@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Factures - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <h1>Factures</h1>
+        <a class="btn btn-secondary" href="{% url 'invoices:invoice_upload' %}">Importer un PDF</a>
+    </div>
+
+    <div class="card">
+        <form method="post" action="{% url 'invoices:gather' %}" class="inline-form">
+            {% csrf_token %}
+            <label style="margin:0;">
+                Du
+                <input type="date" name="start_date" value="{{ default_start_date|date:'Y-m-d' }}">
+            </label>
+            <label style="margin:0;">
+                au
+                <input type="date" name="end_date" value="{{ default_end_date|date:'Y-m-d' }}">
+            </label>
+            <button class="btn" type="submit">Rechercher de nouvelles factures</button>
+        </form>
+    </div>
+
+    {% if latest_job %}
+        {% include "invoices/_gather_status.html" with job=latest_job %}
+    {% endif %}
+
+    {% if invoices %}
+    <table>
+        <thead>
+            <tr>
+                <th>Fournisseur</th>
+                <th>N° facture</th>
+                <th>Date</th>
+                <th>Statut</th>
+                <th class="num">Total HT</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for invoice in invoices %}
+            <tr>
+                <td><a href="{% url 'invoices:invoice_detail' invoice.pk %}">{{ invoice.supplier.name }}</a></td>
+                <td>{{ invoice.invoice_number|default:"—" }}</td>
+                <td>{{ invoice.invoice_date|default:"—" }}</td>
+                <td><span class="status-pill status-{{ invoice.status }}">{{ invoice.get_status_display }}</span></td>
+                <td class="num">{{ invoice.total_ht|floatformat:2 }} €</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+        <div class="empty-state">Aucune facture importée pour le moment.</div>
+    {% endif %}
+{% endblock %}

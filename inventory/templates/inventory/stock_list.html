@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block title %}Stock - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <h1>Stock</h1>
+        <div style="display:flex; gap:0.5rem;">
+            {% if empty_stock_type_count %}
+            <form method="post" action="{% url 'inventory:clear_empty_stock_types' %}"
+                  onsubmit="return confirm('Supprimer {{ empty_stock_type_count }} type(s) de stock sans aucun produit lié ?');">
+                {% csrf_token %}
+                <button class="btn btn-secondary" type="submit">🧹 Vider les types vides ({{ empty_stock_type_count }})</button>
+            </form>
+            {% endif %}
+            <a class="btn" href="{% url 'inventory:stock_type_create' %}">+ Nouveau type</a>
+        </div>
+    </div>
+
+    {% if categories %}
+        {% for category in categories %}
+        <div class="category-block">
+            <div class="category-header" data-toggle="cat-{{ forloop.counter }}">
+                <span class="chevron">▸</span>
+                <strong>{{ category.name }}</strong>
+                <span class="muted">({{ category.rows|length }})</span>
+            </div>
+            <table id="cat-{{ forloop.counter }}" hidden>
+                <thead>
+                    <tr>
+                        <th>Type</th>
+                        <th class="num">Quantité</th>
+                        <th>Unité</th>
+                        <th class="num">Valeur (HT)</th>
+                        <th class="num">Valeur (TTC)</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in category.rows %}
+                    <tr class="stock-row" data-toggle="details-{{ row.stock_type.id }}">
+                        <td><span class="chevron">▸</span> {{ row.stock_type.name }}</td>
+                        <td class="num">{{ row.quantity|floatformat:2 }}</td>
+                        <td>{{ row.stock_type.get_unit_display }}</td>
+                        <td class="num">{{ row.value_ht|floatformat:2 }} €</td>
+                        <td class="num">{{ row.value_ttc|floatformat:2 }} €</td>
+                        <td>
+                            <a href="{% url 'inventory:stock_type_update' row.stock_type.pk %}">Modifier</a>
+                            <form method="post" action="{% url 'inventory:stock_type_delete' row.stock_type.pk %}"
+                                  onsubmit="return confirm('Supprimer \'{{ row.stock_type.name|escapejs }}\' ? Les produits associés repasseront en vérification.');"
+                                  style="display:inline; margin-left:0.5rem;">
+                                {% csrf_token %}
+                                <button type="submit" class="btn btn-small btn-secondary">Supprimer</button>
+                            </form>
+                        </td>
+                    </tr>
+                    <tr id="details-{{ row.stock_type.id }}" hidden>
+                        <td colspan="6" style="padding:0;">
+                            {% if row.movements %}
+                            <table class="sub-table">
+                                <thead>
+                                    <tr>
+                                        <th>Produit</th>
+                                        <th>Fournisseur</th>
+                                        <th>Date</th>
+                                        <th class="num">Quantité achetée</th>
+                                        <th class="num">Prix (HT) / {{ row.stock_type.get_unit_display }}</th>
+                                        <th class="num">Total HT</th>
+                                        <th class="num">TVA</th>
+                                        <th class="num">Total TTC</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for entry in row.movements %}
+                                    <tr>
+                                        <td>{{ entry.line.product.raw_name|default:entry.line.raw_name }}</td>
+                                        <td class="muted">{{ entry.line.invoice.supplier.name }}</td>
+                                        <td>{{ entry.line.invoice.invoice_date|default:"—" }}</td>
+                                        <td class="num">
+                                            {{ entry.purchased_quantity }} {{ entry.line.product.get_unit_display }}
+                                        </td>
+                                        <td class="num">{{ entry.movement.unit_cost_ht|floatformat:2 }} €</td>
+                                        <td class="num">{{ entry.line.total_ht|floatformat:2 }} €</td>
+                                        <td class="num">{{ entry.vat_percent|floatformat:1 }} %</td>
+                                        <td class="num">{{ entry.total_ttc|floatformat:2 }} €</td>
+                                        <td>
+                                            <form method="post" action="{% url 'inventory:edit_product_conversion' entry.line.product.id %}"
+                                                  style="display:flex; gap:0.25rem; align-items:center; margin-bottom:0.3rem;"
+                                                  title="Unité 'Unité' : facteur = quantité de stock par article (ex 0.7 pour une bouteille de 70cl). Unité Litre/Kilo : si la 'Quantité achetée' affichée est déjà correcte, laissez le facteur à 1 - un facteur ≠1 la multiplierait une deuxième fois.">
+                                                {% csrf_token %}
+                                                <select name="product_unit" style="width:62px; padding:0.1rem;">
+                                                    {% for value, label in unit_choices %}
+                                                        <option value="{{ value }}" {% if value == entry.line.product.unit %}selected{% endif %}>{{ label }}</option>
+                                                    {% endfor %}
+                                                </select>
+                                                <input type="text" name="stock_equivalent" value="{{ entry.stock_equivalent_display }}" style="width:48px; padding:0.1rem;">
+                                                <button type="submit" class="btn btn-small" title="Enregistrer">💾</button>
+                                            </form>
+                                            <form method="post" action="{% url 'inventory:remove_product' entry.line.product.id %}"
+                                                  onsubmit="return confirm('Retirer \'{{ entry.line.product.raw_name|escapejs }}\' du stock ?');">
+                                                {% csrf_token %}
+                                                <button type="submit" class="btn btn-small btn-secondary">Retirer</button>
+                                            </form>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                            {% else %}
+                                <p class="muted" style="padding:0.75rem 0.9rem;">Aucun achat enregistré pour le moment.</p>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endfor %}
+        <p class="muted" style="text-align:right; margin-top:0.5rem;">
+            Valeur totale du stock (HT) : <strong style="color:var(--text);">{{ total_value_ht|floatformat:2 }} €</strong>
+            &nbsp;·&nbsp;
+            (TTC) : <strong style="color:var(--text);">{{ total_value_ttc|floatformat:2 }} €</strong>
+        </p>
+    {% else %}
+        <div class="empty-state">
+            Aucun type de stock pour le moment. Créez-en un, ou importez une facture pour démarrer.
+        </div>
+    {% endif %}
+
+    {% if review_count %}
+        <p class="muted" style="margin-top:1.25rem;">
+            {{ review_count }} produit{{ review_count|pluralize }} en attente de rattachement.
+            <a href="{% url 'inventory:review_queue' %}">Voir la file de vérification →</a>
+        </p>
+    {% endif %}
+{% endblock %}
+{% block extra_js %}
+<script>
+document.addEventListener("click", function (event) {
+    if (event.target.closest("a, button, form")) return;
+    var toggle = event.target.closest("[data-toggle]");
+    if (!toggle) return;
+    var target = document.getElementById(toggle.dataset.toggle);
+    if (!target) return;
+    target.hidden = !target.hidden;
+    var chevron = toggle.querySelector(".chevron");
+    if (chevron) chevron.textContent = target.hidden ? "▸" : "▾";
+});
+</script>
+{% endblock %}

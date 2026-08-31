@@ -1,0 +1,41 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}MarginMate{% endblock %}</title>
+    <link rel="stylesheet" href="{% static 'css/marginmate.css' %}">
+    <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
+</head>
+<body>
+    <header class="topbar">
+        <div class="topbar-inner">
+            <a class="brand" href="{% url 'inventory:stock_list' %}">MarginMate</a>
+            <nav>
+                <a href="{% url 'inventory:stock_list' %}" class="{% if request.resolver_match.app_name == 'inventory' and request.resolver_match.url_name == 'stock_list' %}active{% endif %}">Stock</a>
+                <a href="{% url 'inventory:review_queue' %}" class="{% if request.resolver_match.url_name == 'review_queue' %}active{% endif %}">
+                    À vérifier
+                    {% if review_count_nav %}<span class="badge">{{ review_count_nav }}</span>{% endif %}
+                </a>
+                <a href="{% url 'invoices:invoice_list' %}" class="{% if request.resolver_match.app_name == 'invoices' %}active{% endif %}">Factures</a>
+                <a href="/admin/">Admin</a>
+            </nav>
+        </div>
+    </header>
+
+    <main class="container">
+        {% if messages %}
+            <ul class="messages">
+                {% for message in messages %}
+                    <li class="message message-{{ message.tags }}">{{ message }}</li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+
+        {% block content %}{% endblock %}
+    </main>
+
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

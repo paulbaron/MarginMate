@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+db.sqlite3
+huey.sqlite3
+huey.sqlite3-*
+.env
+/media/
+/staticfiles/
+/scraped_invoices/
+.vscode/
+*.log

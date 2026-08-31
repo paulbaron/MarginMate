@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Type de stock - MarginMate{% endblock %}
+{% block content %}
+    <h1>{% if object %}Modifier{% else %}Nouveau{% endif %} type de stock</h1>
+    <div class="card">
+        <form method="post">
+            {% csrf_token %}
+            {% for field in form %}
+                <p>
+                    {{ field.label_tag }}
+                    {{ field }}
+                    {% for error in field.errors %}<div class="message message-error">{{ error }}</div>{% endfor %}
+                </p>
+            {% endfor %}
+            <datalist id="category-datalist">
+                {% for cat in existing_categories %}
+                    <option value="{{ cat }}">
+                {% endfor %}
+            </datalist>
+            <button class="btn" type="submit">Enregistrer</button>
+            <a class="btn btn-secondary" href="{% url 'inventory:stock_list' %}">Annuler</a>
+        </form>
+    </div>
+{% endblock %}

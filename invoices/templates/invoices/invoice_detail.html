@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}{{ invoice }} - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <h1>{{ invoice.supplier.name }} — {{ invoice.invoice_number|default:"—" }}</h1>
+        <span class="status-pill status-{{ invoice.status }}">{{ invoice.get_status_display }}</span>
+    </div>
+    <p class="muted">
+        Date : {{ invoice.invoice_date|default:"—" }}
+        {% if invoice.source_file %} · <a href="{{ invoice.source_file.url }}">Voir le PDF</a>{% endif %}
+    </p>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Produit</th>
+                <th>Type de stock</th>
+                <th class="num">Qté</th>
+                <th class="num">Volume/Poids</th>
+                <th class="num">PU HT</th>
+                <th class="num">Total HT</th>
+                <th class="num">TVA</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for line in invoice.lines.all %}
+            <tr>
+                <td>{{ line.raw_name }}</td>
+                <td>
+                    {% if line.product.stock_type %}
+                        {{ line.product.stock_type.name }}
+                    {% else %}
+                        <span class="muted">À vérifier</span>
+                    {% endif %}
+                </td>
+                <td class="num">{{ line.quantity }}</td>
+                <td class="num">{{ line.total_volume|floatformat:3 }}</td>
+                <td class="num">{{ line.unit_cost_ht|floatformat:2 }} €</td>
+                <td class="num">{{ line.total_ht|floatformat:2 }} €</td>
+                <td class="num">{{ line.vat_rate|floatformat:3 }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+        <tfoot>
+            <tr>
+                <td colspan="5">Total HT</td>
+                <td class="num">{{ invoice.total_ht|floatformat:2 }} €</td>
+                <td></td>
+            </tr>
+        </tfoot>
+    </table>
+
+    {% if invoice.needs_review_count %}
+        <p class="muted" style="margin-top:1rem;">
+            {{ invoice.needs_review_count }} ligne(s) en attente de rattachement.
+            <a href="{% url 'inventory:review_queue' %}">Voir la file de vérification →</a>
+        </p>
+    {% endif %}
+{% endblock %}

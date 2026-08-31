@@ -1,0 +1,39 @@
+<div class="card"
+    id="gather-status"
+    {% if job.status == "PENDING" or job.status == "RUNNING" %}
+    hx-get="{% url 'invoices:gather_status' job.id %}"
+    hx-trigger="every 1s"
+    hx-swap="outerHTML"
+    {% endif %}
+>
+    <span class="status-pill status-{{ job.status }}">{{ job.get_status_display }}</span>
+    <span class="muted">
+        {% if job.range_start %}Du {{ job.range_start }} au {{ job.range_end }} · {% endif %}
+        Lancée : {{ job.started_at }}
+    </span>
+
+    {% if job.progress %}
+        <table style="margin-top:0.75rem;">
+            <thead>
+                <tr>
+                    <th>Fournisseur</th>
+                    <th class="num">Trouvées</th>
+                    <th class="num">Importées</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for code, entry in job.progress.items %}
+                <tr>
+                    <td>{{ entry.label|default:code }}</td>
+                    <td class="num">{{ entry.found|default:0 }}</td>
+                    <td class="num">{{ entry.imported|default:0 }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% endif %}
+
+    {% if job.log %}
+        <div class="log-box" style="margin-top:0.75rem;">{{ job.log }}</div>
+    {% endif %}
+</div>

@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block title %}À vérifier - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <h1>Produits à rattacher</h1>
+        <div style="display:flex; gap:0.5rem;">
+            <form method="post" action="{% url 'inventory:suggest_products' %}">
+                {% csrf_token %}
+                <button class="btn btn-secondary" type="submit">🤖 Suggérer avec l'IA</button>
+            </form>
+            {% if suggested_count %}
+            <form method="post" action="{% url 'inventory:approve_all_suggestions' %}"
+                  onsubmit="return confirm('Approuver {{ suggested_count }} suggestion(s) IA sans les vérifier une par une ?\n\nConfiance : {{ confidence_counts.high|default:0 }} haute, {{ confidence_counts.medium|default:0 }} moyenne, {{ confidence_counts.low|default:0 }} basse.\n\nCeci créera des mouvements de stock directement - vérifiez les suggestions basse confiance avant si possible.');">
+                {% csrf_token %}
+                <button class="btn" type="submit">✅ Approuver toutes les suggestions ({{ suggested_count }})</button>
+            </form>
+            {% endif %}
+        </div>
+    </div>
+    <p class="muted">
+        Ces produits ont été trouvés sur une facture mais ne sont liés à aucun type de stock.
+        Rattachez-les à un type existant, ou créez-en un nouveau — leur historique d'achats sera
+        automatiquement ajouté au stock dès que vous validez.
+        "Suggérer avec l'IA" pré-remplit les champs ci-dessous pour les produits qui n'ont pas
+        encore de suggestion (via un modèle local, gratuit, exécuté sur cette machine) — vérifiez
+        toujours avant de valider, l'IA peut se tromper.
+    </p>
+
+    {% if latest_suggestion_job %}
+        {% include "inventory/_suggestion_job_status.html" with job=latest_suggestion_job %}
+    {% endif %}
+
+    <datalist id="category-datalist">
+        {% for cat in existing_categories %}
+            <option value="{{ cat }}">
+        {% endfor %}
+    </datalist>
+
+    {% if products %}
+        {% for product in products %}
+        {% with s=product.ai_suggestion %}
+        <div class="card">
+            <strong>{{ product.raw_name }}</strong>
+            <span class="muted"> — {{ product.supplier.name }}</span>
+            <ul style="margin:0.4rem 0 0; padding-left:1.2rem; color:var(--muted); font-size:0.88rem;">
+                {% for line in product.invoice_lines.all %}
+                <li>
+                    Facture du {{ line.invoice.invoice_date|default:"?" }} : quantité totale {{ line.quantity }}
+                    {% if line.colisage > 1 %}(colisage {{ line.colisage }}, déjà inclus dans la quantité){% endif %},
+                    {% if line.total_volume %}volume/poids mesuré {{ line.total_volume }}{% else %}pas de volume/poids spécifié{% endif %},
+                    total HT {{ line.total_ht }} €
+                </li>
+                {% endfor %}
+            </ul>
+            {% if s %}
+                <p class="muted" style="margin:0.4rem 0 0;">
+                    🤖 Suggestion IA ({{ s.confidence|default:"?" }}) : {{ s.reasoning|default:"—" }}
+                </p>
+            {% endif %}
+            <form method="post" action="{% url 'inventory:assign_product' product.id %}" style="margin-top:0.75rem;">
+                {% csrf_token %}
+                <div class="inline-form">
+                    <select name="existing_stock_type" class="js-existing-stock-type"
+                            data-unit-target="stock-unit-{{ product.id }}"
+                            data-category-target="stock-category-{{ product.id }}">
+                        <option value="">— Type existant —</option>
+                        {% for st in stock_types %}
+                            <option value="{{ st.id }}" data-unit="{{ st.unit }}" data-category="{{ st.category }}"
+                                {% if s.matched_stock_type_id == st.id %}selected{% endif %}>{{ st.name }}</option>
+                        {% endfor %}
+                    </select>
+                    <span class="muted">ou</span>
+                    <input type="text" name="new_stock_type_name" placeholder="Nouveau type (ex: Vodka)"
+                           value="{% if s.is_new_stock_type %}{{ s.stock_type_name }}{% endif %}">
+                    <label class="muted" style="margin:0;">
+                        Unité du stock
+                        <select name="new_stock_type_unit" id="stock-unit-{{ product.id }}">
+                            {% for value, label in unit_choices %}
+                                <option value="{{ value }}" {% if s.is_new_stock_type and s.new_stock_type_unit == value %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </label>
+                    <label class="muted" style="margin:0;">
+                        Catégorie
+                        <input type="text" name="new_stock_type_category" id="stock-category-{{ product.id }}"
+                               list="category-datalist" autocomplete="off" placeholder="ex: Spiritueux" style="width:140px;"
+                               value="{% if s.is_new_stock_type %}{{ s.new_stock_type_category|default:'' }}{% endif %}">
+                    </label>
+                </div>
+                <div class="inline-form" style="margin-top:0.5rem;">
+                    <label class="muted" style="margin:0;">
+                        Unité du produit
+                        <select name="product_unit">
+                            {% for value, label in unit_choices %}
+                                <option value="{{ value }}" {% if s.product_unit == value %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </label>
+                    <span class="muted">=</span>
+                    <input type="text" name="stock_equivalent" value="{% if s %}{{ s.stock_equivalent }}{% else %}1{% endif %}" style="width:80px;">
+                    <span class="muted">unité(s) de stock</span>
+                </div>
+                <button class="btn btn-small" type="submit" style="margin-top:0.5rem;">Rattacher</button>
+            </form>
+        </div>
+        {% endwith %}
+        {% endfor %}
+    {% else %}
+        <div class="empty-state">Rien à vérifier pour le moment.</div>
+    {% endif %}
+{% endblock %}
+{% block extra_js %}
+<script>
+function syncExistingStockType(select) {
+    var unitSelect = document.getElementById(select.dataset.unitTarget);
+    var categoryInput = document.getElementById(select.dataset.categoryTarget);
+    var chosen = select.options[select.selectedIndex];
+    var hasSelection = !!select.value;
+    if (unitSelect) {
+        if (hasSelection) unitSelect.value = chosen.dataset.unit;
+        unitSelect.disabled = hasSelection;
+    }
+    if (categoryInput) {
+        if (hasSelection) categoryInput.value = chosen.dataset.category || "";
+        categoryInput.disabled = hasSelection;
+    }
+}
+document.addEventListener("change", function (event) {
+    if (!event.target.matches(".js-existing-stock-type")) return;
+    syncExistingStockType(event.target);
+});
+document.addEventListener("DOMContentLoaded", function () {
+    document.querySelectorAll(".js-existing-stock-type").forEach(function (select) {
+        if (select.value) syncExistingStockType(select);
+    });
+});
+</script>
+{% endblock %}
