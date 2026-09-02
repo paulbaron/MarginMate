@@ -16,6 +16,12 @@ FÛT 10/15/20/25/30/50 L") rather than tied to any specific product - kept
 as its own line with a negative quantity/total, the same way Metro's
 crate/pallet refunds are, so it can be matched to a stock item like any
 other product and have its value actually subtracted.
+
+Not every row has a volume/weight (CONT. UNIT./VOLUME EFFECTIF, used to
+derive most products' totals) - a CO2 gas cylinder, for one, is billed as
+a flat "1 TUB" at a per-cylinder price with its own consigne on top (e.g.
+"BOUTEILLE CO2 10 KG GRISE"), so that case falls back to quantity * unit
+price directly.
 """
 
 from __future__ import annotations
@@ -32,11 +38,17 @@ from .registry import register
 TVA_INDEX_TO_RATE = {1: Decimal("0.2"), 2: Decimal("0.055"), 3: Decimal("0")}
 
 LINE_REGEX = re.compile(
-    r"([A-Z0-9]+)\s+(.+?)\s+(-?\d+)\s+(FUT|CAR|CAI|BT|EMB)\s(-?\d+)\s+(L|BT|BOI|EMB)\s+(\d+,\d+)\s+(-?\d+,\d+)\s+"
+    r"([A-Z0-9]+)\s+(.+?)\s+(-?\d+)\s+(FUT|CAR|CAI|BT|EMB|TUB|UNI|PUB)\s(-?\d+)\s+(L|BT|BOI|EMB|TUB|UNI|PUB)\s+(\d+,\d+)\s+(-?\d+,\d+)\s+"
     r"(\d+,\d+\s*\%\s+)?(\d+,\d+\s+)?(-?\d+,\d+\s+)?(-?\d+,\d+\s+)?(\d+,\d\d\s*\s+)?(\d+,\d\d)\s+(-?\d+,\d\d\s+)"
     r"(-?\d+,\d\d\s+)?(-?\d+,\d\d\s+)([1-3])"
 )
-QUANTITY_REGEX = re.compile(r"(-?\d+)\s+(FUT|CAR|CAI|BT|EMB)")
+# FUT/CAR/CAI/BT/EMB are container types (keg, case, box, bottle, empty
+# return); TUB/UNI/PUB show up on non-alcohol rows this parser otherwise has
+# no reason to single out (gas cylinders, equipment loans, POS material) -
+# TUB in particular carries a real deposit (see the CO2 cylinder example in
+# the module docstring), so all three need to be recognized here even
+# though UNI/PUB rows end up filtered out later for having no real price.
+QUANTITY_REGEX = re.compile(r"(-?\d+)\s+(FUT|CAR|CAI|BT|EMB|TUB|UNI|PUB)")
 INVOICE_NUMBER_REGEX = re.compile(r"Facture No\s*:\s*(\S+)")
 DATE_SECTION_MARKER = "DATE FACTURE"
 DATE_REGEX = re.compile(r"(\d{2}/\d{2}/\d{4})")
@@ -71,15 +83,23 @@ def _to_int(text: str | None, default: int = 0) -> int:
         return default
 
 
+_NEGLIGIBLE_PRICE = Decimal("0.001")
+
+
 def _row_is_valid(row) -> bool:
     if not (row[1] and row[2]):
         return False
-    is_regular_product = bool(row[5]) and bool(row[12]) and bool(row[13])
     # A packaging-deposit refund row (e.g. "EMB01 FÛT 10/15/20/25/30/50 L")
-    # has no price/volume of its own - column 12 (CONT. UNIT.) is blank -
-    # but does have a DECONS. (column 10) amount. See the module docstring.
+    # has no price of its own - column 5 (PRIX HTHD) is blank - but does
+    # have a DECONS. (column 10) amount. See the module docstring.
     is_deconsigne = bool(row[10])
-    return is_regular_product or is_deconsigne
+    # UBA prints a nominal "0,0001" (or the literal text "GRA"/gratuit) in
+    # PRIX HTHD for informational, zero-cost rows (equipment loans, POS
+    # material, return tickets) - real prices are never that small, so this
+    # tells those apart from an actually-priced row without hardcoding
+    # which product codes are which.
+    has_price = _to_decimal(row[5]) >= _NEGLIGIBLE_PRICE
+    return has_price or is_deconsigne
 
 
 def _guess_invoice_number_and_date(full_text: str) -> tuple[str, date | None]:
@@ -137,14 +157,13 @@ class UBAParser(InvoiceParser):
                 if not quantity_match:
                     continue
                 quantity = _to_int(quantity_match.group(1))
-                cont_unit = _to_decimal(row[12])
 
-                if cont_unit == 0:
+                deconsigne_total = _to_decimal(row[10])
+                if deconsigne_total:
                     # A déconsigne (packaging deposit refund) row - see the
                     # module docstring. Its whole "price" is the DECONS.
                     # column; there's no product price/volume to derive.
-                    deconsigne_total = _to_decimal(row[10])
-                    if not deconsigne_total or not quantity:
+                    if not quantity:
                         continue
                     parsed_lines.append(
                         ParsedLine(
@@ -162,11 +181,27 @@ class UBAParser(InvoiceParser):
 
                 product_key = product_code + product_name
                 vat_rate = products_vat.get(product_key, Decimal("0.2"))
-                unit_price = _to_decimal(row[5])
-                unit_tax = _to_decimal(row[8])
-                total_volume = _to_decimal(row[13])
-                base_total_ht = total_volume / cont_unit * unit_price
-                total_taxes = total_volume / cont_unit * unit_tax
+                cont_unit = _to_decimal(row[12])
+                if cont_unit:
+                    unit_price = _to_decimal(row[5])
+                    unit_tax = _to_decimal(row[8])
+                    total_volume = _to_decimal(row[13])
+                    base_total_ht = total_volume / cont_unit * unit_price
+                    total_taxes = total_volume / cont_unit * unit_tax
+                else:
+                    # No volume/weight concept at all - a CO2 cylinder is
+                    # billed as a flat "1 TUB" with a real MNT HTHD (row[6])
+                    # printed, but some rows (e.g. "EMB29 CFP VIDE", an
+                    # empty crate/box) have NOTHING in that column - PRIX
+                    # HTHD there just echoes the consigne value rather than
+                    # being a real per-unit price, so deriving quantity *
+                    # unit_price would fabricate a charge that isn't really
+                    # there. Reading MNT HTHD directly (0 when blank) avoids
+                    # that: no printed total means no real product charge,
+                    # only whatever consigne (below) applies.
+                    total_volume = Decimal("0")
+                    total_taxes = Decimal("0")
+                    base_total_ht = _to_decimal(row[6])
                 # "Droit Unitaire" (row[8]) is a real per-unit duty (alcohol
                 # excise), not VAT - it has to be added to the real cost, the
                 # same way Metro's "COTIS. SECURITE SOCIALE" does (see
@@ -175,20 +210,21 @@ class UBAParser(InvoiceParser):
                 # applied to this data too.
                 total_ht = base_total_ht + total_taxes
 
-                parsed_lines.append(
-                    ParsedLine(
-                        raw_name=product_name,
-                        quantity=quantity,
-                        total_volume=total_volume,
-                        unit_cost_ht=(total_ht / quantity).quantize(Decimal("0.0001")) if quantity else Decimal("0"),
-                        total_ht=total_ht,
-                        taxes=total_taxes,
-                        vat_rate=vat_rate,
-                        category="UBA",
-                        ean=product_code,
+                if total_ht:
+                    parsed_lines.append(
+                        ParsedLine(
+                            raw_name=product_name,
+                            quantity=quantity,
+                            total_volume=total_volume,
+                            unit_cost_ht=(total_ht / quantity).quantize(Decimal("0.0001")) if quantity else Decimal("0"),
+                            total_ht=total_ht,
+                            taxes=total_taxes,
+                            vat_rate=vat_rate,
+                            category="UBA",
+                            ean=product_code,
+                        )
                     )
-                )
-                product_lines_total += total_ht
+                    product_lines_total += total_ht
 
                 # A consigne (packaging deposit charge) is billed on the
                 # SAME row as the product it came with - split out into its

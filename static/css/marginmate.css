@@ -156,6 +156,25 @@ table.sub-table {
 .status-CANCELLED { background: #2a2a2a; color: var(--muted); }
 
 .inline-form { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+
+.sources-dropdown { position: relative; }
+.sources-dropdown summary { cursor: pointer; list-style: none; }
+.sources-dropdown summary::-webkit-details-marker { display: none; }
+.sources-panel {
+    position: absolute;
+    top: calc(100% + 0.3rem);
+    left: 0;
+    z-index: 10;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: var(--radius);
+    padding: 0.5rem 0.75rem;
+    min-width: 220px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+.sources-panel-item { display: flex; align-items: center; gap: 0.4rem; font-weight: normal; white-space: nowrap; }
 form.conversion-form {
     display: flex;
     gap: 0.4rem;

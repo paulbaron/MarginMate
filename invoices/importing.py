@@ -72,10 +72,16 @@ def parse_and_import(
     supplier: Supplier,
     date_hint: date | None = None,
     display_filename: str | None = None,
+    parser_key_override: str | None = None,
 ) -> Invoice:
+    """`parser_key_override` lets a caller (see InvoiceType.parser_key) pick
+    the parser independently of the supplier's own default - None (the
+    default) means "use supplier.parser_key" as before; an explicit value
+    (including "") takes precedence over it."""
     from .parsers import get_parser
 
-    parser = get_parser(supplier.parser_key) or get_parser("LLM")
+    key = supplier.parser_key if parser_key_override is None else parser_key_override
+    parser = get_parser(key) or get_parser("LLM")
     if parser is None:
         raise RuntimeError(f"No parser available for supplier {supplier}.")
     parsed = parser.parse(pdf_path, date_hint=date_hint)

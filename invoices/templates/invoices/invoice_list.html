@@ -3,7 +3,11 @@
 {% block content %}
     <div class="page-header">
         <h1>Factures</h1>
-        <a class="btn btn-secondary" href="{% url 'invoices:invoice_upload' %}">Importer un PDF</a>
+        <div style="display:flex; gap:0.5rem;">
+            <a class="btn btn-secondary" href="{% url 'invoices:invoice_type_list' %}">Types de factures</a>
+            <a class="btn btn-secondary" href="{% url 'invoices:invoice_upload' %}">Importer un PDF</a>
+            <a class="btn btn-secondary" href="{% url 'invoices:invoice_create_manual' %}">+ Facture manuelle</a>
+        </div>
     </div>
 
     <div class="card">
@@ -17,6 +21,19 @@
                 au
                 <input type="date" name="end_date" value="{{ default_end_date|date:'Y-m-d' }}">
             </label>
+            <details class="sources-dropdown">
+                <summary class="btn btn-small btn-secondary">Sources ({{ gather_sources|length }})</summary>
+                <div class="sources-panel">
+                    {% for source in gather_sources %}
+                        <label class="sources-panel-item">
+                            <input type="checkbox" name="sources" value="{{ source.code }}" checked>
+                            {{ source.label }}
+                        </label>
+                    {% empty %}
+                        <span class="muted">Aucune source configurée.</span>
+                    {% endfor %}
+                </div>
+            </details>
             <button class="btn" type="submit">Rechercher de nouvelles factures</button>
         </form>
     </div>

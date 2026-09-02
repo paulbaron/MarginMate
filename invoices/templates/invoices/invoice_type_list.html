@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Types de factures - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <h1>Types de factures</h1>
+        <a class="btn" href="{% url 'invoices:invoice_type_create' %}">+ Nouveau type</a>
+    </div>
+    <p class="muted">
+        Chaque type décrit comment reconnaître les emails d'un fournisseur (expéditeur/objet/contenu) dans la boîte
+        mail partagée et quel parseur lit les factures téléchargées. "Récupérer de nouvelles factures" gathers
+        automatiquement tous les types actifs.
+    </p>
+
+    {% if invoice_types %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Nom</th>
+                    <th>Fournisseur</th>
+                    <th>Source</th>
+                    <th>Parseur</th>
+                    <th>Actif</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for invoice_type in invoice_types %}
+                <tr>
+                    <td><a href="{% url 'invoices:invoice_type_update' invoice_type.pk %}">{{ invoice_type.name }}</a></td>
+                    <td class="muted">{{ invoice_type.supplier.name }}</td>
+                    <td class="muted">{{ invoice_type.get_source_kind_display }}</td>
+                    <td class="muted">{{ invoice_type.parser_key|default:"Analyse IA" }}</td>
+                    <td>{% if invoice_type.is_active %}✅{% else %}—{% endif %}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <div class="empty-state">Aucun type de facture pour le moment.</div>
+    {% endif %}
+
+    <p style="margin-top:1rem;"><a class="btn btn-secondary" href="{% url 'invoices:invoice_list' %}">← Retour aux factures</a></p>
+{% endblock %}

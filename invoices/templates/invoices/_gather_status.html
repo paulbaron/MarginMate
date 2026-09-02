@@ -6,11 +6,28 @@
     hx-swap="outerHTML"
     {% endif %}
 >
-    <span class="status-pill status-{{ job.status }}">{{ job.get_status_display }}</span>
-    <span class="muted">
-        {% if job.range_start %}Du {{ job.range_start }} au {{ job.range_end }} · {% endif %}
-        Lancée : {{ job.started_at }}
-    </span>
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+        <div>
+            <span class="status-pill status-{{ job.status }}">{{ job.get_status_display }}</span>
+            <span class="muted">
+                {% if job.range_start %}Du {{ job.range_start }} au {{ job.range_end }} · {% endif %}
+                Lancée : {{ job.started_at }}
+            </span>
+        </div>
+        {% if job.status == "PENDING" or job.status == "RUNNING" %}
+            {% if job.cancel_requested %}
+                <span class="muted">Annulation en cours…</span>
+            {% else %}
+                <button type="button" class="btn btn-small btn-secondary"
+                    hx-post="{% url 'invoices:gather_cancel' job.id %}"
+                    hx-target="#gather-status"
+                    hx-swap="outerHTML"
+                    hx-confirm="Annuler cette recherche ?">
+                    Annuler
+                </button>
+            {% endif %}
+        {% endif %}
+    </div>
 
     {% if job.progress %}
         <table style="margin-top:0.75rem;">
@@ -18,7 +35,7 @@
                 <tr>
                     <th>Fournisseur</th>
                     <th class="num">Trouvées</th>
-                    <th class="num">Importées</th>
+                    {% if job.kind != "TEST" %}<th class="num">Importées</th>{% endif %}
                 </tr>
             </thead>
             <tbody>
@@ -26,11 +43,36 @@
                 <tr>
                     <td>{{ entry.label|default:code }}</td>
                     <td class="num">{{ entry.found|default:0 }}</td>
-                    <td class="num">{{ entry.imported|default:0 }}</td>
+                    {% if job.kind != "TEST" %}<td class="num">{{ entry.imported|default:0 }}</td>{% endif %}
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
+    {% endif %}
+
+    {% if job.test_matches %}
+        <table style="margin-top:0.75rem;">
+            <thead>
+                <tr>
+                    <th>Expéditeur</th>
+                    <th>Objet</th>
+                    <th>Date</th>
+                    <th>Pièce(s) jointe(s)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for match in job.test_matches %}
+                <tr>
+                    <td>{{ match.sender }}</td>
+                    <td>{{ match.subject }}</td>
+                    <td>{{ match.date|default:"—" }}</td>
+                    <td>{{ match.attachments|join:", "|default:"—" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% elif job.kind == "TEST" and job.status == "SUCCESS" %}
+        <p class="muted" style="margin-top:0.75rem;">Aucun email ne correspond à ces critères sur cette période.</p>
     {% endif %}
 
     {% if job.log %}

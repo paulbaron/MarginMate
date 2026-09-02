@@ -1,3 +1,6 @@
+import re
+
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q, Sum
 from django.utils import timezone
@@ -21,6 +24,82 @@ class Supplier(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class InvoiceType(models.Model):
+    """One recognizable "kind" of invoice this app knows how to gather and
+    parse - e.g. "UBA - Factures". Separate from Supplier because a single
+    supplier could in principle send more than one distinguishable invoice
+    format (each needing its own matching rule and/or parser), and because
+    the matching rule itself lives in a separate, source-kind-specific
+    model (see EmailInvoiceSource) - a future website-based source would
+    need an unrelated shape (login/selectors, not regex patterns).
+    """
+
+    class SourceKind(models.TextChoices):
+        EMAIL = "EMAIL", "Email"
+        WEBSITE = "WEBSITE", "Site web"  # reserved - not yet selectable in the UI
+
+    name = models.CharField(max_length=255)
+    supplier = models.ForeignKey(Supplier, on_delete=models.PROTECT, related_name="invoice_types")
+    # Same convention as Supplier.parser_key (see its docstring) - kept
+    # separate rather than reusing Supplier.parser_key so one supplier can
+    # have two invoice types needing two different parsers.
+    parser_key = models.CharField(max_length=32, blank=True)
+    source_kind = models.CharField(max_length=10, choices=SourceKind.choices, default=SourceKind.EMAIL)
+    is_active = models.BooleanField(
+        default=True, help_text="Whether 'Récupérer les nouvelles factures' should gather this type automatically."
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
+class EmailInvoiceSource(models.Model):
+    """How to recognize an InvoiceType's emails in the shared invoice
+    mailbox (see settings.INVOICE_EMAIL_ADDRESS) and which attachment to
+    treat as the invoice. All patterns are real regexes (not IMAP's own
+    crude substring search - see invoices/scrapers/generic_email.py for
+    why), tested against the From header, the Subject, the decoded text
+    body, and each attachment's filename respectively. subject_pattern and
+    body_pattern blank means "match anything"; sender_pattern is required
+    since matching every email in the inbox would defeat the point.
+    """
+
+    invoice_type = models.OneToOneField(InvoiceType, on_delete=models.CASCADE, related_name="email_source")
+    sender_pattern = models.CharField(max_length=500, help_text="Expression régulière testée sur l'expéditeur.")
+    subject_pattern = models.CharField(
+        max_length=500, blank=True, help_text="Expression régulière testée sur l'objet (vide = tous)."
+    )
+    body_pattern = models.CharField(
+        max_length=500, blank=True, help_text="Expression régulière testée sur le contenu (vide = tous)."
+    )
+    attachment_pattern = models.CharField(
+        max_length=200,
+        blank=True,
+        default=r"(?i)\.pdf$",
+        help_text="Expression régulière testée sur le nom de la pièce jointe.",
+    )
+
+    def __str__(self):
+        return f"Source email de {self.invoice_type}"
+
+    def clean(self):
+        errors = {}
+        for field_name in ("sender_pattern", "subject_pattern", "body_pattern", "attachment_pattern"):
+            value = getattr(self, field_name)
+            if not value:
+                continue
+            try:
+                re.compile(value)
+            except re.error as exc:
+                errors[field_name] = f"Expression régulière invalide : {exc}"
+        if errors:
+            raise ValidationError(errors)
 
 
 class Invoice(models.Model):
@@ -103,11 +182,28 @@ class ScrapeJob(models.Model):
         RUNNING = "RUNNING", "En cours"
         SUCCESS = "SUCCESS", "Terminé"
         FAILED = "FAILED", "Échoué"
+        CANCELLED = "CANCELLED", "Annulé"
 
+    class Kind(models.TextChoices):
+        GATHER = "GATHER", "Récupération"
+        TEST = "TEST", "Test de motif"
+
+    kind = models.CharField(max_length=10, choices=Kind.choices, default=Kind.GATHER)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    # Set by the "Annuler" button (see views.cancel_gather) while the job is
+    # still PENDING/RUNNING - the background thread can't be killed outright
+    # (no safe way to force-stop a plain Python thread), so this is checked
+    # cooperatively between the job's own work units (before each source,
+    # and between IMAP batches within one email scan - see tasks.py) and
+    # the thread stops itself and sets status to CANCELLED once it notices.
+    cancel_requested = models.BooleanField(default=False)
     log = models.TextField(blank=True)
-    # {"METRO": {"label": "Metro", "found": 3, "imported": 2}, "UBA": {...}}
+    # {"METRO": {"label": "Metro", "found": 3, "imported": 2}, "type-4": {...}}
     progress = models.JSONField(default=dict, blank=True)
+    # Only populated for kind=TEST - [{"sender", "subject", "date", "attachments": [...]}, ...],
+    # the matches a pattern test found, shown inline instead of imported. See
+    # views.invoice_type_form / tasks.test_email_pattern_task.
+    test_matches = models.JSONField(default=list, blank=True)
     invoices_found = models.IntegerField(default=0)
     invoices_created = models.IntegerField(default=0)
     range_start = models.DateField(null=True, blank=True)

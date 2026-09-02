@@ -7,6 +7,15 @@
     <title>{% block title %}MarginMate{% endblock %}</title>
     <link rel="stylesheet" href="{% static 'css/marginmate.css' %}">
     <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
+    <script defer>
+    // Attaches Django's CSRF token to every htmx POST/PUT/DELETE request -
+    // needed for any hx-post (e.g. cancelling a running job in place)
+    // since htmx doesn't know about Django's csrf_token templatetag.
+    document.addEventListener("htmx:configRequest", function (event) {
+        var match = document.cookie.match(/(?:^|; )csrftoken=([^;]+)/);
+        if (match) event.detail.headers["X-CSRFToken"] = decodeURIComponent(match[1]);
+    });
+    </script>
 </head>
 <body>
     <header class="topbar">
@@ -18,7 +27,8 @@
                     À vérifier
                     {% if review_count_nav %}<span class="badge">{{ review_count_nav }}</span>{% endif %}
                 </a>
-                <a href="{% url 'invoices:invoice_list' %}" class="{% if request.resolver_match.app_name == 'invoices' %}active{% endif %}">Factures</a>
+                <a href="{% url 'invoices:invoice_list' %}" class="{% if request.resolver_match.url_name == 'invoice_list' or request.resolver_match.url_name == 'invoice_upload' or request.resolver_match.url_name == 'invoice_create_manual' or request.resolver_match.url_name == 'invoice_detail' %}active{% endif %}">Factures</a>
+                <a href="{% url 'invoices:invoice_type_list' %}" class="{% if request.resolver_match.url_name == 'invoice_type_list' or request.resolver_match.url_name == 'invoice_type_create' or request.resolver_match.url_name == 'invoice_type_update' %}active{% endif %}">Types de factures</a>
                 <a href="{% url 'recipes:recipe_list' %}" class="{% if request.resolver_match.app_name == 'recipes' %}active{% endif %}">Recettes</a>
                 <a href="{% url 'inventory:stock_take_list' %}" class="{% if request.resolver_match.url_name == 'stock_take_list' or request.resolver_match.url_name == 'stock_take_create' or request.resolver_match.url_name == 'stock_take_detail' %}active{% endif %}">Inventaires</a>
                 <a href="/admin/">Admin</a>

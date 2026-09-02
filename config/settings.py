@@ -107,8 +107,13 @@ LOGIN_URL = "/admin/login/"
 # Credentials for the invoice scrapers. Never hardcode these - set them in .env.
 METRO_EMAIL = os.environ.get("METRO_EMAIL", "")
 METRO_PASSWORD = os.environ.get("METRO_PASSWORD", "")
+# Shared inbox every email-based InvoiceType is searched against (see
+# invoices/scrapers/generic_email.py) - formerly UBA-only env var names,
+# kept as a fallback so an existing .env keeps working without editing.
 UBA_EMAIL_ADDRESS = os.environ.get("UBA_EMAIL_ADDRESS", "")
 UBA_EMAIL_APP_PASSWORD = os.environ.get("UBA_EMAIL_APP_PASSWORD", "")
+INVOICE_EMAIL_ADDRESS = os.environ.get("INVOICE_EMAIL_ADDRESS", "") or UBA_EMAIL_ADDRESS
+INVOICE_EMAIL_APP_PASSWORD = os.environ.get("INVOICE_EMAIL_APP_PASSWORD", "") or UBA_EMAIL_APP_PASSWORD
 
 # Used only for the last-resort LLM invoice parsing fallback.
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")

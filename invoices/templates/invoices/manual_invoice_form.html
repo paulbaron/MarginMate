@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Nouvelle facture manuelle - MarginMate{% endblock %}
+{% block content %}
+    <h1>Nouvelle facture manuelle</h1>
+    <p class="muted">
+        Pour une facture reçue autrement que par PDF (papier, sur place...). Une fois enregistrée, elle est
+        traitée exactement comme une facture importée : les produits passent par la file de vérification et
+        alimentent le stock une fois rattachés.
+    </p>
+
+    <div class="card">
+        <form method="post" enctype="multipart/form-data">
+            {% csrf_token %}
+            {% for field in form %}
+                <p>
+                    {{ field.label_tag }}
+                    {{ field }}
+                    {% if field.help_text %}<span class="muted">{{ field.help_text }}</span>{% endif %}
+                    {% for error in field.errors %}<div class="message message-error">{{ error }}</div>{% endfor %}
+                </p>
+            {% endfor %}
+
+            <h3>Produits</h3>
+            {{ formset.management_form }}
+            {% if formset.non_form_errors %}
+                <div class="message message-error">{{ formset.non_form_errors }}</div>
+            {% endif %}
+            <div id="line-rows">
+                {% for line_form in formset %}
+                    <div class="manual-invoice-row-wrapper">
+                        <div class="inline-form">
+                            <span style="display:none;">{{ line_form.DELETE }}</span>
+                            {{ line_form.product_name }}
+                            <span class="muted">×</span>
+                            {{ line_form.quantity }}
+                            <span class="muted">Total HT</span>
+                            {{ line_form.total_ht }}
+                            <span class="muted">€ · TVA</span>
+                            {{ line_form.vat_rate }}
+                            <span class="muted">%</span>
+                            <button type="button" class="btn btn-small btn-secondary js-remove-line">Retirer</button>
+                        </div>
+                        {% for error in line_form.non_field_errors %}<div class="message message-error">{{ error }}</div>{% endfor %}
+                        {% for field in line_form %}
+                            {% for error in field.errors %}<div class="message message-error">{{ field.label }} : {{ error }}</div>{% endfor %}
+                        {% endfor %}
+                    </div>
+                {% endfor %}
+            </div>
+            <button type="button" class="btn btn-small btn-secondary" id="add-line-row">+ Ajouter un produit</button>
+
+            <p style="margin-top:1rem;">
+                <button class="btn" type="submit">Créer la facture</button>
+                <a class="btn btn-secondary" href="{% url 'invoices:invoice_list' %}">Annuler</a>
+            </p>
+        </form>
+    </div>
+
+    <template id="empty-line-row">
+        <div class="manual-invoice-row-wrapper">
+            <div class="inline-form">
+                {{ formset.empty_form.product_name }}
+                <span class="muted">×</span>
+                {{ formset.empty_form.quantity }}
+                <span class="muted">Total HT</span>
+                {{ formset.empty_form.total_ht }}
+                <span class="muted">€ · TVA</span>
+                {{ formset.empty_form.vat_rate }}
+                <span class="muted">%</span>
+                <button type="button" class="btn btn-small btn-secondary js-remove-line">Retirer</button>
+            </div>
+        </div>
+    </template>
+{% endblock %}
+{% block extra_js %}
+<script>
+var nextFormIndex = parseInt(document.getElementById("id_form-TOTAL_FORMS").value, 10);
+
+document.getElementById("add-line-row").addEventListener("click", function () {
+    var index = nextFormIndex++;
+    document.getElementById("id_form-TOTAL_FORMS").value = nextFormIndex;
+    var html = document.getElementById("empty-line-row").innerHTML.replace(/__prefix__/g, index);
+    var wrapper = document.createElement("div");
+    wrapper.innerHTML = html.trim();
+    document.getElementById("line-rows").appendChild(wrapper.firstElementChild);
+});
+
+document.addEventListener("click", function (event) {
+    if (!event.target.matches(".js-remove-line")) return;
+    // A plain (non-model) formset has no saved rows to preserve by index -
+    // every row on this page is either brand new or, on a validation
+    // re-render, already correctly bound - so removing one can just drop
+    // it from the DOM outright, no DELETE-checkbox/hide dance needed.
+    event.target.closest(".manual-invoice-row-wrapper").remove();
+});
+</script>
+{% endblock %}

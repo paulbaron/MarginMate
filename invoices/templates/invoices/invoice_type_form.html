@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}{% if invoice_type %}Modifier{% else %}Nouveau{% endif %} type de facture - MarginMate{% endblock %}
+{% block content %}
+    <h1>{% if invoice_type %}Modifier{% else %}Nouveau{% endif %} type de facture</h1>
+
+    <div class="card">
+        <form method="post">
+            {% csrf_token %}
+            <h3>Informations générales</h3>
+            {% for field in type_form %}
+                <p>
+                    {{ field.label_tag }}
+                    {{ field }}
+                    {% if field.help_text %}<span class="muted">{{ field.help_text }}</span>{% endif %}
+                    {% for error in field.errors %}<div class="message message-error">{{ error }}</div>{% endfor %}
+                </p>
+            {% endfor %}
+
+            <h3>Source : email</h3>
+            <p class="muted">
+                L'email est recherché dans la boîte mail partagée (voir INVOICE_EMAIL_ADDRESS dans .env). Chaque
+                champ est une expression régulière ; expéditeur/objet/contenu sont testés sur l'email, pièce jointe
+                sur le nom de fichier. Objet et contenu vides = tous. Utilisez "Tester" pour vérifier un motif
+                avant de l'enregistrer - aucun email ni facture n'est modifié ou importé par un test.
+            </p>
+            {% for field in source_form %}
+                {% if field.name != "test_start_date" and field.name != "test_end_date" %}
+                <p>
+                    {{ field.label_tag }}
+                    {{ field }}
+                    {% if field.help_text %}<span class="muted">{{ field.help_text }}</span>{% endif %}
+                    {% for error in field.errors %}<div class="message message-error">{{ error }}</div>{% endfor %}
+                </p>
+                {% endif %}
+            {% endfor %}
+
+            <h3>Tester ce motif</h3>
+            <div class="inline-form">
+                {{ source_form.test_start_date.label_tag }}
+                {{ source_form.test_start_date }}
+                {{ source_form.test_end_date.label_tag }}
+                {{ source_form.test_end_date }}
+                <button class="btn btn-secondary" type="submit" name="action" value="test">Tester</button>
+            </div>
+
+            <p style="margin-top:1.5rem;">
+                <button class="btn" type="submit" name="action" value="save">Enregistrer</button>
+                <a class="btn btn-secondary" href="{% url 'invoices:invoice_type_list' %}">Annuler</a>
+            </p>
+        </form>
+    </div>
+
+    {% if test_job %}
+        {% include "invoices/_gather_status.html" with job=test_job %}
+    {% endif %}
+{% endblock %}
