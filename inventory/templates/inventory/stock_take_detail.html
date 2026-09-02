@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Inventaire du {{ stock_take.taken_at|date:"d/m/Y" }} - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <h1>Inventaire du {{ stock_take.taken_at|date:"d/m/Y H:i" }}</h1>
+        <div style="display:flex; gap:0.5rem;">
+            <a class="btn btn-secondary" href="{% url 'inventory:stock_take_update' stock_take.pk %}">Modifier</a>
+            <form method="post" action="{% url 'inventory:stock_take_delete' stock_take.pk %}"
+                  onsubmit="return confirm('Supprimer cet inventaire ?');">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-secondary">Supprimer</button>
+            </form>
+        </div>
+    </div>
+    {% if stock_take.note %}<p class="muted">{{ stock_take.note }}</p>{% endif %}
+
+    <div class="card">
+        <table class="sub-table">
+            <thead>
+                <tr>
+                    <th>Produit / type de stock</th>
+                    <th>Fournisseur</th>
+                    <th class="num">Quantité comptée</th>
+                    <th class="num">Valeur (HT)</th>
+                    <th>Déduit de</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for line in lines %}
+                <tr>
+                    <td>
+                        {% if line.product_id %}{{ line.product.raw_name }}{% else %}{{ line.stock_type.name }} <span class="muted">(type de stock)</span>{% endif %}
+                    </td>
+                    <td class="muted">{{ line.product.supplier.name|default:"—" }}</td>
+                    <td class="num">{{ line.counted_quantity|floatformat:"-4" }} {{ line.get_unit_display }}</td>
+                    <td class="num">{{ line.value_ht|floatformat:2 }} €</td>
+                    <td class="muted" style="font-size:0.9em;">
+                        {% for source in line.sources.all %}
+                            {{ source.quantity_used|floatformat:"-4" }} {{ line.get_unit_display }} à {{ source.unit_cost_ht|floatformat:4 }} €
+                            (<a href="{% url 'invoices:invoice_detail' source.invoice_line.invoice_id %}">facture du {{ source.invoice_line.invoice.invoice_date|date:"d/m/Y" }}</a>)<br>
+                        {% empty %}
+                            —
+                        {% endfor %}
+                        {% if line.has_shortfall %}
+                            <span title="{{ line.shortfall_quantity|floatformat:'-4' }} {{ line.get_unit_display }} au-delà de l'historique d'achats connu, valorisé au prix le plus ancien connu">⚠️ {{ line.shortfall_quantity|floatformat:"-4" }} {{ line.get_unit_display }} au-delà de l'historique</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="5" class="muted">Aucun produit compté.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <p class="muted" style="text-align:right; margin-top:0.5rem;">
+            Valeur totale (HT) : <strong style="color:var(--text);">{{ stock_take.total_value_ht|floatformat:2 }} €</strong>
+        </p>
+    </div>
+
+    <a class="btn btn-secondary" href="{% url 'inventory:stock_take_list' %}">← Retour aux inventaires</a>
+{% endblock %}

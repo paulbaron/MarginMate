@@ -37,6 +37,16 @@ class Invoice(models.Model):
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.IMPORTED)
     error_message = models.TextField(blank=True)
     imported_at = models.DateTimeField(auto_now_add=True)
+    # The gap between the supplier's own printed grand total (Montant HT +
+    # Droits) and the sum of what we could actually attribute to individual
+    # lines - e.g. UBA prints several separate duty categories (ACCISE,
+    # REGIE, VIG. SECU, ...) as one invoice-level total, but only some of
+    # them show up in a per-product column, so summing lines alone slightly
+    # understates the true cost. Added into total_ht below purely so the
+    # invoice's own total reconciles to the penny with what was actually
+    # billed - never attributed to any individual product's own price,
+    # since there's no reliable way to know which product it belongs to.
+    reconciliation_adjustment = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
     class Meta:
         ordering = ["-invoice_date", "-imported_at"]
@@ -53,7 +63,8 @@ class Invoice(models.Model):
 
     @property
     def total_ht(self):
-        return self.lines.aggregate(total=Sum("total_ht"))["total"] or 0
+        lines_total = self.lines.aggregate(total=Sum("total_ht"))["total"] or 0
+        return lines_total + self.reconciliation_adjustment
 
     @property
     def needs_review_count(self):

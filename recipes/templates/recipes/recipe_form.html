@@ -1,0 +1,193 @@
+{% extends "base.html" %}
+{% block title %}{% if recipe.pk %}Modifier{% else %}Nouvelle{% endif %} recette - MarginMate{% endblock %}
+{% block content %}
+    <h1>{% if recipe.pk %}Modifier{% else %}Nouvelle{% endif %} recette</h1>
+    <datalist id="recipe-category-datalist">
+        {% for cat in existing_categories %}
+            <option value="{{ cat }}">
+        {% endfor %}
+    </datalist>
+    <script id="ingredient-units-data" type="application/json">
+        {
+            {% for value, label in ingredient_units.items %}"{{ value }}": "{{ label|escapejs }}"{% if not forloop.last %},{% endif %}{% endfor %}
+        }
+    </script>
+    <div class="card">
+        <form method="post">
+            {% csrf_token %}
+            {% for field in form %}
+                <p>
+                    {{ field.label_tag }}
+                    {{ field }}
+                    {% for error in field.errors %}<div class="message message-error">{{ error }}</div>{% endfor %}
+                </p>
+            {% endfor %}
+
+            <h3>Ingrédients</h3>
+            <p class="muted">
+                Un ingrédient est soit un type de stock, soit une autre recette (dont le coût est calculé
+                au prorata de la quantité utilisée par rapport à ce qu'elle produit). Deux ingrédients
+                reliés par "OU" sont des alternatives - la recette aura une variante par alternative
+                (même prix de vente, coût et marge différents).
+            </p>
+            {{ formset.management_form }}
+            {% if formset.non_form_errors %}
+                <div class="message message-error">{{ formset.non_form_errors }}</div>
+            {% endif %}
+            <div id="ingredient-rows">
+                {% for ingredient_form in formset %}
+                    <div class="ingredient-row-wrapper" data-group="{{ ingredient_form.group.value|default:0 }}">
+                        <div class="inline-form ingredient-row">
+                            {{ ingredient_form.id }}
+                            {{ ingredient_form.group }}
+                            <span style="display:none;">{{ ingredient_form.DELETE }}</span>
+                            {{ ingredient_form.source }}
+                            <span class="muted">×</span>
+                            {{ ingredient_form.quantity }}
+                            <span class="muted ingredient-unit-label"></span>
+                            <button type="button" class="btn btn-small btn-secondary js-add-alternative">OU</button>
+                            <button type="button" class="btn btn-small btn-secondary js-remove-ingredient">Retirer</button>
+                        </div>
+                        {% for error in ingredient_form.non_field_errors %}<div class="message message-error">{{ error }}</div>{% endfor %}
+                        {% for error in ingredient_form.source.errors %}<div class="message message-error">{{ error }}</div>{% endfor %}
+                    </div>
+                {% endfor %}
+            </div>
+            <button type="button" class="btn btn-small btn-secondary" id="add-ingredient-row">+ Ajouter un ingrédient</button>
+
+            <p style="margin-top:1rem;">
+                <button class="btn" type="submit">Enregistrer</button>
+                <a class="btn btn-secondary" href="{% if recipe.pk %}{% url 'recipes:recipe_detail' recipe.pk %}{% else %}{% url 'recipes:recipe_list' %}{% endif %}">Annuler</a>
+            </p>
+        </form>
+    </div>
+
+    <template id="empty-ingredient-row">
+        <div class="ingredient-row-wrapper" data-group="0">
+            <div class="inline-form ingredient-row">
+                {{ formset.empty_form.group }}
+                <span style="display:none;">{{ formset.empty_form.DELETE }}</span>
+                {{ formset.empty_form.source }}
+                <span class="muted">×</span>
+                {{ formset.empty_form.quantity }}
+                <span class="muted ingredient-unit-label"></span>
+                <button type="button" class="btn btn-small btn-secondary js-add-alternative">OU</button>
+                <button type="button" class="btn btn-small btn-secondary js-remove-ingredient">Retirer</button>
+            </div>
+        </div>
+    </template>
+{% endblock %}
+{% block extra_js %}
+<script>
+var ingredientUnits = {};
+try {
+    ingredientUnits = JSON.parse(document.getElementById("ingredient-units-data").textContent);
+} catch (e) {
+    // malformed data - unit labels just won't populate
+}
+
+var nextGroupId = 1;
+document.querySelectorAll(".ingredient-row-wrapper").forEach(function (wrapper) {
+    nextGroupId = Math.max(nextGroupId, parseInt(wrapper.dataset.group, 10) + 1);
+});
+
+function updateUnitLabel(row) {
+    var select = row.querySelector("select[name$='-source']");
+    var label = row.querySelector(".ingredient-unit-label");
+    if (select && label) label.textContent = ingredientUnits[select.value] || "";
+}
+
+// The N existing (saved) ingredients occupy indices 0..N-1 - Django's
+// inline formset requires that exact range to always mean "these are the
+// existing objects" (it needs an -id at each of those positions to know
+// which object a form updates), regardless of where they visually sit on
+// the page. Renumbering everything by DOM position on every add/remove
+// (an earlier version of this script did that) shifted an existing
+// ingredient's fields to a different index whenever a new "OU" row got
+// inserted before it in the DOM - Django then found no -id where it
+// expected one and silently failed to save. The fix: NEVER rename an
+// existing row's fields. Every new row gets one fresh index, counting up
+// from whatever TOTAL_FORMS already was, and keeps that index for its
+// whole life on the page - a removed new row just leaves a gap, which an
+// empty, permitted-to-be-blank form index (anything beyond the original
+// count) is already designed to tolerate.
+var nextFormIndex = parseInt(document.getElementById("id_ingredients-TOTAL_FORMS").value, 10);
+
+var nextGroupId = 1;
+document.querySelectorAll(".ingredient-row-wrapper").forEach(function (wrapper) {
+    nextGroupId = Math.max(nextGroupId, parseInt(wrapper.dataset.group, 10) + 1);
+});
+
+function updateUnitLabel(row) {
+    var select = row.querySelector("select[name$='-source']");
+    var label = row.querySelector(".ingredient-unit-label");
+    if (select && label) label.textContent = ingredientUnits[select.value] || "";
+}
+
+// Marks a wrapper with .js-same-group-follows whenever the NEXT visible
+// wrapper shares its group - purely visual (see the "OU" ::before rule in
+// marginmate.css), so alternatives read as one connected choice instead of
+// a row of otherwise-identical-looking ingredient lines.
+function renderGroupDividers() {
+    var wrappers = Array.from(document.querySelectorAll(".ingredient-row-wrapper")).filter(function (w) { return !w.hidden; });
+    wrappers.forEach(function (wrapper, index) {
+        var next = wrappers[index + 1];
+        var sameGroup = next && next.dataset.group === wrapper.dataset.group;
+        wrapper.classList.toggle("js-same-group-follows", !!sameGroup);
+    });
+}
+
+function addRow(groupId) {
+    var index = nextFormIndex++;
+    document.getElementById("id_ingredients-TOTAL_FORMS").value = nextFormIndex;
+    var html = document.getElementById("empty-ingredient-row").innerHTML.replace(/__prefix__/g, index);
+    var wrapper = document.createElement("div");
+    wrapper.innerHTML = html.trim();
+    var newRow = wrapper.firstElementChild;
+    newRow.dataset.group = groupId;
+    newRow.querySelector("input[name$='-group']").value = groupId;
+    return newRow;
+}
+
+document.getElementById("add-ingredient-row").addEventListener("click", function () {
+    var row = addRow(nextGroupId++);
+    document.getElementById("ingredient-rows").appendChild(row);
+    renderGroupDividers();
+});
+
+document.addEventListener("click", function (event) {
+    if (event.target.matches(".js-add-alternative")) {
+        var wrapper = event.target.closest(".ingredient-row-wrapper");
+        var row = addRow(parseInt(wrapper.dataset.group, 10));
+        wrapper.insertAdjacentElement("afterend", row);
+        renderGroupDividers();
+        return;
+    }
+    if (event.target.matches(".js-remove-ingredient")) {
+        var wrapper = event.target.closest(".ingredient-row-wrapper");
+        var idField = wrapper.querySelector("input[name$='-id']");
+        if (idField && idField.value) {
+            // an existing, saved ingredient - mark for deletion on save
+            // rather than removing outright, since blanking its other
+            // fields instead would fail "this field is required".
+            wrapper.querySelector("input[name$='-DELETE']").checked = true;
+            wrapper.hidden = true;
+        } else {
+            // never-saved row - just drop it, leaving a gap in the index
+            // range is fine (see the note above nextFormIndex).
+            wrapper.remove();
+        }
+        renderGroupDividers();
+    }
+});
+
+document.addEventListener("change", function (event) {
+    if (!event.target.matches("select[name$='-source']")) return;
+    updateUnitLabel(event.target.closest(".ingredient-row-wrapper"));
+});
+document.addEventListener("DOMContentLoaded", function () {
+    document.querySelectorAll(".ingredient-row-wrapper").forEach(updateUnitLabel);
+    renderGroupDividers();
+});
+</script>
+{% endblock %}

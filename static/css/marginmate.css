@@ -103,6 +103,12 @@ tfoot td { font-weight: 700; border-top: 2px solid var(--panel-border); }
 
 [hidden] { display: none !important; }
 
+.search-bar { margin-bottom: 1.25rem; }
+.search-bar input { width: 100%; max-width: 420px; }
+.search-bar .muted { margin: 0.4rem 0 0; font-size: 0.85rem; }
+
+.search-hidden { display: none !important; }
+
 .category-block { margin-bottom: 1rem; }
 .category-header {
     cursor: pointer;
@@ -149,8 +155,30 @@ table.sub-table {
 .status-IMPORTED, .status-RUNNING { background: #232a3a; color: #7fa6e0; }
 .status-CANCELLED { background: #2a2a2a; color: var(--muted); }
 
-form.inline-form { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.inline-form { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+form.conversion-form {
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+    margin-bottom: 0.4rem;
+    font-size: 0.85rem;
+}
+form.conversion-form select { width: 104px; padding: 0.25rem 0.4rem; }
+form.conversion-form input { width: 68px; padding: 0.25rem 0.4rem; text-align: right; }
 form p { margin: 0.6rem 0; }
+.price-history-chart, .recipe-pie-chart { max-width: 640px; width: 100%; height: auto; }
+
+.ingredient-row-wrapper { margin-bottom: 0.5rem; }
+.ingredient-row-wrapper + .ingredient-row-wrapper[data-group] { position: relative; }
+.ingredient-row-wrapper.js-same-group-follows { margin-bottom: 0.15rem; }
+.ingredient-row-wrapper.js-same-group-follows + .ingredient-row-wrapper::before {
+    content: "OU";
+    display: block;
+    color: var(--amber);
+    font-size: 0.75rem;
+    font-weight: 600;
+    margin: 0.1rem 0 0.15rem 0;
+}
 label { display: block; margin-bottom: 0.25rem; color: var(--muted); font-size: 0.9rem; }
 input, select, textarea {
     background: var(--bg);

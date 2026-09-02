@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Recettes - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <h1>Recettes</h1>
+        <a class="btn" href="{% url 'recipes:recipe_create' %}">+ Nouvelle recette</a>
+    </div>
+
+    {% if recipes %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Nom</th>
+                    <th>Catégorie</th>
+                    <th class="num">Produit</th>
+                    <th class="num">Coût (HT)</th>
+                    <th class="num">Prix (TTC)</th>
+                    <th class="num">Marge (HT)</th>
+                    <th class="num">Facteur</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for recipe in recipes %}
+                <tr>
+                    <td>
+                        <a href="{% url 'recipes:recipe_detail' recipe.pk %}">{{ recipe.name }}</a>
+                        {% if recipe.variation_count > 1 %}<span class="muted">({{ recipe.variation_count }} variantes)</span>{% endif %}
+                    </td>
+                    <td class="muted">{{ recipe.category|default:"—" }}</td>
+                    <td class="num">{{ recipe.yield_quantity|floatformat:2 }} {{ recipe.get_yield_unit_display }}</td>
+                    <td class="num">
+                        {% with range=recipe.ranges.cost_ht %}
+                            {% if range %}
+                                {% if range.0 == range.1 %}{{ range.0|floatformat:2 }} €{% else %}{{ range.0|floatformat:2 }} – {{ range.1|floatformat:2 }} €{% endif %}
+                            {% else %}—{% endif %}
+                        {% endwith %}
+                    </td>
+                    <td class="num">{{ recipe.selling_price_ttc|floatformat:2 }} €</td>
+                    <td class="num">
+                        {% with range=recipe.ranges.margin_percent %}
+                            {% if range %}
+                                {% if range.0 == range.1 %}{{ range.0|floatformat:0 }} %{% else %}{{ range.0|floatformat:0 }} – {{ range.1|floatformat:0 }} %{% endif %}
+                            {% else %}—{% endif %}
+                        {% endwith %}
+                    </td>
+                    <td class="num">
+                        {% with range=recipe.ranges.price_factor %}
+                            {% if range %}
+                                {% if range.0 == range.1 %}x{{ range.0|floatformat:1 }}{% else %}x{{ range.0|floatformat:1 }} – x{{ range.1|floatformat:1 }}{% endif %}
+                            {% else %}—{% endif %}
+                        {% endwith %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <div class="empty-state">Aucune recette pour le moment. Créez-en une pour commencer.</div>
+    {% endif %}
+{% endblock %}

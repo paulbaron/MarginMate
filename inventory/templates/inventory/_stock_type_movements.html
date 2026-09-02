@@ -1,0 +1,51 @@
+{% if movements %}
+<table class="sub-table">
+    <thead>
+        <tr>
+            <th>Produit</th>
+            <th>Fournisseur</th>
+            <th>Date</th>
+            <th class="num">Quantité achetée</th>
+            <th class="num">Prix (HT) / {{ stock_type.get_unit_display }}</th>
+            <th class="num">Total HT</th>
+            <th class="num">TVA</th>
+            <th class="num">Total TTC</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for entry in movements %}
+        <tr>
+            <td><a href="{% url 'invoices:invoice_detail' entry.line.invoice_id %}" title="Voir la facture">{{ entry.line.product.raw_name|default:entry.line.raw_name }}</a></td>
+            <td class="muted">{{ entry.line.invoice.supplier.name }}</td>
+            <td>{{ entry.line.invoice.invoice_date|default:"—" }}</td>
+            <td class="num">
+                {{ entry.purchased_quantity }} {{ entry.purchased_quantity_unit }}
+            </td>
+            <td class="num">{{ entry.movement.unit_cost_ht|floatformat:2 }} €</td>
+            <td class="num">{{ entry.line.total_ht|floatformat:2 }} €</td>
+            <td class="num">{{ entry.vat_percent|floatformat:1 }} %</td>
+            <td class="num">{{ entry.total_ttc|floatformat:2 }} €</td>
+            <td>
+                <form method="post" action="{% url 'inventory:edit_product_conversion' entry.line.product.id %}"
+                      class="conversion-form"
+                      title="Facteur = quantité de stock par article (ex 0.7 pour une bouteille de 70cl). Si la 'Quantité achetée' affichée est déjà la bonne quantité de stock (facture mesurant directement un volume/poids), laissez le facteur à 1 - un facteur ≠1 la multiplierait une deuxième fois.">
+                    {% csrf_token %}
+                    <span class="muted">1 produit =</span>
+                    <input type="text" name="stock_equivalent" value="{{ entry.stock_equivalent_display }}">
+                    <span class="muted">{{ stock_type.get_unit_display }}</span>
+                    <button type="submit" class="btn btn-small" title="Enregistrer">💾</button>
+                </form>
+                <form method="post" action="{% url 'inventory:remove_product' entry.line.product.id %}"
+                      onsubmit="return confirm('Retirer \'{{ entry.line.product.raw_name|escapejs }}\' du stock ?');">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-small btn-secondary">Retirer</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+    <p class="muted" style="padding:0.75rem 0.9rem;">Aucun achat enregistré pour le moment.</p>
+{% endif %}

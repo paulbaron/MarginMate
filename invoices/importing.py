@@ -28,7 +28,12 @@ def import_parsed_invoice(
         if Invoice.objects.filter(supplier=supplier, invoice_number=parsed.invoice_number).exists():
             raise DuplicateInvoiceError(f"Invoice {parsed.invoice_number} from {supplier} was already imported.")
 
-    invoice = Invoice(supplier=supplier, invoice_number=parsed.invoice_number, invoice_date=parsed.invoice_date)
+    invoice = Invoice(
+        supplier=supplier,
+        invoice_number=parsed.invoice_number,
+        invoice_date=parsed.invoice_date,
+        reconciliation_adjustment=parsed.reconciliation_adjustment,
+    )
     if source_file_path:
         name = display_filename or os.path.basename(source_file_path)
         with open(source_file_path, "rb") as fh:

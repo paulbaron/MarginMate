@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}{{ recipe.name }} - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <h1>{{ recipe.name }}</h1>
+        <div style="display:flex; gap:0.5rem;">
+            <a class="btn btn-secondary" href="{% url 'recipes:recipe_update' recipe.pk %}">Modifier</a>
+            <form method="post" action="{% url 'recipes:recipe_delete' recipe.pk %}"
+                  onsubmit="return confirm('Supprimer \'{{ recipe.name|escapejs }}\' ?');">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-secondary">Supprimer</button>
+            </form>
+        </div>
+    </div>
+    <p class="muted">
+        {% if recipe.category %}{{ recipe.category }} · {% endif %}
+        Produit : {{ recipe.yield_quantity|floatformat:2 }} {{ recipe.get_yield_unit_display }}
+        · Prix de vente : {{ recipe.selling_price_ttc|floatformat:2 }} € TTC
+        ({{ recipe.selling_price_ht|floatformat:2 }} € HT, TVA {{ recipe.vat_percent|floatformat:0 }} %)
+        {% if recipe.happy_hour_price_ttc %}
+            · Happy hour : {{ recipe.happy_hour_price_ttc|floatformat:2 }} € TTC
+            ({{ recipe.happy_hour_price_ht|floatformat:2 }} € HT)
+        {% endif %}
+        {% if recipe.used_in.exists %}
+            <br>Utilisée comme ingrédient dans :
+            {% for ri in recipe.used_in.all %}<a href="{% url 'recipes:recipe_detail' ri.recipe_id %}">{{ ri.recipe.name }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
+        {% endif %}
+    </p>
+
+    {% if not variations %}
+        <div class="empty-state">Aucun ingrédient pour le moment.</div>
+    {% endif %}
+
+    {% if variations|length > 1 %}
+        {% with cost_range=recipe.cost_range margin_range=recipe.margin_percent_range factor_range=recipe.price_factor_range %}
+        <div class="card">
+            <p class="muted">
+                Sur les {{ variations|length }} variantes :
+                Coût {{ cost_range.0|floatformat:2 }} – {{ cost_range.1|floatformat:2 }} € ·
+                Marge {{ margin_range.0|floatformat:0 }} – {{ margin_range.1|floatformat:0 }} % ·
+                Facteur x{{ factor_range.0|floatformat:1 }} – x{{ factor_range.1|floatformat:1 }}
+            </p>
+            <p>
+                <label for="variation-select">Variante :</label>
+                <select id="variation-select">
+                    {% for variation in variations %}
+                        <option value="{{ forloop.counter0 }}">{{ variation.name }}</option>
+                    {% endfor %}
+                </select>
+            </p>
+        </div>
+        {% endwith %}
+    {% endif %}
+
+    {% for variation in variations %}
+    <div class="card js-variation" data-variation-index="{{ forloop.counter0 }}" {% if not forloop.first %}hidden{% endif %}>
+        {% if variations|length > 1 %}<h3>{{ variation.name }}</h3>{% endif %}
+        <table class="sub-table">
+            <thead>
+                <tr>
+                    <th>Ingrédient</th>
+                    <th class="num">Quantité</th>
+                    <th class="num">Coût unitaire (HT)</th>
+                    <th class="num">Coût (HT)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for entry in variation.breakdown %}
+                <tr>
+                    <td>
+                        {% if entry.ingredient.sub_recipe_id %}
+                            <a href="{% url 'recipes:recipe_detail' entry.ingredient.sub_recipe_id %}">{{ entry.ingredient.source_name }}</a>
+                        {% else %}
+                            {{ entry.ingredient.source_name }}
+                        {% endif %}
+                    </td>
+                    <td class="num">{{ entry.ingredient.quantity|floatformat:"-4" }} {{ entry.ingredient.source_unit_display }}</td>
+                    <td class="num">{{ entry.unit_cost_ht|floatformat:4 }} €</td>
+                    <td class="num">{{ entry.cost_ht|floatformat:2 }} €</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <p class="muted" style="text-align:right; margin-top:0.5rem;">
+            Coût total (HT) pour {{ recipe.yield_quantity|floatformat:2 }} {{ recipe.get_yield_unit_display }} :
+            <strong style="color:var(--text);">{{ variation.cost_ht|floatformat:2 }} €</strong>
+        </p>
+
+        <div style="display:flex; gap:2rem; flex-wrap:wrap; margin-top:0.75rem;">
+            <p>
+                Marge HT : <strong style="color:var(--green);">{{ variation.margin_ht|floatformat:2 }} €</strong>
+                ({{ variation.margin_percent|floatformat:1 }} % du prix HT) · Facteur :
+                <strong style="color:var(--green);">x{{ variation.price_factor|floatformat:2 }}</strong>
+            </p>
+            {% if variation.happy_hour %}
+            <p class="muted">
+                Happy hour — Marge HT : <strong>{{ variation.happy_hour.margin_ht|floatformat:2 }} €</strong>
+                ({{ variation.happy_hour.margin_percent|floatformat:1 }} %) · Facteur :
+                <strong>x{{ variation.happy_hour.price_factor|floatformat:2 }}</strong>
+            </p>
+            {% endif %}
+        </div>
+
+        {% if variation.pie_svg %}
+            <h4 style="margin-top:1rem;">Répartition du coût par ingrédient</h4>
+            {{ variation.pie_svg|safe }}
+        {% endif %}
+    </div>
+    {% endfor %}
+{% endblock %}
+{% block extra_js %}
+{% if variations|length > 1 %}
+<script>
+document.getElementById("variation-select").addEventListener("change", function (event) {
+    var selected = event.target.value;
+    document.querySelectorAll(".js-variation").forEach(function (card) {
+        card.hidden = card.dataset.variationIndex !== selected;
+    });
+});
+</script>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,5 @@
+{% if has_enough_data %}
+    {{ chart_svg|safe }}
+{% else %}
+    <p class="muted" style="padding:0.75rem 0.9rem;">Pas assez d'historique pour tracer un graphique (au moins 2 achats nécessaires).</p>
+{% endif %}

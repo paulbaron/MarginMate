@@ -6,6 +6,15 @@ regex-based extractor. Line format (columns as printed on the PDF):
 
 VAP and Poids/Volume are both optional and only one is usually present -
 whichever is there ends up in the group we call ``weight_or_volume``.
+
+Two more real formatting quirks, both for crate/pallet deposit ("consigne")
+lines: a charge line (buying a full crate, e.g. "CAISSE COCA 24X33CL PLEIN")
+is prefixed with a literal "+ " before the EAN with no EAN of its own, and a
+refund line (returning the empty crate/pallet, e.g. "... VIDE" or "PALETTE
+EUROPE") prints its Qté and Montant with a trailing "-" instead of a leading
+one (e.g. "1-", "5,50-"). Both are handled here rather than skipped so a
+refund can be linked to a stock item like any other product and have its
+(negative) quantity/value actually subtracted.
 """
 
 from __future__ import annotations
@@ -23,8 +32,8 @@ from .registry import register
 TVA_LETTER_TO_RATE = {"A": Decimal("0"), "B": Decimal("0.055"), "C": Decimal("0.2"), "D": Decimal("0.2")}
 
 LINE_REGEX = re.compile(
-    r"(\d+\s+)?(\d+)\s+(.+?)\s+([A-Z]\s+)?(\d?\d,\d\s+)?(\d+,\d+\s+)?(\d+,\d+\s+)?"
-    r"(\d+,\d+)\s+(\d+\s+)?(\d+)\s+(\d+,\d+)\s+([A-D])"
+    r"(?:\+\s+)?(\d+\s+)?(\d+)\s+(.+?)\s+([A-Z]\s+)?(\d?\d,\d\s+)?(\d+,\d+\s+)?(\d+,\d+\s+)?"
+    r"(\d+,\d+)\s+(\d+\s+)?(\d+-?)\s+(\d+,\d+-?)\s+([A-D])"
 )
 COTIS_SOCIALE_REGEX = re.compile(r"Plus : COTIS\. SECURITE SOCIALE\s+(\d+,\d+)\s+([A-D])")
 DISCOUNT_REGEX = re.compile(r"Offre Achetez Plus Payez Moins\s+(\d+,\d+)-")
@@ -43,10 +52,17 @@ def _to_decimal(text: str | None, default: str = "0") -> Decimal:
     text = text.strip().replace(",", ".")
     if not text:
         return Decimal(default)
+    # Metro prints negative amounts (consigne refunds) with a trailing "-"
+    # rather than a leading one, e.g. "5,50-" - Decimal() doesn't accept that
+    # form directly, so move the sign before parsing.
+    negative = text.endswith("-")
+    if negative:
+        text = text[:-1]
     try:
-        return Decimal(text)
+        value = Decimal(text)
     except Exception:
         return Decimal(default)
+    return -value if negative else value
 
 
 def _to_int(text: str | None, default: int = 0) -> int:
@@ -55,10 +71,14 @@ def _to_int(text: str | None, default: int = 0) -> int:
     text = text.strip()
     if not text:
         return default
+    negative = text.endswith("-")
+    if negative:
+        text = text[:-1]
     try:
-        return int(text)
+        value = int(text)
     except ValueError:
         return default
+    return -value if negative else value
 
 
 def _guess_invoice_number_and_date(full_text: str, pdf_path: str) -> tuple[str, date | None]:
@@ -150,6 +170,17 @@ class MetroParser(InvoiceParser):
                         products_in_category.clear()
 
         for parsed_line in lines_by_name.values():
+            # Metro's printed unit/line price is NOT the real cost: a "Plus :
+            # COTIS. SECURITE SOCIALE" surcharge (mandatory on alcohol) is
+            # billed as a separate line right after the product and has to be
+            # added, and a bulk-buy "Offre Achetez Plus Payez Moins" discount
+            # subtracted - both already accumulated into taxes/discount above
+            # by product name. total_ht is folded to the real total actually
+            # paid (matching the original parser's tried-and-tested
+            # `montant_ht - promotions + taxes` formula) so every downstream
+            # cost calculation, which just reads total_ht as the truth, sees
+            # the right number without having to know about this quirk.
+            parsed_line.total_ht = parsed_line.total_ht - parsed_line.discount + parsed_line.taxes
             if parsed_line.quantity:
                 parsed_line.unit_cost_ht = (parsed_line.total_ht / parsed_line.quantity).quantize(Decimal("0.0001"))
 

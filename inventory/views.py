@@ -1,24 +1,30 @@
-import threading
+import json
 from collections import Counter
 from decimal import Decimal, InvalidOperation
 from itertools import groupby
 
 from django.contrib import messages
+from django.db import transaction
+from django.db.models import Q
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
+from django.utils import timezone
 from django.views.generic import CreateView, ListView, UpdateView
 
-from .ai_suggestions import _check_ollama_ready
-from .forms import StockTypeForm
-from .models import Product, StockMovement, StockType, SuggestionJob, UnitChoices
+from .forms import StockTakeForm, StockTakeLineFormSet, StockTypeForm, stock_take_entry_lookup
+from .models import Product, StockMovement, StockTake, StockTakeLineSource, StockType, UnitChoices
+from .product_matching_rules import apply_rules_to_pending_products
 from .services import (
     link_product_to_stock_type,
+    merge_stock_types,
     product_base_amount,
     refresh_invoice_statuses_for_product,
     unlink_product,
     update_product_conversion,
+    value_counted_quantity,
+    value_counted_stock_type_quantity,
 )
-from .tasks import run_suggestion_job
 
 
 def existing_categories():
@@ -35,56 +41,309 @@ class StockListView(ListView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        rows = []
-        for st in context["stock_types"]:
-            movements_qs = (
-                StockMovement.objects.filter(stock_type=st)
-                .select_related("invoice_line__invoice__supplier", "invoice_line__product")
-                .order_by("-invoice_line__invoice__invoice_date", "-created_at")
+        stock_types = list(context["stock_types"])
+
+        # Only the per-type totals here - one query for every movement's
+        # (quantity, unit_cost_ht, invoice line total/VAT) instead of a
+        # separate aggregate query per stock type (was 3-4 queries x 316
+        # stock types = well over a thousand). Summed in Python rather than
+        # via StockType.current_quantity/current_value_ht/current_value_ttc
+        # (still fine as convenience properties elsewhere, e.g. the admin
+        # list view - one query per row doesn't matter there the way it
+        # does with every stock type on screen at once here) - SQLite's own
+        # SUM()/multiplication isn't true decimal arithmetic and drifts
+        # slightly once there are enough rows, which Python's Decimal
+        # doesn't.
+        #
+        # The purchase-history detail (2500+ rows and growing) is
+        # deliberately NOT fetched here at all - seeing every stock type's
+        # full history at once, most of it hidden behind a collapsed
+        # section nobody opens, was most of why this page used to take
+        # several seconds just to render (8+ MB of HTML). It's fetched
+        # lazily per stock type instead, the first time a row is expanded -
+        # see stock_type_movements() below.
+        quantity_by_type: dict[int, Decimal] = {}
+        value_ht_by_type: dict[int, Decimal] = {}
+        value_ttc_by_type: dict[int, Decimal] = {}
+        values = StockMovement.objects.values_list(
+            "stock_type_id", "quantity", "unit_cost_ht", "invoice_line__total_ht", "invoice_line__vat_rate"
+        )
+        for stock_type_id, quantity, unit_cost_ht, line_total_ht, vat_rate in values:
+            quantity_by_type[stock_type_id] = quantity_by_type.get(stock_type_id, Decimal("0")) + quantity
+            value_ht_by_type[stock_type_id] = value_ht_by_type.get(stock_type_id, Decimal("0")) + (
+                quantity * unit_cost_ht
             )
-            movements = []
-            for m in movements_qs:
-                line = m.invoice_line
-                movements.append(
-                    {
-                        "movement": m,
-                        "line": line,
-                        "total_ttc": line.total_ht * (1 + line.vat_rate) if line else None,
-                        "vat_percent": line.vat_rate * 100 if line else None,
-                        # Same fallback the actual stock computation uses
-                        # (total_volume when measured, else the item count) -
-                        # showing total_volume unconditionally here made
-                        # "Quantité achetée" read as 0 whenever a line had no
-                        # measured volume, even though the real stock
-                        # contribution was correctly computed from quantity.
-                        "purchased_quantity": product_base_amount(line) if line else None,
-                        # Clean display value for the inline edit input - a
-                        # raw Decimal shows as "0.7000", not "0.7".
-                        "stock_equivalent_display": (
-                            f"{float(line.product.stock_equivalent):g}" if line else None
-                        ),
-                    }
+            if line_total_ht is not None:
+                value_ttc_by_type[stock_type_id] = value_ttc_by_type.get(stock_type_id, Decimal("0")) + (
+                    line_total_ht * (vat_rate + Decimal("1"))
                 )
-            rows.append(
+
+        rows = [
+            {
+                "stock_type": st,
+                "quantity": quantity_by_type.get(st.id, Decimal("0")),
+                "value_ht": value_ht_by_type.get(st.id, Decimal("0")),
+                "value_ttc": value_ttc_by_type.get(st.id, Decimal("0")),
+            }
+            for st in stock_types
+        ]
+        categories = []
+        for category, group in groupby(rows, key=lambda row: row["stock_type"].category):
+            category_rows = list(group)
+            categories.append(
                 {
-                    "stock_type": st,
-                    "quantity": st.current_quantity,
-                    "value_ht": st.current_value_ht,
-                    "value_ttc": st.current_value_ttc,
-                    "movements": movements,
+                    "name": category or "Sans catégorie",
+                    "rows": category_rows,
+                    "total_value_ht": sum((row["value_ht"] for row in category_rows), start=Decimal("0")),
+                    "total_value_ttc": sum((row["value_ttc"] for row in category_rows), start=Decimal("0")),
                 }
             )
-        categories = [
-            {"name": category or "Sans catégorie", "rows": list(group)}
-            for category, group in groupby(rows, key=lambda row: row["stock_type"].category)
-        ]
         context["categories"] = categories
         context["total_value_ht"] = sum((row["value_ht"] for row in rows), start=0)
         context["total_value_ttc"] = sum((row["value_ttc"] for row in rows), start=0)
         context["review_count"] = Product.objects.filter(stock_type__isnull=True).count()
         context["empty_stock_type_count"] = StockType.objects.filter(products__isnull=True).distinct().count()
-        context["unit_choices"] = UnitChoices.choices
         return context
+
+
+def _stock_type_movement_entries(stock_type):
+    movements_qs = (
+        StockMovement.objects.filter(stock_type=stock_type)
+        .select_related("invoice_line__invoice__supplier", "invoice_line__product")
+        .order_by("-invoice_line__invoice__invoice_date", "-created_at")
+    )
+    entries = []
+    for m in movements_qs:
+        line = m.invoice_line
+        entries.append(
+            {
+                "movement": m,
+                "line": line,
+                "total_ttc": line.total_ht * (1 + line.vat_rate) if line else None,
+                "vat_percent": line.vat_rate * 100 if line else None,
+                # Same fallback the actual stock computation uses (total_volume
+                # when measured, else the item count) - showing total_volume
+                # unconditionally here made "Quantité achetée" read as 0
+                # whenever a line had no measured volume, even though the real
+                # stock contribution was correctly computed from quantity.
+                "purchased_quantity": product_base_amount(line) if line else None,
+                # The unit label to print next to purchased_quantity - the
+                # stock type's own unit (e.g. Kilogramme) only when the line
+                # actually measured one; a plain item count (a jar, a can)
+                # is always "Unité" regardless of what unit the stock type
+                # tracks in, since product.unit now always mirrors the stock
+                # type (see assign_product) and would otherwise mislabel
+                # e.g. "2" jars of tahina as "2 Kilogramme".
+                "purchased_quantity_unit": (
+                    stock_type.get_unit_display()
+                    if line and line.product.unit != UnitChoices.UNIT and line.total_volume
+                    else "Unité"
+                ),
+                # Clean display value for the inline edit input - a raw
+                # Decimal shows as "0.7000", not "0.7".
+                "stock_equivalent_display": (f"{float(line.product.stock_equivalent):g}" if line else None),
+            }
+        )
+    return entries
+
+
+def _build_price_history_svg(points: list[tuple]) -> str:
+    """points: [(date, unit_cost_ht), ...] oldest first. A self-contained
+    inline SVG line chart - hand-rolled rather than pulling in a charting
+    library, matching this app's plain-HTML/vanilla-JS style elsewhere.
+    Empty string (rendered as a message instead) when there's nothing
+    meaningful to plot a line through.
+    """
+    if len(points) < 2:
+        return ""
+
+    width, height = 640, 220
+    pad_left, pad_right, pad_top, pad_bottom = 55, 20, 20, 30
+    plot_w = width - pad_left - pad_right
+    plot_h = height - pad_top - pad_bottom
+
+    dates = [p[0] for p in points]
+    prices = [float(p[1]) for p in points]
+    min_price, max_price = min(prices), max(prices)
+    if min_price == max_price:
+        min_price -= 1
+        max_price += 1
+    date_min, date_max = dates[0], dates[-1]
+    date_span = (date_max - date_min).days or 1
+
+    def x_for(date):
+        return pad_left + (date - date_min).days / date_span * plot_w
+
+    def y_for(price):
+        return pad_top + (1 - (price - min_price) / (max_price - min_price)) * plot_h
+
+    coords = list(zip((x_for(d) for d in dates), (y_for(p) for p in prices)))
+    polyline_points = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords)
+    circles = "".join(
+        f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3" fill="var(--amber)"><title>{d} : {p:.4f} €</title></circle>'
+        for (x, y), d, p in zip(coords, dates, prices)
+    )
+
+    return (
+        f'<svg viewBox="0 0 {width} {height}" class="price-history-chart" role="img" '
+        f'aria-label="Évolution du prix unitaire">'
+        f'<line x1="{pad_left}" y1="{pad_top}" x2="{pad_left}" y2="{height - pad_bottom}" '
+        f'stroke="var(--panel-border)" />'
+        f'<line x1="{pad_left}" y1="{height - pad_bottom}" x2="{width - pad_right}" y2="{height - pad_bottom}" '
+        f'stroke="var(--panel-border)" />'
+        f'<text x="4" y="{pad_top + 4}" font-size="11" fill="var(--muted)">{max_price:.2f} €</text>'
+        f'<text x="4" y="{height - pad_bottom}" font-size="11" fill="var(--muted)">{min_price:.2f} €</text>'
+        f'<text x="{pad_left}" y="{height - 8}" font-size="11" fill="var(--muted)">{date_min}</text>'
+        f'<text x="{width - pad_right}" y="{height - 8}" font-size="11" fill="var(--muted)" '
+        f'text-anchor="end">{date_max}</text>'
+        f'<polyline points="{polyline_points}" fill="none" stroke="var(--amber)" stroke-width="2" />'
+        f"{circles}"
+        f"</svg>"
+    )
+
+
+def stock_type_price_history(request, pk):
+    """Lazy-loaded (see stock_type_movements below) price-over-time chart
+    for one stock type, plotting every movement's unit_cost_ht against its
+    invoice date."""
+    stock_type = get_object_or_404(StockType, pk=pk)
+    points = list(
+        StockMovement.objects.filter(stock_type=stock_type, invoice_line__isnull=False)
+        .order_by("invoice_line__invoice__invoice_date")
+        .values_list("invoice_line__invoice__invoice_date", "unit_cost_ht")
+    )
+    return render(
+        request,
+        "inventory/_stock_type_price_history.html",
+        {"stock_type": stock_type, "chart_svg": _build_price_history_svg(points), "has_enough_data": len(points) >= 2},
+    )
+
+
+def stock_type_movements(request, pk):
+    """Purchase history for one stock type - fetched on demand (see
+    StockListView.get_context_data for why this isn't just baked into the
+    main page for every stock type up front) the first time its row is
+    expanded, via a plain hx-get/htmx.ajax call from stock_list.html."""
+    stock_type = get_object_or_404(StockType, pk=pk)
+    return render(
+        request,
+        "inventory/_stock_type_movements.html",
+        {
+            "stock_type": stock_type,
+            "movements": _stock_type_movement_entries(stock_type),
+        },
+    )
+
+
+def search_stock_types(request):
+    """Backs the Stock page's search box: matches a stock type by its own
+    name/category, or by the raw_name of any product filed under it, so
+    typing what's actually printed on an invoice still finds the right row
+    even when the stock type itself was named something more generic."""
+    query = (request.GET.get("q") or "").strip()
+    if not query:
+        return JsonResponse({"ids": []})
+    ids = (
+        StockType.objects.filter(
+            Q(name__icontains=query) | Q(category__icontains=query) | Q(products__raw_name__icontains=query)
+        )
+        .distinct()
+        .values_list("id", flat=True)
+    )
+    return JsonResponse({"ids": list(ids)})
+
+
+def export_associations(request):
+    """Downloadable snapshot of every product's stock-item classification -
+    a backup of the (often manual, time-consuming) review work, and a way
+    to seed another instance with it instead of starting from zero. Matched
+    back up on import by (supplier name, raw invoice name), the same pair
+    Product itself is uniquely keyed on."""
+    products = Product.objects.filter(stock_type__isnull=False).select_related("stock_type", "supplier")
+    data = [
+        {
+            "supplier": product.supplier.name,
+            "raw_name": product.raw_name,
+            "product_unit": product.unit,
+            "stock_equivalent": str(product.stock_equivalent),
+            "stock_type_name": product.stock_type.name,
+            "stock_type_category": product.stock_type.category,
+            "stock_type_unit": product.stock_type.unit,
+        }
+        for product in products
+    ]
+    payload = json.dumps({"version": 1, "products": data}, ensure_ascii=False, indent=2)
+    response = HttpResponse(payload, content_type="application/json")
+    response["Content-Disposition"] = 'attachment; filename="marginmate-associations.json"'
+    return response
+
+
+def import_associations(request):
+    """Replays an export_associations file against this instance. Never
+    overwrites an existing classification - a product already linked to a
+    different stock type than the file says is skipped and counted, not
+    silently changed, so importing someone else's work can't clobber your
+    own review decisions."""
+    if request.method != "POST":
+        return render(request, "inventory/import_associations.html")
+
+    upload = request.FILES.get("file")
+    if not upload:
+        messages.error(request, "Choisissez un fichier à importer.")
+        return redirect("inventory:import_associations")
+
+    try:
+        payload = json.loads(upload.read().decode("utf-8"))
+        entries = payload["products"]
+    except (json.JSONDecodeError, UnicodeDecodeError, KeyError, TypeError):
+        messages.error(request, "Fichier invalide ou mal formé.")
+        return redirect("inventory:import_associations")
+
+    applied = 0
+    skipped_conflict = 0
+    skipped_unmatched = 0
+    for entry in entries:
+        try:
+            supplier_name = entry["supplier"]
+            raw_name = entry["raw_name"]
+            stock_type_name = (entry["stock_type_name"] or "").strip()
+        except (KeyError, TypeError):
+            skipped_unmatched += 1
+            continue
+        if not stock_type_name:
+            skipped_unmatched += 1
+            continue
+
+        product = Product.objects.filter(supplier__name=supplier_name, raw_name=raw_name).first()
+        if product is None:
+            skipped_unmatched += 1
+            continue
+
+        if product.stock_type_id is not None:
+            already_matches = product.stock_type.name.lower() == stock_type_name.lower()
+            if already_matches:
+                applied += 1
+            else:
+                skipped_conflict += 1
+            continue
+
+        stock_type = StockType.objects.filter(name__iexact=stock_type_name).first()
+        if stock_type is None:
+            stock_type = StockType.objects.create(
+                name=stock_type_name,
+                category=(entry.get("stock_type_category") or "").strip(),
+                unit=entry.get("stock_type_unit") or UnitChoices.UNIT,
+            )
+        stock_equivalent = _parse_positive_decimal(str(entry.get("stock_equivalent", "1")), default=Decimal("1"))
+        link_product_to_stock_type(product, stock_type, unit=stock_type.unit, stock_equivalent=stock_equivalent or Decimal("1"))
+        applied += 1
+
+    messages.success(
+        request,
+        f"{applied} association(s) appliquée(s), {skipped_conflict} ignorée(s) (déjà classé différemment), "
+        f"{skipped_unmatched} ignorée(s) (produit introuvable dans cette instance).",
+    )
+    return redirect("inventory:stock_list")
 
 
 class CategoryAutocompleteMixin:
@@ -106,6 +365,75 @@ class StockTypeUpdateView(CategoryAutocompleteMixin, UpdateView):
     form_class = StockTypeForm
     template_name = "inventory/stock_type_form.html"
     success_url = reverse_lazy("inventory:stock_list")
+
+    def form_valid(self, form):
+        # product.unit always mirrors its stock type's unit (see
+        # assign_product) - but nothing keeps that true automatically if the
+        # stock type's OWN unit is edited after products are already linked,
+        # so every linked product's unit/movements get recomputed here too.
+        # Without this, changing "Prosecco" from Unité to Litre would save
+        # the new unit but leave every purchase still counted as bottles.
+        old_unit = StockType.objects.get(pk=self.object.pk).unit
+        response = super().form_valid(form)
+        if self.object.unit != old_unit:
+            products = list(self.object.products.all())
+            for product in products:
+                update_product_conversion(product, unit=self.object.unit, stock_equivalent=product.stock_equivalent)
+            if products:
+                messages.info(
+                    self.request,
+                    f"Unité changée : {len(products)} produit(s) lié(s) à \"{self.object.name}\" "
+                    "recalculé(s) en conséquence.",
+                )
+        return response
+
+    def form_invalid(self, form):
+        # A rename that collides with a different existing stock type is
+        # offered as a merge instead of just being rejected outright - very
+        # often that collision IS exactly two brand-specific duplicates of
+        # the same real thing (e.g. renaming "Gin Biillyon" to "Gin") that
+        # should have been one stock type all along. Detected independently
+        # of whatever Django's own validation message says (never string-
+        # match error text - it's in English here regardless of the rest of
+        # the app per LANGUAGE_CODE, and could change between versions).
+        new_name = (form.data.get("name") or "").strip()
+        conflict = None
+        if new_name and form.errors.get("name"):
+            conflict = StockType.objects.filter(name__iexact=new_name).exclude(pk=self.object.pk).first()
+        context = self.get_context_data(form=form)
+        if conflict:
+            context["merge_candidate"] = conflict
+            # ModelForm._post_clean() mutates self.object's fields in place
+            # to the submitted values during validation, even though nothing
+            # gets saved on an invalid form - re-fetch so the merge prompt
+            # shows what's actually in the database, not the rejected edit.
+            context["current_stock_type"] = StockType.objects.get(pk=self.object.pk)
+        return self.render_to_response(context)
+
+
+def merge_stock_type(request, pk):
+    """Confirmed from the "this name already exists" prompt on the edit
+    form (see StockTypeUpdateView.form_invalid) - merges `pk` into whatever
+    stock type `target_id` names, deleting `pk`. Any other field changes
+    that were being made on `pk` (category, unit) are discarded along with
+    it: choosing to merge means "this is the same thing", not "also apply
+    my edits to the survivor"."""
+    if request.method != "POST":
+        return redirect("inventory:stock_list")
+    source = get_object_or_404(StockType, pk=pk)
+    target = get_object_or_404(StockType, pk=request.POST.get("target_id"))
+    if source.unit != target.unit:
+        messages.error(
+            request,
+            f'Fusion impossible : "{source.name}" est en {source.get_unit_display()}, '
+            f'"{target.name}" est en {target.get_unit_display()}. Changez d\'abord l\'unité '
+            "de l'un des deux, ou déplacez les produits manuellement.",
+        )
+        return redirect("inventory:stock_type_update", pk=source.pk)
+    source_name, target_name = source.name, target.name
+    merge_stock_types(source, target)
+    messages.success(request, f'"{source_name}" fusionné dans "{target_name}".')
+    return redirect("inventory:stock_list")
 
 
 def delete_stock_type(request, pk):
@@ -144,12 +472,23 @@ class ReviewQueueView(ListView):
     model = Product
     template_name = "inventory/review_queue.html"
     context_object_name = "products"
+    paginate_by = 50
 
     def get_queryset(self):
+        # Every pending product gets a suggestion before the page ever
+        # renders - no separate button to click, no stale/blank rows. Cheap
+        # to call on every visit: it only touches products with no
+        # suggestion yet, so once the queue is fully autofilled this is a
+        # single no-op query.
+        apply_rules_to_pending_products()
         return (
             Product.objects.filter(stock_type__isnull=True)
             .select_related("supplier")
-            .prefetch_related("invoice_lines")
+            # Without the `__invoice` half, `{{ line.invoice.invoice_date }}`
+            # in the template hits the DB once per invoice line instead of
+            # once total - the single biggest cost on this page (2439 of
+            # 2445 queries, ~5s, before this fix).
+            .prefetch_related("invoice_lines__invoice")
             .order_by("raw_name")
         )
 
@@ -158,12 +497,20 @@ class ReviewQueueView(ListView):
         context["stock_types"] = StockType.objects.all()
         context["unit_choices"] = UnitChoices.choices
         context["existing_categories"] = existing_categories()
-        context["latest_suggestion_job"] = SuggestionJob.objects.first()
 
-        suggested = [p for p in context["products"] if p.ai_suggestion]
-        confidence_counts = Counter(p.ai_suggestion.get("confidence", "?") for p in suggested)
-        context["suggested_count"] = len(suggested)
-        context["confidence_counts"] = confidence_counts
+        # Deliberately NOT derived from context["products"]: that's just the
+        # current page post-pagination, but "Approuver toutes les
+        # suggestions" and the intro text both talk about the whole queue -
+        # only the JSON blob is fetched (not full rows) since that's all
+        # this needs.
+        all_suggestions = list(
+            Product.objects.filter(stock_type__isnull=True, ai_suggestion__isnull=False).values_list(
+                "ai_suggestion", flat=True
+            )
+        )
+        context["suggested_count"] = len(all_suggestions)
+        context["confidence_counts"] = Counter(s.get("confidence", "?") for s in all_suggestions)
+        context["fallback_count"] = sum(1 for s in all_suggestions if s.get("source") == "fallback")
         return context
 
 
@@ -180,56 +527,16 @@ def edit_product_conversion(request, product_id):
     if request.method != "POST":
         return redirect("inventory:stock_list")
     product = get_object_or_404(Product, pk=product_id)
-    product_unit = request.POST.get("product_unit")
     stock_equivalent = _parse_positive_decimal(request.POST.get("stock_equivalent", ""), default=None)
-    if product_unit not in UnitChoices.values or stock_equivalent is None:
-        messages.error(request, "Unité ou facteur invalide.")
+    if stock_equivalent is None:
+        messages.error(request, "Facteur invalide.")
         return redirect("inventory:stock_list")
-    update_product_conversion(product, unit=product_unit, stock_equivalent=stock_equivalent)
+    # product.unit always mirrors its stock type's unit now (see
+    # assign_product) - there's nothing left for a human to choose here
+    # beyond the conversion factor itself.
+    update_product_conversion(product, unit=product.stock_type.unit, stock_equivalent=stock_equivalent)
     messages.success(request, f'"{product.raw_name}" mis à jour (facteur {stock_equivalent}, {product.stock_type}).')
     return redirect("inventory:stock_list")
-
-
-def trigger_suggest_products(request):
-    if request.method != "POST":
-        return redirect("inventory:review_queue")
-
-    active_job = SuggestionJob.objects.filter(
-        status__in=[SuggestionJob.Status.PENDING, SuggestionJob.Status.RUNNING]
-    ).first()
-    if active_job:
-        return redirect("inventory:review_queue")
-
-    try:
-        _check_ollama_ready()
-    except RuntimeError as exc:
-        messages.error(request, str(exc))
-        return redirect("inventory:review_queue")
-
-    job = SuggestionJob.objects.create()
-    thread = threading.Thread(target=run_suggestion_job, args=(job.id,), daemon=True)
-    thread.start()
-    return redirect("inventory:review_queue")
-
-
-def suggestion_job_status(request, job_id):
-    job = get_object_or_404(SuggestionJob, pk=job_id)
-    # Only reload the page from a polling request that just observed the job
-    # finish - not on a fresh page load where the latest job already happens
-    # to be SUCCESS, or every visit to the review queue would reload forever.
-    is_poll = request.headers.get("HX-Request") == "true"
-    return render(request, "inventory/_suggestion_job_status.html", {"job": job, "is_poll": is_poll})
-
-
-def cancel_suggestion_job(request, job_id):
-    if request.method != "POST":
-        return redirect("inventory:review_queue")
-    job = get_object_or_404(SuggestionJob, pk=job_id)
-    if job.status in (SuggestionJob.Status.PENDING, SuggestionJob.Status.RUNNING):
-        job.cancel_requested = True
-        job.save(update_fields=["cancel_requested"])
-        messages.info(request, "Annulation demandée - le modèle va s'arrêter dans quelques secondes.")
-    return redirect("inventory:review_queue")
 
 
 def _resolve_suggestion_stock_type(suggestion: dict) -> StockType | None:
@@ -259,7 +566,6 @@ def approve_all_suggestions(request):
     skip_reasons = Counter()
     for product in products:
         suggestion = product.ai_suggestion
-        product_unit = suggestion.get("product_unit")
         stock_equivalent = _parse_positive_decimal(str(suggestion.get("stock_equivalent", "")), default=None)
         stock_type = _resolve_suggestion_stock_type(suggestion)
 
@@ -268,20 +574,20 @@ def approve_all_suggestions(request):
             reason = "aucun type de stock identifié"
         elif stock_equivalent is None:
             reason = f"facteur de conversion invalide ({suggestion.get('stock_equivalent')!r})"
-        elif product_unit not in UnitChoices.values:
-            reason = f"unité de produit invalide ({product_unit!r})"
 
         if reason:
             skip_reasons[reason] += 1
-            # Clear it so "Suggérer avec l'IA" picks this product up again
-            # instead of it being permanently stuck with a bad suggestion -
-            # re-running costs nothing since only products without a
-            # suggestion get sent to the model.
+            # Clear it so the next visit to the review queue re-generates a
+            # suggestion for it (ReviewQueueView.get_queryset calls
+            # apply_rules_to_pending_products on every request, which only
+            # ever touches products with no suggestion yet) instead of it
+            # being permanently stuck with a bad one.
             product.ai_suggestion = None
             product.save(update_fields=["ai_suggestion"])
             continue
 
-        link_product_to_stock_type(product, stock_type, unit=product_unit, stock_equivalent=stock_equivalent)
+        # product.unit always mirrors stock_type.unit - see assign_product.
+        link_product_to_stock_type(product, stock_type, unit=stock_type.unit, stock_equivalent=stock_equivalent)
         approved += 1
 
     skipped = sum(skip_reasons.values())
@@ -289,14 +595,13 @@ def approve_all_suggestions(request):
         detail = ", ".join(f"{count} ({reason})" for reason, count in skip_reasons.most_common())
         messages.warning(
             request,
-            f"{approved} produit(s) rattaché(s) d'après l'IA. {skipped} ignoré(s) : {detail}. "
-            "Ces produits sont repassés sans suggestion - relancez « Suggérer avec l'IA » pour leur en "
-            "générer une nouvelle.",
+            f"{approved} produit(s) rattaché(s) d'après les suggestions. {skipped} ignoré(s) : {detail}. "
+            "Ces produits sont repassés sans suggestion - une nouvelle sera générée automatiquement.",
         )
     elif approved:
-        messages.success(request, f"{approved} produit(s) rattaché(s) automatiquement d'après les suggestions IA.")
+        messages.success(request, f"{approved} produit(s) rattaché(s) automatiquement d'après les suggestions.")
     else:
-        messages.info(request, "Aucune suggestion IA à approuver pour le moment.")
+        messages.info(request, "Aucune suggestion à approuver pour le moment.")
     return redirect("inventory:review_queue")
 
 
@@ -317,28 +622,124 @@ def assign_product(request, product_id):
         return redirect("inventory:review_queue")
 
     product = get_object_or_404(Product, pk=product_id)
-    existing_id = request.POST.get("existing_stock_type")
-    new_name = request.POST.get("new_stock_type_name", "").strip()
-    product_unit = request.POST.get("product_unit") or UnitChoices.UNIT
+    name = request.POST.get("stock_type_name", "").strip()
     stock_equivalent = _parse_positive_decimal(request.POST.get("stock_equivalent", ""), default=Decimal("1"))
 
     if stock_equivalent is None:
         messages.error(request, "L'équivalence en stock doit être un nombre positif.")
         return redirect("inventory:review_queue")
 
-    if existing_id:
-        stock_type = get_object_or_404(StockType, pk=existing_id)
-    elif new_name:
-        unit = request.POST.get("new_stock_type_unit") or UnitChoices.UNIT
-        category = request.POST.get("new_stock_type_category", "").strip()
-        stock_type, _ = StockType.objects.get_or_create(
-            name__iexact=new_name,
-            defaults={"name": new_name, "unit": unit, "category": category},
-        )
-    else:
-        messages.error(request, "Choisissez un type existant ou donnez un nom pour en créer un nouveau.")
+    if not name:
+        messages.error(request, "Donnez un nom de type de stock.")
         return redirect("inventory:review_queue")
 
-    link_product_to_stock_type(product, stock_type, unit=product_unit, stock_equivalent=stock_equivalent)
+    # A name matching an existing type (case-insensitively) is used as-is -
+    # the unit/category fields only matter for creating a brand new one, the
+    # same resolution _resolve_suggestion_stock_type already does for
+    # suggestions.
+    stock_type = StockType.objects.filter(name__iexact=name).first()
+    if stock_type is None:
+        unit = request.POST.get("new_stock_type_unit") or UnitChoices.UNIT
+        category = request.POST.get("new_stock_type_category", "").strip()
+        stock_type = StockType.objects.create(name=name, unit=unit, category=category)
+
+    # product.unit isn't a separate human choice: it always mirrors whatever
+    # stock type ends up being used (existing types keep their own unit
+    # regardless of what the "new type" dropdown said, via get_or_create's
+    # defaults being ignored when a match already exists) - see
+    # product_base_amount in services.py for why "Litre" vs "Kilogramme"
+    # never actually changes anything, only "Unité" vs. not does.
+    link_product_to_stock_type(product, stock_type, unit=stock_type.unit, stock_equivalent=stock_equivalent)
     messages.success(request, f'"{product.raw_name}" lié à "{stock_type.name}".')
     return redirect("inventory:review_queue")
+
+
+class StockTakeListView(ListView):
+    model = StockTake
+    template_name = "inventory/stock_take_list.html"
+    context_object_name = "stock_takes"
+
+
+def _save_stock_take_line(line):
+    """Value one changed/new stock-take line and replace its source
+    breakdown - called only for lines formset.save(commit=False) actually
+    returns (new lines, and existing ones the user changed), so an
+    untouched existing line keeps reporting exactly what it did when it
+    was last saved (see StockTake's docstring on why that's frozen)."""
+    if line.product_id:
+        result = value_counted_quantity(line.product, line.counted_quantity, line.unit)
+    else:
+        result = value_counted_stock_type_quantity(line.stock_type, line.counted_quantity)
+    line.value_ht = result["value_ht"]
+    line.has_shortfall = result["has_shortfall"]
+    line.shortfall_quantity = result["shortfall_quantity"]
+    line.save()
+    line.sources.all().delete()
+    StockTakeLineSource.objects.bulk_create(
+        StockTakeLineSource(
+            stock_take_line=line,
+            invoice_line=source["invoice_line"],
+            quantity_used=source["quantity_used"],
+            unit_cost_ht=source["unit_cost_ht"],
+        )
+        for source in result["sources"]
+    )
+
+
+def _stock_take_form_view(request, stock_take):
+    if request.method == "POST":
+        form = StockTakeForm(request.POST, instance=stock_take)
+        formset = StockTakeLineFormSet(request.POST, instance=stock_take)
+        if form.is_valid() and formset.is_valid():
+            with transaction.atomic():
+                stock_take = form.save()
+                lines = formset.save(commit=False)
+                for line in lines:
+                    _save_stock_take_line(line)
+                for obj in formset.deleted_objects:
+                    obj.delete()
+            messages.success(request, "Inventaire enregistré.")
+            return redirect("inventory:stock_take_detail", pk=stock_take.pk)
+    else:
+        initial = {} if stock_take.pk else {"taken_at": timezone.now()}
+        form = StockTakeForm(instance=stock_take, initial=initial)
+        formset = StockTakeLineFormSet(instance=stock_take)
+    entries = stock_take_entry_lookup()
+    return render(
+        request,
+        "inventory/stock_take_form.html",
+        {
+            "stock_take": stock_take,
+            "form": form,
+            "formset": formset,
+            "entry_names": entries.keys(),
+            "entry_data": json.dumps(entries),
+        },
+    )
+
+
+def stock_take_create(request):
+    return _stock_take_form_view(request, StockTake())
+
+
+def stock_take_update(request, pk):
+    return _stock_take_form_view(request, get_object_or_404(StockTake, pk=pk))
+
+
+def stock_take_detail(request, pk):
+    stock_take = get_object_or_404(StockTake, pk=pk)
+    lines = list(
+        stock_take.lines.select_related("product", "product__supplier", "stock_type")
+        .prefetch_related("sources__invoice_line__invoice")
+        .order_by("product__raw_name", "stock_type__name")
+    )
+    return render(request, "inventory/stock_take_detail.html", {"stock_take": stock_take, "lines": lines})
+
+
+def stock_take_delete(request, pk):
+    if request.method != "POST":
+        return redirect("inventory:stock_take_list")
+    stock_take = get_object_or_404(StockTake, pk=pk)
+    stock_take.delete()
+    messages.success(request, "Inventaire supprimé.")
+    return redirect("inventory:stock_take_list")

@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Importer les associations - MarginMate{% endblock %}
+{% block content %}
+    <h1>Importer les associations produit → type de stock</h1>
+    <div class="card">
+        <p class="muted">
+            Choisissez un fichier exporté depuis une autre instance (ou une sauvegarde). Seuls les
+            produits déjà présents dans cette instance et pas encore classés seront rattachés - un
+            produit déjà classé différemment est ignoré, jamais écrasé.
+        </p>
+        <form method="post" enctype="multipart/form-data">
+            {% csrf_token %}
+            <p><input type="file" name="file" accept="application/json" required></p>
+            <button class="btn" type="submit">Importer</button>
+            <a class="btn btn-secondary" href="{% url 'inventory:stock_list' %}">Annuler</a>
+        </form>
+    </div>
+{% endblock %}

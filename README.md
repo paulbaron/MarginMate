@@ -9,7 +9,11 @@ and keep a live view of stock quantity/value.
   specific supplier product like "SOBIESKI VODKA 70CL"), and `StockMovement`
   (an append-only ledger of stock received). Current stock quantity/value is
   always computed from the ledger, never stored directly, so it can't drift.
-  A `Product` with no `StockType` yet sits in the review queue.
+  A `Product` with no `StockType` yet sits in the review queue - "Appliquer
+  les règles" pre-fills it from `product_matching_rules.py` (a hardcoded,
+  regex-based brand/product → stock item table) and `quantity_extraction.py`
+  (a regex-based pack-size/count parser), covering known products instantly;
+  anything neither recognises still needs a manual "Rattacher".
 - **invoices** app: `Supplier`, `Invoice`, `InvoiceLine`, `ScrapeJob`, plus:
   - `parsers/` - one parser class per supplier PDF layout (`metro.py`,
     `uba.py`), a registry (`registry.py`), and a last-resort generic parser
@@ -44,9 +48,6 @@ Edit `.env`:
   (Google account settings → App passwords, requires 2FA enabled).
 - `ANTHROPIC_API_KEY` - optional, only needed to use "Autre (analyse IA)"
   when uploading an invoice from a supplier with no dedicated parser.
-- `OLLAMA_HOST` / `OLLAMA_MODEL` - only needed for "🤖 Suggérer avec l'IA" in
-  the review queue - see "Local LLM (stock suggestions)" below. Free, no API
-  key, runs on this machine.
 
 **Security note:** never put real credentials directly in Python files. The
 original `ScrapBarInvoices/src/Server/ScrapInvoices/ScrapInvoices.py` had a
@@ -65,32 +66,33 @@ Then:
 
 Open http://127.0.0.1:8000/. The Django admin is at `/admin/`.
 
-## Local LLM (stock suggestions)
+## Stock item matching
 
-"🤖 Suggérer avec l'IA" in the review queue (`/review/`) pre-fills the
-stock-matching form for each pending product - which stock item it likely
-belongs to, its unit, and the conversion factor - using a local model via
-[Ollama](https://ollama.com), so it's free and runs entirely on this
-machine. It only pre-fills the form; you still confirm/edit and click
-"Rattacher" yourself (see `inventory/ai_suggestions.py` for why: unit
-conversion has enough real edge cases that blind auto-apply isn't safe).
+"📋 Appliquer les règles" in the review queue (`/review/`) pre-fills the
+stock-matching form for each pending product without a suggestion yet -
+which stock item it likely belongs to, its unit, and the conversion factor.
+Both are entirely hardcoded/regex-based, not model-generated:
 
-Setup:
+- `inventory/product_matching_rules.py` - a table of (regex pattern → stock
+  item name, category, unit), e.g. any raw name containing "RHUM" maps to
+  "Rhum" regardless of brand. Add a new tuple here whenever a recurring
+  product keeps landing in the review queue unmatched.
+- `inventory/quantity_extraction.py` - parses a pack size or count out of
+  the raw name (70CL, 1KG, "MPRO 100 GANT LATEX" → 100, ...), cross-checked
+  against the invoice line's own colisage/quantity/volume so a pack size
+  the supplier already counted isn't applied a second time.
 
-```bash
-winget install --id Ollama.Ollama -e
-ollama pull qwen3:8b
-```
+An earlier version used a local LLM (Ollama) for the naming step instead -
+removed after real usage showed it was both too slow (tens of seconds per
+batch) and not reliable enough (the same product named differently between
+runs, occasional cross-product mixups within a batch). See git history if
+that's ever worth revisiting with a faster/more capable model - the
+regex-based quantity extraction was already proven more reliable than the
+LLM at that specific job even before the naming side was replaced too.
 
-Qwen3 8B was chosen for its combination of reliable structured-JSON output
-and strong French-language support among models that fit comfortably in
-6-8GB of VRAM (research done August 2026 - re-check current recommendations
-if you revisit this, the local-LLM landscape moves fast). Swap `OLLAMA_MODEL`
-in `.env` to try another one; no code changes needed as long as it supports
-Ollama's structured-output `format` parameter.
-
-Ollama runs as a background service once installed (check with
-`ollama list`) - no extra process to start alongside `runserver`.
+Either way, this only pre-fills the form; you still confirm/edit and click
+"Rattacher" yourself. Anything neither the rules nor the quantity extractor
+recognise falls through to a normal manual review, same as before.
 
 ## Selenium / Chrome
 

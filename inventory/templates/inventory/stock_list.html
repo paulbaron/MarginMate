@@ -11,17 +11,25 @@
                 <button class="btn btn-secondary" type="submit">🧹 Vider les types vides ({{ empty_stock_type_count }})</button>
             </form>
             {% endif %}
+            <a class="btn btn-secondary" href="{% url 'inventory:export_associations' %}">⬇️ Exporter les associations</a>
+            <a class="btn btn-secondary" href="{% url 'inventory:import_associations' %}">⬆️ Importer les associations</a>
             <a class="btn" href="{% url 'inventory:stock_type_create' %}">+ Nouveau type</a>
         </div>
     </div>
 
     {% if categories %}
+        <div class="search-bar">
+            <input type="text" id="stock-search" autocomplete="off"
+                   placeholder="Rechercher un produit, un type de stock ou une catégorie…">
+            <p class="muted" id="stock-search-status" hidden></p>
+        </div>
         {% for category in categories %}
         <div class="category-block">
             <div class="category-header" data-toggle="cat-{{ forloop.counter }}">
                 <span class="chevron">▸</span>
                 <strong>{{ category.name }}</strong>
                 <span class="muted">({{ category.rows|length }})</span>
+                <span class="muted">— {{ category.total_value_ht|floatformat:2 }} € HT / {{ category.total_value_ttc|floatformat:2 }} € TTC</span>
             </div>
             <table id="cat-{{ forloop.counter }}" hidden>
                 <thead>
@@ -36,7 +44,9 @@
                 </thead>
                 <tbody>
                     {% for row in category.rows %}
-                    <tr class="stock-row" data-toggle="details-{{ row.stock_type.id }}">
+                    <tr class="stock-row" data-toggle="details-{{ row.stock_type.id }}"
+                        data-stock-type-id="{{ row.stock_type.id }}"
+                        data-movements-url="{% url 'inventory:stock_type_movements' row.stock_type.pk %}">
                         <td><span class="chevron">▸</span> {{ row.stock_type.name }}</td>
                         <td class="num">{{ row.quantity|floatformat:2 }}</td>
                         <td>{{ row.stock_type.get_unit_display }}</td>
@@ -44,6 +54,10 @@
                         <td class="num">{{ row.value_ttc|floatformat:2 }} €</td>
                         <td>
                             <a href="{% url 'inventory:stock_type_update' row.stock_type.pk %}">Modifier</a>
+                            <button type="button" class="btn btn-small btn-secondary js-price-history-toggle"
+                                    title="Évolution du prix" style="margin-left:0.5rem;"
+                                    data-price-history-url="{% url 'inventory:stock_type_price_history' row.stock_type.pk %}"
+                                    data-target="price-history-{{ row.stock_type.id }}">📈</button>
                             <form method="post" action="{% url 'inventory:stock_type_delete' row.stock_type.pk %}"
                                   onsubmit="return confirm('Supprimer \'{{ row.stock_type.name|escapejs }}\' ? Les produits associés repasseront en vérification.');"
                                   style="display:inline; margin-left:0.5rem;">
@@ -52,62 +66,14 @@
                             </form>
                         </td>
                     </tr>
+                    <tr id="price-history-{{ row.stock_type.id }}" hidden>
+                        <td colspan="6" style="padding:0.75rem 0.9rem;">
+                            <p class="muted">Chargement…</p>
+                        </td>
+                    </tr>
                     <tr id="details-{{ row.stock_type.id }}" hidden>
                         <td colspan="6" style="padding:0;">
-                            {% if row.movements %}
-                            <table class="sub-table">
-                                <thead>
-                                    <tr>
-                                        <th>Produit</th>
-                                        <th>Fournisseur</th>
-                                        <th>Date</th>
-                                        <th class="num">Quantité achetée</th>
-                                        <th class="num">Prix (HT) / {{ row.stock_type.get_unit_display }}</th>
-                                        <th class="num">Total HT</th>
-                                        <th class="num">TVA</th>
-                                        <th class="num">Total TTC</th>
-                                        <th></th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {% for entry in row.movements %}
-                                    <tr>
-                                        <td>{{ entry.line.product.raw_name|default:entry.line.raw_name }}</td>
-                                        <td class="muted">{{ entry.line.invoice.supplier.name }}</td>
-                                        <td>{{ entry.line.invoice.invoice_date|default:"—" }}</td>
-                                        <td class="num">
-                                            {{ entry.purchased_quantity }} {{ entry.line.product.get_unit_display }}
-                                        </td>
-                                        <td class="num">{{ entry.movement.unit_cost_ht|floatformat:2 }} €</td>
-                                        <td class="num">{{ entry.line.total_ht|floatformat:2 }} €</td>
-                                        <td class="num">{{ entry.vat_percent|floatformat:1 }} %</td>
-                                        <td class="num">{{ entry.total_ttc|floatformat:2 }} €</td>
-                                        <td>
-                                            <form method="post" action="{% url 'inventory:edit_product_conversion' entry.line.product.id %}"
-                                                  style="display:flex; gap:0.25rem; align-items:center; margin-bottom:0.3rem;"
-                                                  title="Unité 'Unité' : facteur = quantité de stock par article (ex 0.7 pour une bouteille de 70cl). Unité Litre/Kilo : si la 'Quantité achetée' affichée est déjà correcte, laissez le facteur à 1 - un facteur ≠1 la multiplierait une deuxième fois.">
-                                                {% csrf_token %}
-                                                <select name="product_unit" style="width:62px; padding:0.1rem;">
-                                                    {% for value, label in unit_choices %}
-                                                        <option value="{{ value }}" {% if value == entry.line.product.unit %}selected{% endif %}>{{ label }}</option>
-                                                    {% endfor %}
-                                                </select>
-                                                <input type="text" name="stock_equivalent" value="{{ entry.stock_equivalent_display }}" style="width:48px; padding:0.1rem;">
-                                                <button type="submit" class="btn btn-small" title="Enregistrer">💾</button>
-                                            </form>
-                                            <form method="post" action="{% url 'inventory:remove_product' entry.line.product.id %}"
-                                                  onsubmit="return confirm('Retirer \'{{ entry.line.product.raw_name|escapejs }}\' du stock ?');">
-                                                {% csrf_token %}
-                                                <button type="submit" class="btn btn-small btn-secondary">Retirer</button>
-                                            </form>
-                                        </td>
-                                    </tr>
-                                    {% endfor %}
-                                </tbody>
-                            </table>
-                            {% else %}
-                                <p class="muted" style="padding:0.75rem 0.9rem;">Aucun achat enregistré pour le moment.</p>
-                            {% endif %}
+                            <p class="muted" style="padding:0.75rem 0.9rem;">Chargement…</p>
                         </td>
                     </tr>
                     {% endfor %}
@@ -135,15 +101,173 @@
 {% endblock %}
 {% block extra_js %}
 <script>
+// Which categories/stock types are expanded is remembered per browser
+// (not per user account - this is a single-user app) so reloading the page,
+// e.g. after editing a product's conversion factor, doesn't collapse
+// everything you had open back down.
+var EXPANDED_STORAGE_KEY = "marginmate:stock:expanded";
+
+function loadExpandedIds() {
+    try {
+        return new Set(JSON.parse(localStorage.getItem(EXPANDED_STORAGE_KEY) || "[]"));
+    } catch (e) {
+        return new Set();
+    }
+}
+
+function saveExpandedIds(ids) {
+    try {
+        localStorage.setItem(EXPANDED_STORAGE_KEY, JSON.stringify(Array.from(ids)));
+    } catch (e) {
+        // private browsing / storage disabled - expansion just won't persist
+    }
+}
+
+function expandTarget(toggle, target) {
+    target.hidden = false;
+    var chevron = toggle.querySelector(".chevron");
+    if (chevron) chevron.textContent = "▾";
+    if (toggle.dataset.movementsUrl && !target.dataset.loaded) {
+        target.dataset.loaded = "1";
+        // Returned so callers restoring many rows at once (see
+        // DOMContentLoaded below) can await it - firing htmx.ajax for
+        // dozens of rows in the same synchronous loop silently drops all
+        // but a couple of the requests (reproduced directly: 36 concurrent
+        // calls left 34 rows stuck on "Chargement…" forever, since nothing
+        // ever retries once dataset.loaded is set), even though every one
+        // of them works fine called on its own.
+        return htmx.ajax("GET", toggle.dataset.movementsUrl, { target: target.querySelector("td"), swap: "innerHTML" });
+    }
+    return Promise.resolve();
+}
+
 document.addEventListener("click", function (event) {
+    var chartToggle = event.target.closest(".js-price-history-toggle");
+    if (chartToggle) {
+        var chartTarget = document.getElementById(chartToggle.dataset.target);
+        if (!chartTarget) return;
+        if (chartTarget.hidden) {
+            chartTarget.hidden = false;
+            if (!chartTarget.dataset.loaded) {
+                chartTarget.dataset.loaded = "1";
+                htmx.ajax("GET", chartToggle.dataset.priceHistoryUrl, { target: chartTarget.querySelector("td"), swap: "innerHTML" });
+            }
+        } else {
+            chartTarget.hidden = true;
+        }
+        return;
+    }
     if (event.target.closest("a, button, form")) return;
     var toggle = event.target.closest("[data-toggle]");
     if (!toggle) return;
     var target = document.getElementById(toggle.dataset.toggle);
     if (!target) return;
-    target.hidden = !target.hidden;
-    var chevron = toggle.querySelector(".chevron");
-    if (chevron) chevron.textContent = target.hidden ? "▸" : "▾";
+
+    var expanded = loadExpandedIds();
+    if (target.hidden) {
+        expandTarget(toggle, target);
+        expanded.add(toggle.dataset.toggle);
+    } else {
+        target.hidden = true;
+        var chevron = toggle.querySelector(".chevron");
+        if (chevron) chevron.textContent = "▸";
+        expanded.delete(toggle.dataset.toggle);
+    }
+    saveExpandedIds(expanded);
+});
+
+document.addEventListener("DOMContentLoaded", async function () {
+    var expanded = loadExpandedIds();
+    if (!expanded.size) return;
+    var toRestore = Array.prototype.filter.call(
+        document.querySelectorAll("[data-toggle]"),
+        function (toggle) { return expanded.has(toggle.dataset.toggle); }
+    );
+    // One at a time, not Promise.all/fire-and-forget - see expandTarget.
+    for (var i = 0; i < toRestore.length; i++) {
+        var toggle = toRestore[i];
+        var target = document.getElementById(toggle.dataset.toggle);
+        if (target) await expandTarget(toggle, target);
+    }
+});
+
+// Search matches a stock type by its own name/category (checked server-side
+// too, but there's no reason to round-trip for that) or by any of its
+// products' raw invoice names (only the server knows those, since products
+// aren't in the DOM until a row is expanded - see stock_type_movements).
+// Matching rows/categories are shown regardless of their persisted collapse
+// state; clearing the box reverts to exactly that persisted state, since
+// search never writes to it.
+var SEARCH_DEBOUNCE_MS = 200;
+var searchTimer = null;
+var searchToken = 0;
+
+function restoreCategoryState(header, table) {
+    var expanded = loadExpandedIds();
+    var isExpanded = expanded.has(header.dataset.toggle);
+    table.hidden = !isExpanded;
+    var chevron = header.querySelector(".chevron");
+    if (chevron) chevron.textContent = isExpanded ? "▾" : "▸";
+}
+
+function applySearchFilter(matchedIds) {
+    var totalMatches = 0;
+    document.querySelectorAll(".category-block").forEach(function (block) {
+        var header = block.querySelector(".category-header");
+        var table = block.querySelector("table");
+        var matchCount = 0;
+        table.querySelectorAll(".stock-row").forEach(function (row) {
+            var detailsRow = document.getElementById(row.dataset.toggle);
+            var matches = matchedIds === null || matchedIds.has(row.dataset.stockTypeId);
+            row.classList.toggle("search-hidden", !matches);
+            if (detailsRow) detailsRow.classList.toggle("search-hidden", !matches);
+            if (matches) matchCount++;
+        });
+        totalMatches += matchCount;
+        block.classList.toggle("search-hidden", matchedIds !== null && matchCount === 0);
+        if (matchedIds === null) {
+            restoreCategoryState(header, table);
+        } else if (matchCount > 0) {
+            table.hidden = false;
+            var chevron = header.querySelector(".chevron");
+            if (chevron) chevron.textContent = "▾";
+        }
+    });
+    return totalMatches;
+}
+
+function runSearch(query) {
+    var statusEl = document.getElementById("stock-search-status");
+    if (!query) {
+        applySearchFilter(null);
+        statusEl.hidden = true;
+        return;
+    }
+    var token = ++searchToken;
+    fetch("{% url 'inventory:search_stock_types' %}?q=" + encodeURIComponent(query))
+        .then(function (resp) { return resp.json(); })
+        .then(function (data) {
+            if (token !== searchToken) return;
+            var matched = new Set(data.ids.map(String));
+            var count = applySearchFilter(matched);
+            statusEl.hidden = false;
+            statusEl.textContent = count ? count + " résultat" + (count > 1 ? "s" : "") : "Aucun résultat.";
+        })
+        .catch(function () {
+            if (token !== searchToken) return;
+            statusEl.hidden = false;
+            statusEl.textContent = "Erreur de recherche.";
+        });
+}
+
+document.addEventListener("DOMContentLoaded", function () {
+    var searchInput = document.getElementById("stock-search");
+    if (!searchInput) return;
+    searchInput.addEventListener("input", function () {
+        clearTimeout(searchTimer);
+        var query = searchInput.value.trim();
+        searchTimer = setTimeout(function () { runSearch(query); }, SEARCH_DEBOUNCE_MS);
+    });
 });
 </script>
 {% endblock %}

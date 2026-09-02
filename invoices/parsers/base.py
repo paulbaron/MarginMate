@@ -32,6 +32,9 @@ class ParsedInvoice:
     invoice_number: str
     invoice_date: date | None
     lines: list[ParsedLine] = field(default_factory=list)
+    # See Invoice.reconciliation_adjustment - 0 when a parser doesn't have
+    # (or doesn't need) a printed grand total to reconcile against.
+    reconciliation_adjustment: Decimal = Decimal("0")
 
 
 class InvoiceParser:

@@ -35,6 +35,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "inventory",
     "invoices",
+    "recipes",
 ]
 
 MIDDLEWARE = [
@@ -111,12 +112,6 @@ UBA_EMAIL_APP_PASSWORD = os.environ.get("UBA_EMAIL_APP_PASSWORD", "")
 
 # Used only for the last-resort LLM invoice parsing fallback.
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-
-# Local LLM (Ollama) used for the "Suggérer avec l'IA" stock-matching feature -
-# free, runs on this machine, no API key needed. Requires Ollama running
-# (https://ollama.com) with the model pulled: `ollama pull qwen3:8b`.
-OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:8b")
 
 # Confidence threshold (0-100) above which a fuzzy product-name match is treated
 # as "the same product" instead of being sent to the review queue.

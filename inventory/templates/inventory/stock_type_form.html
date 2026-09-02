@@ -21,4 +21,31 @@
             <a class="btn btn-secondary" href="{% url 'inventory:stock_list' %}">Annuler</a>
         </form>
     </div>
+
+    {% if merge_candidate %}
+    <div class="card" style="border-color:var(--amber);">
+        <p>
+            Un type de stock nommé « <strong>{{ merge_candidate.name }}</strong> » existe déjà
+            ({{ merge_candidate.get_unit_display }}, {{ merge_candidate.products.count }} produit{{ merge_candidate.products.count|pluralize }}).
+        </p>
+        {% if merge_candidate.unit == current_stock_type.unit %}
+            <p class="muted">
+                Fusionner « {{ current_stock_type.name }} » dans « {{ merge_candidate.name }} » ? Tous ses produits et son
+                historique d'achats seront transférés, puis « {{ current_stock_type.name }} » sera supprimé. Irréversible.
+            </p>
+            <form method="post" action="{% url 'inventory:stock_type_merge' current_stock_type.pk %}"
+                  onsubmit="return confirm('Fusionner \'{{ current_stock_type.name|escapejs }}\' dans \'{{ merge_candidate.name|escapejs }}\' ? Cette action est irréversible.');">
+                {% csrf_token %}
+                <input type="hidden" name="target_id" value="{{ merge_candidate.pk }}">
+                <button type="submit" class="btn">Fusionner dans « {{ merge_candidate.name }} »</button>
+            </form>
+        {% else %}
+            <p class="muted">
+                Fusion impossible : « {{ current_stock_type.name }} » est en {{ current_stock_type.get_unit_display }}, « {{ merge_candidate.name }} »
+                est en {{ merge_candidate.get_unit_display }}. Changez d'abord l'unité de l'un des deux, ou déplacez
+                les produits manuellement.
+            </p>
+        {% endif %}
+    </div>
+    {% endif %}
 {% endblock %}

@@ -1,8 +1,6 @@
 from decimal import Decimal
 
 from django.db import models
-from django.db.models import DecimalField, F, Sum
-from django.db.models.functions import Coalesce
 
 
 class UnitChoices(models.TextChoices):
@@ -33,33 +31,49 @@ class StockType(models.Model):
 
     @property
     def current_quantity(self) -> Decimal:
-        return self.movements.aggregate(total=Coalesce(Sum("quantity"), Decimal("0")))["total"]
+        # Sum("quantity") - same SQLite float-precision reasoning as
+        # current_value_ht below: even a single-column SUM() isn't exact
+        # decimal arithmetic once there are enough rows (verified: some
+        # stock types were off by a few thousandths after dozens of
+        # movements). Summing the fetched values in Python is exact.
+        return sum(self.movements.values_list("quantity", flat=True), start=Decimal("0"))
 
     @property
     def current_value_ht(self) -> Decimal:
-        total = self.movements.aggregate(
-            total=Coalesce(
-                Sum(F("quantity") * F("unit_cost_ht"), output_field=DecimalField(max_digits=14, decimal_places=4)),
-                Decimal("0"),
-            )
-        )["total"]
-        return total
+        # Multiplying at the SQL level (Sum(F("quantity") * F("unit_cost_ht")))
+        # goes through SQLite's own arithmetic for that multiplication, which
+        # isn't true decimal - confirmed it silently produces slightly wrong
+        # totals even for one single movement (6.000 * 1.2183 came back as
+        # 7.31 instead of the exact 7.3098). Multiplying in Python with
+        # Decimal instead is exact; the values themselves are still fetched
+        # in one query.
+        return sum(
+            (quantity * unit_cost_ht for quantity, unit_cost_ht in self.movements.values_list("quantity", "unit_cost_ht")),
+            start=Decimal("0"),
+        )
 
     @property
     def current_value_ttc(self) -> Decimal:
         """Sum of each movement's own invoice line total including VAT - not
         current_value_ht times one blended rate, since different products in
-        the same stock type can carry different VAT rates."""
-        total = self.movements.filter(invoice_line__isnull=False).aggregate(
-            total=Coalesce(
-                Sum(
-                    F("invoice_line__total_ht") * (F("invoice_line__vat_rate") + Decimal("1")),
-                    output_field=DecimalField(max_digits=14, decimal_places=4),
-                ),
-                Decimal("0"),
-            )
-        )["total"]
-        return total
+        the same stock type can carry different VAT rates. Same SQLite
+        float-precision reasoning as current_value_ht above applies here."""
+        values = self.movements.filter(invoice_line__isnull=False).values_list(
+            "invoice_line__total_ht", "invoice_line__vat_rate"
+        )
+        return sum((total_ht * (vat_rate + Decimal("1")) for total_ht, vat_rate in values), start=Decimal("0"))
+
+    @property
+    def current_unit_cost_ht(self) -> Decimal:
+        """Average cost per unit across whatever stock remains - used by
+        recipes/models.py to cost an ingredient. Deliberately the same
+        average the rest of this page is built on (current_value_ht /
+        current_quantity), not a "latest price" or FIFO cost - there's no
+        existing concept of ordering movements by "used first" in this app,
+        and an average is the simplest thing that's already consistent with
+        every other number already shown for a stock type."""
+        quantity = self.current_quantity
+        return (self.current_value_ht / quantity) if quantity else Decimal("0")
 
 
 class Product(models.Model):
@@ -90,9 +104,9 @@ class Product(models.Model):
         default=Decimal("1"),
         help_text="How much of the stock type's unit is in one 'unit' of this product.",
     )
-    # An AI-generated pre-fill for the review form (see ai_suggestions.py) -
-    # a hint the user still has to confirm via the normal assign flow, never
-    # applied automatically. None until "Suggérer avec l'IA" has run for
+    # A pre-fill for the review form (see product_matching_rules.py) - a
+    # hint the user still has to confirm via the normal assign flow, never
+    # applied automatically. None until "Appliquer les règles" has matched
     # this product; cleared once the product is actually assigned.
     ai_suggestion = models.JSONField(null=True, blank=True, default=None)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -135,12 +149,134 @@ class StockMovement(models.Model):
         return f"{self.quantity} {self.stock_type.unit} of {self.stock_type}"
 
 
+class StockTake(models.Model):
+    """A dated physical stock count - "here's what I actually have on the
+    shelf right now" - as opposed to StockMovement's running ledger of what
+    was bought. Each line is valued from that product's own real purchase
+    history (see services.value_counted_quantity), frozen at the moment the
+    count is saved so a later invoice correction can't silently rewrite a
+    past count's reported value.
+    """
+
+    taken_at = models.DateTimeField()
+    note = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-taken_at"]
+
+    def __str__(self):
+        return f"Inventaire du {self.taken_at:%d/%m/%Y}"
+
+    @property
+    def total_value_ht(self) -> Decimal:
+        return sum(self.lines.values_list("value_ht", flat=True), start=Decimal("0"))
+
+    @property
+    def has_shortfall(self) -> bool:
+        return self.lines.filter(has_shortfall=True).exists()
+
+
+class StockTakeLine(models.Model):
+    """One counted product OR stock type within a StockTake - exactly one of
+    the two (see the CheckConstraint below): a specific product when you
+    know exactly which bottle/pack you're looking at (counted_quantity is
+    then how many of THAT product, not the stock type's own unit - see
+    services.value_counted_quantity), or a stock type directly when it's
+    easier to just say "how much Vodka" without pinning down which brand
+    (counted_quantity then is already in the stock type's own unit).
+
+    value_ht/has_shortfall are computed once by value_counted_quantity() /
+    value_counted_stock_type_quantity() and stored, not recomputed on every
+    view, so this line keeps reporting what the count was actually worth on
+    the day it was taken."""
+
+    stock_take = models.ForeignKey(StockTake, related_name="lines", on_delete=models.CASCADE)
+    product = models.ForeignKey(
+        Product, null=True, blank=True, on_delete=models.PROTECT, related_name="stock_take_lines"
+    )
+    stock_type = models.ForeignKey(
+        StockType, null=True, blank=True, on_delete=models.PROTECT, related_name="stock_take_lines"
+    )
+    counted_quantity = models.DecimalField(max_digits=10, decimal_places=4)
+    # What counted_quantity is expressed in. For a stock_type line this is
+    # always that stock type's own unit (no real choice). For a product
+    # line it's a real choice: UNIT to count discrete bottles/packs, or the
+    # product's stock type's own unit to enter an amount measured directly
+    # (e.g. "roughly 0.3L left in an open bottle") - see
+    # services.value_counted_quantity. Stored (not re-derived) so a saved
+    # count keeps meaning what it meant on the day it was taken.
+    unit = models.CharField(max_length=4, choices=UnitChoices.choices)
+    value_ht = models.DecimalField(max_digits=10, decimal_places=2)
+    # True when the count exceeds everything this product's purchase
+    # history can account for - the shortfall portion is still valued (at
+    # the oldest known price) so the total isn't understated, but this
+    # flags it for a human to notice the mismatch (miscount, or stock
+    # bought before this system tracked invoices).
+    has_shortfall = models.BooleanField(default=False)
+    shortfall_quantity = models.DecimalField(max_digits=10, decimal_places=4, default=Decimal("0"))
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                check=(
+                    models.Q(product__isnull=False, stock_type__isnull=True)
+                    | models.Q(product__isnull=True, stock_type__isnull=False)
+                ),
+                name="stocktakeline_exactly_one_source",
+            ),
+            models.UniqueConstraint(
+                fields=["stock_take", "product"], name="unique_product_per_stock_take", condition=models.Q(product__isnull=False)
+            ),
+            models.UniqueConstraint(
+                fields=["stock_take", "stock_type"],
+                name="unique_stock_type_per_stock_take",
+                condition=models.Q(stock_type__isnull=False),
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.counted_quantity} x {self.source_name}"
+
+    @property
+    def source_name(self) -> str:
+        return self.product.raw_name if self.product_id else self.stock_type.name
+
+
+class StockTakeLineSource(models.Model):
+    """One FIFO "slice" of a StockTakeLine's valuation: how much of one
+    specific invoice line contributed to that line's price, and at what
+    per-unit cost - so a count's value isn't just a number, it's traceable
+    back to the actual purchases it was priced from. Frozen alongside
+    value_ht (see StockTakeLine) rather than recomputed, for the same
+    reason: a later invoice correction shouldn't silently rewrite what a
+    past count was reported as being worth.
+
+    The shortfall portion of a line (see has_shortfall/shortfall_quantity)
+    has no source row of its own - it's an extrapolation at the oldest
+    known price, not something actually drawn from that invoice line.
+    """
+
+    stock_take_line = models.ForeignKey(StockTakeLine, related_name="sources", on_delete=models.CASCADE)
+    invoice_line = models.ForeignKey("invoices.InvoiceLine", on_delete=models.PROTECT, related_name="+")
+    quantity_used = models.DecimalField(max_digits=10, decimal_places=4)
+    unit_cost_ht = models.DecimalField(max_digits=10, decimal_places=4)
+
+    class Meta:
+        ordering = ["-invoice_line__invoice__invoice_date"]
+
+    def __str__(self):
+        return f"{self.quantity_used} @ {self.unit_cost_ht} from {self.invoice_line}"
+
+
 class SuggestionJob(models.Model):
-    """Tracks one run of "Suggérer avec l'IA" (see ai_suggestions.py). Runs in
-    a background thread since local LLM inference for ~10 products already
-    takes tens of seconds - blocking the request the way an early version did
-    reproduces exactly the "looks hung, no feedback" problem already fixed
-    once for invoice gathering (see invoices.ScrapeJob).
+    """Historical record of "Suggérer avec l'IA" runs from when stock-item
+    naming suggestions came from a local Ollama model instead of the
+    hardcoded rules in product_matching_rules.py (see git history for that
+    code if it's ever worth revisiting - too slow and not reliable enough in
+    practice, per real usage). Nothing creates new rows here anymore; kept
+    only so old job history stays queryable rather than deleting it via a
+    migration nobody asked for.
     """
 
     class Status(models.TextChoices):

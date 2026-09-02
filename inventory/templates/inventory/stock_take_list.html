@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Inventaires - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <h1>Inventaires physiques</h1>
+        <a class="btn" href="{% url 'inventory:stock_take_create' %}">+ Nouvel inventaire</a>
+    </div>
+    <p class="muted">
+        Un inventaire compare ce que vous avez réellement en stock (compté à la main) à sa valeur
+        d'achat réelle : chaque produit compté est valorisé au prix des derniers achats couvrant la
+        quantité comptée (le lot le plus récent d'abord).
+    </p>
+
+    {% if stock_takes %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Note</th>
+                    <th class="num">Produits comptés</th>
+                    <th class="num">Valeur (HT)</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for stock_take in stock_takes %}
+                <tr>
+                    <td><a href="{% url 'inventory:stock_take_detail' stock_take.pk %}">{{ stock_take.taken_at|date:"d/m/Y H:i" }}</a></td>
+                    <td class="muted">{{ stock_take.note|default:"—" }}</td>
+                    <td class="num">{{ stock_take.lines.count }}</td>
+                    <td class="num">{{ stock_take.total_value_ht|floatformat:2 }} €</td>
+                    <td>{% if stock_take.has_shortfall %}<span class="muted" title="Au moins un produit compté dépasse son historique d'achats">⚠️</span>{% endif %}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <div class="empty-state">Aucun inventaire pour le moment.</div>
+    {% endif %}
+{% endblock %}
