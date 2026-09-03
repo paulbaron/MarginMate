@@ -10,7 +10,8 @@
         {% if invoice.source_file %} · <a href="{{ invoice.source_file.url }}">Voir le PDF</a>{% endif %}
     </p>
 
-    <table>
+    <div class="table-wrap">
+    <table data-table data-table-label="lignes">
         <thead>
             <tr>
                 <th>Produit</th>
@@ -49,6 +50,7 @@
             </tr>
         </tfoot>
     </table>
+    </div>
 
     {% if invoice.needs_review_count %}
         <p class="muted" style="margin-top:1rem;">

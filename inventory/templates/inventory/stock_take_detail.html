@@ -3,7 +3,7 @@
 {% block content %}
     <div class="page-header">
         <h1>Inventaire du {{ stock_take.taken_at|date:"d/m/Y H:i" }}</h1>
-        <div style="display:flex; gap:0.5rem;">
+        <div class="actions">
             <a class="btn" href="{% url 'inventory:stock_take_variance' stock_take.pk %}">Écarts</a>
             <a class="btn btn-secondary" href="{% url 'inventory:stock_take_update' stock_take.pk %}">Modifier</a>
             <form method="post" action="{% url 'inventory:stock_take_delete' stock_take.pk %}"
@@ -16,7 +16,8 @@
     {% if stock_take.note %}<p class="muted">{{ stock_take.note }}</p>{% endif %}
 
     <div class="card">
-        <table class="sub-table">
+        <div class="table-wrap">
+        <table class="sub-table" data-table data-table-label="lignes">
             <thead>
                 <tr>
                     <th>Produit / type de stock</th>
@@ -52,6 +53,7 @@
                 {% endfor %}
             </tbody>
         </table>
+        </div>
         <p class="muted" style="text-align:right; margin-top:0.5rem;">
             Valeur totale (HT) : <strong style="color:var(--text);">{{ stock_take.total_value_ht|floatformat:2 }} €</strong>
         </p>

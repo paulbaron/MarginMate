@@ -2,12 +2,16 @@
 {% block title %}Recettes - MarginMate{% endblock %}
 {% block content %}
     <div class="page-header">
-        <h1>Recettes</h1>
+        <div>
+            <h1>Recettes</h1>
+            <p class="page-subtitle">Ce que vous vendez, ce que ça coûte et ce que ça rapporte. Les alternatives « OU » donnent une fourchette plutôt qu’un chiffre unique.</p>
+        </div>
         <a class="btn" href="{% url 'recipes:recipe_create' %}">+ Nouvelle recette</a>
     </div>
 
     {% if recipes %}
-        <table>
+        <div class="table-wrap">
+        <table data-table data-table-label="recettes">
             <thead>
                 <tr>
                     <th>Nom</th>
@@ -54,7 +58,11 @@
                 {% endfor %}
             </tbody>
         </table>
+        </div>
     {% else %}
-        <div class="empty-state">Aucune recette pour le moment. Créez-en une pour commencer.</div>
+        <div class="empty-state">
+            <p>Aucune recette pour le moment.</p>
+            <a class="btn" href="{% url 'recipes:recipe_create' %}">+ Nouvelle recette</a>
+        </div>
     {% endif %}
 {% endblock %}

@@ -7,6 +7,7 @@
     <title>{% block title %}MarginMate{% endblock %}</title>
     <link rel="stylesheet" href="{% static 'css/marginmate.css' %}">
     <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
+    <script src="{% static 'js/datatable.js' %}" defer></script>
     <script defer>
     // Attaches Django's CSRF token to every htmx POST/PUT/DELETE request -
     // needed for any hx-post (e.g. cancelling a running job in place)
@@ -21,7 +22,7 @@
     <header class="topbar">
         <div class="topbar-inner">
             <a class="brand" href="{% url 'inventory:stock_list' %}">MarginMate</a>
-            <nav>
+            <nav aria-label="Navigation principale">
                 <a href="{% url 'inventory:stock_list' %}" class="{% if request.resolver_match.app_name == 'inventory' and request.resolver_match.url_name == 'stock_list' %}active{% endif %}">Stock</a>
                 <a href="{% url 'inventory:review_queue' %}" class="{% if request.resolver_match.url_name == 'review_queue' %}active{% endif %}">
                     À vérifier

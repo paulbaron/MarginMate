@@ -3,7 +3,7 @@
 {% block content %}
     <div class="page-header">
         <h1>Produits à rattacher</h1>
-        <div style="display:flex; gap:0.5rem;">
+        <div class="actions">
             {% if suggested_count %}
             <form method="post" action="{% url 'inventory:approve_all_suggestions' %}"
                   onsubmit="return confirm('Approuver {{ suggested_count }} suggestion(s) sans les vérifier une par une ?\n\nConfiance : {{ confidence_counts.high|default:0 }} haute, {{ confidence_counts.medium|default:0 }} moyenne, {{ confidence_counts.low|default:0 }} basse.\n\nCeci créera des mouvements de stock directement - vérifiez les suggestions basse confiance avant si possible.');">

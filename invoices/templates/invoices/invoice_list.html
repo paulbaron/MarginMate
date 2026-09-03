@@ -2,8 +2,11 @@
 {% block title %}Factures - MarginMate{% endblock %}
 {% block content %}
     <div class="page-header">
-        <h1>Factures</h1>
-        <div style="display:flex; gap:0.5rem;">
+        <div>
+            <h1>Factures</h1>
+            <p class="page-subtitle">Les factures importées et leurs lignes, avec le coût réel par unité une fois les taxes et remises appliquées.</p>
+        </div>
+        <div class="actions">
             <a class="btn btn-secondary" href="{% url 'invoices:invoice_type_list' %}">Types de factures</a>
             <a class="btn btn-secondary" href="{% url 'invoices:invoice_upload' %}">Importer un PDF</a>
             <a class="btn btn-secondary" href="{% url 'invoices:invoice_create_manual' %}">+ Facture manuelle</a>
@@ -43,7 +46,8 @@
     {% endif %}
 
     {% if invoices %}
-    <table>
+    <div class="table-wrap">
+    <table data-table data-table-label="factures">
         <thead>
             <tr>
                 <th>Fournisseur</th>
@@ -58,14 +62,18 @@
             <tr>
                 <td><a href="{% url 'invoices:invoice_detail' invoice.pk %}">{{ invoice.supplier.name }}</a></td>
                 <td>{{ invoice.invoice_number|default:"—" }}</td>
-                <td>{{ invoice.invoice_date|default:"—" }}</td>
+                <td data-sort="{{ invoice.invoice_date|date:'Y-m-d' }}">{{ invoice.invoice_date|date:"d/m/Y"|default:"—" }}</td>
                 <td><span class="status-pill status-{{ invoice.status }}">{{ invoice.get_status_display }}</span></td>
                 <td class="num">{{ invoice.total_ht|floatformat:2 }} €</td>
             </tr>
             {% endfor %}
         </tbody>
     </table>
+    </div>
     {% else %}
-        <div class="empty-state">Aucune facture importée pour le moment.</div>
+        <div class="empty-state">
+            <p>Aucune facture importée pour le moment.</p>
+            <a class="btn" href="{% url 'invoices:invoice_upload' %}">Importer un PDF</a>
+        </div>
     {% endif %}
 {% endblock %}

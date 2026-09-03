@@ -2,8 +2,11 @@
 {% block title %}Stock - MarginMate{% endblock %}
 {% block content %}
     <div class="page-header">
-        <h1>Stock</h1>
-        <div style="display:flex; gap:0.5rem;">
+        <div>
+            <h1>Stock</h1>
+            <p class="page-subtitle">Ce que vous avez en stock et ce que ça vaut, calculé à partir des factures importées. Cliquez une ligne pour voir son historique de prix.</p>
+        </div>
+        <div class="actions">
             {% if empty_stock_type_count %}
             <form method="post" action="{% url 'inventory:clear_empty_stock_types' %}"
                   onsubmit="return confirm('Supprimer {{ empty_stock_type_count }} type(s) de stock sans aucun produit lié ?');">
@@ -18,10 +21,35 @@
     </div>
 
     {% if categories %}
-        <div class="search-bar">
-            <input type="text" id="stock-search" autocomplete="off"
+        <div class="stat-row">
+            <div class="stat">
+                <div class="stat-label">Valeur du stock (HT)</div>
+                <div class="stat-value">{{ total_value_ht|floatformat:2 }} €</div>
+            </div>
+            <div class="stat">
+                <div class="stat-label">Valeur du stock (TTC)</div>
+                <div class="stat-value">{{ total_value_ttc|floatformat:2 }} €</div>
+            </div>
+            <div class="stat">
+                <div class="stat-label">Types de stock</div>
+                <div class="stat-value">{{ stock_type_count }}</div>
+                <div class="stat-note">dans {{ categories|length }} catégorie{{ categories|length|pluralize }}</div>
+            </div>
+            {% if review_count %}
+            <div class="stat">
+                <div class="stat-label">À rattacher</div>
+                <div class="stat-value bad">{{ review_count }}</div>
+                <div class="stat-note"><a href="{% url 'inventory:review_queue' %}">Voir la file d'attente</a></div>
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="table-toolbar">
+            <div class="table-search" style="max-width:520px;">
+            <input type="search" id="stock-search" autocomplete="off"
                    placeholder="Rechercher un produit, un type de stock ou une catégorie…">
-            <p class="muted" id="stock-search-status" hidden></p>
+            </div>
+            <p class="table-count" id="stock-search-status" hidden></p>
         </div>
         {% for category in categories %}
         <div class="category-block">
@@ -31,7 +59,7 @@
                 <span class="muted">({{ category.rows|length }})</span>
                 <span class="muted">— {{ category.total_value_ht|floatformat:2 }} € HT / {{ category.total_value_ttc|floatformat:2 }} € TTC</span>
             </div>
-            <table id="cat-{{ forloop.counter }}" hidden>
+            <table id="cat-{{ forloop.counter }}" data-table data-table-sort-only hidden>
                 <thead>
                     <tr>
                         <th>Type</th>
@@ -66,12 +94,12 @@
                             </form>
                         </td>
                     </tr>
-                    <tr id="price-history-{{ row.stock_type.id }}" hidden>
+                    <tr id="price-history-{{ row.stock_type.id }}" data-child-row hidden>
                         <td colspan="6" style="padding:0.75rem 0.9rem;">
                             <p class="muted">Chargement…</p>
                         </td>
                     </tr>
-                    <tr id="details-{{ row.stock_type.id }}" hidden>
+                    <tr id="details-{{ row.stock_type.id }}" data-child-row hidden>
                         <td colspan="6" style="padding:0;">
                             <p class="muted" style="padding:0.75rem 0.9rem;">Chargement…</p>
                         </td>
@@ -81,11 +109,6 @@
             </table>
         </div>
         {% endfor %}
-        <p class="muted" style="text-align:right; margin-top:0.5rem;">
-            Valeur totale du stock (HT) : <strong style="color:var(--text);">{{ total_value_ht|floatformat:2 }} €</strong>
-            &nbsp;·&nbsp;
-            (TTC) : <strong style="color:var(--text);">{{ total_value_ttc|floatformat:2 }} €</strong>
-        </p>
     {% else %}
         <div class="empty-state">
             Aucun type de stock pour le moment. Créez-en un, ou importez une facture pour démarrer.

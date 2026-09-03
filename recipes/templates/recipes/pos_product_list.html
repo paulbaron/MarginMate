@@ -16,7 +16,8 @@
         <div class="card">
             <h3>À traiter ({{ pending|length }})</h3>
             <p class="muted">{{ pending_quantity }} articles vendus ne sont rattachés à aucune recette.</p>
-            <table class="sub-table">
+            <div class="table-wrap">
+            <table class="sub-table" data-table data-table-label="produits">
                 <thead>
                     <tr>
                         <th>Produit caisse</th>
@@ -32,7 +33,7 @@
                             <strong>{{ product.name }}</strong>
                             {% if product.first_seen %}
                                 <br><span class="muted" style="font-size:0.85em;">
-                                    {{ product.first_seen }} → {{ product.last_seen }}
+                                    {{ product.first_seen|date:"d/m/Y" }} → {{ product.last_seen|date:"d/m/Y" }}
                                 </span>
                             {% endif %}
                         </td>
@@ -70,6 +71,7 @@
                     {% endfor %}
                 </tbody>
             </table>
+            </div>
         </div>
     {% else %}
         <div class="empty-state">
@@ -84,9 +86,10 @@
     {% if linked %}
         <div class="card">
             <h3>Rattachés ({{ linked|length }})</h3>
-            <table class="sub-table">
+            <div class="table-wrap">
+            <table class="sub-table" data-table data-table-label="produits liés">
                 <thead>
-                    <tr><th>Produit caisse</th><th class="num">Vendus</th><th>Recette</th><th></th></tr>
+                    <tr><th>Produit caisse</th><th class="num">Vendus</th><th>Recette</th><th data-no-sort></th></tr>
                 </thead>
                 <tbody>
                     {% for product in linked %}
@@ -109,6 +112,7 @@
                     {% endfor %}
                 </tbody>
             </table>
+            </div>
         </div>
     {% endif %}
 
@@ -116,8 +120,9 @@
         <div class="card">
             <h3>Ignorés ({{ ignored|length }})</h3>
             <p class="muted">Ces produits ne consomment aucun stock suivi.</p>
-            <table class="sub-table">
-                <thead><tr><th>Produit caisse</th><th class="num">Vendus</th><th></th></tr></thead>
+            <div class="table-wrap">
+            <table class="sub-table" data-table data-table-label="produits ignorés">
+                <thead><tr><th>Produit caisse</th><th class="num">Vendus</th><th data-no-sort></th></tr></thead>
                 <tbody>
                     {% for product in ignored %}
                     <tr>
@@ -133,6 +138,7 @@
                     {% endfor %}
                 </tbody>
             </table>
+            </div>
         </div>
     {% endif %}
 {% endblock %}

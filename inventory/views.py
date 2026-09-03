@@ -102,6 +102,7 @@ class StockListView(ListView):
         context["categories"] = categories
         context["total_value_ht"] = sum((row["value_ht"] for row in rows), start=0)
         context["total_value_ttc"] = sum((row["value_ttc"] for row in rows), start=0)
+        context["stock_type_count"] = len(stock_types)
         context["review_count"] = Product.objects.filter(stock_type__isnull=True).count()
         context["empty_stock_type_count"] = StockType.objects.filter(products__isnull=True).distinct().count()
         return context

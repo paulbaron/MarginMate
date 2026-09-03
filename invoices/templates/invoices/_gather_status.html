@@ -10,8 +10,8 @@
         <div>
             <span class="status-pill status-{{ job.status }}">{{ job.get_status_display }}</span>
             <span class="muted">
-                {% if job.range_start %}Du {{ job.range_start }} au {{ job.range_end }} · {% endif %}
-                Lancée : {{ job.started_at }}
+                {% if job.range_start %}Du {{ job.range_start|date:"d/m/Y" }} au {{ job.range_end|date:"d/m/Y" }} · {% endif %}
+                Lancée : {{ job.started_at|date:"d/m/Y à H:i" }}
             </span>
         </div>
         {% if job.status == "PENDING" or job.status == "RUNNING" %}
