@@ -24,12 +24,13 @@
                 au
                 <input type="date" name="end_date" value="{{ default_end_date|date:'Y-m-d' }}">
             </label>
-            <details class="sources-dropdown">
+            <details class="sources-dropdown" data-persist="sources-open" data-persist-durable>
                 <summary class="btn btn-small btn-secondary">Sources ({{ gather_sources|length }})</summary>
                 <div class="sources-panel">
                     {% for source in gather_sources %}
                         <label class="sources-panel-item">
-                            <input type="checkbox" name="sources" value="{{ source.code }}" checked>
+                            <input type="checkbox" name="sources" value="{{ source.code }}" checked
+                                   data-persist="source:{{ source.code }}" data-persist-durable>
                             {{ source.label }}
                         </label>
                     {% empty %}

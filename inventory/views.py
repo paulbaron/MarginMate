@@ -150,11 +150,19 @@ def _stock_type_movement_entries(stock_type):
 
 
 def _build_price_history_svg(points: list[tuple]) -> str:
-    """points: [(date, unit_cost_ht), ...] oldest first. A self-contained
-    inline SVG line chart - hand-rolled rather than pulling in a charting
-    library, matching this app's plain-HTML/vanilla-JS style elsewhere.
-    Empty string (rendered as a message instead) when there's nothing
-    meaningful to plot a line through.
+    """points: [(date, unit_cost_ht), ...] oldest first, as an inline SVG line
+    chart.
+
+    Still hand-rolled rather than pulling in a charting library. Chart.js and
+    friends are ~65KB gzipped plus a CDN dependency, and would replace a
+    server-rendered SVG - which works with JavaScript off and prints - with a
+    canvas that doesn't. For one line of a few dozen points and one pie of at
+    most eight slices, the only thing they'd buy is the hover tooltip, and
+    that's static/js/charts.js: about eighty lines, no dependency.
+
+    The markup exists to be enhanced: every point carries its date and price
+    in data attributes, so the tooltip shows real values rather than the
+    browser's own sluggish <title> tooltip.
     """
     if len(points) < 2:
         return ""
@@ -181,26 +189,38 @@ def _build_price_history_svg(points: list[tuple]) -> str:
 
     coords = list(zip((x_for(d) for d in dates), (y_for(p) for p in prices)))
     polyline_points = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords)
-    circles = "".join(
-        f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3" fill="var(--amber)"><title>{d} : {p:.4f} €</title></circle>'
+    dots = "".join(
+        f'<circle class="chart-point" cx="{x:.1f}" cy="{y:.1f}" r="3" fill="var(--amber)" '
+        f'data-x="{x:.1f}" data-y="{y:.1f}" data-label="{d:%d/%m/%Y}" data-value="{p:.4f} €" />'
         for (x, y), d, p in zip(coords, dates, prices)
+    )
+    # A faint fill under the line makes the shape readable at a glance, which
+    # is what this chart is actually for - "is it getting dearer".
+    area = (
+        f'<polygon points="{pad_left:.1f},{height - pad_bottom} {polyline_points} '
+        f'{width - pad_right:.1f},{height - pad_bottom}" fill="var(--amber)" opacity="0.08" />'
     )
 
     return (
-        f'<svg viewBox="0 0 {width} {height}" class="price-history-chart" role="img" '
-        f'aria-label="Évolution du prix unitaire">'
+        f'<div class="chart" data-chart="line" data-plot="{pad_left},{pad_top},{plot_w},{plot_h}">'
+        f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="Évolution du prix unitaire">'
         f'<line x1="{pad_left}" y1="{pad_top}" x2="{pad_left}" y2="{height - pad_bottom}" '
-        f'stroke="var(--panel-border)" />'
+        f'stroke="var(--border)" />'
         f'<line x1="{pad_left}" y1="{height - pad_bottom}" x2="{width - pad_right}" y2="{height - pad_bottom}" '
-        f'stroke="var(--panel-border)" />'
+        f'stroke="var(--border)" />'
         f'<text x="4" y="{pad_top + 4}" font-size="11" fill="var(--muted)">{max_price:.2f} €</text>'
         f'<text x="4" y="{height - pad_bottom}" font-size="11" fill="var(--muted)">{min_price:.2f} €</text>'
-        f'<text x="{pad_left}" y="{height - 8}" font-size="11" fill="var(--muted)">{date_min}</text>'
+        f'<text x="{pad_left}" y="{height - 8}" font-size="11" fill="var(--muted)">{date_min:%d/%m/%Y}</text>'
         f'<text x="{width - pad_right}" y="{height - 8}" font-size="11" fill="var(--muted)" '
-        f'text-anchor="end">{date_max}</text>'
+        f'text-anchor="end">{date_max:%d/%m/%Y}</text>'
+        f"{area}"
         f'<polyline points="{polyline_points}" fill="none" stroke="var(--amber)" stroke-width="2" />'
-        f"{circles}"
+        f'<line class="chart-hover-line" x1="0" y1="{pad_top}" x2="0" y2="{height - pad_bottom}" />'
+        f'<circle class="chart-hover-dot" cx="0" cy="0" r="5" />'
+        f"{dots}"
         f"</svg>"
+        f'<div class="chart-tooltip" data-chart-tooltip></div>'
+        f"</div>"
     )
 
 

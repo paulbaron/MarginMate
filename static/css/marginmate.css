@@ -521,3 +521,148 @@ form p { margin: var(--s3) 0; }
     * { transition: none !important; animation: none !important; }
     .btn:active { transform: none; }
 }
+
+/* ------------------------------------------------------------ job console */
+
+.job-status-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--s2);
+}
+
+.job-console { margin-top: var(--s3); }
+
+/* While a job runs, the one line that matters - what it's doing right now -
+   sits in plain sight. The wall of scanner output behind it is what people
+   found alarming, and it's almost never what they wanted to read. */
+.job-console-live {
+    display: flex;
+    align-items: center;
+    gap: var(--s2);
+    margin: 0 0 var(--s2);
+    color: var(--text-dim);
+    font-size: 0.9rem;
+}
+.job-console-last {
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.job-spinner {
+    flex: none;
+    width: 0.85em;
+    height: 0.85em;
+    border: 2px solid var(--border-strong);
+    border-top-color: var(--amber);
+    border-radius: 50%;
+    animation: job-spin 0.7s linear infinite;
+}
+@keyframes job-spin { to { transform: rotate(360deg); } }
+
+.log-details > summary {
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 0.85rem;
+    padding: var(--s1) 0;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: var(--s2);
+}
+.log-details > summary::-webkit-details-marker { display: none; }
+.log-details > summary::before {
+    content: "▸";
+    display: inline-block;
+    transition: transform 0.12s ease;
+}
+.log-details[open] > summary::before { transform: rotate(90deg); }
+.log-details > summary:hover { color: var(--text); }
+.log-actions { display: flex; justify-content: flex-end; margin-bottom: var(--s1); }
+
+/* --------------------------------------------------------------- charts */
+
+.chart {
+    position: relative;
+    max-width: 680px;
+}
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+
+/* Follows the cursor, so it must never sit under it and swallow the next
+   hover event. */
+.chart-tooltip {
+    position: absolute;
+    z-index: 5;
+    pointer-events: none;
+    background: var(--bg-raised);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    padding: var(--s1) var(--s2);
+    font-size: 0.8rem;
+    line-height: 1.35;
+    white-space: nowrap;
+    box-shadow: var(--shadow-pop);
+    transform: translate(-50%, calc(-100% - 10px));
+    opacity: 0;
+    transition: opacity 0.1s ease;
+}
+.chart-tooltip[data-visible] { opacity: 1; }
+.chart-tooltip strong { color: var(--text); font-variant-numeric: tabular-nums; }
+.chart-tooltip .swatch {
+    display: inline-block;
+    width: 0.65em;
+    height: 0.65em;
+    border-radius: 2px;
+    margin-right: 0.35em;
+}
+
+.chart-hover-line { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0; }
+.chart-hover-dot { fill: var(--amber); stroke: var(--bg); stroke-width: 2; opacity: 0; }
+.chart[data-hovering] .chart-hover-line,
+.chart[data-hovering] .chart-hover-dot { opacity: 1; }
+
+.chart-slice { transition: opacity 0.12s ease; cursor: default; }
+.chart[data-hovering] .chart-slice { opacity: 0.45; }
+.chart .chart-slice[data-active] { opacity: 1; }
+
+.chart-legend { display: flex; flex-wrap: wrap; gap: var(--s1) var(--s3); margin-top: var(--s2); font-size: 0.85rem; }
+.chart-legend-item { display: inline-flex; align-items: center; gap: 0.35rem; cursor: default; }
+.chart-legend-item[data-active] { color: var(--text); }
+
+/* ------------------------------------------------------------ bulk select */
+
+/* Only rendered while something is selected, so it never becomes another
+   permanent thing to read past. */
+.bulk-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--s3);
+    padding: var(--s2) var(--s3);
+    margin-bottom: var(--s2);
+    background: var(--amber-bg);
+    border: 1px solid #574728;
+    border-radius: var(--radius-sm);
+    font-size: 0.9rem;
+}
+
+/* ------------------------------------------------- till product decisions */
+
+.pos-actions { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.pos-actions select { max-width: 15rem; }
+/* A modifier on "Lier", not a rival to it - happy hour still links to the
+   same recipe, it just also records the till's name for it. */
+.pos-hh { display: inline-flex; align-items: center; gap: 0.3rem; margin: 0; font-weight: 500; font-size: 0.82rem; }
+.pos-secondary { color: var(--muted); font-size: 0.85rem; display: inline-flex; gap: var(--s1); align-items: center; }
+
+/* A button that reads as a link: same weight as the other secondary choices,
+   without pretending a destructive action is navigation. */
+.link-button {
+    all: unset;
+    cursor: pointer;
+    color: var(--amber);
+    font: inherit;
+}
+.link-button:hover { text-decoration: underline; }

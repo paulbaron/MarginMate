@@ -4,6 +4,8 @@ Project-level rather than per-app because the problem below has now bitten
 three different formsets across three different apps.
 """
 
+import re
+
 from django import forms
 
 
@@ -60,3 +62,28 @@ class BlankRowTolerantForm(BlankRowTolerantFormMixin, forms.Form):
 
 class BlankRowTolerantModelForm(BlankRowTolerantFormMixin, forms.ModelForm):
     pass
+
+
+class JobLogMixin:
+    """Shared reading of a background job's `log` field.
+
+    Both job models append timestamped lines to one text field. The console
+    partial (templates/_job_console.html) shows the last line on its own as
+    "what's happening right now" and folds the rest away, so both models have
+    to answer the same two questions about it.
+    """
+
+    #: "[+  12.3s] " - real information while a job runs, noise on the one
+    #: line shown as a live status, where the spinner already says "running".
+    _ELAPSED_PREFIX = re.compile(r"^\[\+\s*[\d.]+s\]\s*")
+
+    @property
+    def log_lines(self) -> int:
+        return len([line for line in (self.log or "").splitlines() if line.strip()])
+
+    @property
+    def last_log_line(self) -> str:
+        for line in reversed((self.log or "").splitlines()):
+            if line.strip():
+                return self._ELAPSED_PREFIX.sub("", line).strip()
+        return ""

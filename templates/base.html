@@ -7,7 +7,9 @@
     <title>{% block title %}MarginMate{% endblock %}</title>
     <link rel="stylesheet" href="{% static 'css/marginmate.css' %}">
     <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
+    <script src="{% static 'js/ui.js' %}" defer></script>
     <script src="{% static 'js/datatable.js' %}" defer></script>
+    <script src="{% static 'js/charts.js' %}" defer></script>
     <script defer>
     // Attaches Django's CSRF token to every htmx POST/PUT/DELETE request -
     // needed for any hx-post (e.g. cancelling a running job in place)

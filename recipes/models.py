@@ -9,6 +9,8 @@ from django.core.validators import MinValueValidator, MaxValueValidator
 from django.db import models
 from django.utils import timezone
 
+from common import JobLogMixin
+
 from inventory.models import StockType, UnitChoices
 
 
@@ -634,7 +636,7 @@ class RecipeSale(models.Model):
         return f"{self.quantity} x {self.recipe.name} ({self.sold_on})"
 
 
-class SalesImportJob(models.Model):
+class SalesImportJob(JobLogMixin, models.Model):
     """One run of "fetch the sales from the till".
 
     Same shape as invoices' ScrapeJob and for the same reason: the run drives

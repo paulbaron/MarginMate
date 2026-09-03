@@ -5,6 +5,8 @@ from django.db import models
 from django.db.models import Q, Sum
 from django.utils import timezone
 
+from common import JobLogMixin
+
 
 class Supplier(models.Model):
     """A vendor invoices come from. ``parser_key`` points at an entry in the
@@ -176,7 +178,7 @@ class InvoiceLine(models.Model):
         return f"{self.raw_name} x{self.quantity}"
 
 
-class ScrapeJob(models.Model):
+class ScrapeJob(JobLogMixin, models.Model):
     class Status(models.TextChoices):
         PENDING = "PENDING", "En attente"
         RUNNING = "RUNNING", "En cours"
@@ -213,6 +215,12 @@ class ScrapeJob(models.Model):
 
     class Meta:
         ordering = ["-started_at"]
+
+    @property
+    def is_active(self) -> bool:
+        """Still going. Named to match SalesImportJob so one shared template
+        can render either - see templates/_job_console.html."""
+        return self.status in (self.Status.PENDING, self.Status.RUNNING)
 
     def append_log(self, message: str):
         # Timestamped so a slow run can actually be diagnosed after the fact

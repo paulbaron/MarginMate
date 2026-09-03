@@ -154,18 +154,53 @@
             button.addEventListener("click", function () {
                 var current = th.getAttribute("aria-sort");
                 var next = current === "ascending" ? "descending" : "ascending";
-                Array.prototype.forEach.call(headerRow.cells, function (other) {
-                    if (other.hasAttribute("aria-sort")) other.setAttribute("aria-sort", "none");
-                });
-                th.setAttribute("aria-sort", next);
-                sortBy(index, next === "ascending" ? 1 : -1);
+                applySort(index, next === "ascending" ? 1 : -1);
+                saveSort(table, index, next === "ascending" ? 1 : -1);
             });
         });
 
+        function applySort(index, direction) {
+            Array.prototype.forEach.call(headerRow.cells, function (other) {
+                if (other.hasAttribute("aria-sort")) other.setAttribute("aria-sort", "none");
+            });
+            var th = headerRow.cells[index];
+            if (!th || !th.hasAttribute("aria-sort")) return;
+            th.setAttribute("aria-sort", direction === 1 ? "ascending" : "descending");
+            sortBy(index, direction);
+        }
+
+        var saved = readSort(table);
+        if (saved) applySort(saved.index, saved.direction);
+
         if (toolbar) {
             toolbar.input.addEventListener("input", function () { filter(toolbar.input.value); });
-            toolbar.setCount(groups.length, groups.length, false);
+            // ui.js restores the box's TEXT while the toolbar is being built,
+            // which is before this listener exists - so a restored filter
+            // would show its own search term over a completely unfiltered
+            // table. Apply whatever it put there.
+            filter(toolbar.input.value);
         }
+    }
+
+    /** Stable per-table key: its id when it has one, else its position. */
+    function tableKey(table) {
+        if (table.id) return table.id;
+        var all = Array.prototype.slice.call(document.querySelectorAll("table[data-table]"));
+        return "t" + all.indexOf(table);
+    }
+
+    function sortKeyFor(table) { return "mm:" + location.pathname + ":table-sort:" + tableKey(table); }
+
+    function saveSort(table, index, direction) {
+        try { sessionStorage.setItem(sortKeyFor(table), index + ":" + direction); } catch (e) { /* blocked */ }
+    }
+
+    function readSort(table) {
+        var raw;
+        try { raw = sessionStorage.getItem(sortKeyFor(table)); } catch (e) { return null; }
+        if (!raw) return null;
+        var parts = raw.split(":");
+        return { index: Number(parts[0]), direction: Number(parts[1]) };
     }
 
     function buildToolbar(table, label) {
@@ -178,6 +213,9 @@
         input.type = "search";
         input.setAttribute("autocomplete", "off");
         input.setAttribute("aria-label", "Rechercher dans les " + label);
+        // ui.js restores this on reload. Session-scoped, so a filter typed
+        // today doesn't quietly hide rows next week - see its header.
+        input.setAttribute("data-persist", "table-search:" + tableKey(table));
         input.placeholder = "Rechercher…";
         search.appendChild(input);
 
@@ -190,6 +228,11 @@
 
         var anchor = table.closest(".table-wrap") || table;
         anchor.parentNode.insertBefore(toolbar, anchor);
+
+        // This input is created here, AFTER ui.js has already swept the page
+        // for [data-persist] elements - so it has to hand itself over, or the
+        // search box is the one thing on the page that forgets itself.
+        if (window.MarginMateUI) window.MarginMateUI.init(toolbar);
 
         return {
             input: input,
