@@ -10,7 +10,12 @@ from django.utils import timezone
 from django.views.generic import DetailView, ListView
 
 from .forms import EmailInvoiceSourceForm, InvoiceTypeForm, InvoiceUploadForm, ManualInvoiceForm, ManualInvoiceLineFormSet
-from .importing import DuplicateInvoiceError, import_parsed_invoice, parse_and_import
+from .importing import (
+    DuplicateInvoiceError,
+    import_parsed_invoice,
+    parse_and_import,
+    replace_invoice_lines,
+)
 from .models import Invoice, InvoiceType, ScrapeJob, Supplier
 from .parsers.base import ParsedInvoice, ParsedLine
 from .tasks import gather_invoices_task, suggested_start_date, test_email_pattern_task
@@ -266,4 +271,60 @@ def invoice_type_form(request, pk=None):
             # the pattern fields, so the shared partial leaves them out.
             "test_date_fields": ["test_start_date", "test_end_date"],
         },
+    )
+
+
+def edit_invoice_lines(request, pk):
+    """Type an invoice's lines in by hand.
+
+    For invoices that arrived with no parser (see importing.parse_and_import)
+    and for correcting one that did. Reuses the manual-invoice line formset,
+    so there's one way to enter a line rather than two that drift.
+
+    Saving replaces the lines wholesale: an invoice is a document, and the
+    lines are what it says. Editing them in place would mean reconciling
+    which existing line each row refers to, and stock movements already
+    created from them - deleting and recreating is both simpler and
+    exactly what "this is what the invoice actually says" means.
+    """
+    invoice = get_object_or_404(Invoice.objects.select_related("supplier"), pk=pk)
+
+    if request.method == "POST":
+        formset = ManualInvoiceLineFormSet(request.POST)
+        if formset.is_valid():
+            lines = []
+            for line_form in formset:
+                if not line_form.cleaned_data or line_form.cleaned_data.get("DELETE"):
+                    continue
+                quantity = line_form.cleaned_data["quantity"]
+                total_ht = line_form.cleaned_data["total_ht"]
+                lines.append(
+                    ParsedLine(
+                        raw_name=line_form.cleaned_data["product_name"],
+                        quantity=quantity,
+                        total_volume=Decimal("0"),
+                        unit_cost_ht=(total_ht / quantity).quantize(Decimal("0.0001")) if quantity else Decimal("0"),
+                        total_ht=total_ht,
+                        vat_rate=line_form.cleaned_data["vat_rate"] / Decimal("100"),
+                    )
+                )
+            replace_invoice_lines(invoice, lines)
+            messages.success(request, f"{len(lines)} ligne(s) enregistrée(s).")
+            return redirect("invoices:invoice_detail", pk=invoice.pk)
+    else:
+        initial = [
+            {
+                "product_name": line.raw_name,
+                "quantity": line.quantity,
+                "total_ht": line.total_ht,
+                "vat_rate": line.vat_rate * Decimal("100"),
+            }
+            for line in invoice.lines.all()
+        ]
+        formset = ManualInvoiceLineFormSet(initial=initial)
+
+    return render(
+        request,
+        "invoices/invoice_lines_form.html",
+        {"invoice": invoice, "formset": formset},
     )

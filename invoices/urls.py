@@ -15,4 +15,5 @@ urlpatterns = [
     path("types/new/", views.invoice_type_form, name="invoice_type_create"),
     path("types/<int:pk>/edit/", views.invoice_type_form, name="invoice_type_update"),
     path("<int:pk>/", views.InvoiceDetailView.as_view(), name="invoice_detail"),
+    path("<int:pk>/lignes/", views.edit_invoice_lines, name="invoice_edit_lines"),
 ]

@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Lignes de {{ invoice }} - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <p class="breadcrumb"><a href="{% url 'invoices:invoice_detail' invoice.pk %}">← {{ invoice.supplier.name }} {{ invoice.invoice_number }}</a></p>
+            <h1>Saisir les lignes</h1>
+            <p class="muted">
+                {% if invoice.invoice_date %}Facture du {{ invoice.invoice_date|date:"d/m/Y" }}{% endif %}
+                {% if invoice.source_file %} · <a href="{{ invoice.source_file.url }}" target="_blank" rel="noopener">ouvrir le PDF</a>{% endif %}
+            </p>
+        </div>
+    </div>
+
+    <p class="lead">
+        Ce fournisseur n'a pas de parseur : les lignes se saisissent à la main. Le total et la TVA
+        de chaque ligne suffisent — le coût unitaire réel en est déduit.
+    </p>
+
+    <div class="card">
+        <form method="post">
+            {% csrf_token %}
+            {{ formset.management_form }}
+            {% if formset.non_form_errors %}
+                <div class="message message-error">{{ formset.non_form_errors }}</div>
+            {% endif %}
+            <div id="line-rows">
+                {% for line_form in formset %}
+                    <div class="invoice-line-row">
+                        <div class="inline-form">
+                            <span class="muted">{{ line_form.DELETE }}</span>
+                            {{ line_form.product_name }}
+                            {{ line_form.quantity }}
+                            {{ line_form.total_ht }}
+                            {{ line_form.vat_rate }}
+                            <span class="muted">% TVA</span>
+                            <button type="button" class="btn btn-small btn-secondary js-remove-line">Retirer</button>
+                        </div>
+                        {% for error in line_form.non_field_errors %}<div class="message message-error">{{ error }}</div>{% endfor %}
+                        {% for field in line_form %}
+                            {% for error in field.errors %}<div class="message message-error">{{ field.label }} : {{ error }}</div>{% endfor %}
+                        {% endfor %}
+                    </div>
+                {% endfor %}
+            </div>
+            <button type="button" class="btn btn-small btn-secondary" id="add-line-row">+ Ajouter une ligne</button>
+
+            <div class="form-actions" style="margin-top:1rem;">
+                <button class="btn" type="submit">Enregistrer les lignes</button>
+                <a class="btn btn-secondary" href="{% url 'invoices:invoice_detail' invoice.pk %}">Annuler</a>
+            </div>
+        </form>
+    </div>
+
+    <template id="empty-line-row">
+        <div class="invoice-line-row">
+            <div class="inline-form">
+                <span class="muted">{{ formset.empty_form.DELETE }}</span>
+                {{ formset.empty_form.product_name }}
+                {{ formset.empty_form.quantity }}
+                {{ formset.empty_form.total_ht }}
+                {{ formset.empty_form.vat_rate }}
+                <span class="muted">% TVA</span>
+                <button type="button" class="btn btn-small btn-secondary js-remove-line">Retirer</button>
+            </div>
+        </div>
+    </template>
+{% endblock %}
+{% block extra_js %}
+<script>
+// Same index discipline as the recipe form: a new row gets one fresh index
+// counting up from TOTAL_FORMS and keeps it, and removing a row leaves a gap
+// rather than renumbering - see recipe_form.html for why renumbering breaks.
+(function () {
+    var totalForms = document.querySelector("[name$='-TOTAL_FORMS']");
+    var next = parseInt(totalForms.value, 10);
+    document.getElementById("add-line-row").addEventListener("click", function () {
+        var html = document.getElementById("empty-line-row").innerHTML.replace(/__prefix__/g, next);
+        next += 1;
+        totalForms.value = next;
+        var holder = document.createElement("div");
+        holder.innerHTML = html.trim();
+        document.getElementById("line-rows").appendChild(holder.firstElementChild);
+    });
+    document.addEventListener("click", function (event) {
+        if (!event.target.matches(".js-remove-line")) return;
+        var row = event.target.closest(".invoice-line-row");
+        var del = row.querySelector("input[name$='-DELETE']");
+        if (del) {
+            del.checked = true;
+            row.hidden = true;
+        } else {
+            row.remove();
+        }
+    });
+})();
+</script>
+{% endblock %}

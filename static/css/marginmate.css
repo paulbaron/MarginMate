@@ -764,3 +764,9 @@ form p { margin: var(--s3) 0; }
 .explainer[open] > summary::before { transform: rotate(90deg); }
 .explainer > summary:hover { color: var(--text); }
 .explainer p { max-width: 62ch; color: var(--muted); font-size: 0.88rem; margin: var(--s2) 0 0; }
+
+.invoice-line-row { margin-bottom: var(--s2); }
+.invoice-line-row .inline-form input[name$="-product_name"] { min-width: 18rem; flex: 1; }
+.invoice-line-row .inline-form input[name$="-quantity"],
+.invoice-line-row .inline-form input[name$="-vat_rate"] { width: 6rem; text-align: right; }
+.invoice-line-row .inline-form input[name$="-total_ht"] { width: 8rem; text-align: right; }

@@ -15,6 +15,10 @@
             {% if invoice.source_file %}
                 <a class="btn btn-secondary" href="{{ invoice.source_file.url }}" target="_blank" rel="noopener">Voir le PDF</a>
             {% endif %}
+            <a class="btn {% if not lines %}btn{% else %}btn-secondary{% endif %}"
+               href="{% url 'invoices:invoice_edit_lines' invoice.pk %}">
+                {% if lines %}Corriger les lignes{% else %}Saisir les lignes{% endif %}
+            </a>
         </div>
     </div>
 
@@ -95,6 +99,12 @@
                 <td class="num">{{ line.unit_cost_ht|floatformat:4 }} €</td>
                 <td class="num">{{ line.total_ht|floatformat:2 }} €</td>
                 <td class="num">{{ line.vat_percent|floatformat:"-1" }} %</td>
+            </tr>
+            {% empty %}
+            <tr>
+                <td colspan="7" class="muted" style="text-align:center; padding:2rem 0;">
+                    Aucune ligne. Ce fournisseur n'a pas de parseur — saisissez-les à la main.
+                </td>
             </tr>
             {% endfor %}
         </tbody>

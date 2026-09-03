@@ -87,7 +87,7 @@ class InvoiceTypeForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        choices = [("", "— Analyse IA automatique —")] + [
+        choices = [("", "— Saisie manuelle —")] + [
             (key, key) for key in sorted(PARSER_REGISTRY) if key != "LLM"
         ]
         self.fields["parser_key"] = forms.ChoiceField(choices=choices, required=False, label="Parseur")
