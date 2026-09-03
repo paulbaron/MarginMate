@@ -64,6 +64,7 @@
                     <tr>
                         <th>Type</th>
                         <th class="num">Quantité</th>
+                        <th class="num">Vendu</th>
                         <th>Unité</th>
                         <th class="num">Valeur (HT)</th>
                         <th class="num">Valeur (TTC)</th>
@@ -77,6 +78,17 @@
                         data-movements-url="{% url 'inventory:stock_type_movements' row.stock_type.pk %}">
                         <td><span class="chevron">▸</span> {{ row.stock_type.name }}</td>
                         <td class="num">{{ row.quantity|floatformat:2 }}</td>
+                        <td class="num">
+                            {% if row.sold %}
+                                {{ row.sold.exact|floatformat:2 }}
+                                {% if row.sold.is_ambiguous %}
+                                    <span class="sold-shared"
+                                          title="{{ row.sold.shared|floatformat:2 }} de plus ont été consommés par des recettes qui proposent cet article OU {{ row.sold.pool_partners }} autre{{ row.sold.pool_partners|pluralize }} — impossible de savoir lesquels.">
+                                        +{{ row.sold.shared|floatformat:2 }} ?
+                                    </span>
+                                {% endif %}
+                            {% else %}<span class="muted">—</span>{% endif %}
+                        </td>
                         <td>{{ row.stock_type.get_unit_display }}</td>
                         <td class="num">{{ row.value_ht|floatformat:2 }} €</td>
                         <td class="num">{{ row.value_ttc|floatformat:2 }} €</td>

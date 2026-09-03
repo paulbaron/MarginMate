@@ -770,3 +770,18 @@ form p { margin: var(--s3) 0; }
 .invoice-line-row .inline-form input[name$="-quantity"],
 .invoice-line-row .inline-form input[name$="-vat_rate"] { width: 6rem; text-align: right; }
 .invoice-line-row .inline-form input[name$="-total_ht"] { width: 8rem; text-align: right; }
+
+.sale-line-row { margin-bottom: var(--s2); }
+.sale-line-row .inline-form select { min-width: 18rem; }
+.sale-line-row .inline-form input { width: 7rem; text-align: right; }
+
+/* "Sold" is two numbers when recipes offer alternatives: what certainly was
+   this item, and what a choice took from its pool. The second is shown as a
+   separate, quieter figure rather than added in - adding them would state a
+   split that genuinely isn't known. */
+.sold-shared {
+    color: var(--muted);
+    font-size: 0.82em;
+    cursor: help;
+    border-bottom: 1px dotted var(--border-strong);
+}

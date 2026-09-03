@@ -8,6 +8,7 @@
         </div>
         <div class="actions">
             <a class="btn btn-secondary" href="{% url 'recipes:pos_product_list' %}">Produits caisse</a>
+            <a class="btn btn-secondary" href="{% url 'recipes:sale_document_create' %}">+ Facture de vente</a>
             <a class="btn" href="{% url 'recipes:sales_import' %}">Importer depuis L'Addition</a>
         </div>
     </div>
@@ -49,6 +50,47 @@
         </table>
     </div>
     {% endif %}
+
+    <div class="card">
+        <h3>Factures de vente</h3>
+        <p class="muted">
+            Ce que vous avez vendu hors caisse — recettes ou types de stock vendus tels quels.
+            Comptées dans les écarts d'inventaire au même titre que les ventes de la caisse.
+        </p>
+        {% if documents %}
+        <div class="table-wrap">
+        <table class="sub-table" data-table data-table-label="factures">
+            <thead>
+                <tr><th>Date</th><th>Référence</th><th>Lignes</th><th class="num">Total TTC</th><th></th></tr>
+            </thead>
+            <tbody>
+                {% for document in documents %}
+                <tr>
+                    <td>{{ document.sold_on|date:"d/m/Y" }}</td>
+                    <td>{{ document.reference|default:"—" }}{% if document.note %}<br><span class="muted" style="font-size:0.85em;">{{ document.note }}</span>{% endif %}</td>
+                    <td class="muted" style="font-size:0.9em;">
+                        {% for line in document.lines.all %}
+                            {{ line.quantity|floatformat:"-2" }} × {{ line.source_name }}{% if not forloop.last %}<br>{% endif %}
+                        {% endfor %}
+                    </td>
+                    <td class="num">{{ document.total_ttc|floatformat:2 }} €</td>
+                    <td class="num">
+                        <a class="btn btn-small btn-secondary" href="{% url 'recipes:sale_document_update' document.pk %}">Modifier</a>
+                        <form method="post" action="{% url 'recipes:sale_document_delete' document.pk %}"
+                              style="display:inline;" onsubmit="return confirm('Supprimer cette vente ?');">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-small btn-secondary">Supprimer</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% else %}
+            <div class="empty-state">Aucune facture de vente.</div>
+        {% endif %}
+    </div>
 
     <div class="card">
         <h3>Dernières ventes</h3>

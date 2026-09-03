@@ -15,7 +15,7 @@ from django.views.generic import CreateView, ListView, UpdateView
 from .forms import StockTakeForm, StockTakeLineFormSet, StockTypeForm, stock_take_entry_lookup
 from .models import Product, StockMovement, StockTake, StockTakeLineSource, StockType, UnitChoices
 from .product_matching_rules import apply_rules_to_pending_products
-from .variance import compute_variance
+from .variance import compute_variance, quantities_sold
 from .services import (
     link_product_to_stock_type,
     merge_stock_types,
@@ -103,6 +103,13 @@ class StockListView(ListView):
         context["total_value_ht"] = sum((row["value_ht"] for row in rows), start=0)
         context["total_value_ttc"] = sum((row["value_ttc"] for row in rows), start=0)
         context["stock_type_count"] = len(stock_types)
+        # How much of each item has been sold - see variance.quantities_sold
+        # for why it is two numbers rather than one.
+        sold = quantities_sold()
+        for category in categories:
+            for row in category["rows"]:
+                row["sold"] = sold.get(row["stock_type"].id)
+
         context["review_count"] = Product.objects.filter(stock_type__isnull=True).count()
         context["empty_stock_type_count"] = StockType.objects.filter(products__isnull=True).distinct().count()
         return context

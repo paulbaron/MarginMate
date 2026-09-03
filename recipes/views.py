@@ -15,11 +15,20 @@ from django.views.generic import ListView
 from .forms import (
     MANUAL_SALE_SOURCE,
     ManualSaleForm,
+    SaleDocumentForm,
+    SaleDocumentLineFormSet,
     RecipeForm,
     RecipeIngredientFormSet,
     ingredient_unit_map,
 )
-from .models import PosProduct, Recipe, RecipeSale, SalesImportJob, variation_scope
+from .models import (
+    PosProduct,
+    Recipe,
+    RecipeSale,
+    SaleDocument,
+    SalesImportJob,
+    variation_scope,
+)
 from .tasks import import_laddition_sales_task
 
 
@@ -423,6 +432,9 @@ def sales_list(request):
     else:
         form = ManualSaleForm()
 
+    documents = list(
+        SaleDocument.objects.prefetch_related("lines__recipe", "lines__stock_type").order_by("-sold_on")[:50]
+    )
     sales = RecipeSale.objects.select_related("recipe").order_by("-sold_on", "recipe__name")[:400]
     totals = RecipeSale.objects.values("source").annotate(
         rows=Count("id"), units=Sum("quantity")
@@ -435,6 +447,7 @@ def sales_list(request):
             "sales": sales,
             "totals": totals,
             "manual_source": MANUAL_SALE_SOURCE,
+            "documents": documents,
         },
     )
 
@@ -475,3 +488,43 @@ def pos_products_bulk(request):
     updated = PosProduct.objects.filter(name__in=names).update(ignored=True, recipe=None)
     messages.success(request, f"{updated} produit{'s' if updated > 1 else ''} ignoré{'s' if updated > 1 else ''}.")
     return redirect("recipes:pos_product_list")
+
+
+def sale_document_form(request, pk=None):
+    """Create or edit a hand-written sale document.
+
+    Lines can be recipes or stock items sold as themselves; both feed the
+    variance report, a recipe through its ingredients and a stock item
+    directly.
+    """
+    document = get_object_or_404(SaleDocument, pk=pk) if pk else SaleDocument()
+
+    if request.method == "POST":
+        form = SaleDocumentForm(request.POST, instance=document)
+        formset = SaleDocumentLineFormSet(request.POST, instance=document)
+        if form.is_valid() and formset.is_valid():
+            with transaction.atomic():
+                document = form.save()
+                formset.instance = document
+                formset.save()
+            messages.success(request, f"{document} enregistrée.")
+            return redirect("recipes:sales_list")
+    else:
+        form = SaleDocumentForm(instance=document)
+        formset = SaleDocumentLineFormSet(instance=document)
+
+    return render(
+        request,
+        "recipes/sale_document_form.html",
+        {"form": form, "formset": formset, "document": document if document.pk else None},
+    )
+
+
+def sale_document_delete(request, pk):
+    if request.method != "POST":
+        return redirect("recipes:sales_list")
+    document = get_object_or_404(SaleDocument, pk=pk)
+    label = str(document)
+    document.delete()
+    messages.success(request, f"{label} supprimée.")
+    return redirect("recipes:sales_list")

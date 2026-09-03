@@ -502,7 +502,7 @@ def compute_variance(closing_take: StockTake, opening_take: StockTake | None = N
     rather than leaving that assumption buried.
     """
     from recipes.models import Recipe
-    from recipes.sales import sales_between
+    from recipes.sales import sales_between, stock_type_sales_between
 
     if opening_take is None:
         opening_take = (
@@ -558,6 +558,13 @@ def compute_variance(closing_take: StockTake, opening_take: StockTake | None = N
             expected_min[pool] = expected_min.get(pool, ZERO) + min(totals) * count
             expected_max[pool] = expected_max.get(pool, ZERO) + max(totals) * count
 
+    # A stock item sold as itself - a bottle over the counter - consumes
+    # exactly itself. No recipe, no alternatives, no ambiguity.
+    for stock_type_id, quantity in stock_type_sales_between(period_start, period_end).items():
+        pool = pool_of.setdefault(stock_type_id, frozenset({stock_type_id}))
+        expected_min[pool] = expected_min.get(pool, ZERO) + quantity
+        expected_max[pool] = expected_max.get(pool, ZERO) + quantity
+
     pools = set(pool_of.values()) | set(expected_min)
     stock_types = {st.id: st for st in StockType.objects.filter(id__in=set().union(*pools) if pools else [])}
 
@@ -590,3 +597,92 @@ def compute_variance(closing_take: StockTake, opening_take: StockTake | None = N
         report.pools.append(variance)
 
     return report
+
+
+@dataclass
+class SoldQuantity:
+    """How much of one stock item was sold over a period.
+
+    Two numbers, because "how much vodka did I sell" genuinely has two
+    answers when recipes offer alternatives. `exact` is what is certainly
+    this item: sold as itself, or used by a recipe that names it with no
+    "OU" beside it. `shared` is the amount a choice consumed from the pool
+    this item belongs to - some of it was this item, and there is no way to
+    know how much.
+
+    Reporting exact + shared as one number would be a guess; reporting only
+    the exact part would understate a bar whose spirits are all alternatives
+    to each other, which is most bars.
+    """
+
+    exact: Decimal = ZERO
+    shared: Decimal = ZERO
+    pool: frozenset = frozenset()
+
+    @property
+    def pool_partners(self) -> int:
+        return max(0, len(self.pool) - 1)
+
+    @property
+    def is_ambiguous(self) -> bool:
+        return self.shared > 0 and self.pool_partners > 0
+
+    @property
+    def upper_bound(self) -> Decimal:
+        """The most this item could possibly have been."""
+        return self.exact + self.shared
+
+
+def quantities_sold(start: date | None = None, end: date | None = None) -> dict[int, SoldQuantity]:
+    """{stock_type_id: SoldQuantity} over a window (all time by default).
+
+    Built the same way the variance report builds expected usage, and for the
+    same reason: a recipe's choice group consumes from a POOL, not from an
+    identifiable item.
+    """
+    from django.utils import timezone
+
+    from recipes.models import Recipe
+    from recipes.sales import sales_between, stock_type_sales_between
+
+    if end is None:
+        end = timezone.localdate()
+
+    sold = sales_between(start, end)
+    recipes = list(Recipe.objects.prefetch_related("ingredients__stock_type", "ingredients__sub_recipe"))
+    pool_of = build_pools(recipes)
+
+    result: dict[int, SoldQuantity] = {}
+
+    def entry(stock_type_id: int) -> SoldQuantity:
+        if stock_type_id not in result:
+            result[stock_type_id] = SoldQuantity(
+                pool=pool_of.get(stock_type_id, frozenset({stock_type_id}))
+            )
+        return result[stock_type_id]
+
+    # Sold as itself: no recipe, no alternatives, no doubt.
+    for stock_type_id, quantity in stock_type_sales_between(start, end).items():
+        entry(stock_type_id).exact += quantity
+
+    for recipe in recipes:
+        count = sold.get(recipe.pk, 0)
+        if not count:
+            continue
+        for options in recipe_usage_terms(recipe):
+            if not options:
+                continue
+            if len(options) == 1:
+                for stock_type_id, amount in options[0].items():
+                    entry(stock_type_id).exact += amount * count
+                continue
+            # A choice: the amount is certain, which item it came from isn't.
+            # Credited to every member of the pool as "shared" - deliberately
+            # NOT divided between them, since the split is exactly what can't
+            # be known and an equal share would look like a measurement.
+            totals = [sum(option.values(), start=ZERO) for option in options]
+            consumed = max(totals) * count
+            for stock_type_id in {st_id for option in options for st_id in option}:
+                entry(stock_type_id).shared += consumed
+
+    return result

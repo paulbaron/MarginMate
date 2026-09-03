@@ -824,3 +824,86 @@ class RecipeIngredient(models.Model):
         if self.stock_type_id:
             return self.stock_type.get_unit_display()
         return self.sub_recipe.get_yield_unit_display()
+
+
+class SaleDocument(models.Model):
+    """Something sold, recorded by hand: a bar tab settled off the books, a
+    private event, a case sold to a friend at cost.
+
+    Separate from RecipeSale because a line here can be a stock item sold
+    AS ITSELF - a bottle over the counter - which is not a recipe and has no
+    ingredients to expand. Both kinds feed the variance report: a recipe line
+    consumes whatever the recipe consumes, a stock line consumes itself.
+    """
+
+    reference = models.CharField(max_length=100, blank=True, help_text="Optionnel — votre propre numéro.")
+    sold_on = models.DateField()
+    note = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-sold_on", "-created_at"]
+
+    def __str__(self):
+        return f"Vente du {self.sold_on:%d/%m/%Y}" + (f" ({self.reference})" if self.reference else "")
+
+    @property
+    def total_ttc(self) -> Decimal:
+        return sum((line.total_ttc for line in self.lines.all()), start=Decimal("0"))
+
+
+class SaleDocumentLine(models.Model):
+    """One line of a sale document: a recipe OR a stock item, never both and
+    never neither - the same exactly-one-source shape as RecipeIngredient and
+    StockTakeLine, and enforced the same way."""
+
+    document = models.ForeignKey(SaleDocument, related_name="lines", on_delete=models.CASCADE)
+    recipe = models.ForeignKey(Recipe, null=True, blank=True, on_delete=models.PROTECT, related_name="sale_lines")
+    stock_type = models.ForeignKey(
+        StockType, null=True, blank=True, on_delete=models.PROTECT, related_name="sale_lines"
+    )
+    # Decimal rather than an integer count: a recipe is sold by the serving,
+    # but a stock item can be sold by the litre.
+    quantity = models.DecimalField(max_digits=10, decimal_places=4)
+    unit_price_ttc = models.DecimalField(
+        max_digits=8, decimal_places=2, null=True, blank=True,
+        help_text="Optionnel — laissez vide pour le prix de vente de la recette.",
+    )
+
+    class Meta:
+        ordering = ["id"]
+        constraints = [
+            models.CheckConstraint(
+                check=(
+                    models.Q(recipe__isnull=False, stock_type__isnull=True)
+                    | models.Q(recipe__isnull=True, stock_type__isnull=False)
+                ),
+                name="saledocumentline_exactly_one_source",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.quantity} x {self.source_name}"
+
+    def clean(self):
+        if bool(self.recipe_id) == bool(self.stock_type_id):
+            raise ValidationError("Choisissez soit une recette, soit un type de stock — pas les deux.")
+
+    @property
+    def source_name(self) -> str:
+        return self.recipe.name if self.recipe_id else self.stock_type.name
+
+    @property
+    def unit_display(self) -> str:
+        return self.recipe.get_yield_unit_display() if self.recipe_id else self.stock_type.get_unit_display()
+
+    @property
+    def total_ttc(self) -> Decimal:
+        """The line's own price when given, else the recipe's own selling
+        price. A stock item sold as itself has no default - there's no
+        "price" on a stock item, only a cost."""
+        if self.unit_price_ttc is not None:
+            return self.unit_price_ttc * self.quantity
+        if self.recipe_id:
+            return self.recipe.selling_price_ttc * self.quantity
+        return Decimal("0")
