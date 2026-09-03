@@ -7,14 +7,7 @@
         <form method="post">
             {% csrf_token %}
             <h3>Informations générales</h3>
-            {% for field in type_form %}
-                <p>
-                    {{ field.label_tag }}
-                    {{ field }}
-                    {% if field.help_text %}<span class="muted">{{ field.help_text }}</span>{% endif %}
-                    {% for error in field.errors %}<div class="message message-error">{{ error }}</div>{% endfor %}
-                </p>
-            {% endfor %}
+            {% include "_form_fields.html" with form=type_form %}
 
             <h3>Source : email</h3>
             <p class="muted">
@@ -23,22 +16,13 @@
                 sur le nom de fichier. Objet et contenu vides = tous. Utilisez "Tester" pour vérifier un motif
                 avant de l'enregistrer - aucun email ni facture n'est modifié ou importé par un test.
             </p>
-            {% for field in source_form %}
-                {% if field.name != "test_start_date" and field.name != "test_end_date" %}
-                <p>
-                    {{ field.label_tag }}
-                    {{ field }}
-                    {% if field.help_text %}<span class="muted">{{ field.help_text }}</span>{% endif %}
-                    {% for error in field.errors %}<div class="message message-error">{{ error }}</div>{% endfor %}
-                </p>
-                {% endif %}
-            {% endfor %}
+            {% include "_form_fields.html" with form=source_form exclude=test_date_fields %}
 
             <h3>Tester ce motif</h3>
             <div class="inline-form">
-                {{ source_form.test_start_date.label_tag }}
+                <label for="{{ source_form.test_start_date.id_for_label }}" class="inline-label">{{ source_form.test_start_date.label }}</label>
                 {{ source_form.test_start_date }}
-                {{ source_form.test_end_date.label_tag }}
+                <label for="{{ source_form.test_end_date.id_for_label }}" class="inline-label">{{ source_form.test_end_date.label }}</label>
                 {{ source_form.test_end_date }}
                 <button class="btn btn-secondary" type="submit" name="action" value="test">Tester</button>
             </div>

@@ -18,7 +18,8 @@ class Supplier(models.Model):
     name = models.CharField(max_length=255)
     parser_key = models.CharField(max_length=32, blank=True)
     is_scrapable = models.BooleanField(
-        default=False, help_text="Whether 'Gather new invoices' knows how to fetch this supplier automatically."
+        default=False,
+        help_text="Si « Récupérer les nouvelles factures » sait aller les chercher tout seul."
     )
 
     class Meta:
@@ -50,7 +51,8 @@ class InvoiceType(models.Model):
     parser_key = models.CharField(max_length=32, blank=True)
     source_kind = models.CharField(max_length=10, choices=SourceKind.choices, default=SourceKind.EMAIL)
     is_active = models.BooleanField(
-        default=True, help_text="Whether 'Récupérer les nouvelles factures' should gather this type automatically."
+        default=True,
+        help_text="Inclure ce type dans « Récupérer les nouvelles factures »."
     )
     created_at = models.DateTimeField(auto_now_add=True)
 

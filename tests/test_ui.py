@@ -412,6 +412,31 @@ class ChartMarkupTests(TestCase):
         self.assertIn('data-label="01/01/2026"', html)
         self.assertIn("chart-hover-line", html)
 
+    def test_every_css_variable_used_anywhere_is_defined(self):
+        """A var() that resolves to nothing doesn't error - it just silently
+        draws nothing, which is how the price chart's axes went invisible
+        after the stylesheet renamed a token."""
+        import glob
+        import pathlib
+        import re
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        css = (root / "static/css/marginmate.css").read_text(encoding="utf-8")
+        defined = set(re.findall(r"(--[\w-]+)\s*:", css))
+
+        used = {}
+        patterns = ("static/css/*.css", "static/js/*.js", "templates/**/*.html",
+                    "*/templates/**/*.html", "*/views.py")
+        for pattern in patterns:
+            for path in glob.glob(str(root / pattern), recursive=True):
+                if ".venv" in path:
+                    continue
+                for name in re.findall(r"var\((--[\w-]+)", pathlib.Path(path).read_text(encoding="utf-8")):
+                    used.setdefault(name, set()).add(pathlib.Path(path).name)
+
+        missing = {name: sorted(files) for name, files in used.items() if name not in defined}
+        self.assertEqual(missing, {}, f"CSS variables used but never defined: {missing}")
+
     def test_the_axes_use_a_colour_that_actually_exists(self):
         """They were drawn with var(--panel-border) after the stylesheet
         renamed it, which made them invisible."""
@@ -437,3 +462,111 @@ class ChartMarkupTests(TestCase):
         from decimal import Decimal
 
         self.assertEqual(_build_price_history_svg([(date(2026, 1, 1), Decimal("1.50"))]), "")
+
+
+class FormRenderingTests(TestCase):
+    """Every form goes through templates/_form_fields.html.
+
+    The field loop used to be copy-pasted into seven templates and had
+    drifted: some rendered each field's help text, some didn't - and the ones
+    that didn't were the recipe and stock-item forms, where the models define
+    the most useful help ("Ex : 0.20 pour 20%").
+    """
+
+    FORM_PAGES = [
+        ("inventory:stock_type_create", {}),
+        ("inventory:stock_take_create", {}),
+        ("invoices:invoice_upload", {}),
+        ("invoices:invoice_create_manual", {}),
+        ("invoices:invoice_type_create", {}),
+        ("recipes:recipe_create", {}),
+    ]
+
+    def test_every_form_page_uses_the_shared_layout(self):
+        for name, kwargs in self.FORM_PAGES:
+            with self.subTest(page=name):
+                html = self.client.get(reverse(name, kwargs=kwargs)).content.decode()
+                self.assertIn("form-grid", html)
+
+    def test_no_template_still_hand_rolls_a_field_loop(self):
+        """`{{ field.label_tag }}` was the giveaway of the copy-pasted block.
+        Looked for literally rather than by parsing loops: a cleverer check
+        kept flagging `{% for error in line_form.errors %}`, which is a
+        different job and perfectly fine."""
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        offenders = [
+            path.name
+            for path in root.rglob("*.html")
+            if ".venv" not in path.parts and "label_tag" in path.read_text(encoding="utf-8")
+        ]
+        self.assertEqual(offenders, [], f"These still render fields by hand: {offenders}")
+
+    def test_help_text_reaches_the_page(self):
+        html = self.client.get(reverse("recipes:recipe_create")).content.decode()
+        self.assertIn("Ex : 0.20 pour 20%", html)
+        self.assertIn('class="help"', html)
+
+    def test_required_fields_are_marked(self):
+        html = self.client.get(reverse("recipes:recipe_create")).content.decode()
+        self.assertIn('class="required"', html)
+
+    def test_a_field_with_an_error_is_flagged(self):
+        response = self.client.post(reverse("inventory:stock_type_create"), {"name": "", "unit": ""})
+        self.assertContains(response, "has-error")
+        self.assertContains(response, "field-error")
+
+    def test_hidden_fields_are_rendered_but_not_labelled(self):
+        """A hidden input inside a .form-field would leave an empty labelled
+        box on the page."""
+        from django import forms
+        from django.template.loader import render_to_string
+
+        class Sample(forms.Form):
+            visible = forms.CharField()
+            secret = forms.CharField(widget=forms.HiddenInput())
+
+        html = render_to_string("_form_fields.html", {"form": Sample()})
+        self.assertIn('name="secret"', html)
+        self.assertEqual(html.count("form-field "), html.count("form-field form-field-text"))
+
+    def test_excluded_fields_are_left_out(self):
+        """The invoice-type page renders its two date fields beside the
+        "Tester" button instead of among the pattern fields."""
+        from django import forms
+        from django.template.loader import render_to_string
+
+        class Sample(forms.Form):
+            keep = forms.CharField()
+            drop = forms.CharField()
+
+        html = render_to_string("_form_fields.html", {"form": Sample(), "exclude": ["drop"]})
+        self.assertIn('name="keep"', html)
+        self.assertNotIn('name="drop"', html)
+
+
+class AssetVersioningTests(TestCase):
+    """`{% asset %}` stamps the file's mtime onto its URL.
+
+    Without it, editing the stylesheet and seeing nothing change looks like
+    the change didn't work rather than like it didn't load - which cost two
+    debugging detours during this very pass.
+    """
+
+    def test_the_url_carries_a_version(self):
+        from inventory.templatetags.assets import asset
+
+        url = asset("css/marginmate.css")
+        self.assertIn("marginmate.css?v=", url)
+
+    def test_a_missing_file_still_yields_a_usable_url(self):
+        from inventory.templatetags.assets import asset
+
+        self.assertEqual(asset("css/does-not-exist.css"), "/static/css/does-not-exist.css")
+
+    def test_the_base_template_uses_it_for_every_local_asset(self):
+        html = self.client.get(reverse("inventory:stock_list")).content.decode()
+        for name in ("marginmate.css", "ui.js", "datatable.js", "charts.js"):
+            with self.subTest(asset=name):
+                self.assertIn(name + "?v=", html)

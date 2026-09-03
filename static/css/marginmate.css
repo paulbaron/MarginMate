@@ -666,3 +666,62 @@ form p { margin: var(--s3) 0; }
     font: inherit;
 }
 .link-button:hover { text-decoration: underline; }
+
+/* ------------------------------------------------------------------ forms */
+
+/* Two columns where there's room, one where there isn't. Fields sized by
+   content type rather than all stretched to the same width: a VAT rate and a
+   recipe name don't want the same box, and matching them makes the short one
+   look like it expects far more than it does. */
+.form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+    gap: var(--s3);
+    margin-bottom: var(--s4);
+}
+.form-field { display: flex; flex-direction: column; gap: 0.3rem; min-width: 0; }
+.form-field > label { margin: 0; color: var(--text-dim); font-size: 0.85rem; font-weight: 600; }
+.form-field input,
+.form-field select,
+.form-field textarea { width: 100%; }
+.form-field-textarea, .form-field-file { grid-column: 1 / -1; }
+.form-field-textarea textarea { min-height: 6rem; resize: vertical; }
+
+/* A checkbox is a statement, not a value: its label belongs beside it. */
+.form-field-checkbox { flex-direction: row; align-items: center; gap: var(--s2); }
+.form-field-checkbox > label { order: 2; font-weight: 500; color: var(--text); }
+.form-field-checkbox input { width: auto; }
+
+.form-field .required { color: var(--amber); margin-left: 0.15em; }
+.form-field .help { margin: 0; font-size: 0.8rem; color: var(--muted); line-height: 1.35; }
+.form-field .field-error { margin: 0; font-size: 0.82rem; color: var(--red); }
+.form-field.has-error input,
+.form-field.has-error select,
+.form-field.has-error textarea { border-color: var(--red); }
+
+.form-actions { display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; }
+
+/* A label sitting on the same line as its control, for the compact inline
+   forms (a date range beside its button) rather than the .form-grid stack. */
+.inline-label {
+    margin: 0;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+/* A checkbox needs its label beside it and its help underneath, which a
+   plain column can't do - the help would come between the box and the words
+   it belongs to. */
+.form-field-checkbox {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    column-gap: var(--s2);
+    row-gap: 0.2rem;
+}
+.form-field-checkbox input { grid-column: 1; grid-row: 1; }
+.form-field-checkbox > label { grid-column: 2; grid-row: 1; }
+.form-field-checkbox .help,
+.form-field-checkbox .field-error { grid-column: 1 / -1; grid-row: 2; }

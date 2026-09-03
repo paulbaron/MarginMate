@@ -1,0 +1,34 @@
+{% comment %}
+One way of rendering a form's fields, for every form in the app.
+
+This block was copy-pasted into seven templates and had already drifted: some
+showed each field's help text, some didn't - and the ones that didn't were the
+recipe and stock-item forms, which is exactly where it's needed ("Ex : 0.20
+pour 20%"). Thirteen help texts are defined on the models; they may as well be
+on screen.
+
+Context: `form`. Optional `exclude`, a list of field names the caller renders
+itself somewhere else on the page.
+{% endcomment %}
+{% if form.non_field_errors %}
+    <div class="message message-error">
+        {% for error in form.non_field_errors %}<p>{{ error }}</p>{% endfor %}
+    </div>
+{% endif %}
+<div class="form-grid">
+    {% for field in form %}
+        {% if field.name in exclude %}
+        {% elif field.is_hidden %}
+            {{ field }}
+        {% else %}
+            <div class="form-field form-field-{{ field.widget_type }}{% if field.errors %} has-error{% endif %}">
+                <label for="{{ field.id_for_label }}">
+                    {{ field.label }}{% if field.field.required %}<span class="required" aria-hidden="true">*</span>{% endif %}
+                </label>
+                {{ field }}
+                {% if field.help_text %}<p class="help">{{ field.help_text }}</p>{% endif %}
+                {% for error in field.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+            </div>
+        {% endif %}
+    {% endfor %}
+</div>

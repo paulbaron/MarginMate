@@ -1,15 +1,15 @@
-{% load static %}
+{% load static %}{% load assets %}
 <!DOCTYPE html>
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}MarginMate{% endblock %}</title>
-    <link rel="stylesheet" href="{% static 'css/marginmate.css' %}">
+    <link rel="stylesheet" href="{% asset 'css/marginmate.css' %}">
     <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
-    <script src="{% static 'js/ui.js' %}" defer></script>
-    <script src="{% static 'js/datatable.js' %}" defer></script>
-    <script src="{% static 'js/charts.js' %}" defer></script>
+    <script src="{% asset 'js/ui.js' %}" defer></script>
+    <script src="{% asset 'js/datatable.js' %}" defer></script>
+    <script src="{% asset 'js/charts.js' %}" defer></script>
     <script defer>
     // Attaches Django's CSRF token to every htmx POST/PUT/DELETE request -
     // needed for any hx-post (e.g. cancelling a running job in place)

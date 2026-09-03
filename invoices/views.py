@@ -249,5 +249,13 @@ def invoice_type_form(request, pk=None):
     return render(
         request,
         "invoices/invoice_type_form.html",
-        {"type_form": type_form, "source_form": source_form, "test_job": test_job, "invoice_type": invoice_type},
+        {
+            "type_form": type_form,
+            "source_form": source_form,
+            "test_job": test_job,
+            "invoice_type": invoice_type,
+            # Rendered by hand beside the "Tester" button rather than among
+            # the pattern fields, so the shared partial leaves them out.
+            "test_date_fields": ["test_start_date", "test_end_date"],
+        },
     )
