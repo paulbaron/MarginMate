@@ -48,12 +48,23 @@ def _column_index(cell_ref: str) -> int:
 
 
 def _shared_strings(archive: zipfile.ZipFile) -> list[str]:
+    """The workbook's string table.
+
+    Streamed rather than parsed into a DOM: on a multi-year export this table
+    holds every distinct product name, ticket reference and date in the file,
+    and building a tree of it costs far more than the list it becomes.
+    """
     if "xl/sharedStrings.xml" not in archive.namelist():
         return []
-    root = ElementTree.fromstring(archive.read("xl/sharedStrings.xml"))
-    # Runs (<r>) split a single string across several <t> elements when part
-    # of it is styled differently; joining them gives the text back.
-    return ["".join(t.text or "" for t in si.iter(f"{MAIN_NS}t")) for si in root.findall(f"{MAIN_NS}si")]
+    strings: list[str] = []
+    with archive.open("xl/sharedStrings.xml") as stream:
+        context = ElementTree.iterparse(stream, events=("end",))
+        for _event, element in context:
+            if element.tag != f"{MAIN_NS}si":
+                continue
+            strings.append("".join(t.text or "" for t in element.iter(f"{MAIN_NS}t")))
+            element.clear()
+    return strings
 
 
 def _sheet_paths(archive: zipfile.ZipFile) -> dict[str, str]:
@@ -94,13 +105,27 @@ def read_sheet(path: str, sheet_name: str):
         if sheet_name not in paths:
             raise XlsxError(f"{path} has no sheet named {sheet_name!r} (found: {list(paths)})")
         strings = _shared_strings(archive)
-        root = ElementTree.fromstring(archive.read(paths[sheet_name]))
-        for row in root.iter(f"{MAIN_NS}row"):
-            cells: dict[int, str] = {}
-            for cell in row.findall(f"{MAIN_NS}c"):
-                cells[_column_index(cell.get("r"))] = _cell_text(cell, strings)
-            width = max(cells) + 1 if cells else 0
-            yield [cells.get(i, "") for i in range(width)]
+        with archive.open(paths[sheet_name]) as stream:
+            # Streamed, and each row dropped as soon as it has been yielded.
+            # Reading the sheet with fromstring() built a DOM of the whole
+            # thing: three years of line-by-line ticket data peaked at 1.3 GB,
+            # which on a smaller machine is not slow but fatal.
+            context = ElementTree.iterparse(stream, events=("start", "end"))
+            _event, root = next(context)
+            for event, element in context:
+                if event != "end" or element.tag != f"{MAIN_NS}row":
+                    continue
+                cells: dict[int, str] = {}
+                for cell in element.findall(f"{MAIN_NS}c"):
+                    cells[_column_index(cell.get("r"))] = _cell_text(cell, strings)
+                width = max(cells) + 1 if cells else 0
+                row = [cells.get(i, "") for i in range(width)]
+                # clear() empties the element; the parent still holds it, so
+                # the root has to be cleared too or the rows simply pile up
+                # there instead and nothing has been saved.
+                element.clear()
+                root.clear()
+                yield row
 
 
 def _cell_text(cell, strings: list[str]) -> str:

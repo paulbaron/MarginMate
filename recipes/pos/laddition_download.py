@@ -112,7 +112,11 @@ def capture_export_template(driver, log=print) -> str:
     return template
 
 
-def _wait_for_new_xlsx(download_dir: str, before: set[str]) -> str:
+class DownloadCancelled(RuntimeError):
+    """Raised when the caller asks to stop mid-download."""
+
+
+def _wait_for_new_xlsx(download_dir: str, before: set[str], on_wait=None) -> str:
     """Wait for a completed .xlsx that wasn't there before.
 
     Only .xlsx counts: the page also kicks off an unrelated "downloads.htm"
@@ -128,13 +132,20 @@ def _wait_for_new_xlsx(download_dir: str, before: set[str]) -> str:
         ]
         if new:
             return os.path.join(download_dir, new[0])
+        # The caller gets a look in on every tick: this is the longest wait in
+        # the whole run - a multi-year export takes the server a while to
+        # produce - so a Cancel pressed here has to be noticed here.
+        if on_wait is not None:
+            on_wait()
         time.sleep(2)
     raise LadditionDownloadError(
         f"No .xlsx appeared in {download_dir} within {DOWNLOAD_TIMEOUT_SECONDS}s."
     )
 
 
-def download_sales_lines(start: date, end: date, download_dir: str, log=print) -> list[str]:
+def download_sales_lines(
+    start: date, end: date, download_dir: str, log=print, should_cancel=None
+) -> list[str]:
     """Download the sales-lines export covering [start, end].
 
     One file per date window: the back office caps a range at two years, so
@@ -147,16 +158,24 @@ def download_sales_lines(start: date, end: date, download_dir: str, log=print) -
     if not windows:
         return []
 
+    def check():
+        """Stop, and say so, if the caller has asked us to."""
+        if should_cancel is not None and should_cancel():
+            raise DownloadCancelled()
+
     paths = []
+    check()
     with laddition_session(download_dir, path=SALES_LINES_PATH, log=log) as driver:
+        check()
         template = capture_export_template(driver, log=log)
         for index, (window_start, window_end) in enumerate(windows, start=1):
+            check()
             label = f"{window_start} to {window_end}"
             if len(windows) > 1:
                 label = f"[{index}/{len(windows)}] {label}"
             before = set(os.listdir(download_dir))
             driver.get(with_dates(template, window_start, window_end))
-            path = _wait_for_new_xlsx(download_dir, before)
+            path = _wait_for_new_xlsx(download_dir, before, on_wait=check)
             log(f"{label}: {os.path.basename(path)}")
             paths.append(path)
     return paths

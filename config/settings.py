@@ -69,10 +69,26 @@ TEMPLATES = [
 WSGI_APPLICATION = "config.wsgi.application"
 
 
+#: How the app shares one SQLite file between a background import that
+#: writes for minutes and a status page that polls once a second.
+SQLITE_OPTIONS = {
+    # Background imports write for a while, and meanwhile the status page
+    # polls this same database once a second. SQLite locks the whole file to
+    # write, so the two contend - and with the default 5-second timeout a
+    # three-year sales import died outright with "database is locked"
+    # partway through.
+    "timeout": 60,
+    # WAL lets readers carry on while a writer holds the lock, which is
+    # exactly the shape here: one writer, one poller. Set per connection but
+    # persisted in the database file itself.
+    "init_command": "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
+}
+
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": BASE_DIR / "db.sqlite3",
+        "OPTIONS": SQLITE_OPTIONS,
     }
 }
 

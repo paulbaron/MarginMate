@@ -205,7 +205,7 @@ class InvoiceLine(models.Model):
         return self.vat_rate * Decimal("100")
 
 
-class ScrapeJob(JobLogMixin, models.Model):
+class ScrapeJob(JobLogMixin):
     class Status(models.TextChoices):
         PENDING = "PENDING", "En attente"
         RUNNING = "RUNNING", "En cours"
@@ -243,12 +243,6 @@ class ScrapeJob(JobLogMixin, models.Model):
     class Meta:
         ordering = ["-started_at"]
 
-    @property
-    def is_active(self) -> bool:
-        """Still going. Named to match SalesImportJob so one shared template
-        can render either - see templates/_job_console.html."""
-        return self.status in (self.Status.PENDING, self.Status.RUNNING)
-
     def append_log(self, message: str):
         # Timestamped so a slow run can actually be diagnosed after the fact
         # (which specific step took how long) instead of just knowing the
@@ -256,7 +250,8 @@ class ScrapeJob(JobLogMixin, models.Model):
         elapsed = (timezone.now() - self.started_at).total_seconds()
         line = f"[+{elapsed:6.1f}s] {message}"
         self.log = f"{self.log}{line}\n" if self.log else f"{line}\n"
-        self.save(update_fields=["log"])
+        self.last_heartbeat = timezone.now()
+        self.save(update_fields=["log", "last_heartbeat"])
 
     def update_progress(self, supplier_code: str, label: str = "", **counts):
         entry = self.progress.setdefault(supplier_code, {"label": label, "found": 0, "imported": 0})

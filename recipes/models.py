@@ -1,4 +1,5 @@
 import itertools
+from datetime import timedelta
 import math
 import threading
 from contextlib import contextmanager
@@ -636,7 +637,7 @@ class RecipeSale(models.Model):
         return f"{self.quantity} x {self.recipe.name} ({self.sold_on})"
 
 
-class SalesImportJob(JobLogMixin, models.Model):
+class SalesImportJob(JobLogMixin):
     """One run of "fetch the sales from the till".
 
     Same shape as invoices' ScrapeJob and for the same reason: the run drives
@@ -669,14 +670,12 @@ class SalesImportJob(JobLogMixin, models.Model):
         ordering = ["-started_at"]
 
     def append_log(self, message: str) -> None:
-        elapsed = (timezone.now() - self.started_at).total_seconds()
+        now = timezone.now()
+        elapsed = (now - self.started_at).total_seconds()
         line = f"[+{elapsed:6.1f}s] {message}"
         self.log = f"{self.log}{line}\n" if self.log else f"{line}\n"
-        self.save(update_fields=["log"])
-
-    @property
-    def is_active(self) -> bool:
-        return self.status in (self.Status.PENDING, self.Status.RUNNING)
+        self.last_heartbeat = now
+        self.save(update_fields=["log", "last_heartbeat"])
 
 
 class PosProduct(models.Model):

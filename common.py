@@ -5,8 +5,11 @@ three different formsets across three different apps.
 """
 
 import re
+from datetime import timedelta
 
 from django import forms
+from django.db import models
+from django.utils import timezone
 
 
 class BlankRowTolerantFormMixin:
@@ -64,18 +67,72 @@ class BlankRowTolerantModelForm(BlankRowTolerantFormMixin, forms.ModelForm):
     pass
 
 
-class JobLogMixin:
-    """Shared reading of a background job's `log` field.
+class JobLogMixin(models.Model):
+    """Everything a background job needs beyond its own fields.
 
-    Both job models append timestamped lines to one text field. The console
-    partial (templates/_job_console.html) shows the last line on its own as
-    "what's happening right now" and folds the rest away, so both models have
-    to answer the same two questions about it.
+    Both job models append timestamped lines to one text field, and both are
+    driven by a daemon thread that cannot be relied on to reach its own
+    `finally`: the dev server's autoreloader kills it outright on any code
+    change. The job is then left RUNNING for ever, which blocks every future
+    run behind "already in progress" - and its Cancel button does nothing,
+    because there is no thread left to notice. That combination is a deadlock
+    with no way out from the UI, and it is what stopped a three-year sales
+    import from ever starting again.
+
+    `last_heartbeat` is how a run says "still here" during the long silent
+    stretches; anything quiet for STALE_AFTER is presumed dead and reaped.
     """
+
+    #: Deliberately generous: one export of three years of tickets takes
+    #: about a minute to generate and fetch, and declaring a working job dead
+    #: is worse than waiting a little longer.
+    STALE_AFTER = timedelta(minutes=10)
+
+    last_heartbeat = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        abstract = True
 
     #: "[+  12.3s] " - real information while a job runs, noise on the one
     #: line shown as a live status, where the spinner already says "running".
     _ELAPSED_PREFIX = re.compile(r"^\[\+\s*[\d.]+s\]\s*")
+
+    def beat(self) -> None:
+        """Say "still alive" without writing a log line - the download has
+        long silent stretches, and a line every two seconds would bury the
+        log it shares."""
+        self.last_heartbeat = timezone.now()
+        self.save(update_fields=["last_heartbeat"])
+
+    @property
+    def is_active(self) -> bool:
+        return self.status in (self.Status.PENDING, self.Status.RUNNING)
+
+    @property
+    def is_stale(self) -> bool:
+        """Nominally running, but nothing has been heard from it."""
+        if not self.is_active:
+            return False
+        since = self.last_heartbeat or self.started_at
+        return timezone.now() - since > self.STALE_AFTER
+
+    @classmethod
+    def reap_stale(cls) -> int:
+        """Mark abandoned runs as failed, so they stop blocking new ones."""
+        stale = [
+            job
+            for job in cls.objects.filter(status__in=[cls.Status.PENDING, cls.Status.RUNNING])
+            if job.is_stale
+        ]
+        for job in stale:
+            job.status = cls.Status.FAILED
+            job.finished_at = timezone.now()
+            job.save(update_fields=["status", "finished_at"])
+            job.append_log(
+                "Interrompue : plus aucune nouvelle de cette exécution. "
+                "Le serveur a probablement redémarré pendant qu'elle tournait."
+            )
+        return len(stale)
 
     @property
     def log_lines(self) -> int:

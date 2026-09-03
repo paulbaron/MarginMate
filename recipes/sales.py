@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 
+from django.db import transaction
+
 from .models import Recipe, RecipeSale
 
 
@@ -99,6 +101,17 @@ def record_sales(entries, source: str = "manual") -> SalesImportResult:
             recipes[recipe.pk] = recipe
         totals[key] = totals.get(key, 0) + int(quantity)
 
+    # One transaction, not one per row. Three years of sales is a few
+    # thousand recipe/day totals, and taking and releasing the write lock
+    # that many times is both slow and what actually broke the import: the
+    # status page polls the same SQLite file every second, and one of those
+    # thousands of tiny writes eventually loses the race.
+    with transaction.atomic():
+        _write_sales(order, totals, recipes, source, result)
+    return result
+
+
+def _write_sales(order, totals, recipes, source, result) -> None:
     for key in order:
         recipe_id, sold_on = key
         _sale, created = RecipeSale.objects.update_or_create(
@@ -111,7 +124,6 @@ def record_sales(entries, source: str = "manual") -> SalesImportResult:
             result.created += 1
         else:
             result.updated += 1
-    return result
 
 
 def sales_between(start: date | None, end: date) -> dict[int, int]:

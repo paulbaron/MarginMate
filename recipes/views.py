@@ -368,6 +368,10 @@ def sales_import(request):
 def trigger_sales_import(request):
     if request.method != "POST":
         return redirect("recipes:sales_import")
+    # Clear out any run that died without saying so before deciding whether
+    # one is genuinely in progress - otherwise a single killed thread locks
+    # this page out permanently.
+    SalesImportJob.reap_stale()
     if SalesImportJob.objects.filter(
         status__in=[SalesImportJob.Status.PENDING, SalesImportJob.Status.RUNNING]
     ).exists():

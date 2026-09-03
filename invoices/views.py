@@ -165,6 +165,10 @@ def trigger_gather(request):
     if request.method != "POST":
         return redirect("invoices:invoice_list")
 
+    # Clear out any run that died without saying so before deciding whether
+    # one is genuinely in progress - otherwise a single killed thread locks
+    # this page out permanently. See common.JobLogMixin.
+    ScrapeJob.reap_stale()
     active_job = ScrapeJob.objects.filter(
         kind=ScrapeJob.Kind.GATHER, status__in=[ScrapeJob.Status.PENDING, ScrapeJob.Status.RUNNING]
     ).first()

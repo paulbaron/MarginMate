@@ -8,13 +8,15 @@ request open. The page polls SalesImportJob for progress.
 from __future__ import annotations
 
 import traceback
+
+from django.db import transaction
 from datetime import date
 
 from django.conf import settings
 from django.utils import timezone
 
 from .models import PosProduct, SalesImportJob
-from .pos.laddition_download import download_sales_lines
+from .pos.laddition_download import DownloadCancelled, download_sales_lines
 from .pos.laddition_xlsx import parse_sales_exports
 from .sales import record_sales
 
@@ -38,6 +40,12 @@ def sync_pos_products(export) -> int:
     double-counts them, which is why they're labelled as a rough guide to
     what sells rather than an accounting figure.
     """
+    # One transaction: same lock contention as record_sales.
+    with transaction.atomic():
+        return _sync_pos_products(export)
+
+
+def _sync_pos_products(export) -> int:
     for name, info in export.products.items():
         product, created = PosProduct.objects.get_or_create(
             name=name,
@@ -70,7 +78,16 @@ def import_laddition_sales_task(job_id: int, start: date, end: date, download_di
         job.append_log(f"Récupération des ventes du {start} au {end}.")
         _raise_if_cancelled(job)
 
-        paths = download_sales_lines(start, end, download_dir, log=job.append_log)
+        def still_wanted() -> bool:
+            # Also a heartbeat: the download is the long phase, and a run
+            # silent for ten minutes is treated as dead (see is_stale).
+            job.beat()
+            job.refresh_from_db(fields=["cancel_requested"])
+            return job.cancel_requested
+
+        paths = download_sales_lines(
+            start, end, download_dir, log=job.append_log, should_cancel=still_wanted
+        )
         if not paths:
             raise RuntimeError("Aucun fichier téléchargé.")
         _raise_if_cancelled(job)
@@ -97,7 +114,7 @@ def import_laddition_sales_task(job_id: int, start: date, end: date, download_di
             )
         job.status = SalesImportJob.Status.SUCCESS
 
-    except _Cancelled:
+    except (_Cancelled, DownloadCancelled):
         job.status = SalesImportJob.Status.CANCELLED
         job.append_log("Annulé.")
     except Exception as exc:  # noqa: BLE001 - the job record IS the error report
