@@ -56,6 +56,14 @@ class InvoiceDetailView(DetailView):
     def get_queryset(self):
         return Invoice.objects.select_related("supplier").prefetch_related("lines__product__stock_type")
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        # Handed to the template as a list so the totals in the footer and
+        # the rows above them read from one prefetched set rather than
+        # re-querying per property.
+        context["lines"] = list(self.object.lines.all())
+        return context
+
 
 def upload_invoice(request):
     if request.method == "POST":

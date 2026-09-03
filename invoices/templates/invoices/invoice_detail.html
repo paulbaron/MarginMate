@@ -2,13 +2,60 @@
 {% block title %}{{ invoice }} - MarginMate{% endblock %}
 {% block content %}
     <div class="page-header">
-        <h1>{{ invoice.supplier.name }} — {{ invoice.invoice_number|default:"—" }}</h1>
-        <span class="status-pill status-{{ invoice.status }}">{{ invoice.get_status_display }}</span>
+        <div>
+            <p class="breadcrumb"><a href="{% url 'invoices:invoice_list' %}">← Factures</a></p>
+            <h1>{{ invoice.supplier.name }} — {{ invoice.invoice_number|default:"sans numéro" }}</h1>
+            <p class="muted">
+                {% if invoice.invoice_date %}Datée du {{ invoice.invoice_date|date:"d/m/Y" }}{% else %}Sans date{% endif %}
+                · Importée le {{ invoice.imported_at|date:"d/m/Y à H:i" }}
+            </p>
+        </div>
+        <div class="page-header-actions">
+            <span class="status-pill status-{{ invoice.status }}">{{ invoice.get_status_display }}</span>
+            {% if invoice.source_file %}
+                <a class="btn btn-secondary" href="{{ invoice.source_file.url }}" target="_blank" rel="noopener">Voir le PDF</a>
+            {% endif %}
+        </div>
     </div>
-    <p class="muted">
-        Date : {{ invoice.invoice_date|default:"—" }}
-        {% if invoice.source_file %} · <a href="{{ invoice.source_file.url }}">Voir le PDF</a>{% endif %}
-    </p>
+
+    {% if invoice.error_message %}
+        <div class="message message-error">{{ invoice.error_message }}</div>
+    {% endif %}
+
+    <div class="stat-row">
+        <div class="stat">
+            <span class="stat-label">Total HT</span>
+            <span class="stat-value">{{ invoice.total_ht|floatformat:2 }} €</span>
+            {% if invoice.reconciliation_adjustment %}
+                <span class="stat-note">dont {{ invoice.reconciliation_adjustment|floatformat:2 }} € de régularisation</span>
+            {% endif %}
+        </div>
+        <div class="stat">
+            <span class="stat-label">Total TTC</span>
+            <span class="stat-value">{{ invoice.total_ttc|floatformat:2 }} €</span>
+        </div>
+        <div class="stat">
+            <span class="stat-label">Lignes</span>
+            <span class="stat-value">{{ invoice.lines.count }}</span>
+        </div>
+        {% if invoice.needs_review_count %}
+        <div class="stat stat-warn">
+            <span class="stat-label">À rattacher</span>
+            <span class="stat-value">{{ invoice.needs_review_count }}</span>
+            <span class="stat-note"><a href="{% url 'inventory:review_queue' %}">Ouvrir la file →</a></span>
+        </div>
+        {% endif %}
+    </div>
+
+    {% if invoice.reconciliation_adjustment %}
+        <div class="message">
+            Le total imprimé par le fournisseur dépasse la somme des lignes de
+            <strong>{{ invoice.reconciliation_adjustment|floatformat:2 }} €</strong> : des droits (accise, régie,
+            vignette sécu) facturés globalement, sans colonne par produit. Ajouté au total pour qu'il
+            corresponde au centime près à ce qui a été facturé, mais jamais imputé à un produit — rien ne dit
+            auquel il revient.
+        </div>
+    {% endif %}
 
     <div class="table-wrap">
     <table data-table data-table-label="lignes">
@@ -18,44 +65,58 @@
                 <th>Type de stock</th>
                 <th class="num">Qté</th>
                 <th class="num">Volume/Poids</th>
-                <th class="num">PU HT</th>
+                <th class="num">PU HT réel</th>
                 <th class="num">Total HT</th>
                 <th class="num">TVA</th>
             </tr>
         </thead>
         <tbody>
-            {% for line in invoice.lines.all %}
+            {% for line in lines %}
             <tr>
-                <td>{{ line.raw_name }}</td>
+                <td>
+                    {{ line.raw_name }}
+                    {% if line.taxes or line.discount %}
+                        <br><span class="muted" style="font-size:0.8em;">
+                            {% if line.taxes %}+ {{ line.taxes|floatformat:2 }} € de taxes{% endif %}
+                            {% if line.taxes and line.discount %} · {% endif %}
+                            {% if line.discount %}− {{ line.discount|floatformat:2 }} € de remise{% endif %}
+                        </span>
+                    {% endif %}
+                </td>
                 <td>
                     {% if line.product.stock_type %}
-                        {{ line.product.stock_type.name }}
+                        <a href="{% url 'inventory:stock_list' %}">{{ line.product.stock_type.name }}</a>
                     {% else %}
-                        <span class="muted">À vérifier</span>
+                        <span class="status-pill status-NEEDS_REVIEW">À rattacher</span>
                     {% endif %}
                 </td>
                 <td class="num">{{ line.quantity }}</td>
-                <td class="num">{{ line.total_volume|floatformat:3 }}</td>
-                <td class="num">{{ line.unit_cost_ht|floatformat:2 }} €</td>
+                <td class="num">{% if line.total_volume %}{{ line.total_volume|floatformat:3 }}{% else %}<span class="muted">—</span>{% endif %}</td>
+                <td class="num">{{ line.unit_cost_ht|floatformat:4 }} €</td>
                 <td class="num">{{ line.total_ht|floatformat:2 }} €</td>
-                <td class="num">{{ line.vat_rate|floatformat:3 }}</td>
+                <td class="num">{{ line.vat_percent|floatformat:"-1" }} %</td>
             </tr>
             {% endfor %}
         </tbody>
         <tfoot>
             <tr>
-                <td colspan="5">Total HT</td>
-                <td class="num">{{ invoice.total_ht|floatformat:2 }} €</td>
+                <td colspan="5">Somme des lignes</td>
+                <td class="num">{{ invoice.lines_total_ht|floatformat:2 }} €</td>
                 <td></td>
             </tr>
+            {% if invoice.reconciliation_adjustment %}
+            <tr>
+                <td colspan="5">Régularisation</td>
+                <td class="num">{{ invoice.reconciliation_adjustment|floatformat:2 }} €</td>
+                <td></td>
+            </tr>
+            <tr>
+                <td colspan="5"><strong>Total HT</strong></td>
+                <td class="num"><strong>{{ invoice.total_ht|floatformat:2 }} €</strong></td>
+                <td></td>
+            </tr>
+            {% endif %}
         </tfoot>
     </table>
     </div>
-
-    {% if invoice.needs_review_count %}
-        <p class="muted" style="margin-top:1rem;">
-            {{ invoice.needs_review_count }} ligne(s) en attente de rattachement.
-            <a href="{% url 'inventory:review_queue' %}">Voir la file de vérification →</a>
-        </p>
-    {% endif %}
 {% endblock %}

@@ -1,4 +1,5 @@
 import re
+from decimal import Decimal
 
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -150,6 +151,24 @@ class Invoice(models.Model):
         return lines_total + self.reconciliation_adjustment
 
     @property
+    def total_ttc(self):
+        """Summed per line, not total_ht times one rate: a single invoice
+        mixes 20% spirits with 5.5% food, and any blended rate would be
+        wrong for both. The reconciliation adjustment carries no VAT of its
+        own - it's duty, not a taxable sale - so it's added flat."""
+        total = sum(
+            (line.total_ht * (Decimal("1") + line.vat_rate) for line in self.lines.all()),
+            start=Decimal("0"),
+        )
+        return total + self.reconciliation_adjustment
+
+    @property
+    def lines_total_ht(self):
+        """What the lines alone come to, before the reconciliation
+        adjustment - the two are shown side by side when they differ."""
+        return sum((line.total_ht for line in self.lines.all()), start=Decimal("0"))
+
+    @property
     def needs_review_count(self):
         return self.lines.filter(product__stock_type__isnull=True).count()
 
@@ -178,6 +197,12 @@ class InvoiceLine(models.Model):
 
     def __str__(self):
         return f"{self.raw_name} x{self.quantity}"
+
+    @property
+    def vat_percent(self):
+        """20 rather than 0.200 - the stored rate is a fraction, and every
+        page that showed it raw made people read it as a currency amount."""
+        return self.vat_rate * Decimal("100")
 
 
 class ScrapeJob(JobLogMixin, models.Model):

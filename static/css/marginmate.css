@@ -725,3 +725,42 @@ form p { margin: var(--s3) 0; }
 .form-field-checkbox > label { grid-column: 2; grid-row: 1; }
 .form-field-checkbox .help,
 .form-field-checkbox .field-error { grid-column: 1 / -1; grid-row: 2; }
+
+/* --------------------------------------------------------- detail pages */
+
+.breadcrumb { margin: 0 0 0.2rem; font-size: 0.85rem; }
+.breadcrumb a { color: var(--muted); }
+.breadcrumb a:hover { color: var(--text); text-decoration: none; }
+/* Used by six templates and defined by none of them until now, so every
+   header's buttons were laid out by whatever the browser did with a bare
+   <div> - which is why some of them stacked instead of sitting in a row. */
+.actions,
+.page-header-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--s2);
+    flex-wrap: wrap;
+}
+
+.stat-note { font-size: 0.78rem; color: var(--muted); }
+.stat-warn { border-color: #574728; }
+.stat-warn .stat-value { color: var(--amber); }
+
+/* An intro sentence, then the detail folded away. A six-line paragraph at
+   the top of the busiest page is read once and skipped for ever after. */
+.lead { color: var(--text-dim); max-width: 62ch; margin: 0 0 var(--s2); }
+.explainer { margin-bottom: var(--s3); }
+.explainer > summary {
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 0.85rem;
+    list-style: none;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s1);
+}
+.explainer > summary::-webkit-details-marker { display: none; }
+.explainer > summary::before { content: "▸"; transition: transform 0.12s ease; }
+.explainer[open] > summary::before { transform: rotate(90deg); }
+.explainer > summary:hover { color: var(--text); }
+.explainer p { max-width: 62ch; color: var(--muted); font-size: 0.88rem; margin: var(--s2) 0 0; }

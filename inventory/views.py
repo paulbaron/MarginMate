@@ -771,7 +771,17 @@ def stock_take_detail(request, pk):
         .prefetch_related("sources__invoice_line__invoice")
         .order_by("product__raw_name", "stock_type__name")
     )
-    return render(request, "inventory/stock_take_detail.html", {"stock_take": stock_take, "lines": lines})
+    return render(
+        request,
+        "inventory/stock_take_detail.html",
+        {
+            "stock_take": stock_take,
+            "lines": lines,
+            # Counted from the rows already fetched - StockTake.has_shortfall
+            # would run its own query, and the page wants the number anyway.
+            "shortfall_count": sum(1 for line in lines if line.has_shortfall),
+        },
+    )
 
 
 def stock_take_delete(request, pk):

@@ -2,9 +2,16 @@
 {% block title %}Inventaire du {{ stock_take.taken_at|date:"d/m/Y" }} - MarginMate{% endblock %}
 {% block content %}
     <div class="page-header">
-        <h1>Inventaire du {{ stock_take.taken_at|date:"d/m/Y H:i" }}</h1>
-        <div class="actions">
-            <a class="btn" href="{% url 'inventory:stock_take_variance' stock_take.pk %}">Écarts</a>
+        <div>
+            <p class="breadcrumb"><a href="{% url 'inventory:stock_take_list' %}">← Inventaires</a></p>
+            <h1>Inventaire du {{ stock_take.taken_at|date:"d/m/Y" }}</h1>
+            <p class="muted">
+                Compté à {{ stock_take.taken_at|date:"H:i" }}
+                {% if stock_take.note %} · {{ stock_take.note }}{% endif %}
+            </p>
+        </div>
+        <div class="page-header-actions">
+            <a class="btn" href="{% url 'inventory:stock_take_variance' stock_take.pk %}">Voir les écarts</a>
             <a class="btn btn-secondary" href="{% url 'inventory:stock_take_update' stock_take.pk %}">Modifier</a>
             <form method="post" action="{% url 'inventory:stock_take_delete' stock_take.pk %}"
                   onsubmit="return confirm('Supprimer cet inventaire ?');">
@@ -13,7 +20,34 @@
             </form>
         </div>
     </div>
-    {% if stock_take.note %}<p class="muted">{{ stock_take.note }}</p>{% endif %}
+
+    <div class="stat-row">
+        <div class="stat">
+            <span class="stat-label">Valeur comptée (HT)</span>
+            <span class="stat-value">{{ stock_take.total_value_ht|floatformat:2 }} €</span>
+            <span class="stat-note">au prix réellement payé, achat par achat</span>
+        </div>
+        <div class="stat">
+            <span class="stat-label">Articles comptés</span>
+            <span class="stat-value">{{ lines|length }}</span>
+        </div>
+        {% if shortfall_count %}
+        <div class="stat stat-warn">
+            <span class="stat-label">Au-delà de l'historique</span>
+            <span class="stat-value">{{ shortfall_count }}</span>
+            <span class="stat-note">comptés en plus grande quantité que ce qui a été acheté</span>
+        </div>
+        {% endif %}
+    </div>
+
+    {% if shortfall_count %}
+        <div class="message">
+            {{ shortfall_count }} article{{ shortfall_count|pluralize }} compté{{ shortfall_count|pluralize }} au-delà
+            de ce que l'historique d'achats peut expliquer. La part en trop est quand même valorisée, au plus
+            ancien prix connu, pour ne pas sous-estimer le total — mais c'est le signe d'un comptage inexact
+            ou d'un stock acheté avant le suivi des factures.
+        </div>
+    {% endif %}
 
     <div class="card">
         <div class="table-wrap">
@@ -54,10 +88,5 @@
             </tbody>
         </table>
         </div>
-        <p class="muted" style="text-align:right; margin-top:0.5rem;">
-            Valeur totale (HT) : <strong style="color:var(--text);">{{ stock_take.total_value_ht|floatformat:2 }} €</strong>
-        </p>
     </div>
-
-    <a class="btn btn-secondary" href="{% url 'inventory:stock_take_list' %}">← Retour aux inventaires</a>
 {% endblock %}

@@ -15,6 +15,7 @@ aren't:
 """
 
 from datetime import date, datetime
+from decimal import Decimal
 
 from django.test import TestCase
 from django.urls import reverse
@@ -570,3 +571,132 @@ class AssetVersioningTests(TestCase):
         for name in ("marginmate.css", "ui.js", "datatable.js", "charts.js"):
             with self.subTest(asset=name):
                 self.assertIn(name + "?v=", html)
+
+
+class InvoiceDetailTests(TestCase):
+    """The reconciliation adjustment exists precisely so an invoice's total
+    matches what the supplier billed - and it was invisible on the one page
+    that shows that total."""
+
+    def setUp(self):
+        from tests.factories import make_invoice, make_invoice_line, make_product, make_supplier
+
+        supplier = make_supplier(code="UBA", name="UBA")
+        self.invoice = make_invoice(supplier=supplier, invoice_number="VE-1")
+        product = make_product(supplier=supplier, raw_name="BIERE 30L")
+        make_invoice_line(
+            invoice=self.invoice, product=product, quantity=5, total_ht="100.00",
+            vat_rate=Decimal("0.20"), taxes=Decimal("3.50"),
+        )
+
+    def url(self):
+        return reverse("invoices:invoice_detail", kwargs={"pk": self.invoice.pk})
+
+    def test_the_adjustment_is_shown_and_explained(self):
+        self.invoice.reconciliation_adjustment = Decimal("0.30")
+        self.invoice.save(update_fields=["reconciliation_adjustment"])
+        html = self.client.get(self.url()).content.decode()
+        self.assertIn("0,30", html.replace(".", ","))
+        self.assertIn("Régularisation", html)
+        self.assertIn("droits", html)
+
+    def test_no_adjustment_means_no_extra_rows(self):
+        html = self.client.get(self.url()).content.decode()
+        self.assertNotIn("Régularisation", html)
+
+    def test_vat_is_shown_as_a_percentage_not_a_fraction(self):
+        """0.200 read as a currency amount to everyone who saw it."""
+        html = self.client.get(self.url()).content.decode()
+        self.assertIn("20 %", html)
+        self.assertNotIn("0.200", html)
+
+    def test_the_totals_add_up(self):
+        self.invoice.reconciliation_adjustment = Decimal("0.30")
+        self.invoice.save(update_fields=["reconciliation_adjustment"])
+        self.assertEqual(self.invoice.lines_total_ht, Decimal("100.00"))
+        self.assertEqual(self.invoice.total_ht, Decimal("100.30"))
+        # 100 at 20% = 120, plus the adjustment, which carries no VAT itself.
+        self.assertEqual(self.invoice.total_ttc, Decimal("120.30"))
+
+    def test_ttc_mixes_rates_per_line_rather_than_blending_them(self):
+        from tests.factories import make_invoice_line, make_product
+
+        food = make_product(supplier=self.invoice.supplier, raw_name="COMTE")
+        make_invoice_line(
+            invoice=self.invoice, product=food, quantity=1, total_ht="100.00",
+            vat_rate=Decimal("0.055"),
+        )
+        self.assertEqual(self.invoice.total_ttc, Decimal("120.00") + Decimal("105.50"))
+
+    def test_taxes_and_discounts_are_visible_on_the_line(self):
+        """They're why the real unit cost differs from the printed price."""
+        html = self.client.get(self.url()).content.decode()
+        self.assertIn("de taxes", html)
+
+    def test_the_page_links_back_to_the_list(self):
+        html = self.client.get(self.url()).content.decode()
+        self.assertIn(reverse("invoices:invoice_list"), html)
+
+
+class StockTakeDetailTests(TestCase):
+    def setUp(self):
+        from tests.factories import make_stock_take, make_stock_take_line, make_stock_type
+        from inventory.models import UnitChoices
+
+        self.take = make_stock_take()
+        self.stock_type = make_stock_type(name="Vodka", unit=UnitChoices.LITRE)
+        make_stock_take_line(
+            stock_take=self.take, stock_type=self.stock_type,
+            counted_quantity="4", unit=UnitChoices.LITRE, value_ht="40",
+        )
+
+    def url(self):
+        return reverse("inventory:stock_take_detail", kwargs={"pk": self.take.pk})
+
+    def test_the_total_is_a_headline_not_a_footnote(self):
+        html = self.client.get(self.url()).content.decode()
+        self.assertIn("stat-value", html)
+        self.assertIn("Valeur comptée", html)
+
+    def test_a_shortfall_is_counted_and_explained(self):
+        from tests.factories import make_stock_take_line, make_stock_type
+        from inventory.models import UnitChoices
+
+        make_stock_take_line(
+            stock_take=self.take, stock_type=make_stock_type(name="Gin"),
+            counted_quantity="9", unit=UnitChoices.LITRE, value_ht="90",
+            has_shortfall=True, shortfall_quantity=Decimal("3"),
+        )
+        response = self.client.get(self.url())
+        self.assertEqual(response.context["shortfall_count"], 1)
+        self.assertContains(response, "au-delà")
+
+    def test_no_shortfall_means_no_warning(self):
+        response = self.client.get(self.url())
+        self.assertEqual(response.context["shortfall_count"], 0)
+        self.assertNotContains(response, "stat-warn")
+
+    def test_the_page_links_to_its_variance_report(self):
+        html = self.client.get(self.url()).content.decode()
+        self.assertIn(reverse("inventory:stock_take_variance", kwargs={"pk": self.take.pk}), html)
+
+
+class LayoutClassTests(TestCase):
+    """Classes used by templates but never defined in the stylesheet don't
+    error - the element just gets no layout, which is how six button groups
+    ended up with none."""
+
+    def test_every_class_a_template_uses_for_layout_is_defined(self):
+        import pathlib
+        import re
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        css = (root / "static/css/marginmate.css").read_text(encoding="utf-8")
+        defined = set(re.findall(r"\.([a-zA-Z][\w-]*)", css))
+        # Only the structural ones: utility and state classes are applied by
+        # JavaScript or come from Django, and aren't all styled.
+        structural = {"actions", "page-header-actions", "stat-row", "stat", "form-grid",
+                      "form-field", "table-wrap", "bulk-bar", "job-console", "chart",
+                      "explainer", "lead", "breadcrumb"}
+        missing = sorted(name for name in structural if name not in defined)
+        self.assertEqual(missing, [], f"Structural classes with no CSS rule: {missing}")
