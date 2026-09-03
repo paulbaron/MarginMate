@@ -1,5 +1,4 @@
 import itertools
-from datetime import timedelta
 import math
 import threading
 from contextlib import contextmanager
