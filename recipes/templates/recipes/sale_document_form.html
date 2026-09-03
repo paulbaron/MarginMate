@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Facture de vente - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <p class="breadcrumb"><a href="{% url 'recipes:sales_list' %}">← Ventes</a></p>
+            <h1>{% if document %}Modifier une vente{% else %}Nouvelle facture de vente{% endif %}</h1>
+        </div>
+    </div>
+
+    <p class="lead">
+        Ce que vous avez vendu hors caisse. Une ligne est soit une recette, soit un type de stock vendu
+        tel quel — une bouteille au comptoir. Les deux comptent dans les écarts d'inventaire : une recette
+        consomme ses ingrédients, un type de stock se consomme lui-même.
+    </p>
+
+    <div class="card">
+        <form method="post">
+            {% csrf_token %}
+            {% include "_form_fields.html" %}
+
+            <h3>Lignes</h3>
+            {{ formset.management_form }}
+            {% if formset.non_form_errors %}
+                <div class="message message-error">{{ formset.non_form_errors }}</div>
+            {% endif %}
+            <div id="sale-line-rows">
+                {% for line_form in formset %}
+                    <div class="sale-line-row">
+                        <div class="inline-form">
+                            {{ line_form.id }}
+                            <span style="display:none;">{{ line_form.DELETE }}</span>
+                            {{ line_form.source }}
+                            <span class="muted">×</span>
+                            {{ line_form.quantity }}
+                            <span class="muted">à</span>
+                            {{ line_form.unit_price_ttc }}
+                            <span class="muted">€ TTC (optionnel)</span>
+                            <button type="button" class="btn btn-small btn-secondary js-remove-sale-line">Retirer</button>
+                        </div>
+                        {% for error in line_form.non_field_errors %}<div class="message message-error">{{ error }}</div>{% endfor %}
+                        {% for error in line_form.source.errors %}<div class="message message-error">{{ error }}</div>{% endfor %}
+                        {% for error in line_form.quantity.errors %}<div class="message message-error">Quantité : {{ error }}</div>{% endfor %}
+                    </div>
+                {% endfor %}
+            </div>
+            <button type="button" class="btn btn-small btn-secondary" id="add-sale-line">+ Ajouter une ligne</button>
+
+            <div class="form-actions" style="margin-top:1rem;">
+                <button class="btn" type="submit">Enregistrer</button>
+                <a class="btn btn-secondary" href="{% url 'recipes:sales_list' %}">Annuler</a>
+            </div>
+        </form>
+    </div>
+
+    <template id="empty-sale-line">
+        <div class="sale-line-row">
+            <div class="inline-form">
+                <span style="display:none;">{{ formset.empty_form.DELETE }}</span>
+                {{ formset.empty_form.source }}
+                <span class="muted">×</span>
+                {{ formset.empty_form.quantity }}
+                <span class="muted">à</span>
+                {{ formset.empty_form.unit_price_ttc }}
+                <span class="muted">€ TTC (optionnel)</span>
+                <button type="button" class="btn btn-small btn-secondary js-remove-sale-line">Retirer</button>
+            </div>
+        </div>
+    </template>
+{% endblock %}
+{% block extra_js %}
+<script>
+// New rows take a fresh index counting up from TOTAL_FORMS and keep it;
+// removing one leaves a gap rather than renumbering. Renumbering moves an
+// existing row's -id to a different index and Django then silently fails to
+// save it - see recipe_form.html, where that bug was found.
+(function () {
+    var totalForms = document.querySelector("[name$='-TOTAL_FORMS']");
+    var next = parseInt(totalForms.value, 10);
+    document.getElementById("add-sale-line").addEventListener("click", function () {
+        var html = document.getElementById("empty-sale-line").innerHTML.replace(/__prefix__/g, next);
+        next += 1;
+        totalForms.value = next;
+        var holder = document.createElement("div");
+        holder.innerHTML = html.trim();
+        document.getElementById("sale-line-rows").appendChild(holder.firstElementChild);
+    });
+    document.addEventListener("click", function (event) {
+        if (!event.target.matches(".js-remove-sale-line")) return;
+        var row = event.target.closest(".sale-line-row");
+        var id = row.querySelector("input[name$='-id']");
+        if (id && id.value) {
+            row.querySelector("input[name$='-DELETE']").checked = true;
+            row.hidden = true;
+        } else {
+            row.remove();
+        }
+    });
+})();
+</script>
+{% endblock %}

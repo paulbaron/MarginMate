@@ -39,7 +39,8 @@
                 valorisé au moins cher — c'est le minimum que les chiffres permettent d'affirmer.
             </p>
             {% if report.missing %}
-            <table class="sub-table">
+            <div class="table-wrap">
+            <table class="sub-table" data-table data-table-label="groupes">
                 <thead>
                     <tr>
                         <th>Groupe</th>
@@ -79,7 +80,7 @@
                         </td>
                     </tr>
                     {% if pool.cheapest %}
-                    <tr>
+                    <tr data-child-row>
                         <td colspan="7" class="muted" style="font-size:0.88rem; padding-top:0;">
                             Valorisé en {{ pool.cheapest.name }} ({{ pool.cheapest_unit_cost|floatformat:2 }} € / {{ pool.unit }}<!--
                             -->{% if pool.cheapest_item_size %}, {{ pool.cheapest_item_size|floatformat:"-3" }} {{ pool.unit }} par article{% endif %})
@@ -89,6 +90,7 @@
                     {% endfor %}
                 </tbody>
             </table>
+            </div>
             {% else %}
                 <p>Rien d'inexpliqué sur cette période.</p>
             {% endif %}

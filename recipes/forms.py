@@ -6,7 +6,7 @@ from django.forms import BaseInlineFormSet, inlineformset_factory
 from common import BlankRowTolerantModelForm
 from inventory.models import StockType
 
-from .models import Recipe, RecipeIngredient, RecipeSale
+from .models import Recipe, RecipeIngredient, RecipeSale, SaleDocument, SaleDocumentLine
 from .services import assert_no_cycle
 
 # Sales typed in by hand live under their own source so a till import, which
@@ -234,3 +234,110 @@ class ManualSaleForm(forms.ModelForm):
             defaults={"quantity": self.cleaned_data["quantity"]},
         )
         return sale
+
+
+class SaleDocumentForm(forms.ModelForm):
+    class Meta:
+        model = SaleDocument
+        fields = ["sold_on", "reference", "note"]
+        labels = {"sold_on": "Date de vente", "reference": "Référence", "note": "Note"}
+        widgets = {"sold_on": forms.DateInput(attrs={"type": "date"})}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not self.instance.pk:
+            # self.initial, NOT fields["sold_on"].initial: a ModelForm seeds
+            # self.initial from the instance, so the key is already there
+            # holding None and the field's own initial is never consulted -
+            # the date box just renders empty.
+            self.initial["sold_on"] = timezone.localdate()
+
+
+class SaleDocumentLineForm(BlankRowTolerantModelForm):
+    """One line: a recipe OR a stock item, chosen from a single field.
+
+    Same single-field-two-FKs shape as RecipeIngredientForm, and for the same
+    reason - "what did you sell?" is one question, not two.
+    """
+
+    source = forms.ChoiceField(label="Vendu")
+
+    bookkeeping_fields = ()
+
+    class Meta:
+        model = SaleDocumentLine
+        fields = ["quantity", "unit_price_ttc"]
+        labels = {"quantity": "Quantité", "unit_price_ttc": "Prix unitaire TTC"}
+
+    def __init__(self, *args, source_choices=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["unit_price_ttc"].required = False
+        self.fields["source"].choices = (
+            source_choices if source_choices is not None else sale_source_choices()
+        )
+        if self.instance.pk:
+            self.initial["source"] = (
+                f"recipe:{self.instance.recipe_id}" if self.instance.recipe_id
+                else f"stock:{self.instance.stock_type_id}"
+            )
+
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get("DELETE"):
+            return cleaned
+        source = cleaned.get("source")
+        if not source:
+            self.add_error("source", "Choisissez une recette ou un type de stock.")
+            return cleaned
+        kind, _, id_str = source.partition(":")
+        if kind == "recipe":
+            self.instance.recipe_id = int(id_str)
+            self.instance.stock_type_id = None
+        else:
+            self.instance.stock_type_id = int(id_str)
+            self.instance.recipe_id = None
+        return cleaned
+
+
+def sale_source_choices() -> list:
+    """Everything sellable: a recipe, or a stock item sold as itself."""
+    return [
+        ("", "---------"),
+        ("Recettes", [(f"recipe:{r.pk}", r.name) for r in Recipe.objects.order_by("name")]),
+        (
+            "Types de stock",
+            [
+                (f"stock:{st.pk}", f"{st.name} ({st.get_unit_display()})")
+                for st in StockType.objects.order_by("name")
+            ],
+        ),
+    ]
+
+
+class BaseSaleDocumentLineFormSet(BaseInlineFormSet):
+    def get_form_kwargs(self, index):
+        kwargs = super().get_form_kwargs(index)
+        # Built once rather than per row - it's two full table scans.
+        if "source_choices" not in kwargs:
+            if not hasattr(self, "_cached_choices"):
+                self._cached_choices = sale_source_choices()
+            kwargs["source_choices"] = self._cached_choices
+        return kwargs
+
+    def clean(self):
+        super().clean()
+        if any(self.errors):
+            return
+        if not any(f.cleaned_data and not f.cleaned_data.get("DELETE") for f in self.forms):
+            raise forms.ValidationError("Ajoutez au moins une ligne.")
+
+
+SaleDocumentLineFormSet = inlineformset_factory(
+    SaleDocument,
+    SaleDocumentLine,
+    form=SaleDocumentLineForm,
+    formset=BaseSaleDocumentLineFormSet,
+    fields=["quantity", "unit_price_ttc"],
+    extra=3,
+    can_delete=True,
+)

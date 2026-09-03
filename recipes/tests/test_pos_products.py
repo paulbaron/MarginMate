@@ -217,3 +217,92 @@ class RecipeCreatePrefillTests(TestCase):
     def test_without_the_parameter_the_form_is_blank(self):
         response = self.client.get(reverse("recipes:recipe_create"))
         self.assertEqual(response.status_code, 200)
+
+
+class HappyHourModifierTests(TestCase):
+    """"Happy hour" is a modifier on linking, not a separate action - it links
+    to the same recipe AND records the till's name for it."""
+
+    def setUp(self):
+        self.recipe = make_recipe(name="Pinte Blonde")
+        self.product = PosProduct.objects.create(name="Pinte Blonde HH", total_quantity=197)
+
+    def post(self, **extra):
+        data = {"action": "link", "recipe": self.recipe.pk}
+        data.update(extra)
+        return self.client.post(
+            reverse("recipes:pos_product_assign", kwargs={"pk": self.product.pk}), data
+        )
+
+    def test_linking_without_the_checkbox_leaves_the_happy_hour_name_alone(self):
+        self.post()
+        self.product.refresh_from_db()
+        self.recipe.refresh_from_db()
+        self.assertEqual(self.product.recipe, self.recipe)
+        self.assertEqual(self.recipe.happy_hour_name, "")
+
+    def test_the_checkbox_records_the_till_name_as_the_happy_hour_one(self):
+        self.post(as_happy_hour="1")
+        self.product.refresh_from_db()
+        self.recipe.refresh_from_db()
+        self.assertEqual(self.product.recipe, self.recipe)
+        self.assertEqual(self.recipe.happy_hour_name, "Pinte Blonde HH")
+
+    def test_the_old_separate_action_still_works(self):
+        """An open tab or a bookmark shouldn't 400 after the redesign."""
+        self.client.post(
+            reverse("recipes:pos_product_assign", kwargs={"pk": self.product.pk}),
+            {"action": "happy_hour", "recipe": self.recipe.pk},
+        )
+        self.recipe.refresh_from_db()
+        self.assertEqual(self.recipe.happy_hour_name, "Pinte Blonde HH")
+
+    def test_a_clashing_happy_hour_name_is_refused_with_a_message(self):
+        make_recipe(name="Pinte Blonde HH")   # already answers to that name
+        self.post(as_happy_hour="1")
+        response = self.client.get(reverse("recipes:pos_product_list"))
+        self.recipe.refresh_from_db()
+        self.assertEqual(self.recipe.happy_hour_name, "")
+        self.assertTrue(any("Déjà utilisé" in str(m) for m in response.context["messages"]))
+
+
+class BulkIgnoreTests(TestCase):
+    """A first import leaves a hundred-odd unmatched products, most of them
+    food and coffee. One page reload each is not a workflow."""
+
+    def setUp(self):
+        for name in ("Café", "Thé", "Planche", "Mule"):
+            PosProduct.objects.create(name=name, total_quantity=10)
+
+    def test_several_products_are_ignored_at_once(self):
+        response = self.client.post(
+            reverse("recipes:pos_products_bulk"), {"selected": ["Café", "Thé", "Planche"]}, follow=True
+        )
+        self.assertEqual(PosProduct.objects.filter(ignored=True).count(), 3)
+        self.assertFalse(PosProduct.objects.get(name="Mule").ignored)
+        self.assertTrue(any("3 produits ignorés" in str(m) for m in response.context["messages"]))
+
+    def test_one_product_reads_as_singular(self):
+        response = self.client.post(
+            reverse("recipes:pos_products_bulk"), {"selected": ["Café"]}, follow=True
+        )
+        self.assertTrue(any("1 produit ignoré" in str(m) for m in response.context["messages"]))
+
+    def test_an_empty_selection_says_so_rather_than_silently_doing_nothing(self):
+        response = self.client.post(reverse("recipes:pos_products_bulk"), {}, follow=True)
+        self.assertEqual(PosProduct.objects.filter(ignored=True).count(), 0)
+        self.assertTrue(any("Aucun produit" in str(m) for m in response.context["messages"]))
+
+    def test_a_get_does_nothing(self):
+        self.client.get(reverse("recipes:pos_products_bulk"))
+        self.assertEqual(PosProduct.objects.filter(ignored=True).count(), 0)
+
+    def test_bulk_ignore_clears_any_existing_link(self):
+        recipe = make_recipe(name="Mule")
+        product = PosProduct.objects.get(name="Mule")
+        product.recipe = recipe
+        product.save()
+        self.client.post(reverse("recipes:pos_products_bulk"), {"selected": ["Mule"]})
+        product.refresh_from_db()
+        self.assertTrue(product.ignored)
+        self.assertIsNone(product.recipe)

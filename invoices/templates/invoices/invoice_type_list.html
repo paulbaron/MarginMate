@@ -2,7 +2,10 @@
 {% block title %}Types de factures - MarginMate{% endblock %}
 {% block content %}
     <div class="page-header">
-        <h1>Types de factures</h1>
+        <div>
+            <h1>Types de factures</h1>
+            <p class="page-subtitle">Comment reconnaître et récupérer chaque sorte de facture, et quel parseur lui appliquer.</p>
+        </div>
         <a class="btn" href="{% url 'invoices:invoice_type_create' %}">+ Nouveau type</a>
     </div>
     <p class="muted">
@@ -12,7 +15,8 @@
     </p>
 
     {% if invoice_types %}
-        <table>
+        <div class="table-wrap">
+        <table data-table data-table-label="types">
             <thead>
                 <tr>
                     <th>Nom</th>
@@ -34,6 +38,7 @@
                 {% endfor %}
             </tbody>
         </table>
+        </div>
     {% else %}
         <div class="empty-state">Aucun type de facture pour le moment.</div>
     {% endif %}

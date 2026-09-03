@@ -1,9 +1,12 @@
 import re
+from decimal import Decimal
 
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q, Sum
 from django.utils import timezone
+
+from common import JobLogMixin
 
 
 class Supplier(models.Model):
@@ -16,7 +19,8 @@ class Supplier(models.Model):
     name = models.CharField(max_length=255)
     parser_key = models.CharField(max_length=32, blank=True)
     is_scrapable = models.BooleanField(
-        default=False, help_text="Whether 'Gather new invoices' knows how to fetch this supplier automatically."
+        default=False,
+        help_text="Si « Récupérer les nouvelles factures » sait aller les chercher tout seul."
     )
 
     class Meta:
@@ -48,7 +52,8 @@ class InvoiceType(models.Model):
     parser_key = models.CharField(max_length=32, blank=True)
     source_kind = models.CharField(max_length=10, choices=SourceKind.choices, default=SourceKind.EMAIL)
     is_active = models.BooleanField(
-        default=True, help_text="Whether 'Récupérer les nouvelles factures' should gather this type automatically."
+        default=True,
+        help_text="Inclure ce type dans « Récupérer les nouvelles factures »."
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -146,6 +151,24 @@ class Invoice(models.Model):
         return lines_total + self.reconciliation_adjustment
 
     @property
+    def total_ttc(self):
+        """Summed per line, not total_ht times one rate: a single invoice
+        mixes 20% spirits with 5.5% food, and any blended rate would be
+        wrong for both. The reconciliation adjustment carries no VAT of its
+        own - it's duty, not a taxable sale - so it's added flat."""
+        total = sum(
+            (line.total_ht * (Decimal("1") + line.vat_rate) for line in self.lines.all()),
+            start=Decimal("0"),
+        )
+        return total + self.reconciliation_adjustment
+
+    @property
+    def lines_total_ht(self):
+        """What the lines alone come to, before the reconciliation
+        adjustment - the two are shown side by side when they differ."""
+        return sum((line.total_ht for line in self.lines.all()), start=Decimal("0"))
+
+    @property
     def needs_review_count(self):
         return self.lines.filter(product__stock_type__isnull=True).count()
 
@@ -175,8 +198,14 @@ class InvoiceLine(models.Model):
     def __str__(self):
         return f"{self.raw_name} x{self.quantity}"
 
+    @property
+    def vat_percent(self):
+        """20 rather than 0.200 - the stored rate is a fraction, and every
+        page that showed it raw made people read it as a currency amount."""
+        return self.vat_rate * Decimal("100")
 
-class ScrapeJob(models.Model):
+
+class ScrapeJob(JobLogMixin, models.Model):
     class Status(models.TextChoices):
         PENDING = "PENDING", "En attente"
         RUNNING = "RUNNING", "En cours"
@@ -213,6 +242,12 @@ class ScrapeJob(models.Model):
 
     class Meta:
         ordering = ["-started_at"]
+
+    @property
+    def is_active(self) -> bool:
+        """Still going. Named to match SalesImportJob so one shared template
+        can render either - see templates/_job_console.html."""
+        return self.status in (self.Status.PENDING, self.Status.RUNNING)
 
     def append_log(self, message: str):
         # Timestamped so a slow run can actually be diagnosed after the fact

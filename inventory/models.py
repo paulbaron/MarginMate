@@ -107,7 +107,7 @@ class Product(models.Model):
         max_digits=10,
         decimal_places=4,
         default=Decimal("1"),
-        help_text="How much of the stock type's unit is in one 'unit' of this product.",
+        help_text="Quantité de l'unité du type de stock contenue dans une « unité » de ce produit.",
     )
     # A pre-fill for the review form (see product_matching_rules.py) - a
     # hint the user still has to confirm via the normal assign flow, never

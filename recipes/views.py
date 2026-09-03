@@ -15,11 +15,20 @@ from django.views.generic import ListView
 from .forms import (
     MANUAL_SALE_SOURCE,
     ManualSaleForm,
+    SaleDocumentForm,
+    SaleDocumentLineFormSet,
     RecipeForm,
     RecipeIngredientFormSet,
     ingredient_unit_map,
 )
-from .models import PosProduct, Recipe, RecipeSale, SalesImportJob, variation_scope
+from .models import (
+    PosProduct,
+    Recipe,
+    RecipeSale,
+    SaleDocument,
+    SalesImportJob,
+    variation_scope,
+)
 from .tasks import import_laddition_sales_task
 
 
@@ -30,16 +39,20 @@ _PIE_COLORS = ["#d99b3f", "#6fbf73", "#e0685f", "#5b9bd9", "#c77dd9", "#d9c73f",
 
 
 def _build_ingredient_pie_svg(breakdown: list[dict]) -> str:
-    """Hand-rolled inline SVG pie chart of each ingredient's share of a
-    recipe's total cost - same "no new dependency" approach as the stock
-    page's price-history line chart. Built from the exact same breakdown
-    cost_ht() itself sums, so the chart and the displayed total can never
-    disagree. Empty string when there's no cost to show a proportion of.
+    """Each ingredient's share of a recipe's cost, as an inline SVG pie.
 
-    The result is rendered with |safe, so every stock item / sub-recipe name
-    that goes into it has to be escaped here - those names come from invoice
-    text and from whatever the user typed into the stock page, neither of
-    which is trustworthy markup.
+    Built from the exact same breakdown cost_ht() sums, so the chart and the
+    displayed total can never disagree. Empty string when there's no cost to
+    show a proportion of.
+
+    Hand-rolled for the same reason as the price chart (see
+    inventory/views.py::_build_price_history_svg): a charting library's only
+    real contribution here would be the tooltip, and static/js/charts.js does
+    that for both charts at once.
+
+    The result is rendered with |safe, so every name that goes into it is
+    escaped here - those come from invoice text and from whatever was typed
+    on the stock page, neither of which is trustworthy markup.
     """
     total = sum((entry["cost_ht"] for entry in breakdown), start=Decimal("0"))
     non_zero = [entry for entry in breakdown if entry["cost_ht"] > 0]
@@ -49,46 +62,46 @@ def _build_ingredient_pie_svg(breakdown: list[dict]) -> str:
     size, radius = 220, 100
     cx = cy = size / 2
 
-    def legend_item(color, name, fraction):
-        return (
-            '<span style="display:inline-flex; align-items:center; gap:0.35rem; margin:0 0.75rem 0.35rem 0;">'
-            f'<span style="width:0.7rem; height:0.7rem; background:{color}; border-radius:2px; '
-            'display:inline-block; flex:none;"></span>'
-            f"{name} ({fraction * 100:.1f}%)</span>"
-        )
-
-    if len(non_zero) == 1:
-        name = escape(non_zero[0]["ingredient"].source_name)
-        svg = (
-            f'<svg viewBox="0 0 {size} {size}" class="recipe-pie-chart" role="img" '
-            f'aria-label="Répartition du coût"><circle cx="{cx}" cy="{cy}" r="{radius}" '
-            f'fill="{_PIE_COLORS[0]}"><title>{name} : 100%</title></circle></svg>'
-        )
-        return svg + f'<div style="margin-top:0.5rem;">{legend_item(_PIE_COLORS[0], name, 1)}</div>'
-
-    start_angle = -math.pi / 2  # 12 o'clock
     slices, legend = [], []
-    for i, entry in enumerate(non_zero):
+    start_angle = -math.pi / 2  # 12 o'clock
+    for index, entry in enumerate(non_zero):
         fraction = float(entry["cost_ht"] / total)
-        angle = fraction * 2 * math.pi
-        end_angle = start_angle + angle
-        x1, y1 = cx + radius * math.cos(start_angle), cy + radius * math.sin(start_angle)
-        x2, y2 = cx + radius * math.cos(end_angle), cy + radius * math.sin(end_angle)
-        large_arc = 1 if angle > math.pi else 0
-        color = _PIE_COLORS[i % len(_PIE_COLORS)]
-        name = escape(entry["ingredient"].source_name)
-        slices.append(
-            f'<path d="M{cx},{cy} L{x1:.1f},{y1:.1f} A{radius},{radius} 0 {large_arc} 1 {x2:.1f},{y2:.1f} Z" '
-            f'fill="{color}"><title>{name} : {fraction * 100:.1f}%</title></path>'
-        )
-        legend.append(legend_item(color, name, fraction))
-        start_angle = end_angle
+        color = _PIE_COLORS[index % len(_PIE_COLORS)]
+        name = escape(entry.get("name") or entry["ingredient"].source_name)
+        value = f"{entry['cost_ht']:.2f} € · {fraction * 100:.1f} %"
+        common = f'data-index="{index}" data-label="{name}" data-value="{value}" data-color="{color}"'
 
-    svg = (
-        f'<svg viewBox="0 0 {size} {size}" class="recipe-pie-chart" role="img" '
-        f'aria-label="Répartition du coût">{"".join(slices)}</svg>'
+        if len(non_zero) == 1:
+            # A single 100% slice can't be drawn as an arc - the start and end
+            # points coincide and the path collapses to nothing.
+            slices.append(
+                f'<circle class="chart-slice" cx="{cx}" cy="{cy}" r="{radius}" fill="{color}" {common} />'
+            )
+        else:
+            end_angle = start_angle + fraction * 2 * math.pi
+            x1, y1 = cx + radius * math.cos(start_angle), cy + radius * math.sin(start_angle)
+            x2, y2 = cx + radius * math.cos(end_angle), cy + radius * math.sin(end_angle)
+            large_arc = 1 if fraction > 0.5 else 0
+            slices.append(
+                f'<path class="chart-slice" d="M{cx},{cy} L{x1:.1f},{y1:.1f} '
+                f'A{radius},{radius} 0 {large_arc} 1 {x2:.1f},{y2:.1f} Z" fill="{color}" {common} />'
+            )
+            start_angle = end_angle
+
+        legend.append(
+            f'<span class="chart-legend-item" data-legend-for="{index}">'
+            f'<span class="swatch" style="background:{color};"></span>{name}'
+            f' <span class="muted">{fraction * 100:.1f} %</span></span>'
+        )
+
+    return (
+        f'<div class="chart chart-pie" data-chart="pie" style="max-width:260px;">'
+        f'<svg viewBox="0 0 {size} {size}" role="img" aria-label="Répartition du coût">'
+        f'{"".join(slices)}</svg>'
+        f'<div class="chart-tooltip" data-chart-tooltip></div>'
+        f'<div class="chart-legend">{"".join(legend)}</div>'
+        f"</div>"
     )
-    return svg + f'<div style="margin-top:0.5rem;">{"".join(legend)}</div>'
 
 
 class RecipeListView(ListView):
@@ -283,9 +296,10 @@ def pos_product_list(request):
 def pos_product_assign(request, pk):
     """Link one till product to a recipe, or set it aside.
 
-    Four actions, because those are the four real answers to "what is this
-    thing?": it's an existing recipe, it's the happy-hour version of one, it
-    needs a recipe of its own, or it isn't something we track.
+    "Happy hour" is a MODIFIER on linking rather than an action of its own:
+    it links to the same recipe, and additionally records this as the name
+    the till uses during happy hour so both sets of sales land together.
+    Presenting it as a fifth button implied a fifth kind of answer.
     """
     if request.method != "POST":
         return redirect("recipes:pos_product_list")
@@ -304,21 +318,14 @@ def pos_product_assign(request, pk):
         product.save(update_fields=["ignored", "recipe"])
         messages.success(request, f'"{product.name}" remis à traiter.')
 
-    elif action == "link":
+    elif action in ("link", "happy_hour"):
+        # "happy_hour" is still accepted so an old bookmark or a half-submitted
+        # form doesn't 400; the checkbox is what the page sends now.
+        as_happy_hour = action == "happy_hour" or bool(request.POST.get("as_happy_hour"))
         recipe = Recipe.objects.filter(pk=request.POST.get("recipe") or 0).first()
         if recipe is None:
             messages.error(request, "Choisissez une recette.")
-        else:
-            product.recipe = recipe
-            product.ignored = False
-            product.save(update_fields=["recipe", "ignored"])
-            messages.success(request, f'"{product.name}" lié à « {recipe.name} ».')
-
-    elif action == "happy_hour":
-        recipe = Recipe.objects.filter(pk=request.POST.get("recipe") or 0).first()
-        if recipe is None:
-            messages.error(request, "Choisissez la recette de base.")
-        else:
+        elif as_happy_hour:
             recipe.happy_hour_name = product.name
             try:
                 recipe.full_clean()
@@ -332,6 +339,11 @@ def pos_product_assign(request, pk):
                 messages.success(
                     request, f'"{product.name}" enregistré comme happy hour de « {recipe.name} ».'
                 )
+        else:
+            product.recipe = recipe
+            product.ignored = False
+            product.save(update_fields=["recipe", "ignored"])
+            messages.success(request, f'"{product.name}" lié à « {recipe.name} ».')
 
     return redirect("recipes:pos_product_list")
 
@@ -420,6 +432,9 @@ def sales_list(request):
     else:
         form = ManualSaleForm()
 
+    documents = list(
+        SaleDocument.objects.prefetch_related("lines__recipe", "lines__stock_type").order_by("-sold_on")[:50]
+    )
     sales = RecipeSale.objects.select_related("recipe").order_by("-sold_on", "recipe__name")[:400]
     totals = RecipeSale.objects.values("source").annotate(
         rows=Count("id"), units=Sum("quantity")
@@ -432,6 +447,7 @@ def sales_list(request):
             "sales": sales,
             "totals": totals,
             "manual_source": MANUAL_SALE_SOURCE,
+            "documents": documents,
         },
     )
 
@@ -448,4 +464,67 @@ def sales_delete(request, pk):
     else:
         sale.delete()
         messages.success(request, "Vente supprimée.")
+    return redirect("recipes:sales_list")
+
+
+def pos_products_bulk(request):
+    """Set aside several till products at once.
+
+    With a hundred-odd unmatched products after a first import, most of which
+    are food, coffee or one-off oddities, doing this a row at a time means a
+    hundred full page reloads. Only "ignore" is offered in bulk: linking needs
+    a different recipe per product, so there's nothing to batch, and a bulk
+    action that quietly linked the wrong ones would be exactly the silent
+    mis-attribution the rest of this app works hard to avoid.
+    """
+    if request.method != "POST":
+        return redirect("recipes:pos_product_list")
+
+    names = request.POST.getlist("selected")
+    if not names:
+        messages.error(request, "Aucun produit sélectionné.")
+        return redirect("recipes:pos_product_list")
+
+    updated = PosProduct.objects.filter(name__in=names).update(ignored=True, recipe=None)
+    messages.success(request, f"{updated} produit{'s' if updated > 1 else ''} ignoré{'s' if updated > 1 else ''}.")
+    return redirect("recipes:pos_product_list")
+
+
+def sale_document_form(request, pk=None):
+    """Create or edit a hand-written sale document.
+
+    Lines can be recipes or stock items sold as themselves; both feed the
+    variance report, a recipe through its ingredients and a stock item
+    directly.
+    """
+    document = get_object_or_404(SaleDocument, pk=pk) if pk else SaleDocument()
+
+    if request.method == "POST":
+        form = SaleDocumentForm(request.POST, instance=document)
+        formset = SaleDocumentLineFormSet(request.POST, instance=document)
+        if form.is_valid() and formset.is_valid():
+            with transaction.atomic():
+                document = form.save()
+                formset.instance = document
+                formset.save()
+            messages.success(request, f"{document} enregistrée.")
+            return redirect("recipes:sales_list")
+    else:
+        form = SaleDocumentForm(instance=document)
+        formset = SaleDocumentLineFormSet(instance=document)
+
+    return render(
+        request,
+        "recipes/sale_document_form.html",
+        {"form": form, "formset": formset, "document": document if document.pk else None},
+    )
+
+
+def sale_document_delete(request, pk):
+    if request.method != "POST":
+        return redirect("recipes:sales_list")
+    document = get_object_or_404(SaleDocument, pk=pk)
+    label = str(document)
+    document.delete()
+    messages.success(request, f"{label} supprimée.")
     return redirect("recipes:sales_list")

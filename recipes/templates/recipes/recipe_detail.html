@@ -3,7 +3,7 @@
 {% block content %}
     <div class="page-header">
         <h1>{{ recipe.name }}</h1>
-        <div style="display:flex; gap:0.5rem;">
+        <div class="actions">
             <a class="btn btn-secondary" href="{% url 'recipes:recipe_update' recipe.pk %}">Modifier</a>
             <form method="post" action="{% url 'recipes:recipe_delete' recipe.pk %}"
                   onsubmit="return confirm('Supprimer \'{{ recipe.name|escapejs }}\' ?');">
@@ -32,19 +32,36 @@
     {% endif %}
 
     {% if summary.variation_count > 1 %}
+    <div class="stat-row">
+        <div class="stat">
+            <div class="stat-label">Variantes</div>
+            <div class="stat-value">{{ summary.variation_count|floatformat:0 }}</div>
+            <div class="stat-note">une par combinaison d'alternatives</div>
+        </div>
+        {% if summary.cost_range %}
+        <div class="stat">
+            <div class="stat-label">Coût (HT)</div>
+            <div class="stat-value">{{ summary.cost_range.0|floatformat:2 }} – {{ summary.cost_range.1|floatformat:2 }} €</div>
+            <div class="stat-note">du moins cher au plus cher</div>
+        </div>
+        {% endif %}
+        {% if summary.margin_percent_range %}
+        <div class="stat">
+            <div class="stat-label">Marge</div>
+            <div class="stat-value good">{{ summary.margin_percent_range.0|floatformat:0 }} – {{ summary.margin_percent_range.1|floatformat:0 }} %</div>
+            <div class="stat-note">du prix HT</div>
+        </div>
+        {% endif %}
+        {% if summary.price_factor_range %}
+        <div class="stat">
+            <div class="stat-label">Facteur</div>
+            <div class="stat-value">x{{ summary.price_factor_range.0|floatformat:1 }} – x{{ summary.price_factor_range.1|floatformat:1 }}</div>
+            <div class="stat-note">prix de vente ÷ coût</div>
+        </div>
+        {% endif %}
+    </div>
+
     <div class="card">
-        <p class="muted">
-            Sur les {{ summary.variation_count|floatformat:0 }} variantes :
-            {% if summary.cost_range %}
-                Coût {{ summary.cost_range.0|floatformat:2 }} – {{ summary.cost_range.1|floatformat:2 }} €
-            {% endif %}
-            {% if summary.margin_percent_range %}
-                · Marge {{ summary.margin_percent_range.0|floatformat:0 }} – {{ summary.margin_percent_range.1|floatformat:0 }} %
-            {% endif %}
-            {% if summary.price_factor_range %}
-                · Facteur x{{ summary.price_factor_range.0|floatformat:1 }} – x{{ summary.price_factor_range.1|floatformat:1 }}
-            {% endif %}
-        </p>
 
         <form method="get" id="variation-picker">
             {% if listed_variations %}

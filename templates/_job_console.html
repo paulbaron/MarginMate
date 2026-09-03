@@ -1,0 +1,33 @@
+{% comment %}
+The technical log of a background job.
+
+ A wall of timestamped scanner output is alarming to read and almost never
+ what someone actually wants, so it's folded away behind a disclosure. What
+ they DO want while a job runs is "what's happening right now", which is the
+ last line - shown on its own, in plain sight, with a spinner.
+
+ The log itself stays, unabridged: it's how a slow or failed run gets
+ diagnosed after the fact.
+
+ Context: `log` (the text), `running` (bool), `console_id` (unique per page).
+{% endcomment %}
+{% if log %}
+<div class="job-console" data-job-console {% if running %}data-running{% endif %}>
+    {% if running %}
+        <p class="job-console-live">
+            <span class="job-spinner" aria-hidden="true"></span>
+            <span class="job-console-last" data-job-last>{{ last_line|default:"Démarrage…" }}</span>
+        </p>
+    {% endif %}
+    <details class="log-details" data-persist="{{ console_id|default:'job-log' }}">
+        <summary>
+            Journal technique
+            <span class="muted">({{ log_lines|default:0 }} ligne{{ log_lines|default:0|pluralize }})</span>
+        </summary>
+        <div class="log-actions">
+            <button type="button" class="btn btn-small btn-secondary" data-copy-log>Copier</button>
+        </div>
+        <div class="log-box" data-log-scroll>{{ log }}</div>
+    </details>
+</div>
+{% endif %}

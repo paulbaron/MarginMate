@@ -1,20 +1,20 @@
-<div class="card"
+<div class="card job-status"
     id="gather-status"
-    {% if job.status == "PENDING" or job.status == "RUNNING" %}
+    {% if job.is_active %}
     hx-get="{% url 'invoices:gather_status' job.id %}"
     hx-trigger="every 1s"
     hx-swap="outerHTML"
     {% endif %}
 >
-    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+    <div class="job-status-head">
         <div>
             <span class="status-pill status-{{ job.status }}">{{ job.get_status_display }}</span>
             <span class="muted">
-                {% if job.range_start %}Du {{ job.range_start }} au {{ job.range_end }} · {% endif %}
-                Lancée : {{ job.started_at }}
+                {% if job.range_start %}Du {{ job.range_start|date:"d/m/Y" }} au {{ job.range_end|date:"d/m/Y" }} · {% endif %}
+                Lancée : {{ job.started_at|date:"d/m/Y à H:i" }}
             </span>
         </div>
-        {% if job.status == "PENDING" or job.status == "RUNNING" %}
+        {% if job.is_active %}
             {% if job.cancel_requested %}
                 <span class="muted">Annulation en cours…</span>
             {% else %}
@@ -75,7 +75,5 @@
         <p class="muted" style="margin-top:0.75rem;">Aucun email ne correspond à ces critères sur cette période.</p>
     {% endif %}
 
-    {% if job.log %}
-        <div class="log-box" style="margin-top:0.75rem;">{{ job.log }}</div>
-    {% endif %}
+    {% include "_job_console.html" with log=job.log running=job.is_active last_line=job.last_log_line log_lines=job.log_lines console_id="gather-log" %}
 </div>

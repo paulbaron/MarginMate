@@ -218,6 +218,39 @@ For the variance engine this means a nested choice must be pooled too:
 **never capped**, because a pool missing a member reports that member's whole
 consumption as unexplained. Amounts are capped (`MAX_SUB_VARIATIONS`).
 
+### UI conventions
+
+`static/css/marginmate.css` holds the design tokens - colours, a 4px spacing
+scale (`--s1`..`--s6`), radii. Use the tokens, not literals, and prefer an
+existing class to an inline `style=`:
+
+| Want | Use |
+|---|---|
+| Buttons beside a page title | `<div class="actions">` inside `.page-header` |
+| A line saying what a page is for | `<p class="page-subtitle">` |
+| Headline figures | `.stat-row` > `.stat` > `.stat-label` / `.stat-value` / `.stat-note` |
+| A table | `<div class="table-wrap"><table data-table data-table-label="factures">` |
+
+**Every table gets search and sorting for free** via `static/js/datatable.js`
+— add `data-table` and it grows a search box, a live "12 / 261" count and a
+sort button in every header. Three things to remember:
+
+- `data-sort="2026-03-31"` on a `<td>` when the displayed text doesn't sort
+  correctly. A date shown as `31/03/2026` sorts as *text* without it, so
+  every March lands together regardless of year.
+- `data-child-row` on a row that explains the row above it (an expanded
+  panel, a "valorisé en X" note). Without it, sorting separates the two.
+- `data-table-sort-only` when the page already has its own search — the
+  stock list's is server-backed and fuzzy, and a second box filtering the
+  same rows by a different rule is worse than none.
+
+`tests/test_ui.py` checks these hold, because all three fail *silently*: the
+page still renders, it just quietly stops working the way every other page
+does.
+
+**Dates are always `|date:"d/m/Y"`.** `LANGUAGE_CODE` is `en-us`, so an
+unformatted date renders "March 31, 2026" in an otherwise French interface.
+
 ### Django's `{# … #}` comment is SINGLE-LINE ONLY
 
 A multi-line one prints itself onto the page and executes any tag inside it.

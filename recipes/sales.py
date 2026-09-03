@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
+from decimal import Decimal
 
 from .models import Recipe, RecipeSale
 
@@ -123,10 +124,41 @@ def sales_between(start: date | None, end: date) -> dict[int, int]:
     the day of the closing count is. `start` of None means "everything up to
     the closing count", for the very first period.
     """
+    from .models import SaleDocumentLine
+
+    totals: dict[int, int] = {}
+
     queryset = RecipeSale.objects.filter(sold_on__lte=end)
     if start is not None:
         queryset = queryset.filter(sold_on__gt=start)
-    totals: dict[int, int] = {}
     for recipe_id, quantity in queryset.values_list("recipe_id", "quantity"):
         totals[recipe_id] = totals.get(recipe_id, 0) + quantity
+
+    # Hand-written sale documents count too: a tab settled off the books
+    # consumed exactly as much stock as one rung up on the till.
+    document_lines = SaleDocumentLine.objects.filter(
+        recipe__isnull=False, document__sold_on__lte=end
+    )
+    if start is not None:
+        document_lines = document_lines.filter(document__sold_on__gt=start)
+    for recipe_id, quantity in document_lines.values_list("recipe_id", "quantity"):
+        totals[recipe_id] = totals.get(recipe_id, 0) + quantity
+
+    return totals
+
+
+def stock_type_sales_between(start: date | None, end: date) -> dict[int, "Decimal"]:
+    """{stock_type_id: quantity} sold directly, as itself, over the window.
+
+    A bottle sold over the counter is not a recipe and has no ingredients to
+    expand - it consumes exactly itself, in its own unit.
+    """
+    from .models import SaleDocumentLine
+
+    lines = SaleDocumentLine.objects.filter(stock_type__isnull=False, document__sold_on__lte=end)
+    if start is not None:
+        lines = lines.filter(document__sold_on__gt=start)
+    totals: dict[int, Decimal] = {}
+    for stock_type_id, quantity in lines.values_list("stock_type_id", "quantity"):
+        totals[stock_type_id] = totals.get(stock_type_id, Decimal("0")) + quantity
     return totals

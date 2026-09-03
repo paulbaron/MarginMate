@@ -16,9 +16,24 @@
         <div class="card">
             <h3>À traiter ({{ pending|length }})</h3>
             <p class="muted">{{ pending_quantity }} articles vendus ne sont rattachés à aucune recette.</p>
-            <table class="sub-table">
+            {% comment %}Deliberately NOT wrapping the table: every row already contains
+               its own <form>, and nested forms are invalid HTML - the browser
+               silently drops the inner one, which would break every per-row
+               action on the page. The checkboxes join this form by id.{% endcomment %}
+            <form method="post" action="{% url 'recipes:pos_products_bulk' %}" id="pos-bulk-form">{% csrf_token %}</form>
+            <div class="bulk-bar" data-bulk-bar hidden>
+                <span><strong data-bulk-count>0</strong> sélectionné(s)</span>
+                <button type="submit" form="pos-bulk-form" class="btn btn-small"
+                        onclick="return confirm('Ignorer les produits sélectionnés ?');">
+                    Ignorer la sélection
+                </button>
+                <button type="button" class="btn btn-small btn-secondary" data-bulk-clear>Tout désélectionner</button>
+            </div>
+            <div class="table-wrap">
+            <table class="sub-table" data-table data-table-label="produits">
                 <thead>
                     <tr>
+                        <th data-no-sort><input type="checkbox" data-bulk-all aria-label="Tout sélectionner"></th>
                         <th>Produit caisse</th>
                         <th class="num">Vendus</th>
                         <th>Catégorie</th>
@@ -28,11 +43,14 @@
                 <tbody>
                     {% for product in pending %}
                     <tr>
+                        <td><input type="checkbox" form="pos-bulk-form" name="selected"
+                                   value="{{ product.name }}" data-bulk-item
+                                   aria-label="Sélectionner {{ product.name }}"></td>
                         <td>
                             <strong>{{ product.name }}</strong>
                             {% if product.first_seen %}
                                 <br><span class="muted" style="font-size:0.85em;">
-                                    {{ product.first_seen }} → {{ product.last_seen }}
+                                    {{ product.first_seen|date:"d/m/Y" }} → {{ product.last_seen|date:"d/m/Y" }}
                                 </span>
                             {% endif %}
                         </td>
@@ -42,8 +60,12 @@
                             {% if product.typology %}<br><span style="font-size:0.85em;">{{ product.typology }}</span>{% endif %}
                         </td>
                         <td>
+                            {% comment %}Four buttons a row read as four equally likely choices, which they
+                               aren't: almost every product is either an existing recipe or nothing
+                               we track. So one select and one primary button, with "happy hour"
+                               as a modifier on the same action, and the other two as quiet links.{% endcomment %}
                             <form method="post" action="{% url 'recipes:pos_product_assign' product.pk %}"
-                                  class="inline-form" style="flex-wrap:wrap; gap:0.35rem;">
+                                  class="pos-actions">
                                 {% csrf_token %}
                                 <select name="recipe" aria-label="Recette pour {{ product.name }}">
                                     <option value="">— Choisir une recette —</option>
@@ -51,25 +73,25 @@
                                         <option value="{{ recipe.pk }}">{{ recipe.name }}</option>
                                     {% endfor %}
                                 </select>
-                                <button type="submit" name="action" value="link" class="btn btn-small">C'est ça</button>
-                                <button type="submit" name="action" value="happy_hour" class="btn btn-small btn-secondary"
-                                        title="Enregistre ce nom comme la version happy hour de la recette choisie : mêmes ingrédients, ventes cumulées.">
-                                    Happy hour de…
-                                </button>
-                                <a class="btn btn-small btn-secondary"
-                                   href="{% url 'recipes:recipe_create' %}?name={{ product.name|urlencode }}">
-                                    Créer la recette
-                                </a>
-                                <button type="submit" name="action" value="ignore" class="btn btn-small btn-secondary"
-                                        title="Pour ce qui ne consomme aucun stock suivi : café, cuisine, divers.">
-                                    Ignorer
-                                </button>
+                                <label class="pos-hh" title="Mêmes ingrédients que la recette choisie, ventes cumulées avec elle.">
+                                    <input type="checkbox" name="as_happy_hour" value="1"> happy hour
+                                </label>
+                                <button type="submit" name="action" value="link" class="btn btn-small">Lier</button>
+                                <span class="pos-secondary">
+                                    <a href="{% url 'recipes:recipe_create' %}?name={{ product.name|urlencode }}">Créer la recette</a>
+                                    ·
+                                    <button type="submit" name="action" value="ignore" class="link-button"
+                                            title="Pour ce qui ne consomme aucun stock suivi : café, cuisine, divers.">
+                                        Ignorer
+                                    </button>
+                                </span>
                             </form>
                         </td>
                     </tr>
                     {% endfor %}
                 </tbody>
             </table>
+            </div>
         </div>
     {% else %}
         <div class="empty-state">
@@ -84,9 +106,10 @@
     {% if linked %}
         <div class="card">
             <h3>Rattachés ({{ linked|length }})</h3>
-            <table class="sub-table">
+            <div class="table-wrap">
+            <table class="sub-table" data-table data-table-label="produits liés">
                 <thead>
-                    <tr><th>Produit caisse</th><th class="num">Vendus</th><th>Recette</th><th></th></tr>
+                    <tr><th>Produit caisse</th><th class="num">Vendus</th><th>Recette</th><th data-no-sort></th></tr>
                 </thead>
                 <tbody>
                     {% for product in linked %}
@@ -109,6 +132,7 @@
                     {% endfor %}
                 </tbody>
             </table>
+            </div>
         </div>
     {% endif %}
 
@@ -116,8 +140,9 @@
         <div class="card">
             <h3>Ignorés ({{ ignored|length }})</h3>
             <p class="muted">Ces produits ne consomment aucun stock suivi.</p>
-            <table class="sub-table">
-                <thead><tr><th>Produit caisse</th><th class="num">Vendus</th><th></th></tr></thead>
+            <div class="table-wrap">
+            <table class="sub-table" data-table data-table-label="produits ignorés">
+                <thead><tr><th>Produit caisse</th><th class="num">Vendus</th><th data-no-sort></th></tr></thead>
                 <tbody>
                     {% for product in ignored %}
                     <tr>
@@ -133,6 +158,7 @@
                     {% endfor %}
                 </tbody>
             </table>
+            </div>
         </div>
     {% endif %}
 {% endblock %}

@@ -11,7 +11,7 @@
     <p class="muted">
         Récupère le rapport « Lignes de ventes » de L'Addition pour la période choisie et enregistre
         les ventes, jour par jour. Les périodes de plus de deux ans sont découpées automatiquement.
-        {% if last_sale %}<br>Dernière vente enregistrée : {{ last_sale.sold_on }}.{% endif %}
+        {% if last_sale %}<br>Dernière vente enregistrée : {{ last_sale.sold_on|date:"d/m/Y" }}.{% endif %}
     </p>
 
     <div class="card">

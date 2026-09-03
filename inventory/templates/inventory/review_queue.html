@@ -3,7 +3,7 @@
 {% block content %}
     <div class="page-header">
         <h1>Produits à rattacher</h1>
-        <div style="display:flex; gap:0.5rem;">
+        <div class="actions">
             {% if suggested_count %}
             <form method="post" action="{% url 'inventory:approve_all_suggestions' %}"
                   onsubmit="return confirm('Approuver {{ suggested_count }} suggestion(s) sans les vérifier une par une ?\n\nConfiance : {{ confidence_counts.high|default:0 }} haute, {{ confidence_counts.medium|default:0 }} moyenne, {{ confidence_counts.low|default:0 }} basse.\n\nCeci créera des mouvements de stock directement - vérifiez les suggestions basse confiance avant si possible.');">
@@ -13,15 +13,20 @@
             {% endif %}
         </div>
     </div>
-    <p class="muted">
-        Ces produits ont été trouvés sur une facture mais ne sont liés à aucun type de stock.
-        Rattachez-les à un type existant, ou créez-en un nouveau — leur historique d'achats sera
-        automatiquement ajouté au stock dès que vous validez.
-        Les champs ci-dessous sont pré-remplis automatiquement d'après une table de correspondance
-        codée en dur (marque/nom de produit → type de stock). Pour un produit non reconnu, le nom de
-        facture est repris tel quel comme type de stock ({{ fallback_count }} actuellement marqué{{ fallback_count|pluralize }}
-        "🏷️ nom brut" ci-dessous) — vérifiez toujours avant de valider.
+    <p class="lead">
+        Trouvés sur une facture, liés à aucun type de stock. Rattachez-les — leur historique
+        d'achats rejoint le stock dès validation.
     </p>
+    <details class="explainer" data-persist="review-help" data-persist-durable>
+        <summary>Comment les propositions sont faites</summary>
+        <p>
+            Les champs sont pré-remplis d'après une table de correspondance codée en dur
+            (marque ou nom de produit → type de stock). Pour un produit non reconnu, le nom
+            figurant sur la facture est repris tel quel : {{ fallback_count }} produit{{ fallback_count|pluralize }}
+            {{ fallback_count|pluralize:"est,sont" }} dans ce cas ci-dessous, marqué{{ fallback_count|pluralize }}
+            « 🏷️ nom brut ». Vérifiez toujours avant de valider.
+        </p>
+    </details>
 
     <datalist id="category-datalist">
         {% for cat in existing_categories %}
