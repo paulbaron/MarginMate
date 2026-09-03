@@ -24,9 +24,7 @@ import re
 from datetime import date, datetime
 from decimal import Decimal
 
-import pdfplumber
-
-from .base import InvoiceParser, ParsedInvoice, ParsedLine
+from .base import InvoiceParser, ParsedInvoice, ParsedLine, PdfPage
 from .registry import register
 
 LINE_REGEX = re.compile(
@@ -56,46 +54,48 @@ def _to_decimal(text: str | None, default: str = "0") -> Decimal:
 @register
 class CecinaParser(InvoiceParser):
     supplier_code = "CECINA"
+    # Text-only: this layout's tables come out with merged cells.
 
-    def parse(self, pdf_path: str, date_hint: date | None = None) -> ParsedInvoice:
+    def parse_pages(
+        self, pages: list[PdfPage], date_hint: date | None = None, source_name: str = ""
+    ) -> ParsedInvoice:
         lines_by_code: dict[str, ParsedLine] = {}
         full_text_parts: list[str] = []
 
-        with pdfplumber.open(pdf_path) as pdf:
-            for page in pdf.pages:
-                text = page.extract_text() or ""
-                full_text_parts.append(text)
+        for page in pages:
+            text = page.text
+            full_text_parts.append(text)
 
-                tva_rate_by_code = {
-                    match.group(1): _to_decimal(match.group(2)) / Decimal("100")
-                    for match in TVA_CODE_REGEX.finditer(text)
-                }
+            tva_rate_by_code = {
+                match.group(1): _to_decimal(match.group(2)) / Decimal("100")
+                for match in TVA_CODE_REGEX.finditer(text)
+            }
 
-                for line in text.split("\n"):
-                    match = LINE_REGEX.match(line.strip())
-                    if not match:
-                        continue
-                    code, designation, unit, quantity_raw, unit_price_raw, amount_raw, tva_code = match.groups()
-                    if unit.lower() not in ("unité", "carton", "colis"):
-                        continue  # a stray numeric-looking line that isn't really a product row
-                    quantity = int(quantity_raw)
-                    amount = _to_decimal(amount_raw)
-                    vat_rate = tva_rate_by_code.get(tva_code, Decimal("0"))
+            for line in text.split("\n"):
+                match = LINE_REGEX.match(line.strip())
+                if not match:
+                    continue
+                code, designation, unit, quantity_raw, unit_price_raw, amount_raw, tva_code = match.groups()
+                if unit.lower() not in ("unité", "carton", "colis"):
+                    continue  # a stray numeric-looking line that isn't really a product row
+                quantity = int(quantity_raw)
+                amount = _to_decimal(amount_raw)
+                vat_rate = tva_rate_by_code.get(tva_code, Decimal("0"))
 
-                    parsed_line = lines_by_code.get(code)
-                    if parsed_line is None:
-                        lines_by_code[code] = ParsedLine(
-                            raw_name=designation.strip(),
-                            quantity=quantity,
-                            total_volume=Decimal("0"),
-                            unit_cost_ht=Decimal("0"),
-                            total_ht=amount,
-                            vat_rate=vat_rate,
-                            ean=code,
-                        )
-                    else:
-                        parsed_line.quantity += quantity
-                        parsed_line.total_ht += amount
+                parsed_line = lines_by_code.get(code)
+                if parsed_line is None:
+                    lines_by_code[code] = ParsedLine(
+                        raw_name=designation.strip(),
+                        quantity=quantity,
+                        total_volume=Decimal("0"),
+                        unit_cost_ht=Decimal("0"),
+                        total_ht=amount,
+                        vat_rate=vat_rate,
+                        ean=code,
+                    )
+                else:
+                    parsed_line.quantity += quantity
+                    parsed_line.total_ht += amount
 
         for parsed_line in lines_by_code.values():
             if parsed_line.quantity:

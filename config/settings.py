@@ -115,12 +115,27 @@ UBA_EMAIL_APP_PASSWORD = os.environ.get("UBA_EMAIL_APP_PASSWORD", "")
 INVOICE_EMAIL_ADDRESS = os.environ.get("INVOICE_EMAIL_ADDRESS", "") or UBA_EMAIL_ADDRESS
 INVOICE_EMAIL_APP_PASSWORD = os.environ.get("INVOICE_EMAIL_APP_PASSWORD", "") or UBA_EMAIL_APP_PASSWORD
 
+# Credentials for the L'Addition till, used to download the "Z digital"
+# sales report (see recipes/pos/laddition.py). Same rule: .env only.
+LADDITION_EMAIL = os.environ.get("LADDITION_EMAIL", "")
+LADDITION_PASSWORD = os.environ.get("LADDITION_PASSWORD", "")
+
 # Used only for the last-resort LLM invoice parsing fallback.
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 # Confidence threshold (0-100) above which a fuzzy product-name match is treated
 # as "the same product" instead of being sent to the review queue.
-PRODUCT_FUZZY_MATCH_THRESHOLD = int(os.environ.get("PRODUCT_FUZZY_MATCH_THRESHOLD", "92"))
+#
+# Only ever compared between names that already have identical numbers (see
+# inventory/matching.py::numeric_signature), so all this score still has to
+# absorb is non-numeric drift - spacing, punctuation, word order, a short
+# supplier suffix - which measures 94.7-100 on the real catalogue, while the
+# closest genuinely-different pair left ("COCA COLA" vs "COCA COLA ZERO")
+# scores 92.8. Raised from 92 to sit inside that gap. Erring high is the safe
+# direction: too strict just means a duplicate product in the review queue,
+# where it's visible, while too loose merges silently and corrupts a
+# product's price history with another product's costs.
+PRODUCT_FUZZY_MATCH_THRESHOLD = int(os.environ.get("PRODUCT_FUZZY_MATCH_THRESHOLD", "94"))
 
 # Run Selenium in headless mode (should stay True for background/server use).
 SCRAPER_HEADLESS = env_bool("SCRAPER_HEADLESS", True)

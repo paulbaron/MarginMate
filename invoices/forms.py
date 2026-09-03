@@ -2,6 +2,8 @@ from decimal import Decimal
 
 from django import forms
 
+from common import BlankRowTolerantForm
+
 from .models import EmailInvoiceSource, Invoice, InvoiceType, Supplier
 from .parsers import PARSER_REGISTRY
 
@@ -48,13 +50,19 @@ class ManualInvoiceForm(forms.ModelForm):
         return uploaded
 
 
-class ManualInvoiceLineForm(forms.Form):
+class ManualInvoiceLineForm(BlankRowTolerantForm):
     product_name = forms.CharField(label="Produit", max_length=255)
     quantity = forms.IntegerField(label="Quantité", min_value=1)
     total_ht = forms.DecimalField(label="Total (HT)", max_digits=12, decimal_places=2, min_value=Decimal("0"))
+    # Pre-filled, since almost every line is 20% - which means a row where
+    # the user typed nothing still submits a VAT rate. That must not make an
+    # otherwise-empty row look filled in, or a blank trailing row (and any
+    # row removed client-side) blocks the save. See BlankRowTolerantFormMixin.
     vat_rate = forms.DecimalField(
         label="TVA (%)", max_digits=5, decimal_places=2, min_value=Decimal("0"), initial=Decimal("20")
     )
+
+    bookkeeping_fields = ("vat_rate",)
 
 
 class BaseManualInvoiceLineFormSet(forms.BaseFormSet):

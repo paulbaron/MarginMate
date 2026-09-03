@@ -24,12 +24,12 @@
                 <tr>
                     <td>
                         <a href="{% url 'recipes:recipe_detail' recipe.pk %}">{{ recipe.name }}</a>
-                        {% if recipe.variation_count > 1 %}<span class="muted">({{ recipe.variation_count }} variantes)</span>{% endif %}
+                        {% if recipe.summary_data.variation_count > 1 %}<span class="muted">({{ recipe.summary_data.variation_count|floatformat:0 }} variantes)</span>{% endif %}
                     </td>
                     <td class="muted">{{ recipe.category|default:"—" }}</td>
                     <td class="num">{{ recipe.yield_quantity|floatformat:2 }} {{ recipe.get_yield_unit_display }}</td>
                     <td class="num">
-                        {% with range=recipe.ranges.cost_ht %}
+                        {% with range=recipe.summary_data.cost_range %}
                             {% if range %}
                                 {% if range.0 == range.1 %}{{ range.0|floatformat:2 }} €{% else %}{{ range.0|floatformat:2 }} – {{ range.1|floatformat:2 }} €{% endif %}
                             {% else %}—{% endif %}
@@ -37,14 +37,14 @@
                     </td>
                     <td class="num">{{ recipe.selling_price_ttc|floatformat:2 }} €</td>
                     <td class="num">
-                        {% with range=recipe.ranges.margin_percent %}
+                        {% with range=recipe.summary_data.margin_percent_range %}
                             {% if range %}
                                 {% if range.0 == range.1 %}{{ range.0|floatformat:0 }} %{% else %}{{ range.0|floatformat:0 }} – {{ range.1|floatformat:0 }} %{% endif %}
                             {% else %}—{% endif %}
                         {% endwith %}
                     </td>
                     <td class="num">
-                        {% with range=recipe.ranges.price_factor %}
+                        {% with range=recipe.summary_data.price_factor_range %}
                             {% if range %}
                                 {% if range.0 == range.1 %}x{{ range.0|floatformat:1 }}{% else %}x{{ range.0|floatformat:1 }} – x{{ range.1|floatformat:1 }}{% endif %}
                             {% else %}—{% endif %}

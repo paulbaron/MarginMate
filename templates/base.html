@@ -30,6 +30,7 @@
                 <a href="{% url 'invoices:invoice_list' %}" class="{% if request.resolver_match.url_name == 'invoice_list' or request.resolver_match.url_name == 'invoice_upload' or request.resolver_match.url_name == 'invoice_create_manual' or request.resolver_match.url_name == 'invoice_detail' %}active{% endif %}">Factures</a>
                 <a href="{% url 'invoices:invoice_type_list' %}" class="{% if request.resolver_match.url_name == 'invoice_type_list' or request.resolver_match.url_name == 'invoice_type_create' or request.resolver_match.url_name == 'invoice_type_update' %}active{% endif %}">Types de factures</a>
                 <a href="{% url 'recipes:recipe_list' %}" class="{% if request.resolver_match.app_name == 'recipes' %}active{% endif %}">Recettes</a>
+                <a href="{% url 'recipes:pos_product_list' %}" class="{% if request.resolver_match.url_name == 'pos_product_list' or request.resolver_match.url_name == 'sales_import' or request.resolver_match.url_name == 'sales_list' %}active{% endif %}">Ventes</a>
                 <a href="{% url 'inventory:stock_take_list' %}" class="{% if request.resolver_match.url_name == 'stock_take_list' or request.resolver_match.url_name == 'stock_take_create' or request.resolver_match.url_name == 'stock_take_detail' %}active{% endif %}">Inventaires</a>
                 <a href="/admin/">Admin</a>
             </nav>

@@ -27,34 +27,63 @@
         {% endif %}
     </p>
 
-    {% if not variations %}
+    {% if not variation %}
         <div class="empty-state">Aucun ingrédient pour le moment.</div>
     {% endif %}
 
-    {% if variations|length > 1 %}
-        {% with cost_range=recipe.cost_range margin_range=recipe.margin_percent_range factor_range=recipe.price_factor_range %}
-        <div class="card">
-            <p class="muted">
-                Sur les {{ variations|length }} variantes :
-                Coût {{ cost_range.0|floatformat:2 }} – {{ cost_range.1|floatformat:2 }} € ·
-                Marge {{ margin_range.0|floatformat:0 }} – {{ margin_range.1|floatformat:0 }} % ·
-                Facteur x{{ factor_range.0|floatformat:1 }} – x{{ factor_range.1|floatformat:1 }}
-            </p>
-            <p>
+    {% if summary.variation_count > 1 %}
+    <div class="card">
+        <p class="muted">
+            Sur les {{ summary.variation_count|floatformat:0 }} variantes :
+            {% if summary.cost_range %}
+                Coût {{ summary.cost_range.0|floatformat:2 }} – {{ summary.cost_range.1|floatformat:2 }} €
+            {% endif %}
+            {% if summary.margin_percent_range %}
+                · Marge {{ summary.margin_percent_range.0|floatformat:0 }} – {{ summary.margin_percent_range.1|floatformat:0 }} %
+            {% endif %}
+            {% if summary.price_factor_range %}
+                · Facteur x{{ summary.price_factor_range.0|floatformat:1 }} – x{{ summary.price_factor_range.1|floatformat:1 }}
+            {% endif %}
+        </p>
+
+        <form method="get" id="variation-picker">
+            {% if listed_variations %}
+                {# Few enough to name every combination outright. #}
                 <label for="variation-select">Variante :</label>
-                <select id="variation-select">
-                    {% for variation in variations %}
-                        <option value="{{ forloop.counter0 }}">{{ variation.name }}</option>
+                <select id="variation-select" name="v">
+                    {% for option in listed_variations %}
+                        <option value="{{ option.value }}" {% if option.value == selection_key %}selected{% endif %}>{{ option.name }}</option>
                     {% endfor %}
                 </select>
-            </p>
-        </div>
-        {% endwith %}
+            {% else %}
+                {% comment %}
+                Too many combinations to list - one dropdown per choice
+                instead, which is linear in the number of choices rather than
+                in their product, and easier to steer besides.
+                {% endcomment %}
+                <p class="muted" style="margin-top:0;">Choisissez une option par alternative :</p>
+                <div style="display:flex; gap:1rem; flex-wrap:wrap;">
+                    {% for picker in group_pickers %}
+                        <label>
+                            <span class="muted">Alternative {{ forloop.counter }}</span><br>
+                            <select name="g{{ picker.position }}" data-position="{{ picker.position }}" class="js-group-picker">
+                                {% for option in picker.options %}
+                                    <option value="{{ option.index }}" {% if option.index == picker.selected %}selected{% endif %}>{{ option.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </label>
+                    {% endfor %}
+                </div>
+                <input type="hidden" name="v" id="variation-value" value="{{ selection_key }}">
+            {% endif %}
+            <noscript><button class="btn btn-small" type="submit" style="margin-top:0.5rem;">Afficher</button></noscript>
+        </form>
+    </div>
     {% endif %}
 
-    {% for variation in variations %}
-    <div class="card js-variation" data-variation-index="{{ forloop.counter0 }}" {% if not forloop.first %}hidden{% endif %}>
-        {% if variations|length > 1 %}<h3>{{ variation.name }}</h3>{% endif %}
+    {% if variation %}
+    <div class="card">
+        {% if summary.variation_count > 1 %}<h3>{{ variation.name }}</h3>{% endif %}
         <table class="sub-table">
             <thead>
                 <tr>
@@ -90,33 +119,55 @@
             <p>
                 Marge HT : <strong style="color:var(--green);">{{ variation.margin_ht|floatformat:2 }} €</strong>
                 ({{ variation.margin_percent|floatformat:1 }} % du prix HT) · Facteur :
-                <strong style="color:var(--green);">x{{ variation.price_factor|floatformat:2 }}</strong>
+                <strong style="color:var(--green);">{% if variation.price_factor %}x{{ variation.price_factor|floatformat:2 }}{% else %}—{% endif %}</strong>
             </p>
             {% if variation.happy_hour %}
             <p class="muted">
                 Happy hour — Marge HT : <strong>{{ variation.happy_hour.margin_ht|floatformat:2 }} €</strong>
                 ({{ variation.happy_hour.margin_percent|floatformat:1 }} %) · Facteur :
-                <strong>x{{ variation.happy_hour.price_factor|floatformat:2 }}</strong>
+                <strong>{% if variation.happy_hour.price_factor %}x{{ variation.happy_hour.price_factor|floatformat:2 }}{% else %}—{% endif %}</strong>
             </p>
             {% endif %}
         </div>
 
-        {% if variation.pie_svg %}
+        {% if pie_svg %}
             <h4 style="margin-top:1rem;">Répartition du coût par ingrédient</h4>
-            {{ variation.pie_svg|safe }}
+            {{ pie_svg|safe }}
         {% endif %}
     </div>
-    {% endfor %}
+    {% endif %}
 {% endblock %}
 {% block extra_js %}
-{% if variations|length > 1 %}
+{% if summary.variation_count > 1 %}
 <script>
-document.getElementById("variation-select").addEventListener("change", function (event) {
-    var selected = event.target.value;
-    document.querySelectorAll(".js-variation").forEach(function (card) {
-        card.hidden = card.dataset.variationIndex !== selected;
+// Switching variation reloads the page with the new ?v= - the costs come
+// from the server, so what's on screen can never drift from what the recipe
+// actually is. Only ever one variation's worth of markup, whether the recipe
+// has two variations or two million.
+(function () {
+    var form = document.getElementById("variation-picker");
+    if (!form) return;
+
+    var select = document.getElementById("variation-select");
+    if (select) {
+        select.addEventListener("change", function () { form.submit(); });
+        return;
+    }
+
+    // Per-group pickers: combine them into the single ?v= value.
+    var hidden = document.getElementById("variation-value");
+    var pickers = Array.prototype.slice.call(form.querySelectorAll(".js-group-picker"));
+    form.addEventListener("change", function () {
+        var indices = (hidden.value || "").split(".");
+        pickers.forEach(function (picker) {
+            indices[parseInt(picker.dataset.position, 10)] = picker.value;
+        });
+        hidden.value = indices.join(".");
+        // The per-group selects are only a UI; ?v= carries the whole answer.
+        pickers.forEach(function (picker) { picker.disabled = true; });
+        form.submit();
     });
-});
+})();
 </script>
 {% endif %}
 {% endblock %}

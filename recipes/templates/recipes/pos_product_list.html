@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block title %}Produits caisse - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <h1>Produits caisse</h1>
+        <a class="btn" href="{% url 'recipes:sales_import' %}">Importer les ventes</a>
+    </div>
+
+    <p class="muted">
+        Chaque produit de la caisse doit correspondre à une recette, sinon ses ventes ne sont pas
+        comptées&nbsp;: le stock qu'il consomme apparaît alors comme manquant dans les écarts
+        d'inventaire. Les plus vendus sont en haut — c'est là que se cache l'essentiel.
+    </p>
+
+    {% if pending %}
+        <div class="card">
+            <h3>À traiter ({{ pending|length }})</h3>
+            <p class="muted">{{ pending_quantity }} articles vendus ne sont rattachés à aucune recette.</p>
+            <table class="sub-table">
+                <thead>
+                    <tr>
+                        <th>Produit caisse</th>
+                        <th class="num">Vendus</th>
+                        <th>Catégorie</th>
+                        <th style="width:52%;">Que faire ?</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for product in pending %}
+                    <tr>
+                        <td>
+                            <strong>{{ product.name }}</strong>
+                            {% if product.first_seen %}
+                                <br><span class="muted" style="font-size:0.85em;">
+                                    {{ product.first_seen }} → {{ product.last_seen }}
+                                </span>
+                            {% endif %}
+                        </td>
+                        <td class="num">{{ product.total_quantity }}</td>
+                        <td class="muted">
+                            {{ product.category|default:"—" }}
+                            {% if product.typology %}<br><span style="font-size:0.85em;">{{ product.typology }}</span>{% endif %}
+                        </td>
+                        <td>
+                            <form method="post" action="{% url 'recipes:pos_product_assign' product.pk %}"
+                                  class="inline-form" style="flex-wrap:wrap; gap:0.35rem;">
+                                {% csrf_token %}
+                                <select name="recipe" aria-label="Recette pour {{ product.name }}">
+                                    <option value="">— Choisir une recette —</option>
+                                    {% for recipe in recipes %}
+                                        <option value="{{ recipe.pk }}">{{ recipe.name }}</option>
+                                    {% endfor %}
+                                </select>
+                                <button type="submit" name="action" value="link" class="btn btn-small">C'est ça</button>
+                                <button type="submit" name="action" value="happy_hour" class="btn btn-small btn-secondary"
+                                        title="Enregistre ce nom comme la version happy hour de la recette choisie : mêmes ingrédients, ventes cumulées.">
+                                    Happy hour de…
+                                </button>
+                                <a class="btn btn-small btn-secondary"
+                                   href="{% url 'recipes:recipe_create' %}?name={{ product.name|urlencode }}">
+                                    Créer la recette
+                                </a>
+                                <button type="submit" name="action" value="ignore" class="btn btn-small btn-secondary"
+                                        title="Pour ce qui ne consomme aucun stock suivi : café, cuisine, divers.">
+                                    Ignorer
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="empty-state">
+            {% if linked or ignored %}
+                Tout est traité — chaque produit de la caisse a sa recette.
+            {% else %}
+                Aucun produit de caisse pour le moment. Lancez un import pour commencer.
+            {% endif %}
+        </div>
+    {% endif %}
+
+    {% if linked %}
+        <div class="card">
+            <h3>Rattachés ({{ linked|length }})</h3>
+            <table class="sub-table">
+                <thead>
+                    <tr><th>Produit caisse</th><th class="num">Vendus</th><th>Recette</th><th></th></tr>
+                </thead>
+                <tbody>
+                    {% for product in linked %}
+                    <tr>
+                        <td>{{ product.name }}</td>
+                        <td class="num">{{ product.total_quantity }}</td>
+                        <td>
+                            <a href="{% url 'recipes:recipe_detail' product.recipe.pk %}">{{ product.recipe.name }}</a>
+                            {% if product.recipe.happy_hour_name == product.name %}
+                                <span class="muted">(happy hour)</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <form method="post" action="{% url 'recipes:pos_product_assign' product.pk %}">
+                                {% csrf_token %}
+                                <button type="submit" name="action" value="reset" class="btn btn-small btn-secondary">Détacher</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% endif %}
+
+    {% if ignored %}
+        <div class="card">
+            <h3>Ignorés ({{ ignored|length }})</h3>
+            <p class="muted">Ces produits ne consomment aucun stock suivi.</p>
+            <table class="sub-table">
+                <thead><tr><th>Produit caisse</th><th class="num">Vendus</th><th></th></tr></thead>
+                <tbody>
+                    {% for product in ignored %}
+                    <tr>
+                        <td class="muted">{{ product.name }}</td>
+                        <td class="num muted">{{ product.total_quantity }}</td>
+                        <td>
+                            <form method="post" action="{% url 'recipes:pos_product_assign' product.pk %}">
+                                {% csrf_token %}
+                                <button type="submit" name="action" value="reset" class="btn btn-small btn-secondary">Remettre à traiter</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% endif %}
+{% endblock %}

@@ -1,4 +1,7 @@
+from datetime import date
 from decimal import Decimal
+
+from django.db.models import F, Q
 
 from .models import Product, StockMovement, StockType, UnitChoices
 
@@ -131,7 +134,16 @@ def _fifo_value(lines_with_amounts, counted_quantity: Decimal) -> dict:
     oldest_unit_cost = None
     sources = []
     for line, line_qty in lines_with_amounts:
-        if not line_qty:
+        if remaining <= 0:
+            break
+        # Only positive lines are stock that could still be on the shelf. A
+        # NEGATIVE line_qty is a return/refund (a déconsigne of empty kegs,
+        # a Metro pallet given back) - not inventory, and poison in this
+        # loop: min() would pick the negative, so `remaining` would GROW
+        # instead of shrinking, and its negative unit cost would then price
+        # any shortfall at a discount. Measured a count worth 40 EUR coming
+        # out at -140 EUR before this guard existed.
+        if line_qty <= 0:
             continue
         line_unit_cost = line.total_ht / line_qty
         oldest_unit_cost = line_unit_cost
@@ -139,8 +151,6 @@ def _fifo_value(lines_with_amounts, counted_quantity: Decimal) -> dict:
         total_value += used * line_unit_cost
         sources.append({"invoice_line": line, "quantity_used": used, "unit_cost_ht": line_unit_cost})
         remaining -= used
-        if remaining <= 0:
-            break
 
     has_shortfall = remaining > 0
     shortfall_quantity = max(remaining, Decimal("0"))
@@ -155,24 +165,62 @@ def _fifo_value(lines_with_amounts, counted_quantity: Decimal) -> dict:
     }
 
 
-def value_counted_quantity(product: Product, counted_quantity: Decimal, unit: str) -> dict:
+def _purchase_ladder(queryset, as_of: date | None):
+    """Invoice lines newest-purchase-first, optionally as of a date - the
+    order _fifo_value walks.
+
+    Two things the database won't get right on its own. Ordering: invoice_date
+    is nullable and NULL ordering is backend-specific (SQLite sorts them last
+    on a DESC, PostgreSQL first), so it's pinned explicitly - an undated
+    invoice is the one we know least about and belongs at the OLDEST end,
+    never at the newest where it would price the entire count.
+
+    And `as_of`: a back-dated stock take must not be priced from deliveries
+    that hadn't arrived yet. Undated invoices survive that filter rather than
+    being dropped - we can't prove they're too new, and dropping them would
+    understate the count; they sort last anyway, so they're only ever reached
+    as a fallback.
+    """
+    if as_of is not None:
+        queryset = queryset.filter(Q(invoice__invoice_date__lte=as_of) | Q(invoice__invoice_date__isnull=True))
+    return queryset.order_by(F("invoice__invoice_date").desc(nulls_last=True), "-id")
+
+
+def value_counted_quantity(
+    product: Product, counted_quantity: Decimal, unit: str, as_of: date | None = None
+) -> dict:
     """FIFO valuation (see _fifo_value) for a count of one specific
     product. `unit` says what counted_quantity is expressed in - UNIT for
     a bottle/pack count, matched against invoice_line.quantity (not
     product_base_amount, which would read the measured total_volume
     instead - the right basis for stock movements, but litres when this
     count is in bottles); the product's stock type's own measured unit
-    otherwise, matched against product_base_amount as before. Callers
-    (StockTakeLineForm) restrict which unit can be chosen for a given
-    product - see product_is_discrete_count for the default suggested.
+    otherwise. Callers (StockTakeLineForm) restrict which unit can be
+    chosen for a given product - see product_is_discrete_count for the
+    default suggested. `as_of` prices the count as of a date - see
+    _purchase_ladder.
     """
     is_unit_count = unit == UnitChoices.UNIT
-    lines = product.invoice_lines.select_related("invoice").order_by("-invoice__invoice_date", "-id")
-    pairs = ((line, Decimal(line.quantity) if is_unit_count else product_base_amount(line)) for line in lines)
+    lines = _purchase_ladder(product.invoice_lines.select_related("invoice"), as_of)
+    pairs = (
+        (
+            line,
+            # A count in the stock type's own unit has to be matched against
+            # a ladder in that same unit - so product_base_amount (which is
+            # in the PRODUCT's unit) still needs the stock_equivalent
+            # conversion, exactly as value_counted_stock_type_quantity below
+            # applies it. Without it, counting "2.1 litres" of a product
+            # measured in bottles priced 2.1 BOTTLES instead.
+            Decimal(line.quantity) if is_unit_count else product_base_amount(line) * product.stock_equivalent,
+        )
+        for line in lines
+    )
     return _fifo_value(pairs, counted_quantity)
 
 
-def value_counted_stock_type_quantity(stock_type: StockType, counted_quantity: Decimal) -> dict:
+def value_counted_stock_type_quantity(
+    stock_type: StockType, counted_quantity: Decimal, as_of: date | None = None
+) -> dict:
     """FIFO valuation (see _fifo_value) for a stock type counted directly
     (see StockTakeLine.stock_type) rather than through one specific
     product - for when it's easier to say "how much Vodka" than to pin
@@ -185,10 +233,9 @@ def value_counted_stock_type_quantity(stock_type: StockType, counted_quantity: D
     """
     from invoices.models import InvoiceLine  # local import: inventory avoids a hard dependency on invoices otherwise
 
-    lines = (
-        InvoiceLine.objects.filter(product__stock_type=stock_type)
-        .select_related("invoice", "product")
-        .order_by("-invoice__invoice_date", "-id")
+    lines = _purchase_ladder(
+        InvoiceLine.objects.filter(product__stock_type=stock_type).select_related("invoice", "product"),
+        as_of,
     )
     pairs = ((line, product_base_amount(line) * line.product.stock_equivalent) for line in lines)
     return _fifo_value(pairs, counted_quantity)

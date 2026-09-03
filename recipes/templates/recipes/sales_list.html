@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Ventes - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <h1>Ventes</h1>
+        <div style="display:flex; gap:0.5rem;">
+            <a class="btn btn-secondary" href="{% url 'recipes:pos_product_list' %}">Produits caisse</a>
+            <a class="btn" href="{% url 'recipes:sales_import' %}">Importer depuis L'Addition</a>
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>Ajouter une vente à la main</h3>
+        <p class="muted">
+            Pour ce que la caisse n'a pas enregistré. Ces lignes ont leur propre origine
+            « {{ manual_source }} » : un import L'Addition corrige ses propres chiffres sans jamais
+            les écraser. Ressaisir la même recette au même jour met à jour la quantité.
+        </p>
+        <form method="post" class="inline-form" style="align-items:flex-end;">
+            {% csrf_token %}
+            {% for field in form %}
+                <label style="display:flex; flex-direction:column; gap:0.2rem;">
+                    <span class="muted">{{ field.label }}</span>
+                    {{ field }}
+                    {% for error in field.errors %}<span class="message message-error">{{ error }}</span>{% endfor %}
+                </label>
+            {% endfor %}
+            <button class="btn" type="submit">Ajouter</button>
+        </form>
+    </div>
+
+    {% if totals %}
+    <div class="card">
+        <h3>Par origine</h3>
+        <table class="sub-table">
+            <thead><tr><th>Origine</th><th class="num">Lignes</th><th class="num">Unités vendues</th></tr></thead>
+            <tbody>
+                {% for row in totals %}
+                <tr>
+                    <td>{{ row.source }}</td>
+                    <td class="num">{{ row.rows }}</td>
+                    <td class="num">{{ row.units|default:0 }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+
+    <div class="card">
+        <h3>Dernières ventes</h3>
+        {% if sales %}
+        <table class="sub-table">
+            <thead>
+                <tr><th>Date</th><th>Recette</th><th class="num">Quantité</th><th>Origine</th><th></th></tr>
+            </thead>
+            <tbody>
+                {% for sale in sales %}
+                <tr>
+                    <td>{{ sale.sold_on|date:"d/m/Y" }}</td>
+                    <td><a href="{% url 'recipes:recipe_detail' sale.recipe_id %}">{{ sale.recipe.name }}</a></td>
+                    <td class="num">{{ sale.quantity }}</td>
+                    <td class="muted">{{ sale.source }}</td>
+                    <td class="num">
+                        {% if sale.source == manual_source %}
+                        <form method="post" action="{% url 'recipes:sales_delete' sale.pk %}"
+                              onsubmit="return confirm('Supprimer cette vente ?');">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-small btn-secondary">Supprimer</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+            <div class="empty-state">Aucune vente enregistrée pour le moment.</div>
+        {% endif %}
+    </div>
+{% endblock %}

@@ -402,7 +402,7 @@ def scrape_metro_invoices(
                             # slow or stuck file should never take the rest down
                             # with it).
                             WebDriverWait(driver, DOWNLOAD_TIMEOUT_SECONDS).until(
-                                lambda d: len(os.listdir(download_dir)) > before
+                                lambda d, before=before: len(os.listdir(download_dir)) > before
                             )
                             consecutive_timeouts = 0
                         except TimeoutException:
@@ -413,7 +413,7 @@ def scrape_metro_invoices(
                             # something that actually succeeded a moment later.
                             try:
                                 WebDriverWait(driver, GRACE_PERIOD_SECONDS).until(
-                                    lambda d: len(os.listdir(download_dir)) > before
+                                    lambda d, before=before: len(os.listdir(download_dir)) > before
                                 )
                                 log(
                                     f"Invoice {idx + 1}/{total} finished just after the "

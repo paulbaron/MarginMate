@@ -24,9 +24,7 @@ import re
 from datetime import date, datetime
 from decimal import Decimal
 
-import pdfplumber
-
-from .base import InvoiceParser, ParsedInvoice, ParsedLine
+from .base import InvoiceParser, ParsedInvoice, ParsedLine, PdfPage
 from .registry import register
 
 TVA_LETTER_TO_RATE = {"A": Decimal("0"), "B": Decimal("0.055"), "C": Decimal("0.2"), "D": Decimal("0.2")}
@@ -81,7 +79,7 @@ def _to_int(text: str | None, default: int = 0) -> int:
     return -value if negative else value
 
 
-def _guess_invoice_number_and_date(full_text: str, pdf_path: str) -> tuple[str, date | None]:
+def _guess_invoice_number_and_date(full_text: str, source_name: str) -> tuple[str, date | None]:
     store_match = INVOICE_STORE_REGEX.search(full_text)
     ref_match = INVOICE_REF_REGEX.search(full_text)
     if store_match and ref_match:
@@ -89,7 +87,7 @@ def _guess_invoice_number_and_date(full_text: str, pdf_path: str) -> tuple[str, 
     elif ref_match:
         invoice_number = ref_match.group(1)
     else:
-        invoice_number = os.path.splitext(os.path.basename(pdf_path))[0]
+        invoice_number = os.path.splitext(source_name)[0]
 
     invoice_date = None
     date_match = INVOICE_DATE_REGEX.search(full_text)
@@ -99,7 +97,7 @@ def _guess_invoice_number_and_date(full_text: str, pdf_path: str) -> tuple[str, 
         except ValueError:
             invoice_date = None
     if invoice_date is None:
-        filename = os.path.splitext(os.path.basename(pdf_path))[0]
+        filename = os.path.splitext(source_name)[0]
         ts_match = FILENAME_TIMESTAMP_REGEX.search(filename)
         if ts_match:
             try:
@@ -112,62 +110,66 @@ def _guess_invoice_number_and_date(full_text: str, pdf_path: str) -> tuple[str, 
 @register
 class MetroParser(InvoiceParser):
     supplier_code = "METRO"
+    # Without this, pdfplumber merges vertically-adjacent columns into a
+    # single line and the product regex stops matching.
+    text_extraction_kwargs = {"y_tolerance": 0}
 
-    def parse(self, pdf_path: str, date_hint: date | None = None) -> ParsedInvoice:
+    def parse_pages(
+        self, pages: list[PdfPage], date_hint: date | None = None, source_name: str = ""
+    ) -> ParsedInvoice:
         lines_by_name: dict[str, ParsedLine] = {}
         products_in_category: list[str] = []
         full_text_parts: list[str] = []
 
-        with pdfplumber.open(pdf_path) as pdf:
-            for page in pdf.pages:
-                text = page.extract_text(y_tolerance=0) or ""
-                full_text_parts.append(text)
-                current_product = None
-                for line in text.split("\n"):
-                    match = LINE_REGEX.match(line)
-                    if match:
-                        product_name = match.group(3).strip()
-                        weight_or_volume_raw = match.group(7) or match.group(6)
-                        weight_or_volume = _to_decimal(weight_or_volume_raw)
-                        colisage = _to_int(match.group(9), 1) or 1
-                        quantity = _to_int(match.group(10))
-                        total_units = colisage * quantity
-                        total_ht = _to_decimal(match.group(11))
-                        vat_rate = TVA_LETTER_TO_RATE[match.group(12).strip()]
+        for page in pages:
+            text = page.text
+            full_text_parts.append(text)
+            current_product = None
+            for line in text.split("\n"):
+                match = LINE_REGEX.match(line)
+                if match:
+                    product_name = match.group(3).strip()
+                    weight_or_volume_raw = match.group(7) or match.group(6)
+                    weight_or_volume = _to_decimal(weight_or_volume_raw)
+                    colisage = _to_int(match.group(9), 1) or 1
+                    quantity = _to_int(match.group(10))
+                    total_units = colisage * quantity
+                    total_ht = _to_decimal(match.group(11))
+                    vat_rate = TVA_LETTER_TO_RATE[match.group(12).strip()]
 
-                        parsed_line = lines_by_name.get(product_name)
-                        if parsed_line is None:
-                            parsed_line = ParsedLine(
-                                raw_name=product_name,
-                                quantity=total_units,
-                                total_volume=total_units * weight_or_volume,
-                                unit_cost_ht=Decimal("0"),
-                                total_ht=total_ht,
-                                vat_rate=vat_rate,
-                                colisage=colisage,
-                            )
-                            lines_by_name[product_name] = parsed_line
-                        else:
-                            parsed_line.quantity += total_units
-                            parsed_line.total_volume += total_units * weight_or_volume
-                            parsed_line.total_ht += total_ht
-                        current_product = product_name
-                        products_in_category.append(product_name)
-                        continue
+                    parsed_line = lines_by_name.get(product_name)
+                    if parsed_line is None:
+                        parsed_line = ParsedLine(
+                            raw_name=product_name,
+                            quantity=total_units,
+                            total_volume=total_units * weight_or_volume,
+                            unit_cost_ht=Decimal("0"),
+                            total_ht=total_ht,
+                            vat_rate=vat_rate,
+                            colisage=colisage,
+                        )
+                        lines_by_name[product_name] = parsed_line
+                    else:
+                        parsed_line.quantity += total_units
+                        parsed_line.total_volume += total_units * weight_or_volume
+                        parsed_line.total_ht += total_ht
+                    current_product = product_name
+                    products_in_category.append(product_name)
+                    continue
 
-                    cotis_match = COTIS_SOCIALE_REGEX.match(line)
-                    if cotis_match and current_product:
-                        lines_by_name[current_product].taxes += _to_decimal(cotis_match.group(1))
+                cotis_match = COTIS_SOCIALE_REGEX.match(line)
+                if cotis_match and current_product:
+                    lines_by_name[current_product].taxes += _to_decimal(cotis_match.group(1))
 
-                    discount_match = DISCOUNT_REGEX.match(line)
-                    if discount_match and current_product:
-                        lines_by_name[current_product].discount += _to_decimal(discount_match.group(1))
+                discount_match = DISCOUNT_REGEX.match(line)
+                if discount_match and current_product:
+                    lines_by_name[current_product].discount += _to_decimal(discount_match.group(1))
 
-                    category_match = CATEGORY_REGEX.match(line)
-                    if category_match:
-                        for name in products_in_category:
-                            lines_by_name[name].category = category_match.group(1).strip()
-                        products_in_category.clear()
+                category_match = CATEGORY_REGEX.match(line)
+                if category_match:
+                    for name in products_in_category:
+                        lines_by_name[name].category = category_match.group(1).strip()
+                    products_in_category.clear()
 
         for parsed_line in lines_by_name.values():
             # Metro's printed unit/line price is NOT the real cost: a "Plus :
@@ -185,7 +187,7 @@ class MetroParser(InvoiceParser):
                 parsed_line.unit_cost_ht = (parsed_line.total_ht / parsed_line.quantity).quantize(Decimal("0.0001"))
 
         full_text = "\n".join(full_text_parts)
-        invoice_number, invoice_date = _guess_invoice_number_and_date(full_text, pdf_path)
+        invoice_number, invoice_date = _guess_invoice_number_and_date(full_text, source_name)
         if invoice_date is None:
             invoice_date = date_hint
 

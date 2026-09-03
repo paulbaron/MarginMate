@@ -36,7 +36,7 @@ class StockType(models.Model):
         # decimal arithmetic once there are enough rows (verified: some
         # stock types were off by a few thousandths after dozens of
         # movements). Summing the fetched values in Python is exact.
-        return sum(self.movements.values_list("quantity", flat=True), start=Decimal("0"))
+        return sum((movement.quantity for movement in self.movements.all()), start=Decimal("0"))
 
     @property
     def current_value_ht(self) -> Decimal:
@@ -45,10 +45,15 @@ class StockType(models.Model):
         # isn't true decimal - confirmed it silently produces slightly wrong
         # totals even for one single movement (6.000 * 1.2183 came back as
         # 7.31 instead of the exact 7.3098). Multiplying in Python with
-        # Decimal instead is exact; the values themselves are still fetched
-        # in one query.
+        # Decimal instead is exact.
+        #
+        # Iterating .all() rather than .values_list() so that a caller which
+        # prefetch_related("movements") is actually served from that cache -
+        # values_list() always issues its own query, which made every page
+        # costing a list of stock types (the recipe list, a recipe's
+        # ingredient breakdown) run one extra query PER stock type.
         return sum(
-            (quantity * unit_cost_ht for quantity, unit_cost_ht in self.movements.values_list("quantity", "unit_cost_ht")),
+            (movement.quantity * movement.unit_cost_ht for movement in self.movements.all()),
             start=Decimal("0"),
         )
 
@@ -125,21 +130,35 @@ class Product(models.Model):
         return self.stock_type_id is None
 
 
-class StockMovement(models.Model):
-    """Append-only stock ledger entry. Positive quantity = stock received.
+class MovementKind(models.TextChoices):
+    PURCHASE = "PURCHASE", "Achat"
+    # A loss you already know about: a broken bottle, a drink offered or
+    # poured for staff, a spill. Recording it keeps the shelf count honest
+    # AND keeps it out of the variance report's "unexplained" figure - which
+    # is the number worth acting on (see inventory/variance.py).
+    LOSS = "LOSS", "Perte connue"
+    # A correction to the ledger itself ("the opening count was wrong"),
+    # rather than something that physically happened.
+    CORRECTION = "CORRECTION", "Correction"
 
-    Future features (deducting stock from recipe sales, manual corrections)
-    are meant to plug in as additional movements - with a negative quantity
-    and no invoice_line - without needing any change to this model.
+
+class StockMovement(models.Model):
+    """Append-only stock ledger entry. Positive quantity = stock received,
+    negative = stock that left without being sold (see MovementKind).
     """
 
     stock_type = models.ForeignKey(StockType, on_delete=models.CASCADE, related_name="movements")
+    kind = models.CharField(max_length=12, choices=MovementKind.choices, default=MovementKind.PURCHASE)
     quantity = models.DecimalField(max_digits=12, decimal_places=3)
     unit_cost_ht = models.DecimalField(max_digits=10, decimal_places=4, default=0)
     invoice_line = models.OneToOneField(
         "invoices.InvoiceLine", null=True, blank=True, on_delete=models.SET_NULL, related_name="stock_movement"
     )
     note = models.CharField(max_length=255, blank=True)
+    # When the movement actually happened, which is not always when it was
+    # typed in - a loss noticed on Monday may have happened on Saturday, and
+    # the variance report puts it in the window it really belongs to.
+    occurred_on = models.DateField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -147,6 +166,20 @@ class StockMovement(models.Model):
 
     def __str__(self):
         return f"{self.quantity} {self.stock_type.unit} of {self.stock_type}"
+
+    @property
+    def effective_date(self):
+        """The date this movement counts against when slicing a period.
+
+        `occurred_on` when given; otherwise the invoice's own date, which is
+        when the stock really arrived - not when the PDF happened to be
+        imported, which can be weeks later and would drop the delivery into
+        the wrong stock-take window."""
+        if self.occurred_on:
+            return self.occurred_on
+        if self.invoice_line_id and self.invoice_line.invoice.invoice_date:
+            return self.invoice_line.invoice.invoice_date
+        return self.created_at.date() if self.created_at else None
 
 
 class StockTake(models.Model):

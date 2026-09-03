@@ -15,6 +15,7 @@ from django.views.generic import CreateView, ListView, UpdateView
 from .forms import StockTakeForm, StockTakeLineFormSet, StockTypeForm, stock_take_entry_lookup
 from .models import Product, StockMovement, StockTake, StockTakeLineSource, StockType, UnitChoices
 from .product_matching_rules import apply_rules_to_pending_products
+from .variance import compute_variance
 from .services import (
     link_product_to_stock_type,
     merge_stock_types,
@@ -654,6 +655,18 @@ def assign_product(request, product_id):
     return redirect("inventory:review_queue")
 
 
+def stock_take_variance(request, pk):
+    """Where did the stock go? See inventory/variance.py for the reasoning -
+    in short: what physically left the shelf, minus what the sales explain,
+    with a recipe's alternatives pooled rather than guessed at."""
+    stock_take = get_object_or_404(StockTake, pk=pk)
+    return render(
+        request,
+        "inventory/stock_take_variance.html",
+        {"report": compute_variance(stock_take)},
+    )
+
+
 class StockTakeListView(ListView):
     model = StockTake
     template_name = "inventory/stock_take_list.html"
@@ -666,10 +679,14 @@ def _save_stock_take_line(line):
     returns (new lines, and existing ones the user changed), so an
     untouched existing line keeps reporting exactly what it did when it
     was last saved (see StockTake's docstring on why that's frozen)."""
+    # A count is priced from the purchases that had actually arrived by the
+    # day it was taken - back-dating a stock take must not reach forward
+    # into later deliveries. See services._purchase_ladder.
+    as_of = timezone.localtime(line.stock_take.taken_at).date()
     if line.product_id:
-        result = value_counted_quantity(line.product, line.counted_quantity, line.unit)
+        result = value_counted_quantity(line.product, line.counted_quantity, line.unit, as_of=as_of)
     else:
-        result = value_counted_stock_type_quantity(line.stock_type, line.counted_quantity)
+        result = value_counted_stock_type_quantity(line.stock_type, line.counted_quantity, as_of=as_of)
     line.value_ht = result["value_ht"]
     line.has_shortfall = result["has_shortfall"]
     line.shortfall_quantity = result["shortfall_quantity"]

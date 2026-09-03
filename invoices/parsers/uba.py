@@ -30,9 +30,7 @@ import re
 from datetime import date, datetime
 from decimal import Decimal
 
-import pdfplumber
-
-from .base import InvoiceParser, ParsedInvoice, ParsedLine
+from .base import InvoiceParser, ParsedInvoice, ParsedLine, PdfPage
 from .registry import register
 
 TVA_INDEX_TO_RATE = {1: Decimal("0.2"), 2: Decimal("0.055"), 3: Decimal("0")}
@@ -58,7 +56,15 @@ DATE_REGEX = re.compile(r"(\d{2}/\d{2}/\d{4})")
 # Invoice.reconciliation_adjustment) - the "14" and "U.B.A." anchor the
 # match so it can't be confused with one of the per-VAT-bucket subtotal
 # rows earlier on the page, which have the same "three amounts" shape.
-GRAND_TOTAL_REGEX = re.compile(r"(\d[\d\s]*,\d{2})\s+(\d[\d\s]*,\d{2})\s+(\d[\d\s]*,\d{2})\s+\d+\s+U\.B\.A\.")
+# Spaces only, never \s, inside and between the three amounts: UBA uses a
+# space as its thousands separator ("1 234,56"), but \s also matches a
+# NEWLINE, which lets a match start on the previous line and swallow its
+# trailing digits - e.g. "...15/11/2024\n257,19" parses Montant HT as
+# "2024\n257,19", which Decimal rejects, silently making it 0 and the
+# reconciliation adjustment wrong by the whole HT total. None of the 84
+# real invoices trip this today; the fixture in tests/test_parser_uba.py
+# does, which is the point.
+GRAND_TOTAL_REGEX = re.compile(r"(\d[\d ]*,\d{2})[ \t]+(\d[\d ]*,\d{2})[ \t]+(\d[\d ]*,\d{2})[ \t]+\d+[ \t]+U\.B\.A\.")
 
 
 def _to_decimal(text: str | None, default: str = "0") -> Decimal:
@@ -124,23 +130,25 @@ def _guess_invoice_number_and_date(full_text: str) -> tuple[str, date | None]:
 @register
 class UBAParser(InvoiceParser):
     supplier_code = "UBA"
+    needs_tables = True
 
-    def parse(self, pdf_path: str, date_hint: date | None = None) -> ParsedInvoice:
+    def parse_pages(
+        self, pages: list[PdfPage], date_hint: date | None = None, source_name: str = ""
+    ) -> ParsedInvoice:
         products_vat: dict[str, Decimal] = {}
         full_text_parts: list[str] = []
         tables = []
 
-        with pdfplumber.open(pdf_path) as pdf:
-            for page in pdf.pages:
-                text = page.extract_text() or ""
-                full_text_parts.append(text)
-                for line in text.split("\n"):
-                    match = LINE_REGEX.match(line)
-                    if match:
-                        product_key = match.group(1) + match.group(2)
-                        tva_idx = _to_int(match.group(18))
-                        products_vat[product_key] = TVA_INDEX_TO_RATE.get(tva_idx, Decimal("0.2"))
-                tables += page.extract_tables()
+        for page in pages:
+            text = page.text
+            full_text_parts.append(text)
+            for line in text.split("\n"):
+                match = LINE_REGEX.match(line)
+                if match:
+                    product_key = match.group(1) + match.group(2)
+                    tva_idx = _to_int(match.group(18))
+                    products_vat[product_key] = TVA_INDEX_TO_RATE.get(tva_idx, Decimal("0.2"))
+            tables += page.tables
 
         parsed_lines: list[ParsedLine] = []
         product_lines_total = Decimal("0")

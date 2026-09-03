@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Importer les ventes - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <h1>Importer les ventes</h1>
+        <a class="btn btn-secondary" href="{% url 'recipes:pos_product_list' %}">
+            Produits caisse{% if pending_count %} ({{ pending_count }} à traiter){% endif %}
+        </a>
+    </div>
+
+    <p class="muted">
+        Récupère le rapport « Lignes de ventes » de L'Addition pour la période choisie et enregistre
+        les ventes, jour par jour. Les périodes de plus de deux ans sont découpées automatiquement.
+        {% if last_sale %}<br>Dernière vente enregistrée : {{ last_sale.sold_on }}.{% endif %}
+    </p>
+
+    <div class="card">
+        <form method="post" action="{% url 'recipes:trigger_sales_import' %}" class="inline-form" style="gap:0.75rem; flex-wrap:wrap;">
+            {% csrf_token %}
+            <label>Du <input type="date" name="start_date" value="{{ default_start }}" required></label>
+            <label>au <input type="date" name="end_date" value="{{ default_end }}" required></label>
+            <button class="btn" type="submit" {% if job.is_active %}disabled{% endif %}>
+                Récupérer les ventes
+            </button>
+        </form>
+        <p class="muted" style="margin-bottom:0;">
+            Nécessite <code>LADDITION_EMAIL</code> et <code>LADDITION_PASSWORD</code> dans le fichier
+            <code>.env</code>. La récupération ouvre un navigateur en arrière-plan et peut prendre
+            quelques minutes par tranche de deux ans.
+        </p>
+    </div>
+
+    {% if job %}
+        {% include "recipes/_sales_import_status.html" %}
+    {% endif %}
+{% endblock %}

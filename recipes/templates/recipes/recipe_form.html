@@ -86,17 +86,6 @@ try {
     // malformed data - unit labels just won't populate
 }
 
-var nextGroupId = 1;
-document.querySelectorAll(".ingredient-row-wrapper").forEach(function (wrapper) {
-    nextGroupId = Math.max(nextGroupId, parseInt(wrapper.dataset.group, 10) + 1);
-});
-
-function updateUnitLabel(row) {
-    var select = row.querySelector("select[name$='-source']");
-    var label = row.querySelector(".ingredient-unit-label");
-    if (select && label) label.textContent = ingredientUnits[select.value] || "";
-}
-
 // The N existing (saved) ingredients occupy indices 0..N-1 - Django's
 // inline formset requires that exact range to always mean "these are the
 // existing objects" (it needs an -id at each of those positions to know
@@ -113,6 +102,9 @@ function updateUnitLabel(row) {
 // count) is already designed to tolerate.
 var nextFormIndex = parseInt(document.getElementById("id_ingredients-TOTAL_FORMS").value, 10);
 
+// One past the highest group already on the page - the server renders the
+// spare blank row with its own fresh group (see BaseRecipeIngredientFormSet),
+// so this never hands out a number that's already in use.
 var nextGroupId = 1;
 document.querySelectorAll(".ingredient-row-wrapper").forEach(function (wrapper) {
     nextGroupId = Math.max(nextGroupId, parseInt(wrapper.dataset.group, 10) + 1);

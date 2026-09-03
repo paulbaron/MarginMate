@@ -1,0 +1,45 @@
+<div class="card"
+    id="sales-import-status"
+    {% if job.is_active %}
+    hx-get="{% url 'recipes:sales_import_status' job.id %}"
+    hx-trigger="every 1s"
+    hx-swap="outerHTML"
+    {% endif %}
+>
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+        <div>
+            <span class="status-pill status-{{ job.status }}">{{ job.get_status_display }}</span>
+            <span class="muted">
+                {% if job.range_start %}Du {{ job.range_start }} au {{ job.range_end }} · {% endif %}
+                Lancée : {{ job.started_at }}
+            </span>
+        </div>
+        {% if job.is_active %}
+            {% if job.cancel_requested %}
+                <span class="muted">Annulation en cours…</span>
+            {% else %}
+                <button type="button" class="btn btn-small btn-secondary"
+                    hx-post="{% url 'recipes:cancel_sales_import' job.id %}"
+                    hx-target="#sales-import-status"
+                    hx-swap="outerHTML"
+                    hx-confirm="Annuler cette récupération ?">
+                    Annuler
+                </button>
+            {% endif %}
+        {% endif %}
+    </div>
+
+    {% if job.items_sold or job.recorded %}
+        <p style="margin-top:0.75rem;">
+            <strong>{{ job.items_sold }}</strong> articles vendus ·
+            <strong>{{ job.recorded }}</strong> totaux recette/jour enregistrés
+            {% if job.unmatched %}
+                · <a href="{% url 'recipes:pos_product_list' %}"><strong>{{ job.unmatched }}</strong> produits à rattacher</a>
+            {% endif %}
+        </p>
+    {% endif %}
+
+    {% if job.log %}
+        <pre style="margin-top:0.75rem; max-height:16rem; overflow:auto; white-space:pre-wrap;">{{ job.log }}</pre>
+    {% endif %}
+</div>

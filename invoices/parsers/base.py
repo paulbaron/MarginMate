@@ -37,10 +37,57 @@ class ParsedInvoice:
     reconciliation_adjustment: Decimal = Decimal("0")
 
 
+@dataclass
+class PdfPage:
+    """One page's worth of raw material, as pdfplumber hands it over: the
+    page text, and (only for parsers that ask for them) its extracted
+    tables as row lists.
+
+    This exists so the PDF reading and the actual parsing are separable.
+    Every parser's real logic lives in `parse_pages`, which takes these and
+    never touches pdfplumber - so a test can hand it hand-written pages and
+    exercise a supplier's layout quirks without needing a real invoice file.
+    """
+
+    text: str
+    tables: list[list[list[str | None]]] = field(default_factory=list)
+
+
 class InvoiceParser:
-    """One InvoiceParser subclass per supplier PDF layout."""
+    """One InvoiceParser subclass per supplier PDF layout.
+
+    Subclasses implement `parse_pages`; `parse` handles the pdfplumber I/O
+    for all of them. (The LLM fallback parser overrides `parse` directly,
+    since it works from whole-document text rather than a layout.)
+    """
 
     supplier_code: str = ""
+    # extract_tables() is comparatively expensive, so only the parsers that
+    # actually read tables pay for it.
+    needs_tables: bool = False
+    # Per-parser tweaks for page.extract_text() - Metro needs y_tolerance=0
+    # to stop adjacent columns being merged into one line. Never mutated.
+    text_extraction_kwargs: dict = {}
 
     def parse(self, pdf_path: str, date_hint: date | None = None) -> ParsedInvoice:
+        import os
+
+        import pdfplumber
+
+        with pdfplumber.open(pdf_path) as pdf:
+            pages = [
+                PdfPage(
+                    text=page.extract_text(**self.text_extraction_kwargs) or "",
+                    tables=page.extract_tables() if self.needs_tables else [],
+                )
+                for page in pdf.pages
+            ]
+        return self.parse_pages(pages, date_hint=date_hint, source_name=os.path.basename(pdf_path))
+
+    def parse_pages(
+        self, pages: list[PdfPage], date_hint: date | None = None, source_name: str = ""
+    ) -> ParsedInvoice:
+        """`source_name` is the PDF's bare filename - Metro invoices fall back
+        to it for the invoice number and date when the page text doesn't
+        yield them, so it's part of the raw material, not just metadata."""
         raise NotImplementedError

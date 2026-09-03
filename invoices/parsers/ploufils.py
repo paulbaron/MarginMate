@@ -13,9 +13,7 @@ import re
 from datetime import date, datetime
 from decimal import Decimal
 
-import pdfplumber
-
-from .base import InvoiceParser, ParsedInvoice, ParsedLine
+from .base import InvoiceParser, ParsedInvoice, ParsedLine, PdfPage
 from .registry import register
 
 DOCUMENT_NUMBER_REGEX = re.compile(r"N°\s*document\s*:\s*(\S+)")
@@ -42,16 +40,18 @@ def _to_decimal(text: str | None, default: str = "0") -> Decimal:
 @register
 class PlouFilsParser(InvoiceParser):
     supplier_code = "PLOUFILS"
+    needs_tables = True
 
-    def parse(self, pdf_path: str, date_hint: date | None = None) -> ParsedInvoice:
+    def parse_pages(
+        self, pages: list[PdfPage], date_hint: date | None = None, source_name: str = ""
+    ) -> ParsedInvoice:
         all_rows: list[list] = []
         full_text_parts: list[str] = []
 
-        with pdfplumber.open(pdf_path) as pdf:
-            for page in pdf.pages:
-                full_text_parts.append(page.extract_text() or "")
-                for table in page.extract_tables():
-                    all_rows.extend(table)
+        for page in pages:
+            full_text_parts.append(page.text)
+            for table in page.tables:
+                all_rows.extend(table)
 
         full_text = "\n".join(full_text_parts)
 

@@ -4,6 +4,7 @@
     <div class="page-header">
         <h1>Inventaire du {{ stock_take.taken_at|date:"d/m/Y H:i" }}</h1>
         <div style="display:flex; gap:0.5rem;">
+            <a class="btn" href="{% url 'inventory:stock_take_variance' stock_take.pk %}">Écarts</a>
             <a class="btn btn-secondary" href="{% url 'inventory:stock_take_update' stock_take.pk %}">Modifier</a>
             <form method="post" action="{% url 'inventory:stock_take_delete' stock_take.pk %}"
                   onsubmit="return confirm('Supprimer cet inventaire ?');">

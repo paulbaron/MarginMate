@@ -25,5 +25,6 @@ urlpatterns = [
     path("stock-takes/new/", views.stock_take_create, name="stock_take_create"),
     path("stock-takes/<int:pk>/", views.stock_take_detail, name="stock_take_detail"),
     path("stock-takes/<int:pk>/edit/", views.stock_take_update, name="stock_take_update"),
+    path("stock-takes/<int:pk>/variance/", views.stock_take_variance, name="stock_take_variance"),
     path("stock-takes/<int:pk>/delete/", views.stock_take_delete, name="stock_take_delete"),
 ]

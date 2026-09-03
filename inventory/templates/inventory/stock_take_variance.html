@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}Écarts - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <h1>Écarts de stock</h1>
+        <a class="btn btn-secondary" href="{% url 'inventory:stock_take_detail' report.closing_take.pk %}">Retour à l'inventaire</a>
+    </div>
+
+    {% if report.since_beginning %}
+        <p class="muted">
+            Depuis le début jusqu'au {{ report.period_end|date:"d/m/Y" }} ·
+            {{ report.sales_counted }} ventes enregistrées sur {{ report.recipes_sold }} recette{{ report.recipes_sold|pluralize }}
+        </p>
+        <div class="message">
+            Un seul inventaire : tout ce qui a été acheté depuis le début est comparé à ce comptage.
+            Cela suppose que <strong>les factures remontent à l'ouverture du bar</strong> — sinon,
+            les bouteilles achetées avant vos premières factures apparaîtront comme manquantes.
+            Un deuxième inventaire supprimera cette hypothèse.
+        </div>
+    {% else %}
+        <p class="muted">
+            Du {{ report.period_start|date:"d/m/Y" }} au {{ report.period_end|date:"d/m/Y" }} ·
+            {{ report.sales_counted }} ventes enregistrées sur {{ report.recipes_sold }} recette{{ report.recipes_sold|pluralize }}
+        </p>
+    {% endif %}
+
+    {% if report.sales_counted == 0 %}
+            <div class="message message-error">
+                Aucune vente enregistrée sur cette période : tout ce qui est sorti du stock
+                apparaît donc comme manquant.
+            </div>
+        {% endif %}
+
+        <div class="card">
+            <h3>Manquant : au moins {{ report.total_value_missing_min|floatformat:2 }} €</h3>
+            <p class="muted">
+                Les alternatives d'une recette (« vodka OU gin ») sont regroupées : impossible de
+                savoir quelle bouteille a servi, donc le manque est compté sur le groupe entier et
+                valorisé au moins cher — c'est le minimum que les chiffres permettent d'affirmer.
+            </p>
+            {% if report.missing %}
+            <table class="sub-table">
+                <thead>
+                    <tr>
+                        <th>Groupe</th>
+                        <th class="num">Sorti du stock</th>
+                        <th class="num">Expliqué par les ventes</th>
+                        <th class="num">Pertes connues</th>
+                        <th class="num">Manquant</th>
+                        <th class="num">≈ bouteilles</th>
+                        <th class="num">Valeur mini</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for pool in report.missing %}
+                    <tr>
+                        <td>
+                            {{ pool.label }}
+                            {% if not pool.is_reliable %}
+                                <br><span class="muted">⚠️ pas compté dans cet inventaire</span>
+                            {% endif %}
+                        </td>
+                        <td class="num">{{ pool.actual_usage|floatformat:2 }} {{ pool.unit }}</td>
+                        <td class="num">
+                            {% if pool.expected_usage_min == pool.expected_usage_max %}
+                                {{ pool.expected_usage_min|floatformat:2 }}
+                            {% else %}
+                                {{ pool.expected_usage_min|floatformat:2 }} – {{ pool.expected_usage_max|floatformat:2 }}
+                            {% endif %}
+                            {{ pool.unit }}
+                        </td>
+                        <td class="num">{{ pool.known_losses|floatformat:2 }} {{ pool.unit }}</td>
+                        <td class="num">{{ pool.unexplained_min|floatformat:2 }} {{ pool.unit }}</td>
+                        <td class="num">
+                            {% if pool.bottles_missing_min %}{{ pool.bottles_missing_min|floatformat:1 }}{% else %}—{% endif %}
+                        </td>
+                        <td class="num">
+                            {% if pool.value_missing_min %}{{ pool.value_missing_min|floatformat:2 }} €{% else %}—{% endif %}
+                        </td>
+                    </tr>
+                    {% if pool.cheapest %}
+                    <tr>
+                        <td colspan="7" class="muted" style="font-size:0.88rem; padding-top:0;">
+                            Valorisé en {{ pool.cheapest.name }} ({{ pool.cheapest_unit_cost|floatformat:2 }} € / {{ pool.unit }}<!--
+                            -->{% if pool.cheapest_item_size %}, {{ pool.cheapest_item_size|floatformat:"-3" }} {{ pool.unit }} par article{% endif %})
+                        </td>
+                    </tr>
+                    {% endif %}
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+                <p>Rien d'inexpliqué sur cette période.</p>
+            {% endif %}
+        </div>
+
+        {% if report.incomplete %}
+        <div class="card">
+            <h3>Non comptés ({{ report.incomplete|length }})</h3>
+            <p class="muted">
+                Ces articles ont bougé pendant la période mais ne figurent pas dans
+                {% if report.since_beginning %}l'inventaire{% else %}les deux inventaires{% endif %},
+                donc aucun écart ne peut être calculé pour eux — les compter la prochaine fois
+                les fera apparaître ci-dessus.
+            </p>
+            <p>
+                {% for pool in report.incomplete %}
+                    {{ pool.label }}{% if not forloop.last %} · {% endif %}
+                {% endfor %}
+            </p>
+        </div>
+        {% endif %}
+
+        {% if report.impossible %}
+        <div class="card">
+            <h3>Incohérences</h3>
+            <p class="muted">
+                Les ventes consomment plus de stock qu'il n'en est réellement sorti — ce qui est
+                impossible. C'est une erreur de données : comptage inexact, livraison non importée,
+                ou recette qui ne correspond pas à ce qui est réellement servi.
+            </p>
+            <table class="sub-table">
+                <thead>
+                    <tr>
+                        <th>Groupe</th>
+                        <th class="num">Sorti du stock</th>
+                        <th class="num">Exigé par les ventes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for pool in report.impossible %}
+                    <tr>
+                        <td>{{ pool.label }}</td>
+                        <td class="num">{{ pool.actual_usage|floatformat:2 }} {{ pool.unit }}</td>
+                        <td class="num">{{ pool.expected_usage_min|floatformat:2 }} {{ pool.unit }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% endif %}
+{% endblock %}
