@@ -32,7 +32,7 @@ from .importing import (
 )
 
 from .deletion import InvoiceInUseError, blocking_stock_takes, delete_invoice
-from .models import Invoice, InvoiceType, ReceiptBatch, ScrapeJob, ShopItemPrice, Supplier
+from .models import Invoice, InvoiceType, ReceiptBatch, ScrapeJob, Supplier
 from .parsers import get_parser
 from .parsers.base import ParsedInvoice, ParsedLine
 from .tasks import default_gather_start, gather_invoices_task, test_email_pattern_task

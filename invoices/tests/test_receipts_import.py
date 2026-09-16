@@ -14,7 +14,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from inventory.models import Product
-from invoices.models import Invoice, ShopItemPrice, Supplier, label_for_unit_price
+from invoices.models import ShopItemPrice, Supplier, label_for_unit_price
 from invoices.parsers.base import ParsedInvoice, ParsedLine
 from invoices.receipts import PLACEHOLDER_MARKER, detect_parser, label_placeholder_lines
 from tests.factories import make_invoice, make_invoice_line, make_product

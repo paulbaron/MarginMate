@@ -20,7 +20,7 @@ from django.urls import reverse
 
 from invoices.importing import import_parsed_invoice
 from invoices.models import Supplier
-from invoices.parsers.base import ParsedInvoice, ParsedLine, PdfPage
+from invoices.parsers.base import ParsedLine, PdfPage
 from invoices.parsers.franprix import FranprixParser
 from invoices.parsers.monoprix import MonoprixParser
 from invoices.parsers.sabbh import SabbhParser
