@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Import de tickets - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <p class="breadcrumb"><a href="{% url 'invoices:receipt_upload' %}">← Importer des tickets</a></p>
+            <h1>Import du {{ batch.started_at|date:"d/m/Y à H:i" }}</h1>
+            <p class="page-subtitle">
+                Les tickets sont lus l'un après l'autre (quelques secondes chacun) ; la page se met à jour toute seule.
+            </p>
+        </div>
+        <div class="actions">
+            <a class="btn" href="{% url 'invoices:receipt_queue' %}">
+                Vérifier les tickets{% if pending_count %} <span class="badge">{{ pending_count }}</span>{% endif %}
+            </a>
+        </div>
+    </div>
+
+    {% include "invoices/_receipt_batch_status.html" %}
+{% endblock %}

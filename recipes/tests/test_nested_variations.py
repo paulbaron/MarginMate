@@ -302,12 +302,19 @@ class NestedQueryCountTests(TestCase):
             ingredient(self.recipe, group=group, stock_cost="1")
         ingredient(self.recipe, group=0, sub_recipe=syrup)
 
+    # Two of the queries on any page are the nav badges - the products
+    # awaiting review and the till receipts awaiting verification - which
+    # every template in the app pays for through the context processors.
+    # They are counted here rather than excluded so that adding a third
+    # shows up as a decision instead of as drift.
+    NAV_BADGE_QUERIES = 2
+
     def test_the_detail_page_stays_cheap(self):
-        with self.assertNumQueries(7):
+        with self.assertNumQueries(6 + self.NAV_BADGE_QUERIES):
             self.assertEqual(self.client.get(f"/recipes/{self.recipe.pk}/").status_code, 200)
 
     def test_the_list_page_stays_cheap(self):
-        with self.assertNumQueries(8):
+        with self.assertNumQueries(7 + self.NAV_BADGE_QUERIES):
             self.assertEqual(self.client.get("/recipes/").status_code, 200)
 
     def test_the_scope_never_serves_a_stale_grouping(self):

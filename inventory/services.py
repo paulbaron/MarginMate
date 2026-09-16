@@ -1,7 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
-from django.db.models import F, Q
+from django.db.models import F, Min, Q
 
 from .models import Product, StockMovement, StockType, UnitChoices
 
@@ -94,6 +94,27 @@ def bulk_product_counting_units(products) -> dict:
         )
         for product in products
     }
+
+
+def first_purchase_dates(product_ids=None) -> dict[int, date]:
+    """{product_id: the date of its earliest DATED invoice}.
+
+    What a stock take uses to know a product existed yet: something first
+    delivered in June cannot have been standing on the shelf in March, so
+    offering it in a March count is offering a mistake.
+
+    Products whose invoices carry no date at all are simply absent from the
+    result, and callers read that as "no reason to exclude it" - the same
+    reasoning _purchase_ladder already applies to undated invoices: we can't
+    prove they're too new, and pretending otherwise would silently drop real
+    stock out of a count.
+    """
+    from invoices.models import InvoiceLine
+
+    lines = InvoiceLine.objects.filter(invoice__invoice_date__isnull=False)
+    if product_ids is not None:
+        lines = lines.filter(product_id__in=list(product_ids))
+    return dict(lines.values_list("product_id").annotate(first=Min("invoice__invoice_date")))
 
 
 def compute_movement_amounts(invoice_line) -> tuple[Decimal, Decimal]:

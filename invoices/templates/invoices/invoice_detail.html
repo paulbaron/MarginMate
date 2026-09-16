@@ -19,6 +19,7 @@
                href="{% url 'invoices:invoice_edit_lines' invoice.pk %}">
                 {% if lines %}Corriger les lignes{% else %}Saisir les lignes{% endif %}
             </a>
+            <a class="btn btn-danger" href="{% url 'invoices:invoice_delete' invoice.pk %}">Supprimer</a>
         </div>
     </div>
 
@@ -38,6 +39,17 @@
             <span class="stat-label">Total TTC</span>
             <span class="stat-value">{{ invoice.total_ttc|floatformat:2 }} €</span>
         </div>
+        {% with payment=invoice.payment %}
+        {% if payment %}
+        <div class="stat">
+            <span class="stat-label">Payée</span>
+            <span class="stat-value">{{ payment.transaction.paid_on|date:"d/m/Y" }}</span>
+            <span class="stat-note">
+                <a href="{% url 'bank:bank_home' %}?vue=rapprochees">{{ payment.transaction.counterparty|default:payment.transaction.bank_type }} · {{ payment.transaction.amount_due|floatformat:2 }} €</a>
+            </span>
+        </div>
+        {% endif %}
+        {% endwith %}
         <div class="stat">
             <span class="stat-label">Lignes</span>
             <span class="stat-value">{{ invoice.lines.count }}</span>
@@ -55,9 +67,9 @@
         <div class="message">
             Le total imprimé par le fournisseur dépasse la somme des lignes de
             <strong>{{ invoice.reconciliation_adjustment|floatformat:2 }} €</strong> : des droits (accise, régie,
-            vignette sécu) facturés globalement, sans colonne par produit. Ajouté au total pour qu'il
-            corresponde au centime près à ce qui a été facturé, mais jamais imputé à un produit — rien ne dit
-            auquel il revient.
+            vignette sécu) facturés globalement, sans colonne par produit. Ajouté au total, avec sa TVA — les
+            droits entrent dans la base de la TVA — pour qu'il corresponde au centime près à ce qui a été
+            facturé et prélevé, mais jamais imputé à un produit — rien ne dit auquel il revient.
         </div>
     {% endif %}
 
@@ -78,7 +90,10 @@
             {% for line in lines %}
             <tr>
                 <td>
-                    {{ line.raw_name }}
+                    {{ line.product.raw_name }}
+                    {% if line.raw_name|lower != line.product.raw_name|lower %}
+                        <span class="read-as">tel qu'imprimé : {{ line.raw_name }}</span>
+                    {% endif %}
                     {% if line.taxes or line.discount %}
                         <br><span class="muted" style="font-size:0.8em;">
                             {% if line.taxes %}+ {{ line.taxes|floatformat:2 }} € de taxes{% endif %}
@@ -103,7 +118,11 @@
             {% empty %}
             <tr>
                 <td colspan="7" class="muted" style="text-align:center; padding:2rem 0;">
-                    Aucune ligne. Ce fournisseur n'a pas de parseur — saisissez-les à la main.
+                    {% if has_parser %}
+                        Aucune ligne : le parseur de ce fournisseur n'a rien trouvé dans ce document — saisissez-les à la main.
+                    {% else %}
+                        Aucune ligne. Ce fournisseur n'a pas de parseur — saisissez-les à la main.
+                    {% endif %}
                 </td>
             </tr>
             {% endfor %}

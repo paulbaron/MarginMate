@@ -2,12 +2,15 @@
 {% block title %}{% if stock_take.pk %}Modifier{% else %}Nouvel{% endif %} inventaire - MarginMate{% endblock %}
 {% block content %}
     <h1>{% if stock_take.pk %}Modifier{% else %}Nouvel{% endif %} inventaire</h1>
-    <datalist id="stock-take-entry-datalist">
-        {% for name in entry_names %}
-            <option value="{{ name }}">
-        {% endfor %}
-    </datalist>
+    {% comment %}
+    Left empty on purpose: the options are filled in by JS from entry-data,
+    filtered to what had actually been delivered by the date being counted.
+    Rendering all 800 of them here and then removing some would ship a list
+    that is wrong until the script runs.
+    {% endcomment %}
+    <datalist id="stock-take-entry-datalist"></datalist>
     <script id="entry-data" type="application/json">{{ entry_data|safe }}</script>
+    <script id="saved-values" type="application/json">{{ saved_values|safe }}</script>
     <div class="card">
         <form method="post">
             {% csrf_token %}
@@ -26,7 +29,7 @@
             {% endif %}
             <div id="line-rows">
                 {% for line_form in formset %}
-                    <div class="stock-take-row-wrapper">
+                    <div class="stock-take-row-wrapper" data-line-id="{{ line_form.instance.pk|default_if_none:'' }}">
                         <div class="inline-form">
                             {{ line_form.id }}
                             <span style="display:none;">{{ line_form.DELETE }}</span>
@@ -34,6 +37,7 @@
                             <span class="muted">×</span>
                             {{ line_form.counted_quantity }}
                             {{ line_form.unit }}
+                            <output class="line-value" aria-live="polite"></output>
                             <button type="button" class="btn btn-small btn-secondary js-remove-line">Retirer</button>
                         </div>
                         {% for error in line_form.non_field_errors %}<div class="message message-error">{{ error }}</div>{% endfor %}
@@ -44,6 +48,25 @@
             </div>
             <button type="button" class="btn btn-small btn-secondary" id="add-line-row">+ Ajouter une ligne</button>
 
+            <div class="stock-take-total">
+                <span>Valeur de l'inventaire (HT)</span>
+                <strong id="inventory-total">—</strong>
+                <span class="muted" id="inventory-total-note"></span>
+                <span class="muted draft-state" id="draft-state"></span>
+            </div>
+
+            <div class="message message-warning" id="draft-offer" hidden>
+                <p>
+                    Un comptage non enregistré traîne dans ce navigateur
+                    (<span id="draft-when"></span>, <span id="draft-count"></span>).
+                    Il vient probablement d'un onglet fermé ou d'une page perdue avant l'enregistrement.
+                </p>
+                <p>
+                    <button type="button" class="btn btn-small" id="draft-restore">Restaurer ce comptage</button>
+                    <button type="button" class="btn btn-small btn-secondary" id="draft-discard">Ignorer et supprimer</button>
+                </p>
+            </div>
+
             <p style="margin-top:1rem;">
                 <button class="btn" type="submit">Enregistrer l'inventaire</button>
                 <a class="btn btn-secondary" href="{% if stock_take.pk %}{% url 'inventory:stock_take_detail' stock_take.pk %}{% else %}{% url 'inventory:stock_take_list' %}{% endif %}">Annuler</a>
@@ -52,12 +75,13 @@
     </div>
 
     <template id="empty-line-row">
-        <div class="stock-take-row-wrapper">
+        <div class="stock-take-row-wrapper" data-line-id="">
             <div class="inline-form">
                 {{ formset.empty_form.entry_search }}
                 <span class="muted">×</span>
                 {{ formset.empty_form.counted_quantity }}
                 {{ formset.empty_form.unit }}
+                <output class="line-value" aria-live="polite"></output>
                 <button type="button" class="btn btn-small btn-secondary js-remove-line">Retirer</button>
             </div>
         </div>
@@ -65,11 +89,61 @@
 {% endblock %}
 {% block extra_js %}
 <script>
+var VALUE_URL = "{% url 'inventory:value_stock_take_line' %}";
+
 var entryData = {};
 try {
     entryData = JSON.parse(document.getElementById("entry-data").textContent);
 } catch (e) {
     // malformed data - unit choices just won't populate
+}
+
+// {line id: what that line was valued at when it was saved}. A saved line's
+// value is frozen (see StockTake's docstring), so the running total is right
+// the instant the page opens, with no request and nothing re-priced.
+var savedValues = {};
+try {
+    savedValues = JSON.parse(document.getElementById("saved-values").textContent);
+} catch (e) {
+    // the total just starts from the rows the user touches
+}
+
+var euros = new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" });
+
+// -- what existed yet -------------------------------------------------
+//
+// Something first delivered in June cannot have been on the shelf in March,
+// so the datalist only offers what had actually arrived by the date being
+// counted. It follows the date field live, because changing the date is
+// exactly when the honest answer changes. An entry with no dated invoice at
+// all is always offered: nothing on record says it is too new, and hiding it
+// would quietly drop real stock out of the count (see
+// services.first_purchase_dates).
+
+function countedDate() {
+    var field = document.getElementById("id_taken_at");
+    var raw = field ? field.value : "";
+    return raw ? raw.slice(0, 10) : "";  // "2026-03-31T18:00" -> "2026-03-31"
+}
+
+function isAvailable(entry, onDate) {
+    if (!entry) return false;
+    if (!onDate || !entry.available_from) return true;
+    return entry.available_from <= onDate;   // ISO dates compare as strings
+}
+
+function rebuildDatalist() {
+    var onDate = countedDate();
+    var datalist = document.getElementById("stock-take-entry-datalist");
+    var fragment = document.createDocumentFragment();
+    Object.keys(entryData).forEach(function (name) {
+        if (!isAvailable(entryData[name], onDate)) return;
+        var option = document.createElement("option");
+        option.value = name;
+        fragment.appendChild(option);
+    });
+    datalist.innerHTML = "";
+    datalist.appendChild(fragment);
 }
 
 // Rebuilds a row's unit <select> to only offer the choices valid for
@@ -107,13 +181,19 @@ function updateUnitChoices(row, useDefault) {
 // (editing a stock take).
 var nextFormIndex = parseInt(document.getElementById("id_lines-TOTAL_FORMS").value, 10);
 
-document.getElementById("add-line-row").addEventListener("click", function () {
+function addLineRow() {
     var index = nextFormIndex++;
     document.getElementById("id_lines-TOTAL_FORMS").value = nextFormIndex;
     var html = document.getElementById("empty-line-row").innerHTML.replace(/__prefix__/g, index);
     var wrapper = document.createElement("div");
     wrapper.innerHTML = html.trim();
-    document.getElementById("line-rows").appendChild(wrapper.firstElementChild);
+    var row = wrapper.firstElementChild;
+    document.getElementById("line-rows").appendChild(row);
+    return row;
+}
+
+document.getElementById("add-line-row").addEventListener("click", function () {
+    addLineRow().querySelector("input[name$='-entry_search']").focus();
 });
 
 document.addEventListener("click", function (event) {
@@ -126,16 +206,294 @@ document.addEventListener("click", function (event) {
     } else {
         wrapper.remove();
     }
+    updateTotal();
 });
 
+// -- live prices ------------------------------------------------------
+//
+// Each row is priced by the server, through the very same functions the save
+// uses. A second, simpler "close enough" sum computed here in JS is exactly
+// how this codebase has shipped silently wrong money before - so the number
+// on screen while typing IS the number that gets stored.
+
+var VALUE_DEBOUNCE_MS = 350;
+var rowTimers = new WeakMap();
+var rowValues = new WeakMap();
+var inFlight = new WeakMap();
+
+function updateTotal() {
+    var total = 0;
+    var pending = 0;
+    var priced = 0;
+    document.querySelectorAll(".stock-take-row-wrapper").forEach(function (row) {
+        if (row.hidden) return;  // taken out of the count, just not yet saved
+        var value = rowValues.get(row);
+        if (value === undefined) {
+            if (row.querySelector("input[name$='-entry_search']").value.trim()) pending++;
+            return;
+        }
+        total += value;
+        priced++;
+    });
+    document.getElementById("inventory-total").textContent = priced ? euros.format(total) : "—";
+    document.getElementById("inventory-total-note").textContent =
+        pending ? "(" + pending + " ligne" + (pending > 1 ? "s" : "") + " en cours de calcul…)" : "";
+}
+
+function showRowValue(row, data, failed) {
+    var output = row.querySelector(".line-value");
+    if (!output) return;
+    if (!data || !data.ok) {
+        // A row that couldn't be priced must not keep showing its old
+        // figure - the total would then be quietly wrong. It says so
+        // instead, so a blank total has a visible reason rather than
+        // looking like the page gave up.
+        rowValues.delete(row);
+        output.className = "line-value" + (failed ? " line-value-failed" : "");
+        output.textContent = failed ? "prix indisponible" : "";
+        output.title = failed ? "Impossible de calculer ce prix - la valeur totale est donc incomplète." : "";
+        updateTotal();
+        return;
+    }
+    rowValues.set(row, parseFloat(data.value_ht));
+    output.className = "line-value" + (data.has_shortfall ? " line-value-shortfall" : "");
+    // The line total leads (it is what the inventory sums), with the unit
+    // price beside it - "what is one of these worth" being the number a
+    // human sanity-checks a count against.
+    output.textContent = "";
+    var total = document.createElement("span");
+    total.className = "line-value-total";
+    total.textContent = euros.format(parseFloat(data.value_ht));
+    output.appendChild(total);
+    if (data.unit_cost_ht) {
+        var unit = document.createElement("span");
+        unit.className = "line-value-unit";
+        unit.textContent = " (" + euros.format(parseFloat(data.unit_cost_ht)) + " / " + data.unit_label + ")";
+        output.appendChild(unit);
+    }
+    output.title = data.has_shortfall
+        ? "Le comptage dépasse ce que les factures connues expliquent : " + data.shortfall_quantity +
+          " valorisé au plus ancien prix connu."
+        : "Valorisé sur les achats réellement facturés à cette date.";
+    updateTotal();
+}
+
+function priceRow(row) {
+    var entry = row.querySelector("input[name$='-entry_search']");
+    var quantity = row.querySelector("input[name$='-counted_quantity']");
+    var unit = row.querySelector("select[name$='-unit']");
+    if (!entry || !quantity) return;
+    if (!entry.value.trim() || !quantity.value.trim() || !entryData[entry.value]) {
+        showRowValue(row, null);
+        return;
+    }
+    var params = new URLSearchParams({
+        entry: entry.value,
+        quantity: quantity.value,
+        unit: unit ? unit.value : "",
+        as_of: countedDate(),
+    });
+    // One request per row at a time: typing "12" fires on "1" then "12", and
+    // without this the slower first reply can land last and show a stale price.
+    var token = {};
+    inFlight.set(row, token);
+    fetch(VALUE_URL + "?" + params.toString(), { headers: { "X-Requested-With": "XMLHttpRequest" } })
+        .then(function (response) { return response.json(); })
+        .then(function (data) {
+            if (inFlight.get(row) !== token) return;
+            showRowValue(row, data, !data || !data.ok);
+        })
+        .catch(function () {
+            if (inFlight.get(row) !== token) return;
+            showRowValue(row, null, true);
+        });
+}
+
+function schedulePricing(row) {
+    clearTimeout(rowTimers.get(row));
+    rowTimers.set(row, setTimeout(function () { priceRow(row); }, VALUE_DEBOUNCE_MS));
+}
+
+function priceEveryRow() {
+    document.querySelectorAll(".stock-take-row-wrapper").forEach(function (row) {
+        if (!row.hidden) schedulePricing(row);
+    });
+}
+
 document.addEventListener("input", function (event) {
-    if (!event.target.matches("input[name$='-entry_search']")) return;
-    updateUnitChoices(event.target.closest(".stock-take-row-wrapper"), true);
+    if (event.target.matches("input[name$='-entry_search']")) {
+        var row = event.target.closest(".stock-take-row-wrapper");
+        updateUnitChoices(row, true);
+        schedulePricing(row);
+        return;
+    }
+    if (event.target.matches("input[name$='-counted_quantity']")) {
+        schedulePricing(event.target.closest(".stock-take-row-wrapper"));
+        return;
+    }
+    if (event.target.matches("#id_taken_at")) {
+        // The date decides both what may be counted and what it was worth.
+        rebuildDatalist();
+        priceEveryRow();
+    }
 });
+
+document.addEventListener("change", function (event) {
+    if (!event.target.matches("select[name$='-unit']")) return;
+    schedulePricing(event.target.closest(".stock-take-row-wrapper"));
+});
+
+// -- the draft net ----------------------------------------------------
+//
+// Counting a bar is an hour's work that exists nowhere but this page until
+// Enregistrer succeeds. Everything typed is mirrored into this browser's own
+// storage as it goes, so a closed tab, a stray refresh, a crash or a failed
+// save leaves something to come back to. It is a safety net and nothing
+// more: the database stays the only record, and the draft is dropped the
+// moment the inventory is actually saved.
+
+var DRAFT_KEY = "marginmate:stock-take-draft:{{ stock_take.pk|default_if_none:'new' }}";
+var DRAFT_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 7;
+
+function collectRows() {
+    var rows = [];
+    document.querySelectorAll(".stock-take-row-wrapper").forEach(function (row) {
+        if (row.hidden) return;   // removed, just not saved yet
+        var entry = row.querySelector("input[name$='-entry_search']");
+        var quantity = row.querySelector("input[name$='-counted_quantity']");
+        var unit = row.querySelector("select[name$='-unit']");
+        if (!entry || !entry.value.trim()) return;
+        rows.push({ entry: entry.value, quantity: quantity ? quantity.value : "", unit: unit ? unit.value : "" });
+    });
+    return rows;
+}
+
+function saveDraft() {
+    var rows = collectRows();
+    try {
+        if (!rows.length) {
+            localStorage.removeItem(DRAFT_KEY);
+        } else {
+            localStorage.setItem(DRAFT_KEY, JSON.stringify({
+                savedAt: Date.now(),
+                takenAt: (document.getElementById("id_taken_at") || {}).value || "",
+                note: (document.getElementById("id_note") || {}).value || "",
+                rows: rows,
+            }));
+        }
+        var state = document.getElementById("draft-state");
+        if (state) state.textContent = rows.length ? "brouillon local à jour" : "";
+    } catch (e) {
+        // private browsing, or storage full - the form still works, it just
+        // has no net. Never let this break typing.
+    }
+}
+
+function readDraft() {
+    try {
+        var draft = JSON.parse(localStorage.getItem(DRAFT_KEY) || "null");
+        if (!draft || !draft.rows || !draft.rows.length) return null;
+        if (Date.now() - draft.savedAt > DRAFT_MAX_AGE_MS) {
+            localStorage.removeItem(DRAFT_KEY);
+            return null;
+        }
+        return draft;
+    } catch (e) {
+        return null;
+    }
+}
+
+function discardDraft() {
+    try { localStorage.removeItem(DRAFT_KEY); } catch (e) { /* nothing to clean up */ }
+}
+
+function sameAsOnScreen(draft) {
+    var current = collectRows();
+    if (current.length !== draft.rows.length) return false;
+    return current.every(function (row, index) {
+        return row.entry === draft.rows[index].entry && row.quantity === draft.rows[index].quantity;
+    });
+}
+
+function restoreDraft(draft) {
+    var dateField = document.getElementById("id_taken_at");
+    var noteField = document.getElementById("id_note");
+    if (dateField && draft.takenAt) dateField.value = draft.takenAt;
+    if (noteField && draft.note) noteField.value = draft.note;
+    rebuildDatalist();
+
+    // Rows already on screen come from the database and keep their id, so
+    // they are matched by name rather than replaced - restoring must never
+    // turn an edit of a saved line into a duplicate of it.
+    var byEntry = {};
+    document.querySelectorAll(".stock-take-row-wrapper").forEach(function (row) {
+        var entry = row.querySelector("input[name$='-entry_search']");
+        if (entry && entry.value.trim()) byEntry[entry.value] = row;
+    });
+
+    draft.rows.forEach(function (saved) {
+        var row = byEntry[saved.entry] || addLineRow();
+        row.querySelector("input[name$='-entry_search']").value = saved.entry;
+        updateUnitChoices(row, false);
+        row.querySelector("input[name$='-counted_quantity']").value = saved.quantity;
+        var unit = row.querySelector("select[name$='-unit']");
+        if (unit && saved.unit) unit.value = saved.unit;
+        schedulePricing(row);
+    });
+    document.getElementById("draft-offer").hidden = true;
+}
+
+function offerDraft() {
+    var draft = readDraft();
+    if (!draft || sameAsOnScreen(draft)) return false;
+    document.getElementById("draft-when").textContent =
+        new Date(draft.savedAt).toLocaleString("fr-FR");
+    document.getElementById("draft-count").textContent =
+        draft.rows.length + " ligne" + (draft.rows.length > 1 ? "s" : "");
+    document.getElementById("draft-offer").hidden = false;
+    document.getElementById("draft-restore").addEventListener("click", function () { restoreDraft(draft); });
+    document.getElementById("draft-discard").addEventListener("click", function () {
+        discardDraft();
+        document.getElementById("draft-offer").hidden = true;
+    });
+    return true;
+}
+
+document.addEventListener("input", saveDraft);
+document.addEventListener("change", saveDraft);
+document.addEventListener("click", function (event) {
+    if (event.target.matches(".js-remove-line")) saveDraft();
+});
+
+// Deliberately NOT cleared on submit. A submit that comes back with errors -
+// or never arrives at all, which is the 400 that lost a real inventory - is
+// exactly when the draft has to still be there. It is cleared from the
+// detail page instead, which is only ever reached by a save that worked.
+
 document.addEventListener("DOMContentLoaded", function () {
+    rebuildDatalist();
     document.querySelectorAll(".stock-take-row-wrapper").forEach(function (row) {
         updateUnitChoices(row, false);
+        // A saved line already knows what it is worth; only rows the user
+        // has since edited need the server asked again.
+        var saved = savedValues[row.dataset.lineId];
+        if (saved !== undefined) {
+            showRowValue(row, { ok: true, value_ht: saved, unit_cost_ht: null, has_shortfall: false });
+        } else if (row.querySelector("input[name$='-entry_search']").value.trim()) {
+            schedulePricing(row);
+        }
     });
+    // The formset renders no spare row (see StockTakeLineFormSet), so a
+    // brand-new inventory needs somewhere to start typing.
+    if (!document.querySelectorAll(".stock-take-row-wrapper").length) addLineRow();
+    updateTotal();
+    // Re-establish the net straight away - it matters most on a form that
+    // came back with validation errors, where the data is on screen, unsaved,
+    // and nothing has been typed yet to trigger the input handler. But NOT
+    // while a recovered draft is being offered: overwriting it with the
+    // emptier page behind the banner would destroy the very thing the banner
+    // is offering to restore, the moment the user reloads instead of clicking.
+    if (!offerDraft()) saveDraft();
 });
 </script>
 {% endblock %}

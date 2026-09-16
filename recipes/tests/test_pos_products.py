@@ -55,6 +55,37 @@ class PosProductListTests(TestCase):
         response = self.client.get(reverse("recipes:pos_product_list"))
         self.assertContains(response, "Aucun produit de caisse")
 
+    def test_each_table_has_a_stable_id(self):
+        """Without an explicit id, datatable.js falls back to this table's
+        position among every data-table on the page (see tableKey in
+        static/js/datatable.js) to key its persisted search text. "Rattachés"
+        and "Ignorés" only render at all once something has been linked or
+        ignored, so without a fixed id, a search box's saved text could end
+        up keyed to a position a DIFFERENT table now occupies as soon as the
+        set of visible sections changes between visits - a search that
+        "sometimes" seems to apply to the wrong table. One id per table,
+        regardless of which sections are present, closes that off."""
+        make_pos_product("À faire")
+        make_pos_product("Lié", recipe=self.recipe)
+        make_pos_product("Ignoré", ignored=True)
+        response = self.client.get(reverse("recipes:pos_product_list"))
+        self.assertContains(response, 'id="pos-pending-table"')
+        self.assertContains(response, 'id="pos-linked-table"')
+        self.assertContains(response, 'id="pos-ignored-table"')
+
+    def test_the_recipe_picker_column_is_not_sortable(self):
+        """Every row's "Que faire ?" cell carries the identical <select> of
+        every recipe - not describing that row, just offering a choice - so
+        sorting or searching by it is meaningless. Sorting is opted out with
+        data-no-sort; see static/js/datatable.js's searchableText for why
+        the SAME <select> also has to be stripped out of what search reads,
+        or typing any recipe name (e.g. "pinte") matches every row that
+        COULD be linked to a "Pinte…" recipe - which used to be all of
+        them."""
+        make_pos_product("À faire")
+        response = self.client.get(reverse("recipes:pos_product_list"))
+        self.assertRegex(response.content.decode(), r"<th data-no-sort[^>]*>Que faire \?")
+
 
 class PosProductAssignTests(TestCase):
     def setUp(self):
@@ -81,6 +112,25 @@ class PosProductAssignTests(TestCase):
         self.post("link", recipe=self.recipe.pk)
         record_sales([("Alcool + soda HH", date(2026, 6, 1), 5)])
         self.assertEqual(RecipeSale.objects.get().recipe, self.recipe)
+
+    def test_linking_immediately_backfills_from_daily_quantities_already_on_file(self):
+        """The whole point of PosProductDailyQuantity: this product's
+        per-day figures have been sitting there since the import that first
+        saw it, whether or not it had a recipe yet (see sync_pos_products).
+        Linking is therefore a pure local rebuild - no L'Addition contact,
+        no waiting - and "Dernières ventes" is correct the moment this POST
+        returns, not after a separate recovery step."""
+        from recipes.models import PosProductDailyQuantity
+
+        PosProductDailyQuantity.objects.create(product=self.product, sold_on=date(2026, 6, 1), quantity=5)
+        PosProductDailyQuantity.objects.create(product=self.product, sold_on=date(2026, 6, 2), quantity=3)
+
+        self.post("link", recipe=self.recipe.pk)
+
+        self.assertEqual(RecipeSale.objects.filter(recipe=self.recipe).count(), 2)
+        self.assertEqual(
+            sum(RecipeSale.objects.filter(recipe=self.recipe).values_list("quantity", flat=True)), 8
+        )
 
     def test_marking_it_as_a_happy_hour_variant(self):
         """Sets the name on the RECIPE, so both till names fold into one."""
@@ -125,6 +175,33 @@ class PosProductAssignTests(TestCase):
         self.assertFalse(self.product.ignored)
         self.assertTrue(self.product.needs_review)
 
+    def test_detaching_takes_its_days_back_out_of_the_recipe(self):
+        """The other direction of the same rebuild - a day this product no
+        longer accounts for must not keep inflating the recipe it used to
+        belong to."""
+        from recipes.models import PosProductDailyQuantity
+
+        PosProductDailyQuantity.objects.create(product=self.product, sold_on=date(2026, 6, 1), quantity=5)
+        self.post("link", recipe=self.recipe.pk)
+        self.assertEqual(RecipeSale.objects.filter(recipe=self.recipe).count(), 1)
+
+        self.post("reset")
+        self.assertEqual(RecipeSale.objects.filter(recipe=self.recipe).count(), 0)
+
+    def test_detaching_leaves_a_day_another_linked_product_still_covers(self):
+        """Two till names can fold into one recipe (see happy hour) - taking
+        one of them back out must only remove ITS share of a shared day."""
+        from recipes.models import PosProductDailyQuantity
+
+        other = make_pos_product("Alcool + Soda", recipe=self.recipe)
+        PosProductDailyQuantity.objects.create(product=other, sold_on=date(2026, 6, 1), quantity=20)
+        PosProductDailyQuantity.objects.create(product=self.product, sold_on=date(2026, 6, 1), quantity=5)
+        self.post("link", recipe=self.recipe.pk)
+        self.assertEqual(RecipeSale.objects.get(recipe=self.recipe).quantity, 25)
+
+        self.post("reset")
+        self.assertEqual(RecipeSale.objects.get(recipe=self.recipe).quantity, 20)
+
     def test_linking_without_choosing_a_recipe_changes_nothing(self):
         self.post("link", recipe="")
         self.product.refresh_from_db()
@@ -149,8 +226,12 @@ class PosProductAssignTests(TestCase):
 
 
 class SyncPosProductsTests(TestCase):
-    def export(self, products):
-        return ParsedExport(products=products)
+    def export(self, products, entries):
+        """`entries` mirrors `products` the way a real parse always does -
+        see parse_rows, which builds both from the same rows in the same
+        loop. total_quantity is now computed from entries (per-day), not
+        from products' own window-wide total - see PosProductDailyQuantity."""
+        return ParsedExport(products=products, entries=entries)
 
     def test_products_are_created_from_an_import(self):
         sync_pos_products(
@@ -160,7 +241,8 @@ class SyncPosProductsTests(TestCase):
                         "quantity": 512, "category": "Bières", "typology": "Liquide (Alcool)",
                         "first": date(2026, 6, 1), "last": date(2026, 6, 30),
                     }
-                }
+                },
+                entries=[("Pinte Blonde", date(2026, 6, 15), 512)],
             )
         )
         product = PosProduct.objects.get()
@@ -169,6 +251,9 @@ class SyncPosProductsTests(TestCase):
         self.assertEqual((product.first_seen, product.last_seen), (date(2026, 6, 1), date(2026, 6, 30)))
 
     def test_a_second_import_extends_the_dates_and_adds_to_the_total(self):
+        """Two genuinely different, non-overlapping periods still add up -
+        this is not the same thing as re-importing the SAME period twice,
+        which IdempotentReSyncTests covers instead."""
         first = {
             "Pinte Blonde": {
                 "quantity": 100, "category": "Bières", "typology": "",
@@ -181,8 +266,8 @@ class SyncPosProductsTests(TestCase):
                 "first": date(2026, 7, 1), "last": date(2026, 7, 31),
             }
         }
-        sync_pos_products(self.export(first))
-        sync_pos_products(self.export(later))
+        sync_pos_products(self.export(first, entries=[("Pinte Blonde", date(2026, 6, 15), 100)]))
+        sync_pos_products(self.export(later, entries=[("Pinte Blonde", date(2026, 7, 15), 50)]))
         product = PosProduct.objects.get()
         self.assertEqual(product.total_quantity, 150)
         self.assertEqual((product.first_seen, product.last_seen), (date(2026, 6, 1), date(2026, 7, 31)))
@@ -200,10 +285,129 @@ class SyncPosProductsTests(TestCase):
                         "quantity": 10, "category": "", "typology": "",
                         "first": date(2026, 6, 1), "last": date(2026, 6, 30),
                     }
-                }
+                },
+                entries=[("Pinte Blonde", date(2026, 6, 1), 10)],
             )
         )
         self.assertEqual(PosProduct.objects.get().recipe, recipe)
+
+
+class AutoLinkCoincidingNamesTests(TestCase):
+    """A till name that already answers to a recipe - its own name, or a
+    happy_hour_name - is counted into that recipe's sales by record_sales
+    with or without an explicit PosProduct link (see recipe_lookup). Left
+    unlinked, the product sat in "needs review" forever for something
+    already resolved, and "Produits caisse" undercounted the recipe
+    relative to "Dernières ventes" - the two pages stopped reconciling.
+    Seen on real till data: "alcool + soda" (matching the recipe's own name
+    exactly) sat unlinked while "Alcool + soda HH" was linked, so Rattachés
+    showed only a fraction of what Dernières ventes reported for the
+    recipe."""
+
+    def export(self, name, quantity, sold_on):
+        return ParsedExport(
+            products={name: {"quantity": quantity, "category": "", "typology": "", "first": sold_on, "last": sold_on}},
+            entries=[(name, sold_on, quantity)],
+        )
+
+    def test_a_name_matching_a_recipe_is_linked_automatically(self):
+        recipe = make_recipe(name="Alcool + Soda")
+        sync_pos_products(self.export("Alcool + Soda", 30, date(2026, 6, 1)))
+        product = PosProduct.objects.get(name="Alcool + Soda")
+        self.assertEqual(product.recipe, recipe)
+        self.assertFalse(product.needs_review)
+
+    def test_a_name_matching_a_happy_hour_name_is_linked_automatically(self):
+        recipe = make_recipe(name="Alcool + Soda")
+        recipe.happy_hour_name = "Alcool + soda HH"
+        recipe.save(update_fields=["happy_hour_name"])
+        sync_pos_products(self.export("Alcool + soda HH", 12, date(2026, 6, 1)))
+        self.assertEqual(PosProduct.objects.get(name="Alcool + soda HH").recipe, recipe)
+
+    def test_an_ignored_product_is_not_reopened_by_a_coincidence(self):
+        """Ignoring is a deliberate decision too - a later import finding a
+        name-match must not silently undo it."""
+        recipe = make_recipe(name="Café")
+        PosProduct.objects.create(name="Café", ignored=True)
+        sync_pos_products(self.export("Café", 5, date(2026, 6, 1)))
+        product = PosProduct.objects.get(name="Café")
+        self.assertIsNone(product.recipe)
+        self.assertTrue(product.ignored)
+
+    def test_a_name_with_no_matching_recipe_stays_pending(self):
+        sync_pos_products(self.export("Truc Inconnu", 3, date(2026, 6, 1)))
+        product = PosProduct.objects.get(name="Truc Inconnu")
+        self.assertIsNone(product.recipe)
+        self.assertTrue(product.needs_review)
+
+    def test_produits_caisse_and_dernieres_ventes_now_agree(self):
+        """The concrete symptom: summed across every till name for one
+        recipe, the two pages have to land on the same number."""
+        from django.db.models import Sum
+
+        from recipes.models import RecipeSale
+        from recipes.sales import record_sales
+
+        recipe = make_recipe(name="Alcool + Soda")
+        recipe.happy_hour_name = "Alcool + soda HH"
+        recipe.save(update_fields=["happy_hour_name"])
+        export = ParsedExport(
+            products={
+                "Alcool + Soda": {"quantity": 30, "category": "", "typology": "", "first": date(2026, 6, 1), "last": date(2026, 6, 1)},
+                "Alcool + soda HH": {"quantity": 12, "category": "", "typology": "", "first": date(2026, 6, 1), "last": date(2026, 6, 1)},
+            },
+            entries=[("Alcool + Soda", date(2026, 6, 1), 30), ("Alcool + soda HH", date(2026, 6, 1), 12)],
+        )
+        sync_pos_products(export)
+        record_sales(export.entries, source="laddition")
+
+        dernieres_ventes = RecipeSale.objects.filter(recipe=recipe).aggregate(Sum("quantity"))["quantity__sum"]
+        produits_caisse = PosProduct.objects.filter(recipe=recipe).aggregate(Sum("total_quantity"))["total_quantity__sum"]
+        self.assertEqual(dernieres_ventes, 42)
+        self.assertEqual(produits_caisse, 42)
+
+
+class IdempotentReSyncTests(TestCase):
+    """The actual bug: PosProduct.total_quantity used to be a bare counter
+    with no memory of which dates a previous import already covered, so
+    re-importing an OVERLAPPING window (which pos_products_backfill does
+    routinely) added to it again, every time - one real product was found
+    reading 4-5x its true total after a handful of backfills."""
+
+    def export(self, entries):
+        products: dict = {}
+        for name, day, quantity in entries:
+            info = products.setdefault(
+                name, {"quantity": 0, "category": "", "typology": "", "first": day, "last": day}
+            )
+            info["quantity"] += quantity
+            info["first"] = min(info["first"], day)
+            info["last"] = max(info["last"], day)
+        return ParsedExport(products=products, entries=entries)
+
+    def test_re_importing_the_exact_same_window_does_not_double_the_total(self):
+        entries = [("Pinte Blonde", date(2026, 6, 1), 10), ("Pinte Blonde", date(2026, 6, 2), 15)]
+        sync_pos_products(self.export(entries))
+        sync_pos_products(self.export(entries))  # the SAME window again
+        self.assertEqual(PosProduct.objects.get().total_quantity, 25)
+
+    def test_an_overlapping_window_corrects_the_shared_days_rather_than_adding(self):
+        sync_pos_products(self.export([
+            ("Pinte Blonde", date(2026, 6, 1), 10), ("Pinte Blonde", date(2026, 6, 2), 15),
+        ]))
+        # Re-covers June 2nd (unchanged) and adds June 3rd - a wider,
+        # overlapping backfill window, exactly what the backfill button
+        # sends when it reaches back to the earliest gap.
+        sync_pos_products(self.export([
+            ("Pinte Blonde", date(2026, 6, 2), 15), ("Pinte Blonde", date(2026, 6, 3), 7),
+        ]))
+        self.assertEqual(PosProduct.objects.get().total_quantity, 32)  # 10 + 15 + 7, not 47
+
+    def test_re_importing_five_times_still_reads_the_true_total(self):
+        entries = [("Pinte Blonde", date(2026, 6, 1), 10)]
+        for _ in range(5):
+            sync_pos_products(self.export(entries))
+        self.assertEqual(PosProduct.objects.get().total_quantity, 10)
 
 
 class RecipeCreatePrefillTests(TestCase):

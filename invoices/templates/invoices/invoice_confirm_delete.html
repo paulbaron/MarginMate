@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Supprimer {% if entries|length > 1 %}des factures{% else %}une facture{% endif %} - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <p class="breadcrumb"><a href="{{ next }}">← Retour</a></p>
+            <h1>
+                {% if entries|length > 1 %}Supprimer {{ entries|length }} factures{% else %}Supprimer cette facture{% endif %}
+            </h1>
+            <p class="page-subtitle">
+                Partent avec chaque facture : ses lignes, le stock qu'elles avaient fait entrer, le fichier
+                d'origine et son aperçu, et les produits pas encore classés qui n'existaient que par elle.
+                Les produits déjà classés sont conservés.
+            </p>
+        </div>
+    </div>
+
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Fournisseur</th>
+                    <th>N°</th>
+                    <th>Date</th>
+                    <th class="num">Lignes</th>
+                    <th class="num">Total TTC</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for entry in entries %}
+                    <tr>
+                        <td><a href="{% url 'invoices:invoice_detail' entry.invoice.pk %}">{{ entry.invoice.supplier.name }}</a></td>
+                        <td>{{ entry.invoice.invoice_number|default:"—" }}</td>
+                        <td>{{ entry.invoice.invoice_date|date:"d/m/Y"|default:"—" }}</td>
+                        <td class="num">{{ entry.line_count }}</td>
+                        <td class="num">{{ entry.invoice.total_ttc|floatformat:2 }} €</td>
+                        <td>
+                            {% if entry.blockers %}
+                                <span class="status-pill status-ERROR">Conservée</span>
+                                <span class="muted">
+                                    elle a servi à valoriser l'inventaire du
+                                    {% for take in entry.blockers %}{{ take.taken_at|date:"d/m/Y" }}{% if not forloop.last %}, {% endif %}{% endfor %}
+                                </span>
+                            {% else %}
+                                <span class="status-pill status-NEEDS_REVIEW">Sera supprimée</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% if deletable_count %}
+        <form method="post" action="{{ form_action }}" class="form-actions" style="margin-top:1rem;">
+            {% csrf_token %}
+            <input type="hidden" name="next" value="{{ next }}">
+            <input type="hidden" name="confirm" value="1">
+            {% for entry in entries %}
+                {% if not entry.blockers %}<input type="hidden" name="invoice_ids" value="{{ entry.invoice.pk }}">{% endif %}
+            {% endfor %}
+            <button class="btn btn-danger" type="submit">
+                Supprimer définitivement{% if deletable_count > 1 %} ({{ deletable_count }}){% endif %}
+            </button>
+            <a class="btn btn-secondary" href="{{ next }}">Annuler</a>
+        </form>
+    {% else %}
+        <div class="message message-error" style="margin-top:1rem;">
+            Rien ne peut être supprimé ici : un inventaire déjà enregistré a été valorisé avec
+            {% if entries|length > 1 %}ces factures{% else %}cette facture{% endif %}. La supprimer changerait,
+            après coup, ce que cet inventaire valait.
+        </div>
+        <a class="btn btn-secondary" href="{{ next }}">Retour</a>
+    {% endif %}
+{% endblock %}

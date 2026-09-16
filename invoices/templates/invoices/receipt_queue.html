@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Tickets à vérifier - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <h1>Tickets à vérifier</h1>
+            <p class="page-subtitle">
+                Les plus anciens d'abord. Un ticket sort d'ici quand quelqu'un a comparé
+                ses lignes à la photo et validé.
+            </p>
+        </div>
+        <div class="actions">
+            <a class="btn" href="{% url 'invoices:receipt_upload' %}">Importer des tickets</a>
+        </div>
+    </div>
+
+    <div class="stat-row">
+        <div class="stat">
+            <div class="stat-label">En attente</div>
+            <div class="stat-value">{{ receipts|length }}</div>
+        </div>
+        <div class="stat">
+            <div class="stat-label">Déjà vérifiés</div>
+            <div class="stat-value">{{ verified_count }}</div>
+        </div>
+    </div>
+
+    {% if receipts %}
+        <form id="receipt-bulk-form" method="post" action="{% url 'invoices:invoice_bulk_delete' %}" class="bulk-bar" data-bulk-select>
+            {% csrf_token %}
+            <input type="hidden" name="next" value="{% url 'invoices:receipt_queue' %}">
+            <label class="bulk-all"><input type="checkbox" data-bulk-all form="receipt-bulk-form"> Tout sélectionner</label>
+            <span class="muted" data-bulk-count data-empty="Cochez des tickets pour les supprimer."></span>
+            <button class="btn btn-small btn-danger" type="submit" data-bulk-submit disabled>Supprimer la sélection…</button>
+        </form>
+        <div class="receipt-grid">
+            {% for receipt in receipts %}
+                <div class="receipt-card-wrap">
+                <input type="checkbox" class="receipt-select" name="invoice_ids" value="{{ receipt.pk }}" form="receipt-bulk-form" data-bulk-item
+                       aria-label="Sélectionner le ticket {{ receipt.supplier.name }} du {{ receipt.invoice_date|date:'d/m/Y' }}">
+                <a class="receipt-card" href="{% url 'invoices:receipt_review' receipt.pk %}">
+                    <div class="receipt-card-thumb">
+                        {% if receipt.preview_image %}
+                            <img src="{{ receipt.preview_image.url }}" alt="Ticket {{ receipt.supplier.name }}" loading="lazy">
+                        {% endif %}
+                    </div>
+                    <div class="receipt-card-body">
+                        <strong>{{ receipt.supplier.name }}</strong>
+                        <span class="amount">{{ receipt.total_ttc|floatformat:2 }} €</span>
+                        <span class="muted">{{ receipt.invoice_date|date:"d/m/Y"|default:"date inconnue" }}</span>
+                        {% if receipt.failed_checks %}
+                            <span class="status-pill status-NEEDS_REVIEW">
+                                {{ receipt.failed_checks|length }} contrôle{{ receipt.failed_checks|pluralize }} en échec
+                            </span>
+                        {% else %}
+                            <span class="status-pill status-COMPLETE">Comptes vérifiés</span>
+                        {% endif %}
+                    </div>
+                </a>
+                </div>
+            {% endfor %}
+        </div>
+    {% else %}
+        <div class="card">
+            <p class="lead">Rien à vérifier. Tous les tickets importés ont été validés.</p>
+            <a class="btn" href="{% url 'invoices:receipt_upload' %}">Importer des tickets</a>
+        </div>
+    {% endif %}
+{% endblock %}

@@ -717,6 +717,35 @@ class PosProduct(models.Model):
     def needs_review(self) -> bool:
         return self.recipe_id is None and not self.ignored
 
+
+class PosProductDailyQuantity(models.Model):
+    """How many of one till product sold on one day - what makes
+    PosProduct.total_quantity idempotent the same way RecipeSale already is.
+
+    The L'Addition export only gives sync_pos_products a total for the
+    WHOLE downloaded window, not a per-day figure (see ParsedExport.products
+    in recipes/pos/laddition_xlsx.py) - so a naive `total_quantity += that`
+    had no memory of which dates a previous import already covered, and
+    every re-import of an overlapping range added to it again, forever.
+    That was invisible for a one-off import, but pos_products_backfill
+    exists specifically to re-import overlapping history on demand, so the
+    drift compounded every time it ran - one product was found reading 4-5x
+    its real total after a handful of backfills.
+
+    Built from the export's per-day `entries` instead (the same ones
+    record_sales uses), so a day imported twice corrects itself rather than
+    doubling, and total_quantity is a true sum, always.
+    """
+
+    product = models.ForeignKey(PosProduct, related_name="daily_quantities", on_delete=models.CASCADE)
+    sold_on = models.DateField()
+    quantity = models.PositiveIntegerField()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["product", "sold_on"], name="unique_pos_product_daily_quantity")
+        ]
+
     @property
     def status(self) -> str:
         if self.recipe_id:

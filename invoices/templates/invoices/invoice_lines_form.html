@@ -13,8 +13,12 @@
     </div>
 
     <p class="lead">
-        Ce fournisseur n'a pas de parseur : les lignes se saisissent à la main. Le total et la TVA
-        de chaque ligne suffisent — le coût unitaire réel en est déduit.
+        {% if has_parser %}
+            Corrigez ce que le parseur a mal lu, ou saisissez ce qu'il n'a pas trouvé.
+        {% else %}
+            Ce fournisseur n'a pas de parseur : les lignes se saisissent à la main.
+        {% endif %}
+        Le total et la TVA de chaque ligne suffisent — le coût unitaire réel en est déduit.
     </p>
 
     <div class="card">

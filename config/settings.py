@@ -36,6 +36,7 @@ INSTALLED_APPS = [
     "inventory",
     "invoices",
     "recipes",
+    "bank",
 ]
 
 MIDDLEWARE = [
@@ -61,6 +62,7 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 "inventory.context_processors.review_count",
+                "invoices.context_processors.receipt_review_count",
             ],
         },
     },
@@ -91,6 +93,29 @@ DATABASES = {
         "OPTIONS": SQLITE_OPTIONS,
     }
 }
+
+
+# An inventory is one formset row per thing counted, and a bar counts
+# hundreds of things. Django's default cap of 1000 POSTed fields is reached
+# at 332 rows on a new stock take (three fields a row, plus the management
+# form) and at 249 when editing one (each saved row also posts its id) - and
+# what happens there is the worst possible failure: the request is rejected
+# outright with 400 Bad Request, before any view runs, so there is no form to
+# re-render and every count the user typed is gone with no way back.
+#
+# That is not a hypothetical - it is what "j'ai perdu mon inventaire après
+# avoir cliqué sur enregistrer" was. The cap exists to blunt hash-collision
+# DoS on public sites; this is a single-user app on a laptop, so it is set to
+# a number no real inventory will reach.
+# Covered by inventory/tests/test_stock_take_form.py::BigInventoryTests.
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 25_000
+
+# The same trap for files: by default Django refuses a request carrying more
+# than 100, again with a bare 400 before any view runs. Scanning a whole
+# folder of receipt photos in one go is what the Tickets page is for, and a
+# year of them is several hundred.
+# Covered by invoices/tests/test_receipt_batches.py::BigFolderUploadTests.
+DATA_UPLOAD_MAX_NUMBER_FILES = 2_000
 
 
 AUTH_PASSWORD_VALIDATORS = [

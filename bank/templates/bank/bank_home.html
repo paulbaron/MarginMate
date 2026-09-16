@@ -1,0 +1,238 @@
+{% extends "base.html" %}
+{% block title %}Banque - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <h1>Banque</h1>
+            <p class="page-subtitle">
+                Chaque dépense du relevé rattachée à la facture ou au ticket qu'elle a payé. Le rattachement est
+                automatique quand le montant est exact au centime, la date cohérente et le fournisseur nommé par
+                la banque ; le reste est proposé, à confirmer ligne par ligne.
+            </p>
+        </div>
+        <div class="actions">
+            <a class="btn btn-secondary" href="{% url 'bank:rule_list' %}">Dépenses sans facture attendue</a>
+            {% if has_lines %}
+                <form method="post" action="{% url 'bank:bank_reconcile' %}">
+                    {% csrf_token %}
+                    <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                    <button class="btn btn-secondary" type="submit">Relancer le rapprochement</button>
+                </form>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="card">
+        <form method="post" enctype="multipart/form-data" class="inline-form">
+            {% csrf_token %}
+            <label>
+                <span class="upload-choice-title">Relevés bancaires (CSV)</span>
+                <input type="file" name="files" multiple accept=".csv,text/csv">
+            </label>
+            <button class="btn" type="submit">Importer</button>
+        </form>
+        <p class="muted">
+            L'export CSV du compte, un ou plusieurs mois à la fois. Une opération déjà importée est reconnue et
+            sautée : on peut réimporter un mois qui chevauche le précédent. Après avoir importé de nouvelles
+            factures ou de nouveaux tickets, « Relancer le rapprochement » les cherche dans les dépenses restantes.
+        </p>
+    </div>
+
+    {% if has_lines %}
+        <form method="get" class="inline-form">
+            <input type="hidden" name="vue" value="{{ view }}">
+            <label>
+                Mois
+                <select name="mois">
+                    <option value="">Tous les mois</option>
+                    {% for key, label in months %}
+                        <option value="{{ key }}"{% if key == month %} selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <button class="btn btn-small btn-secondary" type="submit">Afficher</button>
+        </form>
+
+        <div class="stat-row">
+            <div class="stat">
+                <span class="stat-label">Dépenses</span>
+                <span class="stat-value">{{ stats.spending_total|floatformat:2 }} €</span>
+                <span class="stat-note">{{ stats.spending_count }} opération{{ stats.spending_count|pluralize }}</span>
+            </div>
+            <div class="stat">
+                <span class="stat-label">Rattachées à une facture</span>
+                <span class="stat-value">{{ stats.linked_total|floatformat:2 }} €</span>
+                <span class="stat-note">{{ stats.linked_count }} opération{{ stats.linked_count|pluralize }}</span>
+            </div>
+            <div class="stat{% if stats.todo_count %} stat-warn{% endif %}">
+                <span class="stat-label">Sans facture</span>
+                <span class="stat-value">{{ stats.todo_total|floatformat:2 }} €</span>
+                <span class="stat-note">{{ stats.todo_count }} opération{{ stats.todo_count|pluralize }}</span>
+            </div>
+            <div class="stat">
+                <span class="stat-label">Pas de facture attendue</span>
+                <span class="stat-value">{{ stats.no_invoice_total|floatformat:2 }} €</span>
+                <span class="stat-note">
+                    {{ stats.no_invoice_count }} opération{{ stats.no_invoice_count|pluralize }}, dont {{ stats.by_rule_count }} par
+                    <a href="{% url 'bank:rule_list' %}">règle</a>
+                </span>
+            </div>
+        </div>
+
+        <div class="filter-tabs">
+            {% for tab in tabs %}
+                <a class="filter-tab{% if tab.active %} active{% endif %}"
+                   href="{% url 'bank:bank_home' %}?vue={{ tab.key }}{% if month %}&amp;mois={{ month }}{% endif %}">
+                    {{ tab.label }}
+                    <span class="filter-tab-figure">{{ tab.count }}</span>
+                </a>
+            {% endfor %}
+        </div>
+
+        {% if view == "par-beneficiaire" %}
+            {% if groups %}
+                <div class="table-wrap">
+                    <table data-table data-table-label="bénéficiaires">
+                        <thead>
+                            <tr>
+                                <th>Bénéficiaire</th>
+                                <th class="num">Dépenses</th>
+                                <th class="num">Montant</th>
+                                <th>Dernière</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for group in groups %}
+                                <tr>
+                                    <td><strong>{{ group.name }}</strong></td>
+                                    <td class="num">{{ group.count }}</td>
+                                    <td class="num" data-sort="{{ group.total|stringformat:'s' }}">{{ group.total|floatformat:2 }} €</td>
+                                    <td data-sort="{{ group.last|date:'Y-m-d' }}">{{ group.last|date:"d/m/Y" }}</td>
+                                    <td>
+                                        <a class="btn btn-small btn-secondary"
+                                           href="{% url 'bank:rule_list' %}?motif={{ group.pattern|urlencode }}&amp;nom={{ group.name|urlencode }}">Ignorer…</a>
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% else %}
+                <div class="empty-state"><p>Toutes les dépenses ont leur facture, ou n'en attendent pas.</p></div>
+            {% endif %}
+        {% elif rows %}
+            <div class="table-wrap">
+                <table data-table data-table-label="opérations">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Opération</th>
+                            <th class="num">Montant</th>
+                            <th>Facture</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in rows %}
+                            {% with line=row.line %}
+                                <tr>
+                                    <td data-sort="{{ line.paid_on|date:'Y-m-d' }}">{{ line.paid_on|date:"d/m/Y" }}</td>
+                                    <td>
+                                        <strong>{{ line.counterparty|default:line.bank_type }}</strong>
+                                        <span class="read-as">{{ line.get_kind_display }} · {{ line.label|truncatechars:90 }}</span>
+                                    </td>
+                                    <td class="num" data-sort="{{ line.amount|stringformat:'s' }}">{{ line.amount|floatformat:2 }} €</td>
+                                    <td>
+                                        {% if row.status == "linked" %}
+                                            {% for payment in row.payments %}
+                                                <div>
+                                                    <a href="{% url 'invoices:invoice_detail' payment.invoice.pk %}">{{ payment.invoice.supplier.name }} n° {{ payment.invoice.invoice_number|default:payment.invoice.pk }}</a>
+                                                    <span class="muted">· {{ payment.invoice.invoice_date|date:"d/m/Y"|default:"sans date" }} · {{ payment.invoice.total_ttc|floatformat:2 }} €</span>
+                                                    <span class="status-pill status-linked">{{ payment.get_method_display }}</span>
+                                                </div>
+                                            {% endfor %}
+                                        {% elif row.status == "no_invoice" %}
+                                            <span class="status-pill status-ignored">Pas de facture attendue</span>
+                                            {% if row.rule %}
+                                                <a class="read-as" href="{% url 'bank:rule_list' %}">règle « {{ row.rule }} »</a>
+                                            {% else %}
+                                                <span class="read-as">marquée à la main</span>
+                                            {% endif %}
+                                        {% elif row.status == "income" %}
+                                            <span class="muted">Entrée d'argent</span>
+                                        {% else %}
+                                            {% if row.suggestion %}
+                                                <p class="read-as">{{ row.suggestion.reason }}</p>
+                                                {% for option in row.options %}
+                                                    <form method="post" action="{% url 'bank:bank_line_action' line.pk %}" class="inline-form">
+                                                        {% csrf_token %}
+                                                        <input type="hidden" name="action" value="link">
+                                                        <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                                                        {% for invoice in option.invoices %}<input type="hidden" name="invoice" value="{{ invoice.pk }}">{% endfor %}
+                                                        <span>
+                                                            {% for invoice in option.invoices %}{{ invoice.supplier.name }} n° {{ invoice.invoice_number|default:invoice.pk }} {% if invoice.invoice_date %}du {{ invoice.invoice_date|date:"d/m/Y" }}{% else %}sans date{% endif %}{% if not forloop.last %} + {% endif %}{% endfor %}
+                                                            · {{ option.total|floatformat:2 }} €
+                                                            {% if option.gap %}<span class="status-pill status-NEEDS_REVIEW">écart {{ option.gap|floatformat:2 }} €</span>{% endif %}
+                                                        </span>
+                                                        <button class="btn btn-small" type="submit">Rattacher</button>
+                                                    </form>
+                                                {% endfor %}
+                                            {% endif %}
+                                            {% if row.choices %}
+                                                <form method="post" action="{% url 'bank:bank_line_action' line.pk %}" class="inline-form">
+                                                    {% csrf_token %}
+                                                    <input type="hidden" name="action" value="link">
+                                                    <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                                                    <select name="invoice" aria-label="Facture réglée par ce paiement">
+                                                        <option value="">Choisir une facture…</option>
+                                                        {% for invoice, total in row.choices %}
+                                                            <option value="{{ invoice.pk }}">{{ invoice.supplier.name }} n° {{ invoice.invoice_number|default:invoice.pk }} · {{ invoice.invoice_date|date:"d/m/Y"|default:"sans date" }} · {{ total|floatformat:2 }} €</option>
+                                                        {% endfor %}
+                                                    </select>
+                                                    <button class="btn btn-small btn-secondary" type="submit">Rattacher</button>
+                                                </form>
+                                            {% elif not row.suggestion %}
+                                                <span class="muted">Aucune facture non réglée à ces dates.</span>
+                                            {% endif %}
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if row.status != "income" %}
+                                            <form method="post" action="{% url 'bank:bank_line_action' line.pk %}" class="inline-form">
+                                                {% csrf_token %}
+                                                <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                                                {% if row.status == "linked" %}
+                                                    <button class="btn btn-small btn-secondary" type="submit" name="action" value="unlink">Délier</button>
+                                                {% elif row.status == "todo" %}
+                                                    <button class="btn btn-small btn-secondary" type="submit" name="action" value="no_invoice">Pas de facture</button>
+                                                    {% if line.settled_by_hand %}
+                                                        <button class="btn btn-small btn-secondary" type="submit" name="action" value="reopen">Rapprocher automatiquement</button>
+                                                    {% endif %}
+                                                {% elif not row.rule %}
+                                                    <button class="btn btn-small btn-secondary" type="submit" name="action" value="reopen">Rapprocher automatiquement</button>
+                                                {% endif %}
+                                            </form>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            {% endwith %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <div class="empty-state">
+                {% if view == "a-traiter" %}
+                    <p>Toutes les dépenses ont leur facture, ou n'en attendent pas.</p>
+                {% else %}
+                    <p>Aucune opération ici.</p>
+                {% endif %}
+            </div>
+        {% endif %}
+    {% else %}
+        <div class="empty-state">
+            <p>Aucun relevé importé pour l'instant : exportez le compte en CSV depuis le site de la banque, puis importez-le ci-dessus.</p>
+        </div>
+    {% endif %}
+{% endblock %}

@@ -1,21 +1,36 @@
 import json
+import unicodedata
 from collections import Counter
 from decimal import Decimal, InvalidOperation
 from itertools import groupby
 
 from django.contrib import messages
 from django.db import transaction
-from django.db.models import Q
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
 from django.utils import timezone
+from django.utils.dateparse import parse_date
 from django.views.generic import CreateView, ListView, UpdateView
 
-from .forms import StockTakeForm, StockTakeLineFormSet, StockTypeForm, stock_take_entry_lookup
+from .forms import (
+    STOCK_TYPE_ENTRY_SUFFIX,
+    EntryResolver,
+    StockTakeForm,
+    StockTakeLineFormSet,
+    StockTypeForm,
+    stock_take_entry_lookup,
+)
 from .models import Product, StockMovement, StockTake, StockTakeLineSource, StockType, UnitChoices
 from .product_matching_rules import apply_rules_to_pending_products
-from .variance import compute_variance, quantities_sold
+from .variance import (
+    PeriodStock,
+    SoldQuantity,
+    StockPeriod,
+    compute_variance,
+    quantities_sold,
+    stock_between,
+)
 from .services import (
     link_product_to_stock_type,
     merge_stock_types,
@@ -104,15 +119,98 @@ class StockListView(ListView):
         context["total_value_ttc"] = sum((row["value_ttc"] for row in rows), start=0)
         context["stock_type_count"] = len(stock_types)
         # How much of each item has been sold - see variance.quantities_sold
-        # for why it is two numbers rather than one.
-        sold = quantities_sold()
-        for category in categories:
-            for row in category["rows"]:
-                row["sold"] = sold.get(row["stock_type"].id)
+        # for why it is two numbers rather than one. unit_costs reuses the
+        # sums already computed above (same formula as
+        # StockType.current_unit_cost_ht) rather than have quantities_sold()
+        # scan StockMovement a second time for the same numbers.
+        unit_costs = {
+            stock_type_id: value_ht_by_type[stock_type_id] / quantity
+            for stock_type_id, quantity in quantity_by_type.items()
+            if quantity
+        }
+        period = self.selected_period()
+        context["period"] = period
+        context["stock_takes"] = StockTake.objects.all()
+        if period is None:
+            # All time. Passing the ledger quantities in is what makes the
+            # "Vendu" column comparable to the "Quantité" column beside it:
+            # they are then literally the same figure.
+            sold = quantities_sold(unit_costs=unit_costs, available=quantity_by_type)
+        else:
+            sold = quantities_sold(
+                period.start, period.end, unit_costs=unit_costs, available=period.ceilings()
+            )
+        self._attach_sold(context, categories, sold, period, unit_costs)
 
         context["review_count"] = Product.objects.filter(stock_type__isnull=True).count()
         context["empty_stock_type_count"] = StockType.objects.filter(products__isnull=True).distinct().count()
         return context
+
+    def selected_period(self) -> StockPeriod | None:
+        """The window `?inventaire=<pk>` asks for, or None for all time.
+
+        Only the CLOSING count is named; the opening one is whichever came
+        before it, exactly as on the écarts page - naming both would let the
+        two pages disagree about what "this period" means, and there is no
+        second thing to choose anyway.
+        """
+        take_id = self.request.GET.get("inventaire")
+        # Anything that isn't an id we have falls back to all time rather
+        # than erroring: this is a query parameter, so a stale bookmark, a
+        # since-deleted inventory or a hand-typed URL all end up here, and
+        # `pk="tomorrow"` raises ValueError rather than simply not matching.
+        if not (take_id or "").isdigit():
+            return None
+        closing_take = StockTake.objects.filter(pk=take_id).first()
+        return stock_between(closing_take) if closing_take is not None else None
+
+    @staticmethod
+    def _attach_sold(context, categories, sold, period, unit_costs):
+        """Hang the sold/period figures on each row, and total them up."""
+        over_stock = 0
+        uncounted = 0
+        missing_value = Decimal("0")
+        for category in categories:
+            category["total_missing_value"] = Decimal("0")
+            for row in category["rows"]:
+                stock_type_id = row["stock_type"].id
+                row["sold"] = sold.get(stock_type_id)
+                if period is None:
+                    row["flag_over"] = row["sold"] is not None and row["sold"].is_over
+                    if row["flag_over"]:
+                        over_stock += 1
+                    continue
+                item = period.items.get(stock_type_id) or PeriodStock()
+                row["period"] = item
+                if row["sold"] is None:
+                    # Bought and counted but never sold - which is not the
+                    # same as "not in this period", and the difference is the
+                    # whole of what left the shelf being unexplained.
+                    row["sold"] = SoldQuantity(available=item.sellable)
+                # Nothing bought, counted or sold: this item simply wasn't
+                # part of the period, and there are hundreds of those.
+                row["in_period"] = item.has_activity or bool(row["sold"].headline)
+                # An item missing from either count has no measured opening
+                # or closing, so everything it bought reads as evaporated -
+                # the single biggest source of false "missing" there is (see
+                # CLAUDE.md). It is listed, and left without a verdict.
+                row["reliable"] = item.counted
+                row["flag_over"] = False
+                if not row["in_period"]:
+                    continue
+                if not row["reliable"]:
+                    uncounted += 1
+                    continue
+                row["flag_over"] = row["sold"].is_over
+                if row["flag_over"]:
+                    over_stock += 1
+                row["missing_value_ht"] = row["sold"].unexplained * unit_costs.get(stock_type_id, Decimal("0"))
+                category["total_missing_value"] += row["missing_value_ht"]
+                missing_value += row["missing_value_ht"]
+        context["over_stock_count"] = over_stock
+        context["uncounted_count"] = uncounted
+        context["total_missing_value"] = missing_value
+        context["column_count"] = 7 if period is None else 10
 
 
 def _stock_type_movement_entries(stock_type):
@@ -154,6 +252,43 @@ def _stock_type_movement_entries(stock_type):
             }
         )
     return entries
+
+
+def _aggregate_price_points(movements: list[tuple]) -> list[tuple]:
+    """movements: [(date, quantity, unit_cost_ht), ...], any order - one
+    (date, unit_cost_ht) point per distinct date, quantity-weighted.
+
+    The chart plots price against date, so its x-axis needs at least two
+    DISTINCT dates - not just two movements. A stock type bought twice on
+    the same day (a split delivery, a same-day correction) used to slip
+    past the "enough history" gate with two same-date points, which then
+    collapsed the whole chart onto one x-coordinate: `date_span` came out
+    as 0, so every point landed at the left edge instead of "not enough
+    history" - which is what actually happened to "Bière triple".
+
+    Weighted by how much was bought at each price rather than a plain mean,
+    so a same-day 2-for-1 correction doesn't count for as much as the
+    delivery it's correcting. Weighted by magnitude (not signed quantity),
+    since a return still reports a real price and a negative weight would
+    only cancel the movement it's correcting rather than being ignored.
+    """
+    grouped: dict = {}
+    for occurred_on, quantity, unit_cost_ht in movements:
+        grouped.setdefault(occurred_on, []).append((quantity, unit_cost_ht))
+
+    points = []
+    for occurred_on in sorted(grouped):
+        entries = grouped[occurred_on]
+        weight = sum(abs(quantity) for quantity, _ in entries)
+        if weight > 0:
+            price = sum(abs(quantity) * unit_cost_ht for quantity, unit_cost_ht in entries) / weight
+        else:
+            # Every movement that day nets to zero weight (e.g. a purchase
+            # reversed same-day) - nothing to weight by, so just average
+            # the raw prices rather than divide by zero.
+            price = sum(unit_cost_ht for _, unit_cost_ht in entries) / len(entries)
+        points.append((occurred_on, price))
+    return points
 
 
 def _build_price_history_svg(points: list[tuple]) -> str:
@@ -236,11 +371,10 @@ def stock_type_price_history(request, pk):
     for one stock type, plotting every movement's unit_cost_ht against its
     invoice date."""
     stock_type = get_object_or_404(StockType, pk=pk)
-    points = list(
-        StockMovement.objects.filter(stock_type=stock_type, invoice_line__isnull=False)
-        .order_by("invoice_line__invoice__invoice_date")
-        .values_list("invoice_line__invoice__invoice_date", "unit_cost_ht")
-    )
+    raw_movements = StockMovement.objects.filter(
+        stock_type=stock_type, invoice_line__isnull=False
+    ).values_list("invoice_line__invoice__invoice_date", "quantity", "unit_cost_ht")
+    points = _aggregate_price_points(raw_movements)
     return render(
         request,
         "inventory/_stock_type_price_history.html",
@@ -264,6 +398,17 @@ def stock_type_movements(request, pk):
     )
 
 
+def _search_normalize(text: str) -> str:
+    """Case- AND accent-insensitive comparison key - "biere" has to find
+    "Bière", since nobody reaches for the compose key while typing fast at a
+    bar. Mirrors the normalisation static/js/datatable.js applies to every
+    other table's search, so the two search boxes in this app behave the
+    same way. SQLite's own `icontains` folds case but not accents, which is
+    why this runs in Python instead."""
+    decomposed = unicodedata.normalize("NFD", text)
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch)).lower()
+
+
 def search_stock_types(request):
     """Backs the Stock page's search box: matches a stock type by its own
     name/category, or by the raw_name of any product filed under it, so
@@ -272,14 +417,17 @@ def search_stock_types(request):
     query = (request.GET.get("q") or "").strip()
     if not query:
         return JsonResponse({"ids": []})
-    ids = (
-        StockType.objects.filter(
-            Q(name__icontains=query) | Q(category__icontains=query) | Q(products__raw_name__icontains=query)
+    needle = _search_normalize(query)
+    ids = [
+        stock_type.id
+        for stock_type in StockType.objects.prefetch_related("products")
+        if any(
+            needle in _search_normalize(haystack)
+            for haystack in [stock_type.name, stock_type.category]
+            + [product.raw_name for product in stock_type.products.all()]
         )
-        .distinct()
-        .values_list("id", flat=True)
-    )
-    return JsonResponse({"ids": list(ids)})
+    ]
+    return JsonResponse({"ids": ids})
 
 
 def export_associations(request):
@@ -686,12 +834,28 @@ def assign_product(request, product_id):
 def stock_take_variance(request, pk):
     """Where did the stock go? See inventory/variance.py for the reasoning -
     in short: what physically left the shelf, minus what the sales explain,
-    with a recipe's alternatives pooled rather than guessed at."""
+    with a recipe's alternatives pooled rather than guessed at.
+
+    `?recettes=1` drops the items no recipe can reach. Those can only ever
+    read as 100% missing - the till sells them but nothing says what they're
+    made of - so they swamp the figure without being shrinkage at all. Both
+    totals are computed either way, so the page can show what the filter
+    costs rather than hiding it.
+    """
     stock_take = get_object_or_404(StockTake, pk=pk)
+    full = compute_variance(stock_take)
+    linked = full.only_in_recipes()
+    only_recipes = request.GET.get("recettes") == "1"
     return render(
         request,
         "inventory/stock_take_variance.html",
-        {"report": compute_variance(stock_take)},
+        {
+            "report": linked if only_recipes else full,
+            "only_recipes": only_recipes,
+            "total_all": full.total_value_missing_min,
+            "total_linked": linked.total_value_missing_min,
+            "unlinked_count": full.unlinked_count,
+        },
     )
 
 
@@ -731,10 +895,24 @@ def _save_stock_take_line(line):
     )
 
 
+def _submitted_as_of(form) -> "date | None":
+    """The date this save is counting, from the POST rather than from the
+    saved row: the date field and a new line can change in the same submit,
+    and the new line has to be judged against the date being saved."""
+    if not form.is_bound or not form.is_valid():
+        return None
+    taken_at = form.cleaned_data.get("taken_at")
+    return timezone.localtime(taken_at).date() if taken_at else None
+
+
 def _stock_take_form_view(request, stock_take):
     if request.method == "POST":
         form = StockTakeForm(request.POST, instance=stock_take)
-        formset = StockTakeLineFormSet(request.POST, instance=stock_take)
+        # One resolver for the whole formset: every row asks the same "what
+        # did the user type, and did it exist yet" questions of the same data,
+        # and asking per row was a query per row (400 on a real inventory).
+        form_kwargs = {"as_of": _submitted_as_of(form), "resolver": EntryResolver()}
+        formset = StockTakeLineFormSet(request.POST, instance=stock_take, form_kwargs=form_kwargs)
         if form.is_valid() and formset.is_valid():
             with transaction.atomic():
                 stock_take = form.save()
@@ -759,7 +937,69 @@ def _stock_take_form_view(request, stock_take):
             "formset": formset,
             "entry_names": entries.keys(),
             "entry_data": json.dumps(entries),
+            # What the already-saved lines are worth, so the running total is
+            # right the moment the page opens without valuing anything again
+            # (a saved line's value is frozen - see StockTake's docstring).
+            "saved_values": json.dumps(
+                {
+                    str(line_form.instance.pk): str(line_form.instance.value_ht)
+                    for line_form in formset.forms
+                    if line_form.instance.pk and line_form.instance.value_ht is not None
+                }
+            ),
         },
+    )
+
+
+def value_stock_take_line(request):
+    """Price one row of the inventory being edited, live.
+
+    Deliberately routed through the very same functions the save uses
+    (value_counted_quantity / value_counted_stock_type_quantity, as of the
+    same date), because a preview computed a second, simpler way is exactly
+    how this codebase has shipped silently wrong money before. What the row
+    shows while typing is what the row will be worth once saved.
+
+    A GET: it reads and prices, it changes nothing.
+    """
+    name = (request.GET.get("entry") or "").strip()
+    resolver = EntryResolver()
+    try:
+        quantity = Decimal((request.GET.get("quantity") or "").replace(",", "."))
+    except InvalidOperation:
+        return JsonResponse({"ok": False, "error": "quantity"})
+    as_of = parse_date(request.GET.get("as_of") or "") or timezone.localdate()
+
+    if name.endswith(STOCK_TYPE_ENTRY_SUFFIX):
+        stock_type = resolver.stock_type(name)
+        if stock_type is None:
+            return JsonResponse({"ok": False, "error": "unknown"})
+        result = value_counted_stock_type_quantity(stock_type, quantity, as_of=as_of)
+        unit_label = stock_type.get_unit_display()
+    else:
+        product = resolver.product(name)
+        if product is None:
+            return JsonResponse({"ok": False, "error": "unknown"})
+        unit = request.GET.get("unit") or UnitChoices.UNIT
+        if unit not in {UnitChoices.UNIT, product.stock_type.unit}:
+            unit = UnitChoices.UNIT
+        result = value_counted_quantity(product, quantity, unit, as_of=as_of)
+        unit_label = "unité" if unit == UnitChoices.UNIT else product.stock_type.get_unit_display()
+
+    value_ht = result["value_ht"]
+    return JsonResponse(
+        {
+            "ok": True,
+            "value_ht": f"{value_ht:.2f}",
+            # The price of ONE of whatever was counted, which is the number a
+            # human recognises ("a bottle of that is 16.86 €") - and it is
+            # the count's own blended FIFO price, not a headline list price,
+            # so it always reconciles with the line total beside it.
+            "unit_cost_ht": f"{(value_ht / quantity):.2f}" if quantity else None,
+            "unit_label": unit_label,
+            "has_shortfall": result["has_shortfall"],
+            "shortfall_quantity": f"{result['shortfall_quantity']:.2f}",
+        }
     )
 
 

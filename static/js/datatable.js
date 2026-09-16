@@ -22,6 +22,34 @@
 
     var COLLATOR = new Intl.Collator("fr", { sensitivity: "base", numeric: true });
 
+    // Combining diacritical marks (codepoints 0x0300-0x036F), built from
+    // character codes rather than a literal escape so the range can't be
+    // silently mangled into literal accented characters by an editor/tool.
+    var COMBINING_MARKS = new RegExp("[" + String.fromCharCode(0x0300) + "-" + String.fromCharCode(0x036f) + "]", "g");
+
+    /** Case- AND accent-insensitive: "biere" has to find "Bière", since
+     *  nobody reaches for the compose key while typing fast at a bar.
+     *  NFD decomposition splits "è" into "e" + a combining grave accent,
+     *  which is then stripped - so accented and plain text compare equal. */
+    function normalize(text) {
+        return text.toLowerCase().normalize("NFD").replace(COMBINING_MARKS, "");
+    }
+
+    /** An element's text for SEARCH purposes - textContent, but with any
+     *  <select> stripped out first. A per-row "choose a recipe" dropdown
+     *  offers the SAME full list of every recipe on every row, and
+     *  textContent walks into <option>s whether or not they're the one
+     *  showing - so before this, typing a recipe name like "pinte" matched
+     *  every row that could be linked to ANY "Pinte…" recipe, i.e. all of
+     *  them, not just the ones actually called that. A <select> is a
+     *  control offering choices, not content describing the row. */
+    function searchableText(element) {
+        if (!element.querySelector("select")) return element.textContent || "";
+        var clone = element.cloneNode(true);
+        clone.querySelectorAll("select").forEach(function (select) { select.remove(); });
+        return clone.textContent || "";
+    }
+
     /** Text of a cell, ignoring anything marked as not part of the value. */
     function cellText(cell) {
         if (!cell) return "";
@@ -104,12 +132,12 @@
         }
 
         function filter(query) {
-            var needle = query.trim().toLowerCase();
+            var needle = normalize(query.trim());
             groups.forEach(function (group) {
                 // Search the whole row, children included: an expanded panel's
                 // contents are part of what that row is about.
                 var haystack = [group.row].concat(group.children)
-                    .map(function (r) { return (r.textContent || "").toLowerCase(); })
+                    .map(function (r) { return normalize(searchableText(r)); })
                     .join(" ");
                 var hidden = needle !== "" && haystack.indexOf(needle) === -1;
                 group.row.classList.toggle("search-hidden", hidden);

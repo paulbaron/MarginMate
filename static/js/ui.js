@@ -187,3 +187,45 @@
 
     window.MarginMateUI = { init: init };
 })();
+
+// Bulk selection for deletion (invoice list, receipt queue). The tick boxes
+// point at their form with form="..." so a table can stay a table. "Tout
+// sélectionner" only ticks what the search filter is showing; anything ticked
+// and then filtered out still shows on the confirmation page, which lists
+// exactly what will be deleted before anything is.
+(function () {
+    function setUp(form) {
+        var id = form.id;
+        var selector = "input[data-bulk-item][form='" + id + "']";
+        var all = document.querySelector("input[data-bulk-all][form='" + id + "']");
+        var count = form.querySelector("[data-bulk-count]");
+        var submit = form.querySelector("[data-bulk-submit]");
+        function items() { return Array.prototype.slice.call(document.querySelectorAll(selector)); }
+        function refresh() {
+            var ticked = items().filter(function (item) { return item.checked; }).length;
+            if (submit) submit.disabled = ticked === 0;
+            if (count) {
+                count.textContent = ticked
+                    ? ticked + " sélectionné" + (ticked > 1 ? "s" : "")
+                    : (count.getAttribute("data-empty") || "");
+            }
+        }
+        if (all) {
+            all.addEventListener("change", function () {
+                items().forEach(function (item) {
+                    if (item.offsetParent !== null) item.checked = all.checked;
+                });
+                refresh();
+            });
+        }
+        document.addEventListener("change", function (event) {
+            if (event.target.matches(selector)) refresh();
+        });
+        refresh();
+    }
+    function init() {
+        document.querySelectorAll("form[data-bulk-select]").forEach(setUp);
+    }
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
+    else init();
+})();

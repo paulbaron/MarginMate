@@ -6,19 +6,33 @@ from decimal import Decimal
 
 from django.contrib import messages
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.utils import timezone
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.generic import DetailView, ListView
 
-from .forms import EmailInvoiceSourceForm, InvoiceTypeForm, InvoiceUploadForm, ManualInvoiceForm, ManualInvoiceLineFormSet
+from .forms import (
+    EmailInvoiceSourceForm,
+    InvoiceTypeForm,
+    InvoiceUploadForm,
+    ManualInvoiceForm,
+    ManualInvoiceLineFormSet,
+    ReceiptBatchUploadForm,
+    ReceiptLineFormSet,
+    ShopItemPriceForm,
+)
 from .importing import (
     DuplicateInvoiceError,
     import_parsed_invoice,
     parse_and_import,
     replace_invoice_lines,
 )
-from .models import Invoice, InvoiceType, ScrapeJob, Supplier
+
+from .deletion import InvoiceInUseError, blocking_stock_takes, delete_invoice
+from .models import Invoice, InvoiceType, ReceiptBatch, ScrapeJob, ShopItemPrice, Supplier
+from .parsers import get_parser
 from .parsers.base import ParsedInvoice, ParsedLine
-from .tasks import gather_invoices_task, suggested_start_date, test_email_pattern_task
+from .tasks import default_gather_start, gather_invoices_task, test_email_pattern_task
 
 
 class InvoiceListView(ListView):
@@ -27,7 +41,8 @@ class InvoiceListView(ListView):
     context_object_name = "invoices"
 
     def get_queryset(self):
-        return Invoice.objects.select_related("supplier").all()
+        # Lines prefetched: every row shows totals added up from them.
+        return Invoice.objects.select_related("supplier").prefetch_related("lines")
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -45,10 +60,14 @@ class InvoiceListView(ListView):
         gather_sources += [{"code": f"type-{it.id}", "label": it.name} for it in email_types]
         context["gather_sources"] = gather_sources
 
-        scrapable_codes = set(Supplier.objects.filter(is_scrapable=True).values_list("code", flat=True))
-        scrapable_codes |= {it.supplier.code for it in email_types}
-        starts = [suggested_start_date(code) for code in scrapable_codes]
-        context["default_start_date"] = min(starts) if starts else timezone.localdate()
+        # From the newest invoice these sources have already brought in: a
+        # gather is for what arrived since. The earliest of each source's
+        # latest used to be taken instead - one supplier billing twice a
+        # year sent every gather ten months back, through 3,800 emails.
+        gathered = {it.supplier_id for it in email_types}
+        if metro_supplier:
+            gathered.add(metro_supplier.pk)
+        context["default_start_date"] = default_gather_start(gathered)
         context["default_end_date"] = timezone.localdate()
         return context
 
@@ -67,6 +86,7 @@ class InvoiceDetailView(DetailView):
         # the rows above them read from one prefetched set rather than
         # re-querying per property.
         context["lines"] = list(self.object.lines.all())
+        context["has_parser"] = get_parser(self.object.supplier.parser_key) is not None
         return context
 
 
@@ -278,6 +298,19 @@ def invoice_type_form(request, pk=None):
     )
 
 
+def _vat_percent_for_form(line):
+    """The line's VAT rate as the line-entry form will accept it back.
+
+    `InvoiceLine.vat_rate` is stored to four decimals, so 5.5% is 0.0550 and
+    multiplying by 100 gives "5.5000" - which the form's own
+    DecimalField(decimal_places=2) then rejects. Rendering a value a page
+    refuses on submit fails in the worst way available: the error lands under
+    a field nobody touched, on a form the user has just spent time
+    correcting.
+    """
+    return (line.vat_rate * Decimal("100")).quantize(Decimal("0.01"))
+
+
 def edit_invoice_lines(request, pk):
     """Type an invoice's lines in by hand.
 
@@ -321,7 +354,7 @@ def edit_invoice_lines(request, pk):
                 "product_name": line.raw_name,
                 "quantity": line.quantity,
                 "total_ht": line.total_ht,
-                "vat_rate": line.vat_rate * Decimal("100"),
+                "vat_rate": _vat_percent_for_form(line),
             }
             for line in invoice.lines.all()
         ]
@@ -330,5 +363,331 @@ def edit_invoice_lines(request, pk):
     return render(
         request,
         "invoices/invoice_lines_form.html",
-        {"invoice": invoice, "formset": formset},
+        {
+            "invoice": invoice,
+            "formset": formset,
+            "has_parser": get_parser(invoice.supplier.parser_key) is not None,
+        },
     )
+
+
+# --------------------------------------------------------------------------
+# Photographed till receipts
+#
+# A separate flow from `upload_invoice` because the two are not the same job.
+# A digital invoice arrives once, parses exactly, and is done. A receipt is a
+# photo: it arrives in batches, it may be misread, and the point of the
+# screens below is to make checking a batch fast enough that it actually gets
+# done. See invoices/receipts.py.
+# --------------------------------------------------------------------------
+
+
+def _pending_receipts():
+    """Receipts a person still has to look at, oldest first.
+
+    Oldest first on purpose: a review queue is worked through, not browsed,
+    and starting at the end means the backlog never shrinks from the front.
+    """
+    return (
+        Invoice.objects.filter(reviewed_at__isnull=True)
+        .exclude(parse_checks=[])
+        .select_related("supplier")
+        .order_by("invoice_date", "id")
+    )
+
+
+def receipt_upload(request):
+    """Receipt photos in: a few files, or a whole folder.
+
+    The files are staged and handed to a background job
+    (invoices/receipt_batches.py) - a folder is minutes of OCR, far too long
+    to hold a request open - and the browser goes straight to that batch's
+    page, which fills in file by file.
+    """
+    from .receipt_batches import stage_batch, start_batch
+
+    ReceiptBatch.reap_stale()
+    if request.method == "POST":
+        form = ReceiptBatchUploadForm(request.POST, request.FILES)
+        if form.is_valid():
+            batch = stage_batch(form.cleaned_data["files"], form.ignored_names)
+            start_batch(batch)
+            return redirect("invoices:receipt_batch", pk=batch.pk)
+    else:
+        form = ReceiptBatchUploadForm()
+
+    return render(
+        request,
+        "invoices/receipt_upload.html",
+        {"form": form, "batches": ReceiptBatch.objects.all()[:5], "pending_count": _pending_receipts().count()},
+    )
+
+
+def receipt_batch(request, pk):
+    """One import: its progress while it runs, every file's outcome after."""
+    ReceiptBatch.reap_stale()
+    batch = get_object_or_404(ReceiptBatch, pk=pk)
+    return render(
+        request, "invoices/receipt_batch.html", {"batch": batch, "pending_count": _pending_receipts().count()}
+    )
+
+
+def receipt_batch_status(request, pk):
+    """The live part of the batch page, re-fetched by htmx every second while
+    the batch runs."""
+    batch = get_object_or_404(ReceiptBatch, pk=pk)
+    return render(request, "invoices/_receipt_batch_status.html", {"batch": batch})
+
+
+def receipt_batch_cancel(request, pk):
+    """Stop after the file being read now. What was already imported stays."""
+    if request.method != "POST":
+        return redirect("invoices:receipt_batch", pk=pk)
+    batch = get_object_or_404(ReceiptBatch, pk=pk)
+    if batch.is_active:
+        batch.cancel_requested = True
+        batch.save(update_fields=["cancel_requested"])
+    return render(request, "invoices/_receipt_batch_status.html", {"batch": batch})
+
+
+def receipt_queue(request):
+    """Everything waiting to be checked, as a wall of thumbnails."""
+    pending = list(_pending_receipts())
+    return render(
+        request,
+        "invoices/receipt_queue.html",
+        {
+            "receipts": pending,
+            "verified_count": Invoice.objects.filter(reviewed_at__isnull=False).count(),
+        },
+    )
+
+
+def receipt_review(request, pk):
+    """Check one receipt against its photo, then move to the next.
+
+    The photo, the parser's checks and the editable lines are on one screen
+    because they are one question - "does this say what the ticket says?" -
+    and answering it by flipping between three pages is what stops receipts
+    being checked at all.
+
+    Saving reuses `replace_invoice_lines`, the same path as a hand-typed
+    invoice, so a corrected receipt and a typed one end up identical - there
+    is no second way for lines to reach the database.
+    """
+    invoice = get_object_or_404(Invoice.objects.select_related("supplier"), pk=pk)
+    queue = list(_pending_receipts().values_list("pk", flat=True))
+    next_pk = next((candidate for candidate in queue if candidate != invoice.pk), None)
+
+    price_form = ShopItemPriceForm()
+
+    if request.method == "POST":
+        action = request.POST.get("action")
+
+        if action == "remember_price":
+            price_form = ShopItemPriceForm(request.POST)
+            if price_form.is_valid():
+                price = price_form.save(commit=False)
+                price.supplier = invoice.supplier
+                price.save()
+                relabelled = _apply_price_to_invoice(invoice, price)
+                messages.success(
+                    request,
+                    f"Prix retenu : {price.unit_price_ttc} € = {price.label}"
+                    + (f" ({relabelled} ligne(s) renommée(s))." if relabelled else "."),
+                )
+                return redirect("invoices:receipt_review", pk=invoice.pk)
+            formset = _line_formset_for(invoice)
+        else:
+            formset = ReceiptLineFormSet(request.POST)
+            if formset.is_valid():
+                lines = []
+                for line_form in formset:
+                    if not line_form.cleaned_data or line_form.cleaned_data.get("DELETE"):
+                        continue
+                    quantity = line_form.cleaned_data["quantity"]
+                    total_ht = line_form.cleaned_data["total_ht"]
+                    lines.append(
+                        ParsedLine(
+                            raw_name=line_form.cleaned_data["product_name"],
+                            read_as=line_form.cleaned_data.get("read_as", ""),
+                            quantity=quantity,
+                            total_volume=Decimal("0"),
+                            unit_cost_ht=(total_ht / quantity).quantize(Decimal("0.0001"))
+                            if quantity
+                            else Decimal("0"),
+                            total_ht=total_ht,
+                            vat_rate=line_form.cleaned_data["vat_rate"] / Decimal("100"),
+                        )
+                    )
+                replace_invoice_lines(invoice, lines)
+                invoice.reviewed_at = timezone.now()
+                invoice.save(update_fields=["reviewed_at"])
+                messages.success(request, f"Ticket vérifié : {invoice}")
+                if next_pk:
+                    return redirect("invoices:receipt_review", pk=next_pk)
+                return redirect("invoices:receipt_queue")
+    else:
+        formset = _line_formset_for(invoice)
+
+    lines = list(invoice.lines.select_related("product").all())
+    return render(
+        request,
+        "invoices/receipt_review.html",
+        {
+            "invoice": invoice,
+            "formset": formset,
+            "price_form": price_form,
+            "lines": lines,
+            "known_prices": invoice.supplier.item_prices.all(),
+            "next_pk": next_pk,
+            "remaining": len(queue),
+            "ocr_lines": invoice.ocr_text.split("\n") if invoice.ocr_text else [],
+        },
+    )
+
+
+def _line_formset_for(invoice):
+    """The review form, pre-filled from the saved lines.
+
+    A line still named as OCR read it (`read_as`) but attached to a product
+    of another spelling - by inventory.matching - is pre-filled with the
+    product's own name, and the reading is shown under the row: the match is
+    only safe because a person sees it here. Every other line keeps its own
+    name: a line renamed from the shop's price list reads "Citron vert" while
+    its product may still be the "Article divers" placeholder, and
+    pre-filling the product's name would undo the rename. The reading rides
+    along in a hidden field, so saving the page keeps it.
+    """
+    initial = []
+    for line in invoice.lines.select_related("product"):
+        name = line.raw_name
+        if line.read_as and line.raw_name == line.read_as:
+            name = line.product.raw_name
+        initial.append(
+            {
+                "product_name": name,
+                "read_as": line.read_as,
+                "quantity": line.quantity,
+                "total_ht": line.total_ht,
+                "vat_rate": _vat_percent_for_form(line),
+            }
+        )
+    return ReceiptLineFormSet(initial=initial)
+
+
+def _apply_price_to_invoice(invoice, price) -> int:
+    """Rename this invoice's unnamed lines that match a newly recorded price.
+
+    Only the placeholder ones, and only on this invoice: rewriting names
+    across history would change what past invoices claim to have bought.
+    """
+    from .receipts import PLACEHOLDER_MARKER
+
+    renamed = 0
+    for line in invoice.lines.all():
+        if PLACEHOLDER_MARKER not in line.raw_name:
+            continue
+        unit_ttc = (line.unit_cost_ht * (Decimal("1") + line.vat_rate)).quantize(Decimal("0.01"))
+        if unit_ttc == price.unit_price_ttc:
+            line.raw_name = price.label
+            line.save(update_fields=["raw_name"])
+            renamed += 1
+    return renamed
+
+
+# --------------------------------------------------------------------------
+# Deleting invoices - see invoices/deletion.py for what goes with them, and
+# why an invoice that priced a stock take is kept.
+# --------------------------------------------------------------------------
+
+
+def _safe_next(request, default="invoices:invoice_list"):
+    """Back to the page that asked (the receipt queue, say) - but never to
+    another site: `next` comes from the request, so anyone can write it."""
+    target = request.POST.get("next") or request.GET.get("next") or ""
+    if target and url_has_allowed_host_and_scheme(
+        target, allowed_hosts={request.get_host()}, require_https=request.is_secure()
+    ):
+        return target
+    return reverse(default)
+
+
+def _deletion_entry(invoice, blockers):
+    return {"invoice": invoice, "blockers": blockers, "line_count": invoice.lines.count()}
+
+
+def _deletion_message(summaries):
+    text = (
+        f"Facture supprimée : {summaries[0].label}."
+        if len(summaries) == 1
+        else f"{len(summaries)} factures supprimées."
+    )
+    removed = sum(summary.products_removed for summary in summaries)
+    if removed:
+        text += f" {removed} produit(s) non classé(s) qui n'existai(en)t que par elle(s) retiré(s)."
+    return text
+
+
+def _render_delete_confirmation(request, entries, next_url, form_action):
+    return render(
+        request,
+        "invoices/invoice_confirm_delete.html",
+        {
+            "entries": entries,
+            "deletable_count": sum(1 for entry in entries if not entry["blockers"]),
+            "next": next_url,
+            "form_action": form_action,
+        },
+    )
+
+
+def invoice_delete(request, pk):
+    """One invoice. A GET only ever shows what would go; the POST deletes."""
+    invoice = get_object_or_404(Invoice.objects.select_related("supplier"), pk=pk)
+    next_url = _safe_next(request)
+    blockers = blocking_stock_takes(invoice)
+    if request.method == "POST":
+        if not blockers:
+            messages.success(request, _deletion_message([delete_invoice(invoice)]))
+            return redirect(next_url)
+        messages.error(request, str(InvoiceInUseError(invoice, blockers)))
+    return _render_delete_confirmation(
+        request,
+        [_deletion_entry(invoice, blockers)],
+        next_url,
+        reverse("invoices:invoice_delete", args=[invoice.pk]),
+    )
+
+
+def invoice_bulk_delete(request):
+    """Several invoices, ticked on a list page.
+
+    Two POSTs: the first - straight from the checkboxes - only shows what
+    would be deleted; the second, carrying `confirm`, does it. A tick box is
+    too easy to leave checked under a search filter for it to delete on its
+    own. An invoice that priced a stock take is kept and named, and doesn't
+    stop the rest.
+    """
+    next_url = _safe_next(request)
+    if request.method != "POST":
+        return redirect(next_url)
+    ids = [int(value) for value in request.POST.getlist("invoice_ids") if value.isdigit()]
+    invoices = list(Invoice.objects.filter(pk__in=ids).select_related("supplier").order_by("invoice_date", "pk"))
+    if not invoices:
+        messages.warning(request, "Aucune facture sélectionnée.")
+        return redirect(next_url)
+
+    entries = [_deletion_entry(invoice, blocking_stock_takes(invoice)) for invoice in invoices]
+    if request.POST.get("confirm") != "1":
+        return _render_delete_confirmation(request, entries, next_url, reverse("invoices:invoice_bulk_delete"))
+
+    summaries = []
+    for entry in entries:
+        try:
+            summaries.append(delete_invoice(entry["invoice"]))
+        except InvoiceInUseError as exc:
+            messages.error(request, str(exc))
+    if summaries:
+        messages.success(request, _deletion_message(summaries))
+    return redirect(next_url)

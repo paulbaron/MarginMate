@@ -29,6 +29,7 @@ from .models import (
     SalesImportJob,
     variation_scope,
 )
+from .sales import resync_recipe_from_daily_quantities
 from .tasks import import_laddition_sales_task
 
 
@@ -305,6 +306,15 @@ def pos_product_assign(request, pk):
         return redirect("recipes:pos_product_list")
     product = get_object_or_404(PosProduct, pk=pk)
     action = request.POST.get("action")
+    # Whichever recipe(s) this action touches need their RecipeSale rows
+    # rebuilt from PosProductDailyQuantity afterward - see
+    # resync_recipe_from_daily_quantities. That data has been kept locally
+    # since each till product was first imported, so this is a local
+    # rebuild, not a new L'Addition fetch: the numbers are right the moment
+    # the link changes, not after a separate "go fetch history" step.
+    to_resync: set[Recipe] = set()
+    if product.recipe_id:
+        to_resync.add(product.recipe)
 
     if action == "ignore":
         product.ignored = True
@@ -336,6 +346,7 @@ def pos_product_assign(request, pk):
                 product.recipe = recipe
                 product.ignored = False
                 product.save(update_fields=["recipe", "ignored"])
+                to_resync.add(recipe)
                 messages.success(
                     request, f'"{product.name}" enregistré comme happy hour de « {recipe.name} ».'
                 )
@@ -343,7 +354,11 @@ def pos_product_assign(request, pk):
             product.recipe = recipe
             product.ignored = False
             product.save(update_fields=["recipe", "ignored"])
+            to_resync.add(recipe)
             messages.success(request, f'"{product.name}" lié à « {recipe.name} ».')
+
+    for touched in to_resync:
+        resync_recipe_from_daily_quantities(touched)
 
     return redirect("recipes:pos_product_list")
 
@@ -439,7 +454,13 @@ def sales_list(request):
     documents = list(
         SaleDocument.objects.prefetch_related("lines__recipe", "lines__stock_type").order_by("-sold_on")[:50]
     )
-    sales = RecipeSale.objects.select_related("recipe").order_by("-sold_on", "recipe__name")[:400]
+    # Unbounded, like invoices/InvoiceListView - the search box only sees
+    # what's actually in the table, so capping this made "search the whole
+    # dataset" a lie: typing a recipe name found it only if one of its sales
+    # happened to be recent enough to be in the first 400 rows. table-wrap's
+    # own bounded scroll (see marginmate.css) is what keeps a long list like
+    # this one usable, the same way it already does for invoices.
+    sales = RecipeSale.objects.select_related("recipe").order_by("-sold_on", "recipe__name")
     totals = RecipeSale.objects.values("source").annotate(
         rows=Count("id"), units=Sum("quantity")
     ).order_by("-units")

@@ -218,3 +218,53 @@ class InvoiceLineEditingTests(TestCase):
         response = self.client.post(self.url(), self.payload([]))
         self.assertContains(response, "Ajoutez au moins un produit")
         self.assertEqual(self.invoice.lines.count(), 1)
+
+
+class EditInvoiceLinesRoundTripTests(TestCase):
+    """The page has to accept the values it just rendered.
+
+    `InvoiceLine.vat_rate` is stored to four decimals, so 20% comes out of
+    the database as 0.2000 and reaches the form as "20.0000" - which
+    `ManualInvoiceLineForm.vat_rate` (two decimal places) then refuses. The
+    save fails with an error under a field the user never touched, on a form
+    they have just spent time filling in. Both line-entry screens pre-fill
+    from saved lines, so both are checked here.
+    """
+
+    def setUp(self):
+        from tests.factories import make_invoice_line, make_product
+
+        supplier = make_supplier(code="ROUNDTRIP", name="Round Trip")
+        self.invoice = make_invoice(supplier=supplier, invoice_date=date(2026, 3, 1))
+        product = make_product(supplier=supplier, raw_name="VODKA 70CL")
+        make_invoice_line(
+            invoice=self.invoice, product=product, quantity=6, total_ht="90.00",
+            vat_rate=Decimal("0.2000"),
+        )
+
+    def _round_trip(self, url_name, prefix):
+        response = self.client.get(reverse(url_name, args=[self.invoice.pk]))
+        self.assertEqual(response.status_code, 200)
+        rendered = response.context["formset"].forms[0].initial["vat_rate"]
+
+        data = {
+            f"{prefix}-TOTAL_FORMS": "1",
+            f"{prefix}-INITIAL_FORMS": "1",
+            f"{prefix}-MIN_NUM_FORMS": "0",
+            f"{prefix}-MAX_NUM_FORMS": "1000",
+            f"{prefix}-0-product_name": "VODKA 70CL",
+            f"{prefix}-0-quantity": "6",
+            f"{prefix}-0-total_ht": "90.00",
+            f"{prefix}-0-vat_rate": str(rendered),
+        }
+        saved = self.client.post(reverse(url_name, args=[self.invoice.pk]), data)
+        self.assertEqual(
+            saved.status_code, 302, f"{url_name} rejected the VAT rate it rendered ({rendered})"
+        )
+
+    def test_edit_invoice_lines_accepts_its_own_rendered_rate(self):
+        self._round_trip("invoices:invoice_edit_lines", "form")
+
+    def test_the_rate_keeps_its_value_through_the_round_trip(self):
+        response = self.client.get(reverse("invoices:invoice_edit_lines", args=[self.invoice.pk]))
+        self.assertEqual(response.context["formset"].forms[0].initial["vat_rate"], Decimal("20.00"))

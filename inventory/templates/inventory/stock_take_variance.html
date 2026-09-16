@@ -3,7 +3,10 @@
 {% block content %}
     <div class="page-header">
         <h1>Écarts de stock</h1>
-        <a class="btn btn-secondary" href="{% url 'inventory:stock_take_detail' report.closing_take.pk %}">Retour à l'inventaire</a>
+        <div class="actions">
+            <a class="btn btn-secondary" href="{% url 'inventory:stock_list' %}?inventaire={{ report.closing_take.pk }}">Voir article par article</a>
+            <a class="btn btn-secondary" href="{% url 'inventory:stock_take_detail' report.closing_take.pk %}">Retour à l'inventaire</a>
+        </div>
     </div>
 
     {% if report.since_beginning %}
@@ -31,12 +34,45 @@
             </div>
         {% endif %}
 
+        <div class="filter-tabs">
+            <a class="filter-tab{% if not only_recipes %} active{% endif %}"
+               href="{% url 'inventory:stock_take_variance' report.closing_take.pk %}">
+                Tous les articles
+                <span class="filter-tab-figure">{{ total_all|floatformat:2 }} €</span>
+            </a>
+            <a class="filter-tab{% if only_recipes %} active{% endif %}"
+               href="{% url 'inventory:stock_take_variance' report.closing_take.pk %}?recettes=1">
+                Seulement ceux utilisés par une recette
+                <span class="filter-tab-figure">{{ total_linked|floatformat:2 }} €</span>
+            </a>
+        </div>
+        {% if unlinked_count %}
+        <p class="muted" style="margin-top:-0.5rem;">
+            {% comment %}
+            Written out both ways rather than assembled from |pluralize: the
+            elision changes too ("n'est" / "ne sont"), and stitching that
+            together from filters produced "n'sont".
+            {% endcomment %}
+            {% if unlinked_count == 1 %}1 article n'est utilisé{% else %}{{ unlinked_count }} articles ne sont utilisés{% endif %} par aucune recette :
+            la caisse les vend, mais rien ne dit ce qu'il y a dedans, donc tout ce qui sort
+            apparaît comme manquant. Leur écrire une recette — ou les rattacher depuis
+            <a href="{% url 'recipes:pos_product_list' %}">Produits caisse</a> — vaut mieux que
+            de les compter comme des pertes.
+        </p>
+        {% endif %}
+
         <div class="card">
-            <h3>Manquant : au moins {{ report.total_value_missing_min|floatformat:2 }} €</h3>
+            <h3>
+                Manquant : au moins {{ report.total_value_missing_min|floatformat:2 }} €
+                {% if only_recipes %}<span class="muted" style="font-weight:400; font-size:0.8em;">— articles liés à une recette</span>{% endif %}
+            </h3>
             <p class="muted">
                 Les alternatives d'une recette (« vodka OU gin ») sont regroupées : impossible de
                 savoir quelle bouteille a servi, donc le manque est compté sur le groupe entier et
                 valorisé au moins cher — c'est le minimum que les chiffres permettent d'affirmer.
+                La <strong>perte estimée</strong> de chaque article (débordement, fonds de bouteille —
+                <a href="{% url 'inventory:stock_list' %}">modifiable par article</a>, 10 % par défaut)
+                est déduite avant de parler de manquant.
             </p>
             {% if report.missing %}
             <div class="table-wrap">
@@ -47,6 +83,7 @@
                         <th class="num">Sorti du stock</th>
                         <th class="num">Expliqué par les ventes</th>
                         <th class="num">Pertes connues</th>
+                        <th class="num">Perte estimée</th>
                         <th class="num">Manquant</th>
                         <th class="num">≈ bouteilles</th>
                         <th class="num">Valeur mini</th>
@@ -71,7 +108,10 @@
                             {{ pool.unit }}
                         </td>
                         <td class="num">{{ pool.known_losses|floatformat:2 }} {{ pool.unit }}</td>
-                        <td class="num">{{ pool.unexplained_min|floatformat:2 }} {{ pool.unit }}</td>
+                        <td class="num muted" title="Part des {{ pool.actual_usage|floatformat:2 }} {{ pool.unit }} sortis qui n'était jamais destinée à être vendue, au taux propre à chaque article.">
+                            −{{ pool.loss_allowance|floatformat:2 }} {{ pool.unit }}
+                        </td>
+                        <td class="num">{{ pool.shortfall|floatformat:2 }} {{ pool.unit }}</td>
                         <td class="num">
                             {% if pool.bottles_missing_min %}{{ pool.bottles_missing_min|floatformat:1 }}{% else %}—{% endif %}
                         </td>
@@ -81,7 +121,7 @@
                     </tr>
                     {% if pool.cheapest %}
                     <tr data-child-row>
-                        <td colspan="7" class="muted" style="font-size:0.88rem; padding-top:0;">
+                        <td colspan="8" class="muted" style="font-size:0.88rem; padding-top:0;">
                             Valorisé en {{ pool.cheapest.name }} ({{ pool.cheapest_unit_cost|floatformat:2 }} € / {{ pool.unit }}<!--
                             -->{% if pool.cheapest_item_size %}, {{ pool.cheapest_item_size|floatformat:"-3" }} {{ pool.unit }} par article{% endif %})
                         </td>

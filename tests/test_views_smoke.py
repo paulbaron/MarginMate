@@ -18,6 +18,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from inventory.models import UnitChoices
+from invoices.models import ReceiptBatch, ShopItemPrice
 from tests.factories import (
     make_ingredient,
     make_invoice,
@@ -70,6 +71,47 @@ class PageSmokeTests(TestCase):
         make_invoice_line(invoice=cls.invoice, product=cls.unassigned, quantity=1, total_ht="20.00")
 
         cls.invoice_type = make_invoice_type(supplier=cls.supplier, name="Metro - Factures", parser_key="METRO")
+
+        # A photographed till receipt waiting to be checked. It carries a
+        # FAILED check on purpose: the review page renders the failing and
+        # passing branches differently, and the empty state hides both.
+        cls.receipt_supplier = make_supplier(code="SABBH", name="Sabbh Oriental", parser_key="SABBH")
+        cls.receipt = make_invoice(
+            supplier=cls.receipt_supplier,
+            invoice_date=date(2026, 7, 14),
+            parse_checks=[
+                {"label": "Somme des lignes = total imprimé", "passed": False, "detail": "écart +0.49 €"},
+                {"label": "TVA 5.5% cohérente", "passed": True, "detail": "HT 1.99 € x 5.5%"},
+            ],
+            ocr_text="Sabbh Oriental\nArticle divers\n3pcs  0,70  2,10A",
+            ocr_confidence=Decimal("0.86"),
+        )
+        cls.receipt_product = make_product(
+            supplier=cls.receipt_supplier, raw_name="Article divers (0.70 EUR/u)"
+        )
+        make_invoice_line(
+            invoice=cls.receipt,
+            product=cls.receipt_product,
+            quantity=3,
+            total_ht="1.99",
+            unit_cost_ht="0.6633",
+            vat_rate=Decimal("0.055"),
+            raw_name="Article divers (0.70 EUR/u)",
+        )
+        ShopItemPrice.objects.create(
+            supplier=cls.receipt_supplier, unit_price_ttc=Decimal("0.70"), label="Citron vert"
+        )
+        # A finished folder import with every outcome the batch page draws.
+        cls.batch = ReceiptBatch.objects.create(
+            status=ReceiptBatch.Status.SUCCESS,
+            results=[
+                {"name": "ok.pdf", "status": "ok", "invoice_id": cls.receipt.pk, "shop": "Sabbh Oriental",
+                 "total": "2.10", "date": "14/07/2026", "verified": False},
+                {"name": "dup.pdf", "status": "duplicate", "message": "Fichier déjà importé"},
+                {"name": "x.pdf", "status": "unrecognised", "message": "Enseigne non reconnue"},
+                {"name": "Thumbs.db", "status": "ignored", "message": "Ni un PDF ni une photo : ignoré."},
+            ],
+        )
 
         cls.recipe = make_recipe(name="Moscow Mule", category="Cocktail", selling_price_ttc="8.50")
         make_ingredient(cls.recipe, stock_type=cls.vodka, quantity="0.04", group=0)
@@ -177,6 +219,28 @@ class PageSmokeTests(TestCase):
     def test_invoice_type_update(self):
         self.assertPageOK("invoices:invoice_type_update", pk=self.invoice_type.pk)
 
+    def test_receipt_upload(self):
+        self.assertContains(self.assertPageOK("invoices:receipt_upload"), "Un dossier entier")
+
+    def test_receipt_batch(self):
+        response = self.assertPageOK("invoices:receipt_batch", pk=self.batch.pk)
+        for name in ("ok.pdf", "dup.pdf", "x.pdf", "Thumbs.db"):
+            self.assertContains(response, name)
+
+    def test_receipt_batch_status(self):
+        self.assertPageOK("invoices:receipt_batch_status", pk=self.batch.pk)
+
+    def test_receipt_queue(self):
+        self.assertContains(self.assertPageOK("invoices:receipt_queue"), "Sabbh Oriental")
+
+    def test_invoice_delete_confirmation(self):
+        self.assertContains(self.assertPageOK("invoices:invoice_delete", pk=self.invoice.pk), "Supprimer")
+
+    def test_receipt_review(self):
+        response = self.assertPageOK("invoices:receipt_review", pk=self.receipt.pk)
+        self.assertContains(response, "Somme des lignes")
+        self.assertContains(response, "Citron vert")
+
     # --- till (L'Addition) ------------------------------------------------
     def test_pos_product_list(self):
         self.assertPageOK("recipes:pos_product_list")
@@ -240,6 +304,12 @@ class EmptyDatabasePageSmokeTests(TestCase):
 
     def test_invoice_create_manual(self):
         self.assertPageOK("invoices:invoice_create_manual")
+
+    def test_receipt_upload(self):
+        self.assertPageOK("invoices:receipt_upload")
+
+    def test_receipt_queue(self):
+        self.assertPageOK("invoices:receipt_queue")
 
     def test_recipe_list(self):
         self.assertPageOK("recipes:recipe_list")

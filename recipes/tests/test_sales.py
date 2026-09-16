@@ -369,3 +369,20 @@ class SalesPageTests(TestCase):
         sale = RecipeSale.objects.get()
         self.client.post(reverse("recipes:sales_delete", kwargs={"pk": sale.pk}))
         self.assertFalse(RecipeSale.objects.filter(pk=sale.pk).exists())
+
+    def test_the_table_is_not_capped_to_the_most_recent_400(self):
+        """The search box on this page only sees what's in the rendered
+        table (see static/js/datatable.js) - capping the queryset made
+        "search the whole dataset" a lie, silently, for anything older than
+        whichever day happened to be the 400th most recent. A sale from
+        years back has to actually be on the page for it to be findable."""
+        from datetime import timedelta
+
+        from django.urls import reverse
+
+        RecipeSale.objects.bulk_create(
+            RecipeSale(recipe=self.mule, sold_on=date(2020, 1, 1) + timedelta(days=n), quantity=1, source="laddition")
+            for n in range(401)
+        )
+        response = self.client.get(reverse("recipes:sales_list"))
+        self.assertContains(response, "01/01/2020")
