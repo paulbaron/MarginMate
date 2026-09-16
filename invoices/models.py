@@ -1,4 +1,5 @@
 import re
+from datetime import timedelta
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
@@ -131,6 +132,8 @@ class Invoice(models.Model):
     # billed - never attributed to any individual product's own price,
     # since there's no reliable way to know which product it belongs to.
     reconciliation_adjustment = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    # A photographed receipt's printed total - what was paid. See total_ttc.
+    printed_total_ttc = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     # Everything below is only populated for photographed till receipts (see
     # invoices/parsers/receipt_base.py). A digital PDF needs none of it: if
     # the layout matched, the numbers are the numbers.
@@ -186,8 +189,26 @@ class Invoice(models.Model):
         don't carry (or a receipt's HT rounding), and duty is part of the VAT
         base: added flat, every UBA total fell five or six cents short of
         what the bank actually debited for it.
+
+        A receipt whose every line kept its printed amount is added up from
+        those, never from HT (ten pitas at 0,70 came to 7,01), and its
+        adjustment is left out: in HT it puts back cents the division by
+        (1 + rate) rounded away, which the printed amounts never lost. When
+        those amounts are within the parser's tolerance of the printed total,
+        the printed total is the answer - it is what was paid, and a cent the
+        OCR misread must not make the bank payment unmatchable.
         """
+        from .parsers.receipt_base import RECONCILIATION_TOLERANCE
+
         lines = list(self.lines.all())
+        if lines and all(line.printed_ttc is not None for line in lines):
+            printed = sum((line.printed_ttc for line in lines), start=Decimal("0"))
+            paid = self.printed_total_ttc
+            if paid is not None and abs(paid - printed) <= RECONCILIATION_TOLERANCE:
+                return paid
+            return printed
+        # Otherwise all from HT: the adjustment covers every line's rounding,
+        # so mixing in printed amounts would count some of it twice.
         total = sum(
             (line.total_ht * (Decimal("1") + line.vat_rate) for line in lines),
             start=Decimal("0"),
@@ -272,12 +293,24 @@ class InvoiceLine(models.Model):
     # the next ticket is matched against all of them. Blank for digital
     # invoices, typed lines and "Article divers" - a price is not a name.
     read_as = models.CharField(max_length=255, blank=True)
+    # The amount tax included as the receipt printed it (or as typed on the
+    # review screen, which is in TTC). Needed because HT to the cent does not
+    # always convert back: 7,00 at 5.5% is 6,64 HT, which is 7,01. Null for
+    # digital invoices, which are in HT, and for a line a promotion was
+    # spread onto; `total_ttc` then works it out from HT.
+    printed_ttc = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
 
     class Meta:
         ordering = ["id"]
 
     def __str__(self):
         return f"{self.raw_name} x{self.quantity}"
+
+    @property
+    def total_ttc(self):
+        if self.printed_ttc is not None:
+            return self.printed_ttc
+        return self.total_ht * (Decimal("1") + self.vat_rate)
 
     @property
     def vat_percent(self):
@@ -445,6 +478,12 @@ class ReceiptBatch(JobLogMixin):
     started_at = models.DateTimeField(auto_now_add=True)
     finished_at = models.DateTimeField(null=True, blank=True)
 
+    #: A receipt takes seconds, and a running batch beats every 15 s
+    #: (receipt_batches._Heartbeat): quiet for this long, it is dead - the
+    #: dev server restarted, most likely. Ten minutes, the default, is how
+    #: long a dead import used to keep showing "En cours".
+    STALE_AFTER = timedelta(seconds=90)
+
     class Meta:
         ordering = ["-started_at"]
 
@@ -455,8 +494,10 @@ class ReceiptBatch(JobLogMixin):
         elapsed = (timezone.now() - self.started_at).total_seconds()
         line = f"[+{elapsed:6.1f}s] {message}"
         self.log = f"{self.log}{line}\n" if self.log else f"{line}\n"
-        self.last_heartbeat = timezone.now()
-        self.save(update_fields=["log", "last_heartbeat"])
+        # Not a heartbeat: the reaper writes here too, and the line saying a
+        # batch is dead must not make it look alive (can_resume). A running
+        # batch beats on its own - after every file, and from its _Heartbeat.
+        self.save(update_fields=["log"])
 
     def _count(self, *statuses) -> int:
         return sum(1 for entry in self.results if entry.get("status") in statuses)
@@ -489,6 +530,25 @@ class ReceiptBatch(JobLogMixin):
     @property
     def failed_count(self) -> int:
         return self._count("unrecognised", "error")
+
+    @property
+    def pending_count(self) -> int:
+        return self._count("pending")
+
+    @property
+    def awaiting_shop_count(self) -> int:
+        """Files no shop was recognised on, kept for the operator to name it."""
+        return sum(1 for entry in self.results if entry["status"] == "unrecognised" and entry.get("kept"))
+
+    @property
+    def can_resume(self) -> bool:
+        """Files left unread by a run that died. Not while it may still be
+        running: a batch heard from within STALE_AFTER could be one whose
+        machine has just woken up, and resuming it would read files twice."""
+        if self.is_active or not self.pending_count:
+            return False
+        since = self.last_heartbeat or self.started_at
+        return timezone.now() - since > self.STALE_AFTER
 
     @property
     def ignored_count(self) -> int:

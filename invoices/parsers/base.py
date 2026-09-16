@@ -35,6 +35,10 @@ class ParsedLine:
     # ReceiptParser.parse_ocr_pages; blank for a placeholder and for any
     # document that was not photographed.
     read_as: str = ""
+    # The line's amount tax included, as the ticket printed it (see
+    # InvoiceLine.printed_ttc). Set by the receipt parsers; None for a digital
+    # invoice, and for a line a promotion was spread onto.
+    printed_ttc: Decimal | None = None
 
 
 @dataclass
@@ -85,6 +89,9 @@ class ParsedInvoice:
     # to the printed total - shown on the imported invoice, which then waits
     # in "À vérifier".
     warnings: list[str] = field(default_factory=list)
+    # The total the ticket printed (what was paid), for a photographed
+    # receipt; see Invoice.printed_total_ttc.
+    printed_total_ttc: Decimal | None = None
 
 
 @dataclass

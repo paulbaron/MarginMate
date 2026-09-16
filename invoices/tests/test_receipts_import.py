@@ -7,11 +7,13 @@ are tested from hand-written pages elsewhere in this package.
 
 from datetime import date
 from decimal import Decimal
+from unittest import mock
 
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
+from inventory.models import Product
 from invoices.models import Invoice, ShopItemPrice, Supplier, label_for_unit_price
 from invoices.parsers.base import ParsedInvoice, ParsedLine
 from invoices.receipts import PLACEHOLDER_MARKER, detect_parser, label_placeholder_lines
@@ -217,6 +219,51 @@ class ReceiptReviewViewTests(TestCase):
         self.invoice.refresh_from_db()
         self.assertIsNotNone(self.invoice.reviewed_at)
 
+    def _payload(self, **extra):
+        return {
+            "form-TOTAL_FORMS": "1",
+            "form-INITIAL_FORMS": "1",
+            "form-MIN_NUM_FORMS": "0",
+            "form-MAX_NUM_FORMS": "1000",
+            "form-0-product_name": "Citron vert",
+            "form-0-quantity": "3",
+            "form-0-total_ttc": "2.10",
+            "form-0-vat_rate": "5.5",
+            **extra,
+        }
+
+    def test_the_review_screen_shows_the_date_to_correct(self):
+        response = self.client.get(reverse("invoices:receipt_review", args=[self.invoice.pk]))
+        self.assertContains(response, 'name="invoice_date"')
+        self.assertContains(response, 'value="2026-07-14"')
+
+    def test_the_date_is_set_on_the_review_screen(self):
+        """A ticket typed in from its photo, or one whose date the OCR
+        missed, gets its date where it is checked."""
+        self.client.post(
+            reverse("invoices:receipt_review", args=[self.invoice.pk]), self._payload(invoice_date="2024-08-13")
+        )
+        self.invoice.refresh_from_db()
+        self.assertEqual(self.invoice.invoice_date, date(2024, 8, 13))
+        self.assertIsNotNone(self.invoice.reviewed_at)
+
+    def test_a_blank_date_does_not_erase_the_one_read(self):
+        for posted in ({"invoice_date": ""}, {}):
+            with self.subTest(posted=posted):
+                self.client.post(reverse("invoices:receipt_review", args=[self.invoice.pk]), self._payload(**posted))
+                self.invoice.refresh_from_db()
+                self.assertEqual(self.invoice.invoice_date, date(2026, 7, 14))
+
+    def test_an_impossible_date_is_refused_on_the_page(self):
+        response = self.client.post(
+            reverse("invoices:receipt_review", args=[self.invoice.pk]), self._payload(invoice_date="2024-13-45")
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Date du ticket")
+        self.invoice.refresh_from_db()
+        self.assertIsNone(self.invoice.reviewed_at)
+        self.assertEqual(self.invoice.invoice_date, date(2026, 7, 14))
+
     def test_a_row_removed_in_the_browser_leaves_a_gap_in_the_indices(self):
         """Removing a row client-side does not renumber the others, so the
         POST arrives with 0 and 2 and no 1 at all. Django validates the
@@ -278,6 +325,61 @@ class ReceiptReviewViewTests(TestCase):
         )
         self.assertEqual([line.raw_name for line in self.invoice.lines.all()], ["Citron vert"])
 
+    def test_a_price_already_known_is_refused_on_the_page(self):
+        """The shop is not a form field, so Django never checked the
+        uniqueness it is part of: the second 0,70 reached the database and
+        came back as a server error."""
+        ShopItemPrice.objects.create(supplier=self.supplier, unit_price_ttc=Decimal("0.70"), label="Pain Pita")
+        response = self.client.post(
+            reverse("invoices:receipt_review", args=[self.invoice.pk]),
+            {"action": "remember_price", "unit_price_ttc": "0.70", "label": "Citron vert", "valid_from": ""},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "0.70 € est déjà retenu chez Sabbh Oriental : « Pain Pita »")
+        self.assertEqual(ShopItemPrice.objects.count(), 1)
+
+    def test_the_same_price_from_a_new_date_is_accepted(self):
+        ShopItemPrice.objects.create(supplier=self.supplier, unit_price_ttc=Decimal("0.70"), label="Pain Pita")
+        response = self.client.post(
+            reverse("invoices:receipt_review", args=[self.invoice.pk]),
+            {"action": "remember_price", "unit_price_ttc": "0.70", "label": "Citron vert", "valid_from": "2026-07-01"},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(ShopItemPrice.objects.count(), 2)
+        duplicate = self.client.post(
+            reverse("invoices:receipt_review", args=[self.invoice.pk]),
+            {"action": "remember_price", "unit_price_ttc": "0.70", "label": "Menthe", "valid_from": "2026-07-01"},
+        )
+        self.assertContains(duplicate, "à partir du 01/07/2026")
+
+    def test_a_date_is_not_kept_when_the_lines_fail_to_save(self):
+        with mock.patch("invoices.views.replace_invoice_lines", side_effect=RuntimeError("disque plein")):
+            with self.assertRaises(RuntimeError):
+                self.client.post(
+                    reverse("invoices:receipt_review", args=[self.invoice.pk]),
+                    self._payload(invoice_date="2024-08-13"),
+                )
+        self.invoice.refresh_from_db()
+        self.assertEqual(self.invoice.invoice_date, date(2026, 7, 14))
+        self.assertIsNone(self.invoice.reviewed_at)
+
+    def test_the_queue_does_not_query_once_per_receipt(self):
+        url = reverse("invoices:receipt_queue")
+        self.client.get(url)  # warm up the session
+        with_one = self._queue_queries(url)
+        for _ in range(3):
+            receipt = make_invoice(supplier=self.supplier, parse_checks=[{"label": "x", "passed": True}])
+            make_invoice_line(invoice=receipt, vat_rate=FIVE_FIVE)
+        self.assertEqual(self._queue_queries(url), with_one)
+
+    def _queue_queries(self, url):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        with CaptureQueriesContext(connection) as captured:
+            self.client.get(url)
+        return len(captured)
+
     def test_remembering_a_price_does_not_mark_the_receipt_reviewed(self):
         """Recording a price is not the same as having checked the ticket."""
         self.client.post(
@@ -286,6 +388,107 @@ class ReceiptReviewViewTests(TestCase):
         )
         self.invoice.refresh_from_db()
         self.assertIsNone(self.invoice.reviewed_at)
+
+
+class RememberPriceAcrossQueueTests(TestCase):
+    """A price recorded on one ticket names the same "Article divers" line on
+    every ticket of that shop still waiting to be checked - one answer, not
+    one per ticket."""
+
+    def setUp(self):
+        self.supplier = Supplier.objects.get(code="SABBH")
+        self.current = self._receipt(date(2026, 7, 14))
+
+    def _receipt(self, on, supplier=None, reviewed=False, unit_ht="0.6633", name=None):
+        supplier = supplier or self.supplier
+        invoice = make_invoice(
+            supplier=supplier,
+            invoice_date=on,
+            parse_checks=[{"label": "Somme des lignes = total imprimé", "passed": True, "detail": ""}],
+            reviewed_at=timezone.now() if reviewed else None,
+        )
+        unit_ttc = (Decimal(unit_ht) * (1 + FIVE_FIVE)).quantize(Decimal("0.01"))
+        name = name or f"Article divers ({unit_ttc} EUR/u)"
+        # One product per name and shop, as the import leaves it.
+        product = Product.objects.filter(supplier=supplier, raw_name=name).first()
+        make_invoice_line(
+            invoice=invoice, product=product or make_product(supplier=supplier, raw_name=name), quantity=3,
+            total_ht=str((Decimal(unit_ht) * 3).quantize(Decimal("0.01"))), unit_cost_ht=unit_ht,
+            vat_rate=FIVE_FIVE, raw_name=name,
+        )
+        return invoice
+
+    def _remember(self, price="0.70", label="Citron vert", valid_from=""):
+        return self.client.post(
+            reverse("invoices:receipt_review", args=[self.current.pk]),
+            {"action": "remember_price", "unit_price_ttc": price, "label": label, "valid_from": valid_from},
+            follow=True,
+        )
+
+    @staticmethod
+    def _names(invoice):
+        return [line.raw_name for line in invoice.lines.all()]
+
+    def test_the_price_names_the_same_line_on_every_ticket_still_to_check(self):
+        others = [self._receipt(date(2026, 7, 2)), self._receipt(date(2026, 7, 20))]
+        response = self._remember()
+        for invoice in [self.current, *others]:
+            with self.subTest(invoice=invoice.pk):
+                self.assertEqual(self._names(invoice), ["Citron vert"])
+        self.assertContains(response, "3 ligne(s) renommée(s) sur 3 ticket(s)")
+
+    def test_a_checked_ticket_keeps_what_was_confirmed(self):
+        """A checked ticket says what a person confirmed it bought."""
+        checked = self._receipt(date(2026, 7, 2), reviewed=True)
+        self._remember()
+        self.assertEqual(self._names(checked), ["Article divers (0.70 EUR/u)"])
+
+    def test_the_ticket_the_price_was_recorded_on_is_named_even_once_checked(self):
+        """Opened again through "Corriger les lignes": naming its line is
+        what the person is doing on that very screen."""
+        self.current.reviewed_at = timezone.now()
+        self.current.save(update_fields=["reviewed_at"])
+        self._remember()
+        self.assertEqual(self._names(self.current), ["Citron vert"])
+
+    def test_another_shops_tickets_are_left_alone(self):
+        other_shop = self._receipt(date(2026, 7, 2), supplier=Supplier.objects.get(code="WINGSENG"))
+        self._remember()
+        self.assertEqual(self._names(other_shop), ["Article divers (0.70 EUR/u)"])
+
+    def test_a_line_at_another_price_is_left_alone(self):
+        dearer = self._receipt(date(2026, 7, 2), unit_ht="0.7109")  # 0,75 TTC
+        self._remember()
+        self.assertEqual(self._names(dearer), ["Article divers (0.75 EUR/u)"])
+
+    def test_a_named_line_at_the_same_price_is_left_alone(self):
+        named = self._receipt(date(2026, 7, 2), name="MENTHE FRAICHE")
+        self._remember()
+        self.assertEqual(self._names(named), ["MENTHE FRAICHE"])
+
+    def test_a_dated_price_leaves_older_tickets_alone(self):
+        """"À partir du" means the price did not name anything before it."""
+        before = self._receipt(date(2026, 6, 20))
+        after = self._receipt(date(2026, 7, 20))
+        response = self._remember(valid_from="2026-07-01")
+        self.assertEqual(self._names(before), ["Article divers (0.70 EUR/u)"])
+        self.assertEqual(self._names(after), ["Citron vert"])
+        self.assertEqual(self._names(self.current), ["Citron vert"])
+        self.assertContains(response, "2 ligne(s) renommée(s) sur 2 ticket(s)")
+
+    def test_a_price_recorded_earlier_names_the_tickets_imported_since(self):
+        """A ticket imported before its price was known is caught up too, so
+        the queue never holds a line the price list already answers."""
+        waiting = self._receipt(date(2026, 7, 2), unit_ht="0.4739")  # 0,50 TTC
+        ShopItemPrice.objects.create(supplier=self.supplier, unit_price_ttc=Decimal("0.50"), label="Menthe")
+        self._remember()
+        self.assertEqual(self._names(waiting), ["Menthe"])
+
+    def test_saying_so_when_nothing_was_renamed(self):
+        response = self._remember(price="1.20", label="Coriandre")
+        self.assertContains(response, "Prix retenu : 1.20 € = Coriandre")
+        self.assertContains(response, "aucune ligne à renommer")
+        self.assertEqual(self._names(self.current), ["Article divers (0.70 EUR/u)"])
 
 
 class InvoiceReceiptPropertyTests(TestCase):

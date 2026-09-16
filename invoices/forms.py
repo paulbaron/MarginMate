@@ -5,7 +5,7 @@ from django import forms
 from common import BlankRowTolerantForm
 
 from .models import EmailInvoiceSource, Invoice, InvoiceType, ShopItemPrice, Supplier
-from .parsers import PARSER_REGISTRY
+from .parsers import LLM_PARSER_KEY, PARSER_REGISTRY
 
 
 class InvoiceUploadForm(forms.Form):
@@ -99,7 +99,12 @@ class ReceiptLineForm(ManualInvoiceLineForm):
         widget=forms.NumberInput(attrs={"step": "0.01", "placeholder": "Total TTC"}),
     )
 
-    bookkeeping_fields = ("vat_rate", "read_as")
+    # What the screen worked out from HT for a line whose ticket amount is not
+    # known (a promotion spread onto it, an old import). Posted back so that
+    # saving it untouched does not make a derived figure pass for a printed one.
+    computed_ttc = forms.DecimalField(required=False, max_digits=12, decimal_places=2, widget=forms.HiddenInput)
+
+    bookkeeping_fields = ("vat_rate", "read_as", "computed_ttc")
 
     def cleaned_total_ht(self) -> Decimal:
         """The line's HT total, from the TTC typed and the line's own rate.
@@ -108,6 +113,13 @@ class ReceiptLineForm(ManualInvoiceLineForm):
         rate = self.cleaned_data["vat_rate"] / Decimal("100")
         total_ttc = self.cleaned_data["total_ttc"]
         return (total_ttc / (Decimal("1") + rate)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def printed_ttc(self) -> Decimal | None:
+        """The amount to keep as the ticket's: what was typed - unless it is
+        the figure worked out from HT for this line, left as it was."""
+        typed = self.cleaned_data["total_ttc"]
+        computed = self.cleaned_data.get("computed_ttc")
+        return None if computed is not None and typed == computed else typed
 
     @property
     def read_hint(self) -> str:
@@ -137,7 +149,7 @@ class InvoiceTypeForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         choices = [("", "— Saisie manuelle —")] + [
-            (key, key) for key in sorted(PARSER_REGISTRY) if key != "LLM"
+            (key, key) for key in sorted(PARSER_REGISTRY) if key != LLM_PARSER_KEY
         ]
         self.fields["parser_key"] = forms.ChoiceField(choices=choices, required=False, label="Parseur")
 
@@ -219,6 +231,27 @@ class ReceiptBatchUploadForm(forms.Form):
         return accepted
 
 
+class ReceiptShopForm(forms.Form):
+    """The shop a ticket whose header was unreadable came from."""
+
+    supplier = forms.ModelChoiceField(
+        queryset=Supplier.objects.exclude(parser_key=LLM_PARSER_KEY),
+        label="Enseigne",
+        error_messages={"required": "Choisissez l'enseigne du ticket.", "invalid_choice": "Enseigne inconnue."},
+    )
+
+
+class ReceiptDateForm(forms.Form):
+    """The ticket's date, on the review screen: the OCR can miss it, and a
+    ticket typed in from its photo has none until it is given one."""
+
+    invoice_date = forms.DateField(
+        label="Date du ticket",
+        required=False,
+        widget=forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
+    )
+
+
 class ShopItemPriceForm(forms.ModelForm):
     """Teach the app what an unnamed "Article divers" line was.
 
@@ -236,3 +269,25 @@ class ShopItemPriceForm(forms.ModelForm):
             "valid_from": "À partir du",
         }
         widgets = {"valid_from": forms.DateInput(attrs={"type": "date"})}
+
+    def __init__(self, *args, supplier=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.supplier = supplier
+
+    def clean(self):
+        """The model's uniqueness involves the shop, which is not a field
+        here, so Django does not check it: a price already known reached the
+        database and failed there, as a server error."""
+        cleaned = super().clean()
+        price, valid_from = cleaned.get("unit_price_ttc"), cleaned.get("valid_from")
+        if self.supplier is not None and price is not None:
+            known = ShopItemPrice.objects.filter(
+                supplier=self.supplier, unit_price_ttc=price, valid_from=valid_from
+            ).first()
+            if known is not None:
+                since = f" à partir du {valid_from:%d/%m/%Y}" if valid_from else ""
+                raise forms.ValidationError(
+                    f"{price} € est déjà retenu chez {self.supplier.name}{since} : « {known.label} ». "
+                    "Pour le changer, supprimez-le dans Admin → Prix connus des tickets, puis retenez le bon."
+                )
+        return cleaned

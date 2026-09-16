@@ -1,6 +1,3 @@
-from .models import Invoice
-
-
 def receipt_review_count(request):
     """The nav badge for tickets still waiting to be checked.
 
@@ -8,8 +5,6 @@ def receipt_review_count(request):
     digital invoice never enters this queue, and including one would make
     the badge a number nothing on the Tickets page accounts for.
     """
-    return {
-        "receipt_review_count_nav": Invoice.objects.filter(reviewed_at__isnull=True)
-        .exclude(parse_checks=[])
-        .count()
-    }
+    from .receipts import pending_receipts
+
+    return {"receipt_review_count_nav": pending_receipts().count()}

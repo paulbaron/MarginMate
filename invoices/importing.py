@@ -12,6 +12,7 @@ from inventory.services import create_stock_movement_for_line
 
 from .deletion import remove_orphan_products
 from .models import Invoice, InvoiceLine, Supplier
+from .parsers import ticket_parser_for
 from .parsers.base import ParsedInvoice, ParsedLine
 
 
@@ -35,6 +36,7 @@ def import_parsed_invoice(
         invoice_number=parsed.invoice_number,
         invoice_date=parsed.invoice_date,
         reconciliation_adjustment=parsed.reconciliation_adjustment,
+        printed_total_ttc=parsed.printed_total_ttc,
     )
     if source_file_path:
         name = display_filename or os.path.basename(source_file_path)
@@ -80,6 +82,7 @@ def _create_line(invoice: Invoice, product, parsed_line: ParsedLine) -> InvoiceL
         discount=parsed_line.discount,
         vat_rate=parsed_line.vat_rate,
         category=parsed_line.category,
+        printed_ttc=parsed_line.printed_ttc,
     )
 
 
@@ -158,9 +161,12 @@ def replace_invoice_lines(invoice: Invoice, parsed_lines) -> Invoice:
 
     needs_review = False
     # A receipt's lines were read by OCR, and a name corrected on the
-    # review screen can still carry the recogniser's mistakes.
+    # review screen can still carry the recogniser's mistakes. Not a paper
+    # ticket filed by hand under Metro or UBA: its lines are typed, and that
+    # supplier's digital catalogue keeps the strict matcher.
+    ocr_tolerant = invoice.is_receipt and ticket_parser_for(invoice.supplier.code) is not None
     resolved = resolve_products(
-        invoice.supplier, [(line.raw_name, line.ean) for line in parsed_lines], ocr_tolerant=invoice.is_receipt
+        invoice.supplier, [(line.raw_name, line.ean) for line in parsed_lines], ocr_tolerant=ocr_tolerant
     )
     for parsed_line, (product, _created) in zip(parsed_lines, resolved):
         line = _create_line(invoice, product, parsed_line)

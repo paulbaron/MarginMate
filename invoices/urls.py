@@ -18,6 +18,12 @@ urlpatterns = [
     path("tickets/lots/<int:pk>/", views.receipt_batch, name="receipt_batch"),
     path("tickets/lots/<int:pk>/statut/", views.receipt_batch_status, name="receipt_batch_status"),
     path("tickets/lots/<int:pk>/arreter/", views.receipt_batch_cancel, name="receipt_batch_cancel"),
+    path("tickets/lots/<int:pk>/reprendre/", views.receipt_batch_resume, name="receipt_batch_resume"),
+    path(
+        "tickets/lots/<int:pk>/fichiers/<int:index>/enseigne/",
+        views.receipt_batch_assign,
+        name="receipt_batch_assign",
+    ),
     path("tickets/verification/", views.receipt_queue, name="receipt_queue"),
     path("tickets/<int:pk>/verifier/", views.receipt_review, name="receipt_review"),
     path("supprimer/", views.invoice_bulk_delete, name="invoice_bulk_delete"),

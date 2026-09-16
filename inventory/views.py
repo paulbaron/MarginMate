@@ -226,7 +226,7 @@ def _stock_type_movement_entries(stock_type):
             {
                 "movement": m,
                 "line": line,
-                "total_ttc": line.total_ht * (1 + line.vat_rate) if line else None,
+                "total_ttc": line.total_ttc if line else None,
                 "vat_percent": line.vat_rate * 100 if line else None,
                 # Same fallback the actual stock computation uses (total_volume
                 # when measured, else the item count) - showing total_volume

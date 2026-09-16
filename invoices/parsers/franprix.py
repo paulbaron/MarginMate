@@ -196,6 +196,7 @@ class FranprixParser(ReceiptParser):
                 # the whole receipt to review.
                 rate = Decimal("0")
             lines_total_ttc += parsed_line.total_ht
+            parsed_line.printed_ttc = parsed_line.total_ht
             parsed_line.vat_rate = rate
             parsed_line.total_ht = to_ht(parsed_line.total_ht, rate)
             parsed_line.unit_cost_ht = (
@@ -262,6 +263,7 @@ class FranprixParser(ReceiptParser):
             lines=parsed_lines,
             reconciliation_adjustment=adjustment,
             checks=checks,
+            printed_total_ttc=totals.printed_total_ttc,
         )
 
 

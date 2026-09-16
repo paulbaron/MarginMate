@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import EmailInvoiceSource, Invoice, InvoiceLine, InvoiceType, ScrapeJob, Supplier
+from .models import EmailInvoiceSource, Invoice, InvoiceLine, InvoiceType, ScrapeJob, ShopItemPrice, Supplier
 
 
 class InvoiceLineInline(admin.TabularInline):
@@ -31,6 +31,16 @@ class InvoiceAdmin(admin.ModelAdmin):
     list_display = ["__str__", "supplier", "invoice_date", "status", "total_ht"]
     list_filter = ["supplier", "status"]
     inlines = [InvoiceLineInline]
+
+
+@admin.register(ShopItemPrice)
+class ShopItemPriceAdmin(admin.ModelAdmin):
+    """Where a wrong "Prix connu" is deleted: the review screen only adds
+    them, since the price is the key (see ShopItemPriceForm)."""
+
+    list_display = ["unit_price_ttc", "label", "supplier", "valid_from", "created_at"]
+    list_filter = ["supplier"]
+    search_fields = ["label"]
 
 
 @admin.register(ScrapeJob)

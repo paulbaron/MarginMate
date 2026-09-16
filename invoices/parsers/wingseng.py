@@ -107,6 +107,7 @@ class WingSengParser(ReceiptParser):
                     total_ht=to_ht(total_ttc, effective_rate),
                     vat_rate=effective_rate,
                     category="Wing Seng",
+                    printed_ttc=total_ttc,
                 )
             )
             printed_amounts.append(total_ttc)
@@ -210,6 +211,7 @@ class WingSengParser(ReceiptParser):
             lines=parsed_lines,
             reconciliation_adjustment=adjustment,
             checks=checks,
+            printed_total_ttc=totals.printed_total_ttc,
         )
 
 

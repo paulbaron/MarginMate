@@ -10,7 +10,8 @@ than Django's default 100 files get through.
 """
 
 import os
-from datetime import date
+import shutil
+from datetime import date, timedelta
 from decimal import Decimal
 from unittest import mock
 
@@ -18,6 +19,7 @@ from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.datastructures import MultiValueDict
 from PIL import Image
 
@@ -27,8 +29,8 @@ from invoices.models import ReceiptBatch, Supplier
 from invoices.ocr import page_images
 from invoices.parsers.base import ParsedInvoice, ParsedLine
 from invoices.parsers.wingseng import WingSengParser
-from invoices.receipt_batches import run_receipt_batch, stage_batch
-from invoices.receipts import ReceiptRead, file_sha256, import_receipt
+from invoices.receipt_batches import MISSING_FILE, _Heartbeat, resume_batch, run_receipt_batch, stage_batch
+from invoices.receipts import ReceiptRead, UnrecognisedShopError, file_sha256, import_receipt
 from tests.factories import make_invoice
 
 
@@ -98,7 +100,7 @@ class RunBatchTests(TestCase):
         outcomes = [
             self._receipt(),
             DuplicateInvoiceError("Fichier déjà importé"),
-            ValueError("Enseigne non reconnue"),
+            UnrecognisedShopError("Enseigne non reconnue"),
             RuntimeError("fichier illisible"),
         ]
         with mock.patch("invoices.receipt_batches.import_receipt", side_effect=outcomes) as importer:
@@ -108,6 +110,9 @@ class RunBatchTests(TestCase):
         self.assertEqual(batch.status, ReceiptBatch.Status.SUCCESS)
         self.assertEqual((batch.imported_count, batch.duplicate_count, batch.failed_count), (1, 1, 2))
         self.assertIn("fichier illisible", batch.results[3]["message"])
+        # Kept for its shop to be chosen by hand (test_receipt_shop_choice).
+        self.assertTrue(batch.results[2]["kept"])
+        self.assertNotIn("kept", batch.results[3])
         self.assertEqual(batch.progress_percent, 100)
 
     def test_an_imported_file_links_to_its_receipt(self):
@@ -124,7 +129,7 @@ class RunBatchTests(TestCase):
     def test_the_staged_files_are_cleaned_up(self):
         batch = stage_batch([upload("a.pdf")])
         folder = os.path.join(settings.MEDIA_ROOT, "receipt_batches", str(batch.pk))
-        with mock.patch("invoices.receipt_batches.import_receipt", side_effect=ValueError("x")):
+        with mock.patch("invoices.receipt_batches.import_receipt", side_effect=DuplicateInvoiceError("x")):
             run_receipt_batch(batch.pk)
         self.assertFalse(os.path.exists(folder))
 
@@ -249,3 +254,96 @@ class BatchPageTests(TestCase):
         self.client.post(url)
         self.batch.refresh_from_db()
         self.assertTrue(self.batch.cancel_requested)
+
+
+class DeadBatchTests(TestCase):
+    """The dev server's autoreloader kills a running batch outright. A
+    137-ticket import died one second in, while code was being edited, and
+    showed "En cours" for half an hour with a Stop button nothing heard."""
+
+    def running_batch(self, silent_for):
+        batch = stage_batch([upload("a.pdf"), upload("b.pdf")])
+        self.addCleanup(shutil.rmtree, os.path.join(settings.MEDIA_ROOT, "receipt_batches", str(batch.pk)), True)
+        ReceiptBatch.objects.filter(pk=batch.pk).update(
+            status=ReceiptBatch.Status.RUNNING, last_heartbeat=timezone.now() - silent_for
+        )
+        return ReceiptBatch.objects.get(pk=batch.pk)
+
+    def test_the_live_status_notices_a_dead_batch_by_itself(self):
+        batch = self.running_batch(timedelta(minutes=5))
+        response = self.client.get(reverse("invoices:receipt_batch_status", args=[batch.pk]))
+        batch.refresh_from_db()
+        self.assertEqual(batch.status, ReceiptBatch.Status.FAILED)
+        self.assertContains(response, "Reprendre l'import")
+        self.assertContains(response, "Non lu")
+        self.assertNotContains(response, "En attente")
+
+    def test_a_batch_is_presumed_dead_after_a_minute_and_a_half_not_ten(self):
+        dead, alive = self.running_batch(timedelta(minutes=2)), self.running_batch(timedelta(seconds=30))
+        ReceiptBatch.reap_stale()
+        dead.refresh_from_db()
+        alive.refresh_from_db()
+        self.assertEqual((dead.status, alive.status), (ReceiptBatch.Status.FAILED, ReceiptBatch.Status.RUNNING))
+
+    def test_resuming_reads_only_the_files_it_never_reached(self):
+        batch = self.running_batch(timedelta(minutes=5))
+        batch.results[0].update(status="ok", invoice_id=1, shop="Wing Seng", total="1.00", date="", verified=True)
+        batch.save(update_fields=["results"])
+        ReceiptBatch.reap_stale()
+        with mock.patch("invoices.receipt_batches.threading.Thread") as thread:
+            response = self.client.post(reverse("invoices:receipt_batch_resume", args=[batch.pk]))
+        self.assertRedirects(response, reverse("invoices:receipt_batch", args=[batch.pk]))
+        thread.return_value.start.assert_called_once()
+        with mock.patch("invoices.receipt_batches.import_receipt", side_effect=ValueError("x")) as importer:
+            batch = run_receipt_batch(batch.pk)
+        self.assertEqual((importer.call_count, batch.status), (1, ReceiptBatch.Status.SUCCESS))
+
+    def test_nothing_is_resumed_while_it_may_still_be_running(self):
+        batch = self.running_batch(timedelta(seconds=10))
+        self.assertEqual(resume_batch(batch), 0)
+        ReceiptBatch.objects.filter(pk=batch.pk).update(status=ReceiptBatch.Status.FAILED)
+        batch.refresh_from_db()
+        self.assertFalse(batch.can_resume, "heard from seconds ago - the machine may just have woken up")
+
+    def test_a_batch_that_read_everything_has_nothing_to_resume(self):
+        batch = stage_batch([upload("a.pdf")])
+        with mock.patch("invoices.receipt_batches.import_receipt", side_effect=ValueError("x")):
+            batch = run_receipt_batch(batch.pk)
+        ReceiptBatch.objects.filter(pk=batch.pk).update(last_heartbeat=timezone.now() - timedelta(hours=1))
+        batch.refresh_from_db()
+        self.assertFalse(batch.can_resume)
+
+    def test_the_heartbeat_puts_a_wrongly_reaped_batch_back_to_running(self):
+        batch = self.running_batch(timedelta(minutes=5))
+        ReceiptBatch.reap_stale()
+        _Heartbeat(batch.pk).beat()
+        batch.refresh_from_db()
+        self.assertEqual((batch.status, batch.finished_at), (ReceiptBatch.Status.RUNNING, None))
+        self.assertLess(timezone.now() - batch.last_heartbeat, timedelta(seconds=5))
+
+    def test_a_staged_file_that_has_gone_is_said_so(self):
+        batch = stage_batch([upload("a.pdf")])
+        os.remove(os.path.join(settings.MEDIA_ROOT, batch.results[0]["stored"]))
+        with mock.patch("invoices.receipt_batches.import_receipt") as importer:
+            batch = run_receipt_batch(batch.pk)
+        importer.assert_not_called()
+        self.assertEqual((batch.results[0]["status"], batch.results[0]["message"]), ("error", MISSING_FILE))
+
+    def test_a_run_that_crashes_keeps_its_unread_files(self):
+        batch = stage_batch([upload("a.pdf"), upload("b.pdf")])
+        folder = os.path.join(settings.MEDIA_ROOT, "receipt_batches", str(batch.pk))
+        self.addCleanup(shutil.rmtree, folder, True)
+        with mock.patch("invoices.receipt_batches.import_receipt", side_effect=ValueError("x")), mock.patch(
+            "invoices.receipt_batches._discard", side_effect=RuntimeError("disque plein")
+        ):
+            batch = run_receipt_batch(batch.pk)
+        self.assertEqual((batch.status, batch.pending_count), (ReceiptBatch.Status.FAILED, 1))
+        self.assertTrue(os.path.exists(folder))
+
+    def test_resume_only_answers_a_post(self):
+        batch = self.running_batch(timedelta(minutes=5))
+        ReceiptBatch.reap_stale()
+        response = self.client.get(reverse("invoices:receipt_batch_resume", args=[batch.pk]))
+        self.assertRedirects(response, reverse("invoices:receipt_batch", args=[batch.pk]))
+        batch.refresh_from_db()
+        self.assertEqual(batch.status, ReceiptBatch.Status.FAILED)

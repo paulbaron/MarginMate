@@ -179,6 +179,27 @@
         initBulk(root);
     }
 
+    // A button with `data-busy-label` says so while its form's request runs
+    // (a ticket's OCR is seconds), and can't be pressed a second time.
+    document.addEventListener("submit", function (event) {
+        var button = event.target.querySelector("button[data-busy-label]");
+        if (!button || event.defaultPrevented) return;
+        setTimeout(function () {
+            button.setAttribute("data-idle-label", button.textContent);
+            button.disabled = true;
+            button.textContent = button.getAttribute("data-busy-label");
+        }, 0);
+    });
+    // Back to a page the browser kept in memory: the request is long over.
+    window.addEventListener("pageshow", function (event) {
+        if (!event.persisted) return;
+        document.querySelectorAll("button[data-idle-label]").forEach(function (button) {
+            button.disabled = false;
+            button.textContent = button.getAttribute("data-idle-label");
+            button.removeAttribute("data-idle-label");
+        });
+    });
+
     document.addEventListener("DOMContentLoaded", function () { init(document); });
     // htmx replaces the whole status card every second while a job runs, so
     // the restored <details> state and the scroll position have to be

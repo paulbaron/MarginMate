@@ -25,6 +25,27 @@
         {% endif %}
     </div>
 
+    {% if batch.can_resume %}
+        <div class="message message-error">
+            Import interrompu avant la fin — le serveur a probablement redémarré pendant qu'il tournait.
+            {{ batch.pending_count }} ticket{{ batch.pending_count|pluralize }}
+            n'{{ batch.pending_count|pluralize:"a,ont" }} pas encore été lu{{ batch.pending_count|pluralize }} ;
+            ils sont gardés, rien n'est à réimporter.
+            <form method="post" action="{% url 'invoices:receipt_batch_resume' batch.pk %}" class="inline-form">
+                {% csrf_token %}
+                <button class="btn btn-small" type="submit">Reprendre l'import</button>
+            </form>
+        </div>
+    {% endif %}
+
+    {% if batch.awaiting_shop_count and not batch.is_active %}
+        <div class="message message-warning">
+            {{ batch.awaiting_shop_count }} ticket{{ batch.awaiting_shop_count|pluralize }}
+            sans enseigne reconnue : pour chacun, choisissez son enseigne dans la liste et importez-le -
+            il s'ouvre ensuite pour vérification, à saisir d'après la photo si la lecture n'a rien donné.
+        </div>
+    {% endif %}
+
     <div class="batch-progress" role="progressbar" aria-valuenow="{{ batch.progress_percent }}" aria-valuemin="0" aria-valuemax="100">
         <div class="batch-progress-bar" style="width: {{ batch.progress_percent }}%"></div>
     </div>
@@ -81,16 +102,39 @@
                             </td>
                             <td><a class="btn btn-small btn-secondary" href="{% url 'invoices:receipt_review' entry.invoice_id %}">Vérifier</a></td>
                         {% elif entry.status == "pending" %}
-                            <td colspan="3" class="muted">en attente</td>
-                            <td><span class="status-pill status-PENDING">En attente</span></td>
+                            <td colspan="3" class="muted">{% if batch.is_active %}en attente{% else %}pas encore lu{% endif %}</td>
+                            <td><span class="status-pill status-PENDING">{% if batch.is_active %}En attente{% else %}Non lu{% endif %}</span></td>
                             <td></td>
+                        {% elif entry.status == "unrecognised" %}
+                            <td colspan="3" class="muted">
+                                {{ entry.message }}
+                                {% if not entry.kept %}Pour choisir son enseigne, réimportez ce fichier.{% endif %}
+                            </td>
+                            <td><span class="status-pill status-ERROR">Enseigne inconnue</span></td>
+                            <td>
+                                {% if entry.kept and not batch.is_active %}
+                                    <form method="post" action="{% url 'invoices:receipt_batch_assign' batch.pk forloop.counter0 %}" class="inline-form shop-choice">
+                                        {% csrf_token %}
+                                        <select name="supplier" required aria-label="Enseigne de {{ entry.name }}">
+                                            <option value="">Choisissez son enseigne…</option>
+                                            {% for group, shops in shop_groups %}
+                                                {% if shops %}
+                                                    <optgroup label="{{ group }}">
+                                                        {% for shop in shops %}<option value="{{ shop.pk }}">{{ shop.name }}</option>{% endfor %}
+                                                    </optgroup>
+                                                {% endif %}
+                                            {% endfor %}
+                                        </select>
+                                        <button class="btn btn-small" type="submit" data-busy-label="Lecture du ticket…">Importer</button>
+                                    </form>
+                                {% endif %}
+                            </td>
                         {% else %}
                             <td colspan="3" class="muted">{{ entry.message }}</td>
                             <td>
                                 {% if entry.status == "duplicate" %}<span class="status-pill status-CANCELLED">Déjà importé</span>
                                 {% elif entry.status == "ignored" %}<span class="status-pill status-CANCELLED">Ignoré</span>
                                 {% elif entry.status == "cancelled" %}<span class="status-pill status-CANCELLED">Non traité</span>
-                                {% elif entry.status == "unrecognised" %}<span class="status-pill status-ERROR">Enseigne inconnue</span>
                                 {% else %}<span class="status-pill status-ERROR">Erreur</span>{% endif %}
                             </td>
                             <td></td>

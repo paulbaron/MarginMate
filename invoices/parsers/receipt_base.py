@@ -729,6 +729,8 @@ def distribute_discount(
             remaining -= share
         line.discount = (line.discount or Decimal("0")) + share
         line.total_ht = line.total_ht - share
+        # What the line finally cost is worked out now, not printed.
+        line.printed_ttc = None
         line.unit_cost_ht = (
             (line.total_ht / line.quantity).quantize(UNIT, rounding=ROUND_HALF_UP)
             if line.quantity

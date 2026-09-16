@@ -108,7 +108,7 @@ class PageSmokeTests(TestCase):
                 {"name": "ok.pdf", "status": "ok", "invoice_id": cls.receipt.pk, "shop": "Sabbh Oriental",
                  "total": "2.10", "date": "14/07/2026", "verified": False},
                 {"name": "dup.pdf", "status": "duplicate", "message": "Fichier déjà importé"},
-                {"name": "x.pdf", "status": "unrecognised", "message": "Enseigne non reconnue"},
+                {"name": "x.pdf", "status": "unrecognised", "message": "Enseigne non reconnue", "kept": True},
                 {"name": "Thumbs.db", "status": "ignored", "message": "Ni un PDF ni une photo : ignoré."},
             ],
         )
@@ -229,6 +229,12 @@ class PageSmokeTests(TestCase):
 
     def test_receipt_batch_status(self):
         self.assertPageOK("invoices:receipt_batch_status", pk=self.batch.pk)
+
+    def test_receipt_batch_resume_is_post_only(self):
+        self.assertRedirectsOnGet("invoices:receipt_batch_resume", pk=self.batch.pk)
+
+    def test_receipt_batch_assign_is_post_only(self):
+        self.assertRedirectsOnGet("invoices:receipt_batch_assign", pk=self.batch.pk, index=2)
 
     def test_receipt_queue(self):
         self.assertContains(self.assertPageOK("invoices:receipt_queue"), "Sabbh Oriental")

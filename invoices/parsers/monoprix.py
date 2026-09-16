@@ -150,6 +150,7 @@ class MonoprixParser(ReceiptParser):
                     total_ht=total_ht,
                     vat_rate=effective_rate,
                     category=category or "Monoprix",
+                    printed_ttc=total_ttc,
                 )
             )
 
@@ -227,6 +228,7 @@ class MonoprixParser(ReceiptParser):
             lines=parsed_lines,
             reconciliation_adjustment=adjustment,
             checks=checks,
+            printed_total_ttc=totals.printed_total_ttc,
         )
 
 
@@ -243,6 +245,7 @@ def _read_discount(line: str) -> Decimal | None:
 def _apply_discount(line: ParsedLine, share_ht: Decimal) -> None:
     line.discount = (line.discount or Decimal("0")) + share_ht
     line.total_ht -= share_ht
+    line.printed_ttc = None
     line.unit_cost_ht = (
         (line.total_ht / line.quantity).quantize(UNIT, rounding=ROUND_HALF_UP) if line.quantity else Decimal("0")
     )

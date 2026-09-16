@@ -1003,6 +1003,12 @@ form p { margin: var(--s3) 0; }
 
 /* A line attached to a known product under another spelling: what was read. */
 .read-as { display: block; margin: var(--s1) 0 0; color: var(--text-dim); font-size: 0.8rem; font-family: var(--font-mono); }
+/* Renaming a receipt's product everywhere, under its line. */
+.rename-product { margin: var(--s1) 0 0; font-size: 0.85rem; }
+.rename-product summary { cursor: pointer; color: var(--text-dim); }
+.rename-product .inline-form { margin-top: var(--s2); align-items: center; }
+.rename-product input[type="text"] { width: 18rem; max-width: 100%; }
+.rename-product p { margin: var(--s1) 0 0; font-size: 0.8rem; }
 
 /* Receipt import: two ways in (files, a folder), and a batch that fills in. */
 .upload-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--s3); margin-bottom: var(--s3); }
@@ -1011,3 +1017,9 @@ form p { margin: var(--s3) 0; }
 .upload-choice-title { font-weight: 600; }
 .batch-progress { height: 6px; margin: var(--s3) 0; border-radius: 999px; background: var(--bg); overflow: hidden; }
 .batch-progress-bar { height: 100%; background: var(--green); transition: width 0.4s ease; }
+/* A file no shop was recognised on: some supplier names are a sentence long. */
+.shop-choice select { width: 14rem; max-width: 100%; }
+/* The ticket's date, above its lines on the review screen. */
+.receipt-date { align-items: center; margin-bottom: var(--s3); }
+.receipt-date label { margin: 0; }
+.receipt-date input { width: auto; }

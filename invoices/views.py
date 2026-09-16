@@ -5,6 +5,7 @@ from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.contrib import messages
+from django.db import transaction
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -18,7 +19,9 @@ from .forms import (
     ManualInvoiceForm,
     ManualInvoiceLineFormSet,
     ReceiptBatchUploadForm,
+    ReceiptDateForm,
     ReceiptLineFormSet,
+    ReceiptShopForm,
     ShopItemPriceForm,
 )
 from .importing import (
@@ -388,12 +391,9 @@ def _pending_receipts():
     Oldest first on purpose: a review queue is worked through, not browsed,
     and starting at the end means the backlog never shrinks from the front.
     """
-    return (
-        Invoice.objects.filter(reviewed_at__isnull=True)
-        .exclude(parse_checks=[])
-        .select_related("supplier")
-        .order_by("invoice_date", "id")
-    )
+    from .receipts import pending_receipts
+
+    return pending_receipts().select_related("supplier").order_by("invoice_date", "id")
 
 
 def receipt_upload(request):
@@ -423,20 +423,80 @@ def receipt_upload(request):
     )
 
 
+def _batch_status_context(batch):
+    """What the live part of a batch page draws: the batch, and the shops a
+    file no shop was recognised on can be filed under."""
+    from .receipts import shop_choices
+
+    return {"batch": batch, "shop_groups": shop_choices() if batch.awaiting_shop_count else []}
+
+
 def receipt_batch(request, pk):
     """One import: its progress while it runs, every file's outcome after."""
     ReceiptBatch.reap_stale()
     batch = get_object_or_404(ReceiptBatch, pk=pk)
     return render(
-        request, "invoices/receipt_batch.html", {"batch": batch, "pending_count": _pending_receipts().count()}
+        request,
+        "invoices/receipt_batch.html",
+        {**_batch_status_context(batch), "pending_count": _pending_receipts().count()},
     )
 
 
 def receipt_batch_status(request, pk):
     """The live part of the batch page, re-fetched by htmx every second while
-    the batch runs."""
+    the batch runs. It is all that changes on screen, so it has to notice a
+    dead batch itself - or "En cours" stays up for ever."""
+    ReceiptBatch.reap_stale()
     batch = get_object_or_404(ReceiptBatch, pk=pk)
-    return render(request, "invoices/_receipt_batch_status.html", {"batch": batch})
+    return render(request, "invoices/_receipt_batch_status.html", _batch_status_context(batch))
+
+
+def receipt_batch_resume(request, pk):
+    """Carry on with the files an interrupted batch never reached."""
+    from .receipt_batches import resume_batch
+
+    batch = get_object_or_404(ReceiptBatch, pk=pk)
+    if request.method == "POST":
+        resumed = resume_batch(batch)
+        if resumed:
+            messages.success(request, f"Import repris : {resumed} ticket(s) restant(s) à lire.")
+        else:
+            messages.warning(
+                request,
+                "Rien à reprendre : cet import tourne encore (ou vient à peine de s'arrêter - "
+                "réessayez dans une minute), ou tous ses tickets ont été lus.",
+            )
+    return redirect("invoices:receipt_batch", pk=batch.pk)
+
+
+def receipt_batch_assign(request, pk, index):
+    """File a ticket no shop was recognised on under the shop the operator
+    names, then open it on the review screen - the same one as every other
+    scan, where a ticket that could not be read is typed in from its photo.
+
+    The OCR runs inside this request: one ticket is a few seconds, not the
+    minutes a folder takes.
+    """
+    from .receipt_batches import ShopChoiceError, import_with_shop
+
+    batch = get_object_or_404(ReceiptBatch, pk=pk)
+    if request.method != "POST":
+        return redirect("invoices:receipt_batch", pk=batch.pk)
+    form = ReceiptShopForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, " ".join(form.errors["supplier"]))
+        return redirect("invoices:receipt_batch", pk=batch.pk)
+    supplier = form.cleaned_data["supplier"]
+    try:
+        entry = import_with_shop(batch, index, supplier)
+    except ShopChoiceError as exc:
+        messages.error(request, str(exc))
+        return redirect("invoices:receipt_batch", pk=batch.pk)
+    if entry["status"] != "ok":
+        messages.warning(request, entry["message"])
+        return redirect("invoices:receipt_batch", pk=batch.pk)
+    messages.success(request, f"{entry['name']} importé comme ticket {supplier.name} : vérifiez-le d'après la photo.")
+    return redirect("invoices:receipt_review", pk=entry["invoice_id"])
 
 
 def receipt_batch_cancel(request, pk):
@@ -447,12 +507,13 @@ def receipt_batch_cancel(request, pk):
     if batch.is_active:
         batch.cancel_requested = True
         batch.save(update_fields=["cancel_requested"])
-    return render(request, "invoices/_receipt_batch_status.html", {"batch": batch})
+    return render(request, "invoices/_receipt_batch_status.html", _batch_status_context(batch))
 
 
 def receipt_queue(request):
     """Everything waiting to be checked, as a wall of thumbnails."""
-    pending = list(_pending_receipts())
+    # Lines prefetched: every card shows a total added up from them.
+    pending = list(_pending_receipts().prefetch_related("lines"))
     return render(
         request,
         "invoices/receipt_queue.html",
@@ -480,27 +541,39 @@ def receipt_review(request, pk):
     next_pk = next((candidate for candidate in queue if candidate != invoice.pk), None)
 
     price_form = ShopItemPriceForm()
+    date_form = ReceiptDateForm(initial={"invoice_date": invoice.invoice_date})
 
     if request.method == "POST":
         action = request.POST.get("action")
 
+        if action == "rename_product":
+            _rename_product_from_review(request, invoice)
+            return redirect("invoices:receipt_review", pk=invoice.pk)
+
         if action == "remember_price":
-            price_form = ShopItemPriceForm(request.POST)
+            price_form = ShopItemPriceForm(request.POST, supplier=invoice.supplier)
             if price_form.is_valid():
+                from .receipts import apply_known_prices
+
                 price = price_form.save(commit=False)
                 price.supplier = invoice.supplier
                 price.save()
-                relabelled = _apply_price_to_invoice(invoice, price)
+                applied = apply_known_prices(invoice)
                 messages.success(
                     request,
                     f"Prix retenu : {price.unit_price_ttc} € = {price.label}"
-                    + (f" ({relabelled} ligne(s) renommée(s))." if relabelled else "."),
+                    + (
+                        f" ({applied.lines} ligne(s) renommée(s) sur {applied.receipts} ticket(s))."
+                        if applied.lines
+                        else " (aucune ligne à renommer sur les tickets à vérifier)."
+                    ),
                 )
                 return redirect("invoices:receipt_review", pk=invoice.pk)
             formset = _line_formset_for(invoice)
         else:
             formset = ReceiptLineFormSet(request.POST)
-            if formset.is_valid():
+            date_form = ReceiptDateForm(request.POST, initial={"invoice_date": invoice.invoice_date})
+            if formset.is_valid() and date_form.is_valid():
                 lines = []
                 for line_form in formset:
                     if not line_form.cleaned_data or line_form.cleaned_data.get("DELETE"):
@@ -518,12 +591,21 @@ def receipt_review(request, pk):
                             else Decimal("0"),
                             total_ht=total_ht,
                             vat_rate=line_form.cleaned_data["vat_rate"] / Decimal("100"),
+                            printed_ttc=line_form.printed_ttc(),
                         )
                     )
-                replace_invoice_lines(invoice, lines)
-                invoice.reviewed_at = timezone.now()
-                invoice.save(update_fields=["reviewed_at"])
+                # One piece: a date saved on a ticket whose lines then failed
+                # to save would be a change nobody validated.
+                with transaction.atomic():
+                    # Left blank, the date read stays: a blank is a field
+                    # nobody filled in, not a date someone removed.
+                    if date_form.cleaned_data["invoice_date"]:
+                        invoice.invoice_date = date_form.cleaned_data["invoice_date"]
+                    replace_invoice_lines(invoice, lines)
+                    invoice.reviewed_at = timezone.now()
+                    invoice.save(update_fields=["invoice_date", "reviewed_at"])
                 messages.success(request, f"Ticket vérifié : {invoice}")
+                _say_where_products_are_renamed(request, invoice)
                 if next_pk:
                     return redirect("invoices:receipt_review", pk=next_pk)
                 return redirect("invoices:receipt_queue")
@@ -537,6 +619,7 @@ def receipt_review(request, pk):
         {
             "invoice": invoice,
             "formset": formset,
+            "date_form": date_form,
             "price_form": price_form,
             "lines": lines,
             "known_prices": invoice.supplier.item_prices.all(),
@@ -545,6 +628,58 @@ def receipt_review(request, pk):
             "ocr_lines": invoice.ocr_text.split("\n") if invoice.ocr_text else [],
         },
     )
+
+
+def _rename_product_from_review(request, invoice):
+    """The "Renommer ... sur tous les tickets" form under a line. Only a
+    product on this ticket: the screen offers nothing else."""
+    from .receipts import rename_product
+
+    product_id = request.POST.get("product", "")
+    line = (
+        invoice.lines.select_related("product").filter(product_id=product_id).first()
+        if product_id.isdigit()
+        else None
+    )
+    if line is None:
+        messages.error(request, "Ce produit n'est pas sur ce ticket.")
+        return
+    product, old = line.product, line.product.raw_name
+    try:
+        rename_product(product, request.POST.get("name", ""))
+    except ValueError as exc:
+        messages.error(request, str(exc))
+        return
+    messages.success(
+        request,
+        f"Produit renommé sur tous les tickets {invoice.supplier.name} : « {old} » devient « {product.raw_name} ».",
+    )
+
+
+def _say_where_products_are_renamed(request, invoice):
+    """A name typed in a line that the matcher attached to a product of
+    another spelling relabels that line only - the next ticket still shows
+    the product's own name. Said once, where it can be acted on - and only
+    where renaming is offered (see _line_formset_for)."""
+    from .receipts import PLACEHOLDER_MARKER, parser_for
+
+    if parser_for(invoice.supplier) is None:
+        return
+    said = set()
+    for line in invoice.lines.select_related("product"):
+        product_name = line.product.raw_name
+        if (
+            line.raw_name != line.read_as
+            and line.raw_name.casefold() != product_name.casefold()
+            and PLACEHOLDER_MARKER not in product_name
+            and (line.raw_name, product_name) not in said
+        ):
+            said.add((line.raw_name, product_name))
+            messages.warning(
+                request,
+                f"« {line.raw_name} » est rattaché au produit « {product_name} », qui garde son nom sur les "
+                "autres tickets. Pour le corriger partout : « Renommer … sur tous les tickets », sous sa ligne.",
+            )
 
 
 def _line_formset_for(invoice):
@@ -559,44 +694,50 @@ def _line_formset_for(invoice):
     pre-filling the product's name would undo the rename. The reading rides
     along in a hidden field, so saving the page keeps it.
     """
+    from .receipts import PLACEHOLDER_MARKER, parser_for
+
+    # Renaming is for the products of shops whose tickets are read: a paper
+    # Metro ticket filed by hand shows Metro's catalogue products, which its
+    # digital invoices find by their exact name.
+    can_rename = parser_for(invoice.supplier) is not None
     initial = []
+    renamable = []
+    offered = set()
     for line in invoice.lines.select_related("product"):
         name = line.raw_name
         if line.read_as and line.raw_name == line.read_as:
             name = line.product.raw_name
+        # Offered under the first line of each product (six baguettes, one
+        # rename), filled in with what the row says: the product's own name,
+        # or the spelling someone typed that still landed on the old one -
+        # the case the warning after a save points here for. Never on a
+        # placeholder about to go.
+        if (
+            can_rename
+            and PLACEHOLDER_MARKER not in line.product.raw_name
+            and line.product_id not in offered
+        ):
+            offered.add(line.product_id)
+            renamable.append((line.product, name))
+        else:
+            renamable.append((None, ""))
+        # As the ticket prints it; see ReceiptLineForm.total_ttc.
+        total_ttc = line.total_ttc.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         initial.append(
             {
                 "product_name": name,
                 "read_as": line.read_as,
                 "quantity": line.quantity,
-                # As the ticket prints it; see ReceiptLineForm.total_ttc.
-                "total_ttc": (line.total_ht * (Decimal("1") + line.vat_rate)).quantize(
-                    Decimal("0.01"), rounding=ROUND_HALF_UP
-                ),
+                "total_ttc": total_ttc,
+                "computed_ttc": total_ttc if line.printed_ttc is None else None,
                 "vat_rate": _vat_percent_for_form(line),
             }
         )
-    return ReceiptLineFormSet(initial=initial)
-
-
-def _apply_price_to_invoice(invoice, price) -> int:
-    """Rename this invoice's unnamed lines that match a newly recorded price.
-
-    Only the placeholder ones, and only on this invoice: rewriting names
-    across history would change what past invoices claim to have bought.
-    """
-    from .receipts import PLACEHOLDER_MARKER
-
-    renamed = 0
-    for line in invoice.lines.all():
-        if PLACEHOLDER_MARKER not in line.raw_name:
-            continue
-        unit_ttc = (line.unit_cost_ht * (Decimal("1") + line.vat_rate)).quantize(Decimal("0.01"))
-        if unit_ttc == price.unit_price_ttc:
-            line.raw_name = price.label
-            line.save(update_fields=["raw_name"])
-            renamed += 1
-    return renamed
+    formset = ReceiptLineFormSet(initial=initial)
+    for form, (product, rename_to) in zip(formset.forms, renamable):
+        form.renamable_product = product
+        form.rename_to = rename_to
+    return formset
 
 
 # --------------------------------------------------------------------------

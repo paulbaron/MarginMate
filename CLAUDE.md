@@ -148,7 +148,12 @@ names at all. `ShopItemPrice` maps a **unit price** (not a line total —
 product, and the mapping is applied in `receipts.label_placeholder_lines` at
 import time, never in the parser, which must stay free of database access.
 An unmapped line is named by its own price ("Article divers (0.70 EUR/u)")
-so the review screen is actionable without opening the photo.
+so the review screen is actionable without opening the photo. Recording a
+price on the review screen names that line on **every ticket of the shop still
+waiting to be checked** (`receipts.apply_known_prices`) - one Pita price left
+25 tickets of the queue unnamed when it named only the ticket it was typed
+on. Every known price is applied, each as of its own ticket's date, and a
+checked ticket is never rewritten (except the one the price was typed on).
 
 **The review screen is the deliverable, not the parser.** `/invoices/tickets/`
 takes a batch and detects each shop from its own header (a Franprix ticket
@@ -162,6 +167,25 @@ photo meant converting every one in one's head. `ReceiptLineForm.cleaned_total_h
 stores HT with the line's own rate, and a total saved untouched keeps its HT to
 the cent. A receipt's "Corriger les lignes" opens this screen, not the HT form
 (which would also drop the lines' OCR readings).
+
+**A receipt line keeps its printed TTC** (`InvoiceLine.printed_ttc`, set by
+the receipt parsers and by this form). HT to the cent does not convert back:
+7,00 at 5.5% is 6,64 HT, which is 7,01 - ten pitas at 0,70 read 7,01 on the
+screen meant to check them. `InvoiceLine.total_ttc` and everything shown in
+TTC use it. A line a promotion was spread onto has none - its cost is worked
+out - and the form posts back what it showed for such a line
+(`computed_ttc`), so saving it untouched does not pass a worked-out figure off
+as printed: one Franprix ticket validated before that came to 7,91 for 7,92
+paid. `Invoice.total_ttc`, when every line has a printed amount, is their sum
+(never plus the adjustment, which in HT puts back cents the printed amounts
+never lost: added on top, six 0,49 baguettes came to 2,97) - or the ticket's
+own printed total (`Invoice.printed_total_ttc`, what was paid) when the lines
+are within the parser's tolerance of it, so a cent the OCR misread never costs
+the bank match. Otherwise the whole invoice stays on the HT arithmetic.
+Receipts imported before these fields got them back from their stored reading
+(`manage.py restore_printed_ttc`, matched by count, rate and HT, never by
+name; `--dry-run` first after a parser change): 34 totals a cent or two off
+became the printed one, none went the other way.
 
 **A folder is a background job** (`invoices/receipt_batches.py`). The upload
 page takes files or a whole folder (`webkitdirectory`; both inputs post as
@@ -177,6 +201,33 @@ phone photo's rotation lives in its EXIF tag, so `ocr.page_images` applies it
 or the receipt is read sideways; and scanning the same folder again has to be
 cheap, so `import_receipt` checks the file's SHA-256
 (`Invoice.source_sha256`, backfilled by migration 0014) before any OCR.
+
+**An unrecognised ticket is not a dead end.** A torn or faded header is enough
+for `detect_parser` to find nothing (a real Sabbah ticket, 13/08/2024). The
+batch raises `UnrecognisedShopError` for that - a plain `ValueError` is a broken
+file, reported as an error - keeps the file (`"kept"` on the entry) and, once
+the batch has finished, offers a list of shops on that row
+(`receipt_batches.import_with_shop`, never while the thread runs: it owns
+`results` and would write its copy over the change). The OCR runs in the
+request, so shop choices take turns on one lock, and a resume waits for none -
+two tabs used to import the same file twice. The chosen shop's reader
+runs regardless of the header; a supplier with no ticket reader, or a reader
+that fails or reads nothing, still files the ticket, empty, with a failed
+"Lecture automatique" check - that check is also what puts it in the review
+queue, which lists only receipts with checks. Either way the operator lands on
+the review screen, which also takes the ticket's **date** (a blank field keeps
+the date read: it is a field nobody filled in, not a date removed).
+
+**The autoreloader kills an import outright** on any code change: a
+137-ticket batch died one second in, while code was being edited, and showed
+"En cours" for half an hour. So a running batch beats every 15 s from a
+thread of its own (`receipt_batches._Heartbeat`), counts as dead after 90 s of
+silence (`ReceiptBatch.STALE_AFTER`; the page's live part reaps too, or it
+never changes), and can be resumed ("Reprendre l'import"): staged files stay
+until every one has been read. Not resumable while it may still run - a beat
+within STALE_AFTER could come from a machine that just woke up, and the beat
+puts a batch reaped that way back to running. **Check no import or gather is
+running before editing code**, or run the server with `--noreload`.
 
 One trap found by opening the page rather than by a test: `vat_rate` is
 stored to four decimals, so 20% renders as "20.0000" and the line form
@@ -211,6 +262,26 @@ the review screen is recognised on the next ticket. `read_as` is never set on
 price list's dates. The product a corrected line stops using is deleted if
 nobody classified it (`deletion.remove_orphan_products`), or it would wait in
 the review queue for ever.
+
+**A product is renamed under its line, not in it.** A receipt's product is
+named after its first reading ("BAGUETTE BLAND"), which fills every ticket's
+form. Typing the right spelling in a line relabels that line only - the typed
+name resolves straight back to the same product, since it is one of its
+readings - so the review screen offers "Renommer … sur tous les tickets" under
+the first line of each product (`receipts.rename_product`), filled in with what
+that row says (a typed "ORANGE" on the product "RANGE"), and says so after a
+save that kept a typed name on a product of another spelling. A rename keeps
+every OCR reading as read (still recognised), relabels the lines named after
+the product and the shop's price list, and refuses a name another product of
+the shop has: that is a merge, done by typing the name in the line. **Only the
+products of shops with a ticket reader**: a paper ticket filed by hand under
+Metro shows Metro's catalogue, which its PDFs find by exact name with no
+reading to fall back on - and its typed lines match strictly for the same
+reason. Renaming and "Retenir ce prix" reload the page, so the page asks
+before dropping line corrections not yet validated. A price already known is
+refused by the form (the shop is not a form field, so Django never checked
+the uniqueness it is part of, and the database answered with a 500); wrong
+prices are deleted in Admin → Prix connus des tickets.
 
 ### Deleting an invoice (`invoices/deletion.py`)
 
