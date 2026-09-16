@@ -4,7 +4,7 @@ from django import forms
 
 from common import BlankRowTolerantForm
 
-from .models import EmailInvoiceSource, Invoice, InvoiceType, Supplier
+from .models import EmailInvoiceSource, Invoice, InvoiceType, ShopItemPrice, Supplier
 from .parsers import PARSER_REGISTRY
 
 
@@ -78,6 +78,34 @@ ManualInvoiceLineFormSet = forms.formset_factory(
     ManualInvoiceLineForm, formset=BaseManualInvoiceLineFormSet, extra=1, can_delete=True
 )
 
+class ReceiptLineForm(ManualInvoiceLineForm):
+    # What OCR read on the ticket, carried through the page untouched so a
+    # corrected line keeps it: the reading stays a name its product is known
+    # by (InvoiceLine.read_as), and a misreading attached by hand to the
+    # right product is recognised on the next ticket. Bookkeeping, so a row
+    # carrying nothing else is still a blank row.
+    read_as = forms.CharField(required=False, max_length=255, widget=forms.HiddenInput)
+
+    bookkeeping_fields = ("vat_rate", "read_as")
+
+    @property
+    def read_hint(self) -> str:
+        """The reading, when it isn't what the row now says - shown under it."""
+        read = " ".join(str(self["read_as"].value() or "").split())
+        name = " ".join(str(self["product_name"].value() or "").split())
+        return read if read.upper() != name.upper() else ""
+
+
+# No spare row. A blank line under the real ones is a convenience when
+# creating a record and reads as a bug when correcting a saved one - a
+# receipt whose lines you are checking against a photo shows an empty row
+# where an item might have been missed, which is exactly the doubt this
+# screen exists to remove. The page adds the first row itself when there is
+# nothing to show. See the formset notes in CLAUDE.md.
+ReceiptLineFormSet = forms.formset_factory(
+    ReceiptLineForm, formset=BaseManualInvoiceLineFormSet, extra=0, can_delete=True
+)
+
 
 class InvoiceTypeForm(forms.ModelForm):
     class Meta:
@@ -110,3 +138,80 @@ class EmailInvoiceSourceForm(forms.ModelForm):
             "body_pattern": "Contenu (regex)",
             "attachment_pattern": "Pièce jointe (regex)",
         }
+
+
+from .ocr import IMAGE_EXTENSIONS  # noqa: E402 - kept next to the only thing using it
+
+RECEIPT_EXTENSIONS = (".pdf",) + IMAGE_EXTENSIONS
+
+
+class MultipleFileInput(forms.ClearableFileInput):
+    allow_multiple_selected = True
+
+
+class MultipleFileField(forms.FileField):
+    """A file field that keeps every file the browser sent.
+
+    Django's own FileField deliberately returns just one, so a plain
+    `multiple` attribute silently imports the last photo of a batch and
+    discards the rest - which looks exactly like an upload that worked.
+    """
+
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("widget", MultipleFileInput(attrs={"multiple": True}))
+        super().__init__(*args, **kwargs)
+
+    def clean(self, data, initial=None):
+        single = super().clean
+        if isinstance(data, (list, tuple)):
+            return [single(item, initial) for item in data]
+        return [single(data, initial)]
+
+
+class ReceiptBatchUploadForm(forms.Form):
+    """Photos of till receipts, several at a time.
+
+    No supplier field: the shop is read off each receipt's own header (see
+    receipts.detect_parser). Asking for it per file is the friction that
+    ends with a shoebox of unentered receipts.
+    """
+
+    files = MultipleFileField(
+        label="Photos de tickets",
+        required=False,
+        help_text="Des fichiers, ou un dossier entier : PDF, JPG, PNG, WebP ou TIFF.",
+    )
+
+    def clean_files(self):
+        """Keep the receipts, set the rest aside by name.
+
+        A folder carries whatever else is in it - Thumbs.db, desktop.ini, a
+        note - and refusing the whole selection over one of those is how a
+        folder upload stops being usable. They are listed as ignored on the
+        batch page instead. Only a selection with nothing usable is refused.
+        """
+        uploads = [upload for upload in self.cleaned_data["files"] if upload]
+        accepted = [upload for upload in uploads if upload.name.lower().endswith(RECEIPT_EXTENSIONS)]
+        self.ignored_names = [upload.name for upload in uploads if upload not in accepted]
+        if not accepted:
+            raise forms.ValidationError("Aucun PDF ni aucune photo dans la sélection.")
+        return accepted
+
+
+class ShopItemPriceForm(forms.ModelForm):
+    """Teach the app what an unnamed "Article divers" line was.
+
+    The price is the key, so it is not editable once saved - changing it
+    would silently re-point every future receipt at a different product.
+    Correcting a mistake means deleting the entry and adding the right one.
+    """
+
+    class Meta:
+        model = ShopItemPrice
+        fields = ["unit_price_ttc", "label", "valid_from"]
+        labels = {
+            "unit_price_ttc": "Prix unitaire TTC",
+            "label": "Produit",
+            "valid_from": "À partir du",
+        }
+        widgets = {"valid_from": forms.DateInput(attrs={"type": "date"})}

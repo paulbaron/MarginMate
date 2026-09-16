@@ -46,6 +46,51 @@ class BaseTemplateTests(TestCase):
     def test_the_stylesheet_is_loaded(self):
         self.assertContains(self.client.get(reverse("inventory:stock_list")), "css/marginmate.css")
 
+    def test_the_ventes_nav_link_actually_goes_to_ventes(self):
+        """It used to point at Produits caisse instead - a different page,
+        with a different search box, under a label that says "Ventes". A
+        search that looks broken on the page you land on isn't the bug when
+        it's the wrong page."""
+        html = self.client.get(reverse("inventory:stock_list")).content.decode()
+        nav = html[html.index("<nav"):html.index("</nav>")]
+        self.assertIn(f'href="{reverse("recipes:sales_list")}"', nav)
+        self.assertNotIn(f'href="{reverse("recipes:pos_product_list")}"', nav)
+
+    def test_the_ventes_link_is_marked_active_from_the_ventes_page(self):
+        import re
+
+        html = self.client.get(reverse("recipes:sales_list")).content.decode()
+        link = re.search(r"<a [^>]*>Ventes</a>", html)
+        self.assertIsNotNone(link, "no <a ...>Ventes</a> link found")
+        self.assertIn('class="active"', link.group(0))
+
+    def test_recettes_is_not_also_lit_up_on_the_ventes_page(self):
+        """"Recettes" and "Ventes" are different sections with different
+        search boxes, but both live under the same `recipes` app_name -
+        Recettes lit up on every caisse/ventes page too, checking only the
+        app rather than which view. Landing on "Ventes" with "Recettes"
+        also highlighted looks like confirmation you're on the right page
+        when you aren't."""
+        import re
+
+        html = self.client.get(reverse("recipes:sales_list")).content.decode()
+        recettes = re.search(r"<a [^>]*>Recettes</a>", html)
+        self.assertIsNotNone(recettes, "no <a ...>Recettes</a> link found")
+        self.assertNotIn('class="active"', recettes.group(0))
+
+    def test_recettes_is_still_active_on_its_own_pages(self):
+        import re
+
+        from tests.factories import make_recipe
+
+        recipe = make_recipe(name="Mule")
+        for url in (reverse("recipes:recipe_list"), reverse("recipes:recipe_detail", kwargs={"pk": recipe.pk})):
+            with self.subTest(url=url):
+                html = self.client.get(url).content.decode()
+                link = re.search(r"<a [^>]*>Recettes</a>", html)
+                self.assertIsNotNone(link)
+                self.assertIn('class="active"', link.group(0))
+
 
 class SearchableSortableTableTests(TestCase):
     """Every list page gets a search box and sortable columns."""
@@ -141,6 +186,24 @@ class SortKeyTests(TestCase):
         self.assertContains(response, 'data-sort="2026-03-05"')
         self.assertContains(response, "05/03/2026")
 
+    def test_the_vendu_column_carries_a_plain_numeric_sort_key(self):
+        """Its displayed text can be "247.68" alone or "247.68 ?" with an
+        estimate badge - sorting by the cell's own text (the datatable.js
+        default) would fall back to a string compare for every row that
+        has the badge, which sorted "247.68 ?" as text and mixed the
+        estimated rows into the wrong order relative to the certain ones."""
+        vodka = make_priced_stock_type(name="Vodka", unit_cost_ht="15", quantity="10")
+        gin = make_priced_stock_type(name="Gin", unit_cost_ht="25", quantity="10")
+        recipe = make_recipe(name="Mule")
+        make_ingredient(recipe, stock_type=vodka, quantity="0.04", group=0)
+        make_ingredient(recipe, stock_type=gin, quantity="0.04", group=0)
+        record_sales([("Mule", date(2026, 3, 5), 100)])
+
+        response = self.client.get(reverse("inventory:stock_list"))
+        # Gin is the priciest alternative, so it's the one carrying the
+        # estimate - and its sort key must still be the bare number.
+        self.assertContains(response, 'data-sort="4.00"')
+
 
 class ChildRowTests(TestCase):
     """Rows that explain the row above them have to travel with it."""
@@ -170,6 +233,46 @@ class ChildRowTests(TestCase):
         response = self.client.get(reverse("inventory:stock_take_variance", kwargs={"pk": closing.pk}))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "data-child-row")
+
+    def test_stock_list_child_row_colspan_matches_the_header(self):
+        """A child row's colspan has to cover every column, or table-layout
+        spreads the mismatch across every row that shares those columns -
+        not just the one that got expanded. Stayed at 6 when "Vendu" made
+        this a 7-column table, which is what made expanding any row widen
+        the whole category."""
+        import re
+
+        make_priced_stock_type(name="Vodka", unit_cost_ht="12", quantity="10")
+        html = self.client.get(reverse("inventory:stock_list")).content.decode()
+
+        thead = re.search(r"<thead>(.*?)</thead>", html, re.S).group(1)
+        header_columns = thead.count("<th")
+        self.assertGreater(header_columns, 0)
+
+        child_colspans = re.findall(r'<tr[^>]*data-child-row[^>]*>\s*<td colspan="(\d+)"', html)
+        self.assertTrue(child_colspans, "expected at least one data-child-row with a colspan")
+        for colspan in child_colspans:
+            self.assertEqual(int(colspan), header_columns)
+
+    def test_stock_list_column_widths_are_wide_enough_for_their_content(self):
+        """The category table is table-layout:fixed (see marginmate.css) so
+        a nested purchase-history table can't force its columns wider on
+        expand - which means the <colgroup> is now what decides column
+        widths, and a gap here is silent: too narrow and "Modifier" / the
+        price-history button / "Supprimer" wrap onto extra lines, which is
+        what made every row noticeably taller than it needs to be."""
+        import re
+
+        make_priced_stock_type(name="Vodka", unit_cost_ht="12", quantity="10")
+        html = self.client.get(reverse("inventory:stock_list")).content.decode()
+
+        widths = [float(w) for w in re.findall(r'<col style="width:(\d+)px">', html)]
+        self.assertEqual(len(widths), 7)
+        type_width, _qty, _sold, _unit, _ht, _ttc, actions_width = widths
+        # "Modifier" + the 📈 button + "Supprimer", each with their own
+        # margin, need roughly 200px on one line - see the row-height test.
+        self.assertGreaterEqual(actions_width, 200)
+        self.assertGreaterEqual(type_width, 200)
 
 
 class PageChromeTests(TestCase):
@@ -250,7 +353,7 @@ class TemplateHygieneTests(TestCase):
         root = pathlib.Path(__file__).resolve().parent.parent
         for path in self.template_files():
             # Name it the way the loader will look it up.
-            for base in ("templates", *[f"{app}/templates" for app in ("inventory", "invoices", "recipes")]):
+            for base in ("templates", *[f"{app}/templates" for app in ("inventory", "invoices", "recipes", "bank")]):
                 candidate = root / base
                 if candidate in path.parents:
                     name = str(path.relative_to(candidate)).replace("\\", "/")
@@ -489,6 +592,31 @@ class FormRenderingTests(TestCase):
                 html = self.client.get(reverse(name, kwargs=kwargs)).content.decode()
                 self.assertIn("form-grid", html)
 
+    def test_no_page_waits_on_a_third_party_host(self):
+        """Every asset is served from this machine.
+
+        htmx used to come from unpkg.com, which answers with a 301 before the
+        real file - so every page spent two third-party round trips before
+        any of the app's OWN scripts ran, because deferred scripts run in
+        document order. A bar's back office should also work with the
+        internet down.
+        """
+        html = self.client.get(reverse("inventory:stock_list")).content.decode()
+        head = html.split("</head>")[0]
+        for external in ("//unpkg.com", "//cdn.", "//cdnjs.", "//ajax.googleapis.com"):
+            self.assertNotIn(external, head, f"{external} is back in the page head")
+
+    def test_the_head_holds_no_parser_blocking_script(self):
+        """`defer` does nothing on an INLINE script: it runs where it sits,
+        and a classic script waits for pending stylesheets first - so one in
+        the head stops the page being parsed at all until the CSS lands."""
+        html = self.client.get(reverse("inventory:stock_list")).content.decode()
+        head = html.split("</head>")[0]
+        inline_scripts = [
+            block for block in head.split("<script")[1:] if not block.lstrip().startswith("src=")
+        ]
+        self.assertEqual(inline_scripts, [], "inline <script> in <head> blocks parsing on the stylesheet")
+
     def test_no_template_still_hand_rolls_a_field_loop(self):
         """`{{ field.label_tag }}` was the giveaway of the copy-pasted block.
         Looked for literally rather than by parsing loops: a cleverer check
@@ -615,8 +743,10 @@ class InvoiceDetailTests(TestCase):
         self.invoice.save(update_fields=["reconciliation_adjustment"])
         self.assertEqual(self.invoice.lines_total_ht, Decimal("100.00"))
         self.assertEqual(self.invoice.total_ht, Decimal("100.30"))
-        # 100 at 20% = 120, plus the adjustment, which carries no VAT itself.
-        self.assertEqual(self.invoice.total_ttc, Decimal("120.30"))
+        # 100 at 20% = 120, plus the adjustment AT 20%: it is duty, and duty
+        # is part of the VAT base. Added flat, every UBA total fell five or
+        # six cents short of what the bank actually debited for it.
+        self.assertEqual(self.invoice.total_ttc, Decimal("120.36"))
 
     def test_ttc_mixes_rates_per_line_rather_than_blending_them(self):
         from tests.factories import make_invoice_line, make_product

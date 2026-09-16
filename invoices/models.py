@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from django.core.exceptions import ValidationError
 from django.db import models
-from django.db.models import Q, Sum
+from django.db.models import Q
 from django.utils import timezone
 
 from common import JobLogMixin
@@ -131,6 +131,30 @@ class Invoice(models.Model):
     # billed - never attributed to any individual product's own price,
     # since there's no reliable way to know which product it belongs to.
     reconciliation_adjustment = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    # Everything below is only populated for photographed till receipts (see
+    # invoices/parsers/receipt_base.py). A digital PDF needs none of it: if
+    # the layout matched, the numbers are the numbers.
+    #
+    # A photo is different. OCR can misread a digit and produce a perfectly
+    # well-formed wrong price, so a receipt parser checks its own arithmetic
+    # against the totals the ticket itself prints and stores the verdict
+    # here. `parse_checks` is a list of {"label", "passed", "detail"} - see
+    # parsers.base.ParseCheck - and the review screen shows it beside the
+    # photo so a human can see *why* a receipt was flagged.
+    ocr_text = models.TextField(blank=True)
+    ocr_confidence = models.DecimalField(max_digits=4, decimal_places=2, null=True, blank=True)
+    parse_checks = models.JSONField(default=list, blank=True)
+    preview_image = models.ImageField(upload_to="receipts/%Y/%m/", blank=True, null=True)
+    # Set when a person has actually looked at the photo and accepted the
+    # lines. Distinct from status=COMPLETE, which only means every product
+    # was recognised - a receipt can be COMPLETE and still misread.
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    # SHA-256 of the file exactly as it was uploaded. A folder of receipt
+    # photos gets scanned again and again as new ones land in it; this is
+    # what lets the ones already imported be skipped before any OCR runs,
+    # rather than each costing seconds to recognise only to be refused as a
+    # duplicate afterwards.
+    source_sha256 = models.CharField(max_length=64, blank=True, db_index=True)
 
     class Meta:
         ordering = ["-invoice_date", "-imported_at"]
@@ -147,20 +171,38 @@ class Invoice(models.Model):
 
     @property
     def total_ht(self):
-        lines_total = self.lines.aggregate(total=Sum("total_ht"))["total"] or 0
-        return lines_total + self.reconciliation_adjustment
+        """Added up in Python from the lines, like total_ttc: the invoice list
+        prefetches them, so showing both totals costs two queries for the
+        whole page rather than one per invoice per total."""
+        return self.lines_total_ht + self.reconciliation_adjustment
 
     @property
     def total_ttc(self):
         """Summed per line, not total_ht times one rate: a single invoice
         mixes 20% spirits with 5.5% food, and any blended rate would be
-        wrong for both. The reconciliation adjustment carries no VAT of its
-        own - it's duty, not a taxable sale - so it's added flat."""
+        wrong for both.
+
+        The reconciliation adjustment takes VAT too. It is duty the lines
+        don't carry (or a receipt's HT rounding), and duty is part of the VAT
+        base: added flat, every UBA total fell five or six cents short of
+        what the bank actually debited for it.
+        """
+        lines = list(self.lines.all())
         total = sum(
-            (line.total_ht * (Decimal("1") + line.vat_rate) for line in self.lines.all()),
+            (line.total_ht * (Decimal("1") + line.vat_rate) for line in lines),
             start=Decimal("0"),
         )
-        return total + self.reconciliation_adjustment
+        return total + self.reconciliation_adjustment * (Decimal("1") + self._adjustment_vat_rate(lines))
+
+    @staticmethod
+    def _adjustment_vat_rate(lines) -> Decimal:
+        """The rate of the goods the adjustment belongs with: the lines that
+        carry duty when some do, otherwise all of them - by largest HT share
+        when their rates are mixed."""
+        weights = {}
+        for line in [line for line in lines if line.taxes] or lines:
+            weights[line.vat_rate] = weights.get(line.vat_rate, Decimal("0")) + abs(line.total_ht)
+        return max(weights, key=weights.get) if weights else Decimal("0")
 
     @property
     def lines_total_ht(self):
@@ -171,6 +213,38 @@ class Invoice(models.Model):
     @property
     def needs_review_count(self):
         return self.lines.filter(product__stock_type__isnull=True).count()
+
+    @property
+    def is_receipt(self):
+        """A photographed till receipt rather than a digital invoice."""
+        return bool(self.parse_checks) or bool(self.ocr_text)
+
+    @property
+    def failed_checks(self):
+        return [check for check in self.parse_checks if not check.get("passed")]
+
+    @property
+    def ocr_confidence_percent(self):
+        """69, not 0.69 - the stored value is a fraction, and the review
+        screen rendered it straight through `floatformat:0`, which turned
+        every receipt's confidence into "1%"."""
+        if self.ocr_confidence is None:
+            return None
+        return self.ocr_confidence * Decimal("100")
+
+    @property
+    def receipt_verified(self):
+        """The parse proved itself against the ticket's own printed totals.
+
+        Not the same as "correct" - it is the strongest statement the
+        machine can make on its own, and it is what decides whether a
+        receipt needs a human to look at the photo.
+        """
+        return bool(self.parse_checks) and not self.failed_checks
+
+    @property
+    def needs_receipt_review(self):
+        return self.is_receipt and self.reviewed_at is None and not self.receipt_verified
 
 
 class InvoiceLine(models.Model):
@@ -191,6 +265,13 @@ class InvoiceLine(models.Model):
     discount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     vat_rate = models.DecimalField(max_digits=5, decimal_places=4, default=0)
     category = models.CharField(max_length=255, blank=True)
+    # The product name exactly as OCR read it off a receipt photo, kept when
+    # the review screen corrects `raw_name`. Each reading is one more name
+    # its product is known by (inventory.matching.known_readings): one till
+    # label comes back as BAGUETTE BLANC, BLAND, BLAVD or AGUETTE BLANC, and
+    # the next ticket is matched against all of them. Blank for digital
+    # invoices, typed lines and "Article divers" - a price is not a name.
+    read_as = models.CharField(max_length=255, blank=True)
 
     class Meta:
         ordering = ["id"]
@@ -203,6 +284,77 @@ class InvoiceLine(models.Model):
         """20 rather than 0.200 - the stored rate is a fraction, and every
         page that showed it raw made people read it as a currency amount."""
         return self.vat_rate * Decimal("100")
+
+
+class ShopItemPrice(models.Model):
+    """What a shop's unnamed receipt line actually was, keyed by its price.
+
+    Some tills print no product names at all - every line on a Sabbh Oriental
+    ticket reads "Article divers", and the only thing telling a lemon from a
+    bunch of mint is what it cost. This is the operator's own answer to that,
+    built up one price at a time from the review screen.
+
+    **Keyed on the unit price, not the line total.** 0,70 EUR shows up as
+    3pcs/2,10, 6pcs/4,20, 7pcs/4,90 and 11pcs/7,70 across five receipts:
+    keying on the total would need a new entry for every quantity ever
+    bought, while the unit price needs one per product. The price is stored
+    tax-inclusive because that is what the receipt prints and what the
+    operator reads off the photo.
+
+    `valid_from` exists because shop prices move. An entry with no date is
+    the standing answer; a dated one takes over from that date on, so a
+    price change is recorded rather than overwriting what older invoices
+    were priced with.
+    """
+
+    supplier = models.ForeignKey(Supplier, on_delete=models.CASCADE, related_name="item_prices")
+    unit_price_ttc = models.DecimalField(
+        max_digits=10, decimal_places=2, help_text="Prix unitaire TTC tel qu'imprimé sur le ticket."
+    )
+    label = models.CharField(max_length=255, help_text="Le produit correspondant à ce prix.")
+    valid_from = models.DateField(
+        null=True,
+        blank=True,
+        help_text="À partir de quand ce prix s'applique. Vide = depuis toujours.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["supplier", "unit_price_ttc", "-valid_from"]
+        constraints = [
+            # Two constraints rather than one: SQLite treats NULLs as
+            # distinct, so a single UniqueConstraint over a nullable
+            # valid_from would let unlimited undated duplicates through.
+            models.UniqueConstraint(
+                fields=["supplier", "unit_price_ttc", "valid_from"],
+                condition=~Q(valid_from=None),
+                name="unique_shop_item_price_dated",
+            ),
+            models.UniqueConstraint(
+                fields=["supplier", "unit_price_ttc"],
+                condition=Q(valid_from=None),
+                name="unique_shop_item_price_undated",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.supplier} {self.unit_price_ttc} EUR -> {self.label}"
+
+
+def label_for_unit_price(supplier, unit_price_ttc, on_date=None):
+    """The product name recorded for `unit_price_ttc`, or "" if none is.
+
+    Returns the most recent entry that had already taken effect on
+    `on_date`; undated entries are the fallback. Never guesses at a nearby
+    price - a 0,70 mapping must not answer for a 0,75 line, because that is
+    how one product's costs quietly become another's.
+    """
+    candidates = supplier.item_prices.filter(unit_price_ttc=unit_price_ttc)
+    if on_date is not None:
+        candidates = candidates.filter(Q(valid_from=None) | Q(valid_from__lte=on_date))
+    # ordering puts dated entries (most recent first) ahead of undated ones.
+    best = candidates.order_by(models.F("valid_from").desc(nulls_last=True)).first()
+    return best.label if best else ""
 
 
 class ScrapeJob(JobLogMixin):
@@ -259,3 +411,85 @@ class ScrapeJob(JobLogMixin):
             entry["label"] = label
         entry.update(counts)
         self.save(update_fields=["progress"])
+
+
+class ReceiptBatch(JobLogMixin):
+    """A batch of receipt photos imported in the background - typically a
+    whole folder. See invoices/receipt_batches.py.
+
+    `results` has one entry per file, in upload order:
+
+        {"name": "Franprix 13.06EUR.pdf", "stored": "receipt_batches/12/0003.pdf",
+         "status": "pending" | "ok" | "duplicate" | "unrecognised" | "error"
+                   | "ignored" | "cancelled",
+         "message": "...", "invoice_id": 42, "shop": "Franprix",
+         "total": "13.06", "date": "2026-07-15", "verified": true}
+
+    One JSON list rather than a table: it only exists to be shown on the
+    batch page, and it is rewritten after every file.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "En attente"
+        RUNNING = "RUNNING", "En cours"
+        SUCCESS = "SUCCESS", "Terminé"
+        FAILED = "FAILED", "Échoué"
+        CANCELLED = "CANCELLED", "Annulé"
+
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    # Checked between files: a thread can't be stopped safely from outside,
+    # so the job stops itself (same as ScrapeJob.cancel_requested).
+    cancel_requested = models.BooleanField(default=False)
+    log = models.TextField(blank=True)
+    results = models.JSONField(default=list, blank=True)
+    started_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-started_at"]
+
+    def __str__(self):
+        return f"Lot de tickets du {self.started_at:%d/%m/%Y %H:%M}"
+
+    def append_log(self, message: str):
+        elapsed = (timezone.now() - self.started_at).total_seconds()
+        line = f"[+{elapsed:6.1f}s] {message}"
+        self.log = f"{self.log}{line}\n" if self.log else f"{line}\n"
+        self.last_heartbeat = timezone.now()
+        self.save(update_fields=["log", "last_heartbeat"])
+
+    def _count(self, *statuses) -> int:
+        return sum(1 for entry in self.results if entry.get("status") in statuses)
+
+    @property
+    def to_read(self) -> int:
+        """Files that are receipts to recognise - everything but the ignored."""
+        return len(self.results) - self._count("ignored")
+
+    @property
+    def read(self) -> int:
+        return self.to_read - self._count("pending")
+
+    @property
+    def progress_percent(self) -> int:
+        return round(100 * self.read / self.to_read) if self.to_read else 100
+
+    @property
+    def imported_count(self) -> int:
+        return self._count("ok")
+
+    @property
+    def verified_count(self) -> int:
+        return sum(1 for entry in self.results if entry.get("status") == "ok" and entry.get("verified"))
+
+    @property
+    def duplicate_count(self) -> int:
+        return self._count("duplicate")
+
+    @property
+    def failed_count(self) -> int:
+        return self._count("unrecognised", "error")
+
+    @property
+    def ignored_count(self) -> int:
+        return self._count("ignored")

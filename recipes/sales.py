@@ -126,6 +126,53 @@ def _write_sales(order, totals, recipes, source, result) -> None:
             result.updated += 1
 
 
+def resync_recipe_from_daily_quantities(recipe: Recipe) -> None:
+    """Rebuild this recipe's "laddition" RecipeSale rows from the till
+    products already linked to it, using quantities already on file
+    (PosProductDailyQuantity) rather than going back to L'Addition.
+
+    That data has been kept locally, per day, since the moment each till
+    product was first seen in ANY import - whether or not it had a recipe
+    yet (see sync_pos_products) - so linking one is a pure local rebuild:
+    sum what's already known, day by day, across every PosProduct that
+    resolves to this recipe. No download, no wait; the numbers on both
+    "Produits caisse" and "Dernières ventes" are correct the moment the
+    link is saved.
+
+    Call this whenever a PosProduct's link to a recipe changes - both
+    directions: a NEWLY linked product needs its days added in, and a
+    DETACHED one needs them taken back out, or the recipe's total would
+    still include a till name that no longer belongs to it.
+    """
+    from collections import defaultdict
+
+    from .models import PosProductDailyQuantity
+
+    totals: dict[date, int] = defaultdict(int)
+    for sold_on, quantity in PosProductDailyQuantity.objects.filter(
+        product__recipe=recipe
+    ).values_list("sold_on", "quantity"):
+        totals[sold_on] += quantity
+
+    with transaction.atomic():
+        if totals:
+            RecipeSale.objects.bulk_create(
+                [
+                    RecipeSale(recipe=recipe, sold_on=sold_on, source="laddition", quantity=quantity)
+                    for sold_on, quantity in totals.items()
+                ],
+                update_conflicts=True,
+                unique_fields=["recipe", "sold_on", "source"],
+                update_fields=["quantity"],
+            )
+        # A day no PosProduct accounts for anymore (the last one linked to
+        # it was just detached) must not leave a stale "laddition" row
+        # behind - only days no CURRENTLY linked product covers are safe to
+        # drop this way, which is exactly what's left once `totals` (this
+        # recipe's full day-by-day picture, just rebuilt) is excluded.
+        RecipeSale.objects.filter(recipe=recipe, source="laddition").exclude(sold_on__in=totals.keys()).delete()
+
+
 def sales_between(start: date | None, end: date) -> dict[int, int]:
     """{recipe_id: units sold} over a stock-take window.
 

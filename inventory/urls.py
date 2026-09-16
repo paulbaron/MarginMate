@@ -23,6 +23,7 @@ urlpatterns = [
     path("review/<int:product_id>/assign/", views.assign_product, name="assign_product"),
     path("stock-takes/", views.StockTakeListView.as_view(), name="stock_take_list"),
     path("stock-takes/new/", views.stock_take_create, name="stock_take_create"),
+    path("stock-takes/value-line/", views.value_stock_take_line, name="value_stock_take_line"),
     path("stock-takes/<int:pk>/", views.stock_take_detail, name="stock_take_detail"),
     path("stock-takes/<int:pk>/edit/", views.stock_take_update, name="stock_take_update"),
     path("stock-takes/<int:pk>/variance/", views.stock_take_variance, name="stock_take_variance"),

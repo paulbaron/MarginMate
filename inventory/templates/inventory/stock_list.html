@@ -4,7 +4,20 @@
     <div class="page-header">
         <div>
             <h1>Stock</h1>
-            <p class="page-subtitle">Ce que vous avez en stock et ce que ça vaut, calculé à partir des factures importées. Cliquez une ligne pour voir son historique de prix.</p>
+            {% if period %}
+                <p class="page-subtitle">
+                    {% if period.since_beginning %}
+                        Depuis le début jusqu'à l'inventaire du {{ period.end|date:"d/m/Y" }} :
+                        ce qui est sorti du stock, ce que les ventes expliquent, et ce qui manque.
+                    {% else %}
+                        Du {{ period.start|date:"d/m/Y" }} au {{ period.end|date:"d/m/Y" }} :
+                        ce qui est sorti du stock entre les deux inventaires, ce que les ventes
+                        expliquent, et ce qui manque.
+                    {% endif %}
+                </p>
+            {% else %}
+                <p class="page-subtitle">Ce que vous avez en stock et ce que ça vaut, calculé à partir des factures importées. Cliquez une ligne pour voir son historique de prix.</p>
+            {% endif %}
         </div>
         <div class="actions">
             {% if empty_stock_type_count %}
@@ -22,6 +35,34 @@
 
     {% if categories %}
         <div class="stat-row">
+            {% if period %}
+            <div class="stat">
+                <div class="stat-label">Manquant (HT)</div>
+                <div class="stat-value {% if total_missing_value %}bad{% endif %}">{{ total_missing_value|floatformat:2 }} €</div>
+                <div class="stat-note">sorti du stock, non expliqué par les ventes</div>
+            </div>
+            {% if over_stock_count %}
+            <div class="stat">
+                <div class="stat-label">Vendu &gt; sorti</div>
+                <div class="stat-value bad">{{ over_stock_count }}</div>
+                <div class="stat-note">article{{ over_stock_count|pluralize }} vendu{{ over_stock_count|pluralize }} plus qu'il n'en est sorti</div>
+            </div>
+            {% endif %}
+            {% if uncounted_count %}
+            <div class="stat stat-warn">
+                <div class="stat-label">Non comptés</div>
+                <div class="stat-value">{{ uncounted_count }}</div>
+                <div class="stat-note">absents d'un des deux inventaires — aucun écart calculable</div>
+            </div>
+            {% endif %}
+            <div class="stat">
+                <div class="stat-label">Voir aussi</div>
+                <div class="stat-value" style="font-size:1rem;">
+                    <a href="{% url 'inventory:stock_take_variance' period.closing_take.pk %}">Écarts par groupe →</a>
+                </div>
+                <div class="stat-note">le manque regroupé et valorisé au moins cher</div>
+            </div>
+            {% else %}
             <div class="stat">
                 <div class="stat-label">Valeur du stock (HT)</div>
                 <div class="stat-value">{{ total_value_ht|floatformat:2 }} €</div>
@@ -35,6 +76,13 @@
                 <div class="stat-value">{{ stock_type_count }}</div>
                 <div class="stat-note">dans {{ categories|length }} catégorie{{ categories|length|pluralize }}</div>
             </div>
+            {% if over_stock_count %}
+            <div class="stat">
+                <div class="stat-label">Vendu &gt; acheté</div>
+                <div class="stat-value bad">{{ over_stock_count }}</div>
+                <div class="stat-note">article{{ over_stock_count|pluralize }} dont les ventes dépassent les achats</div>
+            </div>
+            {% endif %}
             {% if review_count %}
             <div class="stat">
                 <div class="stat-label">À rattacher</div>
@@ -42,24 +90,97 @@
                 <div class="stat-note"><a href="{% url 'inventory:review_queue' %}">Voir la file d'attente</a></div>
             </div>
             {% endif %}
+            {% endif %}
         </div>
 
         <div class="table-toolbar">
-            <div class="table-search" style="max-width:520px;">
+            <div class="table-search" style="max-width:420px;">
             <input type="search" id="stock-search" autocomplete="off"
                    placeholder="Rechercher un produit, un type de stock ou une catégorie…">
             </div>
+            <form method="get" class="period-picker">
+                <label for="period-select">Période</label>
+                <select name="inventaire" id="period-select" onchange="this.form.submit()">
+                    <option value="">Depuis le début (stock actuel)</option>
+                    {% for take in stock_takes %}
+                        <option value="{{ take.pk }}"{% if period.closing_take.pk == take.pk %} selected{% endif %}>
+                            Inventaire du {{ take.taken_at|date:"d/m/Y" }}{% if take.note %} — {{ take.note }}{% endif %}
+                        </option>
+                    {% endfor %}
+                </select>
+                <noscript><button class="btn btn-small btn-secondary" type="submit">Afficher</button></noscript>
+            </form>
             <p class="table-count" id="stock-search-status" hidden></p>
         </div>
+
+        {% if period and period.since_beginning %}
+        <div class="message">
+            Aucun inventaire antérieur à celui-ci : tout ce qui a été acheté depuis le début est
+            comparé à ce comptage. Cela suppose que <strong>les factures remontent à l'ouverture
+            du bar</strong> — sinon, les bouteilles achetées avant vos premières factures
+            apparaîtront comme manquantes.
+        </div>
+        {% endif %}
         {% for category in categories %}
         <div class="category-block">
             <div class="category-header" data-toggle="cat-{{ forloop.counter }}">
                 <span class="chevron">▸</span>
                 <strong>{{ category.name }}</strong>
                 <span class="muted">({{ category.rows|length }})</span>
-                <span class="muted">— {{ category.total_value_ht|floatformat:2 }} € HT / {{ category.total_value_ttc|floatformat:2 }} € TTC</span>
+                {% if period %}
+                    <span class="muted">— manquant : {{ category.total_missing_value|floatformat:2 }} € HT</span>
+                {% else %}
+                    <span class="muted">— {{ category.total_value_ht|floatformat:2 }} € HT / {{ category.total_value_ttc|floatformat:2 }} € TTC</span>
+                {% endif %}
             </div>
-            <table id="cat-{{ forloop.counter }}" data-table data-table-sort-only hidden>
+            {% comment %}
+            The scroll box only exists in period mode. `overflow-x` makes an
+            element a scroll container on BOTH axes (see the note on
+            .table-wrap in marginmate.css), and a sticky `thead` inside one
+            sticks to that box rather than to the viewport - so wrapping the
+            7-column table too would quietly stop its header following you
+            down a long category, to buy a scrollbar it never needs.
+            {% endcomment %}
+            {% if period %}<div class="stock-table-wrap">{% endif %}
+            <table id="cat-{{ forloop.counter }}" class="stock-table{% if period %} stock-table-period{% endif %}"
+                   data-table data-table-sort-only hidden>
+                {% if period %}
+                <colgroup>
+                    <col style="width:240px">
+                    <col style="width:95px">
+                    <col style="width:85px">
+                    <col style="width:85px">
+                    <col style="width:85px">
+                    <col style="width:100px">
+                    <col style="width:100px">
+                    <col style="width:110px">
+                    <col style="width:90px">
+                    <col style="width:250px">
+                </colgroup>
+                <thead>
+                    <tr>
+                        <th>Type</th>
+                        <th class="num">Ouverture</th>
+                        <th class="num">Achats</th>
+                        <th class="num">Clôture</th>
+                        <th class="num">Sorti</th>
+                        <th class="num">Vendu</th>
+                        <th class="num">Manquant</th>
+                        <th class="num">Manquant (HT)</th>
+                        <th>Unité</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                {% else %}
+                <colgroup>
+                    <col style="width:300px">
+                    <col style="width:90px">
+                    <col style="width:110px">
+                    <col style="width:90px">
+                    <col style="width:110px">
+                    <col style="width:110px">
+                    <col style="width:230px">
+                </colgroup>
                 <thead>
                     <tr>
                         <th>Type</th>
@@ -71,27 +192,72 @@
                         <th></th>
                     </tr>
                 </thead>
+                {% endif %}
                 <tbody>
                     {% for row in category.rows %}
                     <tr class="stock-row" data-toggle="details-{{ row.stock_type.id }}"
                         data-stock-type-id="{{ row.stock_type.id }}"
                         data-movements-url="{% url 'inventory:stock_type_movements' row.stock_type.pk %}">
-                        <td><span class="chevron">▸</span> {{ row.stock_type.name }}</td>
+                        <td>
+                            <span class="chevron">▸</span> {{ row.stock_type.name }}
+                            {% if period and row.in_period and not row.reliable %}
+                                <span class="uncounted" title="Absent de {% if period.since_beginning %}l'inventaire{% else %}l'un des deux inventaires{% endif %} : sans comptage, tout ce qui a été acheté ressemble à du stock disparu. Comptez-le la prochaine fois.">non compté</span>
+                            {% endif %}
+                        </td>
+                        {% if period %}
+                        {% if row.in_period %}
+                        <td class="num">{{ row.period.opening|floatformat:2 }}</td>
+                        <td class="num">{{ row.period.purchases|floatformat:2 }}</td>
+                        <td class="num">{{ row.period.closing|floatformat:2 }}</td>
+                        <td class="num" data-sort="{{ row.period.sellable }}">
+                            {{ row.period.sellable|floatformat:2 }}
+                            {% if row.period.known_losses %}
+                                <span class="sold-shared" title="{{ row.period.left_the_shelf|floatformat:2 }} sont sortis du stock, dont {{ row.period.known_losses|floatformat:2 }} de pertes déjà déclarées — celles-ci ne peuvent pas avoir été vendues.">*</span>
+                            {% endif %}
+                        </td>
+                        {% else %}
+                        <td class="num muted">—</td>
+                        <td class="num muted">—</td>
+                        <td class="num muted">—</td>
+                        <td class="num muted">—</td>
+                        {% endif %}
+                        {% else %}
                         <td class="num">{{ row.quantity|floatformat:2 }}</td>
-                        <td class="num">
-                            {% if row.sold %}
-                                {{ row.sold.exact|floatformat:2 }}
+                        {% endif %}
+                        <td class="num" data-sort="{{ row.sold.headline|default_if_none:'' }}">
+                            {% if row.sold and row.sold.headline %}
+                                <span {% if row.flag_over %}class="sold-over"
+                                      title="Vendu plus qu'il n'en est {% if period %}sorti du stock sur la période{% else %}été acheté{% endif %} : il manque {{ row.sold.missing|floatformat:2 }} {{ row.stock_type.get_unit_display }}. Facture manquante, recette erronée, ou produit caisse mal rattaché."{% endif %}>{{ row.sold.headline|floatformat:2 }}</span>
                                 {% if row.sold.is_ambiguous %}
                                     <span class="sold-shared"
-                                          title="{{ row.sold.shared|floatformat:2 }} de plus ont été consommés par des recettes qui proposent cet article OU {{ row.sold.pool_partners }} autre{{ row.sold.pool_partners|pluralize }} — impossible de savoir lesquels.">
-                                        +{{ row.sold.shared|floatformat:2 }} ?
+                                          title="{% if row.sold.headline_is_estimate %}Estimation{% else %}Dont {{ row.sold.shared|floatformat:2 }} estimé{% endif %} : cet article est proposé en alternative de {{ row.sold.pool_partners }} autre{{ row.sold.pool_partners|pluralize }}, alors les ventes leur sont réparties du plus cher au moins cher, dans la limite de ce qui {% if period %}est sorti du stock{% else %}a été acheté{% endif %} (moins {{ row.stock_type.loss_percent|floatformat:"-2" }} % de perte).">
+                                        ?
                                     </span>
                                 {% endif %}
                             {% else %}<span class="muted">—</span>{% endif %}
                         </td>
+                        {% if period %}
+                        {% if row.in_period and row.reliable %}
+                        <td class="num" data-sort="{{ row.sold.unexplained }}">
+                            {% if row.sold.unexplained %}
+                                <span class="stock-missing">{{ row.sold.unexplained|floatformat:2 }}</span>
+                            {% else %}<span class="muted">—</span>{% endif %}
+                        </td>
+                        <td class="num" data-sort="{{ row.missing_value_ht|default:0 }}">
+                            {% if row.missing_value_ht %}
+                                <span class="stock-missing">{{ row.missing_value_ht|floatformat:2 }} €</span>
+                            {% else %}<span class="muted">—</span>{% endif %}
+                        </td>
+                        {% else %}
+                        <td class="num muted" data-sort="">—</td>
+                        <td class="num muted" data-sort="">—</td>
+                        {% endif %}
+                        <td>{{ row.stock_type.get_unit_display }}</td>
+                        {% else %}
                         <td>{{ row.stock_type.get_unit_display }}</td>
                         <td class="num">{{ row.value_ht|floatformat:2 }} €</td>
                         <td class="num">{{ row.value_ttc|floatformat:2 }} €</td>
+                        {% endif %}
                         <td>
                             <a href="{% url 'inventory:stock_type_update' row.stock_type.pk %}">Modifier</a>
                             <button type="button" class="btn btn-small btn-secondary js-price-history-toggle"
@@ -107,18 +273,19 @@
                         </td>
                     </tr>
                     <tr id="price-history-{{ row.stock_type.id }}" data-child-row hidden>
-                        <td colspan="6" style="padding:0.75rem 0.9rem;">
+                        <td colspan="{{ column_count }}" style="padding:0.75rem 0.9rem;">
                             <p class="muted">Chargement…</p>
                         </td>
                     </tr>
                     <tr id="details-{{ row.stock_type.id }}" data-child-row hidden>
-                        <td colspan="6" style="padding:0;">
+                        <td colspan="{{ column_count }}" style="padding:0;">
                             <p class="muted" style="padding:0.75rem 0.9rem;">Chargement…</p>
                         </td>
                     </tr>
                     {% endfor %}
                 </tbody>
             </table>
+            {% if period %}</div>{% endif %}
         </div>
         {% endfor %}
     {% else %}

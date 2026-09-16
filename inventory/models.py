@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
 
@@ -7,6 +8,25 @@ class UnitChoices(models.TextChoices):
     LITRE = "L", "Litre"
     UNIT = "UNIT", "Unité"
     KILOGRAM = "KG", "Kilogramme"
+
+
+#: How much of what's bought is assumed never to reach a glass, for a stock
+#: item that hasn't been given its own figure. Ten per cent is a bar rule of
+#: thumb, not a measurement - which is exactly why it's editable per item.
+DEFAULT_LOSS_PERCENT = Decimal("10")
+
+
+def loss_fraction(percent) -> Decimal:
+    """A loss percentage as a 0-1 fraction, clamped to the range that means
+    anything.
+
+    Clamped rather than trusted: the field's validators only run on a form,
+    and a negative allowance would let an item be credited with covering MORE
+    sales than it was ever bought - which reads as stock that isn't missing.
+    """
+    if percent is None:
+        return DEFAULT_LOSS_PERCENT / Decimal("100")
+    return min(max(percent, Decimal("0")), Decimal("100")) / Decimal("100")
 
 
 class StockType(models.Model):
@@ -21,6 +41,22 @@ class StockType(models.Model):
     name = models.CharField(max_length=255, unique=True)
     unit = models.CharField(max_length=4, choices=UnitChoices.choices)
     category = models.CharField(max_length=255, blank=True)
+    # How much of what's bought never reaches a glass: over-pouring, the last
+    # centilitres in a bottle, a keg's foam, a dropped crate. It's a
+    # per-item property (a draught beer loses far more than a bottle of
+    # syrup), which is why it lives here rather than as one global setting.
+    #
+    # Used when attributing an ambiguous "vodka OU gin" sale to a real
+    # bottle: an alternative is only assumed to have covered a sale while it
+    # still has stock left ABOVE this allowance - see
+    # variance.allocate_choices.
+    loss_percent = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=DEFAULT_LOSS_PERCENT,
+        validators=[MinValueValidator(Decimal("0")), MaxValueValidator(Decimal("100"))],
+        help_text="Part des achats perdue avant la vente (débordement, fonds de bouteille…). 10 % par défaut.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -28,6 +64,11 @@ class StockType(models.Model):
 
     def __str__(self):
         return self.name
+
+    @property
+    def loss_fraction(self) -> Decimal:
+        """This item's loss allowance as a 0-1 fraction."""
+        return loss_fraction(self.loss_percent)
 
     @property
     def current_quantity(self) -> Decimal:

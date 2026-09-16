@@ -43,6 +43,21 @@ def suggested_start_date(supplier_code: str) -> date:
     return timezone.localdate() - timedelta(days=DEFAULT_LOOKBACK_DAYS)
 
 
+def default_gather_start(supplier_ids) -> date:
+    """Where the "Factures" page starts a search by default: the date of the
+    newest invoice any gathered source has already brought in - a gather is
+    for what arrived since. Receipts are left out (photographed, never
+    gathered), and so is a date in the future (a misread one).
+    """
+    latest = (
+        Invoice.objects.filter(supplier_id__in=supplier_ids, ocr_text="", invoice_date__lte=timezone.localdate())
+        .order_by("-invoice_date")
+        .values_list("invoice_date", flat=True)
+        .first()
+    )
+    return latest or timezone.localdate() - timedelta(days=DEFAULT_LOOKBACK_DAYS)
+
+
 def _import_downloaded_file(
     job: ScrapeJob,
     supplier: Supplier,

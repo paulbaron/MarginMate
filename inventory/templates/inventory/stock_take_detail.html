@@ -90,3 +90,17 @@
         </div>
     </div>
 {% endblock %}
+{% block extra_js %}
+<script>
+// Reaching this page means a save actually went through, so the browser-side
+// draft of that inventory has done its job and is dropped - see the "draft
+// net" section of stock_take_form.html for why it is cleared here rather
+// than when the form was submitted.
+try {
+    localStorage.removeItem("marginmate:stock-take-draft:{{ stock_take.pk }}");
+    localStorage.removeItem("marginmate:stock-take-draft:new");
+} catch (e) {
+    // storage unavailable - nothing was ever written, so nothing to clear
+}
+</script>
+{% endblock %}

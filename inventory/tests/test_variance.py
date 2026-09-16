@@ -18,6 +18,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from django.test import TestCase
+from django.urls import reverse
 from django.utils import timezone
 
 from inventory.models import MovementKind, StockMovement, UnitChoices
@@ -388,6 +389,217 @@ class VarianceArithmeticTests(TestCase):
         self.assertEqual([pool.label for pool in report.incomplete], [])
 
 
+class LossAllowanceTests(TestCase):
+    """Part of what leaves the shelf was never going to be sold: over-pours,
+    the last centilitres of a bottle, a keg's foam. StockType.loss_percent
+    says how much, per item, and the écarts report deducts it before calling
+    anything missing - otherwise every normal week reads as theft.
+
+    Kept separate from the `unexplained_*` figures, which stay raw: those are
+    the hard arithmetic, and `is_impossible` still judges on them so an
+    over-generous allowance can never turn into "your data is wrong".
+    """
+
+    def setUp(self):
+        self.vodka = make_stock_type(name="Vodka", unit=UnitChoices.LITRE)
+
+    def report(self, opening, closing, loss_percent=None):
+        if loss_percent is not None:
+            self.vodka.loss_percent = Decimal(loss_percent)
+            self.vodka.save(update_fields=["loss_percent"])
+        opening_take = make_stock_take(taken_at=at(1))
+        make_stock_take_line(
+            stock_take=opening_take, stock_type=self.vodka,
+            counted_quantity=opening, unit=UnitChoices.LITRE,
+        )
+        closing_take = make_stock_take(taken_at=at(10))
+        make_stock_take_line(
+            stock_take=closing_take, stock_type=self.vodka,
+            counted_quantity=closing, unit=UnitChoices.LITRE,
+        )
+        report = compute_variance(closing_take)
+        return next(p for p in report.pools if self.vodka in p.stock_types)
+
+    def test_ten_percent_of_what_left_the_shelf_is_allowed_for_by_default(self):
+        pool = self.report("100", "80")
+        self.assertEqual(pool.actual_usage, Decimal("20"))
+        self.assertEqual(pool.loss_allowance, Decimal("2"))
+        self.assertEqual(pool.unexplained_min, Decimal("20"))  # raw, untouched
+        self.assertEqual(pool.shortfall, Decimal("18"))
+
+    def test_the_rate_is_the_items_own(self):
+        self.assertEqual(self.report("100", "80", loss_percent="25").loss_allowance, Decimal("5"))
+        self.vodka.refresh_from_db()
+        self.assertEqual(self.report("100", "80", loss_percent="0").loss_allowance, Decimal("0"))
+
+    def test_an_allowance_bigger_than_the_gap_leaves_nothing_missing(self):
+        """A gap the spillage already explains is not shrinkage - and the
+        shortfall floors at zero rather than going negative, because stock
+        does not appear out of nowhere."""
+        recipe = make_recipe(name="Vodka tonic")
+        make_ingredient(recipe, stock_type=self.vodka, quantity="1", group=0)
+        record_sales([(recipe.name, date(2026, 3, 5), 19)])  # 19 of the 20 L
+
+        pool = self.report("100", "80")
+        self.assertEqual(pool.unexplained_min, Decimal("1"))
+        self.assertEqual(pool.loss_allowance, Decimal("2"))
+        self.assertEqual(pool.shortfall, Decimal("0"))
+        self.assertFalse(pool.is_missing)
+
+    def test_a_pool_uses_each_members_own_rate_not_an_average(self):
+        """A draught beer at 15% next to a syrup at 2% must not be averaged
+        into a rate that fits neither."""
+        gin = make_stock_type(name="Gin", unit=UnitChoices.LITRE, loss_percent=Decimal("30"))
+        self.vodka.loss_percent = Decimal("10")
+        self.vodka.save(update_fields=["loss_percent"])
+        recipe = make_recipe(name="Mule")
+        make_ingredient(recipe, stock_type=self.vodka, quantity="0.04", group=0)
+        make_ingredient(recipe, stock_type=gin, quantity="0.04", group=0)
+
+        opening_take = make_stock_take(taken_at=at(1))
+        closing_take = make_stock_take(taken_at=at(10))
+        for take, counts in ((opening_take, ("100", "100")), (closing_take, ("90", "50"))):
+            for stock_type, quantity in zip((self.vodka, gin), counts):
+                make_stock_take_line(
+                    stock_take=take, stock_type=stock_type,
+                    counted_quantity=quantity, unit=UnitChoices.LITRE,
+                )
+
+        report = compute_variance(closing_take)
+        pool = next(p for p in report.pools if self.vodka in p.stock_types)
+        self.assertIn(gin, pool.stock_types)
+        # 10 L of vodka at 10% + 50 L of gin at 30%
+        self.assertEqual(pool.loss_allowance, Decimal("1") + Decimal("15"))
+
+    def test_an_impossible_count_gets_no_allowance(self):
+        """Counting more at the end than ever existed is a miscount. A
+        negative usage must not hand the pool a negative allowance, which
+        would quietly INFLATE the shortfall."""
+        pool = self.report("1", "40")
+        self.assertLess(pool.actual_usage, 0)
+        self.assertEqual(pool.loss_allowance, Decimal("0"))
+
+    def test_impossible_is_still_judged_on_the_raw_figures(self):
+        """The allowance is an estimate; it must never be the thing that
+        declares the data wrong."""
+        recipe = make_recipe(name="Vodka tonic")
+        make_ingredient(recipe, stock_type=self.vodka, quantity="1", group=0)
+        record_sales([(recipe.name, date(2026, 3, 5), 30)])  # 30 L sold
+        pool = self.report("100", "80")  # only 20 L actually left the shelf
+        self.assertTrue(pool.is_impossible)
+        self.assertFalse(pool.is_missing)
+
+
+class RecipeLinkedFilterTests(TestCase):
+    """An item no recipe is made from can only ever read as 100% missing.
+
+    The till really does sell it - a glass of prosecco, a saucisson board -
+    but nothing in the app says what those are made of, so every drop that
+    leaves the shelf lands in the unexplained column. On the real database
+    that was 78% of the headline figure. It is a recipe that hasn't been
+    written, not stock that walked, so the page can set those aside.
+    """
+
+    def setUp(self):
+        self.vodka = make_stock_type(name="Vodka", unit=UnitChoices.LITRE)
+        self.prosecco = make_stock_type(name="Prosecco", unit=UnitChoices.LITRE)
+        # Priced, so the pools have a euro figure to compare. Dated before
+        # the opening count, so it prices the stock without also being a
+        # purchase inside the window.
+        for stock_type, cost in ((self.vodka, "20"), (self.prosecco, "8")):
+            StockMovement.objects.create(
+                stock_type=stock_type, quantity=Decimal("100"), unit_cost_ht=Decimal(cost),
+                kind=MovementKind.PURCHASE, occurred_on=date(2026, 1, 1),
+            )
+        recipe = make_recipe(name="Vodka tonic")
+        make_ingredient(recipe, stock_type=self.vodka, quantity="0.04", group=0)
+
+    def build(self):
+        opening = make_stock_take(taken_at=at(1))
+        closing = make_stock_take(taken_at=at(10))
+        for take, quantity in ((opening, "100"), (closing, "50")):
+            for stock_type in (self.vodka, self.prosecco):
+                make_stock_take_line(
+                    stock_take=take, stock_type=stock_type,
+                    counted_quantity=quantity, unit=UnitChoices.LITRE,
+                )
+        return compute_variance(closing)
+
+    def pool_for(self, report, stock_type):
+        return next(p for p in report.pools if stock_type in p.stock_types)
+
+    def test_an_item_a_recipe_uses_is_flagged(self):
+        self.assertTrue(self.pool_for(self.build(), self.vodka).in_recipes)
+
+    def test_an_item_no_recipe_uses_is_not(self):
+        self.assertFalse(self.pool_for(self.build(), self.prosecco).in_recipes)
+
+    def test_the_filtered_report_drops_it(self):
+        report = self.build()
+        self.assertEqual(len(report.missing), 2)
+        linked = report.only_in_recipes()
+        self.assertEqual([p.label for p in linked.missing], ["Vodka"])
+        self.assertLess(linked.total_value_missing_min, report.total_value_missing_min)
+
+    def test_the_unfiltered_report_is_not_touched(self):
+        """only_in_recipes returns a new report - reading the filtered view
+        must not quietly change what the full one says."""
+        report = self.build()
+        before = report.total_value_missing_min
+        report.only_in_recipes()
+        self.assertEqual(report.total_value_missing_min, before)
+
+    def test_an_item_reached_only_through_a_sub_recipe_counts(self):
+        """"Vodka OU <sirop maison>", where the syrup is its own recipe: the
+        syrup's own ingredients are used by a recipe just as much."""
+        sugar = make_stock_type(name="Sucre", unit=UnitChoices.KILOGRAM)
+        syrup = make_recipe(name="Sirop maison", yield_quantity="1")
+        make_ingredient(syrup, stock_type=sugar, quantity="0.5", group=0)
+        cocktail = make_recipe(name="Cocktail")
+        make_ingredient(cocktail, sub_recipe=syrup, quantity="0.02", group=0)
+
+        opening = make_stock_take(taken_at=at(1))
+        closing = make_stock_take(taken_at=at(10))
+        for take, quantity in ((opening, "10"), (closing, "5")):
+            make_stock_take_line(
+                stock_take=take, stock_type=sugar,
+                counted_quantity=quantity, unit=UnitChoices.KILOGRAM,
+            )
+        report = compute_variance(closing)
+        self.assertTrue(self.pool_for(report, sugar).in_recipes)
+
+    def test_a_pool_counts_if_any_member_is_used(self):
+        """Alternatives are pooled, so the group is reachable as soon as one
+        of them is - dropping the pool would take the used item with it."""
+        gin = make_stock_type(name="Gin", unit=UnitChoices.LITRE)
+        mule = make_recipe(name="Mule")
+        make_ingredient(mule, stock_type=self.vodka, quantity="0.04", group=0)
+        make_ingredient(mule, stock_type=gin, quantity="0.04", group=0)
+
+        report = self.build()
+        pool = self.pool_for(report, self.vodka)
+        self.assertIn(gin, pool.stock_types)
+        self.assertTrue(pool.in_recipes)
+
+    def test_the_page_offers_both_readings(self):
+        report = self.build()
+        url = reverse("inventory:stock_take_variance", kwargs={"pk": report.closing_take.pk})
+
+        full = self.client.get(url)
+        self.assertFalse(full.context["only_recipes"])
+        self.assertEqual(len(full.context["report"].missing), 2)
+        self.assertEqual(full.context["unlinked_count"], 1)
+        self.assertContains(full, "Seulement ceux utilisés par une recette")
+
+        filtered = self.client.get(url, {"recettes": "1"})
+        self.assertTrue(filtered.context["only_recipes"])
+        self.assertEqual([p.label for p in filtered.context["report"].missing], ["Vodka"])
+        # Both figures are on the page either way, so the filter never hides
+        # what it costs.
+        self.assertEqual(filtered.context["total_all"], full.context["total_all"])
+        self.assertLess(filtered.context["total_linked"], filtered.context["total_all"])
+
+
 class CheapestBottleTests(TestCase):
     """Stating the loss as "N bottles of the cheapest" - the floor."""
 
@@ -446,19 +658,23 @@ class CheapestBottleTests(TestCase):
         self.assertEqual(balanced.unexplained_min, Decimal("0"))
 
     def test_missing_stock_is_priced_at_the_cheapest_member(self):
-        """2 litres unaccounted for, valued as if it were all the cheap rum -
-        the smallest claim the data supports."""
+        """2 litres unaccounted for, less the spillage that was never going
+        to be sold, valued as if the rest were all the cheap rum - the
+        smallest claim the data supports."""
         pool = self.build(opening=("10", "10"), closing=("7", "7"), sold=100)
         self.assertEqual(pool.unexplained_min, Decimal("2"))
+        # 6 L left the shelf, 10% of it was never destined for a glass.
+        self.assertEqual(pool.loss_allowance, Decimal("0.6"))
+        self.assertEqual(pool.shortfall, Decimal("1.4"))
         self.assertEqual(pool.cheapest, self.cheap)
         self.assertEqual(pool.cheapest_unit_cost, Decimal("10"))
-        self.assertEqual(pool.value_missing_min, Decimal("20"))
+        self.assertEqual(pool.value_missing_min, Decimal("14"))
 
     def test_missing_stock_is_counted_in_bottles_of_the_cheapest(self):
         pool = self.build(opening=("10", "10"), closing=("7", "7"), sold=100)
         self.assertEqual(pool.cheapest_item_size, Decimal("0.7"))
-        # 2 L / 0.7 L per bottle
-        self.assertAlmostEqual(pool.bottles_missing_min, Decimal("2") / Decimal("0.7"), places=6)
+        # 1.4 L / 0.7 L per bottle
+        self.assertAlmostEqual(pool.bottles_missing_min, Decimal("2"), places=6)
 
     def test_the_bottle_size_is_the_format_usually_bought(self):
         """A stock item can hold several formats - a vodka bought mostly in
@@ -541,7 +757,8 @@ class ReportSummaryTests(TestCase):
 
         report = compute_variance(closing)
         self.assertEqual([pool.stock_types[0].name for pool in report.missing], ["Whisky", "Limonade"])
-        self.assertEqual(report.total_value_missing_min, Decimal("2") * 40 + Decimal("2") * 1)
+        # 2 L went from each, less each one's 10% allowance -> 1.8 L apiece.
+        self.assertEqual(report.total_value_missing_min, Decimal("1.8") * 40 + Decimal("1.8") * 1)
 
     def test_the_report_says_how_many_sales_it_used(self):
         vodka = make_stock_type(name="Vodka")

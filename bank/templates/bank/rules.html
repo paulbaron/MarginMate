@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}Dépenses sans facture attendue - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <p class="breadcrumb"><a href="{% url 'bank:bank_home' %}">← Banque</a></p>
+            <h1>Dépenses sans facture attendue</h1>
+            <p class="page-subtitle">
+                Un prêt, l'URSSAF, les salaires : des dépenses qui n'auront jamais de facture. Une opération dont le
+                libellé correspond à une règle compte comme « pas de facture attendue » plutôt que comme une facture
+                manquante, et le rapprochement automatique la laisse de côté. Une dépense déjà rattachée à sa facture
+                n'est jamais cachée.
+            </p>
+        </div>
+    </div>
+
+    <div class="card">
+        <form method="post" action="{% url 'bank:rule_list' %}">
+            {% csrf_token %}
+            {% include "_form_fields.html" with form=form %}
+            <div class="form-actions">
+                <button class="btn btn-secondary" type="submit" name="action" value="test">Tester</button>
+                <button class="btn" type="submit" name="action" value="add">Ajouter la règle</button>
+            </div>
+        </form>
+
+        {% if test %}
+            <div class="message">
+                <strong>{{ test.count }} dépense{{ test.count|pluralize }}</strong>, {{ test.total|floatformat:2 }} €,
+                correspond{{ test.count|pluralize:"ent" }} à ce motif.
+                {% if test.linked %}
+                    <br>Dont {{ test.linked }} déjà rattachée{{ test.linked|pluralize }} à une facture : le motif est
+                    peut-être trop large.
+                {% endif %}
+            </div>
+            {% if test.examples %}
+                <div class="table-wrap">
+                    <table data-table data-table-label="opérations">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Opération</th>
+                                <th class="num">Montant</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for line in test.examples %}
+                                <tr>
+                                    <td data-sort="{{ line.paid_on|date:'Y-m-d' }}">{{ line.paid_on|date:"d/m/Y" }}</td>
+                                    <td>
+                                        <strong>{{ line.counterparty|default:line.bank_type }}</strong>
+                                        <span class="read-as">{{ line.label|truncatechars:90 }}</span>
+                                    </td>
+                                    <td class="num" data-sort="{{ line.amount|stringformat:'s' }}">{{ line.amount|floatformat:2 }} €</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% endif %}
+        {% endif %}
+    </div>
+
+    <h2>Règles</h2>
+    {% if rules %}
+        <div class="table-wrap">
+            <table data-table data-table-label="règles">
+                <thead>
+                    <tr>
+                        <th>Nom</th>
+                        <th>Motif</th>
+                        <th class="num">Dépenses</th>
+                        <th class="num">Montant</th>
+                        <th>État</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for rule, found in rules %}
+                        <tr>
+                            <td>{{ rule.description|default:"—" }}</td>
+                            <td><code>{{ rule.pattern }}</code></td>
+                            <td class="num">{{ found.count|default:"0" }}</td>
+                            <td class="num" data-sort="{{ found.total|stringformat:'s' }}">
+                                {{ found.total|floatformat:2 }} €
+                                {% if found.linked %}
+                                    <span class="status-pill status-NEEDS_REVIEW">dont {{ found.linked }} rattachée{{ found.linked|pluralize }}</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if rule.is_active %}
+                                    <span class="status-pill status-linked">Active</span>
+                                {% else %}
+                                    <span class="status-pill status-ignored">Suspendue</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <form method="post" action="{% url 'bank:rule_action' rule.pk %}" class="inline-form">
+                                    {% csrf_token %}
+                                    <button class="btn btn-small btn-secondary" type="submit" name="action" value="toggle">
+                                        {% if rule.is_active %}Suspendre{% else %}Réactiver{% endif %}
+                                    </button>
+                                    <button class="btn btn-small btn-danger" type="submit" name="action" value="delete">Supprimer</button>
+                                </form>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="empty-state">
+            <p>
+                Aucune règle pour l'instant. Sur la page Banque, l'onglet « Sans facture, par bénéficiaire » propose
+                « Ignorer… » à côté de chaque bénéficiaire.
+            </p>
+            <a class="btn btn-secondary" href="{% url 'bank:bank_home' %}?vue=par-beneficiaire">Voir les dépenses par bénéficiaire</a>
+        </div>
+    {% endif %}
+{% endblock %}

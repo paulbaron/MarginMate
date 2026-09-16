@@ -24,6 +24,38 @@ class ParsedLine:
     # applied by hand via the stock_equivalent factor, isn't always obvious
     # from quantity alone. 1 when the supplier's format has no such concept.
     colisage: int = 1
+    # True when the till printed a generic placeholder ("Article divers")
+    # instead of a product name. The line's own unit price is then the only
+    # thing identifying what was bought, and the name is filled in at import
+    # time from the shop's price list (see inventory ShopItemPrice and
+    # importing.label_placeholder_lines) rather than in the parser, which
+    # must stay free of database access to remain testable.
+    is_placeholder: bool = False
+    # The name exactly as OCR read it (see InvoiceLine.read_as). Set by
+    # ReceiptParser.parse_ocr_pages; blank for a placeholder and for any
+    # document that was not photographed.
+    read_as: str = ""
+
+
+@dataclass
+class ParseCheck:
+    """One self-consistency check a parser ran against its own output.
+
+    Parsers that read a clean digital PDF don't need these: if the layout
+    matched, the numbers are the numbers. OCR-backed parsers (see
+    parsers/receipt_base.py) are different - the input is a photograph, and
+    a misread digit produces a perfectly well-formed wrong price. So those
+    parsers check their own arithmetic against the totals the receipt itself
+    prints, and hand the verdict up for the review queue to show.
+
+    `label` is shown to the user as-is, in French, and `detail` carries the
+    numbers that made the check pass or fail so a human can see *why*
+    without re-reading the ticket.
+    """
+
+    label: str
+    passed: bool
+    detail: str = ""
 
 
 @dataclass
@@ -32,9 +64,27 @@ class ParsedInvoice:
     invoice_number: str
     invoice_date: date | None
     lines: list[ParsedLine] = field(default_factory=list)
+    # The text this parse was derived from, kept only when it isn't already
+    # in the source file - i.e. OCR output for a photographed receipt.
+    # Stored on the Invoice so the review screen can show what the parser
+    # actually read next to the photo it read it from.
+    source_text: str = ""
+    # Lowest per-line OCR confidence on the page, 0..1. None for parsers
+    # that read a digital PDF, where the concept doesn't apply.
+    confidence: Decimal | None = None
+    checks: list[ParseCheck] = field(default_factory=list)
+    # True when the lines were read off a photo by OCR rather than out of a
+    # digital document. Product names are then matched tolerantly (see
+    # inventory.matching.ocr_match): a recogniser misreads "500G" as
+    # "5OOG", a supplier's own PDF never does.
+    from_ocr: bool = False
     # See Invoice.reconciliation_adjustment - 0 when a parser doesn't have
     # (or doesn't need) a printed grand total to reconcile against.
     reconciliation_adjustment: Decimal = Decimal("0")
+    # What the parser noticed but could not settle - lines that don't add up
+    # to the printed total - shown on the imported invoice, which then waits
+    # in "À vérifier".
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass

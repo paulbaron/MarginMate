@@ -10,15 +10,16 @@ from __future__ import annotations
 import traceback
 
 from django.db import transaction
+from django.db.models import Sum
 from datetime import date
 
 from django.conf import settings
 from django.utils import timezone
 
-from .models import PosProduct, SalesImportJob
+from .models import PosProduct, PosProductDailyQuantity, SalesImportJob
 from .pos.laddition_download import DownloadCancelled, download_sales_lines
 from .pos.laddition_xlsx import parse_sales_exports
-from .sales import record_sales
+from .sales import record_sales, recipe_lookup
 
 
 class _Cancelled(Exception):
@@ -35,10 +36,12 @@ def sync_pos_products(export) -> int:
     """Record every till product the export mentioned, mapped or not.
 
     This is what turns "105 names printed once at the end of an import" into
-    a backlog you can actually work through - see PosProduct. Totals
-    accumulate across imports; re-importing the same period therefore
-    double-counts them, which is why they're labelled as a rough guide to
-    what sells rather than an accounting figure.
+    a backlog you can actually work through - see PosProduct. Quantities are
+    tracked per day (PosProductDailyQuantity), which is what makes this safe
+    to call on an already-covered period: a re-imported day corrects itself
+    instead of piling onto what was already recorded for it - the same
+    guarantee record_sales already gives RecipeSale. See that model's
+    docstring for what the naive version used to do instead.
     """
     # One transaction: same lock contention as record_sales.
     with transaction.atomic():
@@ -46,25 +49,80 @@ def sync_pos_products(export) -> int:
 
 
 def _sync_pos_products(export) -> int:
+    # A till name that already answers to a recipe - its own name, or a
+    # happy_hour_name set on one - is counted into that recipe's sales by
+    # record_sales whether or not this PosProduct is explicitly linked (see
+    # recipe_lookup). Left unlinked, it sits in the "needs review" backlog
+    # forever asking to be resolved even though it already has been, and
+    # "Produits caisse" undercounts that recipe relative to what "Dernières
+    # ventes" shows for it - the two pages stop reconciling. Auto-linking
+    # here doesn't change what gets counted, only makes the explicit link
+    # match what record_sales was already doing silently.
+    lookup = recipe_lookup()
+
+    products: dict[str, PosProduct] = {}
     for name, info in export.products.items():
         product, created = PosProduct.objects.get_or_create(
             name=name,
             defaults={
                 "category": info["category"],
                 "typology": info["typology"],
-                "total_quantity": info["quantity"],
                 "first_seen": info["first"],
                 "last_seen": info["last"],
             },
         )
-        if created:
-            continue
-        product.total_quantity += info["quantity"]
-        product.category = product.category or info["category"]
-        product.typology = product.typology or info["typology"]
-        product.first_seen = min(product.first_seen or info["first"], info["first"])
-        product.last_seen = max(product.last_seen or info["last"], info["last"])
-        product.save(update_fields=["total_quantity", "category", "typology", "first_seen", "last_seen"])
+        update_fields = []
+        if not created:
+            product.category = product.category or info["category"]
+            product.typology = product.typology or info["typology"]
+            product.first_seen = min(product.first_seen or info["first"], info["first"])
+            product.last_seen = max(product.last_seen or info["last"], info["last"])
+            update_fields = ["category", "typology", "first_seen", "last_seen"]
+        if product.recipe_id is None and not product.ignored:
+            coinciding = lookup.get(name.strip().lower())
+            if coinciding is not None:
+                product.recipe = coinciding
+                update_fields.append("recipe")
+        if update_fields:
+            product.save(update_fields=update_fields)
+        products[name] = product
+
+    # (name, day) -> quantity, from the same per-day entries record_sales
+    # works from, rather than export.products' window-wide total - that's
+    # the whole fix: a day sold twice in one export sums (one row per item
+    # rung up), but a day already recorded from an EARLIER import is
+    # replaced, not added to.
+    daily: dict[tuple[str, date], int] = {}
+    for name, day, quantity in export.entries:
+        key = (name, day)
+        daily[key] = daily.get(key, 0) + quantity
+
+    PosProductDailyQuantity.objects.bulk_create(
+        [
+            PosProductDailyQuantity(product=products[name], sold_on=day, quantity=quantity)
+            for (name, day), quantity in daily.items()
+        ],
+        update_conflicts=True,
+        unique_fields=["product", "sold_on"],
+        update_fields=["quantity"],
+    )
+
+    touched = list(products.values())
+    totals = {
+        row["product_id"]: row["total"]
+        for row in PosProductDailyQuantity.objects.filter(product__in=touched)
+        .values("product_id")
+        .annotate(total=Sum("quantity"))
+    }
+    changed = []
+    for product in touched:
+        total = totals.get(product.id, 0)
+        if total != product.total_quantity:
+            product.total_quantity = total
+            changed.append(product)
+    if changed:
+        PosProduct.objects.bulk_update(changed, ["total_quantity"])
+
     return len(export.products)
 
 

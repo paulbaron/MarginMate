@@ -328,6 +328,15 @@ th[aria-sort]:not([aria-sort="none"]) > button { color: var(--text); }
 .stock-row { cursor: pointer; }
 .stock-row td:first-child .chevron { margin-right: var(--s1); }
 
+/* Fixed, not auto: this table nests a full purchase-history table (up to
+   nine columns) inside an expanded row's cell. Under the default auto
+   layout, that nested table's own content width feeds back into how wide
+   THESE columns are - so expanding one row widened every row in the
+   category, since they all share the same column tracks. Fixed layout
+   takes the columns entirely from the widths below, no matter what gets
+   swapped into a cell later. */
+.stock-table { table-layout: fixed; }
+
 /* -------------------------------------------------------------------- cards */
 
 .card {
@@ -771,17 +780,234 @@ form p { margin: var(--s3) 0; }
 .invoice-line-row .inline-form input[name$="-vat_rate"] { width: 6rem; text-align: right; }
 .invoice-line-row .inline-form input[name$="-total_ht"] { width: 8rem; text-align: right; }
 
+/* What each counted line is worth, priced live by the server while the
+   inventory is being typed (see stock_take_form.html). */
+.line-value {
+    /* Takes whatever room the inputs leave rather than reserving a fixed
+       slice of it - a fixed width pushed "Retirer" onto a second line, and
+       an inventory is hundreds of these rows. */
+    flex: 1 1 9rem;
+    text-align: right;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    font-variant-numeric: tabular-nums;
+    cursor: help;
+}
+.line-value-total { font-weight: 600; }
+.line-value-unit { color: var(--muted); }
+/* The count exceeds what the invoices can account for - the rest is valued
+   at the oldest known price, which is a guess worth flagging. */
+.line-value-shortfall { color: var(--amber); }
+/* Couldn't be priced at all, so the total below is incomplete and says so
+   rather than quietly leaving this line out. */
+.line-value-failed { color: var(--red); }
+
+.stock-take-total {
+    display: flex;
+    align-items: baseline;
+    gap: var(--s2);
+    margin-top: var(--s4);
+    padding-top: var(--s3);
+    border-top: 1px solid var(--border-strong);
+}
+.stock-take-total strong { font-size: 1.35rem; color: var(--amber); font-variant-numeric: tabular-nums; }
+.draft-state { margin-left: auto; font-size: 0.8rem; }
+
 .sale-line-row { margin-bottom: var(--s2); }
 .sale-line-row .inline-form select { min-width: 18rem; }
 .sale-line-row .inline-form input { width: 7rem; text-align: right; }
 
-/* "Sold" is two numbers when recipes offer alternatives: what certainly was
-   this item, and what a choice took from its pool. The second is shown as a
-   separate, quieter figure rather than added in - adding them would state a
-   split that genuinely isn't known. */
+/* "Sold" can be part certainty, part attribution: what was definitely this
+   item, plus what an ambiguous "vodka OU gin" most plausibly took from it
+   (see inventory/variance.py::allocate_choices). One number, with a quiet
+   marker saying part of it is attributed. */
 .sold-shared {
     color: var(--muted);
     font-size: 0.82em;
     cursor: help;
     border-bottom: 1px dotted var(--border-strong);
 }
+
+/* More was poured than was ever bought - a missing invoice or a wrong
+   recipe, not shrinkage. */
+.sold-over {
+    color: var(--red);
+    cursor: help;
+}
+
+/* Two readings of the same report, side by side with what each comes to -
+   the gap between them IS the finding, so neither is hidden behind the
+   other. */
+.filter-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s2);
+    margin-bottom: var(--s3);
+}
+.filter-tab {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    padding: var(--s2) var(--s4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--panel);
+    color: var(--text-dim);
+    font-size: 0.85rem;
+}
+.filter-tab:hover { border-color: var(--muted); text-decoration: none; }
+.filter-tab.active {
+    border-color: var(--amber);
+    color: var(--text);
+    background: var(--amber-bg);
+}
+.filter-tab-figure { font-size: 1.15rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.filter-tab.active .filter-tab-figure { color: var(--amber); }
+
+/* Stock that left the shelf between two counts and no sale explains: the
+   shrinkage figure. Amber rather than red - it is the number to look into,
+   not necessarily a mistake. */
+.stock-missing { color: var(--amber); }
+
+/* Not counted in both inventories, so no variance can honestly be computed
+   for it - see inventory/variance.py::PeriodStock. */
+.uncounted {
+    color: var(--amber);
+    background: var(--amber-bg);
+    border: 1px solid #574728;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 0.05rem 0.45rem;
+    margin-left: 0.35rem;
+    cursor: help;
+    white-space: nowrap;
+}
+
+/* Which period the stock page is showing: all time, or between two counts. */
+.period-picker { display: flex; align-items: center; gap: var(--s2); }
+.period-picker label { margin: 0; white-space: nowrap; }
+.period-picker select { min-width: 16rem; }
+
+/* Between two counts the table grows from 7 columns to 10 - wide enough to
+   scroll rather than squash every figure into illegibility, which is what
+   table-layout:fixed would otherwise do to it on a laptop. Only applied in
+   that mode: see the comment in stock_list.html for why the 7-column table
+   is deliberately left unwrapped. */
+.stock-table-wrap { overflow-x: auto; }
+/* The sum of the period colgroup's own widths - below it, table-layout:fixed
+   scales every column down proportionally and the actions wrap onto two
+   lines instead of the table simply scrolling. */
+.stock-table-period { min-width: 1240px; }
+
+/* Till-receipt review — the photo beside what was read off it.
+ *
+ * Checking a receipt is a comparison, so the two things being compared have
+ * to be on screen together: flipping between a photo and a form is what
+ * stops receipts being checked at all. The photo column is sticky because a
+ * receipt is tall and the lines are short - scrolling the form must not
+ * scroll the evidence out of view. Below 900px the columns stack, since a
+ * side-by-side of two narrow columns is worse than one of each.
+ */
+.receipt-review {
+    display: grid;
+    grid-template-columns: minmax(280px, 380px) 1fr;
+    gap: var(--s5);
+    align-items: start;
+}
+
+@media (max-width: 900px) {
+    .receipt-review { grid-template-columns: 1fr; }
+}
+
+.receipt-photo {
+    position: sticky;
+    top: var(--s4);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: var(--s2);
+    max-height: calc(100vh - 2 * var(--s4));
+    overflow-y: auto;
+}
+
+.receipt-photo img { width: 100%; display: block; border-radius: var(--radius-sm); }
+
+/* The parser's own verdict. Green and red carry the whole message at a
+   glance, so the detail text is secondary until something is wrong. */
+.check-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s2); }
+
+.check {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: var(--s2);
+    padding: var(--s2) var(--s3);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--bg-raised);
+}
+
+.check-pass { border-color: #2f5133; background: var(--green-bg); }
+.check-fail { border-color: #5a2f2c; background: var(--red-bg); }
+.check-mark { font-weight: 700; }
+.check-pass .check-mark { color: var(--green); }
+.check-fail .check-mark { color: var(--red); }
+.check-label { font-weight: 600; }
+.check-detail { grid-column: 2; color: var(--text-dim); font-size: 0.85rem; font-family: var(--font-mono); }
+
+/* The raw recognised text, folded away: needed when a number looks wrong,
+   noise the rest of the time. */
+.ocr-dump {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: var(--s3);
+    max-height: 320px;
+    overflow: auto;
+    white-space: pre-wrap;
+}
+
+/* The review queue: a wall of thumbnails, because recognising which receipt
+   is which is a visual job. */
+.receipt-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap: var(--s4);
+}
+
+.receipt-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.receipt-card:hover { border-color: var(--border-strong); background: var(--panel-hover); }
+.receipt-card-thumb { height: 190px; overflow: hidden; background: var(--bg); }
+.receipt-card-thumb img { width: 100%; object-fit: cover; object-position: top; display: block; }
+.receipt-card-body { padding: var(--s3); display: grid; gap: var(--s1); }
+.receipt-card-body .amount { font-family: var(--font-mono); font-size: 1.05rem; }
+
+/* Bulk selection for deletion (invoice list, receipt queue). */
+.bulk-bar { display: flex; align-items: center; gap: var(--s3); margin: var(--s3) 0; flex-wrap: wrap; }
+.bulk-all { display: inline-flex; align-items: center; gap: var(--s2); margin: 0; }
+.select-col { width: 2.2rem; text-align: center; }
+.receipt-card-wrap { position: relative; }
+.receipt-select { position: absolute; top: var(--s2); left: var(--s2); z-index: 1; width: 1.15rem; height: 1.15rem; }
+
+/* A line attached to a known product under another spelling: what was read. */
+.read-as { display: block; margin: var(--s1) 0 0; color: var(--text-dim); font-size: 0.8rem; font-family: var(--font-mono); }
+
+/* Receipt import: two ways in (files, a folder), and a batch that fills in. */
+.upload-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--s3); margin-bottom: var(--s3); }
+.upload-choice { display: grid; gap: var(--s1); padding: var(--s3); border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); margin: 0; cursor: pointer; }
+.upload-choice:hover { background: var(--panel-hover); }
+.upload-choice-title { font-weight: 600; }
+.batch-progress { height: 6px; margin: var(--s3) 0; border-radius: 999px; background: var(--bg); overflow: hidden; }
+.batch-progress-bar { height: 100%; background: var(--green); transition: width 0.4s ease; }

@@ -1,6 +1,11 @@
 """Selenium scraper for Metro France invoices, ported from ScrapBarInvoices.
 Logs into docs.metro.fr, filters invoices to a date range, and downloads
-every available PDF into ``download_dir``.
+every PDF not already imported into ``download_dir``.
+
+Metro blocks accounts that hammer its site, so this stays gentle: one login
+per run, one date window at a time, and never more than one click every
+CLICK_INTERVAL_SECONDS. What it no longer does is wait for each file before
+the next click - see _download_window.
 """
 
 from __future__ import annotations
@@ -21,9 +26,12 @@ from selenium.webdriver.support.ui import Select, WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
 
 PAGE_WAIT_SECONDS = 15  # for one-off waits: login, filters, page structure appearing
-DOWNLOAD_TIMEOUT_SECONDS = 45  # per invoice - independent of how many invoices there are in total
-GRACE_PERIOD_SECONDS = 20  # older invoices can be noticeably slower to generate; a bit of extra patience
-# before writing one off as failed avoids false "skipped" reports for downloads that were just about to land.
+DOWNLOAD_TIMEOUT_SECONDS = 65  # per invoice, from its click - older invoices can be
+# noticeably slower for Metro to generate, so this is generous. It is only
+# ever spent on a download that really is late: see _PendingDownloads.
+CLICK_INTERVAL_SECONDS = 2.0  # never faster than a person clicking down the list
+MAX_IN_FLIGHT = 3  # downloads clicked but not on disk yet; the next click waits for room
+POLL_SECONDS = 0.5
 WINDOW_DAYS = 90  # a wide date range is processed in chunks this big rather than
 # in one go: Metro's own results page caps at 100 rows with no pagination we
 # drive, so a single request spanning years would silently truncate to the
@@ -31,10 +39,9 @@ WINDOW_DAYS = 90  # a wide date range is processed in chunks this big rather tha
 # rendered results list light, which the one real crash we saw (a stuck
 # session after several identical-looking timeouts on a 100-row/3-year
 # window) points at as a contributing factor.
-MAX_CONSECUTIVE_TIMEOUTS = 3  # if this many downloads in a row time out with
-# no visible change on the page, something is systematically wrong (not just
-# one slow invoice) - stop wasting the rest of the per-invoice timeout budget
-# on a pattern that isn't going to resolve itself.
+MAX_CONSECUTIVE_TIMEOUTS = 3  # if this many downloads in a row never arrive,
+# something is systematically wrong (not just one slow invoice) - stop
+# clicking the rest of the window instead of timing each of them out too.
 MAX_SESSION_RESTARTS = 2  # a crashed browser session (seen in practice, not
 # just theoretical - Chrome occasionally dies mid-run) used to silently
 # abandon every window that hadn't been processed yet while still reporting
@@ -98,17 +105,21 @@ def _fail_with_diagnostics(driver, download_dir: str, log, context: str):
     )
 
 
+def _log_page_state(driver, download_dir: str, log, context: str) -> None:
+    _url, _title, _body, screenshot_path = _capture_diagnostics(driver, download_dir, log, context)
+    if screenshot_path and os.path.exists(screenshot_path):
+        os.remove(screenshot_path)
+
+
 CHECKBOX_ID_REGEX = re.compile(r"^FRA_(\d+)_(\d+)_(\d+)_\d+$")
 
 
-def _row_invoice_number(button) -> str | None:
-    """The list page's row checkbox id looks like "FRA_134_52_45126_<timestamp>"
-    - the same (store, ref1, ref2) triple our PDF-text-based invoice_number
-    parsing derives, just not zero-padded. Reconstructing it here lets us
-    recognise an already-imported invoice from the list page alone, without
-    downloading and parsing its PDF first only to discover it's a duplicate -
-    the difference matters a lot when a wide date range mostly overlaps
-    invoices already gathered before.
+def _row_key(button) -> tuple[int, int, int] | None:
+    """(store, till, number) of a result row, from its checkbox id
+    ("FRA_134_52_45126_<timestamp>"). The same triple names the row's PDF
+    ("134_52_45126_<timestamp>_invoice_cus_copy_main.pdf") and, zero-padded,
+    the invoice number the PDF parser derives - so a row can be recognised as
+    already imported, and its file as landed, without opening anything.
     """
     try:
         row = button.find_element(By.XPATH, "./ancestor::tr[1]")
@@ -119,8 +130,31 @@ def _row_invoice_number(button) -> str | None:
     match = CHECKBOX_ID_REGEX.match(checkbox_id)
     if not match:
         return None
-    store, ref1, ref2 = match.groups()
-    return f"{store}-{int(ref1):03d}-{int(ref2):06d}"
+    store, till, number = (int(part) for part in match.groups())
+    return store, till, number
+
+
+def _invoice_number(key) -> str:
+    store, till, number = key
+    return f"{store}-{till:03d}-{number:06d}"
+
+
+def _is_known(key, known_numbers) -> bool:
+    """A deposit credit note ("Consignes") doesn't print its store, so the
+    parser stores it as "052-014645" - matched on till and number too.
+    Compared with the full "134-052-014645" only, every credit note used to
+    be downloaded again on every run, then thrown away as a duplicate.
+    """
+    _store, till, number = key
+    return _invoice_number(key) in known_numbers or f"{till:03d}-{number:06d}" in known_numbers
+
+
+def _file_prefix(key) -> str:
+    """How the PDF a row's download produces starts ("" matches any PDF)."""
+    if key is None:
+        return ""
+    store, till, number = key
+    return f"{store}_{till}_{number}_"
 
 
 def _date_windows(start_date: date, end_date: date):
@@ -267,6 +301,142 @@ def _wait_for_stable_results(get_buttons, max_wait: float = 20, poll: float = 1.
     return last_count
 
 
+def _visible_download_buttons(driver):
+    # The page renders a desktop copy of each row (inside a <tr>) and a
+    # hidden mobile copy (inside a <div data-testid="mobileRowTest">), both
+    # sharing the same id. Scoping to <tr> excludes the mobile duplicates
+    # structurally, in a single query - calling .is_displayed() on every
+    # match instead would mean one browser round-trip per element, on every
+    # single invoice download, which gets extremely slow once there are more
+    # than a handful.
+    return driver.find_elements(By.CSS_SELECTOR, "tr #downloadPdfButton")
+
+
+class _PendingDownloads:
+    """Downloads clicked but not on disk yet, each recognised by the file its
+    row produces - never by counting what is in the folder.
+
+    A click sometimes also starts a stray non-PDF download ("downloads.htm")
+    that appears and vanishes. Counted along with the PDFs, it hid the one
+    that had just landed, and the scraper sat out a full timeout on a
+    download long finished: ten times in one gather, eleven of its twelve
+    minutes. A PDF only counts if it wasn't already there, with that same
+    modification time, when its row was clicked.
+    """
+
+    def __init__(self, download_dir: str, clock):
+        self.download_dir = download_dir
+        self.clock = clock
+        self.pending: dict[str, tuple[str, float, set]] = {}
+
+    def _pdfs(self) -> set[tuple[str, int]]:
+        found = set()
+        with os.scandir(self.download_dir) as entries:
+            for entry in entries:
+                if not entry.name.lower().endswith(".pdf"):
+                    continue
+                try:
+                    found.add((entry.name, entry.stat().st_mtime_ns))
+                except OSError:
+                    continue
+        return found
+
+    def start(self, label: str, prefix: str) -> None:
+        self.pending[label] = (prefix, self.clock(), self._pdfs())
+
+    def landed(self) -> list[str]:
+        on_disk = self._pdfs()
+        done = [
+            label
+            for label, (prefix, _clicked, before) in self.pending.items()
+            if any(name.startswith(prefix) and (name, mtime) not in before for name, mtime in on_disk)
+        ]
+        for label in done:
+            del self.pending[label]
+        return done
+
+    def expired(self) -> list[str]:
+        now = self.clock()
+        late = [
+            label
+            for label, (_prefix, clicked, _before) in self.pending.items()
+            if now - clicked > DOWNLOAD_TIMEOUT_SECONDS
+        ]
+        for label in late:
+            del self.pending[label]
+        return late
+
+
+def _settle(driver, downloads: _PendingDownloads, download_dir, log, failures: int, sleep, until_empty: bool) -> int:
+    """Wait until a download slot is free - or, with `until_empty`, until
+    nothing is outstanding - noting what landed and what never will.
+    Returns how many downloads have failed in a row."""
+    while True:
+        if downloads.landed():
+            failures = 0
+        for label in downloads.expired():
+            failures += 1
+            log(f"Invoice {label} did not finish downloading within {DOWNLOAD_TIMEOUT_SECONDS}s - skipped.")
+            if failures == 1:
+                _log_page_state(driver, download_dir, log, f"waiting for invoice {label} to download")
+        if not downloads.pending:
+            return failures
+        if not until_empty and (len(downloads.pending) < MAX_IN_FLIGHT or failures >= MAX_CONSECUTIVE_TIMEOUTS):
+            return failures
+        sleep(POLL_SECONDS)
+
+
+def _download_window(
+    driver, download_dir: str, total: int, known_numbers, log, on_step, sleep=time.sleep, clock=time.monotonic
+) -> int:
+    """Download every row of the current results page not already imported.
+
+    The next click doesn't wait for the previous file - that waiting was most
+    of a gather's time. Metro isn't hammered either: one click every
+    CLICK_INTERVAL_SECONDS at most, never more than MAX_IN_FLIGHT downloads
+    outstanding, and whatever is still on its way when the list is done is
+    waited for before the next date window. Returns how many downloads were
+    started.
+    """
+    downloads = _PendingDownloads(download_dir, clock)
+    failures = 0
+    started = 0
+    for idx in range(total):
+        # Re-fetched each time rather than reusing handles captured before
+        # any click: the page can re-render rows after a download, which
+        # silently invalidates old references.
+        buttons = _visible_download_buttons(driver)
+        if idx >= len(buttons):
+            log(
+                f"Expected a download button at position {idx + 1}/{total} but the page only "
+                f"has {len(buttons)} now - stopping early for this window."
+            )
+            break
+        key = _row_key(buttons[idx])
+        label = f"{idx + 1}/{total}" + (f" ({_invoice_number(key)})" if key else "")
+        if key and _is_known(key, known_numbers):
+            log(f"Invoice {label} already imported - skipping download.")
+            on_step()
+            continue
+
+        failures = _settle(driver, downloads, download_dir, log, failures, sleep, until_empty=False)
+        if failures >= MAX_CONSECUTIVE_TIMEOUTS:
+            log(
+                f"{MAX_CONSECUTIVE_TIMEOUTS} downloads in a row never arrived - something is stuck on "
+                "Metro's side. Stopping this window rather than clicking the rest."
+            )
+            break
+        _js_click(driver, buttons[idx])
+        downloads.start(label, _file_prefix(key))
+        started += 1
+        log(f"Downloading Metro invoice {label}")
+        on_step()
+        sleep(CLICK_INTERVAL_SECONDS)
+
+    _settle(driver, downloads, download_dir, log, failures, sleep, until_empty=True)
+    return started
+
+
 def scrape_metro_invoices(
     download_dir: str, start_date: date, end_date: date, log=print, on_progress=None
 ) -> list[str]:
@@ -275,7 +445,7 @@ def scrape_metro_invoices(
 
     from invoices.models import Invoice  # local import: scrapers avoid a hard dependency on models otherwise
 
-    known_invoice_numbers = set(
+    known_numbers = set(
         Invoice.objects.filter(supplier__code="METRO").exclude(invoice_number="").values_list(
             "invoice_number", flat=True
         )
@@ -306,6 +476,9 @@ def scrape_metro_invoices(
                 "download.default_directory": os.path.abspath(download_dir),
                 "download.prompt_for_download": False,
                 "plugins.always_open_pdf_externally": True,
+                # Downloads now overlap: Chrome must not stop a page from
+                # starting a second one before the first has finished.
+                "profile.default_content_setting_values.automatic_downloads": 1,
             },
         )
         service = Service(ChromeDriverManager().install())
@@ -326,15 +499,11 @@ def scrape_metro_invoices(
     session_restarts = 0
     driver = None
 
-    def visible_download_buttons():
-        # The page renders a desktop copy of each row (inside a <tr>) and
-        # a hidden mobile copy (inside a <div data-testid="mobileRowTest">),
-        # both sharing the same id. Scoping to <tr> excludes the mobile
-        # duplicates structurally, in a single query - calling
-        # .is_displayed() on every match instead would mean one browser
-        # round-trip per element, on every single invoice download,
-        # which gets extremely slow once there are more than a handful.
-        return driver.find_elements(By.CSS_SELECTOR, "tr #downloadPdfButton")
+    def on_step():
+        nonlocal overall_index
+        overall_index += 1
+        if on_progress:
+            on_progress(overall_index, None)
 
     try:
         while window_idx < len(windows):
@@ -350,7 +519,7 @@ def scrape_metro_invoices(
                     _apply_date_filter(driver, wait, download_dir, log, window_start, window_end)
 
                     try:
-                        wait.until(lambda d: len(visible_download_buttons()) > 0)
+                        wait.until(lambda d: len(_visible_download_buttons(d)) > 0)
                     except TimeoutException:
                         log(f"Aucune facture entre {window_start} et {window_end}.")
                         window_idx += 1
@@ -359,7 +528,7 @@ def scrape_metro_invoices(
                     # Rows appearing isn't the same as the page being done re-rendering
                     # them (event handlers, etc.) - wait for the count to stop
                     # changing before trusting it or starting to click.
-                    total = _wait_for_stable_results(visible_download_buttons)
+                    total = _wait_for_stable_results(lambda: _visible_download_buttons(driver))
                     if total >= 100:
                         log(
                             f"⚠ 100 factures ou plus trouvées entre {window_start} et {window_end} - "
@@ -367,86 +536,7 @@ def scrape_metro_invoices(
                             "Relancez avec une période plus courte si besoin."
                         )
                     log(f"Found {total} Metro invoice(s) between {window_start} and {window_end}")
-
-                    consecutive_timeouts = 0
-                    for idx in range(total):
-                        # Re-fetch fresh each time instead of reusing element handles
-                        # captured before any clicks: the page can re-render rows
-                        # after a download, which silently invalidates old
-                        # references and can make a stale click land on the wrong
-                        # element entirely.
-                        current_buttons = visible_download_buttons()
-                        if idx >= len(current_buttons):
-                            log(
-                                f"Expected a download button at position {idx + 1}/{total} but the page only "
-                                f"has {len(current_buttons)} now - stopping early for this window."
-                            )
-                            break
-
-                        invoice_number = _row_invoice_number(current_buttons[idx])
-                        if invoice_number and invoice_number in known_invoice_numbers:
-                            overall_index += 1
-                            log(f"Invoice {idx + 1}/{total} ({invoice_number}) already imported - skipping download.")
-                            if on_progress:
-                                on_progress(overall_index, None)
-                            continue
-
-                        _js_click(driver, current_buttons[idx])
-                        overall_index += 1
-                        log(f"Downloading Metro invoice {idx + 1}/{total}")
-                        before = len(os.listdir(download_dir))
-                        try:
-                            # A generous, per-file timeout - independent of how long
-                            # the whole run takes overall (a big date range with
-                            # hundreds of invoices is expected to take a while; one
-                            # slow or stuck file should never take the rest down
-                            # with it).
-                            WebDriverWait(driver, DOWNLOAD_TIMEOUT_SECONDS).until(
-                                lambda d, before=before: len(os.listdir(download_dir)) > before
-                            )
-                            consecutive_timeouts = 0
-                        except TimeoutException:
-                            # Older invoices seem to take noticeably longer for Metro
-                            # to generate/serve than recent ones - a download that's
-                            # merely slow can land just after our wait gives up. A
-                            # short grace check avoids reporting a false "skip" for
-                            # something that actually succeeded a moment later.
-                            try:
-                                WebDriverWait(driver, GRACE_PERIOD_SECONDS).until(
-                                    lambda d, before=before: len(os.listdir(download_dir)) > before
-                                )
-                                log(
-                                    f"Invoice {idx + 1}/{total} finished just after the "
-                                    f"{DOWNLOAD_TIMEOUT_SECONDS}s timeout - no action needed."
-                                )
-                                consecutive_timeouts = 0
-                            except TimeoutException:
-                                consecutive_timeouts += 1
-                                _current_url, _title, _body, screenshot_path = _capture_diagnostics(
-                                    driver,
-                                    download_dir,
-                                    log,
-                                    f"waiting for invoice {idx + 1}/{total} to finish downloading",
-                                    screenshot_suffix=f"_invoice_{idx + 1}",
-                                )
-                                if screenshot_path and os.path.exists(screenshot_path):
-                                    os.remove(screenshot_path)
-                                total_wait = DOWNLOAD_TIMEOUT_SECONDS + GRACE_PERIOD_SECONDS
-                                log(
-                                    f"Skipping invoice {idx + 1}/{total} after a {total_wait}s timeout "
-                                    f"({consecutive_timeouts}/{MAX_CONSECUTIVE_TIMEOUTS} consecutive)."
-                                )
-                                if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS:
-                                    log(
-                                        f"{MAX_CONSECUTIVE_TIMEOUTS} downloads in a row timed out with no visible "
-                                        "change on the page - something is systematically stuck (not just one slow "
-                                        "invoice). Stopping this window early instead of retrying the rest at the "
-                                        "full timeout each."
-                                    )
-                                    break
-                                continue
-                        if on_progress:
-                            on_progress(overall_index, None)
+                    _download_window(driver, download_dir, total, known_numbers, log, on_step)
                     window_idx += 1
             except WebDriverException as exc:
                 # A dead/crashed browser session (seen more than once in

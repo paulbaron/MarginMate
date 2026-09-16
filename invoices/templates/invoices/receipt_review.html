@@ -1,0 +1,203 @@
+{% extends "base.html" %}
+{% block title %}Vérifier {{ invoice.supplier.name }} - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <p class="breadcrumb"><a href="{% url 'invoices:receipt_queue' %}">← Tickets à vérifier</a></p>
+            <h1>{{ invoice.supplier.name }}</h1>
+            <p class="page-subtitle">
+                {{ invoice.invoice_date|date:"d/m/Y"|default:"Date non lue" }}
+                · {{ invoice.total_ttc|floatformat:2 }} € TTC
+                {% if invoice.ocr_confidence %} · lecture la moins sûre : {{ invoice.ocr_confidence_percent|floatformat:0 }}%{% endif %}
+                {% if remaining %} · {{ remaining }} ticket{{ remaining|pluralize }} en attente{% endif %}
+            </p>
+        </div>
+        <div class="actions">
+            {% if invoice.source_file %}
+                <a class="btn btn-secondary" href="{{ invoice.source_file.url }}" target="_blank" rel="noopener">Photo d'origine</a>
+            {% endif %}
+            <a class="btn btn-secondary" href="{% url 'invoices:invoice_detail' invoice.pk %}">Fiche facture</a>
+            <a class="btn btn-danger"
+               href="{% url 'invoices:invoice_delete' invoice.pk %}?next={% if next_pk %}{% url 'invoices:receipt_review' next_pk %}{% else %}{% url 'invoices:receipt_queue' %}{% endif %}">Supprimer ce ticket</a>
+        </div>
+    </div>
+
+    <div class="receipt-review">
+        <div class="receipt-photo">
+            {% if invoice.preview_image %}
+                <img src="{{ invoice.preview_image.url }}" alt="Photo du ticket">
+            {% else %}
+                <p class="muted">Pas d'aperçu enregistré pour ce ticket.</p>
+            {% endif %}
+        </div>
+
+        <div>
+            {% comment %}
+            The parser's own arithmetic first: it says whether the numbers
+            below can be trusted at all, which decides how carefully the rest
+            of this page has to be read.
+            {% endcomment %}
+            <h2>Contrôles</h2>
+            <ul class="check-list">
+                {% for check in invoice.parse_checks %}
+                    <li class="check {% if check.passed %}check-pass{% else %}check-fail{% endif %}">
+                        <span class="check-mark">{% if check.passed %}✓{% else %}✕{% endif %}</span>
+                        <span class="check-label">{{ check.label }}</span>
+                        {% if check.detail %}<span class="check-detail">{{ check.detail }}</span>{% endif %}
+                    </li>
+                {% empty %}
+                    <li class="check"><span class="check-mark">—</span><span class="check-label">Aucun contrôle enregistré.</span></li>
+                {% endfor %}
+            </ul>
+
+            <h2>Lignes</h2>
+            <p class="lead">
+                Corrigez ce qui ne correspond pas à la photo, puis validez. Les montants sont
+                <strong>hors taxes</strong> — le ticket, lui, imprime des prix TTC.
+            </p>
+
+            <div class="card">
+                <form method="post">
+                    {% csrf_token %}
+                    {{ formset.management_form }}
+                    {% if formset.non_form_errors %}
+                        <div class="message message-error">{{ formset.non_form_errors }}</div>
+                    {% endif %}
+                    <div id="line-rows">
+                        {% for line_form in formset %}
+                            <div class="invoice-line-row">
+                                <div class="inline-form">
+                                    <span class="muted">{{ line_form.DELETE }}</span>
+                                    {{ line_form.product_name }}
+                                    {{ line_form.quantity }}
+                                    {{ line_form.total_ht }}
+                                    {{ line_form.vat_rate }}
+                                    {{ line_form.read_as }}
+                                    <span class="muted">% TVA</span>
+                                    <button type="button" class="btn btn-small btn-secondary js-remove-line">Retirer</button>
+                                </div>
+                                {% if line_form.read_hint %}
+                                    <p class="read-as">lu sur le ticket : « {{ line_form.read_hint }} » — rattaché au produit ci-dessus</p>
+                                {% endif %}
+                                {% for error in line_form.non_field_errors %}<div class="message message-error">{{ error }}</div>{% endfor %}
+                                {% for field in line_form %}
+                                    {% for error in field.errors %}<div class="message message-error">{{ field.label }} : {{ error }}</div>{% endfor %}
+                                {% endfor %}
+                            </div>
+                        {% endfor %}
+                    </div>
+                    <button type="button" class="btn btn-small btn-secondary" id="add-line-row">+ Ajouter une ligne</button>
+
+                    <div class="form-actions" style="margin-top:1rem;">
+                        <button class="btn" type="submit">
+                            {% if next_pk %}Valider et passer au suivant{% else %}Valider ce ticket{% endif %}
+                        </button>
+                        <a class="btn btn-secondary" href="{% url 'invoices:receipt_queue' %}">Revenir à la liste</a>
+                    </div>
+                </form>
+            </div>
+
+            {% comment %}
+            Only shown for shops that print no product names. Recording the
+            price here is what stops the next receipt from the same shop
+            needing the same manual work.
+            {% endcomment %}
+            <h2>Prix connus chez {{ invoice.supplier.name }}</h2>
+            <p class="lead">
+                Certaines caisses n'impriment pas les noms de produits, seulement
+                « Article divers » et un prix. Retenez ici ce que chaque prix désigne :
+                les prochains tickets seront nommés tout seuls.
+            </p>
+
+            <div class="card">
+                <form method="post">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="remember_price">
+                    {% include "_form_fields.html" with form=price_form %}
+                    <button class="btn btn-secondary" type="submit">Retenir ce prix</button>
+                </form>
+
+                {% if known_prices %}
+                    <div class="table-wrap" style="margin-top:1rem;">
+                        <table data-table data-table-sort-only data-table-label="prix">
+                            <thead>
+                                <tr>
+                                    <th class="num">Prix unitaire TTC</th>
+                                    <th>Produit</th>
+                                    <th>Depuis</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for price in known_prices %}
+                                    <tr>
+                                        <td class="num">{{ price.unit_price_ttc|floatformat:2 }} €</td>
+                                        <td>{{ price.label }}</td>
+                                        <td {% if price.valid_from %}data-sort="{{ price.valid_from|date:'Y-m-d' }}"{% endif %}>
+                                            {{ price.valid_from|date:"d/m/Y"|default:"toujours" }}
+                                        </td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% endif %}
+            </div>
+
+            <h2>Texte lu sur la photo</h2>
+            <details>
+                <summary class="muted">Afficher ce que la reconnaissance a lu</summary>
+                <div class="ocr-dump">{% for line in ocr_lines %}{{ line }}
+{% endfor %}</div>
+            </details>
+        </div>
+    </div>
+
+    <template id="empty-line-row">
+        <div class="invoice-line-row">
+            <div class="inline-form">
+                <span class="muted">{{ formset.empty_form.DELETE }}</span>
+                {{ formset.empty_form.product_name }}
+                {{ formset.empty_form.quantity }}
+                {{ formset.empty_form.total_ht }}
+                {{ formset.empty_form.vat_rate }}
+                <span class="muted">% TVA</span>
+                <button type="button" class="btn btn-small btn-secondary js-remove-line">Retirer</button>
+            </div>
+        </div>
+    </template>
+{% endblock %}
+{% block extra_js %}
+<script>
+// Same index discipline as invoice_lines_form.html: a new row takes one
+// fresh index counting up from TOTAL_FORMS and keeps it, and removing a row
+// leaves a GAP rather than renumbering. Renumbering re-points every later
+// row at different data mid-edit.
+(function () {
+    var totalForms = document.querySelector("[name$='-TOTAL_FORMS']");
+    if (!totalForms) return;
+    var next = parseInt(totalForms.value, 10);
+    var addButton = document.getElementById("add-line-row");
+    if (addButton) {
+        addButton.addEventListener("click", function () {
+            var html = document.getElementById("empty-line-row").innerHTML.replace(/__prefix__/g, next);
+            next += 1;
+            totalForms.value = next;
+            var holder = document.createElement("div");
+            holder.innerHTML = html.trim();
+            document.getElementById("line-rows").appendChild(holder.firstElementChild);
+        });
+    }
+    document.addEventListener("click", function (event) {
+        if (!event.target.matches(".js-remove-line")) return;
+        var row = event.target.closest(".invoice-line-row");
+        var del = row.querySelector("input[name$='-DELETE']");
+        if (del) {
+            del.checked = true;
+            row.hidden = true;
+        } else {
+            row.remove();
+        }
+    });
+})();
+</script>
+{% endblock %}

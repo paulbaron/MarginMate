@@ -6,12 +6,13 @@ from datetime import date
 from django.core.files import File
 from django.db import transaction
 
-from inventory.matching import resolve_product
+from inventory.matching import resolve_products
 from inventory.models import StockMovement
 from inventory.services import create_stock_movement_for_line
 
+from .deletion import remove_orphan_products
 from .models import Invoice, InvoiceLine, Supplier
-from .parsers.base import ParsedInvoice
+from .parsers.base import ParsedInvoice, ParsedLine
 
 
 class DuplicateInvoiceError(Exception):
@@ -27,7 +28,7 @@ def import_parsed_invoice(
 ) -> Invoice:
     if parsed.invoice_number:
         if Invoice.objects.filter(supplier=supplier, invoice_number=parsed.invoice_number).exists():
-            raise DuplicateInvoiceError(f"Invoice {parsed.invoice_number} from {supplier} was already imported.")
+            raise DuplicateInvoiceError(f"Déjà dans MarginMate : {supplier} n° {parsed.invoice_number}.")
 
     invoice = Invoice(
         supplier=supplier,
@@ -42,22 +43,11 @@ def import_parsed_invoice(
     invoice.save()
 
     needs_review = False
-    for parsed_line in parsed.lines:
-        product, _created = resolve_product(supplier, parsed_line.raw_name, parsed_line.ean)
-        line = InvoiceLine.objects.create(
-            invoice=invoice,
-            product=product,
-            raw_name=parsed_line.raw_name,
-            quantity=parsed_line.quantity,
-            colisage=parsed_line.colisage,
-            total_volume=parsed_line.total_volume,
-            unit_cost_ht=parsed_line.unit_cost_ht,
-            total_ht=parsed_line.total_ht,
-            taxes=parsed_line.taxes,
-            discount=parsed_line.discount,
-            vat_rate=parsed_line.vat_rate,
-            category=parsed_line.category,
-        )
+    resolved = resolve_products(
+        supplier, [(line.raw_name, line.ean) for line in parsed.lines], ocr_tolerant=parsed.from_ocr
+    )
+    for parsed_line, (product, _created) in zip(parsed.lines, resolved):
+        line = _create_line(invoice, product, parsed_line)
         if product.needs_review:
             needs_review = True
         else:
@@ -73,6 +63,24 @@ def import_parsed_invoice(
         invoice.status = Invoice.Status.NEEDS_REVIEW if needs_review else Invoice.Status.COMPLETE
     invoice.save(update_fields=["status"])
     return invoice
+
+
+def _create_line(invoice: Invoice, product, parsed_line: ParsedLine) -> InvoiceLine:
+    return InvoiceLine.objects.create(
+        invoice=invoice,
+        product=product,
+        raw_name=parsed_line.raw_name,
+        read_as=parsed_line.read_as,
+        quantity=parsed_line.quantity,
+        colisage=parsed_line.colisage,
+        total_volume=parsed_line.total_volume,
+        unit_cost_ht=parsed_line.unit_cost_ht,
+        total_ht=parsed_line.total_ht,
+        taxes=parsed_line.taxes,
+        discount=parsed_line.discount,
+        vat_rate=parsed_line.vat_rate,
+        category=parsed_line.category,
+    )
 
 
 def parse_and_import(
@@ -108,7 +116,22 @@ def parse_and_import(
         )
     else:
         parsed = parser.parse(pdf_path, date_hint=date_hint)
-    return import_parsed_invoice(supplier, parsed, source_file_path=pdf_path, display_filename=display_filename)
+    invoice = import_parsed_invoice(supplier, parsed, source_file_path=pdf_path, display_filename=display_filename)
+
+    # Said on the invoice itself. A parser that reads nothing has usually met
+    # a new layout - and an empty invoice otherwise reads as "this supplier
+    # has no parser", which is what a Plou & Fils one said in April 2026.
+    problems = list(parsed.warnings)
+    if parser is not None and not parsed.lines:
+        problems.append(
+            f"Le parseur {key} n'a trouvé aucune ligne dans ce document : sa mise en page a peut-être "
+            "changé. Saisissez les lignes à la main."
+        )
+    if problems:
+        invoice.error_message = " ".join(problems)
+        invoice.status = Invoice.Status.NEEDS_REVIEW
+        invoice.save(update_fields=["error_message", "status"])
+    return invoice
 
 
 @transaction.atomic
@@ -120,32 +143,32 @@ def replace_invoice_lines(invoice: Invoice, parsed_lines) -> Invoice:
     parser) and when correcting a parsed one. The old lines' stock movements
     have to go with them - leaving them behind would double-count the stock,
     and they are the whole reason a line matters.
+
+    So do the products the old lines pointed at that no line uses any more,
+    when nobody has classified them: a misreading attached by hand to the
+    product it really was leaves behind the product it had created, which
+    would otherwise wait in the review queue for ever. Same rule as deleting
+    an invoice (deletion.remove_orphan_products).
     """
+    parsed_lines = list(parsed_lines)
+    previous_products = set(invoice.lines.values_list("product_id", flat=True))
     for line in invoice.lines.all():
         StockMovement.objects.filter(invoice_line=line).delete()
     invoice.lines.all().delete()
 
     needs_review = False
-    for parsed_line in parsed_lines:
-        product, _created = resolve_product(invoice.supplier, parsed_line.raw_name, parsed_line.ean)
-        line = InvoiceLine.objects.create(
-            invoice=invoice,
-            product=product,
-            raw_name=parsed_line.raw_name,
-            quantity=parsed_line.quantity,
-            colisage=parsed_line.colisage,
-            total_volume=parsed_line.total_volume,
-            unit_cost_ht=parsed_line.unit_cost_ht,
-            total_ht=parsed_line.total_ht,
-            taxes=parsed_line.taxes,
-            discount=parsed_line.discount,
-            vat_rate=parsed_line.vat_rate,
-            category=parsed_line.category,
-        )
+    # A receipt's lines were read by OCR, and a name corrected on the
+    # review screen can still carry the recogniser's mistakes.
+    resolved = resolve_products(
+        invoice.supplier, [(line.raw_name, line.ean) for line in parsed_lines], ocr_tolerant=invoice.is_receipt
+    )
+    for parsed_line, (product, _created) in zip(parsed_lines, resolved):
+        line = _create_line(invoice, product, parsed_line)
         if product.needs_review:
             needs_review = True
         else:
             create_stock_movement_for_line(line)
+    remove_orphan_products(previous_products)
 
     if not parsed_lines:
         invoice.status = Invoice.Status.NEEDS_REVIEW

@@ -30,14 +30,14 @@
                 <button type="button" class="btn btn-small btn-secondary" data-bulk-clear>Tout désélectionner</button>
             </div>
             <div class="table-wrap">
-            <table class="sub-table" data-table data-table-label="produits">
+            <table id="pos-pending-table" class="sub-table" data-table data-table-label="produits">
                 <thead>
                     <tr>
                         <th data-no-sort><input type="checkbox" data-bulk-all aria-label="Tout sélectionner"></th>
                         <th>Produit caisse</th>
                         <th class="num">Vendus</th>
                         <th>Catégorie</th>
-                        <th style="width:52%;">Que faire ?</th>
+                        <th data-no-sort style="width:52%;">Que faire ?</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -107,7 +107,7 @@
         <div class="card">
             <h3>Rattachés ({{ linked|length }})</h3>
             <div class="table-wrap">
-            <table class="sub-table" data-table data-table-label="produits liés">
+            <table id="pos-linked-table" class="sub-table" data-table data-table-label="produits liés">
                 <thead>
                     <tr><th>Produit caisse</th><th class="num">Vendus</th><th>Recette</th><th data-no-sort></th></tr>
                 </thead>
@@ -141,7 +141,7 @@
             <h3>Ignorés ({{ ignored|length }})</h3>
             <p class="muted">Ces produits ne consomment aucun stock suivi.</p>
             <div class="table-wrap">
-            <table class="sub-table" data-table data-table-label="produits ignorés">
+            <table id="pos-ignored-table" class="sub-table" data-table data-table-label="produits ignorés">
                 <thead><tr><th>Produit caisse</th><th class="num">Vendus</th><th data-no-sort></th></tr></thead>
                 <tbody>
                     {% for product in ignored %}

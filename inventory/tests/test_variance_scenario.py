@@ -166,15 +166,20 @@ class BarScenarioTests(TestCase):
         self.assertEqual(pool.expected_usage_min, Decimal("20"))
         self.assertEqual(pool.unexplained_min, Decimal("5"))
 
+        # Of the 25 L that went, 10% was never going to reach a glass, so
+        # only 2.5 L of the 5 L gap is worth calling missing.
+        self.assertEqual(pool.loss_allowance, Decimal("2.5"))
+        self.assertEqual(pool.shortfall, Decimal("2.5"))
+
         self.assertEqual(pool.cheapest, self.stock["Rhum"])
         self.assertEqual(pool.cheapest_unit_cost, Decimal("15"))
-        # 5 L at 70cl a bottle
-        self.assertAlmostEqual(pool.bottles_missing_min, Decimal("5") / Decimal("0.7"), places=6)
-        self.assertEqual(pool.value_missing_min, Decimal("75"))  # 5 L x 15
+        # 2.5 L at 70cl a bottle
+        self.assertAlmostEqual(pool.bottles_missing_min, Decimal("2.5") / Decimal("0.7"), places=6)
+        self.assertEqual(pool.value_missing_min, Decimal("37.50"))  # 2.5 L x 15
 
-        # Priced as whisky it would be 200 EUR - which is exactly why the
+        # Priced as whisky it would be 100 EUR - which is exactly why the
         # headline figure uses the cheapest.
-        self.assertLess(pool.value_missing_min, Decimal("5") * Decimal("40"))
+        self.assertLess(pool.value_missing_min, Decimal("2.5") * Decimal("40"))
 
     def test_a_broken_bottle_you_logged_is_not_shrinkage(self):
         StockMovement.objects.create(
@@ -229,7 +234,8 @@ class BarScenarioTests(TestCase):
         self.assertEqual(response.status_code, 200)
         assertNoUnrenderedTemplateSyntax(self, response, "variance report")
         self.assertContains(response, "Gin / Vodka / Whisky / Rhum")
-        self.assertContains(response, "75.00")   # the floor, in euros
+        self.assertContains(response, "37.50")   # the floor, in euros
+        self.assertContains(response, "Perte estimée")
         self.assertContains(response, "Rhum")    # priced as the cheapest
         self.assertContains(response, "500 ventes")
 
@@ -246,7 +252,58 @@ class BarScenarioTests(TestCase):
         )
         self.assertContains(response, "Aucune vente enregistrée")
 
+    def test_a_manual_sale_and_an_uncounted_item_both_land_correctly(self):
+        """Everything at once, the way a real month actually looks: the
+        till's own figures, a tab a regular settled off the books, and a new
+        mixer that just arrived and hasn't been through a stock take yet.
+        None of the three may disturb what the other two report."""
+        from recipes.models import SaleDocument, SaleDocumentLine
+
+        self.count(1, dict.fromkeys(self.stock, "40"))
+        new_mixer = make_stock_type(name="Ginger ale", unit=UnitChoices.LITRE)
+        closing_take = self.count(
+            31,
+            {
+                "Gin": "31", "Vodka": "30", "Whisky": "38", "Rhum": "40",  # 21 L gone
+                **MIXERS_BALANCED,
+            },
+        )
+        make_stock_take_line(
+            stock_take=closing_take, stock_type=new_mixer, counted_quantity="8", unit=UnitChoices.LITRE
+        )
+
+        record_sales([("Alcool + Soda", date(2026, 3, 15), 300), ("Mule", date(2026, 3, 15), 200)])
+        document = SaleDocument.objects.create(sold_on=date(2026, 3, 20))
+        SaleDocumentLine.objects.create(document=document, stock_type=self.stock["Gin"], quantity=Decimal("1"))
+
+        report = compute_variance(closing_take)
+
+        spirits = self.spirits(report)
+        # 20 L from the recipes, +1 L from the hand-written tab.
+        self.assertEqual(spirits.expected_usage_min, Decimal("21"))
+        self.assertEqual(spirits.actual_usage, Decimal("21"))
+        self.assertFalse(spirits.is_missing)
+
+        self.assertFalse(self.mixers(report).is_missing)
+        self.assertNotIn(self.mixers(report), report.incomplete)
+
+        incomplete_names = {st.name for pool in report.incomplete for st in pool.stock_types}
+        self.assertEqual(incomplete_names, {"Ginger ale"})
+        missing_names = {st.name for pool in report.missing for st in pool.stock_types}
+        impossible_names = {st.name for pool in report.impossible for st in pool.stock_types}
+        self.assertNotIn("Ginger ale", missing_names | impossible_names)
+
     def test_the_report_ranks_by_what_the_loss_is_worth(self):
+        """...and a gap smaller than the spillage allowance is not a loss at
+        all.
+
+        Both pools are 5 L short on the raw arithmetic. But the spirits only
+        poured 25 L, so 5 L is a fifth of everything that moved - well past
+        anything spillage explains. The mixers poured 105 L, where 5 L is
+        under 5% and entirely ordinary. Ranking by euros alone would have put
+        the mixers on the report next to the spirits; ranking after the
+        allowance leaves only the one worth asking about.
+        """
         report = self.run_period(
             opening=dict.fromkeys(self.stock, "40"),
             closing={
@@ -255,10 +312,15 @@ class BarScenarioTests(TestCase):
             },
             sales={"Alcool + Soda": 300, "Mule": 200},
         )
+        mixers = self.mixers(report)
+        self.assertEqual(mixers.unexplained_min, Decimal("5"))
+        self.assertGreater(mixers.loss_allowance, Decimal("5"))
+        self.assertEqual(mixers.shortfall, Decimal("0"))
+
         self.assertEqual(
             [pool.label for pool in report.missing],
-            [self.spirits(report).label, self.mixers(report).label],
-            "the expensive pool should be reported first",
+            [self.spirits(report).label],
+            "only the pool whose gap outruns its own spillage allowance",
         )
-        # 5 L of rum at 15 + 5 L of limonade at 2
-        self.assertEqual(report.total_value_missing_min, Decimal("75") + Decimal("10"))
+        # 2.5 L of rum at 15
+        self.assertEqual(report.total_value_missing_min, Decimal("37.50"))
