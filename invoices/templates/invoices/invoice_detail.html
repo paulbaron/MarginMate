@@ -16,7 +16,7 @@
                 <a class="btn btn-secondary" href="{{ invoice.source_file.url }}" target="_blank" rel="noopener">Voir le PDF</a>
             {% endif %}
             <a class="btn {% if not lines %}btn{% else %}btn-secondary{% endif %}"
-               href="{% url 'invoices:invoice_edit_lines' invoice.pk %}">
+               href="{% if invoice.is_receipt %}{% url 'invoices:receipt_review' invoice.pk %}{% else %}{% url 'invoices:invoice_edit_lines' invoice.pk %}{% endif %}">
                 {% if lines %}Corriger les lignes{% else %}Saisir les lignes{% endif %}
             </a>
             <a class="btn btn-danger" href="{% url 'invoices:invoice_delete' invoice.pk %}">Supprimer</a>

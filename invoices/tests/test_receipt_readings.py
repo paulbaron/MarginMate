@@ -134,7 +134,7 @@ class ReviewScreenTests(TestCase):
                     f"form-{index}-product_name": name,
                     f"form-{index}-read_as": read_as,
                     f"form-{index}-quantity": "1",
-                    f"form-{index}-total_ht": "0.46",
+                    f"form-{index}-total_ttc": "0.49",
                     f"form-{index}-vat_rate": "5.5",
                 }
             )

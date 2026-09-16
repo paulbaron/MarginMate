@@ -184,7 +184,7 @@ class ReceiptReviewViewTests(TestCase):
                 "form-MAX_NUM_FORMS": "1000",
                 "form-0-product_name": "Citron vert",
                 "form-0-quantity": "3",
-                "form-0-total_ht": "1.99",
+                "form-0-total_ttc": "2.10",
                 "form-0-vat_rate": "5.5",
             },
         )
@@ -209,7 +209,7 @@ class ReceiptReviewViewTests(TestCase):
             "form-MAX_NUM_FORMS": "1000",
             "form-0-product_name": "Citron vert",
             "form-0-quantity": "3",
-            "form-0-total_ht": "1.99",
+            "form-0-total_ttc": "2.10",
             "form-0-vat_rate": str(rendered),
         }
         saved = self.client.post(reverse("invoices:receipt_review", args=[self.invoice.pk]), payload)
@@ -231,11 +231,11 @@ class ReceiptReviewViewTests(TestCase):
                 "form-MAX_NUM_FORMS": "1000",
                 "form-0-product_name": "Citron vert",
                 "form-0-quantity": "3",
-                "form-0-total_ht": "1.99",
+                "form-0-total_ttc": "2.10",
                 "form-0-vat_rate": "5.5",
                 "form-2-product_name": "Menthe",
                 "form-2-quantity": "2",
-                "form-2-total_ht": "0.95",
+                "form-2-total_ttc": "1.00",
                 "form-2-vat_rate": "5.5",
             },
         )
@@ -256,11 +256,11 @@ class ReceiptReviewViewTests(TestCase):
                 "form-MAX_NUM_FORMS": "1000",
                 "form-0-product_name": "Citron vert",
                 "form-0-quantity": "3",
-                "form-0-total_ht": "1.99",
+                "form-0-total_ttc": "2.10",
                 "form-0-vat_rate": "5.5",
                 "form-1-product_name": "",
                 "form-1-quantity": "",
-                "form-1-total_ht": "",
+                "form-1-total_ttc": "",
                 "form-1-vat_rate": "20",
             },
         )

@@ -2,7 +2,7 @@ import os
 import tempfile
 import threading
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from django.contrib import messages
 from django.shortcuts import get_object_or_404, redirect, render
@@ -506,7 +506,7 @@ def receipt_review(request, pk):
                     if not line_form.cleaned_data or line_form.cleaned_data.get("DELETE"):
                         continue
                     quantity = line_form.cleaned_data["quantity"]
-                    total_ht = line_form.cleaned_data["total_ht"]
+                    total_ht = line_form.cleaned_total_ht()
                     lines.append(
                         ParsedLine(
                             raw_name=line_form.cleaned_data["product_name"],
@@ -569,7 +569,10 @@ def _line_formset_for(invoice):
                 "product_name": name,
                 "read_as": line.read_as,
                 "quantity": line.quantity,
-                "total_ht": line.total_ht,
+                # As the ticket prints it; see ReceiptLineForm.total_ttc.
+                "total_ttc": (line.total_ht * (Decimal("1") + line.vat_rate)).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP
+                ),
                 "vat_rate": _vat_percent_for_form(line),
             }
         )

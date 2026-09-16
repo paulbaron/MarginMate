@@ -157,6 +157,11 @@ wrong — an unrecognised file is reported, never guessed). `.../verification/`
 is the queue, oldest first; `.../<pk>/verifier/` puts the photo beside the
 checks and the editable lines and moves to the next receipt on save. Saving
 goes through `replace_invoice_lines`, the same path as a hand-typed invoice.
+The form is in **TTC**, as the ticket prints it: checking an HT price against a
+photo meant converting every one in one's head. `ReceiptLineForm.cleaned_total_ht`
+stores HT with the line's own rate, and a total saved untouched keeps its HT to
+the cent. A receipt's "Corriger les lignes" opens this screen, not the HT form
+(which would also drop the lines' OCR readings).
 
 **A folder is a background job** (`invoices/receipt_batches.py`). The upload
 page takes files or a whole folder (`webkitdirectory`; both inputs post as

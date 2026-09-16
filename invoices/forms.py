@@ -1,4 +1,4 @@
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from django import forms
 
@@ -78,6 +78,7 @@ ManualInvoiceLineFormSet = forms.formset_factory(
     ManualInvoiceLineForm, formset=BaseManualInvoiceLineFormSet, extra=1, can_delete=True
 )
 
+
 class ReceiptLineForm(ManualInvoiceLineForm):
     # What OCR read on the ticket, carried through the page untouched so a
     # corrected line keeps it: the reading stays a name its product is known
@@ -85,8 +86,28 @@ class ReceiptLineForm(ManualInvoiceLineForm):
     # right product is recognised on the next ticket. Bookkeeping, so a row
     # carrying nothing else is still a blank row.
     read_as = forms.CharField(required=False, max_length=255, widget=forms.HiddenInput)
+    # The ticket prints TTC, so that is what is typed and checked against
+    # the photo - converting each price in one's head to check it was the
+    # hard part. The line is still stored HT (cleaned_total_ht); the
+    # inherited HT field goes.
+    total_ht = None
+    total_ttc = forms.DecimalField(
+        label="Total (TTC)",
+        max_digits=12,
+        decimal_places=2,
+        min_value=Decimal("0"),
+        widget=forms.NumberInput(attrs={"step": "0.01", "placeholder": "Total TTC"}),
+    )
 
     bookkeeping_fields = ("vat_rate", "read_as")
+
+    def cleaned_total_ht(self) -> Decimal:
+        """The line's HT total, from the TTC typed and the line's own rate.
+        A total saved untouched comes back to the cent it was stored at: the
+        rounding on the way out is under half a cent once divided back."""
+        rate = self.cleaned_data["vat_rate"] / Decimal("100")
+        total_ttc = self.cleaned_data["total_ttc"]
+        return (total_ttc / (Decimal("1") + rate)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     @property
     def read_hint(self) -> str:
