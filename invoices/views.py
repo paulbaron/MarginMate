@@ -26,6 +26,8 @@ from .forms import (
 )
 from .importing import (
     DuplicateInvoiceError,
+    InvoiceLinesInUseError,
+    corrected_line,
     import_parsed_invoice,
     parse_and_import,
     replace_invoice_lines,
@@ -332,28 +334,31 @@ def edit_invoice_lines(request, pk):
     if request.method == "POST":
         formset = ManualInvoiceLineFormSet(request.POST)
         if formset.is_valid():
+            stored = {line.pk: line for line in invoice.lines.all()}
             lines = []
             for line_form in formset:
                 if not line_form.cleaned_data or line_form.cleaned_data.get("DELETE"):
                     continue
-                quantity = line_form.cleaned_data["quantity"]
-                total_ht = line_form.cleaned_data["total_ht"]
                 lines.append(
-                    ParsedLine(
+                    corrected_line(
+                        stored.get(line_form.cleaned_data.get("line_id")),
                         raw_name=line_form.cleaned_data["product_name"],
-                        quantity=quantity,
-                        total_volume=Decimal("0"),
-                        unit_cost_ht=(total_ht / quantity).quantize(Decimal("0.0001")) if quantity else Decimal("0"),
-                        total_ht=total_ht,
+                        quantity=line_form.cleaned_data["quantity"],
+                        total_ht=line_form.cleaned_data["total_ht"],
                         vat_rate=line_form.cleaned_data["vat_rate"] / Decimal("100"),
                     )
                 )
-            replace_invoice_lines(invoice, lines)
-            messages.success(request, f"{len(lines)} ligne(s) enregistrée(s).")
-            return redirect("invoices:invoice_detail", pk=invoice.pk)
+            try:
+                replace_invoice_lines(invoice, lines)
+            except InvoiceLinesInUseError as exc:
+                messages.error(request, str(exc))
+            else:
+                messages.success(request, f"{len(lines)} ligne(s) enregistrée(s).")
+                return redirect("invoices:invoice_detail", pk=invoice.pk)
     else:
         initial = [
             {
+                "line_id": line.pk,
                 "product_name": line.raw_name,
                 "quantity": line.quantity,
                 "total_ht": line.total_ht,
@@ -574,41 +579,41 @@ def receipt_review(request, pk):
             formset = ReceiptLineFormSet(request.POST)
             date_form = ReceiptDateForm(request.POST, initial={"invoice_date": invoice.invoice_date})
             if formset.is_valid() and date_form.is_valid():
+                stored = {line.pk: line for line in invoice.lines.all()}
                 lines = []
                 for line_form in formset:
                     if not line_form.cleaned_data or line_form.cleaned_data.get("DELETE"):
                         continue
-                    quantity = line_form.cleaned_data["quantity"]
-                    total_ht = line_form.cleaned_total_ht()
                     lines.append(
-                        ParsedLine(
+                        corrected_line(
+                            stored.get(line_form.cleaned_data.get("line_id")),
                             raw_name=line_form.cleaned_data["product_name"],
-                            read_as=line_form.cleaned_data.get("read_as", ""),
-                            quantity=quantity,
-                            total_volume=Decimal("0"),
-                            unit_cost_ht=(total_ht / quantity).quantize(Decimal("0.0001"))
-                            if quantity
-                            else Decimal("0"),
-                            total_ht=total_ht,
+                            quantity=line_form.cleaned_data["quantity"],
+                            total_ht=line_form.cleaned_total_ht(),
                             vat_rate=line_form.cleaned_data["vat_rate"] / Decimal("100"),
+                            read_as=line_form.cleaned_data.get("read_as", ""),
                             printed_ttc=line_form.printed_ttc(),
                         )
                     )
-                # One piece: a date saved on a ticket whose lines then failed
-                # to save would be a change nobody validated.
-                with transaction.atomic():
-                    # Left blank, the date read stays: a blank is a field
-                    # nobody filled in, not a date someone removed.
-                    if date_form.cleaned_data["invoice_date"]:
-                        invoice.invoice_date = date_form.cleaned_data["invoice_date"]
-                    replace_invoice_lines(invoice, lines)
-                    invoice.reviewed_at = timezone.now()
-                    invoice.save(update_fields=["invoice_date", "reviewed_at"])
-                messages.success(request, f"Ticket vérifié : {invoice}")
-                _say_where_products_are_renamed(request, invoice)
-                if next_pk:
-                    return redirect("invoices:receipt_review", pk=next_pk)
-                return redirect("invoices:receipt_queue")
+                try:
+                    # One piece: a date saved on a ticket whose lines then
+                    # failed to save would be a change nobody validated.
+                    with transaction.atomic():
+                        # Left blank, the date read stays: a blank is a field
+                        # nobody filled in, not a date someone removed.
+                        if date_form.cleaned_data["invoice_date"]:
+                            invoice.invoice_date = date_form.cleaned_data["invoice_date"]
+                        replace_invoice_lines(invoice, lines)
+                        invoice.reviewed_at = timezone.now()
+                        invoice.save(update_fields=["invoice_date", "reviewed_at"])
+                except InvoiceLinesInUseError as exc:
+                    messages.error(request, str(exc))
+                else:
+                    messages.success(request, f"Ticket vérifié : {invoice}")
+                    _say_where_products_are_renamed(request, invoice)
+                    if next_pk:
+                        return redirect("invoices:receipt_review", pk=next_pk)
+                    return redirect("invoices:receipt_queue")
     else:
         formset = _line_formset_for(invoice)
 
@@ -730,6 +735,7 @@ def _line_formset_for(invoice):
                 "quantity": line.quantity,
                 "total_ttc": total_ttc,
                 "computed_ttc": total_ttc if line.printed_ttc is None else None,
+                "line_id": line.pk,
                 "vat_rate": _vat_percent_for_form(line),
             }
         )

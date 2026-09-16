@@ -313,8 +313,9 @@ def pos_product_assign(request, pk):
     # rebuild, not a new L'Addition fetch: the numbers are right the moment
     # the link changes, not after a separate "go fetch history" step.
     to_resync: set[Recipe] = set()
-    if product.recipe_id:
-        to_resync.add(product.recipe)
+    previous = product.recipe if product.recipe_id else None
+    if previous is not None:
+        to_resync.add(previous)
 
     if action == "ignore":
         product.ignored = True
@@ -356,6 +357,17 @@ def pos_product_assign(request, pk):
             product.save(update_fields=["recipe", "ignored"])
             to_resync.add(recipe)
             messages.success(request, f'"{product.name}" lié à « {recipe.name} ».')
+
+    # A happy-hour variant taken off its recipe takes its name with it: the
+    # import counts sales by that name, and would go on adding this product's
+    # to the recipe - and relink a product sent back to the worklist.
+    if (
+        previous is not None
+        and product.recipe_id != previous.pk
+        and previous.happy_hour_name.strip().lower() == product.name.strip().lower()
+    ):
+        previous.happy_hour_name = ""
+        previous.save(update_fields=["happy_hour_name"])
 
     for touched in to_resync:
         resync_recipe_from_daily_quantities(touched)

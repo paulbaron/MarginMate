@@ -34,7 +34,7 @@ import imaplib
 import os
 import re
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 
 from django.conf import settings
 
@@ -209,7 +209,10 @@ def find_matching_emails(
     imap.login(address, app_password)
     try:
         imap.select("inbox")
-        search_criteria = f'SINCE "{_format_date_for_imap(start_date)}" BEFORE "{_format_date_for_imap(end_date)}"'
+        # BEFORE is exclusive (RFC 3501): the day after, or the end date's
+        # emails - today's, by default - are left out.
+        before = _format_date_for_imap(end_date + timedelta(days=1))
+        search_criteria = f'SINCE "{_format_date_for_imap(start_date)}" BEFORE "{before}"'
         status, messages = imap.search(None, search_criteria)
         if status != "OK" or not messages or not messages[0]:
             log("No emails found in that date range")

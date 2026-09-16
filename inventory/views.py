@@ -6,6 +6,7 @@ from itertools import groupby
 
 from django.contrib import messages
 from django.db import transaction
+from django.db.models import ProtectedError
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
@@ -21,7 +22,7 @@ from .forms import (
     StockTypeForm,
     stock_take_entry_lookup,
 )
-from .models import Product, StockMovement, StockTake, StockTakeLineSource, StockType, UnitChoices
+from .models import Product, StockMovement, StockTake, StockTakeLine, StockTakeLineSource, StockType, UnitChoices
 from .product_matching_rules import apply_rules_to_pending_products
 from .variance import (
     PeriodStock,
@@ -619,13 +620,22 @@ def delete_stock_type(request, pk):
     stock_type = get_object_or_404(StockType, pk=pk)
     name = stock_type.name
     affected_products = list(stock_type.products.all())
+    try:
+        with transaction.atomic():
+            stock_type.delete()
+    except ProtectedError as exc:
+        messages.error(
+            request,
+            f"« {name} » est encore utilisé ({_where_used(exc.protected_objects)}) : "
+            "fusionnez-le dans un autre article plutôt que de le supprimer.",
+        )
+        return redirect("inventory:stock_list")
     # Product.stock_type is SET_NULL and StockMovement.stock_type is CASCADE,
     # so this alone sends every associated product back to the review queue
     # and drops the stock type's ledger entries. That cascade happens at the
     # DB level, bypassing unlink_product() - so invoice statuses need
     # refreshing separately here, or their invoices would stay marked
     # COMPLETE despite now containing an unreviewed product again.
-    stock_type.delete()
     for product in affected_products:
         refresh_invoice_statuses_for_product(product)
     messages.success(request, f'Type de stock "{name}" supprimé. Les produits associés sont repassés en vérification.')
@@ -635,14 +645,46 @@ def delete_stock_type(request, pk):
 def clear_empty_stock_types(request):
     if request.method != "POST":
         return redirect("inventory:stock_list")
-    empty = StockType.objects.filter(products__isnull=True).distinct()
-    count = empty.count()
-    empty.delete()
-    if count:
-        messages.success(request, f"{count} type(s) de stock vide(s) supprimé(s).")
+    # Empty: no product and no movement - a loss written down against an
+    # item with no product would go with it.
+    empty = StockType.objects.filter(products__isnull=True, movements__isnull=True).distinct()
+    deleted = kept = 0
+    for stock_type in empty:
+        # One at a time: a syrup written into a recipe before its first
+        # purchase is empty and in use, and must not stop the others.
+        try:
+            with transaction.atomic():
+                stock_type.delete()
+        except ProtectedError:
+            kept += 1
+        else:
+            deleted += 1
+    if deleted or kept:
+        messages.success(
+            request,
+            f"{deleted} type(s) de stock vide(s) supprimé(s)"
+            + (f", {kept} gardé(s) car utilisé(s) dans une recette, un inventaire ou une vente." if kept else "."),
+        )
     else:
         messages.info(request, "Aucun type de stock vide à supprimer.")
     return redirect("inventory:stock_list")
+
+
+def _where_used(objects) -> str:
+    """What still names a stock item, in the words of the pages that do."""
+    from recipes.models import RecipeIngredient, SaleDocumentLine
+
+    recipes = sorted({obj.recipe.name for obj in objects if isinstance(obj, RecipeIngredient)})
+    takes = sorted({timezone.localtime(obj.stock_take.taken_at).date() for obj in objects if isinstance(obj, StockTakeLine)})
+    documents = {obj.document_id for obj in objects if isinstance(obj, SaleDocumentLine)}
+    parts = []
+    if recipes:
+        parts.append("recette(s) " + ", ".join(recipes))
+    if takes:
+        parts.append("inventaire(s) du " + ", ".join(f"{day:%d/%m/%Y}" for day in takes))
+    if documents:
+        parts.append(f"{len(documents)} document(s) de vente")
+    return " ; ".join(parts) or "ailleurs"
 
 
 class ReviewQueueView(ListView):
@@ -707,6 +749,9 @@ def edit_product_conversion(request, product_id):
     stock_equivalent = _parse_positive_decimal(request.POST.get("stock_equivalent", ""), default=None)
     if stock_equivalent is None:
         messages.error(request, "Facteur invalide.")
+        return redirect("inventory:stock_list")
+    if product.stock_type is None:
+        messages.error(request, f'"{product.raw_name}" n\'est rattaché à aucun article de stock.')
         return redirect("inventory:stock_list")
     # product.unit always mirrors its stock type's unit now (see
     # assign_product) - there's nothing left for a human to choose here

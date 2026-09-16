@@ -52,8 +52,10 @@ class ManualInvoiceForm(forms.ModelForm):
 
 class ManualInvoiceLineForm(BlankRowTolerantForm):
     product_name = forms.CharField(label="Produit", max_length=255)
-    quantity = forms.IntegerField(label="Quantité", min_value=1)
-    total_ht = forms.DecimalField(label="Total (HT)", max_digits=12, decimal_places=2, min_value=Decimal("0"))
+    # Negative for a refund - a deposit crate or pallet given back, printed
+    # "1-" / "15,00-" by Metro - with a negative amount to match (clean).
+    quantity = forms.IntegerField(label="Quantité")
+    total_ht = forms.DecimalField(label="Total (HT)", max_digits=12, decimal_places=2)
     # Pre-filled, since almost every line is 20% - which means a row where
     # the user typed nothing still submits a VAT rate. That must not make an
     # otherwise-empty row look filled in, or a blank trailing row (and any
@@ -62,7 +64,27 @@ class ManualInvoiceLineForm(BlankRowTolerantForm):
         label="TVA (%)", max_digits=5, decimal_places=2, min_value=Decimal("0"), initial=Decimal("20")
     )
 
-    bookkeeping_fields = ("vat_rate",)
+    # The stored line a row shows, when correcting an invoice: it keeps what
+    # the form doesn't (see importing.corrected_line).
+    line_id = forms.IntegerField(required=False, widget=forms.HiddenInput)
+
+    bookkeeping_fields = ("vat_rate", "line_id")
+    #: The amount field the sign check reads.
+    total_field = "total_ht"
+
+    def clean(self):
+        cleaned = super().clean()
+        quantity, total = cleaned.get("quantity"), cleaned.get(self.total_field)
+        if quantity == 0:
+            self.add_error("quantity", "Une quantité ne peut pas être nulle.")
+        elif quantity is not None and total is not None and total != 0 and (quantity < 0) != (total < 0):
+            # A positive count at a negative price is stock worth less than
+            # nothing: the FIFO valuation's worst known failure.
+            self.add_error(
+                self.total_field,
+                "Un retour a une quantité et un montant négatifs, un achat les deux positifs.",
+            )
+        return cleaned
 
 
 class BaseManualInvoiceLineFormSet(forms.BaseFormSet):
@@ -95,16 +117,16 @@ class ReceiptLineForm(ManualInvoiceLineForm):
         label="Total (TTC)",
         max_digits=12,
         decimal_places=2,
-        min_value=Decimal("0"),
         widget=forms.NumberInput(attrs={"step": "0.01", "placeholder": "Total TTC"}),
     )
+    total_field = "total_ttc"
 
     # What the screen worked out from HT for a line whose ticket amount is not
     # known (a promotion spread onto it, an old import). Posted back so that
     # saving it untouched does not make a derived figure pass for a printed one.
     computed_ttc = forms.DecimalField(required=False, max_digits=12, decimal_places=2, widget=forms.HiddenInput)
 
-    bookkeeping_fields = ("vat_rate", "read_as", "computed_ttc")
+    bookkeeping_fields = ("vat_rate", "read_as", "computed_ttc", "line_id")
 
     def cleaned_total_ht(self) -> Decimal:
         """The line's HT total, from the TTC typed and the line's own rate.

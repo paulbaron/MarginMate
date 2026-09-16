@@ -71,7 +71,9 @@ class ManualInvoiceLineFormSetTests(TestCase):
         self.assertFalse(formset.is_valid())
         self.assertIn("quantity", formset.errors[0])
 
-    def test_a_negative_total_is_rejected(self):
+    def test_a_negative_total_on_a_purchase_is_rejected(self):
+        """A refund is a negative count AND a negative amount (see
+        test_edit_lines); a purchase at a negative price is a typo."""
         formset = self.build(payload({0: line(total_ht="-10.00")}))
         self.assertFalse(formset.is_valid())
 

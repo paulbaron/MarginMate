@@ -120,11 +120,12 @@ class MetroParser(InvoiceParser):
         lines_by_name: dict[str, ParsedLine] = {}
         products_in_category: list[str] = []
         full_text_parts: list[str] = []
+        # Across pages: a levy or discount line can start the next page.
+        current_product = None
 
         for page in pages:
             text = page.text
             full_text_parts.append(text)
-            current_product = None
             for line in text.split("\n"):
                 match = LINE_REGEX.match(line)
                 if match:

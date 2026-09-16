@@ -293,6 +293,24 @@ count, since deleting it would rewrite what that count was worth. Unclassified
 products that only it created go with it (a misread receipt's garbled names
 would otherwise sit in the review queue for ever); files go on commit.
 
+### Correcting an invoice's lines
+
+The line forms (the HT editor, "Corriger les lignes", and the ticket review
+screen) show a name, a count, a total and VAT; a stored line carries more -
+Metro's measured volume, duty, discount, pack size, category, a receipt's
+reading and printed TTC. Each row posts back its line's id, and
+`importing.corrected_line` keeps what the form doesn't show (the volume
+scaled when the count changes: an item's size didn't). Rebuilt from the four
+visible fields, a Metro invoice saved untouched turned 4.2 L of vodka into
+6 L of stock, and a weighed Wing Seng lemon lost its kilos.
+`replace_invoice_lines` then **updates those lines in place** - a stock take
+priced from one keeps its trail, where deleting and recreating it hit the
+PROTECT with a 500 (66 real invoices) - and removes the others, refusing
+(`InvoiceLinesInUseError`, nothing saved) to remove one a count was priced
+from. A refund is a negative count **and** a negative amount (Metro's "1-" /
+"15,00-", on 41 real invoices); a positive count at a negative price is
+refused - stock worth less than nothing is what the FIFO guard exists for.
+
 ### Gathering invoices
 
 **Metro bans accounts that hammer docs.metro.fr.** One login per run, one
@@ -311,7 +329,13 @@ vanishes; counted along, it hid PDFs that had landed in a second, and one
 gather spent eleven of its twelve minutes timing out downloads long finished.
 Deposit credit notes ("Consignes") don't print their store, so the parser
 stores them as "052-014645"; the list page is matched on till and number too
-(`_is_known`), or every credit note is downloaded again on every run.
+(`_is_known`), or every credit note is downloaded again on every run. The
+levy and discount lines belong to the product above them **across page
+breaks** too.
+
+The mailbox search asks for BEFORE the day **after** the end date: IMAP's
+BEFORE is exclusive (RFC 3501), and the form's end date is today - this
+morning's invoice email was left for a later run.
 
 The gather form starts from **the newest invoice the gathered sources have
 already brought in** (`tasks.default_gather_start`, receipts and future dates
@@ -464,6 +488,22 @@ when it arrived, and hiding it would drop real stock out of a count.
 
 A row being **deleted** is never re-judged. Validating a row on its way out
 traps the user in an inventory they can no longer fix.
+
+**An invoice line with no printed volume stores `total_volume` 0, not NULL.**
+`product_counting_ratios` skips those lines (`total_volume__gt=0`); tested
+with isnull, the 0 ratio went through and `stock_units_per_item` turned
+eleven 1 L bottles counted on a shelf into 0 litres - 62 real count lines on
+210 products read as entirely missing in the écarts and stock pages. An
+unmeasured product's items convert with `stock_equivalent`, exactly as its
+purchases were booked.
+
+**A stock item in use is merged, not deleted.** Recipes, stock-take lines and
+sale lines hold their stock item with PROTECT. `merge_stock_types` moves them
+all, in one transaction (a count that measured both items becomes one line
+adding both up) - it used to fail on them after the products had already
+moved. Deleting an item still in use, alone or through "supprimer les types
+vides", is refused with where it is used; "vide" means no product and no
+movement, so a loss written down against an item survives.
 
 ### N+1s hide in per-object properties
 
@@ -668,6 +708,13 @@ Blonde HH"). Put its till name in the base recipe's `happy_hour_name` and
 both fold into one recipe. `record_sales` therefore aggregates by RESOLVED
 RECIPE, not by raw name — summing by name would write one and overwrite it
 with the other, silently losing every happy-hour sale.
+
+Taking a variant off its recipe (ignore, back to the worklist, linked
+elsewhere) clears that `happy_hour_name`: the import counts sales by name, so
+its sales kept landing on the recipe, and a product sent back to the worklist
+was relinked by the next import. An ignored till product sells no recipe
+whatever its name (`record_sales` skips it, and does not list it as
+unmatched).
 
 ### One inventory is enough (if the invoices go back far enough)
 

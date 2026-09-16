@@ -3,11 +3,14 @@ from __future__ import annotations
 import os
 from datetime import date
 
+from decimal import Decimal
+
 from django.core.files import File
 from django.db import transaction
+from django.utils import timezone
 
 from inventory.matching import resolve_products
-from inventory.models import StockMovement
+from inventory.models import StockMovement, StockTake, StockTakeLineSource
 from inventory.services import create_stock_movement_for_line
 
 from .deletion import remove_orphan_products
@@ -67,23 +70,88 @@ def import_parsed_invoice(
     return invoice
 
 
+def _line_values(parsed_line: ParsedLine) -> dict:
+    return {
+        "raw_name": parsed_line.raw_name,
+        "read_as": parsed_line.read_as,
+        "quantity": parsed_line.quantity,
+        "colisage": parsed_line.colisage,
+        "total_volume": parsed_line.total_volume,
+        "unit_cost_ht": parsed_line.unit_cost_ht,
+        "total_ht": parsed_line.total_ht,
+        "taxes": parsed_line.taxes,
+        "discount": parsed_line.discount,
+        "vat_rate": parsed_line.vat_rate,
+        "category": parsed_line.category,
+        "printed_ttc": parsed_line.printed_ttc,
+    }
+
+
 def _create_line(invoice: Invoice, product, parsed_line: ParsedLine) -> InvoiceLine:
-    return InvoiceLine.objects.create(
-        invoice=invoice,
-        product=product,
-        raw_name=parsed_line.raw_name,
-        read_as=parsed_line.read_as,
-        quantity=parsed_line.quantity,
-        colisage=parsed_line.colisage,
-        total_volume=parsed_line.total_volume,
-        unit_cost_ht=parsed_line.unit_cost_ht,
-        total_ht=parsed_line.total_ht,
-        taxes=parsed_line.taxes,
-        discount=parsed_line.discount,
-        vat_rate=parsed_line.vat_rate,
-        category=parsed_line.category,
-        printed_ttc=parsed_line.printed_ttc,
+    return InvoiceLine.objects.create(invoice=invoice, product=product, **_line_values(parsed_line))
+
+
+class InvoiceLinesInUseError(Exception):
+    """Lines a stock take was priced from can be corrected, not removed."""
+
+    def __init__(self, lines, stock_takes):
+        self.lines = lines
+        self.stock_takes = stock_takes
+        names = ", ".join(sorted({line.raw_name for line in lines}))
+        dates = ", ".join(f"{timezone.localtime(take.taken_at):%d/%m/%Y}" for take in stock_takes)
+        super().__init__(
+            f"{names} a servi à valoriser l'inventaire du {dates} : cette ligne peut être corrigée, "
+            "pas retirée - la retirer changerait la valeur de cet inventaire."
+        )
+
+
+_STORED = object()
+VOLUME = Decimal("0.001")
+UNIT_COST = Decimal("0.0001")
+
+
+def corrected_line(
+    stored: InvoiceLine | None,
+    raw_name: str,
+    quantity: int,
+    total_ht: Decimal,
+    vat_rate: Decimal,
+    read_as=_STORED,
+    printed_ttc=_STORED,
+) -> ParsedLine:
+    """A row a person corrected, as the ParsedLine replace_invoice_lines takes.
+
+    A row that was a stored line keeps what the forms don't show: Metro's
+    measured volume (scaled when the count changed - the size of an item
+    didn't), duty, discount, pack size, category, and what OCR read. Rebuilt
+    from the four visible fields instead, a Metro invoice saved untouched
+    turned 4.2 L of vodka into 6 L of stock. The printed TTC stays while the
+    amount does; `read_as`/`printed_ttc`, when given, are the form's own.
+    """
+    line = ParsedLine(
+        raw_name=raw_name,
+        quantity=quantity,
+        total_volume=Decimal("0"),
+        unit_cost_ht=(total_ht / quantity).quantize(UNIT_COST) if quantity else Decimal("0"),
+        total_ht=total_ht,
+        vat_rate=vat_rate,
+        read_as="" if read_as is _STORED else read_as,
+        printed_ttc=None if printed_ttc is _STORED else printed_ttc,
     )
+    if stored is None:
+        return line
+    line.line_id = stored.pk
+    if stored.quantity and quantity != stored.quantity:
+        line.total_volume = (stored.total_volume * quantity / stored.quantity).quantize(VOLUME)
+    else:
+        line.total_volume = stored.total_volume
+    line.taxes, line.discount = stored.taxes, stored.discount
+    line.colisage, line.category = stored.colisage, stored.category
+    if read_as is _STORED:
+        line.read_as = stored.read_as
+    if printed_ttc is _STORED and (total_ht, vat_rate) == (stored.total_ht, stored.vat_rate):
+        line.printed_ttc = stored.printed_ttc
+    return line
 
 
 def parse_and_import(
@@ -147,6 +215,12 @@ def replace_invoice_lines(invoice: Invoice, parsed_lines) -> Invoice:
     have to go with them - leaving them behind would double-count the stock,
     and they are the whole reason a line matters.
 
+    A parsed line with a `line_id` corrects that stored line in place: the
+    same row, so a stock take priced from it keeps its trail (the line used
+    to be deleted and recreated, which the stock take's PROTECT refused with
+    a server error). Stored lines no parsed line names are removed - unless a
+    stock take was priced from them: InvoiceLinesInUseError, nothing saved.
+
     So do the products the old lines pointed at that no line uses any more,
     when nobody has classified them: a misreading attached by hand to the
     product it really was leaves behind the product it had created, which
@@ -154,10 +228,24 @@ def replace_invoice_lines(invoice: Invoice, parsed_lines) -> Invoice:
     an invoice (deletion.remove_orphan_products).
     """
     parsed_lines = list(parsed_lines)
-    previous_products = set(invoice.lines.values_list("product_id", flat=True))
-    for line in invoice.lines.all():
-        StockMovement.objects.filter(invoice_line=line).delete()
-    invoice.lines.all().delete()
+    stored = {line.pk: line for line in invoice.lines.all()}
+    corrected = {parsed.line_id for parsed in parsed_lines if parsed.line_id in stored}
+    removed = [line for pk, line in stored.items() if pk not in corrected]
+    take_ids = (
+        StockTakeLineSource.objects.filter(invoice_line__in=removed)
+        .values_list("stock_take_line__stock_take_id", flat=True)
+        .distinct()
+    )
+    if removed and take_ids:
+        used = set(StockTakeLineSource.objects.filter(invoice_line__in=removed).values_list("invoice_line_id", flat=True))
+        raise InvoiceLinesInUseError(
+            [line for line in removed if line.pk in used],
+            list(StockTake.objects.filter(id__in=take_ids).order_by("taken_at")),
+        )
+
+    previous_products = {line.product_id for line in stored.values()}
+    StockMovement.objects.filter(invoice_line__in=list(stored.values())).delete()
+    InvoiceLine.objects.filter(pk__in=[line.pk for line in removed]).delete()
 
     needs_review = False
     # A receipt's lines were read by OCR, and a name corrected on the
@@ -169,7 +257,15 @@ def replace_invoice_lines(invoice: Invoice, parsed_lines) -> Invoice:
         invoice.supplier, [(line.raw_name, line.ean) for line in parsed_lines], ocr_tolerant=ocr_tolerant
     )
     for parsed_line, (product, _created) in zip(parsed_lines, resolved):
-        line = _create_line(invoice, product, parsed_line)
+        # pop: a line named twice (a crafted post) is corrected once.
+        line = stored.pop(parsed_line.line_id, None) if parsed_line.line_id in corrected else None
+        if line is None:
+            line = _create_line(invoice, product, parsed_line)
+        else:
+            for field, value in _line_values(parsed_line).items():
+                setattr(line, field, value)
+            line.product = product
+            line.save()
         if product.needs_review:
             needs_review = True
         else:

@@ -39,6 +39,9 @@ class ParsedLine:
     # InvoiceLine.printed_ttc). Set by the receipt parsers; None for a digital
     # invoice, and for a line a promotion was spread onto.
     printed_ttc: Decimal | None = None
+    # The stored InvoiceLine this one corrects, when a person edits an
+    # invoice (see importing.replace_invoice_lines). Parsers never set it.
+    line_id: int | None = None
 
 
 @dataclass

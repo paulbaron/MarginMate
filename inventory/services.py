@@ -1,9 +1,10 @@
 from datetime import date
 from decimal import Decimal
 
+from django.db import transaction
 from django.db.models import F, Min, Q
 
-from .models import Product, StockMovement, StockType, UnitChoices
+from .models import Product, StockMovement, StockTakeLine, StockType, UnitChoices
 
 
 def product_base_amount(invoice_line) -> Decimal:
@@ -25,7 +26,10 @@ def product_base_amount(invoice_line) -> Decimal:
 def product_counting_ratios(product_ids) -> dict:
     """{product_id: {ratio, ratio, ...}} - the distinct total_volume/quantity
     ratios seen across each product's own invoice lines (lines with no
-    measured total_volume are skipped, not counted as a 0 ratio).
+    measured total_volume are skipped, not counted as a 0 ratio). "No
+    measured volume" is 0, not NULL - the field defaults to 0 - and testing
+    it with isnull let a 0 ratio through: eleven 1 L bottles counted on a
+    shelf then converted to 0 litres (stock_units_per_item).
 
     A product that's always sold in the same fixed size (a 70cl vodka
     bottle) has invoices where total_volume is simply quantity * that
@@ -42,7 +46,7 @@ def product_counting_ratios(product_ids) -> dict:
 
     ratios: dict[int, set] = {}
     lines = InvoiceLine.objects.filter(
-        product_id__in=list(product_ids), total_volume__isnull=False, quantity__gt=0
+        product_id__in=list(product_ids), total_volume__gt=0, quantity__gt=0
     ).values_list("product_id", "total_volume", "quantity")
     for product_id, total_volume, quantity in lines:
         ratios.setdefault(product_id, set()).add(total_volume / quantity)
@@ -343,6 +347,7 @@ def update_product_conversion(product: Product, unit: str, stock_equivalent: Dec
         create_stock_movement_for_line(line)
 
 
+@transaction.atomic
 def merge_stock_types(source: StockType, target: StockType) -> None:
     """Merges `source` into `target`: every product (and the stock movements
     they've already produced) currently pointing at `source` gets re-pointed
@@ -355,9 +360,32 @@ def merge_stock_types(source: StockType, target: StockType) -> None:
     litres and a food item in kilos) can't be merged this way; the caller
     is expected to reject that case with a clear error instead of silently
     producing numbers that don't mean anything.
+
+    Recipes, stock takes and sale documents that name `source` (all PROTECT)
+    move over too - deleting it used to fail on them after its products had
+    already moved, leaving the merge half done. A count that measured both
+    items directly becomes one line holding both: same unit, so the amounts
+    and their frozen values simply add up.
     """
+    from recipes.models import RecipeIngredient, SaleDocumentLine
+
     StockMovement.objects.filter(stock_type=source).update(stock_type=target)
     Product.objects.filter(stock_type=source).update(stock_type=target)
+    RecipeIngredient.objects.filter(stock_type=source).update(stock_type=target)
+    SaleDocumentLine.objects.filter(stock_type=source).update(stock_type=target)
+    for line in StockTakeLine.objects.filter(stock_type=source):
+        twin = StockTakeLine.objects.filter(stock_take_id=line.stock_take_id, stock_type=target).first()
+        if twin is None:
+            line.stock_type = target
+            line.save(update_fields=["stock_type"])
+            continue
+        twin.counted_quantity += line.counted_quantity
+        twin.value_ht += line.value_ht
+        twin.shortfall_quantity += line.shortfall_quantity
+        twin.has_shortfall = twin.has_shortfall or line.has_shortfall
+        twin.save(update_fields=["counted_quantity", "value_ht", "shortfall_quantity", "has_shortfall"])
+        line.sources.update(stock_take_line=twin)
+        line.delete()
     source.delete()
 
 

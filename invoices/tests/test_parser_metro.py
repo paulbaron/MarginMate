@@ -74,6 +74,18 @@ class MetroParserTests(SimpleTestCase):
         self.assertEqual(line.taxes, Decimal("10.42"))
         self.assertEqual(line.total_ht, Decimal("77.25") + Decimal("10.42"))
 
+    def test_a_levy_printed_at_the_top_of_the_next_page_still_counts(self):
+        """A page break between a bottle and its levy line used to drop the
+        levy: the product the page started with was forgotten."""
+        levy = "Plus : COTIS. SECURITE SOCIALE 10,42 D" + chr(10)
+        bottom, top = BODY.split(levy)
+        first = PdfPage(text=HEADER + bottom)
+        second = PdfPage(text=HEADER + levy + top)
+        invoice = parse([first, second])
+        whisky = line_named(invoice, "WHISKY EXEMPLE 40D 70CL")
+        self.assertEqual(whisky.taxes, Decimal("10.42"))
+        self.assertEqual(whisky.total_ht, line_named(parse(), "WHISKY EXEMPLE 40D 70CL").total_ht)
+
     def test_bulk_discount_is_subtracted_from_total(self):
         line = line_named(parse(), "GIN EXEMPLE 37.5D 70CL")
         self.assertEqual(line.discount, Decimal("1.80"))

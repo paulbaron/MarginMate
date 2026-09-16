@@ -81,7 +81,12 @@ def record_sales(entries, source: str = "manual") -> SalesImportResult:
     the variance report is only as trustworthy as its inputs. Anything
     unmatched comes back in the result rather than being dropped.
     """
+    from .models import PosProduct
+
     lookup = recipe_lookup()
+    # A till product marked "ignoré" sells no recipe, whatever its name - and
+    # is not a name waiting for one either.
+    ignored = {name.strip().lower() for name in PosProduct.objects.filter(ignored=True).values_list("name", flat=True)}
 
     totals: dict[tuple[int, date], int] = {}
     order: list[tuple[int, date]] = []
@@ -90,6 +95,8 @@ def record_sales(entries, source: str = "manual") -> SalesImportResult:
 
     for name, sold_on, quantity in entries:
         name = str(name).strip()
+        if name.lower() in ignored:
+            continue
         recipe = lookup.get(name.lower())
         if recipe is None:
             if name not in result.unmatched:
