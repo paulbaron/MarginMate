@@ -56,7 +56,7 @@
             {% if unlinked_count == 1 %}1 article n'est utilisé{% else %}{{ unlinked_count }} articles ne sont utilisés{% endif %} par aucune recette :
             la caisse les vend, mais rien ne dit ce qu'il y a dedans, donc tout ce qui sort
             apparaît comme manquant. Leur écrire une recette — ou les rattacher depuis
-            <a href="{% url 'recipes:pos_product_list' %}">Produits caisse</a> — vaut mieux que
+            les produits caisse <a href="{% url 'recipes:pos_product_list' %}">à lier</a> — vaut mieux que
             de les compter comme des pertes.
         </p>
         {% endif %}

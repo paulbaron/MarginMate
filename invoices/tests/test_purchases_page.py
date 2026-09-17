@@ -60,6 +60,7 @@ class PurchasesPageTests(TestCase):
         self.assertContains(response, f'action="{reverse("invoices:invoice_upload")}"')
         self.assertContains(response, f'action="{reverse("invoices:gather")}"')
         self.assertContains(response, reverse("invoices:invoice_create_manual"))
+        self.assertEqual(response.context["pdf_form"].fields["supplier"].label, "Fournisseur")
 
     def test_the_three_tabs_and_what_waits_in_them(self):
         undated(make_invoice(supplier=self.metro, invoice_number="SANS-DATE"))

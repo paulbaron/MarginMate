@@ -11,7 +11,7 @@ from .parsers import LLM_PARSER_KEY, PARSER_REGISTRY
 
 
 class InvoiceUploadForm(forms.Form):
-    supplier = forms.ModelChoiceField(queryset=Supplier.objects.all())
+    supplier = forms.ModelChoiceField(queryset=Supplier.objects.all(), label="Fournisseur")
     source_file = forms.FileField(label="Fichier PDF")
 
     def clean_source_file(self):

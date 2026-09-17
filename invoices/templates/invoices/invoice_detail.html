@@ -3,7 +3,7 @@
 {% block content %}
     <div class="page-header">
         <div>
-            <p class="breadcrumb"><a href="{% url 'invoices:invoice_list' %}">← Factures</a></p>
+            <p class="breadcrumb"><a href="{% url 'invoices:invoice_list' %}">← Achats</a></p>
             <h1>{{ invoice.supplier.name }} — {{ invoice.invoice_number|default:"sans numéro" }}</h1>
             <p class="muted">
                 {% if invoice.invoice_date %}Datée du {{ invoice.invoice_date|date:"d/m/Y" }}{% else %}Sans date{% endif %}

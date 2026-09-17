@@ -329,7 +329,7 @@ function syncStockTypeName(input) {
 // "Ricard 45d" typed, "Ricard" exists: the existing item whose name the
 // typed one starts with (or the reverse), the longest such name first.
 function plain(text) {
-    return text.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+    return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 }
 function nearestStockType(typed) {
     var wanted = plain(typed);

@@ -212,14 +212,17 @@ waiting to be checked** (`receipts.apply_known_prices`) - one Pita price left
 on. Every known price is applied, each as of its own ticket's date, and a
 checked ticket is never rewritten (except the one the price was typed on).
 
-**The review screen is the deliverable, not the parser.** `/invoices/tickets/`
-takes a batch and detects each shop from its own header (a Franprix ticket
-run through the Monoprix parser *would* produce lines, and they would be
-wrong — an unrecognised file is reported, never guessed). `.../verification/`
-is the queue, oldest first; `.../<pk>/verifier/` puts the photo beside the
-checks and the editable lines and moves to the next receipt on save (a ticket
-already checked, reopened from its page, goes back to its page). Saving goes
-through `replace_invoice_lines`, the same path as a hand-typed invoice.
+**The review screen is the deliverable, not the parser.** The Achats page's
+import card takes a batch (`/invoices/tickets/`) and detects each shop from
+its own header (a Franprix ticket run through the Monoprix parser *would*
+produce lines, and they would be wrong — an unrecognised file is reported,
+never guessed). `.../verification/` is the queue tab, oldest first;
+`.../<pk>/verifier/` puts the photo beside the checks and the editable lines
+and moves to the next receipt on save (a ticket already checked, reopened
+from its page, goes back to its page). With `?lot=<batch>` it goes through
+that import's tickets only and ends on the import; the whole queue ends on the
+list of tickets checked recently. Saving goes through `replace_invoice_lines`,
+the same path as a hand-typed invoice.
 
 **One correction page for tickets and invoices** (`views._correction_page`,
 `document_review.html`): `<pk>/lignes/` is the same page for a supplier
@@ -708,8 +711,8 @@ theft, and the order these come off matters more than the arithmetic:
    the écarts page, which shows **both** totals side by side so the filter
    can't hide what it costs. Actual candidate shrinkage: €2,335.
 
-The fix for (3) is writing recipes, not tuning the report — see the "Produits
-caisse" backlog, 187 of 211 till products unmapped at the time of writing.
+The fix for (3) is writing recipes, not tuning the report — see the "À lier"
+backlog, 187 of 211 till products unmapped at the time of writing.
 
 Sales come in through `recipes/sales.py::record_sales` and nowhere else, so a
 new source (API, CSV, whatever the till turns out to be) is just a function
@@ -815,12 +818,17 @@ Four things that cost real debugging time:
   "submit" while XPath `@type` matches nothing. It's matched on exact text —
   which also avoids the "Mot de passe oublié ?" button right next to it.
 
-The UI is two pages under **Ventes**: `/recipes/caisse/import/` runs the
-import (background thread + htmx polling, same shape as the invoice gather)
-and `/recipes/caisse/` is the backlog of till products with no recipe -
+The UI is two tabs of **Recettes & ventes**: "Ventes" runs the import
+(background thread + htmx polling, same shape as the invoice gather) and "À
+lier" (`/recipes/caisse/`) is the backlog of till products with no recipe -
 biggest sellers first, since that's where the unexplained stock is. Four
-actions per row: link to a recipe, mark as a happy-hour variant, create a
-recipe (name prefilled), or ignore (coffee, food, anything untracked).
+actions per row, in place: link to a recipe (the one with a close name is
+chosen already, `links.suggest_recipe`; an "HH" name ticks happy hour), mark
+as a happy-hour variant, create the recipe (`?caisse=`: named after it,
+linked to it on save), or ignore (coffee, food, anything untracked). Linking
+and unlinking go through `recipes/links.py` only - from these rows and from
+the recipe form's "Vendue en caisse sous" - which rebuilds the sales and
+clears a happy-hour name that leaves with its product.
 
 `PosProduct` is that backlog, and an explicit mapping on it beats a
 coinciding recipe name in `recipe_lookup()` - a mapping made by hand is a
@@ -886,6 +894,37 @@ For the variance engine this means a nested choice must be pooled too:
 `reachable_stock_types` is deliberately separate from the amounts and is
 **never capped**, because a pool missing a member reports that member's whole
 consumption as unexplained. Amounts are capped (`MAX_SUB_VARIATIONS`).
+
+### Three workspaces, not eight pages
+
+The navigation is **Produits** (stock and the products to classify),
+**Achats** (invoices, tickets, invoice types) and **Recettes & ventes**
+(recipes, till products, sales), each with the count of what waits there
+(`config/navigation.py` decides which link a page lights up). They were
+separate pages, and checking that something added had landed meant going
+back and forth between them. The rules that came with merging them:
+
+- **Every old address still works** and draws the merged page on its tab or
+  import (`inventory.views.StockListView` + `review_queue`,
+  `invoices/workspace.py::render_purchases`, `recipes/menu.py::render_menu`).
+  Tabs are links to those addresses; `hx-boost` swaps only `#workspace`, so
+  the import card above keeps a running import as it is.
+- **An action answers where it was taken.** A product classified in the
+  Produits side panel gets the panel back with a note and an undo (the undo
+  deletes a stock item the classification created - signed, `UNDO_SALT`),
+  and `HX-Trigger: catalogue-changed` makes the list reload itself opened on
+  that item. A till product linked from its row gets the row back. A PDF
+  imported comes back highlighted and opened in the list (`?surligner=`);
+  the list reloads when an import or a gather ends (`documents-changed`,
+  sent by their status partials once they stop polling).
+- **Without JavaScript the same forms post and redirect** to the page; the
+  in-place answer is chosen on `HX-Request`.
+- **No out-of-band part beside a `<tr>`**: htmx 1.9 parses a row response
+  inside a table, and the HTML parser moves a sibling `<span>` out of it.
+  Counts next to a row answer travel as an `HX-Trigger` event instead
+  (`to-link-count`, handled in `ui.js`).
+- A page with a side panel is wider (`container-wide`), and the stock list's
+  columns are shares, not pixels, so it fits beside the panel.
 
 ### UI conventions
 
