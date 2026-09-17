@@ -266,6 +266,20 @@ def value_counted_stock_type_quantity(
     return _fifo_value(pairs, counted_quantity)
 
 
+def expense_product(supplier, name: str = "") -> Product:
+    """The product a supplier of charges files a poste on, named after that
+    poste - after the supplier itself when its document says no more than
+    what it charges. It is no article: no stock type, no queue, no stock
+    page - see invoices.Supplier.expenses_only."""
+    product, created = Product.objects.get_or_create(
+        supplier=supplier, raw_name=name or supplier.name, defaults={"is_expense": True}
+    )
+    if not created and not product.is_expense:
+        product.is_expense = True
+        product.save(update_fields=["is_expense"])
+    return product
+
+
 def create_stock_movement_for_line(invoice_line) -> StockMovement | None:
     """Create the StockMovement for an already-matched invoice line.
 

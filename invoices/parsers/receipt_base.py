@@ -87,7 +87,13 @@ MIN_OCR_CONFIDENCE = Decimal("0.80")
 # decided by arithmetic, in amount_candidates.
 # Never the head of a longer dotted number: "VERSION: 2023.11.9.4" is not
 # 2023,11 EUR (it was, on every ticket of one till, as their total).
-AMOUNT_RE = re.compile(r"(?<![\d.,])(\d{1,4})[.,](\d{2,4})(?!\d|[.,]\d)")
+# Thousands as a French document groups them: "1 011,00", with an ordinary,
+# a no-break or a narrow space. Only in front of a decimal part, and only in
+# groups of exactly three digits, or "10.49 31.47" - two amounts side by side
+# in a column - would read as one of 49,314. A water bill of 1 011,00 € was
+# filed at 11,00 €, and nothing on the screen said which it was.
+UNITS = r"\d{1,3}(?:[   ]\d{3})+|\d{1,4}"
+AMOUNT_RE = re.compile(rf"(?<![\d.,])({UNITS})[.,](\d{{2,4}})(?!\d|[.,]\d)")
 # Rates print as "5,5%", "5.50%", "20%", and - when a column rule is read as
 # a leading digit - "15.5%". The leading-1 case is undone in read_rate.
 RATE_RE = re.compile(r"(?<![\d.,])(\d{1,3})(?:[.,](\d{1,2}))?\s*%")
@@ -112,7 +118,7 @@ WRITTEN_DATE_RE = re.compile(
 # printed in cents - but a column rule or the euro sign read as a digit
 # ("6.061" in a Franprix VAT table), so it is swallowed rather than allowed to
 # make a different amount.
-MONEY_RE = re.compile(r"(?<![\d.,])(?P<sign>-\s?)?(?P<units>\d{1,4})[.,](?P<cents>\d{2})\d{0,2}(?!\d|[.,]\d)")
+MONEY_RE = re.compile(rf"(?<![\d.,])(?P<sign>-\s?)?(?P<units>{UNITS})[.,](?P<cents>\d{{2}})\d{{0,2}}(?!\d|[.,]\d)")
 # A price per unit: an amount followed by a slash, whatever the unit after it
 # reads as ("@ 3.49 / KG", "à 3.49. / <G", "2.99EUR/kg").
 PER_UNIT_RE = re.compile(r"(?P<price>\d{1,4}[.,]\d{2})[^\d\s/]{0,3}\s*/")
@@ -126,12 +132,15 @@ BANNER_RE = re.compile(r"[-\s]*\*{2,}[^*]*\*{2,}[-\s]*")
 UNREAD_NAME = "Article non lu"
 
 
+def money_value(match) -> Decimal:
+    """The amount a MONEY_RE match read, thousands separators taken out."""
+    units = re.sub(r"[   ]", "", match.group("units"))
+    return Decimal(f"{'-' if match.group('sign') else ''}{units}.{match.group('cents')}")
+
+
 def line_amounts(line: str) -> list[Decimal]:
     """Every money amount on a line, signed, to the cent."""
-    return [
-        Decimal(f"{'-' if match.group('sign') else ''}{match.group('units')}.{match.group('cents')}")
-        for match in MONEY_RE.finditer(line)
-    ]
+    return [money_value(match) for match in MONEY_RE.finditer(line)]
 
 
 def printed_total(lines: list[str]) -> Decimal | None:
@@ -162,22 +171,70 @@ def printed_total(lines: list[str]) -> Decimal | None:
     for candidate in repeated:
         summaries, _rate_only = collect_vat_summaries(lines, candidate)
         read = [summary for summary in summaries if not summary.derived and summary.total_ttc is not None]
-        if any(abs(summary.total_ttc - candidate) <= CENTS for summary in read):
+        # A table printed twice (a rate's row, then a "Total" row repeating
+        # it) is one reading, not two.
+        distinct = {(summary.rate, summary.base, summary.vat_amount, summary.total_ttc) for summary in read}
+        if len(distinct) == 1 and abs(read[0].total_ttc - candidate) <= CENTS:
             return candidate
         # Several rates print one row each, and the amount paid is their sum -
         # which no row shows. Taking the one row that repeats an amount made a
-        # 0.20 paper bag the total, and the 11.20 of ham a "promotion".
-        if len(read) >= 2 and abs(sum((summary.total_ttc for summary in read), start=Decimal("0")) - candidate) <= CENTS:
+        # 0.20 paper bag the total, and the 11.20 of ham a "promotion"; and a
+        # water bill, where every item row prints its own tax, made its 27,42
+        # subscription the 260,63 € it charges.
+        if len(distinct) >= 2 and abs(
+            sum((total for _rate, _base, _vat, total in distinct), start=Decimal("0")) - candidate
+        ) <= CENTS:
             return candidate
     table, _rate_only = collect_vat_summaries(lines, None)
     read = [summary for summary in table if not summary.derived and summary.total_ttc is not None]
     if read:
         table_total = sum((summary.total_ttc for summary in read), start=Decimal("0"))
-        return table_total if amount_printed(lines, table_total) is not None else None
+        if amount_printed(lines, table_total) is not None:
+            return table_total
+        return _taxed_total(lines)
+    taxed = _taxed_total(lines)
+    if taxed is not None:
+        return taxed
     with_tax = _ht_and_tax(lines, repeated)
     if with_tax is not None:
         return with_tax
     return repeated[0] if repeated else None
+
+
+def _taxed_total(lines: list[str]) -> Decimal | None:
+    """The total of a document printing its tax beside its rate ("TVA
+    [20.00%]  2.16"), the value of what it sells ("Total de la facture HT
+    10.80") and their sum ("Somme a payer TTC*  12.96") - each once.
+
+    The printed rate is what makes one printing enough: only an HT the tax
+    is really that rate of can pair with it, and their sum has to be printed
+    too, so three figures have to agree. `_ht_and_tax` searches without a
+    rate to anchor it and asks for each figure twice for that reason. A
+    phone bill states its three totals that way and nothing else twice; its
+    2,97 € of texts, printed as a subtotal and again on its line, stood for
+    the 12,96 € it charges.
+
+    Nothing is returned when two pairs fit: a figure that could be the tax
+    of either of two others says nothing.
+    """
+    amounts = {amount for line in lines for amount in line_amounts(line) if amount > 0}
+    totals: set[Decimal] = set()
+    for line in lines:
+        rate = read_rate(line)
+        if rate is None or not rate:
+            continue
+        values = amount_candidates(RATE_RE.sub(" ", line))
+        if len(values) != 1:
+            continue
+        (tax,) = values
+        for base in amounts:
+            if base <= tax:
+                continue
+            if abs((base * rate).quantize(CENTS, rounding=ROUND_HALF_UP) - tax) > VAT_IDENTITY_TOLERANCE:
+                continue
+            if base + tax in amounts:
+                totals.add(base + tax)
+    return totals.pop() if len(totals) == 1 else None
 
 
 def _ht_and_tax(lines: list[str], repeated: list[Decimal]) -> Decimal | None:
@@ -310,7 +367,7 @@ def amount_candidates(text: str) -> list[Decimal]:
             values.append(value)
 
     for match in AMOUNT_RE.finditer(text):
-        integer, decimals = match.group(1), match.group(2)
+        integer, decimals = re.sub(r"[   ]", "", match.group(1)), match.group(2)
         printed = Decimal(f"{integer}.{decimals}")
         remember(printed)
         if len(decimals) > 2:
@@ -942,7 +999,7 @@ def collect_vat_summaries(lines: list[str], printed_total: Decimal | None) -> tu
         summary = finalise_summary(parse_vat_line(line, rate=rate, expected_total=printed_total), printed_total)
         if summary is not None and summary.base is not None:
             known = summaries.get(summary.rate)
-            if known is None or (known.derived and not summary.derived):
+            if known is None or _better_bucket(summary, known):
                 summaries[summary.rate] = summary
         elif rate not in legible:
             legible.append(rate)
@@ -958,6 +1015,21 @@ def collect_vat_summaries(lines: list[str], printed_total: Decimal | None) -> tu
                 summaries[inferred.rate] = inferred.resolve()
                 break
     return list(summaries.values()), [rate for rate in legible if rate not in summaries]
+
+
+def _better_bucket(summary: VatSummary, known: VatSummary) -> bool:
+    """Which of two readings of the same rate is that rate's bucket.
+
+    A bucket covers the whole document, so it can never be smaller than a
+    single row taxed at the same rate: the larger base wins. A water bill
+    whose every row prints its own tax ("25,99  5,5%  1,43  27,42") states
+    its real table at the foot ("Dont TVA 5,5 % : 6,82 € sur la base de
+    123,97 €"), fifty lines below - read first, the subscription's row stood
+    for the whole bill and 27,42 € passed for the 260,63 € charged.
+    """
+    if known.derived != summary.derived:
+        return known.derived
+    return not known.derived and summary.base > known.base
 
 
 # Letters a VAT table row may print before its figures ("T.V.A.").

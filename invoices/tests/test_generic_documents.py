@@ -14,6 +14,7 @@ from decimal import Decimal
 from django.test import SimpleTestCase
 
 from invoices.parsers.generic_receipt import GenericReceiptParser, TicketShop, read_line
+from invoices.parsers.receipt_base import amount_candidates, line_amounts
 
 D = Decimal
 READER = GenericReceiptParser(TicketShop("SHOP", (), "Magasin"))
@@ -282,3 +283,266 @@ class TotalsFirstTests(SimpleTestCase):
         the document's own figure, not a line of it."""
         parsed = READER.parse_text(PHONE_BILL)
         self.assertNotIn("Total de la facture HT", [line.raw_name for line in parsed.lines])
+
+
+# A water bill: every row prints its own tax, so the subscription's row is a
+# VAT row of its own - and its amount is printed again at the top, beside
+# "Votre abonnement". The bill's real table is at the foot, fifty lines
+# below, with its base printed after its tax.
+WATER_BILL = """EAU EXEMPLE  AU DISPO
+Votre reference contrat  1000000
+FACTURE TRIMESTRIELLE
+N 2026100000001 DU 3 JUILLET 2026
+200  Votre abonnement  21,10€ TTC
+100  Votre consommation  50 m3  96,75€ TTC
+Total  117,85€ TTC
+Solde anterieur  0,00€ TTC
+Montant net a prelever  117,85€ TTC
+Le montant de cette facture sera preleve automatiquement le 17 juillet 2026.
+VOTRE FACTURE
+Compteur n  Ancien index  Nouvel index  Consommation
+I00AA000000  ESTIME LE 04/04/26  ESTIME LE 26/06/26  50m3
+EN DETAIL
+Quantite  Prix unitaire  Montant  Taux  Montant TVA  Montant
+€ HT  € HT  TVA  €  € TTC
+PRODUCTION ET DISTRIBUTION DE L'EAU  70,00  3,85  73,85
+ABONNEMENT
+Abonnement pour compteur - O20  du 01/04/26 au 30/06/26  1  20,0000  20,00  5,5%  1,10  21,10
+CONSOMMATION
+Fourniture d'eau potable  du 04/04/26 au 26/06/26  50  m3  1,0000  50,00  5,5%  2,75  52,75
+COLLECTE ET TRAITEMENT DES EAUX USEES  40,00  4,00  44,00
+Collecte des eaux usees  du 04/04/26 au 26/06/26  50  m3  0,6000  30,00  10,0%  3,00  33,00
+Transport et epuration  du 04/04/26 au 26/06/26  50  m3  0,2000  10,00  10,0%  1,00  11,00
+TOTAL  110,00  7,85  117,85
+SOLDE ANTERIEUR  0,00
+MONTANT NET A PRELEVER  117,85
+Prix au litre TTC (hors abonnement): 0,00200 €  TVA :acquittee sur les debits
+* EXEMPLE : SYNDICAT INTERDEPARTEMENTAL  Dont TVA 5,5 % : 3,85 € sur la base de 70,00 €
+Dont TVA 10,0 % : 4,00 € sur la base de 40,00 €
+2/2"""
+
+# The same bill a quarter later, over a thousand euros, with what was still
+# owed from the quarter before printed under its total.
+WATER_BILL_WITH_BALANCE = WATER_BILL.replace(
+    "Solde anterieur  0,00€ TTC", "Solde anterieur  171,37€ TTC"
+).replace(
+    "Montant net a prelever  117,85€ TTC", "Montant net a payer  1 289,22€ TTC"
+).replace(
+    "SOLDE ANTERIEUR  0,00", "SOLDE ANTERIEUR  171,37"
+).replace(
+    "MONTANT NET A PRELEVER  117,85", "MONTANT NET A PAYER  1 289,22"
+).replace(
+    "Collecte des eaux usees  du 04/04/26 au 26/06/26  50  m3  0,6000  30,00  10,0%  3,00  33,00",
+    "Collecte des eaux usees  du 04/04/26 au 26/06/26  50  m3  20,6000  1 030,00  10,0%  103,00  1 133,00",
+).replace(
+    "COLLECTE ET TRAITEMENT DES EAUX USEES  40,00  4,00  44,00",
+    "COLLECTE ET TRAITEMENT DES EAUX USEES  1 040,00  104,00  1 144,00",
+).replace(
+    "Dont TVA 10,0 % : 4,00 € sur la base de 40,00 €",
+    "Dont TVA 10,0 % : 104,00 € sur la base de 1 040,00 €",
+).replace("TOTAL  110,00  7,85  117,85", "TOTAL  1 110,00  107,85  1 217,85").replace(
+    "Total  117,85€ TTC", "Total  1 217,85€ TTC"
+).replace(
+    "100  Votre consommation  50 m3  96,75€ TTC", "100  Votre consommation  50 m3  1 196,75€ TTC"
+)
+
+
+class WaterBillTests(SimpleTestCase):
+    def test_a_rows_own_tax_does_not_stand_for_the_whole_bill(self):
+        """The subscription's row is a bucket at 5,5% of 21,10 and its amount
+        is printed twice; the bill's own table says 5,5% of 73,85. A bucket
+        covers the document, so the larger reading is the bill's."""
+        parsed = READER.parse_text(WATER_BILL)
+        self.assertEqual(parsed.printed_total_ttc, D("117.85"))
+        self.assertEqual(
+            sorted((rate, base, tax) for rate, base, tax in parsed.vat_breakdown),
+            [(D("0.055"), D("70.00"), D("3.85")), (D("0.100"), D("40.00"), D("4.00"))],
+        )
+
+    def test_a_thousands_separator_is_not_a_second_amount(self):
+        """Read as "030,00", the bill's own table no longer added up and the
+        1 217,85 € charged was filed as 217,85 €."""
+        parsed = READER.parse_text(WATER_BILL_WITH_BALANCE)
+        self.assertEqual(parsed.printed_total_ttc, D("1217.85"))
+
+    def test_what_was_owed_before_is_not_part_of_this_bill(self):
+        """"MONTANT NET A PAYER 1 289,22" is this quarter plus the last
+        quarter's unpaid balance: the document is worth what it charges."""
+        self.assertEqual(READER.parse_text(WATER_BILL_WITH_BALANCE).printed_total_ttc, D("1217.85"))
+
+
+# A phone bill whose sundry services are subtotalled ("Total : 2.97") and
+# printed again on their own line, while the amount charged is printed once.
+PHONE_BILL_WITH_EXTRAS = PHONE_BILL.replace(
+    "Total de la facture HT  8.33", "Total de la facture HT  10.80"
+).replace("TVA [20.00%]  1.66", "TVA [20.00%]  2.16").replace(
+    "Somme a payer TTC*  9.99", "Somme a payer TTC*  12.96"
+) + """
+Services fournis par des tiers (Total : 2.97  TTC ( 2.48 HT ))
+SMS+  6  2.97 (2.48)"""
+
+
+class TaxPrintedBesideItsRateTests(SimpleTestCase):
+    def test_the_total_is_the_ht_the_printed_tax_belongs_to(self):
+        """Nothing here is printed twice but the 2,97 of texts, which the
+        bill charges among the 12,96 it debits."""
+        parsed = READER.parse_text(PHONE_BILL_WITH_EXTRAS)
+        self.assertEqual(parsed.printed_total_ttc, D("12.96"))
+
+    def test_a_tax_that_could_belong_to_two_amounts_proves_nothing(self):
+        """20% of 10,80 is 2,16 and so is 20% of 10,81: with both printed,
+        and both sums printed too, the document says nothing."""
+        ambiguous = """FACTURE
+Total HT  10.80
+Autre montant  10.81
+TVA [20.00%]  2.16
+A payer  12.96
+Deja regle  12.97"""
+        self.assertIsNone(READER.parse_text(ambiguous).printed_total_ttc)
+
+
+class ThousandsSeparatorTests(SimpleTestCase):
+    def test_a_space_between_three_digits_and_a_decimal_part_groups_thousands(self):
+        self.assertEqual(line_amounts("MONTANT NET A PAYER  1 011,00"), [D("1011.00")])
+        self.assertEqual(
+            line_amounts("TOTAL  936,59  74,41  1 011,00"), [D("936.59"), D("74.41"), D("1011.00")]
+        )
+        self.assertEqual(amount_candidates("TOTAL  1 011,00"), [D("1011.00")])
+
+    def test_two_amounts_in_neighbouring_columns_stay_two(self):
+        """"10.49 31.47" is what a price column and the amount beside it look
+        like once the space between them is all that separates them."""
+        self.assertEqual(line_amounts("PAIN COMPLET  10.49 31.47"), [D("10.49"), D("31.47")])
+        self.assertEqual(line_amounts("PAIN COMPLET  10.49 314.47"), [D("10.49"), D("314.47")])
+
+    def test_a_group_of_two_or_four_digits_is_not_a_thousands_group(self):
+        self.assertEqual(line_amounts("CAISSE 12  1 04,50"), [D("4.50")])
+        self.assertEqual(line_amounts("TICKET  2 0110,00"), [D("110.00")])
+
+
+# A wine grower's invoice, printing each price and each amount both ways -
+# HT and TTC - with no tax column, its rate last on the row. Two suppliers
+# had a parser of their own for this until the reader could do it: what they
+# knew is in these two fixtures. Structure copied, data invented.
+WINE_INVOICE = """SCEA EXEMPLE ET FILS  FACTURE
+26 Rue Inventee
+37530, Charge, France  Date: 30/04/2026
+contact@exemple.fr  N° document: FA-202604-0001
+Date de livraison: 02/04/2026
+Adresse de livraison:  Adresse de facturation:
+Societe AU DIPSO  Societe AU DIPSO
+140 RUE DES LILAS  140 RUE DES LILAS
+Désignation  Qté  Px U. HT  Px U. TTC  HT  TTC  Taux
+LES CAILLOUX EXEMPLE - - AC TOURAINE  18  5,00€  6,00€  90,00€  108,00€  20,00%
+JUS DE RAISIN EXEMPLE - - VAL DE LOIRE  24  5,50€  5,80€  132,00€  139,26€  5,50%
+Nombre de produits: 42  Nombre de colis: 7  Volume total: 31.5L  Poids total: 63.35kg
+Libellé  Hors taxe  TVA  TTC  Montant total HT  222,00€
+Taux 20.00%  90,00€  18,00€  108,00€
+Taux 5.50%  132,00€  7,26€  139,26€
+Total net HT  222,00€
+Règlement  Total TVA  25,26€
+Virement - A 45 jours
+Montant total TTC  247,26€
+RIB  Net à payer  247,26€
+Titulaire du compte: SCEA EXEMPLE ET FILS
+IBAN: FR76 1234 5678 9012 3456 7890 123
+BIC: AGRIFRPP894
+SIREN : 383317872 - SIRET : 38331787200018 - TVA : FR04383317872 - NAF : 01.21Z
+SCEA EXEMPLE ET FILS  FA-202604-0001 - LE DIPSOMANIAC - AU DIPSO  Page 1/1"""
+
+# The same grower two years earlier: no "Taux" column, and its reference
+# under another name again ("Référence interne" in January 2025).
+WINE_INVOICE_2024 = """FACTURE
+Date: 29/11/2024
+N° document: FA-202411-0001
+Désignation  Qté  Px U. HT (hors droits)  Px U. TTC  HT  TTC
+LES CAILLOUX EXEMPLE - - AC TOURAINE  18  4.50€  5.40€  81.00€  97.20€
+CREMANT EXEMPLE - - CREMANT DE LOIRE  6  5.00€  6.00€  30.00€  36.00€
+Nombre de produits: 24
+Libellé  Hors taxe  TVA  TVA réglée  TTC  Montant total HT  111,00€
+Taux 20.00%  111,00€  22,20€  0,00€  133,20€
+Total net HT  111,00€
+Montant total TTC  133,20€
+IBAN: FR76 1234 5678 9012 3456 7890 123"""
+
+
+class WineInvoiceTests(SimpleTestCase):
+    def test_a_row_printing_both_ways_keeps_its_count(self):
+        """Nothing adds up on the row - it prints no tax - so the count is
+        proved by one rate turning both prices into both amounts. Read as a
+        bare list of amounts, eighteen bottles came out as one at 90,00."""
+        parsed = READER.parse_text(WINE_INVOICE)
+        self.assertEqual(
+            lines_of(parsed),
+            [
+                ("LES CAILLOUX EXEMPLE - - AC TOURAINE", 18, D("108.00"), D("90.00"), D("0.20")),
+                ("JUS DE RAISIN EXEMPLE - - VAL DE LOIRE", 24, D("139.26"), D("132.00"), D("0.055")),
+            ],
+        )
+        self.assertEqual((parsed.printed_total_ttc, parsed.invoice_date), (D("247.26"), date(2026, 4, 30)))
+        self.assertEqual(failed(parsed), [])
+
+    def test_the_unit_price_is_per_bottle(self):
+        """What every cost downstream is divided by: 5,00 € the bottle, not
+        90,00 € the case."""
+        self.assertEqual([line.unit_cost_ht for line in READER.parse_text(WINE_INVOICE).lines][0], D("5.00"))
+
+    def test_the_document_number_is_its_own_and_never_the_iban(self):
+        """An IBAN is a long digit run once its spaces are gone, and the same
+        one every month: read as the number, the next invoice was refused as
+        a duplicate of this one."""
+        self.assertEqual(READER.parse_text(WINE_INVOICE).invoice_number, "FA-202604-0001")
+        self.assertEqual(READER.parse_text(WINE_INVOICE_2024).invoice_number, "FA-202411-0001")
+        self.assertEqual(
+            READER.parse_text(WINE_INVOICE_2024.replace("N° document:", "Référence interne:")).invoice_number,
+            "FA-202411-0001",
+        )
+
+    def test_the_older_layout_without_a_rate_column(self):
+        parsed = READER.parse_text(WINE_INVOICE_2024)
+        self.assertEqual(
+            [(line.quantity, line.total_ht) for line in parsed.lines],
+            [(18, D("81.00")), (6, D("30.00"))],
+        )
+        self.assertEqual(parsed.printed_total_ttc, D("133.20"))
+
+
+# A champagne grower's invoice: the count in front of the name, no line HT at
+# all - only the unit prices and the amount TTC - and the HT in the VAT table.
+CHAMPAGNE_INVOICE = """B E R N A R D
+EXEMPLE
+Champagne
+2, rue Inventee -51120 VINDEY , FRANCE
+EARL EXEMPLE Père & Fils
+IBAN : FR76 9876 5432 1098 7654 3210 987
+SAS AU DIPSO
+140 RUE DES LILAS
+75011 PARIS 11
+Dépôt :  EARLD
+Commande N° 20250180 du 22/11/2025  Règlement  A réception  au  02/12/2025
+Quantité  Désignation  PU HT  PU TTC  MNT TTC  Tva
+12  BOUTEILLE(S)  CHAMPAGNE EXEMPLE BRUT  75 CL  13,75 €  16,50 €  198,00 €  A
+Tva  Libellé  Taux  Base H.T.  Montant
+A  TVA à 20 %  20,00  165,00 €  33,00 €
+Total Net  198,00 €
+Net à payer  198,00 €
+N° de Siret :  43122667900014
+Montant  198,00 €
+N° de TVA :  FR70431226679  Code client  AUDIPSO"""
+
+
+class ChampagneInvoiceTests(SimpleTestCase):
+    def test_the_count_in_front_of_the_name_stays_out_of_it(self):
+        """"12 BOUTEILLE(S) CHAMPAGNE" and "6 BOUTEILLE(S) CHAMPAGNE" are the
+        same champagne; left in the name they are two products that never
+        meet, and neither is what the shelf holds."""
+        parsed = READER.parse_text(CHAMPAGNE_INVOICE)
+        self.assertEqual(
+            lines_of(parsed),
+            [("BOUTEILLE(S) CHAMPAGNE EXEMPLE BRUT 75 CL", 12, D("198.00"), D("165.00"), D("0.2"))],
+        )
+        self.assertEqual(failed(parsed), [])
+
+    def test_its_order_number_is_its_number(self):
+        parsed = READER.parse_text(CHAMPAGNE_INVOICE)
+        self.assertEqual((parsed.invoice_number, parsed.invoice_date), ("20250180", date(2025, 11, 22)))

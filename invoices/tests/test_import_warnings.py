@@ -1,8 +1,10 @@
 """What an import says when the parser read nothing, or read lines that don't
 add up - and what an invoice with no lines says about its supplier.
 
-A Plou & Fils invoice in a new layout imported with no lines, and its page
-said "Ce fournisseur n'a pas de parseur" - which was not the problem.
+A wine grower's invoice in a new layout imported with no lines, and its page
+said "Ce fournisseur n'a pas de parseur" - which was not the problem. The
+supplier here has a reader of its own, invented like the rest: what is being
+tested is what the page says, not whose invoice it is.
 """
 
 import os
@@ -30,7 +32,7 @@ class FakeParser:
 
 def parsed(lines=(), warnings=()):
     return ParsedInvoice(
-        supplier_code="PLOUFILS",
+        supplier_code="GROSSISTE",
         invoice_number="FA-202604-0001",
         invoice_date=date(2026, 4, 30),
         lines=list(lines),
@@ -40,13 +42,13 @@ def parsed(lines=(), warnings=()):
 
 class ImportWarningTests(TestCase):
     def setUp(self):
-        self.supplier = make_supplier(code="PLOUFILS", name="SCEA Plou & Fils", parser_key="PLOUFILS")
-        self.path = os.path.join(settings.MEDIA_ROOT, "plou-exemple.pdf")
+        self.supplier = make_supplier(code="GROSSISTE", name="Grossiste Exemple", parser_key="GROSSISTE")
+        self.path = os.path.join(settings.MEDIA_ROOT, "grossiste-exemple.pdf")
         with open(self.path, "wb") as handle:
             handle.write(b"%PDF-1.4 exemple")
 
     def import_with(self, result):
-        with mock.patch.dict("invoices.parsers.registry.PARSER_REGISTRY", {"PLOUFILS": FakeParser(result)}):
+        with mock.patch.dict("invoices.parsers.registry.PARSER_REGISTRY", {"GROSSISTE": FakeParser(result)}):
             return parse_and_import(self.path, self.supplier)
 
     def test_a_parser_that_finds_nothing_says_so_on_the_invoice(self):
@@ -82,7 +84,7 @@ class ImportWarningTests(TestCase):
 
 class EmptyInvoicePageTests(TestCase):
     def test_a_supplier_with_a_parser_is_not_said_to_have_none(self):
-        supplier = make_supplier(code="PLOUFILS", name="SCEA Plou & Fils", parser_key="PLOUFILS")
+        supplier = make_supplier(code="GROSSISTE", name="Grossiste Exemple", parser_key="METRO")
         invoice = make_invoice(supplier=supplier)
         response = self.client.get(reverse("invoices:invoice_detail", args=[invoice.pk]))
         self.assertContains(response, "n'a rien trouvé dans ce document")

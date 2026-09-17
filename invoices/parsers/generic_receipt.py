@@ -72,6 +72,7 @@ from .receipt_base import (
     format_rate,
     line_amounts,
     missing_item_check,
+    money_value,
     parse_vat_line,
     printed_ht_base,
     printed_promotion,
@@ -182,16 +183,32 @@ ARTICLE_COUNT_RES = (
 )
 LEADING_NUMBER_RE = re.compile(r"^(?P<count>\d{1,3})\s+(?=[A-Za-zÀ-ÿ]{2})")
 # "FACTURE N° P5200000012345", "Numéro Facture : 1234567".
-INVOICE_NUMBER_RES = (
-    re.compile(r"(?i)\bfacture\s*(?:n\s*[°o]\.?|num[ée]ro)\s*:?\s*([A-Z]{0,3}\d[\dA-Z-]{3,})"),
-    re.compile(r"(?i)\bnum[ée]ro\s+(?:de\s+)?facture\s*:?\s*([A-Z]{0,3}\d[\dA-Z-]{3,})"),
-)
 # Ticket numbers, in the forms the tills print them.
 TICKET_WORD_RE = re.compile(r"(?i)ticket\D{0,15}?(\d{4,10})(?!\d)")
 # A ticket number this short is the till's count of the day: it comes round.
 DAILY_COUNT_DIGITS = 4
 STORE_TILL_RE = re.compile(r"R\d\s*(\d{5,6}-\d{2})\s*(\d{2,4})")
 BARCODE_RE = re.compile(r"(?<!\d)(\d{18,26})(?!\d)")
+# An IBAN is a long digit run too once its spaces are taken out, and it is
+# the same one on every invoice a supplier sends: read as the document's
+# number, the second invoice of the year was refused as a duplicate of the
+# first. Taken out before anything else is looked for.
+IBAN_RE = re.compile(r"(?<![A-Z0-9])[A-Z]{2}\d{2}(?:\s?[A-Z0-9]{2,4}){3,9}(?![A-Z0-9])")
+# What a document calls its own reference, whatever word it uses for itself.
+# Never "N° client" or "Référence contrat": those name the customer, and are
+# the same on every document they send.
+DOCUMENT_WORDS = r"(?:facture|document|commande|pi[eè]ce|avoir|bon\s+de\s+livraison)"
+DOCUMENT_NUMBER_RES = (
+    re.compile(rf"(?i)\b{DOCUMENT_WORDS}\s*(?:n\s*[°o]\.?|num[ée]ro)\s*:?\s*([A-Z0-9][A-Z0-9\-/]{{3,}})"),
+    re.compile(rf"(?i)\bnum[ée]ro\s+(?:de\s+)?{DOCUMENT_WORDS}\s*:?\s*([A-Z0-9][A-Z0-9\-/]{{3,}})"),
+    re.compile(rf"(?i)\bn\s*[°o]\.?\s*(?:de\s+|du\s+)?{DOCUMENT_WORDS}\s*:?\s*([A-Z0-9][A-Z0-9\-/]{{3,}})"),
+    # "Référence interne: FA-202501-3025", the sender's own reference for the
+    # document - a wine merchant's invoices changed that label for "N°
+    # document" from one January to the next. Never "Référence unique de
+    # mandat", the bank's and the same every month, nor "Votre référence
+    # contrat", which names the customer.
+    re.compile(r"(?i)\br[ée]f[ée]rence\s+(?:interne|document|facture)\s*:?\s*([A-Z0-9][A-Z0-9\-/]{3,})"),
+)
 
 
 @dataclass
@@ -243,7 +260,7 @@ class Reading:
 
 
 def _money(match) -> Decimal:
-    return Decimal(f"{'-' if match.group('sign') else ''}{match.group('units')}.{match.group('cents')}")
+    return money_value(match)
 
 
 def _is_date_or_time(line: str) -> bool:
@@ -268,6 +285,24 @@ def is_gtin(code: str) -> bool:
 def read_line(index: int, line: str, total: Decimal | None = None) -> Reading | None:
     """A line's name, figures and code - or None for a line that is never
     an item (a date, a phone number)."""
+    reading = _read_line(index, line, total)
+    if reading is not None:
+        reading.name = _without_leading_count(reading.name, reading.count)
+    return reading
+
+
+def _without_leading_count(name: str | None, count: int | None) -> str | None:
+    """"12 BOUTEILLE(S) CHAMPAGNE 75 CL" is twelve of "BOUTEILLE(S) CHAMPAGNE
+    75 CL", not a product of its own: a count in front of the name is the
+    quantity column, and left in, the same champagne bought by six and by
+    twelve makes two products that never meet."""
+    if not name or not count or count < 2:
+        return name
+    rest = name[len(str(count)):].lstrip(" .:-xX\u00d7")
+    return rest if name.startswith(str(count)) and LETTERS_RE.search(rest) else name
+
+
+def _read_line(index: int, line: str, total: Decimal | None = None) -> Reading | None:
     ean = ""
     for match in GTIN_RE.finditer(line):
         if is_gtin(match.group(1)):
@@ -362,6 +397,15 @@ def read_line(index: int, line: str, total: Decimal | None = None) -> Reading | 
     unit_values = [value for _s, value, is_per_unit in amounts if is_per_unit]
     if unit_values:
         reading.unit = unit_values[0]
+    if len(plain) >= 4:
+        both_ways = _ht_ttc_row(plain)
+        if both_ways is not None:
+            read_count, unit, reading.ht, reading.total, reading.rate = both_ways
+            reading.unit, reading.count = unit, read_count
+            reading.count_printed = reading.count_printed or any(
+                value == read_count for _start, value in integers
+            )
+            return reading
     if len(plain) >= 3 or (len(plain) >= 2 and _rate_tokens(plain)):
         taxed = _taxed_row(plain)
         if taxed is not None:
@@ -454,6 +498,38 @@ def _taxed_row(values: list[Decimal]) -> tuple[Decimal, Decimal, Decimal, bool] 
             ht, vat = pairs.pop()
             return ht, ht + vat, rate, True
     return None
+
+
+def _ht_ttc_row(values: list[Decimal]) -> tuple[int, Decimal, Decimal, Decimal, Decimal] | None:
+    """(count, unit price HT, HT, TTC, rate) of a row printing its price and
+    its amount each both ways - "18  4,50  5,40  81,00  97,20" - or None.
+
+    There is no tax column, so nothing on the row adds up; what proves the
+    reading is that one French rate turns both prices into both amounts and
+    a whole number of them makes the amount. Only in HT: a unit price is
+    rounded before it is multiplied, so 24 bottles at 5,80 TTC are printed
+    139,26 and not 139,20. Read as a bare list of amounts, a wine
+    merchant's eighteen bottles came out as a single one at 81,00 - the
+    quantity is what every unit cost downstream is divided by.
+    """
+    positive = sorted({value for value in values if value > 0})
+    found = set()
+    for rate in KNOWN_VAT_RATES:
+        pairs = [
+            (ht, ttc)
+            for ht in positive
+            for ttc in positive
+            if ht < ttc and (ht * (1 + rate)).quantize(CENTS, ROUND_HALF_UP) == ttc
+        ]
+        for unit_ht, unit_ttc in pairs:
+            for ht, ttc in pairs:
+                if ht <= unit_ht:
+                    continue
+                count = ht / unit_ht
+                if count != count.to_integral_value() or count < 2:
+                    continue
+                found.add((int(count), unit_ht, ht, ttc, rate))
+    return found.pop() if len(found) == 1 else None
 
 
 def _rated_row(amounts: list[tuple[int, Decimal]], integers: list[tuple[int, int]]):
@@ -614,6 +690,11 @@ class GenericReceiptParser(ReceiptParser):
             reconciliation_adjustment=adjustment,
             checks=checks,
             printed_total_ttc=total,
+            vat_breakdown=[
+                (summary.rate, summary.base, summary.vat_amount)
+                for summary in (summary.resolve() for summary in totals.vat_summaries)
+                if not summary.derived and summary.base is not None and summary.vat_amount is not None
+            ],
         )
 
     def _segment(self, lines, total, totals, vat_rows, start, structured_only=False, untabled=()) -> Segment:
@@ -1507,17 +1588,19 @@ def _as_ht(items: list[Reading], rates: dict[int, Decimal]) -> None:
 
 
 def _ticket_number(text: str, invoice_date: date | None) -> str:
+    text = IBAN_RE.sub(" ", text)
     match = TICKET_WORD_RE.search(text)
     if match:
         number = match.group(1)
         if len(number) <= DAILY_COUNT_DIGITS and invoice_date is not None:
             return f"{number}-{invoice_date:%Y%m%d}"
         return number
-    # Before the long digit runs below: an IBAN is one too, spaces removed.
-    for pattern in INVOICE_NUMBER_RES:
-        match = pattern.search(text)
-        if match:
-            return match.group(1)
+    # Before the long digit runs below: a payment reference is one too.
+    for pattern in DOCUMENT_NUMBER_RES:
+        for match in pattern.finditer(text):
+            number = match.group(1).strip(".:-/")
+            if any(character.isdigit() for character in number):
+                return number
     match = STORE_TILL_RE.search(text.replace(" ", ""))
     if match:
         return "-".join(match.groups())

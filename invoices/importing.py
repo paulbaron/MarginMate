@@ -10,8 +10,9 @@ from django.utils import timezone
 
 from inventory.matching import resolve_products
 from inventory.models import StockMovement, StockTake, StockTakeLineSource
-from inventory.services import create_stock_movement_for_line
+from inventory.services import create_stock_movement_for_line, expense_product
 
+from .charges import read_charge
 from .deletion import remove_orphan_products
 from .models import Invoice, InvoiceLine, Supplier
 from .ocr import document_text
@@ -33,6 +34,8 @@ def import_parsed_invoice(
     if parsed.invoice_number:
         if Invoice.objects.filter(supplier=supplier, invoice_number=parsed.invoice_number).exists():
             raise DuplicateInvoiceError(f"Déjà dans MarginMate : {supplier} n° {parsed.invoice_number}.")
+    if supplier.expenses_only:
+        parsed.printed_total_ttc = charge_reading(parsed)[0]
 
     invoice = Invoice(
         supplier=supplier,
@@ -47,18 +50,26 @@ def import_parsed_invoice(
             invoice.source_file.save(name, File(fh), save=False)
     invoice.save()
 
+    # A supplier of charges has no products: its document is filed as the
+    # postes it names, or as one line per VAT rate, on products that carry
+    # its charges and reach no stock page.
+    lines = expense_lines(supplier, parsed) if supplier.expenses_only else parsed.lines
     needs_review = False
-    resolved = resolve_products(
-        supplier, [(line.raw_name, line.ean) for line in parsed.lines], ocr_tolerant=parsed.from_ocr
-    )
-    for parsed_line, (product, _created) in zip(parsed.lines, resolved):
-        line = _create_line(invoice, product, parsed_line)
-        if product.needs_review:
-            needs_review = True
-        else:
-            create_stock_movement_for_line(line)
+    if supplier.expenses_only:
+        for parsed_line in lines:
+            _create_line(invoice, expense_product(supplier, parsed_line.raw_name), parsed_line)
+    else:
+        resolved = resolve_products(
+            supplier, [(line.raw_name, line.ean) for line in lines], ocr_tolerant=parsed.from_ocr
+        )
+        for parsed_line, (product, _created) in zip(lines, resolved):
+            line = _create_line(invoice, product, parsed_line)
+            if product.needs_review:
+                needs_review = True
+            else:
+                create_stock_movement_for_line(line)
 
-    if not parsed.lines:
+    if not lines:
         # Nothing was parsed, by design: the supplier has no parser, so the
         # PDF is filed and its lines get typed in by hand. Marked for review
         # so it doesn't sit in the list looking like a complete, zero-euro
@@ -67,7 +78,179 @@ def import_parsed_invoice(
     else:
         invoice.status = Invoice.Status.NEEDS_REVIEW if needs_review else Invoice.Status.COMPLETE
     invoice.save(update_fields=["status"])
+    if supplier.expenses_only:
+        charge_needs_a_look(invoice, parsed.printed_total_ttc)
     return invoice
+
+
+UNREAD_CHARGE = (
+    "Le total de ce document n'a pas été lu : le montant de la charge vient de ce qui a pu être lu, "
+    "vérifiez-le sur le document."
+)
+
+
+def charge_needs_a_look(invoice: Invoice, printed_total) -> None:
+    """A charge is its document's own total. Where that total could not be
+    read, the figure filed is whatever was read instead - said out loud, and
+    the document waits in "À vérifier" rather than passing for settled."""
+    if printed_total is not None or not invoice.lines.exists():
+        return
+    invoice.error_message = UNREAD_CHARGE
+    invoice.status = Invoice.Status.NEEDS_REVIEW
+    invoice.save(update_fields=["error_message", "status"])
+
+
+def expense_lines(supplier: Supplier, parsed: ParsedInvoice) -> list[ParsedLine]:
+    """What a supplier of charges is filed as (see charge_reading)."""
+    return charge_reading(parsed, supplier.name)[1]
+
+
+def charge_reading(parsed: ParsedInvoice, name: str = "") -> tuple[Decimal | None, list[ParsedLine]]:
+    """What a charge document is worth, and the lines it is filed as.
+
+    A subscription, a rent, a water bill have no product behind them - what
+    matters is what was paid, on what, and at which rate, for the accounts
+    and for the bank match. Three readings, in this order:
+
+    - **its VAT table**, when it accounts for the total to the cent: one
+      line per rate. The strongest, and a rate that does not add up is a
+      rate nobody should book;
+    - **the postes it names** (invoices.charges): one line each, which is
+      how a rent is kept apart from the building provision beside it. They
+      settle the total too - a rent statement prints last month's échéance
+      and the direct debit that paid it, and the largest amount printed
+      twice is that, not what is being charged now;
+    - **its total alone**, on one line named after the supplier.
+
+    What was paid is never the sum of whatever was read as lines: a rent
+    statement lists the previous balance, the direct debit, the tax and the
+    rent, and adding those up gives a figure nobody ever paid. With no total
+    at all, the lines are all there is; with neither, nothing is filed and
+    the document waits.
+    """
+    total = parsed.printed_total_ttc
+    breakdown = [(rate, base, tax) for rate, base, tax in parsed.vat_breakdown if base]
+    accounted = sum((base + tax for _rate, base, tax in breakdown), start=Decimal("0"))
+    if breakdown and (total is None or abs(accounted - total) <= Decimal("0.01")):
+        return total, [_expense_line(name, base, rate) for rate, base, _tax in breakdown]
+    settled, postes = read_charge(parsed.source_text, total)
+    if postes:
+        return settled, [_expense_line(poste.name, poste.total_ht, poste.rate) for poste in postes]
+    if total is None:
+        # Not what was paid, and it must not pass for it (charge_needs_a_look).
+        read = _lines_total(parsed)
+        return None, ([_expense_line(name, read, Decimal("0"))] if read else [])
+    return total, [_expense_line(name, total, Decimal("0"))]
+
+
+def _lines_total(parsed: ParsedInvoice) -> Decimal:
+    gross = sum(
+        ((line.total_ht * (Decimal("1") + line.vat_rate)) for line in parsed.lines), start=Decimal("0")
+    )
+    return gross.quantize(Decimal("0.01"))
+
+
+def _expense_line(name: str, total_ht: Decimal, rate: Decimal) -> ParsedLine:
+    return ParsedLine(
+        raw_name=name,
+        quantity=1,
+        total_volume=Decimal("0"),
+        unit_cost_ht=total_ht,
+        total_ht=total_ht,
+        vat_rate=rate,
+    )
+
+
+def redo_as_expenses(supplier: Supplier) -> int:
+    """File the documents already in as charges: their postes, or the one
+    line their total makes, and the products their old lines named go with
+    them (remove_orphan_products). Returns how many documents changed - one
+    whose lines a stock take was priced from is left alone, since it was
+    stock after all.
+
+    Each document is **read again from its own text** where it kept some,
+    rather than from the lines it is filed as: a rent statement filed at
+    last month's échéance says so nowhere in those lines, and a correction
+    typed on one of them is lost - which is the price of changing what a
+    supplier is.
+    """
+    done = 0
+    for invoice in Invoice.objects.filter(supplier=supplier).prefetch_related("lines"):
+        stored = list(invoice.lines.all())
+        parsed = _as_parsed(invoice, stored)
+        total, wanted = charge_reading(parsed, supplier.name)
+        for line in wanted:
+            expense_product(supplier, line.raw_name)  # by name, so the lines find it again
+        if not wanted or (_already_charges(supplier, stored, wanted) and total == invoice.printed_total_ttc):
+            continue
+        try:
+            replace_invoice_lines(invoice, wanted)
+        except InvoiceLinesInUseError:
+            continue
+        if total != invoice.printed_total_ttc:
+            invoice.printed_total_ttc = total
+            invoice.save(update_fields=["printed_total_ttc"])
+        charge_needs_a_look(invoice, invoice.printed_total_ttc)
+        done += 1
+    return done
+
+
+def _as_parsed(invoice: Invoice, stored) -> ParsedInvoice:
+    read = _read_again(invoice)
+    if read is not None:
+        return read
+    # Nothing was kept of the document itself (a paper invoice typed in):
+    # the rates its lines carry are all the VAT table there is, and redoing
+    # it as charges must not lose them.
+    by_rate: dict[Decimal, Decimal] = {}
+    for line in stored:
+        by_rate[line.vat_rate] = by_rate.get(line.vat_rate, Decimal("0")) + line.total_ht
+    breakdown = [
+        (rate, total, (total * rate).quantize(Decimal("0.01")))
+        for rate, total in sorted(by_rate.items())
+        if total
+    ]
+    return ParsedInvoice(
+        vat_breakdown=breakdown,
+        source_text=invoice.document_text,
+        supplier_code=invoice.supplier.code,
+        invoice_number=invoice.invoice_number,
+        invoice_date=invoice.invoice_date,
+        lines=[
+            ParsedLine(
+                raw_name=line.raw_name, quantity=line.quantity, total_volume=line.total_volume,
+                unit_cost_ht=line.unit_cost_ht, total_ht=line.total_ht, vat_rate=line.vat_rate,
+            )
+            for line in stored
+        ],
+        printed_total_ttc=invoice.printed_total_ttc,
+    )
+
+
+def _read_again(invoice: Invoice) -> ParsedInvoice | None:
+    """The document read from the text it kept, or None - not a PDF any
+    more, or a supplier whose reader needs the file itself."""
+    from .receipts import parser_for  # here: receipts imports this module
+
+    text = invoice.document_text
+    reader = parser_for(invoice.supplier) if text else None
+    if reader is None or not hasattr(reader, "parse_text"):
+        return None
+    try:
+        parsed = reader.parse_text(text, date_hint=invoice.invoice_date)
+    except Exception:  # noqa: BLE001 - a reading that fails is one less reading
+        return None
+    parsed.invoice_number = invoice.invoice_number
+    parsed.invoice_date = invoice.invoice_date
+    return parsed
+
+
+def _already_charges(supplier: Supplier, stored, wanted) -> bool:
+    return len(stored) == len(wanted) and all(
+        (line.raw_name, line.total_ht, line.vat_rate)
+        == (parsed_line.raw_name, parsed_line.total_ht, parsed_line.vat_rate)
+        for line, parsed_line in zip(stored, wanted)
+    )
 
 
 def _line_values(parsed_line: ParsedLine) -> dict:

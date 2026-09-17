@@ -40,6 +40,16 @@ class Supplier(models.Model):
     # a document no header was recognised on, and on no other supplier's
     # list, it files the document here.
     ticket_identifiers = models.JSONField("identifiants lus sur ses documents", default=list, blank=True)
+    # A supplier whose documents are charges, not goods: a phone
+    # subscription, the rent, the water. There is no product behind a rent,
+    # so its documents are filed as one line per VAT rate (importing.
+    # expense_lines) on a product of its own that never reaches the stock
+    # pages - and what they cost is shown on "Produits" in a fold apart.
+    expenses_only = models.BooleanField(
+        "factures de charges",
+        default=False,
+        help_text="Abonnement, loyer, eau… : une ligne par taux de TVA, aucun produit à classer.",
+    )
 
     class Meta:
         ordering = ["name"]

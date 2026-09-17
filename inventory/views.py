@@ -1,6 +1,7 @@
 import json
 import unicodedata
 from collections import Counter
+from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 from itertools import groupby
 
@@ -164,9 +165,68 @@ def catalogue_context(request) -> dict:
         )
     _attach_sold(context, categories, sold, period, unit_costs)
 
-    context["review_count"] = Product.objects.filter(stock_type__isnull=True).count()
+    context["review_count"] = Product.objects.filter(stock_type__isnull=True, is_expense=False).count()
     context["empty_stock_type_count"] = StockType.objects.filter(products__isnull=True).distinct().count()
+    context["charge_suppliers"] = charge_suppliers(period)
     return context
+
+
+def charge_suppliers(period=None) -> list[dict]:
+    """What the suppliers of charges cost - a subscription, the rent, the
+    water. They hold no stock, so they are nowhere else on this page; they
+    are spending all the same, and seeing it beside the purchases is the
+    whole point of showing them here.
+
+    Over the window being looked at, or the last twelve months by default:
+    an all-time total of a monthly subscription says little.
+
+    Each supplier carries its postes where its documents name them - the
+    rent apart from the building provision, which is the one that gets
+    regularised (see invoices.charges).
+    """
+    from invoices.models import Invoice, InvoiceLine, Supplier
+
+    suppliers = list(Supplier.objects.filter(expenses_only=True).order_by("name"))
+    if not suppliers:
+        return []
+    documents = Invoice.objects.filter(supplier__in=suppliers).exclude(invoice_date=None)
+    if period is not None:
+        documents = documents.filter(invoice_date__gte=period.start, invoice_date__lte=period.end)
+        since = period.start
+    else:
+        since = timezone.localdate() - timedelta(days=365)
+        documents = documents.filter(invoice_date__gte=since)
+    rows: dict[int, dict] = {
+        supplier.pk: {
+            "supplier": supplier, "documents": 0, "total_ttc": Decimal("0"), "last": None, "postes": {}
+        }
+        for supplier in suppliers
+    }
+    for line in InvoiceLine.objects.filter(invoice__in=documents).select_related("invoice"):
+        row = rows[line.invoice.supplier_id]
+        amount = (line.total_ht * (Decimal("1") + line.vat_rate)).quantize(Decimal("0.01"))
+        row["total_ttc"] += amount
+        row["postes"][line.raw_name] = row["postes"].get(line.raw_name, Decimal("0")) + amount
+    for invoice in documents.only("supplier_id", "invoice_date"):
+        row = rows[invoice.supplier_id]
+        row["documents"] += 1
+        if row["last"] is None or invoice.invoice_date > row["last"]:
+            row["last"] = invoice.invoice_date
+    return [
+        row
+        | {
+            "since": since,
+            # One poste is the charge itself under another name.
+            "postes": [
+                {"name": name, "total_ttc": total}
+                for name, total in sorted(row["postes"].items(), key=lambda item: -item[1])
+            ]
+            if len(row["postes"]) > 1
+            else [],
+        }
+        for row in rows.values()
+        if row["documents"]
+    ]
 
 def selected_period(request) -> StockPeriod | None:
     """The window `?inventaire=<pk>` asks for, or None for all time.
@@ -728,7 +788,7 @@ def review_panel_context() -> dict:
     # touches products with no suggestion yet.
     apply_rules_to_pending_products()
     pending = (
-        Product.objects.filter(stock_type__isnull=True)
+        Product.objects.filter(stock_type__isnull=True, is_expense=False)
         .select_related("supplier")
         # Without the `__invoice` half, `{{ line.invoice.invoice_date }}`
         # hits the database once per invoice line (2439 of 2445 queries, ~5s,
@@ -741,7 +801,7 @@ def review_panel_context() -> dict:
     # The whole queue, not the products shown: "Tout approuver" and the
     # explanation both speak of all of it. Only the suggestions are fetched.
     all_suggestions = list(
-        Product.objects.filter(stock_type__isnull=True, ai_suggestion__isnull=False).values_list(
+        Product.objects.filter(stock_type__isnull=True, is_expense=False, ai_suggestion__isnull=False).values_list(
             "ai_suggestion", flat=True
         )
     )
@@ -864,7 +924,7 @@ def approve_all_suggestions(request):
     if request.method != "POST":
         return redirect("inventory:stock_list")
 
-    products = Product.objects.filter(stock_type__isnull=True, ai_suggestion__isnull=False)
+    products = Product.objects.filter(stock_type__isnull=True, is_expense=False, ai_suggestion__isnull=False)
     approved = 0
     skip_reasons = Counter()
     for product in products:

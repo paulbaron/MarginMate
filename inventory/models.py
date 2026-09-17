@@ -155,6 +155,12 @@ class Product(models.Model):
     # applied automatically. None until "Appliquer les règles" has matched
     # this product; cleared once the product is actually assigned.
     ai_suggestion = models.JSONField(null=True, blank=True, default=None)
+    # A charge, not an article: a poste a supplier of charges files its
+    # documents on - the supplier itself, or the rent and the provisions it
+    # names (invoices.Supplier.expenses_only, invoices/charges.py). It has no
+    # stock type and never will, so it waits in no queue and reaches no
+    # stock page.
+    is_expense = models.BooleanField("poste de charge", default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -168,7 +174,7 @@ class Product(models.Model):
 
     @property
     def needs_review(self) -> bool:
-        return self.stock_type_id is None
+        return self.stock_type_id is None and not self.is_expense
 
 
 class MovementKind(models.TextChoices):

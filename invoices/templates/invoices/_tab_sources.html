@@ -44,21 +44,38 @@ patterns, the parser that reads them), and the shops a ticket is recognised by.
     </div>
 {% endif %}
 
-<h2>Enseignes des tickets</h2>
+<h2>Enseignes et fournisseurs sans lecteur dédié</h2>
 <p class="muted">
-    Un ticket est rangé chez l'enseigne dont il porte l'en-tête. Une enseigne inconnue se crée depuis le ticket
-    lui-même, à l'import.
+    Un document est rangé chez l'enseigne dont il porte l'en-tête ou les identifiants. Une enseigne inconnue se
+    crée depuis le document lui-même, à l'import, et son en-tête se donne sur la page où il est vérifié.
+    Cochez « charges » pour un fournisseur dont les documents ne sont pas des produits : abonnement, loyer, eau.
+    Ses factures sont alors enregistrées en une ligne par taux de TVA, sans rien à classer, et leur total
+    apparaît sur la page Produits sous « Charges et abonnements ».
 </p>
 <div class="table-wrap">
 <table data-table data-table-label="enseignes">
     <thead>
-        <tr><th>Enseigne</th><th>En-tête reconnu</th></tr>
+        <tr><th>Enseigne</th><th>Reconnue par</th><th>Charges</th></tr>
     </thead>
     <tbody>
         {% for shop in ticket_shops %}
             <tr>
                 <td>{{ shop.name }}</td>
-                <td>{% if shop.ticket_header %}« {{ shop.ticket_header }} »{% else %}<span class="muted">caisse déjà connue de l'application</span>{% endif %}</td>
+                <td>
+                    {% if shop.names_shop %}{{ shop.names_shop|join:", " }}
+                    {% else %}<span class="muted">caisse déjà connue de l'application</span>{% endif %}
+                </td>
+                <td>
+                    <form method="post" action="{% url 'invoices:supplier_expenses' shop.pk %}" class="inline-form">
+                        {% csrf_token %}
+                        <label class="inline-label" title="Abonnement, loyer, eau… : une ligne par taux de TVA, aucun produit à classer.">
+                            <input type="checkbox" name="expenses_only" value="1"{% if shop.expenses_only %} checked{% endif %}
+                                   onchange="this.form.requestSubmit ? this.form.requestSubmit() : this.form.submit()">
+                            Charges
+                        </label>
+                        <noscript><button class="btn btn-small btn-secondary" type="submit">Enregistrer</button></noscript>
+                    </form>
+                </td>
             </tr>
         {% endfor %}
     </tbody>

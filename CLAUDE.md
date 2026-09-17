@@ -158,7 +158,42 @@ What it knows, all arithmetic:
   "100X35X2.5" is a size, not a count of 100; a **quantity column of one**
   between a price and the amount it makes is a count; and a number in front
   of a name is a count when the ticket says how many articles it sold
-  ("3 ARTICLE(S)", `_count_from_articles`).
+  ("3 ARTICLE(S)", `_count_from_articles`). A count in front of the name
+  stays **out of the name** (`_without_leading_count`), or the same
+  champagne bought by six and by twelve is two products that never meet;
+- a **row printing its price and its amount both ways**, HT and TTC, with no
+  tax column ("18  4,50  5,40  81,00  97,20") is read by `_ht_ttc_row`:
+  nothing on it adds up, so what proves it is one French rate turning both
+  prices into both amounts and a whole number of them making the amount -
+  in HT only, since a unit price is rounded before it is multiplied (24
+  bottles at 5,80 TTC print 139,26, not 139,20). Without it those eighteen
+  bottles came out as one at 81,00, and the unit cost is what every value
+  downstream is divided by;
+- a **bucket of VAT covers the whole document**, so between two readings of
+  one rate the larger base is the table's (`_better_bucket`): a water bill
+  whose every row prints its own tax states its real table fifty lines
+  below, and the subscription's row - read first - made its 27,42 € the
+  260,63 € the bill charges;
+- a **tax printed beside its rate** ("TVA [20.00%]  2.16") with the value it
+  taxes and their sum printed too is a total, each printed once
+  (`_taxed_total`): the rate is what makes one printing enough, where
+  `_ht_and_tax` searches without one and asks for each figure twice;
+- **thousands are grouped by a space** in French: "1 011,00" is one amount,
+  not eleven euros (`UNITS`, only in front of a decimal part and in groups
+  of exactly three digits, or two amounts in neighbouring columns would read
+  as one);
+- a **document's number** is the one it prints for itself ("N° document",
+  "Commande N°", "Référence interne": `DOCUMENT_NUMBER_RES`) and **never an
+  IBAN**, which is a long digit run once its spaces are gone and the same
+  one on every invoice a supplier sends - read as the number, the second
+  invoice of the year was refused as a duplicate of the first.
+
+Those rules replaced two parsers: measured on every De Poivre and Plou &
+Fils invoice filed, the one reader reproduces them line for line - names,
+counts, unit prices, rates, dates and numbers - so `parsers/depoivre.py` and
+`parsers/ploufils.py` are gone (migration `invoices/0024`, which forgets
+their keys) and their layouts are fixtures in `test_generic_documents.py`.
+Metro's and UBA's stay: theirs are not one table.
 
 Evaluate a change the same way before trusting it: parse every stored
 `ocr_text` and compare with the checked lines, per shop, counting separately
@@ -262,6 +297,43 @@ waiting to be checked** (`receipts.apply_known_prices`) - one Pita price left
 25 tickets of the queue unnamed when it named only the ticket it was typed
 on. Every known price is applied, each as of its own ticket's date, and a
 checked ticket is never rewritten (except the one the price was typed on).
+
+### A supplier of charges has no products
+
+A subscription, a rent, a water bill: there is no product behind them and
+nothing to classify, so `Supplier.expenses_only` (a box on Achats → Sources,
+which redoes what is already filed - `importing.redo_as_expenses`, reading
+each document again from the text it kept) files them by
+`importing.charge_reading` instead of resolving products. Its lines land on
+`Product.is_expense` products, which reach no stock page, no review queue
+and no stock movement; **Produits** shows what they cost in a fold of its
+own ("Charges et abonnements", `inventory.views.charge_suppliers`, over the
+stock-take window or the last twelve months) - charges are not stock, but
+they are spending.
+
+Three readings, in this order: **the VAT table** when it accounts for the
+total to the cent (one line per rate); **the postes the document names**
+(`invoices/charges.py`); **the total alone**, on one line named after the
+supplier. What was paid is never the sum of whatever was read as lines - a
+rent statement lists the previous balance, the direct debit, the tax and the
+rent, and adding those up gives a figure nobody ever paid. A charge whose
+total was not read at all is filed with what was read and held in "À
+vérifier" (`charge_needs_a_look`): it must not pass for settled.
+
+**A poste is a label and the amount printed after it**, and a document's
+postes are the run of them adding up to an amount printed below them. That
+run is what proves the reading *and* settles the total: a statement puts two
+columns on one line (the account's history left, this month's postes right),
+so only each line's **last** amount is this month's; a subtotal printed
+among them is the run restated and is stepped over; a minus on its own in
+front of an amount is its sign; and the tax poste - the one that is a French
+rate of exactly one other - is folded into the poste it taxes rather than
+kept as one. Measured on the 31 rent statements filed, that separates the
+rent from the building and water provisions and corrects six totals the
+reader had taken from the left column (last month's échéance, printed twice,
+is bigger than this month's). **A document is worth what it charges**: where
+the debit also settles arrears, those were charged on the avis they come
+from, and counting them again would book them twice.
 
 **One import for every document.** Tickets and PDF invoices went in through
 two cards, and the person importing had to know which; the Achats page has

@@ -99,6 +99,10 @@ class ParsedInvoice:
     # The total the ticket printed (what was paid), for a photographed
     # receipt; see Invoice.printed_total_ttc.
     printed_total_ttc: Decimal | None = None
+    # The document's own VAT table, as (rate, HT base, tax) - what a
+    # supplier of charges is filed on, one line a rate, since there is no
+    # product behind a rent (invoices.importing.expense_lines).
+    vat_breakdown: list[tuple[Decimal, Decimal, Decimal]] = field(default_factory=list)
 
 
 @dataclass

@@ -384,7 +384,7 @@ def apply_rules_to_pending_products() -> tuple[int, int]:
     from .models import Product
     from .quantity_extraction import extract_quantity_for_product
 
-    pending = Product.objects.filter(stock_type__isnull=True, ai_suggestion__isnull=True)
+    pending = Product.objects.filter(stock_type__isnull=True, is_expense=False, ai_suggestion__isnull=True)
     rule_matched = 0
     fallback = 0
     category_words: dict[str, Counter] | None = None

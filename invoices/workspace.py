@@ -240,8 +240,14 @@ def _to_check() -> dict:
 
 def _sources() -> dict:
     from .parsers import is_ticket_shop
+    from .receipts import names_shop
 
+    shops = [supplier for supplier in Supplier.objects.all() if is_ticket_shop(supplier)]
+    for shop in shops:
+        # What files its documents there on their own, as the operator reads
+        # it (an attribute, since a template calls nothing with arguments).
+        shop.names_shop = names_shop(shop)
     return {
         "invoice_types": InvoiceType.objects.select_related("supplier", "email_source"),
-        "ticket_shops": [supplier for supplier in Supplier.objects.all() if is_ticket_shop(supplier)],
+        "ticket_shops": shops,
     }

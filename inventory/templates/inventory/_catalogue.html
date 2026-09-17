@@ -184,3 +184,49 @@ is what those answers trigger.
     </div>
 {% endif %}
 </div>
+
+{% comment %}
+What the suppliers of charges cost - a subscription, the rent, the water.
+They hold no stock, so they are nowhere else on this page; folded away, since
+they are not what one comes here for.
+{% endcomment %}
+{% if charge_suppliers %}
+    <details class="explainer charges" data-persist="charges">
+        <summary>Charges et abonnements (hors stock)</summary>
+        <p class="muted">
+            Ces fournisseurs n'ont pas de produits : leurs factures sont enregistrées par poste quand elles
+            en nomment (loyer, provisions), sinon en une ligne par taux de TVA.
+            Totaux {% if period %}sur la période choisie{% else %}sur les douze derniers mois{% endif %}.
+        </p>
+        <div class="table-wrap">
+            <table class="sub-table" data-table data-table-sort-only data-table-label="charges">
+                <thead>
+                    <tr>
+                        <th>Fournisseur</th>
+                        <th class="num">Documents</th>
+                        <th class="num">Total TTC</th>
+                        <th>Dernier</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in charge_suppliers %}
+                        <tr>
+                            <td>{{ row.supplier.name }}</td>
+                            <td class="num">{{ row.documents }}</td>
+                            <td class="num">{{ row.total_ttc|floatformat:2 }} €</td>
+                            <td data-sort="{{ row.last|date:'Y-m-d' }}">{{ row.last|date:"d/m/Y" }}</td>
+                        </tr>
+                        {% for poste in row.postes %}
+                            <tr data-child-row>
+                                <td class="muted">↳ {{ poste.name }}</td>
+                                <td></td>
+                                <td class="num muted">{{ poste.total_ttc|floatformat:2 }} €</td>
+                                <td></td>
+                            </tr>
+                        {% endfor %}
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </details>
+{% endif %}

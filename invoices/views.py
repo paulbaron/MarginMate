@@ -37,7 +37,7 @@ from .importing import (
     parse_and_import,
     replace_invoice_lines,
 )
-from .models import Invoice, InvoiceType, ReceiptBatch, ScrapeJob
+from .models import Invoice, InvoiceType, ReceiptBatch, ScrapeJob, Supplier
 from .parsers import LLM_PARSER_KEY, get_parser
 from .parsers.base import ParsedInvoice, ParsedLine
 from .tasks import gather_invoices_task, test_email_pattern_task
@@ -500,6 +500,35 @@ def receipt_batch_cancel(request, pk):
         batch.cancel_requested = True
         batch.save(update_fields=["cancel_requested"])
     return render(request, "invoices/_receipt_batch_status.html", batch_status_context(batch))
+
+
+def supplier_expenses(request, pk):
+    """Say whether a supplier's documents are charges rather than goods - a
+    subscription, the rent, the water. Ticking it files what is already in
+    the same way; unticking it changes what comes next, nothing else: the
+    lines of a document already filed are a person's to correct."""
+    from .importing import redo_as_expenses
+
+    supplier = get_object_or_404(Supplier, pk=pk)
+    here = redirect("invoices:invoice_type_list")
+    if request.method != "POST":
+        return here
+    supplier.expenses_only = bool(request.POST.get("expenses_only"))
+    supplier.save(update_fields=["expenses_only"])
+    if not supplier.expenses_only:
+        messages.success(
+            request,
+            f"{supplier.name} redevient un fournisseur de produits. Les documents déjà enregistrés gardent "
+            "leurs lignes : corrigez-les document par document si besoin.",
+        )
+        return here
+    done = redo_as_expenses(supplier)
+    messages.success(
+        request,
+        f"{supplier.name} : ses documents sont des charges - une ligne par taux de TVA, aucun produit à classer"
+        + (f" ({done} document(s) déjà enregistré(s) refaits ainsi)." if done else "."),
+    )
+    return here
 
 
 def receipt_queue(request):
