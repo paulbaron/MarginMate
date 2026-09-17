@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import threading
@@ -10,7 +11,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
-from django.views.generic import DetailView, ListView
+from django.views.generic import DetailView
 
 from .deletion import InvoiceInUseError, blocking_stock_takes, delete_invoice
 from .forms import (
@@ -36,54 +37,22 @@ from .importing import (
     parse_and_import,
     replace_invoice_lines,
 )
-from .models import Invoice, InvoiceType, ReceiptBatch, ScrapeJob, Supplier
+from .models import Invoice, InvoiceType, ReceiptBatch, ScrapeJob
 from .parsers import get_parser
 from .parsers.base import ParsedInvoice, ParsedLine
-from .tasks import default_gather_start, gather_invoices_task, test_email_pattern_task
+from .tasks import gather_invoices_task, test_email_pattern_task
+from .workspace import batch_invoice_ids, batch_status_context, render_purchases
 
 
-class InvoiceListView(ListView):
-    model = Invoice
-    template_name = "invoices/invoice_list.html"
-    context_object_name = "invoices"
+def invoice_list(request):
+    """"Achats", on its list of every document."""
+    return render_purchases(request, "documents")
 
-    def get_queryset(self):
-        # Lines prefetched: every row shows totals added up from them.
-        invoices = Invoice.objects.select_related("supplier").prefetch_related("lines")
-        if self.request.GET.get("sans_date"):
-            invoices = invoices.filter(invoice_date__isnull=True)
-        return invoices
 
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["latest_job"] = ScrapeJob.objects.filter(kind=ScrapeJob.Kind.GATHER).first()
-        # A document with no date sits outside every stock valuation and the
-        # bank match: counted, and one click from the list of them.
-        context["undated_count"] = Invoice.objects.filter(invoice_date__isnull=True).count()
-        context["undated_only"] = bool(self.request.GET.get("sans_date"))
-
-        metro_supplier = Supplier.objects.filter(code="METRO", is_scrapable=True).first()
-        email_types = list(
-            InvoiceType.objects.filter(is_active=True, source_kind=InvoiceType.SourceKind.EMAIL).select_related(
-                "supplier"
-            )
-        )
-        gather_sources = []
-        if metro_supplier:
-            gather_sources.append({"code": "METRO", "label": metro_supplier.name})
-        gather_sources += [{"code": f"type-{it.id}", "label": it.name} for it in email_types]
-        context["gather_sources"] = gather_sources
-
-        # From the newest invoice these sources have already brought in: a
-        # gather is for what arrived since. The earliest of each source's
-        # latest used to be taken instead - one supplier billing twice a
-        # year sent every gather ten months back, through 3,800 emails.
-        gathered = {it.supplier_id for it in email_types}
-        if metro_supplier:
-            gathered.add(metro_supplier.pk)
-        context["default_start_date"] = default_gather_start(gathered)
-        context["default_end_date"] = timezone.localdate()
-        return context
+def _documents_changed(response):
+    """Tell the page to reload its list of documents: an import ended."""
+    response["HX-Trigger"] = json.dumps({"documents-changed": True})
+    return response
 
 
 class InvoiceDetailView(DetailView):
@@ -105,29 +74,49 @@ class InvoiceDetailView(DetailView):
 
 
 def upload_invoice(request):
-    if request.method == "POST":
-        form = InvoiceUploadForm(request.POST, request.FILES)
-        if form.is_valid():
-            supplier = form.cleaned_data["supplier"]
-            uploaded = form.cleaned_data["source_file"]
-            suffix = os.path.splitext(uploaded.name)[1] or ".pdf"
-            fd, tmp_path = tempfile.mkstemp(suffix=suffix)
-            try:
-                with os.fdopen(fd, "wb") as tmp:
-                    for chunk in uploaded.chunks():
-                        tmp.write(chunk)
-                invoice = parse_and_import(tmp_path, supplier, display_filename=uploaded.name)
-                messages.success(request, f"Facture importée : {invoice}")
-                return redirect("invoices:invoice_detail", pk=invoice.pk)
-            except DuplicateInvoiceError as exc:
-                messages.warning(request, str(exc))
-            except Exception as exc:  # noqa: BLE001 - surfaced to the user, not a crash
-                messages.error(request, f"Échec de l'import : {exc}")
-            finally:
-                os.unlink(tmp_path)
+    """A supplier's PDF, from the import card. Imported, it is shown first in
+    the list, highlighted and opened on its lines."""
+    if request.method != "POST":
+        return render_purchases(request, "documents", import_tab="pdf")
+    form = InvoiceUploadForm(request.POST, request.FILES)
+    if not form.is_valid():
+        return render_purchases(request, "documents", import_tab="pdf", pdf_form=form)
+    supplier = form.cleaned_data["supplier"]
+    uploaded = form.cleaned_data["source_file"]
+    suffix = os.path.splitext(uploaded.name)[1] or ".pdf"
+    fd, tmp_path = tempfile.mkstemp(suffix=suffix)
+    try:
+        with os.fdopen(fd, "wb") as tmp:
+            for chunk in uploaded.chunks():
+                tmp.write(chunk)
+        invoice = parse_and_import(tmp_path, supplier, display_filename=uploaded.name)
+    except DuplicateInvoiceError as exc:
+        messages.warning(request, str(exc))
+    except Exception as exc:  # noqa: BLE001 - surfaced to the user, not a crash
+        messages.error(request, f"Échec de l'import : {exc}")
     else:
-        form = InvoiceUploadForm()
-    return render(request, "invoices/invoice_upload.html", {"form": form})
+        messages.success(request, f"Facture importée : {invoice}. Ses lignes sont ouvertes dans la liste.")
+        return redirect(f"{reverse('invoices:invoice_list')}?surligner={invoice.pk}")
+    finally:
+        os.unlink(tmp_path)
+    return redirect(f"{reverse('invoices:invoice_list')}?ajouter=pdf")
+
+
+def invoice_preview(request, pk):
+    """A document's lines, opened in place under its row in the list."""
+    invoice = get_object_or_404(
+        Invoice.objects.select_related("supplier").prefetch_related("lines__product__stock_type"), pk=pk
+    )
+    lines = list(invoice.lines.all())
+    return render(
+        request,
+        "invoices/_document_preview.html",
+        {
+            "invoice": invoice,
+            "lines": lines,
+            "to_classify": sum(1 for line in lines if line.product.stock_type_id is None),
+        },
+    )
 
 
 def create_manual_invoice(request):
@@ -220,7 +209,9 @@ def trigger_gather(request):
 
 def gather_status(request, job_id):
     job = get_object_or_404(ScrapeJob, pk=job_id)
-    return render(request, "invoices/_gather_status.html", {"job": job})
+    response = render(request, "invoices/_gather_status.html", {"job": job})
+    # Polled only while the gather runs: a finished answer is its end.
+    return response if job.is_active else _documents_changed(response)
 
 
 def cancel_gather(request, job_id):
@@ -232,19 +223,15 @@ def cancel_gather(request, job_id):
         job.save(update_fields=["cancel_requested"])
     # Renders the same partial gather_status does (rather than redirecting)
     # so the htmx-powered "Annuler" button can swap it in directly, whether
-    # the job being cancelled is a real gather (invoice_list.html) or a
+    # the job being cancelled is a real gather (the Achats page) or a
     # pattern test (invoice_type_form.html) - both already include this
     # same partial for their live status card.
     return render(request, "invoices/_gather_status.html", {"job": job})
 
 
-class InvoiceTypeListView(ListView):
-    model = InvoiceType
-    template_name = "invoices/invoice_type_list.html"
-    context_object_name = "invoice_types"
-
-    def get_queryset(self):
-        return InvoiceType.objects.select_related("supplier", "email_source")
+def invoice_type_list(request):
+    """"Achats", on where invoices come from."""
+    return render_purchases(request, "sources")
 
 
 def invoice_type_form(request, pk=None):
@@ -345,49 +332,32 @@ def _pending_receipts():
 
 
 def receipt_upload(request):
-    """Receipt photos in: a few files, or a whole folder.
+    """Receipt photos in: a few files, or a whole folder, from the import card.
 
     The files are staged and handed to a background job
     (invoices/receipt_batches.py) - a folder is minutes of OCR, far too long
-    to hold a request open - and the browser goes straight to that batch's
-    page, which fills in file by file.
+    to hold a request open - and the browser goes straight to that import,
+    which fills in file by file in the card.
     """
     from .receipt_batches import stage_batch, start_batch
 
     ReceiptBatch.reap_stale()
-    if request.method == "POST":
-        form = ReceiptBatchUploadForm(request.POST, request.FILES)
-        if form.is_valid():
-            batch = stage_batch(form.cleaned_data["files"], form.ignored_names)
-            start_batch(batch)
-            return redirect("invoices:receipt_batch", pk=batch.pk)
-    else:
-        form = ReceiptBatchUploadForm()
-
-    return render(
-        request,
-        "invoices/receipt_upload.html",
-        {"form": form, "batches": ReceiptBatch.objects.all()[:5], "pending_count": _pending_receipts().count()},
-    )
-
-
-def _batch_status_context(batch):
-    """What the live part of a batch page draws: the batch, and the shops a
-    file no shop was recognised on can be filed under."""
-    from .receipts import shop_choices
-
-    return {"batch": batch, "shop_groups": shop_choices() if batch.awaiting_shop_count else []}
+    if request.method != "POST":
+        return render_purchases(request, "documents", import_tab="tickets")
+    form = ReceiptBatchUploadForm(request.POST, request.FILES)
+    if not form.is_valid():
+        return render_purchases(request, "documents", import_tab="tickets", receipt_form=form)
+    batch = stage_batch(form.cleaned_data["files"], form.ignored_names)
+    start_batch(batch)
+    return redirect("invoices:receipt_batch", pk=batch.pk)
 
 
 def receipt_batch(request, pk):
-    """One import: its progress while it runs, every file's outcome after."""
+    """One import: its progress while it runs and every file's outcome in
+    the card, its documents in the list below."""
     ReceiptBatch.reap_stale()
     batch = get_object_or_404(ReceiptBatch, pk=pk)
-    return render(
-        request,
-        "invoices/receipt_batch.html",
-        {**_batch_status_context(batch), "pending_count": _pending_receipts().count()},
-    )
+    return render_purchases(request, "documents", import_tab="tickets", batch=batch)
 
 
 def receipt_batch_status(request, pk):
@@ -396,7 +366,10 @@ def receipt_batch_status(request, pk):
     dead batch itself - or "En cours" stays up for ever."""
     ReceiptBatch.reap_stale()
     batch = get_object_or_404(ReceiptBatch, pk=pk)
-    return render(request, "invoices/_receipt_batch_status.html", _batch_status_context(batch))
+    response = render(request, "invoices/_receipt_batch_status.html", batch_status_context(batch))
+    # Polled only while the import runs: a finished answer is its end, and
+    # the list below takes in its documents.
+    return response if batch.is_active else _documents_changed(response)
 
 
 def receipt_batch_resume(request, pk):
@@ -492,21 +465,13 @@ def receipt_batch_cancel(request, pk):
     if batch.is_active:
         batch.cancel_requested = True
         batch.save(update_fields=["cancel_requested"])
-    return render(request, "invoices/_receipt_batch_status.html", _batch_status_context(batch))
+    return render(request, "invoices/_receipt_batch_status.html", batch_status_context(batch))
 
 
 def receipt_queue(request):
-    """Everything waiting to be checked, as a wall of thumbnails."""
-    # Lines prefetched: every card shows a total added up from them.
-    pending = list(_pending_receipts().prefetch_related("lines"))
-    return render(
-        request,
-        "invoices/receipt_queue.html",
-        {
-            "receipts": pending,
-            "verified_count": Invoice.objects.filter(reviewed_at__isnull=False).count(),
-        },
-    )
+    """"Achats", on what waits to be checked: the tickets, as a wall of
+    thumbnails, and the documents to fix."""
+    return render_purchases(request, "a-verifier")
 
 
 def receipt_review(request, pk):
@@ -536,9 +501,16 @@ def _correction_page(request, invoice):
     """
     is_receipt = invoice.is_receipt
     document = DOCUMENT_RECEIPT if is_receipt else DOCUMENT_INVOICE
-    queue = list(_pending_receipts().values_list("pk", flat=True)) if is_receipt else []
+    # Checking an import's tickets (`?lot=`) goes through them only, then
+    # back to the import; the whole queue ends on what was checked.
+    lot = _lot_of(request) if is_receipt else None
+    pending = _pending_receipts()
+    if lot is not None:
+        pending = pending.filter(pk__in=batch_invoice_ids(lot))
+    queue = list(pending.values_list("pk", flat=True)) if is_receipt else []
     next_pk = next((candidate for candidate in queue if candidate != invoice.pk), None)
-    here = redirect(request.path)
+    lot_query = f"?lot={lot.pk}" if lot is not None else ""
+    here = redirect(request.get_full_path())
 
     price_form = ShopItemPriceForm()
     header = {"invoice_date": invoice.invoice_date, "printed_total_ttc": invoice.printed_total_ttc}
@@ -603,8 +575,10 @@ def _correction_page(request, invoice):
                     if not was_pending:
                         return redirect("invoices:invoice_detail", pk=invoice.pk)
                     if next_pk:
-                        return redirect("invoices:receipt_review", pk=next_pk)
-                    return redirect("invoices:receipt_queue")
+                        return redirect(reverse("invoices:receipt_review", args=[next_pk]) + lot_query)
+                    if lot is not None:
+                        return redirect("invoices:receipt_batch", pk=lot.pk)
+                    return redirect(reverse("invoices:invoice_list") + "?filtre=verifies")
 
     if formset is None:
         formset = _line_formset_for(invoice, document)
@@ -635,12 +609,20 @@ def _correction_page(request, invoice):
             "known_prices": invoice.supplier.item_prices.all() if is_receipt else [],
             "next_pk": next_pk,
             "remaining": len(queue),
+            "lot": lot,
+            "lot_query": lot_query,
             "can_reread": _can_reread(invoice),
             "source_is_pdf": bool(invoice.source_file) and invoice.source_file.name.lower().endswith(".pdf"),
             "ocr_lines": invoice.ocr_text.split("\n") if invoice.ocr_text else [],
             **shop_context,
         },
     )
+
+
+def _lot_of(request):
+    """The import a ticket is checked within, if the address names one."""
+    posted = request.GET.get("lot", "")
+    return ReceiptBatch.objects.filter(pk=posted).first() if posted.isdigit() else None
 
 
 def _save_corrections(request, invoice, formset, header_form) -> bool:

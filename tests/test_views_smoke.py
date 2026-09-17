@@ -214,6 +214,11 @@ class PageSmokeTests(TestCase):
     def test_invoice_detail(self):
         self.assertContains(self.assertPageOK("invoices:invoice_detail", pk=self.invoice.pk), "SOBIESKI")
 
+    def test_invoice_preview(self):
+        """A document's lines, opened under its row on the Achats page."""
+        self.assertContains(self.assertPageOK("invoices:invoice_preview", pk=self.invoice.pk), "SOBIESKI")
+        self.assertContains(self.assertPageOK("invoices:invoice_preview", pk=self.receipt.pk), "écart +0.49 €")
+
     def test_invoice_upload(self):
         self.assertPageOK("invoices:invoice_upload")
 

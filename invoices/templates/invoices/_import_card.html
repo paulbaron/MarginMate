@@ -1,0 +1,131 @@
+{% comment %}
+Adding purchases, three ways, and the import that runs - on every tab of
+"Achats". What an import brings in shows up in the list below it (the live
+parts trigger `documents-changed` when they end).
+{% endcomment %}
+<section class="card import-card" id="ajouter" aria-labelledby="import-title" data-import-tab="{{ import_tab }}">
+    <div class="import-card-head">
+        <h2 id="import-title">Ajouter des achats</h2>
+        <div class="segmented" role="tablist" aria-label="Façon d'ajouter">
+            <button type="button" role="tab" data-import-tab="tickets" aria-controls="import-tickets">📷 Tickets de caisse</button>
+            <button type="button" role="tab" data-import-tab="pdf" aria-controls="import-pdf">📄 Facture PDF</button>
+            <button type="button" role="tab" data-import-tab="recuperer" aria-controls="import-recuperer">
+                🔄 Récupérer (Metro, e-mails){% if latest_job.is_active %} <span class="live-dot" title="Recherche en cours"></span>{% endif %}
+            </button>
+        </div>
+    </div>
+
+    <div id="import-tickets" role="tabpanel" data-import-panel="tickets">
+        <form method="post" action="{% url 'invoices:receipt_upload' %}" enctype="multipart/form-data">
+            {% csrf_token %}
+            {% for error in receipt_form.files.errors %}<div class="message message-error">{{ error }}</div>{% endfor %}
+            {% comment %}
+            Two inputs, one field: both post as "files", so a selection from
+            either - or both - arrives as one list (forms.MultipleFileField).
+            {% endcomment %}
+            <div class="upload-choices">
+                <label class="upload-choice">
+                    <span class="upload-choice-title">Des photos</span>
+                    <span class="muted">Un ou plusieurs tickets, en image ou en PDF.</span>
+                    <input type="file" name="files" multiple
+                           accept=".pdf,.jpg,.jpeg,.png,.webp,.tif,.tiff,.bmp,application/pdf,image/*">
+                </label>
+                <label class="upload-choice">
+                    <span class="upload-choice-title">Un dossier entier</span>
+                    <span class="muted">Ce qui n'est ni PDF ni photo est ignoré ; un ticket déjà importé est sauté.</span>
+                    <input type="file" name="files" webkitdirectory directory multiple>
+                </label>
+            </div>
+            <div class="import-actions">
+                <button class="btn" type="submit" data-busy-label="Envoi…">Importer les tickets</button>
+                <span class="muted">L'enseigne est reconnue sur chaque ticket, et chacun est vérifié contre ses propres totaux.</span>
+            </div>
+        </form>
+
+        {% if batch %}
+            {% include "invoices/_receipt_batch_status.html" %}
+        {% endif %}
+
+        {% if recent_batches %}
+            <details class="explainer recent-imports" data-persist="recent-imports">
+                <summary>Derniers imports de tickets</summary>
+                <div class="table-wrap">
+                    <table class="sub-table">
+                        <thead>
+                            <tr>
+                                <th>Lancé le</th>
+                                <th>État</th>
+                                <th class="num">Tickets</th>
+                                <th class="num">Importés</th>
+                                <th class="num">Déjà connus</th>
+                                <th class="num">À ranger</th>
+                                <th class="num">Échecs</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for recent in recent_batches %}
+                                <tr{% if recent.pk == batch.pk %} class="is-new"{% endif %}>
+                                    <td>{{ recent.started_at|date:"d/m/Y H:i" }}</td>
+                                    <td><span class="status-pill status-{{ recent.status }}">{{ recent.get_status_display }}</span></td>
+                                    <td class="num">{{ recent.to_read }}</td>
+                                    <td class="num">{{ recent.imported_count }}</td>
+                                    <td class="num">{{ recent.duplicate_count }}</td>
+                                    <td class="num">{{ recent.awaiting_shop_count }}</td>
+                                    <td class="num">{{ recent.failed_count }}</td>
+                                    <td><a class="btn btn-small btn-secondary" href="{% url 'invoices:receipt_batch' recent.pk %}">Voir</a></td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </details>
+        {% endif %}
+    </div>
+
+    <div id="import-pdf" role="tabpanel" data-import-panel="pdf" hidden>
+        <form method="post" action="{% url 'invoices:invoice_upload' %}" enctype="multipart/form-data" class="pdf-import">
+            {% csrf_token %}
+            {% include "_form_fields.html" with form=pdf_form %}
+            <div class="import-actions">
+                <button class="btn" type="submit" data-busy-label="Lecture de la facture…">Importer la facture</button>
+                <span class="muted">
+                    « Autre (analyse IA) » pour un fournisseur sans lecteur dédié. La facture s'ouvre ensuite
+                    dans la liste, sur ses lignes.
+                </span>
+            </div>
+        </form>
+    </div>
+
+    <div id="import-recuperer" role="tabpanel" data-import-panel="recuperer" hidden>
+        <form method="post" action="{% url 'invoices:gather' %}" class="inline-form">
+            {% csrf_token %}
+            <label class="inline-label">
+                Du
+                <input type="date" name="start_date" value="{{ default_start_date|date:'Y-m-d' }}">
+            </label>
+            <label class="inline-label">
+                au
+                <input type="date" name="end_date" value="{{ default_end_date|date:'Y-m-d' }}">
+            </label>
+            <details class="sources-dropdown" data-persist="sources-open" data-persist-durable>
+                <summary class="btn btn-small btn-secondary">Sources ({{ gather_sources|length }})</summary>
+                <div class="sources-panel">
+                    {% for source in gather_sources %}
+                        <label class="sources-panel-item">
+                            <input type="checkbox" name="sources" value="{{ source.code }}" checked
+                                   data-persist="source:{{ source.code }}" data-persist-durable>
+                            {{ source.label }}
+                        </label>
+                    {% empty %}
+                        <span class="muted">Aucune source configurée : voir l'onglet « Sources ».</span>
+                    {% endfor %}
+                </div>
+            </details>
+            <button class="btn" type="submit"{% if latest_job.is_active %} disabled{% endif %}>Rechercher de nouvelles factures</button>
+        </form>
+        {% if latest_job %}
+            {% include "invoices/_gather_status.html" with job=latest_job %}
+        {% endif %}
+    </div>
+</section>

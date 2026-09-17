@@ -1,0 +1,66 @@
+{% comment %}
+Where purchases come from: the invoice types a gather looks for (mailbox
+patterns, the parser that reads them), and the shops a ticket is recognised by.
+{% endcomment %}
+<div class="section-head">
+    <div>
+        <h2>Types de factures</h2>
+        <p class="muted">
+            Comment reconnaître les e-mails d'un fournisseur dans la boîte partagée (expéditeur, objet, contenu)
+            et quel lecteur appliquer à ses factures. « Récupérer » parcourt tous les types actifs.
+        </p>
+    </div>
+    <a class="btn" href="{% url 'invoices:invoice_type_create' %}">+ Nouveau type</a>
+</div>
+{% if invoice_types %}
+    <div class="table-wrap">
+    <table data-table data-table-label="types">
+        <thead>
+            <tr>
+                <th>Nom</th>
+                <th>Fournisseur</th>
+                <th>Source</th>
+                <th>Lecteur</th>
+                <th>Actif</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for invoice_type in invoice_types %}
+            <tr>
+                <td><a href="{% url 'invoices:invoice_type_update' invoice_type.pk %}">{{ invoice_type.name }}</a></td>
+                <td class="muted">{{ invoice_type.supplier.name }}</td>
+                <td class="muted">{{ invoice_type.get_source_kind_display }}</td>
+                <td class="muted">{{ invoice_type.parser_key|default:"Analyse IA" }}</td>
+                <td>{% if invoice_type.is_active %}✅{% else %}—{% endif %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+{% else %}
+    <div class="empty-state">
+        Aucun type de facture pour le moment.
+        <a class="btn" href="{% url 'invoices:invoice_type_create' %}">+ Nouveau type</a>
+    </div>
+{% endif %}
+
+<h2>Enseignes des tickets</h2>
+<p class="muted">
+    Un ticket est rangé chez l'enseigne dont il porte l'en-tête. Une enseigne inconnue se crée depuis le ticket
+    lui-même, à l'import.
+</p>
+<div class="table-wrap">
+<table data-table data-table-label="enseignes">
+    <thead>
+        <tr><th>Enseigne</th><th>En-tête reconnu</th></tr>
+    </thead>
+    <tbody>
+        {% for shop in ticket_shops %}
+            <tr>
+                <td>{{ shop.name }}</td>
+                <td>{% if shop.ticket_header %}« {{ shop.ticket_header }} »{% else %}<span class="muted">caisse déjà connue de l'application</span>{% endif %}</td>
+            </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>

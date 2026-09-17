@@ -25,6 +25,15 @@
         {% endif %}
     </div>
 
+    {% if batch_first_to_check and not batch.is_active %}
+        <p class="batch-next">
+            <a class="btn" href="{% url 'invoices:receipt_review' batch_first_to_check %}?lot={{ batch.pk }}">
+                Vérifier {% if batch_to_check == 1 %}le ticket{% else %}les {{ batch_to_check }} tickets{% endif %} de cet import →
+            </a>
+            <span class="muted">un après l'autre, puis retour ici ; leur liste est plus bas.</span>
+        </p>
+    {% endif %}
+
     {% if batch.can_resume %}
         <div class="message message-error">
             Import interrompu avant la fin — le serveur a probablement redémarré pendant qu'il tournait.
@@ -108,7 +117,7 @@
                                     <span class="status-pill status-NEEDS_REVIEW">À vérifier</span>
                                 {% endif %}
                             </td>
-                            <td><a class="btn btn-small btn-secondary" href="{% url 'invoices:receipt_review' entry.invoice_id %}">Vérifier</a></td>
+                            <td><a class="btn btn-small btn-secondary" href="{% url 'invoices:receipt_review' entry.invoice_id %}?lot={{ batch.pk }}">Vérifier</a></td>
                         {% elif entry.status == "pending" %}
                             <td colspan="3" class="muted">{% if batch.is_active %}en attente{% else %}pas encore lu{% endif %}</td>
                             <td><span class="status-pill status-PENDING">{% if batch.is_active %}En attente{% else %}Non lu{% endif %}</span></td>

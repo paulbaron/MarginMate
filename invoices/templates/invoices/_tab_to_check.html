@@ -1,0 +1,115 @@
+{% comment %}
+What waits for a person: the tickets whose reading has to be compared with the
+photo, oldest first, and the documents that cannot be used as they are.
+{% endcomment %}
+<div class="stat-row">
+    <div class="stat{% if receipts %} stat-warn{% endif %}">
+        <div class="stat-label">Tickets à vérifier</div>
+        <div class="stat-value">{{ receipts|length }}</div>
+        {% if receipts %}
+            <div class="stat-note">
+                <a href="{% url 'invoices:receipt_review' receipts.0.pk %}">Commencer par le plus ancien →</a>
+            </div>
+        {% endif %}
+    </div>
+    <div class="stat">
+        <div class="stat-label">Tickets déjà vérifiés</div>
+        <div class="stat-value">{{ verified_count }}</div>
+        <div class="stat-note"><a href="{% url 'invoices:invoice_list' %}?filtre=verifies">Vérifiés récemment</a></div>
+    </div>
+    <div class="stat{% if to_fix %} stat-warn{% endif %}">
+        <div class="stat-label">Documents à corriger</div>
+        <div class="stat-value">{{ to_fix|length }}</div>
+        <div class="stat-note">sans date, ou import en échec</div>
+    </div>
+    {% if with_products_to_classify %}
+        <div class="stat">
+            <div class="stat-label">Produits à classer</div>
+            <div class="stat-value">{{ with_products_to_classify }}</div>
+            <div class="stat-note">
+                facture{{ with_products_to_classify|pluralize }} concernée{{ with_products_to_classify|pluralize }} :
+                <a href="{% url 'inventory:stock_list' %}#a-classer">les classer dans Produits</a>
+            </div>
+        </div>
+    {% endif %}
+</div>
+
+{% if to_fix %}
+    <h2>Documents à corriger</h2>
+    <div class="table-wrap">
+        <table data-table data-table-label="documents à corriger">
+            <thead>
+                <tr>
+                    <th>Fournisseur</th>
+                    <th>N°</th>
+                    <th>Problème</th>
+                    <th class="num">Total HT</th>
+                    <th data-no-sort></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for invoice in to_fix %}
+                    <tr>
+                        <td><a href="{% url 'invoices:invoice_detail' invoice.pk %}">{{ invoice.supplier.name }}</a></td>
+                        <td>{{ invoice.invoice_number|default:"—" }}</td>
+                        <td>
+                            {% if not invoice.invoice_date %}<span class="status-pill status-ERROR">sans date</span>{% endif %}
+                            {% if invoice.status == "ERROR" %}<span class="status-pill status-ERROR">import en échec</span>{% endif %}
+                            {% if invoice.error_message %}<span class="muted">{{ invoice.error_message|truncatechars:90 }}</span>{% endif %}
+                        </td>
+                        <td class="num">{{ invoice.total_ht|floatformat:2 }} €</td>
+                        <td class="num"><a class="btn btn-small" href="{% url 'invoices:invoice_edit_lines' invoice.pk %}">Corriger</a></td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+{% endif %}
+
+<h2>Tickets à vérifier</h2>
+{% if receipts %}
+    <p class="muted">
+        Les plus anciens d'abord. Un ticket sort d'ici quand quelqu'un a comparé ses lignes à la photo et validé ;
+        « Valider et passer au suivant » enchaîne les tickets.
+    </p>
+    <form id="receipt-bulk-form" method="post" action="{% url 'invoices:invoice_bulk_delete' %}" class="bulk-bar" data-bulk-select>
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{% url 'invoices:receipt_queue' %}">
+        <label class="bulk-all"><input type="checkbox" data-bulk-all form="receipt-bulk-form"> Tout sélectionner</label>
+        <span class="muted" data-bulk-count data-empty="Cochez des tickets pour les supprimer."></span>
+        <button class="btn btn-small btn-danger" type="submit" data-bulk-submit disabled>Supprimer la sélection…</button>
+    </form>
+    <div class="receipt-grid">
+        {% for receipt in receipts %}
+            <div class="receipt-card-wrap">
+            <input type="checkbox" class="receipt-select" name="invoice_ids" value="{{ receipt.pk }}" form="receipt-bulk-form" data-bulk-item
+                   aria-label="Sélectionner le ticket {{ receipt.supplier.name }} du {{ receipt.invoice_date|date:'d/m/Y' }}">
+            <a class="receipt-card" href="{% url 'invoices:receipt_review' receipt.pk %}">
+                <div class="receipt-card-thumb">
+                    {% if receipt.preview_image %}
+                        <img src="{{ receipt.preview_image.url }}" alt="Ticket {{ receipt.supplier.name }}" loading="lazy">
+                    {% endif %}
+                </div>
+                <div class="receipt-card-body">
+                    <strong>{{ receipt.supplier.name }}</strong>
+                    <span class="amount">{{ receipt.total_ttc|floatformat:2 }} €</span>
+                    <span class="muted">{{ receipt.invoice_date|date:"d/m/Y"|default:"date inconnue" }}</span>
+                    {% if receipt.failed_checks %}
+                        <span class="status-pill status-NEEDS_REVIEW" title="{% for check in receipt.failed_checks %}{{ check.label }}{% if not forloop.last %} · {% endif %}{% endfor %}">
+                            {{ receipt.failed_checks|length }} contrôle{{ receipt.failed_checks|pluralize }} en échec
+                        </span>
+                        <span class="receipt-card-checks">{{ receipt.failed_checks.0.label }}{% if receipt.failed_checks|length > 1 %}, …{% endif %}</span>
+                    {% else %}
+                        <span class="status-pill status-COMPLETE">Comptes vérifiés</span>
+                    {% endif %}
+                </div>
+            </a>
+            </div>
+        {% endfor %}
+    </div>
+{% else %}
+    <div class="empty-state">
+        Aucun ticket à vérifier : tous les tickets importés ont été validés.
+        <a href="{% url 'invoices:receipt_upload' %}">Importer des tickets</a>
+    </div>
+{% endif %}

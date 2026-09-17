@@ -1,0 +1,59 @@
+{% comment %}
+A document's lines, under its row in the Achats list: enough to see that an
+import read what it should, and where each product went.
+{% endcomment %}
+<div class="document-preview">
+    {% if invoice.failed_checks %}
+        <ul class="preview-checks">
+            {% for check in invoice.failed_checks %}
+                <li><span class="check-mark">✕</span> {{ check.label }}{% if check.detail %} <span class="muted">— {{ check.detail }}</span>{% endif %}</li>
+            {% endfor %}
+        </ul>
+    {% endif %}
+    {% if invoice.error_message %}
+        <p class="message message-error">{{ invoice.error_message }}</p>
+    {% endif %}
+    {% if lines %}
+        <table class="sub-table">
+            <thead>
+                <tr>
+                    <th>Ligne</th>
+                    <th class="num">Qté</th>
+                    <th class="num">HT</th>
+                    <th class="num">TTC</th>
+                    <th>Article de stock</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for line in lines %}
+                    <tr>
+                        <td>{{ line.raw_name }}</td>
+                        <td class="num">{{ line.quantity }}</td>
+                        <td class="num">{{ line.total_ht|floatformat:2 }} €</td>
+                        <td class="num">{{ line.total_ttc|floatformat:2 }} €</td>
+                        <td>
+                            {% if line.product.stock_type %}
+                                {{ line.product.stock_type.name }}
+                            {% else %}
+                                <a class="status-pill status-NEEDS_REVIEW" href="{% url 'inventory:stock_list' %}#a-classer">à classer</a>
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p class="muted">Aucune ligne lue.</p>
+    {% endif %}
+    <div class="preview-actions">
+        {% if invoice.parse_checks %}
+            <a class="btn btn-small" href="{% url 'invoices:receipt_review' invoice.pk %}">{% if invoice.reviewed_at %}Revoir avec la photo{% else %}Vérifier avec la photo{% endif %}</a>
+        {% else %}
+            <a class="btn btn-small" href="{% url 'invoices:invoice_edit_lines' invoice.pk %}">Corriger les lignes</a>
+        {% endif %}
+        <a class="btn btn-small btn-secondary" href="{% url 'invoices:invoice_detail' invoice.pk %}">Ouvrir le document</a>
+        {% if to_classify %}
+            <span class="muted">{{ to_classify }} produit{{ to_classify|pluralize }} à classer dans <a href="{% url 'inventory:stock_list' %}#a-classer">Produits</a></span>
+        {% endif %}
+    </div>
+</div>

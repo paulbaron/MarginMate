@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}Achats - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <h1>Achats</h1>
+            <p class="page-subtitle">
+                Factures des fournisseurs et tickets de caisse : les ajouter, vérifier ce qui a été lu,
+                les retrouver.
+            </p>
+        </div>
+        <div class="actions">
+            <a class="btn btn-secondary" href="{% url 'invoices:invoice_create_manual' %}">+ Saisir une facture à la main</a>
+        </div>
+    </div>
+
+    {% include "invoices/_import_card.html" %}
+
+    {% comment %}
+    The tabs are addresses of their own (bookmarkable, and what the old pages'
+    links now open); hx-boost swaps only #workspace, so the import card above
+    - and an import running in it - stays as it is.
+    {% endcomment %}
+    <div id="workspace" class="workspace">
+        <nav class="tabs" aria-label="Achats" hx-boost="true" hx-target="#workspace" hx-select="#workspace" hx-swap="outerHTML">
+            {% for entry in tabs %}
+                <a href="{{ entry.url }}" class="tab{% if entry.active %} active{% endif %}"{% if entry.active %} aria-current="page"{% endif %}>
+                    {{ entry.label }}
+                    <span class="count-pill{% if not entry.attention %} count-pill-quiet{% endif %}">{{ entry.count }}</span>
+                </a>
+            {% endfor %}
+        </nav>
+
+        {% if tab == "documents" %}
+            {% include "invoices/_tab_documents.html" %}
+        {% elif tab == "a-verifier" %}
+            {% include "invoices/_tab_to_check.html" %}
+        {% else %}
+            {% include "invoices/_tab_sources.html" %}
+        {% endif %}
+    </div>
+{% endblock %}
+{% block extra_js %}
+<script>
+// The import card: one of three ways to add purchases, the one chosen last
+// remembered (an address can ask for one: ?ajouter=pdf).
+(function () {
+    var KEY = "marginmate:achats:import-tab";
+    var card = document.getElementById("ajouter");
+    if (!card) return;
+
+    function show(name) {
+        card.querySelectorAll("[data-import-tab]").forEach(function (button) {
+            var on = button.dataset.importTab === name;
+            button.setAttribute("aria-selected", on ? "true" : "false");
+            button.classList.toggle("active", on);
+        });
+        card.querySelectorAll("[data-import-panel]").forEach(function (panel) {
+            panel.hidden = panel.dataset.importPanel !== name;
+        });
+    }
+
+    card.addEventListener("click", function (event) {
+        var button = event.target.closest("[data-import-tab]");
+        if (!button) return;
+        show(button.dataset.importTab);
+        try { localStorage.setItem(KEY, button.dataset.importTab); } catch (e) { /* not remembered */ }
+    });
+
+    var chosen = card.dataset.importTab;
+    if (!chosen) {
+        try { chosen = localStorage.getItem(KEY); } catch (e) { chosen = null; }
+    }
+    if (!card.querySelector('[data-import-panel="' + chosen + '"]')) chosen = "tickets";
+    show(chosen);
+})();
+
+// A document's row opens in place on its lines (fetched the first time),
+// and the one just imported (?surligner=) opens by itself.
+(function () {
+    function toggle(row) {
+        var details = document.getElementById("preview-" + row.dataset.document);
+        if (!details) return;
+        var opening = details.hidden;
+        details.hidden = !opening;
+        row.classList.toggle("is-open", opening);
+        var chevron = row.querySelector(".chevron");
+        if (chevron) chevron.textContent = opening ? "▾" : "▸";
+        if (opening && !details.dataset.loaded) {
+            details.dataset.loaded = "1";
+            htmx.ajax("GET", row.dataset.previewUrl, { target: details.querySelector("td"), swap: "innerHTML" });
+        }
+    }
+
+    document.addEventListener("click", function (event) {
+        if (event.target.closest("a, button, input, label, form")) return;
+        var row = event.target.closest("tr[data-document]");
+        if (row) toggle(row);
+    });
+    document.addEventListener("keydown", function (event) {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        var row = event.target.closest && event.target.closest("tr[data-document]");
+        if (!row || event.target !== row) return;
+        event.preventDefault();
+        toggle(row);
+    });
+
+    function openHighlighted(root) {
+        (root || document).querySelectorAll("tr[data-document][data-highlight]").forEach(function (row) {
+            var details = document.getElementById("preview-" + row.dataset.document);
+            if (details && details.hidden) toggle(row);
+            row.scrollIntoView({ block: "center" });
+            row.classList.add("flash");
+        });
+    }
+    document.addEventListener("DOMContentLoaded", function () { openHighlighted(document); });
+    document.body.addEventListener("htmx:afterSwap", function (event) {
+        if (event.target.id === "workspace" || event.target.id === "documents") openHighlighted(event.target);
+    });
+})();
+</script>
+{% endblock %}

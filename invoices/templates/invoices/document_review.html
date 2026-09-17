@@ -4,8 +4,10 @@
     <div class="page-header">
         <div>
             <p class="breadcrumb">
-                {% if is_receipt %}
-                    <a href="{% url 'invoices:receipt_queue' %}">← Tickets à vérifier</a>
+                {% if lot %}
+                    <a href="{% url 'invoices:receipt_batch' lot.pk %}">← Import du {{ lot.started_at|date:"d/m/Y H:i" }}</a>
+                {% elif is_receipt %}
+                    <a href="{% url 'invoices:receipt_queue' %}">← Achats · tickets à vérifier</a>
                 {% else %}
                     <a href="{% url 'invoices:invoice_detail' invoice.pk %}">← {{ invoice.supplier.name }} {{ invoice.invoice_number }}</a>
                 {% endif %}
@@ -17,7 +19,7 @@
                 {% if invoice.ocr_confidence %} · lecture la moins sûre : {{ invoice.ocr_confidence_percent|floatformat:0 }}%{% endif %}
                 {% if is_receipt %}
                     {% if invoice.reviewed_at %} · vérifié le {{ invoice.reviewed_at|date:"d/m/Y" }}{% endif %}
-                    {% if remaining %} · {{ remaining }} ticket{{ remaining|pluralize }} en attente{% endif %}
+                    {% if remaining %} · {{ remaining }} ticket{{ remaining|pluralize }} en attente{% if lot %} dans cet import{% endif %}{% endif %}
                 {% endif %}
             </p>
             {% if is_receipt %}
@@ -59,7 +61,7 @@
                 </form>
             {% endif %}
             <a class="btn btn-danger"
-               href="{% url 'invoices:invoice_delete' invoice.pk %}?next={% if not is_receipt %}{% url 'invoices:invoice_list' %}{% elif next_pk %}{% url 'invoices:receipt_review' next_pk %}{% else %}{% url 'invoices:receipt_queue' %}{% endif %}">Supprimer</a>
+               href="{% url 'invoices:invoice_delete' invoice.pk %}?next={% if not is_receipt %}{% url 'invoices:invoice_list' %}{% elif next_pk %}{% url 'invoices:receipt_review' next_pk %}{{ lot_query|urlencode }}{% elif lot %}{% url 'invoices:receipt_batch' lot.pk %}{% else %}{% url 'invoices:receipt_queue' %}{% endif %}">Supprimer</a>
         </div>
     </div>
 
@@ -203,7 +205,7 @@
                             {% if not is_receipt %}Enregistrer les lignes{% elif invoice.reviewed_at %}Enregistrer les corrections{% elif next_pk %}Valider et passer au suivant{% else %}Valider ce ticket{% endif %}
                         </button>
                         {% if is_receipt %}
-                            <a class="btn btn-secondary" href="{% url 'invoices:receipt_queue' %}">Revenir à la liste</a>
+                            <a class="btn btn-secondary" href="{% if lot %}{% url 'invoices:receipt_batch' lot.pk %}{% else %}{% url 'invoices:receipt_queue' %}{% endif %}">Revenir à la liste</a>
                         {% else %}
                             <a class="btn btn-secondary" href="{% url 'invoices:invoice_detail' invoice.pk %}">Annuler</a>
                         {% endif %}

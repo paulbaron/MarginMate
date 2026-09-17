@@ -185,7 +185,11 @@ class ChooseShopInBatchTests(TestCase):
         metro = Supplier.objects.get(code="METRO")
         self.assertContains(response, f'<option value="{metro.pk}">Metro</option>', html=True)
         self.assertContains(response, '<option value="new">+ Nouvelle enseigne…</option>', html=True)
-        self.assertNotContains(response, "analyse IA")
+        # The AI pseudo-supplier reads no ticket: not a shop to choose (the
+        # page's PDF import offers it, for invoices).
+        html = response.content.decode()
+        start = html.index(f'action="{self.url}"')
+        self.assertNotIn("analyse IA", html[start:html.index("</form>", start)])
         self.assertContains(response, "choisissez son enseigne")
 
     def test_choosing_the_shop_imports_the_file_and_opens_it_for_review(self):

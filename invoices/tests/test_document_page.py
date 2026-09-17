@@ -442,6 +442,8 @@ class DatesTests(TestCase):
         Invoice.objects.filter(pk=undated.pk).update(invoice_date=None)
         response = self.client.get(reverse("invoices:invoice_list"))
         self.assertEqual(response.context["undated_count"], 1)
-        self.assertContains(response, "?sans_date=1")
-        filtered = self.client.get(reverse("invoices:invoice_list") + "?sans_date=1")
-        self.assertEqual([invoice.pk for invoice in filtered.context["invoices"]], [undated.pk])
+        self.assertContains(response, "?filtre=sans-date")
+        # The address the list used to give still filters.
+        for query in ("?filtre=sans-date", "?sans_date=1"):
+            filtered = self.client.get(reverse("invoices:invoice_list") + query)
+            self.assertEqual([invoice.pk for invoice in filtered.context["invoices"]], [undated.pk])

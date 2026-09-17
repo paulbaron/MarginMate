@@ -1,0 +1,120 @@
+{% comment %}
+Every invoice and ticket. Reloads itself when an import ends
+(`documents-changed`), keeping its filter. A row opens in place on its lines.
+{% endcomment %}
+<div id="documents" hx-get="{{ request.get_full_path }}" hx-select="#documents" hx-swap="outerHTML"
+     hx-trigger="documents-changed from:body">
+    <div class="filter-chips" role="group" aria-label="Filtrer les documents">
+        {% for chip in chips %}
+            <a href="{{ chip.url }}" class="chip{% if chip.active %} active{% endif %}"{% if chip.active %} aria-current="true"{% endif %}
+               hx-boost="true" hx-target="#workspace" hx-select="#workspace" hx-swap="outerHTML">
+                {{ chip.label }} <span class="chip-count">{{ chip.count }}</span>
+            </a>
+        {% endfor %}
+        {% if lot %}
+            <span class="chip active" aria-current="true">
+                Import du {{ lot.started_at|date:"d/m/Y H:i" }} <span class="chip-count">{{ invoices|length }}</span>
+            </span>
+        {% endif %}
+    </div>
+
+    {% if active_filter == "sans-date" %}
+        <div class="message">
+            Factures et tickets <strong>sans date</strong> : hors de toute valorisation du stock et du rapprochement
+            bancaire. Ouvrez chacun et donnez-lui la sienne.
+        </div>
+    {% elif undated_count and not active_filter and not lot %}
+        <div class="message message-error">
+            {{ undated_count }} facture{{ undated_count|pluralize }} ou ticket{{ undated_count|pluralize }} sans date :
+            hors de toute valorisation du stock et du rapprochement bancaire.
+            <a href="{% url 'invoices:invoice_list' %}?filtre=sans-date">Les afficher</a>
+        </div>
+    {% elif active_filter == "verifies" %}
+        <p class="muted">Les tickets vérifiés ces deux derniers jours, le dernier en haut.</p>
+    {% elif active_filter == "recents" %}
+        <p class="muted">Ce qui a été importé ces deux derniers jours.</p>
+    {% endif %}
+
+    {% if invoices %}
+        <form id="invoice-bulk-form" method="post" action="{% url 'invoices:invoice_bulk_delete' %}" class="bulk-bar" data-bulk-select>
+            {% csrf_token %}
+            <input type="hidden" name="next" value="{{ request.get_full_path }}">
+            <span class="muted" data-bulk-count data-empty="Cochez des documents pour les supprimer."></span>
+            <button class="btn btn-small btn-danger" type="submit" data-bulk-submit disabled>Supprimer la sélection…</button>
+        </form>
+        <div class="table-wrap">
+        <table data-table data-table-label="documents" class="documents-table">
+            <thead>
+                <tr>
+                    <th class="select-col" data-no-sort><input type="checkbox" data-bulk-all form="invoice-bulk-form" aria-label="Tout sélectionner"></th>
+                    <th>Fournisseur</th>
+                    <th>Type</th>
+                    <th>N°</th>
+                    <th>Date</th>
+                    <th>État</th>
+                    <th class="num">Total HT</th>
+                    <th class="num">Total TTC</th>
+                    <th data-no-sort></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for invoice in invoices %}
+                <tr data-document="{{ invoice.pk }}"{% if invoice.pk == highlight %} data-highlight{% endif %}
+                    data-preview-url="{% url 'invoices:invoice_preview' invoice.pk %}" tabindex="0"
+                    class="document-row{% if invoice.pk == highlight %} is-new{% endif %}"
+                    aria-label="{{ invoice.supplier.name }} du {{ invoice.invoice_date|date:'d/m/Y'|default:'?' }} : afficher les lignes">
+                    <td class="select-col"><input type="checkbox" name="invoice_ids" value="{{ invoice.pk }}" form="invoice-bulk-form" data-bulk-item aria-label="Sélectionner {{ invoice }}"></td>
+                    <td>
+                        <span class="chevron" aria-hidden="true">▸</span>
+                        <a href="{% url 'invoices:invoice_detail' invoice.pk %}">{{ invoice.supplier.name }}</a>
+                        {% if invoice.pk == highlight %}<span class="new-pill">importée</span>{% endif %}
+                    </td>
+                    <td class="muted">{% if invoice.is_receipt %}Ticket{% else %}Facture{% endif %}</td>
+                    <td>{{ invoice.invoice_number|default:"—" }}</td>
+                    <td data-sort="{{ invoice.invoice_date|date:'Y-m-d' }}">
+                        {% if invoice.invoice_date %}{{ invoice.invoice_date|date:"d/m/Y" }}{% else %}<span class="status-pill status-ERROR">sans date</span>{% endif %}
+                    </td>
+                    <td>
+                        {% if invoice.parse_checks %}
+                            {% if invoice.reviewed_at %}
+                                <span class="status-pill status-COMPLETE">Vérifié</span>
+                            {% else %}
+                                <span class="status-pill status-NEEDS_REVIEW">À vérifier</span>
+                            {% endif %}
+                        {% else %}
+                            <span class="status-pill status-{{ invoice.status }}">{% if invoice.status == "NEEDS_REVIEW" %}Produits à classer{% else %}{{ invoice.get_status_display }}{% endif %}</span>
+                        {% endif %}
+                    </td>
+                    <td class="num">{{ invoice.total_ht|floatformat:2 }} €</td>
+                    <td class="num">{{ invoice.total_ttc|floatformat:2 }} €</td>
+                    <td class="num">
+                        {% if invoice.parse_checks and not invoice.reviewed_at %}
+                            <a class="btn btn-small" href="{% url 'invoices:receipt_review' invoice.pk %}{% if lot %}?lot={{ lot.pk }}{% endif %}">Vérifier</a>
+                        {% elif invoice.is_receipt %}
+                            <a class="btn btn-small btn-secondary" href="{% url 'invoices:receipt_review' invoice.pk %}">Corriger</a>
+                        {% else %}
+                            <a class="btn btn-small btn-secondary" href="{% url 'invoices:invoice_edit_lines' invoice.pk %}">Corriger</a>
+                        {% endif %}
+                    </td>
+                </tr>
+                <tr id="preview-{{ invoice.pk }}" data-child-row hidden class="document-preview-row">
+                    <td colspan="9"><p class="muted">Chargement…</p></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+    {% elif lot %}
+        <div class="empty-state">Cet import n'a encore rien importé.</div>
+    {% elif active_filter %}
+        <div class="empty-state">
+            Aucun document ici.
+            <a href="{% url 'invoices:invoice_list' %}">Voir tous les documents</a>
+        </div>
+    {% else %}
+        <div class="empty-state">
+            <p>Aucun achat pour le moment : ajoutez des tickets ou une facture avec la carte ci-dessus.</p>
+            <a class="btn" href="{% url 'invoices:invoice_upload' %}">Importer une facture PDF</a>
+        </div>
+    {% endif %}
+</div>
