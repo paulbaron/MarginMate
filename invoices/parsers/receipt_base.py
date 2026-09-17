@@ -164,7 +164,30 @@ def printed_total(lines: list[str]) -> Decimal | None:
     if read:
         table_total = sum((summary.total_ttc for summary in read), start=Decimal("0"))
         return table_total if amount_printed(lines, table_total) is not None else None
+    with_tax = _ht_and_tax(lines, repeated)
+    if with_tax is not None:
+        return with_tax
     return repeated[0] if repeated else None
+
+
+def _ht_and_tax(lines: list[str], repeated: list[Decimal]) -> Decimal | None:
+    """The total of a document whose VAT table is unreadable but which prints
+    its HT and its tax, each more than once, and their sum: "332,50" and
+    "66,50" on the totals and in the table, "399,00" once as the amount due.
+    Only when one pair does, and at exactly one French rate."""
+    printed = {abs(value) for line in lines for value in line_amounts(line)}
+    found = {
+        base + tax
+        for base in repeated
+        for tax in repeated
+        if 0 < tax < base
+        and base + tax in printed
+        and len([
+            rate for rate in KNOWN_VAT_RATES
+            if abs((base * rate).quantize(CENTS, rounding=ROUND_HALF_UP) - tax) <= CENTS
+        ]) == 1
+    }
+    return found.pop() if len(found) == 1 else None
 
 
 def ends_items(amount: Decimal, item_count: int, gross: Decimal, net: Decimal, total: Decimal | None) -> bool:
