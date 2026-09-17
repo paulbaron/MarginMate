@@ -2,7 +2,7 @@ import os
 import tempfile
 import threading
 from datetime import date, timedelta
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 
 from django.contrib import messages
 from django.db import transaction
@@ -14,16 +14,19 @@ from django.views.generic import DetailView, ListView
 
 from .deletion import InvoiceInUseError, blocking_stock_takes, delete_invoice
 from .forms import (
+    DOCUMENT_INVOICE,
+    DOCUMENT_RECEIPT,
+    DocumentHeaderForm,
     EmailInvoiceSourceForm,
     InvoiceTypeForm,
     InvoiceUploadForm,
+    LineCorrectionFormSet,
     ManualInvoiceForm,
     ManualInvoiceLineFormSet,
     ReceiptBatchUploadForm,
-    ReceiptHeaderForm,
-    ReceiptLineFormSet,
     ReceiptShopForm,
     ShopItemPriceForm,
+    line_initial,
 )
 from .importing import (
     DuplicateInvoiceError,
@@ -46,11 +49,18 @@ class InvoiceListView(ListView):
 
     def get_queryset(self):
         # Lines prefetched: every row shows totals added up from them.
-        return Invoice.objects.select_related("supplier").prefetch_related("lines")
+        invoices = Invoice.objects.select_related("supplier").prefetch_related("lines")
+        if self.request.GET.get("sans_date"):
+            invoices = invoices.filter(invoice_date__isnull=True)
+        return invoices
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["latest_job"] = ScrapeJob.objects.filter(kind=ScrapeJob.Kind.GATHER).first()
+        # A document with no date sits outside every stock valuation and the
+        # bank match: counted, and one click from the list of them.
+        context["undated_count"] = Invoice.objects.filter(invoice_date__isnull=True).count()
+        context["undated_only"] = bool(self.request.GET.get("sans_date"))
 
         metro_supplier = Supplier.objects.filter(code="METRO", is_scrapable=True).first()
         email_types = list(
@@ -302,80 +312,14 @@ def invoice_type_form(request, pk=None):
     )
 
 
-def _vat_percent_for_form(line):
-    """The line's VAT rate as the line-entry form will accept it back.
-
-    `InvoiceLine.vat_rate` is stored to four decimals, so 5.5% is 0.0550 and
-    multiplying by 100 gives "5.5000" - which the form's own
-    DecimalField(decimal_places=2) then rejects. Rendering a value a page
-    refuses on submit fails in the worst way available: the error lands under
-    a field nobody touched, on a form the user has just spent time
-    correcting.
-    """
-    return (line.vat_rate * Decimal("100")).quantize(Decimal("0.01"))
-
-
 def edit_invoice_lines(request, pk):
-    """Type an invoice's lines in by hand.
-
-    For invoices that arrived with no parser (see importing.parse_and_import)
-    and for correcting one that did. Reuses the manual-invoice line formset,
-    so there's one way to enter a line rather than two that drift.
-
-    Saving replaces the lines wholesale: an invoice is a document, and the
-    lines are what it says. Editing them in place would mean reconciling
-    which existing line each row refers to, and stock movements already
-    created from them - deleting and recreating is both simpler and
-    exactly what "this is what the invoice actually says" means.
-    """
+    """Correct an invoice's lines - or type them in, for a supplier with no
+    parser (see importing.parse_and_import). A ticket's are corrected on its
+    review screen: the same page, with the ticket's queue around it."""
     invoice = get_object_or_404(Invoice.objects.select_related("supplier"), pk=pk)
-
-    if request.method == "POST":
-        formset = ManualInvoiceLineFormSet(request.POST)
-        if formset.is_valid():
-            stored = {line.pk: line for line in invoice.lines.all()}
-            lines = []
-            for line_form in formset:
-                if not line_form.cleaned_data or line_form.cleaned_data.get("DELETE"):
-                    continue
-                lines.append(
-                    corrected_line(
-                        stored.get(line_form.cleaned_data.get("line_id")),
-                        raw_name=line_form.cleaned_data["product_name"],
-                        quantity=line_form.cleaned_data["quantity"],
-                        total_ht=line_form.cleaned_data["total_ht"],
-                        vat_rate=line_form.cleaned_data["vat_rate"] / Decimal("100"),
-                    )
-                )
-            try:
-                replace_invoice_lines(invoice, lines)
-            except InvoiceLinesInUseError as exc:
-                messages.error(request, str(exc))
-            else:
-                messages.success(request, f"{len(lines)} ligne(s) enregistrée(s).")
-                return redirect("invoices:invoice_detail", pk=invoice.pk)
-    else:
-        initial = [
-            {
-                "line_id": line.pk,
-                "product_name": line.raw_name,
-                "quantity": line.quantity,
-                "total_ht": line.total_ht,
-                "vat_rate": _vat_percent_for_form(line),
-            }
-            for line in invoice.lines.all()
-        ]
-        formset = ManualInvoiceLineFormSet(initial=initial)
-
-    return render(
-        request,
-        "invoices/invoice_lines_form.html",
-        {
-            "invoice": invoice,
-            "formset": formset,
-            "has_parser": get_parser(invoice.supplier.parser_key) is not None,
-        },
-    )
+    if invoice.is_receipt:
+        return redirect("invoices:receipt_review", pk=invoice.pk)
+    return _correction_page(request, invoice)
 
 
 # --------------------------------------------------------------------------
@@ -529,37 +473,63 @@ def receipt_queue(request):
 
 
 def receipt_review(request, pk):
-    """Check one receipt against its photo, then move to the next.
+    """Check one receipt against its photo, then move to the next."""
+    invoice = get_object_or_404(Invoice.objects.select_related("supplier"), pk=pk)
+    if not invoice.is_receipt:
+        return redirect("invoices:invoice_edit_lines", pk=invoice.pk)
+    return _correction_page(request, invoice)
 
-    The photo, the parser's checks and the editable lines are on one screen
-    because they are one question - "does this say what the ticket says?" -
-    and answering it by flipping between three pages is what stops receipts
-    being checked at all.
 
-    The lines are checked against the printed total as they are typed (the
-    page's script), and the checks stored on the ticket are brought up to
+def _correction_page(request, invoice):
+    """One page to correct a document against its photo or PDF: its date,
+    its total and each of its lines - for a ticket and a supplier invoice
+    alike.
+
+    The photo, the checks and the editable lines are on one screen because
+    they are one question - "does this say what the document says?" - and
+    answering it by flipping between pages is what stops receipts being
+    checked at all. The lines are checked against the total as they are
+    typed (the page's script), and a ticket's stored checks are brought up to
     date when it is validated (receipts.recheck_after_review).
 
     Saving reuses `replace_invoice_lines`, the same path as a hand-typed
-    invoice, so a corrected receipt and a typed one end up identical - there
-    is no second way for lines to reach the database.
+    invoice: there is no second way for lines to reach the database. A ticket
+    still to check moves on to the next one; anything else goes back to its
+    page.
     """
-    invoice = get_object_or_404(Invoice.objects.select_related("supplier"), pk=pk)
-    queue = list(_pending_receipts().values_list("pk", flat=True))
+    is_receipt = invoice.is_receipt
+    document = DOCUMENT_RECEIPT if is_receipt else DOCUMENT_INVOICE
+    queue = list(_pending_receipts().values_list("pk", flat=True)) if is_receipt else []
     next_pk = next((candidate for candidate in queue if candidate != invoice.pk), None)
+    here = redirect(request.path)
 
     price_form = ShopItemPriceForm()
     header = {"invoice_date": invoice.invoice_date, "printed_total_ttc": invoice.printed_total_ttc}
-    date_form = ReceiptHeaderForm(initial=header)
+    header_form = DocumentHeaderForm(initial=header)
+    formset = None
 
     if request.method == "POST":
         action = request.POST.get("action")
 
-        if action == "rename_product":
-            _rename_product_from_review(request, invoice)
-            return redirect("invoices:receipt_review", pk=invoice.pk)
+        if action == "reread":
+            _reread_from_page(request, invoice)
+            return here
 
-        if action == "remember_price":
+        if is_receipt and action == "unverify":
+            invoice.reviewed_at = None
+            invoice.save(update_fields=["reviewed_at"])
+            messages.success(request, "Ticket remis dans la liste des tickets à vérifier.")
+            return here
+
+        if is_receipt and action == "rename_product":
+            _rename_product_from_review(request, invoice)
+            return here
+
+        if is_receipt and action == "forget_price":
+            _forget_price(request, invoice)
+            return here
+
+        if is_receipt and action == "remember_price":
             price_form = ShopItemPriceForm(request.POST, supplier=invoice.supplier)
             if price_form.is_valid():
                 from .receipts import apply_known_prices
@@ -577,79 +547,154 @@ def receipt_review(request, pk):
                         else " (aucune ligne à renommer sur les tickets à vérifier)."
                     ),
                 )
-                return redirect("invoices:receipt_review", pk=invoice.pk)
-            formset = _line_formset_for(invoice)
-        else:
-            formset = ReceiptLineFormSet(request.POST)
-            date_form = ReceiptHeaderForm(request.POST, initial=header)
-            if formset.is_valid() and date_form.is_valid():
-                stored = {line.pk: line for line in invoice.lines.all()}
-                lines = []
-                for line_form in formset:
-                    if not line_form.cleaned_data or line_form.cleaned_data.get("DELETE"):
-                        continue
-                    lines.append(
-                        corrected_line(
-                            stored.get(line_form.cleaned_data.get("line_id")),
-                            raw_name=line_form.cleaned_data["product_name"],
-                            quantity=line_form.cleaned_data["quantity"],
-                            total_ht=line_form.cleaned_total_ht(),
-                            vat_rate=line_form.cleaned_data["vat_rate"] / Decimal("100"),
-                            read_as=line_form.cleaned_data.get("read_as", ""),
-                            printed_ttc=line_form.printed_ttc(),
-                        )
-                    )
-                from .receipts import recheck_after_review
-
-                try:
-                    # One piece: a date saved on a ticket whose lines then
-                    # failed to save would be a change nobody validated.
-                    with transaction.atomic():
-                        # Left blank, what was read stays: a blank is a field
-                        # nobody filled in, not a value someone removed.
-                        for field in ("invoice_date", "printed_total_ttc"):
-                            if date_form.cleaned_data[field] is not None:
-                                setattr(invoice, field, date_form.cleaned_data[field])
-                        replace_invoice_lines(invoice, lines)
-                        recheck_after_review(invoice)
-                        invoice.reviewed_at = timezone.now()
-                        invoice.save(update_fields=["invoice_date", "printed_total_ttc", "parse_checks", "reviewed_at"])
-                except InvoiceLinesInUseError as exc:
-                    messages.error(request, str(exc))
-                else:
+                return here
+        elif action is None:
+            formset = LineCorrectionFormSet(request.POST, form_kwargs={"document": document})
+            header_form = DocumentHeaderForm(request.POST, initial=header)
+            if formset.is_valid() and header_form.is_valid():
+                was_pending = invoice.reviewed_at is None
+                if _save_corrections(request, invoice, formset, header_form):
+                    if not is_receipt:
+                        messages.success(request, f"{invoice.lines.count()} ligne(s) enregistrée(s).")
+                        return redirect("invoices:invoice_detail", pk=invoice.pk)
                     messages.success(request, f"Ticket vérifié : {invoice}")
                     _say_where_products_are_renamed(request, invoice)
+                    if not was_pending:
+                        return redirect("invoices:invoice_detail", pk=invoice.pk)
                     if next_pk:
                         return redirect("invoices:receipt_review", pk=next_pk)
                     return redirect("invoices:receipt_queue")
-    else:
-        formset = _line_formset_for(invoice)
 
+    if formset is None:
+        formset = _line_formset_for(invoice, document)
+    return render(
+        request,
+        "invoices/document_review.html",
+        {
+            **_checks_context(invoice),
+            "invoice": invoice,
+            "is_receipt": is_receipt,
+            "formset": formset,
+            "header_form": header_form,
+            "price_form": price_form,
+            "known_prices": invoice.supplier.item_prices.all() if is_receipt else [],
+            "next_pk": next_pk,
+            "remaining": len(queue),
+            "can_reread": _can_reread(invoice),
+            "source_is_pdf": bool(invoice.source_file) and invoice.source_file.name.lower().endswith(".pdf"),
+            "ocr_lines": invoice.ocr_text.split("\n") if invoice.ocr_text else [],
+        },
+    )
+
+
+def _save_corrections(request, invoice, formset, header_form) -> bool:
+    """Store what the page says. Returns whether it was saved."""
+    from .receipts import recheck_after_review
+
+    document = DOCUMENT_RECEIPT if invoice.is_receipt else DOCUMENT_INVOICE
+    stored = {line.pk: line for line in invoice.lines.all()}
+    lines = []
+    for line_form in formset:
+        if not line_form.cleaned_data or line_form.cleaned_data.get("DELETE"):
+            continue
+        line = stored.get(line_form.cleaned_data.get("line_id"))
+        amounts = line_form.amounts(line)
+        vat_rate = line_form.cleaned_data["vat_rate"] / Decimal("100")
+        extra = {}
+        if document == DOCUMENT_RECEIPT:
+            extra = {
+                "read_as": line_form.cleaned_data.get("read_as", ""),
+                "printed_ttc": amounts["printed_ttc"],
+                "discount_ttc": amounts["discount_ttc"],
+                "discount": amounts["discount"],
+            }
+        elif line is not None and line_form.untouched(line):
+            extra = {"printed_ttc": line.printed_ttc}
+        lines.append(
+            corrected_line(
+                line,
+                raw_name=line_form.cleaned_data["product_name"],
+                quantity=line_form.cleaned_data["quantity"],
+                total_ht=amounts["total_ht"],
+                vat_rate=line.vat_rate if line is not None and line_form.untouched(line) else vat_rate,
+                total_volume=line_form.volume(line),
+                **extra,
+            )
+        )
+    try:
+        # One piece: a date saved on a document whose lines then failed to
+        # save would be a change nobody validated.
+        with transaction.atomic():
+            invoice.invoice_date = header_form.cleaned_data["invoice_date"]
+            # Left blank, the total read stays: a blank is a field nobody
+            # filled in, not a value someone removed.
+            if header_form.cleaned_data["printed_total_ttc"] is not None:
+                invoice.printed_total_ttc = header_form.cleaned_data["printed_total_ttc"]
+            replace_invoice_lines(invoice, lines)
+            fields = ["invoice_date", "printed_total_ttc"]
+            if invoice.is_receipt:
+                recheck_after_review(invoice)
+                invoice.reviewed_at = timezone.now()
+                fields += ["parse_checks", "reviewed_at"]
+            invoice.save(update_fields=fields)
+    except InvoiceLinesInUseError as exc:
+        messages.error(request, str(exc))
+        return False
+    return True
+
+
+def _checks_context(invoice) -> dict:
+    """The checks beside the lines: the one kept up to date as they are
+    typed, and the rest as they were stored."""
     from .parsers.receipt_base import RECONCILIATION_TOLERANCE
     from .receipts import READING_CHECKS, SUM_CHECK, lines_check
 
-    lines = list(invoice.lines.select_related("product").all())
-    return render(
+    return {
+        "live_check": lines_check(invoice),
+        "other_checks": [check for check in invoice.parse_checks if check["label"] != SUM_CHECK],
+        "tolerance": RECONCILIATION_TOLERANCE,
+        # What the parser said about lines a person may since have corrected:
+        # shown as such, and replaced on validation.
+        "reading_checks": READING_CHECKS,
+    }
+
+
+def _can_reread(invoice) -> bool:
+    """Whether the page offers to read the document's file again."""
+    from .receipts import parser_for
+
+    if not invoice.source_file:
+        return False
+    if invoice.is_receipt:
+        return parser_for(invoice.supplier) is not None
+    parser = get_parser(invoice.supplier.parser_key)
+    return parser is not None and invoice.supplier.parser_key != "LLM"
+
+
+def _reread_from_page(request, invoice) -> None:
+    from .receipts import RereadError, reread_document
+
+    try:
+        messages.success(request, reread_document(invoice))
+    except (RereadError, InvoiceLinesInUseError) as exc:
+        messages.error(request, str(exc))
+
+
+def _forget_price(request, invoice) -> None:
+    """Drop one of the shop's known prices. Lines it already named keep their
+    name: it is theirs now, and correcting one is done in the line."""
+    from .models import ShopItemPrice
+
+    price = ShopItemPrice.objects.filter(supplier=invoice.supplier, pk=request.POST.get("price") or 0).first()
+    if price is None:
+        messages.error(request, "Ce prix n'est pas (ou plus) connu pour cette enseigne.")
+        return
+    price.delete()
+    since = f" (depuis le {price.valid_from:%d/%m/%Y})" if price.valid_from else ""
+    messages.success(
         request,
-        "invoices/receipt_review.html",
-        {
-            "invoice": invoice,
-            # The one check the page keeps up to date as lines are typed.
-            "live_check": lines_check(invoice),
-            "other_checks": [check for check in invoice.parse_checks if check["label"] != SUM_CHECK],
-            "tolerance": RECONCILIATION_TOLERANCE,
-            # What the parser said about lines a person may since have
-            # corrected: shown as such, and replaced on validation.
-            "reading_checks": READING_CHECKS,
-            "formset": formset,
-            "date_form": date_form,
-            "price_form": price_form,
-            "lines": lines,
-            "known_prices": invoice.supplier.item_prices.all(),
-            "next_pk": next_pk,
-            "remaining": len(queue),
-            "ocr_lines": invoice.ocr_text.split("\n") if invoice.ocr_text else [],
-        },
+        f"Prix oublié : {price.unit_price_ttc} € = {price.label}{since}. "
+        "Les lignes déjà nommées ainsi gardent leur nom.",
     )
 
 
@@ -705,13 +750,13 @@ def _say_where_products_are_renamed(request, invoice):
             )
 
 
-def _line_formset_for(invoice):
-    """The review form, pre-filled from the saved lines.
+def _line_formset_for(invoice, document):
+    """The correction form, pre-filled from the saved lines (line_initial).
 
-    A line still named as OCR read it (`read_as`) but attached to a product
-    of another spelling - by inventory.matching - is pre-filled with the
-    product's own name, and the reading is shown under the row: the match is
-    only safe because a person sees it here. Every other line keeps its own
+    On a ticket, a line still named as OCR read it (`read_as`) but attached to
+    a product of another spelling - by inventory.matching - is pre-filled with
+    the product's own name, and the reading is shown under the row: the match
+    is only safe because a person sees it here. Every other line keeps its own
     name: a line renamed from the shop's price list reads "Citron vert" while
     its product may still be the "Article divers" placeholder, and
     pre-filling the product's name would undo the rename. The reading rides
@@ -722,42 +767,26 @@ def _line_formset_for(invoice):
     # Renaming is for the products of shops whose tickets are read: a paper
     # Metro ticket filed by hand shows Metro's catalogue products, which its
     # digital invoices find by their exact name.
-    can_rename = parser_for(invoice.supplier) is not None
+    can_rename = document == DOCUMENT_RECEIPT and parser_for(invoice.supplier) is not None
     initial = []
     renamable = []
     offered = set()
     for line in invoice.lines.select_related("product"):
-        name = line.raw_name
-        if line.read_as and line.raw_name == line.read_as:
-            name = line.product.raw_name
+        row = line_initial(line, document)
+        if document == DOCUMENT_RECEIPT and line.read_as and line.raw_name == line.read_as:
+            row["product_name"] = line.product.raw_name
         # Offered under the first line of each product (six baguettes, one
         # rename), filled in with what the row says: the product's own name,
         # or the spelling someone typed that still landed on the old one -
         # the case the warning after a save points here for. Never on a
         # placeholder about to go.
-        if (
-            can_rename
-            and PLACEHOLDER_MARKER not in line.product.raw_name
-            and line.product_id not in offered
-        ):
+        if can_rename and PLACEHOLDER_MARKER not in line.product.raw_name and line.product_id not in offered:
             offered.add(line.product_id)
-            renamable.append((line.product, name))
+            renamable.append((line.product, row["product_name"]))
         else:
             renamable.append((None, ""))
-        # As the ticket prints it; see ReceiptLineForm.total_ttc.
-        total_ttc = line.total_ttc.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        initial.append(
-            {
-                "product_name": name,
-                "read_as": line.read_as,
-                "quantity": line.quantity,
-                "total_ttc": total_ttc,
-                "computed_ttc": total_ttc if line.printed_ttc is None else None,
-                "line_id": line.pk,
-                "vat_rate": _vat_percent_for_form(line),
-            }
-        )
-    formset = ReceiptLineFormSet(initial=initial)
+        initial.append(row)
+    formset = LineCorrectionFormSet(initial=initial, form_kwargs={"document": document})
     for form, (product, rename_to) in zip(formset.forms, renamable):
         form.renamable_product = product
         form.rename_to = rename_to

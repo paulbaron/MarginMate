@@ -62,6 +62,7 @@ class ReviewScreenChecksTests(TestCase):
             "form-INITIAL_FORMS": "0",
             "form-MIN_NUM_FORMS": "0",
             "form-MAX_NUM_FORMS": "1000",
+            "invoice_date": "2026-07-15",
             "form-0-product_name": "PAIN COMPLET",
             "form-0-quantity": "2",
             "form-0-total_ttc": "0.98",
@@ -85,7 +86,7 @@ class ReviewScreenChecksTests(TestCase):
         self.assertContains(response, 'data-tolerance="0.05"')
         self.assertContains(response, 'name="printed_total_ttc"')
         self.assertContains(response, 'value="0.98"')
-        self.assertContains(response, 'id="receipt-total"')
+        self.assertContains(response, 'id="document-total"')
         self.assertEqual(response.content.decode().count("Somme des lignes = total imprimé"), 1)
         self.assertContains(response, "Somme HT des lignes = base HT du ticket <span class=\"muted\">(à la lecture du ticket)</span>")
         self.assertNotContains(response, "cohérente <span")
@@ -121,7 +122,7 @@ class ReviewScreenChecksTests(TestCase):
         ]
         self.invoice.save(update_fields=["printed_total_ttc", "parse_checks"])
         page = self.client.get(self.url)
-        self.assertIn("saisissez le total du ticket", page.context["live_check"]["detail"])
+        self.assertIn("saisissez le total pour les vérifier", page.context["live_check"]["detail"])
         self.post(printed_total_ttc="0.98")
         self.invoice.refresh_from_db()
         self.assertEqual(self.invoice.printed_total_ttc, D("0.98"))

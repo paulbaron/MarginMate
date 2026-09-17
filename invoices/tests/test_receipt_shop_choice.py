@@ -23,7 +23,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from invoices import receipt_batches
+from invoices import receipts
 from invoices.importing import DuplicateInvoiceError, replace_invoice_lines
 from invoices.models import Invoice, ReceiptBatch, Supplier
 from invoices.ocr import OcrCell, OcrLine, OcrPage
@@ -98,7 +98,7 @@ class ImportAsChosenShopTests(TestCase):
         self.assertEqual((invoice.supplier, invoice.lines.count()), (metro, 0))
         self.assertEqual(invoice.status, Invoice.Status.NEEDS_REVIEW)
         failed = self._failed(invoice)
-        self.assertEqual(list(failed), ["Lecture automatique"])
+        self.assertEqual(sorted(failed), ["Date du ticket", "Lecture automatique"])
         self.assertIn("saisissez les lignes", failed["Lecture automatique"])
         self.assertIn("Numero de ticket", invoice.ocr_text)
         self.assertTrue(invoice.source_file)
@@ -256,12 +256,12 @@ class ChooseShopInBatchTests(TestCase):
 
     def test_a_second_choice_waits_for_the_first(self):
         """Two tabs, or a double click: the same file imported twice."""
-        receipt_batches._shop_choice_lock.acquire()
+        receipts.OCR_LOCK.acquire()
         try:
             with mock.patch("invoices.receipt_batches.SHOP_CHOICE_WAIT_SECONDS", 0.01):
                 response, importer = self.choose()
         finally:
-            receipt_batches._shop_choice_lock.release()
+            receipts.OCR_LOCK.release()
         importer.assert_not_called()
         self.assertIn("Un autre ticket est en cours d'import : réessayez dans un instant.", messages_of(response))
         self.assertEqual(self.batch.results[0]["status"], "unrecognised")
@@ -270,12 +270,12 @@ class ChooseShopInBatchTests(TestCase):
         """The resumed thread would write its own copy of the results over
         the ticket's outcome."""
         ReceiptBatch.objects.filter(pk=self.batch.pk).update(status=ReceiptBatch.Status.FAILED)
-        receipt_batches._shop_choice_lock.acquire()
+        receipts.OCR_LOCK.acquire()
         try:
             with mock.patch("invoices.receipt_batches.threading.Thread") as thread:
                 self.assertEqual(resume_batch(self.batch), 0)
         finally:
-            receipt_batches._shop_choice_lock.release()
+            receipts.OCR_LOCK.release()
         thread.assert_not_called()
 
     def test_choosing_only_answers_a_post(self):

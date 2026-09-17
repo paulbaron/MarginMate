@@ -1,0 +1,438 @@
+{% extends "base.html" %}
+{% block title %}{% if is_receipt %}Vérifier{% else %}Corriger{% endif %} {{ invoice.supplier.name }} - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <p class="breadcrumb">
+                {% if is_receipt %}
+                    <a href="{% url 'invoices:receipt_queue' %}">← Tickets à vérifier</a>
+                {% else %}
+                    <a href="{% url 'invoices:invoice_detail' invoice.pk %}">← {{ invoice.supplier.name }} {{ invoice.invoice_number }}</a>
+                {% endif %}
+            </p>
+            <h1>{{ invoice.supplier.name }}{% if not is_receipt and invoice.invoice_number %} — {{ invoice.invoice_number }}{% endif %}</h1>
+            <p class="page-subtitle">
+                {{ invoice.invoice_date|date:"d/m/Y"|default:"Sans date" }}
+                · <span id="document-total">{{ invoice.total_ttc|floatformat:2 }}</span> € TTC
+                {% if invoice.ocr_confidence %} · lecture la moins sûre : {{ invoice.ocr_confidence_percent|floatformat:0 }}%{% endif %}
+                {% if is_receipt %}
+                    {% if invoice.reviewed_at %} · vérifié le {{ invoice.reviewed_at|date:"d/m/Y" }}{% endif %}
+                    {% if remaining %} · {{ remaining }} ticket{{ remaining|pluralize }} en attente{% endif %}
+                {% endif %}
+            </p>
+        </div>
+        <div class="actions">
+            {% if invoice.source_file %}
+                <a class="btn btn-secondary" href="{{ invoice.source_file.url }}" target="_blank" rel="noopener">{% if source_is_pdf %}Ouvrir le PDF{% else %}Photo d'origine{% endif %}</a>
+            {% endif %}
+            {% if is_receipt %}
+                <a class="btn btn-secondary" href="{% url 'invoices:invoice_detail' invoice.pk %}">Fiche facture</a>
+            {% endif %}
+            {% if can_reread %}
+                <form method="post" data-leaves-lines
+                      data-confirm="Relire le document remplace sa date, son total et toutes ses lignes par ce qui sera lu, corrections comprises.{% if is_receipt %} Le ticket repassera dans la liste à vérifier.{% endif %} Continuer ?">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="reread">
+                    <button class="btn btn-secondary" type="submit">Relire le document</button>
+                </form>
+            {% endif %}
+            {% if is_receipt and invoice.reviewed_at %}
+                <form method="post" data-leaves-lines>
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="unverify">
+                    <button class="btn btn-secondary" type="submit">Remettre à vérifier</button>
+                </form>
+            {% endif %}
+            <a class="btn btn-danger"
+               href="{% url 'invoices:invoice_delete' invoice.pk %}?next={% if not is_receipt %}{% url 'invoices:invoice_list' %}{% elif next_pk %}{% url 'invoices:receipt_review' next_pk %}{% else %}{% url 'invoices:receipt_queue' %}{% endif %}">Supprimer</a>
+        </div>
+    </div>
+
+    <div class="receipt-review">
+        <div class="receipt-photo{% if source_is_pdf and not invoice.preview_image %} document-pdf{% endif %}">
+            {% if invoice.preview_image %}
+                <img src="{{ invoice.preview_image.url }}" alt="Photo du ticket">
+            {% elif source_is_pdf %}
+                <iframe src="{{ invoice.source_file.url }}" title="Le document" class="document-frame"></iframe>
+            {% elif invoice.source_file %}
+                <img src="{{ invoice.source_file.url }}" alt="Le document">
+            {% else %}
+                <p class="muted">Aucun document enregistré.</p>
+            {% endif %}
+        </div>
+
+        <div>
+            {% comment %}
+            The arithmetic first: it says whether the numbers below can be
+            trusted at all, which decides how carefully the rest of this page
+            has to be read.
+            {% endcomment %}
+            <h2>Contrôles</h2>
+            <ul class="check-list">
+                {% comment %}
+                A supplier invoice with no total typed has nothing to be
+                checked against yet: said, but not in red.
+                {% endcomment %}
+                {% if not is_receipt and invoice.printed_total_ttc is None %}
+                    {% firstof "check-neutral" as check_state %}{% firstof "–" as check_mark %}
+                {% elif live_check.passed %}
+                    {% firstof "check-pass" as check_state %}{% firstof "✓" as check_mark %}
+                {% else %}
+                    {% firstof "check-fail" as check_state %}{% firstof "✕" as check_mark %}
+                {% endif %}
+                <li class="check {{ check_state }}" id="live-lines-check" data-tolerance="{{ tolerance }}">
+                    <span class="check-mark">{{ check_mark }}</span>
+                    <span class="check-label">{{ live_check.label }}</span>
+                    <span class="check-detail">{{ live_check.detail }}</span>
+                </li>
+                {% for check in other_checks %}
+                    <li class="check {% if check.passed %}check-pass{% else %}check-fail{% endif %}">
+                        <span class="check-mark">{% if check.passed %}✓{% else %}✕{% endif %}</span>
+                        <span class="check-label">{{ check.label }}{% if check.label in reading_checks %} <span class="muted">(à la lecture du ticket)</span>{% endif %}</span>
+                        {% if check.detail %}<span class="check-detail">{{ check.detail }}</span>{% endif %}
+                    </li>
+                {% endfor %}
+            </ul>
+
+            <h2>Lignes</h2>
+            <p class="lead">
+                {% if is_receipt %}
+                    Corrigez ce qui ne correspond pas à la photo, puis validez. Chaque montant se lit
+                    <strong>avant remise</strong>, tel qu'imprimé : tapez-le en TTC ou en HT, l'autre suit.
+                    La remise d'une promotion se met à côté. Un nom corrigé dans une ligne ne vaut que pour
+                    ce ticket : pour corriger le nom d'un produit partout, ouvrez « Renommer … » sous sa ligne.
+                {% else %}
+                    Corrigez ce que le parseur a mal lu, ou saisissez ce qu'il n'a pas trouvé. Tapez chaque
+                    montant en HT ou en TTC, l'autre suit ; le coût unitaire réel en est déduit.
+                {% endif %}
+            </p>
+
+            <div class="card">
+                <form method="post" id="document-lines" data-document="{% if is_receipt %}receipt{% else %}invoice{% endif %}">
+                    {% csrf_token %}
+                    {{ formset.management_form }}
+                    {% if formset.non_form_errors %}
+                        <div class="message message-error">{{ formset.non_form_errors }}</div>
+                    {% endif %}
+                    <div class="inline-form receipt-date">
+                        <label for="{{ header_form.invoice_date.id_for_label }}">{{ header_form.invoice_date.label }}</label>
+                        {{ header_form.invoice_date }}
+                        {% if not invoice.invoice_date %}<span class="muted">non lue</span>{% endif %}
+                        <label for="{{ header_form.printed_total_ttc.id_for_label }}">{{ header_form.printed_total_ttc.label }}</label>
+                        {{ header_form.printed_total_ttc }}
+                        {% if is_receipt and invoice.printed_total_ttc is None %}<span class="muted">non lu sur le ticket</span>{% endif %}
+                    </div>
+                    {% for field in header_form %}
+                        {% for error in field.errors %}
+                            <div class="message message-error">{{ field.label }} : {{ error }}</div>
+                        {% endfor %}
+                    {% endfor %}
+
+                    <div class="correction-grid{% if not is_receipt %} correction-grid-invoice{% endif %}" id="line-rows">
+                        <div class="correction-head" aria-hidden="true">
+                            <span>Produit</span>
+                            <span class="num">Qté</span>
+                            <span class="num">{% if is_receipt %}Poids (kg){% else %}Poids / vol.{% endif %}</span>
+                            <span class="num">HT</span>
+                            <span class="num">TTC</span>
+                            {% if is_receipt %}<span class="num">Remise</span>{% endif %}
+                            <span class="num">TVA %</span>
+                            <span></span>
+                        </div>
+                        {% for line_form in formset %}
+                            <div class="invoice-line-row">
+                                <div class="correction-row">
+                                    <span hidden>{{ line_form.DELETE }}</span>
+                                    {{ line_form.product_name }}
+                                    {{ line_form.quantity }}
+                                    {{ line_form.total_volume }}
+                                    {{ line_form.total_ht }}
+                                    {{ line_form.total_ttc }}
+                                    {% if is_receipt %}{{ line_form.discount_ttc }}{% endif %}
+                                    {{ line_form.vat_rate }}
+                                    {{ line_form.amount_source }}
+                                    {{ line_form.read_as }}
+                                    {{ line_form.line_id }}
+                                    <button type="button" class="btn btn-small btn-secondary js-remove-line" title="Retirer cette ligne" aria-label="Retirer cette ligne">✕</button>
+                                </div>
+                                {% if line_form.read_hint %}
+                                    <p class="read-as">lu sur le ticket : « {{ line_form.read_hint }} » — rattaché au produit ci-dessus</p>
+                                {% endif %}
+                                {% if line_form.renamable_product %}
+                                    {% with product=line_form.renamable_product %}
+                                        <details class="rename-product">
+                                            <summary>Renommer « {{ product.raw_name }} » sur tous les tickets {{ invoice.supplier.name }}</summary>
+                                            <div class="inline-form">
+                                                <input type="text" name="name" value="{{ line_form.rename_to }}" maxlength="255" required
+                                                       form="rename-product-{{ forloop.counter0 }}" aria-label="Nouveau nom du produit">
+                                                <button class="btn btn-small btn-secondary" type="submit" form="rename-product-{{ forloop.counter0 }}">Renommer partout</button>
+                                            </div>
+                                            <p class="muted">Corriger le nom dans la ligne ci-dessus ne change que ce ticket ; ici, le produit est renommé sur tous ses tickets, et l'orthographe lue reste reconnue.</p>
+                                        </details>
+                                    {% endwith %}
+                                {% endif %}
+                                {% for error in line_form.non_field_errors %}<div class="message message-error">{{ error }}</div>{% endfor %}
+                                {% for field in line_form %}
+                                    {% for error in field.errors %}<div class="message message-error">{{ field.label }} : {{ error }}</div>{% endfor %}
+                                {% endfor %}
+                            </div>
+                        {% empty %}
+                            <p class="muted" id="no-line-yet">Aucune ligne : ajoutez celles du document d'après {% if is_receipt %}la photo{% else %}le PDF{% endif %}.</p>
+                        {% endfor %}
+                    </div>
+                    <button type="button" class="btn btn-small btn-secondary" id="add-line-row">+ Ajouter une ligne</button>
+
+                    <div class="form-actions" style="margin-top:1rem;">
+                        <button class="btn" type="submit">
+                            {% if not is_receipt %}Enregistrer les lignes{% elif invoice.reviewed_at %}Enregistrer les corrections{% elif next_pk %}Valider et passer au suivant{% else %}Valider ce ticket{% endif %}
+                        </button>
+                        {% if is_receipt %}
+                            <a class="btn btn-secondary" href="{% url 'invoices:receipt_queue' %}">Revenir à la liste</a>
+                        {% else %}
+                            <a class="btn btn-secondary" href="{% url 'invoices:invoice_detail' invoice.pk %}">Annuler</a>
+                        {% endif %}
+                    </div>
+                </form>
+                {% comment %}
+                The rename forms can't sit inside the lines form: forms don't
+                nest. Their fields are in the rows and point here by `form=`.
+                {% endcomment %}
+                {% for line_form in formset %}
+                    {% if line_form.renamable_product %}
+                        <form method="post" id="rename-product-{{ forloop.counter0 }}" hidden data-leaves-lines>
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="rename_product">
+                            <input type="hidden" name="product" value="{{ line_form.renamable_product.pk }}">
+                        </form>
+                    {% endif %}
+                {% endfor %}
+            </div>
+
+            {% if is_receipt %}
+                {% comment %}
+                Recording the price here is what stops the next receipt from a
+                shop that prints no product names needing the same manual work.
+                {% endcomment %}
+                <h2>Prix connus chez {{ invoice.supplier.name }}</h2>
+                <p class="lead">
+                    Certaines caisses n'impriment pas les noms de produits, seulement
+                    « Article divers » et un prix. Retenez ici ce que chaque prix désigne :
+                    les lignes à ce prix sont renommées sur tous les tickets de cette enseigne
+                    qui restent à vérifier, et les prochains tickets seront nommés tout seuls.
+                </p>
+
+                <div class="card">
+                    <form method="post" data-leaves-lines>
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="remember_price">
+                        {% include "_form_fields.html" with form=price_form %}
+                        <button class="btn btn-secondary" type="submit">Retenir ce prix</button>
+                    </form>
+
+                    {% if known_prices %}
+                        <div class="table-wrap" style="margin-top:1rem;">
+                            <table data-table data-table-sort-only data-table-label="prix">
+                                <thead>
+                                    <tr>
+                                        <th class="num">Prix unitaire TTC</th>
+                                        <th>Produit</th>
+                                        <th>Depuis</th>
+                                        <th data-no-sort></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for price in known_prices %}
+                                        <tr>
+                                            <td class="num">{{ price.unit_price_ttc|floatformat:2 }} €</td>
+                                            <td>{{ price.label }}</td>
+                                            <td {% if price.valid_from %}data-sort="{{ price.valid_from|date:'Y-m-d' }}"{% endif %}>
+                                                {{ price.valid_from|date:"d/m/Y"|default:"toujours" }}
+                                            </td>
+                                            <td class="num">
+                                                <form method="post" data-leaves-lines
+                                                      data-confirm="Oublier que {{ price.unit_price_ttc|floatformat:2 }} € désigne « {{ price.label }} » ? Les lignes déjà nommées ainsi gardent leur nom.">
+                                                    {% csrf_token %}
+                                                    <input type="hidden" name="action" value="forget_price">
+                                                    <input type="hidden" name="price" value="{{ price.pk }}">
+                                                    <button class="btn btn-small btn-secondary" type="submit">Oublier</button>
+                                                </form>
+                                            </td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    {% endif %}
+                </div>
+
+                <h2>Texte lu sur la photo</h2>
+                <details>
+                    <summary class="muted">Afficher ce que la reconnaissance a lu</summary>
+                    <div class="ocr-dump">{% for line in ocr_lines %}{{ line }}
+{% endfor %}</div>
+                </details>
+            {% endif %}
+        </div>
+    </div>
+
+    <template id="empty-line-row">
+        <div class="invoice-line-row">
+            <div class="correction-row">
+                <span hidden>{{ formset.empty_form.DELETE }}</span>
+                {{ formset.empty_form.product_name }}
+                {{ formset.empty_form.quantity }}
+                {{ formset.empty_form.total_volume }}
+                {{ formset.empty_form.total_ht }}
+                {{ formset.empty_form.total_ttc }}
+                {% if is_receipt %}{{ formset.empty_form.discount_ttc }}{% endif %}
+                {{ formset.empty_form.vat_rate }}
+                {{ formset.empty_form.amount_source }}
+                <button type="button" class="btn btn-small btn-secondary js-remove-line" title="Retirer cette ligne" aria-label="Retirer cette ligne">✕</button>
+            </div>
+        </div>
+    </template>
+{% endblock %}
+{% block extra_js %}
+<script>
+// A new row takes one fresh index counting up from TOTAL_FORMS and keeps it,
+// and removing a row leaves a GAP rather than renumbering: renumbering
+// re-points every later row at different data mid-edit.
+(function () {
+    var lines = document.getElementById("document-lines");
+    var totalForms = document.querySelector("[name$='-TOTAL_FORMS']");
+    if (!lines || !totalForms) return;
+    var next = parseInt(totalForms.value, 10);
+    var edited = false;
+
+    document.getElementById("add-line-row").addEventListener("click", function () {
+        var html = document.getElementById("empty-line-row").innerHTML.replace(/__prefix__/g, next);
+        next += 1;
+        totalForms.value = next;
+        var holder = document.createElement("div");
+        holder.innerHTML = html.trim();
+        document.getElementById("line-rows").appendChild(holder.firstElementChild);
+        var empty = document.getElementById("no-line-yet");
+        if (empty) empty.remove();
+        edited = true;
+    });
+
+    function field(row, name) {
+        return row.querySelector("input[name$='-" + name + "']");
+    }
+    function cents(input) {
+        if (!input) return null;
+        var value = parseFloat(String(input.value).replace(",", "."));
+        return isNaN(value) ? null : Math.round(value * 100);
+    }
+    function euros(amount) {
+        return (amount / 100).toFixed(2);
+    }
+
+    // HT and TTC follow each other through the line's rate; the one typed
+    // last is the one the server keeps (amount_source), the other it works
+    // out again the same way.
+    function follow(row, typed) {
+        var source = field(row, "amount_source");
+        if (typed) source.value = typed;
+        var rate = parseFloat(String((field(row, "vat_rate") || {}).value || "").replace(",", "."));
+        if (isNaN(rate)) return;
+        var factor = 1 + rate / 100;
+        var ht = field(row, "total_ht");
+        var ttc = field(row, "total_ttc");
+        if (source.value === "ht") {
+            var htCents = cents(ht);
+            ttc.value = htCents === null ? "" : euros(Math.round(htCents * factor));
+        } else {
+            var ttcCents = cents(ttc);
+            ht.value = ttcCents === null ? "" : euros(Math.round(ttcCents / factor));
+        }
+    }
+
+    // The lines against the total, as they are typed: the same sum (each
+    // line to the cent, after its promotion) and tolerance as the check
+    // saved on validation.
+    var check = document.getElementById("live-lines-check");
+    var shownTotal = document.getElementById("document-total");
+    function refreshCheck() {
+        var sum = 0;
+        var discounts = 0;
+        lines.querySelectorAll("#line-rows .invoice-line-row").forEach(function (row) {
+            var del = field(row, "DELETE");
+            if (row.hidden || (del && del.checked)) return;
+            var amount = cents(field(row, "total_ttc"));
+            var discount = cents(field(row, "discount_ttc")) || 0;
+            if (amount !== null) sum += amount - discount;
+            discounts += discount;
+        });
+        if (shownTotal) shownTotal.textContent = euros(sum);
+        if (!check) return;
+        var paid = cents(lines.querySelector("input[name='printed_total_ttc']"));
+        var detail;
+        var passed = false;
+        if (paid === null) {
+            detail = "lignes " + euros(sum) + " € : saisissez le total pour les vérifier";
+        } else {
+            var gap = paid - sum;
+            passed = Math.abs(gap) <= Math.round(parseFloat(check.dataset.tolerance) * 100);
+            detail = "lignes " + euros(sum) + " € / ticket " + euros(paid) + " € (écart "
+                + (gap < 0 ? "-" : "+") + euros(Math.abs(gap)) + " €)";
+        }
+        if (discounts) {
+            detail += " - articles " + euros(sum + discounts) + " € moins " + euros(discounts) + " € de remises";
+        }
+        var neutral = paid === null && lines.dataset.document === "invoice";
+        check.classList.toggle("check-pass", passed);
+        check.classList.toggle("check-fail", !passed && !neutral);
+        check.classList.toggle("check-neutral", neutral);
+        check.querySelector(".check-mark").textContent = neutral ? "–" : passed ? "✓" : "✕";
+        check.querySelector(".check-detail").textContent = detail;
+    }
+
+    lines.addEventListener("input", function (event) {
+        // The rename fields sit in the rows but belong to their own forms.
+        if (event.target.form !== lines) return;
+        edited = true;
+        var row = event.target.closest(".invoice-line-row");
+        if (row) {
+            var name = event.target.name || "";
+            if (/-total_ht$/.test(name)) follow(row, "ht");
+            else if (/-total_ttc$/.test(name)) follow(row, "ttc");
+            else if (/-vat_rate$/.test(name)) follow(row, null);
+        }
+        refreshCheck();
+    });
+    lines.addEventListener("change", refreshCheck);
+    refreshCheck();
+
+    document.addEventListener("click", function (event) {
+        if (!event.target.matches(".js-remove-line")) return;
+        var row = event.target.closest(".invoice-line-row");
+        var del = field(row, "DELETE");
+        if (del) {
+            del.checked = true;
+            row.hidden = true;
+        } else {
+            row.remove();
+        }
+        edited = true;
+        refreshCheck();
+    });
+
+    // Renaming, recording or forgetting a price, reading the document again:
+    // each reloads the page, and corrections typed in the lines and not yet
+    // saved would go without a word.
+    document.querySelectorAll("form[data-leaves-lines]").forEach(function (form) {
+        form.addEventListener("submit", function (event) {
+            var question = form.dataset.confirm || "";
+            if (edited) {
+                question = "Les corrections des lignes n'ont pas été enregistrées et seront perdues. "
+                    + (question || "Continuer ?");
+            }
+            if (question && !window.confirm(question.trim())) {
+                event.preventDefault();
+            }
+        });
+    });
+})();
+</script>
+{% endblock %}

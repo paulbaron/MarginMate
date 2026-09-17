@@ -8,27 +8,32 @@ from decimal import ROUND_HALF_UP, Decimal
 from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 
-from invoices.forms import ReceiptLineForm
+from invoices.forms import DOCUMENT_RECEIPT, LineCorrectionForm
 from invoices.models import Supplier
 from tests.factories import make_invoice, make_invoice_line, make_product
 
 CHECKED = [{"label": "Somme des lignes = total imprimé", "passed": True, "detail": ""}]
 
 
-def bound_form(total_ttc, rate, quantity="1"):
-    form = ReceiptLineForm(
-        data={"product_name": "MENTHE", "quantity": quantity, "total_ttc": total_ttc, "vat_rate": rate}
+def bound_form(total_ttc, rate, quantity="1", **fields):
+    form = LineCorrectionForm(
+        data={"product_name": "MENTHE", "quantity": quantity, "total_ttc": total_ttc, "vat_rate": rate, **fields},
+        document=DOCUMENT_RECEIPT,
     )
     if not form.is_valid():
         raise AssertionError(form.errors)
     return form
 
 
+def ht(form):
+    return form.amounts()["total_ht"]
+
+
 class TtcToHtTests(SimpleTestCase):
     def test_the_ht_total_comes_from_the_ttc_and_the_line_rate(self):
-        self.assertEqual(bound_form("10.55", "5.5").cleaned_total_ht(), Decimal("10.00"))
-        self.assertEqual(bound_form("12.00", "20").cleaned_total_ht(), Decimal("10.00"))
-        self.assertEqual(bound_form("7.00", "0").cleaned_total_ht(), Decimal("7.00"))
+        self.assertEqual(ht(bound_form("10.55", "5.5")), Decimal("10.00"))
+        self.assertEqual(ht(bound_form("12.00", "20")), Decimal("10.00"))
+        self.assertEqual(ht(bound_form("7.00", "0")), Decimal("7.00"))
 
     def test_a_total_saved_untouched_keeps_its_ht_to_the_cent(self):
         """The page shows HT x (1 + rate), rounded. Saved as it is, a line
@@ -39,12 +44,47 @@ class TtcToHtTests(SimpleTestCase):
             for cents in range(1, 2001):
                 stored = Decimal(cents) / 100
                 shown = (stored * (1 + rate)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-                if bound_form(str(shown), percent).cleaned_total_ht() != stored:
+                if ht(bound_form(str(shown), percent)) != stored:
                     drifted.append((percent, stored, shown))
         self.assertEqual(drifted, [])
 
-    def test_the_form_has_no_ht_field_left(self):
-        self.assertNotIn("total_ht", ReceiptLineForm().fields)
+    def test_the_ht_typed_last_is_the_one_kept(self):
+        """The page fills each amount from the other; the one typed last
+        says which is the reading."""
+        form = bound_form("12.00", "20", total_ht="9.99", amount_source="ht")
+        self.assertEqual(form.amounts(), {
+            "total_ht": Decimal("9.99"), "printed_ttc": Decimal("11.99"),
+            "discount_ttc": Decimal("0"), "discount": Decimal("0"),
+        })
+
+    def test_an_amount_given_only_one_way_is_that_way(self):
+        form = bound_form("", "20", total_ht="10.00")
+        self.assertEqual(form.amounts()["printed_ttc"], Decimal("12.00"))
+
+    def test_a_promotion_comes_off_the_printed_amount(self):
+        form = bound_form("0.49", "5.5", discount_ttc="0.17")
+        self.assertEqual(form.amounts(), {
+            "total_ht": Decimal("0.30"), "printed_ttc": Decimal("0.49"),
+            "discount_ttc": Decimal("0.17"), "discount": Decimal("0.16"),
+        })
+
+    def test_a_promotion_above_the_price_is_refused(self):
+        form = LineCorrectionForm(
+            data={"product_name": "PAIN", "quantity": "1", "total_ttc": "0.49", "discount_ttc": "0.50",
+                  "vat_rate": "5.5"},
+            document=DOCUMENT_RECEIPT,
+        )
+        self.assertIn("discount_ttc", form.errors)
+
+    def test_no_amount_at_all_is_refused(self):
+        form = LineCorrectionForm(
+            data={"product_name": "PAIN", "quantity": "1", "vat_rate": "5.5"}, document=DOCUMENT_RECEIPT
+        )
+        self.assertIn("total_ttc", form.errors)
+
+    def test_a_new_ticket_line_is_food(self):
+        self.assertEqual(LineCorrectionForm(document=DOCUMENT_RECEIPT)["vat_rate"].value(), Decimal("5.5"))
+        self.assertEqual(LineCorrectionForm()["vat_rate"].value(), Decimal("20"))
 
 
 class ReviewScreenTtcTests(TestCase):
@@ -71,6 +111,7 @@ class ReviewScreenTtcTests(TestCase):
                 "form-INITIAL_FORMS": "1",
                 "form-MIN_NUM_FORMS": "0",
                 "form-MAX_NUM_FORMS": "1000",
+                "invoice_date": "2026-07-01",
                 "form-0-product_name": "MENTHE",
                 "form-0-read_as": "MENTHE",
                 "form-0-quantity": "3",
@@ -84,7 +125,8 @@ class ReviewScreenTtcTests(TestCase):
         self.assertEqual(response.context["formset"].forms[0].initial["total_ttc"], Decimal("1.50"))
         self.assertContains(response, 'name="form-0-total_ttc"')
         self.assertContains(response, 'value="1.50"')
-        self.assertContains(response, "total TTC")
+        self.assertContains(response, 'name="form-0-total_ht"')
+        self.assertContains(response, 'value="1.42"')
 
     def test_a_corrected_ttc_total_is_stored_ht(self):
         self.assertEqual(self.post("2.11").status_code, 302)

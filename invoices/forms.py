@@ -1,6 +1,8 @@
+from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
 from django import forms
+from django.utils import timezone
 
 from common import BlankRowTolerantForm
 
@@ -20,6 +22,21 @@ class InvoiceUploadForm(forms.Form):
 
 
 MANUAL_INVOICE_ATTACHMENT_EXTENSIONS = (".pdf", ".jpg", ".jpeg", ".png")
+EARLIEST_DOCUMENT_DATE = date(2000, 1, 1)
+
+
+def check_document_date(value: date | None) -> date:
+    """An invoice or ticket is dated, and dated between 2000 and today: every
+    stock valuation and the bank match place it by that date, and one filed
+    without it sat outside all of them. A future date is a misread year."""
+    if value is None:
+        raise forms.ValidationError("Saisissez la date du document.")
+    today = timezone.localdate()
+    if not EARLIEST_DOCUMENT_DATE <= value <= today:
+        raise forms.ValidationError(
+            f"Date impossible : entre le {EARLIEST_DOCUMENT_DATE:%d/%m/%Y} et aujourd'hui ({today:%d/%m/%Y})."
+        )
+    return value
 
 
 class ManualInvoiceForm(forms.ModelForm):
@@ -42,6 +59,9 @@ class ManualInvoiceForm(forms.ModelForm):
         # - required here so FIFO valuation/stock-take history stays
         # chronologically meaningful.
         self.fields["invoice_date"].required = True
+
+    def clean_invoice_date(self):
+        return check_document_date(self.cleaned_data.get("invoice_date"))
 
     def clean_source_file(self):
         uploaded = self.cleaned_data.get("source_file")
@@ -101,47 +121,215 @@ ManualInvoiceLineFormSet = forms.formset_factory(
 )
 
 
-class ReceiptLineForm(ManualInvoiceLineForm):
-    # What OCR read on the ticket, carried through the page untouched so a
-    # corrected line keeps it: the reading stays a name its product is known
-    # by (InvoiceLine.read_as), and a misreading attached by hand to the
-    # right product is recognised on the next ticket. Bookkeeping, so a row
-    # carrying nothing else is still a blank row.
-    read_as = forms.CharField(required=False, max_length=255, widget=forms.HiddenInput)
-    # The ticket prints TTC, so that is what is typed and checked against
-    # the photo - converting each price in one's head to check it was the
-    # hard part. The line is still stored HT (cleaned_total_ht); the
-    # inherited HT field goes.
-    total_ht = None
-    total_ttc = forms.DecimalField(
-        label="Total (TTC)",
+CENTS = Decimal("0.01")
+DOCUMENT_RECEIPT = "receipt"
+DOCUMENT_INVOICE = "invoice"
+
+
+def _to_ht(amount: Decimal, rate: Decimal) -> Decimal:
+    return (amount / (Decimal("1") + rate)).quantize(CENTS, rounding=ROUND_HALF_UP)
+
+
+def _to_ttc(amount: Decimal, rate: Decimal) -> Decimal:
+    return (amount * (Decimal("1") + rate)).quantize(CENTS, rounding=ROUND_HALF_UP)
+
+
+def plain_volume(value: Decimal) -> Decimal | None:
+    """A stored weight as a field shows it: 4.184, 3 - never 3.000, nor the
+    "1E+1" Decimal.normalize() makes of 10. None for none."""
+    if not value:
+        return None
+    return value.quantize(Decimal("1")) if value == value.to_integral_value() else value.normalize()
+
+
+def line_initial(line, document: str) -> dict:
+    """A stored line as the correction page shows it.
+
+    Both amounts, HT and TTC, before any promotion: a ticket's as it printed
+    them (`printed_ttc`), with the line's share of a promotion beside them;
+    a supplier invoice's HT as stored, its TTC worked out. A receipt line
+    kept from before promotions were kept apart shows its cost as it is,
+    with no promotion. See LineCorrectionForm.amounts."""
+    rate = line.vat_rate
+    if document == DOCUMENT_RECEIPT and line.printed_ttc is not None:
+        total_ttc = line.printed_ttc
+        total_ht = line.total_ht + line.discount if line.discount_ttc else line.total_ht
+    else:
+        total_ttc, total_ht = _to_ttc(line.total_ht, rate), line.total_ht
+    return {
+        "line_id": line.pk,
+        "product_name": line.raw_name,
+        "read_as": line.read_as,
+        "quantity": line.quantity,
+        "total_volume": plain_volume(line.total_volume),
+        "total_ht": total_ht,
+        "total_ttc": total_ttc,
+        "discount_ttc": line.discount_ttc or None,
+        "vat_rate": (rate * Decimal("100")).quantize(CENTS),
+        "amount_source": "ttc" if document == DOCUMENT_RECEIPT else "ht",
+    }
+
+
+class LineCorrectionForm(BlankRowTolerantForm):
+    """One row of the correction page, the same for a ticket and a supplier
+    invoice.
+
+    The amount is shown both ways - HT and TTC, each following the other as
+    it is typed - and whichever was typed last (`amount_source`, set by the
+    page) is the one kept; the other is worked out from it with the line's
+    rate. A ticket starts from its TTC, as printed; an invoice from its HT.
+    A ticket's promotion sits beside its printed amount (`discount_ttc`)
+    rather than inside it, so both can be checked against the photo."""
+
+    product_name = forms.CharField(label="Produit", max_length=255)
+    # Negative for a refund, with a negative amount to match (clean).
+    quantity = forms.IntegerField(label="Qté")
+    # Kilos of a weighed item, litres of a measured one.
+    total_volume = forms.DecimalField(
+        label="Poids / volume",
+        required=False,
+        max_digits=12,
+        decimal_places=3,
+        widget=forms.NumberInput(attrs={"step": "0.001", "placeholder": "kg / L"}),
+    )
+    total_ht = forms.DecimalField(
+        label="Montant HT",
+        required=False,
         max_digits=12,
         decimal_places=2,
-        widget=forms.NumberInput(attrs={"step": "0.01", "placeholder": "Total TTC"}),
+        widget=forms.NumberInput(attrs={"step": "0.01", "placeholder": "HT"}),
     )
-    total_field = "total_ttc"
+    total_ttc = forms.DecimalField(
+        label="Montant TTC",
+        required=False,
+        max_digits=12,
+        decimal_places=2,
+        widget=forms.NumberInput(attrs={"step": "0.01", "placeholder": "TTC"}),
+    )
+    discount_ttc = forms.DecimalField(
+        label="Remise TTC",
+        required=False,
+        max_digits=10,
+        decimal_places=2,
+        min_value=Decimal("0"),
+        widget=forms.NumberInput(attrs={"step": "0.01", "placeholder": "remise"}),
+    )
+    vat_rate = forms.DecimalField(label="TVA (%)", max_digits=5, decimal_places=2, min_value=Decimal("0"))
+    amount_source = forms.ChoiceField(choices=(("ht", "HT"), ("ttc", "TTC")), required=False, widget=forms.HiddenInput)
+    # What OCR read on the ticket, carried through so a corrected line keeps
+    # it (InvoiceLine.read_as).
+    read_as = forms.CharField(required=False, max_length=255, widget=forms.HiddenInput)
+    # The stored line a row shows: it keeps what the form doesn't
+    # (importing.corrected_line).
+    line_id = forms.IntegerField(required=False, widget=forms.HiddenInput)
 
-    # What the screen worked out from HT for a line whose ticket amount is not
-    # known (a promotion spread onto it, an old import). Posted back so that
-    # saving it untouched does not make a derived figure pass for a printed one.
-    computed_ttc = forms.DecimalField(required=False, max_digits=12, decimal_places=2, widget=forms.HiddenInput)
+    bookkeeping_fields = ("vat_rate", "amount_source", "read_as", "line_id")
 
-    bookkeeping_fields = ("vat_rate", "read_as", "computed_ttc", "line_id")
+    def __init__(self, *args, document: str = DOCUMENT_INVOICE, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.document = document
+        # A ticket's lines are food unless it says otherwise; a supplier's
+        # invoice is mostly drink.
+        self.fields["vat_rate"].initial = Decimal("5.5") if document == DOCUMENT_RECEIPT else Decimal("20")
+        self.fields["amount_source"].initial = self.default_source
+        if document != DOCUMENT_RECEIPT:
+            del self.fields["discount_ttc"]
+        # The rows have one heading for all of them: each box still says what
+        # it is, to a screen reader and - once the rows wrap - on screen.
+        self.fields["quantity"].widget.attrs.setdefault("placeholder", "qté")
+        self.fields["vat_rate"].widget.attrs.setdefault("placeholder", "TVA %")
+        self.fields["product_name"].widget.attrs.setdefault("placeholder", "Produit")
+        if document == DOCUMENT_RECEIPT:
+            self.fields["total_volume"].widget.attrs["placeholder"] = "kg"
+        for field in self.fields.values():
+            if not field.widget.is_hidden:
+                field.widget.attrs.setdefault("aria-label", field.label)
 
-    def cleaned_total_ht(self) -> Decimal:
-        """The line's HT total, from the TTC typed and the line's own rate.
-        A total saved untouched comes back to the cent it was stored at: the
-        rounding on the way out is under half a cent once divided back."""
-        rate = self.cleaned_data["vat_rate"] / Decimal("100")
-        total_ttc = self.cleaned_data["total_ttc"]
-        return (total_ttc / (Decimal("1") + rate)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    @property
+    def default_source(self) -> str:
+        return "ttc" if self.document == DOCUMENT_RECEIPT else "ht"
 
-    def printed_ttc(self) -> Decimal | None:
-        """The amount to keep as the ticket's: what was typed - unless it is
-        the figure worked out from HT for this line, left as it was."""
-        typed = self.cleaned_data["total_ttc"]
-        computed = self.cleaned_data.get("computed_ttc")
-        return None if computed is not None and typed == computed else typed
+    def _source(self) -> str:
+        source = self.cleaned_data.get("amount_source") or self.default_source
+        other = "ht" if source == "ttc" else "ttc"
+        if self.cleaned_data.get(f"total_{source}") is None and self.cleaned_data.get(f"total_{other}") is not None:
+            return other
+        return source
+
+    def clean(self):
+        cleaned = super().clean()
+        if self.errors:
+            return cleaned
+        quantity = cleaned.get("quantity")
+        field = "total_ht" if self._source() == "ht" else "total_ttc"
+        amount = cleaned.get(field)
+        if amount is None:
+            self.add_error("total_ttc", "Saisissez le montant de la ligne, HT ou TTC.")
+            return cleaned
+        if quantity == 0:
+            self.add_error("quantity", "Une quantité ne peut pas être nulle.")
+        elif quantity is not None and amount != 0 and (quantity < 0) != (amount < 0):
+            # A positive count at a negative price is stock worth less than
+            # nothing: the FIFO valuation's worst known failure.
+            self.add_error(field, "Un retour a une quantité et un montant négatifs, un achat les deux positifs.")
+        discount = cleaned.get("discount_ttc") or Decimal("0")
+        if discount and discount > abs(self._printed_ttc()):
+            self.add_error("discount_ttc", "La remise dépasse le montant de la ligne.")
+        return cleaned
+
+    def _rate(self) -> Decimal:
+        return self.cleaned_data["vat_rate"] / Decimal("100")
+
+    def _printed_ttc(self) -> Decimal:
+        if self._source() == "ttc":
+            return self.cleaned_data["total_ttc"]
+        return _to_ttc(self.cleaned_data["total_ht"], self._rate())
+
+    def untouched(self, stored) -> bool:
+        """Whether the row still shows the stored line's amounts as the page
+        drew them: saved as it is, nothing about its money moves."""
+        if stored is None:
+            return False
+        shown = line_initial(stored, self.document)
+        same = all(self.cleaned_data.get(field) == shown[field] for field in ("total_ht", "total_ttc", "vat_rate"))
+        return same and (self.cleaned_data.get("discount_ttc") or None) == shown["discount_ttc"]
+
+    def amounts(self, stored=None) -> dict:
+        """What the row stores: `total_ht` after any promotion and, for a
+        ticket, its printed amount and share of the promotion.
+
+        A row left as drawn keeps the stored figures to the cent. A TTC typed
+        is converted with the line's rate - and a total saved untouched comes
+        back to its HT: the rounding on the way out is under half a cent once
+        divided back."""
+        if self.untouched(stored):
+            return {
+                "total_ht": stored.total_ht,
+                "printed_ttc": stored.printed_ttc,
+                "discount_ttc": stored.discount_ttc,
+                "discount": stored.discount,
+            }
+        rate = self._rate()
+        if self._source() == "ht":
+            before = self.cleaned_data["total_ht"]
+        else:
+            before = _to_ht(self.cleaned_data["total_ttc"], rate)
+        if self.document != DOCUMENT_RECEIPT:
+            return {"total_ht": before, "printed_ttc": None}
+        printed = self._printed_ttc()
+        discount = self.cleaned_data.get("discount_ttc") or Decimal("0")
+        if not discount:
+            return {"total_ht": before, "printed_ttc": printed, "discount_ttc": Decimal("0"), "discount": Decimal("0")}
+        net = _to_ht(printed - discount, rate)
+        return {"total_ht": net, "printed_ttc": printed, "discount_ttc": discount, "discount": before - net}
+
+    def volume(self, stored=None):
+        """The weight typed - or None, for a row still showing the stored
+        one: corrected_line then scales it with the count."""
+        typed = self.cleaned_data.get("total_volume")
+        if stored is not None and typed == plain_volume(stored.total_volume):
+            return None
+        return typed or Decimal("0")
 
     @property
     def read_hint(self) -> str:
@@ -157,8 +345,8 @@ class ReceiptLineForm(ManualInvoiceLineForm):
 # where an item might have been missed, which is exactly the doubt this
 # screen exists to remove. The page adds the first row itself when there is
 # nothing to show. See the formset notes in CLAUDE.md.
-ReceiptLineFormSet = forms.formset_factory(
-    ReceiptLineForm, formset=BaseManualInvoiceLineFormSet, extra=0, can_delete=True
+LineCorrectionFormSet = forms.formset_factory(
+    LineCorrectionForm, formset=BaseManualInvoiceLineFormSet, extra=0, can_delete=True
 )
 
 
@@ -263,24 +451,28 @@ class ReceiptShopForm(forms.Form):
     )
 
 
-class ReceiptHeaderForm(forms.Form):
-    """The ticket's date and printed total, on the review screen: the OCR can
+class DocumentHeaderForm(forms.Form):
+    """The document's date and total, on the correction page: the OCR can
     miss either, and a ticket typed in from its photo has neither until it is
-    given them. The total is what the lines are checked against as they are
-    typed."""
+    given them. The date is required (check_document_date); the total is what
+    the lines are checked against as they are typed, and left blank keeps the
+    one read."""
 
     invoice_date = forms.DateField(
-        label="Date du ticket",
-        required=False,
+        label="Date",
         widget=forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
+        error_messages={"required": "Saisissez la date du document."},
     )
     printed_total_ttc = forms.DecimalField(
-        label="Total payé",
+        label="Total payé (TTC)",
         required=False,
         max_digits=12,
         decimal_places=2,
         widget=forms.NumberInput(attrs={"step": "0.01", "placeholder": "Total TTC"}),
     )
+
+    def clean_invoice_date(self):
+        return check_document_date(self.cleaned_data.get("invoice_date"))
 
 
 class ShopItemPriceForm(forms.ModelForm):
@@ -319,6 +511,6 @@ class ShopItemPriceForm(forms.ModelForm):
                 since = f" à partir du {valid_from:%d/%m/%Y}" if valid_from else ""
                 raise forms.ValidationError(
                     f"{price} € est déjà retenu chez {self.supplier.name}{since} : « {known.label} ». "
-                    "Pour le changer, supprimez-le dans Admin → Prix connus des tickets, puis retenez le bon."
+                    "Pour le changer, oubliez-le dans la liste des prix connus, puis retenez le bon."
                 )
         return cleaned

@@ -1,7 +1,8 @@
 from django.conf import settings
-from django.conf.urls.static import static
 from django.contrib import admin
-from django.urls import include, path
+from django.urls import include, path, re_path
+from django.views.decorators.clickjacking import xframe_options_sameorigin
+from django.views.static import serve
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -12,4 +13,12 @@ urlpatterns = [
 ]
 
 if settings.DEBUG:
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+    # An invoice's PDF is shown inside its own correction page, so this site
+    # may frame its uploaded files; every other page keeps DENY.
+    urlpatterns += [
+        re_path(
+            rf"^{settings.MEDIA_URL.lstrip('/')}(?P<path>.*)$",
+            xframe_options_sameorigin(serve),
+            {"document_root": settings.MEDIA_ROOT},
+        )
+    ]

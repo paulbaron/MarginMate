@@ -42,7 +42,7 @@ from django.utils import timezone
 
 from .importing import DuplicateInvoiceError
 from .models import ReceiptBatch
-from .receipts import UnrecognisedShopError, import_receipt
+from .receipts import OCR_LOCK, OCR_WAIT_SECONDS, UnrecognisedShopError, import_receipt
 
 STAGING_DIR = "receipt_batches"
 # A shop chosen by hand is imported inside the request, seconds of OCR. Two
@@ -50,8 +50,7 @@ STAGING_DIR = "receipt_batches"
 # and a batch resumed meanwhile would write its own copy of `results` over the
 # outcome - so shop choices take turns, and a resume waits for none. One
 # process: the dev server is threaded, not forked.
-_shop_choice_lock = threading.Lock()
-SHOP_CHOICE_WAIT_SECONDS = 120
+SHOP_CHOICE_WAIT_SECONDS = OCR_WAIT_SECONDS
 HEARTBEAT_SECONDS = 15
 MISSING_FILE = "Fichier temporaire introuvable : réimportez ce ticket."
 
@@ -91,7 +90,7 @@ def resume_batch(batch: ReceiptBatch) -> int:
     """Carry on with the files a batch that died never reached. Returns how
     many are left to read - 0 when there is nothing to resume, or when the
     batch may still be running (see ReceiptBatch.can_resume)."""
-    if not _shop_choice_lock.acquire(blocking=False):
+    if not OCR_LOCK.acquire(blocking=False):
         return 0  # a ticket is being imported by hand: try again in a moment
     try:
         batch.refresh_from_db()
@@ -106,7 +105,7 @@ def resume_batch(batch: ReceiptBatch) -> int:
         batch.last_heartbeat = timezone.now()
         batch.save(update_fields=["status", "cancel_requested", "finished_at", "last_heartbeat"])
     finally:
-        _shop_choice_lock.release()
+        OCR_LOCK.release()
     batch.append_log(f"Reprise : {remaining} ticket(s) restant(s) à lire.")
     start_batch(batch)
     return remaining
@@ -241,12 +240,12 @@ def import_with_shop(batch: ReceiptBatch, index: int, supplier) -> dict:
     owns `results` and would write its own copy over this change), and when
     the import itself fails - the file is kept, to try again.
     """
-    if not _shop_choice_lock.acquire(timeout=SHOP_CHOICE_WAIT_SECONDS):
+    if not OCR_LOCK.acquire(timeout=SHOP_CHOICE_WAIT_SECONDS):
         raise ShopChoiceError("Un autre ticket est en cours d'import : réessayez dans un instant.")
     try:
         return _import_with_shop(batch, index, supplier)
     finally:
-        _shop_choice_lock.release()
+        OCR_LOCK.release()
 
 
 def _import_with_shop(batch: ReceiptBatch, index: int, supplier) -> dict:

@@ -67,6 +67,7 @@ from .receipt_base import (
     collect_vat_summaries,
     compose_invoice_number,
     ends_items,
+    format_rate,
     line_amounts,
     missing_item_check,
     parse_vat_line,
@@ -552,7 +553,7 @@ class GenericReceiptParser(ReceiptParser):
                     continue  # an amount alone: a sub-total, a payment
             reading.read_total = amount
             if reading.computed:
-                notes.append(f"{reading.name or UNREAD_NAME} {amount:.2f} € (HT {reading.ht:.2f} € + TVA {reading.rate * 100:g} %)")
+                notes.append(f"{reading.name or UNREAD_NAME} {amount:.2f} € (HT {reading.ht:.2f} € + TVA {format_rate(reading.rate)} %)")
             items.append(reading)
             pending = None
         return items, details, voids, items_end

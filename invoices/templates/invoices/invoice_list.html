@@ -46,6 +46,19 @@
         {% include "invoices/_gather_status.html" with job=latest_job %}
     {% endif %}
 
+    {% if undated_only %}
+        <div class="message">
+            Factures et tickets <strong>sans date</strong> : ouvrez chacun et donnez-lui la sienne dans « Corriger les lignes ».
+            <a href="{% url 'invoices:invoice_list' %}">Voir toutes les factures</a>
+        </div>
+    {% elif undated_count %}
+        <div class="message message-error">
+            {{ undated_count }} facture{{ undated_count|pluralize }} ou ticket{{ undated_count|pluralize }} sans date :
+            hors de toute valorisation de stock et du rapprochement bancaire.
+            <a href="{% url 'invoices:invoice_list' %}?sans_date=1">Les afficher</a>
+        </div>
+    {% endif %}
+
     {% if invoices %}
     <form id="invoice-bulk-form" method="post" action="{% url 'invoices:invoice_bulk_delete' %}" class="bulk-bar" data-bulk-select>
         {% csrf_token %}

@@ -5,16 +5,16 @@ at the payload level: the browser posts non-contiguous indices and echoes
 back pre-filled defaults, neither of which a happy-path test produces.
 """
 
-from decimal import Decimal
-
 import os
 from datetime import date
-from django.urls import reverse
-from invoices.models import Invoice
-from tests.factories import make_invoice, make_supplier
+from decimal import Decimal
+
 from django.test import TestCase
+from django.urls import reverse
 
 from invoices.forms import ManualInvoiceLineFormSet
+from invoices.models import Invoice
+from tests.factories import make_invoice, make_supplier
 
 
 def payload(rows, total_forms=None):
@@ -149,6 +149,7 @@ class InvoiceLineEditingTests(TestCase):
             "form-INITIAL_FORMS": "0",
             "form-MIN_NUM_FORMS": "0",
             "form-MAX_NUM_FORMS": "1000",
+            "invoice_date": "2026-01-01",
         }
         for index, row in enumerate(rows):
             for key, value in row.items():
@@ -254,6 +255,7 @@ class EditInvoiceLinesRoundTripTests(TestCase):
             f"{prefix}-INITIAL_FORMS": "1",
             f"{prefix}-MIN_NUM_FORMS": "0",
             f"{prefix}-MAX_NUM_FORMS": "1000",
+            "invoice_date": "2026-03-01",
             f"{prefix}-0-product_name": "VODKA 70CL",
             f"{prefix}-0-quantity": "6",
             f"{prefix}-0-total_ht": "90.00",

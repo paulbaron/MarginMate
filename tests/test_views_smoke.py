@@ -247,6 +247,12 @@ class PageSmokeTests(TestCase):
         self.assertContains(response, "Somme des lignes")
         self.assertContains(response, "Citron vert")
 
+    def test_invoice_edit_lines(self):
+        """The same page as a ticket's, in its supplier-invoice form."""
+        response = self.assertPageOK("invoices:invoice_edit_lines", pk=self.invoice.pk)
+        self.assertContains(response, "SOBIESKI")
+        self.assertContains(response, "Enregistrer les lignes")
+
     # --- till (L'Addition) ------------------------------------------------
     def test_pos_product_list(self):
         self.assertPageOK("recipes:pos_product_list")

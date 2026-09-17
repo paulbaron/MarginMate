@@ -28,6 +28,7 @@ from invoices.tests import test_parser_franprix as franprix
 from invoices.tests import test_parser_monoprix as monoprix
 from invoices.tests import test_parser_sabbh as sabbh
 from invoices.tests import test_parser_wingseng as wingseng
+from invoices.tests.page_posts import page_post
 from tests.factories import make_invoice, make_invoice_line, make_product
 
 FIVE_FIVE = Decimal("0.055")
@@ -196,7 +197,7 @@ class ReviewScreenTests(TestCase):
     def test_the_form_shows_the_printed_amount(self):
         response = self.client.get(self.url)
         self.assertEqual(response.context["formset"].forms[0].initial["total_ttc"], D("7.00"))
-        self.assertContains(response, '<span id="receipt-total">7.00</span> € TTC')
+        self.assertContains(response, '<span id="document-total">7.00</span> € TTC')
 
     def test_saving_keeps_the_amount_typed(self):
         self.client.post(
@@ -206,6 +207,7 @@ class ReviewScreenTests(TestCase):
                 "form-INITIAL_FORMS": "1",
                 "form-MIN_NUM_FORMS": "0",
                 "form-MAX_NUM_FORMS": "1000",
+                "invoice_date": "2026-09-11",
                 "form-0-product_name": "Pain Pita",
                 "form-0-quantity": "10",
                 "form-0-total_ttc": "7.00",
@@ -235,29 +237,23 @@ class WorkedOutAmountsOnReviewTests(TestCase):
         self.url = reverse("invoices:receipt_review", args=[self.invoice.pk])
 
     def payload(self, **changes):
-        forms = self.client.get(self.url).context["formset"].forms
-        data = {
-            "form-TOTAL_FORMS": str(len(forms)),
-            "form-INITIAL_FORMS": str(len(forms)),
-            "form-MIN_NUM_FORMS": "0",
-            "form-MAX_NUM_FORMS": "1000",
-        }
-        for index, form in enumerate(forms):
-            for field in ("product_name", "quantity", "total_ttc", "vat_rate", "read_as", "computed_ttc"):
-                value = form.initial.get(field)
-                data[f"form-{index}-{field}"] = "" if value is None else str(value)
-        data.update(changes)
-        return data
+        return page_post(self.client.get(self.url), **changes)
 
     def test_saved_untouched_it_stays_worked_out(self):
         before = self.invoice.total_ttc
-        self.client.post(self.url, self.payload())
+        self.assertEqual(self.client.post(self.url, self.payload()).status_code, 302)
         self.assertEqual([line.printed_ttc for line in self.invoice.lines.all()], [None, None, None])
         self.assertEqual(self.invoice.total_ttc, before)
 
     def test_corrected_it_becomes_the_ticket_amount(self):
-        self.client.post(self.url, self.payload(**{"form-0-total_ttc": "0.36"}))
+        self.client.post(self.url, self.payload(**{"form-0-total_ttc": "0.36", "form-0-amount_source": "ttc"}))
         self.assertEqual([line.printed_ttc for line in self.invoice.lines.all()], [D("0.36"), None, None])
+        self.assertEqual(self.invoice.lines.first().total_ht, D("0.34"))
+
+    def test_an_ht_typed_makes_the_ticket_amount_from_it(self):
+        self.client.post(self.url, self.payload(**{"form-0-total_ht": "0.47", "form-0-amount_source": "ht"}))
+        line = self.invoice.lines.first()
+        self.assertEqual((line.total_ht, line.printed_ttc), (D("0.47"), D("0.50")))
 
     def test_a_row_typed_in_is_a_ticket_amount(self):
         data = self.payload()

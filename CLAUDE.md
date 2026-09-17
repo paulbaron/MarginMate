@@ -212,23 +212,53 @@ takes a batch and detects each shop from its own header (a Franprix ticket
 run through the Monoprix parser *would* produce lines, and they would be
 wrong — an unrecognised file is reported, never guessed). `.../verification/`
 is the queue, oldest first; `.../<pk>/verifier/` puts the photo beside the
-checks and the editable lines and moves to the next receipt on save. Saving
-goes through `replace_invoice_lines`, the same path as a hand-typed invoice.
-The form is in **TTC**, as the ticket prints it: checking an HT price against a
-photo meant converting every one in one's head. `ReceiptLineForm.cleaned_total_ht`
-stores HT with the line's own rate, and a total saved untouched keeps its HT to
-the cent. A receipt's "Corriger les lignes" opens this screen, not the HT form
-(which would also drop the lines' OCR readings).
+checks and the editable lines and moves to the next receipt on save (a ticket
+already checked, reopened from its page, goes back to its page). Saving goes
+through `replace_invoice_lines`, the same path as a hand-typed invoice.
+
+**One correction page for tickets and invoices** (`views._correction_page`,
+`document_review.html`): `<pk>/lignes/` is the same page for a supplier
+invoice, its PDF framed beside the lines (media may be framed by this site
+only, `config/urls.py`); a ticket's `lignes/` redirects to its review URL. Each
+row shows the amount **both ways, HT and TTC**, each following the other as it
+is typed through the line's rate; the one typed last (`amount_source`) is kept
+and the other worked out - checking an HT price against a photo meant
+converting every one in one's head. A ticket starts from its printed TTC, an
+invoice from its HT. A ticket's **promotion sits beside its price**
+(`discount_ttc`), and the live check says "articles X € moins Y € de
+remises", which is what the ticket prints as its pre-discount total. The
+weight is a field (`total_volume`). A row left as drawn keeps every stored
+figure to the cent (`LineCorrectionForm.untouched`) - so a line kept from
+before promotions were kept apart stays worked out from HT - and a TTC typed
+converts back to its HT to the cent. New ticket lines start at 5.5%, invoice
+lines at 20%. Build test posts from the page (`invoices/tests/page_posts.py`):
+a hand-written subset tests a request no browser sends, and several such tests
+passed without ever saving.
+
+The page also **reads the document again** ("Relire le document",
+`receipts.reread_document`): the photo through OCR, or the PDF through its
+supplier's parser, replacing date, total and lines - corrections included, the
+page asks first - and a ticket goes back to the queue. Nothing changes when
+there is no file, no reader, or nothing read, and a line a stock take was
+priced from stops it. A checked ticket can be put back in the queue ("Remettre
+à vérifier"), and a known price forgotten ("Oublier"; the lines it named keep
+their name).
+
+**Every document is dated between 2000 and today** (`forms.check_document_date`,
+on this page and on a hand-typed invoice). An import still files an undated
+document - there is no one to ask - but a ticket gets a failed "Date du ticket"
+check (so it waits in the queue) and a PDF an `error_message`; the invoice list
+counts them and lists them (`?sans_date=1`).
 
 **A receipt line keeps its printed TTC** (`InvoiceLine.printed_ttc`, set by
 the receipt parsers and by this form). HT to the cent does not convert back:
 7,00 at 5.5% is 6,64 HT, which is 7,01 - ten pitas at 0,70 read 7,01 on the
 screen meant to check them. `InvoiceLine.total_ttc` and everything shown in
-TTC use it. A line a promotion was spread onto has none - its cost is worked
-out - and the form posts back what it showed for such a line
-(`computed_ttc`), so saving it untouched does not pass a worked-out figure off
-as printed: one Franprix ticket validated before that came to 7,91 for 7,92
-paid. `Invoice.total_ttc`, when every line has a printed amount, is their sum
+TTC use it, less the line's promotion (`discount_ttc`). A receipt line with no
+printed amount - imported before promotions were kept apart - is worked out
+from HT, and saved untouched it stays so: passed off as printed, one Franprix
+ticket validated that way came to 7,91 for 7,92 paid. `Invoice.total_ttc`, when
+every line has a printed amount, is their sum
 (never plus the adjustment, which in HT puts back cents the printed amounts
 never lost: added on top, six 0,49 baguettes came to 2,97) - or the ticket's
 own printed total (`Invoice.printed_total_ttc`, what was paid) when the lines
@@ -236,8 +266,9 @@ are within the parser's tolerance of it, so a cent the OCR misread never costs
 the bank match. Otherwise the whole invoice stays on the HT arithmetic.
 Receipts imported before these fields got them back from their stored reading
 (`manage.py restore_printed_ttc`, matched by count, rate and HT, never by
-name; `--dry-run` first after a parser change): 34 totals a cent or two off
-became the printed one, none went the other way.
+name, and never from a promoted reading, whose printed amount is before the
+promotion; `--dry-run` first after a parser change): 34 totals a cent or two
+off became the printed one, none went the other way.
 
 **A folder is a background job** (`invoices/receipt_batches.py`). The upload
 page takes files or a whole folder (`webkitdirectory`; both inputs post as
@@ -267,8 +298,9 @@ runs regardless of the header; a supplier with no ticket reader, or a reader
 that fails or reads nothing, still files the ticket, empty, with a failed
 "Lecture automatique" check - that check is also what puts it in the review
 queue, which lists only receipts with checks. Either way the operator lands on
-the review screen, which also takes the ticket's **date** (a blank field keeps
-the date read: it is a field nobody filled in, not a date removed).
+the review screen, which also takes the ticket's date and total (a blank
+total keeps the one read: it is a field nobody filled in, not a total
+removed). The same lock serialises "Relire le document" (`receipts.OCR_LOCK`).
 
 **The autoreloader kills an import outright** on any code change: a
 137-ticket batch died one second in, while code was being edited, and showed
@@ -284,8 +316,9 @@ running before editing code**, or run the server with `--noreload`.
 One trap found by opening the page rather than by a test: `vat_rate` is
 stored to four decimals, so 20% renders as "20.0000" and the line form
 (`decimal_places=2`) refuses the value it just rendered — the save dies with
-an error under a field nobody touched. `_vat_percent_for_form` quantizes it.
-This affected `edit_invoice_lines` too, and had done all along.
+an error under a field nobody touched. `forms.line_initial` quantizes it, and
+writes a weight as 4.184 or 10, never "10.000" or the "1E+1"
+`Decimal.normalize()` makes of it.
 
 **Product names read by OCR match tolerantly — receipts only.**
 `resolve_products(..., ocr_tolerant=True)` (set from `ParsedInvoice.from_ocr`
@@ -329,11 +362,11 @@ the shop has: that is a merge, done by typing the name in the line. **Only the
 products of shops with a ticket reader**: a paper ticket filed by hand under
 Metro shows Metro's catalogue, which its PDFs find by exact name with no
 reading to fall back on - and its typed lines match strictly for the same
-reason. Renaming and "Retenir ce prix" reload the page, so the page asks
-before dropping line corrections not yet validated. A price already known is
-refused by the form (the shop is not a form field, so Django never checked
-the uniqueness it is part of, and the database answered with a 500); wrong
-prices are deleted in Admin → Prix connus des tickets.
+reason. Renaming, reading again and the price list reload the page, so the
+page asks before dropping line corrections not yet saved. A price already
+known is refused by the form (the shop is not a form field, so Django never
+checked the uniqueness it is part of, and the database answered with a 500);
+a wrong one is forgotten from the list under it.
 
 ### Deleting an invoice (`invoices/deletion.py`)
 
@@ -347,12 +380,12 @@ would otherwise sit in the review queue for ever); files go on commit.
 
 ### Correcting an invoice's lines
 
-The line forms (the HT editor, "Corriger les lignes", and the ticket review
-screen) show a name, a count, a total and VAT; a stored line carries more -
-Metro's measured volume, duty, discount, pack size, category, a receipt's
-reading and printed TTC. Each row posts back its line's id, and
-`importing.corrected_line` keeps what the form doesn't show (the volume
-scaled when the count changes: an item's size didn't). Rebuilt from the four
+The correction page shows a name, a count, a weight, the amounts and VAT (and
+a ticket's promotion); a stored line carries more - duty, Metro's discount,
+pack size, category, a receipt's reading. Each row posts back its line's id,
+and `importing.corrected_line` keeps what the form doesn't show, and the
+volume unless one was typed (scaled when the count changes: an item's size
+didn't). Rebuilt from the four
 visible fields, a Metro invoice saved untouched turned 4.2 L of vodka into
 6 L of stock, and a weighed Wing Seng lemon lost its kilos.
 `replace_invoice_lines` then **updates those lines in place** - a stock take

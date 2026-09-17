@@ -29,17 +29,19 @@ import hashlib
 import io
 import os
 import re
+import threading
 from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.core.files.base import ContentFile
 from django.db import transaction
+from django.utils import timezone
 
 from .importing import DuplicateInvoiceError, import_parsed_invoice
 from .models import Invoice, InvoiceLine, ShopItemPrice, Supplier, label_for_unit_price
 from .ocr import deskew, ocr_prepared_image, page_images
-from .parsers import LLM_PARSER_KEY, PARSER_REGISTRY, ticket_parser_for
+from .parsers import LLM_PARSER_KEY, PARSER_REGISTRY, get_parser, ticket_parser_for
 from .parsers.base import ParseCheck, ParsedInvoice
 from .parsers.receipt_base import CENTS, RECONCILIATION_TOLERANCE, ReceiptParser
 
@@ -54,6 +56,12 @@ CHOSEN_SHOP_CHECK = "Enseigne choisie à la main"
 UNREAD_CHECK = "Lecture automatique"
 SUM_CHECK = "Somme des lignes = total imprimé"
 UNREAD_TOTAL_CHECK = "Total imprimé lu"
+DATE_CHECK = "Date du ticket"
+# One recognition at a time in a request (a shop chosen by hand, a document
+# read again): each is seconds of CPU, and two tabs used to import one file
+# twice.
+OCR_LOCK = threading.Lock()
+OCR_WAIT_SECONDS = 120
 # What the parser said about the lines it read. Once a person has corrected
 # the lines, these describe lines that no longer exist: they give way to one
 # check on the lines as they are now (lines_check).
@@ -70,7 +78,31 @@ READING_CHECKS = {
     "Quantité x prix unitaire = total",
     "Taux par article",
     "Taux applicable",
+    # The page refuses a document with no valid date.
+    DATE_CHECK,
 }
+
+
+class RereadError(Exception):
+    """A document could not be read again; nothing was changed. The message
+    is for the operator."""
+
+
+def date_check(invoice_date: date | None) -> ParseCheck | None:
+    """A failed check when the ticket gave no usable date - none, or one
+    outside 2000-today (a misread year): the ticket goes to review, where the
+    date is required."""
+    from .forms import EARLIEST_DOCUMENT_DATE
+
+    if invoice_date is None:
+        return ParseCheck(label=DATE_CHECK, passed=False, detail="Aucune date lisible : saisissez-la d'après la photo.")
+    if not EARLIEST_DOCUMENT_DATE <= invoice_date <= timezone.localdate():
+        return ParseCheck(
+            label=DATE_CHECK,
+            passed=False,
+            detail=f"Date lue impossible ({invoice_date:%d/%m/%Y}) : corrigez-la d'après la photo.",
+        )
+    return None
 
 
 class UnrecognisedShopError(ValueError):
@@ -326,21 +358,26 @@ def lines_check(invoice: Invoice, prefix: str = "") -> dict:
     """The lines as they stand against the total the ticket printed - with the
     parser's own tolerance, the one Invoice.total_ttc trusts. Each line counts
     as the review screen shows it, to the cent."""
-    lines_total = sum(
-        (line.total_ttc.quantize(CENTS, rounding=ROUND_HALF_UP) for line in invoice.lines.all()), start=Decimal("0")
+    lines = list(invoice.lines.all())
+    lines_total = sum((line.total_ttc.quantize(CENTS, rounding=ROUND_HALF_UP) for line in lines), start=Decimal("0"))
+    discounts = sum((line.discount_ttc for line in lines if line.printed_ttc is not None), start=Decimal("0"))
+    # The promotions apart, as the page shows them: the articles are what the
+    # ticket prints as its total before promotions.
+    promotions = (
+        f" - articles {lines_total + discounts:.2f} € moins {discounts:.2f} € de remises" if discounts else ""
     )
     paid = invoice.printed_total_ttc
     if paid is None:
         return {
             "label": SUM_CHECK,
             "passed": False,
-            "detail": f"{prefix}lignes {lines_total:.2f} € : saisissez le total du ticket pour les vérifier",
+            "detail": f"{prefix}lignes {lines_total:.2f} € : saisissez le total pour les vérifier{promotions}",
         }
     gap = paid - lines_total
     return {
         "label": SUM_CHECK,
         "passed": abs(gap) <= RECONCILIATION_TOLERANCE,
-        "detail": f"{prefix}lignes {lines_total:.2f} € / ticket {paid:.2f} € (écart {gap:+.2f} €)",
+        "detail": f"{prefix}lignes {lines_total:.2f} € / ticket {paid:.2f} € (écart {gap:+.2f} €){promotions}",
     }
 
 
@@ -385,7 +422,8 @@ def reread_receipt(invoice: Invoice) -> bool:
         parsed = parser.parse_text(invoice.ocr_text)
     except Exception:  # noqa: BLE001 - a reading today's parser can't handle stays as it was
         return False
-    checks = [{"label": check.label, "passed": check.passed, "detail": check.detail} for check in parsed.checks]
+    dated = date_check(parsed.invoice_date or invoice.invoice_date)
+    checks = [_as_dict(check) for check in parsed.checks + ([dated] if dated else [])]
     if not parsed.lines or not _sum_check_passed(checks) or _failures(checks) >= _failures(invoice.parse_checks):
         return False
     label_placeholder_lines(invoice.supplier, parsed)
@@ -407,6 +445,94 @@ def reread_receipt(invoice: Invoice) -> bool:
     except InvoiceLinesInUseError:
         return False
     return True
+
+
+def _as_dict(check: ParseCheck) -> dict:
+    return {"label": check.label, "passed": check.passed, "detail": check.detail}
+
+
+def reread_document(invoice: Invoice) -> str:
+    """Read a document's file again from scratch and put what it says in
+    place of its lines, date and total - a person's corrections included.
+    A ticket goes back to the review queue. Returns what to tell the
+    operator; raises RereadError, having changed nothing, when there is
+    nothing to read or nothing was read, and InvoiceLinesInUseError when a
+    stock take was priced from a line the reading drops."""
+    if not invoice.source_file:
+        raise RereadError("Aucun fichier d'origine n'est enregistré pour ce document : rien à relire.")
+    try:
+        path = invoice.source_file.path
+    except (NotImplementedError, ValueError):
+        path = ""
+    if not path or not os.path.exists(path):
+        raise RereadError("Le fichier d'origine de ce document est introuvable : rien à relire.")
+    if invoice.is_receipt:
+        return _reread_receipt_file(invoice, path)
+    return _reread_invoice_file(invoice, path)
+
+
+def _reread_receipt_file(invoice: Invoice, path: str) -> str:
+    from .importing import replace_invoice_lines
+
+    supplier = invoice.supplier
+    if parser_for(supplier) is None:
+        raise RereadError(f"Les tickets {supplier.name} ne sont pas lus automatiquement : rien à relire.")
+    if not OCR_LOCK.acquire(timeout=OCR_WAIT_SECONDS):
+        raise RereadError("Un autre ticket est en cours de lecture : réessayez dans un instant.")
+    try:
+        read = read_receipt(path, supplier=supplier)
+    finally:
+        OCR_LOCK.release()
+    parsed = read.parsed
+    if parsed is None or not parsed.lines:
+        reason = f" ({read.problem})" if read.problem else ""
+        raise RereadError(f"La relecture n'a trouvé aucune ligne{reason} : le ticket n'a pas été modifié.")
+    label_placeholder_lines(supplier, parsed)
+    invoice_date = parsed.invoice_date or invoice.invoice_date
+    dated = date_check(invoice_date)
+    chosen = [check for check in invoice.parse_checks if check["label"] == CHOSEN_SHOP_CHECK]
+    with transaction.atomic():
+        replace_invoice_lines(invoice, parsed.lines)
+        invoice.invoice_date = invoice_date
+        invoice.printed_total_ttc = parsed.printed_total_ttc
+        invoice.reconciliation_adjustment = parsed.reconciliation_adjustment
+        invoice.ocr_text = parsed.source_text
+        invoice.ocr_confidence = parsed.confidence
+        invoice.parse_checks = [_as_dict(check) for check in parsed.checks + ([dated] if dated else [])] + chosen
+        invoice.reviewed_at = None
+        if invoice.failed_checks:
+            invoice.status = Invoice.Status.NEEDS_REVIEW
+        if read.preview:
+            invoice.preview_image.save(
+                f"{os.path.splitext(os.path.basename(path))[0]}.jpg", ContentFile(read.preview), save=False
+            )
+        invoice.save()
+    return f"Ticket relu : {len(parsed.lines)} ligne(s), à vérifier de nouveau."
+
+
+def _reread_invoice_file(invoice: Invoice, path: str) -> str:
+    from .importing import replace_invoice_lines
+
+    parser = get_parser(invoice.supplier.parser_key)
+    if parser is None or parser.supplier_code == LLM_PARSER_KEY:
+        raise RereadError(f"Les factures {invoice.supplier.name} ne sont pas lues automatiquement : rien à relire.")
+    try:
+        parsed = parser.parse(path, date_hint=invoice.invoice_date)
+    except Exception as exc:  # noqa: BLE001 - said to the operator; nothing changed
+        raise RereadError(f"La relecture a échoué ({str(exc).strip() or exc.__class__.__name__}) : rien n'a été modifié.")
+    if not parsed.lines:
+        raise RereadError("La relecture n'a trouvé aucune ligne : la facture n'a pas été modifiée.")
+    with transaction.atomic():
+        replace_invoice_lines(invoice, parsed.lines)
+        invoice.invoice_date = parsed.invoice_date or invoice.invoice_date
+        invoice.reconciliation_adjustment = parsed.reconciliation_adjustment
+        if parsed.printed_total_ttc is not None:
+            invoice.printed_total_ttc = parsed.printed_total_ttc
+        invoice.error_message = " ".join(parsed.warnings)
+        if invoice.error_message:
+            invoice.status = Invoice.Status.NEEDS_REVIEW
+        invoice.save()
+    return f"Facture relue : {len(parsed.lines)} ligne(s)."
 
 
 def _describe(invoice: Invoice) -> str:
@@ -452,6 +578,9 @@ def import_receipt(
     else:
         parsed = _chosen_shop_read(supplier, read, date_hint)
     label_placeholder_lines(supplier, parsed)
+    dated = date_check(parsed.invoice_date)
+    if dated is not None:
+        parsed.checks.append(dated)
 
     invoice = import_parsed_invoice(
         supplier,
@@ -529,8 +658,10 @@ __all__ = [
     "DuplicateInvoiceError",
     "PricesApplied",
     "ReceiptRead",
+    "RereadError",
     "UnrecognisedShopError",
     "apply_known_prices",
+    "date_check",
     "detect_parser",
     "import_receipt",
     "label_placeholder_lines",
@@ -543,6 +674,7 @@ __all__ = [
     "recheck_after_review",
     "recognise",
     "rename_product",
+    "reread_document",
     "reread_receipt",
     "shop_choices",
 ]

@@ -406,7 +406,7 @@ class InvoiceStyleRowTests(SimpleTestCase):
         )
 
     def test_an_unreadable_ttc_is_worked_out_and_said(self):
-        self.assertIn("OIGNON INVENTE VRAC 0.63 €", check(self.invoice, "Montants recalculés").detail)
+        self.assertIn("OIGNON INVENTE VRAC 0.63 € (HT 0.60 € + TVA 5.5 %)", check(self.invoice, "Montants recalculés").detail)
 
     def test_the_ticket_adds_up(self):
         self.assertEqual(failed(self.invoice), {})

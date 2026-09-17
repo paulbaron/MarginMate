@@ -5,7 +5,7 @@ review screen that a person actually works through. The parsers themselves
 are tested from hand-written pages elsewhere in this package.
 """
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from unittest import mock
 
@@ -189,6 +189,7 @@ class ReceiptReviewViewTests(TestCase):
                 "form-INITIAL_FORMS": "1",
                 "form-MIN_NUM_FORMS": "0",
                 "form-MAX_NUM_FORMS": "1000",
+                "invoice_date": "2026-07-14",
                 "form-0-product_name": "Citron vert",
                 "form-0-quantity": "3",
                 "form-0-total_ttc": "2.10",
@@ -214,6 +215,7 @@ class ReceiptReviewViewTests(TestCase):
             "form-INITIAL_FORMS": "1",
             "form-MIN_NUM_FORMS": "0",
             "form-MAX_NUM_FORMS": "1000",
+            "invoice_date": "2026-07-14",
             "form-0-product_name": "Citron vert",
             "form-0-quantity": "3",
             "form-0-total_ttc": "2.10",
@@ -230,6 +232,7 @@ class ReceiptReviewViewTests(TestCase):
             "form-INITIAL_FORMS": "1",
             "form-MIN_NUM_FORMS": "0",
             "form-MAX_NUM_FORMS": "1000",
+            "invoice_date": "2026-07-14",
             "form-0-product_name": "Citron vert",
             "form-0-quantity": "3",
             "form-0-total_ttc": "2.10",
@@ -252,22 +255,40 @@ class ReceiptReviewViewTests(TestCase):
         self.assertEqual(self.invoice.invoice_date, date(2024, 8, 13))
         self.assertIsNotNone(self.invoice.reviewed_at)
 
-    def test_a_blank_date_does_not_erase_the_one_read(self):
+    def test_a_ticket_is_not_saved_without_a_date(self):
+        """A document with no date sits outside every stock valuation and the
+        bank match: the page asks for one rather than keeping none."""
+        self.invoice.invoice_date = None
+        self.invoice.save(update_fields=["invoice_date"])
         for posted in ({"invoice_date": ""}, {}):
             with self.subTest(posted=posted):
-                self.client.post(reverse("invoices:receipt_review", args=[self.invoice.pk]), self._payload(**posted))
+                payload = self._payload()
+                payload.pop("invoice_date")
+                payload.update(posted)
+                response = self.client.post(reverse("invoices:receipt_review", args=[self.invoice.pk]), payload)
+                self.assertContains(response, "Saisissez la date du document.")
                 self.invoice.refresh_from_db()
-                self.assertEqual(self.invoice.invoice_date, date(2026, 7, 14))
+                self.assertIsNone(self.invoice.reviewed_at)
 
     def test_an_impossible_date_is_refused_on_the_page(self):
+        tomorrow = timezone.localdate() + timedelta(days=1)
+        for posted in ("2024-13-45", "1999-12-31", tomorrow.isoformat()):
+            with self.subTest(posted=posted):
+                response = self.client.post(
+                    reverse("invoices:receipt_review", args=[self.invoice.pk]), self._payload(invoice_date=posted)
+                )
+                self.assertEqual(response.status_code, 200)
+                self.assertContains(response, "message-error")
+                self.invoice.refresh_from_db()
+                self.assertIsNone(self.invoice.reviewed_at)
+                self.assertEqual(self.invoice.invoice_date, date(2026, 7, 14))
+
+    def test_today_is_a_date(self):
         response = self.client.post(
-            reverse("invoices:receipt_review", args=[self.invoice.pk]), self._payload(invoice_date="2024-13-45")
+            reverse("invoices:receipt_review", args=[self.invoice.pk]),
+            self._payload(invoice_date=timezone.localdate().isoformat()),
         )
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Date du ticket")
-        self.invoice.refresh_from_db()
-        self.assertIsNone(self.invoice.reviewed_at)
-        self.assertEqual(self.invoice.invoice_date, date(2026, 7, 14))
+        self.assertEqual(response.status_code, 302)
 
     def test_a_row_removed_in_the_browser_leaves_a_gap_in_the_indices(self):
         """Removing a row client-side does not renumber the others, so the
@@ -281,6 +302,7 @@ class ReceiptReviewViewTests(TestCase):
                 "form-INITIAL_FORMS": "1",
                 "form-MIN_NUM_FORMS": "0",
                 "form-MAX_NUM_FORMS": "1000",
+                "invoice_date": "2026-07-14",
                 "form-0-product_name": "Citron vert",
                 "form-0-quantity": "3",
                 "form-0-total_ttc": "2.10",
@@ -306,6 +328,7 @@ class ReceiptReviewViewTests(TestCase):
                 "form-INITIAL_FORMS": "1",
                 "form-MIN_NUM_FORMS": "0",
                 "form-MAX_NUM_FORMS": "1000",
+                "invoice_date": "2026-07-14",
                 "form-0-product_name": "Citron vert",
                 "form-0-quantity": "3",
                 "form-0-total_ttc": "2.10",

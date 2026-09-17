@@ -70,8 +70,14 @@ class ImportWarningTests(TestCase):
     def test_a_supplier_without_a_parser_is_filed_empty_without_complaint(self):
         """By design: its lines are typed in by hand."""
         supplier = make_supplier(code="NOPARSER", parser_key="")
-        invoice = parse_and_import(self.path, supplier)
+        invoice = parse_and_import(self.path, supplier, date_hint=date(2026, 5, 1))
         self.assertEqual(invoice.error_message, "")
+
+    def test_an_invoice_with_no_date_says_so(self):
+        """Undated, it counts in no stock valuation and matches no payment."""
+        supplier = make_supplier(code="NOPARSER", parser_key="")
+        invoice = parse_and_import(self.path, supplier)
+        self.assertIn("Date introuvable", invoice.error_message)
 
 
 class EmptyInvoicePageTests(TestCase):

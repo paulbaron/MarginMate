@@ -14,6 +14,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from django.contrib.messages import get_messages
+from django.core.files.base import ContentFile
 from django.test import TestCase
 from django.urls import reverse
 
@@ -21,7 +22,14 @@ from inventory.models import StockTakeLineSource, UnitChoices
 from inventory.services import create_stock_movement_for_line
 from invoices.forms import ManualInvoiceLineFormSet
 from invoices.models import Invoice, InvoiceLine, Supplier
-from tests.factories import make_invoice_line, make_product, make_stock_take, make_stock_take_line, make_stock_type
+from invoices.tests.page_posts import page_post
+from tests.factories import (
+    make_invoice_line,
+    make_product,
+    make_stock_take,
+    make_stock_take_line,
+    make_stock_type,
+)
 
 D = Decimal
 
@@ -30,24 +38,7 @@ def messages_of(response):
     return [str(message) for message in get_messages(response.wsgi_request)]
 
 
-def as_posted(forms, fields, **changes):
-    """What the browser sends back for these forms, with `changes` applied."""
-    data = {
-        "form-TOTAL_FORMS": str(len(forms)),
-        "form-INITIAL_FORMS": "0",
-        "form-MIN_NUM_FORMS": "0",
-        "form-MAX_NUM_FORMS": "1000",
-    }
-    for index, form in enumerate(forms):
-        for field in fields:
-            value = form.initial.get(field)
-            data[f"form-{index}-{field}"] = "" if value is None else str(value)
-    data.update(changes)
-    return data
-
-
 class HtEditorTests(TestCase):
-    FIELDS = ("product_name", "quantity", "total_ht", "vat_rate", "line_id")
 
     def setUp(self):
         self.metro = Supplier.objects.get(code="METRO")
@@ -64,11 +55,11 @@ class HtEditorTests(TestCase):
         self.url = reverse("invoices:invoice_edit_lines", args=[self.invoice.pk])
 
     def post(self, **changes):
-        forms = [form for form in self.client.get(self.url).context["formset"].forms if form.initial]
-        return self.client.post(self.url, as_posted(forms, self.FIELDS, **changes))
+        # The invoice has no date: the page asks for one.
+        return self.client.post(self.url, page_post(self.client.get(self.url), invoice_date="2026-06-30", **changes))
 
     def test_saved_untouched_nothing_changes(self):
-        self.post()
+        self.assertEqual(self.post().status_code, 302)
         line = self.invoice.lines.get()
         self.assertEqual(line.pk, self.line.pk)
         self.assertEqual(
@@ -82,6 +73,32 @@ class HtEditorTests(TestCase):
         line = self.invoice.lines.get()
         self.assertEqual((line.quantity, line.total_volume), (12, D("8.4")))
         self.assertEqual(self.vodka.current_quantity, D("8.4"))
+
+    def test_a_volume_typed_is_the_one_kept(self):
+        self.post(**{"form-0-total_volume": "4.5"})
+        self.assertEqual(self.invoice.lines.get().total_volume, D("4.5"))
+        self.assertEqual(self.vodka.current_quantity, D("4.5"))
+
+    def test_a_ttc_typed_is_stored_ht(self):
+        self.post(**{"form-0-total_ttc": "75.00", "form-0-amount_source": "ttc"})
+        line = self.invoice.lines.get()
+        self.assertEqual((line.total_ht, line.printed_ttc, line.discount), (D("62.50"), None, D("1.00")))
+
+    def test_the_page_shows_the_pdf_beside_the_lines(self):
+        self.invoice.source_file.save("facture.pdf", ContentFile(b"%PDF-1.4"), save=True)
+        response = self.client.get(self.url)
+        self.assertContains(response, 'class="document-frame"')
+        self.assertContains(response, 'value="74.88"')  # 62,40 HT at 20%
+        self.assertNotContains(response, 'name="form-0-discount_ttc"')
+
+    def test_a_ticket_is_corrected_on_its_review_screen(self):
+        ticket = Invoice.objects.create(
+            supplier=self.metro, invoice_number="T-1", parse_checks=[{"label": "x", "passed": True, "detail": ""}]
+        )
+        response = self.client.get(reverse("invoices:invoice_edit_lines", args=[ticket.pk]))
+        self.assertRedirects(response, reverse("invoices:receipt_review", args=[ticket.pk]))
+        response = self.client.get(reverse("invoices:receipt_review", args=[self.invoice.pk]))
+        self.assertRedirects(response, self.url)
 
     def test_a_deposit_refund_can_be_saved(self):
         crate = make_product(supplier=self.metro, raw_name="PALETTE EUROPE")
@@ -108,6 +125,7 @@ class HtEditorTests(TestCase):
                 "form-1-quantity": "1",
                 "form-1-total_ht": "10.00",
                 "form-1-vat_rate": "20",
+                "form-1-amount_source": "ht",
                 "form-TOTAL_FORMS": "2",
             }
         )
@@ -160,8 +178,6 @@ class ReceiptReviewKeepsWhatItDoesNotShowTests(TestCase):
     """The same trap on the ticket screen: a weighed Wing Seng line lost its
     kilos on every validation."""
 
-    FIELDS = ("product_name", "quantity", "total_ttc", "vat_rate", "read_as", "computed_ttc", "line_id")
-
     def test_a_weighed_line_keeps_its_weight(self):
         shop = Supplier.objects.get(code="WINGSENG")
         invoice = Invoice.objects.create(
@@ -173,7 +189,7 @@ class ReceiptReviewKeepsWhatItDoesNotShowTests(TestCase):
             printed_ttc=D("12.51"),
         )
         url = reverse("invoices:receipt_review", args=[invoice.pk])
-        forms = self.client.get(url).context["formset"].forms
-        self.client.post(url, as_posted(forms, self.FIELDS))
+        response = self.client.post(url, page_post(self.client.get(url), invoice_date="2026-03-28"))
+        self.assertEqual(response.status_code, 302)
         stored = invoice.lines.get()
         self.assertEqual((stored.pk, stored.total_volume, stored.printed_ttc), (line.pk, D("4.184"), D("12.51")))

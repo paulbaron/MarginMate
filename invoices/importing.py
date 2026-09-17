@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from datetime import date
-
 from decimal import Decimal
 
 from django.core.files import File
@@ -119,6 +118,9 @@ def corrected_line(
     vat_rate: Decimal,
     read_as=_STORED,
     printed_ttc=_STORED,
+    total_volume=None,
+    discount_ttc=_STORED,
+    discount=_STORED,
 ) -> ParsedLine:
     """A row a person corrected, as the ParsedLine replace_invoice_lines takes.
 
@@ -127,7 +129,9 @@ def corrected_line(
     didn't), duty, discount, pack size, category, and what OCR read. Rebuilt
     from the four visible fields instead, a Metro invoice saved untouched
     turned 4.2 L of vodka into 6 L of stock. The printed TTC stays while the
-    amount does; `read_as`/`printed_ttc`, when given, are the form's own.
+    amount does; `read_as`/`printed_ttc`, when given, are the form's own, and
+    so are a weight typed (`total_volume`) and a ticket's promotion
+    (`discount_ttc`, with `discount` its HT).
     """
     line = ParsedLine(
         raw_name=raw_name,
@@ -138,20 +142,30 @@ def corrected_line(
         vat_rate=vat_rate,
         read_as="" if read_as is _STORED else read_as,
         printed_ttc=None if printed_ttc is _STORED else printed_ttc,
+        discount_ttc=Decimal("0") if discount_ttc is _STORED else discount_ttc,
     )
+    if discount is not _STORED:
+        line.discount = discount
+    if total_volume is not None:
+        line.total_volume = total_volume
     if stored is None:
         return line
     line.line_id = stored.pk
-    if stored.quantity and quantity != stored.quantity:
-        line.total_volume = (stored.total_volume * quantity / stored.quantity).quantize(VOLUME)
-    else:
-        line.total_volume = stored.total_volume
-    line.taxes, line.discount = stored.taxes, stored.discount
+    if total_volume is None:
+        if stored.quantity and quantity != stored.quantity:
+            line.total_volume = (stored.total_volume * quantity / stored.quantity).quantize(VOLUME)
+        else:
+            line.total_volume = stored.total_volume
+    line.taxes = stored.taxes
+    if discount is _STORED:
+        line.discount = stored.discount
     line.colisage, line.category = stored.colisage, stored.category
     if read_as is _STORED:
         line.read_as = stored.read_as
     if printed_ttc is _STORED and (total_ht, vat_rate) == (stored.total_ht, stored.vat_rate):
         line.printed_ttc = stored.printed_ttc
+        if discount_ttc is _STORED:
+            line.discount_ttc = stored.discount_ttc
     return line
 
 
@@ -199,6 +213,9 @@ def parse_and_import(
             f"Le parseur {key} n'a trouvé aucune ligne dans ce document : sa mise en page a peut-être "
             "changé. Saisissez les lignes à la main."
         )
+    if invoice.invoice_date is None:
+        # Undated, it sits outside every stock valuation and the bank match.
+        problems.append("Date introuvable dans le document : saisissez-la dans « Corriger les lignes ».")
     if problems:
         invoice.error_message = " ".join(problems)
         invoice.status = Invoice.Status.NEEDS_REVIEW

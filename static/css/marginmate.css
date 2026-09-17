@@ -951,6 +951,7 @@ form p { margin: var(--s3) 0; }
 .check-fail { border-color: #5a2f2c; background: var(--red-bg); }
 .check-mark { font-weight: 700; }
 .check-pass .check-mark { color: var(--green); }
+.check-neutral .check-mark { color: var(--muted); }
 .check-fail .check-mark { color: var(--red); }
 .check-label { font-weight: 600; }
 .check-detail { grid-column: 2; color: var(--text-dim); font-size: 0.85rem; font-family: var(--font-mono); }
@@ -1023,3 +1024,47 @@ form p { margin: var(--s3) 0; }
 .receipt-date { align-items: center; margin-bottom: var(--s3); }
 .receipt-date label { margin: 0; }
 .receipt-date input { width: auto; }
+
+/* The correction page's lines: one grid, so every amount sits under its
+   heading and a column of prices can be run down against the document.
+   Below 700px the heading goes and each row wraps under its product name;
+   the placeholders say which box is which. */
+.correction-grid { display: grid; gap: var(--s2); margin-bottom: var(--s3); }
+.correction-head,
+.correction-row {
+    display: grid;
+    grid-template-columns: minmax(9rem, 1fr) 3.25rem 4.75rem 5.25rem 5.25rem 4.75rem 3.75rem 2.25rem;
+    gap: var(--s2);
+    align-items: center;
+}
+.correction-grid-invoice .correction-head,
+.correction-grid-invoice .correction-row {
+    grid-template-columns: minmax(9rem, 1fr) 3.25rem 4.75rem 6rem 6rem 3.75rem 2.25rem;
+}
+.correction-head { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.correction-head .num { text-align: right; }
+.correction-row input { width: 100%; min-width: 0; }
+.correction-row input[type="number"] { text-align: right; padding-left: var(--s1); padding-right: var(--s1); -moz-appearance: textfield; }
+/* No spinners: they ate a third of each amount's box, and nobody types a
+   price with arrows. */
+.correction-row input[type="number"]::-webkit-inner-spin-button,
+.correction-row input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.correction-row .js-remove-line { padding-left: 0; padding-right: 0; }
+
+@media (max-width: 700px) {
+    .correction-head { display: none; }
+    .correction-row,
+    .correction-grid-invoice .correction-row { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .correction-row .js-remove-line { justify-self: end; width: 2.25rem; }
+    .correction-row input[name$="-product_name"] { grid-column: 1 / -1; }
+}
+
+/* A supplier invoice's PDF beside its lines: an A4 page needs more room than
+   a till receipt's strip. */
+.receipt-review:has(.document-pdf) { grid-template-columns: minmax(320px, 1fr) minmax(0, 1.35fr); }
+.document-pdf { padding: 0; overflow: hidden; }
+.document-frame { display: block; width: 100%; height: calc(100vh - 2 * var(--s4)); border: 0; }
+@media (max-width: 900px) {
+    .receipt-review:has(.document-pdf) { grid-template-columns: 1fr; }
+    .document-frame { height: 70vh; }
+}

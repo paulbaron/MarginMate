@@ -133,6 +133,7 @@ class ReviewScreenTests(TestCase):
             "form-INITIAL_FORMS": "1",
             "form-MIN_NUM_FORMS": "0",
             "form-MAX_NUM_FORMS": "1000",
+            "invoice_date": "2026-01-01",
         }
         for index, (name, read_as) in zip(indices, rows):
             payload.update(
