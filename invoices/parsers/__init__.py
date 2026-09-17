@@ -1,15 +1,12 @@
 from .base import InvoiceParser, ParsedInvoice, ParsedLine
 from .cecina import CecinaParser
 from .depoivre import DepoivreParser
-from .franprix import FranprixParser
+from .generic_receipt import GenericReceiptParser, TicketShop
 from .llm_fallback import LLMFallbackParser
 from .metro import MetroParser
-from .monoprix import MonoprixParser
 from .ploufils import PlouFilsParser
 from .registry import PARSER_REGISTRY, get_parser
-from .sabbh import SabbhParser
 from .uba import UBAParser
-from .wingseng import WingSengParser
 
 # The fallback "supplier" for documents nobody has a parser for. Its reader is
 # a language model, which nothing is sent to by default and a ticket never.
@@ -31,21 +28,19 @@ def ticket_parser_for(supplier_code: str):
     )
 
 __all__ = [
+    "LLM_PARSER_KEY",
+    "PARSER_REGISTRY",
+    "CecinaParser",
+    "DepoivreParser",
+    "GenericReceiptParser",
     "InvoiceParser",
+    "LLMFallbackParser",
+    "MetroParser",
     "ParsedInvoice",
     "ParsedLine",
-    "PARSER_REGISTRY",
-    "get_parser",
-    "LLM_PARSER_KEY",
-    "ticket_parser_for",
-    "MetroParser",
-    "UBAParser",
-    "CecinaParser",
     "PlouFilsParser",
-    "DepoivreParser",
-    "LLMFallbackParser",
-    "FranprixParser",
-    "MonoprixParser",
-    "SabbhParser",
-    "WingSengParser",
+    "TicketShop",
+    "UBAParser",
+    "get_parser",
+    "ticket_parser_for",
 ]

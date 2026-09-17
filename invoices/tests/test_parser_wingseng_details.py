@@ -10,8 +10,8 @@ from decimal import Decimal
 
 from django.test import SimpleTestCase
 
+from invoices.parsers import ticket_parser_for
 from invoices.parsers.base import PdfPage
-from invoices.parsers.wingseng import WingSengParser
 
 HEADER = (
     "WING SENG\n2 RUE INVENTEE\n75000 PARIS\nWING SENG\nSiren:000000000\n"
@@ -20,7 +20,7 @@ HEADER = (
 
 
 def parse(body, footer):
-    return WingSengParser().parse_pages([PdfPage(text=HEADER + body + footer)])
+    return ticket_parser_for("WINGSENG").parse_pages([PdfPage(text=HEADER + body + footer)])
 
 
 def totals(total, vat):

@@ -84,6 +84,7 @@ def _line_values(parsed_line: ParsedLine) -> dict:
         "vat_rate": parsed_line.vat_rate,
         "category": parsed_line.category,
         "printed_ttc": parsed_line.printed_ttc,
+        "discount_ttc": parsed_line.discount_ttc,
     }
 
 

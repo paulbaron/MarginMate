@@ -9,8 +9,8 @@ from decimal import Decimal
 
 from django.test import SimpleTestCase
 
+from invoices.parsers import ticket_parser_for
 from invoices.parsers.base import PdfPage
-from invoices.parsers.franprix import FranprixParser
 
 HEADER = "franprix\nFRANPRIX\n12 RUE INVENTEE\n75000 PARIS\n005333-01\n"
 FOOTER = "01-06-2026 MONDAY  17:39\nUDAYAN  R1 001234-01 385\n"
@@ -24,7 +24,7 @@ def parse(body, total, vat_row):
         + f"CB SANS CONTACT  {total}\n-Rate--Taxable--Vat--Total-\n{vat_row}\n"
         + FOOTER
     )
-    return FranprixParser().parse_pages([PdfPage(text=text)])
+    return ticket_parser_for("FRANPRIX").parse_pages([PdfPage(text=text)])
 
 
 def line_named(invoice, name):

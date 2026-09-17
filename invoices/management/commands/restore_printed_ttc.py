@@ -39,7 +39,9 @@ def restore_printed_ttc(invoice: Invoice) -> int:
         invoice.printed_total_ttc = parsed.printed_total_ttc
         invoice.save(update_fields=["printed_total_ttc"])
 
-    readings = [line for line in parsed.lines if line.printed_ttc is not None]
+    # A promoted reading's printed amount is before the promotion, its HT
+    # after: given to a line that keeps no promotion, it would overstate it.
+    readings = [line for line in parsed.lines if line.printed_ttc is not None and not line.discount_ttc]
     restored = 0
     for line in invoice.lines.filter(printed_ttc__isnull=True):
         reading = next(

@@ -13,8 +13,8 @@ from decimal import Decimal
 
 from django.test import SimpleTestCase
 
+from invoices.parsers import ticket_parser_for
 from invoices.parsers.base import PdfPage
-from invoices.parsers.franprix import FranprixParser
 
 FIVE_FIVE = Decimal("0.055")
 TWENTY = Decimal("0.20")
@@ -107,7 +107,7 @@ ORIAN  R1 004211-01 316
 
 
 def parse(text):
-    return FranprixParser().parse_pages([PdfPage(text=text)], source_name="ticket.pdf")
+    return ticket_parser_for("FRANPRIX").parse_pages([PdfPage(text=text)], source_name="ticket.pdf")
 
 
 def failed(invoice):

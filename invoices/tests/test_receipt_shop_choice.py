@@ -23,14 +23,23 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from invoices.importing import DuplicateInvoiceError
+from invoices import receipt_batches
+from invoices.importing import DuplicateInvoiceError, replace_invoice_lines
 from invoices.models import Invoice, ReceiptBatch, Supplier
 from invoices.ocr import OcrCell, OcrLine, OcrPage
-from invoices import receipt_batches
-from invoices.importing import replace_invoice_lines
 from invoices.parsers.base import ParsedLine
-from invoices.receipt_batches import MISSING_FILE, resume_batch, run_receipt_batch, stage_batch
-from invoices.receipts import UnrecognisedShopError, detect_parser, import_receipt, pending_receipts
+from invoices.receipt_batches import (
+    MISSING_FILE,
+    resume_batch,
+    run_receipt_batch,
+    stage_batch,
+)
+from invoices.receipts import (
+    UnrecognisedShopError,
+    detect_parser,
+    import_receipt,
+    pending_receipts,
+)
 from invoices.tests.test_parser_sabbh import BASIC
 from tests.factories import make_invoice
 
@@ -97,7 +106,7 @@ class ImportAsChosenShopTests(TestCase):
 
     def test_a_reader_that_fails_still_files_the_ticket_to_type_in(self):
         with mock.patch(
-            "invoices.parsers.sabbh.SabbhParser.parse_pages", side_effect=RuntimeError("colonne introuvable")
+            "invoices.parsers.generic_receipt.GenericReceiptParser.parse_pages", side_effect=RuntimeError("colonne introuvable")
         ):
             invoice = self._import(supplier=self.sabbh)
         self.assertEqual(invoice.lines.count(), 0)

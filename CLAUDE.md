@@ -61,10 +61,52 @@ The small-shop receipts (Franprix, Monoprix, Sabbh Oriental, Wing Seng) are
 phone photos with **no text layer at all** — `pdfplumber` extracts an empty
 string from every one. `invoices/ocr.py` stands in for `extract_text()`, and
 `parsers/receipt_base.py::ReceiptParser` is the only class allowed to
-override `parse()` besides the LLM fallback. Shop parsers still implement
-`parse_pages` **only**, so every layout is still testable from hand-written
-text with no photo and no OCR engine — `test_parser_contract.py` enforces
-that the override lives in the base and nowhere else.
+override `parse()` besides the LLM fallback. The ticket reader still
+implements `parse_pages` **only**, so every layout is still testable from
+hand-written text with no photo and no OCR engine — `test_parser_contract.py`
+enforces that the override lives in the base and nowhere else.
+
+**One reader for every till** (`parsers/generic_receipt.py`). The four shop
+parsers were replaced by one that reads a line for what its numbers do; a
+shop is data (`TicketShop`: header patterns, the placeholder name its till
+prints, whether its items carry a VAT code), registered once per supplier.
+Measured against the 368 tickets a person had checked (`eval` against their
+stored lines, on a scratch copy of the database), it disagreed on 5 where the
+shop parsers disagreed on 21 - each of the 5 a person's shortcut (a quantity
+left at 1, a refund typed as a price) or something the photo lost, and said -
+and passed every check on 361 tickets against 336.
+What it knows, all arithmetic:
+
+- a **count** is the integer that multiplies a unit price into the amount
+  ("8 X 1,89 5,67" is 3: the money wins, and "Quantités recalculées" says so);
+  a **detail line** ("2x 0.50EUR", "BRUTWEIGHT 0.920 KG / @3.49 / KG")
+  belongs to the neighbouring item whose amount it explains, and makes the
+  amount of a name standing above it when that faded;
+- a **cancelled item** is a negative amount under the same name ("NUL
+  LIGNE"): the pair goes. A negative amount under another name is a promotion
+  on the item above; one that cancels more than the item cost leaves a refund
+  line (quantity -1);
+- **the items are the longest run that adds up** - to what was paid, or to a
+  pre-discount total printed after them. When the ticket *proves* a promotion
+  (its amount printed twice between that total and the amount paid, see
+  `printed_promotion`; change printed after the amount paid never counts),
+  only the pre-discount total does: two loaves making exactly what was paid on
+  a "3 pour 2" ticket are a coincidence;
+- a **repair** is tried only when no run adds up, towards a proven total, and
+  kept only when exactly one amount changed makes it: an item priced like its
+  namesakes (0,45 among loaves at 0,49), or an amount whose leading digit was
+  a VAT code ("120.30" for "T2 0.30"). Said under "Montants recalculés";
+- a **row printing its own tax** (Monoprix's invoice layout: unit HT, count,
+  HT, rate, VAT, TTC) carries its rate and HT, and its TTC is worked out from
+  the printed rate when unreadable ("0 63e");
+- **rates**: a row's own, else the bucket its code's items add up to, else -
+  uncoded items on a two-rate ticket - the one split of the items that makes
+  both buckets. Nothing proven: 5.5% (the shops sell food) and "Taux par
+  article" fails.
+
+Evaluate a change the same way before trusting it: parse every stored
+`ocr_text` and compare with the checked lines, per shop, counting separately
+the tickets whose only difference is how a promotion was spread.
 
 The engine is **PP-OCRv6 medium through `rapidocr` 3.x** (ONNX on CPU, about
 5 s a receipt; models download into the package on first use, ~30 s once).
@@ -112,11 +154,13 @@ Six things are load-bearing:
   0.46: the ticket says 2.79 and the lines say 2.76. The TTC arithmetic
   balances perfectly, so only the HT check catches it. That gap goes into
   `reconciliation_adjustment`; a gap bigger than rounding fails instead.
-- **Never assume 5.5%.** Two of the 42 are at 20% (cleaning vinegar at
-  Franprix, a discounted line at Monoprix). Reading those at the food rate
-  understates the cost by 14% with nothing downstream able to tell.
-  `read_rate` rejects any percentage France does not have — OCR reads the
-  VAT *amount* "0,26" as a rate of 26% given the chance.
+- **5.5% is a fallback, never an answer.** Two of the 42 are at 20%
+  (cleaning vinegar at Franprix, a discounted line at Monoprix). Reading those
+  at the food rate understates the cost by 14% with nothing downstream able
+  to tell - so a line priced at 5.5% because nothing proved a rate always
+  fails "Taux par article". `read_rate` rejects any percentage France does
+  not have — OCR reads the VAT *amount* "0,26" as a rate of 26% given the
+  chance.
 - **Group lines by geometry.** A price column a row off its name column
   (curl, tilt) gave each item its neighbour's price; two tightly printed
   rows merged into one product at the second one's price. The deskew plus
@@ -129,10 +173,16 @@ Six things are load-bearing:
   minus what was paid — **only once the ticket prints that sum**; taken on
   trust, a misread price would pass as a promotion. It is spread over the
   products the block names — pro-rata across *matching* lines, so a bread
-  promotion makes bread cheaper rather than shaving centimes off the lemons.
+  promotion makes bread cheaper rather than shaving centimes off the lemons -
+  and over every reading of that product ("BAGUETTE BLAND", "BLAVC"): matched
+  to the one spelled like the block, a 0,50 "3 pour 2" made one 0,49 loaf
+  cost -0,01. Never more than those products cost; cents go to the largest
+  remainders. The line keeps its printed price, the share sits beside it
+  (`discount_ttc`).
 - **A Franprix weight belongs to the item BELOW it.** "BRUTWEIGHT 0.920 KG
   @ 3.49 / KG" is the orange's (0.920 x 3.49 = 3.21, the orange's price). The
-  parser used to put the kilos on the item above, silently.
+  parser used to put the kilos on the item above, silently. Arithmetic
+  decides; with no legible price per kilo, the item below.
 - **The tills disagree about their own VAT tables.** Four shops, five
   layouts, and Sabbh's "Base TVA" column is tax-INCLUSIVE where everyone
   else's is exclusive. `parse_vat_line` settles it by arithmetic — it
@@ -140,7 +190,9 @@ Six things are load-bearing:
   identity *and* reproduces the printed grand total. Franprix draws its
   table with rules the recogniser reads as digits ("2.261" for "| 2,26 |"),
   and only the grand total separates that from Monoprix's genuinely
-  4-decimal HT ("3.0237").
+  4-decimal HT ("3.0237"). Both identities are tried on every pair: at 2,80
+  and 0,15, both hold, and trying the tax-exclusive one alone left five
+  one-line Sabbh tickets without a total.
 
 **"Article divers" is a price, not a name.** Sabbh's till prints no product
 names at all. `ShopItemPrice` maps a **unit price** (not a line total —

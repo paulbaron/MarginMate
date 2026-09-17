@@ -18,9 +18,15 @@ from django.urls import reverse
 from inventory.models import Product
 from invoices.importing import import_parsed_invoice, replace_invoice_lines
 from invoices.models import Supplier
+from invoices.parsers import ticket_parser_for
 from invoices.parsers.base import ParsedInvoice, ParsedLine
-from invoices.parsers.wingseng import WingSengParser
-from tests.factories import make_invoice, make_invoice_line, make_product, make_stock_type
+from invoices.parsers.generic_receipt import GenericReceiptParser
+from tests.factories import (
+    make_invoice,
+    make_invoice_line,
+    make_product,
+    make_stock_type,
+)
 
 FIVE_FIVE = Decimal("0.055")
 CHECKED = [{"label": "Somme des lignes = total imprimé", "passed": True, "detail": ""}]
@@ -215,6 +221,6 @@ class ParseOcrPagesTests(SimpleTestCase):
         parsed = ParsedInvoice(
             supplier_code="WINGSENG", invoice_number="1", invoice_date=None, lines=[named, placeholder]
         )
-        with mock.patch.object(WingSengParser, "parse_pages", return_value=parsed):
-            result = WingSengParser().parse_ocr_pages([])
+        with mock.patch.object(GenericReceiptParser, "parse_pages", return_value=parsed):
+            result = ticket_parser_for("WINGSENG").parse_ocr_pages([])
         self.assertEqual([parsed_line.read_as for parsed_line in result.lines], ["MENTHE", ""])

@@ -14,7 +14,6 @@ from decimal import Decimal
 
 from django.test import SimpleTestCase
 
-from invoices.parsers.base import ParsedLine
 from invoices.parsers.receipt_base import (
     ReceiptTotals,
     VatSummary,
@@ -23,17 +22,16 @@ from invoices.parsers.receipt_base import (
     assign_rates_by_bucket,
     build_checks,
     compose_invoice_number,
-    distribute_discount,
     ends_items,
     finalise_summary,
     format_rate,
     line_amounts,
     parse_vat_line,
+    printed_promotion,
     printed_total,
     read_date,
     read_rate,
     to_ht,
-    weight_on,
 )
 
 D = Decimal
@@ -142,6 +140,16 @@ class PrintedTotalTests(SimpleTestCase):
         ]
         self.assertEqual(printed_total(lines), D("13.51"))
 
+    def test_a_tax_inclusive_table_that_fits_either_reading(self):
+        lines = [
+            "Article divers",
+            "4pcs  0,70  2,80 A",
+            "Articles: 1  Total: 2,80",
+            "Espèces  2,80€",
+            "TVA A 5.50%  2,80  0,15",
+        ]
+        self.assertEqual(printed_total(lines), D("2.80"))
+
     def test_nothing_printed_twice_is_no_total(self):
         self.assertIsNone(printed_total(["MENTHE  1.00", "TOTAL  CEUR  1351"]))
         self.assertIsNone(printed_total([]))
@@ -178,19 +186,31 @@ class AmountPrintedTests(SimpleTestCase):
         self.assertEqual(amount_printed(["TOTAL renise  0.55-", "Le 2eme  -3,58€"], D("3.58")), 1)
 
 
-class WeightOnTests(SimpleTestCase):
-    def test_a_weight_and_its_price_per_kilo(self):
-        self.assertEqual(weight_on("MAN  4.184kg × 2.99EUR/kg"), (D("4.184"), D("2.99")))
-        self.assertEqual(weight_on("BRUTWEIGHT 0.920 KG"), (D("0.920"), None))
+class PrintedPromotionTests(SimpleTestCase):
+    PROMOTION = (
+        "PAIN COMPLET  T1 0.55",
+        "SOUS-TOTAL  2.90",
+        "TOTAL SANS AVANTAGES  3.45",
+        "3 pour 2",
+        "PAIN COMPLET  0.55",
+        "TOTAL remise  0.55-",
+        "TOTAL A PAYER  2.90",
+    )
 
-    def test_whatever_the_unit_reads_as(self):
-        self.assertEqual(weight_on("BRUTWEIGHT 0.920 KG  à 3.49. / <G"), (D("0.920"), D("3.49")))
+    def test_a_pre_discount_total_and_its_discount_printed_twice(self):
+        self.assertEqual(printed_promotion(self.PROMOTION, 1, D("2.90")), (D("3.45"), D("0.55")))
 
-    def test_a_vat_row_with_a_rule_read_as_a_third_decimal_is_not_a_weight(self):
-        self.assertIsNone(weight_on("5.5%  12.92  0.711  13.63"))
+    def test_cash_and_change_are_not_a_promotion_even_on_a_ticket_printed_twice(self):
+        """10,00 handed over, 0,30 back. The photo held the ticket twice, so
+        the change was printed twice: "un article manque" on a ticket that
+        was complete. A promotion is printed before the amount paid comes
+        round again; change is printed after it."""
+        copy = ["POIG COUL ULTR  T2 4.85", "SOUS-TOTAL  9.70", "TOTAL A PAYER  9.70", "ESPECES  10.00", "RENDU  0.30",
+                "20%  8.08  1.62  9.70"]
+        self.assertIsNone(printed_promotion(copy + copy, 1, D("9.70")))
 
-    def test_no_weight(self):
-        self.assertIsNone(weight_on("MENTHE  1.00"))
+    def test_no_total_no_promotion(self):
+        self.assertIsNone(printed_promotion(self.PROMOTION, 1, None))
 
 
 class VatSummaryTests(SimpleTestCase):
@@ -254,6 +274,19 @@ class ParseVatLineTests(SimpleTestCase):
     def test_a_row_with_no_rate_is_not_a_vat_row(self):
         self.assertIsNone(parse_vat_line("TOTAL A PAYER  13.06"))
 
+    def test_a_small_tax_inclusive_row_that_fits_both_readings(self):
+        """2,80 x 5.5% and 2,80 x 5.5% / 1.055 both round to 0,15. Only the
+        first reading was ever tried: the row came out as 2,95 TTC, and no
+        total was found on five Sabbh tickets that print 2,80 four times."""
+        summary = parse_vat_line("TVA A 5.50%  2,80  0,15", expected_total=D("2.80"))
+        self.assertEqual((summary.base, summary.vat_amount, summary.total_ttc), (D("2.65"), D("0.15"), D("2.80")))
+        unprompted = parse_vat_line("TVA A 5.50%  2,80  0,15")
+        self.assertEqual(unprompted.total_ttc, D("2.80"))
+
+    def test_the_same_numbers_as_a_tax_exclusive_row(self):
+        summary = parse_vat_line("5.5%  2,80  0,15  2,95", expected_total=D("2.95"))
+        self.assertEqual((summary.base, summary.total_ttc), (D("2.80"), D("2.95")))
+
 
 class FormatRateTests(SimpleTestCase):
     def test_whole_percentages_do_not_go_scientific(self):
@@ -296,49 +329,6 @@ class AssignRatesTests(SimpleTestCase):
         rates, confident = assign_rates_by_bucket({"T1": D("10.00")}, [])
         self.assertEqual(rates, {})
         self.assertFalse(confident)
-
-
-class DistributeDiscountTests(SimpleTestCase):
-    def _lines(self):
-        return [
-            ParsedLine(raw_name="PAIN COMPLET", quantity=1, total_volume=D("0"), unit_cost_ht=D("0.52"), total_ht=D("0.52")),
-            ParsedLine(raw_name="PAIN COMPLET", quantity=1, total_volume=D("0"), unit_cost_ht=D("0.52"), total_ht=D("0.52")),
-            ParsedLine(raw_name="CITRON VERT", quantity=1, total_volume=D("0"), unit_cost_ht=D("1.71"), total_ht=D("1.71")),
-        ]
-
-    def test_a_named_promotion_only_touches_the_products_it_names(self):
-        """A "3 pour 2" on bread must make bread cheaper, not shave centimes
-        off the lemons bought at full price."""
-        lines = self._lines()
-        attributed, unattributed = distribute_discount(lines, D("0.52"), ["PAIN COMPLET"])
-        self.assertTrue(attributed)
-        self.assertEqual(unattributed, D("0"))
-        self.assertEqual(lines[2].total_ht, D("1.71"))
-        self.assertEqual(lines[0].total_ht + lines[1].total_ht, D("0.52"))
-
-    def test_the_name_is_matched_through_recognition_noise(self):
-        """The discount block and the item line are two separate readings of
-        the same printed words."""
-        lines = self._lines()
-        attributed, _ = distribute_discount(lines, D("0.52"), ["PAIN COMPLEI"])
-        self.assertTrue(attributed)
-        self.assertEqual(lines[2].total_ht, D("1.71"))
-
-    def test_an_unmatched_name_spreads_over_everything_and_says_so(self):
-        lines = self._lines()
-        attributed, _ = distribute_discount(lines, D("0.52"), ["QUELQUE CHOSE"])
-        self.assertFalse(attributed)
-        self.assertEqual(sum(line.total_ht for line in lines), D("2.23"))
-
-    def test_a_zero_discount_changes_nothing(self):
-        lines = self._lines()
-        attributed, _ = distribute_discount(lines, D("0"), ["PAIN COMPLET"])
-        self.assertTrue(attributed)
-        self.assertEqual([line.total_ht for line in lines], [D("0.52"), D("0.52"), D("1.71")])
-
-    def test_no_lines_at_all(self):
-        attributed, _ = distribute_discount([], D("1.00"), ["X"])
-        self.assertTrue(attributed)
 
 
 class BuildChecksTests(SimpleTestCase):

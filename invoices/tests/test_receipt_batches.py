@@ -27,10 +27,21 @@ from invoices.forms import ReceiptBatchUploadForm
 from invoices.importing import DuplicateInvoiceError
 from invoices.models import ReceiptBatch, Supplier
 from invoices.ocr import page_images
+from invoices.parsers import ticket_parser_for
 from invoices.parsers.base import ParsedInvoice, ParsedLine
-from invoices.parsers.wingseng import WingSengParser
-from invoices.receipt_batches import MISSING_FILE, _Heartbeat, resume_batch, run_receipt_batch, stage_batch
-from invoices.receipts import ReceiptRead, UnrecognisedShopError, file_sha256, import_receipt
+from invoices.receipt_batches import (
+    MISSING_FILE,
+    _Heartbeat,
+    resume_batch,
+    run_receipt_batch,
+    stage_batch,
+)
+from invoices.receipts import (
+    ReceiptRead,
+    UnrecognisedShopError,
+    file_sha256,
+    import_receipt,
+)
 from tests.factories import make_invoice
 
 
@@ -169,7 +180,7 @@ class SameFileTwiceTests(TestCase):
                 )
             ],
         )
-        return ReceiptRead(parser=WingSengParser(), parsed=parsed, preview=None, text="WING SENG")
+        return ReceiptRead(parser=ticket_parser_for("WINGSENG"), parsed=parsed, preview=None, text="WING SENG")
 
     def test_a_file_already_imported_is_refused_before_any_ocr(self):
         path = self._file()

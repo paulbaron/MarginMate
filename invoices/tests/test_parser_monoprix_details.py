@@ -9,8 +9,8 @@ from decimal import Decimal
 
 from django.test import SimpleTestCase
 
+from invoices.parsers import ticket_parser_for
 from invoices.parsers.base import PdfPage
-from invoices.parsers.monoprix import MonoprixParser
 
 HEADER = "MONOPRIX\nDimax\n12 RUE INVENTEE,\n75000 PARIS\n0100000000\nBONJOUR\n"
 FOOTER = "12/03/2026 15:36 245 77 1598 770\n024507701598260311153600\n"
@@ -25,7 +25,7 @@ def parse(items, total, vat_row, pre_discount_line=None):
         + f"TVA  H.T.  T.V.A.  T.T.C\n{vat_row}\n"
         + FOOTER
     )
-    return MonoprixParser().parse_pages([PdfPage(text=text)])
+    return ticket_parser_for("MONOPRIX").parse_pages([PdfPage(text=text)])
 
 
 def failed(invoice):
@@ -54,8 +54,9 @@ class PromotionTests(SimpleTestCase):
         )
         (line,) = invoice.lines
         self.assertEqual(line.quantity, 2)
-        self.assertEqual(line.total_ht, Decimal("8.94"))
-        self.assertEqual(line.discount, Decimal("2.98"))
+        self.assertEqual((line.printed_ttc, line.discount_ttc), (Decimal("14.30"), Decimal("3.58")))
+        self.assertEqual(line.total_ht, Decimal("8.93"))  # 10,72 at 20%
+        self.assertEqual(line.discount, Decimal("2.99"))  # 11,92 HT printed
         attributed = next(check for check in invoice.checks if check.label == "Remise attribuée")
         self.assertTrue(attributed.passed)
         self.assertEqual(failed(invoice), set())

@@ -10,8 +10,8 @@ from decimal import Decimal
 
 from django.test import SimpleTestCase
 
+from invoices.parsers import ticket_parser_for
 from invoices.parsers.base import PdfPage
-from invoices.parsers.sabbh import SabbhParser
 
 FIVE_FIVE = Decimal("0.055")
 
@@ -72,7 +72,7 @@ TVAA 5.50%  4,17  0,22
 
 
 def parse(text):
-    return SabbhParser().parse_pages([PdfPage(text=text)], source_name="ticket.pdf")
+    return ticket_parser_for("SABBH").parse_pages([PdfPage(text=text)], source_name="ticket.pdf")
 
 
 def failed(invoice):
@@ -149,11 +149,14 @@ class SabbhFailureTests(SimpleTestCase):
             self.assertEqual(line.vat_rate, FIVE_FIVE)
         self.assertEqual(failed(invoice), [])
 
-    def test_no_rate_at_all_is_reported_and_not_guessed(self):
+    def test_no_rate_at_all_is_assumed_food_and_reported(self):
+        """Nothing on the ticket proves a rate: the lines are priced at 5.5%,
+        the shops' food rate, and the ticket says it was assumed."""
         invoice = parse(BASIC.replace("TVAA 5.50%  11,40  0,59", "TVAA  ....  ...."))
         self.assertIn("Table TVA lue", failed(invoice))
+        self.assertIn("Taux par article", failed(invoice))
         for line in invoice.lines:
-            self.assertEqual(line.vat_rate, Decimal("0"))
+            self.assertEqual(line.vat_rate, FIVE_FIVE)
 
     def test_an_empty_page_is_an_empty_invoice(self):
         self.assertEqual(parse("").lines, [])

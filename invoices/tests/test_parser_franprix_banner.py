@@ -16,8 +16,8 @@ from decimal import Decimal
 
 from django.test import SimpleTestCase
 
+from invoices.parsers import ticket_parser_for
 from invoices.parsers.base import PdfPage
-from invoices.parsers.franprix import FranprixParser
 
 # The first loaf's name was never read: its price sits on the banner's line.
 BANNER_WITH_A_PRICE = """franprix
@@ -54,7 +54,7 @@ LORIAN  R1 004211-02 555
 
 
 def parse(text):
-    return FranprixParser().parse_pages([PdfPage(text=text)], source_name="ticket.pdf")
+    return ticket_parser_for("FRANPRIX").parse_pages([PdfPage(text=text)], source_name="ticket.pdf")
 
 
 class BannerTests(SimpleTestCase):

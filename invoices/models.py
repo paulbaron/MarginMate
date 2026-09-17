@@ -202,7 +202,7 @@ class Invoice(models.Model):
 
         lines = list(self.lines.all())
         if lines and all(line.printed_ttc is not None for line in lines):
-            printed = sum((line.printed_ttc for line in lines), start=Decimal("0"))
+            printed = sum((line.total_ttc for line in lines), start=Decimal("0"))
             paid = self.printed_total_ttc
             if paid is not None and abs(paid - printed) <= RECONCILIATION_TOLERANCE:
                 return paid
@@ -296,9 +296,15 @@ class InvoiceLine(models.Model):
     # The amount tax included as the receipt printed it (or as typed on the
     # review screen, which is in TTC). Needed because HT to the cent does not
     # always convert back: 7,00 at 5.5% is 6,64 HT, which is 7,01. Null for
-    # digital invoices, which are in HT, and for a line a promotion was
-    # spread onto; `total_ttc` then works it out from HT.
+    # digital invoices, which are in HT, and for receipt lines a promotion was
+    # folded into before promotions were kept apart (`discount_ttc`);
+    # `total_ttc` then works it out from HT.
     printed_ttc = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    # The line's share of a promotion, tax included, off `printed_ttc`: a
+    # ticket prints the loaf at 0,49 and "3 pour 2 - 0,49" in a block of its
+    # own, and the review screen shows both as printed. `total_ht` is what the
+    # line cost after it.
+    discount_ttc = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
     class Meta:
         ordering = ["id"]
@@ -308,8 +314,10 @@ class InvoiceLine(models.Model):
 
     @property
     def total_ttc(self):
+        """What the line cost, tax included: as printed, less its share of a
+        promotion - or worked out from HT when nothing was printed."""
         if self.printed_ttc is not None:
-            return self.printed_ttc
+            return self.printed_ttc - self.discount_ttc
         return self.total_ht * (Decimal("1") + self.vat_rate)
 
     @property

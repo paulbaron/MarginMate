@@ -42,7 +42,7 @@ EUR" into "TOTAL EOR" and a till total into a purchase.
 excluding tax, so every line is divided by (1 + rate) on the way in - which
 means the per-line VAT rate has to be right before the division is. Two of
 the 42 receipts are at 20% (cleaning vinegar) rather than the 5.5% food
-rate, so "assume 5.5%" is not available.
+rate, so 5.5% is only ever a fallback the checks report, never an answer.
 """
 
 from __future__ import annotations
@@ -51,18 +51,12 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date
-from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from .base import InvoiceParser, ParseCheck, ParsedInvoice, PdfPage
 
 CENTS = Decimal("0.01")
 UNIT = Decimal("0.0001")
-
-# How alike a name in the discount block and a name on an item line have
-# to be to count as the same product. They are two separate OCR reads of
-# the same printed words, so exact equality never fires; 80 absorbs a
-# couple of substituted characters without matching a different product.
-DISCOUNT_NAME_MATCH_THRESHOLD = 80
 
 # The French rates a food/drink receipt can legitimately carry. Anything the
 # OCR produces outside this set is a misread, not a new tax band, so it is
@@ -104,9 +98,6 @@ DATE_RE = re.compile(r"(?<!\d)(\d{2})[-/.](\d{2})[-/.]((?:19|20)\d{2})")
 # ("6.061" in a Franprix VAT table), so it is swallowed rather than allowed to
 # make a different amount.
 MONEY_RE = re.compile(r"(?<![\d.,])(?P<sign>-\s?)?(?P<units>\d{1,4})[.,](?P<cents>\d{2})\d{0,2}(?!\d)")
-# A weight: three decimals, which money never has ("BRUTWEIGHT 0.920 KG",
-# "MAN 3.360kg").
-WEIGHT_RE = re.compile(r"(?<![\d.,])(?P<weight>\d{1,3}[.,]\d{3})(?!\d)")
 # A price per unit: an amount followed by a slash, whatever the unit after it
 # reads as ("@ 3.49 / KG", "à 3.49. / <G", "2.99EUR/kg").
 PER_UNIT_RE = re.compile(r"(?P<price>\d{1,4}[.,]\d{2})[^\d\s/]{0,3}\s*/")
@@ -116,16 +107,8 @@ PER_UNIT_RE = re.compile(r"(?P<price>\d{1,4}[.,]\d{2})[^\d\s/]{0,3}\s*/")
 # asterisks. Never part of a product's name - but the recogniser once grouped
 # one with the first item's price, whose name it never read.
 BANNER_RE = re.compile(r"[-\s]*\*{2,}[^*]*\*{2,}[-\s]*")
-LETTER_RE = re.compile(r"[A-Za-zÀ-ÿ]")
 # What an item whose name was not read is called until a person names it.
 UNREAD_NAME = "Article non lu"
-
-
-def item_name(text: str) -> str | None:
-    """The product name in `text`, banners taken out; None when no letter is
-    left - the amount is an item, its name was not read."""
-    name = " ".join(BANNER_RE.sub(" ", text).split())
-    return name if LETTER_RE.search(name) else None
 
 
 def line_amounts(line: str) -> list[Decimal]:
@@ -226,16 +209,30 @@ def printed_promotion(lines: list[str], start: int, total: Decimal | None) -> tu
     and every sum balances. The printed pre-discount total is the only thing
     on the ticket saying an item is missing. Cash and change (20,00 handed
     over, 17,10 back) make the same pair, but change is printed once - hence
-    "twice".
+    "twice" - and after the amount paid: a promotion block sits between the
+    pre-discount total and the next line printing what was paid, so only the
+    discounts printed there count. A photo holding the ticket twice printed
+    the change twice.
     """
     if total is None:
         return None
-    region = [abs(amount) for line in lines[start:] for amount in line_amounts(line)]
-    counts = Counter(region)
-    for candidate in sorted({amount for amount in region if amount - total > CENTS}, reverse=True):
-        if counts[candidate - total] >= 2:
-            return candidate, candidate - total
-    return None
+    amounts = [[abs(amount) for amount in line_amounts(line)] for line in lines]
+    found = set()
+    for index in range(start, len(lines)):
+        for candidate in amounts[index]:
+            if candidate - total <= CENTS:
+                continue
+            printed_between = Counter()
+            for later in amounts[index + 1 :]:
+                if any(abs(value - total) <= CENTS for value in later):
+                    break
+                printed_between.update(later)
+            if printed_between[candidate - total] >= 2:
+                found.add(candidate)
+    if not found:
+        return None
+    candidate = max(found)
+    return candidate, candidate - total
 
 
 def missing_item_check(gross: Decimal, promotion: tuple[Decimal, Decimal] | None) -> ParseCheck | None:
@@ -252,26 +249,6 @@ def missing_item_check(gross: Decimal, promotion: tuple[Decimal, Decimal] | None
             f"{discount:.2f} € : un article manque ou est mal lu"
         ),
     )
-
-
-def weight_on(line: str) -> tuple[Decimal, Decimal | None] | None:
-    """(weight in kg, price per kg or None) when `line` is a weight detail.
-
-    A line with a three-decimal figure and no money on it but that figure
-    and a price per unit. The condition is what keeps a Franprix VAT row -
-    "5.5%  12.92  0.711  13.63", a column rule read as a third decimal -
-    from passing as 0.711 kg of something.
-    """
-    match = WEIGHT_RE.search(line)
-    if not match:
-        return None
-    weight = Decimal(match.group("weight").replace(",", "."))
-    per_unit = PER_UNIT_RE.search(line)
-    price = Decimal(per_unit.group("price").replace(",", ".")) if per_unit else None
-    allowed = {weight.quantize(CENTS, rounding=ROUND_DOWN)} | ({price} if price is not None else set())
-    if any(abs(amount) not in allowed for amount in line_amounts(line)):
-        return None
-    return weight, price
 
 
 def amount_candidates(text: str) -> list[Decimal]:
@@ -707,68 +684,6 @@ def assign_rates_by_bucket(
     return assignment, confident
 
 
-def distribute_discount(
-    lines, discount_total: Decimal, discounted_names: list[str]
-) -> tuple[bool, Decimal]:
-    """Spread a receipt-level discount over the lines it belongs to,
-    mutating them in place. Returns (attributed, unattributed_amount).
-
-    Franprix prints its promotions as a separate "Detail des remises
-    immediates" block naming the products, not as a reduction on the item
-    lines themselves - so the items sum to the pre-discount total and only
-    "TOTAL A PAYER" reflects the promotion. Something has to bridge that gap
-    or every promotional receipt fails its own arithmetic check.
-
-    Spreading pro-rata across the *matching* lines rather than all of them
-    is what keeps unit costs honest: a "3 pour 2" on baguettes must make
-    baguettes cheaper, not shave a few centimes off the oranges bought at
-    full price. The names are fuzzy-matched because the discount block and
-    the item line are two separate OCR reads of the same words, and they
-    routinely disagree by a character or two ("BAGUETTE" / "BAGUETIE").
-    """
-    if discount_total <= 0 or not lines:
-        return True, Decimal("0")
-
-    targets = []
-    if discounted_names:
-        from rapidfuzz import fuzz
-
-        for line in lines:
-            for name in discounted_names:
-                if fuzz.token_sort_ratio(line.raw_name.upper(), name.upper()) >= DISCOUNT_NAME_MATCH_THRESHOLD:
-                    targets.append(line)
-                    break
-
-    attributed = bool(targets)
-    if not targets:
-        # No name matched. The total still has to reconcile, so the discount
-        # is spread over everything - but the caller is told, so the review
-        # screen can say the split is a guess rather than a reading.
-        targets = list(lines)
-
-    base = sum((line.total_ht for line in targets), start=Decimal("0"))
-    if base <= 0:
-        return False, discount_total
-
-    remaining = discount_total
-    for index, line in enumerate(targets):
-        if index == len(targets) - 1:
-            share = remaining
-        else:
-            share = (discount_total * line.total_ht / base).quantize(CENTS, rounding=ROUND_HALF_UP)
-            remaining -= share
-        line.discount = (line.discount or Decimal("0")) + share
-        line.total_ht = line.total_ht - share
-        # What the line finally cost is worked out now, not printed.
-        line.printed_ttc = None
-        line.unit_cost_ht = (
-            (line.total_ht / line.quantity).quantize(UNIT, rounding=ROUND_HALF_UP)
-            if line.quantity
-            else Decimal("0")
-        )
-    return attributed, Decimal("0")
-
-
 def format_rate(rate: Decimal) -> str:
     """"5.5" / "20" - never "2E+1", which is what Decimal.normalize() gives
     for a whole-number percentage and what the review screen showed once."""
@@ -823,38 +738,43 @@ def parse_vat_line(
             as_inclusive = (base * resolved_rate / (Decimal("1") + resolved_rate)).quantize(
                 CENTS, rounding=ROUND_HALF_UP
             )
+            # Both identities can hold at once on a small amount (2,80 and
+            # 0,15 at 5.5%), so both readings compete: the one taken first
+            # made a Sabbh row 2,95 TTC, and its ticket had no total.
+            readings = []
             if abs(as_exclusive - vat) <= VAT_IDENTITY_TOLERANCE:
-                total = base + vat
-            elif abs(as_inclusive - vat) <= VAT_IDENTITY_TOLERANCE:
-                total = base
-            else:
-                continue
-            # A row whose third column confirms the total is a better
-            # reading than one where the total is only inferred.
-            confirmed = any(abs(value - total) <= CENTS for value in values)
-            candidate = VatSummary(rate=resolved_rate, base=base, vat_amount=vat).resolve()
-            # Tie-break towards centimes. Both "2.261 / 0.121" (the column
-            # rules read as digits) and "2.26 / 0.12" (the real figures)
-            # satisfy the identity and both are confirmed by a third
-            # column, so the identity alone cannot separate them - but a
-            # till prints money in cents, so the shorter reading is the
-            # true one. Monoprix's genuinely 4-decimal HT survives this
-            # because only its long reading is confirmed at all.
-            extra_decimals = _decimal_places(base) + _decimal_places(vat)
-            # The grand total the receipt printed elsewhere is the strongest
-            # evidence available: a VAT row that adds up to it is the right
-            # reading of that row, whatever its column order or decimal
-            # count. Monoprix's real 4-decimal HT and Franprix's
-            # rule-inflated "2.261" both satisfy the bare identity, and only
-            # this separates them.
-            matches_total = (
-                expected_total is not None
-                and candidate.total_ttc is not None
-                and abs(candidate.total_ttc - expected_total) <= CENTS
-            )
-            score = (0 if matches_total else 1, 0 if confirmed else 1, extra_decimals)
-            if best is None or score < best[0]:
-                best = (score, candidate)
+                readings.append(
+                    (abs(as_exclusive - vat), VatSummary(rate=resolved_rate, base=base, vat_amount=vat, total_ttc=base + vat))
+                )
+            if abs(as_inclusive - vat) <= VAT_IDENTITY_TOLERANCE:
+                readings.append(
+                    (abs(as_inclusive - vat), VatSummary(rate=resolved_rate, base=base - vat, vat_amount=vat, total_ttc=base))
+                )
+            for identity_error, candidate in readings:
+                # A row whose third column confirms the total is a better
+                # reading than one where the total is only inferred.
+                confirmed = any(abs(value - candidate.total_ttc) <= CENTS for value in values)
+                # Tie-break towards centimes. Both "2.261 / 0.121" (the column
+                # rules read as digits) and "2.26 / 0.12" (the real figures)
+                # satisfy the identity and both are confirmed by a third
+                # column, so the identity alone cannot separate them - but a
+                # till prints money in cents, so the shorter reading is the
+                # true one. Monoprix's genuinely 4-decimal HT survives this
+                # because only its long reading is confirmed at all.
+                extra_decimals = _decimal_places(base) + _decimal_places(vat)
+                # The grand total the receipt printed elsewhere is the strongest
+                # evidence available: a VAT row that adds up to it is the right
+                # reading of that row, whatever its column order or decimal
+                # count. Monoprix's real 4-decimal HT and Franprix's
+                # rule-inflated "2.261" both satisfy the bare identity, and only
+                # this separates them.
+                total_gap = abs(candidate.total_ttc - expected_total) if expected_total is not None else Decimal("0")
+                matches_total = expected_total is not None and total_gap <= CENTS
+                # Then the reading that lands exactly: "3.02 / 0.16" is a cent
+                # off both the identity and 3,19, "3.19 / 0.17" is on both.
+                score = (0 if matches_total else 1, 0 if confirmed else 1, total_gap, extra_decimals, identity_error)
+                if best is None or score < best[0]:
+                    best = (score, candidate)
 
     if best is not None:
         return best[1]

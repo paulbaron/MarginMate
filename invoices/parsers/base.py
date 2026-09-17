@@ -37,8 +37,11 @@ class ParsedLine:
     read_as: str = ""
     # The line's amount tax included, as the ticket printed it (see
     # InvoiceLine.printed_ttc). Set by the receipt parsers; None for a digital
-    # invoice, and for a line a promotion was spread onto.
+    # invoice.
     printed_ttc: Decimal | None = None
+    # The line's share of a promotion, TTC, off `printed_ttc` (see
+    # InvoiceLine.discount_ttc); `total_ht` is already net of it.
+    discount_ttc: Decimal = Decimal("0")
     # The stored InvoiceLine this one corrects, when a person edits an
     # invoice (see importing.replace_invoice_lines). Parsers never set it.
     line_id: int | None = None

@@ -19,13 +19,10 @@ from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 
 from invoices.importing import import_parsed_invoice
-from invoices.models import Supplier
-from invoices.parsers.base import ParsedLine, PdfPage
-from invoices.parsers.franprix import FranprixParser
-from invoices.parsers.monoprix import MonoprixParser
-from invoices.parsers.sabbh import SabbhParser
-from invoices.parsers.wingseng import WingSengParser
 from invoices.management.commands.restore_printed_ttc import restore_printed_ttc
+from invoices.models import Supplier
+from invoices.parsers import ticket_parser_for
+from invoices.parsers.base import ParsedLine, PdfPage
 from invoices.receipts import printed_unit_price
 from invoices.tests import test_parser_franprix as franprix
 from invoices.tests import test_parser_monoprix as monoprix
@@ -59,31 +56,31 @@ def parse(parser, text):
 
 class ParsersKeepThePrintedAmountTests(SimpleTestCase):
     def test_sabbh(self):
-        invoice = parse(SabbhParser(), sabbh.BASIC)
+        invoice = parse(ticket_parser_for("SABBH"), sabbh.BASIC)
         self.assertEqual([line.printed_ttc for line in invoice.lines], [D("2.40"), D("9.00")])
 
     def test_the_amount_that_does_not_survive_the_round_trip(self):
-        (line,) = parse(SabbhParser(), SEVEN_EUROS).lines
+        (line,) = parse(ticket_parser_for("SABBH"), SEVEN_EUROS).lines
         self.assertEqual((line.total_ht, line.printed_ttc), (D("6.64"), D("7.00")))
         self.assertNotEqual((line.total_ht * (1 + line.vat_rate)).quantize(D("0.01")), D("7.00"))
 
     def test_wing_seng(self):
-        invoice = parse(WingSengParser(), wingseng.BASIC)
+        invoice = parse(ticket_parser_for("WINGSENG"), wingseng.BASIC)
         self.assertEqual(
             {line.raw_name: line.printed_ttc for line in invoice.lines},
             {"MENTHE": D("1.00"), "CITRON VERT": D("9.00")},
         )
 
     def test_monoprix(self):
-        invoice = parse(MonoprixParser(), monoprix.FRENCH)
+        invoice = parse(ticket_parser_for("MONOPRIX"), monoprix.FRENCH)
         self.assertEqual([line.printed_ttc for line in invoice.lines], [D("2.40"), D("6.00")])
 
     def test_the_ticket_total_is_kept(self):
         for parser, text, total in (
-            (SabbhParser(), sabbh.BASIC, D("11.40")),
-            (WingSengParser(), wingseng.BASIC, D("10.00")),
-            (MonoprixParser(), monoprix.FRENCH, D("8.40")),
-            (FranprixParser(), franprix.DISCOUNTED, D("2.90")),
+            (ticket_parser_for("SABBH"), sabbh.BASIC, D("11.40")),
+            (ticket_parser_for("WINGSENG"), wingseng.BASIC, D("10.00")),
+            (ticket_parser_for("MONOPRIX"), monoprix.FRENCH, D("8.40")),
+            (ticket_parser_for("FRANPRIX"), franprix.DISCOUNTED, D("2.90")),
         ):
             with self.subTest(parser=parser.supplier_code):
                 self.assertEqual(parse(parser, text).printed_total_ttc, total)
@@ -91,15 +88,16 @@ class ParsersKeepThePrintedAmountTests(SimpleTestCase):
     def test_franprix(self):
         for text, expected in ((franprix.TWENTY_PERCENT, [D("3.60"), D("3.60")]), (franprix.MULTIPLIER, [D("3.30")])):
             with self.subTest(expected=expected):
-                self.assertEqual([line.printed_ttc for line in parse(FranprixParser(), text).lines], expected)
+                self.assertEqual([line.printed_ttc for line in parse(ticket_parser_for("FRANPRIX"), text).lines], expected)
 
-    def test_a_discounted_line_no_longer_has_a_printed_amount(self):
+    def test_a_discounted_line_keeps_its_printed_amount_and_its_share(self):
         """The ticket prints the loaf at 0,55 and the promotion elsewhere:
-        what the loaf finally cost is worked out, not read."""
-        invoice = parse(FranprixParser(), franprix.DISCOUNTED)
-        amounts = {(line.raw_name, line.printed_ttc) for line in invoice.lines}
-        self.assertIn(("CITRON VERT 400G", D("1.80")), amounts)
-        self.assertEqual({amount for name, amount in amounts if "PAIN" in name}, {None})
+        both stay as printed, the share of the promotion beside the price."""
+        invoice = parse(ticket_parser_for("FRANPRIX"), franprix.DISCOUNTED)
+        loaves = [(line.printed_ttc, line.discount_ttc) for line in invoice.lines if "PAIN" in line.raw_name]
+        self.assertEqual(loaves, [(D("0.55"), D("0.19")), (D("0.55"), D("0.18")), (D("0.55"), D("0.18"))])
+        lemon = next(line for line in invoice.lines if "CITRON" in line.raw_name)
+        self.assertEqual((lemon.printed_ttc, lemon.discount_ttc), (D("1.80"), D("0")))
 
     def test_the_printed_unit_price_comes_from_the_printed_amount(self):
         line = ParsedLine(
@@ -133,6 +131,16 @@ class TotalsTests(TestCase):
         invoice = self.receipt(("6.64", "7.00"))
         self.assertEqual(invoice.lines.get().total_ttc, D("7.00"))
 
+    def test_a_promotion_comes_off_the_printed_amount(self):
+        invoice = self.receipt(("0.30", "0.49"), ("0.46", "0.49"), paid="0.80")
+        first = invoice.lines.first()
+        first.discount_ttc = D("0.17")
+        first.save(update_fields=["discount_ttc"])
+        self.assertEqual(first.total_ttc, D("0.32"))
+        self.assertEqual(invoice.total_ttc, D("0.80"))
+        invoice.printed_total_ttc = None
+        self.assertEqual(invoice.total_ttc, D("0.81"))
+
     def test_a_line_without_a_printed_amount_is_worked_out_from_ht(self):
         invoice = self.receipt(("10.00", None))
         self.assertEqual(invoice.lines.get().total_ttc, D("10.55"))
@@ -164,7 +172,7 @@ class TotalsTests(TestCase):
         self.assertEqual(self.receipt(("9.48", "10.00")).total_ttc, D("10.00"))
 
     def test_the_import_stores_it(self):
-        parsed = parse(SabbhParser(), SEVEN_EUROS)
+        parsed = parse(ticket_parser_for("SABBH"), SEVEN_EUROS)
         invoice = import_parsed_invoice(self.shop, parsed)
         self.assertEqual(invoice.lines.get().printed_ttc, D("7.00"))
         self.assertEqual(invoice.printed_total_ttc, D("7.00"))
@@ -329,6 +337,17 @@ class RestorePrintedTtcTests(TestCase):
         call_command("restore_printed_ttc", stdout=open(os.devnull, "w"))
         line.refresh_from_db()
         self.assertEqual(line.printed_ttc, D("7.00"))
+
+    def test_a_promoted_reading_restores_nothing(self):
+        """Its printed amount is before the promotion; the stored line's HT is
+        after it."""
+        self.invoice.supplier = Supplier.objects.get(code="FRANPRIX")
+        self.invoice.ocr_text = franprix.DISCOUNTED
+        self.invoice.save(update_fields=["supplier", "ocr_text"])
+        line = self.line(total_ht="0.34", quantity=1, name="PAIN COMPLET")
+        self.assertEqual(restore_printed_ttc(self.invoice), 0)
+        line.refresh_from_db()
+        self.assertIsNone(line.printed_ttc)
 
     def test_a_ticket_that_no_longer_parses_is_left_alone(self):
         self.invoice.ocr_text = "illisible"

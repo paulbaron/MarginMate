@@ -12,8 +12,8 @@ from decimal import Decimal
 
 from django.test import SimpleTestCase
 
+from invoices.parsers import ticket_parser_for
 from invoices.parsers.base import PdfPage
-from invoices.parsers.monoprix import MonoprixParser
 
 FIVE_FIVE = Decimal("0.055")
 
@@ -72,7 +72,7 @@ SIRET48000051200016
 
 
 def parse(text):
-    return MonoprixParser().parse_pages([PdfPage(text=text)], source_name="ticket.pdf")
+    return ticket_parser_for("MONOPRIX").parse_pages([PdfPage(text=text)], source_name="ticket.pdf")
 
 
 class MonoprixFrenchTests(SimpleTestCase):
