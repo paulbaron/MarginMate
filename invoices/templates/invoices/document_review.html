@@ -157,7 +157,7 @@
                             <span></span>
                         </div>
                         {% for line_form in formset %}
-                            <div class="invoice-line-row">
+                            <div class="invoice-line-row{% if line_form.DELETE.value %} is-removed{% endif %}">
                                 <div class="correction-row">
                                     <span hidden>{{ line_form.DELETE }}</span>
                                     {{ line_form.product_name }}
@@ -198,7 +198,10 @@
                             <p class="muted" id="no-line-yet">Aucune ligne : ajoutez celles du document d'après {% if is_receipt %}la photo{% else %}le PDF{% endif %}.</p>
                         {% endfor %}
                     </div>
-                    <button type="button" class="btn btn-small btn-secondary" id="add-line-row">+ Ajouter une ligne</button>
+                    <div class="line-tools">
+                        <button type="button" class="btn btn-small btn-secondary" id="add-line-row">+ Ajouter une ligne</button>
+                        <span class="muted" id="line-count" aria-live="polite"></span>
+                    </div>
 
                     <div class="form-actions" style="margin-top:1rem;">
                         <button class="btn" type="submit">
@@ -409,15 +412,25 @@
     function refreshCheck() {
         var sum = 0;
         var discounts = 0;
+        var kept = 0;
+        var removed = 0;
         lines.querySelectorAll("#line-rows .invoice-line-row").forEach(function (row) {
-            var del = field(row, "DELETE");
-            if (row.hidden || (del && del.checked)) return;
+            if (row.classList.contains("is-removed")) {
+                removed += 1;
+                return;
+            }
+            kept += 1;
             var amount = cents(field(row, "total_ttc"));
             var discount = cents(field(row, "discount_ttc")) || 0;
             if (amount !== null) sum += amount - discount;
             discounts += discount;
         });
         if (shownTotal) shownTotal.textContent = euros(sum);
+        var count = document.getElementById("line-count");
+        if (count) {
+            count.textContent = kept + " ligne" + (kept > 1 ? "s" : "")
+                + (removed ? " · " + removed + " retirée" + (removed > 1 ? "s" : "") + " (↺ pour rétablir)" : "");
+        }
         if (!check) return;
         var paid = cents(lines.querySelector("input[name='printed_total_ttc']"));
         var detail;
@@ -448,7 +461,7 @@
         event.preventDefault();
         var boxes = Array.prototype.filter.call(
             lines.querySelectorAll("input:not([type=hidden]):not([type=checkbox])"),
-            function (box) { return box.offsetParent !== null; }
+            function (box) { return box.offsetParent !== null && !box.disabled && !box.readOnly; }
         );
         var next = boxes[boxes.indexOf(event.target) + 1];
         if (next) {
@@ -474,16 +487,37 @@
     lines.addEventListener("change", refreshCheck);
     refreshCheck();
 
-    document.addEventListener("click", function (event) {
-        if (!event.target.matches(".js-remove-line")) return;
-        var row = event.target.closest(".invoice-line-row");
+    // A line taken out stays where it was, struck through, until the page
+    // is saved: removed at once, the rows below moved up under the pointer,
+    // and a second click took out the line typed in below - silently.
+    function setRemoved(row, removed) {
         var del = field(row, "DELETE");
-        if (del) {
-            del.checked = true;
-            row.hidden = true;
-        } else {
-            row.remove();
+        row.classList.toggle("is-removed", removed);
+        if (del) del.checked = removed;
+        row.querySelectorAll(".correction-row input").forEach(function (box) {
+            if (box === del || box.type === "hidden") return;
+            // A saved line is sent, marked for deletion; a new one is not sent.
+            if (del) box.readOnly = removed;
+            else box.disabled = removed;
+        });
+        if (!del) {
+            row.querySelectorAll(".correction-row input[type=hidden]").forEach(function (box) { box.disabled = removed; });
         }
+        var button = row.querySelector(".js-remove-line");
+        button.textContent = removed ? "↺" : "✕";
+        button.title = removed ? "Rétablir cette ligne" : "Retirer cette ligne";
+        button.setAttribute("aria-label", button.title);
+        var hint = row.querySelector("[data-unit-price]");
+        if (hint && removed) hint.hidden = true;
+        else if (hint) unitHint(row);
+    }
+    lines.querySelectorAll("#line-rows .invoice-line-row.is-removed").forEach(function (row) { setRemoved(row, true); });
+
+    document.addEventListener("click", function (event) {
+        var button = event.target.closest(".js-remove-line");
+        if (!button) return;
+        var row = button.closest(".invoice-line-row");
+        setRemoved(row, !row.classList.contains("is-removed"));
         edited = true;
         refreshCheck();
     });

@@ -62,6 +62,16 @@ class PurchasesPageTests(TestCase):
         self.assertContains(response, reverse("invoices:invoice_create_manual"))
         self.assertEqual(response.context["pdf_form"].fields["supplier"].label, "Fournisseur")
 
+    def test_only_the_import_choices_switch_the_card(self):
+        """The page's script switches on `data-import-tab`: carried by the card
+        itself, a click anywhere in it - choosing a folder - hid every panel."""
+        html = self.client.get(self.url).content.decode()
+        card = html[html.index('id="ajouter"') - 200:html.index('id="import-tickets"')]
+        opening = card[card.index("<section"):card.index(">", card.index("<section"))]
+        self.assertNotIn("data-import-tab", opening)
+        self.assertIn('data-initial-tab=""', opening)
+        self.assertEqual(html.count("data-import-tab="), 3)
+
     def test_the_three_tabs_and_what_waits_in_them(self):
         undated(make_invoice(supplier=self.metro, invoice_number="SANS-DATE"))
         make_invoice_type(supplier=self.metro, name="Metro - Factures")

@@ -282,6 +282,24 @@ class PromotionOnThePageTests(TestCase):
         self.assertEqual((self.loaf.total_ht, self.loaf.discount, self.loaf.discount_ttc), (D("0.46"), D("0"), D("0")))
 
 
+class RemovedLinesTests(TestCase):
+    """A line taken out stays on the page, struck through, until saved - and
+    a page sent back with an error shows it that way still."""
+
+    def test_a_removed_line_comes_back_removed(self):
+        shop = Supplier.objects.get(code="FRANPRIX")
+        ticket = make_invoice(supplier=shop, parse_checks=CHECKED)
+        make_invoice_line(invoice=ticket, product=make_product(supplier=shop), total_ht="1.00", vat_rate=FIVE_FIVE)
+        make_invoice_line(invoice=ticket, product=make_product(supplier=shop), total_ht="2.00", vat_rate=FIVE_FIVE)
+        url = reverse("invoices:receipt_review", args=[ticket.pk])
+        page = self.client.get(url)
+        self.assertNotContains(page, "invoice-line-row is-removed")
+        response = self.client.post(url, page_post(page, invoice_date="", **{"form-0-DELETE": "on"}))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'class="invoice-line-row is-removed"', count=1)
+        self.assertContains(response, 'id="line-count"')
+
+
 class UnitPriceTests(TestCase):
     """Five loaves printed 2.45 with 0.50 off, beside a lemon at 1.80: a
     wrong count shows once the line is written as a price each."""

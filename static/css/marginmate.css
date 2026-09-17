@@ -1353,3 +1353,8 @@ details.handled[open] > summary { margin-bottom: var(--s2); }
 .pick-option input[type="checkbox"] { width: auto; margin: 0; flex: none; }
 .pick-option[hidden] { display: none; }
 .till-chip-hh { border-style: dashed; color: var(--amber); }
+
+/* A line taken out on the correction page stays in place until saved. */
+.invoice-line-row.is-removed .correction-row input { text-decoration: line-through; opacity: 0.45; }
+.invoice-line-row.is-removed .js-remove-line { color: var(--amber); border-color: #574728; }
+.line-tools { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); }

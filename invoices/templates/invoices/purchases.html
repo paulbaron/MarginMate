@@ -61,13 +61,15 @@
     }
 
     card.addEventListener("click", function (event) {
-        var button = event.target.closest("[data-import-tab]");
+        // Only the choice buttons: the card holds the file inputs, and a
+        // click on one must not switch anything.
+        var button = event.target.closest("button[data-import-tab]");
         if (!button) return;
         show(button.dataset.importTab);
         try { localStorage.setItem(KEY, button.dataset.importTab); } catch (e) { /* not remembered */ }
     });
 
-    var chosen = card.dataset.importTab;
+    var chosen = card.dataset.initialTab;
     if (!chosen) {
         try { chosen = localStorage.getItem(KEY); } catch (e) { chosen = null; }
     }
