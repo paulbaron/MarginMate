@@ -12,6 +12,7 @@ from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.generic import DetailView, ListView
 
+from .deletion import InvoiceInUseError, blocking_stock_takes, delete_invoice
 from .forms import (
     EmailInvoiceSourceForm,
     InvoiceTypeForm,
@@ -19,7 +20,7 @@ from .forms import (
     ManualInvoiceForm,
     ManualInvoiceLineFormSet,
     ReceiptBatchUploadForm,
-    ReceiptDateForm,
+    ReceiptHeaderForm,
     ReceiptLineFormSet,
     ReceiptShopForm,
     ShopItemPriceForm,
@@ -32,8 +33,6 @@ from .importing import (
     parse_and_import,
     replace_invoice_lines,
 )
-
-from .deletion import InvoiceInUseError, blocking_stock_takes, delete_invoice
 from .models import Invoice, InvoiceType, ReceiptBatch, ScrapeJob, Supplier
 from .parsers import get_parser
 from .parsers.base import ParsedInvoice, ParsedLine
@@ -537,6 +536,10 @@ def receipt_review(request, pk):
     and answering it by flipping between three pages is what stops receipts
     being checked at all.
 
+    The lines are checked against the printed total as they are typed (the
+    page's script), and the checks stored on the ticket are brought up to
+    date when it is validated (receipts.recheck_after_review).
+
     Saving reuses `replace_invoice_lines`, the same path as a hand-typed
     invoice, so a corrected receipt and a typed one end up identical - there
     is no second way for lines to reach the database.
@@ -546,7 +549,8 @@ def receipt_review(request, pk):
     next_pk = next((candidate for candidate in queue if candidate != invoice.pk), None)
 
     price_form = ShopItemPriceForm()
-    date_form = ReceiptDateForm(initial={"invoice_date": invoice.invoice_date})
+    header = {"invoice_date": invoice.invoice_date, "printed_total_ttc": invoice.printed_total_ttc}
+    date_form = ReceiptHeaderForm(initial=header)
 
     if request.method == "POST":
         action = request.POST.get("action")
@@ -577,7 +581,7 @@ def receipt_review(request, pk):
             formset = _line_formset_for(invoice)
         else:
             formset = ReceiptLineFormSet(request.POST)
-            date_form = ReceiptDateForm(request.POST, initial={"invoice_date": invoice.invoice_date})
+            date_form = ReceiptHeaderForm(request.POST, initial=header)
             if formset.is_valid() and date_form.is_valid():
                 stored = {line.pk: line for line in invoice.lines.all()}
                 lines = []
@@ -595,17 +599,21 @@ def receipt_review(request, pk):
                             printed_ttc=line_form.printed_ttc(),
                         )
                     )
+                from .receipts import recheck_after_review
+
                 try:
                     # One piece: a date saved on a ticket whose lines then
                     # failed to save would be a change nobody validated.
                     with transaction.atomic():
-                        # Left blank, the date read stays: a blank is a field
-                        # nobody filled in, not a date someone removed.
-                        if date_form.cleaned_data["invoice_date"]:
-                            invoice.invoice_date = date_form.cleaned_data["invoice_date"]
+                        # Left blank, what was read stays: a blank is a field
+                        # nobody filled in, not a value someone removed.
+                        for field in ("invoice_date", "printed_total_ttc"):
+                            if date_form.cleaned_data[field] is not None:
+                                setattr(invoice, field, date_form.cleaned_data[field])
                         replace_invoice_lines(invoice, lines)
+                        recheck_after_review(invoice)
                         invoice.reviewed_at = timezone.now()
-                        invoice.save(update_fields=["invoice_date", "reviewed_at"])
+                        invoice.save(update_fields=["invoice_date", "printed_total_ttc", "parse_checks", "reviewed_at"])
                 except InvoiceLinesInUseError as exc:
                     messages.error(request, str(exc))
                 else:
@@ -617,12 +625,22 @@ def receipt_review(request, pk):
     else:
         formset = _line_formset_for(invoice)
 
+    from .parsers.receipt_base import RECONCILIATION_TOLERANCE
+    from .receipts import READING_CHECKS, SUM_CHECK, lines_check
+
     lines = list(invoice.lines.select_related("product").all())
     return render(
         request,
         "invoices/receipt_review.html",
         {
             "invoice": invoice,
+            # The one check the page keeps up to date as lines are typed.
+            "live_check": lines_check(invoice),
+            "other_checks": [check for check in invoice.parse_checks if check["label"] != SUM_CHECK],
+            "tolerance": RECONCILIATION_TOLERANCE,
+            # What the parser said about lines a person may since have
+            # corrected: shown as such, and replaced on validation.
+            "reading_checks": READING_CHECKS,
             "formset": formset,
             "date_form": date_form,
             "price_form": price_form,

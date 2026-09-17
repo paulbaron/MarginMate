@@ -170,11 +170,16 @@ class ReceiptReviewViewTests(TestCase):
         response = self.client.get(reverse("invoices:receipt_review", args=[self.invoice.pk]))
         self.assertEqual(len(response.context["formset"].forms), self.invoice.lines.count())
 
-    def test_the_review_page_shows_the_failed_check(self):
+    def test_the_review_page_shows_the_checks(self):
+        """The sum check is worked out on the lines as they stand (see
+        test_review_checks); the others are what was read."""
+        self.invoice.printed_total_ttc = Decimal("2.59")
+        self.invoice.save(update_fields=["printed_total_ttc"])
         response = self.client.get(reverse("invoices:receipt_review", args=[self.invoice.pk]))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Somme des lignes")
         self.assertContains(response, "écart +0.49")
+        self.assertContains(response, "TVA 5.5% cohérente")
 
     def test_saving_marks_the_receipt_reviewed_and_replaces_its_lines(self):
         response = self.client.post(

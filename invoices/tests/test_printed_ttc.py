@@ -188,7 +188,7 @@ class ReviewScreenTests(TestCase):
     def test_the_form_shows_the_printed_amount(self):
         response = self.client.get(self.url)
         self.assertEqual(response.context["formset"].forms[0].initial["total_ttc"], D("7.00"))
-        self.assertContains(response, "7.00 € TTC")
+        self.assertContains(response, '<span id="receipt-total">7.00</span> € TTC')
 
     def test_saving_keeps_the_amount_typed(self):
         self.client.post(

@@ -7,7 +7,7 @@
             <h1>{{ invoice.supplier.name }}</h1>
             <p class="page-subtitle">
                 {{ invoice.invoice_date|date:"d/m/Y"|default:"Date non lue" }}
-                · {{ invoice.total_ttc|floatformat:2 }} € TTC
+                · <span id="receipt-total">{{ invoice.total_ttc|floatformat:2 }}</span> € TTC
                 {% if invoice.ocr_confidence %} · lecture la moins sûre : {{ invoice.ocr_confidence_percent|floatformat:0 }}%{% endif %}
                 {% if remaining %} · {{ remaining }} ticket{{ remaining|pluralize }} en attente{% endif %}
             </p>
@@ -39,14 +39,18 @@
             {% endcomment %}
             <h2>Contrôles</h2>
             <ul class="check-list">
-                {% for check in invoice.parse_checks %}
+                <li class="check {% if live_check.passed %}check-pass{% else %}check-fail{% endif %}"
+                    id="live-lines-check" data-tolerance="{{ tolerance }}">
+                    <span class="check-mark">{% if live_check.passed %}✓{% else %}✕{% endif %}</span>
+                    <span class="check-label">{{ live_check.label }}</span>
+                    <span class="check-detail">{{ live_check.detail }}</span>
+                </li>
+                {% for check in other_checks %}
                     <li class="check {% if check.passed %}check-pass{% else %}check-fail{% endif %}">
                         <span class="check-mark">{% if check.passed %}✓{% else %}✕{% endif %}</span>
-                        <span class="check-label">{{ check.label }}</span>
+                        <span class="check-label">{{ check.label }}{% if check.label in reading_checks %} <span class="muted">(à la lecture du ticket)</span>{% endif %}</span>
                         {% if check.detail %}<span class="check-detail">{{ check.detail }}</span>{% endif %}
                     </li>
-                {% empty %}
-                    <li class="check"><span class="check-mark">—</span><span class="check-label">Aucun contrôle enregistré.</span></li>
                 {% endfor %}
             </ul>
 
@@ -69,9 +73,14 @@
                         <label for="{{ date_form.invoice_date.id_for_label }}">{{ date_form.invoice_date.label }}</label>
                         {{ date_form.invoice_date }}
                         {% if not invoice.invoice_date %}<span class="muted">non lue sur le ticket</span>{% endif %}
+                        <label for="{{ date_form.printed_total_ttc.id_for_label }}">{{ date_form.printed_total_ttc.label }}</label>
+                        {{ date_form.printed_total_ttc }}
+                        {% if invoice.printed_total_ttc is None %}<span class="muted">non lu sur le ticket</span>{% endif %}
                     </div>
-                    {% for error in date_form.invoice_date.errors %}
-                        <div class="message message-error">{{ date_form.invoice_date.label }} : {{ error }}</div>
+                    {% for field in date_form %}
+                        {% for error in field.errors %}
+                            <div class="message message-error">{{ field.label }} : {{ error }}</div>
+                        {% endfor %}
                     {% endfor %}
                     <div id="line-rows">
                         {% for line_form in formset %}
@@ -242,6 +251,51 @@
     if (lines) {
         lines.addEventListener("input", noteEdit);
         lines.addEventListener("change", noteEdit);
+    }
+    // The lines against the printed total, as they are typed: the same sum
+    // (each line to the cent) and tolerance as the check saved on validation.
+    var check = document.getElementById("live-lines-check");
+    var shownTotal = document.getElementById("receipt-total");
+    function cents(input) {
+        if (!input) return null;
+        var value = parseFloat(String(input.value).replace(",", "."));
+        return isNaN(value) ? null : Math.round(value * 100);
+    }
+    function euros(amount) {
+        return (amount / 100).toFixed(2);
+    }
+    function refreshCheck() {
+        if (!check || !lines) return;
+        var sum = 0;
+        lines.querySelectorAll("#line-rows .invoice-line-row").forEach(function (row) {
+            var del = row.querySelector("input[name$='-DELETE']");
+            if (row.hidden || (del && del.checked)) return;
+            var value = cents(row.querySelector("input[name$='-total_ttc']"));
+            if (value !== null) sum += value;
+        });
+        if (shownTotal) shownTotal.textContent = euros(sum);
+        var paid = cents(lines.querySelector("input[name='printed_total_ttc']"));
+        var detail;
+        var passed = false;
+        if (paid === null) {
+            detail = "lignes " + euros(sum) + " € : saisissez le total du ticket pour les vérifier";
+        } else {
+            var gap = paid - sum;
+            passed = Math.abs(gap) <= Math.round(parseFloat(check.dataset.tolerance) * 100);
+            detail = "lignes " + euros(sum) + " € / ticket " + euros(paid) + " € (écart "
+                + (gap < 0 ? "-" : "+") + euros(Math.abs(gap)) + " €)";
+        }
+        check.classList.toggle("check-pass", passed);
+        check.classList.toggle("check-fail", !passed);
+        check.querySelector(".check-mark").textContent = passed ? "✓" : "✕";
+        check.querySelector(".check-detail").textContent = detail;
+    }
+    if (lines) {
+        lines.addEventListener("input", refreshCheck);
+        lines.addEventListener("change", refreshCheck);
+        // "Retirer" hides a row without an input event.
+        lines.addEventListener("click", function () { setTimeout(refreshCheck, 0); });
+        refreshCheck();
     }
     document.querySelectorAll("form[data-leaves-lines]").forEach(function (form) {
         form.addEventListener("submit", function (event) {

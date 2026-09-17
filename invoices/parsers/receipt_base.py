@@ -112,6 +112,22 @@ WEIGHT_RE = re.compile(r"(?<![\d.,])(?P<weight>\d{1,3}[.,]\d{3})(?!\d)")
 PER_UNIT_RE = re.compile(r"(?P<price>\d{1,4}[.,]\d{2})[^\d\s/]{0,3}\s*/")
 
 
+# "**DUPLICATA**", "-**DUPLICATA**---": a banner the till prints between
+# asterisks. Never part of a product's name - but the recogniser once grouped
+# one with the first item's price, whose name it never read.
+BANNER_RE = re.compile(r"[-\s]*\*{2,}[^*]*\*{2,}[-\s]*")
+LETTER_RE = re.compile(r"[A-Za-zÀ-ÿ]")
+# What an item whose name was not read is called until a person names it.
+UNREAD_NAME = "Article non lu"
+
+
+def item_name(text: str) -> str | None:
+    """The product name in `text`, banners taken out; None when no letter is
+    left - the amount is an item, its name was not read."""
+    name = " ".join(BANNER_RE.sub(" ", text).split())
+    return name if LETTER_RE.search(name) else None
+
+
 def line_amounts(line: str) -> list[Decimal]:
     """Every money amount on a line, signed, to the cent."""
     return [
@@ -147,10 +163,13 @@ def printed_total(lines: list[str]) -> Decimal | None:
     repeated = sorted((amount for amount, times in counts.items() if times >= 2), reverse=True)
     for candidate in repeated:
         summaries, _rate_only = collect_vat_summaries(lines, candidate)
-        if any(
-            not summary.derived and summary.total_ttc is not None and abs(summary.total_ttc - candidate) <= CENTS
-            for summary in summaries
-        ):
+        read = [summary for summary in summaries if not summary.derived and summary.total_ttc is not None]
+        if any(abs(summary.total_ttc - candidate) <= CENTS for summary in read):
+            return candidate
+        # Several rates print one row each, and the amount paid is their sum -
+        # which no row shows. Taking the one row that repeats an amount made a
+        # 0.20 paper bag the total, and the 11.20 of ham a "promotion".
+        if len(read) >= 2 and abs(sum((summary.total_ttc for summary in read), start=Decimal("0")) - candidate) <= CENTS:
             return candidate
     table, _rate_only = collect_vat_summaries(lines, None)
     read = [summary for summary in table if not summary.derived and summary.total_ttc is not None]
@@ -618,8 +637,23 @@ class ReceiptParser(InvoiceParser):
         """
         pages = [PdfPage(text=page.text, tables=[]) for page in ocr_pages]
         parsed = self.parse_pages(pages, date_hint=date_hint, source_name=source_name)
+        self._as_read(parsed, "\n".join(page.text for page in ocr_pages))
+        confidences = [page.confidence for page in ocr_pages if page.lines]
+        if confidences:
+            parsed.confidence = Decimal(str(min(confidences))).quantize(CENTS, rounding=ROUND_HALF_UP)
+        return parsed
 
-        parsed.source_text = "\n".join(page.text for page in ocr_pages)
+    def parse_text(self, text: str, date_hint: date | None = None) -> ParsedInvoice:
+        """Parse a receipt's stored reading (Invoice.ocr_text) again: how a
+        parser improvement reaches tickets already imported, with no photo
+        and no OCR (see receipts.reread_receipt)."""
+        parsed = self.parse_pages([PdfPage(text=text, tables=[])], date_hint=date_hint)
+        self._as_read(parsed, text)
+        return parsed
+
+    @staticmethod
+    def _as_read(parsed: ParsedInvoice, text: str) -> None:
+        parsed.source_text = text
         parsed.from_ocr = True
         for line in parsed.lines:
             # Kept before the shop's price list renames a placeholder: a
@@ -627,10 +661,6 @@ class ReceiptParser(InvoiceParser):
             # gets matched against (InvoiceLine.read_as).
             if not line.is_placeholder:
                 line.read_as = line.raw_name
-        confidences = [page.confidence for page in ocr_pages if page.lines]
-        if confidences:
-            parsed.confidence = Decimal(str(min(confidences))).quantize(CENTS, rounding=ROUND_HALF_UP)
-        return parsed
 
 
 def assign_rates_by_bucket(

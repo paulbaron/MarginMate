@@ -74,6 +74,8 @@ from .receipt_base import (
     quantity_checks,
     read_date,
     reconcile_quantity,
+    UNREAD_NAME,
+    item_name,
     to_ht,
     weight_on,
 )
@@ -83,12 +85,13 @@ from .registry import register
 # amount.
 ITEM_RE = re.compile(r"^(?P<name>.*[A-Za-z].*?)\s+T(?P<code>[0-9])\s*(?P<amount>\d{1,3}[.,]\d{2})")
 # "BAGUETTE BLANC  T1 6 X 0.49  2.94" - the multiplier form, printed when the
-# same product is scanned several times. Without it the whole line is
-# skipped: every one of those items vanishes while the receipt still
-# balances against its own printed total.
+# same product is scanned several times ("T1 2 X 0.49Eur 0.98Eur" on a till
+# that prints the currency: up to three characters between the amounts).
+# Without it the whole line is skipped: every one of those items vanishes
+# while the receipt still balances against its own printed total.
 QUANTITY_ITEM_RE = re.compile(
     r"^(?P<name>.*[A-Za-z].*?)\s+T(?P<code>[0-9])\s*(?P<qty>\d{1,3})\s*[xX×]\s*"
-    r"(?P<unit>\d{1,3}[.,]\d{2})\D{0,2}(?P<total>\d{1,4}[.,]\d{2})"
+    r"(?P<unit>\d{1,3}[.,]\d{2})[^\d\s]{0,3}\s*(?P<total>\d{1,4}[.,]\d{2})"
 )
 # "R1 005333-01 385" - store/till, then the ticket sequence.
 TICKET_RE = re.compile(r"R\d\s*(\d{5,6}-\d{2})\s*(\d{2,4})")
@@ -138,15 +141,18 @@ class FranprixParser(ReceiptParser):
             name, quantity, unit_price, amount, code = item
             if unit_price is not None:
                 quantity = reconcile_quantity(name, quantity, unit_price, amount, quantity_fixes, quantity_problems)
+            name = item_name(name)
             parsed_lines.append(
                 ParsedLine(
-                    raw_name=name,
+                    raw_name=name or UNREAD_NAME,
                     quantity=quantity,
                     total_volume=Decimal("0"),
                     unit_cost_ht=Decimal("0"),  # filled in once the rate is known
                     total_ht=amount,  # still TTC here, converted below
                     vat_rate=Decimal("0"),
                     category=code,
+                    # Named on the review screen, like a till's "Article divers".
+                    is_placeholder=name is None,
                 )
             )
             coded_totals[code] = coded_totals.get(code, Decimal("0")) + amount

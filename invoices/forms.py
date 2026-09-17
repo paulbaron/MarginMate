@@ -263,14 +263,23 @@ class ReceiptShopForm(forms.Form):
     )
 
 
-class ReceiptDateForm(forms.Form):
-    """The ticket's date, on the review screen: the OCR can miss it, and a
-    ticket typed in from its photo has none until it is given one."""
+class ReceiptHeaderForm(forms.Form):
+    """The ticket's date and printed total, on the review screen: the OCR can
+    miss either, and a ticket typed in from its photo has neither until it is
+    given them. The total is what the lines are checked against as they are
+    typed."""
 
     invoice_date = forms.DateField(
         label="Date du ticket",
         required=False,
         widget=forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
+    )
+    printed_total_ttc = forms.DecimalField(
+        label="Total payé",
+        required=False,
+        max_digits=12,
+        decimal_places=2,
+        widget=forms.NumberInput(attrs={"step": "0.01", "placeholder": "Total TTC"}),
     )
 
 

@@ -31,7 +31,7 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from django.core.files.base import ContentFile
 from django.db import transaction
@@ -41,7 +41,7 @@ from .models import Invoice, InvoiceLine, ShopItemPrice, Supplier, label_for_uni
 from .ocr import deskew, ocr_prepared_image, page_images
 from .parsers import LLM_PARSER_KEY, PARSER_REGISTRY, ticket_parser_for
 from .parsers.base import ParseCheck, ParsedInvoice
-from .parsers.receipt_base import CENTS, ReceiptParser
+from .parsers.receipt_base import CENTS, RECONCILIATION_TOLERANCE, ReceiptParser
 
 # Wide enough to read a price off on screen, small enough that a batch of
 # thirty receipts doesn't add 50MB to the media folder.
@@ -52,6 +52,25 @@ PREVIEW_QUALITY = 82
 PLACEHOLDER_MARKER = "EUR/u)"
 CHOSEN_SHOP_CHECK = "Enseigne choisie à la main"
 UNREAD_CHECK = "Lecture automatique"
+SUM_CHECK = "Somme des lignes = total imprimé"
+UNREAD_TOTAL_CHECK = "Total imprimé lu"
+# What the parser said about the lines it read. Once a person has corrected
+# the lines, these describe lines that no longer exist: they give way to one
+# check on the lines as they are now (lines_check).
+READING_CHECKS = {
+    SUM_CHECK,
+    UNREAD_CHECK,
+    "Somme HT des lignes = base HT du ticket",
+    "Articles = total avant remise",
+    "Montants recalculés",
+    "Poids rattachés",
+    "Poids x prix au kilo = montant",
+    "Remise attribuée",
+    "Quantités recalculées",
+    "Quantité x prix unitaire = total",
+    "Taux par article",
+    "Taux applicable",
+}
 
 
 class UnrecognisedShopError(ValueError):
@@ -303,6 +322,93 @@ def rename_product(product, name: str) -> int:
         return product.invoice_lines.filter(raw_name=old).exclude(read_as=old).update(raw_name=name)
 
 
+def lines_check(invoice: Invoice, prefix: str = "") -> dict:
+    """The lines as they stand against the total the ticket printed - with the
+    parser's own tolerance, the one Invoice.total_ttc trusts. Each line counts
+    as the review screen shows it, to the cent."""
+    lines_total = sum(
+        (line.total_ttc.quantize(CENTS, rounding=ROUND_HALF_UP) for line in invoice.lines.all()), start=Decimal("0")
+    )
+    paid = invoice.printed_total_ttc
+    if paid is None:
+        return {
+            "label": SUM_CHECK,
+            "passed": False,
+            "detail": f"{prefix}lignes {lines_total:.2f} € : saisissez le total du ticket pour les vérifier",
+        }
+    gap = paid - lines_total
+    return {
+        "label": SUM_CHECK,
+        "passed": abs(gap) <= RECONCILIATION_TOLERANCE,
+        "detail": f"{prefix}lignes {lines_total:.2f} € / ticket {paid:.2f} € (écart {gap:+.2f} €)",
+    }
+
+
+def recheck_after_review(invoice: Invoice) -> None:
+    """Replace what the parser said about the lines with the check on the
+    lines a person validated - or the review screen keeps showing "lignes
+    3.85 € / ticket 9.03 €" about lines corrected long ago. What was read of
+    the VAT table stays: nobody retyped that. Not saved here."""
+    dropped = set(READING_CHECKS)
+    if invoice.printed_total_ttc is not None:
+        dropped.add(UNREAD_TOTAL_CHECK)
+    invoice.parse_checks = [check for check in invoice.parse_checks if check["label"] not in dropped] + [
+        lines_check(invoice, prefix="vérifié à la main : ")
+    ]
+
+
+def _sum_check_passed(checks) -> bool:
+    return any(check["label"] == SUM_CHECK and check["passed"] for check in checks)
+
+
+def _failures(checks) -> int:
+    return sum(1 for check in checks if not check["passed"])
+
+
+def reread_receipt(invoice: Invoice) -> bool:
+    """Read a ticket still waiting to be checked again, from its stored
+    reading, with today's parser - keeping the new lines only if they add up
+    to the printed total and fail fewer checks than the old ones (a sum can
+    pass for the wrong reason: a ticket whose total was misread passed with
+    the rest booked as a "promotion", its other checks failing). Never a
+    checked ticket: its lines are what a person confirmed. Returns whether it
+    changed.
+    """
+    from .importing import InvoiceLinesInUseError, replace_invoice_lines
+
+    if invoice.reviewed_at is not None or not invoice.ocr_text or not _failures(invoice.parse_checks):
+        return False
+    parser = parser_for(invoice.supplier)
+    if parser is None:
+        return False
+    try:
+        parsed = parser.parse_text(invoice.ocr_text)
+    except Exception:  # noqa: BLE001 - a reading today's parser can't handle stays as it was
+        return False
+    checks = [{"label": check.label, "passed": check.passed, "detail": check.detail} for check in parsed.checks]
+    if not parsed.lines or not _sum_check_passed(checks) or _failures(checks) >= _failures(invoice.parse_checks):
+        return False
+    label_placeholder_lines(invoice.supplier, parsed)
+    chosen = [check for check in invoice.parse_checks if check["label"] == CHOSEN_SHOP_CHECK]
+    try:
+        with transaction.atomic():
+            replace_invoice_lines(invoice, parsed.lines)
+            invoice.reconciliation_adjustment = parsed.reconciliation_adjustment
+            invoice.printed_total_ttc = parsed.printed_total_ttc
+            invoice.invoice_date = invoice.invoice_date or parsed.invoice_date
+            invoice.parse_checks = checks + chosen
+            if invoice.failed_checks:
+                invoice.status = Invoice.Status.NEEDS_REVIEW
+            invoice.save(
+                update_fields=[
+                    "reconciliation_adjustment", "printed_total_ttc", "invoice_date", "parse_checks", "status",
+                ]
+            )
+    except InvoiceLinesInUseError:
+        return False
+    return True
+
+
 def _describe(invoice: Invoice) -> str:
     """Shop, ticket number and date, written the way the rest of the app
     writes them - the batch page shows this beside rows dated 02/06/2026."""
@@ -428,12 +534,15 @@ __all__ = [
     "detect_parser",
     "import_receipt",
     "label_placeholder_lines",
+    "lines_check",
     "parser_for",
     "pending_receipts",
     "printed_unit_price",
     "read_receipt",
     "receipt_parsers",
+    "recheck_after_review",
     "recognise",
     "rename_product",
+    "reread_receipt",
     "shop_choices",
 ]
