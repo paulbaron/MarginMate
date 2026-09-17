@@ -14,6 +14,7 @@ from inventory.services import create_stock_movement_for_line
 
 from .deletion import remove_orphan_products
 from .models import Invoice, InvoiceLine, Supplier
+from .ocr import document_text
 from .parsers import is_ticket_shop
 from .parsers.base import ParsedInvoice, ParsedLine
 
@@ -203,6 +204,11 @@ def parse_and_import(
     else:
         parsed = parser.parse(pdf_path, date_hint=date_hint)
     invoice = import_parsed_invoice(supplier, parsed, source_file_path=pdf_path, display_filename=display_filename)
+    # What the document itself says, kept for what it tells about its sender
+    # (invoices/identifiers.py) - and for the header a shop is given.
+    invoice.source_text = document_text(pdf_path)
+    if invoice.source_text:
+        invoice.save(update_fields=["source_text"])
 
     # Said on the invoice itself. A parser that reads nothing has usually met
     # a new layout - and an empty invoice otherwise reads as "this supplier

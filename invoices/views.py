@@ -78,7 +78,7 @@ def upload_invoice(request):
     shown first in the list, highlighted and opened on its lines. Any other
     supplier's - a new one's included - is read like a ticket and opens on
     the correction page, beside its PDF."""
-    from .receipts import OCR_LOCK, OCR_WAIT_SECONDS, has_own_reader, import_receipt
+    from .receipts import OCR_LOCK, OCR_WAIT_SECONDS, import_document
 
     if request.method != "POST":
         return render_purchases(request, "documents", import_tab="pdf")
@@ -91,7 +91,6 @@ def upload_invoice(request):
             form.add_error("new_name", str(exc))
     if supplier is None:
         return render_purchases(request, "documents", import_tab="pdf", pdf_form=form)
-    own_reader = has_own_reader(supplier) or supplier.parser_key == LLM_PARSER_KEY
     uploaded = form.cleaned_data["source_file"]
     suffix = os.path.splitext(uploaded.name)[1] or ".pdf"
     fd, tmp_path = tempfile.mkstemp(suffix=suffix)
@@ -99,15 +98,19 @@ def upload_invoice(request):
         with os.fdopen(fd, "wb") as tmp:
             for chunk in uploaded.chunks():
                 tmp.write(chunk)
-        if own_reader:
+        if supplier.parser_key == LLM_PARSER_KEY:
             invoice = parse_and_import(tmp_path, supplier, display_filename=uploaded.name)
         else:
-            # A scanned invoice is OCR: seconds of CPU, one at a time.
+            # A scan is OCR, seconds of CPU: one document at a time. The file
+            # decides the reader here too - a supplier's own when it has one
+            # and the document is digital, the ticket reader otherwise.
             if not OCR_LOCK.acquire(timeout=OCR_WAIT_SECONDS):
                 raise RuntimeError("un autre document est en cours de lecture, réessayez dans un instant")
             try:
-                invoice = import_receipt(
-                    tmp_path, display_filename=uploaded.name, supplier=supplier,
+                invoice = import_document(
+                    tmp_path,
+                    display_filename=uploaded.name,
+                    supplier=supplier,
                     chosen_because=f"Fournisseur choisi à l'import de la facture ({supplier.name}).",
                 )
             finally:
@@ -119,7 +122,9 @@ def upload_invoice(request):
     else:
         if created:
             messages.info(request, f"Fournisseur {supplier.name} créé.")
-        if own_reader:
+        # Read by its supplier's own reader, it goes to the list; read the
+        # way a ticket is, to the screen where it is checked against itself.
+        if not invoice.is_receipt:
             messages.success(request, f"Facture importée : {invoice}. Ses lignes sont ouvertes dans la liste.")
             return redirect(f"{reverse('invoices:invoice_list')}?surligner={invoice.pk}")
         messages.success(
@@ -633,9 +638,10 @@ def _correction_page(request, invoice):
             "suggested_header": header_guess(invoice.ocr_text),
             "header_choices": header_choices(invoice.ocr_text),
             "names_shop": names_shop(invoice.supplier),
-            # A till configured here is known by its own layout: there is no
-            # header to give for it.
-            "can_set_header": ticket_parser_for(invoice.supplier.code) is None,
+            # A till configured here is known by its own layout, and nothing
+            # is ever filed under the AI pseudo-supplier: no header to give.
+            "can_set_header": ticket_parser_for(invoice.supplier.code) is None
+            and invoice.supplier.parser_key != LLM_PARSER_KEY,
             # The shop's price list matters where its till prints no names, or
             # where one has been started: elsewhere it is folded away.
             "prices_open": bool(shop and shop.placeholder_names)
@@ -796,10 +802,14 @@ def _set_shop_header(request, invoice) -> None:
     from .receipts import describe_tickets, set_shop_header, tickets_printing
 
     shop = invoice.supplier
+    was = shop.ticket_header
     try:
         header = set_shop_header(shop, request.POST.get("ticket_header", "")[:100], ignoring=[invoice])
     except ValueError as exc:
         messages.error(request, str(exc))
+        return
+    if header == was:
+        messages.info(request, f"{shop.name} garde le même en-tête : rien n'a changé.")
         return
     if not header:
         messages.success(

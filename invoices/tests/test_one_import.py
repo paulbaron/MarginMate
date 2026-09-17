@@ -22,6 +22,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 
+from invoices.importing import DuplicateInvoiceError, parse_and_import
 from invoices.models import Invoice, Supplier
 from invoices.parsers.base import ParsedInvoice, ParsedLine
 from invoices.receipt_batches import run_receipt_batch, stage_batch
@@ -101,6 +102,19 @@ class WhichReaderTests(TestCase):
         self.assertFalse(invoice.is_receipt)
         self.assertIn("EAU DE SOURCE", invoice.source_text)
 
+    def test_a_file_already_imported_is_refused_before_it_is_read(self):
+        """A folder scanned again is mostly documents already in: the file's
+        own digest answers, and nothing is opened."""
+        path = os.path.join(settings.MEDIA_ROOT, "facture.pdf")
+        write_pdf(path, METRO_INVOICE)
+        self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
+        with mock.patch("invoices.parsers.metro.MetroParser.parse", return_value=PARSED):
+            import_document(path, display_filename="facture.pdf")
+        with mock.patch("invoices.receipts.document_text") as read, \
+                self.assertRaisesMessage(DuplicateInvoiceError, "Fichier déjà importé"):
+            import_document(path, display_filename="facture.pdf")
+        read.assert_not_called()
+
     def test_a_photo_is_read_as_a_ticket(self):
         make_supplier(code="EPICERIE", name="Épicerie du coin", ticket_header="EPICERIE DU COIN")
         path = os.path.join(settings.MEDIA_ROOT, "ticket.jpg")
@@ -132,6 +146,33 @@ class WhichReaderTests(TestCase):
             invoice = import_document(path, display_filename="cuisipro.pdf")
         self.assertEqual((invoice.supplier, invoice.lines.count()), (shop, 1))
         self.assertTrue(invoice.is_receipt)
+
+
+class WhatTheDocumentSaysTests(TestCase):
+    """Every digital document keeps its text, whichever way it came in: it is
+    what teaches a supplier the figures that name it."""
+
+    def test_an_invoice_gathered_keeps_its_text(self):
+        metro = Supplier.objects.get(code="METRO")
+        path = os.path.join(settings.MEDIA_ROOT, "gathered.pdf")
+        write_pdf(path, METRO_INVOICE)
+        self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
+        with mock.patch("invoices.parsers.metro.MetroParser.parse", return_value=PARSED):
+            invoice = parse_and_import(path, metro, display_filename="gathered.pdf")
+        self.assertIn("EAU DE SOURCE", invoice.source_text)
+        self.assertFalse(invoice.is_receipt)
+
+    def test_a_photo_filed_by_hand_keeps_none(self):
+        """A photo has its reading (`ocr_text`); nothing else is kept."""
+        path = os.path.join(settings.MEDIA_ROOT, "photo.jpg")
+        with open(path, "wb") as handle:
+            handle.write(b"\xff\xd8\xff a photo")
+        self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
+        shop = make_supplier(code="EPICERIE", name="Épicerie du coin", parser_key="")
+        with mock.patch("invoices.receipts.recognise", return_value=recognised(UNKNOWN_SHOP)):
+            invoice = import_document(path, display_filename="photo.jpg", supplier=shop)
+        self.assertEqual(invoice.source_text, "")
+        self.assertTrue(invoice.ocr_text)
 
 
 class OneBatchTests(TestCase):

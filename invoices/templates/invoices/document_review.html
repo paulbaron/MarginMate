@@ -57,7 +57,7 @@
                                        value="{{ invoice.supplier.ticket_header }}" placeholder="{{ suggested_header }}">
                             </label>
                             <button class="btn btn-small btn-secondary" type="submit">Enregistrer</button>
-                            <span class="muted">d'après le document, pour que ses prochains tickets soient reconnus.</span>
+                            <span class="muted">d'après le document, pour que ses prochains soient reconnus.</span>
                             {% if header_choices %}
                                 <span class="header-choices">
                                     {% for choice in header_choices %}
@@ -146,7 +146,7 @@
             <h2>Lignes</h2>
             <p class="lead">
                 {% if is_receipt %}
-                    Corrigez ce qui ne correspond pas à la photo, puis validez. Chaque montant se lit
+                    Corrigez ce qui ne correspond pas {% if source_is_pdf %}au document{% else %}à la photo{% endif %}, puis validez. Chaque montant se lit
                     <strong>avant remise</strong>, tel qu'imprimé : tapez-le en TTC ou en HT, l'autre suit.
                     La remise d'une promotion se met à côté. Un nom corrigé dans une ligne ne vaut que pour
                     ce ticket : pour corriger le nom d'un produit partout, ouvrez « Renommer … » sous sa ligne.
@@ -227,7 +227,7 @@
                                 {% endfor %}
                             </div>
                         {% empty %}
-                            <p class="muted" id="no-line-yet">Aucune ligne : ajoutez celles du document d'après {% if is_receipt %}la photo{% else %}le PDF{% endif %}.</p>
+                            <p class="muted" id="no-line-yet">Aucune ligne : ajoutez celles du document d'après {% if is_receipt and not source_is_pdf %}la photo{% else %}le PDF{% endif %}.</p>
                         {% endfor %}
                     </div>
                     <div class="line-tools">
@@ -320,7 +320,7 @@
                 </div>
                 </details>
 
-                <h2>Texte lu sur la photo</h2>
+                <h2>Texte lu {% if source_is_pdf %}sur le document{% else %}sur la photo{% endif %}</h2>
                 <details>
                     <summary class="muted">Afficher ce que la reconnaissance a lu</summary>
                     <div class="ocr-dump">{% for line in ocr_lines %}{{ line }}

@@ -327,6 +327,11 @@ COLUMN_GAP_SHARE = 0.4
 SAME_TEXT_LINE_POINTS = 3
 
 
+def document_text(path: str) -> str:
+    """The text a digital document carries, or "" for a photo or a scan."""
+    return "\n".join(page.text for page in text_layer_pages(path) if page is not None)
+
+
 def text_layer_pages(path: str) -> list[OcrPage | None]:
     """The text a PDF carries, page by page, as lines the readers take - or
     None for a page that is a picture. A digital invoice needs no OCR: its

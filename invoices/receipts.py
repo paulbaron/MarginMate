@@ -44,7 +44,13 @@ from .identifiers import describe as describe_identifier
 from .identifiers import document_identifiers, may_print
 from .importing import DuplicateInvoiceError, import_parsed_invoice
 from .models import Invoice, InvoiceLine, ShopItemPrice, Supplier, label_for_unit_price
-from .ocr import deskew, ocr_prepared_image, page_images, text_layer_pages
+from .ocr import (
+    deskew,
+    document_text,
+    ocr_prepared_image,
+    page_images,
+    text_layer_pages,
+)
 from .parsers import (
     LLM_PARSER_KEY,
     PARSER_REGISTRY,
@@ -91,6 +97,8 @@ DATE_OR_TIME_RE = re.compile(r"(?<!\d)(?:\d{2}[/.-]\d{2}[/.-]\d{2,4}|\d{1,2}\s?[
 # lines are offered as its header.
 HEADER_LINES_READ = 10
 MAX_HEADER_CHOICES = 6
+# A shop's name or street, not a sentence: longer than this, a line is cut.
+MAX_HEADER_LENGTH = 40
 # The share of a shop's documents that print an identifier for it to name the
 # shop (learn_identifiers).
 MIN_IDENTIFIER_SHARE = Decimal("0.25")
@@ -334,12 +342,13 @@ def header_choices(text: str) -> list[str]:
     document is on show."""
     choices: list[str] = []
     for line in [line.strip() for line in text.splitlines() if line.strip()][:HEADER_LINES_READ]:
-        line = " ".join(line.split())[:60]
+        line = " ".join(line.split())[:MAX_HEADER_LENGTH]
         letters = sum(char.isalpha() for char in line)
         visible = len(line.replace(" ", ""))
         if letters < MIN_HEADER_LENGTH or letters < 0.5 * visible:
             continue
-        if FIELD_RE.match(line) or line_amounts(line) or DATE_OR_TIME_RE.search(line):
+        # "No de Commande :" is the label of a field whose value is elsewhere.
+        if FIELD_RE.match(line) or line.endswith(":") or line_amounts(line) or DATE_OR_TIME_RE.search(line):
             continue
         if line not in choices:
             choices.append(line)
@@ -905,11 +914,6 @@ def has_own_reader(supplier: Supplier) -> bool:
     return supplier.parser_key != LLM_PARSER_KEY and not is_ticket_shop(supplier)
 
 
-def document_text(path: str) -> str:
-    """The text a digital document carries, or "" for a photo or a scan."""
-    return "\n".join(page.text for page in text_layer_pages(path) if page is not None)
-
-
 def has_text_layer(path: str) -> bool:
     """A digital document, rather than a photo or a scan."""
     return any(page is not None for page in text_layer_pages(path))
@@ -928,6 +932,7 @@ def import_document(
     display_filename: str | None = None,
     supplier: Supplier | None = None,
     date_hint: date | None = None,
+    chosen_because: str | None = None,
 ) -> Invoice:
     """Import one file, whatever it is - the file says which reader it needs.
 
@@ -936,12 +941,18 @@ def import_document(
     is recognised, by `supplier` or by what the document prints; anything
     else is read by the ticket reader, which reads an invoice's table too.
     """
+    # Before the file is opened at all: a folder scanned again is mostly
+    # documents already in, and its digest answers for them.
+    known = Invoice.objects.filter(source_sha256=file_sha256(path)).select_related("supplier").first()
+    if known is not None:
+        raise DuplicateInvoiceError(f"Fichier déjà importé : {_describe(known)}.")
     text = document_text(path)
     if text:
         found = supplier if supplier is not None else document_supplier(text)
         if found is not None and has_own_reader(found):
             return import_invoice_pdf(path, found, display_filename=display_filename, text=text)
-    return import_receipt(path, display_filename=display_filename, supplier=supplier, date_hint=date_hint)
+    said = {} if chosen_because is None else {"chosen_because": chosen_because}
+    return import_receipt(path, display_filename=display_filename, supplier=supplier, date_hint=date_hint, **said)
 
 
 def import_invoice_pdf(

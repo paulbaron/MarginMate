@@ -136,7 +136,7 @@ class PurchasesPageTests(TestCase):
     def test_a_pdf_imported_is_highlighted_in_the_list(self):
         new = make_invoice(supplier=self.metro, invoice_number="F-78")
         upload = SimpleUploadedFile("facture.pdf", b"%PDF-1.4", content_type="application/pdf")
-        with mock.patch("invoices.views.parse_and_import", return_value=new):
+        with mock.patch("invoices.receipts.import_document", return_value=new):
             response = self.client.post(
                 reverse("invoices:invoice_upload"), {"supplier": self.metro.pk, "source_file": upload}
             )
@@ -147,7 +147,7 @@ class PurchasesPageTests(TestCase):
 
     def test_a_pdf_that_fails_says_so_on_the_page(self):
         upload = SimpleUploadedFile("facture.pdf", b"%PDF-1.4", content_type="application/pdf")
-        with mock.patch("invoices.views.parse_and_import", side_effect=ValueError("illisible")):
+        with mock.patch("invoices.receipts.import_document", side_effect=ValueError("illisible")):
             response = self.client.post(
                 reverse("invoices:invoice_upload"), {"supplier": self.metro.pk, "source_file": upload}, follow=True
             )

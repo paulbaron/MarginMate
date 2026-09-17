@@ -125,7 +125,7 @@ class UploadTests(TestCase):
     def test_a_supplier_with_its_own_reader_keeps_it(self):
         metro = Supplier.objects.get(code="METRO")
         new = make_invoice(supplier=metro, invoice_number="F-78")
-        with mock.patch("invoices.views.parse_and_import", return_value=new) as parser, \
+        with mock.patch("invoices.importing.parse_and_import", return_value=new) as parser, \
                 mock.patch("invoices.receipts.recognise") as ocr:
             response = self.post(supplier=metro.pk)
         parser.assert_called_once()

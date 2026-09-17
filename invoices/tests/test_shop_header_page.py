@@ -49,6 +49,16 @@ class SetHeaderTests(TestCase):
         # A date or a total says nothing about the shop.
         self.assertNotContains(page, 'data-header-choice="TOTAL 2,35"')
 
+    def test_a_label_or_a_sentence_is_no_header(self):
+        from invoices.receipts import header_choices
+
+        found = header_choices(
+            "No de Commande :\nMerci de votre visite, et à très bientôt dans votre magasin préféré\nBRICO EXEMPLE"
+        )
+        self.assertEqual(found[-1], "BRICO EXEMPLE")
+        self.assertNotIn("No de Commande :", found)
+        self.assertTrue(all(len(choice) <= 40 for choice in found), found)
+
     def test_giving_the_header_files_the_next_tickets_there(self):
         response = self.client.post(self.url, {"action": "shop_header", "ticket_header": "EPICERIE DU COIN"})
         self.assertRedirects(response, self.url)
@@ -119,6 +129,6 @@ class AfterANewShopTests(TestCase):
         shop = make_supplier(code="EPICERIE", name="Épicerie du coin", parser_key="")
         ticket = make_invoice(supplier=shop, ocr_text=TICKET, parse_checks=CHECKED)
         page = self.client.get(reverse("invoices:receipt_review", args=[ticket.pk]))
-        self.assertContains(page, "pour que ses prochains tickets soient reconnus")
+        self.assertContains(page, "pour que ses prochains soient reconnus")
         self.assertEqual(page.context["header_choices"][0], "EPICERIE DU COIN")
         self.assertNotIn(Invoice.objects.get(pk=ticket.pk).supplier.ticket_header, ["EPICERIE DU COIN"])
