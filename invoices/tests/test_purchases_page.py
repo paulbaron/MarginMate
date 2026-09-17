@@ -66,11 +66,11 @@ class PurchasesPageTests(TestCase):
         """The page's script switches on `data-import-tab`: carried by the card
         itself, a click anywhere in it - choosing a folder - hid every panel."""
         html = self.client.get(self.url).content.decode()
-        card = html[html.index('id="ajouter"') - 200:html.index('id="import-tickets"')]
+        card = html[html.index('id="ajouter"') - 200:html.index('id="import-documents"')]
         opening = card[card.index("<section"):card.index(">", card.index("<section"))]
         self.assertNotIn("data-import-tab", opening)
         self.assertIn('data-initial-tab=""', opening)
-        self.assertEqual(html.count("data-import-tab="), 3)
+        self.assertEqual(html.count("data-import-tab="), 2)
 
     def test_the_three_tabs_and_what_waits_in_them(self):
         undated(make_invoice(supplier=self.metro, invoice_number="SANS-DATE"))
@@ -129,9 +129,9 @@ class PurchasesPageTests(TestCase):
 
     def test_the_pages_that_were_their_own_open_the_right_import(self):
         tickets = self.client.get(reverse("invoices:receipt_upload"))
-        self.assertEqual(tickets.context["import_tab"], "tickets")
+        self.assertEqual(tickets.context["import_tab"], "documents")
         pdf = self.client.get(reverse("invoices:invoice_upload"))
-        self.assertEqual(pdf.context["import_tab"], "pdf")
+        self.assertEqual(pdf.context["import_tab"], "documents")
 
     def test_a_pdf_imported_is_highlighted_in_the_list(self):
         new = make_invoice(supplier=self.metro, invoice_number="F-78")
@@ -152,7 +152,7 @@ class PurchasesPageTests(TestCase):
                 reverse("invoices:invoice_upload"), {"supplier": self.metro.pk, "source_file": upload}, follow=True
             )
         self.assertContains(response, "Échec de l&#x27;import : illisible")
-        self.assertEqual(response.context["import_tab"], "pdf")
+        self.assertEqual(response.context["import_tab"], "documents")
 
     def test_a_wrong_file_is_refused_in_the_card(self):
         upload = SimpleUploadedFile("facture.txt", b"x")
@@ -160,11 +160,11 @@ class PurchasesPageTests(TestCase):
             reverse("invoices:invoice_upload"), {"supplier": self.metro.pk, "source_file": upload}
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.context["import_tab"], "pdf")
+        self.assertEqual(response.context["import_tab"], "documents")
         self.assertContains(response, "Seuls les fichiers PDF sont acceptés.")
         empty = self.client.post(reverse("invoices:receipt_upload"), {})
         self.assertEqual(empty.status_code, 200)
-        self.assertEqual(empty.context["import_tab"], "tickets")
+        self.assertEqual(empty.context["import_tab"], "documents")
 
     def test_a_row_opens_in_place(self):
         vodka = make_priced_stock_type(name="Vodka")

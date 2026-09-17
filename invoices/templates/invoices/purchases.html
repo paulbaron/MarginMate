@@ -73,7 +73,7 @@
     if (!chosen) {
         try { chosen = localStorage.getItem(KEY); } catch (e) { chosen = null; }
     }
-    if (!card.querySelector('[data-import-panel="' + chosen + '"]')) chosen = "tickets";
+    if (!card.querySelector('[data-import-panel="' + chosen + '"]')) chosen = "documents";
     show(chosen);
 })();
 

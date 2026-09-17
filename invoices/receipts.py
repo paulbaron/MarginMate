@@ -54,7 +54,12 @@ from .parsers import (
 )
 from .parsers.base import ParseCheck, ParsedInvoice
 from .parsers.generic_receipt import GenericReceiptParser, TicketShop
-from .parsers.receipt_base import CENTS, RECONCILIATION_TOLERANCE, ReceiptParser
+from .parsers.receipt_base import (
+    CENTS,
+    RECONCILIATION_TOLERANCE,
+    ReceiptParser,
+    line_amounts,
+)
 
 # Wide enough to read a price off on screen, small enough that a batch of
 # thirty receipts doesn't add 50MB to the media folder.
@@ -81,6 +86,11 @@ MIN_HEADER_LENGTH = 4
 MAX_TICKETS_ELSEWHERE = 3
 # "Label : value" - a field of the document, never its sender's name.
 FIELD_RE = re.compile(r"^[^:]{2,40}:\s*\S")
+DATE_OR_TIME_RE = re.compile(r"(?<!\d)(?:\d{2}[/.-]\d{2}[/.-]\d{2,4}|\d{1,2}\s?[:Hh]\s?\d{2})(?!\d)")
+# How far down a document its shop's own name can be, and how many of its
+# lines are offered as its header.
+HEADER_LINES_READ = 10
+MAX_HEADER_CHOICES = 6
 # The share of a shop's documents that print an identifier for it to name the
 # shop (learn_identifiers).
 MIN_IDENTIFIER_SHARE = Decimal("0.25")
@@ -264,15 +274,14 @@ def learn_identifiers(supplier: Supplier, *texts: str) -> list[str]:
         candidates |= document_identifiers(text)
     if not candidates:
         return []
-    own = list(Invoice.objects.filter(supplier=supplier).exclude(ocr_text="").values_list("ocr_text", flat=True))
+    own = _stored_texts(Invoice.objects.filter(supplier=supplier))
     own += [text for text in texts if text and text not in own]
     seen = Counter()
     for document in own:
         if may_print(document, candidates):
             seen.update(document_identifiers(document) & candidates)
     kept = {identifier for identifier in candidates if seen[identifier] >= MIN_IDENTIFIER_SHARE * len(own)}
-    others = Invoice.objects.exclude(supplier=supplier).exclude(ocr_text="").values_list("ocr_text", flat=True)
-    for other in others.iterator():
+    for other in _stored_texts(Invoice.objects.exclude(supplier=supplier)):
         if not kept:
             break
         if may_print(other, kept):
@@ -281,6 +290,16 @@ def learn_identifiers(supplier: Supplier, *texts: str) -> list[str]:
         supplier.ticket_identifiers = sorted(kept)
         supplier.save(update_fields=["ticket_identifiers"])
     return sorted(kept - known)
+
+
+def _stored_texts(invoices) -> list[str]:
+    """What the documents of `invoices` say: a receipt's reading, a digital
+    one's own text."""
+    return [
+        ocr_text or source_text
+        for ocr_text, source_text in invoices.values_list("ocr_text", "source_text")
+        if ocr_text or source_text
+    ]
 
 
 def forget_identifiers(supplier: Supplier, text: str) -> None:
@@ -308,6 +327,35 @@ def header_guess(text: str) -> str:
     return ""
 
 
+def header_choices(text: str) -> list[str]:
+    """The lines of a document that could be the text its shop prints at the
+    top: its first lines made of words - a name, a street - with no amount,
+    date or field among them. Offered on the review screen, where the
+    document is on show."""
+    choices: list[str] = []
+    for line in [line.strip() for line in text.splitlines() if line.strip()][:HEADER_LINES_READ]:
+        line = " ".join(line.split())[:60]
+        letters = sum(char.isalpha() for char in line)
+        visible = len(line.replace(" ", ""))
+        if letters < MIN_HEADER_LENGTH or letters < 0.5 * visible:
+            continue
+        if FIELD_RE.match(line) or line_amounts(line) or DATE_OR_TIME_RE.search(line):
+            continue
+        if line not in choices:
+            choices.append(line)
+    return choices[:MAX_HEADER_CHOICES]
+
+
+def names_shop(supplier: Supplier) -> list[str]:
+    """What files a document under `supplier` on its own, as the operator
+    reads it: the text it prints at the top, then what its figures say."""
+    found = []
+    if supplier.ticket_header:
+        found.append(f"en-tête « {supplier.ticket_header} »")
+    found += [describe_identifier(identifier) for identifier in supplier.ticket_identifiers or ()]
+    return found
+
+
 def first_reading(text: str) -> dict:
     """The date and total a ticket reads as, before any shop is known -
     shown beside a ticket waiting for its shop, to tell it from the others."""
@@ -323,15 +371,16 @@ def first_reading(text: str) -> dict:
 
 
 def tickets_printing(header: str, ignoring=()) -> list[Invoice]:
-    """The tickets already filed whose text carries `header`, oldest first."""
+    """The documents already filed whose text carries `header`, oldest
+    first - a ticket as it was read, a digital one as it prints."""
     plain = plain_text(header)
     if len(plain) < MIN_HEADER_LENGTH:
         return []
     ignored = {invoice.pk for invoice in ignoring}
     found = [
         pk
-        for pk, text in Invoice.objects.exclude(ocr_text="").values_list("pk", "ocr_text")
-        if pk not in ignored and _has_header(plain_text(text), plain)
+        for pk, ocr_text, source_text in Invoice.objects.values_list("pk", "ocr_text", "source_text")
+        if pk not in ignored and (ocr_text or source_text) and _has_header(plain_text(ocr_text or source_text), plain)
     ]
     return list(Invoice.objects.filter(pk__in=found).select_related("supplier").order_by("invoice_date", "pk"))
 
@@ -341,6 +390,42 @@ def describe_tickets(tickets) -> str:
         f"{ticket.supplier.name} du {ticket.invoice_date:%d/%m/%Y}" if ticket.invoice_date else f"{ticket.supplier.name} n° {ticket.pk}"
         for ticket in tickets
     )
+
+
+def check_header(header: str, ignoring=(), shop: Supplier | None = None) -> str:
+    """`header` as it will be stored. Raises ValueError, for the operator: a
+    text too short to tell a shop, or one already printed on the tickets of
+    other shops, or of many, which it would take from them. A few tickets of
+    one shop carrying it are more likely this shop's, filed there before it
+    existed (tickets_printing says which; `ignoring` is the ticket being
+    moved, `shop` the shop the header is being given to - its own tickets
+    print it, of course)."""
+    header = " ".join(header.split())
+    if header and len(plain_text(header)) < MIN_HEADER_LENGTH:
+        raise ValueError(
+            f"Le texte d'en-tête « {header} » est trop court pour reconnaître des tickets "
+            f"({MIN_HEADER_LENGTH} caractères au moins)."
+        )
+    elsewhere = [
+        ticket for ticket in tickets_printing(header, ignoring) if shop is None or ticket.supplier_id != shop.pk
+    ]
+    if len(elsewhere) > MAX_TICKETS_ELSEWHERE or len({ticket.supplier_id for ticket in elsewhere}) > 1:
+        raise ValueError(
+            f"« {header} » est imprimé sur {len(elsewhere)} tickets d'autres enseignes "
+            f"({describe_tickets(elsewhere[:5])}{'…' if len(elsewhere) > 5 else ''}) : "
+            "choisissez un texte propre à cette enseigne (son nom, sa rue)."
+        )
+    return header
+
+
+def set_shop_header(supplier: Supplier, header: str, ignoring=()) -> str:
+    """Give `supplier` the text its documents print at the top, so the next
+    ones are filed there on their own - or take it back, with a blank. Same
+    refusals as `create_shop`; returns the header as stored."""
+    header = check_header(header, ignoring, shop=supplier)
+    supplier.ticket_header = header
+    supplier.save(update_fields=["ticket_header"])
+    return header
 
 
 def create_shop(name: str, header: str = "", ignoring=()) -> Supplier:
@@ -357,19 +442,7 @@ def create_shop(name: str, header: str = "", ignoring=()) -> Supplier:
         raise ValueError("Donnez un nom à la nouvelle enseigne.")
     if Supplier.objects.filter(name__iexact=name).exists():
         raise ValueError(f"« {name} » existe déjà : choisissez-la dans la liste.")
-    plain = plain_text(header)
-    if header and len(plain) < MIN_HEADER_LENGTH:
-        raise ValueError(
-            f"Le texte d'en-tête « {header} » est trop court pour reconnaître des tickets "
-            f"({MIN_HEADER_LENGTH} caractères au moins)."
-        )
-    elsewhere = tickets_printing(header, ignoring)
-    if len(elsewhere) > MAX_TICKETS_ELSEWHERE or len({ticket.supplier_id for ticket in elsewhere}) > 1:
-        raise ValueError(
-            f"« {header} » est imprimé sur {len(elsewhere)} tickets d'autres enseignes "
-            f"({describe_tickets(elsewhere[:5])}{'…' if len(elsewhere) > 5 else ''}) : "
-            "choisissez un texte propre à cette enseigne (son nom, sa rue)."
-        )
+    header = check_header(header, ignoring)
     base = re.sub(r"[^A-Z0-9]+", "_", plain_text(name)).strip("_")[:24] or "ENSEIGNE"
     code, suffix = base, 1
     while Supplier.objects.filter(code=code).exists():
@@ -832,14 +905,51 @@ def has_own_reader(supplier: Supplier) -> bool:
     return supplier.parser_key != LLM_PARSER_KEY and not is_ticket_shop(supplier)
 
 
+def document_text(path: str) -> str:
+    """The text a digital document carries, or "" for a photo or a scan."""
+    return "\n".join(page.text for page in text_layer_pages(path) if page is not None)
+
+
 def has_text_layer(path: str) -> bool:
     """A digital document, rather than a photo or a scan."""
     return any(page is not None for page in text_layer_pages(path))
 
 
-def import_invoice_pdf(path: str, supplier: Supplier, display_filename: str | None = None) -> Invoice:
+def document_supplier(text: str) -> Supplier | None:
+    """Whose document this is, from what it prints - the same reading as a
+    ticket's (detect_shop): a header a person gave, a configured till, then
+    the SIREN, phone or web site learned from that supplier's documents."""
+    parser, _identifiers = detect_shop(text)
+    return Supplier.objects.filter(code=parser.supplier_code).first() if parser is not None else None
+
+
+def import_document(
+    path: str,
+    display_filename: str | None = None,
+    supplier: Supplier | None = None,
+    date_hint: date | None = None,
+) -> Invoice:
+    """Import one file, whatever it is - the file says which reader it needs.
+
+    A photo or a scan is read as a ticket. A digital document goes through
+    its supplier's own reader when that supplier has one (Metro, UBA...) and
+    is recognised, by `supplier` or by what the document prints; anything
+    else is read by the ticket reader, which reads an invoice's table too.
+    """
+    text = document_text(path)
+    if text:
+        found = supplier if supplier is not None else document_supplier(text)
+        if found is not None and has_own_reader(found):
+            return import_invoice_pdf(path, found, display_filename=display_filename, text=text)
+    return import_receipt(path, display_filename=display_filename, supplier=supplier, date_hint=date_hint)
+
+
+def import_invoice_pdf(
+    path: str, supplier: Supplier, display_filename: str | None = None, text: str | None = None
+) -> Invoice:
     """A digital invoice through its supplier's own reader - refused, like a
-    ticket, when this very file is in already."""
+    ticket, when this very file is in already. What it prints is kept
+    (`source_text`) and teaches the supplier what names it."""
     from .importing import parse_and_import
 
     digest = file_sha256(path)
@@ -848,7 +958,9 @@ def import_invoice_pdf(path: str, supplier: Supplier, display_filename: str | No
         raise DuplicateInvoiceError(f"Fichier déjà importé : {_describe(known)}.")
     invoice = parse_and_import(path, supplier, display_filename=display_filename)
     invoice.source_sha256 = digest
-    invoice.save(update_fields=["source_sha256"])
+    invoice.source_text = document_text(path) if text is None else text
+    invoice.save(update_fields=["source_sha256", "source_text"])
+    learn_identifiers(supplier, invoice.source_text)
     return invoice
 
 
@@ -979,17 +1091,22 @@ __all__ = [
     "RereadError",
     "UnrecognisedShopError",
     "apply_known_prices",
+    "check_header",
     "create_shop",
     "date_check",
     "describe_tickets",
     "detect_parser",
     "detect_shop",
+    "document_supplier",
+    "document_text",
     "first_reading",
     "forget_identifiers",
     "has_own_reader",
     "has_text_layer",
+    "header_choices",
     "header_guess",
     "identified_supplier",
+    "import_document",
     "import_invoice_pdf",
     "import_receipt",
     "invoice_supplier_choices",
@@ -997,6 +1114,7 @@ __all__ = [
     "learn_identifiers",
     "lines_check",
     "move_to_shop",
+    "names_shop",
     "parser_for",
     "pending_receipts",
     "plain_text",
@@ -1008,6 +1126,7 @@ __all__ = [
     "rename_product",
     "reread_document",
     "reread_receipt",
+    "set_shop_header",
     "shop_choices",
     "tickets_printing",
 ]

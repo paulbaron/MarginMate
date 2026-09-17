@@ -13,7 +13,7 @@ what was typed in them across swaps (hx-preserve, stable ids).
     <div class="job-status-head">
         <div>
             <span class="status-pill status-{{ batch.status }}">{{ batch.get_status_display }}</span>
-            <span class="muted">{{ batch.read }} / {{ batch.to_read }} ticket{{ batch.to_read|pluralize }} lu{{ batch.to_read|pluralize }}</span>
+            <span class="muted">{{ batch.read }} / {{ batch.to_read }} document{{ batch.to_read|pluralize }} lu{{ batch.to_read|pluralize }}</span>
         </div>
         {% if batch.is_active %}
             {% if batch.cancel_requested %}
@@ -55,10 +55,10 @@ what was typed in them across swaps (hx-preserve, stable ids).
 
     {% if batch.awaiting_shop_count %}
         <div class="message message-warning">
-            {{ batch.awaiting_shop_count }} ticket{{ batch.awaiting_shop_count|pluralize }}
-            sans enseigne reconnue : pour chacun, choisissez son enseigne - ou créez-la, avec le texte
-            imprimé en tête de ses tickets pour que les suivants soient reconnus - et importez-le. Il est lu
-            quelle que soit l'enseigne, puis s'ouvre pour vérification{% if batch.is_active %} ; l'import
+            {{ batch.awaiting_shop_count }} document{{ batch.awaiting_shop_count|pluralize }}
+            dont l'enseigne n'a pas été reconnue : pour chacun, choisissez-la - ou créez-la, en la nommant. Le
+            document est lu quelle que soit l'enseigne, puis s'ouvre pour vérification, où vous pourrez dire
+            ce qu'elle imprime en tête pour que les suivants soient reconnus{% if batch.is_active %} ; l'import
             continue pendant ce temps{% endif %}.
         </div>
     {% endif %}
@@ -118,13 +118,21 @@ what was typed in them across swaps (hx-preserve, stable ids).
                             <td>{{ entry.date|default:"—" }}</td>
                             <td class="num">{{ entry.total }} €</td>
                             <td>
-                                {% if entry.verified %}
+                                {% if entry.receipt is False %}
+                                    <span class="status-pill status-{{ entry.state }}">Facture {{ entry.state_label|lower }}</span>
+                                {% elif entry.verified %}
                                     <span class="status-pill status-COMPLETE">Comptes vérifiés</span>
                                 {% else %}
                                     <span class="status-pill status-NEEDS_REVIEW">À vérifier</span>
                                 {% endif %}
                             </td>
-                            <td><a class="btn btn-small btn-secondary" href="{% url 'invoices:receipt_review' entry.invoice_id %}?lot={{ batch.pk }}">Vérifier</a></td>
+                            <td>
+                                {% if entry.receipt is False %}
+                                    <a class="btn btn-small btn-secondary" href="{% url 'invoices:invoice_edit_lines' entry.invoice_id %}">Voir les lignes</a>
+                                {% else %}
+                                    <a class="btn btn-small btn-secondary" href="{% url 'invoices:receipt_review' entry.invoice_id %}?lot={{ batch.pk }}">Vérifier</a>
+                                {% endif %}
+                            </td>
                         {% elif entry.status == "pending" %}
                             <td colspan="3" class="muted">{% if batch.is_active %}en attente{% else %}pas encore lu{% endif %}</td>
                             <td><span class="status-pill status-PENDING">{% if batch.is_active %}En attente{% else %}Non lu{% endif %}</span></td>

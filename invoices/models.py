@@ -162,6 +162,10 @@ class Invoice(models.Model):
     # parsers.base.ParseCheck - and the review screen shows it beside the
     # photo so a human can see *why* a receipt was flagged.
     ocr_text = models.TextField(blank=True)
+    # What a digital document carries as text, kept for what it says about
+    # its sender (invoices/identifiers.py) - a receipt keeps `ocr_text`
+    # instead, and only that one makes a document a receipt.
+    source_text = models.TextField(blank=True)
     ocr_confidence = models.DecimalField(max_digits=4, decimal_places=2, null=True, blank=True)
     parse_checks = models.JSONField(default=list, blank=True)
     preview_image = models.ImageField(upload_to="receipts/%Y/%m/", blank=True, null=True)
@@ -256,6 +260,11 @@ class Invoice(models.Model):
     def is_receipt(self):
         """A photographed till receipt rather than a digital invoice."""
         return bool(self.parse_checks) or bool(self.ocr_text)
+
+    @property
+    def document_text(self):
+        """What the document says, however it was read."""
+        return self.ocr_text or self.source_text
 
     @property
     def failed_checks(self):

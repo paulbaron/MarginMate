@@ -114,7 +114,7 @@ class RunBatchTests(TestCase):
             UnrecognisedShopError("Enseigne non reconnue"),
             RuntimeError("fichier illisible"),
         ]
-        with mock.patch("invoices.receipt_batches.import_receipt", side_effect=outcomes) as importer:
+        with mock.patch("invoices.receipt_batches.import_document", side_effect=outcomes) as importer:
             batch = run_receipt_batch(batch.pk)
         self.assertEqual(importer.call_count, 4)
         self.assertEqual([entry["status"] for entry in batch.results], ["ok", "duplicate", "unrecognised", "error"])
@@ -132,7 +132,7 @@ class RunBatchTests(TestCase):
     def test_an_imported_file_links_to_its_receipt(self):
         receipt = self._receipt()
         batch = stage_batch([upload("a.pdf")])
-        with mock.patch("invoices.receipt_batches.import_receipt", return_value=receipt):
+        with mock.patch("invoices.receipt_batches.import_document", return_value=receipt):
             batch = run_receipt_batch(batch.pk)
         entry = batch.results[0]
         self.assertEqual(
@@ -143,14 +143,14 @@ class RunBatchTests(TestCase):
     def test_the_staged_files_are_cleaned_up(self):
         batch = stage_batch([upload("a.pdf")])
         folder = os.path.join(settings.MEDIA_ROOT, "receipt_batches", str(batch.pk))
-        with mock.patch("invoices.receipt_batches.import_receipt", side_effect=DuplicateInvoiceError("x")):
+        with mock.patch("invoices.receipt_batches.import_document", side_effect=DuplicateInvoiceError("x")):
             run_receipt_batch(batch.pk)
         self.assertFalse(os.path.exists(folder))
 
     def test_stop_halts_the_batch_between_files(self):
         batch = stage_batch([upload("a.pdf"), upload("b.pdf")])
         ReceiptBatch.objects.filter(pk=batch.pk).update(cancel_requested=True)
-        with mock.patch("invoices.receipt_batches.import_receipt") as importer:
+        with mock.patch("invoices.receipt_batches.import_document") as importer:
             batch = run_receipt_batch(batch.pk)
         importer.assert_not_called()
         self.assertEqual([entry["status"] for entry in batch.results], ["cancelled", "cancelled"])
@@ -308,7 +308,7 @@ class DeadBatchTests(TestCase):
             response = self.client.post(reverse("invoices:receipt_batch_resume", args=[batch.pk]))
         self.assertRedirects(response, reverse("invoices:receipt_batch", args=[batch.pk]))
         thread.return_value.start.assert_called_once()
-        with mock.patch("invoices.receipt_batches.import_receipt", side_effect=ValueError("x")) as importer:
+        with mock.patch("invoices.receipt_batches.import_document", side_effect=ValueError("x")) as importer:
             batch = run_receipt_batch(batch.pk)
         self.assertEqual((importer.call_count, batch.status), (1, ReceiptBatch.Status.SUCCESS))
 
@@ -321,7 +321,7 @@ class DeadBatchTests(TestCase):
 
     def test_a_batch_that_read_everything_has_nothing_to_resume(self):
         batch = stage_batch([upload("a.pdf")])
-        with mock.patch("invoices.receipt_batches.import_receipt", side_effect=ValueError("x")):
+        with mock.patch("invoices.receipt_batches.import_document", side_effect=ValueError("x")):
             batch = run_receipt_batch(batch.pk)
         ReceiptBatch.objects.filter(pk=batch.pk).update(last_heartbeat=timezone.now() - timedelta(hours=1))
         batch.refresh_from_db()
@@ -338,7 +338,7 @@ class DeadBatchTests(TestCase):
     def test_a_staged_file_that_has_gone_is_said_so(self):
         batch = stage_batch([upload("a.pdf")])
         os.remove(os.path.join(settings.MEDIA_ROOT, batch.results[0]["stored"]))
-        with mock.patch("invoices.receipt_batches.import_receipt") as importer:
+        with mock.patch("invoices.receipt_batches.import_document") as importer:
             batch = run_receipt_batch(batch.pk)
         importer.assert_not_called()
         self.assertEqual((batch.results[0]["status"], batch.results[0]["message"]), ("error", MISSING_FILE))
@@ -347,7 +347,7 @@ class DeadBatchTests(TestCase):
         batch = stage_batch([upload("a.pdf"), upload("b.pdf")])
         folder = os.path.join(settings.MEDIA_ROOT, "receipt_batches", str(batch.pk))
         self.addCleanup(shutil.rmtree, folder, True)
-        with mock.patch("invoices.receipt_batches.import_receipt", side_effect=ValueError("x")), mock.patch(
+        with mock.patch("invoices.receipt_batches.import_document", side_effect=ValueError("x")), mock.patch(
             "invoices.receipt_batches._discard", side_effect=RuntimeError("disque plein")
         ):
             batch = run_receipt_batch(batch.pk)

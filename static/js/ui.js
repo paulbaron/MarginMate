@@ -283,6 +283,18 @@
     function initShopChoices(root) {
         root.querySelectorAll("select[data-shop-select]").forEach(showNewShop);
     }
+    // The review page offers the document's own top lines as the text its
+    // shop prints there: clicking one fills the box.
+    document.addEventListener("click", function (event) {
+        var choice = event.target.closest("[data-header-choice]");
+        if (!choice) return;
+        var form = choice.closest("form");
+        var input = form && form.querySelector("[data-header-input]");
+        if (!input) return;
+        input.value = choice.dataset.headerChoice;
+        input.focus();
+    });
+
     // A running import's status is fetched again every second, which takes
     // the focus out of a shop being typed in: it waits (hx-trigger filter).
     window.shopChoiceInUse = function () {

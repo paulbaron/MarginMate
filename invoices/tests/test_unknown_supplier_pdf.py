@@ -111,7 +111,7 @@ class UploadTests(TestCase):
             with self.subTest(data=data):
                 response = self.post(**data)
                 self.assertEqual(response.status_code, 200)
-                self.assertEqual(response.context["import_tab"], "pdf")
+                self.assertEqual(response.context["import_tab"], "documents")
                 self.assertContains(response, message)
         self.assertFalse(Invoice.objects.exists())
 
@@ -143,29 +143,31 @@ class FiledFromABatchTests(TestCase):
         self.metro = Supplier.objects.get(code="METRO")
         batch = stage_batch([SimpleUploadedFile("metro.pdf", pdf_bytes(self, INVOICE))])
         self.addCleanup(shutil.rmtree, os.path.join(settings.MEDIA_ROOT, "receipt_batches", str(batch.pk)), True)
-        with mock.patch("invoices.receipt_batches.import_receipt", side_effect=UnrecognisedShopError("?")):
+        with mock.patch("invoices.receipt_batches.import_document", side_effect=UnrecognisedShopError("?")):
             self.batch = run_receipt_batch(batch.pk)
 
     def test_a_supplier_with_its_own_reader_reads_it(self):
         invoice = make_invoice(supplier=self.metro, invoice_number="F-79")
-        with mock.patch("invoices.receipt_batches.import_invoice_pdf", return_value=invoice) as reader, \
-                mock.patch("invoices.receipt_batches.import_receipt") as ticket_reader:
+        with mock.patch("invoices.importing.parse_and_import", return_value=invoice) as reader, \
+                mock.patch("invoices.receipts.import_receipt") as ticket_reader:
             entry = import_with_shop(self.batch, 0, self.metro)
         reader.assert_called_once()
         self.assertEqual(reader.call_args.args[1:], (self.metro,))
         ticket_reader.assert_not_called()
-        self.assertEqual((entry["status"], entry["invoice_id"]), ("ok", invoice.pk))
+        self.assertEqual((entry["status"], entry["invoice_id"], entry["receipt"]), ("ok", invoice.pk, False))
+        self.assertIn("Facture n F-1042", Invoice.objects.get(pk=invoice.pk).source_text)
 
     def test_a_scan_is_read_as_a_ticket_whatever_the_supplier(self):
         path = os.path.join(settings.MEDIA_ROOT, self.batch.results[0]["stored"])
         with open(path, "wb") as handle:
             handle.write(b"%PDF-1.4 a scan: no text in it")
-        receipt = make_invoice(supplier=self.metro, invoice_number="T-1")
-        with mock.patch("invoices.receipt_batches.import_invoice_pdf") as reader, \
-                mock.patch("invoices.receipt_batches.import_receipt", return_value=receipt) as ticket_reader:
-            import_with_shop(self.batch, 0, self.metro)
+        receipt = make_invoice(supplier=self.metro, invoice_number="T-1", ocr_text="un ticket")
+        with mock.patch("invoices.importing.parse_and_import") as reader, \
+                mock.patch("invoices.receipts.import_receipt", return_value=receipt) as ticket_reader:
+            entry = import_with_shop(self.batch, 0, self.metro)
         reader.assert_not_called()
         ticket_reader.assert_called_once()
+        self.assertTrue(entry["receipt"])
 
 
 class ImportInvoicePdfTests(TestCase):

@@ -150,7 +150,7 @@ class ChooseShopInBatchTests(TestCase):
         self.folder = os.path.join(settings.MEDIA_ROOT, "receipt_batches", str(batch.pk))
         self.addCleanup(shutil.rmtree, self.folder, True)
         outcomes = [UnrecognisedShopError("Enseigne non reconnue sur ce ticket."), DuplicateInvoiceError("Déjà là.")]
-        with mock.patch("invoices.receipt_batches.import_receipt", side_effect=outcomes):
+        with mock.patch("invoices.receipt_batches.import_document", side_effect=outcomes):
             self.batch = run_receipt_batch(batch.pk)
         self.url = reverse("invoices:receipt_batch_assign", args=[self.batch.pk, 0])
         self.page = reverse("invoices:receipt_batch", args=[self.batch.pk])
@@ -159,7 +159,7 @@ class ChooseShopInBatchTests(TestCase):
     def choose(self, supplier=None, url=None, **outcome):
         outcome = outcome or {"return_value": self.receipt}
         pk = supplier if supplier is not None else self.sabbh.pk
-        with mock.patch("invoices.receipt_batches.import_receipt", **outcome) as importer:
+        with mock.patch("invoices.receipt_batches.import_document", **outcome) as importer:
             response = self.client.post(url or self.url, {"supplier": pk})
         self.batch.refresh_from_db()
         return response, importer
@@ -174,7 +174,7 @@ class ChooseShopInBatchTests(TestCase):
         choosing a shop would not make it readable."""
         batch = stage_batch([upload("casse.pdf")])
         self.addCleanup(shutil.rmtree, os.path.join(settings.MEDIA_ROOT, "receipt_batches", str(batch.pk)), True)
-        with mock.patch("invoices.receipt_batches.import_receipt", side_effect=ValueError("image tronquée")):
+        with mock.patch("invoices.receipt_batches.import_document", side_effect=ValueError("image tronquée")):
             batch = run_receipt_batch(batch.pk)
         self.assertEqual(batch.results[0]["status"], "error")
         self.assertEqual(batch.awaiting_shop_count, 0)
@@ -192,7 +192,7 @@ class ChooseShopInBatchTests(TestCase):
         html = response.content.decode()
         start = html.index(f'action="{self.url}"')
         self.assertNotIn("analyse IA", html[start:html.index("</form>", start)])
-        self.assertContains(response, "choisissez son enseigne")
+        self.assertContains(response, "dont l'enseigne n'a pas été reconnue")
 
     def test_choosing_the_shop_imports_the_file_and_opens_it_for_review(self):
         response, importer = self.choose()
@@ -284,7 +284,7 @@ class ChooseShopInBatchTests(TestCase):
         self.assertEqual(self.batch.results[0]["status"], "unrecognised")
 
     def test_choosing_only_answers_a_post(self):
-        with mock.patch("invoices.receipt_batches.import_receipt") as importer:
+        with mock.patch("invoices.receipt_batches.import_document") as importer:
             response = self.client.get(self.url)
         self.assertRedirects(response, self.page)
         importer.assert_not_called()
@@ -322,7 +322,7 @@ class ChoiceDuringTheRunTests(TestCase):
         return fake
 
     def run_batch(self, while_reading=None):
-        with mock.patch("invoices.receipt_batches.import_receipt", side_effect=self.importer(while_reading)):
+        with mock.patch("invoices.receipt_batches.import_document", side_effect=self.importer(while_reading)):
             return run_receipt_batch(self.batch.pk)
 
     def test_a_shop_chosen_meanwhile_is_kept(self):
@@ -350,7 +350,7 @@ class ChoiceDuringTheRunTests(TestCase):
             requeued.append(requeue_unrecognised(self.batch))
             return self.receipt
 
-        with mock.patch("invoices.receipt_batches.import_receipt", side_effect=fake), \
+        with mock.patch("invoices.receipt_batches.import_document", side_effect=fake), \
                 mock.patch("invoices.receipt_batches.threading.Thread") as thread:
             entry = import_with_shop(self.batch, 0, self.sabbh)
         self.assertEqual((requeued, entry["status"]), ([0], "ok"))

@@ -221,7 +221,7 @@ class MoveToShopTests(TestCase):
         shop = Supplier.objects.get(name="Épicerie Sabah")
         self.assertEqual((Invoice.objects.get(pk=self.ticket.pk).supplier, shop.ticket_header), (shop, "CROZATIER"))
         said = messages_of(response)
-        self.assertTrue(any("les tickets qui portent « CROZATIER »" in message for message in said), said)
+        self.assertTrue(any("les documents qui portent « CROZATIER »" in message for message in said), said)
         self.assertTrue(any("Sabbh Oriental du 02/02/2024" in message for message in said), said)
         self.assertEqual(Invoice.objects.get(pk=other.pk).supplier, self.sabbh)
 
@@ -290,21 +290,31 @@ class NewShopFromBatchTests(TestCase):
         page = self.client.get(self.page)
         self.assertContains(page, "« EPICERIE DU COIN »")
         self.assertContains(page, "10.50 €")
-        self.assertContains(page, 'name="new_header"')
-        self.assertContains(page, 'value="EPICERIE DU COIN"')
+        # The header is given on the review page, the ticket on screen - not
+        # here, where nobody has seen it.
+        self.assertNotContains(page, 'name="new_header"')
+        self.assertContains(page, 'value="Epicerie Du Coin"')
 
-    def test_naming_the_shop_imports_it_and_reads_the_others_again(self):
+    def test_naming_the_shop_imports_it_and_the_header_reads_the_others_again(self):
+        """The shop is named here, its header given on the ticket's own page:
+        the other files no shop was recognised on are read again then."""
         with mock.patch("invoices.receipts.recognise", return_value=recognised(UNKNOWN_SHOP)), \
                 mock.patch("invoices.receipt_batches.start_batch") as start:
-            response = self.client.post(
-                self.url, {"supplier": "new", "new_name": "Épicerie du coin", "new_header": "EPICERIE DU COIN"}
-            )
+            response = self.client.post(self.url, {"supplier": "new", "new_name": "Épicerie du coin"})
         shop = Supplier.objects.get(name="Épicerie du coin")
         ticket = Invoice.objects.get(supplier=shop)
         self.assertRedirects(response, reverse("invoices:receipt_review", args=[ticket.pk]) + f"?lot={self.batch.pk}")
-        self.assertEqual(ticket.lines.count(), 3)
+        self.assertEqual((ticket.lines.count(), shop.ticket_header), (3, ""))
         self.assertIn(ticket, pending_receipts())
-        self.assertTrue(any("1 autre(s) ticket(s)" in message for message in messages_of(response)))
+        self.assertTrue(any("indiquez le texte" in message for message in messages_of(response)))
+        start.assert_not_called()
+
+        with mock.patch("invoices.receipt_batches.start_batch") as start:
+            given = self.client.post(
+                reverse("invoices:receipt_review", args=[ticket.pk]),
+                {"action": "shop_header", "ticket_header": "EPICERIE DU COIN"},
+            )
+        self.assertTrue(any("1 fichier(s) sans enseigne sont relus" in message for message in messages_of(given)))
         start.assert_called_once()
         self.batch.refresh_from_db()
         self.assertEqual([entry["status"] for entry in self.batch.results], ["ok", "pending"])
@@ -317,18 +327,19 @@ class NewShopFromBatchTests(TestCase):
         self.assertEqual(Invoice.objects.filter(supplier=shop).count(), 2)
 
     def test_a_shop_name_already_taken_is_refused(self):
-        with mock.patch("invoices.receipt_batches.import_receipt") as importer:
+        with mock.patch("invoices.receipt_batches.import_document") as importer:
             response = self.client.post(self.url, {"supplier": "new", "new_name": "Franprix"})
         importer.assert_not_called()
         self.assertRedirects(response, self.page)
         self.assertTrue(any("existe déjà" in message for message in messages_of(response)))
 
-    def test_a_shop_without_a_header_reads_nothing_again(self):
+    def test_a_shop_named_here_is_sent_to_the_ticket_for_its_header(self):
         with mock.patch("invoices.receipts.recognise", return_value=recognised(UNKNOWN_SHOP)), \
                 mock.patch("invoices.receipt_batches.start_batch") as start:
             response = self.client.post(self.url, {"supplier": "new", "new_name": "Épicerie du coin"})
         start.assert_not_called()
-        self.assertTrue(any("à ranger à la main" in message for message in messages_of(response)))
+        said = messages_of(response)
+        self.assertTrue(any("Sur la page du ticket" in message for message in said), said)
 
 
 class ImportTests(TestCase):

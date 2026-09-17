@@ -451,16 +451,17 @@ def receipt_batch_assign(request, pk, index):
         return redirect("invoices:receipt_batch", pk=batch.pk)
     messages.success(request, f"{entry['name']} importé comme ticket {supplier.name} : vérifiez-le d'après la photo.")
     if created:
-        _say_new_shop(request, batch, supplier)
+        _say_new_shop(request, supplier)
     # Checked within its import - the batch may still be running meanwhile.
     return redirect(reverse("invoices:receipt_review", args=[entry["invoice_id"]]) + f"?lot={batch.pk}")
 
 
-def _say_new_shop(request, batch, supplier) -> None:
-    """A new shop with a header: the batch's other unrecognised tickets are
-    read again, and those that print it go to it - and the tickets filed
-    elsewhere that print it are named, to be moved if they are its."""
-    from .receipt_batches import requeue_unrecognised
+def _say_new_shop(request, supplier) -> None:
+    """A new shop: what files its next documents there. With a header - given
+    from the review screen, where the document is on show - the files no shop
+    was recognised on are read again, and the tickets filed elsewhere that
+    print it are named, to be moved if they are its."""
+    from .receipt_batches import requeue_everywhere
     from .receipts import describe_tickets, tickets_printing
 
     elsewhere = [ticket for ticket in tickets_printing(supplier.ticket_header) if ticket.supplier_id != supplier.pk]
@@ -473,14 +474,15 @@ def _say_new_shop(request, batch, supplier) -> None:
     if not supplier.ticket_header:
         messages.info(
             request,
-            f"Enseigne {supplier.name} créée. Sans texte d'en-tête, ses prochains tickets seront à ranger à la main.",
+            f"Enseigne {supplier.name} créée. Sur la page du ticket, d'après la photo, indiquez le texte "
+            "qu'elle imprime en tête : ses prochains documents y seront rangés tout seuls.",
         )
         return
-    requeued = requeue_unrecognised(batch) if batch is not None else 0
+    requeued = requeue_everywhere()
     messages.info(
         request,
-        f"Enseigne {supplier.name} créée : les tickets qui portent « {supplier.ticket_header} » y seront rangés"
-        + (f" - {requeued} autre(s) ticket(s) sans enseigne de cet import sont relus." if requeued else "."),
+        f"Enseigne {supplier.name} créée : les documents qui portent « {supplier.ticket_header} » y seront rangés"
+        + (f" - {requeued} fichier(s) sans enseigne sont relus." if requeued else "."),
     )
 
 
@@ -569,6 +571,10 @@ def _correction_page(request, invoice):
             _move_shop(request, invoice)
             return here
 
+        if is_receipt and action == "shop_header":
+            _set_shop_header(request, invoice)
+            return here
+
         if is_receipt and action == "remember_price":
             price_form = ShopItemPriceForm(request.POST, supplier=invoice.supplier)
             if price_form.is_valid():
@@ -611,12 +617,25 @@ def _correction_page(request, invoice):
         formset = _line_formset_for(invoice, document)
     shop_context = {}
     if is_receipt:
-        from .receipts import PLACEHOLDER_MARKER, header_guess, parser_for, shop_choices
+        from .parsers import ticket_parser_for
+        from .receipts import (
+            PLACEHOLDER_MARKER,
+            header_choices,
+            header_guess,
+            names_shop,
+            parser_for,
+            shop_choices,
+        )
 
         shop = getattr(parser_for(invoice.supplier), "shop", None)
         shop_context = {
             "shop_groups": shop_choices(),
             "suggested_header": header_guess(invoice.ocr_text),
+            "header_choices": header_choices(invoice.ocr_text),
+            "names_shop": names_shop(invoice.supplier),
+            # A till configured here is known by its own layout: there is no
+            # header to give for it.
+            "can_set_header": ticket_parser_for(invoice.supplier.code) is None,
             # The shop's price list matters where its till prints no names, or
             # where one has been started: elsewhere it is folded away.
             "prices_open": bool(shop and shop.placeholder_names)
@@ -766,7 +785,42 @@ def _move_shop(request, invoice) -> None:
         return
     messages.success(request, f"Ticket rangé chez {supplier.name}.")
     if created:
-        _say_new_shop(request, None, supplier)
+        _say_new_shop(request, supplier)
+
+
+def _set_shop_header(request, invoice) -> None:
+    """The text this shop's documents print at the top, given from the page
+    where one is on screen - the import card cannot ask for it, nobody has
+    seen the document there yet."""
+    from .receipt_batches import requeue_everywhere
+    from .receipts import describe_tickets, set_shop_header, tickets_printing
+
+    shop = invoice.supplier
+    try:
+        header = set_shop_header(shop, request.POST.get("ticket_header", "")[:100], ignoring=[invoice])
+    except ValueError as exc:
+        messages.error(request, str(exc))
+        return
+    if not header:
+        messages.success(
+            request,
+            f"{shop.name} n'est plus reconnue par un en-tête ; ses documents le seront par ce qu'ils impriment "
+            "d'autre (n° SIREN, téléphone, site), quand ils en portent.",
+        )
+        return
+    elsewhere = [ticket for ticket in tickets_printing(header, [invoice]) if ticket.supplier_id != shop.pk]
+    if elsewhere:
+        messages.warning(
+            request,
+            f"« {header} » est aussi imprimé sur {describe_tickets(elsewhere)} : "
+            "si ce sont des tickets de cette enseigne, rangez-les avec « Changer d'enseigne ».",
+        )
+    requeued = requeue_everywhere()
+    messages.success(
+        request,
+        f"Les documents qui portent « {header} » iront chez {shop.name}"
+        + (f" - {requeued} fichier(s) sans enseigne sont relus." if requeued else "."),
+    )
 
 
 def _forget_price(request, invoice) -> None:

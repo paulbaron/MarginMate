@@ -24,7 +24,11 @@ from .tasks import default_gather_start
 #: "Ajoutés récemment", "Vérifiés récemment": what an import or a checking
 #: session has just done, to see it landed.
 RECENT = timedelta(hours=48)
-IMPORT_TABS = ("tickets", "pdf", "recuperer")
+# One import for every document - a photo, a scan, a supplier's PDF: what
+# each file is decides how it is read (receipts.import_document). "tickets"
+# and "pdf" were two, and are kept as names of the same one.
+IMPORT_TABS = ("documents", "recuperer")
+OLD_IMPORT_TABS = {"tickets": "documents", "pdf": "documents"}
 
 IS_TICKET = ~Q(parse_checks=[]) | ~Q(ocr_text="")
 IS_INVOICE = Q(parse_checks=[], ocr_text="")
@@ -118,11 +122,13 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
         if latest.is_active or latest.can_resume or latest.awaiting_shop_count:
             shown = latest
 
+    import_tab = OLD_IMPORT_TABS.get(import_tab, import_tab)
     if import_tab not in IMPORT_TABS:
         import_tab = request.GET.get("ajouter", "")
+        import_tab = OLD_IMPORT_TABS.get(import_tab, import_tab)
     if import_tab not in IMPORT_TABS:
         if shown is not None:
-            import_tab = "tickets"
+            import_tab = "documents"
         elif latest_job is not None and latest_job.is_active:
             import_tab = "recuperer"
         else:

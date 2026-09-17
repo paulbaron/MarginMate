@@ -55,10 +55,7 @@ from .receipts import (
     OCR_WAIT_SECONDS,
     UnrecognisedShopError,
     first_reading,
-    has_own_reader,
-    has_text_layer,
-    import_invoice_pdf,
-    import_receipt,
+    import_document,
 )
 
 STAGING_DIR = "receipt_batches"
@@ -68,6 +65,9 @@ STAGING_DIR = "receipt_batches"
 # forked.
 SHOP_CHOICE_WAIT_SECONDS = OCR_WAIT_SECONDS
 HEARTBEAT_SECONDS = 15
+# How far back a new shop or header sends the files nobody could file through
+# the import again (requeue_everywhere).
+REQUEUE_BATCHES = 20
 MISSING_FILE = "Fichier temporaire introuvable : réimportez ce ticket."
 
 # Held for a read and write of a batch's `results`, never across an import.
@@ -162,6 +162,13 @@ def requeue_unrecognised(batch: ReceiptBatch) -> int:
     if not running:
         start_batch(batch)
     return len(waiting)
+
+
+def requeue_everywhere() -> int:
+    """Read the files no shop was recognised on again, in every recent import
+    that still keeps some: a shop, or a header, added since may be theirs."""
+    batches = ReceiptBatch.objects.order_by("-started_at")[:REQUEUE_BATCHES]
+    return sum(requeue_unrecognised(batch) for batch in batches if batch.awaiting_shop_count)
 
 
 def _run_in_thread(batch_id: int) -> None:
@@ -268,7 +275,7 @@ def _read_file(batch: ReceiptBatch, entry: dict) -> str | None:
         entry.update(status="error", message=MISSING_FILE)
         return None
     try:
-        invoice = import_receipt(path, display_filename=entry["name"])
+        invoice = import_document(path, display_filename=entry["name"])
     except DuplicateInvoiceError as exc:
         entry.update(status="duplicate", message=str(exc))
     except UnrecognisedShopError as exc:
@@ -301,6 +308,12 @@ def _record_import(entry: dict, invoice) -> None:
         total=f"{invoice.total_ttc:.2f}",
         date=f"{invoice.invoice_date:%d/%m/%Y}" if invoice.invoice_date else "",
         verified=invoice.receipt_verified,
+        # A photo goes to the review screen; an invoice read by its
+        # supplier's own reader to its own lines, under the state its import
+        # left it in.
+        receipt=invoice.is_receipt,
+        state=invoice.status,
+        state_label=invoice.get_status_display(),
     )
 
 
@@ -354,12 +367,7 @@ def _waiting_file(batch: ReceiptBatch, index: int) -> str:
 def _import_with_shop(batch: ReceiptBatch, index: int, path: str, supplier) -> dict:
     entry = dict(batch.results[index])
     try:
-        # A digital invoice goes through its supplier's own reader, when it
-        # has one; a photo or a scan is read as a ticket whatever the supplier.
-        if has_own_reader(supplier) and has_text_layer(path):
-            invoice = import_invoice_pdf(path, supplier, display_filename=entry["name"])
-        else:
-            invoice = import_receipt(path, display_filename=entry["name"], supplier=supplier)
+        invoice = import_document(path, display_filename=entry["name"], supplier=supplier)
     except DuplicateInvoiceError as exc:
         entry.update(status="duplicate", message=str(exc))
         batch.append_log(f"{entry['name']} (ticket {supplier.name}) : {exc}")

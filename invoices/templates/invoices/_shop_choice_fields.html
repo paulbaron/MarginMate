@@ -22,7 +22,14 @@ the form comes back with an error.
     <label>Nom
         <input type="text" name="new_name" maxlength="255" placeholder="{% if for_invoice %}Fournisseur du coin{% else %}Épicerie du coin{% endif %}" value="{% if typed_name %}{{ typed_name }}{% else %}{{ suggested|title }}{% endif %}">
     </label>
-    <label title="Un{% if for_invoice %}e facture{% else %} ticket{% endif %} qui porte ce texte sera rangé{% if for_invoice %}e{% endif %} chez {% if for_invoice %}ce fournisseur{% else %}cette enseigne{% endif %} : son nom ou sa rue, tel qu'imprimé.">En-tête de ses {% if for_invoice %}documents{% else %}tickets{% endif %}
-        <input type="text" name="new_header" maxlength="100" placeholder="{% if for_invoice %}FOURNISSEUR DU COIN{% else %}EPICERIE DU COIN{% endif %}" value="{% if typed_header %}{{ typed_header }}{% else %}{{ suggested }}{% endif %}">
-    </label>
+    {% comment %}
+    The text its documents print at the top is asked for where one is on
+    screen (the review page, `ask_header`): from the import card, nobody has
+    seen it yet.
+    {% endcomment %}
+    {% if ask_header %}
+        <label title="Un{% if for_invoice %}e facture{% else %} ticket{% endif %} qui porte ce texte sera rangé{% if for_invoice %}e{% endif %} chez {% if for_invoice %}ce fournisseur{% else %}cette enseigne{% endif %} : son nom ou sa rue, tel qu'imprimé.">En-tête de ses {% if for_invoice %}documents{% else %}tickets{% endif %}
+            <input type="text" name="new_header" maxlength="100" placeholder="{% if for_invoice %}FOURNISSEUR DU COIN{% else %}EPICERIE DU COIN{% endif %}" value="{% if typed_header %}{{ typed_header }}{% else %}{{ suggested }}{% endif %}">
+        </label>
+    {% endif %}
 </span>

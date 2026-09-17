@@ -133,7 +133,23 @@ What it knows, all arithmetic:
 - **read past a total** none of the items makes (`_segment`): an invoice and
   the till's ticket on one photo, the ticket's half misread. What is found
   further down has to be a table (`_structured`) - after a total, "CB 0,98"
-  alone also makes what was paid.
+  alone also makes what was paid. Further down, only rows saying what makes
+  their amount count, so a charge included in one of them ("Dont éco-part
+  DEEE 0,02") no longer breaks the run;
+- a **row printing only a product code** takes the name, and the count, of
+  the line that named that code above it (`_take_linked_name`): an
+  electronics till prints "1  5550001-ENCEINTE PORTABLE XL", then
+  "5550001  120,00 €  A  100,00 €  120,00 €" three lines further down;
+- a **run that is the document's own base and tax** read as two lines is not
+  the purchase (`_is_vat_table`); a **discount printed again in HT** under
+  the one already taken is the same discount, and a row whose discount line
+  says what it was taken off ("sur 11,76 soit -1,76" under a row of 10,00)
+  is already net of it;
+- a **percentage is never an amount**, whatever sign is in front of it;
+  "100X35X2.5" is a size, not a count of 100; a **quantity column of one**
+  between a price and the amount it makes is a count; and a number in front
+  of a name is a count when the ticket says how many articles it sold
+  ("3 ARTICLE(S)", `_count_from_articles`).
 
 Evaluate a change the same way before trusting it: parse every stored
 `ocr_text` and compare with the checked lines, per shop, counting separately
@@ -238,11 +254,25 @@ waiting to be checked** (`receipts.apply_known_prices`) - one Pita price left
 on. Every known price is applied, each as of its own ticket's date, and a
 checked ticket is never rewritten (except the one the price was typed on).
 
-**The review screen is the deliverable, not the parser.** The Achats page's
-import card takes a batch (`/invoices/tickets/`) and detects each shop from
-its own header (a Franprix ticket run through the Monoprix parser *would*
-produce lines, and they would be wrong — an unrecognised file is reported,
-never guessed). `.../verification/` is the queue tab, oldest first;
+**One import for every document.** Tickets and PDF invoices went in through
+two cards, and the person importing had to know which; the Achats page has
+one now (files or a whole folder, of anything), and the file decides
+(`receipts.import_document`): a photo or a scan is read as a ticket, a
+digital document goes through its supplier's own reader when that supplier
+has one (`has_own_reader`) and the document says whose it is - otherwise the
+ticket reader, which reads an invoice's table too. Nothing is guessed from
+the file's name or extension: `ocr.text_layer_pages` says whether it carries
+text, and `detect_shop` who printed it. The import reports each file as what
+it became, and links a ticket to its review screen, an invoice to its lines.
+`/invoices/upload/` still takes one PDF with its supplier named by hand -
+folded under the import card, for a document that says nothing about its
+sender, or for the AI pseudo-supplier.
+
+**The review screen is the deliverable, not the parser.** The import card
+takes a batch (`/invoices/tickets/`) and detects each shop from its own
+header (a Franprix ticket run through the Monoprix parser *would* produce
+lines, and they would be wrong — an unrecognised file is reported, never
+guessed). `.../verification/` is the queue tab, oldest first;
 `.../<pk>/verifier/` puts the photo beside the checks and the editable lines
 and moves to the next receipt on save (a ticket already checked, reopened
 from its page, goes back to its page). With `?lot=<batch>` it goes through
@@ -336,8 +366,13 @@ batch has finished, offers the suppliers on that row - or a **new shop**
 top (`Supplier.ticket_header`). The ticket is read whatever the shop:
 `receipts.parser_for` gives every supplier but the AI pseudo-supplier a
 reader, the configured till's or the same reader without settings (a Metro
-paper ticket included). A new shop with a header sends the batch's other
-unrecognised files through the import again (`requeue_unrecognised`), and
+paper ticket included). **The header is given from the review screen, not from the import card**: the
+card is filled in before anyone has seen the document, so it asks for a name
+only, and the review page - the photo beside it - has the box, filled in with
+what the document seems to print (`header_guess`) and with its own top lines
+offered as chips (`header_choices`, `set_shop_header`, refusals as
+`create_shop`'s). Giving it sends every recent import's unrecognised files
+through again (`requeue_everywhere`), and
 `detect_parser` looks for headers people gave **before** the configured tills,
 the longest first: "EPICERIE SABAH" before the "SABAH" Sabbh's till answers
 to. Headers compare without accents, case or punctuation, as whole words
@@ -382,9 +417,14 @@ prices), a web site (never an e-mail's domain - a customer's address is on
 invoices too). Checked the way each is built, since a misread one must not
 name a shop. Stored on `Supplier.ticket_identifiers` and learned only when a
 person said whose a document is - a shop chosen, a ticket moved (the old shop
-forgets what it printed), a ticket checked on the review page
-(`learn_identifiers`; `manage.py learn_shop_identifiers --dry-run` for tickets
-checked before). Measured on the real tickets, two rules keep it honest: an
+forgets what it printed), a ticket checked on the review page, a digital
+invoice imported through its supplier's own reader (`learn_identifiers`;
+`manage.py learn_shop_identifiers --dry-run` for the documents filed before).
+A digital document's text is kept for this (`Invoice.source_text`; only
+`ocr_text` makes a document a receipt), which is what makes **the customer's
+own SIREN** - printed on every supplier's invoice - name nobody: the command
+reads the PDFs already filed before learning anything. Measured on the real
+tickets, two rules keep it honest: an
 identifier counts only when **a quarter of the shop's documents print it**
 (misreadings - "mmoprix.fr", "monoprii.fr" - and labels on some goods -
 "fsc.org" on Mr.Bricolage's wood - are on one ticket or two) and **no other

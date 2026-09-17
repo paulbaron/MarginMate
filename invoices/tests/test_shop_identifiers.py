@@ -11,6 +11,7 @@ carrying it is moved away from.
 OCR never runs here: `receipts.recognise` is replaced. Data invented.
 """
 
+import os
 from datetime import date
 from io import StringIO
 from unittest import mock
@@ -215,3 +216,33 @@ class LearnFromCheckedTicketsCommandTests(TestCase):
         self.run_command()
         self.assertEqual(self.shop.ticket_identifiers, LEARNED)
         self.assertIn("Rien de nouveau", self.run_command())
+
+    def test_the_digital_invoices_already_filed_are_read_for_it(self):
+        """A supplier's PDF invoices say who they are too - and the
+        customer's own SIREN, on every one of them, then names nobody."""
+        from django.conf import settings
+
+        from invoices.tests.pdf_files import write_pdf
+
+        supplier = make_supplier(code="CUISIPRO", name="Cuisipro", parser_key="")
+        path = os.path.join(settings.MEDIA_ROOT, "cuisipro-facture.pdf")
+        write_pdf(path, [
+            "CUISIPRO FRANCE SARL  Tel: 01 98 76 54 32",
+            "FACTURE N 7654321 du 07/11/2024",
+            "Client : AU DIPSO  SIRET 900 000 019 10000",
+            "Verre a shot (lot de 12)  8  3,50  28,00",
+            "TOTAL TTC  EURO  33,60",
+        ])
+        self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
+        invoice = make_invoice(supplier=supplier)
+        invoice.source_file.name = "cuisipro-facture.pdf"
+        invoice.save(update_fields=["source_file"])
+        # The customer's own SIRET is on this shop's invoices and on the
+        # other's: it names neither.
+        make_invoice(supplier=self.shop, ocr_text="AUTRE\nSIRET 900 000 019 10000\n", reviewed_at=timezone.now())
+
+        out = self.run_command()
+        supplier.refresh_from_db()
+        self.assertIn("1 facture(s) numérique(s) lue(s)", out)
+        self.assertEqual(supplier.ticket_identifiers, ["tel:0198765432"])
+        self.assertIn("CUISIPRO FRANCE", Invoice.objects.get(pk=invoice.pk).source_text)

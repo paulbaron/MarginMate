@@ -7,15 +7,14 @@ parts trigger `documents-changed` when they end).
     <div class="import-card-head">
         <h2 id="import-title">Ajouter des achats</h2>
         <div class="segmented" role="tablist" aria-label="Façon d'ajouter">
-            <button type="button" role="tab" data-import-tab="tickets" aria-controls="import-tickets">📷 Tickets de caisse</button>
-            <button type="button" role="tab" data-import-tab="pdf" aria-controls="import-pdf">📄 Facture PDF</button>
+            <button type="button" role="tab" data-import-tab="documents" aria-controls="import-documents">📥 Tickets et factures</button>
             <button type="button" role="tab" data-import-tab="recuperer" aria-controls="import-recuperer">
                 🔄 Récupérer (Metro, e-mails){% if latest_job.is_active %} <span class="live-dot" title="Recherche en cours"></span>{% endif %}
             </button>
         </div>
     </div>
 
-    <div id="import-tickets" role="tabpanel" data-import-panel="tickets">
+    <div id="import-documents" role="tabpanel" data-import-panel="documents">
         <form method="post" action="{% url 'invoices:receipt_upload' %}" enctype="multipart/form-data">
             {% csrf_token %}
             {% for error in receipt_form.files.errors %}<div class="message message-error">{{ error }}</div>{% endfor %}
@@ -25,20 +24,24 @@ parts trigger `documents-changed` when they end).
             {% endcomment %}
             <div class="upload-choices">
                 <label class="upload-choice">
-                    <span class="upload-choice-title">Des photos</span>
-                    <span class="muted">Un ou plusieurs tickets, en image ou en PDF.</span>
+                    <span class="upload-choice-title">Des fichiers</span>
+                    <span class="muted">Photos de tickets, scans, factures PDF : ensemble, dans le désordre.</span>
                     <input type="file" name="files" multiple
                            accept=".pdf,.jpg,.jpeg,.png,.webp,.tif,.tiff,.bmp,application/pdf,image/*">
                 </label>
                 <label class="upload-choice">
                     <span class="upload-choice-title">Un dossier entier</span>
-                    <span class="muted">Ce qui n'est ni PDF ni photo est ignoré ; un ticket déjà importé est sauté.</span>
+                    <span class="muted">Ce qui n'est ni PDF ni photo est ignoré ; un document déjà importé est sauté.</span>
                     <input type="file" name="files" webkitdirectory directory multiple>
                 </label>
             </div>
             <div class="import-actions">
-                <button class="btn" type="submit" data-busy-label="Envoi…">Importer les tickets</button>
-                <span class="muted">L'enseigne est reconnue sur chaque ticket, et chacun est vérifié contre ses propres totaux.</span>
+                <button class="btn" type="submit" data-busy-label="Envoi…">Importer</button>
+                <span class="muted">
+                    Chaque fichier est lu selon ce qu'il contient : une facture PDF passe par le lecteur de son
+                    fournisseur quand il en a un, tout le reste par la lecture de ticket. L'enseigne est reconnue
+                    sur le document, et chacun est vérifié contre ses propres totaux.
+                </span>
             </div>
         </form>
 
@@ -48,14 +51,14 @@ parts trigger `documents-changed` when they end).
 
         {% if recent_batches %}
             <details class="explainer recent-imports" data-persist="recent-imports">
-                <summary>Derniers imports de tickets</summary>
+                <summary>Derniers imports</summary>
                 <div class="table-wrap">
                     <table class="sub-table">
                         <thead>
                             <tr>
                                 <th>Lancé le</th>
                                 <th>État</th>
-                                <th class="num">Tickets</th>
+                                <th class="num">Fichiers</th>
                                 <th class="num">Importés</th>
                                 <th class="num">Déjà connus</th>
                                 <th class="num">À ranger</th>
@@ -81,40 +84,44 @@ parts trigger `documents-changed` when they end).
                 </div>
             </details>
         {% endif %}
-    </div>
-
-    <div id="import-pdf" role="tabpanel" data-import-panel="pdf" hidden>
-        <form method="post" action="{% url 'invoices:invoice_upload' %}" enctype="multipart/form-data" class="pdf-import">
-            {% csrf_token %}
-            {% with supplier_field=pdf_form.supplier file_field=pdf_form.source_file %}
-            <div class="form-grid">
-                <div class="form-field{% if supplier_field.errors or pdf_form.new_name.errors or pdf_form.new_header.errors %} has-error{% endif %}">
-                    <label for="pdf-supplier">{{ supplier_field.label }}<span class="required" aria-hidden="true">*</span></label>
-                    <div class="shop-choice">
-                        {% include "invoices/_shop_choice_fields.html" with shop_groups=invoice_supplier_groups for_invoice=True label="Fournisseur de la facture" select_id="pdf-supplier" selected=pdf_form.data.supplier typed_name=pdf_form.data.new_name typed_header=pdf_form.data.new_header suggested="" current=None %}
+        <details class="explainer pdf-import-by-hand" data-persist="pdf-by-hand">
+            <summary>Choisir le fournisseur d'une facture PDF soi-même</summary>
+            <p class="muted">
+                Utile quand le document ne dit pas de qui il vient, ou pour le confier à l'analyse IA.
+                D'ordinaire, laissez l'import ci-dessus le reconnaître.
+            </p>
+            <form method="post" action="{% url 'invoices:invoice_upload' %}" enctype="multipart/form-data" class="pdf-import">
+                {% csrf_token %}
+                {% with supplier_field=pdf_form.supplier file_field=pdf_form.source_file %}
+                <div class="form-grid">
+                    <div class="form-field{% if supplier_field.errors or pdf_form.new_name.errors or pdf_form.new_header.errors %} has-error{% endif %}">
+                        <label for="pdf-supplier">{{ supplier_field.label }}<span class="required" aria-hidden="true">*</span></label>
+                        <div class="shop-choice">
+                            {% include "invoices/_shop_choice_fields.html" with shop_groups=invoice_supplier_groups for_invoice=True label="Fournisseur de la facture" select_id="pdf-supplier" selected=pdf_form.data.supplier typed_name=pdf_form.data.new_name typed_header=pdf_form.data.new_header suggested="" current=None %}
+                        </div>
+                        <p class="help">
+                            Sans lecteur dédié - ou nouveau -, sa facture est lue comme un ticket : lignes, taux et
+                            totaux vérifiés contre ce qu'elle imprime, puis elle s'ouvre à côté du PDF pour vérification.
+                        </p>
+                        {% for error in supplier_field.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+                        {% for error in pdf_form.new_name.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+                        {% for error in pdf_form.new_header.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
                     </div>
-                    <p class="help">
-                        Sans lecteur dédié - ou nouveau -, sa facture est lue comme un ticket : lignes, taux et
-                        totaux vérifiés contre ce qu'elle imprime, puis elle s'ouvre à côté du PDF pour vérification.
-                    </p>
-                    {% for error in supplier_field.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
-                    {% for error in pdf_form.new_name.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
-                    {% for error in pdf_form.new_header.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+                    <div class="form-field form-field-{{ file_field.widget_type }}{% if file_field.errors %} has-error{% endif %}">
+                        <label for="{{ file_field.id_for_label }}">{{ file_field.label }}<span class="required" aria-hidden="true">*</span></label>
+                        {{ file_field }}
+                        {% for error in file_field.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+                    </div>
                 </div>
-                <div class="form-field form-field-{{ file_field.widget_type }}{% if file_field.errors %} has-error{% endif %}">
-                    <label for="{{ file_field.id_for_label }}">{{ file_field.label }}<span class="required" aria-hidden="true">*</span></label>
-                    {{ file_field }}
-                    {% for error in file_field.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+                {% endwith %}
+                <div class="import-actions">
+                    <button class="btn" type="submit" data-busy-label="Lecture de la facture…">Importer la facture</button>
+                    <span class="muted">
+                        Avec un lecteur dédié (Metro, UBA…), la facture s'ouvre ensuite dans la liste, sur ses lignes.
+                    </span>
                 </div>
-            </div>
-            {% endwith %}
-            <div class="import-actions">
-                <button class="btn" type="submit" data-busy-label="Lecture de la facture…">Importer la facture</button>
-                <span class="muted">
-                    Avec un lecteur dédié (Metro, UBA…), la facture s'ouvre ensuite dans la liste, sur ses lignes.
-                </span>
-            </div>
-        </form>
+            </form>
+        </details>
     </div>
 
     <div id="import-recuperer" role="tabpanel" data-import-panel="recuperer" hidden>

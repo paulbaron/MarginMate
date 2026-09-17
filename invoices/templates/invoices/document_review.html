@@ -32,10 +32,42 @@
                     <form method="post" class="inline-form shop-choice" data-leaves-lines>
                         {% csrf_token %}
                         <input type="hidden" name="action" value="move_shop">
-                        {% include "invoices/_shop_choice_fields.html" with label="Enseigne du ticket" suggested=suggested_header current=invoice.supplier_id %}
+                        {% include "invoices/_shop_choice_fields.html" with label="Enseigne du ticket" suggested=suggested_header current=invoice.supplier_id ask_header=True %}
                         <button class="btn btn-small btn-secondary" type="submit">Ranger ce ticket</button>
                     </form>
                 </details>
+                {% if can_set_header %}
+                    {% comment %}
+                    What files the next documents of this shop here on their
+                    own. The header is given from this page rather than from
+                    the import card: the document is on screen, so its own top
+                    lines can be offered.
+                    {% endcomment %}
+                    <details class="shop-header"{% if not invoice.supplier.ticket_header %} open{% endif %}>
+                        <summary>
+                            Reconnaissance des documents {{ invoice.supplier.name }}
+                            {% if names_shop %}: {{ names_shop|join:", " }}{% else %}: rien encore{% endif %}
+                        </summary>
+                        <form method="post" class="inline-form header-form" data-leaves-lines>
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="shop_header">
+                            <label class="inline-label">
+                                Texte imprimé en tête
+                                <input type="text" name="ticket_header" maxlength="100" data-header-input
+                                       value="{{ invoice.supplier.ticket_header }}" placeholder="{{ suggested_header }}">
+                            </label>
+                            <button class="btn btn-small btn-secondary" type="submit">Enregistrer</button>
+                            <span class="muted">d'après le document, pour que ses prochains tickets soient reconnus.</span>
+                            {% if header_choices %}
+                                <span class="header-choices">
+                                    {% for choice in header_choices %}
+                                        <button type="button" class="chip" data-header-choice="{{ choice }}">{{ choice }}</button>
+                                    {% endfor %}
+                                </span>
+                            {% endif %}
+                        </form>
+                    </details>
+                {% endif %}
             {% endif %}
         </div>
         <div class="actions">
