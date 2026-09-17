@@ -6,10 +6,22 @@ three different formsets across three different apps.
 
 import re
 from datetime import timedelta
+from decimal import Decimal
 
 from django import forms
 from django.db import models
 from django.utils import timezone
+
+
+def plain_number(value) -> str:
+    """A decimal as a person writes it: 0.82, 2, 10, -1 - never "0.820",
+    nor the "1E+1" Decimal.normalize() makes of 10. "" for nothing."""
+    if value is None or value == "":
+        return ""
+    number = Decimal(str(value))
+    if number == number.to_integral_value():
+        return str(number.quantize(Decimal("1")))
+    return format(number.normalize(), "f")
 
 
 class BlankRowTolerantFormMixin:

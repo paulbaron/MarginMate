@@ -8,7 +8,8 @@ from decimal import Decimal
 @dataclass
 class ParsedLine:
     raw_name: str
-    quantity: int
+    # A count, or a measure the document sells by (0.82 m²): a Decimal then.
+    quantity: int | Decimal
     total_volume: Decimal
     unit_cost_ht: Decimal
     total_ht: Decimal

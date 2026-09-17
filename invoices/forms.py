@@ -10,6 +10,22 @@ from .models import EmailInvoiceSource, Invoice, InvoiceType, ShopItemPrice, Sup
 from .parsers import LLM_PARSER_KEY, PARSER_REGISTRY
 
 
+class QuantityField(forms.DecimalField):
+    """A count or a measure, to the thousandth, typed with a comma or a
+    point (0,82 as 0.82)."""
+
+    def __init__(self, **kwargs):
+        kwargs.setdefault("max_digits", 12)
+        kwargs.setdefault("decimal_places", 3)
+        kwargs.setdefault("widget", forms.NumberInput(attrs={"step": "any"}))
+        super().__init__(**kwargs)
+
+    def to_python(self, value):
+        if isinstance(value, str):
+            value = value.strip().replace(",", ".")
+        return super().to_python(value)
+
+
 class InvoiceUploadForm(forms.Form):
     supplier = forms.ModelChoiceField(queryset=Supplier.objects.all(), label="Fournisseur")
     source_file = forms.FileField(label="Fichier PDF")
@@ -74,7 +90,7 @@ class ManualInvoiceLineForm(BlankRowTolerantForm):
     product_name = forms.CharField(label="Produit", max_length=255)
     # Negative for a refund - a deposit crate or pallet given back, printed
     # "1-" / "15,00-" by Metro - with a negative amount to match (clean).
-    quantity = forms.IntegerField(label="Quantité")
+    quantity = QuantityField(label="Quantité")
     total_ht = forms.DecimalField(label="Total (HT)", max_digits=12, decimal_places=2)
     # Pre-filled, since almost every line is 20% - which means a row where
     # the user typed nothing still submits a VAT rate. That must not make an
@@ -142,6 +158,13 @@ def plain_volume(value: Decimal) -> Decimal | None:
     return value.quantize(Decimal("1")) if value == value.to_integral_value() else value.normalize()
 
 
+def plain_quantity(value) -> Decimal:
+    """A stored quantity as its field shows it: 0.82, 2 - not 0.820."""
+    from common import plain_number
+
+    return Decimal(plain_number(value))
+
+
 def line_initial(line, document: str) -> dict:
     """A stored line as the correction page shows it.
 
@@ -160,7 +183,7 @@ def line_initial(line, document: str) -> dict:
         "line_id": line.pk,
         "product_name": line.raw_name,
         "read_as": line.read_as,
-        "quantity": line.quantity,
+        "quantity": plain_quantity(line.quantity),
         "total_volume": plain_volume(line.total_volume),
         "total_ht": total_ht,
         "total_ttc": total_ttc,
@@ -183,7 +206,7 @@ class LineCorrectionForm(BlankRowTolerantForm):
 
     product_name = forms.CharField(label="Produit", max_length=255)
     # Negative for a refund, with a negative amount to match (clean).
-    quantity = forms.IntegerField(label="Qté")
+    quantity = QuantityField(label="Qté")
     # Kilos of a weighed item, litres of a measured one.
     total_volume = forms.DecimalField(
         label="Poids / volume",

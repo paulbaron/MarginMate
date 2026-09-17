@@ -282,7 +282,9 @@ class InvoiceLine(models.Model):
     invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE, related_name="lines")
     product = models.ForeignKey("inventory.Product", on_delete=models.PROTECT, related_name="invoice_lines")
     raw_name = models.CharField(max_length=255)
-    quantity = models.IntegerField(default=1)
+    # A count, or a measure when the document sells by it: 0,82 m² of
+    # plywood, 2,5 m of cable. To the thousandth.
+    quantity = models.DecimalField(max_digits=12, decimal_places=3, default=1)
     # The supplier's own "packs per line" multiplier (Metro's "Colisage"),
     # already folded into `quantity` (quantity = colisage * qty bought) -
     # shown separately in the review queue since whether a pack size was
@@ -320,7 +322,9 @@ class InvoiceLine(models.Model):
         ordering = ["id"]
 
     def __str__(self):
-        return f"{self.raw_name} x{self.quantity}"
+        from common import plain_number
+
+        return f"{self.raw_name} x{plain_number(self.quantity)}"
 
     @property
     def total_ttc(self):

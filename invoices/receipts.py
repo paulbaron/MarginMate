@@ -41,7 +41,7 @@ from django.utils import timezone
 
 from .importing import DuplicateInvoiceError, import_parsed_invoice
 from .models import Invoice, InvoiceLine, ShopItemPrice, Supplier, label_for_unit_price
-from .ocr import deskew, ocr_prepared_image, page_images
+from .ocr import deskew, ocr_prepared_image, page_images, text_layer_pages
 from .parsers import (
     LLM_PARSER_KEY,
     PARSER_REGISTRY,
@@ -315,9 +315,21 @@ class ReceiptRead:
 
 
 def recognise(pdf_path: str):
-    """The photo's pages, deskewed, and what the OCR engine read on each."""
-    images = [deskew(image) for image in page_images(pdf_path)]
-    return images, [ocr_prepared_image(image) for image in images]
+    """The document's pages as images, and what each says: a PDF page's own
+    text when it carries some, what the OCR engine read on the deskewed
+    photo otherwise."""
+    layers = text_layer_pages(pdf_path)
+    images, pages = [], []
+    for position, image in enumerate(page_images(pdf_path)):
+        layer = layers[position] if position < len(layers) else None
+        if layer is not None:
+            images.append(image)
+            pages.append(layer)
+            continue
+        image = deskew(image)
+        images.append(image)
+        pages.append(ocr_prepared_image(image))
+    return images, pages
 
 
 def read_receipt(pdf_path: str, date_hint: date | None = None, supplier: Supplier | None = None) -> ReceiptRead:

@@ -1,4 +1,4 @@
-{% comment %}
+{% load assets %}{% comment %}
 A document's lines, under its row in the Achats list: enough to see that an
 import read what it should, and where each product went.
 {% endcomment %}
@@ -28,7 +28,7 @@ import read what it should, and where each product went.
                 {% for line in lines %}
                     <tr>
                         <td>{{ line.raw_name }}</td>
-                        <td class="num">{{ line.quantity }}</td>
+                        <td class="num">{{ line.quantity|quantity }}</td>
                         <td class="num">{{ line.total_ht|floatformat:2 }} €</td>
                         <td class="num">{{ line.total_ttc|floatformat:2 }} €</td>
                         <td>

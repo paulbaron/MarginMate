@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load assets %}
 {% block title %}{{ invoice }} - MarginMate{% endblock %}
 {% block content %}
     <div class="page-header">
@@ -117,7 +118,7 @@
                         <span class="status-pill status-NEEDS_REVIEW">À rattacher</span>
                     {% endif %}
                 </td>
-                <td class="num">{{ line.quantity }}</td>
+                <td class="num">{{ line.quantity|quantity }}</td>
                 <td class="num">{% if line.total_volume %}{{ line.total_volume|floatformat:3 }}{% else %}<span class="muted">—</span>{% endif %}</td>
                 <td class="num">{{ line.unit_cost_ht|floatformat:4 }} €</td>
                 <td class="num">{{ line.total_ht|floatformat:2 }} €</td>

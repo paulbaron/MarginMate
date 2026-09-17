@@ -1,4 +1,4 @@
-{% comment %}
+{% load assets %}{% comment %}
 The products no stock item has claimed yet, beside the list on the Produits
 page. Every form here posts in place (hx-post) and gets this panel back; the
 page script then reloads the list opened where the product went. Without
@@ -82,7 +82,7 @@ Confiance : {{ confidence_counts.high|default:0 }} haute, {{ confidence_counts.m
                 {% for line in lines|slice:":3" %}
                     <li>
                         <a href="{% url 'invoices:invoice_detail' line.invoice_id %}">{{ line.invoice.invoice_date|date:"d/m/Y"|default:"date ?" }}</a> :
-                        {{ line.quantity }} acheté{{ line.quantity|pluralize }}{% if line.colisage > 1 %} (colis de {{ line.colisage }}){% endif %}{% if line.total_volume %}, {{ line.total_volume|floatformat:"-3" }} L/kg{% endif %},
+                        {{ line.quantity|quantity }} acheté{% if line.quantity > 1 %}s{% endif %}{% if line.colisage > 1 %} (colis de {{ line.colisage }}){% endif %}{% if line.total_volume %}, {{ line.total_volume|floatformat:"-3" }} L/kg{% endif %},
                         {{ line.total_ht|floatformat:2 }} € HT
                     </li>
                 {% endfor %}

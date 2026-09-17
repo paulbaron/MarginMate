@@ -191,6 +191,8 @@ class ProductsPageTests(TestCase):
         )
         response = self.client.get(reverse("inventory:stock_type_movements", args=[self.rum.pk]))
         self.assertContains(response, "09/03/2026")
+        # The 4.2 litres bought, as written: not "4.200".
+        self.assertContains(response, "4.2 Litre")
 
     def test_approving_every_suggestion_comes_back_to_the_page(self):
         self.client.get(self.url)  # the suggestions are made as the page is drawn

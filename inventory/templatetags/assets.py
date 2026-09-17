@@ -22,6 +22,17 @@ from django.templatetags.static import static
 register = template.Library()
 
 
+@register.filter
+def quantity(value) -> str:
+    """A quantity as written: 0.82, 2 - see common.plain_number."""
+    from common import plain_number
+
+    try:
+        return plain_number(value)
+    except (ArithmeticError, ValueError):
+        return str(value)
+
+
 @register.simple_tag
 def asset(path: str) -> str:
     url = static(path)

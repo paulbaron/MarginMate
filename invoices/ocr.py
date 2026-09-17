@@ -294,13 +294,81 @@ def page_images(path: str):
     document = pdfium.PdfDocument(path)
     try:
         for page in document:
+            width, height = page.get_size()
             images = [obj for obj in page.get_objects() if obj.type == pdfium_raw.FPDF_PAGEOBJ_IMAGE]
-            if len(images) == 1:
+            if len(images) == 1 and covers_page(images[0].get_bounds(), width, height):
                 yield images[0].get_bitmap().to_pil().convert("RGB")
             else:
                 yield page.render(scale=300 / 72).to_pil().convert("RGB")
     finally:
         document.close()
+
+
+#: How much of its page an embedded image has to cover to be the page - a
+#: phone scan. A web shop's invoice has one image too: its logo, a strip at
+#: the top, which read alone gave the recogniser seven characters.
+PAGE_PHOTO_SHARE = 0.8
+
+
+def covers_page(bounds, page_width: float, page_height: float) -> bool:
+    """Whether an image placed at `bounds` (left, bottom, right, top, in
+    points) fills its page."""
+    left, bottom, right, top = bounds
+    area = max(right - left, 0) * max(top - bottom, 0)
+    return page_width > 0 and page_height > 0 and area >= PAGE_PHOTO_SHARE * page_width * page_height
+
+
+#: A page with fewer characters of text than this is a picture: a scanner
+#: stamps a page number, a phone app a watermark.
+MIN_TEXT_LAYER_CHARS = 40
+# Two words further apart than this share of their height are in different
+# columns - the gap the recognised lines keep as two spaces.
+COLUMN_GAP_SHARE = 0.4
+SAME_TEXT_LINE_POINTS = 3
+
+
+def text_layer_pages(path: str) -> list[OcrPage | None]:
+    """The text a PDF carries, page by page, as lines the readers take - or
+    None for a page that is a picture. A digital invoice needs no OCR: its
+    own text is exact, and reading a rendering of it could only add errors.
+    Not a PDF: no layer at all."""
+    if not path.lower().endswith(".pdf"):
+        return []
+    import pdfplumber
+
+    pages: list[OcrPage | None] = []
+    with pdfplumber.open(path) as document:
+        for page in document.pages:
+            words = page.extract_words(keep_blank_chars=False, use_text_flow=False)
+            if sum(len(word["text"]) for word in words) < MIN_TEXT_LAYER_CHARS:
+                pages.append(None)
+                continue
+            pages.append(OcrPage(lines=_text_lines(words)))
+    return pages
+
+
+def _text_lines(words) -> list[OcrLine]:
+    rows: list[list[dict]] = []
+    for word in sorted(words, key=lambda word: (round(word["top"]), word["x0"])):
+        for row in rows:
+            if abs(row[0]["top"] - word["top"]) <= SAME_TEXT_LINE_POINTS:
+                row.append(word)
+                break
+        else:
+            rows.append([word])
+    lines = []
+    for row in sorted(rows, key=lambda row: row[0]["top"]):
+        row.sort(key=lambda word: word["x0"])
+        cells: list[OcrCell] = []
+        for word in row:
+            size = max(word["bottom"] - word["top"], 1.0)
+            if cells and word["x0"] - cells[-1].x1 <= COLUMN_GAP_SHARE * size:
+                last = cells[-1]
+                cells[-1] = OcrCell(text=f"{last.text} {word['text']}", x0=last.x0, x1=word["x1"], confidence=1.0)
+            else:
+                cells.append(OcrCell(text=word["text"], x0=word["x0"], x1=word["x1"], confidence=1.0))
+        lines.append(OcrLine(cells=cells, y=row[0]["top"]))
+    return lines
 
 
 def estimate_skew_degrees(image) -> float:

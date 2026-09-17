@@ -1,4 +1,4 @@
-{% if movements %}
+{% load assets %}{% if movements %}
 {% comment %}
 Nine columns in a row of the list: beside the panel of products to classify
 it is narrow, so it scrolls sideways on its own rather than squeezing.
@@ -38,7 +38,7 @@ it is narrow, so it scrolls sideways on its own rather than squeezing.
             <td class="muted">{{ entry.line.invoice.supplier.name|default:"—" }}</td>
             <td>{{ entry.line.invoice.invoice_date|date:"d/m/Y"|default:"—" }}</td>
             <td class="num">
-                {{ entry.purchased_quantity }} {{ entry.purchased_quantity_unit }}
+                {{ entry.purchased_quantity|quantity }} {{ entry.purchased_quantity_unit }}
             </td>
             <td class="num">{{ entry.movement.unit_cost_ht|floatformat:2 }} €</td>
             <td class="num">{{ entry.line.total_ht|floatformat:2 }} €</td>
