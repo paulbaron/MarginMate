@@ -145,6 +145,15 @@ What it knows, all arithmetic:
   the one already taken is the same discount, and a row whose discount line
   says what it was taken off ("sur 11,76 soit -1,76" under a row of 10,00)
   is already net of it;
+- an **amount in brackets that is the one before it excluding tax**
+  ("Abonnement 19.99 (16.66)") is that amount printed twice, not two; a
+  **date spelled out** ("19 mai 2026") is the document's own, read before the
+  day it says it will be debited; and past a total, a run has to say
+  something the total does not - a table, or a price and the discount under
+  it making what was paid (`_priced_detail`, a phone bill printing its
+  totals first and its lines below them). A line whose amount is the
+  document's HT base, printed alone or twice, is that total restated, not a
+  row: a row has more figures than its amount (`_looks_like_a_row`);
 - a **percentage is never an amount**, whatever sign is in front of it;
   "100X35X2.5" is a size, not a count of 100; a **quantity column of one**
   between a price and the amount it makes is a count; and a number in front
@@ -379,10 +388,13 @@ to. Headers compare without accents, case or punctuation, as whole words
 (`receipts.plain_text`), and one shorter than four characters, or already
 printed on the tickets of two other shops or on more than three, is refused -
 a few tickets of one shop carrying it are more likely the new shop's, filed
-before it existed, and are named so they can be moved. A ticket filed under
-the wrong shop is moved from its review page ("Changer d'enseigne",
-`receipts.move_to_shop`): its lines stay and find their products among the
-new shop's, the orphans go. A file waiting for its shop is counted apart
+before it existed, and are named so they can be moved. A document filed under the
+wrong supplier is moved from its own page ("Changer d'enseigne" on a ticket,
+"Changer de fournisseur" on an invoice, `receipts.move_to_shop`): its lines
+stay and find their products among the new supplier's, the orphans go. A
+digital invoice gets no check added by the move - a check is what makes a
+document a receipt (`Invoice.is_receipt`) - and seven invoices had no way
+back at all before that page offered it to them. A file waiting for its shop is counted apart
 ("À ranger", `ReceiptBatch.awaiting_shop_count`), not as a failure:
 `failed_count` is the errors plus the unrecognised files no longer kept.
 
@@ -433,6 +445,18 @@ names no one** (the one branding the goods is printed at every shop selling
 them). It comes after the headers people gave and the configured tills, and
 says so ("Enseigne reconnue"). One identifier learned by two suppliers names
 neither.
+
+Two more rules came from seven Free invoices filed under UBA, on a mobile
+number both print - **the customer's own**, learned while UBA was the only
+supplier printing it. A document that prints a **company number nobody
+knows** is not the supplier whose phone or web site it also prints
+(`identified_supplier`): a SIREN is what a company is, a phone is where
+someone answers. And a **supplier's own reader** - which turns a whole
+document into lines - runs only for a supplier named by its company number
+or by the text it prints at the top (`document_supplier`); read as a ticket,
+a document is checked against its own totals, so that path can be less
+strict. What a document moved away from a supplier printed is forgotten by
+it (`move_to_shop`), which is what unlearns a number that named it wrongly.
 
 **A PDF invoice from a supplier with no reader of its own** - or a new one,
 named in the import card ("+ Nouveau fournisseur…", `InvoiceUploadForm` is a

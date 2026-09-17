@@ -572,7 +572,7 @@ def _correction_page(request, invoice):
             _forget_price(request, invoice)
             return here
 
-        if is_receipt and action == "move_shop":
+        if action == "move_shop":
             _move_shop(request, invoice)
             return here
 
@@ -620,7 +620,9 @@ def _correction_page(request, invoice):
 
     if formset is None:
         formset = _line_formset_for(invoice, document)
-    shop_context = {}
+    from .receipts import shop_choices
+
+    shop_context = {"shop_groups": shop_choices()}
     if is_receipt:
         from .parsers import ticket_parser_for
         from .receipts import (
@@ -629,12 +631,10 @@ def _correction_page(request, invoice):
             header_guess,
             names_shop,
             parser_for,
-            shop_choices,
         )
 
         shop = getattr(parser_for(invoice.supplier), "shop", None)
-        shop_context = {
-            "shop_groups": shop_choices(),
+        shop_context |= {
             "suggested_header": header_guess(invoice.ocr_text),
             "header_choices": header_choices(invoice.ocr_text),
             "names_shop": names_shop(invoice.supplier),
@@ -655,6 +655,7 @@ def _correction_page(request, invoice):
             **_checks_context(invoice),
             "invoice": invoice,
             "is_receipt": is_receipt,
+            "is_invoice": not is_receipt,
             "formset": formset,
             "header_form": header_form,
             "price_form": price_form,
@@ -781,7 +782,8 @@ def _move_shop(request, invoice) -> None:
         messages.error(request, form.error_text())
         return
     if form.cleaned_data["supplier"] == invoice.supplier:
-        messages.info(request, f"Ce ticket est déjà rangé chez {invoice.supplier.name}.")
+        kind = "ticket" if invoice.is_receipt else "document"
+        messages.info(request, f"Ce {kind} est déjà rangé chez {invoice.supplier.name}.")
         return
     try:
         supplier, created = form.shop(ignoring=[invoice])
@@ -789,7 +791,8 @@ def _move_shop(request, invoice) -> None:
     except (ValueError, InvoiceLinesInUseError) as exc:
         messages.error(request, str(exc))
         return
-    messages.success(request, f"Ticket rangé chez {supplier.name}.")
+    kind = "Ticket" if invoice.is_receipt else "Facture"
+    messages.success(request, f"{kind} rangé{'' if invoice.is_receipt else 'e'} chez {supplier.name}.")
     if created:
         _say_new_shop(request, supplier)
 

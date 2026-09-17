@@ -22,20 +22,21 @@
                     {% if remaining %} · {{ remaining }} ticket{{ remaining|pluralize }} en attente{% if lot %} dans cet import{% endif %}{% endif %}
                 {% endif %}
             </p>
+            {% comment %}
+            A document filed under the wrong supplier - a ticket whose header
+            said nothing, an invoice recognised by a figure two companies
+            print - is moved here, its lines with it.
+            {% endcomment %}
+            <details class="move-shop">
+                <summary>Pas de chez {{ invoice.supplier.name }} ? Changer {% if is_receipt %}d'enseigne{% else %}de fournisseur{% endif %}</summary>
+                <form method="post" class="inline-form shop-choice" data-leaves-lines>
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="move_shop">
+                    {% include "invoices/_shop_choice_fields.html" with label="Fournisseur du document" suggested=suggested_header current=invoice.supplier_id ask_header=is_receipt for_invoice=is_invoice %}
+                    <button class="btn btn-small btn-secondary" type="submit">Ranger ce document</button>
+                </form>
+            </details>
             {% if is_receipt %}
-                {% comment %}
-                A ticket filed under the wrong shop - or under one chosen for a
-                header nobody knew - is moved here, its lines with it.
-                {% endcomment %}
-                <details class="move-shop">
-                    <summary>Pas de chez {{ invoice.supplier.name }} ? Changer d'enseigne</summary>
-                    <form method="post" class="inline-form shop-choice" data-leaves-lines>
-                        {% csrf_token %}
-                        <input type="hidden" name="action" value="move_shop">
-                        {% include "invoices/_shop_choice_fields.html" with label="Enseigne du ticket" suggested=suggested_header current=invoice.supplier_id ask_header=True %}
-                        <button class="btn btn-small btn-secondary" type="submit">Ranger ce ticket</button>
-                    </form>
-                </details>
                 {% if can_set_header %}
                     {% comment %}
                     What files the next documents of this shop here on their

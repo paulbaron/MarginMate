@@ -260,6 +260,15 @@ def identified_supplier(text: str) -> tuple[Supplier | None, list[str]]:
         return None, []
     if all(identifier.startswith("web:") for identifier in named):
         return None, []
+    # A company number printed that belongs to nobody known: whoever sent this
+    # document, it is not the supplier whose phone or web site it also prints.
+    # Seven Free invoices went to UBA on a mobile number both print - the
+    # customer's own - while naming Free's SIREN, which named nobody.
+    unknown_company = {
+        identifier for identifier in printed if identifier.startswith("siren:") and identifier not in owners
+    }
+    if unknown_company and not any(identifier.startswith("siren:") for identifier in named):
+        return None, []
     return next(iter(named.values())), sorted(named)
 
 
@@ -461,33 +470,42 @@ def create_shop(name: str, header: str = "", ignoring=()) -> Supplier:
 
 
 def move_to_shop(invoice: Invoice, supplier: Supplier) -> None:
-    """File a ticket under another shop: its lines stay as they are and find
-    their products among the new shop's (the old ones nobody else uses go).
-    Raises ValueError when that shop has a ticket of the same number, and
-    InvoiceLinesInUseError as a correction would."""
+    """File a document under another supplier - a ticket or a digital
+    invoice: its lines stay as they are and find their products among the new
+    supplier's (the old ones nobody else uses go). What named the one it
+    leaves named it wrongly, so that supplier forgets it; the new one learns
+    what the document prints. Raises ValueError when that supplier has a
+    document of the same number, and InvoiceLinesInUseError as a correction
+    would."""
     from .importing import corrected_line, replace_invoice_lines
 
     if supplier.pk == invoice.supplier_id:
         return
     if supplier.parser_key == LLM_PARSER_KEY:
-        raise ValueError("Un ticket ne se range pas sous ce fournisseur.")
+        raise ValueError("Un document ne se range pas sous ce fournisseur.")
     if invoice.invoice_number and (
         Invoice.objects.filter(supplier=supplier, invoice_number=invoice.invoice_number).exclude(pk=invoice.pk).exists()
     ):
-        raise ValueError(f"{supplier.name} a déjà un ticket n° {invoice.invoice_number} : c'est peut-être le même.")
+        raise ValueError(f"{supplier.name} a déjà un document n° {invoice.invoice_number} : c'est peut-être le même.")
     lines = [
         corrected_line(line, raw_name=line.raw_name, quantity=line.quantity, total_ht=line.total_ht, vat_rate=line.vat_rate)
         for line in invoice.lines.all()
     ]
+    text = invoice.document_text
+    fields = ["supplier"]
     with transaction.atomic():
-        forget_identifiers(invoice.supplier, invoice.ocr_text)
+        forget_identifiers(invoice.supplier, text)
         invoice.supplier = supplier
-        invoice.parse_checks = [
-            check for check in invoice.parse_checks if check["label"] not in (CHOSEN_SHOP_CHECK, IDENTIFIED_CHECK)
-        ] + [{"label": CHOSEN_SHOP_CHECK, "passed": True, "detail": f"Rangé chez {supplier.name} à la main."}]
-        invoice.save(update_fields=["supplier", "parse_checks"])
+        if invoice.is_receipt:
+            # A check is what a ticket's review screen reads; adding one to a
+            # digital invoice would turn it into a ticket (Invoice.is_receipt).
+            invoice.parse_checks = [
+                check for check in invoice.parse_checks if check["label"] not in (CHOSEN_SHOP_CHECK, IDENTIFIED_CHECK)
+            ] + [{"label": CHOSEN_SHOP_CHECK, "passed": True, "detail": f"Rangé chez {supplier.name} à la main."}]
+            fields.append("parse_checks")
+        invoice.save(update_fields=fields)
         replace_invoice_lines(invoice, lines)
-        learn_identifiers(supplier, invoice.ocr_text)
+        learn_identifiers(supplier, text)
 
 
 @dataclass
@@ -920,11 +938,21 @@ def has_text_layer(path: str) -> bool:
 
 
 def document_supplier(text: str) -> Supplier | None:
-    """Whose document this is, from what it prints - the same reading as a
-    ticket's (detect_shop): a header a person gave, a configured till, then
-    the SIREN, phone or web site learned from that supplier's documents."""
-    parser, _identifiers = detect_shop(text)
-    return Supplier.objects.filter(code=parser.supplier_code).first() if parser is not None else None
+    """The supplier whose own reader may be handed this document: named by
+    the text it prints at the top, by a configured till, or by its company
+    number (detect_shop).
+
+    A reader of its own turns a whole document into lines, so a phone number
+    or a web site is not enough to choose one - those two are printed by a
+    customer and a supplier alike. Read as a ticket, the document is checked
+    against its own totals, which is why that path is not this strict.
+    """
+    parser, identifiers = detect_shop(text)
+    if parser is None:
+        return None
+    if identifiers and not any(identifier.startswith("siren:") for identifier in identifiers):
+        return None
+    return Supplier.objects.filter(code=parser.supplier_code).first()
 
 
 def import_document(

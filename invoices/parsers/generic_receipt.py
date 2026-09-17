@@ -321,6 +321,7 @@ def read_line(index: int, line: str, total: Decimal | None = None) -> Reading | 
             continue
         is_per_unit = bool(per_unit and per_unit.start() <= match.start("units") < per_unit.end())
         amounts.append((match.start(), _money(match), is_per_unit))
+    amounts = _without_restated_ht(amounts, line)
     integers = [
         (match.start(), int(match.group()))
         for match in INTEGER_RE.finditer(line)
@@ -402,6 +403,25 @@ def read_line(index: int, line: str, total: Decimal | None = None) -> Reading | 
             ):
                 reading.count = 1
     return reading
+
+
+def _without_restated_ht(amounts: list[tuple], line: str) -> list[tuple]:
+    """Drop an amount in brackets that is the one before it excluding tax:
+    "Abonnement 19.99 (16.66)" is one price, printed both ways, not two.
+    Only the brackets and the rate say so - 16,66 is no coincidence at 20%."""
+    kept = []
+    for position, entry in enumerate(amounts):
+        start, value, _is_per_unit = entry
+        bracketed = line[:start].rstrip().endswith("(") and line[start:].lstrip("-0123456789.,").lstrip().startswith(")")
+        before = amounts[position - 1][1] if position else None
+        if (
+            bracketed
+            and before is not None
+            and any(abs(to_ht(before, rate) - value) <= CENTS for rate in KNOWN_VAT_RATES)
+        ):
+            continue
+        kept.append(entry)
+    return kept
 
 
 def _rate_tokens(values: list[Decimal]) -> list[Decimal]:
@@ -621,6 +641,8 @@ class GenericReceiptParser(ReceiptParser):
             # amount are read - the rest is a charge included in one of them
             # ("Dont éco-part DEEE 0,02"), or a total.
             ttc_run = self._fitting_run([item for item in items if _explained(item)], lines, total)
+        if structured_only:
+            ttc_run = self._telling_run(items, lines, total, totals, ttc_run)
         choice = _ht_choice(items, ttc_run, totals)
         for candidate, printed_at in untabled if choice is None else ():
             choice = _ht_choice([item for item in items if item.index < min(printed_at)], ttc_run, candidate)
@@ -641,9 +663,22 @@ class GenericReceiptParser(ReceiptParser):
             ht_run, ht_rates = choice
             _as_ht(ht_run, ht_rates)
             segment.chosen = ht_run
-        elif ttc_run is not None and (not structured_only or _structured(ttc_run)):
+        elif ttc_run is not None:
             segment.chosen = ttc_run
         return segment
+
+    def _telling_run(self, items, lines, total, totals, found):
+        """Past a total, the run has to say something the total does not: be a
+        table (`_structured`), or a price and the discount under it
+        (`_priced_detail`). A line repeating the amount paid - a payment, the
+        heading of a section - is passed over, and what follows it tried."""
+        rest = items
+        while found is not None:
+            if _structured(found) or _priced_detail(found, totals):
+                return found
+            rest = rest[rest.index(found[0]) + 1 :]
+            found = self._fitting_run(rest, lines, total)
+        return None
 
     # -- reading -----------------------------------------------------------
 
@@ -1297,6 +1332,39 @@ def _count_from_articles(items: list[Reading], lines: list[str]) -> None:
     item.name = item.name[match.end():]
 
 
+def _looks_like_a_row(item: Reading) -> bool:
+    """Whether a line on its own reads as a row of a table rather than as one
+    of the document's totals restated.
+
+    A row has more figures than its amount: what makes it ("35,54  1  35,54"),
+    a quantity ("8x Impression simple  20,08"), or a unit price beside it
+    ("Impression simple  5  4,015  20,08"). A total restated prints its
+    amount alone, or twice ("Base ht  607,49  Total HT  607,49"), and a
+    payment line's other figure is a zero ("Carte  37,50  TOTAL HT  0,00").
+    """
+    return (
+        _explained(item)
+        or item.count_printed
+        or (item.unit is not None and item.unit > 0 and item.unit != item.total)
+    )
+
+
+def _priced_detail(run: list[Reading], totals: ReceiptTotals) -> bool:
+    """Whether a single row read past a total is the purchase itemised: its
+    own price, less a discount printed under it, making what was paid - an
+    invoice that prints its totals first and its lines below them ("Abonnement
+    19.99", "Remise -10.00", for 9.99 paid).
+
+    A line that simply repeats the amount paid proves nothing ("Espèces
+    11,40"), and neither does its HT: at one rate, the tax-exclusive total is
+    the same fact as the total, not a second one.
+    """
+    paid = totals.printed_total_ttc
+    if paid is None or len(run) != 1 or not run[0].discount:
+        return False
+    return abs(run[0].net - paid) <= CENTS and abs(run[0].total - paid) > CENTS
+
+
 def _is_vat_table(run: list[Reading], totals: ReceiptTotals) -> bool:
     """Whether a run adding up to what was paid is the document's own VAT
     table read as lines - its HT base on one, its tax on another ("Base ht
@@ -1365,7 +1433,7 @@ def _ht_run(items: list[Reading], ht_base: Decimal | None) -> list[Reading] | No
             run = items[start : start + length]
             if any(item.total is None for item in run):
                 continue
-            if length == 1 and start and run[0].total == ht_base and not _explained(run[0]):
+            if length == 1 and run[0].total == ht_base and not _looks_like_a_row(run[0]):
                 continue
             runs.append(run)
     for run in runs:

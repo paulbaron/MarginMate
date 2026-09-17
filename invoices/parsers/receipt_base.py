@@ -48,6 +48,7 @@ rate, so 5.5% is only ever a fallback the checks report, never an answer.
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date
@@ -95,6 +96,15 @@ RATE_RE = re.compile(r"(?<![\d.,])(\d{1,3})(?:[.,](\d{1,2}))?\s*%")
 # between a date and the time beside it: "Heure:14-07-202614:49:26".
 # With the guard, every Sabbh receipt came out with no date at all.
 DATE_RE = re.compile(r"(?<!\d)(\d{2})[-/.](\d{2})[-/.]((?:19|20)\d{2})")
+# "19 mai 2026", "1er décembre 2025": a month spelled out, accents and case
+# as the document (or the recogniser) has them.
+MONTHS = {
+    "janvier": 1, "fevrier": 2, "mars": 3, "avril": 4, "mai": 5, "juin": 6,
+    "juillet": 7, "aout": 8, "septembre": 9, "octobre": 10, "novembre": 11, "decembre": 12,
+}
+WRITTEN_DATE_RE = re.compile(
+    r"(?<!\d)(\d{1,2})(?:er)?\s+([A-Za-zÀ-ÿ´`^¨]{3,12})\s+((?:19|20)\d{2})(?!\d)", re.IGNORECASE
+)
 
 
 # Money as a till prints it: 1-4 digits, a decimal comma or point, two
@@ -174,7 +184,12 @@ def _ht_and_tax(lines: list[str], repeated: list[Decimal]) -> Decimal | None:
     """The total of a document whose VAT table is unreadable but which prints
     its HT and its tax, each more than once, and their sum: "332,50" and
     "66,50" on the totals and in the table, "399,00" once as the amount due.
-    Only when one pair does, and at exactly one French rate."""
+    Only when one pair does, and at exactly one French rate.
+
+    Printed once each is not enough: on a ticket where an amount was misread,
+    two of the figures left often fit a rate, and taking their sum for the
+    total would let the misreading through as if the ticket added up.
+    """
     printed = {abs(value) for line in lines for value in line_amounts(line)}
     found = {
         base + tax
@@ -328,7 +343,18 @@ def read_rate(text: str) -> Decimal | None:
 
 
 def read_date(text: str, date_hint: date | None = None) -> date | None:
-    """All four shops print day first (15-07-2026, 28/01/2026)."""
+    """All four shops print day first (15-07-2026, 28/01/2026); an invoice
+    may spell its month out ("19 mai 2026"), and then that is the first date
+    it prints, before the day it will be debited."""
+    figures = DATE_RE.search(text)
+    for written in WRITTEN_DATE_RE.finditer(text):
+        month = MONTHS.get(_plain_month(written.group(2)))
+        if month is None or (figures is not None and figures.start() < written.start()):
+            continue
+        try:
+            return date(int(written.group(3)), month, int(written.group(1)))
+        except ValueError:
+            continue
     for match in DATE_RE.finditer(text):
         day, month, year = (int(part) for part in match.groups())
         try:
@@ -336,6 +362,12 @@ def read_date(text: str, date_hint: date | None = None) -> date | None:
         except ValueError:
             continue
     return date_hint
+
+
+def _plain_month(name: str) -> str:
+    """A month as written, without its accents or case ("Fe´vrier", "AOÛT")."""
+    folded = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().lower()
+    return re.sub(r"[^a-z]", "", folded)
 
 
 def to_ht(total_ttc: Decimal, vat_rate: Decimal) -> Decimal:

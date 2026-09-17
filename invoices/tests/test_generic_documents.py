@@ -8,6 +8,7 @@ HT has four decimals, a count told by the "N ARTICLE(S)" line.
 Structure copied from real documents; every name, code and amount invented.
 """
 
+from datetime import date
 from decimal import Decimal
 
 from django.test import SimpleTestCase
@@ -239,3 +240,45 @@ class CountTests(SimpleTestCase):
         self.assertEqual(
             [(line.raw_name, line.quantity) for line in parsed.lines], [("3 Acide citrique 500g", 1)]
         )
+
+
+# A phone bill: its totals first, its detail below them, each amount printed
+# in TTC with its HT in brackets - and its date spelled out.
+PHONE_BILL = """SiteInternet:mobile.exemple.fr
+Forfait Exemple 5G  AU DIPSO
+N de ligne:0600000000  JEAN EXEMPLE
+Facture no 1000000001 du 19 mai 2026
+Total de la facture HT  8.33
+TVA [20.00%]  1.66
+Somme a payer TTC*  9.99
+*Cette somme sera prelevee sur votre compte le 20-05-2026.
+Details de votre facture
+Services (Total : 9.99  TTC)
+Abonnements, forfaits et options du 19-05 au 18-06
+Abonnement "Forfait Exemple 5G"  19.99 (16.66)
+Remise abonne - Famille  -10.00 (-8.33)
+Communications incluses :
+Appels depuis la France metropolitaine  1 h 13 min 47 s  0.00 (0.00)"""
+
+
+class TotalsFirstTests(SimpleTestCase):
+    def test_the_detail_under_the_totals_is_the_purchase_when_it_makes_them_both(self):
+        parsed = READER.parse_text(PHONE_BILL)
+        paid = sum(line.printed_ttc - line.discount_ttc for line in parsed.lines)
+        self.assertEqual((paid, parsed.printed_total_ttc, parsed.invoice_number), (D("9.99"), D("9.99"), "1000000001"))
+        self.assertEqual({line.vat_rate for line in parsed.lines}, {D("0.20")})
+        self.assertEqual(failed(parsed), [])
+
+    def test_the_date_it_spells_out_comes_before_the_day_it_is_debited(self):
+        self.assertEqual(READER.parse_text(PHONE_BILL).invoice_date, date(2026, 5, 19))
+
+    def test_an_amount_in_brackets_that_is_the_same_one_in_ht(self):
+        self.assertEqual(read_line(0, 'Abonnement "Forfait Exemple 5G"  19.99 (16.66)').total, D("19.99"))
+        # Not a rate apart, so two amounts.
+        self.assertEqual(read_line(0, "ARTICLE  12,00 (9,00)").total, D("9.00"))
+
+    def test_a_total_restated_under_the_rows_is_no_row(self):
+        """"Total de la facture HT 8.33" makes the HT base on its own: it is
+        the document's own figure, not a line of it."""
+        parsed = READER.parse_text(PHONE_BILL)
+        self.assertNotIn("Total de la facture HT", [line.raw_name for line in parsed.lines])

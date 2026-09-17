@@ -190,7 +190,7 @@ class MoveToShopTests(TestCase):
 
     def test_a_number_the_new_shop_has_is_refused(self):
         make_invoice(supplier=self.shop, invoice_number="42")
-        with self.assertRaisesMessage(ValueError, "a déjà un ticket n° 42"):
+        with self.assertRaisesMessage(ValueError, "a déjà un document n° 42"):
             move_to_shop(self.ticket, self.shop)
         self.assertEqual(Invoice.objects.get(pk=self.ticket.pk).supplier, self.sabbh)
 
