@@ -22,6 +22,14 @@ Every file ends in exactly one state, shown to the operator:
 A batch where one photo failed silently is worse than one that failed
 loudly: the missing receipt shows up weeks later as stock never bought.
 
+The shop of an unrecognised file can be chosen while the batch still runs, so
+`results` has several writers: the thread, the request choosing a shop, and a
+new shop's re-read. Each takes RESULTS_LOCK, reads the entries fresh and writes
+back only the one it changed - the thread used to write the copy it started
+with after every file, undoing whatever had been chosen meanwhile. The thread
+takes the next pending file each time round, so a file sent back to "pending"
+while it runs is read by the same run.
+
 The dev server's autoreloader kills the thread outright on any code change:
 a 137-ticket batch died one second after it started, and sat "running" for
 half an hour. So a running batch beats every HEARTBEAT_SECONDS from a thread
@@ -47,18 +55,27 @@ from .receipts import (
     OCR_WAIT_SECONDS,
     UnrecognisedShopError,
     first_reading,
+    has_own_reader,
+    has_text_layer,
+    import_invoice_pdf,
     import_receipt,
 )
 
 STAGING_DIR = "receipt_batches"
 # A shop chosen by hand is imported inside the request, seconds of OCR. Two
 # requests for the same file (two tabs, a double click) would both import it,
-# and a batch resumed meanwhile would write its own copy of `results` over the
-# outcome - so shop choices take turns, and a resume waits for none. One
-# process: the dev server is threaded, not forked.
+# so shop choices take turns. One process: the dev server is threaded, not
+# forked.
 SHOP_CHOICE_WAIT_SECONDS = OCR_WAIT_SECONDS
 HEARTBEAT_SECONDS = 15
 MISSING_FILE = "Fichier temporaire introuvable : réimportez ce ticket."
+
+# Held for a read and write of a batch's `results`, never across an import.
+RESULTS_LOCK = threading.Lock()
+# (batch, index) of the files being imported by hand: a new shop's re-read
+# leaves them to that import. In memory, so a request that dies leaves nothing
+# stuck.
+_BY_HAND: set[tuple[int, int]] = set()
 
 
 class ShopChoiceError(Exception):
@@ -92,56 +109,58 @@ def start_batch(batch: ReceiptBatch) -> None:
     threading.Thread(target=_run_in_thread, args=(batch.pk,), daemon=True).start()
 
 
+def _restart(batch: ReceiptBatch) -> list[str]:
+    """Set a batch that is not running to start again (the caller saves)."""
+    batch.status = ReceiptBatch.Status.PENDING
+    batch.cancel_requested = False
+    batch.finished_at = None
+    # Alive from now: a status poll between here and the thread's first save
+    # must not reap it straight back.
+    batch.last_heartbeat = timezone.now()
+    return ["status", "cancel_requested", "finished_at", "last_heartbeat"]
+
+
 def resume_batch(batch: ReceiptBatch) -> int:
     """Carry on with the files a batch that died never reached. Returns how
     many are left to read - 0 when there is nothing to resume, or when the
     batch may still be running (see ReceiptBatch.can_resume)."""
-    if not OCR_LOCK.acquire(blocking=False):
-        return 0  # a ticket is being imported by hand: try again in a moment
-    try:
+    with RESULTS_LOCK:
         batch.refresh_from_db()
         if not batch.can_resume:
             return 0
         remaining = batch.pending_count
-        batch.status = ReceiptBatch.Status.PENDING
-        batch.cancel_requested = False
-        batch.finished_at = None
-        # Alive from now: a status poll between here and the thread's first
-        # save must not reap it straight back.
-        batch.last_heartbeat = timezone.now()
-        batch.save(update_fields=["status", "cancel_requested", "finished_at", "last_heartbeat"])
-    finally:
-        OCR_LOCK.release()
+        batch.save(update_fields=_restart(batch))
     batch.append_log(f"Reprise : {remaining} ticket(s) restant(s) à lire.")
     start_batch(batch)
     return remaining
 
 
 def requeue_unrecognised(batch: ReceiptBatch) -> int:
-    """Read the files of a finished batch no shop was recognised on again -
-    once a shop has been added with its header, some are its tickets.
-    Returns how many are read again; 0 while the batch may still run."""
-    if not OCR_LOCK.acquire(blocking=False):
-        return 0
-    try:
+    """Read the files of a batch no shop was recognised on again - once a
+    shop has been added with its header, some are its tickets. A running
+    batch reads them in its turn; a finished one is started again. A file
+    being imported by hand is left to that import. Returns how many are read
+    again."""
+    with RESULTS_LOCK:
         batch.refresh_from_db()
-        if batch.is_active:
-            return 0
-        waiting = [entry for entry in batch.results if entry["status"] == "unrecognised" and entry.get("kept")]
-        for entry in waiting:
-            entry.update(status="pending", message="")
-            entry.pop("kept")
+        waiting = [
+            index
+            for index, entry in enumerate(batch.results)
+            if entry["status"] == "unrecognised" and entry.get("kept") and (batch.pk, index) not in _BY_HAND
+        ]
         if not waiting:
             return 0
-        batch.status = ReceiptBatch.Status.PENDING
-        batch.cancel_requested = False
-        batch.finished_at = None
-        batch.last_heartbeat = timezone.now()
-        batch.save(update_fields=["results", "status", "cancel_requested", "finished_at", "last_heartbeat"])
-    finally:
-        OCR_LOCK.release()
+        for index in waiting:
+            entry = batch.results[index]
+            entry.update(status="pending", message="")
+            entry.pop("kept")
+        # A batch that looks alive but whose thread died is reaped soon, and
+        # resumed with these.
+        running = batch.is_active
+        batch.save(update_fields=["results"] + ([] if running else _restart(batch)))
     batch.append_log(f"Nouvelle enseigne : {len(waiting)} ticket(s) sans enseigne relu(s).")
-    start_batch(batch)
+    if not running:
+        start_batch(batch)
     return len(waiting)
 
 
@@ -196,57 +215,82 @@ def run_receipt_batch(batch_id: int) -> ReceiptBatch:
     heartbeat = _Heartbeat(batch.pk)
     heartbeat.start()
     try:
-        for entry in batch.results:
-            if entry["status"] != "pending":
-                continue
-            batch.refresh_from_db(fields=["cancel_requested"])
-            if batch.cancel_requested:
-                break
-            path = os.path.join(settings.MEDIA_ROOT, entry["stored"])
-            if not os.path.exists(path):
-                entry.update(status="error", message=MISSING_FILE)
-            else:
-                keep = False
-                try:
-                    invoice = import_receipt(path, display_filename=entry["name"])
-                except DuplicateInvoiceError as exc:
-                    entry.update(status="duplicate", message=str(exc))
-                except UnrecognisedShopError as exc:
-                    # Kept: the operator can still say which shop it is, from
-                    # what it was read as.
-                    entry.update(status="unrecognised", message=str(exc), kept=True, **first_reading(exc.text))
-                    keep = True
-                except Exception as exc:  # noqa: BLE001 - reported per file, never aborts the batch
-                    entry.update(status="error", message=str(exc).strip() or exc.__class__.__name__)
-                    batch.append_log(f"{entry['name']} : {entry['message']}\n{traceback.format_exc()}")
-                else:
-                    _record_import(entry, invoice)
-                finally:
-                    if not keep:
-                        _discard(path)
-            batch.last_heartbeat = timezone.now()
-            batch.save(update_fields=["results", "last_heartbeat"])
+        while (index := _next_file(batch)) is not None:
+            entry = dict(batch.results[index])
+            path = _read_file(batch, entry)
+            _save_entry(batch, index, entry)
+            if path is not None:
+                _discard(path)
+    except Exception:  # noqa: BLE001 - the job row is where a crash is reported
+        # Stopped before the status is written: a beat must never put a
+        # batch that really failed back to running.
+        heartbeat.stop()
+        batch.status = ReceiptBatch.Status.FAILED
+        batch.finished_at = timezone.now()
+        batch.save(update_fields=["status", "finished_at"])
+        batch.append_log(traceback.format_exc())
+        with RESULTS_LOCK:
+            batch.refresh_from_db(fields=["results"])
+            _clean_up(batch)
+    else:
+        heartbeat.stop()
+    return batch
 
+
+def _next_file(batch: ReceiptBatch) -> int | None:
+    """The index of the next file to read - or None, the batch's end written
+    in the same breath: a file sent back to "pending" a moment later then
+    finds the batch finished, and starts it again."""
+    with RESULTS_LOCK:
+        batch.refresh_from_db(fields=["results", "cancel_requested"])
+        pending = [index for index, entry in enumerate(batch.results) if entry["status"] == "pending"]
+        if pending and not batch.cancel_requested:
+            return pending[0]
         if batch.cancel_requested:
-            for entry in batch.results:
-                if entry["status"] == "pending":
-                    entry.update(status="cancelled", message="Lot arrêté avant ce fichier.")
+            for index in pending:
+                batch.results[index].update(status="cancelled", message="Lot arrêté avant ce fichier.")
             batch.status = ReceiptBatch.Status.CANCELLED
         else:
             batch.status = ReceiptBatch.Status.SUCCESS
-    except Exception:  # noqa: BLE001 - the job row is where a crash is reported
-        batch.status = ReceiptBatch.Status.FAILED
-        batch.append_log(traceback.format_exc())
-    finally:
-        # Stopped before the final status is written: a beat must never put
-        # a batch that really failed back to running.
-        heartbeat.stop()
         batch.finished_at = timezone.now()
         batch.save(update_fields=["results", "status", "finished_at"])
         # Files not read yet stay, for "Reprendre l'import", and so do those
         # waiting for their shop to be named.
         _clean_up(batch)
-    return batch
+        return None
+
+
+def _read_file(batch: ReceiptBatch, entry: dict) -> str | None:
+    """Import one staged file, and say how it went on its entry. Returns the
+    file, when it is no longer needed."""
+    path = os.path.join(settings.MEDIA_ROOT, entry["stored"])
+    if not os.path.exists(path):
+        entry.update(status="error", message=MISSING_FILE)
+        return None
+    try:
+        invoice = import_receipt(path, display_filename=entry["name"])
+    except DuplicateInvoiceError as exc:
+        entry.update(status="duplicate", message=str(exc))
+    except UnrecognisedShopError as exc:
+        # Kept: the operator can still say which shop it is, from what it
+        # was read as.
+        entry.update(status="unrecognised", message=str(exc), kept=True, **first_reading(exc.text))
+        return None
+    except Exception as exc:  # noqa: BLE001 - reported per file, never aborts the batch
+        entry.update(status="error", message=str(exc).strip() or exc.__class__.__name__)
+        batch.append_log(f"{entry['name']} : {entry['message']}\n{traceback.format_exc()}")
+    else:
+        _record_import(entry, invoice)
+    return path
+
+
+def _save_entry(batch: ReceiptBatch, index: int, entry: dict) -> None:
+    """Write one file's outcome over the entry as it is now."""
+    with RESULTS_LOCK:
+        batch.refresh_from_db(fields=["results"])
+        batch.results[index] = entry
+        batch.last_heartbeat = timezone.now()
+        batch.save(update_fields=["results", "last_heartbeat"])
 
 
 def _record_import(entry: dict, invoice) -> None:
@@ -261,44 +305,61 @@ def _record_import(entry: dict, invoice) -> None:
 
 
 def _clean_up(batch: ReceiptBatch) -> None:
+    """Remove the staged folder once no file in it is still needed. Called
+    under RESULTS_LOCK, with the results just read."""
     if not any(entry["status"] == "pending" or entry.get("kept") for entry in batch.results):
         shutil.rmtree(os.path.join(settings.MEDIA_ROOT, STAGING_DIR, str(batch.pk)), ignore_errors=True)
 
 
 def import_with_shop(batch: ReceiptBatch, index: int, supplier) -> dict:
-    """Import file `index` of a finished batch - one no shop was recognised
-    on - as a ticket of `supplier`, and return its updated entry: "ok", or
-    "duplicate" when the ticket turns out to be in already.
+    """Import file `index` of a batch - one no shop was recognised on - as a
+    ticket of `supplier`, and return its updated entry: "ok", or "duplicate"
+    when the ticket turns out to be in already. The batch may still be
+    running: its thread leaves this entry alone.
 
     Raises ShopChoiceError, leaving the entry as it was, when the file isn't
-    one waiting for its shop, when the batch is still running (its thread
-    owns `results` and would write its own copy over this change), and when
-    the import itself fails - the file is kept, to try again.
+    one waiting for its shop, and when the import itself fails - the file is
+    kept, to try again.
     """
     if not OCR_LOCK.acquire(timeout=SHOP_CHOICE_WAIT_SECONDS):
         raise ShopChoiceError("Un autre ticket est en cours d'import : réessayez dans un instant.")
     try:
-        return _import_with_shop(batch, index, supplier)
+        with RESULTS_LOCK:
+            path = _waiting_file(batch, index)
+            _BY_HAND.add((batch.pk, index))
+        try:
+            return _import_with_shop(batch, index, path, supplier)
+        finally:
+            with RESULTS_LOCK:
+                _BY_HAND.discard((batch.pk, index))
     finally:
         OCR_LOCK.release()
 
 
-def _import_with_shop(batch: ReceiptBatch, index: int, supplier) -> dict:
+def _waiting_file(batch: ReceiptBatch, index: int) -> str:
+    """The staged file of entry `index`, which has to be waiting for its
+    shop. Called under RESULTS_LOCK."""
     batch.refresh_from_db()
-    if batch.is_active:
-        raise ShopChoiceError("Cet import est encore en cours : attendez qu'il se termine pour choisir une enseigne.")
     entry = batch.results[index] if 0 <= index < len(batch.results) else None
     if entry is None or entry["status"] != "unrecognised" or not entry.get("kept"):
         raise ShopChoiceError("Ce fichier n'attend pas qu'on choisisse son enseigne.")
-
     path = os.path.join(settings.MEDIA_ROOT, entry["stored"])
     if not os.path.exists(path):
         entry.pop("kept")
         batch.save(update_fields=["results"])
         raise ShopChoiceError(MISSING_FILE)
+    return path
 
+
+def _import_with_shop(batch: ReceiptBatch, index: int, path: str, supplier) -> dict:
+    entry = dict(batch.results[index])
     try:
-        invoice = import_receipt(path, display_filename=entry["name"], supplier=supplier)
+        # A digital invoice goes through its supplier's own reader, when it
+        # has one; a photo or a scan is read as a ticket whatever the supplier.
+        if has_own_reader(supplier) and has_text_layer(path):
+            invoice = import_invoice_pdf(path, supplier, display_filename=entry["name"])
+        else:
+            invoice = import_receipt(path, display_filename=entry["name"], supplier=supplier)
     except DuplicateInvoiceError as exc:
         entry.update(status="duplicate", message=str(exc))
         batch.append_log(f"{entry['name']} (ticket {supplier.name}) : {exc}")
@@ -313,9 +374,12 @@ def _import_with_shop(batch: ReceiptBatch, index: int, supplier) -> dict:
         _record_import(entry, invoice)
         batch.append_log(f"{entry['name']} : importé comme ticket {supplier.name} (enseigne choisie à la main).")
     entry.pop("kept")
-    batch.save(update_fields=["results"])
     _discard(path)
-    _clean_up(batch)
+    with RESULTS_LOCK:
+        batch.refresh_from_db(fields=["results"])
+        batch.results[index] = entry
+        batch.save(update_fields=["results"])
+        _clean_up(batch)
     return entry
 
 

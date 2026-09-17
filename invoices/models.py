@@ -4,7 +4,8 @@ from decimal import Decimal
 
 from django.core.exceptions import ValidationError
 from django.db import models
-from django.db.models import Q
+from django.db.models import Q, Value
+from django.db.models.functions import Concat
 from django.utils import timezone
 
 from common import JobLogMixin
@@ -33,6 +34,12 @@ class Supplier(models.Model):
         blank=True,
         help_text="Imprimé en haut de ses tickets (nom, rue…) : un ticket qui le porte est rangé chez ce fournisseur.",
     )
+    # What its documents print that names it whatever their layout - SIREN,
+    # phone, web site (invoices/identifiers.py) - learned from the ones a
+    # person filed or checked under it (receipts.learn_identifiers). Found on
+    # a document no header was recognised on, and on no other supplier's
+    # list, it files the document here.
+    ticket_identifiers = models.JSONField("identifiants lus sur ses documents", default=list, blank=True)
 
     class Meta:
         ordering = ["name"]
@@ -481,7 +488,8 @@ class ReceiptBatch(JobLogMixin):
          "total": "13.06", "date": "2026-07-15", "verified": true}
 
     One JSON list rather than a table: it only exists to be shown on the
-    batch page, and it is rewritten after every file.
+    batch page. The batch's thread and the requests choosing a shop both
+    change it, one entry at a time (receipt_batches.RESULTS_LOCK).
     """
 
     class Status(models.TextChoices):
@@ -514,12 +522,14 @@ class ReceiptBatch(JobLogMixin):
 
     def append_log(self, message: str):
         elapsed = (timezone.now() - self.started_at).total_seconds()
-        line = f"[+{elapsed:6.1f}s] {message}"
-        self.log = f"{self.log}{line}\n" if self.log else f"{line}\n"
+        line = f"[+{elapsed:6.1f}s] {message}\n"
+        self.log = f"{self.log}{line}"
+        # Appended in the database: the batch's thread and a request choosing
+        # a shop both write here, each from its own copy of the log.
         # Not a heartbeat: the reaper writes here too, and the line saying a
         # batch is dead must not make it look alive (can_resume). A running
         # batch beats on its own - after every file, and from its _Heartbeat.
-        self.save(update_fields=["log"])
+        ReceiptBatch.objects.filter(pk=self.pk).update(log=Concat("log", Value(line), output_field=models.TextField()))
 
     def _count(self, *statuses) -> int:
         return sum(1 for entry in self.results if entry.get("status") in statuses)

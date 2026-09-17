@@ -193,3 +193,63 @@ class WebInvoiceTests(SimpleTestCase):
             (self.parsed.printed_total_ttc, self.parsed.invoice_date, self.parsed.invoice_number),
             (D("55.74"), date(2024, 11, 7), "1234567"),
         )
+
+
+# A web shop's order page, captured from the screen: the rows in HT, then the
+# goods' value and the tax, and no rate printed anywhere.
+ORDER_PAGE = """Details de la commande FR10000001  Poser une question
+Référence de la commande : 1000001
+Référence Web : FR10000001
+Date de la commande : 14/03/2025
+Méthode de commande : Web Order
+Valeur de la commande : 61,56 €
+Statut : COMPLETE
+Produit  Quantité  Prix unitaire  Sous total
+Cliquez ici pour suivre votre colis: 1Z000AA00000000000
+NAPPE PAPIER 120CM X 25M
+1  21,45 €  21,45 €
+AB001
+Copie De La Commande Au Panier
+VERRE A SHOT (LOT DE 12)  2  7,35 €  14,70 €
+AB002
+Copie De La Commande Au Panier
+TAPIS DE BAR
+5  3,03 €  15,15 €
+AB003
+Copie De La Commande Au Panier
+valeur des marchandises  51,30 €
+Web Transport  GRATUIT
+Total TVA  10,26 €
+Total de la commande  61,56 €"""
+
+
+class UnratedTaxTests(SimpleTestCase):
+    def test_rows_in_ht_under_a_tax_printed_without_its_rate(self):
+        """The goods' value and the tax make what was paid, and the tax is
+        that value at 20%: the rows adding up to that value are in HT."""
+        parsed = READER.parse_text(ORDER_PAGE)
+        self.assertEqual(
+            [(line.raw_name, line.quantity, line.total_ht, line.vat_rate) for line in parsed.lines],
+            [
+                ("NAPPE PAPIER 120CM X 25M", 1, D("21.45"), D("0.20")),
+                ("VERRE A SHOT (LOT DE 12)", 2, D("14.70"), D("0.20")),
+                ("TAPIS DE BAR", 5, D("15.15"), D("0.20")),
+            ],
+        )
+        self.assertEqual((parsed.printed_total_ttc, parsed.invoice_date), (D("61.56"), date(2025, 3, 14)))
+        failed = [(check.label, check.detail) for check in parsed.checks if not check.passed]
+        self.assertEqual(failed, [])
+        (note,) = [check for check in parsed.checks if check.label == "Taux déduit"]
+        self.assertIn("20 %", note.detail)
+
+    def test_two_items_the_second_a_fifth_of_the_first_prove_no_rate(self):
+        parsed = READER.parse_text("EPICERIE\nPAIN  10,00\nBEURRE  2,00\nTOTAL  12,00\nCB  12,00")
+        self.assertEqual([(line.printed_ttc, line.vat_rate) for line in parsed.lines], [
+            (D("10.00"), D("0.055")), (D("2.00"), D("0.055")),
+        ])
+        self.assertIn("Taux par article", [check.label for check in parsed.checks if not check.passed])
+        self.assertNotIn("Taux déduit", [check.label for check in parsed.checks])
+
+    def test_a_ticket_in_ttc_printing_its_ht_and_tax_stays_in_ttc(self):
+        parsed = READER.parse_text("EPICERIE\nVIN  7,00\nSAVON  5,00\nTOTAL HT  10,00\nTVA  2,00\nTOTAL  12,00\nCB  12,00")
+        self.assertEqual([line.printed_ttc for line in parsed.lines], [D("7.00"), D("5.00")])

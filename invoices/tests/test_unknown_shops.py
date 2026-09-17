@@ -111,6 +111,8 @@ class HeaderTests(TestCase):
         self.assertEqual(header_guess(UNKNOWN_SHOP), "EPICERIE DU COIN")
         self.assertEqual(header_guess("12 RUE X\n0,50\n"), "")
         self.assertEqual(header_guess("  EPICERIE   DU  COIN \n"), "EPICERIE DU COIN")
+        # "Label : value" is a field of the document, not its sender's name.
+        self.assertEqual(header_guess("Statut : COMPLETE\nMéthode de commande : Web Order\nCUISINE PRO"), "CUISINE PRO")
 
     def test_what_a_ticket_reads_as_before_its_shop_is_known(self):
         self.assertEqual(
@@ -299,7 +301,7 @@ class NewShopFromBatchTests(TestCase):
             )
         shop = Supplier.objects.get(name="Épicerie du coin")
         ticket = Invoice.objects.get(supplier=shop)
-        self.assertRedirects(response, reverse("invoices:receipt_review", args=[ticket.pk]))
+        self.assertRedirects(response, reverse("invoices:receipt_review", args=[ticket.pk]) + f"?lot={self.batch.pk}")
         self.assertEqual(ticket.lines.count(), 3)
         self.assertIn(ticket, pending_receipts())
         self.assertTrue(any("1 autre(s) ticket(s)" in message for message in messages_of(response)))

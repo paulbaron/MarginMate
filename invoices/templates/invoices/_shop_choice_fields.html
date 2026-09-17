@@ -2,23 +2,27 @@
 The shop a ticket goes to: a supplier, or a new shop - its name and the text
 its tickets print at the top. The two text boxes show once "Nouvelle
 enseigne" is picked (ui.js); without script they are simply there.
+
+The PDF import uses it for a supplier (`for_invoice`): other words, and the
+choice posted is shown again (`selected`, `typed_name`, `typed_header`) when
+the form comes back with an error.
 {% endcomment %}
-<select name="supplier" required aria-label="{{ label }}" data-shop-select>
-    <option value="">Choisissez l'enseigne…</option>
-    <option value="new">+ Nouvelle enseigne…</option>
+<select name="supplier" required aria-label="{{ label }}" data-shop-select{% if select_id %} id="{{ select_id }}"{% endif %}>
+    <option value="">{% if for_invoice %}Choisissez le fournisseur…{% else %}Choisissez l'enseigne…{% endif %}</option>
+    <option value="new"{% if selected == "new" %} selected{% endif %}>{% if for_invoice %}+ Nouveau fournisseur…{% else %}+ Nouvelle enseigne…{% endif %}</option>
     {% for group, shops in shop_groups %}
         {% if shops %}
             <optgroup label="{{ group }}">
-                {% for shop in shops %}<option value="{{ shop.pk }}"{% if shop.pk == current %} disabled{% endif %}>{{ shop.name }}</option>{% endfor %}
+                {% for shop in shops %}<option value="{{ shop.pk }}"{% if shop.pk == current %} disabled{% endif %}{% if selected and shop.pk|stringformat:"s" == selected %} selected{% endif %}>{{ shop.name }}</option>{% endfor %}
             </optgroup>
         {% endif %}
     {% endfor %}
 </select>
 <span class="new-shop" data-new-shop>
     <label>Nom
-        <input type="text" name="new_name" maxlength="255" placeholder="Épicerie du coin" value="{{ suggested|title }}">
+        <input type="text" name="new_name" maxlength="255" placeholder="{% if for_invoice %}Fournisseur du coin{% else %}Épicerie du coin{% endif %}" value="{% if typed_name %}{{ typed_name }}{% else %}{{ suggested|title }}{% endif %}">
     </label>
-    <label title="Un ticket qui porte ce texte sera rangé chez cette enseigne : son nom ou sa rue, tel qu'imprimé.">En-tête de ses tickets
-        <input type="text" name="new_header" maxlength="100" placeholder="EPICERIE DU COIN" value="{{ suggested }}">
+    <label title="Un{% if for_invoice %}e facture{% else %} ticket{% endif %} qui porte ce texte sera rangé{% if for_invoice %}e{% endif %} chez {% if for_invoice %}ce fournisseur{% else %}cette enseigne{% endif %} : son nom ou sa rue, tel qu'imprimé.">En-tête de ses {% if for_invoice %}documents{% else %}tickets{% endif %}
+        <input type="text" name="new_header" maxlength="100" placeholder="{% if for_invoice %}FOURNISSEUR DU COIN{% else %}EPICERIE DU COIN{% endif %}" value="{% if typed_header %}{{ typed_header }}{% else %}{{ suggested }}{% endif %}">
     </label>
 </span>

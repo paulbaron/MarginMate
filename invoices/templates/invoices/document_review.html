@@ -28,7 +28,7 @@
                 header nobody knew - is moved here, its lines with it.
                 {% endcomment %}
                 <details class="move-shop">
-                    <summary>Pas un ticket {{ invoice.supplier.name }} ? Changer d'enseigne</summary>
+                    <summary>Pas de chez {{ invoice.supplier.name }} ? Changer d'enseigne</summary>
                     <form method="post" class="inline-form shop-choice" data-leaves-lines>
                         {% csrf_token %}
                         <input type="hidden" name="action" value="move_shop">

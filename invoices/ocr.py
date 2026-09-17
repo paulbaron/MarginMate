@@ -331,19 +331,23 @@ def text_layer_pages(path: str) -> list[OcrPage | None]:
     """The text a PDF carries, page by page, as lines the readers take - or
     None for a page that is a picture. A digital invoice needs no OCR: its
     own text is exact, and reading a rendering of it could only add errors.
-    Not a PDF: no layer at all."""
+    Not a PDF, or one this can't open: no layer at all - rendering the page
+    says what is wrong with it."""
     if not path.lower().endswith(".pdf"):
         return []
     import pdfplumber
 
     pages: list[OcrPage | None] = []
-    with pdfplumber.open(path) as document:
-        for page in document.pages:
-            words = page.extract_words(keep_blank_chars=False, use_text_flow=False)
-            if sum(len(word["text"]) for word in words) < MIN_TEXT_LAYER_CHARS:
-                pages.append(None)
-                continue
-            pages.append(OcrPage(lines=_text_lines(words)))
+    try:
+        with pdfplumber.open(path) as document:
+            for page in document.pages:
+                words = page.extract_words(keep_blank_chars=False, use_text_flow=False)
+                if sum(len(word["text"]) for word in words) < MIN_TEXT_LAYER_CHARS:
+                    pages.append(None)
+                    continue
+                pages.append(OcrPage(lines=_text_lines(words)))
+    except Exception:  # noqa: BLE001 - pdfminer raises its own zoo for a broken file
+        return []
     return pages
 
 

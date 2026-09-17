@@ -12,7 +12,7 @@ OCR never runs here: `receipts.recognise` is replaced.
 
 import os
 import shutil
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from unittest import mock
 
@@ -30,6 +30,8 @@ from invoices.ocr import OcrCell, OcrLine, OcrPage
 from invoices.parsers.base import ParsedLine
 from invoices.receipt_batches import (
     MISSING_FILE,
+    import_with_shop,
+    requeue_unrecognised,
     resume_batch,
     run_receipt_batch,
     stage_batch,
@@ -194,7 +196,9 @@ class ChooseShopInBatchTests(TestCase):
 
     def test_choosing_the_shop_imports_the_file_and_opens_it_for_review(self):
         response, importer = self.choose()
-        self.assertRedirects(response, reverse("invoices:receipt_review", args=[self.receipt.pk]))
+        # Checked within its import: saved, the next ticket of the import
+        # comes up, then the import itself.
+        self.assertRedirects(response, reverse("invoices:receipt_review", args=[self.receipt.pk]) + f"?lot={self.batch.pk}")
         importer.assert_called_once()
         self.assertEqual(importer.call_args.args, (self.file,))
         self.assertEqual(importer.call_args.kwargs, {"display_filename": "124_Sabbah.pdf", "supplier": self.sabbh})
@@ -219,18 +223,21 @@ class ChooseShopInBatchTests(TestCase):
         self.assertTrue(any("photo illisible" in message for message in messages_of(response)))
         self.assertIn("photo illisible", self.batch.log)
 
-    def test_nothing_is_imported_while_the_batch_runs(self):
-        """The running thread owns the batch's results: it would write its
-        own copy over the change."""
+    def test_the_shop_can_be_chosen_while_the_batch_runs(self):
+        """No need to wait for a folder of a hundred tickets to check the
+        one no shop was recognised on."""
         ReceiptBatch.objects.filter(pk=self.batch.pk).update(
             status=ReceiptBatch.Status.RUNNING, last_heartbeat=timezone.now()
         )
         page = self.client.get(reverse("invoices:receipt_batch_status", args=[self.batch.pk]))
-        self.assertNotContains(page, self.url)
+        self.assertContains(page, f'action="{self.url}"')
+        # The live part is fetched again every second: the form being filled
+        # in is kept as it is.
+        self.assertContains(page, f'id="shop-choice-{self.batch.pk}-0" hx-preserve')
         response, importer = self.choose()
-        importer.assert_not_called()
-        self.assertRedirects(response, self.page)
-        self.assertEqual(self.batch.results[0]["status"], "unrecognised")
+        importer.assert_called_once()
+        self.assertRedirects(response, reverse("invoices:receipt_review", args=[self.receipt.pk]) + f"?lot={self.batch.pk}")
+        self.assertEqual(self.batch.results[0]["status"], "ok")
 
     def test_a_file_from_before_files_were_kept_asks_for_a_new_upload(self):
         self.batch.results[0].pop("kept")
@@ -276,23 +283,107 @@ class ChooseShopInBatchTests(TestCase):
         self.assertIn("Un autre ticket est en cours d'import : réessayez dans un instant.", messages_of(response))
         self.assertEqual(self.batch.results[0]["status"], "unrecognised")
 
-    def test_no_batch_is_resumed_while_a_ticket_is_imported_by_hand(self):
-        """The resumed thread would write its own copy of the results over
-        the ticket's outcome."""
-        ReceiptBatch.objects.filter(pk=self.batch.pk).update(status=ReceiptBatch.Status.FAILED)
-        receipts.OCR_LOCK.acquire()
-        try:
-            with mock.patch("invoices.receipt_batches.threading.Thread") as thread:
-                self.assertEqual(resume_batch(self.batch), 0)
-        finally:
-            receipts.OCR_LOCK.release()
-        thread.assert_not_called()
-
     def test_choosing_only_answers_a_post(self):
         with mock.patch("invoices.receipt_batches.import_receipt") as importer:
             response = self.client.get(self.url)
         self.assertRedirects(response, self.page)
         importer.assert_not_called()
+
+
+class ChoiceDuringTheRunTests(TestCase):
+    """The batch's thread and a shop choice (or a new shop's re-read) write
+    the same `results`. Each writes only its own entries, read fresh: the
+    thread's copy, taken when it started, used to be written over them.
+
+    The thread is run in this one: what "another request" does happens while
+    it reads a file, from the import it is in the middle of."""
+
+    def setUp(self):
+        self.sabbh = Supplier.objects.get(code="SABBH")
+        self.receipt = make_invoice(supplier=self.sabbh, invoice_date=date(2024, 8, 13))
+        batch = stage_batch([upload("sans-entete.pdf"), upload("a.pdf"), upload("b.pdf")])
+        self.addCleanup(shutil.rmtree, os.path.join(settings.MEDIA_ROOT, "receipt_batches", str(batch.pk)), True)
+        # A first run left the first file waiting for its shop, and was
+        # stopped before the other two.
+        batch.results[0].update(status="unrecognised", kept=True, message="Enseigne non reconnue.")
+        batch.save(update_fields=["results"])
+        self.batch = batch
+        self.read = []
+
+    def importer(self, while_reading=None):
+        """import_receipt: records what it is asked to read, does
+        `while_reading` (another request's work) during the first file of the
+        run, and imports each file as its own ticket."""
+        def fake(path, display_filename, supplier=None):
+            self.read.append((display_filename, supplier))
+            if while_reading and supplier is None and len(self.read) == 1:
+                while_reading()
+            return make_invoice(supplier=supplier or self.sabbh, invoice_number=f"{display_filename}-{len(self.read)}")
+        return fake
+
+    def run_batch(self, while_reading=None):
+        with mock.patch("invoices.receipt_batches.import_receipt", side_effect=self.importer(while_reading)):
+            return run_receipt_batch(self.batch.pk)
+
+    def test_a_shop_chosen_meanwhile_is_kept(self):
+        outcomes = []
+        batch = self.run_batch(lambda: outcomes.append(import_with_shop(self.batch, 0, self.sabbh)))
+        self.assertEqual(outcomes[0]["status"], "ok")
+        self.assertEqual([entry["status"] for entry in batch.results], ["ok", "ok", "ok"])
+        batch.refresh_from_db()
+        self.assertEqual([entry["status"] for entry in batch.results], ["ok", "ok", "ok"])
+        self.assertNotIn("kept", batch.results[0])
+        self.assertEqual(batch.status, ReceiptBatch.Status.SUCCESS)
+
+    def test_a_ticket_read_again_meanwhile_is_read_by_the_same_run(self):
+        with mock.patch("invoices.receipt_batches.threading.Thread") as thread:
+            batch = self.run_batch(lambda: self.assertEqual(requeue_unrecognised(self.batch), 1))
+        thread.assert_not_called()  # the running thread takes it
+        self.assertEqual([name for name, _ in self.read], ["a.pdf", "sans-entete.pdf", "b.pdf"])
+        self.assertEqual([entry["status"] for entry in batch.results], ["ok", "ok", "ok"])
+
+    def test_a_ticket_being_imported_by_hand_is_not_read_again(self):
+        """A new shop's re-read would import the file a second time."""
+        requeued = []
+
+        def fake(path, display_filename, supplier=None):
+            requeued.append(requeue_unrecognised(self.batch))
+            return self.receipt
+
+        with mock.patch("invoices.receipt_batches.import_receipt", side_effect=fake), \
+                mock.patch("invoices.receipt_batches.threading.Thread") as thread:
+            entry = import_with_shop(self.batch, 0, self.sabbh)
+        self.assertEqual((requeued, entry["status"]), ([0], "ok"))
+        thread.assert_not_called()
+
+    def test_a_stopped_run_leaves_a_choice_made_meanwhile(self):
+        def choose_and_stop():
+            import_with_shop(self.batch, 0, self.sabbh)
+            ReceiptBatch.objects.filter(pk=self.batch.pk).update(cancel_requested=True)
+
+        batch = self.run_batch(choose_and_stop)
+        self.assertEqual([entry["status"] for entry in batch.results], ["ok", "ok", "cancelled"])
+        self.assertEqual(batch.status, ReceiptBatch.Status.CANCELLED)
+
+    def test_the_log_keeps_the_lines_of_both(self):
+        thread_copy = ReceiptBatch.objects.get(pk=self.batch.pk)
+        request_copy = ReceiptBatch.objects.get(pk=self.batch.pk)
+        thread_copy.append_log("a.pdf : lu")
+        request_copy.append_log("sans-entete.pdf : importé à la main")
+        log = ReceiptBatch.objects.get(pk=self.batch.pk).log
+        self.assertIn("a.pdf : lu\n", log)
+        self.assertIn("sans-entete.pdf : importé à la main\n", log)
+        self.assertTrue(request_copy.log.endswith("importé à la main\n"))
+
+    def test_a_resumed_run_leaves_a_choice_made_meanwhile(self):
+        ReceiptBatch.objects.filter(pk=self.batch.pk).update(
+            status=ReceiptBatch.Status.FAILED, last_heartbeat=timezone.now() - timedelta(hours=1)
+        )
+        self.batch.refresh_from_db()
+        with mock.patch("invoices.receipt_batches.threading.Thread"):
+            self.assertEqual(resume_batch(self.batch), 2)
+        batch = self.run_batch(lambda: import_with_shop(self.batch, 0, self.sabbh))
+        self.assertEqual([entry["status"] for entry in batch.results], ["ok", "ok", "ok"])
 
 
 class TypedLinesMatchingTests(TestCase):

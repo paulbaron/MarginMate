@@ -26,17 +26,6 @@ class QuantityField(forms.DecimalField):
         return super().to_python(value)
 
 
-class InvoiceUploadForm(forms.Form):
-    supplier = forms.ModelChoiceField(queryset=Supplier.objects.all(), label="Fournisseur")
-    source_file = forms.FileField(label="Fichier PDF")
-
-    def clean_source_file(self):
-        uploaded = self.cleaned_data["source_file"]
-        if not uploaded.name.lower().endswith(".pdf"):
-            raise forms.ValidationError("Seuls les fichiers PDF sont acceptés.")
-        return uploaded
-
-
 MANUAL_INVOICE_ATTACHMENT_EXTENSIONS = (".pdf", ".jpg", ".jpeg", ".png")
 EARLIEST_DOCUMENT_DATE = date(2000, 1, 1)
 
@@ -504,6 +493,7 @@ class ReceiptShopForm(forms.Form):
     )
     new_name = forms.CharField(label="Nom de la nouvelle enseigne", required=False, max_length=255)
     new_header = forms.CharField(label="Texte en tête de ses tickets", required=False, max_length=100)
+    unnamed_error = "Donnez un nom à la nouvelle enseigne."
 
     def clean_supplier(self):
         value = self.cleaned_data["supplier"].strip()
@@ -519,7 +509,7 @@ class ReceiptShopForm(forms.Form):
     def clean(self):
         cleaned = super().clean()
         if cleaned.get("supplier") == NEW_SHOP and not " ".join(cleaned.get("new_name", "").split()):
-            self.add_error("new_name", "Donnez un nom à la nouvelle enseigne.")
+            self.add_error("new_name", self.unnamed_error)
         return cleaned
 
     def error_text(self) -> str:
@@ -534,6 +524,34 @@ class ReceiptShopForm(forms.Form):
         if supplier != NEW_SHOP:
             return supplier, False
         return create_shop(self.cleaned_data["new_name"], self.cleaned_data.get("new_header", ""), ignoring), True
+
+
+class InvoiceUploadForm(ReceiptShopForm):
+    """A supplier's PDF invoice, and whose it is: a supplier with a reader of
+    its own, any other one (its invoice is read like a ticket), a new one -
+    or the AI pseudo-supplier, which only this import offers."""
+
+    source_file = forms.FileField(label="Fichier PDF")
+    unnamed_error = "Donnez un nom au nouveau fournisseur."
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["supplier"].label = "Fournisseur"
+        self.fields["supplier"].error_messages["required"] = "Choisissez le fournisseur de la facture."
+        self.fields["new_name"].label = "Nom du nouveau fournisseur"
+        self.fields["new_header"].label = "Texte en tête de ses factures"
+
+    def clean_supplier(self):
+        value = self.cleaned_data["supplier"].strip()
+        if value.isdigit() and Supplier.objects.filter(pk=value, parser_key=LLM_PARSER_KEY).exists():
+            return Supplier.objects.get(pk=value)
+        return super().clean_supplier()
+
+    def clean_source_file(self):
+        uploaded = self.cleaned_data["source_file"]
+        if not uploaded.name.lower().endswith(".pdf"):
+            raise forms.ValidationError("Seuls les fichiers PDF sont acceptés.")
+        return uploaded
 
 
 class DocumentHeaderForm(forms.Form):

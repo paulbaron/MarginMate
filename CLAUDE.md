@@ -59,7 +59,11 @@ store number the regex picks up.
 
 The small-shop receipts (Franprix, Monoprix, Sabbh Oriental, Wing Seng) are
 phone photos with **no text layer at all** — `pdfplumber` extracts an empty
-string from every one. `invoices/ocr.py` stands in for `extract_text()`, and
+string from every one. A PDF that does carry text (a web shop's invoice) is
+read from it and never OCR'd (`ocr.text_layer_pages`): two Nisbets invoices
+read as seven characters because the OCR was given their logo, the only
+image in the file, for the page - an embedded image is the page only when it
+covers it (`ocr.covers_page`). `invoices/ocr.py` stands in for `extract_text()`, and
 `parsers/receipt_base.py::ReceiptParser` is the only class allowed to
 override `parse()` besides the LLM fallback. The ticket reader still
 implements `parse_pages` **only**, so every layout is still testable from
@@ -107,7 +111,29 @@ What it knows, all arithmetic:
   under "Lignes écartées", in case one was an item; a promotion printed under
   an item never goes beyond its price; a phone number is 0 and nine digits
   (the pairs pattern it replaced took "10.49 31.47" for one, and dropped the
-  line); a percentage stays in a name ("FROMAGE BLANC 20% MG").
+  line); a percentage stays in a name ("FROMAGE BLANC 20% MG");
+- a **table row** - a DIY store's invoice, a web shop's - is a code, the
+  name, an EAN (told by its check digit: kept on the line, out of the name), a
+  count, prices and, last, the row's own rate as a plain number ("20,00").
+  **Patterns, never names or column positions**: a column missing changes
+  nothing. A count can be a **fraction** (0,35 m² of plywood;
+  `InvoiceLine.quantity` is a decimal, shown through the `quantity` filter or
+  `common.plain_number` - never raw, "4.200"), except beside "kg", where it is
+  a weight, and a fraction is never "recounted";
+- a **document priced in HT**: the rows making the VAT table's HT base *to
+  the cent* are the purchase when their TTC, worked out, is what was paid and
+  the other reading is no better (`_prefer_ht` - including when the run making
+  the amount paid is the VAT table's own base and tax, read as two lines).
+  A VAT row may print its rate as a bare "20,00" (`unmarked_vat_row`: base x
+  rate is the tax, and base + tax is printed elsewhere), or no rate at all - a
+  web shop's order page printing the goods' value and the tax
+  (`untabled_vat`): that stands for a one-rate table only for HT rows printed
+  above both lines, and says so ("Taux déduit"). Two items of 10,00 and 2,00
+  on a ticket fit the same arithmetic, and must stay TTC at no proven rate;
+- **read past a total** none of the items makes (`_segment`): an invoice and
+  the till's ticket on one photo, the ticket's half misread. What is found
+  further down has to be a table (`_structured`) - after a total, "CB 0,98"
+  alone also makes what was paid.
 
 Evaluate a change the same way before trusting it: parse every stored
 `ocr_text` and compare with the checked lines, per shop, counting separately
@@ -241,7 +267,11 @@ baguettes at 2,45 read like one at 2,45 until divided. A row left as drawn keeps
 figure to the cent (`LineCorrectionForm.untouched`) - so a line kept from
 before promotions were kept apart stays worked out from HT - and a TTC typed
 converts back to its HT to the cent. New ticket lines start at 5.5%, invoice
-lines at 20%. Build test posts from the page (`invoices/tests/page_posts.py`):
+lines at 20%. **A line taken out stays where it was**, struck through, with a
+button to put it back and a count of the lines kept: removed at once, the rows
+below moved up under the pointer, and a repeated click silently took out the
+first line typed below - a ticket re-typed in full then "did not add up" by
+exactly that line. Build test posts from the page (`invoices/tests/page_posts.py`):
 a hand-written subset tests a request no browser sends, and several such tests
 passed without ever saving.
 
@@ -326,11 +356,53 @@ configured till, or any supplier with no PDF parser of its own. Only a shop's
 products match OCR readings tolerantly and can be renamed from a ticket;
 Metro's are named by its invoices.
 
-The shop choice is `import_with_shop`, never while the batch thread runs (it
-owns `results` and would write its copy over the change). The OCR runs in the
-request, so shop choices and "Relire le document" take turns on one lock
-(`receipts.OCR_LOCK`), and a resume waits for none - two tabs used to import
-the same file twice. A reader that fails or reads nothing (or the AI
+The shop choice is `import_with_shop`, **while the batch still runs** too - a
+folder of a hundred tickets used to have to finish before the one without a
+shop could be checked. So `results` has three writers (the thread, a shop
+choice, a new shop's re-read) and each takes `receipt_batches.RESULTS_LOCK`,
+reads the entries fresh and writes back only its own: the thread used to save
+the copy it started with after every file, which would have undone a choice
+made meanwhile. The thread takes the next pending file each time round, so a
+file sent back to "pending" while it runs is read by the same run; the end of
+the batch is written under the lock with the check for pending files, so a
+re-read a moment later starts it again instead of being lost. A file being
+imported by hand is left out of re-reads (`_BY_HAND`, in memory), and
+`append_log` appends in the database. The live part is fetched every second:
+its shop forms keep what was typed (`hx-preserve`, stable ids) and the polling
+waits while one has the focus (`shopChoiceInUse`, ui.js) - a swap takes the
+focus away. The OCR runs in the request, so shop choices and "Relire le
+document" take turns on one lock (`receipts.OCR_LOCK`) - two tabs used to
+import the same file twice.
+
+**A shop is recognised by what its documents print, header or not**
+(`invoices/identifiers.py`, `receipts.identified_supplier`): a SIREN (alone
+where "SIREN"/"RCS" names it, in a SIRET, in a VAT number whose key matches),
+a phone number (same separator between every pair: "01.23 45.67 89.00" is
+prices), a web site (never an e-mail's domain - a customer's address is on
+invoices too). Checked the way each is built, since a misread one must not
+name a shop. Stored on `Supplier.ticket_identifiers` and learned only when a
+person said whose a document is - a shop chosen, a ticket moved (the old shop
+forgets what it printed), a ticket checked on the review page
+(`learn_identifiers`; `manage.py learn_shop_identifiers --dry-run` for tickets
+checked before). Measured on the real tickets, two rules keep it honest: an
+identifier counts only when **a quarter of the shop's documents print it**
+(misreadings - "mmoprix.fr", "monoprii.fr" - and labels on some goods -
+"fsc.org" on Mr.Bricolage's wood - are on one ticket or two) and **no other
+supplier's documents do** (the customer's own phone); and **a web site alone
+names no one** (the one branding the goods is printed at every shop selling
+them). It comes after the headers people gave and the configured tills, and
+says so ("Enseigne reconnue"). One identifier learned by two suppliers names
+neither.
+
+**A PDF invoice from a supplier with no reader of its own** - or a new one,
+named in the import card ("+ Nouveau fournisseur…", `InvoiceUploadForm` is a
+`ReceiptShopForm`) - is read the way a ticket is (`import_receipt` with the
+supplier) and opens on the correction page beside its PDF; the supplier learns
+what it prints. A supplier with its own reader (Metro, UBA...) keeps it, and a
+digital invoice dropped among ticket photos and filed by hand under one goes
+through it (`receipts.import_invoice_pdf`, when the file has a text layer; a
+scan is read as a ticket whatever the supplier). The AI pseudo-supplier is
+still offered there, last. A reader that fails or reads nothing (or the AI
 pseudo-supplier, which has none) still files the ticket, empty, with a failed
 "Lecture automatique" check - that check is also what puts it in the review
 queue, which lists only receipts with checks. Either way the operator lands on

@@ -31,7 +31,8 @@ import os
 import re
 import threading
 import unicodedata
-from dataclasses import dataclass
+from collections import Counter, defaultdict
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
@@ -39,6 +40,8 @@ from django.core.files.base import ContentFile
 from django.db import transaction
 from django.utils import timezone
 
+from .identifiers import describe as describe_identifier
+from .identifiers import document_identifiers, may_print
 from .importing import DuplicateInvoiceError, import_parsed_invoice
 from .models import Invoice, InvoiceLine, ShopItemPrice, Supplier, label_for_unit_price
 from .ocr import deskew, ocr_prepared_image, page_images, text_layer_pages
@@ -61,6 +64,7 @@ PREVIEW_QUALITY = 82
 # review screen uses it to find lines still waiting for a name.
 PLACEHOLDER_MARKER = "EUR/u)"
 CHOSEN_SHOP_CHECK = "Enseigne choisie à la main"
+IDENTIFIED_CHECK = "Enseigne reconnue"
 UNREAD_CHECK = "Lecture automatique"
 SUM_CHECK = "Somme des lignes = total imprimé"
 UNREAD_TOTAL_CHECK = "Total imprimé lu"
@@ -75,6 +79,11 @@ MIN_HEADER_LENGTH = 4
 # A new shop's header already printed on more tickets filed elsewhere than
 # this - or on tickets of two shops - is that shop's, or anybody's.
 MAX_TICKETS_ELSEWHERE = 3
+# "Label : value" - a field of the document, never its sender's name.
+FIELD_RE = re.compile(r"^[^:]{2,40}:\s*\S")
+# The share of a shop's documents that print an identifier for it to name the
+# shop (learn_identifiers).
+MIN_IDENTIFIER_SHARE = Decimal("0.25")
 # What the parser said about the lines it read. Once a person has corrected
 # the lines, these describe lines that no longer exist: they give way to one
 # check on the lines as they are now (lines_check).
@@ -157,6 +166,19 @@ def shop_choices() -> list[tuple[str, list[Supplier]]]:
     ]
 
 
+def invoice_supplier_choices() -> list[tuple[str, list[Supplier]]]:
+    """What a PDF invoice can be imported under, grouped by how it is read."""
+    suppliers = list(Supplier.objects.order_by("name"))
+    return [
+        ("Lecteur dédié", [supplier for supplier in suppliers if has_own_reader(supplier)]),
+        (
+            "Lue comme un ticket",
+            [supplier for supplier in suppliers if supplier.parser_key != LLM_PARSER_KEY and not has_own_reader(supplier)],
+        ),
+        ("Analyse IA", [supplier for supplier in suppliers if supplier.parser_key == LLM_PARSER_KEY]),
+    ]
+
+
 def plain_text(text: str) -> str:
     """`text` for comparing headers: capitals, no accents, words and figures
     separated by single spaces - "Épicerie  Sabah," is "EPICERIE SABAH"."""
@@ -169,13 +191,20 @@ def _has_header(plain: str, header: str) -> bool:
 
 
 def detect_parser(text: str) -> ReceiptParser | None:
-    """Which shop this receipt belongs to, from its own header.
+    return detect_shop(text)[0]
+
+
+def detect_shop(text: str) -> tuple[ReceiptParser | None, list[str]]:
+    """Which shop this receipt belongs to, from what it prints - and, when
+    that was not a header, the identifiers that said so.
 
     A header a person gave a shop first, the longest first - "EPICERIE SABAH"
     before the "SABAH" a configured till answers to - then the configured
-    tills. Returns None rather than a best guess: an unrecognised receipt
-    that is reported as such costs the operator one click, while one filed
-    under the wrong shop produces plausible lines under the wrong products.
+    tills, then the SIREN, phone or web site learned from the shop's tickets
+    (`identified_supplier`). Returns None rather than a best guess: an
+    unrecognised receipt that is reported as such costs the operator one
+    click, while one filed under the wrong shop produces plausible lines under
+    the wrong products.
     """
     plain = plain_text(text)
     named = [
@@ -184,12 +213,85 @@ def detect_parser(text: str) -> ReceiptParser | None:
     ]
     for header, supplier in sorted(named, key=lambda pair: -len(pair[0])):
         if _has_header(plain, header):
-            return parser_for(supplier)
+            return parser_for(supplier), []
     for parser in receipt_parsers().values():
         for pattern in getattr(parser, "header_patterns", ()):
             if re.search(pattern, text, re.IGNORECASE):
-                return parser
-    return None
+                return parser, []
+    supplier, identifiers = identified_supplier(text)
+    if supplier is None:
+        return None, []
+    return parser_for(supplier), identifiers
+
+
+def identified_supplier(text: str) -> tuple[Supplier | None, list[str]]:
+    """The one supplier whose learned identifiers `text` prints, and those
+    identifiers. One learned by two suppliers names neither; identifiers
+    naming two suppliers name no one; a web site alone names no one - the
+    one that brands the goods ("fsc.org" on wood) is printed at every shop
+    selling them."""
+    printed = document_identifiers(text)
+    if not printed:
+        return None, []
+    owners = defaultdict(list)
+    for supplier in Supplier.objects.exclude(parser_key=LLM_PARSER_KEY):
+        for identifier in printed.intersection(supplier.ticket_identifiers or ()):
+            owners[identifier].append(supplier)
+    named = {identifier: suppliers[0] for identifier, suppliers in owners.items() if len(suppliers) == 1}
+    if len({supplier.pk for supplier in named.values()}) != 1:
+        return None, []
+    if all(identifier.startswith("web:") for identifier in named):
+        return None, []
+    return next(iter(named.values())), sorted(named)
+
+
+def learn_identifiers(supplier: Supplier, *texts: str) -> list[str]:
+    """Bring what names `supplier` up to date with `texts` - documents a
+    person filed or checked under it - and return what it learned.
+
+    An identifier names the shop when at least MIN_IDENTIFIER_SHARE of its
+    documents print it - a misreading, or a label printed on some goods, is
+    on one ticket or two - and no other supplier's documents do: the
+    customer's own phone names nobody. Checked again for those it knew.
+    """
+    if supplier.parser_key == LLM_PARSER_KEY:
+        return []
+    # As stored now: another ticket of the shop may have taught it meanwhile.
+    supplier.refresh_from_db(fields=["ticket_identifiers"])
+    known = set(supplier.ticket_identifiers or ())
+    candidates = set(known)
+    for text in texts:
+        candidates |= document_identifiers(text)
+    if not candidates:
+        return []
+    own = list(Invoice.objects.filter(supplier=supplier).exclude(ocr_text="").values_list("ocr_text", flat=True))
+    own += [text for text in texts if text and text not in own]
+    seen = Counter()
+    for document in own:
+        if may_print(document, candidates):
+            seen.update(document_identifiers(document) & candidates)
+    kept = {identifier for identifier in candidates if seen[identifier] >= MIN_IDENTIFIER_SHARE * len(own)}
+    others = Invoice.objects.exclude(supplier=supplier).exclude(ocr_text="").values_list("ocr_text", flat=True)
+    for other in others.iterator():
+        if not kept:
+            break
+        if may_print(other, kept):
+            kept -= document_identifiers(other)
+    if kept != known:
+        supplier.ticket_identifiers = sorted(kept)
+        supplier.save(update_fields=["ticket_identifiers"])
+    return sorted(kept - known)
+
+
+def forget_identifiers(supplier: Supplier, text: str) -> None:
+    """A document printing them is not `supplier`'s after all: they name it
+    no longer."""
+    printed = document_identifiers(text)
+    supplier.refresh_from_db(fields=["ticket_identifiers"])
+    kept = [identifier for identifier in supplier.ticket_identifiers or () if identifier not in printed]
+    if len(kept) != len(supplier.ticket_identifiers or ()):
+        supplier.ticket_identifiers = kept
+        supplier.save(update_fields=["ticket_identifiers"])
 
 
 def header_guess(text: str) -> str:
@@ -197,6 +299,8 @@ def header_guess(text: str) -> str:
     top lines made of words rather than figures - to suggest when naming a
     new shop. Blank when nothing looks like one."""
     for line in [line.strip() for line in text.splitlines() if line.strip()][:6]:
+        if FIELD_RE.match(line):
+            continue  # "Statut : COMPLETE" is a field, not a name
         letters = sum(char.isalpha() for char in line)
         visible = len(line.replace(" ", ""))
         if letters >= MIN_HEADER_LENGTH and not any(char.isdigit() for char in line) and letters >= 0.7 * visible:
@@ -294,12 +398,14 @@ def move_to_shop(invoice: Invoice, supplier: Supplier) -> None:
         for line in invoice.lines.all()
     ]
     with transaction.atomic():
+        forget_identifiers(invoice.supplier, invoice.ocr_text)
         invoice.supplier = supplier
-        invoice.parse_checks = [check for check in invoice.parse_checks if check["label"] != CHOSEN_SHOP_CHECK] + [
-            {"label": CHOSEN_SHOP_CHECK, "passed": True, "detail": f"Rangé chez {supplier.name} à la main."}
-        ]
+        invoice.parse_checks = [
+            check for check in invoice.parse_checks if check["label"] not in (CHOSEN_SHOP_CHECK, IDENTIFIED_CHECK)
+        ] + [{"label": CHOSEN_SHOP_CHECK, "passed": True, "detail": f"Rangé chez {supplier.name} à la main."}]
         invoice.save(update_fields=["supplier", "parse_checks"])
         replace_invoice_lines(invoice, lines)
+        learn_identifiers(supplier, invoice.ocr_text)
 
 
 @dataclass
@@ -312,6 +418,8 @@ class ReceiptRead:
     text: str
     # Why a reader the operator chose produced nothing (its exception).
     problem: str = ""
+    # What named the shop, when no header did (identified_supplier).
+    identified_by: list[str] = field(default_factory=list)
 
 
 def recognise(pdf_path: str):
@@ -343,7 +451,7 @@ def read_receipt(pdf_path: str, date_hint: date | None = None, supplier: Supplie
     images, ocr_pages = recognise(pdf_path)
     text = "\n".join(page.text for page in ocr_pages)
 
-    parser = detect_parser(text) if supplier is None else parser_for(supplier)
+    parser, identified_by = detect_shop(text) if supplier is None else (parser_for(supplier), [])
     parsed, problem = None, ""
     if parser is not None:
         try:
@@ -354,7 +462,10 @@ def read_receipt(pdf_path: str, date_hint: date | None = None, supplier: Supplie
             if supplier is None:
                 raise
             problem = str(exc).strip() or exc.__class__.__name__
-    return ReceiptRead(parser=parser, parsed=parsed, preview=_encode_preview(images), text=text, problem=problem)
+    return ReceiptRead(
+        parser=parser, parsed=parsed, preview=_encode_preview(images), text=text, problem=problem,
+        identified_by=identified_by,
+    )
 
 
 def _encode_preview(images) -> bytes | None:
@@ -715,11 +826,38 @@ def _describe(invoice: Invoice) -> str:
     return described
 
 
+def has_own_reader(supplier: Supplier) -> bool:
+    """Whether `supplier`'s PDF invoices have a reader of their own (Metro,
+    UBA...) - any other supplier's are read the way a ticket is."""
+    return supplier.parser_key != LLM_PARSER_KEY and not is_ticket_shop(supplier)
+
+
+def has_text_layer(path: str) -> bool:
+    """A digital document, rather than a photo or a scan."""
+    return any(page is not None for page in text_layer_pages(path))
+
+
+def import_invoice_pdf(path: str, supplier: Supplier, display_filename: str | None = None) -> Invoice:
+    """A digital invoice through its supplier's own reader - refused, like a
+    ticket, when this very file is in already."""
+    from .importing import parse_and_import
+
+    digest = file_sha256(path)
+    known = Invoice.objects.filter(source_sha256=digest).select_related("supplier").first()
+    if known is not None:
+        raise DuplicateInvoiceError(f"Fichier déjà importé : {_describe(known)}.")
+    invoice = parse_and_import(path, supplier, display_filename=display_filename)
+    invoice.source_sha256 = digest
+    invoice.save(update_fields=["source_sha256"])
+    return invoice
+
+
 def import_receipt(
     pdf_path: str,
     display_filename: str | None = None,
     date_hint: date | None = None,
     supplier: Supplier | None = None,
+    chosen_because: str = "L'en-tête du ticket n'a pas été reconnu.",
 ) -> Invoice:
     """Recognise, parse and file one receipt photo.
 
@@ -738,13 +876,22 @@ def import_receipt(
         raise DuplicateInvoiceError(f"Fichier déjà importé : {_describe(known)}.")
 
     read = read_receipt(pdf_path, date_hint=date_hint, supplier=supplier)
+    named_by_hand = supplier is not None
     if supplier is None:
         if read.parser is None or read.parsed is None:
             raise UnrecognisedShopError("Enseigne non reconnue sur ce ticket.", text=read.text)
         supplier = Supplier.objects.get(code=read.parser.supplier_code)
         parsed = read.parsed
+        if read.identified_by:
+            parsed.checks.append(ParseCheck(
+                label=IDENTIFIED_CHECK,
+                passed=True,
+                detail="Aucun en-tête connu : reconnue par son "
+                + ", son ".join(describe_identifier(identifier) for identifier in read.identified_by)
+                + " (vu sur ses tickets).",
+            ))
     else:
-        parsed = _chosen_shop_read(supplier, read, date_hint)
+        parsed = _chosen_shop_read(supplier, read, date_hint, chosen_because)
     label_placeholder_lines(supplier, parsed)
     dated = date_check(parsed.invoice_date)
     if dated is not None:
@@ -778,10 +925,15 @@ def import_receipt(
     invoice.save(
         update_fields=["ocr_text", "ocr_confidence", "parse_checks", "preview_image", "status", "source_sha256"]
     )
+    if named_by_hand:
+        # Its next tickets are recognised by what this one prints.
+        learn_identifiers(supplier, invoice.ocr_text)
     return invoice
 
 
-def _chosen_shop_read(supplier: Supplier, read: ReceiptRead, date_hint: date | None) -> ParsedInvoice:
+def _chosen_shop_read(
+    supplier: Supplier, read: ReceiptRead, date_hint: date | None, chosen_because: str
+) -> ParsedInvoice:
     """What gets filed for a ticket whose shop the operator named.
 
     Whatever the reader made of it, plus a check saying the shop was chosen
@@ -807,9 +959,7 @@ def _chosen_shop_read(supplier: Supplier, read: ReceiptRead, date_hint: date | N
         parsed.checks.append(
             ParseCheck(label=UNREAD_CHECK, passed=False, detail=f"{reason} : saisissez les lignes d'après la photo.")
         )
-    parsed.checks.append(
-        ParseCheck(label=CHOSEN_SHOP_CHECK, passed=True, detail="L'en-tête du ticket n'a pas été reconnu.")
-    )
+    parsed.checks.append(ParseCheck(label=CHOSEN_SHOP_CHECK, passed=True, detail=chosen_because))
     return parsed
 
 
@@ -833,10 +983,18 @@ __all__ = [
     "date_check",
     "describe_tickets",
     "detect_parser",
+    "detect_shop",
     "first_reading",
+    "forget_identifiers",
+    "has_own_reader",
+    "has_text_layer",
     "header_guess",
+    "identified_supplier",
+    "import_invoice_pdf",
     "import_receipt",
+    "invoice_supplier_choices",
     "label_placeholder_lines",
+    "learn_identifiers",
     "lines_check",
     "move_to_shop",
     "parser_for",

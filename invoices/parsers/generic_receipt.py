@@ -473,19 +473,25 @@ class GenericReceiptParser(ReceiptParser):
         vat_rows = {index for index in range(len(lines)) if unmarked_vat_row(lines, index) is not None}
         vat_summaries, rate_only = collect_vat_summaries(lines, total)
         totals = ReceiptTotals(printed_total_ttc=total, vat_summaries=vat_summaries, rate_only=rate_only)
+        # No VAT table: maybe an HT and a tax printed with no rate beside them.
+        untabled = untabled_vat(lines, total) if not vat_summaries and not rate_only else []
 
-        first = segment = self._segment(lines, total, totals, vat_rows, 0)
+        first = segment = self._segment(lines, total, totals, vat_rows, 0, untabled=untabled)
         # Items read up to a total that none of them makes: the document may
         # print its lines again further down - the invoice under the till's
         # ticket, both on one photo, the ticket's half misread. What is found
         # there has to be a table, though: after the total, "CB 0,98" alone
         # also makes what was paid.
         while segment.chosen is None and segment.end + 1 < len(lines):
-            segment = self._segment(lines, total, totals, vat_rows, segment.end + 1, structured_only=True)
+            segment = self._segment(
+                lines, total, totals, vat_rows, segment.end + 1, structured_only=True, untabled=untabled
+            )
         if segment.chosen is None:
             segment = first
             segment.chosen = self._repaired(first.items, lines, total, first.notes) if first.items else []
         items, read, notes = segment.chosen, segment.items, segment.notes
+        if segment.totals is not None:
+            totals = segment.totals
         weight_problems, quantity_fixes, quantity_problems = (
             segment.weight_problems, segment.quantity_fixes, segment.quantity_problems
         )
@@ -503,6 +509,14 @@ class GenericReceiptParser(ReceiptParser):
         gross = sum((item.total for item in items), start=ZERO)
 
         extra: list[ParseCheck] = quantity_checks(quantity_fixes, quantity_problems)
+        if segment.totals is not None:
+            (summary,) = totals.vat_summaries
+            extra.append(ParseCheck(
+                label="Taux déduit",
+                passed=True,
+                detail=f"aucun taux imprimé : {format_rate(summary.rate)} %, la TVA {summary.vat_amount:.2f} € "
+                f"étant ce taux de {summary.base:.2f} € HT, et les deux faisant le total",
+            ))
         if weight_problems:
             extra.append(ParseCheck(label="Poids rattachés", passed=False, detail="; ".join(weight_problems)))
 
@@ -554,9 +568,13 @@ class GenericReceiptParser(ReceiptParser):
             printed_total_ttc=total,
         )
 
-    def _segment(self, lines, total, totals, vat_rows, start, structured_only=False) -> Segment:
+    def _segment(self, lines, total, totals, vat_rows, start, structured_only=False, untabled=()) -> Segment:
         """The items read from `start` up to the next total, and the run of
-        them that is the purchase (None when none adds up)."""
+        them that is the purchase (None when none adds up).
+
+        `untabled` are the readings of an HT and a tax printed with no rate
+        (untabled_vat): one is taken only for rows in HT printed above both
+        lines - it then stands for the VAT table (`segment.totals`)."""
         segment = Segment()
         items, details, voids, segment.end = self._read_items(lines, total, segment.notes, vat_rows, start)
         self._attach_details(
@@ -567,10 +585,15 @@ class GenericReceiptParser(ReceiptParser):
             # item then: "7 X 0.49 3.43" is one, its "T1" read "11".
             items = [item for item in items if item.explained is not None and abs(item.explained - item.total) <= CENTS]
         segment.items = items
-        ht_run = _ht_run(items, printed_ht_base(totals))
-        ht_rates = _ht_rates(ht_run, totals) if ht_run else None
         ttc_run = self._fitting_run(items, lines, total)
-        if ht_rates is not None and _prefer_ht(ht_run, ttc_run, totals, ht_rates):
+        choice = _ht_choice(items, ttc_run, totals)
+        for candidate, printed_at in untabled if choice is None else ():
+            choice = _ht_choice([item for item in items if item.index < min(printed_at)], ttc_run, candidate)
+            if choice is not None:
+                segment.totals = candidate
+                break
+        if choice is not None:
+            ht_run, ht_rates = choice
             _as_ht(ht_run, ht_rates)
             segment.chosen = ht_run
         elif ttc_run is not None and (not structured_only or _structured(ttc_run)):
@@ -948,6 +971,9 @@ class Segment:
     weight_problems: list = field(default_factory=list)
     quantity_fixes: list = field(default_factory=list)
     quantity_problems: list = field(default_factory=list)
+    # The VAT table an HT and a tax printed without a rate stand for, when the
+    # chosen rows are read in HT through it.
+    totals: ReceiptTotals | None = None
 
 
 def _structured(run: list[Reading]) -> bool:
@@ -1114,6 +1140,44 @@ def _split_by_buckets(items: list[Reading], summaries, by_base: bool = False) ->
         for position, item in enumerate(groups[key]):
             rates[id(item)] = first.rate if position < taken else second.rate
     return rates
+
+
+def untabled_vat(lines: list[str], total: Decimal | None) -> list[tuple[ReceiptTotals, tuple[int, int]]]:
+    """A document that prints its HT and its tax but no rate - a web shop's
+    order page: two lines of one amount each that make what was paid, the
+    second the first at exactly one French rate. Each such reading, as the
+    VAT table it stands for, with the two lines. Only a hypothesis: two items
+    of 10,00 and 2,00 fit it too (see GenericReceiptParser._segment)."""
+    if total is None:
+        return []
+    singles = []
+    for index, line in enumerate(lines):
+        amounts = line_amounts(line)
+        if len(amounts) == 1 and amounts[0] > 0:
+            singles.append((index, amounts[0]))
+    found = []
+    for base_at, base in singles:
+        for vat_at, vat in singles:
+            if vat_at == base_at or vat >= base or base + vat != total:
+                continue
+            rates = [
+                rate for rate in KNOWN_VAT_RATES
+                if abs((base * rate).quantize(CENTS, rounding=ROUND_HALF_UP) - vat) <= CENTS
+            ]
+            if len(rates) == 1:
+                summary = VatSummary(rate=rates[0], base=base, vat_amount=vat)
+                found.append((ReceiptTotals(printed_total_ttc=total, vat_summaries=[summary]), (base_at, vat_at)))
+    return found
+
+
+def _ht_choice(items, ttc_run, totals: ReceiptTotals):
+    """The rows in HT making the document's HT base, with their rates, when
+    they are the purchase (_prefer_ht) - or None."""
+    ht_run = _ht_run(items, printed_ht_base(totals))
+    ht_rates = _ht_rates(ht_run, totals) if ht_run else None
+    if ht_rates is not None and _prefer_ht(ht_run, ttc_run, totals, ht_rates):
+        return ht_run, ht_rates
+    return None
 
 
 def _ht_run(items: list[Reading], ht_base: Decimal | None) -> list[Reading] | None:

@@ -86,12 +86,32 @@ parts trigger `documents-changed` when they end).
     <div id="import-pdf" role="tabpanel" data-import-panel="pdf" hidden>
         <form method="post" action="{% url 'invoices:invoice_upload' %}" enctype="multipart/form-data" class="pdf-import">
             {% csrf_token %}
-            {% include "_form_fields.html" with form=pdf_form %}
+            {% with supplier_field=pdf_form.supplier file_field=pdf_form.source_file %}
+            <div class="form-grid">
+                <div class="form-field{% if supplier_field.errors or pdf_form.new_name.errors or pdf_form.new_header.errors %} has-error{% endif %}">
+                    <label for="pdf-supplier">{{ supplier_field.label }}<span class="required" aria-hidden="true">*</span></label>
+                    <div class="shop-choice">
+                        {% include "invoices/_shop_choice_fields.html" with shop_groups=invoice_supplier_groups for_invoice=True label="Fournisseur de la facture" select_id="pdf-supplier" selected=pdf_form.data.supplier typed_name=pdf_form.data.new_name typed_header=pdf_form.data.new_header suggested="" current=None %}
+                    </div>
+                    <p class="help">
+                        Sans lecteur dédié - ou nouveau -, sa facture est lue comme un ticket : lignes, taux et
+                        totaux vérifiés contre ce qu'elle imprime, puis elle s'ouvre à côté du PDF pour vérification.
+                    </p>
+                    {% for error in supplier_field.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+                    {% for error in pdf_form.new_name.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+                    {% for error in pdf_form.new_header.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+                </div>
+                <div class="form-field form-field-{{ file_field.widget_type }}{% if file_field.errors %} has-error{% endif %}">
+                    <label for="{{ file_field.id_for_label }}">{{ file_field.label }}<span class="required" aria-hidden="true">*</span></label>
+                    {{ file_field }}
+                    {% for error in file_field.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+                </div>
+            </div>
+            {% endwith %}
             <div class="import-actions">
                 <button class="btn" type="submit" data-busy-label="Lecture de la facture…">Importer la facture</button>
                 <span class="muted">
-                    « Autre (analyse IA) » pour un fournisseur sans lecteur dédié. La facture s'ouvre ensuite
-                    dans la liste, sur ses lignes.
+                    Avec un lecteur dédié (Metro, UBA…), la facture s'ouvre ensuite dans la liste, sur ses lignes.
                 </span>
             </div>
         </form>

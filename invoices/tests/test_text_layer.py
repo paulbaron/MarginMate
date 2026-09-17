@@ -68,6 +68,13 @@ class TextLayerTests(SimpleTestCase):
             pass
         self.assertEqual(ocr.text_layer_pages(photo), [])
 
+    def test_a_broken_pdf_has_no_layer(self):
+        """Rendering it is what says what is wrong with it."""
+        broken = self.path("casse.pdf")
+        with open(broken, "wb") as handle:
+            handle.write(b"%PDF-1.4 cut short")
+        self.assertEqual(ocr.text_layer_pages(broken), [])
+
     def test_a_text_pdf_is_never_sent_to_the_recogniser(self):
         pdf = write_pdf(self.path("facture.pdf"), INVOICE, logo=True)
         with mock.patch("invoices.receipts.ocr_prepared_image") as recogniser:

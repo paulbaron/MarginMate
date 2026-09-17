@@ -90,6 +90,8 @@ def render_purchases(request, tab, *, status=200, **card):
 
 
 def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_form=None) -> dict:
+    from .receipts import invoice_supplier_choices
+
     metro = Supplier.objects.filter(code="METRO", is_scrapable=True).first()
     email_types = list(
         InvoiceType.objects.filter(is_active=True, source_kind=InvoiceType.SourceKind.EMAIL).select_related("supplier")
@@ -130,6 +132,7 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
         "import_tab": import_tab,
         "receipt_form": receipt_form or ReceiptBatchUploadForm(),
         "pdf_form": pdf_form or InvoiceUploadForm(),
+        "invoice_supplier_groups": invoice_supplier_choices(),
         "gather_sources": gather_sources,
         "default_start_date": default_gather_start(gathered),
         "default_end_date": timezone.localdate(),

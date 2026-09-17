@@ -283,6 +283,11 @@
     function initShopChoices(root) {
         root.querySelectorAll("select[data-shop-select]").forEach(showNewShop);
     }
+    // A running import's status is fetched again every second, which takes
+    // the focus out of a shop being typed in: it waits (hx-trigger filter).
+    window.shopChoiceInUse = function () {
+        return !!document.querySelector(".shop-choice:focus-within");
+    };
 
     // "Recettes & ventes": a till product linked or set aside in place - the
     // counts of what is left to link follow.

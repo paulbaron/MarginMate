@@ -1,10 +1,15 @@
 <div class="card job-status" id="receipt-batch-status"
     {% if batch.is_active %}
     hx-get="{% url 'invoices:receipt_batch_status' batch.pk %}"
-    hx-trigger="every 1s"
+    hx-trigger="every 1s [!shopChoiceInUse()]"
     hx-swap="outerHTML"
     {% endif %}
 >
+{% comment %}
+Fetched again every second while the import runs - except while a shop is
+being chosen (ui.js), since a swap takes the focus away; the shop forms keep
+what was typed in them across swaps (hx-preserve, stable ids).
+{% endcomment %}
     <div class="job-status-head">
         <div>
             <span class="status-pill status-{{ batch.status }}">{{ batch.get_status_display }}</span>
@@ -25,12 +30,13 @@
         {% endif %}
     </div>
 
-    {% if batch_first_to_check and not batch.is_active %}
+    {% if batch_first_to_check %}
         <p class="batch-next">
-            <a class="btn" href="{% url 'invoices:receipt_review' batch_first_to_check %}?lot={{ batch.pk }}">
-                Vérifier {% if batch_to_check == 1 %}le ticket{% else %}les {{ batch_to_check }} tickets{% endif %} de cet import →
+            <a class="btn{% if batch.is_active %} btn-secondary{% endif %}" href="{% url 'invoices:receipt_review' batch_first_to_check %}?lot={{ batch.pk }}">
+                Vérifier {% if batch_to_check == 1 %}le ticket{% else %}les {{ batch_to_check }} tickets{% endif %}
+                {% if batch.is_active %}déjà lu{{ batch_to_check|pluralize }}{% else %}de cet import{% endif %} →
             </a>
-            <span class="muted">un après l'autre, puis retour ici ; leur liste est plus bas.</span>
+            <span class="muted">un après l'autre, puis retour ici{% if batch.is_active %} - ceux lus entre-temps suivent{% else %} ; leur liste est plus bas{% endif %}.</span>
         </p>
     {% endif %}
 
@@ -47,12 +53,13 @@
         </div>
     {% endif %}
 
-    {% if batch.awaiting_shop_count and not batch.is_active %}
+    {% if batch.awaiting_shop_count %}
         <div class="message message-warning">
             {{ batch.awaiting_shop_count }} ticket{{ batch.awaiting_shop_count|pluralize }}
             sans enseigne reconnue : pour chacun, choisissez son enseigne - ou créez-la, avec le texte
             imprimé en tête de ses tickets pour que les suivants soient reconnus - et importez-le. Il est lu
-            quelle que soit l'enseigne, puis s'ouvre pour vérification.
+            quelle que soit l'enseigne, puis s'ouvre pour vérification{% if batch.is_active %} ; l'import
+            continue pendant ce temps{% endif %}.
         </div>
     {% endif %}
 
@@ -131,8 +138,8 @@
                                 {% if not entry.kept %}<span class="muted">réimportez ce fichier pour choisir son enseigne</span>{% endif %}
                             </td>
                             <td>
-                                {% if entry.kept and not batch.is_active %}
-                                    <form method="post" action="{% url 'invoices:receipt_batch_assign' batch.pk forloop.counter0 %}" class="inline-form shop-choice">
+                                {% if entry.kept %}
+                                    <form id="shop-choice-{{ batch.pk }}-{{ forloop.counter0 }}" hx-preserve method="post" action="{% url 'invoices:receipt_batch_assign' batch.pk forloop.counter0 %}" class="inline-form shop-choice">
                                         {% csrf_token %}
                                         {% with label="Enseigne de "|add:entry.name %}
                                             {% include "invoices/_shop_choice_fields.html" with suggested=entry.header current=None %}

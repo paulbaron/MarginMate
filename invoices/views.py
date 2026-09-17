@@ -38,7 +38,7 @@ from .importing import (
     replace_invoice_lines,
 )
 from .models import Invoice, InvoiceType, ReceiptBatch, ScrapeJob
-from .parsers import get_parser
+from .parsers import LLM_PARSER_KEY, get_parser
 from .parsers.base import ParsedInvoice, ParsedLine
 from .tasks import gather_invoices_task, test_email_pattern_task
 from .workspace import batch_invoice_ids, batch_status_context, render_purchases
@@ -74,14 +74,24 @@ class InvoiceDetailView(DetailView):
 
 
 def upload_invoice(request):
-    """A supplier's PDF, from the import card. Imported, it is shown first in
-    the list, highlighted and opened on its lines."""
+    """A supplier's PDF, from the import card. With a reader of its own, it is
+    shown first in the list, highlighted and opened on its lines. Any other
+    supplier's - a new one's included - is read like a ticket and opens on
+    the correction page, beside its PDF."""
+    from .receipts import OCR_LOCK, OCR_WAIT_SECONDS, has_own_reader, import_receipt
+
     if request.method != "POST":
         return render_purchases(request, "documents", import_tab="pdf")
     form = InvoiceUploadForm(request.POST, request.FILES)
-    if not form.is_valid():
+    supplier = created = None
+    if form.is_valid():
+        try:
+            supplier, created = form.shop()
+        except ValueError as exc:
+            form.add_error("new_name", str(exc))
+    if supplier is None:
         return render_purchases(request, "documents", import_tab="pdf", pdf_form=form)
-    supplier = form.cleaned_data["supplier"]
+    own_reader = has_own_reader(supplier) or supplier.parser_key == LLM_PARSER_KEY
     uploaded = form.cleaned_data["source_file"]
     suffix = os.path.splitext(uploaded.name)[1] or ".pdf"
     fd, tmp_path = tempfile.mkstemp(suffix=suffix)
@@ -89,14 +99,33 @@ def upload_invoice(request):
         with os.fdopen(fd, "wb") as tmp:
             for chunk in uploaded.chunks():
                 tmp.write(chunk)
-        invoice = parse_and_import(tmp_path, supplier, display_filename=uploaded.name)
+        if own_reader:
+            invoice = parse_and_import(tmp_path, supplier, display_filename=uploaded.name)
+        else:
+            # A scanned invoice is OCR: seconds of CPU, one at a time.
+            if not OCR_LOCK.acquire(timeout=OCR_WAIT_SECONDS):
+                raise RuntimeError("un autre document est en cours de lecture, réessayez dans un instant")
+            try:
+                invoice = import_receipt(
+                    tmp_path, display_filename=uploaded.name, supplier=supplier,
+                    chosen_because=f"Fournisseur choisi à l'import de la facture ({supplier.name}).",
+                )
+            finally:
+                OCR_LOCK.release()
     except DuplicateInvoiceError as exc:
         messages.warning(request, str(exc))
     except Exception as exc:  # noqa: BLE001 - surfaced to the user, not a crash
         messages.error(request, f"Échec de l'import : {exc}")
     else:
-        messages.success(request, f"Facture importée : {invoice}. Ses lignes sont ouvertes dans la liste.")
-        return redirect(f"{reverse('invoices:invoice_list')}?surligner={invoice.pk}")
+        if created:
+            messages.info(request, f"Fournisseur {supplier.name} créé.")
+        if own_reader:
+            messages.success(request, f"Facture importée : {invoice}. Ses lignes sont ouvertes dans la liste.")
+            return redirect(f"{reverse('invoices:invoice_list')}?surligner={invoice.pk}")
+        messages.success(
+            request, f"Facture {supplier.name} lue sans lecteur dédié : vérifiez ses lignes d'après le document."
+        )
+        return redirect("invoices:receipt_review", pk=invoice.pk)
     finally:
         os.unlink(tmp_path)
     return redirect(f"{reverse('invoices:invoice_list')}?ajouter=pdf")
@@ -407,9 +436,6 @@ def receipt_batch_assign(request, pk, index):
     if not form.is_valid():
         messages.error(request, form.error_text())
         return redirect("invoices:receipt_batch", pk=batch.pk)
-    if batch.is_active:
-        messages.error(request, "Cet import est encore en cours : attendez qu'il se termine pour choisir une enseigne.")
-        return redirect("invoices:receipt_batch", pk=batch.pk)
     try:
         supplier, created = form.shop()
     except ValueError as exc:
@@ -426,7 +452,8 @@ def receipt_batch_assign(request, pk, index):
     messages.success(request, f"{entry['name']} importé comme ticket {supplier.name} : vérifiez-le d'après la photo.")
     if created:
         _say_new_shop(request, batch, supplier)
-    return redirect("invoices:receipt_review", pk=entry["invoice_id"])
+    # Checked within its import - the batch may still be running meanwhile.
+    return redirect(reverse("invoices:receipt_review", args=[entry["invoice_id"]]) + f"?lot={batch.pk}")
 
 
 def _say_new_shop(request, batch, supplier) -> None:
@@ -627,7 +654,7 @@ def _lot_of(request):
 
 def _save_corrections(request, invoice, formset, header_form) -> bool:
     """Store what the page says. Returns whether it was saved."""
-    from .receipts import recheck_after_review
+    from .receipts import learn_identifiers, recheck_after_review
 
     document = DOCUMENT_RECEIPT if invoice.is_receipt else DOCUMENT_INVOICE
     stored = {line.pk: line for line in invoice.lines.all()}
@@ -674,6 +701,9 @@ def _save_corrections(request, invoice, formset, header_form) -> bool:
                 recheck_after_review(invoice)
                 invoice.reviewed_at = timezone.now()
                 fields += ["parse_checks", "reviewed_at"]
+                # Checked, it is this shop's: its next tickets are
+                # recognised by what this one prints, header or not.
+                learn_identifiers(invoice.supplier, invoice.ocr_text)
             invoice.save(update_fields=fields)
     except InvoiceLinesInUseError as exc:
         messages.error(request, str(exc))
