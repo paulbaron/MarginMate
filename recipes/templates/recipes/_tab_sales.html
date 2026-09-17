@@ -1,0 +1,147 @@
+{% comment %}
+What was sold: fetched from the till, typed by hand, or invoiced - the other
+half of the stock variance.
+{% endcomment %}
+<div class="card">
+    <div class="section-head">
+        <div>
+            <h3>Importer les ventes de L'Addition</h3>
+            <p class="muted">
+                Le rapport « Lignes de ventes » de la période, enregistré jour par jour ; les nouveaux produits de la
+                caisse arrivent dans « À lier ».
+                {% if last_sale %}Dernière vente enregistrée : {{ last_sale.sold_on|date:"d/m/Y" }}.{% endif %}
+            </p>
+        </div>
+    </div>
+    <form method="post" action="{% url 'recipes:trigger_sales_import' %}" class="inline-form">
+        {% csrf_token %}
+        <label class="inline-label">Du <input type="date" name="start_date" value="{{ default_start }}" required></label>
+        <label class="inline-label">au <input type="date" name="end_date" value="{{ default_end }}" required></label>
+        <button class="btn" type="submit" {% if job.is_active %}disabled{% endif %}>Récupérer les ventes</button>
+    </form>
+    <p class="muted small">
+        Nécessite <code>LADDITION_EMAIL</code> et <code>LADDITION_PASSWORD</code> dans le fichier <code>.env</code>.
+        La récupération ouvre un navigateur en arrière-plan et peut prendre quelques minutes par tranche de deux ans.
+    </p>
+    {% if job %}
+        {% include "recipes/_sales_import_status.html" %}
+    {% endif %}
+</div>
+
+<div class="card">
+    <h3>Ajouter une vente à la main</h3>
+    <p class="muted">
+        Pour ce que la caisse n'a pas enregistré. Ces lignes ont leur propre origine
+        « {{ manual_source }} » : un import L'Addition corrige ses propres chiffres sans jamais
+        les écraser. Ressaisir la même recette au même jour met à jour la quantité.
+    </p>
+    <form method="post" action="{% url 'recipes:sales_list' %}" class="inline-form manual-sale">
+        {% csrf_token %}
+        {% for field in form %}
+            <label class="stacked-label">
+                <span class="muted">{{ field.label }}</span>
+                {{ field }}
+                {% for error in field.errors %}<span class="message message-error">{{ error }}</span>{% endfor %}
+            </label>
+        {% endfor %}
+        <button class="btn" type="submit">Ajouter</button>
+    </form>
+</div>
+
+{% if totals %}
+<div class="card">
+    <h3>Par origine</h3>
+    <table class="sub-table">
+        <thead><tr><th>Origine</th><th class="num">Lignes</th><th class="num">Unités vendues</th></tr></thead>
+        <tbody>
+            {% for row in totals %}
+            <tr>
+                <td>{{ row.source }}</td>
+                <td class="num">{{ row.rows }}</td>
+                <td class="num">{{ row.units|default:0 }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<div class="card">
+    <div class="section-head">
+        <div>
+            <h3>Factures de vente</h3>
+            <p class="muted">
+                Ce que vous avez vendu hors caisse — recettes ou types de stock vendus tels quels.
+                Comptées dans les écarts d'inventaire au même titre que les ventes de la caisse.
+            </p>
+        </div>
+        <a class="btn btn-secondary" href="{% url 'recipes:sale_document_create' %}">+ Facture de vente</a>
+    </div>
+    {% if documents %}
+    <div class="table-wrap">
+    <table class="sub-table" data-table data-table-label="factures">
+        <thead>
+            <tr><th>Date</th><th>Référence</th><th>Lignes</th><th class="num">Total TTC</th><th></th></tr>
+        </thead>
+        <tbody>
+            {% for document in documents %}
+            <tr>
+                <td data-sort="{{ document.sold_on|date:'Y-m-d' }}">{{ document.sold_on|date:"d/m/Y" }}</td>
+                <td>{{ document.reference|default:"—" }}{% if document.note %}<br><span class="muted small">{{ document.note }}</span>{% endif %}</td>
+                <td class="muted small">
+                    {% for line in document.lines.all %}
+                        {{ line.quantity|floatformat:"-2" }} × {{ line.source_name }}{% if not forloop.last %}<br>{% endif %}
+                    {% endfor %}
+                </td>
+                <td class="num">{{ document.total_ttc|floatformat:2 }} €</td>
+                <td class="num row-actions">
+                    <a class="btn btn-small btn-secondary" href="{% url 'recipes:sale_document_update' document.pk %}">Modifier</a>
+                    <form method="post" action="{% url 'recipes:sale_document_delete' document.pk %}"
+                          onsubmit="return confirm('Supprimer cette vente ?');">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-small btn-secondary">Supprimer</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+        <div class="empty-state">Aucune facture de vente.</div>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h3>Dernières ventes</h3>
+    {% if sales %}
+    <div class="table-wrap">
+    <table class="sub-table" data-table data-table-label="ventes">
+        <thead>
+            <tr><th>Date</th><th>Recette</th><th class="num">Quantité</th><th>Origine</th><th></th></tr>
+        </thead>
+        <tbody>
+            {% for sale in sales %}
+            <tr>
+                <td data-sort="{{ sale.sold_on|date:'Y-m-d' }}">{{ sale.sold_on|date:"d/m/Y" }}</td>
+                <td><a href="{% url 'recipes:recipe_detail' sale.recipe_id %}">{{ sale.recipe.name }}</a></td>
+                <td class="num">{{ sale.quantity }}</td>
+                <td class="muted">{{ sale.source }}</td>
+                <td class="num">
+                    {% if sale.source == manual_source %}
+                    <form method="post" action="{% url 'recipes:sales_delete' sale.pk %}"
+                          onsubmit="return confirm('Supprimer cette vente ?');">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-small btn-secondary">Supprimer</button>
+                    </form>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+        <div class="empty-state">Aucune vente enregistrée pour le moment.</div>
+    {% endif %}
+</div>

@@ -1,0 +1,78 @@
+{% comment %}
+One till product in the list to link. Its forms post in place and get this row
+back, saying what was done - with an undo - or, undone or refused, the product
+to link again.
+{% endcomment %}
+{% if outcome %}
+    <tr id="pos-{{ product.pk }}" class="pos-done">
+        <td></td>
+        <td><strong>{{ product.name }}</strong></td>
+        <td class="num">{{ product.total_quantity }}</td>
+        <td colspan="2">
+            {% if outcome == "linked" %}
+                <span class="pos-outcome">✓ lié à
+                    <a href="{% url 'recipes:recipe_detail' product.recipe.pk %}">{{ product.recipe.name }}</a>{% if product.recipe.happy_hour_name|lower == product.name|lower %} (happy hour){% endif %}
+                    — ses ventes y sont comptées.</span>
+            {% else %}
+                <span class="pos-outcome muted">✓ ignoré : ne consomme aucun stock suivi.</span>
+            {% endif %}
+            <form method="post" action="{% url 'recipes:pos_product_assign' product.pk %}"
+                  hx-post="{% url 'recipes:pos_product_assign' product.pk %}" hx-target="closest tr" hx-swap="outerHTML"
+                  class="inline-action">
+                {% csrf_token %}
+                <button type="submit" name="action" value="reset" class="link-button">Annuler</button>
+            </form>
+        </td>
+    </tr>
+{% else %}
+    <tr id="pos-{{ product.pk }}">
+        <td><input type="checkbox" form="pos-bulk-form" name="selected"
+                   value="{{ product.name }}" data-bulk-item
+                   aria-label="Sélectionner {{ product.name }}"></td>
+        <td>
+            <strong>{{ product.name }}</strong>
+            {% if product.first_seen %}
+                <br><span class="muted small">{{ product.first_seen|date:"d/m/Y" }} → {{ product.last_seen|date:"d/m/Y" }}</span>
+            {% endif %}
+        </td>
+        <td class="num">{{ product.total_quantity }}</td>
+        <td class="muted">
+            {{ product.category|default:"—" }}
+            {% if product.typology %}<br><span class="small">{{ product.typology }}</span>{% endif %}
+        </td>
+        <td>
+            {% comment %}
+            Four buttons a row read as four equally likely choices, which they
+            aren't: almost every product is either an existing recipe or nothing
+            we track. So one select - on the likely recipe already - and one
+            primary button, with "happy hour" as a modifier on the same action,
+            and the other two as quiet links.
+            {% endcomment %}
+            <form method="post" action="{% url 'recipes:pos_product_assign' product.pk %}"
+                  hx-post="{% url 'recipes:pos_product_assign' product.pk %}" hx-target="closest tr" hx-swap="outerHTML"
+                  class="pos-actions">
+                {% csrf_token %}
+                <select name="recipe" aria-label="Recette pour {{ product.name }}">
+                    <option value="">— Choisir une recette —</option>
+                    {% for recipe in recipes %}
+                        <option value="{{ recipe.pk }}"{% if recipe.pk == product.suggested_recipe.pk %} selected{% endif %}>{{ recipe.name }}</option>
+                    {% endfor %}
+                </select>
+                <label class="pos-hh" title="Mêmes ingrédients que la recette choisie, ventes cumulées avec elle.">
+                    <input type="checkbox" name="as_happy_hour" value="1"{% if product.suggested_happy_hour %} checked{% endif %}> happy hour
+                </label>
+                <button type="submit" name="action" value="link" class="btn btn-small">Lier</button>
+                <span class="pos-secondary">
+                    <a href="{% url 'recipes:recipe_create' %}?caisse={{ product.pk }}">Créer la recette</a>
+                    ·
+                    <button type="submit" name="action" value="ignore" class="link-button"
+                            title="Pour ce qui ne consomme aucun stock suivi : café, cuisine, divers.">
+                        Ignorer
+                    </button>
+                </span>
+                {% if product.suggested_recipe %}<span class="pos-suggested muted">recette proposée d'après le nom</span>{% endif %}
+                {% if error %}<span class="message message-error pos-error">{{ error }}</span>{% endif %}
+            </form>
+        </td>
+    </tr>
+{% endif %}

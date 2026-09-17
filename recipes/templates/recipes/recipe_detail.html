@@ -2,7 +2,10 @@
 {% block title %}{{ recipe.name }} - MarginMate{% endblock %}
 {% block content %}
     <div class="page-header">
-        <h1>{{ recipe.name }}</h1>
+        <div>
+            <p class="breadcrumb"><a href="{% url 'recipes:recipe_list' %}">← Recettes &amp; ventes</a></p>
+            <h1>{{ recipe.name }}</h1>
+        </div>
         <div class="actions">
             <a class="btn btn-secondary" href="{% url 'recipes:recipe_update' recipe.pk %}">Modifier</a>
             <form method="post" action="{% url 'recipes:recipe_delete' recipe.pk %}"
@@ -26,6 +29,17 @@
             {% for ri in recipe.used_in.all %}<a href="{% url 'recipes:recipe_detail' ri.recipe_id %}">{{ ri.recipe.name }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
         {% endif %}
     </p>
+
+    <div class="card till-summary">
+        <strong>Vendue en caisse sous</strong>
+        {% for product in till_products %}
+            <span class="till-chip{% if product.name|lower == recipe.happy_hour_name|lower %} till-chip-hh" title="Son nom en happy hour{% endif %}">{{ product.name }}</span>
+        {% empty %}
+            <span class="muted">aucun produit de la caisse : ses ventes ne sont pas comptées.</span>
+        {% endfor %}
+        · <span class="muted">{{ units_sold }} vendu{{ units_sold|pluralize }} en tout</span>
+        · <a href="{% url 'recipes:recipe_update' recipe.pk %}">{% if till_products %}Changer{% else %}Lier un produit de la caisse{% endif %}</a>
+    </div>
 
     {% if not variation %}
         <div class="empty-state">Aucun ingrédient pour le moment.</div>

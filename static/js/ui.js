@@ -178,6 +178,95 @@
         initConsoles(root);
         initBulk(root);
         initShopChoices(root);
+        initPickLists(root);
+    }
+
+    // A long multiple choice (`select[multiple][data-pick-list]`, the till
+    // products a recipe is sold as) as a searchable list of boxes with the
+    // chosen ones on top - a plain multiple select needs Ctrl-click and drops
+    // the whole choice at the first click without it. The select stays the
+    // form's field, hidden, and follows every box.
+    function plainText(text) {
+        return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    }
+    function initPickLists(root) {
+        root.querySelectorAll("select[multiple][data-pick-list]").forEach(function (select) {
+            if (select.hasAttribute("data-pick-ready")) return;
+            select.setAttribute("data-pick-ready", "");
+            var holder = document.createElement("div");
+            holder.className = "pick-list";
+            var chips = document.createElement("div");
+            chips.className = "pick-chips";
+            var search = document.createElement("input");
+            search.type = "search";
+            search.placeholder = "Chercher…";
+            search.setAttribute("aria-label", "Chercher dans la liste");
+            var list = document.createElement("div");
+            list.className = "pick-options";
+            var boxes = [];
+
+            function render() {
+                chips.textContent = "";
+                boxes.forEach(function (entry) {
+                    entry.box.checked = entry.option.selected;
+                    if (!entry.option.selected) return;
+                    var chip = document.createElement("button");
+                    chip.type = "button";
+                    chip.className = "till-chip pick-chip";
+                    chip.textContent = entry.option.textContent + " ×";
+                    chip.setAttribute("aria-label", "Retirer " + entry.option.textContent);
+                    chip.addEventListener("click", function () {
+                        entry.option.selected = false;
+                        render();
+                    });
+                    chips.appendChild(chip);
+                });
+                if (!chips.children.length) {
+                    var none = document.createElement("span");
+                    none.className = "muted";
+                    none.textContent = "Aucun pour l'instant.";
+                    chips.appendChild(none);
+                }
+            }
+
+            Array.prototype.forEach.call(select.options, function (option) {
+                var label = document.createElement("label");
+                label.className = "pick-option";
+                var box = document.createElement("input");
+                box.type = "checkbox";
+                box.addEventListener("change", function () {
+                    option.selected = box.checked;
+                    render();
+                });
+                label.appendChild(box);
+                label.appendChild(document.createTextNode(" " + option.textContent));
+                list.appendChild(label);
+                boxes.push({ option: option, box: box, label: label, text: plainText(option.textContent) });
+            });
+            search.addEventListener("input", function () {
+                var wanted = plainText(search.value.trim());
+                boxes.forEach(function (entry) { entry.label.hidden = wanted && entry.text.indexOf(wanted) < 0; });
+            });
+            // Enter in the search box picks the one product it leaves.
+            search.addEventListener("keydown", function (event) {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                var shown = boxes.filter(function (entry) { return !entry.label.hidden; });
+                if (shown.length === 1) {
+                    shown[0].option.selected = true;
+                    search.value = "";
+                    search.dispatchEvent(new Event("input"));
+                    render();
+                }
+            });
+
+            holder.appendChild(chips);
+            holder.appendChild(search);
+            holder.appendChild(list);
+            select.hidden = true;
+            select.parentNode.insertBefore(holder, select.nextSibling);
+            render();
+        });
     }
 
     // The new shop's name and header show once "Nouvelle enseigne" is picked.
@@ -194,6 +283,15 @@
     function initShopChoices(root) {
         root.querySelectorAll("select[data-shop-select]").forEach(showNewShop);
     }
+
+    // "Recettes & ventes": a till product linked or set aside in place - the
+    // counts of what is left to link follow.
+    document.addEventListener("to-link-count", function (event) {
+        var count = event.detail && typeof event.detail.value !== "undefined" ? event.detail.value : event.detail;
+        document.querySelectorAll("[data-to-link-count]").forEach(function (pill) { pill.textContent = count; });
+        var nav = document.getElementById("nav-count-recettes");
+        if (nav) nav.innerHTML = count ? ' <span class="badge">' + count + "</span>" : "";
+    });
 
     // A form with `data-confirm` asks first. The correction page's forms ask
     // their own question (data-leaves-lines), with the unsaved lines in it.

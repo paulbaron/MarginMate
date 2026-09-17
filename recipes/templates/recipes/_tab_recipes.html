@@ -1,0 +1,70 @@
+<p class="muted">
+    Les alternatives « OU » donnent une fourchette plutôt qu'un chiffre unique. Une recette que la caisse ne vend
+    sous aucun nom n'explique aucune sortie de stock : liez-la depuis « À lier » ou dans sa fiche.
+</p>
+{% if recipes %}
+    <div class="table-wrap">
+    <table data-table data-table-label="recettes">
+        <thead>
+            <tr>
+                <th>Nom</th>
+                <th>Catégorie</th>
+                <th>Vendue en caisse sous</th>
+                <th class="num">Vendus</th>
+                <th class="num">Produit</th>
+                <th class="num">Coût (HT)</th>
+                <th class="num">Prix (TTC)</th>
+                <th class="num">Marge (HT)</th>
+                <th class="num">Facteur</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for recipe in recipes %}
+            <tr>
+                <td>
+                    <a href="{% url 'recipes:recipe_detail' recipe.pk %}">{{ recipe.name }}</a>
+                    {% if recipe.summary_data.variation_count > 1 %}<span class="muted">({{ recipe.summary_data.variation_count|floatformat:0 }} variantes)</span>{% endif %}
+                </td>
+                <td class="muted">{{ recipe.category|default:"—" }}</td>
+                <td>
+                    {% for name in recipe.till_names %}
+                        <span class="till-chip{% if name|lower == recipe.happy_hour_name|lower %} till-chip-hh" title="Son nom en happy hour{% endif %}">{{ name }}</span>
+                    {% empty %}
+                        <span class="muted">—</span>
+                    {% endfor %}
+                </td>
+                <td class="num" data-sort="{{ recipe.units_sold }}">{% if recipe.units_sold %}{{ recipe.units_sold }}{% else %}<span class="muted">0</span>{% endif %}</td>
+                <td class="num">{{ recipe.yield_quantity|floatformat:2 }} {{ recipe.get_yield_unit_display }}</td>
+                <td class="num">
+                    {% with range=recipe.summary_data.cost_range %}
+                        {% if range %}
+                            {% if range.0 == range.1 %}{{ range.0|floatformat:2 }} €{% else %}{{ range.0|floatformat:2 }} – {{ range.1|floatformat:2 }} €{% endif %}
+                        {% else %}—{% endif %}
+                    {% endwith %}
+                </td>
+                <td class="num">{{ recipe.selling_price_ttc|floatformat:2 }} €</td>
+                <td class="num">
+                    {% with range=recipe.summary_data.margin_percent_range %}
+                        {% if range %}
+                            {% if range.0 == range.1 %}{{ range.0|floatformat:0 }} %{% else %}{{ range.0|floatformat:0 }} – {{ range.1|floatformat:0 }} %{% endif %}
+                        {% else %}—{% endif %}
+                    {% endwith %}
+                </td>
+                <td class="num">
+                    {% with range=recipe.summary_data.price_factor_range %}
+                        {% if range %}
+                            {% if range.0 == range.1 %}x{{ range.0|floatformat:1 }}{% else %}x{{ range.0|floatformat:1 }} – x{{ range.1|floatformat:1 }}{% endif %}
+                        {% else %}—{% endif %}
+                    {% endwith %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+{% else %}
+    <div class="empty-state">
+        <p>Aucune recette pour le moment.</p>
+        <a class="btn" href="{% url 'recipes:recipe_create' %}">+ Nouvelle recette</a>
+    </div>
+{% endif %}

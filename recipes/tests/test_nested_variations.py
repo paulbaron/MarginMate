@@ -309,12 +309,18 @@ class NestedQueryCountTests(TestCase):
     # adding a fourth shows up as a decision instead of as drift.
     NAV_BADGE_QUERIES = 3
 
+    # What the till sells a recipe as, and how many were sold: two queries
+    # on its page, whatever the recipe. On the list, the same two for every
+    # recipe at once, and the counts of the page's tabs.
+    TILL_QUERIES = 2
+    TAB_QUERIES = 2
+
     def test_the_detail_page_stays_cheap(self):
-        with self.assertNumQueries(6 + self.NAV_BADGE_QUERIES):
+        with self.assertNumQueries(6 + self.TILL_QUERIES + self.NAV_BADGE_QUERIES):
             self.assertEqual(self.client.get(f"/recipes/{self.recipe.pk}/").status_code, 200)
 
     def test_the_list_page_stays_cheap(self):
-        with self.assertNumQueries(7 + self.NAV_BADGE_QUERIES):
+        with self.assertNumQueries(7 + self.TILL_QUERIES + self.TAB_QUERIES + self.NAV_BADGE_QUERIES):
             self.assertEqual(self.client.get("/recipes/").status_code, 200)
 
     def test_the_scope_never_serves_a_stale_grouping(self):

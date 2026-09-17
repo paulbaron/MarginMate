@@ -1312,3 +1312,44 @@ body:has(.container-wide) .topbar-inner { max-width: calc(var(--content-width) +
 .receipt-card-checks { color: var(--muted); font-size: 0.75rem; }
 .section-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: var(--s3); }
 .section-head h2 { margin-top: 0; }
+
+/* Recettes & ventes */
+.till-chip {
+    display: inline-block;
+    margin: 1px 4px 1px 0;
+    padding: 0 0.5em;
+    border-radius: var(--radius-pill);
+    border: 1px solid var(--border);
+    background: var(--bg-raised);
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    white-space: nowrap;
+}
+button.pick-chip { font: inherit; font-size: 0.8rem; cursor: pointer; }
+button.pick-chip:hover { border-color: var(--red); color: var(--text); }
+.till-summary { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
+.pos-done > td { background: var(--green-bg); }
+.pos-outcome { margin-right: var(--s2); }
+.pos-suggested { font-size: 0.75rem; }
+.pos-error { display: inline-block; margin: 0; padding: 0.1rem 0.5rem; }
+details.handled > summary { cursor: pointer; font-weight: 650; }
+details.handled[open] > summary { margin-bottom: var(--s2); }
+.stacked-label { display: flex; flex-direction: column; gap: 2px; margin: 0; }
+.manual-sale { align-items: flex-end; }
+
+.pick-list { display: flex; flex-direction: column; gap: var(--s2); }
+.pick-chips { display: flex; flex-wrap: wrap; gap: var(--s1); min-height: 1.6em; }
+.pick-options {
+    max-height: 14rem;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: var(--s1) var(--s2);
+    background: var(--bg);
+}
+.pick-option { margin: 0; padding: 2px 0; font-weight: 500; color: var(--text); cursor: pointer; }
+.form-field-selectmultiple { grid-column: span 2; }
+.pick-option { display: flex; align-items: center; gap: var(--s2); }
+.pick-option input[type="checkbox"] { width: auto; margin: 0; flex: none; }
+.pick-option[hidden] { display: none; }
+.till-chip-hh { border-style: dashed; color: var(--amber); }

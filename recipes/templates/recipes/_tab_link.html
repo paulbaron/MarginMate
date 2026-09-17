@@ -1,0 +1,111 @@
+<p class="muted">
+    Chaque produit de la caisse doit correspondre à une recette, sinon ses ventes ne sont pas comptées : le stock
+    qu'il consomme apparaît alors comme manquant dans les écarts d'inventaire. Les plus vendus sont en haut — c'est
+    là que se cache l'essentiel. Une recette au nom proche est déjà choisie ; « Créer la recette » l'écrit et la
+    lie en une fois.
+</p>
+
+{% if pending %}
+    <div class="card">
+        <h3>À lier ({{ pending|length }})</h3>
+        <p class="muted">{{ pending_quantity }} articles vendus ne sont rattachés à aucune recette.</p>
+        {% comment %}Deliberately NOT wrapping the table: every row already contains
+           its own <form>, and nested forms are invalid HTML - the browser
+           silently drops the inner one, which would break every per-row
+           action on the page. The checkboxes join this form by id.{% endcomment %}
+        <form method="post" action="{% url 'recipes:pos_products_bulk' %}" id="pos-bulk-form">{% csrf_token %}</form>
+        <div class="bulk-bar" data-bulk-bar hidden>
+            <span><strong data-bulk-count>0</strong> sélectionné(s)</span>
+            <button type="submit" form="pos-bulk-form" class="btn btn-small"
+                    onclick="return confirm('Ignorer les produits sélectionnés ?');">
+                Ignorer la sélection
+            </button>
+            <button type="button" class="btn btn-small btn-secondary" data-bulk-clear>Tout désélectionner</button>
+        </div>
+        <div class="table-wrap">
+        <table id="pos-pending-table" class="sub-table" data-table data-table-label="produits">
+            <thead>
+                <tr>
+                    <th data-no-sort><input type="checkbox" data-bulk-all aria-label="Tout sélectionner"></th>
+                    <th>Produit caisse</th>
+                    <th class="num">Vendus</th>
+                    <th>Catégorie</th>
+                    <th data-no-sort style="width:52%;">Que faire ?</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for product in pending %}
+                    {% include "recipes/_pos_row.html" %}
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </div>
+{% else %}
+    <div class="empty-state">
+        {% if linked or ignored %}
+            Tout est traité — chaque produit de la caisse a sa recette.
+        {% else %}
+            Aucun produit de caisse pour le moment. Importez les ventes depuis l'onglet « Ventes » pour commencer.
+        {% endif %}
+    </div>
+{% endif %}
+
+{% if linked %}
+    <details class="card handled" data-persist="pos-linked">
+        <summary>Rattachés ({{ linked|length }})</summary>
+        <div class="table-wrap">
+        <table id="pos-linked-table" class="sub-table" data-table data-table-label="produits liés">
+            <thead>
+                <tr><th>Produit caisse</th><th class="num">Vendus</th><th>Recette</th><th data-no-sort></th></tr>
+            </thead>
+            <tbody>
+                {% for product in linked %}
+                <tr>
+                    <td>{{ product.name }}</td>
+                    <td class="num">{{ product.total_quantity }}</td>
+                    <td>
+                        <a href="{% url 'recipes:recipe_detail' product.recipe.pk %}">{{ product.recipe.name }}</a>
+                        {% if product.recipe.happy_hour_name == product.name %}
+                            <span class="muted">(happy hour)</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <form method="post" action="{% url 'recipes:pos_product_assign' product.pk %}">
+                            {% csrf_token %}
+                            <button type="submit" name="action" value="reset" class="btn btn-small btn-secondary">Détacher</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </details>
+{% endif %}
+
+{% if ignored %}
+    <details class="card handled" data-persist="pos-ignored">
+        <summary>Ignorés ({{ ignored|length }})</summary>
+        <p class="muted">Ces produits ne consomment aucun stock suivi.</p>
+        <div class="table-wrap">
+        <table id="pos-ignored-table" class="sub-table" data-table data-table-label="produits ignorés">
+            <thead><tr><th>Produit caisse</th><th class="num">Vendus</th><th data-no-sort></th></tr></thead>
+            <tbody>
+                {% for product in ignored %}
+                <tr>
+                    <td class="muted">{{ product.name }}</td>
+                    <td class="num muted">{{ product.total_quantity }}</td>
+                    <td>
+                        <form method="post" action="{% url 'recipes:pos_product_assign' product.pk %}">
+                            {% csrf_token %}
+                            <button type="submit" name="action" value="reset" class="btn btn-small btn-secondary">Remettre à traiter</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </details>
+{% endif %}

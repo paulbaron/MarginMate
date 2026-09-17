@@ -1,7 +1,22 @@
 {% extends "base.html" %}
 {% block title %}{% if recipe.pk %}Modifier{% else %}Nouvelle{% endif %} recette - MarginMate{% endblock %}
 {% block content %}
+    <p class="breadcrumb">
+        {% if for_product %}
+            <a href="{% url 'recipes:pos_product_list' %}">← Recettes &amp; ventes · à lier</a>
+        {% elif recipe.pk %}
+            <a href="{% url 'recipes:recipe_detail' recipe.pk %}">← {{ recipe.name }}</a>
+        {% else %}
+            <a href="{% url 'recipes:recipe_list' %}">← Recettes &amp; ventes</a>
+        {% endif %}
+    </p>
     <h1>{% if recipe.pk %}Modifier{% else %}Nouvelle{% endif %} recette</h1>
+    {% if for_product %}
+        <div class="message">
+            Pour « {{ for_product.name }} » de la caisse ({{ for_product.total_quantity }} vendus) : enregistrée, la
+            recette lui est liée et ses ventes y sont comptées, puis vous revenez aux produits à lier.
+        </div>
+    {% endif %}
     <datalist id="recipe-category-datalist">
         {% for cat in existing_categories %}
             <option value="{{ cat }}">
@@ -51,7 +66,7 @@
 
             <p style="margin-top:1rem;">
                 <button class="btn" type="submit">Enregistrer</button>
-                <a class="btn btn-secondary" href="{% if recipe.pk %}{% url 'recipes:recipe_detail' recipe.pk %}{% else %}{% url 'recipes:recipe_list' %}{% endif %}">Annuler</a>
+                <a class="btn btn-secondary" href="{% if for_product %}{% url 'recipes:pos_product_list' %}{% elif recipe.pk %}{% url 'recipes:recipe_detail' recipe.pk %}{% else %}{% url 'recipes:recipe_list' %}{% endif %}">Annuler</a>
             </p>
         </form>
     </div>

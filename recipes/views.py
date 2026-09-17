@@ -1,16 +1,14 @@
+import json
 import math
 import threading
-from datetime import date, timedelta
+from datetime import date
 from decimal import Decimal
 
 from django.contrib import messages
-from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import Count, Sum
+from django.db.models import Sum
 from django.shortcuts import get_object_or_404, redirect, render
-from django.utils import timezone
 from django.utils.html import escape
-from django.views.generic import ListView
 
 from .forms import (
     MANUAL_SALE_SOURCE,
@@ -21,6 +19,8 @@ from .forms import (
     RecipeIngredientFormSet,
     ingredient_unit_map,
 )
+from .links import LinkError, link, set_aside
+from .menu import pending_count, render_menu, with_suggestion
 from .models import (
     PosProduct,
     Recipe,
@@ -29,7 +29,6 @@ from .models import (
     SalesImportJob,
     variation_scope,
 )
-from .sales import resync_recipe_from_daily_quantities
 from .tasks import import_laddition_sales_task
 
 
@@ -105,27 +104,9 @@ def _build_ingredient_pie_svg(breakdown: list[dict]) -> str:
     )
 
 
-class RecipeListView(ListView):
-    model = Recipe
-    template_name = "recipes/recipe_list.html"
-    context_object_name = "recipes"
-
-    def get_queryset(self):
-        # Every recipe's ingredients in one extra query, so summary() below
-        # never goes back to the database per row.
-        return super().get_queryset().prefetch_related(
-            "ingredients__stock_type__movements", "ingredients__sub_recipe"
-        )
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        with variation_scope():
-            for recipe in context["recipes"]:
-                # summary() is linear in the number of ingredients, so a
-                # recipe with a million variations costs the same here as one
-                # with two.
-                recipe.summary_data = recipe.summary(list(recipe.ingredients.all()))
-        return context
+def recipe_list(request):
+    """"Recettes & ventes", on the recipes."""
+    return render_menu(request, "recettes")
 
 
 # Beyond this many variations the picker stops listing them individually and
@@ -188,6 +169,8 @@ def _render_recipe_detail(request, recipe, ingredients):
             ],
             "listed_variations": listed_variations,
             "selection_key": _selection_key(normalised),
+            "till_products": list(recipe.pos_products.order_by("name")),
+            "units_sold": recipe.sales.aggregate(units=Sum("quantity"))["units"] or 0,
             "pie_svg": _build_ingredient_pie_svg(variation["breakdown"]) if variation else "",
         },
     )
@@ -215,7 +198,11 @@ def _selection_key(indices) -> str:
     return ".".join(str(index) for index in indices)
 
 
-def _recipe_form_view(request, recipe):
+def _recipe_form_view(request, recipe, for_product=None):
+    """Write a recipe - and link it to what the till sells it as. Created
+    for a till product (`for_product`), it goes back to the till products to
+    link once saved."""
+    initial = {"pos_products": [for_product.pk]} if for_product is not None else None
     if request.method == "POST":
         form = RecipeForm(request.POST, instance=recipe)
         formset = RecipeIngredientFormSet(
@@ -225,10 +212,17 @@ def _recipe_form_view(request, recipe):
             with transaction.atomic():
                 recipe = form.save()
                 formset.save()
-            messages.success(request, f'"{recipe.name}" enregistrée.')
+                linked = _link_till_products(recipe, form.cleaned_data["pos_products"])
+            messages.success(
+                request,
+                f"« {recipe.name} » enregistrée"
+                + (f", vendue en caisse sous {', '.join(f'« {name} »' for name in linked)}." if linked else "."),
+            )
+            if for_product is not None:
+                return redirect("recipes:pos_product_list")
             return redirect("recipes:recipe_detail", pk=recipe.pk)
     else:
-        form = RecipeForm(instance=recipe)
+        form = RecipeForm(instance=recipe, initial=initial)
         formset = RecipeIngredientFormSet(instance=recipe, form_kwargs={"parent_recipe": recipe if recipe.pk else None})
     return render(
         request,
@@ -237,17 +231,34 @@ def _recipe_form_view(request, recipe):
             "form": form,
             "formset": formset,
             "recipe": recipe,
+            "for_product": for_product,
             "existing_categories": _existing_categories(),
             "ingredient_units": ingredient_unit_map(),
         },
     )
 
 
+def _link_till_products(recipe, wanted) -> list[str]:
+    """Link the till products the form names to `recipe`, and take off it
+    those it no longer names. Returns the names it is sold under."""
+    wanted_ids = {product.pk for product in wanted}
+    for product in recipe.pos_products.exclude(pk__in=wanted_ids).select_related("recipe"):
+        set_aside(product, ignored=False)
+    for product in wanted:
+        if product.recipe_id != recipe.pk:
+            link(product, recipe)
+    return sorted(product.name for product in wanted)
+
+
 def recipe_create(request):
-    # ?name= prefills the form from the "Créer la recette" button on the
-    # till-products screen, so working through that backlog doesn't mean
-    # retyping (and risking mistyping) a name that has to match exactly.
-    return _recipe_form_view(request, Recipe(name=(request.GET.get("name") or "").strip()))
+    """A new recipe. `?caisse=<id>` writes it for that till product: named
+    after it and linked to it on save. `?name=` prefills the name alone."""
+    posted = request.GET.get("caisse", "")
+    for_product = (
+        PosProduct.objects.filter(pk=posted, recipe__isnull=True).first() if posted.isdigit() else None
+    )
+    name = (request.GET.get("name") or (for_product.name if for_product else "")).strip()
+    return _recipe_form_view(request, Recipe(name=name), for_product=for_product)
 
 
 def recipe_update(request, pk):
@@ -271,64 +282,31 @@ def recipe_delete(request, pk):
 # --- Till (L'Addition) -----------------------------------------------------
 
 def pos_product_list(request):
-    """The backlog of till products with no recipe yet.
-
-    Deliberately the same shape as inventory's review queue: the unmapped
-    ones first, biggest sellers at the top (that's where the unexplained
-    stock is), with the already-handled ones tucked below.
-    """
-    products = PosProduct.objects.select_related("recipe")
-    pending = [p for p in products if p.needs_review]
-    linked = [p for p in products if p.recipe_id]
-    ignored = [p for p in products if p.ignored and not p.recipe_id]
-    return render(
-        request,
-        "recipes/pos_product_list.html",
-        {
-            "pending": pending,
-            "linked": linked,
-            "ignored": ignored,
-            "recipes": Recipe.objects.order_by("name"),
-            "pending_quantity": sum(p.total_quantity for p in pending),
-        },
-    )
+    """"Recettes & ventes", on the till products still to link."""
+    return render_menu(request, "a-lier")
 
 
 def pos_product_assign(request, pk):
-    """Link one till product to a recipe, or set it aside.
+    """Link one till product to a recipe, or set it aside - in place, from
+    its row, which comes back saying what was done (with an undo).
 
     "Happy hour" is a MODIFIER on linking rather than an action of its own:
     it links to the same recipe, and additionally records this as the name
     the till uses during happy hour so both sets of sales land together.
-    Presenting it as a fifth button implied a fifth kind of answer.
     """
     if request.method != "POST":
         return redirect("recipes:pos_product_list")
-    product = get_object_or_404(PosProduct, pk=pk)
+    product = get_object_or_404(PosProduct.objects.select_related("recipe"), pk=pk)
     action = request.POST.get("action")
-    # Whichever recipe(s) this action touches need their RecipeSale rows
-    # rebuilt from PosProductDailyQuantity afterward - see
-    # resync_recipe_from_daily_quantities. That data has been kept locally
-    # since each till product was first imported, so this is a local
-    # rebuild, not a new L'Addition fetch: the numbers are right the moment
-    # the link changes, not after a separate "go fetch history" step.
-    to_resync: set[Recipe] = set()
-    previous = product.recipe if product.recipe_id else None
-    if previous is not None:
-        to_resync.add(previous)
+    outcome, error = None, None
 
     if action == "ignore":
-        product.ignored = True
-        product.recipe = None
-        product.save(update_fields=["ignored", "recipe"])
-        messages.success(request, f'"{product.name}" ignoré.')
-
+        set_aside(product, ignored=True)
+        outcome = "ignored"
+        message = f"« {product.name} » ignoré."
     elif action == "reset":
-        product.ignored = False
-        product.recipe = None
-        product.save(update_fields=["ignored", "recipe"])
-        messages.success(request, f'"{product.name}" remis à traiter.')
-
+        set_aside(product, ignored=False)
+        message = f"« {product.name} » remis à traiter."
     elif action in ("link", "happy_hour"):
         # "happy_hour" is still accepted so an old bookmark or a half-submitted
         # form doesn't 400; the checkbox is what the page sends now.
@@ -336,66 +314,48 @@ def pos_product_assign(request, pk):
         posted = request.POST.get("recipe", "")
         recipe = Recipe.objects.filter(pk=posted).first() if posted.isdigit() else None
         if recipe is None:
-            messages.error(request, "Choisissez une recette.")
-        elif as_happy_hour:
-            recipe.happy_hour_name = product.name
-            try:
-                recipe.full_clean()
-            except ValidationError as exc:
-                messages.error(request, "; ".join(m for msgs in exc.message_dict.values() for m in msgs))
-            else:
-                recipe.save(update_fields=["happy_hour_name"])
-                product.recipe = recipe
-                product.ignored = False
-                product.save(update_fields=["recipe", "ignored"])
-                to_resync.add(recipe)
-                messages.success(
-                    request, f'"{product.name}" enregistré comme happy hour de « {recipe.name} ».'
-                )
+            error = "Choisissez une recette."
         else:
-            product.recipe = recipe
-            product.ignored = False
-            product.save(update_fields=["recipe", "ignored"])
-            to_resync.add(recipe)
-            messages.success(request, f'"{product.name}" lié à « {recipe.name} ».')
+            try:
+                link(product, recipe, happy_hour=as_happy_hour)
+            except LinkError as exc:
+                error = str(exc)
+            else:
+                outcome = "linked"
+                message = (
+                    f"« {product.name} » enregistré comme happy hour de « {recipe.name} »."
+                    if as_happy_hour
+                    else f"« {product.name} » lié à « {recipe.name} »."
+                )
+    else:
+        error = "Action inconnue."
 
-    # A happy-hour variant taken off its recipe takes its name with it: the
-    # import counts sales by that name, and would go on adding this product's
-    # to the recipe - and relink a product sent back to the worklist.
-    if (
-        previous is not None
-        and product.recipe_id != previous.pk
-        and previous.happy_hour_name.strip().lower() == product.name.strip().lower()
-    ):
-        previous.happy_hour_name = ""
-        previous.save(update_fields=["happy_hour_name"])
-
-    for touched in to_resync:
-        resync_recipe_from_daily_quantities(touched)
-
+    if request.headers.get("HX-Request") == "true":
+        recipes = list(Recipe.objects.order_by("name"))
+        response = render(
+            request,
+            "recipes/_pos_row.html",
+            {"product": with_suggestion(product, recipes), "recipes": recipes, "outcome": outcome, "error": error},
+        )
+        # The counts beside "À lier" follow (ui.js). Not as out-of-band
+        # parts: beside a <tr>, htmx 1.9's parser moves them out of the row.
+        response["HX-Trigger"] = json.dumps({"to-link-count": pending_count()})
+        return response
+    if error:
+        messages.error(request, error)
+    else:
+        messages.success(request, message)
     return redirect("recipes:pos_product_list")
 
 
 def sales_import(request):
-    """The "fetch sales from the till" page - the sales-side twin of the
-    invoice gather screen."""
-    job = SalesImportJob.objects.first()
-    return render(
-        request,
-        "recipes/sales_import.html",
-        {
-            "job": job,
-            "default_start": (timezone.localdate() - timedelta(days=30)).isoformat(),
-            "default_end": timezone.localdate().isoformat(),
-            "pending_count": PosProduct.objects.filter(recipe__isnull=True, ignored=False).count(),
-            "last_sale": RecipeSale.objects.order_by("-sold_on").first(),
-        },
-    )
+    """The till import now sits on the sales tab."""
+    return render_menu(request, "ventes")
 
 
 def trigger_sales_import(request):
     if request.method != "POST":
-        return redirect("recipes:sales_import")
+        return redirect("recipes:sales_list")
     # Clear out any run that died without saying so before deciding whether
     # one is genuinely in progress - otherwise a single killed thread locks
     # this page out permanently.
@@ -404,22 +364,22 @@ def trigger_sales_import(request):
         status__in=[SalesImportJob.Status.PENDING, SalesImportJob.Status.RUNNING]
     ).exists():
         messages.error(request, "Une récupération est déjà en cours.")
-        return redirect("recipes:sales_import")
+        return redirect("recipes:sales_list")
 
     start = _parse_date(request.POST.get("start_date"))
     end = _parse_date(request.POST.get("end_date"))
     if not start or not end:
         messages.error(request, "Renseignez les deux dates.")
-        return redirect("recipes:sales_import")
+        return redirect("recipes:sales_list")
     if start > end:
         messages.error(request, "La date de début est après la date de fin.")
-        return redirect("recipes:sales_import")
+        return redirect("recipes:sales_list")
 
     job = SalesImportJob.objects.create(range_start=start, range_end=end)
     threading.Thread(
         target=import_laddition_sales_task, args=(job.id, start, end), daemon=True
     ).start()
-    return redirect("recipes:sales_import")
+    return redirect("recipes:sales_list")
 
 
 def sales_import_status(request, job_id):
@@ -432,7 +392,7 @@ def sales_import_status(request, job_id):
 
 def cancel_sales_import(request, job_id):
     if request.method != "POST":
-        return redirect("recipes:sales_import")
+        return redirect("recipes:sales_list")
     job = get_object_or_404(SalesImportJob, pk=job_id)
     if job.is_active:
         job.cancel_requested = True
@@ -448,7 +408,8 @@ def _parse_date(value):
 
 
 def sales_list(request):
-    """Every recorded sale, and a form to add one by hand.
+    """"Recettes & ventes", on the sales: the till import, a sale typed by
+    hand, the sale documents and every recorded sale.
 
     Manual entries are for what the till never saw - a tab settled off the
     books, a private event. They're stored under their own source, so an
@@ -461,33 +422,8 @@ def sales_list(request):
             sale = form.save()
             messages.success(request, f"{sale.quantity} × {sale.recipe.name} le {sale.sold_on:%d/%m/%Y}.")
             return redirect("recipes:sales_list")
-    else:
-        form = ManualSaleForm()
-
-    documents = list(
-        SaleDocument.objects.prefetch_related("lines__recipe", "lines__stock_type").order_by("-sold_on")[:50]
-    )
-    # Unbounded, like invoices/InvoiceListView - the search box only sees
-    # what's actually in the table, so capping this made "search the whole
-    # dataset" a lie: typing a recipe name found it only if one of its sales
-    # happened to be recent enough to be in the first 400 rows. table-wrap's
-    # own bounded scroll (see marginmate.css) is what keeps a long list like
-    # this one usable, the same way it already does for invoices.
-    sales = RecipeSale.objects.select_related("recipe").order_by("-sold_on", "recipe__name")
-    totals = RecipeSale.objects.values("source").annotate(
-        rows=Count("id"), units=Sum("quantity")
-    ).order_by("-units")
-    return render(
-        request,
-        "recipes/sales_list.html",
-        {
-            "form": form,
-            "sales": sales,
-            "totals": totals,
-            "manual_source": MANUAL_SALE_SOURCE,
-            "documents": documents,
-        },
-    )
+        return render_menu(request, "ventes", form=form)
+    return render_menu(request, "ventes")
 
 
 def sales_delete(request, pk):

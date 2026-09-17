@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Recettes & ventes - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <h1>Recettes &amp; ventes</h1>
+            <p class="page-subtitle">
+                Ce que vous servez, ce que ça coûte, et ce que la caisse en a vendu : chaque produit de la caisse
+                lié à sa recette, pour que ses ventes expliquent le stock qui sort.
+            </p>
+        </div>
+        <div class="actions">
+            <a class="btn" href="{% url 'recipes:recipe_create' %}">+ Nouvelle recette</a>
+        </div>
+    </div>
+
+    {% comment %}
+    Tabs at their own addresses; hx-boost swaps only #workspace.
+    {% endcomment %}
+    <div id="workspace" class="workspace">
+        <nav class="tabs" aria-label="Recettes et ventes" hx-boost="true" hx-target="#workspace" hx-select="#workspace" hx-swap="outerHTML">
+            {% for entry in tabs %}
+                <a href="{{ entry.url }}" class="tab{% if entry.active %} active{% endif %}"{% if entry.active %} aria-current="page"{% endif %}>
+                    {{ entry.label }}
+                    {% if entry.count is not None %}
+                        <span class="count-pill{% if not entry.attention %} count-pill-quiet{% endif %}"{% if entry.key == "a-lier" %} data-to-link-count{% endif %}>{{ entry.count }}</span>
+                    {% endif %}
+                </a>
+            {% endfor %}
+        </nav>
+
+        {% if tab == "recettes" %}
+            {% include "recipes/_tab_recipes.html" %}
+        {% elif tab == "a-lier" %}
+            {% include "recipes/_tab_link.html" %}
+        {% else %}
+            {% include "recipes/_tab_sales.html" %}
+        {% endif %}
+    </div>
+{% endblock %}

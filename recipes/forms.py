@@ -1,12 +1,13 @@
 from django import forms
 from django.core.exceptions import ValidationError
+from django.db.models import Q
 from django.utils import timezone
 from django.forms import BaseInlineFormSet, inlineformset_factory
 
 from common import BlankRowTolerantModelForm
 from inventory.models import StockType
 
-from .models import Recipe, RecipeIngredient, RecipeSale, SaleDocument, SaleDocumentLine
+from .models import PosProduct, Recipe, RecipeIngredient, RecipeSale, SaleDocument, SaleDocumentLine
 from .services import assert_no_cycle
 
 # Sales typed in by hand live under their own source so a till import, which
@@ -60,6 +61,31 @@ def ingredient_source_choices(parent_recipe=None) -> list:
 
 
 class RecipeForm(forms.ModelForm):
+    # What the till sells as this recipe - linked on save (views.
+    # _recipe_form_view, through recipes.links), so a recipe written for a till
+    # product is linked to it in the same step. Offered: the till products
+    # still to link, and this recipe's own.
+    pos_products = forms.ModelMultipleChoiceField(
+        queryset=PosProduct.objects.none(),
+        required=False,
+        label="Vendue en caisse sous",
+        help_text="Les produits de la caisse dont les ventes sont celles de cette recette. "
+        "Un produit lié à une autre recette se détache d'abord depuis « À lier ».",
+        widget=forms.SelectMultiple(attrs={"data-pick-list": "", "size": "8"}),
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        own = Q(recipe=self.instance) if self.instance.pk else Q(pk__in=[])
+        self.fields["pos_products"].queryset = PosProduct.objects.filter(
+            own | Q(recipe__isnull=True, ignored=False)
+        ).order_by("-total_quantity", "name")
+        self.fields["pos_products"].label_from_instance = lambda product: (
+            f"{product.name} ({product.total_quantity} vendus)"
+        )
+        if self.instance.pk and "pos_products" not in self.initial:
+            self.initial["pos_products"] = list(self.instance.pos_products.values_list("pk", flat=True))
+
     class Meta:
         model = Recipe
         fields = [
