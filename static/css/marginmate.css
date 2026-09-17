@@ -1003,6 +1003,7 @@ form p { margin: var(--s3) 0; }
 .receipt-select { position: absolute; top: var(--s2); left: var(--s2); z-index: 1; width: 1.15rem; height: 1.15rem; }
 
 /* A line attached to a known product under another spelling: what was read. */
+.unit-price { margin: var(--s1) 0 0; color: var(--text-dim); font-size: 0.8rem; text-align: right; }
 .read-as { display: block; margin: var(--s1) 0 0; color: var(--text-dim); font-size: 0.8rem; font-family: var(--font-mono); }
 /* Renaming a receipt's product everywhere, under its line. */
 .rename-product { margin: var(--s1) 0 0; font-size: 0.85rem; }

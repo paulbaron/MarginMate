@@ -232,7 +232,9 @@ converting every one in one's head. A ticket starts from its printed TTC, an
 invoice from its HT. A ticket's **promotion sits beside its price**
 (`discount_ttc`), and the live check says "articles X € moins Y € de
 remises", which is what the ticket prints as its pre-discount total. The
-weight is a field (`total_volume`). A row left as drawn keeps every stored
+weight is a field (`total_volume`), and a row of several says what one costs
+(`LineCorrectionForm.unit_price_hint`, redone by the page as typed): five
+baguettes at 2,45 read like one at 2,45 until divided. A row left as drawn keeps every stored
 figure to the cent (`LineCorrectionForm.untouched`) - so a line kept from
 before promotions were kept apart stays worked out from HT - and a TTC typed
 converts back to its HT to the cent. New ticket lines start at 5.5%, invoice

@@ -1,5 +1,5 @@
 from datetime import date
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from django import forms
 from django.utils import timezone
@@ -248,6 +248,33 @@ class LineCorrectionForm(BlankRowTolerantForm):
     @property
     def default_source(self) -> str:
         return "ttc" if self.document == DOCUMENT_RECEIPT else "ht"
+
+    def _shown(self, name: str) -> Decimal | None:
+        """A box as the page draws it - what was typed, or the stored line."""
+        if name not in self.fields:
+            return None
+        value = self[name].value()
+        try:
+            return Decimal(str(value).strip().replace(",", ".")) if value not in (None, "") else None
+        except InvalidOperation:
+            return None
+
+    @property
+    def unit_price_hint(self) -> str:
+        """"soit 0.39 € TTC l'unité" under a row of several: an amount for
+        the whole line reads like a price each, and a wrong count only shows
+        once divided. The page's script works it out the same way as typed."""
+        quantity = self._shown("quantity")
+        basis = "ttc" if self.document == DOCUMENT_RECEIPT else "ht"
+        amount = self._shown(f"total_{basis}")
+        if quantity is None or abs(quantity) <= 1 or amount is None:
+            return ""
+        each = (amount / quantity).quantize(CENTS, rounding=ROUND_HALF_UP)
+        discount = self._shown("discount_ttc") or Decimal("0")
+        if not discount:
+            return f"soit {each} € {basis.upper()} l'unité"
+        net = ((amount - discount) / quantity).quantize(CENTS, rounding=ROUND_HALF_UP)
+        return f"soit {net} € TTC l'unité après remise ({each} € avant)"
 
     def _source(self) -> str:
         source = self.cleaned_data.get("amount_source") or self.default_source

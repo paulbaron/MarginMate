@@ -170,6 +170,7 @@
                                     {{ line_form.line_id }}
                                     <button type="button" class="btn btn-small btn-secondary js-remove-line" title="Retirer cette ligne" aria-label="Retirer cette ligne">✕</button>
                                 </div>
+                                <p class="unit-price" data-unit-price{% if not line_form.unit_price_hint %} hidden{% endif %}>{{ line_form.unit_price_hint }}</p>
                                 {% if line_form.read_hint %}
                                     <p class="read-as">lu sur le ticket : « {{ line_form.read_hint }} » — rattaché au produit ci-dessus</p>
                                 {% endif %}
@@ -306,6 +307,7 @@
                 {{ formset.empty_form.amount_source }}
                 <button type="button" class="btn btn-small btn-secondary js-remove-line" title="Retirer cette ligne" aria-label="Retirer cette ligne">✕</button>
             </div>
+            <p class="unit-price" data-unit-price hidden></p>
         </div>
     </template>
 {% endblock %}
@@ -363,6 +365,38 @@
             var ttcCents = cents(ttc);
             ht.value = ttcCents === null ? "" : euros(Math.round(ttcCents / factor));
         }
+    }
+
+    // "soit 0.39 € TTC l'unité" under a row of several, as typed: the same
+    // rule as LineCorrectionForm.unit_price_hint, which draws the first one.
+    function number(input) {
+        if (!input || String(input.value).trim() === "") return null;
+        var value = Number(String(input.value).trim().replace(",", "."));
+        return isNaN(value) ? null : value;
+    }
+    function each(amountCents, quantity) {
+        // Half away from zero, like ROUND_HALF_UP on the server.
+        var value = amountCents / quantity;
+        return euros(Math.sign(value) * Math.round(Math.abs(value)));
+    }
+    function unitHint(row) {
+        var hint = row.querySelector("[data-unit-price]");
+        if (!hint) return;
+        var receipt = lines.dataset.document === "receipt";
+        var quantity = number(field(row, "quantity"));
+        var amount = cents(field(row, receipt ? "total_ttc" : "total_ht"));
+        var text = "";
+        if (quantity !== null && Math.abs(quantity) > 1 && amount !== null) {
+            var discount = cents(field(row, "discount_ttc")) || 0;
+            if (!discount) {
+                text = "soit " + each(amount, quantity) + " € " + (receipt ? "TTC" : "HT") + " l'unité";
+            } else {
+                text = "soit " + each(amount - discount, quantity) + " € TTC l'unité après remise ("
+                    + each(amount, quantity) + " € avant)";
+            }
+        }
+        hint.textContent = text;
+        hint.hidden = !text;
     }
 
     // The lines against the total, as they are typed: the same sum (each
@@ -431,6 +465,7 @@
             if (/-total_ht$/.test(name)) follow(row, "ht");
             else if (/-total_ttc$/.test(name)) follow(row, "ttc");
             else if (/-vat_rate$/.test(name)) follow(row, null);
+            unitHint(row);
         }
         refreshCheck();
     });

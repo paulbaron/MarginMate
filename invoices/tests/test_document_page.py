@@ -23,7 +23,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from inventory.models import StockTakeLineSource, UnitChoices
-from invoices.forms import ManualInvoiceForm
+from invoices.forms import DOCUMENT_RECEIPT, LineCorrectionForm, ManualInvoiceForm
 from invoices.importing import parse_and_import, replace_invoice_lines
 from invoices.models import Invoice, ShopItemPrice, Supplier
 from invoices.parsers.base import ParsedInvoice, ParsedLine
@@ -280,6 +280,67 @@ class PromotionOnThePageTests(TestCase):
         self.client.post(self.url, page_post(self.client.get(self.url), **{"form-0-discount_ttc": ""}))
         self.loaf.refresh_from_db()
         self.assertEqual((self.loaf.total_ht, self.loaf.discount, self.loaf.discount_ttc), (D("0.46"), D("0"), D("0")))
+
+
+class UnitPriceTests(TestCase):
+    """Five loaves printed 2.45 with 0.50 off, beside a lemon at 1.80: a
+    wrong count shows once the line is written as a price each."""
+
+    def setUp(self):
+        shop = Supplier.objects.get(code="FRANPRIX")
+        self.ticket = make_invoice(supplier=shop, parse_checks=CHECKED, printed_total_ttc=D("3.75"))
+        make_invoice_line(
+            invoice=self.ticket, product=make_product(supplier=shop, raw_name="BAGUETTE"), raw_name="BAGUETTE",
+            quantity=5, total_ht="1.85", discount="0.47", vat_rate=FIVE_FIVE, printed_ttc=D("2.45"),
+            discount_ttc=D("0.50"),
+        )
+        make_invoice_line(
+            invoice=self.ticket, product=make_product(supplier=shop, raw_name="CITRON"), raw_name="CITRON",
+            total_ht="1.71", vat_rate=FIVE_FIVE, printed_ttc=D("1.80"),
+        )
+        self.url = reverse("invoices:receipt_review", args=[self.ticket.pk])
+
+    def test_several_of_a_kind_show_their_price_each(self):
+        response = self.client.get(self.url)
+        loaves, lemon = response.context["formset"].forms
+        self.assertEqual(loaves.unit_price_hint, "soit 0.39 € TTC l'unité après remise (0.49 € avant)")
+        self.assertEqual(lemon.unit_price_hint, "")
+        self.assertContains(response, "soit 0.39 € TTC l&#x27;unité après remise (0.49 € avant)")
+
+    def test_the_hint_follows_what_was_typed(self):
+        response = self.client.post(
+            self.url, page_post(self.client.get(self.url), invoice_date="", **{"form-0-quantity": "4"})
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.context["formset"].forms[0].unit_price_hint,
+            "soit 0.49 € TTC l'unité après remise (0.61 € avant)",
+        )
+
+    def test_a_row_added_on_the_page_has_room_for_it(self):
+        response = self.client.get(self.url)
+        template = response.content.decode().split('id="empty-line-row"')[1]
+        self.assertIn("data-unit-price", template)
+
+    def test_nothing_to_divide_says_nothing(self):
+        form = LineCorrectionForm(
+            document=DOCUMENT_RECEIPT,
+            data={"product_name": "X", "quantity": "3", "total_ttc": "abc", "vat_rate": "5.5"},
+        )
+        self.assertEqual(form.unit_price_hint, "")
+
+    def test_a_refund_of_several_is_a_price_each(self):
+        form = LineCorrectionForm(
+            document=DOCUMENT_RECEIPT,
+            data={"product_name": "X", "quantity": "-2", "total_ttc": "-3,00", "vat_rate": "5.5"},
+        )
+        self.assertEqual(form.unit_price_hint, "soit 1.50 € TTC l'unité")
+
+    def test_an_invoice_line_is_a_cost_each_before_tax(self):
+        invoice = make_invoice(supplier=Supplier.objects.get(code="METRO"))
+        make_invoice_line(invoice=invoice, quantity=6, total_ht="12.00", vat_rate=D("0.2"))
+        response = self.client.get(reverse("invoices:invoice_edit_lines", args=[invoice.pk]))
+        self.assertEqual(response.context["formset"].forms[0].unit_price_hint, "soit 2.00 € HT l'unité")
 
 
 class WeightOnThePageTests(TestCase):
