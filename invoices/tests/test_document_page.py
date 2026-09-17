@@ -220,6 +220,13 @@ class ForgetPriceTests(TestCase):
         self.assertEqual(self.ticket.lines.get().raw_name, "Pain Pita")
         self.assertTrue(any("Prix oublié : 0.70 € = Pain Pita" in message for message in messages_of(response)))
 
+    def test_a_price_that_is_not_a_number_is_refused_quietly(self):
+        for posted in ("abc", "", "1.5"):
+            with self.subTest(posted=posted):
+                response = self.client.post(self.url, {"action": "forget_price", "price": posted})
+                self.assertRedirects(response, self.url)
+        self.assertTrue(ShopItemPrice.objects.filter(pk=self.price.pk).exists())
+
     def test_another_shops_price_is_not_forgotten_from_here(self):
         other = ShopItemPrice.objects.create(
             supplier=Supplier.objects.get(code="FRANPRIX"), unit_price_ttc=D("0.70"), label="Autre"

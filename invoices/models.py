@@ -547,7 +547,11 @@ class ReceiptBatch(JobLogMixin):
 
     @property
     def failed_count(self) -> int:
-        return self._count("unrecognised", "error")
+        """Files that went nowhere: broken, or no shop recognised and the file
+        no longer kept to name it (awaiting_shop_count is the rest)."""
+        return self._count("error") + sum(
+            1 for entry in self.results if entry["status"] == "unrecognised" and not entry.get("kept")
+        )
 
     @property
     def pending_count(self) -> int:

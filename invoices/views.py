@@ -743,6 +743,9 @@ def _move_shop(request, invoice) -> None:
     if not form.is_valid():
         messages.error(request, form.error_text())
         return
+    if form.cleaned_data["supplier"] == invoice.supplier:
+        messages.info(request, f"Ce ticket est déjà rangé chez {invoice.supplier.name}.")
+        return
     try:
         supplier, created = form.shop(ignoring=[invoice])
         move_to_shop(invoice, supplier)
@@ -759,7 +762,8 @@ def _forget_price(request, invoice) -> None:
     name: it is theirs now, and correcting one is done in the line."""
     from .models import ShopItemPrice
 
-    price = ShopItemPrice.objects.filter(supplier=invoice.supplier, pk=request.POST.get("price") or 0).first()
+    posted = request.POST.get("price", "")
+    price = ShopItemPrice.objects.filter(supplier=invoice.supplier, pk=posted).first() if posted.isdigit() else None
     if price is None:
         messages.error(request, "Ce prix n'est pas (ou plus) connu pour cette enseigne.")
         return

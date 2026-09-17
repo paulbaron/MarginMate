@@ -119,7 +119,10 @@ class RunBatchTests(TestCase):
         self.assertEqual(importer.call_count, 4)
         self.assertEqual([entry["status"] for entry in batch.results], ["ok", "duplicate", "unrecognised", "error"])
         self.assertEqual(batch.status, ReceiptBatch.Status.SUCCESS)
-        self.assertEqual((batch.imported_count, batch.duplicate_count, batch.failed_count), (1, 1, 2))
+        # A ticket waiting for its shop is to be filed, not a failure.
+        self.assertEqual(
+            (batch.imported_count, batch.duplicate_count, batch.failed_count, batch.awaiting_shop_count), (1, 1, 1, 1)
+        )
         self.assertIn("fichier illisible", batch.results[3]["message"])
         # Kept for its shop to be chosen by hand (test_receipt_shop_choice).
         self.assertTrue(batch.results[2]["kept"])

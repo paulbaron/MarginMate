@@ -223,6 +223,12 @@ class MoveToShopTests(TestCase):
         self.assertTrue(any("Sabbh Oriental du 02/02/2024" in message for message in said), said)
         self.assertEqual(Invoice.objects.get(pk=other.pk).supplier, self.sabbh)
 
+    def test_its_own_shop_changes_nothing_and_says_so(self):
+        url = reverse("invoices:receipt_review", args=[self.ticket.pk])
+        response = self.client.post(url, {"action": "move_shop", "supplier": self.sabbh.pk})
+        self.assertIn("Ce ticket est déjà rangé chez Sabbh Oriental.", messages_of(response))
+        self.assertNotIn("Enseigne choisie à la main", [check["label"] for check in Invoice.objects.get(pk=self.ticket.pk).parse_checks])
+
     def test_a_new_shop_needs_a_name(self):
         url = reverse("invoices:receipt_review", args=[self.ticket.pk])
         response = self.client.post(url, {"action": "move_shop", "supplier": "new", "new_name": " "})
@@ -265,6 +271,13 @@ class NewShopFromBatchTests(TestCase):
         self.page = reverse("invoices:receipt_batch", args=[self.batch.pk])
         self.url = reverse("invoices:receipt_batch_assign", args=[self.batch.pk, 0])
         self.second = second
+
+    def test_waiting_for_a_shop_is_counted_apart(self):
+        page = self.client.get(self.page)
+        self.assertContains(page, "À ranger")
+        self.assertEqual((self.batch.failed_count, self.batch.awaiting_shop_count), (0, 2))
+        upload_page = self.client.get(reverse("invoices:receipt_upload"))
+        self.assertContains(upload_page, "<th class=\"num\">À ranger</th>", html=True)
 
     def test_a_ticket_waiting_for_its_shop_shows_what_it_reads_as(self):
         entry = self.batch.results[0]

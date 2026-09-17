@@ -90,6 +90,15 @@ class MergeStockTypesTests(TestCase):
             reverse("inventory:stock_type_merge", args=[self.source.pk]), {"target_id": self.target.pk}
         )
 
+    def test_a_target_that_is_not_an_id_is_not_found(self):
+        """A tampered form: a 404, not a server error."""
+        for posted in ("abc", "", "1.5"):
+            with self.subTest(posted=posted):
+                response = self.client.post(
+                    reverse("inventory:stock_type_merge", args=[self.source.pk]), {"target_id": posted}
+                )
+                self.assertEqual(response.status_code, 404)
+
     def test_everything_that_used_it_moves_over(self):
         recipe = make_recipe(name="Moscow Mule")
         ingredient = make_ingredient(recipe, stock_type=self.source, quantity="0.04")

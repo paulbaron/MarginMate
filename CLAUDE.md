@@ -312,7 +312,9 @@ a few tickets of one shop carrying it are more likely the new shop's, filed
 before it existed, and are named so they can be moved. A ticket filed under
 the wrong shop is moved from its review page ("Changer d'enseigne",
 `receipts.move_to_shop`): its lines stay and find their products among the
-new shop's, the orphans go.
+new shop's, the orphans go. A file waiting for its shop is counted apart
+("À ranger", `ReceiptBatch.awaiting_shop_count`), not as a failure:
+`failed_count` is the errors plus the unrecognised files no longer kept.
 
 **A shop is not a supplier with invoices** (`parsers.is_ticket_shop`): a
 configured till, or any supplier with no PDF parser of its own. Only a shop's
@@ -538,6 +540,13 @@ That is not hypothetical — it is what "j'ai perdu mon inventaire après avoir
 cliqué sur enregistrer" was, on a real evening's counting. `config/settings.py`
 now sets it to 25,000. Any new formset that can grow with the data inherits
 the same ceiling, so check it before assuming a save is "just slow".
+
+### An id read from `request.POST` is checked before it reaches a query
+
+`pk="abc"` in a filter is a `ValueError`, so a tampered or stale form is a
+500 instead of a message. A view that reads an id by hand (not through a
+form field) checks `posted.isdigit()` first and treats anything else as not
+found (`_forget_price`, `merge_stock_type`, `pos_product_assign`).
 
 ### Formsets: no spare row on a saved record
 

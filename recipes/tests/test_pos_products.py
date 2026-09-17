@@ -104,6 +104,12 @@ class PosProductAssignTests(TestCase):
         self.assertEqual(self.product.recipe, self.recipe)
         self.assertFalse(self.product.needs_review)
 
+    def test_a_recipe_that_is_not_an_id_is_asked_for_again(self):
+        response = self.post("link", recipe="abc")
+        self.assertEqual(response.status_code, 302)
+        self.product.refresh_from_db()
+        self.assertIsNone(self.product.recipe)
+
     def test_linking_makes_the_sales_import_recognise_the_name(self):
         """The whole point: the next import stops discarding it."""
         record_sales([("Alcool + soda HH", date(2026, 6, 1), 5)])

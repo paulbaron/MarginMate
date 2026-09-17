@@ -57,6 +57,7 @@
                         <th class="num">Tickets</th>
                         <th class="num">Importés</th>
                         <th class="num">Déjà connus</th>
+                        <th class="num">À ranger</th>
                         <th class="num">Échecs</th>
                         <th></th>
                     </tr>
@@ -69,6 +70,7 @@
                             <td class="num">{{ batch.to_read }}</td>
                             <td class="num">{{ batch.imported_count }}</td>
                             <td class="num">{{ batch.duplicate_count }}</td>
+                            <td class="num">{{ batch.awaiting_shop_count }}</td>
                             <td class="num">{{ batch.failed_count }}</td>
                             <td><a class="btn btn-small btn-secondary" href="{% url 'invoices:receipt_batch' batch.pk %}">Voir</a></td>
                         </tr>

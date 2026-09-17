@@ -599,7 +599,9 @@ def merge_stock_type(request, pk):
     if request.method != "POST":
         return redirect("inventory:stock_list")
     source = get_object_or_404(StockType, pk=pk)
-    target = get_object_or_404(StockType, pk=request.POST.get("target_id"))
+    target_id = request.POST.get("target_id", "")
+    # A posted id that is not one is not found - not a server error.
+    target = get_object_or_404(StockType, pk=target_id if target_id.isdigit() else None)
     if source.unit != target.unit:
         messages.error(
             request,

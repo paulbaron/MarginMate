@@ -333,7 +333,8 @@ def pos_product_assign(request, pk):
         # "happy_hour" is still accepted so an old bookmark or a half-submitted
         # form doesn't 400; the checkbox is what the page sends now.
         as_happy_hour = action == "happy_hour" or bool(request.POST.get("as_happy_hour"))
-        recipe = Recipe.objects.filter(pk=request.POST.get("recipe") or 0).first()
+        posted = request.POST.get("recipe", "")
+        recipe = Recipe.objects.filter(pk=posted).first() if posted.isdigit() else None
         if recipe is None:
             messages.error(request, "Choisissez une recette.")
         elif as_happy_hour:
