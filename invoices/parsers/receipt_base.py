@@ -57,6 +57,9 @@ from .base import InvoiceParser, ParseCheck, ParsedInvoice, PdfPage
 
 CENTS = Decimal("0.01")
 UNIT = Decimal("0.0001")
+# A unit price is printed rounded to the cent: times a count, the rounding
+# grows with it (2 x 4,17 = 8,34 for an amount of 8,33).
+HALF_CENT = Decimal("0.005")
 
 # The French rates a food/drink receipt can legitimately carry. Anything the
 # OCR produces outside this set is a misread, not a new tax band, so it is
@@ -81,7 +84,9 @@ MIN_OCR_CONFIDENCE = Decimal("0.80")
 # higher-precision HT figure (Monoprix prints "3.0237") and sometimes a
 # column rule misread as a digit ("2.261" for "2,26"). Which one it is gets
 # decided by arithmetic, in amount_candidates.
-AMOUNT_RE = re.compile(r"(?<![\d.,])(\d{1,4})[.,](\d{2,4})(?!\d)")
+# Never the head of a longer dotted number: "VERSION: 2023.11.9.4" is not
+# 2023,11 EUR (it was, on every ticket of one till, as their total).
+AMOUNT_RE = re.compile(r"(?<![\d.,])(\d{1,4})[.,](\d{2,4})(?!\d|[.,]\d)")
 # Rates print as "5,5%", "5.50%", "20%", and - when a column rule is read as
 # a leading digit - "15.5%". The leading-1 case is undone in read_rate.
 RATE_RE = re.compile(r"(?<![\d.,])(\d{1,3})(?:[.,](\d{1,2}))?\s*%")
@@ -97,7 +102,7 @@ DATE_RE = re.compile(r"(?<!\d)(\d{2})[-/.](\d{2})[-/.]((?:19|20)\d{2})")
 # printed in cents - but a column rule or the euro sign read as a digit
 # ("6.061" in a Franprix VAT table), so it is swallowed rather than allowed to
 # make a different amount.
-MONEY_RE = re.compile(r"(?<![\d.,])(?P<sign>-\s?)?(?P<units>\d{1,4})[.,](?P<cents>\d{2})\d{0,2}(?!\d)")
+MONEY_RE = re.compile(r"(?<![\d.,])(?P<sign>-\s?)?(?P<units>\d{1,4})[.,](?P<cents>\d{2})\d{0,2}(?!\d|[.,]\d)")
 # A price per unit: an amount followed by a slash, whatever the unit after it
 # reads as ("@ 3.49 / KG", "à 3.49. / <G", "2.99EUR/kg").
 PER_UNIT_RE = re.compile(r"(?P<price>\d{1,4}[.,]\d{2})[^\d\s/]{0,3}\s*/")
@@ -407,7 +412,7 @@ class ReceiptTotals:
         return None
 
 
-def _printed_ht_base(totals: ReceiptTotals) -> Decimal | None:
+def printed_ht_base(totals: ReceiptTotals) -> Decimal | None:
     """The receipt's own tax-exclusive total, summed across its VAT buckets.
 
     None when any bucket failed to yield a base - a partial sum would be a
@@ -533,7 +538,7 @@ def build_checks(
             detail = "Aucun taux de TVA lisible : le taux n'a pas pu être vérifié."
         checks.append(ParseCheck(label="Table TVA lue", passed=False, detail=detail))
 
-    printed_ht = _printed_ht_base(totals)
+    printed_ht = printed_ht_base(totals)
     if printed_ht is not None and lines_total_ht is not None:
         ht_drift = printed_ht - lines_total_ht
         within_rounding = abs(ht_drift) <= rounding_slack
@@ -886,6 +891,11 @@ def collect_vat_summaries(lines: list[str], printed_total: Decimal | None) -> tu
                 summaries[summary.rate] = summary
         elif rate not in legible:
             legible.append(rate)
+    if not summaries:
+        for index, line in enumerate(lines):
+            unmarked = unmarked_vat_row(lines, index)
+            if unmarked is not None and unmarked.rate not in summaries:
+                summaries[unmarked.rate] = unmarked
     if not summaries and not legible:
         for line in lines:
             inferred = infer_vat_row(line, printed_total)
@@ -893,6 +903,53 @@ def collect_vat_summaries(lines: list[str], printed_total: Decimal | None) -> tu
                 summaries[inferred.rate] = inferred.resolve()
                 break
     return list(summaries.values()), [rate for rate in legible if rate not in summaries]
+
+
+# Letters a VAT table row may print before its figures ("T.V.A.").
+MAX_VAT_ROW_LABEL = 6
+
+
+def unmarked_vat_row(lines: list[str], index: int) -> VatSummary | None:
+    """A VAT table row printing its rate as a plain number - "46,45  STDFR
+    20,00  9,29" - read by arithmetic: a base, its tax at the rate the row
+    prints, and their sum printed on another line of the document (the total
+    to pay). Without that third figure, an item row with a 2,00 discount on a
+    10,00 price at 20% would pass for one."""
+    text = lines[index]
+    first_figure = re.search(r"\d", text)
+    # A row of the table, not an item's: no product name before its figures
+    # ("TVA", "T.V.A." at most). With quantity 1, an item row printing its
+    # own tax repeats its HT as its unit price and passes the rest.
+    if first_figure is None or len(re.findall(r"[A-Za-zÀ-ÿ]", text[: first_figure.start()])) > MAX_VAT_ROW_LABEL:
+        return None
+    values = amount_candidates(text)
+    found = set()
+    for rate in KNOWN_VAT_RATES:
+        if rate * 100 not in values:
+            continue
+        others = [value for value in values if value != rate * 100]
+        for base in others:
+            for vat in others:
+                if not 0 < vat < base:
+                    continue
+                if abs((base * rate).quantize(CENTS, rounding=ROUND_HALF_UP) - vat) > CENTS:
+                    continue
+                total = base + vat
+                # Nothing else on the row: an item row printing its own tax
+                # ("15,00 € 4 60,00 € 20,00 12,00 € 72,00 €") has a unit price too.
+                if any(value not in (base, vat, total) for value in others):
+                    continue
+                elsewhere = [
+                    position
+                    for position, line in enumerate(lines)
+                    if position != index and any(abs(amount - total) <= CENTS for amount in line_amounts(line))
+                ]
+                if elsewhere:
+                    found.add((rate, base, vat))
+    if len(found) != 1:
+        return None
+    ((rate, base, vat),) = found
+    return VatSummary(rate=rate, base=base, vat_amount=vat, total_ttc=base + vat)
 
 
 def finalise_summary(summary: VatSummary | None, printed_total: Decimal | None) -> VatSummary | None:
@@ -919,8 +976,8 @@ def finalise_summary(summary: VatSummary | None, printed_total: Decimal | None) 
 
 
 def reconcile_quantity(
-    name: str, quantity: int, unit_price: Decimal, amount: Decimal, fixes: list[str], problems: list[str]
-) -> int:
+    name: str, quantity, unit_price: Decimal, amount: Decimal, fixes: list[str], problems: list[str]
+):
     """A line printing a count, a unit price and a total checks itself.
 
     The count is the one number on it nothing else verifies, while the total
@@ -930,7 +987,11 @@ def reconcile_quantity(
     is kept as read and the disagreement reported. Appends one sentence to
     `fixes` or `problems`; see `quantity_checks`.
     """
-    if unit_price <= 0 or abs(quantity * unit_price - amount) <= CENTS:
+    if unit_price <= 0 or abs(quantity * unit_price - amount) <= max(CENTS, abs(quantity) * HALF_CENT):
+        return quantity
+    if quantity != int(quantity):
+        # A measure (0,35 m²) is not recounted into a whole number.
+        problems.append(f"{name} : {quantity} x {unit_price} € ≠ {amount} €")
         return quantity
     implied = (amount / unit_price).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
     if implied >= 1 and abs(implied * unit_price - amount) <= CENTS:

@@ -41,7 +41,7 @@ where the unit price names the product - receipts.label_placeholder_lines).
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 from itertools import permutations, product
@@ -53,6 +53,7 @@ from .base import ParseCheck, ParsedInvoice, ParsedLine, PdfPage
 from .receipt_base import (
     BANNER_RE,
     CENTS,
+    HALF_CENT,
     KNOWN_VAT_RATES,
     MONEY_RE,
     PER_UNIT_RE,
@@ -61,6 +62,7 @@ from .receipt_base import (
     UNREAD_NAME,
     ReceiptParser,
     ReceiptTotals,
+    VatSummary,
     amount_printed,
     assign_rates_by_bucket,
     build_checks,
@@ -71,6 +73,7 @@ from .receipt_base import (
     line_amounts,
     missing_item_check,
     parse_vat_line,
+    printed_ht_base,
     printed_promotion,
     printed_total,
     quantity_checks,
@@ -78,6 +81,7 @@ from .receipt_base import (
     read_rate,
     reconcile_quantity,
     to_ht,
+    unmarked_vat_row,
 )
 from .registry import PARSER_REGISTRY
 
@@ -127,8 +131,9 @@ COUNT_RE = re.compile(
 GLUED_CODE_RE = re.compile(r"(?<![A-Za-z0-9])T(\d)(?=-?\d)")
 # "T3XBASILIC": a code, a count and a name with no space between them.
 GLUED_COUNT_RE = re.compile(r"^\s*([A-Z])(\d{1,2})[xX×](?=[A-Za-z]{2})")
-# "2.80.11.20": two amounts, a stray dot between them.
-GLUED_AMOUNTS_RE = re.compile(r"(\d[.,]\d{2})[.,](?=\d)")
+# "2.80.11.20": two amounts, a stray dot between them - not a version number
+# ("2023.11.9.4"), whose second part is no amount.
+GLUED_AMOUNTS_RE = re.compile(r"(\d[.,]\d{2})[.,](?=\d{1,4}[.,]\d{2}(?!\d|[.,]\d))")
 # A weight has three decimals and says it is one: "kg" after it, or a price
 # per unit on its line. A VAT table's column rule reads as a third decimal
 # too ("0.711").
@@ -149,8 +154,25 @@ LETTERS_RE = re.compile(r"[A-Za-zÀ-ÿ]")
 HEADING_RE = re.compile(
     r"^\s*(?P<name>[A-ZÀ-Ÿ][A-ZÀ-Ÿ/ '-]{3,}?)(?P<dots>\.+)\s*(?:(?P<amount>\d{1,4}[.,]\d{2})\s*(?:€|E|EUR)?)?\s*$"
 )
-# Words a weight or count line prints around its figures.
-NOISE_WORDS = {"eur", "kg", "pcs", "pc", "x", "man", "brutweight", "weight", "net", "@", "à", "poids", "brut"}
+# Words a weight or count line prints around its figures - and the label of
+# a quantity column ("Qté : 0,350 * 25,74  9,01" is a detail line, not an item).
+NOISE_WORDS = {
+    "eur", "kg", "pcs", "pc", "x", "man", "brutweight", "weight", "net", "@", "à", "poids", "brut",
+    "qte", "qté", "quantite", "quantité", "qty",
+}
+# "0,350 * 25,74": a quantity that is a fraction - a measure sold by the
+# unit, m² of plywood - with the sign that multiplies it. (With "kg", a weight.)
+DECIMAL_COUNT_RE = re.compile(r"(?<![\d.,])(?P<count>\d{1,4}[.,]\d{1,3})\s*[xX×*]\s*(?=\d)")
+# An EAN/GTIN: 8, 12, 13 or 14 digits, told from any other long number by its
+# check digit (a ticket number fails it).
+GTIN_RE = re.compile(r"(?<![\d.,])(\d{8}|\d{12,14})(?![\d.,]?\d)")
+# The store's own article code in front of a name: "412233  VIS INOX".
+LEAD_REFERENCE_RE = re.compile(r"^\s*\d{5,8}\s+(?=[^\d\s])")
+# "FACTURE N° P5200000012345", "Numéro Facture : 1234567".
+INVOICE_NUMBER_RES = (
+    re.compile(r"(?i)\bfacture\s*(?:n\s*[°o]|num[ée]ro)\s*:?\s*([A-Z]{0,3}\d[\dA-Z-]{3,})"),
+    re.compile(r"(?i)\bnum[ée]ro\s+(?:de\s+)?facture\s*:?\s*([A-Z]{0,3}\d[\dA-Z-]{3,})"),
+)
 # Ticket numbers, in the forms the tills print them.
 TICKET_WORD_RE = re.compile(r"(?i)ticket\D{0,15}?(\d{4,10})(?!\d)")
 # A ticket number this short is the till's count of the day: it comes round.
@@ -181,6 +203,13 @@ class Reading:
     category: str = ""
     # The amount as first read, before a partial cancellation.
     read_total: Decimal | None = None
+    ean: str = ""
+    # The VAT rate a table row prints as its last column ("... 3,50  20,00"),
+    # whether its amount turns out to be HT or TTC.
+    row_rate: Decimal | None = None
+    # An amount read in HT (a document whose rows add up to its HT base):
+    # `total` is then worked out, not printed.
+    ht_row: bool = False
 
     @property
     def explained(self) -> Decimal | None:
@@ -212,9 +241,24 @@ def _inside(position: int, spans) -> bool:
     return any(start <= position < end for start, end in spans)
 
 
+def is_gtin(code: str) -> bool:
+    """Whether `code` is an EAN-8/UPC/EAN-13/GTIN-14 with a valid check digit."""
+    if len(code) not in (8, 12, 13, 14) or not code.isdigit():
+        return False
+    digits = [int(char) for char in code]
+    weighted = sum(digit * (3 if position % 2 == 0 else 1) for position, digit in enumerate(reversed(digits[:-1])))
+    return (10 - weighted % 10) % 10 == digits[-1]
+
+
 def read_line(index: int, line: str, total: Decimal | None = None) -> Reading | None:
     """A line's name, figures and code - or None for a line that is never
     an item (a date, a phone number)."""
+    ean = ""
+    for match in GTIN_RE.finditer(line):
+        if is_gtin(match.group(1)):
+            ean = ean or match.group(1)
+            line = line[: match.start()] + " " * len(match.group(1)) + line[match.end():]
+    line = LEAD_REFERENCE_RE.sub("", line)
     line = GLUED_COUNT_RE.sub(r"\1 \2X ", line)
     line = GLUED_CODE_RE.sub(r"T\1 ", line)
     line = GLUED_AMOUNTS_RE.sub(r"\1 ", line)
@@ -241,6 +285,13 @@ def read_line(index: int, line: str, total: Decimal | None = None) -> Reading | 
         count_match = None
     per_unit = PER_UNIT_RE.search(line)
     weight = None
+    fraction = DECIMAL_COUNT_RE.search(line)
+    # "3.850kg x 2.99/kg" is a weight, "kg" glued to it or not.
+    if fraction and count is None and not re.search(r"(?i)kg\b", line) and not _inside(fraction.start(), rates):
+        count = Decimal(fraction.group("count").replace(",", "."))
+        taken.append(fraction.span("count"))
+        if count == count.to_integral_value():
+            count = int(count)
     for match in WEIGHT_RE.finditer(line):
         if _inside(match.start(), taken + rates):
             continue
@@ -287,7 +338,9 @@ def read_line(index: int, line: str, total: Decimal | None = None) -> Reading | 
         if after:
             code = after.group("paren") or after.group("letter")
 
-    reading = Reading(index=index, name=name, count=count, count_printed=count is not None, weight=weight, code=code)
+    reading = Reading(
+        index=index, name=name, count=count, count_printed=count is not None, weight=weight, code=code, ean=ean
+    )
     plain = [value for _s, value, is_per_unit in amounts if not is_per_unit]
     unit_values = [value for _s, value, is_per_unit in amounts if is_per_unit]
     if unit_values:
@@ -300,6 +353,12 @@ def read_line(index: int, line: str, total: Decimal | None = None) -> Reading | 
             rest = [value for value in plain if value not in (ht, ttc) and value != rate * 100]
             reading.unit, reading.count = _unit_and_count(ht, rest, [value for _s, value in integers], count)
             reading.count_printed = reading.count_printed or reading.count is not None
+            return reading
+        rated = _rated_row([(start, value) for start, value, is_per_unit in amounts if not is_per_unit], integers)
+        if rated is not None:
+            row_count, row_unit, reading.total, reading.row_rate = rated
+            if row_count is not None:
+                reading.count, reading.unit, reading.count_printed = row_count, row_unit, True
             return reading
     if name is None and count is not None and len(plain) == 1 and reading.unit is None and weight is None and not code:
         # "2 x 1.00EUR" under an item: the unit price explaining the total.
@@ -350,6 +409,36 @@ def _taxed_row(values: list[Decimal]) -> tuple[Decimal, Decimal, Decimal, bool] 
     return None
 
 
+def _rated_row(amounts: list[tuple[int, Decimal]], integers: list[tuple[int, int]]):
+    """(count, unit price, amount, rate) of a table row whose last column is
+    its VAT rate as a plain number - "1  3,50  0,00  3,50  3,50  20,00",
+    "0,35  21,45  0,00  21,45  7,51  20,00" - or None. The amount is the last
+    figure before the rate; the count and unit price, the first pair printed
+    before it that multiplies into it (a quantity can be a fraction). Count
+    and price are None when no pair does."""
+    numbers = sorted(amounts + [(start, Decimal(value)) for start, value in integers])
+    if len(numbers) < 3:
+        return None
+    rate_at, last = numbers[-1]
+    rate = next((known for known in KNOWN_VAT_RATES if known * 100 == last), None)
+    money = [(start, value) for start, value in amounts if start < rate_at]
+    if rate is None or len(money) < 2:
+        return None
+    amount_at, amount = money[-1]
+    if amount <= 0:
+        return None
+    before = [(start, value) for start, value in numbers if start < amount_at]
+    for position, (_start, count) in enumerate(before):
+        if not 0 < count < 10000:
+            continue
+        for _unit_start, unit in before[position + 1 :]:
+            if unit > 0 and abs(count * unit - amount) <= max(CENTS, count * HALF_CENT):
+                if count == count.to_integral_value():
+                    count = int(count)
+                return count, unit, amount, rate
+    return None, None, amount, rate
+
+
 def _unit_and_count(ht: Decimal, rest: list[Decimal], integers: list[int], count: int | None):
     """The unit price and count of a taxed row: the integer that multiplies
     one of its other amounts into its HT."""
@@ -381,20 +470,26 @@ class GenericReceiptParser(ReceiptParser):
     def parse_pages(self, pages: list[PdfPage], date_hint: date | None = None, source_name: str = "") -> ParsedInvoice:
         lines = [line for page in pages for line in page.text.split("\n") if line.strip()]
         total = printed_total(lines)
-        notes: list[str] = []  # amounts worked out or repaired
-        items, details, voids, _scan_end = self._read_items(lines, total, notes)
-        items_end = 0
-        weight_problems: list[str] = []
-        quantity_fixes: list[str] = []
-        quantity_problems: list[str] = []
-        self._attach_details(items, details, voids, weight_problems, quantity_fixes, quantity_problems)
+        vat_rows = {index for index in range(len(lines)) if unmarked_vat_row(lines, index) is not None}
+        vat_summaries, rate_only = collect_vat_summaries(lines, total)
+        totals = ReceiptTotals(printed_total_ttc=total, vat_summaries=vat_summaries, rate_only=rate_only)
 
-        if self.shop.coded_items and not any(item.code for item in items):
-            # Only a line whose count and unit price make its amount is an
-            # item then: "7 X 0.49 3.43" is one, its "T1" read "11".
-            items = [item for item in items if item.explained is not None and abs(item.explained - item.total) <= CENTS]
-        read = items
-        items = self._select(items, lines, total, notes)
+        first = segment = self._segment(lines, total, totals, vat_rows, 0)
+        # Items read up to a total that none of them makes: the document may
+        # print its lines again further down - the invoice under the till's
+        # ticket, both on one photo, the ticket's half misread. What is found
+        # there has to be a table, though: after the total, "CB 0,98" alone
+        # also makes what was paid.
+        while segment.chosen is None and segment.end + 1 < len(lines):
+            segment = self._segment(lines, total, totals, vat_rows, segment.end + 1, structured_only=True)
+        if segment.chosen is None:
+            segment = first
+            segment.chosen = self._repaired(first.items, lines, total, first.notes) if first.items else []
+        items, read, notes = segment.chosen, segment.items, segment.notes
+        weight_problems, quantity_fixes, quantity_problems = (
+            segment.weight_problems, segment.quantity_fixes, segment.quantity_problems
+        )
+        items_end = 0
         set_aside = [item for item in read if item not in items]
         if items:
             items_end = max(items_end, items[-1].index + 1)
@@ -407,8 +502,6 @@ class GenericReceiptParser(ReceiptParser):
                 )
         gross = sum((item.total for item in items), start=ZERO)
 
-        vat_summaries, rate_only = collect_vat_summaries(lines, total)
-        totals = ReceiptTotals(printed_total_ttc=total, vat_summaries=vat_summaries, rate_only=rate_only)
         extra: list[ParseCheck] = quantity_checks(quantity_fixes, quantity_problems)
         if weight_problems:
             extra.append(ParseCheck(label="Poids rattachés", passed=False, detail="; ".join(weight_problems)))
@@ -461,9 +554,32 @@ class GenericReceiptParser(ReceiptParser):
             printed_total_ttc=total,
         )
 
+    def _segment(self, lines, total, totals, vat_rows, start, structured_only=False) -> Segment:
+        """The items read from `start` up to the next total, and the run of
+        them that is the purchase (None when none adds up)."""
+        segment = Segment()
+        items, details, voids, segment.end = self._read_items(lines, total, segment.notes, vat_rows, start)
+        self._attach_details(
+            items, details, voids, segment.weight_problems, segment.quantity_fixes, segment.quantity_problems
+        )
+        if self.shop.coded_items and not any(item.code for item in items):
+            # Only a line whose count and unit price make its amount is an
+            # item then: "7 X 0.49 3.43" is one, its "T1" read "11".
+            items = [item for item in items if item.explained is not None and abs(item.explained - item.total) <= CENTS]
+        segment.items = items
+        ht_run = _ht_run(items, printed_ht_base(totals))
+        ht_rates = _ht_rates(ht_run, totals) if ht_run else None
+        ttc_run = self._fitting_run(items, lines, total)
+        if ht_rates is not None and _prefer_ht(ht_run, ttc_run, totals, ht_rates):
+            _as_ht(ht_run, ht_rates)
+            segment.chosen = ht_run
+        elif ttc_run is not None and (not structured_only or _structured(ttc_run)):
+            segment.chosen = ttc_run
+        return segment
+
     # -- reading -----------------------------------------------------------
 
-    def _read_items(self, lines, total, notes):
+    def _read_items(self, lines, total, notes, vat_rows=frozenset(), start=0):
         items: list[Reading] = []
         details: list[Reading] = []
         voids: list[Decimal] = []
@@ -478,13 +594,15 @@ class GenericReceiptParser(ReceiptParser):
         orphan: tuple[int, Decimal] | None = None  # an amount glued to a heading
         heading_at = -2
         for index, line in enumerate(lines):
+            if index < start:
+                continue
             heading = HEADING_RE.match(line)
             if heading and (len(heading.group("dots")) >= 3 or "/" in heading.group("name")):
                 category, pending, heading_at = heading.group("name").strip(" ."), None, index
                 amount = heading.group("amount")
                 orphan = (index, Decimal(amount.replace(",", "."))) if amount else None
                 continue
-            reading = read_line(index, line, total)
+            reading = read_line(index, line, total) if index not in vat_rows else None
             if reading is None or reading.vat_row:
                 pending = None
                 continue
@@ -559,6 +677,7 @@ class GenericReceiptParser(ReceiptParser):
             if reading.name is None:
                 if pending is not None and pending.index == index - 1:
                     reading.name = pending.name  # "Article divers" above "3pcs 0,80 2,40 A"
+                    reading.ean = reading.ean or pending.ean
                 elif (reading.count is not None or reading.weight is not None) and (
                     reading.explained is not None and items and abs(reading.explained - items[-1].total) <= CENTS
                 ):
@@ -635,6 +754,13 @@ class GenericReceiptParser(ReceiptParser):
         arithmetic repair; failing that, everything read."""
         if not items:
             return items
+        run = self._fitting_run(items, lines, total)
+        if run is not None:
+            return run
+        return self._repaired(items, lines, total, notes)
+
+    @staticmethod
+    def _anchors(items, lines, total):
         anchors = []  # (amount the run must reach, line printing it or None, firm)
         if total is not None:
             anchors.append((total, None, True))
@@ -643,7 +769,14 @@ class GenericReceiptParser(ReceiptParser):
         # items reach it, and two loaves happening to make what was paid on a
         # "3 pour 2" ticket are not the purchase.
         proven = [anchor for anchor in anchors[1:] if anchor[2]]
-        gross_targets = proven or anchors
+        return proven or anchors
+
+    def _fitting_run(self, items, lines, total):
+        """The longest run of items adding up to what was paid (or a total
+        before promotions), or None. Changes nothing."""
+        if not items:
+            return None
+        gross_targets = self._anchors(items, lines, total)
 
         def fits(run):
             gross = sum((item.total for item in run), start=ZERO)
@@ -666,6 +799,10 @@ class GenericReceiptParser(ReceiptParser):
                     run = candidate[start : start + length]
                     if fits(run):
                         return run
+        return None
+
+    def _repaired(self, items, lines, total, notes):
+        gross_targets = self._anchors(items, lines, total)
         # A repair needs a firm target: what was paid, or a pre-discount total
         # whose discount the ticket prints twice.
         for target, line, firm in sorted(gross_targets, key=lambda anchor: anchor[1] is None):
@@ -790,12 +927,38 @@ class GenericReceiptParser(ReceiptParser):
             vat_rate=rate,
             category=item.category or self.shop.label,
             is_placeholder=placeholder,
-            printed_ttc=item.total,
+            printed_ttc=None if item.ht_row else item.total,
             discount_ttc=item.discount,
+            ean=item.ean,
         )
         if item.discount:
             line.discount = to_ht(item.total, rate) - total_ht
         return line
+
+
+@dataclass
+class Segment:
+    """One block of items, read up to a total: what was read, the run that is
+    the purchase, and what reading them had to say."""
+
+    items: list = field(default_factory=list)
+    chosen: list | None = None
+    end: int = 0
+    notes: list = field(default_factory=list)
+    weight_problems: list = field(default_factory=list)
+    quantity_fixes: list = field(default_factory=list)
+    quantity_problems: list = field(default_factory=list)
+
+
+def _structured(run: list[Reading]) -> bool:
+    """Lines that are a table, not a payment: at least two, each explained by
+    its count or weight times its price, or carrying an EAN or its rate."""
+    return len(run) >= 2 and all(
+        item.ean
+        or item.row_rate is not None
+        or (item.explained is not None and item.total is not None and abs(item.explained - item.total) <= CENTS)
+        for item in run
+    )
 
 
 def _apply(item: Reading, detail: Reading) -> None:
@@ -914,10 +1077,16 @@ def _spread(targets: list[Reading], discount: Decimal) -> None:
         item.discount += share
 
 
-def _split_by_buckets(items: list[Reading], summaries) -> dict[int, Decimal] | None:
+def _split_by_buckets(items: list[Reading], summaries, by_base: bool = False) -> dict[int, Decimal] | None:
     """Uncoded items on a two-rate ticket: the one way of splitting them
-    whose sums are the two buckets. Identical items are interchangeable."""
+    whose sums are the two buckets (their TTC, or their HT base when the
+    amounts are HT). Identical items are interchangeable."""
     resolved = [summary.resolve() for summary in summaries]
+    if by_base:
+        resolved = [
+            VatSummary(rate=summary.rate, total_ttc=summary.base) if summary.base is not None else summary
+            for summary in resolved
+        ]
     if len(resolved) != 2 or any(summary.total_ttc is None for summary in resolved):
         return None
     groups: dict[tuple, list[Reading]] = {}
@@ -947,6 +1116,81 @@ def _split_by_buckets(items: list[Reading], summaries) -> dict[int, Decimal] | N
     return rates
 
 
+def _ht_run(items: list[Reading], ht_base: Decimal | None) -> list[Reading] | None:
+    """The longest run of items whose amounts, as printed, make the
+    document's own HT base to the cent: the rows of a document priced in HT.
+    Exactly: an HT base is the sum of HT amounts, and TTC lines coming within
+    a cent of it are a coincidence."""
+    if ht_base is None or not items:
+        return None
+    size = len(items)
+    for length in range(size, 0, -1):
+        for start in range(size - length + 1):
+            run = items[start : start + length]
+            if all(item.total is not None for item in run) and sum((item.total for item in run), start=ZERO) == ht_base:
+                return run
+    return None
+
+
+def _ht_rates(run: list[Reading], totals: ReceiptTotals) -> dict[int, Decimal] | None:
+    """Each HT row's rate, by id: its own, the document's single one, or the
+    one split of its buckets' HT bases - or None when a row gets none."""
+    split = {}
+    if any(item.row_rate is None for item in run) and totals.line_rate is None:
+        split = _split_by_buckets(run, totals.vat_summaries, by_base=True) or {}
+    rates = {}
+    for item in run:
+        rate = item.row_rate or totals.line_rate or split.get(id(item))
+        if rate is None:
+            return None
+        rates[id(item)] = rate
+    return rates
+
+
+def _prefer_ht(ht_run, ttc_run, totals: ReceiptTotals, rates: dict[int, Decimal]) -> bool:
+    """Whether the rows making the HT base are the purchase, rather than a run
+    making the amount paid. Their TTC, worked out, has to come to what was
+    paid; then they are when nothing else adds up; when they are more lines;
+    when what the other run has on top of them is the tax itself ("TVA 9,29"
+    read as a line); and, as many lines each way, when every one of them
+    prints its rate - an invoice's rows beside the till's ticket, both on one
+    photo."""
+    paid = totals.printed_total_ttc
+    worked_out = sum(
+        ((item.total * (1 + rates[id(item)])).quantize(CENTS, rounding=ROUND_HALF_UP) for item in ht_run), start=ZERO
+    )
+    if paid is None or abs(worked_out - paid) > max(CENTS, len(ht_run) * HALF_CENT):
+        return False
+    if ttc_run is None or len(ht_run) > len(ttc_run):
+        return True
+    ht_ids = {id(item) for item in ht_run}
+    extra = [item for item in ttc_run if id(item) not in ht_ids]
+    tax = sum((summary.resolve().vat_amount or ZERO for summary in totals.vat_summaries), start=ZERO)
+    if extra and len(extra) == len(ttc_run) - len(ht_run) and abs(sum((item.total for item in extra), start=ZERO) - tax) <= CENTS:
+        return True
+    # The other run is the VAT table itself: its base read as one line, its
+    # tax as another.
+    base = sum((item.total for item in ht_run), start=ZERO)
+    for position, item in enumerate(ttc_run):
+        rest = ttc_run[:position] + ttc_run[position + 1 :]
+        if item.total == base and rest and abs(sum((other.total for other in rest), start=ZERO) - tax) <= CENTS:
+            return True
+    if len(ht_run) == len(ttc_run) and all(item.row_rate is not None for item in ht_run):
+        return not all(item.row_rate is not None for item in ttc_run)
+    return False
+
+
+def _as_ht(items: list[Reading], rates: dict[int, Decimal]) -> None:
+    """Read the run's amounts as HT, at the rates found for them; each TTC is
+    worked out."""
+    for item in items:
+        rate = rates[id(item)]
+        item.ht, item.rate, item.ht_row = item.total, rate, True
+        item.total = item.read_total = (item.ht * (1 + rate)).quantize(CENTS, rounding=ROUND_HALF_UP)
+        if item.discount:
+            item.discount = (item.discount * (1 + rate)).quantize(CENTS, rounding=ROUND_HALF_UP)
+
+
 def _ticket_number(text: str, invoice_date: date | None) -> str:
     match = TICKET_WORD_RE.search(text)
     if match:
@@ -954,6 +1198,11 @@ def _ticket_number(text: str, invoice_date: date | None) -> str:
         if len(number) <= DAILY_COUNT_DIGITS and invoice_date is not None:
             return f"{number}-{invoice_date:%Y%m%d}"
         return number
+    # Before the long digit runs below: an IBAN is one too, spaces removed.
+    for pattern in INVOICE_NUMBER_RES:
+        match = pattern.search(text)
+        if match:
+            return match.group(1)
     match = STORE_TILL_RE.search(text.replace(" ", ""))
     if match:
         return "-".join(match.groups())
