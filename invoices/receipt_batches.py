@@ -42,7 +42,13 @@ from django.utils import timezone
 
 from .importing import DuplicateInvoiceError
 from .models import ReceiptBatch
-from .receipts import OCR_LOCK, OCR_WAIT_SECONDS, UnrecognisedShopError, import_receipt
+from .receipts import (
+    OCR_LOCK,
+    OCR_WAIT_SECONDS,
+    UnrecognisedShopError,
+    first_reading,
+    import_receipt,
+)
 
 STAGING_DIR = "receipt_batches"
 # A shop chosen by hand is imported inside the request, seconds of OCR. Two
@@ -109,6 +115,34 @@ def resume_batch(batch: ReceiptBatch) -> int:
     batch.append_log(f"Reprise : {remaining} ticket(s) restant(s) à lire.")
     start_batch(batch)
     return remaining
+
+
+def requeue_unrecognised(batch: ReceiptBatch) -> int:
+    """Read the files of a finished batch no shop was recognised on again -
+    once a shop has been added with its header, some are its tickets.
+    Returns how many are read again; 0 while the batch may still run."""
+    if not OCR_LOCK.acquire(blocking=False):
+        return 0
+    try:
+        batch.refresh_from_db()
+        if batch.is_active:
+            return 0
+        waiting = [entry for entry in batch.results if entry["status"] == "unrecognised" and entry.get("kept")]
+        for entry in waiting:
+            entry.update(status="pending", message="")
+            entry.pop("kept")
+        if not waiting:
+            return 0
+        batch.status = ReceiptBatch.Status.PENDING
+        batch.cancel_requested = False
+        batch.finished_at = None
+        batch.last_heartbeat = timezone.now()
+        batch.save(update_fields=["results", "status", "cancel_requested", "finished_at", "last_heartbeat"])
+    finally:
+        OCR_LOCK.release()
+    batch.append_log(f"Nouvelle enseigne : {len(waiting)} ticket(s) sans enseigne relu(s).")
+    start_batch(batch)
+    return len(waiting)
 
 
 def _run_in_thread(batch_id: int) -> None:
@@ -178,8 +212,9 @@ def run_receipt_batch(batch_id: int) -> ReceiptBatch:
                 except DuplicateInvoiceError as exc:
                     entry.update(status="duplicate", message=str(exc))
                 except UnrecognisedShopError as exc:
-                    # Kept: the operator can still say which shop it is.
-                    entry.update(status="unrecognised", message=str(exc), kept=True)
+                    # Kept: the operator can still say which shop it is, from
+                    # what it was read as.
+                    entry.update(status="unrecognised", message=str(exc), kept=True, **first_reading(exc.text))
                     keep = True
                 except Exception as exc:  # noqa: BLE001 - reported per file, never aborts the batch
                     entry.update(status="error", message=str(exc).strip() or exc.__class__.__name__)

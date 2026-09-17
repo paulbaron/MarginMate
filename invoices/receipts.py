@@ -30,6 +30,7 @@ import io
 import os
 import re
 import threading
+import unicodedata
 from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
@@ -41,8 +42,15 @@ from django.utils import timezone
 from .importing import DuplicateInvoiceError, import_parsed_invoice
 from .models import Invoice, InvoiceLine, ShopItemPrice, Supplier, label_for_unit_price
 from .ocr import deskew, ocr_prepared_image, page_images
-from .parsers import LLM_PARSER_KEY, PARSER_REGISTRY, get_parser, ticket_parser_for
+from .parsers import (
+    LLM_PARSER_KEY,
+    PARSER_REGISTRY,
+    get_parser,
+    is_ticket_shop,
+    ticket_parser_for,
+)
 from .parsers.base import ParseCheck, ParsedInvoice
+from .parsers.generic_receipt import GenericReceiptParser, TicketShop
 from .parsers.receipt_base import CENTS, RECONCILIATION_TOLERANCE, ReceiptParser
 
 # Wide enough to read a price off on screen, small enough that a batch of
@@ -62,6 +70,11 @@ DATE_CHECK = "Date du ticket"
 # twice.
 OCR_LOCK = threading.Lock()
 OCR_WAIT_SECONDS = 120
+# A shop's own header text shorter than this would find itself on any ticket.
+MIN_HEADER_LENGTH = 4
+# A new shop's header already printed on more tickets filed elsewhere than
+# this - or on tickets of two shops - is that shop's, or anybody's.
+MAX_TICKETS_ELSEWHERE = 3
 # What the parser said about the lines it read. Once a person has corrected
 # the lines, these describe lines that no longer exist: they give way to one
 # check on the lines as they are now (lines_check).
@@ -78,6 +91,7 @@ READING_CHECKS = {
     "Quantité x prix unitaire = total",
     "Taux par article",
     "Taux applicable",
+    "Lignes écartées",
     # The page refuses a document with no valid date.
     DATE_CHECK,
 }
@@ -107,7 +121,12 @@ def date_check(invoice_date: date | None) -> ParseCheck | None:
 
 class UnrecognisedShopError(ValueError):
     """No known shop's header is on the ticket. Reported, never guessed: the
-    operator can name the shop (see receipt_batches.import_with_shop)."""
+    operator can name the shop (see receipt_batches.import_with_shop).
+    `text` is what the ticket was read as, to show while choosing."""
+
+    def __init__(self, message: str, text: str = ""):
+        super().__init__(message)
+        self.text = text
 
 
 def receipt_parsers() -> dict[str, ReceiptParser]:
@@ -115,34 +134,172 @@ def receipt_parsers() -> dict[str, ReceiptParser]:
 
 
 def parser_for(supplier: Supplier) -> ReceiptParser | None:
-    """The ticket reader for `supplier`'s tills, if it has one."""
-    return ticket_parser_for(supplier.code)
+    """The reader for `supplier`'s tickets: its till's own settings when it
+    has some, and the same reader without them for any other supplier - a
+    shop added from a ticket, a Metro paper ticket. None only for the AI
+    pseudo-supplier, under which nothing is filed."""
+    configured = ticket_parser_for(supplier.code)
+    if configured is not None:
+        return configured
+    if supplier.parser_key == LLM_PARSER_KEY:
+        return None
+    return GenericReceiptParser(TicketShop(supplier.code, (), supplier.name))
 
 
 def shop_choices() -> list[tuple[str, list[Supplier]]]:
-    """What a ticket can be filed under by hand, grouped: the shops whose
-    tickets are read automatically, then every other supplier, whose tickets
-    are typed in from the photo."""
-    readable = {parser.supplier_code for parser in receipt_parsers().values()}
+    """What a ticket can be filed under by hand, grouped: the shops, then the
+    suppliers whose invoices are PDFs (a paper ticket of theirs). Every one
+    of them has its tickets read."""
     suppliers = list(Supplier.objects.exclude(parser_key=LLM_PARSER_KEY).order_by("name"))
     return [
-        ("Tickets lus automatiquement", [supplier for supplier in suppliers if supplier.code in readable]),
-        ("Autres fournisseurs : lignes à saisir", [supplier for supplier in suppliers if supplier.code not in readable]),
+        ("Magasins", [supplier for supplier in suppliers if is_ticket_shop(supplier)]),
+        ("Fournisseurs à factures (ticket papier)", [supplier for supplier in suppliers if not is_ticket_shop(supplier)]),
     ]
 
 
-def detect_parser(text: str) -> ReceiptParser | None:
-    """Which shop's parser this receipt belongs to, from its own header.
+def plain_text(text: str) -> str:
+    """`text` for comparing headers: capitals, no accents, words and figures
+    separated by single spaces - "Épicerie  Sabah," is "EPICERIE SABAH"."""
+    folded = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().upper()
+    return " ".join(re.findall(r"[A-Z0-9]+", folded))
 
-    Returns None rather than a best guess: an unrecognised receipt that is
-    reported as such costs the operator one click, while one silently run
-    through the wrong shop's parser produces plausible lines at wrong prices.
+
+def _has_header(plain: str, header: str) -> bool:
+    return len(header) >= MIN_HEADER_LENGTH and f" {header} " in f" {plain} "
+
+
+def detect_parser(text: str) -> ReceiptParser | None:
+    """Which shop this receipt belongs to, from its own header.
+
+    A header a person gave a shop first, the longest first - "EPICERIE SABAH"
+    before the "SABAH" a configured till answers to - then the configured
+    tills. Returns None rather than a best guess: an unrecognised receipt
+    that is reported as such costs the operator one click, while one filed
+    under the wrong shop produces plausible lines under the wrong products.
     """
+    plain = plain_text(text)
+    named = [
+        (plain_text(supplier.ticket_header), supplier)
+        for supplier in Supplier.objects.exclude(ticket_header="").exclude(parser_key=LLM_PARSER_KEY)
+    ]
+    for header, supplier in sorted(named, key=lambda pair: -len(pair[0])):
+        if _has_header(plain, header):
+            return parser_for(supplier)
     for parser in receipt_parsers().values():
         for pattern in getattr(parser, "header_patterns", ()):
             if re.search(pattern, text, re.IGNORECASE):
                 return parser
     return None
+
+
+def header_guess(text: str) -> str:
+    """What a ticket seems to print as its shop's name - the first of its
+    top lines made of words rather than figures - to suggest when naming a
+    new shop. Blank when nothing looks like one."""
+    for line in [line.strip() for line in text.splitlines() if line.strip()][:6]:
+        letters = sum(char.isalpha() for char in line)
+        visible = len(line.replace(" ", ""))
+        if letters >= MIN_HEADER_LENGTH and not any(char.isdigit() for char in line) and letters >= 0.7 * visible:
+            return " ".join(line.split())[:60]
+    return ""
+
+
+def first_reading(text: str) -> dict:
+    """The date and total a ticket reads as, before any shop is known -
+    shown beside a ticket waiting for its shop, to tell it from the others."""
+    try:
+        parsed = GenericReceiptParser(TicketShop("", (), "")).parse_text(text)
+    except Exception:  # noqa: BLE001 - only a hint
+        return {}
+    return {
+        "read_date": f"{parsed.invoice_date:%d/%m/%Y}" if parsed.invoice_date else "",
+        "read_total": f"{parsed.printed_total_ttc:.2f}" if parsed.printed_total_ttc is not None else "",
+        "header": header_guess(text),
+    }
+
+
+def tickets_printing(header: str, ignoring=()) -> list[Invoice]:
+    """The tickets already filed whose text carries `header`, oldest first."""
+    plain = plain_text(header)
+    if len(plain) < MIN_HEADER_LENGTH:
+        return []
+    ignored = {invoice.pk for invoice in ignoring}
+    found = [
+        pk
+        for pk, text in Invoice.objects.exclude(ocr_text="").values_list("pk", "ocr_text")
+        if pk not in ignored and _has_header(plain_text(text), plain)
+    ]
+    return list(Invoice.objects.filter(pk__in=found).select_related("supplier").order_by("invoice_date", "pk"))
+
+
+def describe_tickets(tickets) -> str:
+    return ", ".join(
+        f"{ticket.supplier.name} du {ticket.invoice_date:%d/%m/%Y}" if ticket.invoice_date else f"{ticket.supplier.name} n° {ticket.pk}"
+        for ticket in tickets
+    )
+
+
+def create_shop(name: str, header: str = "", ignoring=()) -> Supplier:
+    """A new shop, for tickets no known header was on. With `header`, its
+    next tickets are recognised by it. Raises ValueError, for the operator:
+    no name, a name taken, a header too short - or one printed on the tickets
+    of other shops, or of many, which it would take from them. A few tickets
+    of one shop carrying it are more likely this shop's, filed there before
+    it existed (tickets_printing says which; `ignoring` is the one being
+    moved)."""
+    name = " ".join(name.split())
+    header = " ".join(header.split())
+    if not name:
+        raise ValueError("Donnez un nom à la nouvelle enseigne.")
+    if Supplier.objects.filter(name__iexact=name).exists():
+        raise ValueError(f"« {name} » existe déjà : choisissez-la dans la liste.")
+    plain = plain_text(header)
+    if header and len(plain) < MIN_HEADER_LENGTH:
+        raise ValueError(
+            f"Le texte d'en-tête « {header} » est trop court pour reconnaître des tickets "
+            f"({MIN_HEADER_LENGTH} caractères au moins)."
+        )
+    elsewhere = tickets_printing(header, ignoring)
+    if len(elsewhere) > MAX_TICKETS_ELSEWHERE or len({ticket.supplier_id for ticket in elsewhere}) > 1:
+        raise ValueError(
+            f"« {header} » est imprimé sur {len(elsewhere)} tickets d'autres enseignes "
+            f"({describe_tickets(elsewhere[:5])}{'…' if len(elsewhere) > 5 else ''}) : "
+            "choisissez un texte propre à cette enseigne (son nom, sa rue)."
+        )
+    base = re.sub(r"[^A-Z0-9]+", "_", plain_text(name)).strip("_")[:24] or "ENSEIGNE"
+    code, suffix = base, 1
+    while Supplier.objects.filter(code=code).exists():
+        suffix += 1
+        code = f"{base}_{suffix}"
+    return Supplier.objects.create(code=code, name=name, parser_key="", ticket_header=header)
+
+
+def move_to_shop(invoice: Invoice, supplier: Supplier) -> None:
+    """File a ticket under another shop: its lines stay as they are and find
+    their products among the new shop's (the old ones nobody else uses go).
+    Raises ValueError when that shop has a ticket of the same number, and
+    InvoiceLinesInUseError as a correction would."""
+    from .importing import corrected_line, replace_invoice_lines
+
+    if supplier.pk == invoice.supplier_id:
+        return
+    if supplier.parser_key == LLM_PARSER_KEY:
+        raise ValueError("Un ticket ne se range pas sous ce fournisseur.")
+    if invoice.invoice_number and (
+        Invoice.objects.filter(supplier=supplier, invoice_number=invoice.invoice_number).exclude(pk=invoice.pk).exists()
+    ):
+        raise ValueError(f"{supplier.name} a déjà un ticket n° {invoice.invoice_number} : c'est peut-être le même.")
+    lines = [
+        corrected_line(line, raw_name=line.raw_name, quantity=line.quantity, total_ht=line.total_ht, vat_rate=line.vat_rate)
+        for line in invoice.lines.all()
+    ]
+    with transaction.atomic():
+        invoice.supplier = supplier
+        invoice.parse_checks = [check for check in invoice.parse_checks if check["label"] != CHOSEN_SHOP_CHECK] + [
+            {"label": CHOSEN_SHOP_CHECK, "passed": True, "detail": f"Rangé chez {supplier.name} à la main."}
+        ]
+        invoice.save(update_fields=["supplier", "parse_checks"])
+        replace_invoice_lines(invoice, lines)
 
 
 @dataclass
@@ -322,7 +479,7 @@ def rename_product(product, name: str) -> int:
     product of the shop already has it: two products of one name would split
     one item's purchases between them.
     """
-    if parser_for(product.supplier) is None:
+    if not is_ticket_shop(product.supplier):
         # Metro's and UBA's own invoices find their products by this exact
         # name, with no reading kept to fall back on.
         raise ValueError(
@@ -466,7 +623,7 @@ def reread_document(invoice: Invoice) -> str:
         path = ""
     if not path or not os.path.exists(path):
         raise RereadError("Le fichier d'origine de ce document est introuvable : rien à relire.")
-    if invoice.is_receipt:
+    if invoice.is_receipt or isinstance(get_parser(invoice.supplier.parser_key), ReceiptParser):
         return _reread_receipt_file(invoice, path)
     return _reread_invoice_file(invoice, path)
 
@@ -503,6 +660,8 @@ def _reread_receipt_file(invoice: Invoice, path: str) -> str:
         if invoice.failed_checks:
             invoice.status = Invoice.Status.NEEDS_REVIEW
         if read.preview:
+            if invoice.preview_image:
+                invoice.preview_image.delete(save=False)
             invoice.preview_image.save(
                 f"{os.path.splitext(os.path.basename(path))[0]}.jpg", ContentFile(read.preview), save=False
             )
@@ -569,10 +728,7 @@ def import_receipt(
     read = read_receipt(pdf_path, date_hint=date_hint, supplier=supplier)
     if supplier is None:
         if read.parser is None or read.parsed is None:
-            raise UnrecognisedShopError(
-                "Enseigne non reconnue sur ce ticket "
-                f"({', '.join(sorted(receipt_parsers())) or 'aucun parseur'})."
-            )
+            raise UnrecognisedShopError("Enseigne non reconnue sur ce ticket.", text=read.text)
         supplier = Supplier.objects.get(code=read.parser.supplier_code)
         parsed = read.parsed
     else:
@@ -661,13 +817,19 @@ __all__ = [
     "RereadError",
     "UnrecognisedShopError",
     "apply_known_prices",
+    "create_shop",
     "date_check",
+    "describe_tickets",
     "detect_parser",
+    "first_reading",
+    "header_guess",
     "import_receipt",
     "label_placeholder_lines",
     "lines_check",
+    "move_to_shop",
     "parser_for",
     "pending_receipts",
+    "plain_text",
     "printed_unit_price",
     "read_receipt",
     "receipt_parsers",
@@ -677,4 +839,5 @@ __all__ = [
     "reread_document",
     "reread_receipt",
     "shop_choices",
+    "tickets_printing",
 ]

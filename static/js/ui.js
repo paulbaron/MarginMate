@@ -177,6 +177,22 @@
         initPersistence(root);
         initConsoles(root);
         initBulk(root);
+        initShopChoices(root);
+    }
+
+    // The new shop's name and header show once "Nouvelle enseigne" is picked.
+    function showNewShop(select) {
+        var fields = select.parentNode.querySelector("[data-new-shop]");
+        if (!fields) return;
+        var chosen = select.value === "new";
+        fields.hidden = !chosen;
+        fields.querySelector("input[name='new_name']").required = chosen;
+    }
+    document.addEventListener("change", function (event) {
+        if (event.target.matches("select[data-shop-select]")) showNewShop(event.target);
+    });
+    function initShopChoices(root) {
+        root.querySelectorAll("select[data-shop-select]").forEach(showNewShop);
     }
 
     // A button with `data-busy-label` says so while its form's request runs

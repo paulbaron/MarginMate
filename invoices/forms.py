@@ -441,14 +441,49 @@ class ReceiptBatchUploadForm(forms.Form):
         return accepted
 
 
-class ReceiptShopForm(forms.Form):
-    """The shop a ticket whose header was unreadable came from."""
+NEW_SHOP = "new"
 
-    supplier = forms.ModelChoiceField(
-        queryset=Supplier.objects.exclude(parser_key=LLM_PARSER_KEY),
-        label="Enseigne",
-        error_messages={"required": "Choisissez l'enseigne du ticket.", "invalid_choice": "Enseigne inconnue."},
+
+class ReceiptShopForm(forms.Form):
+    """The shop a ticket belongs to, when its header said nothing known: one
+    of the suppliers, or a new shop - named, and with the text its tickets
+    print at the top, so the next ones are recognised."""
+
+    supplier = forms.CharField(
+        label="Enseigne", error_messages={"required": "Choisissez l'enseigne du ticket."}
     )
+    new_name = forms.CharField(label="Nom de la nouvelle enseigne", required=False, max_length=255)
+    new_header = forms.CharField(label="Texte en tête de ses tickets", required=False, max_length=100)
+
+    def clean_supplier(self):
+        value = self.cleaned_data["supplier"].strip()
+        if value == NEW_SHOP:
+            return NEW_SHOP
+        supplier = (
+            Supplier.objects.exclude(parser_key=LLM_PARSER_KEY).filter(pk=value).first() if value.isdigit() else None
+        )
+        if supplier is None:
+            raise forms.ValidationError("Enseigne inconnue.")
+        return supplier
+
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get("supplier") == NEW_SHOP and not " ".join(cleaned.get("new_name", "").split()):
+            self.add_error("new_name", "Donnez un nom à la nouvelle enseigne.")
+        return cleaned
+
+    def error_text(self) -> str:
+        return " ".join(error for errors in self.errors.values() for error in errors)
+
+    def shop(self, ignoring=()):
+        """(supplier, created). Creating one raises ValueError for the
+        operator (receipts.create_shop)."""
+        from .receipts import create_shop
+
+        supplier = self.cleaned_data["supplier"]
+        if supplier != NEW_SHOP:
+            return supplier, False
+        return create_shop(self.cleaned_data["new_name"], self.cleaned_data.get("new_header", ""), ignoring), True
 
 
 class DocumentHeaderForm(forms.Form):

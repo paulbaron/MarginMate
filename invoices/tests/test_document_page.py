@@ -126,9 +126,18 @@ class RereadTicketTests(TestCase):
         self.assertTrue(any("20/07/2026" in message for message in messages_of(response)), messages_of(response))
         self.assertEqual([saved.pk for saved in self.ticket.lines.all()], [line.pk])
 
-    def test_a_shop_whose_tickets_are_not_read_offers_nothing(self):
+    def test_any_suppliers_paper_ticket_is_read_again(self):
         paper = make_invoice(supplier=Supplier.objects.get(code="METRO"), parse_checks=CHECKED)
         paper.source_file.save("ticket-metro.pdf", ContentFile(b"%PDF-1.4"), save=True)
+        url = reverse("invoices:receipt_review", args=[paper.pk])
+        self.assertContains(self.client.get(url), 'value="reread"')
+        with mock.patch("invoices.receipts.recognise", return_value=recognised(BASIC)):
+            self.client.post(url, {"action": "reread"})
+        self.assertEqual(sorted(line.quantity for line in paper.lines.all()), [2, 3])
+
+    def test_the_ai_pseudo_supplier_reads_nothing(self):
+        paper = make_invoice(supplier=Supplier.objects.get(code="OTHER"), parse_checks=CHECKED)
+        paper.source_file.save("ticket-autre.pdf", ContentFile(b"%PDF-1.4"), save=True)
         url = reverse("invoices:receipt_review", args=[paper.pk])
         self.assertNotContains(self.client.get(url), 'value="reread"')
         response = self.client.post(url, {"action": "reread"})
@@ -287,6 +296,31 @@ class WeightOnThePageTests(TestCase):
         response = self.client.get(reverse("invoices:receipt_review", args=[ticket.pk]))
         self.assertEqual(response.context["formset"].forms[0].initial["total_volume"], D("10"))
         self.assertNotContains(response, "1E+1")
+
+
+class DetailPageTests(TestCase):
+    def test_a_ticket_line_shows_its_price_its_promotion_and_its_ttc(self):
+        shop = Supplier.objects.get(code="FRANPRIX")
+        ticket = make_invoice(supplier=shop, parse_checks=CHECKED, reconciliation_adjustment=D("0.01"))
+        make_invoice_line(invoice=ticket, product=make_product(supplier=shop), total_ht="0.30", discount="0.16",
+                          vat_rate=FIVE_FIVE, printed_ttc=D("0.49"), discount_ttc=D("0.17"))
+        # Typed again by hand before promotions were kept apart: its HT
+        # discount no longer says anything.
+        make_invoice_line(invoice=ticket, product=make_product(supplier=shop), total_ht="0.46", discount="0.47",
+                          vat_rate=FIVE_FIVE, printed_ttc=D("0.49"))
+        response = self.client.get(reverse("invoices:invoice_detail", args=[ticket.pk]))
+        self.assertContains(response, "0.49 € TTC imprimé, − 0.17 € de remise")
+        self.assertNotContains(response, "0.47 € HT de remise")
+        self.assertContains(response, "<th class=\"num\">Total TTC</th>", html=True)
+        self.assertContains(response, "Arrondi")
+        self.assertNotContains(response, "accise")
+
+    def test_an_invoice_keeps_its_duty_explanation(self):
+        invoice = make_invoice(supplier=Supplier.objects.get(code="METRO"), reconciliation_adjustment=D("1.20"))
+        make_invoice_line(invoice=invoice, discount="2.00")
+        response = self.client.get(reverse("invoices:invoice_detail", args=[invoice.pk]))
+        self.assertContains(response, "accise")
+        self.assertContains(response, "2.00 € HT de remise")
 
 
 class DefaultRateTests(TestCase):

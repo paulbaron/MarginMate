@@ -432,9 +432,16 @@ def receipt_batch_assign(request, pk, index):
         return redirect("invoices:receipt_batch", pk=batch.pk)
     form = ReceiptShopForm(request.POST)
     if not form.is_valid():
-        messages.error(request, " ".join(form.errors["supplier"]))
+        messages.error(request, form.error_text())
         return redirect("invoices:receipt_batch", pk=batch.pk)
-    supplier = form.cleaned_data["supplier"]
+    if batch.is_active:
+        messages.error(request, "Cet import est encore en cours : attendez qu'il se termine pour choisir une enseigne.")
+        return redirect("invoices:receipt_batch", pk=batch.pk)
+    try:
+        supplier, created = form.shop()
+    except ValueError as exc:
+        messages.error(request, str(exc))
+        return redirect("invoices:receipt_batch", pk=batch.pk)
     try:
         entry = import_with_shop(batch, index, supplier)
     except ShopChoiceError as exc:
@@ -444,7 +451,37 @@ def receipt_batch_assign(request, pk, index):
         messages.warning(request, entry["message"])
         return redirect("invoices:receipt_batch", pk=batch.pk)
     messages.success(request, f"{entry['name']} importé comme ticket {supplier.name} : vérifiez-le d'après la photo.")
+    if created:
+        _say_new_shop(request, batch, supplier)
     return redirect("invoices:receipt_review", pk=entry["invoice_id"])
+
+
+def _say_new_shop(request, batch, supplier) -> None:
+    """A new shop with a header: the batch's other unrecognised tickets are
+    read again, and those that print it go to it - and the tickets filed
+    elsewhere that print it are named, to be moved if they are its."""
+    from .receipt_batches import requeue_unrecognised
+    from .receipts import describe_tickets, tickets_printing
+
+    elsewhere = [ticket for ticket in tickets_printing(supplier.ticket_header) if ticket.supplier_id != supplier.pk]
+    if elsewhere:
+        messages.warning(
+            request,
+            f"« {supplier.ticket_header} » est aussi imprimé sur {describe_tickets(elsewhere)} : "
+            "si ce sont des tickets de cette enseigne, rangez-les avec « Changer d'enseigne ».",
+        )
+    if not supplier.ticket_header:
+        messages.info(
+            request,
+            f"Enseigne {supplier.name} créée. Sans texte d'en-tête, ses prochains tickets seront à ranger à la main.",
+        )
+        return
+    requeued = requeue_unrecognised(batch) if batch is not None else 0
+    messages.info(
+        request,
+        f"Enseigne {supplier.name} créée : les tickets qui portent « {supplier.ticket_header} » y seront rangés"
+        + (f" - {requeued} autre(s) ticket(s) sans enseigne de cet import sont relus." if requeued else "."),
+    )
 
 
 def receipt_batch_cancel(request, pk):
@@ -529,6 +566,10 @@ def _correction_page(request, invoice):
             _forget_price(request, invoice)
             return here
 
+        if is_receipt and action == "move_shop":
+            _move_shop(request, invoice)
+            return here
+
         if is_receipt and action == "remember_price":
             price_form = ShopItemPriceForm(request.POST, supplier=invoice.supplier)
             if price_form.is_valid():
@@ -567,6 +608,20 @@ def _correction_page(request, invoice):
 
     if formset is None:
         formset = _line_formset_for(invoice, document)
+    shop_context = {}
+    if is_receipt:
+        from .receipts import PLACEHOLDER_MARKER, header_guess, parser_for, shop_choices
+
+        shop = getattr(parser_for(invoice.supplier), "shop", None)
+        shop_context = {
+            "shop_groups": shop_choices(),
+            "suggested_header": header_guess(invoice.ocr_text),
+            # The shop's price list matters where its till prints no names, or
+            # where one has been started: elsewhere it is folded away.
+            "prices_open": bool(shop and shop.placeholder_names)
+            or invoice.supplier.item_prices.exists()
+            or invoice.lines.filter(raw_name__contains=PLACEHOLDER_MARKER).exists(),
+        }
     return render(
         request,
         "invoices/document_review.html",
@@ -583,6 +638,7 @@ def _correction_page(request, invoice):
             "can_reread": _can_reread(invoice),
             "source_is_pdf": bool(invoice.source_file) and invoice.source_file.name.lower().endswith(".pdf"),
             "ocr_lines": invoice.ocr_text.split("\n") if invoice.ocr_text else [],
+            **shop_context,
         },
     )
 
@@ -680,6 +736,24 @@ def _reread_from_page(request, invoice) -> None:
         messages.error(request, str(exc))
 
 
+def _move_shop(request, invoice) -> None:
+    from .receipts import move_to_shop
+
+    form = ReceiptShopForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, form.error_text())
+        return
+    try:
+        supplier, created = form.shop(ignoring=[invoice])
+        move_to_shop(invoice, supplier)
+    except (ValueError, InvoiceLinesInUseError) as exc:
+        messages.error(request, str(exc))
+        return
+    messages.success(request, f"Ticket rangé chez {supplier.name}.")
+    if created:
+        _say_new_shop(request, None, supplier)
+
+
 def _forget_price(request, invoice) -> None:
     """Drop one of the shop's known prices. Lines it already named keep their
     name: it is theirs now, and correcting one is done in the line."""
@@ -729,9 +803,10 @@ def _say_where_products_are_renamed(request, invoice):
     another spelling relabels that line only - the next ticket still shows
     the product's own name. Said once, where it can be acted on - and only
     where renaming is offered (see _line_formset_for)."""
-    from .receipts import PLACEHOLDER_MARKER, parser_for
+    from .parsers import is_ticket_shop
+    from .receipts import PLACEHOLDER_MARKER
 
-    if parser_for(invoice.supplier) is None:
+    if not is_ticket_shop(invoice.supplier):
         return
     said = set()
     for line in invoice.lines.select_related("product"):
@@ -762,12 +837,13 @@ def _line_formset_for(invoice, document):
     pre-filling the product's name would undo the rename. The reading rides
     along in a hidden field, so saving the page keeps it.
     """
-    from .receipts import PLACEHOLDER_MARKER, parser_for
+    from .parsers import is_ticket_shop
+    from .receipts import PLACEHOLDER_MARKER
 
-    # Renaming is for the products of shops whose tickets are read: a paper
-    # Metro ticket filed by hand shows Metro's catalogue products, which its
-    # digital invoices find by their exact name.
-    can_rename = document == DOCUMENT_RECEIPT and parser_for(invoice.supplier) is not None
+    # Renaming is for the products of shops: a paper Metro ticket filed by
+    # hand shows Metro's catalogue products, which its digital invoices find
+    # by their exact name.
+    can_rename = document == DOCUMENT_RECEIPT and is_ticket_shop(invoice.supplier)
     initial = []
     renamable = []
     offered = set()

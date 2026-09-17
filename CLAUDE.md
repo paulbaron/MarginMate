@@ -102,7 +102,12 @@ What it knows, all arithmetic:
 - **rates**: a row's own, else the bucket its code's items add up to, else -
   uncoded items on a two-rate ticket - the one split of the items that makes
   both buckets. Nothing proven: 5.5% (the shops sell food) and "Taux par
-  article" fails.
+  article" fails;
+- lines read but left out of the run (a header, a total misread) are listed
+  under "Lignes écartées", in case one was an item; a promotion printed under
+  an item never goes beyond its price; a phone number is 0 and nine digits
+  (the pairs pattern it replaced took "10.49 31.47" for one, and dropped the
+  line); a percentage stays in a name ("FROMAGE BLANC 20% MG").
 
 Evaluate a change the same way before trusting it: parse every stored
 `ocr_text` and compare with the checked lines, per shop, counting separately
@@ -285,22 +290,50 @@ or the receipt is read sideways; and scanning the same folder again has to be
 cheap, so `import_receipt` checks the file's SHA-256
 (`Invoice.source_sha256`, backfilled by migration 0014) before any OCR.
 
-**An unrecognised ticket is not a dead end.** A torn or faded header is enough
-for `detect_parser` to find nothing (a real Sabbah ticket, 13/08/2024). The
-batch raises `UnrecognisedShopError` for that - a plain `ValueError` is a broken
-file, reported as an error - keeps the file (`"kept"` on the entry) and, once
-the batch has finished, offers a list of shops on that row
-(`receipt_batches.import_with_shop`, never while the thread runs: it owns
-`results` and would write its copy over the change). The OCR runs in the
-request, so shop choices take turns on one lock, and a resume waits for none -
-two tabs used to import the same file twice. The chosen shop's reader
-runs regardless of the header; a supplier with no ticket reader, or a reader
-that fails or reads nothing, still files the ticket, empty, with a failed
+**An unrecognised ticket is not a dead end - the reader works for any shop.**
+A torn or faded header, or a shop nothing was set up for, is enough for
+`detect_parser` to find nothing. The batch raises `UnrecognisedShopError` for
+that - a plain `ValueError` is a broken file, reported as an error - keeps the
+file (`"kept"` on the entry), shows what the ticket reads as (the line that
+looks like its name, date, total: `receipts.first_reading`) and, once the
+batch has finished, offers the suppliers on that row - or a **new shop**
+(`receipts.create_shop`), named and given the text its tickets print at the
+top (`Supplier.ticket_header`). The ticket is read whatever the shop:
+`receipts.parser_for` gives every supplier but the AI pseudo-supplier a
+reader, the configured till's or the same reader without settings (a Metro
+paper ticket included). A new shop with a header sends the batch's other
+unrecognised files through the import again (`requeue_unrecognised`), and
+`detect_parser` looks for headers people gave **before** the configured tills,
+the longest first: "EPICERIE SABAH" before the "SABAH" Sabbh's till answers
+to. Headers compare without accents, case or punctuation, as whole words
+(`receipts.plain_text`), and one shorter than four characters, or already
+printed on the tickets of two other shops or on more than three, is refused -
+a few tickets of one shop carrying it are more likely the new shop's, filed
+before it existed, and are named so they can be moved. A ticket filed under
+the wrong shop is moved from its review page ("Changer d'enseigne",
+`receipts.move_to_shop`): its lines stay and find their products among the
+new shop's, the orphans go.
+
+**A shop is not a supplier with invoices** (`parsers.is_ticket_shop`): a
+configured till, or any supplier with no PDF parser of its own. Only a shop's
+products match OCR readings tolerantly and can be renamed from a ticket;
+Metro's are named by its invoices.
+
+The shop choice is `import_with_shop`, never while the batch thread runs (it
+owns `results` and would write its copy over the change). The OCR runs in the
+request, so shop choices and "Relire le document" take turns on one lock
+(`receipts.OCR_LOCK`), and a resume waits for none - two tabs used to import
+the same file twice. A reader that fails or reads nothing (or the AI
+pseudo-supplier, which has none) still files the ticket, empty, with a failed
 "Lecture automatique" check - that check is also what puts it in the review
 queue, which lists only receipts with checks. Either way the operator lands on
 the review screen, which also takes the ticket's date and total (a blank
 total keeps the one read: it is a field nobody filled in, not a total
-removed). The same lock serialises "Relire le document" (`receipts.OCR_LOCK`).
+removed).
+
+A ticket number of four digits or fewer ("Ticket no 4278") is the till's count
+of the day: it comes round, so it is stored with the date, or a later ticket
+was refused as a duplicate.
 
 **The autoreloader kills an import outright** on any code change: a
 137-ticket batch died one second in, while code was being edited, and showed
@@ -362,8 +395,10 @@ the shop has: that is a merge, done by typing the name in the line. **Only the
 products of shops with a ticket reader**: a paper ticket filed by hand under
 Metro shows Metro's catalogue, which its PDFs find by exact name with no
 reading to fall back on - and its typed lines match strictly for the same
-reason. Renaming, reading again and the price list reload the page, so the
-page asks before dropping line corrections not yet saved. A price already
+reason. Renaming, moving, reading again and the price list reload the page, so
+the page asks before dropping line corrections not yet saved (and Enter in a
+line moves to the next box instead of validating the document). The price
+list is folded away where the till prints names and none was started. A price already
 known is refused by the form (the shop is not a form field, so Django never
 checked the uniqueness it is part of, and the database answered with a 500);
 a wrong one is forgotten from the list under it.

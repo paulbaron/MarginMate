@@ -12,8 +12,9 @@ from common import JobLogMixin
 
 class Supplier(models.Model):
     """A vendor invoices come from. ``parser_key`` points at an entry in the
-    parser registry (invoices/parsers/registry.py); leave it blank to always
-    fall back to the LLM-based generic parser for this supplier.
+    parser registry (invoices/parsers/registry.py); blank, its PDFs are filed
+    empty to be typed in - and its tickets read like any shop's (see
+    parsers.is_ticket_shop).
     """
 
     code = models.CharField(max_length=32, unique=True)
@@ -22,6 +23,15 @@ class Supplier(models.Model):
     is_scrapable = models.BooleanField(
         default=False,
         help_text="Si « Récupérer les nouvelles factures » sait aller les chercher tout seul."
+    )
+    # What a shop no reader was configured for prints at the top of its
+    # tickets: an import finds it there (receipts.detect_parser), before the
+    # configured shops - a person said so.
+    ticket_header = models.CharField(
+        "texte d'en-tête des tickets",
+        max_length=100,
+        blank=True,
+        help_text="Imprimé en haut de ses tickets (nom, rue…) : un ticket qui le porte est rangé chez ce fournisseur.",
     )
 
     class Meta:

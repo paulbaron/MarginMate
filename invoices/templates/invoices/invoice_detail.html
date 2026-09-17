@@ -32,7 +32,7 @@
             <span class="stat-label">Total HT</span>
             <span class="stat-value">{{ invoice.total_ht|floatformat:2 }} €</span>
             {% if invoice.reconciliation_adjustment %}
-                <span class="stat-note">dont {{ invoice.reconciliation_adjustment|floatformat:2 }} € de régularisation</span>
+                <span class="stat-note">dont {{ invoice.reconciliation_adjustment|floatformat:2 }} € {% if invoice.is_receipt %}d'arrondi{% else %}de régularisation{% endif %}</span>
             {% endif %}
         </div>
         <div class="stat">
@@ -63,7 +63,13 @@
         {% endif %}
     </div>
 
-    {% if invoice.reconciliation_adjustment %}
+    {% if invoice.reconciliation_adjustment and invoice.is_receipt %}
+        <div class="message">
+            Arrondi : les lignes, chacune ramenée au centime en HT, font
+            <strong>{{ invoice.reconciliation_adjustment|floatformat:2 }} €</strong> d'écart avec la base HT
+            imprimée sur le ticket. L'écart est compté dans le total HT, jamais dans le coût d'un produit.
+        </div>
+    {% elif invoice.reconciliation_adjustment %}
         <div class="message">
             Le total imprimé par le fournisseur dépasse la somme des lignes de
             <strong>{{ invoice.reconciliation_adjustment|floatformat:2 }} €</strong> : des droits (accise, régie,
@@ -84,6 +90,7 @@
                 <th class="num">PU HT réel</th>
                 <th class="num">Total HT</th>
                 <th class="num">TVA</th>
+                <th class="num">Total TTC</th>
             </tr>
         </thead>
         <tbody>
@@ -94,11 +101,12 @@
                     {% if line.raw_name|lower != line.product.raw_name|lower %}
                         <span class="read-as">tel qu'imprimé : {{ line.raw_name }}</span>
                     {% endif %}
-                    {% if line.taxes or line.discount %}
+                    {% if line.taxes or line.discount_ttc or line.discount and line.printed_ttc is None %}
                         <br><span class="muted" style="font-size:0.8em;">
                             {% if line.taxes %}+ {{ line.taxes|floatformat:2 }} € de taxes{% endif %}
                             {% if line.taxes and line.discount %} · {% endif %}
-                            {% if line.discount %}− {{ line.discount|floatformat:2 }} € de remise{% endif %}
+                            {% if line.discount_ttc and line.printed_ttc is not None %}{{ line.printed_ttc|floatformat:2 }} € TTC imprimé, − {{ line.discount_ttc|floatformat:2 }} € de remise
+                            {% elif line.discount %}− {{ line.discount|floatformat:2 }} € HT de remise{% endif %}
                         </span>
                     {% endif %}
                 </td>
@@ -114,10 +122,11 @@
                 <td class="num">{{ line.unit_cost_ht|floatformat:4 }} €</td>
                 <td class="num">{{ line.total_ht|floatformat:2 }} €</td>
                 <td class="num">{{ line.vat_percent|floatformat:"-1" }} %</td>
+                <td class="num">{{ line.total_ttc|floatformat:2 }} €</td>
             </tr>
             {% empty %}
             <tr>
-                <td colspan="7" class="muted" style="text-align:center; padding:2rem 0;">
+                <td colspan="8" class="muted" style="text-align:center; padding:2rem 0;">
                     {% if has_parser %}
                         Aucune ligne : le parseur de ce fournisseur n'a rien trouvé dans ce document — saisissez-les à la main.
                     {% else %}
@@ -131,20 +140,24 @@
             <tr>
                 <td colspan="5">Somme des lignes</td>
                 <td class="num">{{ invoice.lines_total_ht|floatformat:2 }} €</td>
-                <td></td>
+                <td colspan="2"></td>
             </tr>
             {% if invoice.reconciliation_adjustment %}
             <tr>
                 <td colspan="5">Régularisation</td>
                 <td class="num">{{ invoice.reconciliation_adjustment|floatformat:2 }} €</td>
-                <td></td>
+                <td colspan="2"></td>
             </tr>
             <tr>
                 <td colspan="5"><strong>Total HT</strong></td>
                 <td class="num"><strong>{{ invoice.total_ht|floatformat:2 }} €</strong></td>
-                <td></td>
+                <td colspan="2"></td>
             </tr>
             {% endif %}
+            <tr>
+                <td colspan="7"><strong>Total TTC</strong></td>
+                <td class="num"><strong>{{ invoice.total_ttc|floatformat:2 }} €</strong></td>
+            </tr>
         </tfoot>
     </table>
     </div>

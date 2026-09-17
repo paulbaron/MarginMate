@@ -13,7 +13,9 @@ from django.test import SimpleTestCase
 from invoices.parsers import ticket_parser_for
 from invoices.parsers.base import PdfPage
 from invoices.parsers.generic_receipt import (
+    GenericReceiptParser,
     Reading,
+    TicketShop,
     _discount_targets,
     _split_by_buckets,
     _spread,
@@ -410,7 +412,7 @@ class InvoiceStyleRowTests(SimpleTestCase):
 
     def test_the_ticket_adds_up(self):
         self.assertEqual(failed(self.invoice), {})
-        self.assertEqual(self.invoice.invoice_number, "4278")
+        self.assertEqual(self.invoice.invoice_number, "4278-20260124")
 
 
 class OtherFranprixTillTests(SimpleTestCase):
@@ -489,6 +491,110 @@ class SabbhTests(SimpleTestCase):
         self.assertEqual(lines(invoice), [("Article divers", 4, D("2.80"), D("0"))])
         self.assertTrue(invoice.lines[0].is_placeholder)
         self.assertEqual(failed(invoice), {})
+
+
+# A shop no configuration knows. 2,35 + 2 x 3,10 + 1,95 = 10,50.
+UNKNOWN_SHOP = """EPICERIE DU COIN
+3 RUE INVENTEE 75011 PARIS
+TEL 01 00 00 00 00
+LE 12/03/2026 A 18:04
+TOMATES GRAPPE        2,35
+2 x SIROP MENTHE      3,10   6,20
+PAIN DE MIE           1,95
+TOTAL                10,50
+CB                   10,50
+TVA 5,5%  9,95  0,55
+MERCI DE VOTRE VISITE
+"""
+
+
+class UnknownShopTests(SimpleTestCase):
+    """The reader knows no shop by its layout: a till nobody configured is
+    read like the others, filed under whichever supplier it is given."""
+
+    def setUp(self):
+        reader = GenericReceiptParser(TicketShop("EPICERIE", (), "Épicerie du coin"))
+        self.invoice = reader.parse_pages([PdfPage(text=UNKNOWN_SHOP)])
+
+    def test_its_lines_counts_and_total(self):
+        self.assertEqual(
+            [(line.raw_name, line.quantity, line.printed_ttc, line.vat_rate) for line in self.invoice.lines],
+            [
+                ("TOMATES GRAPPE", 1, D("2.35"), FIVE_FIVE),
+                ("SIROP MENTHE", 2, D("6.20"), FIVE_FIVE),
+                ("PAIN DE MIE", 1, D("1.95"), FIVE_FIVE),
+            ],
+        )
+        self.assertEqual((self.invoice.printed_total_ttc, str(self.invoice.invoice_date)), (D("10.50"), "2026-03-12"))
+        self.assertEqual(failed(self.invoice), {})
+
+    def test_its_lines_are_filed_under_the_supplier_given(self):
+        self.assertEqual(self.invoice.supplier_code, "EPICERIE")
+        self.assertEqual({line.category for line in self.invoice.lines}, {"Épicerie du coin"})
+
+
+class LineShapeTests(SimpleTestCase):
+    def test_two_amounts_with_a_point_are_not_a_phone_number(self):
+        """"10.49 31.47" has the shape "dd.dd dd.dd" a phone pattern took for
+        a number: the line was dropped, three rillettes with it."""
+        text = FRANPRIX_HEAD + (
+            "RILLETTES INVENTEES  T1 3 X 10.49 31.47\n"
+            "TOTAL A PAYER  31.47\n"
+            "CB SANS CONTACT  31.47\n"
+            "5.5%  29.83  1.64  31.47\n"
+        ) + FRANPRIX_FOOT
+        invoice = parse("FRANPRIX", text)
+        self.assertEqual(lines(invoice), [("RILLETTES INVENTEES", 3, D("31.47"), D("0"))])
+        self.assertEqual(failed(invoice), {})
+
+    def test_a_percentage_in_a_name_stays_in_the_name(self):
+        text = MONOPRIX_HEAD + (
+            "FROMAGE BLANC 20% MG  2,39\n"
+            "TOTAL HORS AVANTAGES  2,39\n"
+            "RESTE A PAYER  2,39\n"
+            "CB EMV  2,39\n"
+            "5,5%  2,27  0,12  2,39\n"
+        ) + MONOPRIX_FOOT
+        invoice = parse("MONOPRIX", text)
+        self.assertEqual([line.raw_name for line in invoice.lines], ["FROMAGE BLANC 20% MG"])
+
+    def test_a_promotion_never_makes_an_item_cost_less_than_nothing(self):
+        """A misread "-0,75" under a 0,50 item: capped at the item, and the
+        ticket does not add up."""
+        text = MONOPRIX_HEAD + (
+            "CITRON INVENTE  0,50\n"
+            "Remise immediate -0,75\n"
+            "TOTAL HORS AVANTAGES  0,50\n"
+            "RESTE A PAYER  0,25\n"
+            "CB EMV  0,25\n"
+            "5,5%  0,24  0,01  0,25\n"
+        ) + MONOPRIX_FOOT
+        invoice = parse("MONOPRIX", text)
+        (line,) = invoice.lines
+        self.assertEqual((line.printed_ttc, line.discount_ttc), (D("0.50"), D("0.50")))
+        self.assertGreaterEqual(line.total_ht, 0)
+        self.assertIn("Somme des lignes = total imprimé", failed(invoice))
+
+    def test_a_short_ticket_number_is_a_count_of_the_day(self):
+        """"Ticket no 4278" comes round again: dated, it is not taken for the
+        same ticket on another day."""
+        text = InvoiceStyleRowTests.TEXT
+        self.assertEqual(parse("MONOPRIX", text).invoice_number, "4278-20260124")
+
+    def test_a_long_ticket_number_is_the_ticket(self):
+        self.assertEqual(parse("SABBH", SABBH_HEAD + "Numero de ticket:6800001\n").invoice_number, "6800001")
+
+    def test_lines_set_aside_are_said(self):
+        """A header or a total read among the items is left out when the rest
+        adds up - and said, in case it was an item after all."""
+        invoice = parse("FRANPRIX", OtherFranprixTillTests.TEXT)
+        set_aside = check(invoice, "Lignes écartées")
+        self.assertTrue(set_aside.passed)
+        self.assertIn("TOTAL HT MTXIE 25.91 €", set_aside.detail)
+
+    def test_nothing_set_aside_says_nothing(self):
+        invoice = parse("FRANPRIX", CancelledItemTests.TEXT)
+        self.assertNotIn("Lignes écartées", {item.label for item in invoice.checks})
 
 
 def reading(name, total, index=0, count=None, code=""):

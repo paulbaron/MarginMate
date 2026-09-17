@@ -41,8 +41,9 @@
     {% if batch.awaiting_shop_count and not batch.is_active %}
         <div class="message message-warning">
             {{ batch.awaiting_shop_count }} ticket{{ batch.awaiting_shop_count|pluralize }}
-            sans enseigne reconnue : pour chacun, choisissez son enseigne dans la liste et importez-le -
-            il s'ouvre ensuite pour vérification, à saisir d'après la photo si la lecture n'a rien donné.
+            sans enseigne reconnue : pour chacun, choisissez son enseigne - ou créez-la, avec le texte
+            imprimé en tête de ses tickets pour que les suivants soient reconnus - et importez-le. Il est lu
+            quelle que soit l'enseigne, puis s'ouvre pour vérification.
         </div>
     {% endif %}
 
@@ -106,25 +107,20 @@
                             <td><span class="status-pill status-PENDING">{% if batch.is_active %}En attente{% else %}Non lu{% endif %}</span></td>
                             <td></td>
                         {% elif entry.status == "unrecognised" %}
-                            <td colspan="3" class="muted">
-                                {{ entry.message }}
-                                {% if not entry.kept %}Pour choisir son enseigne, réimportez ce fichier.{% endif %}
+                            <td class="muted">{% if entry.header %}« {{ entry.header }} »{% else %}{{ entry.message }}{% endif %}</td>
+                            <td>{{ entry.read_date|default:"—" }}</td>
+                            <td class="num">{% if entry.read_total %}{{ entry.read_total }} €{% else %}—{% endif %}</td>
+                            <td>
+                                <span class="status-pill status-ERROR">Enseigne inconnue</span>
+                                {% if not entry.kept %}<span class="muted">réimportez ce fichier pour choisir son enseigne</span>{% endif %}
                             </td>
-                            <td><span class="status-pill status-ERROR">Enseigne inconnue</span></td>
                             <td>
                                 {% if entry.kept and not batch.is_active %}
                                     <form method="post" action="{% url 'invoices:receipt_batch_assign' batch.pk forloop.counter0 %}" class="inline-form shop-choice">
                                         {% csrf_token %}
-                                        <select name="supplier" required aria-label="Enseigne de {{ entry.name }}">
-                                            <option value="">Choisissez son enseigne…</option>
-                                            {% for group, shops in shop_groups %}
-                                                {% if shops %}
-                                                    <optgroup label="{{ group }}">
-                                                        {% for shop in shops %}<option value="{{ shop.pk }}">{{ shop.name }}</option>{% endfor %}
-                                                    </optgroup>
-                                                {% endif %}
-                                            {% endfor %}
-                                        </select>
+                                        {% with label="Enseigne de "|add:entry.name %}
+                                            {% include "invoices/_shop_choice_fields.html" with suggested=entry.header current=None %}
+                                        {% endwith %}
                                         <button class="btn btn-small" type="submit" data-busy-label="Lecture du ticket…">Importer</button>
                                     </form>
                                 {% endif %}

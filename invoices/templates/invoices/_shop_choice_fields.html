@@ -1,0 +1,24 @@
+{% comment %}
+The shop a ticket goes to: a supplier, or a new shop - its name and the text
+its tickets print at the top. The two text boxes show once "Nouvelle
+enseigne" is picked (ui.js); without script they are simply there.
+{% endcomment %}
+<select name="supplier" required aria-label="{{ label }}" data-shop-select>
+    <option value="">Choisissez l'enseigne…</option>
+    <option value="new">+ Nouvelle enseigne…</option>
+    {% for group, shops in shop_groups %}
+        {% if shops %}
+            <optgroup label="{{ group }}">
+                {% for shop in shops %}<option value="{{ shop.pk }}"{% if shop.pk == current %} disabled{% endif %}>{{ shop.name }}</option>{% endfor %}
+            </optgroup>
+        {% endif %}
+    {% endfor %}
+</select>
+<span class="new-shop" data-new-shop>
+    <label>Nom
+        <input type="text" name="new_name" maxlength="255" placeholder="Épicerie du coin" value="{{ suggested|title }}">
+    </label>
+    <label title="Un ticket qui porte ce texte sera rangé chez cette enseigne : son nom ou sa rue, tel qu'imprimé.">En-tête de ses tickets
+        <input type="text" name="new_header" maxlength="100" placeholder="EPICERIE DU COIN" value="{{ suggested }}">
+    </label>
+</span>

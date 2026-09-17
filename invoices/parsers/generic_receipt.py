@@ -138,7 +138,9 @@ CODE_AFTER_RE = re.compile(r"(?:\((?P<paren>\d)\)|\s(?P<letter>[A-D]))\s*$")
 # "A 1x BQTE 30G": the code in front of the count.
 CODE_LEAD_RE = re.compile(r"^\s*(?P<code>[A-Z])\s+(?=\d{1,3}\s*[xX×])")
 INTEGER_RE = re.compile(r"(?<![\d.,])\d{1,3}(?![\d.,]?\d)")
-PHONE_RE = re.compile(r"\d{2}[. ]\d{2}[. ]\d{2}[. ]\d{2}")
+# A French phone number: 0 and nine digits, in pairs or not. "10.49 31.47"
+# has the shape of pairs too, and was taken for one.
+PHONE_RE = re.compile(r"(?<![\d.,])0\d(?:[. ]?\d{2}){4}(?!\d)")
 DATE_RE = re.compile(r"(?<!\d)(\d{2})[/.-](\d{2})[/.-](\d{2,4})(?!\d)")
 TIME_RE = re.compile(r"(?<!\d)\d{2}\s?[:H]\s?\d{2}(?!\d)")
 LETTERS_RE = re.compile(r"[A-Za-zÀ-ÿ]")
@@ -151,6 +153,8 @@ HEADING_RE = re.compile(
 NOISE_WORDS = {"eur", "kg", "pcs", "pc", "x", "man", "brutweight", "weight", "net", "@", "à", "poids", "brut"}
 # Ticket numbers, in the forms the tills print them.
 TICKET_WORD_RE = re.compile(r"(?i)ticket\D{0,15}?(\d{4,10})(?!\d)")
+# A ticket number this short is the till's count of the day: it comes round.
+DAILY_COUNT_DIGITS = 4
 STORE_TILL_RE = re.compile(r"R\d\s*(\d{5,6}-\d{2})\s*(\d{2,4})")
 BARCODE_RE = re.compile(r"(?<!\d)(\d{18,26})(?!\d)")
 
@@ -224,11 +228,13 @@ def read_line(index: int, line: str, total: Decimal | None = None) -> Reading | 
         ):
             return Reading(index=index, name=None, vat_row=True)
 
-    taken = [match.span() for match in RATE_RE.finditer(line)]  # spans that are not money
+    # A percentage is not money - but it can be part of a name ("20% MG").
+    rates = [match.span() for match in RATE_RE.finditer(line)]
+    taken = []  # spans of figures that are not money: they end the name
     lead = CODE_LEAD_RE.match(line)
     count = None
     count_match = COUNT_RE.search(line)
-    if count_match and not _inside(count_match.start(), taken):
+    if count_match and not _inside(count_match.start(), rates):
         count = int(count_match.group("count"))
         taken.append(count_match.span())
     else:
@@ -236,7 +242,7 @@ def read_line(index: int, line: str, total: Decimal | None = None) -> Reading | 
     per_unit = PER_UNIT_RE.search(line)
     weight = None
     for match in WEIGHT_RE.finditer(line):
-        if _inside(match.start(), taken):
+        if _inside(match.start(), taken + rates):
             continue
         if match.group("kg") or per_unit:
             weight = Decimal(match.group("weight").replace(",", "."))
@@ -244,14 +250,14 @@ def read_line(index: int, line: str, total: Decimal | None = None) -> Reading | 
             break
     amounts = []  # (position, value, is the price per unit)
     for match in MONEY_RE.finditer(line):
-        if _inside(match.start(), taken):
+        if _inside(match.start(), taken + rates):
             continue
         is_per_unit = bool(per_unit and per_unit.start() <= match.start("units") < per_unit.end())
         amounts.append((match.start(), _money(match), is_per_unit))
     integers = [
         (match.start(), int(match.group()))
         for match in INTEGER_RE.finditer(line)
-        if not _inside(match.start(), taken)
+        if not _inside(match.start(), taken + rates)
     ]
     code_before = CODE_BEFORE_RE.search(line)
 
@@ -387,7 +393,9 @@ class GenericReceiptParser(ReceiptParser):
             # Only a line whose count and unit price make its amount is an
             # item then: "7 X 0.49 3.43" is one, its "T1" read "11".
             items = [item for item in items if item.explained is not None and abs(item.explained - item.total) <= CENTS]
+        read = items
         items = self._select(items, lines, total, notes)
+        set_aside = [item for item in read if item not in items]
         if items:
             items_end = max(items_end, items[-1].index + 1)
         promotion = printed_promotion(lines, items_end, total)
@@ -426,6 +434,15 @@ class GenericReceiptParser(ReceiptParser):
         missing = missing_item_check(gross, promotion)
         if missing is not None:
             extra.append(missing)
+        if set_aside:
+            extra.append(
+                ParseCheck(
+                    label="Lignes écartées",
+                    passed=True,
+                    detail="lues mais hors des articles (en-tête, total mal lu) : "
+                    + "; ".join(f"{item.name or UNREAD_NAME} {item.total:.2f} €" for item in set_aside),
+                )
+            )
 
         text = "\n".join(lines)
         invoice_date = read_date(text, date_hint)
@@ -436,7 +453,7 @@ class GenericReceiptParser(ReceiptParser):
         )
         return ParsedInvoice(
             supplier_code=self.supplier_code,
-            invoice_number=compose_invoice_number(_ticket_number(text), invoice_date, total),
+            invoice_number=compose_invoice_number(_ticket_number(text, invoice_date), invoice_date, total),
             invoice_date=invoice_date,
             lines=parsed_lines,
             reconciliation_adjustment=adjustment,
@@ -576,7 +593,9 @@ class GenericReceiptParser(ReceiptParser):
                     return
         voids.pop()
         if items:
-            items[-1].discount += amount
+            # Never beyond what the item costs: the rest, misread or not, is
+            # left for the sums to report.
+            items[-1].discount += max(min(amount, items[-1].net), ZERO)
 
     def _attach_details(self, items, details, voids, weight_problems, fixes, problems):
         """A detail line explains a neighbouring item: the one whose amount
@@ -928,10 +947,13 @@ def _split_by_buckets(items: list[Reading], summaries) -> dict[int, Decimal] | N
     return rates
 
 
-def _ticket_number(text: str) -> str:
+def _ticket_number(text: str, invoice_date: date | None) -> str:
     match = TICKET_WORD_RE.search(text)
     if match:
-        return match.group(1)
+        number = match.group(1)
+        if len(number) <= DAILY_COUNT_DIGITS and invoice_date is not None:
+            return f"{number}-{invoice_date:%Y%m%d}"
+        return number
     match = STORE_TILL_RE.search(text.replace(" ", ""))
     if match:
         return "-".join(match.groups())

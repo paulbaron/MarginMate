@@ -911,7 +911,7 @@ form p { margin: var(--s3) 0; }
  */
 .receipt-review {
     display: grid;
-    grid-template-columns: minmax(280px, 380px) 1fr;
+    grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
     gap: var(--s5);
     align-items: start;
 }
@@ -1020,6 +1020,17 @@ form p { margin: var(--s3) 0; }
 .batch-progress-bar { height: 100%; background: var(--green); transition: width 0.4s ease; }
 /* A file no shop was recognised on: some supplier names are a sentence long. */
 .shop-choice select { width: 14rem; max-width: 100%; }
+.new-shop { display: inline-flex; flex-wrap: wrap; gap: var(--s2); }
+.new-shop[hidden] { display: none; }
+.new-shop label { display: grid; gap: 2px; margin: 0; font-size: 0.75rem; color: var(--muted); }
+.new-shop input { width: 12rem; max-width: 100%; }
+/* The ticket's shop, under its title on the review page. */
+.move-shop { margin-top: var(--s2); font-size: 0.9rem; }
+.move-shop summary { cursor: pointer; color: var(--text-dim); display: inline; }
+.move-shop .inline-form { margin-top: var(--s2); align-items: center; }
+/* A shop's price list, folded away where its till prints names. */
+.known-prices > summary { cursor: pointer; list-style-position: inside; }
+.known-prices > summary h2 { display: inline; }
 /* The ticket's date, above its lines on the review screen. */
 .receipt-date { align-items: center; margin-bottom: var(--s3); }
 .receipt-date label { margin: 0; }
@@ -1027,9 +1038,12 @@ form p { margin: var(--s3) 0; }
 
 /* The correction page's lines: one grid, so every amount sits under its
    heading and a column of prices can be run down against the document.
-   Below 700px the heading goes and each row wraps under its product name;
-   the placeholders say which box is which. */
-.correction-grid { display: grid; gap: var(--s2); margin-bottom: var(--s3); }
+   Where the lines have under 44rem - a phone, or a laptop with the photo
+   beside them - the heading goes and each row wraps under its product name;
+   the placeholders say which box is which. Measured on the lines' own width
+   (a container query), not the window's: at 1000px, a row wider than its
+   column pushed the page sideways. */
+.correction-grid { display: grid; gap: var(--s2); margin-bottom: var(--s3); container-type: inline-size; }
 .correction-head,
 .correction-row {
     display: grid;
@@ -1051,7 +1065,7 @@ form p { margin: var(--s3) 0; }
 .correction-row input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .correction-row .js-remove-line { padding-left: 0; padding-right: 0; }
 
-@media (max-width: 700px) {
+@container (max-width: 44rem) {
     .correction-head { display: none; }
     .correction-row,
     .correction-grid-invoice .correction-row { grid-template-columns: repeat(4, minmax(0, 1fr)); }

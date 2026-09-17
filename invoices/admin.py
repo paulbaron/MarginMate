@@ -16,7 +16,7 @@ class EmailInvoiceSourceInline(admin.StackedInline):
 
 @admin.register(Supplier)
 class SupplierAdmin(admin.ModelAdmin):
-    list_display = ["name", "code", "parser_key", "is_scrapable"]
+    list_display = ["name", "code", "parser_key", "ticket_header", "is_scrapable"]
 
 
 @admin.register(InvoiceType)

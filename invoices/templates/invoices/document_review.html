@@ -20,6 +20,21 @@
                     {% if remaining %} · {{ remaining }} ticket{{ remaining|pluralize }} en attente{% endif %}
                 {% endif %}
             </p>
+            {% if is_receipt %}
+                {% comment %}
+                A ticket filed under the wrong shop - or under one chosen for a
+                header nobody knew - is moved here, its lines with it.
+                {% endcomment %}
+                <details class="move-shop">
+                    <summary>Pas un ticket {{ invoice.supplier.name }} ? Changer d'enseigne</summary>
+                    <form method="post" class="inline-form shop-choice" data-leaves-lines>
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="move_shop">
+                        {% include "invoices/_shop_choice_fields.html" with label="Enseigne du ticket" suggested=suggested_header current=invoice.supplier_id %}
+                        <button class="btn btn-small btn-secondary" type="submit">Ranger ce ticket</button>
+                    </form>
+                </details>
+            {% endif %}
         </div>
         <div class="actions">
             {% if invoice.source_file %}
@@ -213,7 +228,8 @@
                 Recording the price here is what stops the next receipt from a
                 shop that prints no product names needing the same manual work.
                 {% endcomment %}
-                <h2>Prix connus chez {{ invoice.supplier.name }}</h2>
+                <details class="known-prices"{% if prices_open or price_form.errors %} open{% endif %}>
+                <summary><h2>Prix connus chez {{ invoice.supplier.name }}{% if known_prices %} <span class="muted">({{ known_prices|length }})</span>{% endif %}</h2></summary>
                 <p class="lead">
                     Certaines caisses n'impriment pas les noms de produits, seulement
                     « Article divers » et un prix. Retenez ici ce que chaque prix désigne :
@@ -264,6 +280,7 @@
                         </div>
                     {% endif %}
                 </div>
+                </details>
 
                 <h2>Texte lu sur la photo</h2>
                 <details>
@@ -387,6 +404,22 @@
         check.querySelector(".check-mark").textContent = neutral ? "–" : passed ? "✓" : "✕";
         check.querySelector(".check-detail").textContent = detail;
     }
+
+    // Enter in a box moves on to the next one rather than validating the
+    // whole document halfway through its lines.
+    lines.addEventListener("keydown", function (event) {
+        if (event.key !== "Enter" || event.target.tagName !== "INPUT" || event.target.form !== lines) return;
+        event.preventDefault();
+        var boxes = Array.prototype.filter.call(
+            lines.querySelectorAll("input:not([type=hidden]):not([type=checkbox])"),
+            function (box) { return box.offsetParent !== null; }
+        );
+        var next = boxes[boxes.indexOf(event.target) + 1];
+        if (next) {
+            next.focus();
+            if (next.select) next.select();
+        }
+    });
 
     lines.addEventListener("input", function (event) {
         // The rename fields sit in the rows but belong to their own forms.

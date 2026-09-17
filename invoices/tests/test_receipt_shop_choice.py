@@ -92,17 +92,22 @@ class ImportAsChosenShopTests(TestCase):
         self.assertIn("Numero de ticket", invoice.ocr_text)
         self.assertIn(invoice, pending_receipts())
 
-    def test_a_supplier_with_no_ticket_reader_is_filed_empty_to_type_in(self):
+    def test_a_paper_ticket_of_a_supplier_with_invoices_is_read_too(self):
+        """Metro's own till: no shop settings, the same reader."""
         metro = Supplier.objects.get(code="METRO")
         invoice = self._import(supplier=metro)
-        self.assertEqual((invoice.supplier, invoice.lines.count()), (metro, 0))
+        self.assertEqual((invoice.supplier, invoice.lines.count()), (metro, 2))
+        self.assertIn("Numero de ticket", invoice.ocr_text)
+        self.assertTrue(invoice.source_file)
+        self.assertIn(invoice, pending_receipts())
+
+    def test_the_ai_pseudo_supplier_files_it_empty_to_type_in(self):
+        invoice = self._import(supplier=Supplier.objects.get(code="OTHER"))
+        self.assertEqual(invoice.lines.count(), 0)
         self.assertEqual(invoice.status, Invoice.Status.NEEDS_REVIEW)
         failed = self._failed(invoice)
         self.assertEqual(sorted(failed), ["Date du ticket", "Lecture automatique"])
         self.assertIn("saisissez les lignes", failed["Lecture automatique"])
-        self.assertIn("Numero de ticket", invoice.ocr_text)
-        self.assertTrue(invoice.source_file)
-        self.assertIn(invoice, pending_receipts())
 
     def test_a_reader_that_fails_still_files_the_ticket_to_type_in(self):
         with mock.patch(
@@ -179,6 +184,7 @@ class ChooseShopInBatchTests(TestCase):
         self.assertContains(response, f'<option value="{self.sabbh.pk}">Sabbh Oriental</option>', html=True)
         metro = Supplier.objects.get(code="METRO")
         self.assertContains(response, f'<option value="{metro.pk}">Metro</option>', html=True)
+        self.assertContains(response, '<option value="new">+ Nouvelle enseigne…</option>', html=True)
         self.assertNotContains(response, "analyse IA")
         self.assertContains(response, "choisissez son enseigne")
 
