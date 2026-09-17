@@ -1,0 +1,144 @@
+{% comment %}
+The products no stock item has claimed yet, beside the list on the Produits
+page. Every form here posts in place (hx-post) and gets this panel back; the
+page script then reloads the list opened where the product went. Without
+JavaScript the same forms post normally and come back to the page.
+{% endcomment %}
+<div id="review-panel-body" class="review-panel-body">
+    <div class="review-panel-head">
+        <h2 id="review-panel-title">À classer <span class="count-pill">{{ review_total }}</span></h2>
+        <button type="button" class="link-button" data-panel-close>Masquer</button>
+    </div>
+
+    {% if show_messages and messages %}
+        <ul class="messages">
+            {% for message in messages %}
+                <li class="message message-{{ message.tags }}">{{ message }}</li>
+            {% endfor %}
+        </ul>
+    {% endif %}
+
+    {% if classified %}
+        <div class="classified-note" role="status">
+            <span>
+                ✓ « {{ classified.product.raw_name }} » classé dans
+                <a href="#catalogue" data-reveal-stock-type="{{ classified.stock_type.pk }}">{{ classified.stock_type.name }}</a>
+                {% if classified.created %}<span class="muted">(nouvel article{% if classified.stock_type.category %}, {{ classified.stock_type.category }}{% endif %})</span>{% endif %}
+                — 1 produit = {{ classified.stock_equivalent }} {{ classified.stock_type.get_unit_display|lower }}.
+            </span>
+            <form method="post" action="{% url 'inventory:remove_product' classified.product.pk %}"
+                  hx-post="{% url 'inventory:remove_product' classified.product.pk %}"
+                  hx-target="#review-panel-body" hx-swap="outerHTML" class="inline-action">
+                {% csrf_token %}
+                <input type="hidden" name="drop_type" value="{{ classified.undo }}">
+                <button type="submit" class="link-button">Annuler</button>
+            </form>
+        </div>
+    {% endif %}
+
+    {% if review_products %}
+        <p class="muted review-panel-lead">
+            Trouvés sur une facture ou un ticket, rangés dans aucun article de stock. Tapez l'article :
+            la liste montre où le produit va, et l'ouvre dessus une fois classé.
+        </p>
+        {% if suggested_count %}
+            <form method="post" action="{% url 'inventory:approve_all_suggestions' %}"
+                  data-confirm="Approuver {{ suggested_count }} suggestion(s) sans les vérifier une par une ?
+
+Confiance : {{ confidence_counts.high|default:0 }} haute, {{ confidence_counts.medium|default:0 }} moyenne, {{ confidence_counts.low|default:0 }} basse."
+                  class="review-panel-approve">
+                {% csrf_token %}
+                <button class="btn btn-small btn-secondary" type="submit">{% if suggested_count == 1 %}Approuver la suggestion{% else %}Approuver les {{ suggested_count }} suggestions{% endif %}</button>
+            </form>
+        {% endif %}
+        {% if fallback_count %}
+            <details class="explainer" data-persist="review-help" data-persist-durable>
+                <summary>D'où viennent les propositions</summary>
+                <p>
+                    D'une table de correspondance (marque ou nom → article). Un produit non reconnu est proposé
+                    sous son propre nom, marqué « 🏷️ nom brut » : {{ fallback_count }} dans ce cas.
+                    Vérifiez avant de classer.
+                </p>
+            </details>
+        {% endif %}
+    {% endif %}
+
+    <datalist id="category-datalist">
+        {% for cat in existing_categories %}<option value="{{ cat }}">{% endfor %}
+    </datalist>
+    <datalist id="stock-type-datalist">
+        {% for st in all_stock_types %}<option value="{{ st.name }}">{% endfor %}
+    </datalist>
+    {{ stock_types_json|json_script:"stock-types-data" }}
+
+    {% for product in review_products %}
+        {% with s=product.ai_suggestion lines=product.invoice_lines.all %}
+        <article class="review-card" aria-label="{{ product.raw_name }}">
+            <div class="review-card-head">
+                <strong>{{ product.raw_name }}</strong>
+                <span class="muted">{{ product.supplier.name }}</span>
+            </div>
+            <ul class="review-card-lines">
+                {% for line in lines|slice:":3" %}
+                    <li>
+                        <a href="{% url 'invoices:invoice_detail' line.invoice_id %}">{{ line.invoice.invoice_date|date:"d/m/Y"|default:"date ?" }}</a> :
+                        {{ line.quantity }} acheté{{ line.quantity|pluralize }}{% if line.colisage > 1 %} (colis de {{ line.colisage }}){% endif %}{% if line.total_volume %}, {{ line.total_volume|floatformat:"-3" }} L/kg{% endif %},
+                        {{ line.total_ht|floatformat:2 }} € HT
+                    </li>
+                {% endfor %}
+                {% if lines|length > 3 %}<li class="muted">et {{ lines|length|add:"-3" }} autre{{ lines|length|add:"-3"|pluralize }} achat{{ lines|length|add:"-3"|pluralize }}</li>{% endif %}
+            </ul>
+            {% if s %}
+                <p class="review-card-suggestion">
+                    {% if s.source == "fallback" %}🏷️ Nom brut{% else %}📋 Suggestion{% endif %}
+                    <span class="muted">(confiance {% if s.confidence == "high" %}haute{% elif s.confidence == "medium" %}moyenne{% elif s.confidence == "low" %}basse{% else %}?{% endif %}) {{ s.reasoning|default:"" }}</span>
+                </p>
+            {% endif %}
+            <form method="post" action="{% url 'inventory:assign_product' product.id %}"
+                  hx-post="{% url 'inventory:assign_product' product.id %}"
+                  hx-target="#review-panel-body" hx-swap="outerHTML" class="review-card-form">
+                {% csrf_token %}
+                <label class="review-field review-field-wide">
+                    <span>Article de stock</span>
+                    <input type="text" name="stock_type_name" list="stock-type-datalist"
+                           class="js-stock-type-name" autocomplete="off" placeholder="ex : Vodka" required
+                           data-unit-target="stock-unit-{{ product.id }}"
+                           data-category-target="stock-category-{{ product.id }}"
+                           data-hint-target="stock-hint-{{ product.id }}"
+                           value="{{ s.stock_type_name|default:'' }}">
+                </label>
+                <p class="stock-type-hint" id="stock-hint-{{ product.id }}" aria-live="polite"></p>
+                <label class="review-field">
+                    <span>Unité</span>
+                    <select name="new_stock_type_unit" id="stock-unit-{{ product.id }}">
+                        {% for value, label in unit_choices %}
+                            <option value="{{ value }}"{% if s.new_stock_type_unit == value %} selected{% endif %}>{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label class="review-field">
+                    <span>Catégorie</span>
+                    <input type="text" name="new_stock_type_category" id="stock-category-{{ product.id }}"
+                           list="category-datalist" autocomplete="off" placeholder="ex : Spiritueux"
+                           value="{{ s.new_stock_type_category|default:'' }}">
+                </label>
+                <label class="review-field">
+                    <span>1 produit =</span>
+                    <input type="text" name="stock_equivalent" inputmode="decimal"
+                           value="{% if s %}{{ s.stock_equivalent }}{% else %}1{% endif %}">
+                </label>
+                <button class="btn btn-small" type="submit">Classer</button>
+            </form>
+        </article>
+        {% endwith %}
+    {% empty %}
+        <div class="empty-state review-panel-done">
+            Tout est classé ✓
+            <button type="button" class="btn btn-small btn-secondary" data-panel-close>Fermer le panneau</button>
+        </div>
+    {% endfor %}
+
+    {% if review_more %}
+        <p class="muted">… et {{ review_more }} autres produits, affichés à mesure que ceux-ci sont classés.</p>
+    {% endif %}
+</div>

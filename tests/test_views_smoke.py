@@ -145,7 +145,13 @@ class PageSmokeTests(TestCase):
 
     # --- inventory -------------------------------------------------------
     def test_stock_list(self):
-        self.assertContains(self.assertPageOK("inventory:stock_list"), "Vodka")
+        response = self.assertPageOK("inventory:stock_list")
+        self.assertContains(response, "Vodka")
+        # The products to classify are on the same page.
+        self.assertContains(response, "RHUM INCONNU")
+
+    def test_stock_catalogue(self):
+        self.assertContains(self.assertPageOK("inventory:stock_catalogue"), "Vodka")
 
     def test_stock_type_update(self):
         self.assertPageOK("inventory:stock_type_update", pk=self.vodka.pk)
@@ -163,7 +169,11 @@ class PageSmokeTests(TestCase):
         self.assertPageOK("inventory:stock_type_price_history", pk=self.vodka.pk)
 
     def test_review_queue(self):
-        self.assertContains(self.assertPageOK("inventory:review_queue"), "RHUM INCONNU")
+        """Now the Produits page's side panel: the page asks for it alone."""
+        self.assertRedirectsOnGet("inventory:review_queue")
+        response = self.client.get(reverse("inventory:review_queue"), HTTP_HX_REQUEST="true")
+        self.assertContains(response, "RHUM INCONNU")
+        assertNoUnrenderedTemplateSyntax(self, response, "the review panel")
 
     def test_assign_product(self):
         self.assertRedirectsOnGet("inventory:assign_product", product_id=self.unassigned.pk)
@@ -300,7 +310,9 @@ class EmptyDatabasePageSmokeTests(TestCase):
         self.assertPageOK("inventory:stock_list")
 
     def test_review_queue(self):
-        self.assertPageOK("inventory:review_queue")
+        response = self.client.get(reverse("inventory:review_queue"), HTTP_HX_REQUEST="true")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Tout est classé")
 
     def test_stock_take_list(self):
         self.assertPageOK("inventory:stock_take_list")

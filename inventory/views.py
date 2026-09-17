@@ -5,14 +5,15 @@ from decimal import Decimal, InvalidOperation
 from itertools import groupby
 
 from django.contrib import messages
+from django.core import signing
 from django.db import transaction
 from django.db.models import ProtectedError
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
-from django.urls import reverse_lazy
+from django.urls import reverse, reverse_lazy
 from django.utils import timezone
 from django.utils.dateparse import parse_date
-from django.views.generic import CreateView, ListView, UpdateView
+from django.views.generic import CreateView, ListView, TemplateView, UpdateView
 
 from .forms import (
     STOCK_TYPE_ENTRY_SUFFIX,
@@ -48,170 +49,189 @@ def existing_categories():
     return StockType.objects.exclude(category="").values_list("category", flat=True).distinct().order_by("category")
 
 
-class StockListView(ListView):
-    model = StockType
-    template_name = "inventory/stock_list.html"
-    context_object_name = "stock_types"
+class StockListView(TemplateView):
+    """"Produits": every stock item and what it is worth - and, beside them,
+    the products no stock item has claimed yet.
 
-    def get_queryset(self):
-        return StockType.objects.all().order_by("category", "name")
+    One page because it is one job: a product is classified in the side
+    panel and checked in the list next to it, where it has just landed (the
+    panel's script reloads the list, `stock_catalogue`, opened on that
+    item). The review queue used to be a page of its own, and checking a
+    classification meant going back and forth between the two.
+    """
+
+    template_name = "inventory/stock_list.html"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        stock_types = list(context["stock_types"])
-
-        # Only the per-type totals here - one query for every movement's
-        # (quantity, unit_cost_ht, invoice line total/VAT) instead of a
-        # separate aggregate query per stock type (was 3-4 queries x 316
-        # stock types = well over a thousand). Summed in Python rather than
-        # via StockType.current_quantity/current_value_ht/current_value_ttc
-        # (still fine as convenience properties elsewhere, e.g. the admin
-        # list view - one query per row doesn't matter there the way it
-        # does with every stock type on screen at once here) - SQLite's own
-        # SUM()/multiplication isn't true decimal arithmetic and drifts
-        # slightly once there are enough rows, which Python's Decimal
-        # doesn't.
-        #
-        # The purchase-history detail (2500+ rows and growing) is
-        # deliberately NOT fetched here at all - seeing every stock type's
-        # full history at once, most of it hidden behind a collapsed
-        # section nobody opens, was most of why this page used to take
-        # several seconds just to render (8+ MB of HTML). It's fetched
-        # lazily per stock type instead, the first time a row is expanded -
-        # see stock_type_movements() below.
-        quantity_by_type: dict[int, Decimal] = {}
-        value_ht_by_type: dict[int, Decimal] = {}
-        value_ttc_by_type: dict[int, Decimal] = {}
-        values = StockMovement.objects.values_list(
-            "stock_type_id", "quantity", "unit_cost_ht", "invoice_line__total_ht", "invoice_line__vat_rate"
-        )
-        for stock_type_id, quantity, unit_cost_ht, line_total_ht, vat_rate in values:
-            quantity_by_type[stock_type_id] = quantity_by_type.get(stock_type_id, Decimal("0")) + quantity
-            value_ht_by_type[stock_type_id] = value_ht_by_type.get(stock_type_id, Decimal("0")) + (
-                quantity * unit_cost_ht
-            )
-            if line_total_ht is not None:
-                value_ttc_by_type[stock_type_id] = value_ttc_by_type.get(stock_type_id, Decimal("0")) + (
-                    line_total_ht * (vat_rate + Decimal("1"))
-                )
-
-        rows = [
-            {
-                "stock_type": st,
-                "quantity": quantity_by_type.get(st.id, Decimal("0")),
-                "value_ht": value_ht_by_type.get(st.id, Decimal("0")),
-                "value_ttc": value_ttc_by_type.get(st.id, Decimal("0")),
-            }
-            for st in stock_types
-        ]
-        categories = []
-        for category, group in groupby(rows, key=lambda row: row["stock_type"].category):
-            category_rows = list(group)
-            categories.append(
-                {
-                    "name": category or "Sans catégorie",
-                    "rows": category_rows,
-                    "total_value_ht": sum((row["value_ht"] for row in category_rows), start=Decimal("0")),
-                    "total_value_ttc": sum((row["value_ttc"] for row in category_rows), start=Decimal("0")),
-                }
-            )
-        context["categories"] = categories
-        context["total_value_ht"] = sum((row["value_ht"] for row in rows), start=0)
-        context["total_value_ttc"] = sum((row["value_ttc"] for row in rows), start=0)
-        context["stock_type_count"] = len(stock_types)
-        # How much of each item has been sold - see variance.quantities_sold
-        # for why it is two numbers rather than one. unit_costs reuses the
-        # sums already computed above (same formula as
-        # StockType.current_unit_cost_ht) rather than have quantities_sold()
-        # scan StockMovement a second time for the same numbers.
-        unit_costs = {
-            stock_type_id: value_ht_by_type[stock_type_id] / quantity
-            for stock_type_id, quantity in quantity_by_type.items()
-            if quantity
-        }
-        period = self.selected_period()
-        context["period"] = period
-        context["stock_takes"] = StockTake.objects.all()
-        if period is None:
-            # All time. Passing the ledger quantities in is what makes the
-            # "Vendu" column comparable to the "Quantité" column beside it:
-            # they are then literally the same figure.
-            sold = quantities_sold(unit_costs=unit_costs, available=quantity_by_type)
-        else:
-            sold = quantities_sold(
-                period.start, period.end, unit_costs=unit_costs, available=period.ceilings()
-            )
-        self._attach_sold(context, categories, sold, period, unit_costs)
-
-        context["review_count"] = Product.objects.filter(stock_type__isnull=True).count()
-        context["empty_stock_type_count"] = StockType.objects.filter(products__isnull=True).distinct().count()
+        context.update(catalogue_context(self.request))
+        context.update(review_panel_context())
         return context
 
-    def selected_period(self) -> StockPeriod | None:
-        """The window `?inventaire=<pk>` asks for, or None for all time.
 
-        Only the CLOSING count is named; the opening one is whichever came
-        before it, exactly as on the écarts page - naming both would let the
-        two pages disagree about what "this period" means, and there is no
-        second thing to choose anyway.
-        """
-        take_id = self.request.GET.get("inventaire")
-        # Anything that isn't an id we have falls back to all time rather
-        # than erroring: this is a query parameter, so a stale bookmark, a
-        # since-deleted inventory or a hand-typed URL all end up here, and
-        # `pk="tomorrow"` raises ValueError rather than simply not matching.
-        if not (take_id or "").isdigit():
-            return None
-        closing_take = StockTake.objects.filter(pk=take_id).first()
-        return stock_between(closing_take) if closing_take is not None else None
+def stock_catalogue(request):
+    """The list alone, and its headline figures, for the page to reload in
+    place after a product was classified or sent back."""
+    return render(request, "inventory/_catalogue_refresh.html", catalogue_context(request))
 
-    @staticmethod
-    def _attach_sold(context, categories, sold, period, unit_costs):
-        """Hang the sold/period figures on each row, and total them up."""
-        over_stock = 0
-        uncounted = 0
-        missing_value = Decimal("0")
-        for category in categories:
-            category["total_missing_value"] = Decimal("0")
-            for row in category["rows"]:
-                stock_type_id = row["stock_type"].id
-                row["sold"] = sold.get(stock_type_id)
-                if period is None:
-                    row["flag_over"] = row["sold"] is not None and row["sold"].is_over
-                    if row["flag_over"]:
-                        over_stock += 1
-                    continue
-                item = period.items.get(stock_type_id) or PeriodStock()
-                row["period"] = item
-                if row["sold"] is None:
-                    # Bought and counted but never sold - which is not the
-                    # same as "not in this period", and the difference is the
-                    # whole of what left the shelf being unexplained.
-                    row["sold"] = SoldQuantity(available=item.sellable)
-                # Nothing bought, counted or sold: this item simply wasn't
-                # part of the period, and there are hundreds of those.
-                row["in_period"] = item.has_activity or bool(row["sold"].headline)
-                # An item missing from either count has no measured opening
-                # or closing, so everything it bought reads as evaporated -
-                # the single biggest source of false "missing" there is (see
-                # CLAUDE.md). It is listed, and left without a verdict.
-                row["reliable"] = item.counted
-                row["flag_over"] = False
-                if not row["in_period"]:
-                    continue
-                if not row["reliable"]:
-                    uncounted += 1
-                    continue
-                row["flag_over"] = row["sold"].is_over
+
+def catalogue_context(request) -> dict:
+    """The stock list: categories of stock items with their quantities,
+    values and sales - over all time, or the period `?inventaire=` names."""
+    stock_types = list(StockType.objects.all().order_by("category", "name"))
+    context = {}
+
+    # Only the per-type totals here - one query for every movement's
+    # (quantity, unit_cost_ht, invoice line total/VAT) instead of a
+    # separate aggregate query per stock type (was 3-4 queries x 316
+    # stock types = well over a thousand). Summed in Python rather than
+    # via StockType.current_quantity/current_value_ht/current_value_ttc
+    # (still fine as convenience properties elsewhere, e.g. the admin
+    # list view - one query per row doesn't matter there the way it
+    # does with every stock type on screen at once here) - SQLite's own
+    # SUM()/multiplication isn't true decimal arithmetic and drifts
+    # slightly once there are enough rows, which Python's Decimal
+    # doesn't.
+    #
+    # The purchase-history detail (2500+ rows and growing) is
+    # deliberately NOT fetched here at all - seeing every stock type's
+    # full history at once, most of it hidden behind a collapsed
+    # section nobody opens, was most of why this page used to take
+    # several seconds just to render (8+ MB of HTML). It's fetched
+    # lazily per stock type instead, the first time a row is expanded -
+    # see stock_type_movements() below.
+    quantity_by_type: dict[int, Decimal] = {}
+    value_ht_by_type: dict[int, Decimal] = {}
+    value_ttc_by_type: dict[int, Decimal] = {}
+    values = StockMovement.objects.values_list(
+        "stock_type_id", "quantity", "unit_cost_ht", "invoice_line__total_ht", "invoice_line__vat_rate"
+    )
+    for stock_type_id, quantity, unit_cost_ht, line_total_ht, vat_rate in values:
+        quantity_by_type[stock_type_id] = quantity_by_type.get(stock_type_id, Decimal("0")) + quantity
+        value_ht_by_type[stock_type_id] = value_ht_by_type.get(stock_type_id, Decimal("0")) + (
+            quantity * unit_cost_ht
+        )
+        if line_total_ht is not None:
+            value_ttc_by_type[stock_type_id] = value_ttc_by_type.get(stock_type_id, Decimal("0")) + (
+                line_total_ht * (vat_rate + Decimal("1"))
+            )
+
+    rows = [
+        {
+            "stock_type": st,
+            "quantity": quantity_by_type.get(st.id, Decimal("0")),
+            "value_ht": value_ht_by_type.get(st.id, Decimal("0")),
+            "value_ttc": value_ttc_by_type.get(st.id, Decimal("0")),
+        }
+        for st in stock_types
+    ]
+    categories = []
+    for category, group in groupby(rows, key=lambda row: row["stock_type"].category):
+        category_rows = list(group)
+        categories.append(
+            {
+                "name": category or "Sans catégorie",
+                "rows": category_rows,
+                "total_value_ht": sum((row["value_ht"] for row in category_rows), start=Decimal("0")),
+                "total_value_ttc": sum((row["value_ttc"] for row in category_rows), start=Decimal("0")),
+            }
+        )
+    context["categories"] = categories
+    context["total_value_ht"] = sum((row["value_ht"] for row in rows), start=0)
+    context["total_value_ttc"] = sum((row["value_ttc"] for row in rows), start=0)
+    context["stock_type_count"] = len(stock_types)
+    # How much of each item has been sold - see variance.quantities_sold
+    # for why it is two numbers rather than one. unit_costs reuses the
+    # sums already computed above (same formula as
+    # StockType.current_unit_cost_ht) rather than have quantities_sold()
+    # scan StockMovement a second time for the same numbers.
+    unit_costs = {
+        stock_type_id: value_ht_by_type[stock_type_id] / quantity
+        for stock_type_id, quantity in quantity_by_type.items()
+        if quantity
+    }
+    period = selected_period(request)
+    context["period"] = period
+    context["stock_takes"] = StockTake.objects.all()
+    if period is None:
+        # All time. Passing the ledger quantities in is what makes the
+        # "Vendu" column comparable to the "Quantité" column beside it:
+        # they are then literally the same figure.
+        sold = quantities_sold(unit_costs=unit_costs, available=quantity_by_type)
+    else:
+        sold = quantities_sold(
+            period.start, period.end, unit_costs=unit_costs, available=period.ceilings()
+        )
+    _attach_sold(context, categories, sold, period, unit_costs)
+
+    context["review_count"] = Product.objects.filter(stock_type__isnull=True).count()
+    context["empty_stock_type_count"] = StockType.objects.filter(products__isnull=True).distinct().count()
+    return context
+
+def selected_period(request) -> StockPeriod | None:
+    """The window `?inventaire=<pk>` asks for, or None for all time.
+
+    Only the CLOSING count is named; the opening one is whichever came
+    before it, exactly as on the écarts page - naming both would let the
+    two pages disagree about what "this period" means, and there is no
+    second thing to choose anyway.
+    """
+    take_id = request.GET.get("inventaire")
+    # Anything that isn't an id we have falls back to all time rather
+    # than erroring: this is a query parameter, so a stale bookmark, a
+    # since-deleted inventory or a hand-typed URL all end up here, and
+    # `pk="tomorrow"` raises ValueError rather than simply not matching.
+    if not (take_id or "").isdigit():
+        return None
+    closing_take = StockTake.objects.filter(pk=take_id).first()
+    return stock_between(closing_take) if closing_take is not None else None
+
+def _attach_sold(context, categories, sold, period, unit_costs):
+    """Hang the sold/period figures on each row, and total them up."""
+    over_stock = 0
+    uncounted = 0
+    missing_value = Decimal("0")
+    for category in categories:
+        category["total_missing_value"] = Decimal("0")
+        for row in category["rows"]:
+            stock_type_id = row["stock_type"].id
+            row["sold"] = sold.get(stock_type_id)
+            if period is None:
+                row["flag_over"] = row["sold"] is not None and row["sold"].is_over
                 if row["flag_over"]:
                     over_stock += 1
-                row["missing_value_ht"] = row["sold"].unexplained * unit_costs.get(stock_type_id, Decimal("0"))
-                category["total_missing_value"] += row["missing_value_ht"]
-                missing_value += row["missing_value_ht"]
-        context["over_stock_count"] = over_stock
-        context["uncounted_count"] = uncounted
-        context["total_missing_value"] = missing_value
-        context["column_count"] = 7 if period is None else 10
+                continue
+            item = period.items.get(stock_type_id) or PeriodStock()
+            row["period"] = item
+            if row["sold"] is None:
+                # Bought and counted but never sold - which is not the
+                # same as "not in this period", and the difference is the
+                # whole of what left the shelf being unexplained.
+                row["sold"] = SoldQuantity(available=item.sellable)
+            # Nothing bought, counted or sold: this item simply wasn't
+            # part of the period, and there are hundreds of those.
+            row["in_period"] = item.has_activity or bool(row["sold"].headline)
+            # An item missing from either count has no measured opening
+            # or closing, so everything it bought reads as evaporated -
+            # the single biggest source of false "missing" there is (see
+            # CLAUDE.md). It is listed, and left without a verdict.
+            row["reliable"] = item.counted
+            row["flag_over"] = False
+            if not row["in_period"]:
+                continue
+            if not row["reliable"]:
+                uncounted += 1
+                continue
+            row["flag_over"] = row["sold"].is_over
+            if row["flag_over"]:
+                over_stock += 1
+            row["missing_value_ht"] = row["sold"].unexplained * unit_costs.get(stock_type_id, Decimal("0"))
+            category["total_missing_value"] += row["missing_value_ht"]
+            missing_value += row["missing_value_ht"]
+    context["over_stock_count"] = over_stock
+    context["uncounted_count"] = uncounted
+    context["total_missing_value"] = missing_value
+    context["column_count"] = 7 if period is None else 10
 
 
 def _stock_type_movement_entries(stock_type):
@@ -689,59 +709,118 @@ def _where_used(objects) -> str:
     return " ; ".join(parts) or "ailleurs"
 
 
-class ReviewQueueView(ListView):
-    model = Product
-    template_name = "inventory/review_queue.html"
-    context_object_name = "products"
-    paginate_by = 50
+#: How many products the side panel lists at once; the next ones come up as
+#: these are classified.
+REVIEW_PANEL_SIZE = 50
+#: The undo of a classification may delete the stock item it created - and
+#: only that one: the id it posts back is signed with this.
+UNDO_SALT = "inventory.undo-classification"
 
-    def get_queryset(self):
-        # Every pending product gets a suggestion before the page ever
-        # renders - no separate button to click, no stale/blank rows. Cheap
-        # to call on every visit: it only touches products with no
-        # suggestion yet, so once the queue is fully autofilled this is a
-        # single no-op query.
-        apply_rules_to_pending_products()
-        return (
-            Product.objects.filter(stock_type__isnull=True)
-            .select_related("supplier")
-            # Without the `__invoice` half, `{{ line.invoice.invoice_date }}`
-            # in the template hits the DB once per invoice line instead of
-            # once total - the single biggest cost on this page (2439 of
-            # 2445 queries, ~5s, before this fix).
-            .prefetch_related("invoice_lines__invoice")
-            .order_by("raw_name")
+
+def _is_htmx(request) -> bool:
+    return request.headers.get("HX-Request") == "true"
+
+
+def review_panel_context() -> dict:
+    """The products no stock item has claimed, for the side panel."""
+    # Every pending product gets a suggestion before the panel renders - no
+    # separate button to click, no blank rows. Cheap on every visit: it only
+    # touches products with no suggestion yet.
+    apply_rules_to_pending_products()
+    pending = (
+        Product.objects.filter(stock_type__isnull=True)
+        .select_related("supplier")
+        # Without the `__invoice` half, `{{ line.invoice.invoice_date }}`
+        # hits the database once per invoice line (2439 of 2445 queries, ~5s,
+        # before this was added).
+        .prefetch_related("invoice_lines__invoice")
+        .order_by("raw_name")
+    )
+    total = pending.count()
+    stock_types = list(StockType.objects.order_by("name"))
+    # The whole queue, not the products shown: "Tout approuver" and the
+    # explanation both speak of all of it. Only the suggestions are fetched.
+    all_suggestions = list(
+        Product.objects.filter(stock_type__isnull=True, ai_suggestion__isnull=False).values_list(
+            "ai_suggestion", flat=True
         )
+    )
+    return {
+        "review_products": list(pending[:REVIEW_PANEL_SIZE]),
+        "review_total": total,
+        "review_more": max(total - REVIEW_PANEL_SIZE, 0),
+        "suggested_count": len(all_suggestions),
+        "confidence_counts": Counter(s.get("confidence", "?") for s in all_suggestions),
+        "fallback_count": sum(1 for s in all_suggestions if s.get("source") == "fallback"),
+        "all_stock_types": stock_types,
+        # What the panel's script needs to say whether a typed name is an
+        # existing item, and of which unit and category.
+        "stock_types_json": [
+            {"name": st.name, "unit": st.unit, "unit_label": st.get_unit_display(), "category": st.category}
+            for st in stock_types
+        ],
+        "unit_choices": UnitChoices.choices,
+        "existing_categories": existing_categories(),
+    }
 
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["stock_types"] = StockType.objects.all()
-        context["unit_choices"] = UnitChoices.choices
-        context["existing_categories"] = existing_categories()
 
-        # Deliberately NOT derived from context["products"]: that's just the
-        # current page post-pagination, but "Approuver toutes les
-        # suggestions" and the intro text both talk about the whole queue -
-        # only the JSON blob is fetched (not full rows) since that's all
-        # this needs.
-        all_suggestions = list(
-            Product.objects.filter(stock_type__isnull=True, ai_suggestion__isnull=False).values_list(
-                "ai_suggestion", flat=True
-            )
-        )
-        context["suggested_count"] = len(all_suggestions)
-        context["confidence_counts"] = Counter(s.get("confidence", "?") for s in all_suggestions)
-        context["fallback_count"] = sum(1 for s in all_suggestions if s.get("source") == "fallback")
-        return context
+def _review_panel(request, classified=None, status=200):
+    """The side panel as the page swaps it in: the queue, what was just
+    classified (with its undo), the messages of that action - said here, in
+    the panel, rather than on the next page - and the navigation's count."""
+    response = render(
+        request,
+        "inventory/_review_panel_refresh.html",
+        {**review_panel_context(), "classified": classified, "show_messages": True},
+        status=status,
+    )
+    return response
+
+
+def review_queue(request):
+    """The side panel alone for the page's script; anyone else is sent to
+    the page, opened on it (the queue used to be a page of its own)."""
+    if _is_htmx(request):
+        return _review_panel(request)
+    return redirect(reverse("inventory:stock_list") + "#a-classer")
+
+
+def _catalogue_changed(response, stock_type_id):
+    """Tell the page to reload its list, opened on this stock item."""
+    response["HX-Trigger"] = json.dumps({"catalogue-changed": {"stock_type": stock_type_id}})
+    return response
 
 
 def remove_product(request, product_id):
+    """Send a product back to the products to classify - from the list's
+    "Retirer", or as the undo of a classification made in the panel, which
+    also takes away the stock item that classification created (`drop_type`,
+    signed) if nothing uses it."""
     if request.method != "POST":
         return redirect("inventory:stock_list")
     product = get_object_or_404(Product, pk=product_id)
     unlink_product(product)
-    messages.success(request, f'"{product.raw_name}" retiré du stock et repassé en vérification.')
+    messages.success(request, f"« {product.raw_name} » repassé dans les produits à classer.")
+    _drop_created_stock_type(request.POST.get("drop_type", ""))
+    if _is_htmx(request):
+        return _catalogue_changed(_review_panel(request), None)
     return redirect("inventory:stock_list")
+
+
+def _drop_created_stock_type(signed: str) -> None:
+    try:
+        pk = signing.loads(signed, salt=UNDO_SALT)
+    except signing.BadSignature:
+        return
+    stock_type = StockType.objects.filter(pk=pk, products__isnull=True, movements__isnull=True).first()
+    if stock_type is None:
+        return
+    try:
+        with transaction.atomic():
+            stock_type.delete()
+    except ProtectedError:
+        # Written into a recipe or a count since: it stays.
+        pass
 
 
 def edit_product_conversion(request, product_id):
@@ -783,7 +862,7 @@ def _resolve_suggestion_stock_type(suggestion: dict) -> StockType | None:
 
 def approve_all_suggestions(request):
     if request.method != "POST":
-        return redirect("inventory:review_queue")
+        return redirect("inventory:stock_list")
 
     products = Product.objects.filter(stock_type__isnull=True, ai_suggestion__isnull=False)
     approved = 0
@@ -801,11 +880,10 @@ def approve_all_suggestions(request):
 
         if reason:
             skip_reasons[reason] += 1
-            # Clear it so the next visit to the review queue re-generates a
-            # suggestion for it (ReviewQueueView.get_queryset calls
-            # apply_rules_to_pending_products on every request, which only
-            # ever touches products with no suggestion yet) instead of it
-            # being permanently stuck with a bad one.
+            # Clear it so the next time the panel is drawn a new suggestion is
+            # made (review_panel_context calls apply_rules_to_pending_products,
+            # which only ever touches products with no suggestion yet) instead
+            # of it being permanently stuck with a bad one.
             product.ai_suggestion = None
             product.save(update_fields=["ai_suggestion"])
             continue
@@ -826,7 +904,7 @@ def approve_all_suggestions(request):
         messages.success(request, f"{approved} produit(s) rattaché(s) automatiquement d'après les suggestions.")
     else:
         messages.info(request, "Aucune suggestion à approuver pour le moment.")
-    return redirect("inventory:review_queue")
+    return redirect("inventory:stock_list")
 
 
 def _parse_positive_decimal(raw: str, default: Decimal) -> Decimal | None:
@@ -842,40 +920,57 @@ def _parse_positive_decimal(raw: str, default: Decimal) -> Decimal | None:
 
 
 def assign_product(request, product_id):
+    """Classify one product under a stock item - an existing one named
+    (case aside), or a new one with the unit and category given. From the
+    panel, the panel comes back with the next product and a note saying
+    where this one went, and the page reloads its list opened on it."""
     if request.method != "POST":
-        return redirect("inventory:review_queue")
+        return redirect("inventory:stock_list")
 
     product = get_object_or_404(Product, pk=product_id)
     name = request.POST.get("stock_type_name", "").strip()
     stock_equivalent = _parse_positive_decimal(request.POST.get("stock_equivalent", ""), default=Decimal("1"))
 
+    error = None
     if stock_equivalent is None:
-        messages.error(request, "L'équivalence en stock doit être un nombre positif.")
-        return redirect("inventory:review_queue")
-
-    if not name:
-        messages.error(request, "Donnez un nom de type de stock.")
-        return redirect("inventory:review_queue")
+        error = "L'équivalence en stock doit être un nombre positif."
+    elif not name:
+        error = "Donnez un nom de type de stock."
+    if error:
+        messages.error(request, error)
+        return _review_panel(request) if _is_htmx(request) else redirect("inventory:stock_list")
 
     # A name matching an existing type (case-insensitively) is used as-is -
     # the unit/category fields only matter for creating a brand new one, the
     # same resolution _resolve_suggestion_stock_type already does for
     # suggestions.
     stock_type = StockType.objects.filter(name__iexact=name).first()
-    if stock_type is None:
+    created = stock_type is None
+    if created:
         unit = request.POST.get("new_stock_type_unit") or UnitChoices.UNIT
+        if unit not in UnitChoices.values:
+            unit = UnitChoices.UNIT
         category = request.POST.get("new_stock_type_category", "").strip()
         stock_type = StockType.objects.create(name=name, unit=unit, category=category)
 
     # product.unit isn't a separate human choice: it always mirrors whatever
     # stock type ends up being used (existing types keep their own unit
-    # regardless of what the "new type" dropdown said, via get_or_create's
-    # defaults being ignored when a match already exists) - see
+    # regardless of what the "new type" dropdown said) - see
     # product_base_amount in services.py for why "Litre" vs "Kilogramme"
     # never actually changes anything, only "Unité" vs. not does.
     link_product_to_stock_type(product, stock_type, unit=stock_type.unit, stock_equivalent=stock_equivalent)
-    messages.success(request, f'"{product.raw_name}" lié à "{stock_type.name}".')
-    return redirect("inventory:review_queue")
+    if not _is_htmx(request):
+        messages.success(request, f"« {product.raw_name} » rangé dans « {stock_type.name} ».")
+        return redirect("inventory:stock_list")
+    classified = {
+        "product": product,
+        "stock_type": stock_type,
+        # 0.7, 10 - not 0.700, nor the 1E+1 normalize() makes of 10.
+        "stock_equivalent": format(stock_equivalent.normalize(), "f"),
+        "created": created,
+        "undo": signing.dumps(stock_type.pk, salt=UNDO_SALT) if created else "",
+    }
+    return _catalogue_changed(_review_panel(request, classified), stock_type.pk)
 
 
 def stock_take_variance(request, pk):

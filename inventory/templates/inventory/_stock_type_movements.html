@@ -1,5 +1,10 @@
 {% if movements %}
-<table class="sub-table">
+{% comment %}
+Nine columns in a row of the list: beside the panel of products to classify
+it is narrow, so it scrolls sideways on its own rather than squeezing.
+{% endcomment %}
+<div class="sub-table-wrap">
+<table class="sub-table movements-table">
     <thead>
         <tr>
             <th>Produit</th>
@@ -31,7 +36,7 @@
                 {% endif %}
             </td>
             <td class="muted">{{ entry.line.invoice.supplier.name|default:"—" }}</td>
-            <td>{{ entry.line.invoice.invoice_date|default:"—" }}</td>
+            <td>{{ entry.line.invoice.invoice_date|date:"d/m/Y"|default:"—" }}</td>
             <td class="num">
                 {{ entry.purchased_quantity }} {{ entry.purchased_quantity_unit }}
             </td>
@@ -61,6 +66,7 @@
         {% endfor %}
     </tbody>
 </table>
+</div>
 {% else %}
     <p class="muted" style="padding:0.75rem 0.9rem;">Aucun achat enregistré pour le moment.</p>
 {% endif %}

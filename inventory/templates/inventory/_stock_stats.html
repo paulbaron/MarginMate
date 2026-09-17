@@ -1,0 +1,60 @@
+<div class="stat-row" id="stock-stats"{% if oob %} hx-swap-oob="true"{% endif %}>
+    {% if categories %}
+        {% if period %}
+            <div class="stat">
+                <div class="stat-label">Manquant (HT)</div>
+                <div class="stat-value {% if total_missing_value %}bad{% endif %}">{{ total_missing_value|floatformat:2 }} €</div>
+                <div class="stat-note">sorti du stock, non expliqué par les ventes</div>
+            </div>
+            {% if over_stock_count %}
+                <div class="stat">
+                    <div class="stat-label">Vendu &gt; sorti</div>
+                    <div class="stat-value bad">{{ over_stock_count }}</div>
+                    <div class="stat-note">article{{ over_stock_count|pluralize }} vendu{{ over_stock_count|pluralize }} plus qu'il n'en est sorti</div>
+                </div>
+            {% endif %}
+            {% if uncounted_count %}
+                <div class="stat stat-warn">
+                    <div class="stat-label">Non comptés</div>
+                    <div class="stat-value">{{ uncounted_count }}</div>
+                    <div class="stat-note">absents d'un des deux inventaires — aucun écart calculable</div>
+                </div>
+            {% endif %}
+            <div class="stat">
+                <div class="stat-label">Voir aussi</div>
+                <div class="stat-value stat-value-link">
+                    <a href="{% url 'inventory:stock_take_variance' period.closing_take.pk %}">Écarts par groupe →</a>
+                </div>
+                <div class="stat-note">le manque regroupé et valorisé au moins cher</div>
+            </div>
+        {% else %}
+            <div class="stat">
+                <div class="stat-label">Valeur du stock (HT)</div>
+                <div class="stat-value">{{ total_value_ht|floatformat:2 }} €</div>
+            </div>
+            <div class="stat">
+                <div class="stat-label">Valeur du stock (TTC)</div>
+                <div class="stat-value">{{ total_value_ttc|floatformat:2 }} €</div>
+            </div>
+            <div class="stat">
+                <div class="stat-label">Articles de stock</div>
+                <div class="stat-value">{{ stock_type_count }}</div>
+                <div class="stat-note">dans {{ categories|length }} catégorie{{ categories|length|pluralize }}</div>
+            </div>
+            {% if over_stock_count %}
+                <div class="stat">
+                    <div class="stat-label">Vendu &gt; acheté</div>
+                    <div class="stat-value bad">{{ over_stock_count }}</div>
+                    <div class="stat-note">article{{ over_stock_count|pluralize }} dont les ventes dépassent les achats</div>
+                </div>
+            {% endif %}
+        {% endif %}
+    {% endif %}
+    {% if review_count %}
+        <div class="stat stat-warn">
+            <div class="stat-label">À classer</div>
+            <div class="stat-value">{{ review_count }}</div>
+            <div class="stat-note"><a href="#a-classer" data-panel-open>produit{{ review_count|pluralize }} dans le panneau</a></div>
+        </div>
+    {% endif %}
+</div>

@@ -63,6 +63,7 @@ TEMPLATES = [
                 "django.contrib.messages.context_processors.messages",
                 "inventory.context_processors.review_count",
                 "invoices.context_processors.receipt_review_count",
+                "config.navigation.navigation",
             ],
         },
     },

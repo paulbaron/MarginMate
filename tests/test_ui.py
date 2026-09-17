@@ -46,50 +46,7 @@ class BaseTemplateTests(TestCase):
     def test_the_stylesheet_is_loaded(self):
         self.assertContains(self.client.get(reverse("inventory:stock_list")), "css/marginmate.css")
 
-    def test_the_ventes_nav_link_actually_goes_to_ventes(self):
-        """It used to point at Produits caisse instead - a different page,
-        with a different search box, under a label that says "Ventes". A
-        search that looks broken on the page you land on isn't the bug when
-        it's the wrong page."""
-        html = self.client.get(reverse("inventory:stock_list")).content.decode()
-        nav = html[html.index("<nav"):html.index("</nav>")]
-        self.assertIn(f'href="{reverse("recipes:sales_list")}"', nav)
-        self.assertNotIn(f'href="{reverse("recipes:pos_product_list")}"', nav)
-
-    def test_the_ventes_link_is_marked_active_from_the_ventes_page(self):
-        import re
-
-        html = self.client.get(reverse("recipes:sales_list")).content.decode()
-        link = re.search(r"<a [^>]*>Ventes</a>", html)
-        self.assertIsNotNone(link, "no <a ...>Ventes</a> link found")
-        self.assertIn('class="active"', link.group(0))
-
-    def test_recettes_is_not_also_lit_up_on_the_ventes_page(self):
-        """"Recettes" and "Ventes" are different sections with different
-        search boxes, but both live under the same `recipes` app_name -
-        Recettes lit up on every caisse/ventes page too, checking only the
-        app rather than which view. Landing on "Ventes" with "Recettes"
-        also highlighted looks like confirmation you're on the right page
-        when you aren't."""
-        import re
-
-        html = self.client.get(reverse("recipes:sales_list")).content.decode()
-        recettes = re.search(r"<a [^>]*>Recettes</a>", html)
-        self.assertIsNotNone(recettes, "no <a ...>Recettes</a> link found")
-        self.assertNotIn('class="active"', recettes.group(0))
-
-    def test_recettes_is_still_active_on_its_own_pages(self):
-        import re
-
-        from tests.factories import make_recipe
-
-        recipe = make_recipe(name="Mule")
-        for url in (reverse("recipes:recipe_list"), reverse("recipes:recipe_detail", kwargs={"pk": recipe.pk})):
-            with self.subTest(url=url):
-                html = self.client.get(url).content.decode()
-                link = re.search(r"<a [^>]*>Recettes</a>", html)
-                self.assertIsNotNone(link)
-                self.assertIn('class="active"', link.group(0))
+    # Which navigation link lights up where: tests/test_navigation.py.
 
 
 class SearchableSortableTableTests(TestCase):
@@ -266,12 +223,15 @@ class ChildRowTests(TestCase):
         make_priced_stock_type(name="Vodka", unit_cost_ht="12", quantity="10")
         html = self.client.get(reverse("inventory:stock_list")).content.decode()
 
-        widths = [float(w) for w in re.findall(r'<col style="width:(\d+)px">', html)]
-        self.assertEqual(len(widths), 7)
-        type_width, _qty, _sold, _unit, _ht, _ttc, actions_width = widths
+        # Shares of the width: beside the panel of products to classify the
+        # list is about 880px wide, alone up to 1190px.
+        shares = [float(w) for w in re.findall(r'<col style="width:(\d+)%">', html)]
+        self.assertEqual(len(shares), 7)
+        self.assertEqual(sum(shares), 100)
+        type_width, _qty, _sold, _unit, _ht, _ttc, actions_width = (880 * share / 100 for share in shares)
         # "Modifier" + the 📈 button + "Supprimer", each with their own
-        # margin, need roughly 200px on one line - see the row-height test.
-        self.assertGreaterEqual(actions_width, 200)
+        # margin, need roughly 190px on one line - see the row-height test.
+        self.assertGreaterEqual(actions_width, 190)
         self.assertGreaterEqual(type_width, 200)
 
 

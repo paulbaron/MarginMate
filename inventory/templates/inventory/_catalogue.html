@@ -1,0 +1,186 @@
+{% comment %}
+The list of stock items. The page reloads it in place (stock_catalogue) when
+a product is classified in the side panel or sent back: `catalogue-changed`
+is what those answers trigger.
+{% endcomment %}
+<div id="catalogue" class="catalogue"
+     hx-get="{% url 'inventory:stock_catalogue' %}{% if period %}?inventaire={{ period.closing_take.pk }}{% endif %}"
+     hx-trigger="catalogue-changed from:body" hx-swap="outerHTML">
+{% if categories %}
+    {% for category in categories %}
+    <div class="category-block">
+        <div class="category-header" data-toggle="cat-{{ category.name|slugify }}">
+            <span class="chevron">▸</span>
+            <strong>{{ category.name }}</strong>
+            <span class="muted">({{ category.rows|length }})</span>
+            {% if period %}
+                <span class="muted">— manquant : {{ category.total_missing_value|floatformat:2 }} € HT</span>
+            {% else %}
+                <span class="muted">— {{ category.total_value_ht|floatformat:2 }} € HT / {{ category.total_value_ttc|floatformat:2 }} € TTC</span>
+            {% endif %}
+        </div>
+        {% comment %}
+        The scroll box only exists in period mode. `overflow-x` makes an
+        element a scroll container on BOTH axes (see the note on
+        .table-wrap in marginmate.css), and a sticky `thead` inside one
+        sticks to that box rather than to the viewport - so wrapping the
+        7-column table too would quietly stop its header following you
+        down a long category, to buy a scrollbar it never needs.
+        {% endcomment %}
+        {% if period %}<div class="stock-table-wrap">{% endif %}
+        <table id="cat-{{ category.name|slugify }}" class="stock-table{% if period %} stock-table-period{% endif %}"
+               data-table data-table-sort-only hidden>
+            {% if period %}
+            <colgroup>
+                <col style="width:240px">
+                <col style="width:95px">
+                <col style="width:85px">
+                <col style="width:85px">
+                <col style="width:85px">
+                <col style="width:100px">
+                <col style="width:100px">
+                <col style="width:110px">
+                <col style="width:90px">
+                <col style="width:250px">
+            </colgroup>
+            <thead>
+                <tr>
+                    <th>Type</th>
+                    <th class="num">Ouverture</th>
+                    <th class="num">Achats</th>
+                    <th class="num">Clôture</th>
+                    <th class="num">Sorti</th>
+                    <th class="num">Vendu</th>
+                    <th class="num">Manquant</th>
+                    <th class="num">Manquant (HT)</th>
+                    <th>Unité</th>
+                    <th></th>
+                </tr>
+            </thead>
+            {% else %}
+            {% comment %}
+            Shares, not pixels: beside the panel of products to classify the
+            list is narrower than on its own, and a fixed 1040px table
+            overflowed it.
+            {% endcomment %}
+            <colgroup>
+                <col style="width:26%">
+                <col style="width:9%">
+                <col style="width:9%">
+                <col style="width:9%">
+                <col style="width:11%">
+                <col style="width:11%">
+                <col style="width:25%">
+            </colgroup>
+            <thead>
+                <tr>
+                    <th>Type</th>
+                    <th class="num">Quantité</th>
+                    <th class="num">Vendu</th>
+                    <th>Unité</th>
+                    <th class="num">Valeur (HT)</th>
+                    <th class="num">Valeur (TTC)</th>
+                    <th></th>
+                </tr>
+            </thead>
+            {% endif %}
+            <tbody>
+                {% for row in category.rows %}
+                <tr class="stock-row" data-toggle="details-{{ row.stock_type.id }}"
+                    data-stock-type-id="{{ row.stock_type.id }}"
+                    data-movements-url="{% url 'inventory:stock_type_movements' row.stock_type.pk %}">
+                    <td>
+                        <span class="chevron">▸</span> {{ row.stock_type.name }}
+                        {% if period and row.in_period and not row.reliable %}
+                            <span class="uncounted" title="Absent de {% if period.since_beginning %}l'inventaire{% else %}l'un des deux inventaires{% endif %} : sans comptage, tout ce qui a été acheté ressemble à du stock disparu. Comptez-le la prochaine fois.">non compté</span>
+                        {% endif %}
+                    </td>
+                    {% if period %}
+                    {% if row.in_period %}
+                    <td class="num">{{ row.period.opening|floatformat:2 }}</td>
+                    <td class="num">{{ row.period.purchases|floatformat:2 }}</td>
+                    <td class="num">{{ row.period.closing|floatformat:2 }}</td>
+                    <td class="num" data-sort="{{ row.period.sellable }}">
+                        {{ row.period.sellable|floatformat:2 }}
+                        {% if row.period.known_losses %}
+                            <span class="sold-shared" title="{{ row.period.left_the_shelf|floatformat:2 }} sont sortis du stock, dont {{ row.period.known_losses|floatformat:2 }} de pertes déjà déclarées — celles-ci ne peuvent pas avoir été vendues.">*</span>
+                        {% endif %}
+                    </td>
+                    {% else %}
+                    <td class="num muted">—</td>
+                    <td class="num muted">—</td>
+                    <td class="num muted">—</td>
+                    <td class="num muted">—</td>
+                    {% endif %}
+                    {% else %}
+                    <td class="num">{{ row.quantity|floatformat:2 }}</td>
+                    {% endif %}
+                    <td class="num" data-sort="{{ row.sold.headline|default_if_none:'' }}">
+                        {% if row.sold and row.sold.headline %}
+                            <span {% if row.flag_over %}class="sold-over"
+                                  title="Vendu plus qu'il n'en est {% if period %}sorti du stock sur la période{% else %}été acheté{% endif %} : il manque {{ row.sold.missing|floatformat:2 }} {{ row.stock_type.get_unit_display }}. Facture manquante, recette erronée, ou produit caisse mal rattaché."{% endif %}>{{ row.sold.headline|floatformat:2 }}</span>
+                            {% if row.sold.is_ambiguous %}
+                                <span class="sold-shared"
+                                      title="{% if row.sold.headline_is_estimate %}Estimation{% else %}Dont {{ row.sold.shared|floatformat:2 }} estimé{% endif %} : cet article est proposé en alternative de {{ row.sold.pool_partners }} autre{{ row.sold.pool_partners|pluralize }}, alors les ventes leur sont réparties du plus cher au moins cher, dans la limite de ce qui {% if period %}est sorti du stock{% else %}a été acheté{% endif %} (moins {{ row.stock_type.loss_percent|floatformat:"-2" }} % de perte).">
+                                    ?
+                                </span>
+                            {% endif %}
+                        {% else %}<span class="muted">—</span>{% endif %}
+                    </td>
+                    {% if period %}
+                    {% if row.in_period and row.reliable %}
+                    <td class="num" data-sort="{{ row.sold.unexplained }}">
+                        {% if row.sold.unexplained %}
+                            <span class="stock-missing">{{ row.sold.unexplained|floatformat:2 }}</span>
+                        {% else %}<span class="muted">—</span>{% endif %}
+                    </td>
+                    <td class="num" data-sort="{{ row.missing_value_ht|default:0 }}">
+                        {% if row.missing_value_ht %}
+                            <span class="stock-missing">{{ row.missing_value_ht|floatformat:2 }} €</span>
+                        {% else %}<span class="muted">—</span>{% endif %}
+                    </td>
+                    {% else %}
+                    <td class="num muted" data-sort="">—</td>
+                    <td class="num muted" data-sort="">—</td>
+                    {% endif %}
+                    <td>{{ row.stock_type.get_unit_display }}</td>
+                    {% else %}
+                    <td>{{ row.stock_type.get_unit_display }}</td>
+                    <td class="num">{{ row.value_ht|floatformat:2 }} €</td>
+                    <td class="num">{{ row.value_ttc|floatformat:2 }} €</td>
+                    {% endif %}
+                    <td class="row-actions">
+                        <a href="{% url 'inventory:stock_type_update' row.stock_type.pk %}">Modifier</a>
+                        <button type="button" class="btn btn-small btn-secondary js-price-history-toggle"
+                                title="Évolution du prix" aria-label="Évolution du prix"
+                                data-price-history-url="{% url 'inventory:stock_type_price_history' row.stock_type.pk %}"
+                                data-target="price-history-{{ row.stock_type.id }}">📈</button>
+                        <form method="post" action="{% url 'inventory:stock_type_delete' row.stock_type.pk %}"
+                              onsubmit="return confirm('Supprimer \'{{ row.stock_type.name|escapejs }}\' ? Ses produits repasseront à classer.');">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-small btn-secondary">Supprimer</button>
+                        </form>
+                    </td>
+                </tr>
+                <tr id="price-history-{{ row.stock_type.id }}" data-child-row hidden>
+                    <td colspan="{{ column_count }}" style="padding:0.75rem 0.9rem;">
+                        <p class="muted">Chargement…</p>
+                    </td>
+                </tr>
+                <tr id="details-{{ row.stock_type.id }}" data-child-row hidden>
+                    <td colspan="{{ column_count }}" style="padding:0;">
+                        <p class="muted" style="padding:0.75rem 0.9rem;">Chargement…</p>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% if period %}</div>{% endif %}
+    </div>
+    {% endfor %}
+{% else %}
+    <div class="empty-state">
+        Aucun article de stock pour le moment. Classez un produit dans le panneau, créez un article, ou importez une facture pour démarrer.
+    </div>
+{% endif %}
+</div>

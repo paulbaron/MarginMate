@@ -1,9 +1,10 @@
 {% extends "base.html" %}
-{% block title %}Stock - MarginMate{% endblock %}
+{% block title %}Produits - MarginMate{% endblock %}
+{% block container_class %}{% if review_total %} container-wide{% endif %}{% endblock %}
 {% block content %}
     <div class="page-header">
         <div>
-            <h1>Stock</h1>
+            <h1>Produits</h1>
             {% if period %}
                 <p class="page-subtitle">
                     {% if period.since_beginning %}
@@ -16,7 +17,11 @@
                     {% endif %}
                 </p>
             {% else %}
-                <p class="page-subtitle">Ce que vous avez en stock et ce que ça vaut, calculé à partir des factures importées. Cliquez une ligne pour voir son historique de prix.</p>
+                <p class="page-subtitle">
+                    Tout ce que les factures et les tickets ont apporté, rangé par article de stock, avec ce que
+                    ça vaut. Cliquez une ligne pour voir ses achats{% if review_total %} ; les produits pas encore
+                    rangés attendent dans le panneau « À classer »{% endif %}.
+                </p>
             {% endif %}
         </div>
         <div class="actions">
@@ -29,284 +34,68 @@
             {% endif %}
             <a class="btn btn-secondary" href="{% url 'inventory:export_associations' %}">⬇️ Exporter les associations</a>
             <a class="btn btn-secondary" href="{% url 'inventory:import_associations' %}">⬆️ Importer les associations</a>
-            <a class="btn" href="{% url 'inventory:stock_type_create' %}">+ Nouveau type</a>
+            <a class="btn" href="{% url 'inventory:stock_type_create' %}">+ Nouvel article</a>
         </div>
     </div>
 
-    {% if categories %}
-        <div class="stat-row">
-            {% if period %}
-            <div class="stat">
-                <div class="stat-label">Manquant (HT)</div>
-                <div class="stat-value {% if total_missing_value %}bad{% endif %}">{{ total_missing_value|floatformat:2 }} €</div>
-                <div class="stat-note">sorti du stock, non expliqué par les ventes</div>
-            </div>
-            {% if over_stock_count %}
-            <div class="stat">
-                <div class="stat-label">Vendu &gt; sorti</div>
-                <div class="stat-value bad">{{ over_stock_count }}</div>
-                <div class="stat-note">article{{ over_stock_count|pluralize }} vendu{{ over_stock_count|pluralize }} plus qu'il n'en est sorti</div>
-            </div>
-            {% endif %}
-            {% if uncounted_count %}
-            <div class="stat stat-warn">
-                <div class="stat-label">Non comptés</div>
-                <div class="stat-value">{{ uncounted_count }}</div>
-                <div class="stat-note">absents d'un des deux inventaires — aucun écart calculable</div>
-            </div>
-            {% endif %}
-            <div class="stat">
-                <div class="stat-label">Voir aussi</div>
-                <div class="stat-value" style="font-size:1rem;">
-                    <a href="{% url 'inventory:stock_take_variance' period.closing_take.pk %}">Écarts par groupe →</a>
+    {% include "inventory/_stock_stats.html" %}
+
+    <div class="products-layout{% if review_total %} has-panel{% endif %}" id="products-layout">
+        <div class="products-main">
+            <div class="table-toolbar">
+                <div class="table-search">
+                    <input type="search" id="stock-search" autocomplete="off"
+                           aria-label="Rechercher dans les produits"
+                           placeholder="Rechercher un produit, un article ou une catégorie…">
                 </div>
-                <div class="stat-note">le manque regroupé et valorisé au moins cher</div>
+                <form method="get" class="period-picker">
+                    <label for="period-select">Période</label>
+                    <select name="inventaire" id="period-select" onchange="this.form.submit()">
+                        <option value="">Depuis le début (stock actuel)</option>
+                        {% for take in stock_takes %}
+                            <option value="{{ take.pk }}"{% if period.closing_take.pk == take.pk %} selected{% endif %}>
+                                Inventaire du {{ take.taken_at|date:"d/m/Y" }}{% if take.note %} — {{ take.note }}{% endif %}
+                            </option>
+                        {% endfor %}
+                    </select>
+                    <noscript><button class="btn btn-small btn-secondary" type="submit">Afficher</button></noscript>
+                </form>
+                {% if review_total %}
+                    <button type="button" class="btn btn-small" data-panel-open hidden>
+                        Produits à classer <span class="count-pill" data-review-count>{{ review_total }}</span>
+                    </button>
+                {% endif %}
+                <p class="table-count" id="stock-search-status" hidden></p>
             </div>
-            {% else %}
-            <div class="stat">
-                <div class="stat-label">Valeur du stock (HT)</div>
-                <div class="stat-value">{{ total_value_ht|floatformat:2 }} €</div>
-            </div>
-            <div class="stat">
-                <div class="stat-label">Valeur du stock (TTC)</div>
-                <div class="stat-value">{{ total_value_ttc|floatformat:2 }} €</div>
-            </div>
-            <div class="stat">
-                <div class="stat-label">Types de stock</div>
-                <div class="stat-value">{{ stock_type_count }}</div>
-                <div class="stat-note">dans {{ categories|length }} catégorie{{ categories|length|pluralize }}</div>
-            </div>
-            {% if over_stock_count %}
-            <div class="stat">
-                <div class="stat-label">Vendu &gt; acheté</div>
-                <div class="stat-value bad">{{ over_stock_count }}</div>
-                <div class="stat-note">article{{ over_stock_count|pluralize }} dont les ventes dépassent les achats</div>
-            </div>
-            {% endif %}
-            {% if review_count %}
-            <div class="stat">
-                <div class="stat-label">À rattacher</div>
-                <div class="stat-value bad">{{ review_count }}</div>
-                <div class="stat-note"><a href="{% url 'inventory:review_queue' %}">Voir la file d'attente</a></div>
+
+            {% if period and period.since_beginning %}
+            <div class="message">
+                Aucun inventaire antérieur à celui-ci : tout ce qui a été acheté depuis le début est
+                comparé à ce comptage. Cela suppose que <strong>les factures remontent à l'ouverture
+                du bar</strong> — sinon, les bouteilles achetées avant vos premières factures
+                apparaîtront comme manquantes.
             </div>
             {% endif %}
-            {% endif %}
+
+            <p class="table-empty" id="catalogue-no-match" hidden>
+                Aucun article ne correspond.{% if review_total %} Classé sous ce nom, un produit en crée un nouveau.{% endif %}
+            </p>
+            {% include "inventory/_catalogue.html" %}
         </div>
 
-        <div class="table-toolbar">
-            <div class="table-search" style="max-width:420px;">
-            <input type="search" id="stock-search" autocomplete="off"
-                   placeholder="Rechercher un produit, un type de stock ou une catégorie…">
-            </div>
-            <form method="get" class="period-picker">
-                <label for="period-select">Période</label>
-                <select name="inventaire" id="period-select" onchange="this.form.submit()">
-                    <option value="">Depuis le début (stock actuel)</option>
-                    {% for take in stock_takes %}
-                        <option value="{{ take.pk }}"{% if period.closing_take.pk == take.pk %} selected{% endif %}>
-                            Inventaire du {{ take.taken_at|date:"d/m/Y" }}{% if take.note %} — {{ take.note }}{% endif %}
-                        </option>
-                    {% endfor %}
-                </select>
-                <noscript><button class="btn btn-small btn-secondary" type="submit">Afficher</button></noscript>
-            </form>
-            <p class="table-count" id="stock-search-status" hidden></p>
-        </div>
-
-        {% if period and period.since_beginning %}
-        <div class="message">
-            Aucun inventaire antérieur à celui-ci : tout ce qui a été acheté depuis le début est
-            comparé à ce comptage. Cela suppose que <strong>les factures remontent à l'ouverture
-            du bar</strong> — sinon, les bouteilles achetées avant vos premières factures
-            apparaîtront comme manquantes.
-        </div>
+        {% if review_total %}
+            <aside class="review-panel" id="a-classer" aria-labelledby="review-panel-title">
+                {% include "inventory/_review_panel.html" %}
+            </aside>
         {% endif %}
-        {% for category in categories %}
-        <div class="category-block">
-            <div class="category-header" data-toggle="cat-{{ forloop.counter }}">
-                <span class="chevron">▸</span>
-                <strong>{{ category.name }}</strong>
-                <span class="muted">({{ category.rows|length }})</span>
-                {% if period %}
-                    <span class="muted">— manquant : {{ category.total_missing_value|floatformat:2 }} € HT</span>
-                {% else %}
-                    <span class="muted">— {{ category.total_value_ht|floatformat:2 }} € HT / {{ category.total_value_ttc|floatformat:2 }} € TTC</span>
-                {% endif %}
-            </div>
-            {% comment %}
-            The scroll box only exists in period mode. `overflow-x` makes an
-            element a scroll container on BOTH axes (see the note on
-            .table-wrap in marginmate.css), and a sticky `thead` inside one
-            sticks to that box rather than to the viewport - so wrapping the
-            7-column table too would quietly stop its header following you
-            down a long category, to buy a scrollbar it never needs.
-            {% endcomment %}
-            {% if period %}<div class="stock-table-wrap">{% endif %}
-            <table id="cat-{{ forloop.counter }}" class="stock-table{% if period %} stock-table-period{% endif %}"
-                   data-table data-table-sort-only hidden>
-                {% if period %}
-                <colgroup>
-                    <col style="width:240px">
-                    <col style="width:95px">
-                    <col style="width:85px">
-                    <col style="width:85px">
-                    <col style="width:85px">
-                    <col style="width:100px">
-                    <col style="width:100px">
-                    <col style="width:110px">
-                    <col style="width:90px">
-                    <col style="width:250px">
-                </colgroup>
-                <thead>
-                    <tr>
-                        <th>Type</th>
-                        <th class="num">Ouverture</th>
-                        <th class="num">Achats</th>
-                        <th class="num">Clôture</th>
-                        <th class="num">Sorti</th>
-                        <th class="num">Vendu</th>
-                        <th class="num">Manquant</th>
-                        <th class="num">Manquant (HT)</th>
-                        <th>Unité</th>
-                        <th></th>
-                    </tr>
-                </thead>
-                {% else %}
-                <colgroup>
-                    <col style="width:300px">
-                    <col style="width:90px">
-                    <col style="width:110px">
-                    <col style="width:90px">
-                    <col style="width:110px">
-                    <col style="width:110px">
-                    <col style="width:230px">
-                </colgroup>
-                <thead>
-                    <tr>
-                        <th>Type</th>
-                        <th class="num">Quantité</th>
-                        <th class="num">Vendu</th>
-                        <th>Unité</th>
-                        <th class="num">Valeur (HT)</th>
-                        <th class="num">Valeur (TTC)</th>
-                        <th></th>
-                    </tr>
-                </thead>
-                {% endif %}
-                <tbody>
-                    {% for row in category.rows %}
-                    <tr class="stock-row" data-toggle="details-{{ row.stock_type.id }}"
-                        data-stock-type-id="{{ row.stock_type.id }}"
-                        data-movements-url="{% url 'inventory:stock_type_movements' row.stock_type.pk %}">
-                        <td>
-                            <span class="chevron">▸</span> {{ row.stock_type.name }}
-                            {% if period and row.in_period and not row.reliable %}
-                                <span class="uncounted" title="Absent de {% if period.since_beginning %}l'inventaire{% else %}l'un des deux inventaires{% endif %} : sans comptage, tout ce qui a été acheté ressemble à du stock disparu. Comptez-le la prochaine fois.">non compté</span>
-                            {% endif %}
-                        </td>
-                        {% if period %}
-                        {% if row.in_period %}
-                        <td class="num">{{ row.period.opening|floatformat:2 }}</td>
-                        <td class="num">{{ row.period.purchases|floatformat:2 }}</td>
-                        <td class="num">{{ row.period.closing|floatformat:2 }}</td>
-                        <td class="num" data-sort="{{ row.period.sellable }}">
-                            {{ row.period.sellable|floatformat:2 }}
-                            {% if row.period.known_losses %}
-                                <span class="sold-shared" title="{{ row.period.left_the_shelf|floatformat:2 }} sont sortis du stock, dont {{ row.period.known_losses|floatformat:2 }} de pertes déjà déclarées — celles-ci ne peuvent pas avoir été vendues.">*</span>
-                            {% endif %}
-                        </td>
-                        {% else %}
-                        <td class="num muted">—</td>
-                        <td class="num muted">—</td>
-                        <td class="num muted">—</td>
-                        <td class="num muted">—</td>
-                        {% endif %}
-                        {% else %}
-                        <td class="num">{{ row.quantity|floatformat:2 }}</td>
-                        {% endif %}
-                        <td class="num" data-sort="{{ row.sold.headline|default_if_none:'' }}">
-                            {% if row.sold and row.sold.headline %}
-                                <span {% if row.flag_over %}class="sold-over"
-                                      title="Vendu plus qu'il n'en est {% if period %}sorti du stock sur la période{% else %}été acheté{% endif %} : il manque {{ row.sold.missing|floatformat:2 }} {{ row.stock_type.get_unit_display }}. Facture manquante, recette erronée, ou produit caisse mal rattaché."{% endif %}>{{ row.sold.headline|floatformat:2 }}</span>
-                                {% if row.sold.is_ambiguous %}
-                                    <span class="sold-shared"
-                                          title="{% if row.sold.headline_is_estimate %}Estimation{% else %}Dont {{ row.sold.shared|floatformat:2 }} estimé{% endif %} : cet article est proposé en alternative de {{ row.sold.pool_partners }} autre{{ row.sold.pool_partners|pluralize }}, alors les ventes leur sont réparties du plus cher au moins cher, dans la limite de ce qui {% if period %}est sorti du stock{% else %}a été acheté{% endif %} (moins {{ row.stock_type.loss_percent|floatformat:"-2" }} % de perte).">
-                                        ?
-                                    </span>
-                                {% endif %}
-                            {% else %}<span class="muted">—</span>{% endif %}
-                        </td>
-                        {% if period %}
-                        {% if row.in_period and row.reliable %}
-                        <td class="num" data-sort="{{ row.sold.unexplained }}">
-                            {% if row.sold.unexplained %}
-                                <span class="stock-missing">{{ row.sold.unexplained|floatformat:2 }}</span>
-                            {% else %}<span class="muted">—</span>{% endif %}
-                        </td>
-                        <td class="num" data-sort="{{ row.missing_value_ht|default:0 }}">
-                            {% if row.missing_value_ht %}
-                                <span class="stock-missing">{{ row.missing_value_ht|floatformat:2 }} €</span>
-                            {% else %}<span class="muted">—</span>{% endif %}
-                        </td>
-                        {% else %}
-                        <td class="num muted" data-sort="">—</td>
-                        <td class="num muted" data-sort="">—</td>
-                        {% endif %}
-                        <td>{{ row.stock_type.get_unit_display }}</td>
-                        {% else %}
-                        <td>{{ row.stock_type.get_unit_display }}</td>
-                        <td class="num">{{ row.value_ht|floatformat:2 }} €</td>
-                        <td class="num">{{ row.value_ttc|floatformat:2 }} €</td>
-                        {% endif %}
-                        <td>
-                            <a href="{% url 'inventory:stock_type_update' row.stock_type.pk %}">Modifier</a>
-                            <button type="button" class="btn btn-small btn-secondary js-price-history-toggle"
-                                    title="Évolution du prix" style="margin-left:0.5rem;"
-                                    data-price-history-url="{% url 'inventory:stock_type_price_history' row.stock_type.pk %}"
-                                    data-target="price-history-{{ row.stock_type.id }}">📈</button>
-                            <form method="post" action="{% url 'inventory:stock_type_delete' row.stock_type.pk %}"
-                                  onsubmit="return confirm('Supprimer \'{{ row.stock_type.name|escapejs }}\' ? Les produits associés repasseront en vérification.');"
-                                  style="display:inline; margin-left:0.5rem;">
-                                {% csrf_token %}
-                                <button type="submit" class="btn btn-small btn-secondary">Supprimer</button>
-                            </form>
-                        </td>
-                    </tr>
-                    <tr id="price-history-{{ row.stock_type.id }}" data-child-row hidden>
-                        <td colspan="{{ column_count }}" style="padding:0.75rem 0.9rem;">
-                            <p class="muted">Chargement…</p>
-                        </td>
-                    </tr>
-                    <tr id="details-{{ row.stock_type.id }}" data-child-row hidden>
-                        <td colspan="{{ column_count }}" style="padding:0;">
-                            <p class="muted" style="padding:0.75rem 0.9rem;">Chargement…</p>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-            {% if period %}</div>{% endif %}
-        </div>
-        {% endfor %}
-    {% else %}
-        <div class="empty-state">
-            Aucun type de stock pour le moment. Créez-en un, ou importez une facture pour démarrer.
-        </div>
-    {% endif %}
-
-    {% if review_count %}
-        <p class="muted" style="margin-top:1.25rem;">
-            {{ review_count }} produit{{ review_count|pluralize }} en attente de rattachement.
-            <a href="{% url 'inventory:review_queue' %}">Voir la file de vérification →</a>
-        </p>
-    {% endif %}
+    </div>
 {% endblock %}
 {% block extra_js %}
 <script>
 // Which categories/stock types are expanded is remembered per browser
 // (not per user account - this is a single-user app) so reloading the page,
-// e.g. after editing a product's conversion factor, doesn't collapse
-// everything you had open back down.
+// or the list reloading itself after a product was classified, doesn't
+// collapse everything you had open back down.
 var EXPANDED_STORAGE_KEY = "marginmate:stock:expanded";
 
 function loadExpandedIds() {
@@ -331,13 +120,12 @@ function expandTarget(toggle, target) {
     if (chevron) chevron.textContent = "▾";
     if (toggle.dataset.movementsUrl && !target.dataset.loaded) {
         target.dataset.loaded = "1";
-        // Returned so callers restoring many rows at once (see
-        // DOMContentLoaded below) can await it - firing htmx.ajax for
-        // dozens of rows in the same synchronous loop silently drops all
-        // but a couple of the requests (reproduced directly: 36 concurrent
-        // calls left 34 rows stuck on "Chargement…" forever, since nothing
-        // ever retries once dataset.loaded is set), even though every one
-        // of them works fine called on its own.
+        // Returned so callers restoring many rows at once can await it -
+        // firing htmx.ajax for dozens of rows in the same synchronous loop
+        // silently drops all but a couple of the requests (reproduced
+        // directly: 36 concurrent calls left 34 rows stuck on "Chargement…"
+        // forever, since nothing ever retries once dataset.loaded is set),
+        // even though every one of them works fine called on its own.
         return htmx.ajax("GET", toggle.dataset.movementsUrl, { target: target.querySelector("td"), swap: "innerHTML" });
     }
     return Promise.resolve();
@@ -359,8 +147,8 @@ document.addEventListener("click", function (event) {
         }
         return;
     }
-    if (event.target.closest("a, button, form")) return;
-    var toggle = event.target.closest("[data-toggle]");
+    if (event.target.closest("a, button, form, input, select, label")) return;
+    var toggle = event.target.closest("#catalogue [data-toggle]");
     if (!toggle) return;
     var target = document.getElementById(toggle.dataset.toggle);
     if (!target) return;
@@ -378,11 +166,11 @@ document.addEventListener("click", function (event) {
     saveExpandedIds(expanded);
 });
 
-document.addEventListener("DOMContentLoaded", async function () {
+async function restoreExpanded() {
     var expanded = loadExpandedIds();
     if (!expanded.size) return;
     var toRestore = Array.prototype.filter.call(
-        document.querySelectorAll("[data-toggle]"),
+        document.querySelectorAll("#catalogue [data-toggle]"),
         function (toggle) { return expanded.has(toggle.dataset.toggle); }
     );
     // One at a time, not Promise.all/fire-and-forget - see expandTarget.
@@ -391,7 +179,7 @@ document.addEventListener("DOMContentLoaded", async function () {
         var target = document.getElementById(toggle.dataset.toggle);
         if (target) await expandTarget(toggle, target);
     }
-});
+}
 
 // Search matches a stock type by its own name/category (checked server-side
 // too, but there's no reason to round-trip for that) or by any of its
@@ -414,7 +202,7 @@ function restoreCategoryState(header, table) {
 
 function applySearchFilter(matchedIds) {
     var totalMatches = 0;
-    document.querySelectorAll(".category-block").forEach(function (block) {
+    document.querySelectorAll("#catalogue .category-block").forEach(function (block) {
         var header = block.querySelector(".category-header");
         var table = block.querySelector("table");
         var matchCount = 0;
@@ -435,6 +223,8 @@ function applySearchFilter(matchedIds) {
             if (chevron) chevron.textContent = "▾";
         }
     });
+    var noMatch = document.getElementById("catalogue-no-match");
+    if (noMatch) noMatch.hidden = matchedIds === null || totalMatches > 0;
     return totalMatches;
 }
 
@@ -443,10 +233,10 @@ function runSearch(query) {
     if (!query) {
         applySearchFilter(null);
         statusEl.hidden = true;
-        return;
+        return Promise.resolve();
     }
     var token = ++searchToken;
-    fetch("{% url 'inventory:search_stock_types' %}?q=" + encodeURIComponent(query))
+    return fetch("{% url 'inventory:search_stock_types' %}?q=" + encodeURIComponent(query))
         .then(function (resp) { return resp.json(); })
         .then(function (data) {
             if (token !== searchToken) return;
@@ -462,14 +252,222 @@ function runSearch(query) {
         });
 }
 
-document.addEventListener("DOMContentLoaded", function () {
-    var searchInput = document.getElementById("stock-search");
-    if (!searchInput) return;
-    searchInput.addEventListener("input", function () {
-        clearTimeout(searchTimer);
-        var query = searchInput.value.trim();
-        searchTimer = setTimeout(function () { runSearch(query); }, SEARCH_DEBOUNCE_MS);
+function searchBox() {
+    return document.getElementById("stock-search");
+}
+
+document.addEventListener("input", function (event) {
+    if (event.target !== searchBox()) return;
+    clearTimeout(searchTimer);
+    var query = event.target.value.trim();
+    searchTimer = setTimeout(function () { runSearch(query); }, SEARCH_DEBOUNCE_MS);
+});
+
+// ------------------------------------------------ the panel "À classer"
+//
+// A name typed for a product says straight away whether it is an existing
+// stock item (its unit and category are then taken, not asked) and filters
+// the list beside the panel down to it: where the product is about to go is
+// in sight before it goes there. Once classified, the panel comes back with
+// the next product and the list reloads itself opened on the item.
+
+var stockTypesByName = {};
+
+function loadStockTypes() {
+    stockTypesByName = {};
+    var data = document.getElementById("stock-types-data");
+    if (!data) return;
+    try {
+        JSON.parse(data.textContent).forEach(function (st) {
+            stockTypesByName[st.name.trim().toLowerCase()] = st;
+        });
+    } catch (e) {
+        // malformed data - the field still works, just without the hints
+    }
+}
+
+function syncStockTypeName(input) {
+    var unitSelect = document.getElementById(input.dataset.unitTarget);
+    var categoryInput = document.getElementById(input.dataset.categoryTarget);
+    var hint = document.getElementById(input.dataset.hintTarget);
+    var typed = input.value.trim();
+    var match = stockTypesByName[typed.toLowerCase()];
+    if (unitSelect) {
+        if (match) unitSelect.value = match.unit;
+        unitSelect.disabled = !!match;
+    }
+    if (categoryInput) {
+        if (match) categoryInput.value = match.category || "";
+        categoryInput.disabled = !!match;
+    }
+    if (hint) {
+        hint.classList.toggle("is-new", !!typed && !match);
+        if (!typed) {
+            hint.textContent = "";
+        } else if (match) {
+            hint.textContent = "Article existant · " + (match.category || "sans catégorie") + " · " + match.unit_label.toLowerCase();
+        } else {
+            hint.textContent = "Nouvel article : choisissez son unité et sa catégorie.";
+            var near = nearestStockType(typed);
+            if (near) {
+                var use = document.createElement("button");
+                use.type = "button";
+                use.className = "link-button";
+                use.textContent = "Ou « " + near.name + " » ?";
+                use.addEventListener("click", function () {
+                    input.value = near.name;
+                    input.dispatchEvent(new Event("input", { bubbles: true }));
+                    input.focus();
+                });
+                hint.appendChild(document.createTextNode(" "));
+                hint.appendChild(use);
+            }
+        }
+    }
+}
+
+// "Ricard 45d" typed, "Ricard" exists: the existing item whose name the
+// typed one starts with (or the reverse), the longest such name first.
+function plain(text) {
+    return text.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+}
+function nearestStockType(typed) {
+    var wanted = plain(typed);
+    if (wanted.length < 3) return null;
+    var best = null;
+    Object.keys(stockTypesByName).forEach(function (key) {
+        var name = plain(stockTypesByName[key].name);
+        if (name.length < 3) return;
+        var near = wanted.indexOf(name + " ") === 0 || name.indexOf(wanted) === 0;
+        if (near && (!best || name.length > plain(best.name).length)) best = stockTypesByName[key];
     });
+    return best;
+}
+
+var filterTimer = null;
+document.addEventListener("input", function (event) {
+    if (!event.target.matches(".js-stock-type-name")) return;
+    syncStockTypeName(event.target);
+    var box = searchBox();
+    if (!box) return;
+    clearTimeout(filterTimer);
+    var typed = event.target.value.trim();
+    filterTimer = setTimeout(function () {
+        box.value = typed;
+        runSearch(typed);
+    }, SEARCH_DEBOUNCE_MS);
+});
+
+function syncPanel(focus) {
+    loadStockTypes();
+    var names = document.querySelectorAll("#review-panel-body .js-stock-type-name");
+    names.forEach(syncStockTypeName);
+    if (focus && names.length) {
+        names[0].focus();
+        names[0].select();
+    }
+    var count = document.querySelectorAll("#review-panel-body .review-card").length;
+    var total = document.querySelector("#review-panel-body .count-pill");
+    document.querySelectorAll("[data-review-count]").forEach(function (pill) {
+        if (total) pill.textContent = total.textContent;
+    });
+    if (!count) document.querySelectorAll("[data-panel-open]").forEach(function (button) {
+        if (button.tagName === "BUTTON") button.hidden = true;
+    });
+}
+
+var PANEL_STORAGE_KEY = "marginmate:stock:panel-closed";
+
+function setPanelClosed(closed) {
+    var layout = document.getElementById("products-layout");
+    if (!layout || !document.getElementById("a-classer")) return;
+    layout.classList.toggle("panel-closed", closed);
+    document.querySelectorAll("button[data-panel-open]").forEach(function (button) { button.hidden = !closed; });
+    try { sessionStorage.setItem(PANEL_STORAGE_KEY, closed ? "1" : ""); } catch (e) { /* not remembered */ }
+}
+
+document.addEventListener("click", function (event) {
+    if (event.target.closest("[data-panel-close]")) {
+        setPanelClosed(true);
+        return;
+    }
+    if (event.target.closest("[data-panel-open]")) {
+        setPanelClosed(false);
+        var first = document.querySelector("#review-panel-body .js-stock-type-name");
+        if (first) first.focus();
+        return;
+    }
+    var reveal = event.target.closest("[data-reveal-stock-type]");
+    if (reveal) {
+        event.preventDefault();
+        revealStockType(reveal.dataset.revealStockType);
+    }
+});
+
+// Opens the list on one stock item and makes it blink: where a product was
+// just classified.
+function revealStockType(id) {
+    var row = document.querySelector('#catalogue .stock-row[data-stock-type-id="' + id + '"]');
+    if (!row) return;
+    var box = searchBox();
+    if (row.classList.contains("search-hidden") && box) {
+        box.value = "";
+        applySearchFilter(null);
+        document.getElementById("stock-search-status").hidden = true;
+    }
+    var table = row.closest("table");
+    var header = document.querySelector('#catalogue [data-toggle="' + table.id + '"]');
+    var expanded = loadExpandedIds();
+    if (header && table.hidden) expandTarget(header, table);
+    if (header) expanded.add(header.dataset.toggle);
+    var details = document.getElementById(row.dataset.toggle);
+    if (details) {
+        // The list was drawn after the classification: the purchases it
+        // loads include the product just classified.
+        expandTarget(row, details);
+        expanded.add(row.dataset.toggle);
+    }
+    saveExpandedIds(expanded);
+    row.scrollIntoView({ block: "center", behavior: "smooth" });
+    row.classList.remove("flash");
+    void row.offsetWidth;
+    row.classList.add("flash");
+}
+
+var pendingReveal = null;
+document.body.addEventListener("catalogue-changed", function (event) {
+    pendingReveal = event.detail && event.detail.stock_type;
+});
+
+// Caught on the NEW element: the list and the panel are swapped whole
+// (outerHTML), and the answers also carry out-of-band parts - the figures,
+// the navigation's count - which report the same request target.
+document.body.addEventListener("htmx:afterSwap", function (event) {
+    var swapped = event.target;
+    if (swapped.id === "catalogue") {
+        // The list came back: open what was open, filter as typed, then
+        // show where the product went.
+        var box = searchBox();
+        var query = box ? box.value.trim() : "";
+        restoreExpanded()
+            .then(function () { return runSearch(query); })
+            .then(function () {
+                if (pendingReveal) revealStockType(pendingReveal);
+                pendingReveal = null;
+            });
+    }
+    if (swapped.id === "review-panel-body") {
+        syncPanel(true);
+    }
+});
+
+document.addEventListener("DOMContentLoaded", function () {
+    restoreExpanded();
+    syncPanel(false);
+    var closed = false;
+    try { closed = sessionStorage.getItem(PANEL_STORAGE_KEY) === "1"; } catch (e) { /* default: open */ }
+    if (location.hash === "#a-classer") closed = false;
+    setPanelClosed(closed);
 });
 </script>
 {% endblock %}

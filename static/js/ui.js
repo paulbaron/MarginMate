@@ -195,6 +195,17 @@
         root.querySelectorAll("select[data-shop-select]").forEach(showNewShop);
     }
 
+    // A form with `data-confirm` asks first. The correction page's forms ask
+    // their own question (data-leaves-lines), with the unsaved lines in it.
+    document.addEventListener("submit", function (event) {
+        var form = event.target;
+        if (!form.matches("form[data-confirm]:not([data-leaves-lines])")) return;
+        if (!window.confirm(form.getAttribute("data-confirm"))) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+        }
+    }, true);
+
     // A button with `data-busy-label` says so while its form's request runs
     // (a ticket's OCR is seconds), and can't be pressed a second time.
     document.addEventListener("submit", function (event) {
