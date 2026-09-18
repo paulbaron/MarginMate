@@ -1165,6 +1165,13 @@ back and forth between them. The rules that came with merging them:
   imported comes back highlighted and opened in the list (`?surligner=`);
   the list reloads when an import or a gather ends (`documents-changed`,
   sent by their status partials once they stop polling).
+- **A badge and the list it stands for share one definition.** The "À
+  vérifier" tab counted `TICKET_TO_CHECK` while the page listed
+  `receipts.pending_receipts()`, and when charges were left out of one and
+  not the other the tab read "102" over an empty page. `pending_receipts`
+  is that Q and nothing else; the same went for the "Produits" badge, which
+  counted the postes of charge the page does not list (110 over 97). When a
+  count is cheap to get from the list, take it from the list.
 - **Without JavaScript the same forms post and redirect** to the page; the
   in-place answer is chosen on `HX-Request`.
 - **No out-of-band part beside a `<tr>`**: htmx 1.9 parses a row response
