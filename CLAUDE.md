@@ -352,6 +352,14 @@ set by `_expense_line` from the figures the document prints): 33,33 € HT at
 what leaves the bank. Everything that shows what a charge cost adds those
 up, `inventory.views.charge_suppliers` included.
 
+**A poste opens like a stock item.** The charges fold lives inside
+`#catalogue`, so the page's own toggle script reaches it: a poste's row opens
+on the documents behind it (`inventory.charge_documents`, each linking to the
+document it came from) and its 📈 shows what it has cost over time
+(`charge_history`, the same chart a stock item's price history draws, against
+the document's date). The rent is followed month after month like anything
+else bought - which is the whole reason for keeping the postes apart.
+
 **A poste is a label and the amount printed after it**, and a document's
 postes are the run of them adding up to an amount printed below them. That
 run is what proves the reading *and* settles the total: a statement puts two

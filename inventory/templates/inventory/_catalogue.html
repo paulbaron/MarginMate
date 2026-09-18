@@ -183,19 +183,21 @@ is what those answers trigger.
         Aucun article de stock pour le moment. Classez un produit dans le panneau, créez un article, ou importez une facture pour démarrer.
     </div>
 {% endif %}
-</div>
 
 {% comment %}
 What the suppliers of charges cost - a subscription, the rent, the water.
 They hold no stock, so they are nowhere else on this page; folded away, since
-they are not what one comes here for.
+they are not what one comes here for. Inside #catalogue on purpose: a poste
+opens like a stock item (the page's own toggle script), on its documents and
+its curve.
 {% endcomment %}
 {% if charge_suppliers %}
     <details class="explainer charges" data-persist="charges">
         <summary>Charges et abonnements (hors stock)</summary>
         <p class="muted">
             Ces fournisseurs n'ont pas de produits : leurs factures sont enregistrées par poste quand elles
-            en nomment (loyer, provisions), sinon en une ligne par taux de TVA.
+            en nomment (loyer, provisions), sinon en une ligne par taux de TVA. Ouvrez un poste pour voir ses
+            documents et sa courbe.
             Totaux {% if period %}sur la période choisie{% else %}sur les douze derniers mois{% endif %}.
         </p>
         <div class="table-wrap">
@@ -217,11 +219,26 @@ they are not what one comes here for.
                             <td data-sort="{{ row.last|date:'Y-m-d' }}">{{ row.last|date:"d/m/Y" }}</td>
                         </tr>
                         {% for poste in row.postes %}
-                            <tr data-child-row>
-                                <td class="muted">↳ {{ poste.name }}</td>
+                            <tr class="stock-row charge-row" data-child-row
+                                data-toggle="charge-{{ poste.product.pk }}"
+                                data-movements-url="{% url 'inventory:charge_documents' poste.product.pk %}">
+                                <td class="muted"><span class="chevron">▸</span> {{ poste.name }}</td>
                                 <td></td>
                                 <td class="num muted">{{ poste.total_ttc|floatformat:2 }} €</td>
-                                <td></td>
+                                <td class="row-actions">
+                                    <button type="button" class="btn btn-small btn-secondary js-price-history-toggle"
+                                            title="Évolution de la charge" aria-label="Évolution de la charge"
+                                            data-price-history-url="{% url 'inventory:charge_history' poste.product.pk %}"
+                                            data-target="charge-history-{{ poste.product.pk }}">📈</button>
+                                </td>
+                            </tr>
+                            <tr id="charge-history-{{ poste.product.pk }}" data-child-row hidden>
+                                <td colspan="4" style="padding:0.75rem 0.9rem;"><p class="muted">Chargement…</p></td>
+                            </tr>
+                            <tr id="charge-{{ poste.product.pk }}" data-child-row hidden>
+                                <td colspan="4" style="padding:0;">
+                                    <p class="muted" style="padding:0.75rem 0.9rem;">Chargement…</p>
+                                </td>
                             </tr>
                         {% endfor %}
                     {% endfor %}
@@ -230,3 +247,4 @@ they are not what one comes here for.
         </div>
     </details>
 {% endif %}
+</div>

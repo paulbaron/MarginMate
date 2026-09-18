@@ -202,14 +202,17 @@ def charge_suppliers(period=None) -> list[dict]:
         }
         for supplier in suppliers
     }
-    for line in InvoiceLine.objects.filter(invoice__in=documents).select_related("invoice"):
+    for line in InvoiceLine.objects.filter(invoice__in=documents).select_related("invoice", "product"):
         row = rows[line.invoice.supplier_id]
         # The line's own amount, which for a charge is the figure the
         # document prints (InvoiceLine.printed_ttc): 33,33 € HT at 20% works
         # back out to 40,00 € where the bill says 39,99 €.
         amount = line.total_ttc.quantize(Decimal("0.01"))
         row["total_ttc"] += amount
-        row["postes"][line.raw_name] = row["postes"].get(line.raw_name, Decimal("0")) + amount
+        poste = row["postes"].setdefault(
+            line.raw_name, {"name": line.raw_name, "product": line.product, "total_ttc": Decimal("0")}
+        )
+        poste["total_ttc"] += amount
     for invoice in documents.only("supplier_id", "invoice_date"):
         row = rows[invoice.supplier_id]
         row["documents"] += 1
@@ -220,10 +223,7 @@ def charge_suppliers(period=None) -> list[dict]:
         | {
             "since": since,
             # One poste is the charge itself under another name.
-            "postes": [
-                {"name": name, "total_ttc": total}
-                for name, total in sorted(row["postes"].items(), key=lambda item: -item[1])
-            ]
+            "postes": sorted(row["postes"].values(), key=lambda poste: -poste["total_ttc"])
             if len(row["postes"]) > 1
             else [],
         }
@@ -463,6 +463,46 @@ def stock_type_price_history(request, pk):
         request,
         "inventory/_stock_type_price_history.html",
         {"stock_type": stock_type, "chart_svg": _build_price_history_svg(points), "has_enough_data": len(points) >= 2},
+    )
+
+
+def charge_documents(request, product_id):
+    """The documents behind one poste of charge - a rent, a provision, a
+    subscription - fetched when its row is opened, like a stock item's
+    purchases. Each links to the document it came from."""
+    from invoices.models import InvoiceLine
+
+    product = get_object_or_404(Product, pk=product_id, is_expense=True)
+    lines = (
+        InvoiceLine.objects.filter(product=product)
+        .select_related("invoice", "invoice__supplier")
+        .order_by("-invoice__invoice_date", "-invoice_id")
+    )
+    return render(
+        request,
+        "inventory/_charge_documents.html",
+        {"product": product, "lines": lines, "total_ttc": sum((line.total_ttc for line in lines), Decimal("0"))},
+    )
+
+
+def charge_history(request, product_id):
+    """How much one poste of charge has cost over time, as the same chart a
+    stock item's price history draws: a rent that moves, a subscription that
+    doubles, seen at a glance."""
+    from invoices.models import InvoiceLine
+
+    product = get_object_or_404(Product, pk=product_id, is_expense=True)
+    points = _aggregate_price_points(
+        [
+            (line.invoice.invoice_date, Decimal("1"), line.total_ttc)
+            for line in InvoiceLine.objects.filter(product=product, invoice__invoice_date__isnull=False)
+            .select_related("invoice")
+        ]
+    )
+    return render(
+        request,
+        "inventory/_charge_history.html",
+        {"product": product, "chart_svg": _build_price_history_svg(points), "has_enough_data": len(points) >= 2},
     )
 
 

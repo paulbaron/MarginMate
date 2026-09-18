@@ -1,0 +1,50 @@
+{% comment %}
+The documents behind one poste of charge, opened under its row - a rent month
+after month, a subscription, a provision. Each line links to the document it
+came from, exactly as a stock item's purchases do.
+{% endcomment %}
+{% if lines %}
+    <div class="sub-table-wrap">
+        <table class="sub-table">
+            <thead>
+                <tr>
+                    <th>Document</th>
+                    <th>Date</th>
+                    <th class="num">HT</th>
+                    <th class="num">TVA</th>
+                    <th class="num">TTC</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for line in lines %}
+                    <tr>
+                        <td>
+                            <a href="{% url 'invoices:invoice_detail' line.invoice_id %}">
+                                {{ line.invoice.supplier.name }}{% if line.invoice.invoice_number %} n° {{ line.invoice.invoice_number }}{% endif %}
+                            </a>
+                        </td>
+                        <td data-sort="{{ line.invoice.invoice_date|date:'Y-m-d' }}">
+                            {{ line.invoice.invoice_date|date:"d/m/Y"|default:"—" }}
+                        </td>
+                        <td class="num">{{ line.total_ht|floatformat:2 }} €</td>
+                        <td class="num">{{ line.vat_percent|floatformat:1 }} %</td>
+                        <td class="num">{{ line.total_ttc|floatformat:2 }} €</td>
+                        <td class="num">
+                            <a class="btn btn-small btn-secondary" href="{% url 'invoices:invoice_edit_lines' line.invoice_id %}">Corriger</a>
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+            <tfoot>
+                <tr>
+                    <td colspan="4" class="muted">{{ lines|length }} document{{ lines|length|pluralize }}</td>
+                    <td class="num">{{ total_ttc|floatformat:2 }} €</td>
+                    <td></td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+{% else %}
+    <p class="muted" style="padding:0.75rem 0.9rem;">Aucun document pour ce poste.</p>
+{% endif %}

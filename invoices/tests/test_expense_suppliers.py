@@ -23,7 +23,7 @@ from invoices.importing import import_parsed_invoice, redo_as_expenses, replace_
 from invoices.receipts import pending_receipts, reread_receipt
 from invoices.models import Invoice, Supplier
 from invoices.parsers.base import ParsedInvoice, ParsedLine
-from tests.factories import make_supplier
+from tests.factories import make_product, make_supplier
 
 D = Decimal
 
@@ -396,6 +396,48 @@ class ChargesOnTheProductsPageTests(TestCase):
         """One poste is the charge itself under another name."""
         page = self.client.get(reverse("inventory:stock_list"))
         self.assertEqual([row["postes"] for row in page.context["charge_suppliers"]], [[]])
+
+    def test_a_poste_opens_on_its_documents_and_its_curve(self):
+        """Like any stock item: what it cost month after month, each line
+        linking to the document it came from."""
+        bailleur = make_supplier(code="BAILLEUR", name="Bailleur Exemple", parser_key="", expenses_only=True)
+        for month in (5, 6):
+            import_parsed_invoice(
+                bailleur,
+                parsed(total=D("830.00"), text=STATEMENT, number=f"A-{month}", when=date(2026, month, 1)),
+            )
+        page = self.client.get(reverse("inventory:stock_list"))
+        (row,) = [row for row in page.context["charge_suppliers"] if row["supplier"] == bailleur]
+        rent = next(poste for poste in row["postes"] if poste["name"] == "LOYERLOCAUXACTIVITEHT")
+        self.assertContains(page, reverse("inventory:charge_documents", args=[rent["product"].pk]))
+        self.assertContains(page, reverse("inventory:charge_history", args=[rent["product"].pk]))
+
+        documents = self.client.get(reverse("inventory:charge_documents", args=[rent["product"].pk]))
+        self.assertEqual(len(documents.context["lines"]), 2)
+        self.assertEqual(documents.context["total_ttc"], D("1440.00"))
+        for line in documents.context["lines"]:
+            self.assertContains(documents, reverse("invoices:invoice_detail", args=[line.invoice_id]))
+
+        curve = self.client.get(reverse("inventory:charge_history", args=[rent["product"].pk]))
+        self.assertTrue(curve.context["has_enough_data"])
+        self.assertContains(curve, "<svg")
+
+    def test_one_document_is_not_a_curve(self):
+        once = make_supplier(code="ASSURANCE", name="Assurance Exemple", parser_key="", expenses_only=True)
+        import_parsed_invoice(once, parsed(total=D("120.00"), number="A-1", when=date(2026, 5, 2)))
+        curve = self.client.get(
+            reverse("inventory:charge_history", args=[Product.objects.get(supplier=once).pk])
+        )
+        self.assertFalse(curve.context["has_enough_data"])
+        self.assertContains(curve, "Pas assez d'historique")
+
+    def test_only_a_poste_of_charge_opens_that_way(self):
+        """A stock product has its own history page; this one answers for
+        charges alone, so a wrong id is a 404 rather than a blank panel."""
+        ordinary = make_product(supplier=make_supplier(code="EPICERIE"), raw_name="TOMATES")
+        self.assertEqual(
+            self.client.get(reverse("inventory:charge_documents", args=[ordinary.pk])).status_code, 404
+        )
 
     def test_nothing_is_shown_when_no_supplier_is_a_charge(self):
         Supplier.objects.filter(pk=self.supplier.pk).update(expenses_only=False)
