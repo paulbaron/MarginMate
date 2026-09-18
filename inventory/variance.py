@@ -1155,10 +1155,7 @@ def quantities_sold(
     all-time purchases against one month's sales would say nothing is ever
     missing.
     """
-    from django.utils import timezone
-
-    from recipes.models import Recipe, variation_scope
-    from recipes.sales import sales_between, stock_type_sales_between
+    from recipes.models import variation_scope
 
     # Every recipe is asked for its choice groups three times over (its usage
     # terms, its pools, its allocation), and each ask was a query of its own
