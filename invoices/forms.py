@@ -393,14 +393,25 @@ class InvoiceTypeForm(forms.ModelForm):
     class Meta:
         model = InvoiceType
         fields = ["name", "supplier", "parser_key", "is_active"]
-        labels = {"name": "Nom", "supplier": "Fournisseur", "parser_key": "Parseur", "is_active": "Actif"}
+        labels = {"name": "Nom", "supplier": "Fournisseur", "parser_key": "Lecteur", "is_active": "Actif"}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        choices = [("", "— Saisie manuelle —")] + [
+        # No dedicated parser no longer means typing it in: the one reader
+        # reads any document's table, totals and VAT (parsers/generic_receipt).
+        choices = [("", "— Lecteur générique —")] + [
             (key, key) for key in sorted(PARSER_REGISTRY) if key != LLM_PARSER_KEY
         ]
-        self.fields["parser_key"] = forms.ChoiceField(choices=choices, required=False, label="Parseur")
+        self.fields["parser_key"] = forms.ChoiceField(
+            choices=choices,
+            required=False,
+            label="Lecteur",
+            help_text=(
+                "Le lecteur générique lit n'importe quel document (lignes, totaux, TVA) et se vérifie sur "
+                "les totaux imprimés. Un lecteur dédié n'est utile que pour une mise en page que le "
+                "générique ne sait pas lire."
+            ),
+        )
 
 
 class EmailInvoiceSourceForm(forms.ModelForm):
@@ -576,6 +587,47 @@ class DocumentHeaderForm(forms.Form):
 
     def clean_invoice_date(self):
         return check_document_date(self.cleaned_data.get("invoice_date"))
+
+
+class VatRowForm(forms.Form):
+    """One rate of the VAT table the document prints.
+
+    Typed, not read: a check compares what was read with what is printed, and
+    the printed side has to be reachable or the check is a warning nobody can
+    answer. Blank rows are how a rate is removed, and the spare one at the
+    end is how another is added.
+    """
+
+    rate = forms.DecimalField(
+        label="Taux", required=False, max_digits=5, decimal_places=2, min_value=0, max_value=100,
+        widget=forms.NumberInput(attrs={"step": "0.1", "placeholder": "%", "aria-label": "Taux de TVA"}),
+    )
+    base = forms.DecimalField(
+        label="Base HT", required=False, max_digits=12, decimal_places=2,
+        widget=forms.NumberInput(attrs={"step": "0.01", "placeholder": "Base HT", "aria-label": "Base HT"}),
+    )
+    vat = forms.DecimalField(
+        label="TVA", required=False, max_digits=12, decimal_places=2,
+        widget=forms.NumberInput(attrs={"step": "0.01", "placeholder": "TVA", "aria-label": "Montant de TVA"}),
+    )
+
+    def clean(self):
+        data = super().clean()
+        typed = [value for value in (data.get("rate"), data.get("base"), data.get("vat")) if value is not None]
+        if typed and len(typed) < 3:
+            raise forms.ValidationError("Un taux se saisit avec sa base HT et son montant de TVA.")
+        return data
+
+    @property
+    def row(self) -> list | None:
+        """[rate as a fraction, base, tax], or None for a row left blank."""
+        data = getattr(self, "cleaned_data", {})
+        if data.get("rate") is None or data.get("base") is None or data.get("vat") is None:
+            return None
+        return [str(data["rate"] / Decimal("100")), str(data["base"]), str(data["vat"])]
+
+
+VatTableFormSet = forms.formset_factory(VatRowForm, extra=1)
 
 
 class ShopItemPriceForm(forms.ModelForm):

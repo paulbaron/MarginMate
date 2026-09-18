@@ -43,6 +43,9 @@ def import_parsed_invoice(
         invoice_date=parsed.invoice_date,
         reconciliation_adjustment=parsed.reconciliation_adjustment,
         printed_total_ttc=parsed.printed_total_ttc,
+        # The table the document prints, for the checks to compare against
+        # and for a person to correct (receipts.vat_table).
+        vat_breakdown=[[str(rate), str(base), str(tax)] for rate, base, tax in parsed.vat_breakdown],
     )
     if source_file_path:
         name = display_filename or os.path.basename(source_file_path)

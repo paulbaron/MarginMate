@@ -103,9 +103,11 @@ class ReviewScreenChecksTests(TestCase):
                 "detail": "vérifié à la main : lignes 0.98 € / ticket 0.98 € (écart +0.00 €)",
             },
         )
-        self.assertNotIn("Somme HT des lignes = base HT du ticket", checks)
         self.assertNotIn("Articles = total avant remise", checks)
-        self.assertTrue(checks["TVA 5.5% cohérente"]["passed"])
+        # The VAT checks are recomputed from the table on the page: this
+        # ticket carries none, so the reading's own are gone with the rest.
+        self.assertNotIn("TVA 5.5% cohérente", checks)
+        self.assertNotIn("Somme HT des lignes = base HT du ticket", checks)
         self.assertTrue(self.invoice.receipt_verified)
 
     def test_lines_that_still_do_not_add_up_say_so(self):
@@ -199,3 +201,105 @@ class RereadTests(TestCase):
         self.assertFalse(invoice.lines.exists())
         call_command("reread_receipts", stdout=StringIO())
         self.assertTrue(invoice.lines.exists())
+
+
+class PrintedVatTableTests(TestCase):
+    """The third thing a check compares.
+
+    The lines and the printed total were on the page; the table the document
+    prints was not, so "TVA 5,5% cohérente" and "Somme HT des lignes = base
+    HT du ticket" were warnings nobody could answer - 21 of them still
+    standing on tickets checked long ago.
+    """
+
+    def setUp(self):
+        self.invoice = ticket()
+        self.url = reverse("invoices:receipt_review", args=[self.invoice.pk])
+
+    def post(self, rows=(), **changes):
+        data = {
+            "form-TOTAL_FORMS": "1",
+            "form-INITIAL_FORMS": "0",
+            "form-MIN_NUM_FORMS": "0",
+            "form-MAX_NUM_FORMS": "1000",
+            "invoice_date": "2026-07-15",
+            "form-0-product_name": "PAIN COMPLET",
+            "form-0-quantity": "2",
+            "form-0-total_ttc": "0.98",
+            "form-0-vat_rate": "5.5",
+            "form-0-line_id": str(self.invoice.lines.get().pk),
+            "tva-TOTAL_FORMS": str(len(rows) or 1),
+            "tva-INITIAL_FORMS": "0",
+            "tva-MIN_NUM_FORMS": "0",
+            "tva-MAX_NUM_FORMS": "1000",
+        }
+        for index, (rate, base, vat) in enumerate(rows):
+            data[f"tva-{index}-rate"] = rate
+            data[f"tva-{index}-base"] = base
+            data[f"tva-{index}-vat"] = vat
+        data.update(changes)
+        return self.client.post(self.url, data)
+
+    def checks(self):
+        self.invoice.refresh_from_db()
+        return {check["label"]: check for check in self.invoice.parse_checks}
+
+    def test_the_page_offers_the_table_read_on_the_document(self):
+        self.invoice.vat_breakdown = [["0.055", "0.93", "0.05"]]
+        self.invoice.save(update_fields=["vat_breakdown"])
+        page = self.client.get(self.url)
+        self.assertEqual(
+            page.context["vat_form"].initial,
+            [{"rate": D("5.500"), "base": D("0.93"), "vat": D("0.05")}],
+        )
+        self.assertContains(page, "TVA imprimée sur le document")
+
+    def test_typing_the_table_checks_the_lines_against_it(self):
+        """0,93 € HT at 5,5% is 0,05 € of tax, and the line typed is 0,93 €
+        HT: both checks pass, and both name figures on the page."""
+        self.post(rows=[("5.5", "0.93", "0.05")])
+        checks = self.checks()
+        self.assertTrue(checks["TVA 5.5% cohérente"]["passed"])
+        self.assertTrue(checks["Somme HT des lignes = base HT du ticket"]["passed"])
+        self.assertEqual(self.invoice.vat_breakdown, [["0.055", "0.93", "0.05"]])
+
+    def test_a_table_that_does_not_add_up_says_which_figure_is_wrong(self):
+        self.post(rows=[("5.5", "0.93", "0.19")])
+        checks = self.checks()
+        self.assertFalse(checks["TVA 5.5% cohérente"]["passed"])
+        self.assertIn("0.05 € / document 0.19 €", checks["TVA 5.5% cohérente"]["detail"])
+
+    def test_and_correcting_it_clears_the_warning(self):
+        """Which is the whole point: a warning that can be answered."""
+        self.post(rows=[("5.5", "0.93", "0.19")])
+        self.assertFalse(self.checks()["TVA 5.5% cohérente"]["passed"])
+        self.post(rows=[("5.5", "0.93", "0.05")])
+        self.assertTrue(self.checks()["TVA 5.5% cohérente"]["passed"])
+
+    def test_a_base_that_is_not_what_the_lines_come_to_says_so(self):
+        self.post(rows=[("5.5", "5.00", "0.28")])
+        check = self.checks()["Somme HT des lignes = base HT du ticket"]
+        self.assertFalse(check["passed"])
+        self.assertIn("lignes 0.93 € HT / document 5.00 € HT", check["detail"])
+
+    def test_no_table_asks_nothing(self):
+        """A document that prints none is not wrong, and a failure nobody
+        asked for is the noise this page exists to avoid."""
+        self.post(rows=[("", "", "")])
+        labels = self.checks()
+        self.assertNotIn("TVA 5.5% cohérente", labels)
+        self.assertNotIn("Somme HT des lignes = base HT du ticket", labels)
+        self.assertNotIn("Table TVA lue", labels)
+        self.assertEqual(self.invoice.vat_breakdown, [])
+
+    def test_half_a_row_is_refused_with_what_is_missing(self):
+        response = self.post(rows=[("5.5", "0.93", "")])
+        self.assertContains(response, "Un taux se saisit avec sa base HT et son montant de TVA.")
+        self.invoice.refresh_from_db()
+        self.assertIsNone(self.invoice.reviewed_at)
+
+    def test_a_rate_taken_out_takes_its_check_with_it(self):
+        self.post(rows=[("5.5", "0.93", "0.05"), ("20", "1.00", "0.20")])
+        self.assertIn("TVA 20% cohérente", self.checks())
+        self.post(rows=[("5.5", "0.93", "0.05")])
+        self.assertNotIn("TVA 20% cohérente", self.checks())

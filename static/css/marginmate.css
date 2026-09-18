@@ -305,8 +305,18 @@ th[aria-sort]:not([aria-sort="none"]) > button { color: var(--text); }
     font-size: 1.1rem;
     pointer-events: none;
 }
+/* A search field with its buttons beside it: the glass belongs to the field,
+   so the wrapper holds that alone and this lays the row out. */
+.search-row { display: flex; gap: var(--s2); align-items: center; margin-bottom: var(--s3); flex-wrap: wrap; }
+.search-row .table-search { display: block; }
+
 .table-count { color: var(--muted); font-size: 0.85rem; white-space: nowrap; }
 .table-empty { color: var(--muted); padding: var(--s5); text-align: center; }
+
+/* The VAT table typed beside the total, on the correction page. */
+.vat-rows { display: flex; flex-direction: column; gap: var(--s2); }
+.vat-row { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.vat-row input { width: 7rem; }
 
 .search-hidden { display: none !important; }
 

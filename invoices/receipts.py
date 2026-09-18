@@ -63,6 +63,7 @@ from .parsers.generic_receipt import GenericReceiptParser, TicketShop
 from .parsers.receipt_base import (
     CENTS,
     RECONCILIATION_TOLERANCE,
+    VAT_IDENTITY_TOLERANCE,
     ReceiptParser,
     line_amounts,
 )
@@ -767,17 +768,101 @@ def lines_check(invoice: Invoice, prefix: str = "") -> dict:
     }
 
 
+def vat_table(invoice: Invoice) -> list[dict]:
+    """The VAT table the document prints, as rows of {rate, base, vat}.
+
+    What is stored, or - for a document filed before the table was kept -
+    what reading it again says, so an old ticket's row comes up filled in
+    rather than blank.
+    """
+    rows = invoice.vat_breakdown
+    if not rows and invoice.ocr_text:
+        parser = parser_for(invoice.supplier)
+        if parser is not None and hasattr(parser, "parse_text"):
+            try:
+                rows = [[str(rate), str(base), str(tax)] for rate, base, tax in parser.parse_text(invoice.ocr_text).vat_breakdown]
+            except Exception:  # noqa: BLE001 - a reading that fails leaves the table to be typed
+                rows = []
+    table = []
+    for row in rows:
+        try:
+            rate, base, vat = (Decimal(str(value)) for value in row)
+        except (ArithmeticError, TypeError, ValueError):
+            continue
+        table.append({"rate": rate, "base": base, "vat": vat})
+    return table
+
+
+def vat_table_checks(invoice: Invoice, table: list[dict] | None = None) -> list[dict]:
+    """What the printed VAT table says about the lines, as checks a person
+    can answer: each rate's own arithmetic, and the bases against the lines'
+    HT. Both sides are on the review screen, so a failure always points at a
+    field rather than at a reading nobody can reach.
+    """
+    from .parsers.receipt_base import format_rate
+
+    table = vat_table(invoice) if table is None else table
+    if not table:
+        # No table, no check: a document that prints none is not wrong, and a
+        # failure nobody asked for is the noise this page exists to avoid.
+        # Typing one brings the check with it.
+        return []
+    checks = []
+    for row in table:
+        expected = (row["base"] * row["rate"]).quantize(CENTS, rounding=ROUND_HALF_UP)
+        percent = format_rate(row["rate"])
+        checks.append(
+            {
+                "label": f"TVA {percent}% cohérente",
+                "passed": abs(expected - row["vat"]) <= VAT_IDENTITY_TOLERANCE,
+                "detail": (
+                    f"HT {row['base']:.2f} € x {percent}% = {expected:.2f} € / document {row['vat']:.2f} €"
+                ),
+            }
+        )
+    base_total = sum((row["base"] for row in table), start=Decimal("0"))
+    lines_ht = sum((line.total_ht for line in invoice.lines.all()), start=Decimal("0"))
+    drift = base_total - lines_ht
+    slack = max(RECONCILIATION_TOLERANCE, CENTS * invoice.lines.count())
+    checks.append(
+        {
+            "label": "Somme HT des lignes = base HT du ticket",
+            "passed": abs(drift) <= slack,
+            "detail": f"lignes {lines_ht:.2f} € HT / document {base_total:.2f} € HT (écart {drift:+.2f} €)",
+        }
+    )
+    return checks
+
+
 def recheck_after_review(invoice: Invoice) -> None:
-    """Replace what the parser said about the lines with the check on the
-    lines a person validated - or the review screen keeps showing "lignes
-    3.85 € / ticket 9.03 €" about lines corrected long ago. What was read of
-    the VAT table stays: nobody retyped that. Not saved here."""
-    dropped = set(READING_CHECKS)
+    """Replace what the parser said with checks on what the page now holds:
+    the lines a person validated, the total they typed and the VAT table
+    they typed beside it.
+
+    Every check is then a comparison between two things on the screen - the
+    reading's own notes ("Lignes écartées", "Montants recalculés") go, since
+    they describe lines that no longer exist. Not saved here.
+    """
+    dropped = set(READING_CHECKS) | {check["label"] for check in vat_table_checks(invoice)}
+    dropped |= {label for label in _vat_check_labels(invoice)}
     if invoice.printed_total_ttc is not None:
         dropped.add(UNREAD_TOTAL_CHECK)
-    invoice.parse_checks = [check for check in invoice.parse_checks if check["label"] not in dropped] + [
-        lines_check(invoice, prefix="vérifié à la main : ")
-    ]
+    kept = [check for check in invoice.parse_checks if check["label"] not in dropped]
+    invoice.parse_checks = (
+        kept + [lines_check(invoice, prefix="vérifié à la main : ")] + vat_table_checks(invoice)
+    )
+
+
+def _vat_check_labels(invoice: Invoice) -> set:
+    """Every label a VAT check has ever carried on this document - the rates
+    read at import included, so a table corrected to another rate does not
+    leave the old one's check behind."""
+    return {
+        check["label"]
+        for check in invoice.parse_checks
+        if check["label"].startswith(("TVA ", "Table TVA"))
+        or check["label"] == "Somme HT des lignes = base HT du ticket"
+    }
 
 
 def _sum_check_passed(checks) -> bool:

@@ -178,6 +178,12 @@ class Invoice(models.Model):
     source_text = models.TextField(blank=True)
     ocr_confidence = models.DecimalField(max_digits=4, decimal_places=2, null=True, blank=True)
     parse_checks = models.JSONField(default=list, blank=True)
+    # The VAT table the document prints, as [[rate, base HT, tax], ...] with
+    # the rate as a fraction. Stored because it is one of the three things a
+    # check compares - the lines, the printed total, this - and the only one
+    # a person could not correct: every check that mentioned it was a
+    # warning nobody could answer. Typed on the review screen like the rest.
+    vat_breakdown = models.JSONField(default=list, blank=True)
     preview_image = models.ImageField(upload_to="receipts/%Y/%m/", blank=True, null=True)
     # Set when a person has actually looked at the photo and accepted the
     # lines. Distinct from status=COMPLETE, which only means every product

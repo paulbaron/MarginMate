@@ -125,11 +125,13 @@ class ManualEntryInsteadOfAiTests(TestCase):
             parse_and_import(self.make_pdf(), self.supplier)
         llm.assert_not_called()
 
-    def test_the_form_offers_manual_entry_not_ai(self):
+    def test_the_form_offers_the_one_reader_not_ai(self):
+        """No dedicated parser has not meant typing it in since the one
+        reader started reading any document."""
         from invoices.forms import InvoiceTypeForm
 
         labels = [label for _value, label in InvoiceTypeForm().fields["parser_key"].choices]
-        self.assertIn("— Saisie manuelle —", labels)
+        self.assertIn("— Lecteur générique —", labels)
         self.assertFalse([label for label in labels if "IA" in label])
 
 

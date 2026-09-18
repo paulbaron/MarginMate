@@ -10,12 +10,15 @@ Every invoice and ticket. Reloads itself when an import ends
     table below is therefore sort-only - two boxes filtering by two different
     rules is worse than one.
     {% endcomment %}
-    <form method="get" class="table-search documents-search" hx-boost="true" hx-target="#workspace"
+    <form method="get" class="search-row" hx-boost="true" hx-target="#workspace"
           hx-select="#workspace" hx-swap="outerHTML">
         {% if active_filter %}<input type="hidden" name="filtre" value="{{ active_filter }}">{% endif %}
-        <input type="search" name="q" value="{{ query }}" autocomplete="off"
-               aria-label="Rechercher un document"
-               placeholder="Rechercher un fournisseur, un numéro, une date (12/07/2026), un montant…">
+        {# The magnifying glass is drawn on this wrapper, so it holds the field alone. #}
+        <span class="table-search">
+            <input type="search" name="q" value="{{ query }}" autocomplete="off"
+                   aria-label="Rechercher un document"
+                   placeholder="Rechercher un fournisseur, un numéro, une date (12/07/2026), un montant…">
+        </span>
         <button class="btn btn-small btn-secondary" type="submit">Rechercher</button>
         {% if query %}
             <a class="btn btn-small btn-secondary" href="{% url 'invoices:invoice_list' %}"

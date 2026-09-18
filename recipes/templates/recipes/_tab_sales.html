@@ -119,10 +119,12 @@ half of the stock variance.
     filtering what is rendered could not find a sale from last year. The table
     is therefore sort-only.
     {% endcomment %}
-    <form method="get" class="table-search">
-        <input type="search" name="vente" value="{{ sales_query }}" autocomplete="off"
-               aria-label="Rechercher une vente"
-               placeholder="Rechercher une recette, une date (12/07/2026), une origine…">
+    <form method="get" class="search-row">
+        <span class="table-search">
+            <input type="search" name="vente" value="{{ sales_query }}" autocomplete="off"
+                   aria-label="Rechercher une vente"
+                   placeholder="Rechercher une recette, une date (12/07/2026), une origine…">
+        </span>
         <button class="btn btn-small btn-secondary" type="submit">Rechercher</button>
         {% if sales_query %}<a class="btn btn-small btn-secondary" href="{% url 'recipes:sales_list' %}">Effacer</a>{% endif %}
     </form>

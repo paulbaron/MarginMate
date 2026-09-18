@@ -426,6 +426,21 @@ exactly that line. Build test posts from the page (`invoices/tests/page_posts.py
 a hand-written subset tests a request no browser sends, and several such tests
 passed without ever saving.
 
+**A check compares two things, and both have to be on the page.** The lines
+and the printed total were; the VAT table the document prints was not, so
+"TVA 5,5% cohérente", "Table TVA lue" and "Somme HT des lignes = base HT du
+ticket" were warnings nobody could answer - 21 of them still standing on
+tickets checked long ago. The table is stored (`Invoice.vat_breakdown`, from
+`ParsedInvoice.vat_breakdown` at import) and **typed on the review screen**
+beside the total, a row per rate; validating rebuilds every check from what
+the page holds (`receipts.recheck_after_review`, `vat_table_checks`). An
+empty table asks nothing - a document that prints none is not wrong, and a
+failure nobody asked for is the noise this page exists to avoid - and a row
+typed half way is refused rather than half read. On the real data that took
+21 unanswerable failures to 6, every one of them pointing at a field: three
+tickets whose lines and printed table genuinely disagree (one by 1,25 €),
+two whose lines miss the total, one charge whose total was never read.
+
 The page also **reads the document again** ("Relire le document",
 `receipts.reread_document`): the photo through OCR, or the PDF through its
 supplier's parser, replacing date, total and lines - corrections included, the

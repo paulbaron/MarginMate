@@ -27,6 +27,7 @@ from .forms import (
     ReceiptBatchUploadForm,
     ReceiptShopForm,
     ShopItemPriceForm,
+    VatTableFormSet,
     line_initial,
 )
 from .importing import (
@@ -578,6 +579,7 @@ def _correction_page(request, invoice):
     price_form = ShopItemPriceForm()
     header = {"invoice_date": invoice.invoice_date, "printed_total_ttc": invoice.printed_total_ttc}
     header_form = DocumentHeaderForm(initial=header)
+    vat_form = VatTableFormSet(prefix="tva", initial=_vat_initial(invoice))
     formset = None
 
     if request.method == "POST":
@@ -631,9 +633,13 @@ def _correction_page(request, invoice):
         elif action is None:
             formset = LineCorrectionFormSet(request.POST, form_kwargs={"document": document})
             header_form = DocumentHeaderForm(request.POST, initial=header)
-            if formset.is_valid() and header_form.is_valid():
+            # Posted without the block (a page cached before it existed, a
+            # request written by hand): the table is left as it was rather
+            # than the whole correction being refused.
+            vat_form = VatTableFormSet(request.POST, prefix="tva") if "tva-TOTAL_FORMS" in request.POST else None
+            if formset.is_valid() and header_form.is_valid() and (vat_form is None or vat_form.is_valid()):
                 was_pending = invoice.reviewed_at is None
-                if _save_corrections(request, invoice, formset, header_form):
+                if _save_corrections(request, invoice, formset, header_form, vat_form):
                     if not is_receipt:
                         messages.success(request, f"{invoice.lines.count()} ligne(s) enregistrée(s).")
                         return redirect("invoices:invoice_detail", pk=invoice.pk)
@@ -683,6 +689,7 @@ def _correction_page(request, invoice):
         {
             **_checks_context(invoice),
             "invoice": invoice,
+            "vat_form": vat_form,
             "is_receipt": is_receipt,
             "is_invoice": not is_receipt,
             "formset": formset,
@@ -707,7 +714,7 @@ def _lot_of(request):
     return ReceiptBatch.objects.filter(pk=posted).first() if posted.isdigit() else None
 
 
-def _save_corrections(request, invoice, formset, header_form) -> bool:
+def _save_corrections(request, invoice, formset, header_form, vat_form=None) -> bool:
     """Store what the page says. Returns whether it was saved."""
     from .receipts import learn_identifiers, recheck_after_review
 
@@ -752,6 +759,11 @@ def _save_corrections(request, invoice, formset, header_form) -> bool:
                 invoice.printed_total_ttc = header_form.cleaned_data["printed_total_ttc"]
             replace_invoice_lines(invoice, lines)
             fields = ["invoice_date", "printed_total_ttc"]
+            if vat_form is not None:
+                # The VAT table as the page now holds it, before the checks
+                # that compare the lines against it are worked out.
+                invoice.vat_breakdown = [form.row for form in vat_form if form.row is not None]
+                fields.append("vat_breakdown")
             if invoice.is_receipt:
                 recheck_after_review(invoice)
                 invoice.reviewed_at = timezone.now()
@@ -764,6 +776,16 @@ def _save_corrections(request, invoice, formset, header_form) -> bool:
         messages.error(request, str(exc))
         return False
     return True
+
+
+def _vat_initial(invoice) -> list[dict]:
+    """The VAT table as the page shows it: the rate in percent, as printed."""
+    from .receipts import vat_table
+
+    return [
+        {"rate": row["rate"] * Decimal("100"), "base": row["base"], "vat": row["vat"]}
+        for row in vat_table(invoice)
+    ]
 
 
 def _checks_context(invoice) -> dict:

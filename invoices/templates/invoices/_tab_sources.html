@@ -30,7 +30,8 @@ patterns, the parser that reads them), and the shops a ticket is recognised by.
                 <td><a href="{% url 'invoices:invoice_type_update' invoice_type.pk %}">{{ invoice_type.name }}</a></td>
                 <td class="muted">{{ invoice_type.supplier.name }}</td>
                 <td class="muted">{{ invoice_type.get_source_kind_display }}</td>
-                <td class="muted">{{ invoice_type.parser_key|default:"Analyse IA" }}</td>
+                {# Empty means the one reader, not the AI - which is a supplier of its own. #}
+                <td class="muted">{{ invoice_type.parser_key|default:"Lecteur générique" }}</td>
                 <td>{% if invoice_type.is_active %}✅{% else %}—{% endif %}</td>
             </tr>
             {% endfor %}

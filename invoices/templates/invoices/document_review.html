@@ -172,6 +172,32 @@
                         {{ header_form.printed_total_ttc }}
                         {% if is_receipt and invoice.printed_total_ttc is None %}<span class="muted">non lu sur le ticket</span>{% endif %}
                     </div>
+                    {% comment %}
+                    The VAT table the document prints. It is the third thing a
+                    check compares - with the lines and the total - and the
+                    only one nobody could correct: every check about it was a
+                    warning with no answer. Left empty, it simply asks nothing.
+                    {% endcomment %}
+                    <details class="explainer vat-table"{% if vat_form.forms|length > 1 %} open{% endif %}>
+                        <summary>TVA imprimée sur le document ({{ vat_form.forms|length|add:"-1" }} taux)</summary>
+                        <p class="muted">
+                            Recopiez la table de TVA du document : chaque taux avec sa base HT et son montant.
+                            Elle sert à vérifier les lignes ; laissée vide, elle ne demande rien.
+                        </p>
+                        {{ vat_form.management_form }}
+                        <div class="vat-rows">
+                            {% for row in vat_form %}
+                                <div class="vat-row">
+                                    {{ row.rate }} <span class="muted">%</span>
+                                    {{ row.base }} <span class="muted">€ HT</span>
+                                    {{ row.vat }} <span class="muted">€ TVA</span>
+                                    {% for error in row.non_field_errors %}
+                                        <span class="message message-error">{{ error }}</span>
+                                    {% endfor %}
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </details>
                     {% for field in header_form %}
                         {% for error in field.errors %}
                             <div class="message message-error">{{ field.label }} : {{ error }}</div>
