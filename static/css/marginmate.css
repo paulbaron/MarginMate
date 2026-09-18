@@ -1202,6 +1202,18 @@ tr.is-new > td:first-child { box-shadow: inset 3px 0 0 var(--amber); }
 .row-actions > * + * { margin-left: var(--s1); }
 .row-actions form { display: inline; }
 .sub-table-wrap { overflow-x: auto; }
+
+/* A poste of charge is a row under its supplier's, and sorting keeps the two
+   together (data-child-row) - so the indent is the only thing saying which
+   supplier it belongs to. */
+.charges-table { table-layout: fixed; width: 100%; }
+.charges-table .charge-row td:first-child { padding-left: var(--s4); }
+/* A poste's name is one long unbroken word ("REMBOURSEMENTDEPOTGARANTIE"):
+   it breaks inside its own column rather than widening the table past the
+   panel it sits beside, which pushed the curve button off the page. */
+.charges-table td:first-child, .charges-table th:first-child { overflow-wrap: anywhere; }
+/* A date is never worth breaking over two lines ("24/09/202" / "5"). */
+.charge-documents td.nowrap { white-space: nowrap; }
 .movements-table { min-width: 820px; }
 .movements-table td:nth-child(3) { white-space: nowrap; }
 .movements-table form.conversion-form { flex-wrap: nowrap; white-space: nowrap; }

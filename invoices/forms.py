@@ -504,6 +504,10 @@ class ReceiptShopForm(forms.Form):
     )
     new_name = forms.CharField(label="Nom de la nouvelle enseigne", required=False, max_length=255)
     new_header = forms.CharField(label="Texte en tête de ses tickets", required=False, max_length=100)
+    # A new supplier made from a charge's page is one of charges too, unless
+    # the box says otherwise: made as goods, its rent became a product to
+    # classify.
+    new_expenses = forms.BooleanField(label="Charges", required=False)
     unnamed_error = "Donnez un nom à la nouvelle enseigne."
 
     def clean_supplier(self):
@@ -534,7 +538,43 @@ class ReceiptShopForm(forms.Form):
         supplier = self.cleaned_data["supplier"]
         if supplier != NEW_SHOP:
             return supplier, False
-        return create_shop(self.cleaned_data["new_name"], self.cleaned_data.get("new_header", ""), ignoring), True
+        return (
+            create_shop(
+                self.cleaned_data["new_name"],
+                self.cleaned_data.get("new_header", ""),
+                ignoring,
+                expenses_only=bool(self.cleaned_data.get("new_expenses")),
+            ),
+            True,
+        )
+
+
+class SplitForm(ReceiptShopForm):
+    """Some of a supplier's documents, and the source they go to - one that
+    exists, or a new one named here, with the text its documents print that
+    the others do not. The documents are choices among the supplier's own,
+    so a tampered or stale id is a message, never a 500."""
+
+    documents = forms.MultipleChoiceField(
+        label="Documents",
+        error_messages={
+            "required": "Cochez au moins un document à ranger.",
+            "invalid_choice": "Un des documents cochés n'est pas (ou plus) chez ce fournisseur.",
+        },
+    )
+    source_header = forms.CharField(label="En-tête", required=False, max_length=100)
+    unnamed_error = "Donnez un nom à la nouvelle source."
+
+    def __init__(self, *args, source, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.source = source
+        self.fields["supplier"].error_messages["required"] = "Choisissez où ranger les documents."
+        self.fields["documents"].choices = [
+            (str(pk), str(pk)) for pk in Invoice.objects.filter(supplier=source).values_list("pk", flat=True)
+        ]
+
+    def chosen(self) -> list[Invoice]:
+        return list(Invoice.objects.filter(supplier=self.source, pk__in=self.cleaned_data["documents"]))
 
 
 class InvoiceUploadForm(ReceiptShopForm):

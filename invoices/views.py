@@ -17,6 +17,7 @@ from .deletion import InvoiceInUseError, blocking_stock_takes, delete_invoice
 from .forms import (
     DOCUMENT_INVOICE,
     DOCUMENT_RECEIPT,
+    NEW_SHOP,
     DocumentHeaderForm,
     EmailInvoiceSourceForm,
     InvoiceTypeForm,
@@ -27,6 +28,7 @@ from .forms import (
     ReceiptBatchUploadForm,
     ReceiptShopForm,
     ShopItemPriceForm,
+    SplitForm,
     VatTableFormSet,
     line_initial,
 )
@@ -462,6 +464,24 @@ def receipt_batch_assign(request, pk, index):
     return redirect(reverse("invoices:receipt_review", args=[entry["invoice_id"]]) + f"?lot={batch.pk}")
 
 
+def _how_to_bring(elsewhere, shop) -> str:
+    """How documents filed elsewhere that print `shop`'s header are brought
+    to it. All of one supplier's: together, from that supplier's split -
+    moved one at a time, the ones still waiting print the same figures and
+    `shop` learns nothing from any of them."""
+    from .receipts import can_split
+
+    owners = {ticket.supplier_id: ticket.supplier for ticket in elsewhere}
+    if len(owners) == 1:
+        (owner,) = owners.values()
+        if can_split(owner):
+            return (
+                f"si ce sont des documents de {shop.name}, rangez-les ensemble avec « Séparer des documents de "
+                f"{owner.name} » (depuis l'un d'eux, ou l'onglet Sources)."
+            )
+    return "si ce sont des tickets de cette enseigne, rangez-les avec « Changer d'enseigne »."
+
+
 def _say_new_shop(request, supplier) -> None:
     """A new shop: what files its next documents there. With a header - given
     from the review screen, where the document is on show - the files no shop
@@ -475,7 +495,7 @@ def _say_new_shop(request, supplier) -> None:
         messages.warning(
             request,
             f"« {supplier.ticket_header} » est aussi imprimé sur {describe_tickets(elsewhere)} : "
-            "si ce sont des tickets de cette enseigne, rangez-les avec « Changer d'enseigne ».",
+            + _how_to_bring(elsewhere, supplier),
         )
     if not supplier.ticket_header:
         messages.info(
@@ -506,9 +526,12 @@ def receipt_batch_cancel(request, pk):
 def supplier_expenses(request, pk):
     """Say whether a supplier's documents are charges rather than goods - a
     subscription, the rent, the water. Ticking it files what is already in
-    the same way; unticking it changes what comes next, nothing else: the
-    lines of a document already filed are a person's to correct."""
-    from .importing import redo_as_expenses
+    the same way; unticking it leaves the documents alone - the lines of one
+    already filed are a person's to correct - but gives its products back
+    (`importing.stop_expenses`), or the box could not be undone: flagged for
+    ever, they reached no queue and no stock page, and correcting a document
+    by hand resolved the very same flagged product."""
+    from .importing import redo_as_expenses, stop_expenses
 
     supplier = get_object_or_404(Supplier, pk=pk)
     here = redirect("invoices:invoice_type_list")
@@ -517,10 +540,12 @@ def supplier_expenses(request, pk):
     supplier.expenses_only = bool(request.POST.get("expenses_only"))
     supplier.save(update_fields=["expenses_only"])
     if not supplier.expenses_only:
+        freed = stop_expenses(supplier)
         messages.success(
             request,
             f"{supplier.name} redevient un fournisseur de produits. Les documents déjà enregistrés gardent "
-            "leurs lignes : corrigez-les document par document si besoin.",
+            "leurs lignes : corrigez-les document par document si besoin."
+            + (f" {freed} poste(s) repassent à classer." if freed else ""),
         )
         return here
     done = redo_as_expenses(supplier)
@@ -657,7 +682,7 @@ def _correction_page(request, invoice):
         formset = _line_formset_for(invoice, document)
     from .receipts import shop_choices
 
-    shop_context = {"shop_groups": shop_choices()}
+    shop_context = {"shop_groups": shop_choices(), **_recognition_context(invoice)}
     if is_receipt:
         from .parsers import ticket_parser_for
         from .receipts import (
@@ -665,18 +690,27 @@ def _correction_page(request, invoice):
             header_choices,
             header_guess,
             names_shop,
+            offerable_headers,
             parser_for,
         )
 
         shop = getattr(parser_for(invoice.supplier), "shop", None)
+        can_set_header = (
+            ticket_parser_for(invoice.supplier.code) is None and invoice.supplier.parser_key != LLM_PARSER_KEY
+        )
         shop_context |= {
             "suggested_header": header_guess(invoice.ocr_text),
-            "header_choices": header_choices(invoice.ocr_text),
+            # Only what the save would take: the customer's own street is
+            # printed on every supplier's documents.
+            "header_choices": offerable_headers(
+                header_choices(invoice.ocr_text), shop=invoice.supplier, ignoring=[invoice]
+            )
+            if can_set_header
+            else [],
             "names_shop": names_shop(invoice.supplier),
             # A till configured here is known by its own layout, and nothing
             # is ever filed under the AI pseudo-supplier: no header to give.
-            "can_set_header": ticket_parser_for(invoice.supplier.code) is None
-            and invoice.supplier.parser_key != LLM_PARSER_KEY,
+            "can_set_header": can_set_header,
             # The shop's price list matters where its till prints no names, or
             # where one has been started: elsewhere it is folded away.
             "prices_open": bool(shop and shop.placeholder_names)
@@ -704,6 +738,222 @@ def _correction_page(request, invoice):
             "source_is_pdf": bool(invoice.source_file) and invoice.source_file.name.lower().endswith(".pdf"),
             "ocr_lines": invoice.ocr_text.split("\n") if invoice.ocr_text else [],
             **shop_context,
+        },
+    )
+
+
+def _recognition_context(invoice) -> dict:
+    """What filed this document under its supplier, when that was not its
+    header, and the way to split it off with the others like it - shown on
+    its page, where someone looking at a second subscription's bill is."""
+    from .identifiers import describe as describe_identifier
+    from .identifiers import document_identifiers
+    from .receipts import can_split, separable_documents
+
+    supplier = invoice.supplier
+    text = invoice.document_text
+    context = {
+        "charges_default": supplier.expenses_only,
+        # A document typed by hand has no text to tell it apart by: it is
+        # moved on its own.
+        "split_url": (reverse("invoices:supplier_split", args=[supplier.pk]) + f"?depuis={invoice.pk}")
+        if can_split(supplier) and text
+        else "",
+        "header_missing": False,
+    }
+    if supplier.ticket_header and text:
+        # Only another subscription's: a ticket of the same shop whose top
+        # the photo lost is not something to split off.
+        separable = separable_documents(supplier)
+        if any(document.pk == invoice.pk for document in separable):
+            context["header_missing"] = True
+            context["named_by"] = [
+                describe_identifier(identifier)
+                for identifier in sorted(document_identifiers(text) & set(supplier.ticket_identifiers or ()))
+            ]
+            context["headerless_count"] = len(separable)
+            context["document_count"] = Invoice.objects.filter(supplier=supplier).count()
+    return context
+
+
+def supplier_split(request, pk):
+    """Split some of a supplier's documents off to another source - one
+    company's two subscriptions filed as one, the box and the mobile line.
+
+    The documents are ticked from what tells them apart: those not printing
+    the supplier's header (the default when it has one), or those printing
+    one of the figures it learned (`?avec=`). They move together, and their
+    new source learns what they print once they all have (receipts.
+    split_documents). `?depuis=` is the document the page was opened from,
+    where it goes back to.
+    """
+    from .identifiers import describe as describe_identifier
+    from .identifiers import document_identifiers
+    from .receipts import (
+        can_split,
+        identifiers_naming,
+        names_shop,
+        prints_header,
+        separable_documents,
+        separating_choices,
+        split_documents,
+    )
+
+    source = get_object_or_404(Supplier, pk=pk)
+    sources_tab = reverse("invoices:invoice_type_list")
+    if not can_split(source):
+        messages.error(
+            request, f"Les documents de {source.name} ne se séparent pas : sa caisse ou son lecteur lui est propre."
+        )
+        return redirect(sources_tab)
+    documents = list(Invoice.objects.filter(supplier=source).order_by("invoice_date", "pk"))
+    posted_from = request.GET.get("depuis", "")
+    start = next((invoice for invoice in documents if str(invoice.pk) == posted_from), None)
+    back = reverse("invoices:invoice_edit_lines", args=[start.pk]) if start is not None else sources_tab
+    learned = list(source.ticket_identifiers or ())
+    by = request.GET.get("avec", "")
+    by = by if by in learned else ""
+
+    if request.method == "POST":
+        form = SplitForm(request.POST, source=source)
+        if form.is_valid():
+            destination = form.cleaned_data["supplier"]
+            is_new = destination == NEW_SHOP
+            # The new source's header box stays in the page when an existing
+            # source is picked (hidden, still posted): given to that source,
+            # it silently replaced a header nobody saw.
+            new_header = form.cleaned_data["new_header"] if is_new else ""
+            source_header = form.cleaned_data["source_header"] if "source_header" in request.POST else None
+            try:
+                result = split_documents(
+                    source,
+                    form.chosen(),
+                    destination=None if is_new else destination,
+                    new_name=form.cleaned_data["new_name"],
+                    new_header=new_header,
+                    source_header=source_header,
+                )
+            except (ValueError, InvoiceLinesInUseError) as exc:
+                messages.error(request, str(exc))
+            else:
+                source.refresh_from_db()
+                said = []
+                if result.renamed:
+                    said.append(f"{result.renamed} ligne(s) de charge portent son nom")
+                if result.reclassified:
+                    said.append(f"{result.reclassified} ligne(s) gardent leur article de stock")
+                messages.success(
+                    request,
+                    f"{result.moved} document(s) rangé(s) chez {result.destination.name}"
+                    + (f" ({', '.join(said)})" if said else "")
+                    + f". {result.destination.name} est reconnue par : "
+                    + (", ".join(names_shop(result.destination)) or "rien encore")
+                    + f" ; {source.name} par : "
+                    + (", ".join(names_shop(source)) or "rien encore")
+                    + ".",
+                )
+                for warning in result.warnings:
+                    messages.warning(request, warning)
+                if new_header or (source_header is not None and source_header != source.ticket_header):
+                    from .receipt_batches import requeue_everywhere
+
+                    requeue_everywhere()
+                return redirect(back)
+            # What the refused split had set on its own copy was rolled back;
+            # the page is drawn from what is stored.
+            source.refresh_from_db()
+        else:
+            messages.error(request, form.error_text())
+        ticked = {value for value in request.POST.getlist("documents") if value.isdigit()}
+    else:
+        form = None
+        if by:
+            ticked = {
+                str(invoice.pk)
+                for invoice in documents
+                if invoice.document_text and by in document_identifiers(invoice.document_text)
+            }
+        elif source.ticket_header:
+            # Another subscription's, not a ticket of the same shop whose top
+            # the photo lost (separable_documents).
+            ticked = {str(invoice.pk) for invoice in separable_documents(source)}
+        elif start is not None and start.document_text:
+            # A document typed by hand has no box to tick on this page.
+            ticked = {str(start.pk)}
+        else:
+            ticked = set()
+
+    rows = []
+    for invoice in documents:
+        text = invoice.document_text
+        printed = document_identifiers(text) if text else set()
+        rows.append(
+            {
+                "invoice": invoice,
+                "has_text": bool(text),
+                "ticked": str(invoice.pk) in ticked,
+                "prints_header": bool(source.ticket_header and text and prints_header(text, source.ticket_header)),
+                "named_by": [describe_identifier(identifier) for identifier in learned if identifier in printed],
+            }
+        )
+    # The ticked ones first: seven documents among thirty-seven, by date,
+    # were scattered down a table nobody would scroll to check them.
+    rows.sort(key=lambda row: (not row["ticked"], getattr(row["invoice"].invoice_date, "toordinal", int)(), row["invoice"].pk))
+    chosen = [row["invoice"] for row in rows if row["ticked"]]
+    staying = [row["invoice"] for row in rows if not row["ticked"]]
+    # What each side would then be recognised by, by the rule learning
+    # uses and with what a split may teach: what the source knew.
+    elsewhere = [
+        ocr or pdf
+        for ocr, pdf in Invoice.objects.exclude(supplier=source).values_list("ocr_text", "source_text")
+        if ocr or pdf
+    ]
+    chosen_texts = [invoice.document_text for invoice in chosen if invoice.document_text]
+    staying_texts = [invoice.document_text for invoice in staying if invoice.document_text]
+    printed_by_chosen = set().union(*(document_identifiers(text) for text in chosen_texts))
+    printed_by_staying = set().union(*(document_identifiers(text) for text in staying_texts))
+    will_name = sorted(
+        identifiers_naming(chosen_texts, elsewhere + staying_texts, printed_by_chosen & set(learned))
+    )
+    source_keeps = identifiers_naming(staying_texts, elsewhere + chosen_texts, set(learned))
+    shops = [
+        supplier
+        for supplier in Supplier.objects.exclude(pk=source.pk).exclude(parser_key=LLM_PARSER_KEY).order_by("name")
+        if supplier.expenses_only == source.expenses_only and can_split(supplier)
+    ]
+    return render(
+        request,
+        "invoices/supplier_split.html",
+        {
+            "source": source,
+            "rows": rows,
+            "chosen_count": len(chosen),
+            "untexted": [row for row in rows if not row["has_text"]],
+            "criteria": [(identifier, describe_identifier(identifier)) for identifier in learned],
+            "by": by,
+            "start": start,
+            "back": back,
+            "will_name": [describe_identifier(identifier) for identifier in will_name],
+            # A web site alone names no one (identified_supplier).
+            "will_recognise": any(not identifier.startswith("web:") for identifier in will_name),
+            "header_choices": separating_choices(chosen, staying) if chosen else [],
+            "shop_groups": [("Sources de même nature", shops)],
+            "selected": (request.POST.get("supplier") if request.method == "POST" else "") or NEW_SHOP,
+            "typed_name": request.POST.get("new_name", "") if request.method == "POST" else "",
+            "typed_header": request.POST.get("new_header", "") if request.method == "POST" else "",
+            "source_header": request.POST.get("source_header", source.ticket_header)
+            if request.method == "POST"
+            else source.ticket_header,
+            "form": form,
+            # Printed on both sides, the source's figures name neither.
+            "stays_with_learned": [
+                describe_identifier(identifier)
+                for identifier in learned
+                if identifier not in will_name
+                and identifier not in source_keeps
+                and identifier in printed_by_chosen
+                and identifier in printed_by_staying
+            ],
         },
     )
 
@@ -840,7 +1090,17 @@ def _move_shop(request, invoice) -> None:
         supplier, created = form.shop(ignoring=[invoice])
         move_to_shop(invoice, supplier)
     except (ValueError, InvoiceLinesInUseError) as exc:
-        messages.error(request, str(exc))
+        from .receipts import can_split
+
+        pointer = ""
+        if form.cleaned_data["supplier"] == NEW_SHOP and can_split(invoice.supplier):
+            # Refused because the header is on its siblings: they go
+            # together, or the new supplier learns nothing from any of them.
+            pointer = (
+                f" Pour ranger ensemble plusieurs documents de {invoice.supplier.name} : "
+                f"« Séparer des documents de {invoice.supplier.name} », sur cette page."
+            )
+        messages.error(request, str(exc) + pointer)
         return
     kind = "Ticket" if invoice.is_receipt else "Facture"
     messages.success(request, f"{kind} rangé{'' if invoice.is_receipt else 'e'} chez {supplier.name}.")
@@ -864,6 +1124,7 @@ def _set_shop_header(request, invoice) -> None:
         return
     if header == was:
         messages.info(request, f"{shop.name} garde le même en-tête : rien n'a changé.")
+        _say_headerless(request, shop)
         return
     if not header:
         messages.success(
@@ -876,14 +1137,45 @@ def _set_shop_header(request, invoice) -> None:
     if elsewhere:
         messages.warning(
             request,
-            f"« {header} » est aussi imprimé sur {describe_tickets(elsewhere)} : "
-            "si ce sont des tickets de cette enseigne, rangez-les avec « Changer d'enseigne ».",
+            f"« {header} » est aussi imprimé sur {describe_tickets(elsewhere)} : " + _how_to_bring(elsewhere, shop),
         )
     requeued = requeue_everywhere()
     messages.success(
         request,
         f"Les documents qui portent « {header} » iront chez {shop.name}"
         + (f" - {requeued} fichier(s) sans enseigne sont relus." if requeued else "."),
+    )
+    _say_headerless(request, shop)
+
+
+def _say_headerless(request, shop) -> None:
+    """A header only adds documents: those of `shop` that do not print it
+    stay where something else they print put them. Said, with what that
+    was, since it is exactly what someone giving a second subscription's
+    text expected to see leave."""
+    from .identifiers import describe as describe_identifier
+    from .identifiers import document_identifiers
+    from .receipts import can_split, headerless_documents, separable_documents
+
+    headerless = headerless_documents(shop)
+    if not headerless:
+        return
+    separable = separable_documents(shop)
+    total = Invoice.objects.filter(supplier=shop).count()
+    learned = set(shop.ticket_identifiers or ())
+    named_by = sorted({identifier for invoice in headerless for identifier in document_identifiers(invoice.document_text)} & learned)
+    messages.info(
+        request,
+        f"{len(headerless)} des {total} documents {shop.name} ne portent pas « {shop.ticket_header} » : ils restent "
+        f"chez {shop.name}"
+        + (f", rangés par son {', son '.join(describe_identifier(i) for i in named_by)}" if named_by else "")
+        + "."
+        + (
+            f" {len(separable)} d'entre eux impriment ce que les autres n'impriment pas : s'ils sont d'un autre "
+            f"abonnement, « Séparer des documents de {shop.name} », sur cette page."
+            if can_split(shop) and separable
+            else ""
+        ),
     )
 
 

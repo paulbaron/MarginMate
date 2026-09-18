@@ -21,6 +21,16 @@ urlpatterns = [
     path("products/<int:product_id>/edit-conversion/", views.edit_product_conversion, name="edit_product_conversion"),
     path("charges/<int:product_id>/documents/", views.charge_documents, name="charge_documents"),
     path("charges/<int:product_id>/historique/", views.charge_history, name="charge_history"),
+    path(
+        "charges/fournisseur/<int:supplier_id>/documents/",
+        views.charge_supplier_documents,
+        name="charge_supplier_documents",
+    ),
+    path(
+        "charges/fournisseur/<int:supplier_id>/historique/",
+        views.charge_supplier_history,
+        name="charge_supplier_history",
+    ),
     path("review/", views.review_queue, name="review_queue"),
     path("review/approve-all/", views.approve_all_suggestions, name="approve_all_suggestions"),
     path("review/<int:product_id>/assign/", views.assign_product, name="assign_product"),

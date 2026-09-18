@@ -1,11 +1,11 @@
 {% comment %}
-The documents behind one poste of charge, opened under its row - a rent month
-after month, a subscription, a provision. Each line links to the document it
-came from, exactly as a stock item's purchases do.
+The documents behind a charge, opened under its row - a rent month after
+month, a subscription, a water bill. One line per document, each linking to
+the document it came from, exactly as a stock item's purchases do.
 {% endcomment %}
-{% if lines %}
+{% if rows %}
     <div class="sub-table-wrap">
-        <table class="sub-table">
+        <table class="sub-table charge-documents">
             <thead>
                 <tr>
                     <th>Document</th>
@@ -17,28 +17,41 @@ came from, exactly as a stock item's purchases do.
                 </tr>
             </thead>
             <tbody>
-                {% for line in lines %}
+                {% for row in rows %}
                     <tr>
+                        {% comment %}
+                        The number alone: every row of this panel is the same
+                        supplier's, and its name repeated on each one only ate
+                        the column that has to hold a long reference.
+                        {% endcomment %}
                         <td>
-                            <a href="{% url 'invoices:invoice_detail' line.invoice_id %}">
-                                {{ line.invoice.supplier.name }}{% if line.invoice.invoice_number %} n° {{ line.invoice.invoice_number }}{% endif %}
+                            <a href="{% url 'invoices:invoice_detail' row.invoice.pk %}">
+                                {% if row.invoice.invoice_number %}n° {{ row.invoice.invoice_number }}
+                                {% else %}Document sans numéro{% endif %}
                             </a>
                         </td>
-                        <td data-sort="{{ line.invoice.invoice_date|date:'Y-m-d' }}">
-                            {{ line.invoice.invoice_date|date:"d/m/Y"|default:"—" }}
+                        <td class="nowrap" data-sort="{{ row.invoice.invoice_date|date:'Y-m-d' }}">
+                            {{ row.invoice.invoice_date|date:"d/m/Y"|default:"—" }}
                         </td>
-                        <td class="num">{{ line.total_ht|floatformat:2 }} €</td>
-                        <td class="num">{{ line.vat_percent|floatformat:1 }} %</td>
-                        <td class="num">{{ line.total_ttc|floatformat:2 }} €</td>
+                        <td class="num">{{ row.total_ht|floatformat:2 }} €</td>
+                        {% comment %}
+                        The tax as an amount, not as a rate: a water bill prints
+                        two of them on one document, and printing one would be a
+                        lie about the other while "—" says nothing at all.
+                        {% endcomment %}
+                        <td class="num">{{ row.total_vat|floatformat:2 }} €</td>
+                        <td class="num">{{ row.total_ttc|floatformat:2 }} €</td>
                         <td class="num">
-                            <a class="btn btn-small btn-secondary" href="{% url 'invoices:invoice_edit_lines' line.invoice_id %}">Corriger</a>
+                            <a class="btn btn-small btn-secondary" href="{% url 'invoices:invoice_edit_lines' row.invoice.pk %}">Corriger</a>
                         </td>
                     </tr>
                 {% endfor %}
             </tbody>
             <tfoot>
                 <tr>
-                    <td colspan="4" class="muted">{{ lines|length }} document{{ lines|length|pluralize }}</td>
+                    <td colspan="4" class="muted">
+                        {{ rows|length }} document{{ rows|length|pluralize }} — tout l'historique
+                    </td>
                     <td class="num">{{ total_ttc|floatformat:2 }} €</td>
                     <td></td>
                 </tr>
@@ -46,5 +59,5 @@ came from, exactly as a stock item's purchases do.
         </table>
     </div>
 {% else %}
-    <p class="muted" style="padding:0.75rem 0.9rem;">Aucun document pour ce poste.</p>
+    <p class="muted" style="padding:0.75rem 0.9rem;">Aucun document pour « {{ title }} ».</p>
 {% endif %}

@@ -1,7 +1,7 @@
 import json
 import unicodedata
 from collections import Counter
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from itertools import groupby
 
@@ -14,6 +14,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse, reverse_lazy
 from django.utils import timezone
 from django.utils.dateparse import parse_date
+from django.utils.html import escape
 from django.views.generic import CreateView, ListView, TemplateView, UpdateView
 
 from .forms import (
@@ -168,6 +169,9 @@ def catalogue_context(request) -> dict:
     context["review_count"] = Product.objects.filter(stock_type__isnull=True, is_expense=False).count()
     context["empty_stock_type_count"] = StockType.objects.filter(products__isnull=True).distinct().count()
     context["charge_suppliers"] = charge_suppliers(period)
+    context["charge_total_ttc"] = sum(
+        (row["total_ttc"] for row in context["charge_suppliers"]), Decimal("0")
+    )
     return context
 
 
@@ -180,18 +184,33 @@ def charge_suppliers(period=None) -> list[dict]:
     Over the window being looked at, or the last twelve months by default:
     an all-time total of a monthly subscription says little.
 
-    Each supplier carries its postes where its documents name them - the
-    rent apart from the building provision, which is the one that gets
-    regularised (see invoices.charges).
+    **Every supplier is a row that opens**, on its documents and on its
+    curve, exactly as a stock item does - the water bill has one poste and
+    the rent statement six, and a page that only opened the second left
+    five suppliers out of six with nothing to click. Where a document names
+    several postes, those are rows of their own underneath (the rent apart
+    from the building provision, which is the one that gets regularised -
+    see invoices.charges); where it names one, the supplier's row *is* that
+    poste and repeating it below would say the same thing twice.
+
+    A supplier that billed nothing over the window is listed all the same,
+    with the date of its last document: a water bill arriving twice a year
+    would otherwise drop off the page between two of them, taking its whole
+    history with it.
     """
     from invoices.models import Invoice, InvoiceLine, Supplier
 
     suppliers = list(Supplier.objects.filter(expenses_only=True).order_by("name"))
     if not suppliers:
         return []
-    documents = Invoice.objects.filter(supplier__in=suppliers).exclude(invoice_date=None)
+    every_document = Invoice.objects.filter(supplier__in=suppliers)
+    documents = every_document.exclude(invoice_date=None)
     if period is not None:
-        documents = documents.filter(invoice_date__gte=period.start, invoice_date__lte=period.end)
+        # The first stock take's window has no start: it runs from the
+        # beginning, and a None in the filter was a 500.
+        documents = documents.filter(invoice_date__lte=period.end)
+        if period.start is not None:
+            documents = documents.filter(invoice_date__gte=period.start)
         since = period.start
     else:
         since = timezone.localdate() - timedelta(days=365)
@@ -210,26 +229,44 @@ def charge_suppliers(period=None) -> list[dict]:
         amount = line.total_ttc.quantize(Decimal("0.01"))
         row["total_ttc"] += amount
         poste = row["postes"].setdefault(
-            line.raw_name, {"name": line.raw_name, "product": line.product, "total_ttc": Decimal("0")}
+            line.raw_name,
+            {"name": line.raw_name, "product": line.product, "total_ttc": Decimal("0"), "invoices": set()},
         )
         poste["total_ttc"] += amount
+        poste["invoices"].add(line.invoice_id)
     for invoice in documents.only("supplier_id", "invoice_date"):
+        rows[invoice.supplier_id]["documents"] += 1
+    # The last document ever, inside the window or not: it is what says a
+    # supplier has gone quiet, and on a row showing nothing over the window
+    # it is the only thing left to say.
+    for invoice in every_document.exclude(invoice_date=None).only("supplier_id", "invoice_date"):
         row = rows[invoice.supplier_id]
-        row["documents"] += 1
         if row["last"] is None or invoice.invoice_date > row["last"]:
             row["last"] = invoice.invoice_date
+    filed = set(every_document.values_list("supplier_id", flat=True).distinct())
     return [
         row
         | {
             "since": since,
-            # One poste is the charge itself under another name.
-            "postes": sorted(row["postes"].values(), key=lambda poste: -poste["total_ttc"])
+            # One poste is the charge itself under another name, and the
+            # supplier's own row already opens on it.
+            "postes": sorted(
+                (
+                    poste | {"documents": len(poste["invoices"])}
+                    for poste in row["postes"].values()
+                    # A line nobody attached to a product cannot be opened;
+                    # it is still counted in the supplier's total above.
+                    if poste["product"] is not None
+                ),
+                key=lambda poste: -poste["total_ttc"],
+            )
             if len(row["postes"]) > 1
             else [],
         }
         for row in rows.values()
-        if row["documents"]
+        if row["supplier"].pk in filed
     ]
+
 
 def selected_period(request) -> StockPeriod | None:
     """The window `?inventaire=<pk>` asks for, or None for all time.
@@ -375,7 +412,7 @@ def _aggregate_price_points(movements: list[tuple]) -> list[tuple]:
     return points
 
 
-def _build_price_history_svg(points: list[tuple]) -> str:
+def _build_price_history_svg(points: list[tuple], label: str = "Évolution du prix unitaire") -> str:
     """points: [(date, unit_cost_ht), ...] oldest first, as an inline SVG line
     chart.
 
@@ -429,7 +466,7 @@ def _build_price_history_svg(points: list[tuple]) -> str:
 
     return (
         f'<div class="chart" data-chart="line" data-plot="{pad_left},{pad_top},{plot_w},{plot_h}">'
-        f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="Évolution du prix unitaire">'
+        f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="{escape(label)}">'
         f'<line x1="{pad_left}" y1="{pad_top}" x2="{pad_left}" y2="{height - pad_bottom}" '
         f'stroke="var(--border)" />'
         f'<line x1="{pad_left}" y1="{height - pad_bottom}" x2="{width - pad_right}" y2="{height - pad_bottom}" '
@@ -466,44 +503,113 @@ def stock_type_price_history(request, pk):
     )
 
 
-def charge_documents(request, product_id):
-    """The documents behind one poste of charge - a rent, a provision, a
-    subscription - fetched when its row is opened, like a stock item's
-    purchases. Each links to the document it came from."""
-    from invoices.models import InvoiceLine
+def _charge_document_rows(lines, invoices=()) -> list[dict]:
+    """One row per document, from the lines given - one poste's, or a whole
+    supplier's.
 
-    product = get_object_or_404(Product, pk=product_id, is_expense=True)
-    lines = (
-        InvoiceLine.objects.filter(product=product)
-        .select_related("invoice", "invoice__supplier")
-        .order_by("-invoice__invoice_date", "-invoice_id")
+    A bill printing two rates is read as two lines (see
+    invoices.charge_reading), and a person opening a charge is counting
+    documents, not rates: 29 Total Energie bills showed up as 46. So the
+    tax is an amount here and never a rate - on a document carrying two of
+    them, naming one would be a lie about the other.
+    """
+    # A document filed with nothing read still counts on its row, and is
+    # the one that most needs its "Corriger": it is listed, at 0,00.
+    by_document: dict[int, dict] = {
+        invoice.pk: {"invoice": invoice, "total_ht": Decimal("0"), "total_ttc": Decimal("0")} for invoice in invoices
+    }
+    for line in lines:
+        row = by_document.setdefault(
+            line.invoice_id,
+            {"invoice": line.invoice, "total_ht": Decimal("0"), "total_ttc": Decimal("0")},
+        )
+        row["total_ht"] += line.total_ht
+        row["total_ttc"] += line.total_ttc
+    ordered = sorted(
+        by_document.values(),
+        key=lambda row: (row["invoice"].invoice_date or date.min, row["invoice"].pk),
+        reverse=True,
     )
+    for row in ordered:
+        row["total_vat"] = row["total_ttc"] - row["total_ht"]
+    return ordered
+
+
+def _charge_panel(request, title, lines, invoices=()):
+    """The documents behind a charge - a supplier's, or one of its postes -
+    fetched when its row is opened, like a stock item's purchases. Each
+    links to the document it came from.
+
+    All of them, not the window the row totals: the row says what a charge
+    costs now, this says what it has cost, which is what one opens it for.
+    """
+    rows = _charge_document_rows(lines, invoices)
     return render(
         request,
         "inventory/_charge_documents.html",
-        {"product": product, "lines": lines, "total_ttc": sum((line.total_ttc for line in lines), Decimal("0"))},
+        {"title": title, "rows": rows, "total_ttc": sum((row["total_ttc"] for row in rows), Decimal("0"))},
     )
 
 
-def charge_history(request, product_id):
-    """How much one poste of charge has cost over time, as the same chart a
-    stock item's price history draws: a rent that moves, a subscription that
-    doubles, seen at a glance."""
-    from invoices.models import InvoiceLine
-
-    product = get_object_or_404(Product, pk=product_id, is_expense=True)
-    points = _aggregate_price_points(
-        [
-            (line.invoice.invoice_date, Decimal("1"), line.total_ttc)
-            for line in InvoiceLine.objects.filter(product=product, invoice__invoice_date__isnull=False)
-            .select_related("invoice")
-        ]
-    )
+def _charge_curve(request, title, lines):
+    """What a charge has cost over time, as the same chart a stock item's
+    price history draws: a rent that moves, a subscription that doubles,
+    seen at a glance. One point per document, against its own date."""
+    # What was charged each day, added up: two bills of one date (two
+    # meters, a statement and its regularisation) averaged into an amount
+    # no document charged.
+    by_date: dict = {}
+    for row in _charge_document_rows(lines):
+        day = row["invoice"].invoice_date
+        if day is not None:
+            by_date[day] = by_date.get(day, Decimal("0")) + row["total_ttc"]
+    points = sorted(by_date.items())
     return render(
         request,
         "inventory/_charge_history.html",
-        {"product": product, "chart_svg": _build_price_history_svg(points), "has_enough_data": len(points) >= 2},
+        {
+            "title": title,
+            # Not a unit price: what each document of this charge came to,
+            # tax included. The chart is the stock item's, the reading is
+            # not, and the name it is given is all a screen reader gets.
+            "chart_svg": _build_price_history_svg(points, f"Évolution de la charge : {title}"),
+            "has_enough_data": len(points) >= 2,
+        },
     )
+
+
+def _poste_lines(product_id):
+    from invoices.models import InvoiceLine
+
+    product = get_object_or_404(Product, pk=product_id, is_expense=True)
+    return product.raw_name, InvoiceLine.objects.filter(product=product).select_related("invoice", "invoice__supplier")
+
+
+def _charge_supplier_lines(supplier_id):
+    from invoices.models import InvoiceLine, Supplier
+
+    supplier = get_object_or_404(Supplier, pk=supplier_id, expenses_only=True)
+    return supplier, InvoiceLine.objects.filter(invoice__supplier=supplier).select_related(
+        "invoice", "invoice__supplier"
+    )
+
+
+def charge_documents(request, product_id):
+    return _charge_panel(request, *_poste_lines(product_id))
+
+
+def charge_history(request, product_id):
+    return _charge_curve(request, *_poste_lines(product_id))
+
+
+def charge_supplier_documents(request, supplier_id):
+    supplier, lines = _charge_supplier_lines(supplier_id)
+    return _charge_panel(request, supplier.name, lines, supplier.invoices.select_related("supplier"))
+
+
+def charge_supplier_history(request, supplier_id):
+    supplier, lines = _charge_supplier_lines(supplier_id)
+    return _charge_curve(request, supplier.name, lines)
 
 
 def stock_type_movements(request, pk):

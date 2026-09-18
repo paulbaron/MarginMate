@@ -246,7 +246,7 @@ class CountTests(SimpleTestCase):
 # A phone bill: its totals first, its detail below them, each amount printed
 # in TTC with its HT in brackets - and its date spelled out.
 PHONE_BILL = """SiteInternet:mobile.exemple.fr
-Forfait Exemple 5G  AU DIPSO
+Forfait Exemple 5G  AU COMPTOIR
 N de ligne:0600000000  JEAN EXEMPLE
 Facture no 1000000001 du 19 mai 2026
 Total de la facture HT  8.33
@@ -430,7 +430,7 @@ WINE_INVOICE = """SCEA EXEMPLE ET FILS  FACTURE
 contact@exemple.fr  N° document: FA-202604-0001
 Date de livraison: 02/04/2026
 Adresse de livraison:  Adresse de facturation:
-Societe AU DIPSO  Societe AU DIPSO
+Societe AU COMPTOIR  Societe AU COMPTOIR
 140 RUE DES LILAS  140 RUE DES LILAS
 Désignation  Qté  Px U. HT  Px U. TTC  HT  TTC  Taux
 LES CAILLOUX EXEMPLE - - AC TOURAINE  18  5,00€  6,00€  90,00€  108,00€  20,00%
@@ -447,8 +447,8 @@ RIB  Net à payer  247,26€
 Titulaire du compte: SCEA EXEMPLE ET FILS
 IBAN: FR76 1234 5678 9012 3456 7890 123
 BIC: AGRIFRPP894
-SIREN : 383317872 - SIRET : 38331787200018 - TVA : FR04383317872 - NAF : 01.21Z
-SCEA EXEMPLE ET FILS  FA-202604-0001 - LE DIPSOMANIAC - AU DIPSO  Page 1/1"""
+SIREN : 912345675 - SIRET : 91234567500017 - TVA : FR65912345675 - NAF : 01.21Z
+SCEA EXEMPLE ET FILS  FA-202604-0001 - LE COMPTOIR - AU COMPTOIR  Page 1/1"""
 
 # The same grower two years earlier: no "Taux" column, and its reference
 # under another name again ("Référence interne" in January 2025).
@@ -515,20 +515,20 @@ Champagne
 2, rue Inventee -51120 VINDEY , FRANCE
 EARL EXEMPLE Père & Fils
 IBAN : FR76 9876 5432 1098 7654 3210 987
-SAS AU DIPSO
+SAS AU COMPTOIR
 140 RUE DES LILAS
 75011 PARIS 11
 Dépôt :  EARLD
-Commande N° 20250180 du 22/11/2025  Règlement  A réception  au  02/12/2025
+Commande N° 20259917 du 22/11/2025  Règlement  A réception  au  02/12/2025
 Quantité  Désignation  PU HT  PU TTC  MNT TTC  Tva
 12  BOUTEILLE(S)  CHAMPAGNE EXEMPLE BRUT  75 CL  13,75 €  16,50 €  198,00 €  A
 Tva  Libellé  Taux  Base H.T.  Montant
 A  TVA à 20 %  20,00  165,00 €  33,00 €
 Total Net  198,00 €
 Net à payer  198,00 €
-N° de Siret :  43122667900014
+N° de Siret :  92345678400019
 Montant  198,00 €
-N° de TVA :  FR70431226679  Code client  AUDIPSO"""
+N° de TVA :  FR21923456784  Code client  AUCOMPTOIR"""
 
 
 class ChampagneInvoiceTests(SimpleTestCase):
@@ -545,13 +545,13 @@ class ChampagneInvoiceTests(SimpleTestCase):
 
     def test_its_order_number_is_its_number(self):
         parsed = READER.parse_text(CHAMPAGNE_INVOICE)
-        self.assertEqual((parsed.invoice_number, parsed.invoice_date), ("20250180", date(2025, 11, 22)))
+        self.assertEqual((parsed.invoice_number, parsed.invoice_date), ("20259917", date(2025, 11, 22)))
 
 
 # An alarm subscription: one row, carrying the period it covers, and the
 # invoice's own number written with an ordinal indicator ("Nº").
 ALARM_SUBSCRIPTION = """Votre facture d'abonnement
-Ste AU DIPSO
+Ste AU COMPTOIR
 Votre facture Nº : SDCF00000001
 M. JEAN EXEMPLE
 Date d'émission : 01/08/2026
@@ -610,7 +610,7 @@ France
 août 31, 2026
 PAIEMENT DÛ
 Facturé à  Abonnement
-Billing Company - AU DIPSO  Payment Schedule - One time
+Billing Company - AU COMPTOIR  Payment Schedule - One time
 SIREN - 934567892  payment
 140 Rue des Lilas  Supplier ID - 10001
 Paris  Prochaine date de facturation sept.

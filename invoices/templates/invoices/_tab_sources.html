@@ -47,7 +47,10 @@ patterns, the parser that reads them), and the shops a ticket is recognised by.
 
 <h2>Enseignes et fournisseurs sans lecteur dédié</h2>
 <p class="muted">
-    Un document est rangé chez l'enseigne dont il porte l'en-tête ou les identifiants. Une enseigne inconnue se
+    Un document est rangé chez l'enseigne dont il porte l'en-tête ou les identifiants (n° SIREN, téléphone, site
+    appris sur ses documents, jamais ce que les documents d'un autre fournisseur impriment aussi — votre propre
+    numéro, par exemple). Un en-tête ajoute des documents, il n'en retire aucun : deux abonnements d'une même
+    société rangés ensemble se séparent avec « Séparer des documents ». Une enseigne inconnue se
     crée depuis le document lui-même, à l'import, et son en-tête se donne sur la page où il est vérifié.
     <strong>Cochez « charges »</strong> pour un fournisseur dont les documents ne sont pas une liste de produits :
     abonnement, loyer, eau, électricité, télésurveillance. Ses factures sont alors enregistrées par poste quand
@@ -67,6 +70,23 @@ patterns, the parser that reads them), and the shops a ticket is recognised by.
                 <td>
                     {% if shop.names_shop %}{{ shop.names_shop|join:", " }}
                     {% else %}<span class="muted">caisse déjà connue de l'application</span>{% endif %}
+                    {% comment %}
+                    Only where it says something: documents filed here that do
+                    not print the header - another subscription, perhaps. A
+                    header on every one of them needs no line and no split.
+                    {% endcomment %}
+                    {% if shop.ticket_header and shop.headerless %}
+                        <br><span class="muted">en-tête sur {{ shop.with_header }} de ses {{ shop.document_count }} documents · {{ shop.headerless }} ne le porte{{ shop.headerless|pluralize:"nt" }} pas</span>
+                    {% endif %}
+                    {% comment %}
+                    The split is offered where some documents look like another
+                    subscription (receipts.separable_documents) - not for a
+                    ticket whose top faded, nor on every row. A source with no
+                    header is split from one of its documents' pages.
+                    {% endcomment %}
+                    {% if shop.split_url and shop.separable %}
+                        <br><a href="{{ shop.split_url }}">Séparer des documents ({{ shop.separable }} d'un autre abonnement ?)…</a>
+                    {% endif %}
                 </td>
                 <td>
                     <form method="post" action="{% url 'invoices:supplier_expenses' shop.pk %}" class="inline-form">
@@ -84,3 +104,25 @@ patterns, the parser that reads them), and the shops a ticket is recognised by.
     </tbody>
 </table>
 </div>
+
+{% comment %}
+The suppliers with a reader of their own are recognised the same way - their
+header, what their documents print - and were shown nowhere: what named UBA
+by a customer's phone number could not even be seen.
+{% endcomment %}
+{% if own_readers %}
+    <h3>Fournisseurs avec leur propre lecteur</h3>
+    <div class="table-wrap">
+    <table data-table data-table-sort-only data-table-label="lecteurs">
+        <thead><tr><th>Fournisseur</th><th>Reconnu par</th></tr></thead>
+        <tbody>
+            {% for supplier in own_readers %}
+                <tr>
+                    <td>{{ supplier.name }}</td>
+                    <td>{% if supplier.names_shop %}{{ supplier.names_shop|join:", " }}{% else %}<span class="muted">son lecteur seul (en-tête de ses factures)</span>{% endif %}</td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+{% endif %}

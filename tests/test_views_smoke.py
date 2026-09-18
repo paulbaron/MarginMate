@@ -225,6 +225,18 @@ class PageSmokeTests(TestCase):
     def test_invoice_create_manual(self):
         self.assertPageOK("invoices:invoice_create_manual")
 
+    def test_supplier_split(self):
+        """A source a subscription can be split off: one with no till and no
+        reader of its own. (A configured till's, like Sabbh here, redirects.)"""
+        operator = make_supplier(code="OPERATEUR_SMOKE", name="Operateur", parser_key="", ticket_header="BOX EXEMPLE")
+        make_invoice(supplier=operator, ocr_text="BOX EXEMPLE\nTOTAL 29,99")
+        make_invoice(supplier=operator, ocr_text="FORFAIT MOBILE\nTOTAL 9,99")
+        response = self.assertPageOK("invoices:supplier_split", pk=operator.pk)
+        self.assertContains(response, "Séparer des documents de Operateur")
+        self.assertEqual(
+            self.client.get(reverse("invoices:supplier_split", args=[self.receipt_supplier.pk])).status_code, 302
+        )
+
     def test_invoice_type_list(self):
         self.assertContains(self.assertPageOK("invoices:invoice_type_list"), "Metro - Factures")
 

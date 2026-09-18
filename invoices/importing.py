@@ -9,7 +9,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from inventory.matching import resolve_products
-from inventory.models import StockMovement, StockTake, StockTakeLineSource
+from inventory.models import Product, StockMovement, StockTake, StockTakeLineSource
 from inventory.services import create_stock_movement_for_line, expense_product
 
 from .charges import read_charge
@@ -267,7 +267,27 @@ def redo_as_expenses(supplier: Supplier) -> int:
     done = 0
     for invoice in Invoice.objects.filter(supplier=supplier).prefetch_related("lines"):
         done += refile_as_charge(invoice, _as_parsed(invoice, list(invoice.lines.all())))
+    # Whatever the documents needed, what this supplier sends is a charge:
+    # unticked and ticked again, not one line changes, so nothing else
+    # would put the flag back on its postes. Not a product a stock item
+    # claimed - it is stock after all, which is the same reason a document
+    # a stock take was priced from is left alone above.
+    Product.objects.filter(supplier=supplier, is_expense=False, stock_type__isnull=True).update(is_expense=True)
     return done
+
+
+def stop_expenses(supplier: Supplier) -> int:
+    """A supplier that no longer sends charges sells goods again, so its
+    postes are products like any others - waiting to be classified.
+
+    The documents already filed keep their lines (see views.supplier_expenses:
+    they are a person's to correct), but their products must not stay
+    flagged: unticked, a supplier's products stayed out of the review queue
+    and out of the stock pages with nothing on any screen able to free them
+    - correcting a document by hand resolved the same flagged product.
+    Returns how many went back.
+    """
+    return Product.objects.filter(supplier=supplier, is_expense=True).update(is_expense=False)
 
 
 def _as_parsed(invoice: Invoice, stored) -> ParsedInvoice:
@@ -541,13 +561,17 @@ def replace_invoice_lines(invoice: Invoice, parsed_lines) -> Invoice:
     resolved = resolve_products(
         invoice.supplier, [(line.raw_name, line.ean) for line in parsed_lines], ocr_tolerant=ocr_tolerant
     )
-    if invoice.supplier.expenses_only:
-        # Nothing this supplier sends is a product: a poste renamed by hand
-        # would otherwise land in the queue of products to classify.
-        for product, _created in resolved:
-            if not product.is_expense:
-                product.is_expense = True
-                product.save(update_fields=["is_expense"])
+    # A product is a poste of charge exactly when its supplier's documents
+    # are charges: nothing this supplier sends is a product, so a poste
+    # renamed by hand must not land in the queue of products to classify -
+    # and the flag has to come **off** again when the supplier goes back to
+    # selling goods, or a box ticked by mistake leaves its products out of
+    # the queue, out of every stock page and out of every stock movement
+    # for ever, with no screen able to put them back.
+    for product, _created in resolved:
+        if product.is_expense != invoice.supplier.expenses_only:
+            product.is_expense = invoice.supplier.expenses_only
+            product.save(update_fields=["is_expense"])
     for parsed_line, (product, _created) in zip(parsed_lines, resolved):
         # pop: a line named twice (a crafted post) is corrected once.
         line = stored.pop(parsed_line.line_id, None) if parsed_line.line_id in corrected else None

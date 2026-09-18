@@ -38,6 +38,8 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from django.core.files.base import ContentFile
 from django.db import transaction
+from django.db.models import Count, Max, Sum
+from django.db.models.functions import Length
 from django.utils import timezone
 
 from .identifiers import describe as describe_identifier
@@ -94,6 +96,9 @@ MAX_TICKETS_ELSEWHERE = 3
 # "Label : value" - a field of the document, never its sender's name.
 FIELD_RE = re.compile(r"^[^:]{2,40}:\s*\S")
 DATE_OR_TIME_RE = re.compile(r"(?<!\d)(?:\d{2}[/.-]\d{2}[/.-]\d{2,4}|\d{1,2}\s?[:Hh]\s?\d{2})(?!\d)")
+# Six digits or more in a row: a document's own number, a SIRET, a customer
+# reference - never a street number or a postcode.
+REFERENCE_RE = re.compile(r"\d{6,}")
 # How far down a document its shop's own name can be, and how many of its
 # lines are offered as its header.
 HEADER_LINES_READ = 10
@@ -209,38 +214,107 @@ def _has_header(plain: str, header: str) -> bool:
     return len(header) >= MIN_HEADER_LENGTH and f" {header} " in f" {plain} "
 
 
+def prints_header(text: str, header: str) -> bool:
+    """Whether a document prints `header`: the one definition, as whole
+    words, accents, case and punctuation aside."""
+    return _has_header(plain_text(text), plain_text(header))
+
+
 def detect_parser(text: str) -> ReceiptParser | None:
     return detect_shop(text)[0]
 
 
 def detect_shop(text: str) -> tuple[ReceiptParser | None, list[str]]:
     """Which shop this receipt belongs to, from what it prints - and, when
-    that was not a header, the identifiers that said so.
+    that was not a header, the identifiers that said so (recognise_shop)."""
+    parser, identifiers, _conflict = recognise_shop(text)
+    return parser, identifiers
 
-    A header a person gave a shop first, the longest first - "EPICERIE SABAH"
-    before the "SABAH" a configured till answers to - then the configured
-    tills, then the SIREN, phone or web site learned from the shop's tickets
+
+def recognise_shop(text: str) -> tuple[ReceiptParser | None, list[str], str]:
+    """Which shop a document belongs to, the identifiers that said so when
+    no header did, and - when nobody is named because two things printed on
+    it disagree - what they are, for the person who will choose.
+
+    A header a person gave a shop first - "EPICERIE SABAH" before the
+    "SABAH" a configured till answers to, since a header printed inside
+    another one gives way to it - then the configured tills, then the SIREN,
+    phone or web site learned from the shop's documents
     (`identified_supplier`). Returns None rather than a best guess: an
     unrecognised receipt that is reported as such costs the operator one
     click, while one filed under the wrong shop produces plausible lines under
-    the wrong products.
+    the wrong products. Two guards ask rather than choose:
+
+    - **two suppliers' headers** on one document, neither inside the other:
+      the longest used to win, and one company's two sources (a box and a
+      mobile line) each given the text of its own subscription would take
+      each other's documents on an advert;
+    - **a header against a company number**: a document that prints the
+      header of one supplier and a SIREN another one learned is one of them,
+      and nothing printed on it says which.
     """
     plain = plain_text(text)
-    named = [
-        (plain_text(supplier.ticket_header), supplier)
-        for supplier in Supplier.objects.exclude(ticket_header="").exclude(parser_key=LLM_PARSER_KEY)
+    printed = [
+        (header, supplier)
+        for header, supplier in (
+            (plain_text(supplier.ticket_header), supplier)
+            for supplier in Supplier.objects.exclude(ticket_header="").exclude(parser_key=LLM_PARSER_KEY)
+        )
+        if _has_header(plain, header)
     ]
-    for header, supplier in sorted(named, key=lambda pair: -len(pair[0])):
-        if _has_header(plain, header):
-            return parser_for(supplier), []
-    for parser in receipt_parsers().values():
-        for pattern in getattr(parser, "header_patterns", ()):
-            if re.search(pattern, text, re.IGNORECASE):
-                return parser, []
+    kept = [
+        (header, supplier)
+        for header, supplier in printed
+        if not any(other != header and _has_header(other, header) for other, _ in printed)
+    ]
+    by_header = {supplier.pk: supplier for _header, supplier in kept}
+    if len(by_header) > 1:
+        names = " et ".join(sorted(supplier.name for supplier in by_header.values()))
+        return None, [], f"Ce document porte les en-têtes de {names} : choisissez l'enseigne."
+    named = next(iter(by_header.values()), None)
+    parser = parser_for(named) if named is not None else None
+    if parser is None:
+        parser = next(
+            (
+                till
+                for till in receipt_parsers().values()
+                if any(re.search(pattern, text, re.IGNORECASE) for pattern in getattr(till, "header_patterns", ()))
+            ),
+            None,
+        )
+    if parser is not None:
+        other = _company_of_another(text, parser.supplier_code)
+        if other is not None:
+            owner = named.name if named is not None else getattr(
+                Supplier.objects.filter(code=parser.supplier_code).first(), "name", parser.supplier_code
+            )
+            return None, [], (
+                f"Ce document porte l'en-tête de {owner} mais le n° SIREN de {other.name} : choisissez l'enseigne."
+            )
+        return parser, [], ""
     supplier, identifiers = identified_supplier(text)
     if supplier is None:
-        return None, []
-    return parser_for(supplier), identifiers
+        return None, [], ""
+    return parser_for(supplier), identifiers, ""
+
+
+def _company_of_another(text: str, supplier_code: str) -> Supplier | None:
+    """The one supplier, other than `supplier_code`'s, that learned a company
+    number `text` prints - or None. A number two suppliers learned names
+    neither (identified_supplier), so it contradicts nobody either."""
+    sirens = {identifier for identifier in document_identifiers(text) if identifier.startswith("siren:")}
+    if not sirens:
+        return None
+    owners = defaultdict(list)
+    for supplier in Supplier.objects.exclude(parser_key=LLM_PARSER_KEY).exclude(ticket_identifiers=[]):
+        for identifier in sirens.intersection(supplier.ticket_identifiers or ()):
+            owners[identifier].append(supplier)
+    others = {
+        suppliers[0].pk: suppliers[0]
+        for suppliers in owners.values()
+        if len(suppliers) == 1 and suppliers[0].code != supplier_code
+    }
+    return next(iter(others.values())) if len(others) == 1 else None
 
 
 def identified_supplier(text: str) -> tuple[Supplier | None, list[str]]:
@@ -273,7 +347,7 @@ def identified_supplier(text: str) -> tuple[Supplier | None, list[str]]:
     return next(iter(named.values())), sorted(named)
 
 
-def learn_identifiers(supplier: Supplier, *texts: str) -> list[str]:
+def learn_identifiers(supplier: Supplier, *texts: str, learnable=None) -> list[str]:
     """Bring what names `supplier` up to date with `texts` - documents a
     person filed or checked under it - and return what it learned.
 
@@ -281,33 +355,76 @@ def learn_identifiers(supplier: Supplier, *texts: str) -> list[str]:
     documents print it - a misreading, or a label printed on some goods, is
     on one ticket or two - and no other supplier's documents do: the
     customer's own phone names nobody. Checked again for those it knew.
+    `learnable`, when given, is all it may learn from `texts` (a split
+    teaches what the source knew, nothing more).
+
+    **The others are corrected too**: a supplier that learned something
+    these documents print learned it while it was the only one printing it,
+    and it no longer is. Left alone, one supplier that had once learned the
+    customer's own company number refused every document of another that
+    printed it, header or not, for as long as nobody filed one of its own.
     """
     if supplier.parser_key == LLM_PARSER_KEY:
         return []
     # As stored now: another ticket of the shop may have taught it meanwhile.
     supplier.refresh_from_db(fields=["ticket_identifiers"])
     known = set(supplier.ticket_identifiers or ())
-    candidates = set(known)
+    printed = set()
     for text in texts:
-        candidates |= document_identifiers(text)
-    if not candidates:
-        return []
-    own = _stored_texts(Invoice.objects.filter(supplier=supplier))
-    own += [text for text in texts if text and text not in own]
-    seen = Counter()
-    for document in own:
-        if may_print(document, candidates):
-            seen.update(document_identifiers(document) & candidates)
-    kept = {identifier for identifier in candidates if seen[identifier] >= MIN_IDENTIFIER_SHARE * len(own)}
-    for other in _stored_texts(Invoice.objects.exclude(supplier=supplier)):
-        if not kept:
-            break
-        if may_print(other, kept):
-            kept -= document_identifiers(other)
+        printed |= document_identifiers(text)
+    candidates = known | (printed if learnable is None else printed & set(learnable))
+    learned = []
+    if candidates:
+        own = _stored_texts(Invoice.objects.filter(supplier=supplier))
+        own += [text for text in texts if text and text not in own]
+        kept = identifiers_naming(own, _stored_texts(Invoice.objects.exclude(supplier=supplier)), candidates)
+        if kept != known:
+            supplier.ticket_identifiers = sorted(kept)
+            supplier.save(update_fields=["ticket_identifiers"])
+        learned = sorted(kept - known)
+    if printed:
+        for other in Supplier.objects.exclude(pk=supplier.pk).exclude(parser_key=LLM_PARSER_KEY).exclude(
+            ticket_identifiers=[]
+        ):
+            if printed.intersection(other.ticket_identifiers or ()):
+                _recheck(other)
+    return learned
+
+
+def _recheck(supplier: Supplier) -> None:
+    """What `supplier` knows, checked again against everybody's documents as
+    they are stored now - it can only forget."""
+    known = set(supplier.ticket_identifiers or ())
+    kept = identifiers_naming(
+        _stored_texts(Invoice.objects.filter(supplier=supplier)),
+        _stored_texts(Invoice.objects.exclude(supplier=supplier)),
+        known,
+    )
     if kept != known:
         supplier.ticket_identifiers = sorted(kept)
         supplier.save(update_fields=["ticket_identifiers"])
-    return sorted(kept - known)
+
+
+def identifiers_naming(own_texts, other_texts, candidates) -> set[str]:
+    """Which of `candidates` name a supplier whose documents say `own_texts`,
+    when everybody else's say `other_texts`: those at least
+    MIN_IDENTIFIER_SHARE of its documents print and none of the others do.
+    No documents of its own, nothing names it. No database: what the split
+    page shows before anything moves is worked out by the same rule."""
+    own_texts = [text for text in own_texts if text]
+    if not own_texts or not candidates:
+        return set()
+    seen = Counter()
+    for document in own_texts:
+        if may_print(document, candidates):
+            seen.update(document_identifiers(document) & set(candidates))
+    kept = {identifier for identifier in candidates if seen[identifier] >= MIN_IDENTIFIER_SHARE * len(own_texts)}
+    for other in other_texts:
+        if not kept:
+            break
+        if other and may_print(other, kept):
+            kept -= document_identifiers(other)
+    return kept
 
 
 def _stored_texts(invoices) -> list[str]:
@@ -320,10 +437,12 @@ def _stored_texts(invoices) -> list[str]:
     ]
 
 
-def forget_identifiers(supplier: Supplier, text: str) -> None:
-    """A document printing them is not `supplier`'s after all: they name it
+def forget_identifiers(supplier: Supplier, *texts: str) -> None:
+    """Documents printing them are not `supplier`'s after all: they name it
     no longer."""
-    printed = document_identifiers(text)
+    printed = set()
+    for text in texts:
+        printed |= document_identifiers(text)
     supplier.refresh_from_db(fields=["ticket_identifiers"])
     kept = [identifier for identifier in supplier.ticket_identifiers or () if identifier not in printed]
     if len(kept) != len(supplier.ticket_identifiers or ()):
@@ -341,7 +460,11 @@ def header_guess(text: str) -> str:
         letters = sum(char.isalpha() for char in line)
         visible = len(line.replace(" ", ""))
         if letters >= MIN_HEADER_LENGTH and not any(char.isdigit() for char in line) and letters >= 0.7 * visible:
-            return " ".join(line.split())[:60]
+            # Cut inside a word, the guess matched no document - not even
+            # the one it was read from.
+            guess = _cut_at_a_word(" ".join(line.split()), 60)
+            if guess:
+                return guess
     return ""
 
 
@@ -352,7 +475,7 @@ def header_choices(text: str) -> list[str]:
     document is on show."""
     choices: list[str] = []
     for line in [line.strip() for line in text.splitlines() if line.strip()][:HEADER_LINES_READ]:
-        line = " ".join(line.split())[:MAX_HEADER_LENGTH]
+        line = _cut_at_a_word(" ".join(line.split()), MAX_HEADER_LENGTH)
         letters = sum(char.isalpha() for char in line)
         visible = len(line.replace(" ", ""))
         if letters < MIN_HEADER_LENGTH or letters < 0.5 * visible:
@@ -360,9 +483,24 @@ def header_choices(text: str) -> list[str]:
         # "No de Commande :" is the label of a field whose value is elsewhere.
         if FIELD_RE.match(line) or line.endswith(":") or line_amounts(line) or DATE_OR_TIME_RE.search(line):
             continue
+        # "Facture no 2519210291 du 19 janvier": a reference this document
+        # alone prints is no header - the next one prints another.
+        if REFERENCE_RE.search(line):
+            continue
         if line not in choices:
             choices.append(line)
     return choices[:MAX_HEADER_CHOICES]
+
+
+def _cut_at_a_word(line: str, length: int) -> str:
+    """`line` no longer than `length`, cut after a whole word: cut inside
+    one ("...depuisu"), a header offered from a document no longer matched
+    that very document - a header is compared as whole words."""
+    if len(line) <= length:
+        return line
+    cut = line[:length]
+    # One word longer than a header is no name, and cut it matches nothing.
+    return cut[: cut.rfind(" ")].rstrip() if " " in cut else ""
 
 
 def names_shop(supplier: Supplier) -> list[str]:
@@ -389,7 +527,40 @@ def first_reading(text: str) -> dict:
     }
 
 
-def tickets_printing(header: str, ignoring=()) -> list[Invoice]:
+def document_corpus() -> list[tuple[int, str]]:
+    """Every stored document's id and plain text, read once - for checking
+    several headers against them (about 90 ms for 875 documents, where
+    reading them again for each header offered cost that much each).
+
+    Kept between requests while no document is added, removed or read
+    again (its reading's length changes): the review page offers header
+    chips on every ticket, and paid those 90 ms on each step through the
+    queue. It only decides which chips are offered - a header saved is
+    checked against the documents as they are (check_header, no corpus)."""
+    fingerprint = tuple(
+        Invoice.objects.aggregate(
+            count=Count("pk"),
+            last=Max("pk"),
+            latest=Max("imported_at"),
+            read=Sum(Length("ocr_text") + Length("source_text")),
+        ).values()
+    )
+    with _CORPUS_LOCK:
+        if _CORPUS.get("fingerprint") != fingerprint:
+            _CORPUS["texts"] = [
+                (pk, plain_text(ocr_text or source_text))
+                for pk, ocr_text, source_text in Invoice.objects.values_list("pk", "ocr_text", "source_text")
+                if ocr_text or source_text
+            ]
+            _CORPUS["fingerprint"] = fingerprint
+        return _CORPUS["texts"]
+
+
+_CORPUS: dict = {}
+_CORPUS_LOCK = threading.Lock()
+
+
+def tickets_printing(header: str, ignoring=(), corpus=None) -> list[Invoice]:
     """The documents already filed whose text carries `header`, oldest
     first - a ticket as it was read, a digital one as it prints."""
     plain = plain_text(header)
@@ -397,9 +568,8 @@ def tickets_printing(header: str, ignoring=()) -> list[Invoice]:
         return []
     ignored = {invoice.pk for invoice in ignoring}
     found = [
-        pk
-        for pk, ocr_text, source_text in Invoice.objects.values_list("pk", "ocr_text", "source_text")
-        if pk not in ignored and (ocr_text or source_text) and _has_header(plain_text(ocr_text or source_text), plain)
+        pk for pk, text in (corpus if corpus is not None else document_corpus())
+        if pk not in ignored and _has_header(text, plain)
     ]
     return list(Invoice.objects.filter(pk__in=found).select_related("supplier").order_by("invoice_date", "pk"))
 
@@ -411,22 +581,46 @@ def describe_tickets(tickets) -> str:
     )
 
 
-def check_header(header: str, ignoring=(), shop: Supplier | None = None) -> str:
+def check_header(
+    header: str, ignoring=(), shop: Supplier | None = None, staying=(), corpus=None, staying_label="qui restent"
+) -> str:
     """`header` as it will be stored. Raises ValueError, for the operator: a
-    text too short to tell a shop, or one already printed on the tickets of
-    other shops, or of many, which it would take from them. A few tickets of
-    one shop carrying it are more likely this shop's, filed there before it
-    existed (tickets_printing says which; `ignoring` is the ticket being
-    moved, `shop` the shop the header is being given to - its own tickets
-    print it, of course)."""
+    text too short to tell a shop, one another supplier already has, one
+    printed on a document that stays with the supplier it is being split
+    from (`staying`: it would come straight back), or one already printed on
+    the tickets of other shops, or of many, which it would take from them.
+    A few tickets of one shop carrying it are more likely this shop's, filed
+    there before it existed (tickets_printing says which; `ignoring` is what
+    is being moved, `shop` the shop the header is being given to - its own
+    tickets print it, of course)."""
     header = " ".join(header.split())
     if header and len(plain_text(header)) < MIN_HEADER_LENGTH:
         raise ValueError(
             f"Le texte d'en-tête « {header} » est trop court pour reconnaître des tickets "
             f"({MIN_HEADER_LENGTH} caractères au moins)."
         )
+    if not header:
+        return header
+    taken = next(
+        (
+            supplier
+            for supplier in Supplier.objects.exclude(ticket_header="").exclude(pk=getattr(shop, "pk", None))
+            if plain_text(supplier.ticket_header) == plain_text(header)
+        ),
+        None,
+    )
+    if taken is not None:
+        raise ValueError(f"« {header} » est déjà l'en-tête de {taken.name} : deux enseignes ne partagent pas un en-tête.")
+    back = [document for document in staying if prints_header(document.document_text, header)]
+    if back:
+        raise ValueError(
+            f"« {header} » est aussi imprimé sur {len(back)} document(s) {staying_label} "
+            f"({describe_tickets(back[:5])}{'…' if len(back) > 5 else ''}) : il ne les distingue pas."
+        )
     elsewhere = [
-        ticket for ticket in tickets_printing(header, ignoring) if shop is None or ticket.supplier_id != shop.pk
+        ticket
+        for ticket in tickets_printing(header, ignoring, corpus)
+        if shop is None or ticket.supplier_id != shop.pk
     ]
     if len(elsewhere) > MAX_TICKETS_ELSEWHERE or len({ticket.supplier_id for ticket in elsewhere}) > 1:
         raise ValueError(
@@ -437,17 +631,19 @@ def check_header(header: str, ignoring=(), shop: Supplier | None = None) -> str:
     return header
 
 
-def set_shop_header(supplier: Supplier, header: str, ignoring=()) -> str:
+def set_shop_header(supplier: Supplier, header: str, ignoring=(), staying=(), staying_label="qui restent") -> str:
     """Give `supplier` the text its documents print at the top, so the next
     ones are filed there on their own - or take it back, with a blank. Same
     refusals as `create_shop`; returns the header as stored."""
-    header = check_header(header, ignoring, shop=supplier)
+    header = check_header(header, ignoring, shop=supplier, staying=staying, staying_label=staying_label)
     supplier.ticket_header = header
     supplier.save(update_fields=["ticket_header"])
     return header
 
 
-def create_shop(name: str, header: str = "", ignoring=()) -> Supplier:
+def create_shop(
+    name: str, header: str = "", ignoring=(), expenses_only: bool = False, staying=()
+) -> Supplier:
     """A new shop, for tickets no known header was on. With `header`, its
     next tickets are recognised by it. Raises ValueError, for the operator:
     no name, a name taken, a header too short - or one printed on the tickets
@@ -461,52 +657,352 @@ def create_shop(name: str, header: str = "", ignoring=()) -> Supplier:
         raise ValueError("Donnez un nom à la nouvelle enseigne.")
     if Supplier.objects.filter(name__iexact=name).exists():
         raise ValueError(f"« {name} » existe déjà : choisissez-la dans la liste.")
-    header = check_header(header, ignoring)
+    header = check_header(header, ignoring, staying=staying)
     base = re.sub(r"[^A-Z0-9]+", "_", plain_text(name)).strip("_")[:24] or "ENSEIGNE"
     code, suffix = base, 1
     while Supplier.objects.filter(code=code).exists():
         suffix += 1
         code = f"{base}_{suffix}"
-    return Supplier.objects.create(code=code, name=name, parser_key="", ticket_header=header)
+    return Supplier.objects.create(
+        code=code, name=name, parser_key="", ticket_header=header, expenses_only=expenses_only
+    )
 
 
 def move_to_shop(invoice: Invoice, supplier: Supplier) -> None:
     """File a document under another supplier - a ticket or a digital
-    invoice: its lines stay as they are and find their products among the new
-    supplier's (the old ones nobody else uses go). What named the one it
-    leaves named it wrongly, so that supplier forgets it; the new one learns
-    what the document prints. Raises ValueError when that supplier has a
-    document of the same number, and InvoiceLinesInUseError as a correction
-    would."""
-    from .importing import corrected_line, replace_invoice_lines
+    invoice. See move_documents, which this is for one document."""
+    move_documents([invoice], supplier)
 
-    if supplier.pk == invoice.supplier_id:
-        return
+
+@dataclass
+class Moved:
+    count: int = 0
+    # Charge lines named after the supplier left, now after the new one.
+    renamed: int = 0
+    # Classified lines whose product at the new supplier took the same
+    # stock item, and their stock movement back.
+    reclassified: int = 0
+
+
+def move_documents(invoices, supplier: Supplier, learnable=None) -> Moved:
+    """File documents under another supplier, together: the one definition
+    of a move, for one document or for a whole subscription split off.
+
+    Their lines stay as they are and find their products among the new
+    supplier's (the old ones nobody else uses go), and three things the
+    lines alone would lose are kept:
+
+    - **a charge stays a charge.** Read as goods and moved into a supplier
+      of charges, a document is read again as one (refile_as_charge, the
+      path ticking "Charges" takes): kept as they were, a rent statement's
+      previous balance, direct debit and rent became three postes and the
+      charge three times what it charges. Moved between two suppliers of
+      charges, a line named after the supplier takes the new name. Either
+      way its state is its total's (charge_state): an unread total marked
+      COMPLETE left the only list where it could be seen;
+    - **a classified line stays in stock**: its product at the new supplier,
+      new or never classified, takes the same stock item
+      (link_product_to_stock_type) - re-resolved as a new product, the
+      purchase silently left the stock ledger;
+    - what the documents print is learned by the new supplier **once every
+      one of them has moved** (`learnable`, when given, is all it may
+      learn), and forgotten by those they leave.
+
+    Raises ValueError when a number would be there twice, and
+    InvoiceLinesInUseError as a correction would. All or nothing.
+    """
+    from inventory.services import link_product_to_stock_type
+
+    from .importing import _as_parsed, charge_state, corrected_line, refile_as_charge, replace_invoice_lines
+
+    moving = [invoice for invoice in invoices if invoice.supplier_id != supplier.pk]
+    moved = Moved(count=len(moving))
+    if not moving:
+        return moved
     if supplier.parser_key == LLM_PARSER_KEY:
         raise ValueError("Un document ne se range pas sous ce fournisseur.")
-    if invoice.invoice_number and (
-        Invoice.objects.filter(supplier=supplier, invoice_number=invoice.invoice_number).exclude(pk=invoice.pk).exists()
-    ):
-        raise ValueError(f"{supplier.name} a déjà un document n° {invoice.invoice_number} : c'est peut-être le même.")
-    lines = [
-        corrected_line(line, raw_name=line.raw_name, quantity=line.quantity, total_ht=line.total_ht, vat_rate=line.vat_rate)
-        for line in invoice.lines.all()
-    ]
-    text = invoice.document_text
-    fields = ["supplier"]
+    numbers = Counter(invoice.invoice_number for invoice in moving if invoice.invoice_number)
+    twice = [number for number, times in numbers.items() if times > 1]
+    if twice:
+        raise ValueError(f"Deux des documents portent le n° {twice[0]} : ils ne vont pas chez le même fournisseur.")
+    for invoice in moving:
+        if Invoice.objects.filter(supplier=supplier, invoice_number=invoice.invoice_number).exclude(
+            invoice_number=""
+        ).exclude(pk=invoice.pk).exists():
+            raise ValueError(
+                f"{supplier.name} a déjà un document n° {invoice.invoice_number} : c'est peut-être le même."
+            )
+    left: dict[int, tuple[Supplier, list[str]]] = {}
     with transaction.atomic():
-        forget_identifiers(invoice.supplier, text)
-        invoice.supplier = supplier
-        if invoice.is_receipt:
-            # A check is what a ticket's review screen reads; adding one to a
-            # digital invoice would turn it into a ticket (Invoice.is_receipt).
-            invoice.parse_checks = [
-                check for check in invoice.parse_checks if check["label"] not in (CHOSEN_SHOP_CHECK, IDENTIFIED_CHECK)
-            ] + [{"label": CHOSEN_SHOP_CHECK, "passed": True, "detail": f"Rangé chez {supplier.name} à la main."}]
-            fields.append("parse_checks")
-        invoice.save(update_fields=fields)
-        replace_invoice_lines(invoice, lines)
-        learn_identifiers(supplier, text)
+        for invoice in moving:
+            old = invoice.supplier
+            stored = list(invoice.lines.select_related("product", "product__stock_type"))
+            classified = {
+                line.raw_name: line.product
+                for line in stored
+                if line.product is not None and line.product.stock_type_id is not None
+            }
+            renamed = old.expenses_only and supplier.expenses_only
+            lines = []
+            for line in stored:
+                name = supplier.name if renamed and line.raw_name == old.name else line.raw_name
+                moved.renamed += name != line.raw_name
+                lines.append(
+                    corrected_line(
+                        line, raw_name=name, quantity=line.quantity, total_ht=line.total_ht, vat_rate=line.vat_rate
+                    )
+                )
+            left.setdefault(old.pk, (old, []))[1].append(invoice.document_text)
+            fields = ["supplier"]
+            invoice.supplier = supplier
+            if invoice.is_receipt:
+                # A check is what a ticket's review screen reads; adding one to
+                # a digital invoice would turn it into a ticket (is_receipt).
+                invoice.parse_checks = [
+                    check
+                    for check in invoice.parse_checks
+                    if check["label"] not in (CHOSEN_SHOP_CHECK, IDENTIFIED_CHECK)
+                ] + [{"label": CHOSEN_SHOP_CHECK, "passed": True, "detail": f"Rangé chez {supplier.name} à la main."}]
+                fields.append("parse_checks")
+            invoice.save(update_fields=fields)
+            if supplier.expenses_only and not old.expenses_only and refile_as_charge(
+                invoice, _as_parsed(invoice, stored)
+            ):
+                continue  # read again as a charge, its state included
+            replace_invoice_lines(invoice, lines)
+            if supplier.expenses_only:
+                charge_state(invoice, invoice.printed_total_ttc)
+                continue
+            for line in invoice.lines.select_related("product"):
+                was = classified.get(line.raw_name)
+                if was is not None and line.product.needs_review:
+                    link_product_to_stock_type(line.product, was.stock_type, was.unit, was.stock_equivalent)
+                    moved.reclassified += 1
+        for old, texts in left.values():
+            forget_identifiers(old, *texts)
+            # What it still knows, checked against what it still has.
+            learn_identifiers(old)
+        learn_identifiers(
+            supplier, *(text for _old, texts in left.values() for text in texts), learnable=learnable
+        )
+    return moved
+
+
+def can_split(supplier: Supplier) -> bool:
+    """Whether some of `supplier`'s documents can be split off to another
+    source: not a configured till's, not a supplier with a reader of its
+    own (the new source would have neither), not the AI pseudo-supplier."""
+    return (
+        supplier.parser_key != LLM_PARSER_KEY
+        and ticket_parser_for(supplier.code) is None
+        and not has_own_reader(supplier)
+    )
+
+
+def headerless_documents(supplier: Supplier) -> list[Invoice]:
+    """`supplier`'s documents that carry text and do not print its header,
+    oldest first - none when it has no header. A header only adds: these
+    were filed there by something else they print, and they are the ones a
+    person means when two subscriptions of one company share a supplier."""
+    if not supplier.ticket_header:
+        return []
+    return [
+        invoice
+        for invoice in Invoice.objects.filter(supplier=supplier).order_by("invoice_date", "pk")
+        if invoice.document_text and not prints_header(invoice.document_text, supplier.ticket_header)
+    ]
+
+
+def offerable_headers(choices, shop: Supplier | None = None, ignoring=(), staying=()) -> list[str]:
+    """The `choices` a person could give as a header without the save
+    refusing it - by check_header itself, over the documents read once. The
+    customer's own name and street are on every supplier's documents: offered
+    as chips, they were one click from a refusal."""
+    corpus = document_corpus() if choices else []
+    kept = []
+    for choice in choices:
+        try:
+            check_header(choice, ignoring=ignoring, shop=shop, staying=staying, corpus=corpus)
+        except ValueError:
+            continue
+        kept.append(choice)
+    return kept
+
+
+def separable_documents(supplier: Supplier) -> list[Invoice]:
+    """The documents of `supplier` that look like another subscription: not
+    printing its header, and printing something it learned that none of the
+    documents printing its header do - the mobile line's company number
+    beside the box's bills. A ticket of the same shop whose top the photo
+    lost prints the same phone as the others, and one filed by hand prints
+    nothing learned: neither is another subscription, and offering to split
+    them off would split one shop into two."""
+    headerless = headerless_documents(supplier)
+    learned = set(supplier.ticket_identifiers or ())
+    if not headerless or not learned:
+        return []
+    headerless_pks = {invoice.pk for invoice in headerless}
+    printing = [
+        invoice
+        for invoice in Invoice.objects.filter(supplier=supplier)
+        if invoice.pk not in headerless_pks and invoice.document_text
+    ]
+    if not printing:
+        # Nothing prints the header at all: it is the header that does not
+        # match this shop's documents (its logo read as something else), not
+        # two subscriptions - and with nothing to compare against, whatever
+        # it learned looked like another one's.
+        return []
+    with_header = set()
+    for invoice in printing:
+        with_header |= document_identifiers(invoice.document_text)
+    telling = learned - with_header
+    return [invoice for invoice in headerless if document_identifiers(invoice.document_text) & telling]
+
+
+def separating_choices(chosen, others) -> list[str]:
+    """Texts that could be the header of documents `chosen` apart from
+    `others`: the top lines of the first of them (header_choices) that every
+    chosen document prints and none of the others does - and that no rule
+    refuses (the customer's own name and street are on every supplier's
+    documents)."""
+    chosen = [invoice for invoice in chosen if invoice.document_text]
+    if not chosen:
+        return []
+    shared = [
+        choice
+        for choice in header_choices(chosen[0].document_text)
+        if all(prints_header(invoice.document_text, choice) for invoice in chosen)
+    ]
+    return offerable_headers(shared, ignoring=chosen, staying=others)
+
+
+@dataclass
+class SplitResult:
+    moved: int
+    destination: Supplier
+    warnings: list[str] = field(default_factory=list)
+    renamed: int = 0
+    reclassified: int = 0
+
+
+def split_documents(
+    source: Supplier,
+    invoices,
+    destination: Supplier | None = None,
+    new_name: str = "",
+    new_header: str = "",
+    source_header: str | None = None,
+) -> SplitResult:
+    """Split some of `source`'s documents off to another source - an
+    existing one, or a new one named `new_name` - together, all or nothing.
+
+    For one company's two subscriptions filed as one: what the documents
+    moved print is learned by their new source once they have all moved,
+    and what both sides print (the same web site, the customer's own
+    number) names neither - so where the two print the same company number
+    too (two meters, two lines), only a header tells them apart, and the
+    one given to either side must not be printed on the other's. A new
+    source is of the same kind as the one it comes from - charges stay
+    charges. After the move every document of both sides is recognised
+    again, and if one would go to the other side, nothing is done.
+    Raises ValueError, for the operator.
+    """
+    # Its own copy: a header set on the caller's before a refusal rolled
+    # the database back stayed on the page, as if it had been saved.
+    source = Supplier.objects.get(pk=source.pk)
+    moving = list(invoices)
+    if not moving:
+        raise ValueError("Cochez au moins un document à ranger.")
+    if any(invoice.supplier_id != source.pk for invoice in moving):
+        raise ValueError(f"Ces documents ne sont pas tous chez {source.name}.")
+    if not can_split(source):
+        raise ValueError(f"Les documents de {source.name} ne se séparent pas : sa caisse ou son lecteur lui est propre.")
+    moving_pks = {invoice.pk for invoice in moving}
+    staying = [invoice for invoice in Invoice.objects.filter(supplier=source) if invoice.pk not in moving_pks]
+    if destination is None:
+        name = " ".join(new_name.split())
+        taken = Supplier.objects.filter(name__iexact=name).first() if name else None
+        if taken is not None:
+            raise ValueError(
+                f"« {name} » est déjà le nom de {taken.name}"
+                + (
+                    " : choisissez-la dans la liste « Où les ranger »."
+                    if taken.pk != source.pk and can_split(taken) and taken.expenses_only == source.expenses_only
+                    else ", qui ne peut pas recevoir ces documents : donnez un autre nom à la nouvelle source."
+                )
+            )
+    elif destination.pk == source.pk or destination.parser_key == LLM_PARSER_KEY or not can_split(destination):
+        raise ValueError(f"{destination.name} ne peut pas recevoir ces documents : choisissez une autre source.")
+    elif destination.expenses_only != source.expenses_only:
+        kind = "de charges" if source.expenses_only else "de produits"
+        raise ValueError(
+            f"{destination.name} n'est pas un fournisseur {kind} comme {source.name} : cochez ou "
+            "décochez « Charges » sur l'onglet Sources d'abord."
+        )
+    # What each document was recognised as before: after the split, one that
+    # no longer is recognised at all is said, not only one that would land
+    # on the other side.
+    watched = staying + moving + (list(Invoice.objects.filter(supplier=destination)) if destination else [])
+    before = {invoice.pk: _recognised_code(invoice) for invoice in watched}
+    # A split teaches what the source knew - its company number, its web
+    # site - and nothing it had not: seven bills of one line print the
+    # customer's own number on every page, and moved together they would
+    # have made it the new source's.
+    learnable = set(source.ticket_identifiers or ()) | set(getattr(destination, "ticket_identifiers", None) or ())
+    with transaction.atomic():
+        if source_header is not None and " ".join(source_header.split()) != source.ticket_header:
+            set_shop_header(source, source_header, ignoring=staying, staying=moving, staying_label="à ranger")
+        if source.ticket_header:
+            back = [invoice for invoice in moving if prints_header(invoice.document_text, source.ticket_header)]
+            if back:
+                raise ValueError(
+                    f"« {source.ticket_header} », l'en-tête de {source.name}, est imprimé sur {len(back)} des "
+                    f"documents à ranger ({describe_tickets(back[:5])}) : ils y reviendraient. Décochez-les "
+                    f"s'ils sont bien de {source.name} ; sinon changez ou videz l'en-tête de {source.name} "
+                    "sur cette page."
+                )
+        if destination is None:
+            destination = create_shop(
+                new_name, new_header, ignoring=moving, expenses_only=source.expenses_only, staying=staying
+            )
+        elif new_header and " ".join(new_header.split()) != destination.ticket_header:
+            set_shop_header(destination, new_header, ignoring=moving, staying=staying)
+        moved = move_documents(moving, destination, learnable=learnable)
+        destination.refresh_from_db()
+        source.refresh_from_db()
+        lost = {source.pk: 0, destination.pk: 0}
+        for invoice in Invoice.objects.filter(supplier__in=[source, destination]).select_related("supplier"):
+            code = _recognised_code(invoice)
+            other = destination if invoice.supplier_id == source.pk else source
+            if code == other.code:
+                raise ValueError(
+                    f"Le document {_describe(invoice)} serait reconnu comme un document de {other.name} : "
+                    "donnez à l'une des deux sources un en-tête qui les distingue."
+                )
+            if code is None and before.get(invoice.pk) is not None:
+                lost[invoice.supplier_id] += 1
+    warnings = [
+        f"{count} document(s) de {side.name} ne seraient plus reconnus : ses prochains vous seront demandés. "
+        f"Donnez-lui un en-tête, un texte que ses documents sont seuls à porter."
+        for side, count in ((source, lost[source.pk]), (destination, lost[destination.pk]))
+        if count
+    ]
+    return SplitResult(
+        moved=moved.count,
+        destination=destination,
+        warnings=warnings,
+        renamed=moved.renamed,
+        reclassified=moved.reclassified,
+    )
+
+
+def _recognised_code(invoice: Invoice) -> str | None:
+    """The code of the supplier a document would be filed under today."""
+    if not invoice.document_text:
+        return None
+    parser, _identifiers, _conflict = recognise_shop(invoice.document_text)
+    return getattr(parser, "supplier_code", None)
 
 
 @dataclass
@@ -521,6 +1017,9 @@ class ReceiptRead:
     problem: str = ""
     # What named the shop, when no header did (identified_supplier).
     identified_by: list[str] = field(default_factory=list)
+    # Why nobody was named although something was printed that names a
+    # shop: two of them disagree (recognise_shop).
+    conflict: str = ""
 
 
 def recognise(pdf_path: str):
@@ -552,7 +1051,7 @@ def read_receipt(pdf_path: str, date_hint: date | None = None, supplier: Supplie
     images, ocr_pages = recognise(pdf_path)
     text = "\n".join(page.text for page in ocr_pages)
 
-    parser, identified_by = detect_shop(text) if supplier is None else (parser_for(supplier), [])
+    parser, identified_by, conflict = recognise_shop(text) if supplier is None else (parser_for(supplier), [], "")
     parsed, problem = None, ""
     if parser is not None:
         try:
@@ -565,7 +1064,7 @@ def read_receipt(pdf_path: str, date_hint: date | None = None, supplier: Supplie
             problem = str(exc).strip() or exc.__class__.__name__
     return ReceiptRead(
         parser=parser, parsed=parsed, preview=_encode_preview(images), text=text, problem=problem,
-        identified_by=identified_by,
+        identified_by=identified_by, conflict=conflict,
     )
 
 
@@ -1140,14 +1639,17 @@ def import_receipt(
     named_by_hand = supplier is not None
     if supplier is None:
         if read.parser is None or read.parsed is None:
-            raise UnrecognisedShopError("Enseigne non reconnue sur ce ticket.", text=read.text)
+            raise UnrecognisedShopError(read.conflict or "Enseigne non reconnue sur ce ticket.", text=read.text)
         supplier = Supplier.objects.get(code=read.parser.supplier_code)
         parsed = read.parsed
         if read.identified_by:
             parsed.checks.append(ParseCheck(
                 label=IDENTIFIED_CHECK,
                 passed=True,
-                detail="Aucun en-tête connu : reconnue par son "
+                detail=(
+                    f"Sans son en-tête « {supplier.ticket_header} »" if supplier.ticket_header else "Aucun en-tête connu"
+                )
+                + " : reconnue par son "
                 + ", son ".join(describe_identifier(identifier) for identifier in read.identified_by)
                 + " (vu sur ses tickets).",
             ))

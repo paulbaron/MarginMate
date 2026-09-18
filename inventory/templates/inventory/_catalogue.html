@@ -187,56 +187,92 @@ is what those answers trigger.
 {% comment %}
 What the suppliers of charges cost - a subscription, the rent, the water.
 They hold no stock, so they are nowhere else on this page; folded away, since
-they are not what one comes here for. Inside #catalogue on purpose: a poste
-opens like a stock item (the page's own toggle script), on its documents and
-its curve.
+they are not what one comes here for. Inside #catalogue on purpose: every row
+here opens like a stock item (the page's own toggle script), on the documents
+behind it and on its curve - the supplier itself, and the postes underneath
+where its documents name several.
 {% endcomment %}
 {% if charge_suppliers %}
     <details class="explainer charges" data-persist="charges">
-        <summary>Charges et abonnements (hors stock)</summary>
+        <summary>
+            Charges et abonnements (hors stock)
+            <span class="muted">— {{ charge_suppliers|length }} fournisseur{{ charge_suppliers|length|pluralize }}, {{ charge_total_ttc|floatformat:2 }} € TTC</span>
+        </summary>
         <p class="muted">
             Ces fournisseurs n'ont pas de produits : leurs factures sont enregistrées par poste quand elles
-            en nomment (loyer, provisions), sinon en une ligne par taux de TVA. Ouvrez un poste pour voir ses
-            documents et sa courbe.
-            Totaux {% if period %}sur la période choisie{% else %}sur les douze derniers mois{% endif %}.
+            en nomment (loyer, provisions), sinon en une ligne par taux de TVA. Ouvrez une ligne pour voir ses
+            documents, 📈 pour son évolution.
+            Documents et totaux {% if period %}sur la période choisie{% else %}sur les douze derniers mois{% endif %} ;
+            « Dernier » est le dernier document reçu, même hors de cette fenêtre, et ce qu'une ligne ouvre
+            couvre tout l'historique.
         </p>
         <div class="table-wrap">
-            <table class="sub-table" data-table data-table-sort-only data-table-label="charges">
+            <table class="sub-table charges-table" data-table data-table-sort-only data-table-label="charges">
+                {% comment %}
+                Shares and a fixed layout: this list sits beside the panel of
+                products to classify, where a name like
+                "REMBOURSEMENTDEPOTGARANTIE" widened the table past it and
+                pushed the curve button out of view.
+                {% endcomment %}
+                <colgroup>
+                    <col>
+                    <col style="width:17%">
+                    <col style="width:16%">
+                    <col style="width:16%">
+                    <col style="width:56px">
+                </colgroup>
                 <thead>
                     <tr>
                         <th>Fournisseur</th>
                         <th class="num">Documents</th>
                         <th class="num">Total TTC</th>
-                        <th>Dernier</th>
+                        <th title="Le dernier document reçu, même hors de la fenêtre des totaux">Dernier</th>
+                        <th></th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for row in charge_suppliers %}
-                        <tr>
-                            <td>{{ row.supplier.name }}</td>
+                        <tr class="stock-row" data-toggle="charge-supplier-{{ row.supplier.pk }}"
+                            data-movements-url="{% url 'inventory:charge_supplier_documents' row.supplier.pk %}">
+                            <td><span class="chevron">▸</span> {{ row.supplier.name }}</td>
                             <td class="num">{{ row.documents }}</td>
                             <td class="num">{{ row.total_ttc|floatformat:2 }} €</td>
-                            <td data-sort="{{ row.last|date:'Y-m-d' }}">{{ row.last|date:"d/m/Y" }}</td>
+                            <td data-sort="{{ row.last|date:'Y-m-d' }}">{{ row.last|date:"d/m/Y"|default:"—" }}</td>
+                            <td class="row-actions">
+                                <button type="button" class="btn btn-small btn-secondary js-price-history-toggle"
+                                        title="Évolution de la charge" aria-label="Évolution de la charge"
+                                        data-price-history-url="{% url 'inventory:charge_supplier_history' row.supplier.pk %}"
+                                        data-target="charge-supplier-history-{{ row.supplier.pk }}">📈</button>
+                            </td>
+                        </tr>
+                        <tr id="charge-supplier-history-{{ row.supplier.pk }}" data-child-row hidden>
+                            <td colspan="5" style="padding:0.75rem 0.9rem;"><p class="muted">Chargement…</p></td>
+                        </tr>
+                        <tr id="charge-supplier-{{ row.supplier.pk }}" data-child-row hidden>
+                            <td colspan="5" style="padding:0;">
+                                <p class="muted" style="padding:0.75rem 0.9rem;">Chargement…</p>
+                            </td>
                         </tr>
                         {% for poste in row.postes %}
                             <tr class="stock-row charge-row" data-child-row
                                 data-toggle="charge-{{ poste.product.pk }}"
                                 data-movements-url="{% url 'inventory:charge_documents' poste.product.pk %}">
-                                <td class="muted"><span class="chevron">▸</span> {{ poste.name }}</td>
-                                <td></td>
+                                <td class="muted"><span class="chevron">▸</span>{{ poste.name }}</td>
+                                <td class="num muted">{{ poste.documents }}</td>
                                 <td class="num muted">{{ poste.total_ttc|floatformat:2 }} €</td>
+                                <td></td>
                                 <td class="row-actions">
                                     <button type="button" class="btn btn-small btn-secondary js-price-history-toggle"
-                                            title="Évolution de la charge" aria-label="Évolution de la charge"
+                                            title="Évolution du poste" aria-label="Évolution du poste"
                                             data-price-history-url="{% url 'inventory:charge_history' poste.product.pk %}"
                                             data-target="charge-history-{{ poste.product.pk }}">📈</button>
                                 </td>
                             </tr>
                             <tr id="charge-history-{{ poste.product.pk }}" data-child-row hidden>
-                                <td colspan="4" style="padding:0.75rem 0.9rem;"><p class="muted">Chargement…</p></td>
+                                <td colspan="5" style="padding:0.75rem 0.9rem;"><p class="muted">Chargement…</p></td>
                             </tr>
                             <tr id="charge-{{ poste.product.pk }}" data-child-row hidden>
-                                <td colspan="4" style="padding:0;">
+                                <td colspan="5" style="padding:0;">
                                     <p class="muted" style="padding:0.75rem 0.9rem;">Chargement…</p>
                                 </td>
                             </tr>

@@ -326,6 +326,15 @@ own ("Charges et abonnements", `inventory.views.charge_suppliers`, over the
 stock-take window or the last twelve months) - charges are not stock, but
 they are spending.
 
+**`Product.is_expense` follows its supplier**, both ways
+(`replace_invoice_lines`, `importing.stop_expenses` when the box is unticked,
+`redo_as_expenses` when it is ticked again - not a product a stock item has
+claimed, which is stock after all). Set one way only, a box ticked by mistake
+was irreversible: unticked, the supplier's products stayed flagged for ever -
+out of the review queue, out of every stock page, out of every stock movement -
+and correcting the document by hand, which is what the message after unticking
+asks for, resolved the very same flagged product.
+
 Three readings, in this order: **the VAT table** when it accounts for the
 total to the cent (one line per rate); **the postes the document names**
 (`invoices/charges.py`); **the total alone**, on one line named after the
@@ -352,13 +361,33 @@ set by `_expense_line` from the figures the document prints): 33,33 € HT at
 what leaves the bank. Everything that shows what a charge cost adds those
 up, `inventory.views.charge_suppliers` included.
 
-**A poste opens like a stock item.** The charges fold lives inside
-`#catalogue`, so the page's own toggle script reaches it: a poste's row opens
-on the documents behind it (`inventory.charge_documents`, each linking to the
-document it came from) and its 📈 shows what it has cost over time
-(`charge_history`, the same chart a stock item's price history draws, against
-the document's date). The rent is followed month after month like anything
-else bought - which is the whole reason for keeping the postes apart.
+**Every charge opens like a stock item.** The charges fold lives inside
+`#catalogue`, so the page's own toggle script reaches it: a row opens on the
+documents behind it (each linking to the document it came from, with its
+"Corriger") and its 📈 shows what it has cost over time (the same chart a
+stock item's price history draws, one point per document, against the
+document's own date). The rent is followed month after month like anything
+else bought.
+
+**The supplier's own row is one of them.** Only the postes opened at first,
+and a poste is listed only where a document names several - so the water,
+the phone, the alarm, the venue (one poste each, the charge itself under
+another name) had nothing at all to click: five suppliers out of six. The
+supplier's row opens on all its documents
+(`inventory.charge_supplier_documents` / `charge_supplier_history`), a poste's
+on that poste's (`charge_documents` / `charge_history`), and both go through
+`_charge_document_rows`, which is **one row per document**: a bill printing
+two rates is read as two lines, and 29 Total Energie bills showed up as 46.
+It prints the tax as an **amount**, never as a rate - on a document with two
+of them, naming one would be a lie about the other, and "—" says nothing.
+
+Two things the row and the panel do not share, said on the page rather than
+left to be discovered: what a row **opens** is the whole history, where its
+Documents and Total are the window being looked at; and **"Dernier" is the
+last document ever**, window or not. A supplier is listed as soon as it has
+a document at all - windowed, a water bill arriving twice a year dropped off
+the page between two of them, taking its history with it, and the date is
+exactly what a row with nothing over the window has left to say.
 
 **A poste is a label and the amount printed after it**, and a document's
 postes are the run of them adding up to an amount printed below them. That
@@ -518,12 +547,18 @@ offered as chips (`header_choices`, `set_shop_header`, refusals as
 `create_shop`'s). Giving it sends every recent import's unrecognised files
 through again (`requeue_everywhere`), and
 `detect_parser` looks for headers people gave **before** the configured tills,
-the longest first: "EPICERIE SABAH" before the "SABAH" Sabbh's till answers
-to. Headers compare without accents, case or punctuation, as whole words
-(`receipts.plain_text`), and one shorter than four characters, or already
-printed on the tickets of two other shops or on more than three, is refused -
-a few tickets of one shop carrying it are more likely the new shop's, filed
-before it existed, and are named so they can be moved. A document filed under the
+a header printed inside another giving way to it: "EPICERIE SABAH" before the
+"SABAH" Sabbh's till answers to. Headers compare without accents, case or
+punctuation, as whole words (`receipts.prints_header`, the one definition),
+and one shorter than four characters, one another supplier already has, or
+one already printed on the tickets of two other shops or on more than three,
+is refused - a few tickets of one shop carrying it are more likely the new
+shop's, filed before it existed, and are named so they can be moved (all of
+one supplier's: together, from its split - `views._how_to_bring`). The chips
+offered are only those the save would take (`offerable_headers`, over the
+documents read once, `document_corpus`): the customer's own street is on
+every supplier's documents, and a line with no space before the length a
+header may have is not offered at all - cut, it matched nothing. A document filed under the
 wrong supplier is moved from its own page ("Changer d'enseigne" on a ticket,
 "Changer de fournisseur" on an invoice, `receipts.move_to_shop`): its lines
 stay and find their products among the new supplier's, the orphans go. A
@@ -592,6 +627,90 @@ or by the text it prints at the top (`document_supplier`); read as a ticket,
 a document is checked against its own totals, so that path can be less
 strict. What a document moved away from a supplier printed is forgotten by
 it (`move_to_shop`), which is what unlearns a number that named it wrongly.
+(The seven themselves were deleted and imported again under Free; UBA lost
+the number at the `learn_shop_identifiers` pass that followed, once Free's
+documents printed it too. Nothing names the customer's number because two
+suppliers' documents print it - no list of "my numbers" is kept anywhere.)
+
+**A header only adds documents.** It says "a document printing this is
+this supplier's", never "a document not printing it is someone else's": a
+torn or faded top is exactly what the learned identifiers are for. So
+giving Free the text of its box subscription ("Abonnement Freebox Pop")
+left its seven mobile bills where they were - filed by the company number
+and web sites Free had learned from them. Saving a header now says how many
+of the supplier's documents do not print it and what filed them there
+(`views._say_headerless`), and such a document says so on its own page, with
+what named it (`views._recognition_context`).
+
+**One company, two sources, is a split** (`receipts.split_documents`, the
+page `/invoices/fournisseurs/<pk>/separer/`, reached from that notice, from
+"Changer de fournisseur" and from the Sources tab). The documents not
+printing the header are ticked, or those printing one of the figures the
+supplier learned (`?avec=`); they move **together** to a new source or an
+existing one of the same kind, all or nothing. Moved one at a time
+(`move_to_shop`), the first taught its new source nothing: the siblings
+left behind printed the same SIREN and web site, so nothing was the new
+source's alone, and the next mobile bill came back unrecognised.
+`move_documents` is the one definition of a move - every document first,
+then each supplier left forgets what they print and checks what it still
+knows, then the destination learns **once**, from all of them. What both
+sides print (the customer's own number) names neither; where two contracts
+of one company print the same company number too (two meters, two sites),
+only a header tells them apart, and the page refuses one the staying side
+prints. A new source split from charges is charges, and a charge line named
+after the supplier it leaves takes the new name; after the move every
+document of both sides is recognised again, and one landing on the other
+side undoes the whole split; one no longer recognised at all is said
+(a web site alone names no one). On the real data: Free Mobile learned
+exactly its SIREN and two web sites, Free kept only its header, no other
+supplier's identifiers moved, and not one of the 875 documents changed
+supplier under the new rules. Learning itself is `identifiers_naming`,
+arithmetic with no database, which the split page uses to say beforehand
+what each side will be recognised by.
+
+What an adversarial review of it found, each now a test that failed first:
+
+- **A split teaches what the source knew, nothing more** (`learnable`):
+  seven bills of one line print the customer's number on every page, and
+  moved together they made it the new source's - the next caterer's ticket
+  printing it was filed as a charge. (Moving the seventh on its own still
+  would: a document filed by hand teaches what it prints. The customer's
+  number is safe because another supplier's documents print it.)
+- **Learning corrects the others** (`learn_identifiers` re-checks every
+  supplier holding something the documents print, `_recheck`): one that
+  had learned the customer's company number while it was the only one
+  printing it refused every bill of another, header and all, until someone
+  filed one of its own; and a third supplier sharing a number with the one
+  split was left its only owner.
+- **A move keeps what the lines do not say** (`move_documents`): a document
+  read as goods and moved into a supplier of charges is read again as a
+  charge (`refile_as_charge`) - its previous balance, direct debit and rent
+  had become three postes, three times what it charges; a charge's state is
+  its total's (`charge_state`) - an unread total came out COMPLETE and left
+  "À corriger"; and a classified line's product at the new supplier takes
+  the same stock item (`link_product_to_stock_type`) - re-resolved, the
+  purchase silently left the stock ledger.
+- **Only another subscription's documents are offered**
+  (`separable_documents`: not printing the header, and printing something
+  learned that the documents with the header do not): a shop's own ticket
+  whose top the photo lost prints the same phone as the others, and was
+  offered as a second subscription to split off.
+- The page: it works on its own copy of the source (a refused split showed
+  a header never saved), an existing destination keeps its header (the new
+  source's box stays in the page, hidden, and was posted), a name another
+  supplier has says which, the messages say which documents they mean.
+- The charges page: the first stock take's window has no start (a 500),
+  a curve adds up what one day charged, a document filed with nothing read
+  is listed on its supplier's row.
+
+Two guards **ask rather than choose** (`recognise_shop`, the reason travels
+to the import's message): the headers of **two suppliers** on one document,
+neither inside the other - the longest used to win, and a mobile bill
+advertising the box would have gone to the box - and **a header against a
+company number** another supplier learned. A header still beats another
+supplier's phone or web site. The Sources tab lists every supplier with
+what names it, those with a reader of their own too (UBA, Metro), and how
+many of a shop's documents print its header.
 
 **A PDF invoice from a supplier with no reader of its own** - or a new one,
 named in the import card ("+ Nouveau fournisseur…", `InvoiceUploadForm` is a

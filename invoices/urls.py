@@ -12,6 +12,7 @@ urlpatterns = [
     path("gather/<int:job_id>/status/", views.gather_status, name="gather_status"),
     path("gather/<int:job_id>/cancel/", views.cancel_gather, name="gather_cancel"),
     path("types/", views.invoice_type_list, name="invoice_type_list"),
+    path("fournisseurs/<int:pk>/separer/", views.supplier_split, name="supplier_split"),
     path("fournisseurs/<int:pk>/charges/", views.supplier_expenses, name="supplier_expenses"),
     path("types/new/", views.invoice_type_form, name="invoice_type_create"),
     path("types/<int:pk>/edit/", views.invoice_type_form, name="invoice_type_update"),

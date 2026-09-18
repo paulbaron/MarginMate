@@ -29,7 +29,17 @@ the form comes back with an error.
     {% endcomment %}
     {% if ask_header %}
         <label title="Un{% if for_invoice %}e facture{% else %} ticket{% endif %} qui porte ce texte sera rangé{% if for_invoice %}e{% endif %} chez {% if for_invoice %}ce fournisseur{% else %}cette enseigne{% endif %} : son nom ou sa rue, tel qu'imprimé.">En-tête de ses {% if for_invoice %}documents{% else %}tickets{% endif %}
-            <input type="text" name="new_header" maxlength="100" placeholder="{% if for_invoice %}FOURNISSEUR DU COIN{% else %}EPICERIE DU COIN{% endif %}" value="{% if typed_header %}{{ typed_header }}{% else %}{{ suggested }}{% endif %}">
+            <input type="text" name="new_header" maxlength="100" data-header-input placeholder="{% if for_invoice %}FOURNISSEUR DU COIN{% else %}EPICERIE DU COIN{% endif %}" value="{% if typed_header %}{{ typed_header }}{% else %}{{ suggested }}{% endif %}">
+        </label>
+    {% endif %}
+    {% comment %}
+    Whether the new supplier's documents are charges (`ask_expenses`),
+    ticked from the document it is made from: made as goods from a rent's
+    page, the rent became a product to classify.
+    {% endcomment %}
+    {% if ask_expenses %}
+        <label class="inline-label" title="Abonnement, loyer, eau, électricité… : ses factures sont enregistrées par poste ou par taux de TVA, aucun produit à classer.">
+            <input type="checkbox" name="new_expenses" value="1"{% if expenses %} checked{% endif %}> Charges
         </label>
     {% endif %}
 </span>

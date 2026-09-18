@@ -117,9 +117,28 @@ class RecognitionTests(TestCase):
         """The one branding the goods is printed at every shop selling them."""
         self.assertIsNone(detect_parser("LE 09/01/2026\nTOTAL 3,00\nwww.brico-exemple.fr"))
 
-    def test_a_header_given_by_a_person_comes_first(self):
+    def test_a_header_given_by_a_person_comes_before_a_phone_or_a_web_site(self):
         make_supplier(code="COIN", name="Coin bricolage", parser_key="", ticket_header="RUE DES PLANCHES")
-        self.assertEqual(detect_parser(next_ticket(9)).supplier_code, "COIN")
+        without_the_company = next_ticket(9).replace(f"SIRET {SIREN}10000", "")
+        self.assertEqual(detect_parser(without_the_company).supplier_code, "COIN")
+
+    def test_a_header_and_another_suppliers_company_number_name_nobody(self):
+        """One company's two sources: a mobile bill printing the box's
+        subscription as an advert, and the mobile line's own company number.
+        The header used to win, silently."""
+        make_supplier(code="COIN", name="Coin bricolage", parser_key="", ticket_header="RUE DES PLANCHES")
+        self.assertIsNone(detect_parser(next_ticket(9)))
+        with self.assertRaises(UnrecognisedShopError) as raised:
+            self.import_ticket(next_ticket(9))
+        self.assertIn("Coin bricolage", str(raised.exception))
+        self.assertIn("Brico Exemple", str(raised.exception))
+
+    def test_the_check_says_when_the_suppliers_header_was_not_printed(self):
+        self.shop.ticket_header = "BRICO EXEMPLE CENTRE"
+        self.shop.save()
+        ticket = self.import_ticket(next_ticket(9))
+        check = next(check for check in ticket.parse_checks if check["label"] == IDENTIFIED_CHECK)
+        self.assertIn("Sans son en-tête « BRICO EXEMPLE CENTRE »", check["detail"])
 
     def test_what_two_suppliers_learned_names_neither(self):
         make_supplier(code="AUTRE", name="Autre magasin", parser_key="", ticket_identifiers=["tel:0123456789"])

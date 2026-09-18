@@ -321,15 +321,40 @@ def _to_check() -> dict:
 
 
 def _sources() -> dict:
-    from .parsers import is_ticket_shop
-    from .receipts import names_shop
+    """The invoice types, and every supplier with what files a document
+    under it on its own - its header and the figures it learned - shown,
+    since what cannot be seen cannot be put right. For a shop with a header,
+    how many of its documents print it: the others were filed there by
+    something else they print, and are what a person splitting two
+    subscriptions of one company is after."""
+    from .parsers import LLM_PARSER_KEY, is_ticket_shop
+    from .receipts import can_split, has_own_reader, names_shop, prints_header, separable_documents
 
-    shops = [supplier for supplier in Supplier.objects.all() if is_ticket_shop(supplier)]
+    texts: dict[int, list[str]] = {}
+    for supplier_id, ocr_text, source_text in Invoice.objects.values_list("supplier_id", "ocr_text", "source_text"):
+        if ocr_text or source_text:
+            texts.setdefault(supplier_id, []).append(ocr_text or source_text)
+    counts = dict(Invoice.objects.values_list("supplier_id").annotate(n=Count("id")).values_list("supplier_id", "n"))
+    suppliers = list(Supplier.objects.exclude(parser_key=LLM_PARSER_KEY).order_by("name"))
+    shops = [supplier for supplier in suppliers if is_ticket_shop(supplier)]
     for shop in shops:
-        # What files its documents there on their own, as the operator reads
-        # it (an attribute, since a template calls nothing with arguments).
+        # Attributes, since a template calls nothing with arguments.
         shop.names_shop = names_shop(shop)
+        shop.document_count = counts.get(shop.pk, 0)
+        shop.split_url = (
+            reverse("invoices:supplier_split", args=[shop.pk]) if can_split(shop) and shop.document_count > 1 else ""
+        )
+        shop.with_header = shop.headerless = shop.separable = 0
+        if shop.ticket_header:
+            shop.with_header = sum(1 for text in texts.get(shop.pk, ()) if prints_header(text, shop.ticket_header))
+            shop.headerless = len(texts.get(shop.pk, ())) - shop.with_header
+            if shop.headerless and shop.split_url:
+                shop.separable = len(separable_documents(shop))
+    own_readers = [supplier for supplier in suppliers if has_own_reader(supplier)]
+    for supplier in own_readers:
+        supplier.names_shop = names_shop(supplier)
     return {
         "invoice_types": InvoiceType.objects.select_related("supplier", "email_source"),
         "ticket_shops": shops,
+        "own_readers": own_readers,
     }

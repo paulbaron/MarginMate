@@ -1,8 +1,10 @@
 {% comment %}
-What one poste of charge has cost over time - the same chart a stock item's
-price history draws, against the document's own date.
+What one charge has cost over time - the same chart a stock item's price
+history draws, one point per document, against the document's own date. A
+charge has no unit price, so the caption says what the curve is of.
 {% endcomment %}
 {% if has_enough_data %}
+    <p class="muted" style="margin:0 0 var(--s2);">{{ title }} — ce que chaque document a coûté, TTC.</p>
     {{ chart_svg|safe }}
 {% else %}
     <p class="muted" style="padding:0.75rem 0.9rem;">
