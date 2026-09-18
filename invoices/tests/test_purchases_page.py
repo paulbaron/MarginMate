@@ -99,6 +99,28 @@ class PurchasesPageTests(TestCase):
         self.assertContains(response, reverse("invoices:receipt_review", args=[self.ticket.pk]))
         self.assertContains(response, reverse("invoices:invoice_edit_lines", args=[without_date.pk]))
 
+    def test_the_tab_counts_what_the_tab_lists(self):
+        """It said "À vérifier 102" over an empty page: the count and the
+        list were written twice, and only one of them left the charges out."""
+        charge = Supplier.objects.create(code="BAILLEUR", name="Bailleur Exemple", expenses_only=True)
+        rent = make_invoice(supplier=charge, invoice_date=date(2026, 5, 5), parse_checks=FAILED)
+        response = self.client.get(reverse("invoices:receipt_queue"))
+        waiting = [tab["count"] for tab in response.context["tabs"] if tab["key"] == "a-verifier"]
+        self.assertEqual(waiting, [len(response.context["receipts"]) + len(response.context["to_fix"])])
+        self.assertNotIn(rent.pk, [receipt.pk for receipt in response.context["receipts"]])
+
+    def test_a_charge_that_could_not_be_read_is_shown_among_the_documents_to_fix(self):
+        """It is in no queue, so it would be nowhere at all."""
+        charge = Supplier.objects.create(code="BAILLEUR", name="Bailleur Exemple", expenses_only=True)
+        unread = make_invoice(
+            supplier=charge, invoice_date=date(2026, 5, 5), parse_checks=FAILED,
+            status=Invoice.Status.NEEDS_REVIEW, error_message="Le total de ce document n'a pas été lu",
+        )
+        response = self.client.get(reverse("invoices:receipt_queue"))
+        self.assertIn(unread.pk, [invoice.pk for invoice in response.context["to_fix"]])
+        waiting = [tab["count"] for tab in response.context["tabs"] if tab["key"] == "a-verifier"]
+        self.assertEqual(waiting, [len(response.context["receipts"]) + len(response.context["to_fix"])])
+
     def test_the_list_filters_by_kind_and_by_recency(self):
         old = make_invoice(supplier=self.metro, invoice_number="ANCIENNE")
         Invoice.objects.filter(pk=old.pk).update(imported_at=timezone.now() - timedelta(days=30))

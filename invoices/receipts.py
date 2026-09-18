@@ -596,11 +596,9 @@ def pending_receipts():
     written on it. Forty-two rents and water bills queued behind the tickets
     is a queue nobody works through.
     """
-    return (
-        Invoice.objects.filter(reviewed_at__isnull=True)
-        .exclude(parse_checks=[])
-        .exclude(supplier__expenses_only=True)
-    )
+    from .workspace import TICKET_TO_CHECK  # here: workspace reads this module
+
+    return Invoice.objects.filter(TICKET_TO_CHECK)
 
 
 def printed_unit_price(line) -> Decimal:

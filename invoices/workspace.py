@@ -32,11 +32,19 @@ OLD_IMPORT_TABS = {"tickets": "documents", "pdf": "documents"}
 
 IS_TICKET = ~Q(parse_checks=[]) | ~Q(ocr_text="")
 IS_INVOICE = Q(parse_checks=[], ocr_text="")
-#: The review queue (receipts.pending_receipts).
-TICKET_TO_CHECK = Q(reviewed_at__isnull=True) & ~Q(parse_checks=[])
+#: A supplier of charges: a rent, a subscription (Supplier.expenses_only).
+IS_CHARGE = Q(supplier__expenses_only=True)
+#: The review queue. `receipts.pending_receipts` is this Q and nothing else:
+#: written twice, the tab counted the charges its own list left out, and
+#: said "À vérifier 102" over an empty page.
+TICKET_TO_CHECK = Q(reviewed_at__isnull=True) & ~Q(parse_checks=[]) & ~IS_CHARGE
 #: A document outside that queue that cannot be used as it is: undated (out
-#: of every valuation and of the bank match) or failed to import.
-DOCUMENT_TO_FIX = Q(parse_checks=[]) & (Q(invoice_date__isnull=True) | Q(status=Invoice.Status.ERROR))
+#: of every valuation and of the bank match), failed to import, or a charge
+#: whose own total could not be read (importing.charge_needs_a_look) - it is
+#: in no queue, so this is where it is seen.
+DOCUMENT_TO_FIX = (
+    Q(parse_checks=[]) & (Q(invoice_date__isnull=True) | Q(status=Invoice.Status.ERROR))
+) | (IS_CHARGE & Q(status=Invoice.Status.NEEDS_REVIEW))
 
 
 def waiting_counts() -> dict:

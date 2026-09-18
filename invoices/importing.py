@@ -93,11 +93,25 @@ def charge_needs_a_look(invoice: Invoice, printed_total) -> None:
     """A charge is its document's own total. Where that total could not be
     read, the figure filed is whatever was read instead - said out loud, and
     the document waits in "À vérifier" rather than passing for settled."""
-    if printed_total is not None or not invoice.lines.exists():
-        return
-    invoice.error_message = UNREAD_CHARGE
-    invoice.status = Invoice.Status.NEEDS_REVIEW
-    invoice.save(update_fields=["error_message", "status"])
+    charge_state(invoice, printed_total)
+
+
+def charge_state(invoice: Invoice, printed_total) -> bool:
+    """Set a charge document's status and message from its total, and say
+    whether that changed anything: settled when the document's own total was
+    read, waiting with what is wrong written on it when it was not."""
+    if not invoice.lines.exists():
+        return False
+    unread = printed_total is None
+    wanted = (
+        Invoice.Status.NEEDS_REVIEW if unread else Invoice.Status.COMPLETE,
+        UNREAD_CHARGE if unread else "",
+    )
+    if (invoice.status, invoice.error_message) == wanted:
+        return False
+    invoice.status, invoice.error_message = wanted
+    invoice.save(update_fields=["status", "error_message"])
+    return True
 
 
 def expense_lines(supplier: Supplier, parsed: ParsedInvoice) -> list[ParsedLine]:
@@ -184,23 +198,24 @@ def refile_as_charge(invoice: Invoice, parsed: ParsedInvoice) -> bool:
     total, lines = charge_reading(parsed, invoice.supplier.name)
     if not lines:
         return False
+    changed = False
     stored = list(invoice.lines.all())
-    if _already_charges(invoice.supplier, stored, lines) and total == invoice.printed_total_ttc:
-        return False
-    for line in lines:
-        expense_product(invoice.supplier, line.raw_name)
-    try:
-        with transaction.atomic():
-            replace_invoice_lines(invoice, lines)
-            invoice.printed_total_ttc = total
-            invoice.invoice_date = invoice.invoice_date or parsed.invoice_date
-            invoice.status = Invoice.Status.COMPLETE
-            invoice.error_message = ""
-            invoice.save(update_fields=["printed_total_ttc", "invoice_date", "status", "error_message"])
-    except InvoiceLinesInUseError:
-        return False
-    charge_needs_a_look(invoice, total)
-    return True
+    if not (_already_charges(invoice.supplier, stored, lines) and total == invoice.printed_total_ttc):
+        for line in lines:
+            expense_product(invoice.supplier, line.raw_name)
+        try:
+            with transaction.atomic():
+                replace_invoice_lines(invoice, lines)
+                invoice.printed_total_ttc = total
+                invoice.invoice_date = invoice.invoice_date or parsed.invoice_date
+                invoice.save(update_fields=["printed_total_ttc", "invoice_date"])
+        except InvoiceLinesInUseError:
+            return False
+        changed = True
+    # Its state follows its total even when its lines did not move: a
+    # document held in "À vérifier" before its supplier was known to be one
+    # of charges stayed flagged, with nothing to say about what was wrong.
+    return charge_state(invoice, total) or changed
 
 
 def redo_as_expenses(supplier: Supplier) -> int:
@@ -215,25 +230,14 @@ def redo_as_expenses(supplier: Supplier) -> int:
     last month's échéance says so nowhere in those lines, and a correction
     typed on one of them is lost - which is the price of changing what a
     supplier is.
+
+    Through `refile_as_charge` like every other path, so a document held in
+    "À vérifier" before the supplier was known to be one of charges is
+    settled by the move rather than left flagged with nothing to say.
     """
     done = 0
     for invoice in Invoice.objects.filter(supplier=supplier).prefetch_related("lines"):
-        stored = list(invoice.lines.all())
-        parsed = _as_parsed(invoice, stored)
-        total, wanted = charge_reading(parsed, supplier.name)
-        for line in wanted:
-            expense_product(supplier, line.raw_name)  # by name, so the lines find it again
-        if not wanted or (_already_charges(supplier, stored, wanted) and total == invoice.printed_total_ttc):
-            continue
-        try:
-            replace_invoice_lines(invoice, wanted)
-        except InvoiceLinesInUseError:
-            continue
-        if total != invoice.printed_total_ttc:
-            invoice.printed_total_ttc = total
-            invoice.save(update_fields=["printed_total_ttc"])
-        charge_needs_a_look(invoice, invoice.printed_total_ttc)
-        done += 1
+        done += refile_as_charge(invoice, _as_parsed(invoice, list(invoice.lines.all())))
     return done
 
 
@@ -508,6 +512,13 @@ def replace_invoice_lines(invoice: Invoice, parsed_lines) -> Invoice:
     resolved = resolve_products(
         invoice.supplier, [(line.raw_name, line.ean) for line in parsed_lines], ocr_tolerant=ocr_tolerant
     )
+    if invoice.supplier.expenses_only:
+        # Nothing this supplier sends is a product: a poste renamed by hand
+        # would otherwise land in the queue of products to classify.
+        for product, _created in resolved:
+            if not product.is_expense:
+                product.is_expense = True
+                product.save(update_fields=["is_expense"])
     for parsed_line, (product, _created) in zip(parsed_lines, resolved):
         # pop: a line named twice (a crafted post) is corrected once.
         line = stored.pop(parsed_line.line_id, None) if parsed_line.line_id in corrected else None

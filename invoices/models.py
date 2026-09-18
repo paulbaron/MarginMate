@@ -264,7 +264,9 @@ class Invoice(models.Model):
 
     @property
     def needs_review_count(self):
-        return self.lines.filter(product__stock_type__isnull=True).count()
+        """How many of its lines wait for a stock item - never a charge's
+        postes, which are not products (see Product.needs_review)."""
+        return self.lines.filter(product__stock_type__isnull=True, product__is_expense=False).count()
 
     @property
     def is_receipt(self):

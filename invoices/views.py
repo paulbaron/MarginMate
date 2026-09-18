@@ -148,7 +148,7 @@ def invoice_preview(request, pk):
         {
             "invoice": invoice,
             "lines": lines,
-            "to_classify": sum(1 for line in lines if line.product.stock_type_id is None),
+            "to_classify": sum(1 for line in lines if line.product.needs_review),
         },
     )
 

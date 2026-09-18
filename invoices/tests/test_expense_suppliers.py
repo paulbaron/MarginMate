@@ -19,7 +19,7 @@ from django.urls import reverse
 
 from inventory.models import Product, StockMovement
 from inventory.views import review_panel_context
-from invoices.importing import import_parsed_invoice, redo_as_expenses
+from invoices.importing import import_parsed_invoice, redo_as_expenses, replace_invoice_lines
 from invoices.receipts import pending_receipts, reread_receipt
 from invoices.models import Invoice, Supplier
 from invoices.parsers.base import ParsedInvoice, ParsedLine
@@ -340,6 +340,30 @@ class ChargesOnTheProductsPageTests(TestCase):
              ("PROVISIONEAUFROIDE", D("10.00"))],
         )
         self.assertContains(page, "PROV.CHARGESIMMEUBLE")
+
+    def test_the_navigation_badge_counts_the_same_queue(self):
+        """Written twice, one of them counting the postes of charge, the
+        badge said 110 over a page of 97."""
+        page = self.client.get(reverse("inventory:stock_list"))
+        self.assertEqual(page.context["review_count_nav"], page.context["review_total"])
+        self.assertEqual(page.context["review_count_nav"], 0)
+
+    def test_a_poste_renamed_by_hand_is_still_a_charge(self):
+        """Corrected on the document's own page, a poste keeps a name of its
+        own - and a new product to classify is exactly what a charge must
+        never make."""
+        invoice = Invoice.objects.filter(supplier=self.supplier).first()
+        replace_invoice_lines(
+            invoice,
+            [ParsedLine(
+                raw_name="Loyer", quantity=1, total_volume=D("0"), unit_cost_ht=D("10.00"),
+                total_ht=D("10.00"), vat_rate=D("0"),
+            )],
+        )
+        renamed = Product.objects.get(supplier=self.supplier, raw_name="Loyer")
+        self.assertTrue(renamed.is_expense)
+        self.assertFalse(renamed.needs_review)
+        self.assertEqual(review_panel_context()["review_total"], 0)
 
     def test_a_supplier_filed_in_one_line_shows_no_poste(self):
         """One poste is the charge itself under another name."""
