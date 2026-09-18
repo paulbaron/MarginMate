@@ -87,12 +87,21 @@ MIN_OCR_CONFIDENCE = Decimal("0.80")
 # decided by arithmetic, in amount_candidates.
 # Never the head of a longer dotted number: "VERSION: 2023.11.9.4" is not
 # 2023,11 EUR (it was, on every ticket of one till, as their total).
-# Thousands as a French document groups them: "1 011,00", with an ordinary,
-# a no-break or a narrow space. Only in front of a decimal part, and only in
-# groups of exactly three digits, or "10.49 31.47" - two amounts side by side
-# in a column - would read as one of 49,314. A water bill of 1 011,00 € was
-# filed at 11,00 €, and nothing on the screen said which it was.
-UNITS = r"\d{1,3}(?:[   ]\d{3})+|\d{1,4}"
+# Thousands as a document groups them: "1 011,00" with an ordinary, a
+# no-break or a narrow space, "1.162,80" with a point, "1,162.80" the English
+# way. Only in groups of exactly three digits, and a point or comma groups
+# only when the *other* one is the decimal separator - "2.261" is a
+# three-decimal amount (see AMOUNT_RE), not two thousand. Without it, a water
+# bill of 1 011,00 € was filed at 11,00 €, and 1.162,80 € was read as no
+# amount at all, its invoice filed at the 969,00 € of its goods.
+UNITS = (
+    r"\d{1,3}(?:[   ]\d{3})+"
+    r"|\d{1,3}(?:\.\d{3})+(?=,)"
+    r"|\d{1,3}(?:,\d{3})+(?=\.)"
+    r"|\d{1,4}"
+)
+# What a thousands separator can be, to take back out of the digits.
+GROUPING_RE = re.compile(r"[   .,](?=\d{3})")
 AMOUNT_RE = re.compile(rf"(?<![\d.,])({UNITS})[.,](\d{{2,4}})(?!\d|[.,]\d)")
 # Rates print as "5,5%", "5.50%", "20%", and - when a column rule is read as
 # a leading digit - "15.5%". The leading-1 case is undone in read_rate.
@@ -104,12 +113,28 @@ RATE_RE = re.compile(r"(?<![\d.,])(\d{1,3})(?:[.,](\d{1,2}))?\s*%")
 DATE_RE = re.compile(r"(?<!\d)(\d{2})[-/.](\d{2})[-/.]((?:19|20)\d{2})")
 # "19 mai 2026", "1er décembre 2025": a month spelled out, accents and case
 # as the document (or the recogniser) has them.
+# Abbreviated and in English too ("déc. 01", "Dec 02, 2024"): a platform
+# billing in French dates its invoices in whichever language its template was
+# written in, and 26 documents were filed with no date at all - counting in no
+# stock valuation and matching no payment.
 MONTHS = {
     "janvier": 1, "fevrier": 2, "mars": 3, "avril": 4, "mai": 5, "juin": 6,
     "juillet": 7, "aout": 8, "septembre": 9, "octobre": 10, "novembre": 11, "decembre": 12,
+    "janv": 1, "fevr": 2, "fev": 2, "avr": 4, "juil": 7, "sept": 9, "oct": 10, "nov": 11, "dec": 12,
+    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6, "july": 7,
+    "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "jun": 6, "jul": 7, "aug": 8, "sep": 9,
 }
 WRITTEN_DATE_RE = re.compile(
     r"(?<!\d)(\d{1,2})(?:er)?\s+([A-Za-zÀ-ÿ´`^¨]{3,12})\s+((?:19|20)\d{2})(?!\d)", re.IGNORECASE
+)
+# "août 03, 2026", "Dec 02, 2024", "déc. 02, 2025": the month first, the way
+# a platform translating from English prints it - and abbreviated, with the
+# dot, or with a dash the PDF's own rules left glued to it ("avr—. 26,
+# 2024"). Read_date still takes the first date the document prints, which is
+# its own and not the next billing date below it.
+MONTH_FIRST_DATE_RE = re.compile(
+    r"\b([A-Za-zÀ-ÿ´`^¨]{3,12})[\s.\u2013\u2014-]+(\d{1,2}),\s*((?:19|20)\d{2})(?!\d)", re.IGNORECASE
 )
 
 
@@ -134,7 +159,7 @@ UNREAD_NAME = "Article non lu"
 
 def money_value(match) -> Decimal:
     """The amount a MONEY_RE match read, thousands separators taken out."""
-    units = re.sub(r"[   ]", "", match.group("units"))
+    units = GROUPING_RE.sub("", match.group("units"))
     return Decimal(f"{'-' if match.group('sign') else ''}{units}.{match.group('cents')}")
 
 
@@ -367,7 +392,7 @@ def amount_candidates(text: str) -> list[Decimal]:
             values.append(value)
 
     for match in AMOUNT_RE.finditer(text):
-        integer, decimals = re.sub(r"[   ]", "", match.group(1)), match.group(2)
+        integer, decimals = GROUPING_RE.sub("", match.group(1)), match.group(2)
         printed = Decimal(f"{integer}.{decimals}")
         remember(printed)
         if len(decimals) > 2:
@@ -401,15 +426,22 @@ def read_rate(text: str) -> Decimal | None:
 
 def read_date(text: str, date_hint: date | None = None) -> date | None:
     """All four shops print day first (15-07-2026, 28/01/2026); an invoice
-    may spell its month out ("19 mai 2026"), and then that is the first date
-    it prints, before the day it will be debited."""
+    may spell its month out ("19 mai 2026", "août 03, 2026"), and then that
+    is the first date it prints, before the day it will be debited."""
     figures = DATE_RE.search(text)
-    for written in WRITTEN_DATE_RE.finditer(text):
-        month = MONTHS.get(_plain_month(written.group(2)))
-        if month is None or (figures is not None and figures.start() < written.start()):
+    written_dates = [
+        (match.start(), match.group(2), match.group(1), match.group(3))
+        for match in WRITTEN_DATE_RE.finditer(text)
+    ] + [
+        (match.start(), match.group(1), match.group(2), match.group(3))
+        for match in MONTH_FIRST_DATE_RE.finditer(text)
+    ]
+    for start, name, day, year in sorted(written_dates):
+        month = MONTHS.get(_plain_month(name))
+        if month is None or (figures is not None and figures.start() < start):
             continue
         try:
-            return date(int(written.group(3)), month, int(written.group(1)))
+            return date(int(year), month, int(day))
         except ValueError:
             continue
     for match in DATE_RE.finditer(text):

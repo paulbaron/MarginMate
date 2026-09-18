@@ -39,6 +39,12 @@ MIN_POSTES = 2
 # three labelled amounts in a row adding up to a fourth printed under them is
 # not a coincidence; two could be.
 MIN_POSTES_TO_SETTLE_THE_TOTAL = 3
+# How far apart the lines of one breakdown can stand, and how far below the
+# last of them its total can be printed. A breakdown is a block: two lines of
+# a consumption table three pages apart that happen to add up to something
+# printed elsewhere are not one, and an electricity bill's detail read that
+# way turned its 298,05 € into the 67,94 € of its network charges.
+MAX_LINES_BETWEEN = 4
 
 
 @dataclass(frozen=True)
@@ -73,7 +79,7 @@ def read_charge(text: str, read_total: Decimal | None) -> tuple[Decimal | None, 
     return total, kept if len(kept) >= MIN_POSTES else []
 
 
-def _labelled_amounts(text: str) -> list[Poste]:
+def _labelled_amounts(text: str) -> list[tuple[int, Poste]]:
     """The last amount of each line, and the label printed in front of it.
 
     The last one because a statement puts two columns on one line - "Solde
@@ -84,7 +90,7 @@ def _labelled_amounts(text: str) -> list[Poste]:
     GARANTIE - 3,19", a deposit given back).
     """
     found = []
-    for line in text.split("\n"):
+    for index, line in enumerate(text.split("\n")):
         matches = list(MONEY_RE.finditer(line))
         position = max((index for index, match in enumerate(matches) if money_value(match)), default=None)
         if position is None:
@@ -106,13 +112,13 @@ def _labelled_amounts(text: str) -> list[Poste]:
         amount = money_value(last)
         if before.rstrip().endswith("-"):
             amount = -amount
-        found.append(Poste(name=label, amount=amount))
+        found.append((index, Poste(name=label, amount=amount)))
     return found
 
 
-def _longest_run_adding_up(pairs: list[Poste], text: str) -> list[Poste]:
+def _longest_run_adding_up(pairs: list[tuple[int, Poste]], text: str) -> list[Poste]:
     """The longest run of postes, in the order they are printed, adding up to
-    an amount the document prints under them - what it charges for the
+    an amount the document prints just under them - what it charges for the
     period, its own total ("Total de votre avis d'échéance"). What is taken
     from the account can be more, the arrears of an avis already filed
     among them, and a document is worth what it charges.
@@ -122,21 +128,37 @@ def _longest_run_adding_up(pairs: list[Poste], text: str) -> list[Poste]:
     Each run stops at the first amount that answers - carried on, one that
     had already added up swallowed the direct debit paying it and the total
     restating it, and read them as postes of the month.
+
+    The run has to be a block (MAX_LINES_BETWEEN), and the amount it makes
+    has to be printed below it rather than anywhere: what adds up across a
+    document is not a breakdown of it.
     """
-    printed = {value for line in text.split("\n") for value in line_amounts(line) if value}
+    lines = text.split("\n")
+    printed = [{value for value in line_amounts(line) if value} for line in lines]
     best: list[Poste] = []
     for start in range(len(pairs)):
-        running, kept = ZERO, []
-        for poste in pairs[start:]:
+        running, kept, last_line = ZERO, [], None
+        for index, poste in pairs[start:]:
+            if last_line is not None and index - last_line > MAX_LINES_BETWEEN:
+                break
             if kept and abs(poste.amount - running) <= CENTS:
                 continue
             kept.append(poste)
-            running += poste.amount
-            if len(kept) >= MIN_POSTES and any(abs(running - amount) <= CENTS for amount in printed):
+            running, last_line = running + poste.amount, index
+            if len(kept) >= MIN_POSTES and _printed_below(printed, index, running):
                 if len(kept) > len(best):
                     best = list(kept)
                 break
     return best
+
+
+def _printed_below(printed: list[set], index: int, total: Decimal) -> bool:
+    """Whether `total` is printed on one of the few lines under the last
+    poste - where a document puts the total of what stands above it."""
+    return any(
+        any(abs(total - amount) <= CENTS for amount in printed[line])
+        for line in range(index, min(index + MAX_LINES_BETWEEN + 1, len(printed)))
+    )
 
 
 def _with_the_tax_folded_in(run: list[Poste]) -> list[Poste]:

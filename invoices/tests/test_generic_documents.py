@@ -546,3 +546,106 @@ class ChampagneInvoiceTests(SimpleTestCase):
     def test_its_order_number_is_its_number(self):
         parsed = READER.parse_text(CHAMPAGNE_INVOICE)
         self.assertEqual((parsed.invoice_number, parsed.invoice_date), ("20250180", date(2025, 11, 22)))
+
+
+# An alarm subscription: one row, carrying the period it covers, and the
+# invoice's own number written with an ordinal indicator ("Nº").
+ALARM_SUBSCRIPTION = """Votre facture d'abonnement
+Ste AU DIPSO
+Votre facture Nº : SDCF00000001
+M. JEAN EXEMPLE
+Date d'émission : 01/08/2026
+140 RUE DES LILAS
+Numéro Client :  000001
+75010 PARIS
+TOTAL du montant prélevé le 06/08/2026  77,33 €
+1 / 2
+Votre facture d'abonnement
+Votre facture Nº : SDCF00000001  SIRET :  00000000000001
+Date d'émission : 01/08/2026
+TOTAL du montant prélevé le 06/08/2026  77,33 €
+Quantité  Prix unitaire  Taux de  Montant H.T.
+TVA  en €
+Installation Nº 000001
+Abonnement télésurveillance 24/24  01/08/2026au31/08/2026  1,00  64,44  20,00%  64,44
+Total hors TVA  64,44 €
+TVA  20,00% sur  64,44  12,89 €
+Total T.T.C.  77,33 €
+2 / 2"""
+
+
+class SubscriptionInvoiceTests(SimpleTestCase):
+    def test_the_row_carrying_its_period_is_read(self):
+        """A line was thrown away for holding a date, and the subscription
+        went unread. Only a line that is nothing *but* a date - or one
+        stamped with an hour, which no article carries - is not an item."""
+        read = read_line(0, "Abonnement 24/24  01/08/2026au31/08/2026  1,00  64,44  20,00%  64,44")
+        self.assertEqual((read.name, read.total), ("Abonnement 24/24 01/08/2026au31/08/2026", D("64.44")))
+        self.assertIsNone(read_line(0, "Date d'émission : 01/08/2026"))
+        self.assertIsNone(read_line(0, "TICKET 2790300012345 DU 08/01/2024 10:26:09  Total TTC : 16,21 €"))
+
+    def test_what_it_charges_and_its_table(self):
+        parsed = READER.parse_text(ALARM_SUBSCRIPTION)
+        self.assertEqual(parsed.printed_total_ttc, D("77.33"))
+        self.assertEqual(parsed.vat_breakdown, [(D("0.20"), D("64.44"), D("12.89"))])
+        self.assertEqual(parsed.invoice_date, date(2026, 8, 1))
+
+    def test_its_number_is_written_with_an_ordinal_indicator(self):
+        self.assertEqual(READER.parse_text(ALARM_SUBSCRIPTION).invoice_number, "SDCF00000001")
+
+
+# A booking platform's invoice: thousands separated by a point, a date the
+# month-first way, and a number the PDF's own rules break with a dash.
+PLATFORM_INVOICE = """FACTURE
+Facture # FR-F0000—001
+Date de la facture août 03, 2026
+Exemple Plateforme SA
+Montant 1.162,80 €
+88 Avenue Inventée
+Identifiant client XkQ7mPzR2vLa9
+Paris
+75017
+Période de facturation août 01 au
+France
+août 31, 2026
+PAIEMENT DÛ
+Facturé à  Abonnement
+Billing Company - AU DIPSO  Payment Schedule - One time
+SIREN - 934567892  payment
+140 Rue des Lilas  Supplier ID - 10001
+Paris  Prochaine date de facturation sept.
+75010  01, 2026
+Description  Unités  Réduction  Total HT  TVA  Montant (EUR)
+Abonnement
+1  1  0,00 €  969,00 €  193,80 €  1.162,80 €
+Total HT  969,00 €
+TVA @ 20 %  193,80 €
+Montant de la facture  1.162,80 €
+Paiements  0,00 €
+Montant à payer (EUR)  1.162,80 €"""
+
+
+class PlatformInvoiceTests(SimpleTestCase):
+    def test_thousands_separated_by_a_point(self):
+        """"1.162,80" was read as no amount at all, and the invoice was filed
+        at the 969,00 € of its goods."""
+        parsed = READER.parse_text(PLATFORM_INVOICE)
+        self.assertEqual(parsed.printed_total_ttc, D("1162.80"))
+        self.assertEqual(parsed.vat_breakdown, [(D("0.2"), D("969.00"), D("193.80"))])
+
+    def test_a_date_written_month_first(self):
+        """"août 03, 2026" - and the next billing date printed below it is
+        not the document's own."""
+        self.assertEqual(READER.parse_text(PLATFORM_INVOICE).invoice_date, date(2026, 8, 3))
+
+    def test_a_month_abbreviated_or_in_english(self):
+        for written, expected in (
+            ("Date de la facture Dec 02, 2024", date(2024, 12, 2)),
+            ("Date de la facture déc. 02, 2025", date(2025, 12, 2)),
+            ("Date de la facture avr—. 26, 2024", date(2024, 4, 26)),
+            ("Date de la facture juin— 03, 2024", date(2024, 6, 3)),
+        ):
+            self.assertEqual(READER.parse_text(f"FACTURE\n{written}\nMontant 10,00 €").invoice_date, expected)
+
+    def test_a_number_the_rules_broke_in_two(self):
+        self.assertEqual(READER.parse_text(PLATFORM_INVOICE).invoice_number, "FR-F0000001")

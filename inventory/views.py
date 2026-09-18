@@ -204,7 +204,10 @@ def charge_suppliers(period=None) -> list[dict]:
     }
     for line in InvoiceLine.objects.filter(invoice__in=documents).select_related("invoice"):
         row = rows[line.invoice.supplier_id]
-        amount = (line.total_ht * (Decimal("1") + line.vat_rate)).quantize(Decimal("0.01"))
+        # The line's own amount, which for a charge is the figure the
+        # document prints (InvoiceLine.printed_ttc): 33,33 € HT at 20% works
+        # back out to 40,00 € where the bill says 39,99 €.
+        amount = line.total_ttc.quantize(Decimal("0.01"))
         row["total_ttc"] += amount
         row["postes"][line.raw_name] = row["postes"].get(line.raw_name, Decimal("0")) + amount
     for invoice in documents.only("supplier_id", "invoice_date"):

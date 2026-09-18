@@ -48,9 +48,11 @@ patterns, the parser that reads them), and the shops a ticket is recognised by.
 <p class="muted">
     Un document est rangé chez l'enseigne dont il porte l'en-tête ou les identifiants. Une enseigne inconnue se
     crée depuis le document lui-même, à l'import, et son en-tête se donne sur la page où il est vérifié.
-    Cochez « charges » pour un fournisseur dont les documents ne sont pas des produits : abonnement, loyer, eau.
-    Ses factures sont alors enregistrées en une ligne par taux de TVA, sans rien à classer, et leur total
-    apparaît sur la page Produits sous « Charges et abonnements ».
+    <strong>Cochez « charges »</strong> pour un fournisseur dont les documents ne sont pas une liste de produits :
+    abonnement, loyer, eau, électricité, télésurveillance. Ses factures sont alors enregistrées par poste quand
+    elles en nomment (loyer, provisions), sinon en une ligne par taux de TVA — jamais un produit à classer — et
+    leur total apparaît sur la page Produits sous « Charges et abonnements ». Cocher ou décocher vaut pour les
+    documents déjà importés : ils sont relus et rangés de nouveau.
 </p>
 <div class="table-wrap">
 <table data-table data-table-label="enseignes">
@@ -68,7 +70,7 @@ patterns, the parser that reads them), and the shops a ticket is recognised by.
                 <td>
                     <form method="post" action="{% url 'invoices:supplier_expenses' shop.pk %}" class="inline-form">
                         {% csrf_token %}
-                        <label class="inline-label" title="Abonnement, loyer, eau… : une ligne par taux de TVA, aucun produit à classer.">
+                        <label class="inline-label" title="Abonnement, loyer, eau, électricité… : ses factures sont enregistrées par poste ou par taux de TVA, aucun produit à classer.">
                             <input type="checkbox" name="expenses_only" value="1"{% if shop.expenses_only %} checked{% endif %}
                                    onchange="this.form.requestSubmit ? this.form.requestSubmit() : this.form.submit()">
                             Charges

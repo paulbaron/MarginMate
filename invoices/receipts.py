@@ -590,9 +590,17 @@ def pending_receipts():
     """Receipts a person still has to check: the review queue, unordered.
 
     Only photographed receipts carry `parse_checks`; a digital invoice never
-    enters the queue.
+    enters the queue. Nor does a charge (Supplier.expenses_only): there is
+    nothing to type on a rent - what it charges is filed, and a total that
+    could not be read holds the document in "À vérifier" with what is wrong
+    written on it. Forty-two rents and water bills queued behind the tickets
+    is a queue nobody works through.
     """
-    return Invoice.objects.filter(reviewed_at__isnull=True).exclude(parse_checks=[])
+    return (
+        Invoice.objects.filter(reviewed_at__isnull=True)
+        .exclude(parse_checks=[])
+        .exclude(supplier__expenses_only=True)
+    )
 
 
 def printed_unit_price(line) -> Decimal:
@@ -791,9 +799,12 @@ def reread_receipt(invoice: Invoice) -> bool:
     checked ticket: its lines are what a person confirmed. Returns whether it
     changed.
     """
-    from .importing import InvoiceLinesInUseError, replace_invoice_lines
+    from .importing import InvoiceLinesInUseError, refile_as_charge, replace_invoice_lines
 
-    if invoice.reviewed_at is not None or not invoice.ocr_text or not _failures(invoice.parse_checks):
+    if invoice.reviewed_at is not None or not invoice.ocr_text:
+        return False
+    charge = invoice.supplier.expenses_only
+    if not charge and not _failures(invoice.parse_checks):
         return False
     parser = parser_for(invoice.supplier)
     if parser is None:
@@ -802,6 +813,9 @@ def reread_receipt(invoice: Invoice) -> bool:
         parsed = parser.parse_text(invoice.ocr_text)
     except Exception:  # noqa: BLE001 - a reading today's parser can't handle stays as it was
         return False
+    if charge:
+        # Not the lines a ticket reader makes of it: what it charges.
+        return refile_as_charge(invoice, parsed)
     dated = date_check(parsed.invoice_date or invoice.invoice_date)
     checks = [_as_dict(check) for check in parsed.checks + ([dated] if dated else [])]
     if not parsed.lines or not _sum_check_passed(checks) or _failures(checks) >= _failures(invoice.parse_checks):
@@ -867,6 +881,14 @@ def _reread_receipt_file(invoice: Invoice, path: str) -> str:
     if parsed is None or not parsed.lines:
         reason = f" ({read.problem})" if read.problem else ""
         raise RereadError(f"La relecture n'a trouvé aucune ligne{reason} : le ticket n'a pas été modifié.")
+    if supplier.expenses_only:
+        from .importing import refile_as_charge
+
+        invoice.ocr_text = parsed.source_text
+        invoice.invoice_date = parsed.invoice_date or invoice.invoice_date
+        invoice.save(update_fields=["ocr_text", "invoice_date"])
+        refile_as_charge(invoice, parsed)
+        return f"Document relu : {invoice.lines.count()} poste(s) de charge."
     label_placeholder_lines(supplier, parsed)
     invoice_date = parsed.invoice_date or invoice.invoice_date
     dated = date_check(invoice_date)
@@ -904,6 +926,11 @@ def _reread_invoice_file(invoice: Invoice, path: str) -> str:
         raise RereadError(f"La relecture a échoué ({str(exc).strip() or exc.__class__.__name__}) : rien n'a été modifié.")
     if not parsed.lines:
         raise RereadError("La relecture n'a trouvé aucune ligne : la facture n'a pas été modifiée.")
+    if invoice.supplier.expenses_only:
+        from .importing import refile_as_charge
+
+        refile_as_charge(invoice, parsed)
+        return f"Facture relue : {invoice.lines.count()} poste(s) de charge."
     with transaction.atomic():
         replace_invoice_lines(invoice, parsed.lines)
         invoice.invoice_date = parsed.invoice_date or invoice.invoice_date

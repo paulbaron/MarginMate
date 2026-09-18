@@ -20,6 +20,7 @@ from django.urls import reverse
 from inventory.models import Product, StockMovement
 from inventory.views import review_panel_context
 from invoices.importing import import_parsed_invoice, redo_as_expenses
+from invoices.receipts import pending_receipts, reread_receipt
 from invoices.models import Invoice, Supplier
 from invoices.parsers.base import ParsedInvoice, ParsedLine
 from tests.factories import make_supplier
@@ -142,6 +143,27 @@ class ImportedAsOneLineTests(TestCase):
         )
         self.assertEqual(invoice.status, Invoice.Status.COMPLETE)
 
+    def test_the_amount_kept_is_the_one_the_document_charges(self):
+        """A subscription is a TTC figure - it is what leaves the bank.
+        33,33 € HT at 20% works back out to 40,00 € where the invoice says
+        39,99 €, and 39,99 € is what was paid."""
+        invoice = import_parsed_invoice(
+            self.supplier,
+            parsed(breakdown=[(D("0.20"), D("33.33"), D("6.66"))], total=D("39.99")),
+        )
+        (only,) = invoice.lines.all()
+        self.assertEqual((only.printed_ttc, only.total_ttc), (D("39.99"), D("39.99")))
+        self.assertEqual(invoice.total_ttc, D("39.99"))
+
+    def test_the_products_page_shows_that_amount(self):
+        import_parsed_invoice(
+            self.supplier,
+            parsed(breakdown=[(D("0.20"), D("33.33"), D("6.66"))], total=D("39.99"), when=date(2026, 5, 19)),
+        )
+        page = self.client.get(reverse("inventory:stock_list"))
+        (row,) = page.context["charge_suppliers"]
+        self.assertEqual(row["total_ttc"], D("39.99"))
+
     def test_nothing_of_it_reaches_the_products(self):
         import_parsed_invoice(self.supplier, parsed(lines=[line("Abonnement mobile", "8.33")], total=D("9.99")))
         product = Product.objects.get(supplier=self.supplier)
@@ -242,6 +264,50 @@ class MarkingTheSupplierTests(TestCase):
         self.supplier.save()
         self.assertEqual(redo_as_expenses(self.supplier), 1)
         self.assertEqual(redo_as_expenses(self.supplier), 0)
+
+
+class ReadAgainTests(TestCase):
+    """Reading a charge document again files it as a charge - the same way
+    importing it does."""
+
+    def setUp(self):
+        # Filed as stock first, the way it was before the supplier was known
+        # to be one of charges.
+        self.supplier = make_supplier(code="BAILLEUR", name="Bailleur Exemple", parser_key="")
+        self.invoice = import_parsed_invoice(
+            self.supplier, parsed(lines=[line("ECHEANCE", "830.00")], total=D("830.00"), text=STATEMENT)
+        )
+        # What the document said, kept as a receipt keeps its reading.
+        Invoice.objects.filter(pk=self.invoice.pk).update(
+            ocr_text=STATEMENT, parse_checks=[{"label": "Somme des lignes", "passed": False, "detail": "x"}]
+        )
+        Supplier.objects.filter(pk=self.supplier.pk).update(expenses_only=True)
+        self.supplier.refresh_from_db()
+        self.invoice.refresh_from_db()
+
+    def test_reading_it_again_keeps_its_postes(self):
+        """Read as a ticket, a rent statement's lines are the previous
+        balance and the direct debit beside the rent: 'Relire' put those
+        back in place of the charge."""
+        self.assertTrue(reread_receipt(self.invoice))
+        self.invoice.refresh_from_db()
+        self.assertEqual(
+            [line.raw_name for line in self.invoice.lines.all()],
+            ["LOYERLOCAUXACTIVITEHT", "PROV.CHARGESIMMEUBLE", "PROVISIONEAUFROIDE"],
+        )
+        self.assertEqual((self.invoice.printed_total_ttc, self.invoice.status), (D("820.00"), Invoice.Status.COMPLETE))
+
+    def test_reading_it_again_changes_nothing_when_nothing_changed(self):
+        reread_receipt(self.invoice)
+        self.invoice.refresh_from_db()
+        self.assertFalse(reread_receipt(self.invoice))
+
+    def test_a_charge_is_not_in_the_queue_of_tickets_to_check(self):
+        """There is nothing to type on a rent, and forty-two of them behind
+        the tickets is a queue nobody works through."""
+        self.assertNotIn(self.invoice, pending_receipts())
+        Supplier.objects.filter(pk=self.supplier.pk).update(expenses_only=False)
+        self.assertIn(self.invoice, pending_receipts())
 
 
 class ChargesOnTheProductsPageTests(TestCase):

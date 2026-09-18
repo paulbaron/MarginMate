@@ -198,16 +198,21 @@ IBAN_RE = re.compile(r"(?<![A-Z0-9])[A-Z]{2}\d{2}(?:\s?[A-Z0-9]{2,4}){3,9}(?![A-
 # Never "N° client" or "Référence contrat": those name the customer, and are
 # the same on every document they send.
 DOCUMENT_WORDS = r"(?:facture|document|commande|pi[eè]ce|avoir|bon\s+de\s+livraison)"
+# What a document's own reference is made of: its characters, and a dash a
+# PDF's rules left inside it ("FR-F033—763"), taken back out in _ticket_number.
+REFERENCE = r"[A-Z0-9][A-Z0-9\-/\u2013\u2014]{3,}"
+# "N°", "No", "Nº" with an ordinal indicator, "#".
+NUMBER_MARK = r"(?:n\s*[°\u00bao]\.?|num[ée]ro|#)"
 DOCUMENT_NUMBER_RES = (
-    re.compile(rf"(?i)\b{DOCUMENT_WORDS}\s*(?:n\s*[°o]\.?|num[ée]ro)\s*:?\s*([A-Z0-9][A-Z0-9\-/]{{3,}})"),
-    re.compile(rf"(?i)\bnum[ée]ro\s+(?:de\s+)?{DOCUMENT_WORDS}\s*:?\s*([A-Z0-9][A-Z0-9\-/]{{3,}})"),
-    re.compile(rf"(?i)\bn\s*[°o]\.?\s*(?:de\s+|du\s+)?{DOCUMENT_WORDS}\s*:?\s*([A-Z0-9][A-Z0-9\-/]{{3,}})"),
+    re.compile(rf"(?i)\b{DOCUMENT_WORDS}\s*{NUMBER_MARK}\s*:?\s*({REFERENCE})"),
+    re.compile(rf"(?i)\bnum[ée]ro\s+(?:de\s+)?{DOCUMENT_WORDS}\s*:?\s*({REFERENCE})"),
+    re.compile(rf"(?i)\b{NUMBER_MARK}\s*(?:de\s+|du\s+)?{DOCUMENT_WORDS}\s*:?\s*({REFERENCE})"),
     # "Référence interne: FA-202501-3025", the sender's own reference for the
     # document - a wine merchant's invoices changed that label for "N°
     # document" from one January to the next. Never "Référence unique de
     # mandat", the bank's and the same every month, nor "Votre référence
     # contrat", which names the customer.
-    re.compile(r"(?i)\br[ée]f[ée]rence\s+(?:interne|document|facture)\s*:?\s*([A-Z0-9][A-Z0-9\-/]{3,})"),
+    re.compile(rf"(?i)\br[ée]f[ée]rence\s+(?:interne|document|facture)\s*:?\s*({REFERENCE})"),
 )
 
 
@@ -264,9 +269,21 @@ def _money(match) -> Decimal:
 
 
 def _is_date_or_time(line: str) -> bool:
+    """Whether the line is a date or a time, and so never an item.
+
+    Only when that is *all* it is: an invoice's rows carry the period they
+    cover ("Abonnement 01/08/2026au31/08/2026 1,00 64,44 20,00% 64,44"), and
+    a line thrown away for holding a date left the subscription unread and
+    its own "Total hors TVA" standing in for it.
+    """
     if TIME_RE.search(line):
+        # A till stamps the hour, and nothing it sells carries one: a
+        # "TICKET ... DU 08/01/2024 10:26:09  Total TTC : 16,21 €" line is
+        # the ticket saying what it came to.
         return True
-    return any(1 <= int(day) <= 31 and 1 <= int(month) <= 12 for day, month, _year in DATE_RE.findall(line))
+    if not any(1 <= int(day) <= 31 and 1 <= int(month) <= 12 for day, month, _year in DATE_RE.findall(line)):
+        return False
+    return not line_amounts(line)
 
 
 def _inside(position: int, spans) -> bool:
@@ -1598,7 +1615,7 @@ def _ticket_number(text: str, invoice_date: date | None) -> str:
     # Before the long digit runs below: a payment reference is one too.
     for pattern in DOCUMENT_NUMBER_RES:
         for match in pattern.finditer(text):
-            number = match.group(1).strip(".:-/")
+            number = re.sub(r"[\u2013\u2014]", "", match.group(1)).strip(".:-/")
             if any(character.isdigit() for character in number):
                 return number
     match = STORE_TILL_RE.search(text.replace(" ", ""))

@@ -178,15 +178,30 @@ What it knows, all arithmetic:
   taxes and their sum printed too is a total, each printed once
   (`_taxed_total`): the rate is what makes one printing enough, where
   `_ht_and_tax` searches without one and asks for each figure twice;
-- **thousands are grouped by a space** in French: "1 011,00" is one amount,
-  not eleven euros (`UNITS`, only in front of a decimal part and in groups
-  of exactly three digits, or two amounts in neighbouring columns would read
-  as one);
+- **thousands are grouped**: by a space ("1 011,00"), by a point
+  ("1.162,80") or, in English, by a comma ("1,162.80") - one amount, not
+  eleven euros and not none at all (`UNITS`: groups of exactly three digits,
+  and a point or comma only when the *other* one is the decimal separator,
+  or "2.261" and two amounts in neighbouring columns would read as one);
+- a **date may be written month first** ("août 03, 2026"), abbreviated
+  ("déc. 02, 2025") or in English ("Dec 02, 2024"): a platform billing in
+  French dates its invoices in whichever language its template was written
+  in, and 26 documents were filed with no date at all - counting in no stock
+  valuation and matching no payment. The first date the document prints is
+  still its own, so the next billing date below it names nothing;
+- a **line holding a date is an item all the same** when it prints amounts:
+  an invoice's rows carry the period they cover ("Abonnement 01/08/2026au
+  31/08/2026 1,00 64,44 20,00% 64,44"), and thrown away for its date, one
+  left the subscription unread with the bill's own "Total hors TVA" standing
+  in for it. A line stamped with an **hour** is never an item: a till stamps
+  the hour and nothing it sells carries one;
 - a **document's number** is the one it prints for itself ("N° document",
-  "Commande N°", "Référence interne": `DOCUMENT_NUMBER_RES`) and **never an
-  IBAN**, which is a long digit run once its spaces are gone and the same
-  one on every invoice a supplier sends - read as the number, the second
-  invoice of the year was refused as a duplicate of the first.
+  "Commande N°", "Référence interne", "Facture # FR-F0001", "Nº" with an
+  ordinal indicator: `DOCUMENT_NUMBER_RES`) and **never an IBAN**, which is a
+  long digit run once its spaces are gone and the same one on every invoice a
+  supplier sends - read as the number, the second invoice of the year was
+  refused as a duplicate of the first. A dash a PDF's own rules leave inside
+  a number or a month ("FR-F033—763", "avr—. 26, 2024") is taken back out.
 
 Those rules replaced two parsers: measured on every De Poivre and Plou &
 Fils invoice filed, the one reader reproduces them line for line - names,
@@ -320,6 +335,23 @@ rent, and adding those up gives a figure nobody ever paid. A charge whose
 total was not read at all is filed with what was read and held in "À
 vérifier" (`charge_needs_a_look`): it must not pass for settled.
 
+**Every path that reads a document again goes through
+`importing.refile_as_charge`** (`receipts.reread_receipt`, "Relire le
+document" for a ticket and for an invoice): read as a ticket, a rent
+statement's lines are the previous balance and the direct debit beside the
+rent, and a document relu that way went back to being worth what it was
+before the charge reading settled it. A charge also **never enters the
+review queue** (`receipts.pending_receipts`): there is nothing to type on a
+rent, and forty-two of them behind the tickets is a queue nobody works
+through - a total that could not be read holds the document in "À vérifier"
+with what is wrong written on it instead.
+
+**A charge keeps the amount it charges, tax included** (`InvoiceLine.printed_ttc`,
+set by `_expense_line` from the figures the document prints): 33,33 € HT at
+20% works back out to 40,00 € where the bill says 39,99 €, and 39,99 € is
+what leaves the bank. Everything that shows what a charge cost adds those
+up, `inventory.views.charge_suppliers` included.
+
 **A poste is a label and the amount printed after it**, and a document's
 postes are the run of them adding up to an amount printed below them. That
 run is what proves the reading *and* settles the total: a statement puts two
@@ -334,6 +366,14 @@ reader had taken from the left column (last month's échéance, printed twice,
 is bigger than this month's). **A document is worth what it charges**: where
 the debit also settles arrears, those were charged on the avis they come
 from, and counting them again would book them twice.
+
+A breakdown is a **block**, and its total is printed at the foot of it
+(`MAX_LINES_BETWEEN`): two rows of a consumption table pages apart that add
+up to something printed elsewhere are not one, and an electricity bill read
+that way turned its 298,05 € into the 67,94 € of its network charges. The
+document's **VAT table comes first** all the same (`charge_reading`): where
+it accounts for the total to the cent, that is the reading, and the postes
+are only asked when it does not.
 
 **One import for every document.** Tickets and PDF invoices went in through
 two cards, and the person importing had to know which; the Achats page has

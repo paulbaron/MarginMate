@@ -132,10 +132,12 @@ def charge_reading(parsed: ParsedInvoice, name: str = "") -> tuple[Decimal | Non
     breakdown = [(rate, base, tax) for rate, base, tax in parsed.vat_breakdown if base]
     accounted = sum((base + tax for _rate, base, tax in breakdown), start=Decimal("0"))
     if breakdown and (total is None or abs(accounted - total) <= Decimal("0.01")):
-        return total, [_expense_line(name, base, rate) for rate, base, _tax in breakdown]
+        return total, [_expense_line(name, base, rate, base + tax) for rate, base, tax in breakdown]
     settled, postes = read_charge(parsed.source_text, total)
     if postes:
-        return settled, [_expense_line(poste.name, poste.total_ht, poste.rate) for poste in postes]
+        return settled, [
+            _expense_line(poste.name, poste.total_ht, poste.rate, poste.amount) for poste in postes
+        ]
     if total is None:
         # Not what was paid, and it must not pass for it (charge_needs_a_look).
         read = _lines_total(parsed)
@@ -150,7 +152,15 @@ def _lines_total(parsed: ParsedInvoice) -> Decimal:
     return gross.quantize(Decimal("0.01"))
 
 
-def _expense_line(name: str, total_ht: Decimal, rate: Decimal) -> ParsedLine:
+def _expense_line(name: str, total_ht: Decimal, rate: Decimal, printed_ttc: Decimal | None = None) -> ParsedLine:
+    """A charge line keeps **the amount the document charges**, tax included
+    (InvoiceLine.printed_ttc), and not only its HT.
+
+    What a subscription costs is a TTC figure - it is what leaves the bank -
+    and 33,33 € HT at 20% works back out to 40,00 € where the invoice says
+    39,99 €. The HT stays what the document prints too, so the rounding lands
+    where the document put it rather than on what was paid.
+    """
     return ParsedLine(
         raw_name=name,
         quantity=1,
@@ -158,7 +168,39 @@ def _expense_line(name: str, total_ht: Decimal, rate: Decimal) -> ParsedLine:
         unit_cost_ht=total_ht,
         total_ht=total_ht,
         vat_rate=rate,
+        printed_ttc=printed_ttc if printed_ttc is not None else (total_ht * (1 + rate)).quantize(Decimal("0.01")),
     )
+
+
+def refile_as_charge(invoice: Invoice, parsed: ParsedInvoice) -> bool:
+    """Put a charge document's own reading in place of its lines - what
+    importing it does, for the paths that read it again.
+
+    Every one of them has to come through here: read as a ticket, a rent
+    statement's lines are the previous balance and the direct debit beside
+    the rent, and a document relu that way went back to being worth what it
+    was before the charge reading settled it.
+    """
+    total, lines = charge_reading(parsed, invoice.supplier.name)
+    if not lines:
+        return False
+    stored = list(invoice.lines.all())
+    if _already_charges(invoice.supplier, stored, lines) and total == invoice.printed_total_ttc:
+        return False
+    for line in lines:
+        expense_product(invoice.supplier, line.raw_name)
+    try:
+        with transaction.atomic():
+            replace_invoice_lines(invoice, lines)
+            invoice.printed_total_ttc = total
+            invoice.invoice_date = invoice.invoice_date or parsed.invoice_date
+            invoice.status = Invoice.Status.COMPLETE
+            invoice.error_message = ""
+            invoice.save(update_fields=["printed_total_ttc", "invoice_date", "status", "error_message"])
+    except InvoiceLinesInUseError:
+        return False
+    charge_needs_a_look(invoice, total)
+    return True
 
 
 def redo_as_expenses(supplier: Supplier) -> int:
@@ -246,9 +288,12 @@ def _read_again(invoice: Invoice) -> ParsedInvoice | None:
 
 
 def _already_charges(supplier: Supplier, stored, wanted) -> bool:
+    """Whether the document is already filed as exactly this charge - down
+    to the amount each line prints: filed before a charge kept its TTC, the
+    lines look the same and show 40,00 € for the 39,99 € of the bill."""
     return len(stored) == len(wanted) and all(
-        (line.raw_name, line.total_ht, line.vat_rate)
-        == (parsed_line.raw_name, parsed_line.total_ht, parsed_line.vat_rate)
+        (line.raw_name, line.total_ht, line.vat_rate, line.printed_ttc)
+        == (parsed_line.raw_name, parsed_line.total_ht, parsed_line.vat_rate, parsed_line.printed_ttc)
         for line, parsed_line in zip(stored, wanted)
     )
 
