@@ -1211,6 +1211,12 @@ back and forth between them. The rules that came with merging them:
   imported (`?surligner=`) is shown whatever its date, since it may be older
   than everything on the page; and the table's search and sort only ever see
   what is rendered, which the page says out loud.
+- **A page shows a document as it is, not as it was.** An import's log
+  copied each file's shop, date, total and state at the second it was read,
+  and its page went on showing those: a ticket corrected afterwards still
+  read its first total there. `workspace.batch_rows` hands the template the
+  documents themselves, and the state pill is `Invoice.review_state` - the
+  same rule as every other list.
 - **A badge and the list it stands for share one definition.** The "À
   vérifier" tab counted `TICKET_TO_CHECK` while the page listed
   `receipts.pending_receipts()`, and when charges were left out of one and

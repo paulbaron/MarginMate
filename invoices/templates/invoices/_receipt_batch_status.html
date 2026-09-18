@@ -110,15 +110,22 @@ what was typed in them across swaps (hx-preserve, stable ids).
                 </tr>
             </thead>
             <tbody>
-                {% for entry in batch.results %}
+                {% comment %}
+                Each file with the document it became, as that document is now
+                (workspace.batch_rows): what the import wrote down was true the
+                second it read the file.
+                {% endcomment %}
+                {% for entry in batch_rows %}
                     <tr>
                         <td>{{ entry.name }}</td>
                         {% if entry.status == "ok" %}
-                            <td>{{ entry.shop }}</td>
-                            <td>{{ entry.date|default:"—" }}</td>
-                            <td class="num">{{ entry.total }} €</td>
+                            <td>{{ entry.invoice.supplier.name|default:entry.shop }}</td>
+                            <td>{% if entry.invoice %}{{ entry.invoice.invoice_date|date:"d/m/Y"|default:"—" }}{% else %}{{ entry.date|default:"—" }}{% endif %}</td>
+                            <td class="num">{% if entry.invoice %}{{ entry.invoice.total_ttc|floatformat:2 }}{% else %}{{ entry.total }}{% endif %} €</td>
                             <td>
-                                {% if entry.receipt is False %}
+                                {% if entry.invoice %}
+                                    <span class="status-pill status-{{ entry.invoice.review_state.css }}">{{ entry.invoice.review_state.label }}</span>
+                                {% elif entry.receipt is False %}
                                     <span class="status-pill status-{{ entry.state }}">Facture {{ entry.state_label|lower }}</span>
                                 {% elif entry.verified %}
                                     <span class="status-pill status-COMPLETE">Comptes vérifiés</span>

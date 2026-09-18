@@ -163,18 +163,32 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
 
 
 def batch_status_context(batch) -> dict:
-    """What the live part of an import draws: the import, the shops a file
-    no shop was recognised on can be filed under, and where checking its
-    tickets starts."""
+    """What the live part of an import draws: the import, its files with the
+    documents they became, the shops a file no shop was recognised on can be
+    filed under, and where checking its tickets starts."""
     from .receipts import shop_choices
 
     first, left = first_ticket_to_check(batch_invoice_ids(batch))
     return {
         "batch": batch,
+        "batch_rows": batch_rows(batch),
         "shop_groups": shop_choices() if batch.awaiting_shop_count else [],
         "batch_first_to_check": first,
         "batch_to_check": left,
     }
+
+
+def batch_rows(batch) -> list[dict]:
+    """The import's files, each with the document it became - as that
+    document is now.
+
+    What the import wrote down (shop, date, total, state) was true the second
+    it read the file, and the page went on showing it: a ticket corrected
+    afterwards still read its first total and "À vérifier" on the import it
+    came from. The log keeps its own record; this is what is shown.
+    """
+    invoices = Invoice.objects.filter(pk__in=batch_invoice_ids(batch)).select_related("supplier").in_bulk()
+    return [dict(entry, invoice=invoices.get(entry.get("invoice_id"))) for entry in batch.results]
 
 
 #: How many documents a list shows before it asks to be asked. Every row is

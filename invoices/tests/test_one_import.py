@@ -205,7 +205,22 @@ class OneBatchTests(TestCase):
         ticket, invoice = (Invoice.objects.get(pk=entry["invoice_id"]) for entry in batch.results)
         self.assertContains(page, reverse("invoices:receipt_review", args=[ticket.pk]) + f"?lot={batch.pk}")
         self.assertContains(page, reverse("invoices:invoice_edit_lines", args=[invoice.pk]))
-        self.assertContains(page, "Facture à vérifier")  # its products are new
+        # Its state is the document's own, as every list says it
+        # (Invoice.review_state): its products are new.
+        self.assertContains(page, "Produits à classer")
+
+    def test_an_import_shows_its_documents_as_they_are_now(self):
+        """Shop, date, total and state were copied into the import's log the
+        second each file was read, and the page showed those for ever: a
+        ticket corrected afterwards still read its first total."""
+        with mock.patch("invoices.receipts.recognise", return_value=recognised(UNKNOWN_SHOP)),                 mock.patch("invoices.parsers.metro.MetroParser.parse", return_value=PARSED):
+            batch = run_receipt_batch(self.batch.pk)
+        ticket = Invoice.objects.get(pk=batch.results[0]["invoice_id"])
+        Invoice.objects.filter(pk=ticket.pk).update(invoice_date=date(2019, 3, 4))
+        ticket.lines.update(total_ht=Decimal("100.00"), printed_ttc=Decimal("105.50"), vat_rate=Decimal("0.055"))
+        page = self.client.get(reverse("invoices:receipt_batch", args=[batch.pk]))
+        self.assertContains(page, "04/03/2019")
+        self.assertContains(page, f"{ticket.total_ttc:.2f} €")
 
     def test_a_pdf_of_nobody_known_waits_for_its_supplier(self):
         batch = stage_batch([pdf_upload(self, "inconnu.pdf", [
