@@ -109,6 +109,28 @@ class PurchasesPageTests(TestCase):
         self.assertEqual(waiting, [len(response.context["receipts"]) + len(response.context["to_fix"])])
         self.assertNotIn(rent.pk, [receipt.pk for receipt in response.context["receipts"]])
 
+    def test_a_row_says_what_the_tab_counts(self):
+        """The list said "À vérifier" on 107 charges the tab rightly left
+        out: what a row is called and what the tab counts are one rule
+        (Invoice.review_state)."""
+        charge = Supplier.objects.create(code="BAILLEUR", name="Bailleur Exemple", expenses_only=True)
+        make_invoice(supplier=charge, invoice_date=date(2026, 5, 5), parse_checks=FAILED)
+        response = self.client.get(self.url)
+        body = response.content.decode()
+        waiting = [tab["count"] for tab in response.context["tabs"] if tab["key"] == "a-verifier"][0]
+        self.assertEqual(body.count(">À vérifier<"), waiting)
+        self.assertIn(">Charge<", body)
+        # And no button offering to check what no queue holds.
+        self.assertEqual(body.count(">Vérifier</a>"), waiting)
+
+    def test_a_charge_whose_total_was_not_read_says_so_on_its_row(self):
+        charge = Supplier.objects.create(code="BAILLEUR", name="Bailleur Exemple", expenses_only=True)
+        make_invoice(
+            supplier=charge, invoice_date=date(2026, 5, 5), parse_checks=FAILED,
+            status=Invoice.Status.NEEDS_REVIEW,
+        )
+        self.assertContains(self.client.get(self.url), ">Total à vérifier<")
+
     def test_a_charge_that_could_not_be_read_is_shown_among_the_documents_to_fix(self):
         """It is in no queue, so it would be nowhere at all."""
         charge = Supplier.objects.create(code="BAILLEUR", name="Bailleur Exemple", expenses_only=True)
@@ -132,6 +154,33 @@ class PurchasesPageTests(TestCase):
         self.assertEqual(self.rows(self.client.get(self.url, {"filtre": "verifies"})), [self.checked.pk])
         # An unknown filter is all of them.
         self.assertEqual(len(self.rows(self.client.get(self.url, {"filtre": "n'importe"}))), 4)
+
+    def test_the_list_shows_the_newest_documents_and_says_so(self):
+        """823 rows was 1,2 Mo and half a second of template on every visit,
+        and opening one moved a table 47 000 pixels tall."""
+        with mock.patch("invoices.workspace.PAGE_SIZE", 2):
+            response = self.client.get(self.url)
+        self.assertEqual(len(response.context["invoices"]), 2)
+        self.assertEqual(response.context["hidden_count"], 1)
+        self.assertContains(response, "tout afficher")
+        # The newest first: the two most recent of the three.
+        self.assertEqual(self.rows(response), [self.checked.pk, self.ticket.pk])
+
+    def test_everything_is_one_click_away(self):
+        with mock.patch("invoices.workspace.PAGE_SIZE", 2):
+            response = self.client.get(self.url, {"tout": "1"})
+        self.assertEqual(len(response.context["invoices"]), 3)
+        self.assertEqual(response.context["hidden_count"], 0)
+        self.assertNotContains(response, "tout afficher")
+
+    def test_the_document_just_imported_is_shown_whatever_its_date(self):
+        """Dated last year, it sits past the rows this page renders - and the
+        "importée" pill would point at nothing."""
+        old_one = make_invoice(supplier=self.metro, invoice_number="F-OLD", invoice_date=date(2019, 1, 2))
+        with mock.patch("invoices.workspace.PAGE_SIZE", 2):
+            response = self.client.get(self.url, {"surligner": old_one.pk})
+        self.assertEqual(self.rows(response)[0], old_one.pk)
+        self.assertContains(response, "importée")
 
     def test_an_import_is_a_filter_of_its_own(self):
         batch = ReceiptBatch.objects.create(

@@ -1165,6 +1165,16 @@ back and forth between them. The rules that came with merging them:
   imported comes back highlighted and opened in the list (`?surligner=`);
   the list reloads when an import or a gather ends (`documents-changed`,
   sent by their status partials once they stop polling).
+- **The list shows the newest documents** (`workspace.PAGE_SIZE`, 250), and
+  "tout afficher" renders the rest. Every row is about 1,4 Ko of HTML and a
+  slice of a second of template: at 823 documents the page was 1,2 Mo, 15 000
+  nodes and 626 ms of server time, and opening a row moved a table 47 000
+  pixels tall. Bounded, the same page is 393 Ko, 4 000 nodes and 200 ms. The
+  row that holds an opened document's lines is made when it is first opened,
+  not printed hidden under all of them. Two things to keep: the document just
+  imported (`?surligner=`) is shown whatever its date, since it may be older
+  than everything on the page; and the table's search and sort only ever see
+  what is rendered, which the page says out loud.
 - **A badge and the list it stands for share one definition.** The "À
   vérifier" tab counted `TICKET_TO_CHECK` while the page listed
   `receipts.pending_receipts()`, and when charges were left out of one and

@@ -174,6 +174,13 @@ def batch_status_context(batch) -> dict:
     }
 
 
+#: How many documents a list shows before it asks to be asked. Every row is
+#: about 1,4 Ko of HTML and a slice of a second of template, and the list
+#: grows with every import: at 823 documents the page was 1,2 Mo and took
+#: half a second to render, so opening a row moved a table 47 000 pixels
+#: tall. "Tout afficher" renders the rest.
+PAGE_SIZE = 250
+
 FILTERS = {
     "factures": ("Factures", IS_INVOICE),
     "tickets": ("Tickets", IS_TICKET),
@@ -217,14 +224,27 @@ def _documents(request, batch) -> dict:
         chip["active"] = batch is None and chip["key"] == active
         chip["url"] = reverse("invoices:invoice_list") + (f"?filtre={chip['key']}" if chip["key"] else "")
 
-    rows = list(invoices)
+    everything = request.GET.get("tout") == "1" or batch is not None or active == "sans-date"
+    shown = invoices if everything else invoices[:PAGE_SIZE]
+    rows = list(shown)
+    hidden = 0 if everything else max(counts["total" if not active else active.replace("-", "_")] - len(rows), 0)
     posted = request.GET.get("surligner", "")
     highlight = int(posted) if posted.isdigit() else None
     if highlight is not None:
+        # The document just imported is shown whatever its date: dated last
+        # year, it sits past the rows this page renders, and "importée" would
+        # point at nothing.
+        if not any(invoice.pk == highlight for invoice in rows):
+            rows = [
+                *Invoice.objects.filter(pk=highlight).select_related("supplier").prefetch_related("lines"),
+                *rows,
+            ]
         # Stable: the highlighted document first, the rest in their order.
         rows.sort(key=lambda invoice: invoice.pk != highlight)
     return {
         "invoices": rows,
+        "hidden_count": hidden,
+        "show_all_url": request.get_full_path() + ("&" if request.GET else "?") + "tout=1",
         "chips": chips,
         "active_filter": active,
         "highlight": highlight,

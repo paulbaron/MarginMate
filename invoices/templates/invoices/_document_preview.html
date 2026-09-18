@@ -47,7 +47,7 @@ import read what it should, and where each product went.
     {% endif %}
     <div class="preview-actions">
         {% if invoice.parse_checks %}
-            <a class="btn btn-small" href="{% url 'invoices:receipt_review' invoice.pk %}">{% if invoice.reviewed_at %}Revoir avec la photo{% else %}Vérifier avec la photo{% endif %}</a>
+            <a class="btn btn-small" href="{% url 'invoices:receipt_review' invoice.pk %}">{% if invoice.waiting_check %}Vérifier avec la photo{% else %}Revoir le document{% endif %}</a>
         {% else %}
             <a class="btn btn-small" href="{% url 'invoices:invoice_edit_lines' invoice.pk %}">Corriger les lignes</a>
         {% endif %}

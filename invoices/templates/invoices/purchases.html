@@ -80,9 +80,27 @@
 // A document's row opens in place on its lines (fetched the first time),
 // and the one just imported (?surligner=) opens by itself.
 (function () {
-    function toggle(row) {
+    // The row holding the lines is made when one is first opened, not
+    // printed 823 times under a list nobody has opened: those placeholders
+    // were a fifth of the page's nodes, and every open re-laid them out.
+    function detailsFor(row) {
         var details = document.getElementById("preview-" + row.dataset.document);
-        if (!details) return;
+        if (details) return details;
+        details = document.createElement("tr");
+        details.id = "preview-" + row.dataset.document;
+        details.className = "document-preview-row";
+        details.setAttribute("data-child-row", "");
+        details.hidden = true;
+        var cell = document.createElement("td");
+        cell.colSpan = row.cells.length;
+        cell.innerHTML = '<p class="muted">Chargement…</p>';
+        details.appendChild(cell);
+        row.parentNode.insertBefore(details, row.nextSibling);
+        return details;
+    }
+
+    function toggle(row) {
+        var details = detailsFor(row);
         var opening = details.hidden;
         details.hidden = !opening;
         row.classList.toggle("is-open", opening);
@@ -109,8 +127,7 @@
 
     function openHighlighted(root) {
         (root || document).querySelectorAll("tr[data-document][data-highlight]").forEach(function (row) {
-            var details = document.getElementById("preview-" + row.dataset.document);
-            if (details && details.hidden) toggle(row);
+            if (detailsFor(row).hidden) toggle(row);
             row.scrollIntoView({ block: "center" });
             row.classList.add("flash");
         });

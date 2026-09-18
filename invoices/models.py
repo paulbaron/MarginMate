@@ -274,6 +274,32 @@ class Invoice(models.Model):
         return bool(self.parse_checks) or bool(self.ocr_text)
 
     @property
+    def waiting_check(self) -> bool:
+        """Whether it is in the queue of documents to check - the same rule
+        as `receipts.pending_receipts`, since a row that says "À vérifier"
+        over an empty queue is a row nobody can act on. A charge is never in
+        it: there is nothing to type on a rent."""
+        return bool(self.parse_checks) and self.reviewed_at is None and not self.supplier.expenses_only
+
+    @property
+    def review_state(self) -> dict:
+        """What this document's state is called, wherever it is listed: the
+        pill's class (which colours it) and its label."""
+        if self.waiting_check:
+            return {"css": self.Status.NEEDS_REVIEW, "label": "À vérifier"}
+        if self.supplier.expenses_only:
+            return (
+                {"css": self.Status.NEEDS_REVIEW, "label": "Total à vérifier"}
+                if self.status == self.Status.NEEDS_REVIEW
+                else {"css": self.Status.COMPLETE, "label": "Charge"}
+            )
+        if self.parse_checks:
+            return {"css": self.Status.COMPLETE, "label": "Vérifié"}
+        if self.status == self.Status.NEEDS_REVIEW:
+            return {"css": self.status, "label": "Produits à classer"}
+        return {"css": self.status, "label": self.get_status_display()}
+
+    @property
     def document_text(self):
         """What the document says, however it was read."""
         return self.ocr_text or self.source_text

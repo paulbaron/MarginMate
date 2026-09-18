@@ -35,6 +35,13 @@ Every invoice and ticket. Reloads itself when an import ends
         <p class="muted">Ce qui a été importé ces deux derniers jours.</p>
     {% endif %}
 
+    {% if hidden_count %}
+        <p class="muted">
+            Les {{ invoices|length }} documents les plus récents. {{ hidden_count }} de plus dans cette liste :
+            <a href="{{ show_all_url }}" hx-boost="true" hx-target="#workspace" hx-select="#workspace"
+               hx-swap="outerHTML">tout afficher</a> (la recherche et le tri ne portent que sur ce qui est affiché).
+        </p>
+    {% endif %}
     {% if invoices %}
         <form id="invoice-bulk-form" method="post" action="{% url 'invoices:invoice_bulk_delete' %}" class="bulk-bar" data-bulk-select>
             {% csrf_token %}
@@ -75,20 +82,17 @@ Every invoice and ticket. Reloads itself when an import ends
                         {% if invoice.invoice_date %}{{ invoice.invoice_date|date:"d/m/Y" }}{% else %}<span class="status-pill status-ERROR">sans date</span>{% endif %}
                     </td>
                     <td>
-                        {% if invoice.parse_checks %}
-                            {% if invoice.reviewed_at %}
-                                <span class="status-pill status-COMPLETE">Vérifié</span>
-                            {% else %}
-                                <span class="status-pill status-NEEDS_REVIEW">À vérifier</span>
-                            {% endif %}
-                        {% else %}
-                            <span class="status-pill status-{{ invoice.status }}">{% if invoice.status == "NEEDS_REVIEW" %}Produits à classer{% else %}{{ invoice.get_status_display }}{% endif %}</span>
-                        {% endif %}
+                        {% comment %}
+                        One definition, shared with the "À vérifier" tab's count
+                        (Invoice.review_state): 107 charges said "À vérifier" on
+                        their row over a tab that rightly left them out.
+                        {% endcomment %}
+                        <span class="status-pill status-{{ invoice.review_state.css }}">{{ invoice.review_state.label }}</span>
                     </td>
                     <td class="num">{{ invoice.total_ht|floatformat:2 }} €</td>
                     <td class="num">{{ invoice.total_ttc|floatformat:2 }} €</td>
                     <td class="num">
-                        {% if invoice.parse_checks and not invoice.reviewed_at %}
+                        {% if invoice.waiting_check %}
                             <a class="btn btn-small" href="{% url 'invoices:receipt_review' invoice.pk %}{% if lot %}?lot={{ lot.pk }}{% endif %}">Vérifier</a>
                         {% elif invoice.is_receipt %}
                             <a class="btn btn-small btn-secondary" href="{% url 'invoices:receipt_review' invoice.pk %}">Corriger</a>
@@ -96,9 +100,6 @@ Every invoice and ticket. Reloads itself when an import ends
                             <a class="btn btn-small btn-secondary" href="{% url 'invoices:invoice_edit_lines' invoice.pk %}">Corriger</a>
                         {% endif %}
                     </td>
-                </tr>
-                <tr id="preview-{{ invoice.pk }}" data-child-row hidden class="document-preview-row">
-                    <td colspan="9"><p class="muted">Chargement…</p></td>
                 </tr>
                 {% endfor %}
             </tbody>
