@@ -9,9 +9,10 @@ till product is linked where it is listed, and a recipe is created for, and
 linked to, the till product it is for.
 """
 
+import re
 from datetime import timedelta
 
-from django.db.models import Count, Sum
+from django.db.models import Count, Q, Sum
 from django.shortcuts import render
 from django.urls import reverse
 from django.utils import timezone
@@ -46,6 +47,9 @@ def render_menu(request, tab, *, status=200, **extra):
     for entry in tabs:
         entry["active"] = entry["key"] == tab
     context = {"tab": tab, "tabs": tabs, "to_link_count": to_link}
+    if tab == "ventes":
+        extra.setdefault("query", request.GET.get("vente", ""))
+        extra.setdefault("show_all", request.GET.get("ventes") == "toutes")
     builders = {"recettes": _recipes, "a-lier": _to_link, "ventes": _sales}
     context.update(builders[tab](**extra))
     return render(request, "recipes/menu.html", context, status=status)
@@ -93,19 +97,51 @@ def _to_link() -> dict:
     }
 
 
-def _sales(form=None) -> dict:
-    """Every recorded sale, the till import, and a form to add one by hand."""
+def _sales_matching(query: str):
+    """What a typed search means on the sales: a recipe, a date as it is
+    written (12/07/2026, 07/2026, 2026), or where the sale came from."""
+    matches = Q(recipe__name__icontains=query) | Q(source__icontains=query)
+    written = re.fullmatch(r"(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})", query)
+    month = re.fullmatch(r"(\d{1,2})[/.-](\d{4})", query)
+    if written:
+        day, month_of, year = (int(part) for part in written.groups())
+        matches |= Q(sold_on__day=day, sold_on__month=month_of, sold_on__year=year)
+    elif month:
+        month_of, year = (int(part) for part in month.groups())
+        matches |= Q(sold_on__month=month_of, sold_on__year=year)
+    elif re.fullmatch(r"(19|20)\d{2}", query):
+        matches |= Q(sold_on__year=int(query))
+    return matches
+
+
+#: How many sales the page draws before it asks to be asked. All 8 099 of
+#: them was 2,6 Mo of HTML on one page, and they only ever grow.
+SALES_PAGE_SIZE = 300
+
+
+def _sales(form=None, query: str = "", show_all: bool = False) -> dict:
+    """The recent sales, the till import, and a form to add one by hand.
+
+    The list was left whole because the table's own box only searches what is
+    rendered - so the search is the database's now (a recipe, a date, an
+    origin), as on the Achats list, and the page can stop drawing everything.
+    """
     documents = list(
         SaleDocument.objects.prefetch_related("lines__recipe", "lines__stock_type").order_by("-sold_on")[:50]
     )
-    # Unbounded, like the documents of "Achats" - the search box only sees
-    # what's actually in the table, so capping this made "search the whole
-    # dataset" a lie. table-wrap's own bounded scroll keeps it usable.
     sales = RecipeSale.objects.select_related("recipe").order_by("-sold_on", "recipe__name")
+    query = query.strip()
+    if query:
+        sales = sales.filter(_sales_matching(query))
+    counted = sales.count()
+    shown = list(sales if show_all else sales[:SALES_PAGE_SIZE])
     totals = RecipeSale.objects.values("source").annotate(rows=Count("id"), units=Sum("quantity")).order_by("-units")
     return {
         "form": form or ManualSaleForm(),
-        "sales": sales,
+        "sales": shown,
+        "sales_query": query,
+        "sales_found": counted if query else None,
+        "sales_hidden": max(counted - len(shown), 0),
         "totals": totals,
         "manual_source": MANUAL_SALE_SOURCE,
         "documents": documents,

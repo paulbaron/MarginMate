@@ -651,6 +651,16 @@ def compute_variance(closing_take: StockTake, opening_take: StockTake | None = N
     (see VarianceReport.since_beginning) so the page can say so out loud
     rather than leaving that assumption buried.
     """
+    from recipes.models import variation_scope
+
+    # One read of each recipe for the whole report, as on the stock page: its
+    # groups are asked for once per pool, once per expected amount and once
+    # per name, and each ask was a query (277 to draw the écarts page).
+    with variation_scope():
+        return _compute_variance(closing_take, opening_take)
+
+
+def _compute_variance(closing_take: StockTake, opening_take: StockTake | None = None) -> "VarianceReport":
     from recipes.models import Recipe
     from recipes.sales import sales_between, stock_type_sales_between
 
@@ -1145,6 +1155,22 @@ def quantities_sold(
     all-time purchases against one month's sales would say nothing is ever
     missing.
     """
+    from django.utils import timezone
+
+    from recipes.models import Recipe, variation_scope
+    from recipes.sales import sales_between, stock_type_sales_between
+
+    # Every recipe is asked for its choice groups three times over (its usage
+    # terms, its pools, its allocation), and each ask was a query of its own
+    # with another for its stock items' movements: 290 queries to draw the
+    # Produits page, 132 of them the same ingredients again. The scope reads
+    # each recipe once and keeps it for this computation only - a grouping
+    # changes every time someone presses "OU", so nothing is cached longer.
+    with variation_scope():
+        return _quantities_sold(start, end, unit_costs, available)
+
+
+def _quantities_sold(start, end, unit_costs, available) -> dict[int, "SoldQuantity"]:
     from django.utils import timezone
 
     from recipes.models import Recipe

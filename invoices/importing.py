@@ -97,21 +97,47 @@ def charge_needs_a_look(invoice: Invoice, printed_total) -> None:
 
 
 def charge_state(invoice: Invoice, printed_total) -> bool:
-    """Set a charge document's status and message from its total, and say
-    whether that changed anything: settled when the document's own total was
-    read, waiting with what is wrong written on it when it was not."""
+    """Set a charge document's status, message and checks from its total, and
+    say whether that changed anything: settled when the document's own total
+    was read, waiting with what is wrong written on it when it was not.
+
+    Its checks are about the charge. Kept from the ticket reading it is no
+    longer, they said "lignes 946,11 € / ticket 304,74 €" over two lines
+    adding up to exactly what the document charges - a warning about nothing,
+    under every row a person opens.
+    """
     if not invoice.lines.exists():
         return False
     unread = printed_total is None
+    checks = charge_checks(invoice, printed_total)
     wanted = (
         Invoice.Status.NEEDS_REVIEW if unread else Invoice.Status.COMPLETE,
         UNREAD_CHARGE if unread else "",
     )
-    if (invoice.status, invoice.error_message) == wanted:
+    if (invoice.status, invoice.error_message, invoice.parse_checks) == (*wanted, checks):
         return False
     invoice.status, invoice.error_message = wanted
-    invoice.save(update_fields=["status", "error_message"])
+    invoice.parse_checks = checks
+    invoice.save(update_fields=["status", "error_message", "parse_checks"])
     return True
+
+
+def charge_checks(invoice: Invoice, printed_total) -> list[dict]:
+    """What there is to check on a charge: that the document's own total was
+    read, and that it is dated (out of every valuation and of the bank match
+    without one)."""
+    from .receipts import date_check
+
+    total = (
+        f"{printed_total} € : le total imprimé sur le document."
+        if printed_total is not None
+        else UNREAD_CHARGE
+    )
+    checks = [{"label": "Total de la charge", "passed": printed_total is not None, "detail": total}]
+    dated = date_check(invoice.invoice_date)
+    if dated is not None:
+        checks.append({"label": dated.label, "passed": dated.passed, "detail": dated.detail})
+    return checks
 
 
 def expense_lines(supplier: Supplier, parsed: ParsedInvoice) -> list[ParsedLine]:

@@ -12,6 +12,7 @@ Data invented.
 
 import json
 from datetime import date, timedelta
+from decimal import Decimal
 from unittest import mock
 
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -181,6 +182,37 @@ class PurchasesPageTests(TestCase):
             response = self.client.get(self.url, {"surligner": old_one.pk})
         self.assertEqual(self.rows(response)[0], old_one.pk)
         self.assertContains(response, "importée")
+
+    def test_the_search_asks_the_database_not_the_page(self):
+        """The Eau de Paris invoices sit at the 277th row and the Total
+        Energies ones at the 575th: a box filtering what is rendered found
+        nothing at all."""
+        eau = Supplier.objects.create(code="EAU", name="Eau De Paris")
+        old_one = make_invoice(supplier=eau, invoice_number="F-EAU", invoice_date=date(2019, 3, 4))
+        with mock.patch("invoices.workspace.PAGE_SIZE", 1):
+            response = self.client.get(self.url, {"q": "eau de paris"})
+        self.assertEqual(self.rows(response), [old_one.pk])
+        self.assertEqual(response.context["found_count"], 1)
+        self.assertContains(response, "1 document pour")
+
+    def test_the_search_takes_a_number_a_date_or_an_amount(self):
+        eau = Supplier.objects.create(code="EAU", name="Eau De Paris")
+        wanted = make_invoice(
+            supplier=eau, invoice_number="2025106109524", invoice_date=date(2025, 7, 17),
+            printed_total_ttc=Decimal("260.63"),
+        )
+        for query in ("2025106109524", "17/07/2025", "07/2025", "260,63", "260.63"):
+            with self.subTest(query=query):
+                response = self.client.get(self.url, {"q": query})
+                self.assertIn(wanted.pk, self.rows(response))
+        self.assertEqual(self.client.get(self.url, {"q": "introuvable"}).context["found_count"], 0)
+
+    def test_the_search_keeps_the_filter_it_was_typed_under(self):
+        response = self.client.get(self.url, {"q": "sabbh", "filtre": "tickets"})
+        self.assertEqual(response.context["active_filter"], "tickets")
+        self.assertEqual(self.rows(response), [self.checked.pk, self.ticket.pk])
+        # And the chips carry the search, so switching filter keeps it.
+        self.assertTrue(all("q=sabbh" in chip["url"] for chip in response.context["chips"] if chip["key"]))
 
     def test_an_import_is_a_filter_of_its_own(self):
         batch = ReceiptBatch.objects.create(

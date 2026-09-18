@@ -10,12 +10,15 @@ tab or the import it was about (views.invoice_list, receipt_upload,
 receipt_batch, receipt_queue, invoice_type_list...).
 """
 
+import re
 from datetime import timedelta
+from decimal import Decimal
 
 from django.db.models import Count, Q
 from django.shortcuts import render
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.http import urlencode
 
 from .forms import InvoiceUploadForm, ReceiptBatchUploadForm
 from .models import Invoice, InvoiceType, ReceiptBatch, ScrapeJob, Supplier
@@ -181,6 +184,35 @@ def batch_status_context(batch) -> dict:
 #: tall. "Tout afficher" renders the rest.
 PAGE_SIZE = 250
 
+def documents_matching(invoices, query: str):
+    """The documents a typed search means: a supplier, a number, a date or an
+    amount. The database answers, because the page holds only its first rows
+    - and a box that searches what is rendered cannot find a document from
+    last year.
+
+    A date is matched as it is written (12/07/2026, 07/2026, 2026), and an
+    amount against what the document charges, the way the list shows it.
+    """
+    query = query.strip()
+    if not query:
+        return invoices
+    matches = Q(supplier__name__icontains=query) | Q(invoice_number__icontains=query)
+    digits = [part for part in re.split(r"[^0-9]+", query) if part]
+    written = re.fullmatch(r"(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})", query)
+    if written:
+        day, month, year = (int(part) for part in written.groups())
+        matches |= Q(invoice_date__day=day, invoice_date__month=month, invoice_date__year=year)
+    elif re.fullmatch(r"(\d{1,2})[/.-](\d{4})", query):
+        month, year = (int(part) for part in digits)
+        matches |= Q(invoice_date__month=month, invoice_date__year=year)
+    elif re.fullmatch(r"(19|20)\d{2}", query):
+        matches |= Q(invoice_date__year=int(query))
+    amount = re.fullmatch(r"-?\d{1,6}(?:[.,]\d{1,2})?", query)
+    if amount:
+        matches |= Q(printed_total_ttc=Decimal(query.replace(",", ".")))
+    return invoices.filter(matches)
+
+
 FILTERS = {
     "factures": ("Factures", IS_INVOICE),
     "tickets": ("Tickets", IS_TICKET),
@@ -201,6 +233,9 @@ def _documents(request, batch) -> dict:
         total=Count("pk"), **{key.replace("-", "_"): Count("pk", filter=q) for key, q in conditions.items()}
     )
     invoices = Invoice.objects.select_related("supplier").prefetch_related("lines")
+    query = request.GET.get("q", "")
+    if query:
+        invoices = documents_matching(invoices, query)
     active = request.GET.get("filtre", "")
     if request.GET.get("sans_date"):
         active = "sans-date"
@@ -222,12 +257,15 @@ def _documents(request, batch) -> dict:
             chips.append({"key": key, "label": label, "count": count})
     for chip in chips:
         chip["active"] = batch is None and chip["key"] == active
-        chip["url"] = reverse("invoices:invoice_list") + (f"?filtre={chip['key']}" if chip["key"] else "")
+        parameters = {key: value for key, value in (("filtre", chip["key"]), ("q", query)) if value}
+        chip["url"] = reverse("invoices:invoice_list") + (f"?{urlencode(parameters)}" if parameters else "")
 
+    found = invoices.count() if query else None
     everything = request.GET.get("tout") == "1" or batch is not None or active == "sans-date"
     shown = invoices if everything else invoices[:PAGE_SIZE]
     rows = list(shown)
-    hidden = 0 if everything else max(counts["total" if not active else active.replace("-", "_")] - len(rows), 0)
+    listed = found if query else counts["total" if not active else active.replace("-", "_")]
+    hidden = 0 if everything else max(listed - len(rows), 0)
     posted = request.GET.get("surligner", "")
     highlight = int(posted) if posted.isdigit() else None
     if highlight is not None:
@@ -243,6 +281,8 @@ def _documents(request, batch) -> dict:
         rows.sort(key=lambda invoice: invoice.pk != highlight)
     return {
         "invoices": rows,
+        "query": query,
+        "found_count": found,
         "hidden_count": hidden,
         "show_all_url": request.get_full_path() + ("&" if request.GET else "?") + "tout=1",
         "chips": chips,

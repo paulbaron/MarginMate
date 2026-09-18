@@ -114,9 +114,31 @@ half of the stock variance.
 
 <div class="card">
     <h3>Dernières ventes</h3>
+    {% comment %}
+    The search asks the database: the page draws its first rows only, and a box
+    filtering what is rendered could not find a sale from last year. The table
+    is therefore sort-only.
+    {% endcomment %}
+    <form method="get" class="table-search">
+        <input type="search" name="vente" value="{{ sales_query }}" autocomplete="off"
+               aria-label="Rechercher une vente"
+               placeholder="Rechercher une recette, une date (12/07/2026), une origine…">
+        <button class="btn btn-small btn-secondary" type="submit">Rechercher</button>
+        {% if sales_query %}<a class="btn btn-small btn-secondary" href="{% url 'recipes:sales_list' %}">Effacer</a>{% endif %}
+    </form>
+    {% if sales_query %}
+        <p class="muted">{{ sales_found }} vente{{ sales_found|pluralize }} pour « {{ sales_query }} »</p>
+    {% endif %}
+    {% if sales_hidden %}
+        <p class="muted">
+            Les {{ sales|length }} plus récentes. {{ sales_hidden }} de plus :
+            <a href="?ventes=toutes{% if sales_query %}&vente={{ sales_query|urlencode }}{% endif %}">tout afficher</a>
+            (la recherche et le tri ne portent que sur ce qui est affiché).
+        </p>
+    {% endif %}
     {% if sales %}
     <div class="table-wrap">
-    <table class="sub-table" data-table data-table-label="ventes">
+    <table class="sub-table" data-table data-table-sort-only data-table-label="ventes">
         <thead>
             <tr><th>Date</th><th>Recette</th><th class="num">Quantité</th><th>Origine</th><th></th></tr>
         </thead>

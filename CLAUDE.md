@@ -907,6 +907,17 @@ queries instead of one per row.
 The tell: SQL time near zero while wall time is seconds. That is hundreds of
 tiny queries, not a slow one — profile with `connection.queries`, not EXPLAIN.
 
+**`prefetch_related` does not reach a method that builds its own queryset.**
+`Recipe.choice_groups()` re-reads its ingredients (it wants them ordered,
+with their stock items' movements), so prefetching them at the call site
+bought nothing: every recipe was asked three times over - its usage terms,
+its pools, its allocation - and each ask was a query, with another for the
+movements behind it. That is 290 queries to draw **Produits** and 277 for
+**Écarts**. `recipes.models.variation_scope()` is the memo made for exactly
+this, and wrapping `quantities_sold` and `compute_variance` in one took them
+to 114 and 109. It is scoped, not cached on the instance: a grouping changes
+every time someone presses "OU".
+
 ### Shrinkage: pool the alternatives, never guess the split
 
 `inventory/variance.py` answers "where did the alcohol go" between two stock
@@ -1165,6 +1176,16 @@ back and forth between them. The rules that came with merging them:
   imported comes back highlighted and opened in the list (`?surligner=`);
   the list reloads when an import or a gather ends (`documents-changed`,
   sent by their status partials once they stop polling).
+- **A bounded list needs a search the database answers.** The table's own
+  box (`datatable.js`) only ever sees the rendered rows, so a page that
+  shows its first 250 cannot use it: the Eau de Paris invoices sit at the
+  277th row and the Total Energies ones at the 575th, and looking for them
+  found nothing. `workspace.documents_matching` searches every document by
+  supplier, number, date as it is written (12/07/2026, 07/2026, 2026) or
+  amount, and the table is `data-table-sort-only` - two boxes filtering by
+  two different rules is worse than one. Same on the sales list
+  (`recipes.menu._sales_matching`, `SALES_PAGE_SIZE`): 8 099 rows was 2,6 Mo
+  on one page, and it only grows.
 - **The list shows the newest documents** (`workspace.PAGE_SIZE`, 250), and
   "tout afficher" renders the rest. Every row is about 1,4 Ko of HTML and a
   slice of a second of template: at 823 documents the page was 1,2 Mo, 15 000

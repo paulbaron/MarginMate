@@ -207,6 +207,11 @@ class ImportedAsOneLineTests(TestCase):
         (only,) = invoice.lines.all()
         self.assertEqual((only.total_ht, invoice.status), (D("26.53"), Invoice.Status.NEEDS_REVIEW))
         self.assertIn("vérifiez-le sur le document", invoice.error_message)
+        # And its own check says so, under the row a person opens.
+        self.assertEqual(
+            [(check["label"], check["passed"]) for check in invoice.failed_checks],
+            [("Total de la charge", False)],
+        )
 
     def test_with_nothing_readable_it_waits_for_a_person(self):
         invoice = import_parsed_invoice(self.supplier, parsed(lines=[], total=None))
@@ -301,6 +306,28 @@ class ReadAgainTests(TestCase):
         reread_receipt(self.invoice)
         self.invoice.refresh_from_db()
         self.assertFalse(reread_receipt(self.invoice))
+
+    def test_its_checks_are_about_the_charge(self):
+        """Kept from the ticket reading it is no longer, they said "lignes
+        946,11 € / ticket 304,74 €" over two lines adding up to exactly what
+        the document charges - a warning about nothing under its row."""
+        reread_receipt(self.invoice)
+        self.invoice.refresh_from_db()
+        self.assertEqual(
+            [(check["label"], check["passed"]) for check in self.invoice.parse_checks],
+            [("Total de la charge", True)],
+        )
+        self.assertEqual(self.invoice.failed_checks, [])
+
+    def test_a_reading_that_finds_nothing_changes_nothing(self):
+        """The same rule as any re-read: with nothing readable, the document
+        stays exactly as it was filed."""
+        Invoice.objects.filter(pk=self.invoice.pk).update(ocr_text="AVIS D'ECHEANCE\nRien de lisible")
+        self.invoice.refresh_from_db()
+        before = [(line.raw_name, line.total_ht) for line in self.invoice.lines.all()]
+        self.assertFalse(reread_receipt(self.invoice))
+        self.invoice.refresh_from_db()
+        self.assertEqual([(line.raw_name, line.total_ht) for line in self.invoice.lines.all()], before)
 
     def test_a_charge_is_not_in_the_queue_of_tickets_to_check(self):
         """There is nothing to type on a rent, and forty-two of them behind

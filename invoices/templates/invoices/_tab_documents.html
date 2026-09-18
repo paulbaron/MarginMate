@@ -4,6 +4,31 @@ Every invoice and ticket. Reloads itself when an import ends
 {% endcomment %}
 <div id="documents" hx-get="{{ request.get_full_path }}" hx-select="#documents" hx-swap="outerHTML"
      hx-trigger="documents-changed from:body">
+    {% comment %}
+    The search asks the database: the page holds its first rows only, and a box
+    filtering what is rendered could not find an invoice from last year. The
+    table below is therefore sort-only - two boxes filtering by two different
+    rules is worse than one.
+    {% endcomment %}
+    <form method="get" class="table-search documents-search" hx-boost="true" hx-target="#workspace"
+          hx-select="#workspace" hx-swap="outerHTML">
+        {% if active_filter %}<input type="hidden" name="filtre" value="{{ active_filter }}">{% endif %}
+        <input type="search" name="q" value="{{ query }}" autocomplete="off"
+               aria-label="Rechercher un document"
+               placeholder="Rechercher un fournisseur, un numéro, une date (12/07/2026), un montant…">
+        <button class="btn btn-small btn-secondary" type="submit">Rechercher</button>
+        {% if query %}
+            <a class="btn btn-small btn-secondary" href="{% url 'invoices:invoice_list' %}"
+               hx-boost="true" hx-target="#workspace" hx-select="#workspace" hx-swap="outerHTML">Effacer</a>
+        {% endif %}
+    </form>
+    {% if query %}
+        <p class="muted">
+            {{ found_count }} document{{ found_count|pluralize }} pour « {{ query }} »
+            {% if not found_count %}— essayez le nom du fournisseur, le numéro, une date ou un montant.{% endif %}
+        </p>
+    {% endif %}
+
     <div class="filter-chips" role="group" aria-label="Filtrer les documents">
         {% for chip in chips %}
             <a href="{{ chip.url }}" class="chip{% if chip.active %} active{% endif %}"{% if chip.active %} aria-current="true"{% endif %}
@@ -50,7 +75,7 @@ Every invoice and ticket. Reloads itself when an import ends
             <button class="btn btn-small btn-danger" type="submit" data-bulk-submit disabled>Supprimer la sélection…</button>
         </form>
         <div class="table-wrap">
-        <table data-table data-table-label="documents" class="documents-table">
+        <table data-table data-table-sort-only data-table-label="documents" class="documents-table">
             <thead>
                 <tr>
                     <th class="select-col" data-no-sort><input type="checkbox" data-bulk-all form="invoice-bulk-form" aria-label="Tout sélectionner"></th>

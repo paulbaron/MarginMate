@@ -370,12 +370,10 @@ class SalesPageTests(TestCase):
         self.client.post(reverse("recipes:sales_delete", kwargs={"pk": sale.pk}))
         self.assertFalse(RecipeSale.objects.filter(pk=sale.pk).exists())
 
-    def test_the_table_is_not_capped_to_the_most_recent_400(self):
-        """The search box on this page only sees what's in the rendered
-        table (see static/js/datatable.js) - capping the queryset made
-        "search the whole dataset" a lie, silently, for anything older than
-        whichever day happened to be the 400th most recent. A sale from
-        years back has to actually be on the page for it to be findable."""
+    def test_an_old_sale_is_found_by_searching_and_by_showing_everything(self):
+        """8 099 rows was 2,6 Mo on one page. The list is capped now, and
+        what made capping a lie - a search box that only ever saw the
+        rendered table - is a search the database answers."""
         from datetime import timedelta
 
         from django.urls import reverse
@@ -384,5 +382,19 @@ class SalesPageTests(TestCase):
             RecipeSale(recipe=self.mule, sold_on=date(2020, 1, 1) + timedelta(days=n), quantity=1, source="laddition")
             for n in range(401)
         )
-        response = self.client.get(reverse("recipes:sales_list"))
-        self.assertContains(response, "01/01/2020")
+        page = self.client.get(reverse("recipes:sales_list"))
+        self.assertNotContains(page, "01/01/2020")
+        self.assertContains(page, "tout afficher")
+        # Found by date, by recipe, and by asking for the whole list.
+        self.assertContains(self.client.get(reverse("recipes:sales_list"), {"vente": "01/01/2020"}), "01/01/2020")
+        self.assertContains(
+            self.client.get(reverse("recipes:sales_list"), {"vente": self.mule.name}), self.mule.name
+        )
+        self.assertContains(self.client.get(reverse("recipes:sales_list"), {"ventes": "toutes"}), "01/01/2020")
+
+    def test_the_sales_search_says_how_many_it_found(self):
+        from django.urls import reverse
+
+        response = self.client.get(reverse("recipes:sales_list"), {"vente": "introuvable"})
+        self.assertEqual(response.context["sales_found"], 0)
+        self.assertEqual(list(response.context["sales"]), [])
