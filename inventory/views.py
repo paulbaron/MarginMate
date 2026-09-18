@@ -1035,7 +1035,12 @@ def assign_product(request, product_id):
     stock_equivalent = _parse_positive_decimal(request.POST.get("stock_equivalent", ""), default=Decimal("1"))
 
     error = None
-    if stock_equivalent is None:
+    if product.is_expense:
+        # A rent is not stock. The panel never offers one (it lists what
+        # needs review, and a charge never does), but the address took it:
+        # classified, the rent became bottles, with a stock movement behind.
+        error = f"« {product.raw_name} » est un poste de charge : il n'a pas d'article de stock."
+    elif stock_equivalent is None:
         error = "L'équivalence en stock doit être un nombre positif."
     elif not name:
         error = "Donnez un nom de type de stock."

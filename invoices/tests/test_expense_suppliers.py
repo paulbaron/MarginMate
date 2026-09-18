@@ -439,6 +439,24 @@ class ChargesOnTheProductsPageTests(TestCase):
             self.client.get(reverse("inventory:charge_documents", args=[ordinary.pk])).status_code, 404
         )
 
+    def test_a_poste_cannot_be_classified_as_stock(self):
+        """A rent is not stock. The panel never offers one - it lists what
+        needs review, and a charge never does - but the address took it, and
+        classified, the rent became bottles with a stock movement behind."""
+        from inventory.models import StockType
+
+        poste = Product.objects.get(supplier=self.supplier)
+        article = StockType.objects.create(name="Absinthe")
+        response = self.client.post(
+            reverse("inventory:assign_product", args=[poste.pk]),
+            {"stock_type_name": article.name, "stock_equivalent": "1"},
+            follow=True,
+        )
+        poste.refresh_from_db()
+        self.assertIsNone(poste.stock_type)
+        self.assertFalse(StockMovement.objects.exists())
+        self.assertIn("poste de charge", [str(message) for message in response.context["messages"]][0])
+
     def test_nothing_is_shown_when_no_supplier_is_a_charge(self):
         Supplier.objects.filter(pk=self.supplier.pk).update(expenses_only=False)
         page = self.client.get(reverse("inventory:stock_list"))
