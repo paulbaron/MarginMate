@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}{{ supplier.name }} : {% if wanted %}charges{% else %}produits{% endif %} - MarginMate{% endblock %}
+{% block content %}
+    {% comment %}
+    What changing a supplier's kind will do, said before it is done: it
+    rewrites documents already filed (views.supplier_expenses).
+    {% endcomment %}
+    <div class="page-header">
+        <div>
+            <p class="breadcrumb"><a href="{{ fiche }}">← {{ supplier.name }}</a></p>
+            <h1>{% if wanted %}Faire de {{ supplier.name }} un fournisseur de charges ?{% else %}Faire de {{ supplier.name }} un fournisseur de produits ?{% endif %}</h1>
+        </div>
+    </div>
+    <div class="card">
+        {% if unchanged %}
+            <p>{{ supplier.name }} est déjà un fournisseur de {% if wanted %}charges{% else %}produits{% endif %} : rien à faire.</p>
+            <div class="actions"><a class="btn btn-secondary" href="{{ fiche }}">Revenir à la fiche</a></div>
+        {% else %}
+            {% if wanted %}
+                <p>
+                    Abonnement, loyer, eau, électricité… : ses factures seront enregistrées par poste quand elles en
+                    nomment, sinon en une ligne par taux de TVA — jamais en produits à classer.
+                </p>
+                <ul>
+                    <li>Ses {{ document_count }} document{{ document_count|pluralize }} déjà enregistré{{ document_count|pluralize }} {{ document_count|pluralize:"est,sont" }} relu{{ document_count|pluralize }} ainsi.</li>
+                    {% if checked_count %}
+                        <li><strong>{{ checked_count }} {{ checked_count|pluralize:"a été vérifié,ont été vérifiés" }} à la main : {{ checked_count|pluralize:"ses corrections seront remplacées,leurs corrections seront remplacées" }}. Cela ne se défait pas.</strong></li>
+                    {% endif %}
+                    {% if to_classify %}<li>{{ to_classify }} produit{{ to_classify|pluralize }} quitte{{ to_classify|pluralize:"nt" }} « à classer ».</li>{% endif %}
+                </ul>
+            {% else %}
+                <p>Ses prochains documents seront lus comme une liste de produits.</p>
+                <ul>
+                    <li>Ses {{ document_count }} document{{ document_count|pluralize }} déjà enregistré{{ document_count|pluralize }} garde{{ document_count|pluralize:"nt" }} leurs lignes : corrigez-les un par un si besoin.</li>
+                    {% if postes %}<li>{{ postes }} poste{{ postes|pluralize }} de charge repasse{{ postes|pluralize:"nt" }} « à classer ».</li>{% endif %}
+                </ul>
+            {% endif %}
+            <form method="post" action="{% url 'invoices:supplier_expenses' supplier.pk %}" class="actions">
+                {% csrf_token %}
+                {% if wanted %}<input type="hidden" name="expenses_only" value="1">{% endif %}
+                <input type="hidden" name="confirme" value="1">
+                <button class="btn" type="submit">{% if wanted %}Oui, ce sont des charges{% else %}Oui, ce sont des produits{% endif %}</button>
+                <a class="btn btn-secondary" href="{{ fiche }}">Annuler</a>
+            </form>
+        {% endif %}
+    </div>
+{% endblock %}

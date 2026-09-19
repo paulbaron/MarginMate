@@ -16,6 +16,8 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
 
+from common import is_id
+
 from invoices.models import Invoice
 
 from . import matching, reconcile
@@ -182,7 +184,7 @@ def bank_line_action(request, pk):
 
     action = request.POST.get("action")
     if action == "link":
-        ids = [value for value in request.POST.getlist("invoice") if value.isdigit()]
+        ids = [value for value in request.POST.getlist("invoice") if is_id(value)]
         invoices = list(Invoice.objects.filter(pk__in=ids).select_related("supplier"))
         if not invoices:
             messages.error(request, "Choisissez la facture que ce paiement a réglée.")

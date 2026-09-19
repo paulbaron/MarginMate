@@ -10,6 +10,8 @@ from django.db.models import Sum
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.html import escape
 
+from common import is_id
+
 from .forms import (
     MANUAL_SALE_SOURCE,
     ManualSaleForm,
@@ -255,7 +257,7 @@ def recipe_create(request):
     after it and linked to it on save. `?name=` prefills the name alone."""
     posted = request.GET.get("caisse", "")
     for_product = (
-        PosProduct.objects.filter(pk=posted, recipe__isnull=True).first() if posted.isdigit() else None
+        PosProduct.objects.filter(pk=posted, recipe__isnull=True).first() if is_id(posted) else None
     )
     name = (request.GET.get("name") or (for_product.name if for_product else "")).strip()
     return _recipe_form_view(request, Recipe(name=name), for_product=for_product)
@@ -312,7 +314,7 @@ def pos_product_assign(request, pk):
         # form doesn't 400; the checkbox is what the page sends now.
         as_happy_hour = action == "happy_hour" or bool(request.POST.get("as_happy_hour"))
         posted = request.POST.get("recipe", "")
-        recipe = Recipe.objects.filter(pk=posted).first() if posted.isdigit() else None
+        recipe = Recipe.objects.filter(pk=posted).first() if is_id(posted) else None
         if recipe is None:
             error = "Choisissez une recette."
         else:
@@ -383,6 +385,8 @@ def trigger_sales_import(request):
 
 
 def sales_import_status(request, job_id):
+    # As invoices.views.gather_status: a dead run is reaped where it is polled.
+    SalesImportJob.reap_stale()
     return render(
         request,
         "recipes/_sales_import_status.html",

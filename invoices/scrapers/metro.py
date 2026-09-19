@@ -3,9 +3,19 @@ Logs into docs.metro.fr, filters invoices to a date range, and downloads
 every PDF not already imported into ``download_dir``.
 
 Metro blocks accounts that hammer its site, so this stays gentle: one login
-per run, one date window at a time, and never more than one click every
-CLICK_INTERVAL_SECONDS. What it no longer does is wait for each file before
-the next click - see _download_window.
+per run, one date window at a time, one download at a time, never more than
+one click every CLICK_INTERVAL_SECONDS.
+
+**Metro's firewall is recognised, and never tried again** (MetroBlocked). It
+refused the sign-in on 02/09 and 18/09 - at the moment the credentials were
+sent - with « Vous avez été bloqué par notre pare-feu … identifiant :#18.… ».
+The scraper used to wait 15 s for the date filters and blame a cookie popup
+or a new layout, which read like a glitch to retry; every sign-in against a
+block is one more refused sign-in. The refusal is looked for wherever it can
+show (the page loaded, the credentials sent, a search coming back empty, a
+download that never came, any page that did not come), and Metro is left
+alone for a while after it - and between two sign-ins (metro_pause, kept on
+the supplier and checked before any browser starts, whoever calls).
 """
 
 from __future__ import annotations
@@ -16,8 +26,14 @@ import time
 from datetime import date, datetime, timedelta
 
 from django.conf import settings
+from django.utils import timezone
 from selenium import webdriver
-from selenium.common.exceptions import TimeoutException, WebDriverException
+from selenium.common.exceptions import (
+    InvalidSessionIdException,
+    NoSuchWindowException,
+    TimeoutException,
+    WebDriverException,
+)
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -30,7 +46,10 @@ DOWNLOAD_TIMEOUT_SECONDS = 65  # per invoice, from its click - older invoices ca
 # noticeably slower for Metro to generate, so this is generous. It is only
 # ever spent on a download that really is late: see _PendingDownloads.
 CLICK_INTERVAL_SECONDS = 2.0  # never faster than a person clicking down the list
-MAX_IN_FLIGHT = 3  # downloads clicked but not on disk yet; the next click waits for room
+MAX_IN_FLIGHT = 1  # downloads clicked but not on disk yet; the next click waits for room.
+# Three overlapped once, to spare the waits a counting bug made long (a file
+# landed in a second, and was waited on for 65); with that bug gone, one at
+# a time costs a second per invoice and is what a person does.
 POLL_SECONDS = 0.5
 WINDOW_DAYS = 90  # a wide date range is processed in chunks this big rather than
 # in one go: Metro's own results page caps at 100 rows with no pagination we
@@ -39,15 +58,168 @@ WINDOW_DAYS = 90  # a wide date range is processed in chunks this big rather tha
 # rendered results list light, which the one real crash we saw (a stuck
 # session after several identical-looking timeouts on a 100-row/3-year
 # window) points at as a contributing factor.
-MAX_CONSECUTIVE_TIMEOUTS = 3  # if this many downloads in a row never arrive,
-# something is systematically wrong (not just one slow invoice) - stop
-# clicking the rest of the window instead of timing each of them out too.
-MAX_SESSION_RESTARTS = 2  # a crashed browser session (seen in practice, not
-# just theoretical - Chrome occasionally dies mid-run) used to silently
-# abandon every window that hadn't been processed yet while still reporting
-# the whole gather as successful. A fresh driver + re-login can pick up
-# right where the dead one left off instead of quietly losing months of
-# invoices; this caps how many times we'll do that before giving up.
+MAX_CONSECUTIVE_TIMEOUTS = 3  # if this many downloads in a row never arrive -
+# counted across the whole run, not per window - something is systematically
+# wrong (not one slow invoice): the run stops, rather than searching the next
+# window and clicking on. One late download alone says nothing (the past
+# "timeouts" were a counting bug), so it only gets the refusal checked.
+MAX_SESSION_RESTARTS = 1  # a browser that really died (the session gone -
+# seen in practice) gets one fresh browser and sign-in, after
+# RESTART_PAUSE_SECONDS, to go on from the window it was on. A page that is
+# not what was expected is not a dead browser: each such hiccup used to open
+# a new browser and sign in again, three sign-ins in seconds.
+RESTART_PAUSE_SECONDS = 120
+DATE_FROM_SELECTOR = "input[data-testid='DateInputFieldInputDe']"
+# Metro's firewall judges each sign-in: it refused one after two quiet days,
+# and 31/08 had seen some twenty-five (development testing, mostly). So
+# AdminMate signs in rarely, and leaves Metro alone after a refusal - how
+# long a block lasts is not known (the 02/09 one was over by 16/09).
+BLOCK_PAUSE = timedelta(days=7)
+REPEAT_BLOCK_WITHIN = timedelta(days=30)  # refused again this soon: twice as long
+MIN_GAP_BETWEEN_LOGINS = timedelta(hours=24)  # Metro bills a few times a month
+
+
+class MetroError(RuntimeError):
+    """Metro's part of a gather stopped - in words for the person, with the
+    invoices already downloaded (`files`), which are imported all the same:
+    left on disk, they were fetched from Metro again at the next run."""
+
+    def __init__(self, message: str, files=()):
+        super().__init__(message)
+        self.files = list(files)
+
+
+class MetroBlocked(MetroError):
+    """Metro's firewall refused this browser. Never retried; `reference` is
+    what Metro's support asks for."""
+
+    def __init__(self, message: str, reference: str = "", files=()):
+        super().__init__(message, files)
+        self.reference = reference
+
+
+class MetroLoginFailed(MetroError):
+    """Metro kept the sign-in page up without its firewall's words: the
+    identifier or the password. Not retried, and no long pause."""
+
+
+class _MetroCancelled(Exception):
+    """A person cancelled before the credentials went: no sign-in."""
+
+
+class MetroPaused(MetroError):
+    """Metro is not contacted - no browser started: refused lately
+    (`after_block`), or signed in to less than MIN_GAP_BETWEEN_LOGINS ago."""
+
+    def __init__(self, message: str, until, after_block: bool):
+        super().__init__(message)
+        self.until = until
+        self.after_block = after_block
+
+
+def _metro_supplier():
+    from invoices.models import Supplier  # local import: models are not a scraper's concern otherwise
+
+    return Supplier.objects.filter(code="METRO").first()
+
+
+def _said(moment) -> str:
+    return f"{timezone.localtime(moment):%d/%m à %H:%M}"
+
+
+def metro_pause(now=None) -> MetroPaused | None:
+    """Why Metro is not to be contacted now, and until when - None when it
+    may be. Read from the supplier, by every caller of the scraper: a gather,
+    a shell, a script."""
+    now = now or timezone.now()
+    supplier = _metro_supplier()
+    if supplier is None:
+        return None
+    if supplier.scrape_paused_until and supplier.scrape_paused_until > now:
+        return MetroPaused(
+            f"{supplier.scrape_pause_reason} Metro n'est pas contacté avant le {_said(supplier.scrape_paused_until)}.",
+            supplier.scrape_paused_until,
+            after_block=True,
+        )
+    last = supplier.scrape_last_login_at
+    if last and now - last < MIN_GAP_BETWEEN_LOGINS:
+        until = last + MIN_GAP_BETWEEN_LOGINS
+        return MetroPaused(
+            f"Metro a déjà été consulté le {_said(last)} : une connexion par jour au plus (son pare-feu bloque "
+            f"les comptes trop sollicités). Prochaine connexion possible le {_said(until)}.",
+            until,
+            after_block=False,
+        )
+    return None
+
+
+def record_login(now=None) -> None:
+    """Noted before the password is sent: a run that dies after it counts."""
+    supplier = _metro_supplier()
+    if supplier is not None:
+        supplier.scrape_last_login_at = now or timezone.now()
+        supplier.save(update_fields=["scrape_last_login_at"])
+
+
+def record_block(reference: str, now=None):
+    """Metro refused: left alone for BLOCK_PAUSE - twice that when it had
+    refused within REPEAT_BLOCK_WITHIN. Returns until when."""
+    now = now or timezone.now()
+    supplier = _metro_supplier()
+    if supplier is None:
+        return None
+    repeat = supplier.scrape_last_block_at is not None and now - supplier.scrape_last_block_at < REPEAT_BLOCK_WITHIN
+    supplier.scrape_last_block_at = now
+    supplier.scrape_paused_until = now + BLOCK_PAUSE * (2 if repeat else 1)
+    supplier.scrape_pause_reason = (
+        f"Metro a bloqué la connexion le {_said(now)} (pare-feu" + (f", référence {reference}" if reference else "") + ")."
+    )
+    supplier.save(update_fields=["scrape_last_block_at", "scrape_paused_until", "scrape_pause_reason"])
+    return supplier.scrape_paused_until
+
+
+# What a firewall, or a site counting requests, answers instead of the page.
+BLOCKED_RE = re.compile(
+    r"bloqu[ée]e?s?\s+par\s+(?:notre|le)\s+pare-feu|too many requests|trop de (?:requ[êe]tes|demandes)"
+    r"|access denied|acc[eè]s refus[ée]|request (?:was )?(?:rejected|blocked)|requested url was rejected"
+    r"|you have been blocked",
+    re.I,
+)
+REFERENCE_RE = re.compile(r"#\d+\.[0-9a-f]+\.\d+\.[0-9a-f]+", re.I)
+
+
+def blocked_reference(text: str) -> str | None:
+    """The reference of the refusal a page shows ("#18.608655f.…"), "" for a
+    refusal without one - None when the page refuses nothing."""
+    if not BLOCKED_RE.search(text or ""):
+        return None
+    found = REFERENCE_RE.search(text)
+    return found.group(0) if found else ""
+
+
+def blocked_message(reference: str) -> str:
+    return (
+        "Metro a bloqué la connexion (pare-feu"
+        + (f", référence {reference}" if reference else "")
+        + "). Chaque nouvelle tentative prolonge le blocage : Metro est laissé de côté quelque temps. "
+        "S'il persiste, contactez l'assistance Metro "
+        + ("en lui donnant cette référence." if reference else "en indiquant l'heure du blocage.")
+    )
+
+
+def _page_text(driver) -> str:
+    """What the page shows (visible text only: a hidden alert template in
+    the HTML is no refusal)."""
+    try:
+        return driver.find_element(By.TAG_NAME, "body").text or ""
+    except Exception:  # noqa: BLE001 - a page between two loads, or no page
+        return ""
+
+
+def _raise_if_blocked(driver) -> None:
+    reference = blocked_reference(_page_text(driver))
+    if reference is not None:
+        raise MetroBlocked(blocked_message(reference), reference=reference)
 
 
 def _capture_diagnostics(driver, download_dir: str, log, context: str, screenshot_suffix: str = ""):
@@ -82,7 +254,9 @@ def _capture_diagnostics(driver, download_dir: str, log, context: str, screensho
     try:
         driver.save_screenshot(screenshot_path)
         with open(screenshot_path, "rb") as f:
-            log(f"  (screenshot captured, {len(f.read())} bytes - inspect at {screenshot_path} before it's removed)")
+            # Removed right after (the text above stands for it): the path
+            # was said as if it could still be opened.
+            log(f"  (screenshot captured, {len(f.read())} bytes, not kept)")
     except Exception:
         screenshot_path = None
 
@@ -97,11 +271,11 @@ def _fail_with_diagnostics(driver, download_dir: str, log, context: str):
     current_url, title, _body_text, screenshot_path = _capture_diagnostics(driver, download_dir, log, context)
     if screenshot_path and os.path.exists(screenshot_path):
         os.remove(screenshot_path)
-    raise RuntimeError(
-        f"Metro scraping timed out {context}. URL was {current_url!r}, title was {title!r} - "
-        "see the log above for the page's visible text"
-        ". This usually means the login didn't succeed, a cookie/consent popup is still blocking the "
-        "page, or Metro changed their site layout."
+    # The firewall's page is the first thing a page that never came can be.
+    _raise_if_blocked(driver)
+    raise MetroError(
+        f"Metro : la page attendue n'est pas venue ({context}) - page « {title} » sur "
+        f"{str(current_url).split('?')[0]}. Le texte de la page est dans le journal."
     )
 
 
@@ -114,24 +288,35 @@ def _log_page_state(driver, download_dir: str, log, context: str) -> None:
 CHECKBOX_ID_REGEX = re.compile(r"^FRA_(\d+)_(\d+)_(\d+)_\d+$")
 
 
-def _row_key(button) -> tuple[int, int, int] | None:
+def _key_of(checkbox_id: str) -> tuple[int, int, int] | None:
     """(store, till, number) of a result row, from its checkbox id
     ("FRA_134_52_45126_<timestamp>"). The same triple names the row's PDF
     ("134_52_45126_<timestamp>_invoice_cus_copy_main.pdf") and, zero-padded,
     the invoice number the PDF parser derives - so a row can be recognised as
     already imported, and its file as landed, without opening anything.
     """
-    try:
-        row = button.find_element(By.XPATH, "./ancestor::tr[1]")
-        checkbox = row.find_element(By.CSS_SELECTOR, "input[type='checkbox']")
-        checkbox_id = checkbox.get_attribute("id") or ""
-    except Exception:
-        return None
-    match = CHECKBOX_ID_REGEX.match(checkbox_id)
+    match = CHECKBOX_ID_REGEX.match(checkbox_id or "")
     if not match:
         return None
     store, till, number = (int(part) for part in match.groups())
     return store, till, number
+
+
+# Every result row's download button with its checkbox id, read at once: one
+# browser round-trip, and no row read half-way through a re-render (read one
+# call at a time, a row caught mid-render read as none, and was skipped).
+ROWS_JS = """
+return Array.from(document.querySelectorAll('tr #downloadPdfButton')).map(function (button) {
+  var row = button.closest('tr');
+  var box = row ? row.querySelector("input[type='checkbox']") : null;
+  return [button, box ? box.id : ''];
+});
+"""
+
+
+def _rows(driver) -> list:
+    """(button, key) for each result row - key None when unreadable."""
+    return [(button, _key_of(box_id)) for button, box_id in (driver.execute_script(ROWS_JS) or [])]
 
 
 def _invoice_number(key) -> str:
@@ -165,8 +350,10 @@ def _date_windows(start_date: date, end_date: date):
         window_start = window_end + timedelta(days=1)
 
 
-def _login(driver, wait, download_dir, log):
+def _login(driver, wait, download_dir, log, should_cancel=lambda: False):
     driver.get("https://docs.metro.fr/")
+    # Refused before anything is typed: the credentials are not sent into it.
+    _raise_if_blocked(driver)
     try:
         cookie_banner = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "cms-cookie-disclaimer")))
         shadow_root = driver.execute_script("return arguments[0].shadowRoot", cookie_banner)
@@ -178,9 +365,39 @@ def _login(driver, wait, download_dir, log):
         wait.until(EC.presence_of_element_located((By.ID, "user_id")))
     except TimeoutException:
         _fail_with_diagnostics(driver, download_dir, log, "waiting for the login form to appear")
+    _raise_if_blocked(driver)
     driver.find_element(By.ID, "user_id").send_keys(settings.METRO_EMAIL)
     driver.find_element(By.ID, "password").send_keys(settings.METRO_PASSWORD)
+    if should_cancel():
+        raise _MetroCancelled()
+    record_login()
     driver.find_element(By.ID, "submit").click()
+    _await_sign_in(driver, download_dir, log)
+
+
+def _await_sign_in(driver, download_dir, log, sleep=time.sleep, clock=time.monotonic):
+    """After the credentials: the invoices' page, or Metro's refusal - said
+    at once, never waited out as a missing date filter."""
+    deadline = clock() + PAGE_WAIT_SECONDS
+    while clock() < deadline:
+        try:
+            if driver.find_elements(By.CSS_SELECTOR, DATE_FROM_SELECTOR):
+                return
+        except WebDriverException:
+            pass  # between two pages
+        _raise_if_blocked(driver)
+        sleep(POLL_SECONDS)
+    try:
+        still_asked = "idam.metro.fr" in (driver.current_url or "") and bool(driver.find_elements(By.ID, "password"))
+    except WebDriverException:
+        still_asked = False
+    if still_asked:
+        _log_page_state(driver, download_dir, log, "waiting for the sign-in to finish")
+        raise MetroLoginFailed(
+            "Metro a gardé la page de connexion : identifiant ou mot de passe refusé (METRO_EMAIL / METRO_PASSWORD "
+            "dans le fichier .env). Le message de Metro est dans le journal."
+        )
+    _fail_with_diagnostics(driver, download_dir, log, "waiting for the sign-in to finish")
 
 
 def _js_click(driver, element):
@@ -220,9 +437,7 @@ def _set_date_field(driver, field, value: date):
 
 def _apply_date_filter(driver, wait, download_dir, log, start_date: date, end_date: date):
     try:
-        date_from = wait.until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "input[data-testid='DateInputFieldInputDe']"))
-        )
+        date_from = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, DATE_FROM_SELECTOR)))
         date_to = driver.find_element(By.CSS_SELECTOR, "input[data-testid='DateInputFieldInputÀ']")
     except TimeoutException:
         _fail_with_diagnostics(driver, download_dir, log, "waiting for the invoice date filters")
@@ -327,7 +542,8 @@ class _PendingDownloads:
     def __init__(self, download_dir: str, clock):
         self.download_dir = download_dir
         self.clock = clock
-        self.pending: dict[str, tuple[str, float, set]] = {}
+        self.pending: dict[str, tuple[str, float, set, tuple | None]] = {}
+        self.arrived: list = []  # keys of the rows whose file landed, not yet taken
 
     def _pdfs(self) -> set[tuple[str, int]]:
         found = set()
@@ -341,25 +557,31 @@ class _PendingDownloads:
                     continue
         return found
 
-    def start(self, label: str, prefix: str) -> None:
-        self.pending[label] = (prefix, self.clock(), self._pdfs())
+    def start(self, label: str, prefix: str, key=None) -> None:
+        self.pending[label] = (prefix, self.clock(), self._pdfs(), key)
 
     def landed(self) -> list[str]:
         on_disk = self._pdfs()
         done = [
             label
-            for label, (prefix, _clicked, before) in self.pending.items()
+            for label, (prefix, _clicked, before, _key) in self.pending.items()
             if any(name.startswith(prefix) and (name, mtime) not in before for name, mtime in on_disk)
         ]
         for label in done:
-            del self.pending[label]
+            key = self.pending.pop(label)[3]
+            if key is not None:
+                self.arrived.append(key)
         return done
+
+    def take_arrived(self) -> list:
+        arrived, self.arrived = self.arrived, []
+        return arrived
 
     def expired(self) -> list[str]:
         now = self.clock()
         late = [
             label
-            for label, (_prefix, clicked, _before) in self.pending.items()
+            for label, (_prefix, clicked, _before, _key) in self.pending.items()
             if now - clicked > DOWNLOAD_TIMEOUT_SECONDS
         ]
         for label in late:
@@ -377,6 +599,7 @@ def _settle(driver, downloads: _PendingDownloads, download_dir, log, failures: i
         for label in downloads.expired():
             failures += 1
             log(f"Invoice {label} did not finish downloading within {DOWNLOAD_TIMEOUT_SECONDS}s - skipped.")
+            _raise_if_blocked(driver)
             if failures == 1:
                 _log_page_state(driver, download_dir, log, f"waiting for invoice {label} to download")
         if not downloads.pending:
@@ -386,62 +609,217 @@ def _settle(driver, downloads: _PendingDownloads, download_dir, log, failures: i
         sleep(POLL_SECONDS)
 
 
+class _Run:
+    """What one Metro run keeps from one date window to the next."""
+
+    def __init__(self):
+        self.failures = 0  # downloads in a row that never arrived
+        self.unreadable: list[str] = []  # windows holding rows whose number could not be read
+
+
+SHORT_READS_TOLERATED = 2  # a list read shorter than already seen is read again this often
+MISSES_TOLERATED = 2  # a row not found again for its click is tried again this often
+
+
 def _download_window(
-    driver, download_dir: str, total: int, known_numbers, log, on_step, sleep=time.sleep, clock=time.monotonic
+    driver,
+    download_dir: str,
+    total: int,
+    known_numbers,
+    log,
+    on_step,
+    sleep=time.sleep,
+    clock=time.monotonic,
+    run: _Run | None = None,
+    should_cancel=lambda: False,
+    window: str = "cette période",
 ) -> int:
-    """Download every row of the current results page not already imported.
+    """Download every row of the current results page not already imported:
+    one click every CLICK_INTERVAL_SECONDS at most, never more than
+    MAX_IN_FLIGHT downloads outstanding, and whatever is still on its way
+    when the list is done is waited for before the next date window. Returns
+    how many downloads were started. MAX_CONSECUTIVE_TIMEOUTS downloads in a
+    row that never came - across windows - stop the whole run (MetroError).
 
-    The next click doesn't wait for the previous file - that waiting was most
-    of a gather's time. Metro isn't hammered either: one click every
-    CLICK_INTERVAL_SECONDS at most, never more than MAX_IN_FLIGHT downloads
-    outstanding, and whatever is still on its way when the list is done is
-    waited for before the next date window. Returns how many downloads were
-    started.
+    Rows are followed by their number, never their place: the list can
+    re-render under a click (a row moving up, one arriving), and a place
+    walked over then was a row skipped, or one clicked twice. A row counts
+    as fetched once its file has landed: marked at the click, the download a
+    dying browser cut off was skipped after the restart as "already
+    imported", and never imported - and a file that landed just before the
+    browser died is counted all the same, not fetched again.
+
+    No window ends in silence: a list read shorter than already seen is read
+    again, a row missing when its click comes is tried again, fewer rows read
+    than announced is an error, and so is a list that never stops changing.
+    Rows whose number cannot be read are left to the end of the run
+    (`run.unreadable`), which names their windows.
     """
+    run = run or _Run()
     downloads = _PendingDownloads(download_dir, clock)
-    failures = 0
+    failures = run.failures
     started = 0
-    for idx in range(total):
-        # Re-fetched each time rather than reusing handles captured before
-        # any click: the page can re-render rows after a download, which
-        # silently invalidates old references.
-        buttons = _visible_download_buttons(driver)
-        if idx >= len(buttons):
-            log(
-                f"Expected a download button at position {idx + 1}/{total} but the page only "
-                f"has {len(buttons)} now - stopping early for this window."
-            )
-            break
-        key = _row_key(buttons[idx])
-        label = f"{idx + 1}/{total}" + (f" ({_invoice_number(key)})" if key else "")
-        if key and _is_known(key, known_numbers):
-            log(f"Invoice {label} already imported - skipping download.")
+    decided: set = set()  # rows of this window downloaded, skipped, or given up
+    seen: set = set()  # every row number read in this window
+    misses: dict = {}
+    lost: list[str] = []
+    unreadable = 0
+    short_reads = 0
+    steps = 0
+    cancelled = False
+
+    def note_arrivals():
+        for key in downloads.take_arrived():
+            known_numbers.add(_invoice_number(key))
+
+    try:
+        while True:
+            if should_cancel():
+                log("Annulé : plus aucun téléchargement Metro.")
+                cancelled = True
+                break
+            rows = _rows(driver)
+            read = {key for _button, key in rows if key is not None}
+            seen |= read
+            unreadable = max(unreadable, len(rows) - len(read))
+            waiting = [(place, key) for place, (_button, key) in enumerate(rows) if key is not None and key not in decided]
+            if not waiting:
+                if len(read) < len(seen) and short_reads < SHORT_READS_TOLERATED:
+                    # Caught between two drawings of the list: read again.
+                    short_reads += 1
+                    sleep(POLL_SECONDS)
+                    continue
+                break
+            short_reads = 0
+            steps += 1
+            if steps > 2 * max(total, len(seen)) + 5:
+                raise MetroError(
+                    f"Metro : la liste de {window} n'a cessé de changer - récupération Metro arrêtée, "
+                    f"{len(waiting)} facture(s) non traitée(s)."
+                )
+            place, key = waiting[0]
+            decided.add(key)
+            label = f"{place + 1}/{len(rows)} ({_invoice_number(key)})"
+            if _is_known(key, known_numbers):
+                log(f"Invoice {label} already imported - skipping download.")
+                on_step()
+                continue
+
+            failures = _settle(driver, downloads, download_dir, log, failures, sleep, until_empty=False)
+            note_arrivals()
+            if failures >= MAX_CONSECUTIVE_TIMEOUTS:
+                raise MetroError(
+                    f"Metro : {MAX_CONSECUTIVE_TIMEOUTS} téléchargements de suite ne sont jamais arrivés - récupération "
+                    "Metro arrêtée plutôt que de continuer à cliquer. Le reste viendra à une prochaine recherche."
+                )
+            if should_cancel():
+                log("Annulé : plus aucun téléchargement Metro.")
+                cancelled = True
+                break
+            # Found again by its number: the handle can have gone stale in the wait.
+            button = next((found for found, found_key in _rows(driver) if found_key == key), None)
+            if button is None:
+                misses[key] = misses.get(key, 0) + 1
+                if misses[key] <= MISSES_TOLERATED:
+                    decided.discard(key)  # read again at the next round
+                    log(f"Invoice {label} is not in the list just now - tried again.")
+                else:
+                    lost.append(_invoice_number(key))
+                    log(f"Invoice {label} kept leaving the list - not clicked.")
+                    on_step()
+                continue
+            _js_click(driver, button)
+            downloads.start(label, _file_prefix(key), key)
+            started += 1
+            log(f"Downloading Metro invoice {label}")
             on_step()
-            continue
+            sleep(CLICK_INTERVAL_SECONDS)
 
-        failures = _settle(driver, downloads, download_dir, log, failures, sleep, until_empty=False)
-        if failures >= MAX_CONSECUTIVE_TIMEOUTS:
-            log(
-                f"{MAX_CONSECUTIVE_TIMEOUTS} downloads in a row never arrived - something is stuck on "
-                "Metro's side. Stopping this window rather than clicking the rest."
-            )
-            break
-        _js_click(driver, buttons[idx])
-        downloads.start(label, _file_prefix(key))
-        started += 1
-        log(f"Downloading Metro invoice {label}")
-        on_step()
-        sleep(CLICK_INTERVAL_SECONDS)
-
-    _settle(driver, downloads, download_dir, log, failures, sleep, until_empty=True)
+        run.failures = _settle(driver, downloads, download_dir, log, failures, sleep, until_empty=True)
+    finally:
+        # Only the folder is looked at: a file that landed before a browser
+        # died counts, and is not fetched from Metro again after the restart.
+        try:
+            downloads.landed()
+        except OSError:
+            pass
+        note_arrivals()
+    if run.failures >= MAX_CONSECUTIVE_TIMEOUTS:
+        raise MetroError(
+            f"Metro : {MAX_CONSECUTIVE_TIMEOUTS} téléchargements de suite ne sont jamais arrivés - récupération "
+            "Metro arrêtée. Le reste viendra à une prochaine recherche."
+        )
+    if cancelled:
+        return started
+    if lost:
+        raise MetroError(
+            f"Metro : {len(lost)} facture(s) de {window} n'ont pas pu être cliquées ({', '.join(lost)}) - "
+            "récupération Metro incomplète."
+        )
+    if len(seen) + unreadable < total:
+        raise MetroError(
+            f"Metro : {total} factures annoncées pour {window}, {len(seen) + unreadable} lues - récupération "
+            "Metro incomplète."
+        )
+    if unreadable:
+        run.unreadable.append(window)  # said once every window has been searched
     return started
 
 
+def _session_died(exc: WebDriverException) -> bool:
+    """A browser that is gone - not a page that is not what was expected."""
+    if isinstance(exc, InvalidSessionIdException):
+        return True
+    text = str(exc).lower()
+    return any(
+        sign in text
+        for sign in ("chrome not reachable", "session deleted", "disconnected: not connected", "no such session")
+    )
+
+
+def _build_driver(download_dir: str):
+    options = webdriver.ChromeOptions()
+    if settings.SCRAPER_HEADLESS:
+        options.add_argument("--headless=new")
+    options.add_experimental_option(
+        "prefs",
+        {
+            "download.default_directory": os.path.abspath(download_dir),
+            "download.prompt_for_download": False,
+            "plugins.always_open_pdf_externally": True,
+        },
+    )
+    service = Service(ChromeDriverManager().install())
+    new_driver = webdriver.Chrome(service=service, options=options)
+    # Headless Chrome blocks file downloads by default for security reasons
+    # since Chrome ~96 - without this, every PDF download silently no-ops
+    # and the "wait for the file to appear" loop below just times out.
+    new_driver.execute_cdp_cmd(
+        "Page.setDownloadBehavior",
+        {"behavior": "allow", "downloadPath": os.path.abspath(download_dir)},
+    )
+    return new_driver
+
+
 def scrape_metro_invoices(
-    download_dir: str, start_date: date, end_date: date, log=print, on_progress=None
+    download_dir: str,
+    start_date: date,
+    end_date: date,
+    log=print,
+    on_progress=None,
+    should_cancel=lambda: False,
+    ignore_pause: bool = False,
 ) -> list[str]:
+    """The PDFs downloaded for [start_date, end_date], not already imported.
+    Raises MetroError (MetroBlocked for the firewall) carrying the files that
+    landed before the stop - and MetroPaused, before any browser starts,
+    while Metro is to be left alone (metro_pause), unless a person asked for
+    one sign-in all the same (`ignore_pause`)."""
     if not settings.METRO_EMAIL or not settings.METRO_PASSWORD:
-        raise RuntimeError("METRO_EMAIL / METRO_PASSWORD are not configured in .env")
+        raise MetroError("METRO_EMAIL / METRO_PASSWORD manquent dans le fichier .env.")
+    paused = None if ignore_pause else metro_pause()
+    if paused is not None:
+        raise paused
 
     from invoices.models import Invoice  # local import: scrapers avoid a hard dependency on models otherwise
 
@@ -452,10 +830,9 @@ def scrape_metro_invoices(
     )
 
     os.makedirs(download_dir, exist_ok=True)
-    # Clicking a download button occasionally also triggers an unrelated
-    # multi-MB "downloads.htm" partial download (a stray side effect of the
-    # page's own JS, not something we asked for) that never finishes and
-    # would otherwise pile up across runs - it's not a PDF, so it's junk.
+    # A multi-MB "downloads.htm" sometimes appears beside the PDFs: Chrome's
+    # own component download (it starts "Cr24", a CRX package - seen with no
+    # Metro run at all), not Metro's. It never finishes and is no PDF: junk.
     # Debug screenshots are deleted right after being logged now, but this
     # also mops up any left over from before that change.
     for stale in os.listdir(download_dir):
@@ -466,31 +843,9 @@ def scrape_metro_invoices(
                 pass
     existing = set(os.listdir(download_dir))
 
-    def build_driver():
-        options = webdriver.ChromeOptions()
-        if settings.SCRAPER_HEADLESS:
-            options.add_argument("--headless=new")
-        options.add_experimental_option(
-            "prefs",
-            {
-                "download.default_directory": os.path.abspath(download_dir),
-                "download.prompt_for_download": False,
-                "plugins.always_open_pdf_externally": True,
-                # Downloads now overlap: Chrome must not stop a page from
-                # starting a second one before the first has finished.
-                "profile.default_content_setting_values.automatic_downloads": 1,
-            },
-        )
-        service = Service(ChromeDriverManager().install())
-        new_driver = webdriver.Chrome(service=service, options=options)
-        # Headless Chrome blocks file downloads by default for security reasons
-        # since Chrome ~96 - without this, every PDF download silently no-ops
-        # and the "wait for the file to appear" loop below just times out.
-        new_driver.execute_cdp_cmd(
-            "Page.setDownloadBehavior",
-            {"behavior": "allow", "downloadPath": os.path.abspath(download_dir)},
-        )
-        return new_driver
+    def landed() -> list[str]:
+        new_files = sorted(set(os.listdir(download_dir)) - existing)
+        return [os.path.join(download_dir, f) for f in new_files if f.lower().endswith(".pdf")]
 
     windows = list(_date_windows(start_date, end_date))
     multi_window = len(windows) > 1
@@ -498,6 +853,8 @@ def scrape_metro_invoices(
     window_idx = 0
     session_restarts = 0
     driver = None
+    run = _Run()
+    cancelled = False
 
     def on_step():
         nonlocal overall_index
@@ -506,13 +863,20 @@ def scrape_metro_invoices(
             on_progress(overall_index, None)
 
     try:
-        while window_idx < len(windows):
+        while window_idx < len(windows) and not cancelled:
+            if should_cancel():
+                log("Annulé : Metro n'est pas contacté.")
+                break
             try:
-                driver = build_driver()
+                driver = _build_driver(download_dir)
                 wait = WebDriverWait(driver, PAGE_WAIT_SECONDS)
-                _login(driver, wait, download_dir, log)
+                _login(driver, wait, download_dir, log, should_cancel)
 
                 while window_idx < len(windows):
+                    if should_cancel():
+                        log("Annulé : les fenêtres Metro restantes ne sont pas cherchées.")
+                        cancelled = True
+                        break
                     window_start, window_end = windows[window_idx]
                     if multi_window:
                         log(f"--- Fenêtre {window_start} → {window_end} ---")
@@ -521,6 +885,8 @@ def scrape_metro_invoices(
                     try:
                         wait.until(lambda d: len(_visible_download_buttons(d)) > 0)
                     except TimeoutException:
+                        # A search refused looks like a search that found nothing.
+                        _raise_if_blocked(driver)
                         log(f"Aucune facture entre {window_start} et {window_end}.")
                         window_idx += 1
                         continue
@@ -536,38 +902,80 @@ def scrape_metro_invoices(
                             "Relancez avec une période plus courte si besoin."
                         )
                     log(f"Found {total} Metro invoice(s) between {window_start} and {window_end}")
-                    _download_window(driver, download_dir, total, known_numbers, log, on_step)
-                    window_idx += 1
-            except WebDriverException as exc:
-                # A dead/crashed browser session (seen more than once in
-                # practice) used to take the whole function down without
-                # returning anything past that point - even the rest of a
-                # wide, multi-year date range would simply never be
-                # attempted, while the caller still reported the gather as a
-                # plain success. A fresh session picking up at the next
-                # unprocessed window (rather than giving up, or silently
-                # restarting from the very first one) is what actually keeps
-                # a long backfill from losing whatever window it happened to
-                # be on when Chrome died.
-                log(f"Le navigateur a rencontré une erreur et la session s'est arrêtée : {exc}")
-                session_restarts += 1
-                if session_restarts > MAX_SESSION_RESTARTS:
-                    remaining = ", ".join(f"{w[0]}→{w[1]}" for w in windows[window_idx:])
-                    log(
-                        f"⚠ Abandon après {MAX_SESSION_RESTARTS} nouvelles tentatives - fenêtre(s) jamais "
-                        f"traitée(s) : {remaining}. Relancez une recherche sur cette période pour les récupérer."
+                    _download_window(
+                        driver,
+                        download_dir,
+                        total,
+                        known_numbers,
+                        log,
+                        on_step,
+                        run=run,
+                        should_cancel=should_cancel,
+                        window=f"{window_start} → {window_end}",
                     )
-                    break
+                    window_idx += 1
+            except _MetroCancelled:
+                log("Annulé avant l'envoi de l'identifiant à Metro.")
+                cancelled = True
+            except MetroError:
+                raise
+            except NoSuchWindowException as exc:
+                # A person closed the window: that is a stop, not a crash.
+                raise MetroError("La fenêtre du navigateur a été fermée : récupération Metro arrêtée.") from exc
+            except WebDriverException as exc:
+                log(f"Le navigateur a rencontré une erreur : {exc.__class__.__name__} - {str(exc).strip()[:200]}")
+                if not _session_died(exc):
+                    # The page, not the browser: said, never answered with a
+                    # new browser and a new sign-in.
+                    _raise_if_blocked(driver)
+                    _log_page_state(driver, download_dir, log, "after a browser error")
+                    raise MetroError(
+                        f"Metro : la page n'a pas répondu comme prévu ({exc.__class__.__name__}) - récupération "
+                        "Metro arrêtée. Le détail est dans le journal."
+                    ) from exc
+                # A browser that died (seen in practice) gets one fresh
+                # browser, after a pause, to go on from the window it was on
+                # - quietly giving up lost the rest of a long range.
+                session_restarts += 1
+                remaining = ", ".join(f"{w[0]}→{w[1]}" for w in windows[window_idx:])
+                if session_restarts > MAX_SESSION_RESTARTS:
+                    raise MetroError(
+                        f"Le navigateur s'est arrêté {session_restarts} fois : récupération Metro arrêtée. "
+                        f"Période(s) non cherchée(s) : {remaining}."
+                    ) from exc
                 log(
-                    f"Nouvelle tentative avec une session de navigateur fraîche pour les fenêtres restantes "
-                    f"(essai {session_restarts}/{MAX_SESSION_RESTARTS})..."
+                    f"Le navigateur s'est arrêté : nouvelle session dans {RESTART_PAUSE_SECONDS} s pour les "
+                    f"fenêtres restantes ({remaining})."
                 )
+                time.sleep(RESTART_PAUSE_SECONDS)
+                cancelled = should_cancel()
             finally:
                 try:
                     driver.quit()
                 except Exception:
                     pass
                 driver = None
+        if run.unreadable and not cancelled:
+            raise MetroError(
+                "Metro : des factures sans numéro lisible dans la liste n'ont pas été téléchargées ("
+                + ", ".join(run.unreadable)
+                + ") - récupération Metro incomplète."
+            )
+    except MetroError as exc:
+        exc.files = exc.files or landed()
+        if isinstance(exc, MetroBlocked):
+            try:
+                until = record_block(exc.reference)
+            except Exception as problem:  # noqa: BLE001 - the refusal itself must reach the person
+                log(f"La pause de Metro n'a pas pu être enregistrée : {problem}")
+            else:
+                if until is not None:
+                    log(f"Metro ne sera plus contacté avant le {_said(until)}.")
+        raise
+    except Exception as exc:  # noqa: BLE001 - said in words, with what landed
+        raise MetroError(
+            f"Metro : erreur inattendue ({exc.__class__.__name__} - {str(exc).strip()[:200]}).", files=landed()
+        ) from exc
     finally:
         if driver is not None:
             try:
@@ -575,5 +983,4 @@ def scrape_metro_invoices(
             except Exception:
                 pass
 
-    new_files = sorted(set(os.listdir(download_dir)) - existing)
-    return [os.path.join(download_dir, f) for f in new_files if f.lower().endswith(".pdf")]
+    return landed()

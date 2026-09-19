@@ -14,7 +14,10 @@ and **blanks every credential** so no test can reach the real mailbox, the
 real Metro site or the Anthropic API. `tests/support.py::NoNetworkTestCase`
 additionally makes an accidental outbound connection fail loudly.
 
-Add `--exclude-tag=browser` once browser tests exist, for the fast loop.
+Add `--exclude-tag=browser` for the fast loop: the browser tests drive a
+real headless Chrome (`invoices/tests/test_website_scraper_browser.py`,
+against a customer portal served from the machine) and take a minute and a
+half. They skip themselves where Chrome or its driver is missing.
 
 ## The testing contract
 
@@ -202,6 +205,16 @@ What it knows, all arithmetic:
   supplier sends - read as the number, the second invoice of the year was
   refused as a duplicate of the first. A dash a PDF's own rules leave inside
   a number or a month ("FR-F033—763", "avr—. 26, 2024") is taken back out.
+  A number **printed with its date** ("N° 2026100000001 DU 10 AVRIL 2026",
+  "n°1400000001 du 19 Janvier 2024") is the document's own, whatever lines
+  stand between it and the word « facture »: looked for beside that word
+  only, Eau de Paris' and the Freebox bills were filed under a payment
+  reference or a number made up from the date and the total - and the
+  portal's list, printing the real number, never recognised an invoice
+  already imported. `manage.py refresh_document_numbers --dry-run` puts the
+  printed number in place of such a stand-in (a date-total or a long digit
+  run, never a real number, never one another document of the supplier
+  holds, never a supplier with its own reader): 139 documents on 19/09.
 
 Those rules replaced two parsers: measured on every De Poivre and Plou &
 Fils invoice filed, the one reader reproduces them line for line - names,
@@ -316,9 +329,11 @@ checked ticket is never rewritten (except the one the price was typed on).
 ### A supplier of charges has no products
 
 A subscription, a rent, a water bill: there is no product behind them and
-nothing to classify, so `Supplier.expenses_only` (a box on Achats → Sources,
-which redoes what is already filed - `importing.redo_as_expenses`, reading
-each document again from the text it kept) files them by
+nothing to classify, so `Supplier.expenses_only` (switched from the
+supplier's page, « changer… », behind a confirmation saying what it redoes -
+`importing.redo_as_expenses`, reading each document again from the text it
+kept; the box on the Sources tab saved on a click, and a POST from a page
+still showing it now gets the confirmation) files them by
 `importing.charge_reading` instead of resolving products. Its lines land on
 `Product.is_expense` products, which reach no stock page, no review queue
 and no stock movement; **Produits** shows what they cost in a fold of its
@@ -355,6 +370,16 @@ rent, and forty-two of them behind the tickets is a queue nobody works
 through - a total that could not be read holds the document in "À vérifier"
 with what is wrong written on it instead.
 
+**A charge keeps its own checks** ("Total de la charge", "Date du ticket":
+`importing.charge_state`). A charge fetched by a portal or the mailbox goes
+through the ticket reader first, and `import_receipt` stored that reader's
+checks over the ones the charge reading had just set - about lines the
+charge reading replaced: Eau de Paris' bills, filed at exactly what they
+charge, waited in « À vérifier » under « 5.5 % supposé » and « lignes
+310,15 € HT / ticket 303,28 € ». `manage.py refresh_charge_checks
+--dry-run` gives the documents filed before that their own checks back
+(never one a person validated): 36 on 19/09.
+
 **A charge keeps the amount it charges, tax included** (`InvoiceLine.printed_ttc`,
 set by `_expense_line` from the figures the document prints): 33,33 € HT at
 20% works back out to 40,00 € where the bill says 39,99 €, and 39,99 € is
@@ -388,6 +413,11 @@ last document ever**, window or not. A supplier is listed as soon as it has
 a document at all - windowed, a water bill arriving twice a year dropped off
 the page between two of them, taking its history with it, and the date is
 exactly what a row with nothing over the window has left to say.
+
+Three traps a review found on the charges fold, each a test that failed
+first: the first stock take's window has no start (a None in the filter was
+a 500), a curve adds up what one day charged, and a document filed with
+nothing read is listed on its supplier's row.
 
 **A poste is a label and the amount printed after it**, and a document's
 postes are the run of them adding up to an amount printed below them. That
@@ -553,8 +583,8 @@ punctuation, as whole words (`receipts.prints_header`, the one definition),
 and one shorter than four characters, one another supplier already has, or
 one already printed on the tickets of two other shops or on more than three,
 is refused - a few tickets of one shop carrying it are more likely the new
-shop's, filed before it existed, and are named so they can be moved (all of
-one supplier's: together, from its split - `views._how_to_bring`). The chips
+shop's, filed before it existed, and are named so they can be moved, each
+from its own page (`views._say_new_shop`, `_set_shop_header`). The chips
 offered are only those the save would take (`offerable_headers`, over the
 documents read once, `document_corpus`): the customer's own street is on
 every supplier's documents, and a line with no space before the length a
@@ -606,15 +636,41 @@ A digital document's text is kept for this (`Invoice.source_text`; only
 `ocr_text` makes a document a receipt), which is what makes **the customer's
 own SIREN** - printed on every supplier's invoice - name nobody: the command
 reads the PDFs already filed before learning anything. Measured on the real
-tickets, two rules keep it honest: an
-identifier counts only when **a quarter of the shop's documents print it**
-(misreadings - "mmoprix.fr", "monoprii.fr" - and labels on some goods -
-"fsc.org" on Mr.Bricolage's wood - are on one ticket or two) and **no other
-supplier's documents do** (the customer's own phone); and **a web site alone
-names no one** (the one branding the goods is printed at every shop selling
-them). It comes after the headers people gave and the configured tills, and
-says so ("Enseigne reconnue"). One identifier learned by two suppliers names
-neither.
+tickets, these rules keep it honest (`identifiers_naming`, `still_naming`,
+arithmetic with no database):
+
+- a **new** identifier is learned when **a quarter of the supplier's
+  documents print it** - or, for a supplier with a header, a quarter of
+  those **not** printing the header, two at least (misreadings -
+  "mmoprix.fr", "monoprii.fr" - and labels on some goods - "fsc.org" on
+  Mr.Bricolage's wood - are on one ticket or two), and **no other
+  supplier's documents print it** (the customer's own phone);
+- one it **knows** is dropped only for a reason about that identifier: another
+  supplier's documents print it, or none of its own do any more. Measured
+  again against a quarter of ALL its documents, Free's mobile figures (7 bills
+  among 37) went on 18/09 - silently, on a correction validated - once thirty
+  box bills had been filed beside them by the header;
+- a figure a person set aside (« Retirer », `Supplier.refused_identifiers`)
+  is never learned again;
+- **a web site alone names no one** (the one branding the goods is printed
+  at every shop selling them).
+
+It comes after the headers people gave and the configured tills, and says so
+("Enseigne reconnue"). One identifier learned by two suppliers names
+neither. Every document's figures are read once and kept by their text
+(`identifiers._document_identifiers`, `may_print`): a supplier's page reads
+all 880 documents, and reading them again made it half a second.
+
+**Every change of what names a supplier is recorded** (`SupplierChange`,
+`supplier_changes.py`): its name, header, identifiers, nature, a
+type moved, its first document - with the cause of the act it came from (a
+view or a gather says what it is doing around the call, `with
+cause("validation de …", invoice=…, by_person=True)`; nothing set is
+"automatique") and what an undo needs. `receipts.set_identifiers` is the one
+writer of `ticket_identifiers`, and a contract test says so: the 18/09 loss
+left no trace anywhere. A figure dropped that nobody asked to drop is
+`needs_review` until someone has seen it; `collect()` hands the changes of
+an act back, and the message, the batch log or the gather log says them.
 
 Two more rules came from seven Free invoices filed under UBA, on a mobile
 number both print - **the customer's own**, learned while UBA was the only
@@ -638,70 +694,66 @@ torn or faded top is exactly what the learned identifiers are for. So
 giving Free the text of its box subscription ("Abonnement Freebox Pop")
 left its seven mobile bills where they were - filed by the company number
 and web sites Free had learned from them. Saving a header now says how many
-of the supplier's documents do not print it and what filed them there
-(`views._say_headerless`), and such a document says so on its own page, with
-what named it (`views._recognition_context`).
+of the supplier's documents do not print it, what filed them there, and
+that one not its own is moved from its own page (`views._say_headerless`).
+Giving a header never takes a second subscription's documents out of a
+supplier: two subscriptions are two suppliers (next paragraph).
 
-**One company, two sources, is a split** (`receipts.split_documents`, the
-page `/invoices/fournisseurs/<pk>/separer/`, reached from that notice, from
-"Changer de fournisseur" and from the Sources tab). The documents not
-printing the header are ticked, or those printing one of the figures the
-supplier learned (`?avec=`); they move **together** to a new source or an
-existing one of the same kind, all or nothing. Moved one at a time
-(`move_to_shop`), the first taught its new source nothing: the siblings
-left behind printed the same SIREN and web site, so nothing was the new
-source's alone, and the next mobile bill came back unrecognised.
-`move_documents` is the one definition of a move - every document first,
-then each supplier left forgets what they print and checks what it still
-knows, then the destination learns **once**, from all of them. What both
-sides print (the customer's own number) names neither; where two contracts
-of one company print the same company number too (two meters, two sites),
-only a header tells them apart, and the page refuses one the staying side
-prints. A new source split from charges is charges, and a charge line named
-after the supplier it leaves takes the new name; after the move every
-document of both sides is recognised again, and one landing on the other
-side undoes the whole split; one no longer recognised at all is said
-(a web site alone names no one). On the real data: Free Mobile learned
-exactly its SIREN and two web sites, Free kept only its header, no other
-supplier's identifiers moved, and not one of the 875 documents changed
-supplier under the new rules. Learning itself is `identifiers_naming`,
-arithmetic with no database, which the split page uses to say beforehand
-what each side will be recognised by.
+**One source, one supplier.** A type files what it fetches under its
+supplier, whatever it prints (below), so two sources of one company -
+Free's box and its mobile line - are two suppliers from the start, each
+learning what its own documents print. Filed as one, they needed a page to
+take one subscription back out: a split, chosen, previewed inside a
+rolled-back transaction, confirmed against a fingerprint of everything it
+was worked out from, undone from either side's history - all for a case
+that only exists when a source is filed under another's supplier. The
+owner removed it on 19/09 as unneeded, its history kind (`SPLIT`) with it:
+no split had ever been done. The one real case was fixed the same day by a
+data operation. The owner had created Free Mobile and moved the mobile
+portal's type to it from the type form (`TYPES`) - left behind, a type
+files what it fetches back under Free; then Free Mobile's seven bills,
+filed under Free by its SIREN and web sites, went over together through
+`move_documents`. Free Mobile learned its SIREN and web sites but not the
+customer's phone (UBA's documents print it too), Free kept its header
+and its support site, every box bill is recognised as Free and every
+mobile bill as Free Mobile, and no other document moved. A second
+subscription found under one supplier later is the same fix: a supplier of
+its own, its type moved to it, then its documents.
 
-What an adversarial review of it found, each now a test that failed first:
+**Documents of one source move together** (`receipts.move_documents`, the
+one definition of a move; `move_to_shop` is it for one document, and a
+page only ever moves one - a group move is a data operation). Every
+document first, then each supplier left forgets what they print and checks
+what it still knows, then the destination learns **once**, from all of
+them. Moved one at a time (`move_to_shop`), the first of the seven mobile
+bills taught its new supplier nothing: the siblings left behind printed the
+same SIREN and web site, so nothing was the new supplier's alone, and the
+next mobile bill came back unrecognised - the new supplier learns them only
+once the last has left. All or nothing: two of them with one number, or a
+number the destination already has, and none moves. What both sides print
+(the customer's own number) names neither; where two contracts of one
+company print the same company number too (two meters, two sites), only a
+header tells them apart.
 
-- **A split teaches what the source knew, nothing more** (`learnable`):
-  seven bills of one line print the customer's number on every page, and
-  moved together they made it the new source's - the next caterer's ticket
-  printing it was filed as a charge. (Moving the seventh on its own still
-  would: a document filed by hand teaches what it prints. The customer's
-  number is safe because another supplier's documents print it.)
+What a move keeps, each a test that failed first:
+
 - **Learning corrects the others** (`learn_identifiers` re-checks every
   supplier holding something the documents print, `_recheck`): one that
   had learned the customer's company number while it was the only one
   printing it refused every bill of another, header and all, until someone
   filed one of its own; and a third supplier sharing a number with the one
-  split was left its only owner.
-- **A move keeps what the lines do not say** (`move_documents`): a document
-  read as goods and moved into a supplier of charges is read again as a
-  charge (`refile_as_charge`) - its previous balance, direct debit and rent
-  had become three postes, three times what it charges; a charge's state is
-  its total's (`charge_state`) - an unread total came out COMPLETE and left
+  the documents left was left its only owner.
+- **What the lines do not say** (`move_documents`): a document read as
+  goods and moved into a supplier of charges is read again as a charge
+  (`refile_as_charge`) - its previous balance, direct debit and rent had
+  become three postes, three times what it charges; a charge's state is its
+  total's (`charge_state`) - an unread total came out COMPLETE and left
   "À corriger"; and a classified line's product at the new supplier takes
   the same stock item (`link_product_to_stock_type`) - re-resolved, the
-  purchase silently left the stock ledger.
-- **Only another subscription's documents are offered**
-  (`separable_documents`: not printing the header, and printing something
-  learned that the documents with the header do not): a shop's own ticket
-  whose top the photo lost prints the same phone as the others, and was
-  offered as a second subscription to split off.
-- The page: it works on its own copy of the source (a refused split showed
-  a header never saved), an existing destination keeps its header (the new
-  source's box stays in the page, hidden, and was posted), a name another
-  supplier has says which, the messages say which documents they mean.
-- The charges page: the first stock take's window has no start (a 500),
-  a curve adds up what one day charged, a document filed with nothing read
-  is listed on its supplier's row.
+  purchase silently left the stock ledger. Between two suppliers of
+  charges, a charge line named after the supplier it leaves takes the new
+  name; a new supplier made from a charge's page is charges (the move
+  form's box starts ticked).
 
 Two guards **ask rather than choose** (`recognise_shop`, the reason travels
 to the import's message): the headers of **two suppliers** on one document,
@@ -710,7 +762,68 @@ advertising the box would have gone to the box - and **a header against a
 company number** another supplier learned. A header still beats another
 supplier's phone or web site. The Sources tab lists every supplier with
 what names it, those with a reader of their own too (UBA, Metro), and how
-many of a shop's documents print its header.
+many of a shop's documents print its header; a row opens its page.
+
+**A supplier has a page of its own** (`supplier_views.py`,
+`/invoices/fournisseurs/<pk>/`): what files its documents under it (header,
+identifiers retained - « Retirer » -, printed but not retained with why -
+« Retenir » when the rule would keep it -, set aside - « Ne plus
+l'écarter »), its invoice types, its history with an undo per change, and
+« Modifier » and « Supprimer… », the latter disabled with the reason when it
+cannot be (a till, a reader of its own, documents filed, a type fetching for
+it). Every action answers where it was taken and is recorded; an undo is
+recorded too, marked with what it undoes (`data["undoes"]`), and has no
+undo of its own - offered one, it redid the change in one click, nothing
+shown first; posted by hand, it is refused. A value the page did not offer
+is a message, never a 500, and no GET writes. Two suppliers never share a
+name whatever its case, accented capitals included (`supplier_named`:
+SQLite's case-blind comparison is ASCII only).
+
+- **Created before its first document** (`supplier_create`, « + Nouveau
+  fournisseur » on Sources, or « + Nouveau fournisseur… » in the invoice type
+  form, saved with the type in one transaction - a type refused leaves no
+  supplier). A new source had to name an existing supplier, and one never
+  sent a document did not exist. Where its invoices will come from sends
+  the next page: the type form, filled in (`?fournisseur=&source=&retour=`).
+  Its creation is undone by deleting it, while nothing rests on it.
+- **Modified after a look** (`supplier_edit`): « Vérifier les changements »
+  says what a rename takes along (a supplier of charges: the lines and the
+  poste named after it, `rename_supplier` - never to the name of another of
+  its postes; the code never changes, bank matching keeps the payee names it
+  learned) and what a header does (printed
+  on how many of its documents, on how many of others', refused by
+  `check_header`) - nothing saved; the save applies only if the supplier is
+  as it was checked. One with no documents saves in one step.
+- **Deleted only when empty** (`supplier_delete`): no document, no type;
+  its unused products, known prices, payee names and history go with it,
+  said before.
+- **Its first document** is recorded, to be seen (`FIRST_DOCUMENT`,
+  `needs_review`): what it taught, or what it prints that was not retained
+  (one recognised by its header teaches nothing). Nothing else vouches for
+  a first reading. Suppliers waiting for theirs come first in every import
+  choice (`WAITING_GROUP`).
+- **A type files what it fetches under its supplier, whatever it prints -
+  and a document printing what names another supplier teaches nothing**
+  (`type_supplier_doubt`, `by_type`: another supplier's header, till or
+  learned figures - or the company numbers of others printed beside this
+  one's own, every one of them: `_companies_of_others`).
+  The doubt is kept on the document (`Invoice.supplier_doubt`), not as a
+  check: reading it again, or as a charge, rewrote the checks and the doubt
+  went with them. The document waits (the ticket queue while unchecked,
+  "À corriger" otherwise, `DOCUMENT_TO_FIX`), says why on its page and its
+  row, is **nobody's** to learning (`_stored_texts` leaves it out - counted
+  among everybody else's, it made the other supplier forget its own
+  number the next time it learned; `learn_shop_identifiers` too), and is
+  answered by a person: validated on its page (it then teaches, a digital
+  invoice included) or moved (`move_documents`). It is not its supplier's
+  first document either: the next one, which teaches, is. A type moved to another
+  supplier is recorded on both and given back from either (`TYPES`); the
+  documents it already fetched stay where they were filed, and the message
+  says to change their supplier from their own pages if they are the new
+  one's. A type page drawn before its type moved (a « Rendre » in another
+  tab, or the type saved from another tab) does not move it back unseen
+  (`supplier_was`). Enter in one of its fields saves: « Tester », the
+  form's first button, signed in on a portal.
 
 **A PDF invoice from a supplier with no reader of its own** - or a new one,
 named in the import card ("+ Nouveau fournisseur…", `InvoiceUploadForm` is a
@@ -830,13 +943,82 @@ refused - stock worth less than nothing is what the FIFO guard exists for.
 
 ### Gathering invoices
 
-**Metro bans accounts that hammer docs.metro.fr.** One login per run, one
-90-day window at a time, never more than one download click every
-`CLICK_INTERVAL_SECONDS`, never more than `MAX_IN_FLIGHT` downloads
-outstanding. Within those limits the scraper no longer waits for each file
-before the next click (`scrapers/metro._download_window`); stragglers are
-waited for at the end of each window. Test changes against the fake browser
-in `test_scraper_metro.py`, not against the live site.
+**Never make AdminMate contact Metro, a portal or the mailbox from a
+coding session** - no gather submitted in the browser pane, no curl POST,
+no `gather_invoices_task` / `scrape_metro_invoices` from a shell or a
+script. Coding agents launched 7 of the 18 recorded Metro runs and some
+fourteen unrecorded dev-script sessions on 31/08, and both refused sign-ins
+of 02/09 were an agent's end-to-end check: Metro's firewall blocked the
+owner's access twice. Test against the fakes (`test_scraper_metro.py`,
+`test_metro_refusal.py`); the owner clicks "Tester" for a portal.
+
+**Metro's firewall judges each automated sign-in** (an Akamai edge: « Vous
+avez été bloqué par notre pare-feu … identifiant :#18.… », at the moment the
+credentials are sent, even after two quiet days). So AdminMate signs in
+rarely and never argues with a refusal (`scrapers/metro.py`):
+- the refusal (`blocked_reference`) is looked for wherever it can show - the
+  page loaded, before typing, the credentials sent (`_await_sign_in`: the
+  filters, the refusal, or the sign-in page kept = `MetroLoginFailed`), a
+  search coming back empty, a download that never came, any page that
+  did not come - and raised as `MetroBlocked`, never retried;
+- `metro_pause` - kept on the METRO supplier (`scrape_*` fields), checked
+  before any browser starts, whoever calls: 7 days after a refusal, 14 if
+  it refused again within 30 days, and 24 h between two sign-ins (noted
+  before the password goes). A person can ask for one sign-in through it
+  ("Réessayer Metro maintenant" = `ignore_pause`); its own box is
+  disabled, since the browser re-ticked a remembered one;
+- a gather with `source_codes=None` never includes Metro: named only;
+- the browser is restarted only when it died (`_session_died`), once,
+  after `RESTART_PAUSE_SECONDS`; a page not as expected, or a window closed
+  by hand, stops the run - each hiccup used to mean a new sign-in;
+- one download at a time, one click every `CLICK_INTERVAL_SECONDS`;
+  `MAX_CONSECUTIVE_TIMEOUTS` downloads in a row that never came stop the
+  run (counted across windows; one late download alone says nothing - the
+  old "timeouts" were a counting bug);
+- rows are followed by their number (`ROWS_JS` reads every row's button
+  and checkbox id in one call), never their place: a list re-rendering
+  under a click had a row skipped and another clicked twice. A row counts
+  as fetched once its **file landed** - marked at the click, the download
+  a dying browser cut off was skipped after the restart, and lost;
+- "Annuler" is heard before the browser starts and before the password
+  goes: a cancelled gather still signed in once;
+- a stop carries the PDFs already landed (`MetroError.files`): imported,
+  not fetched again next time.
+
+Metro is searched from its own newest invoice at the latest
+(`min(posted start, suggested_start_date("METRO"))`): while it was paused,
+gathers of the other sources moved the offered start past it, and the
+days between would never have been searched on Metro.
+
+**One source failing is said on its own line and the others run**
+(`tasks._gather_metro`, `_gather_email`, `_gather_website`): on 18/09
+Metro's refusal failed the whole gather, and the mailbox and the five
+portals were never searched. A run with a source in error ends "Terminé"
+with "N source(s) en échec" beside its pill, and the form offers that
+run's period again (the default, since the newest invoice brought in,
+skipped what it missed) - unless the run before asked the same period and
+missed the same sources (`workspace._missed_again`): a portal asking for a
+code every time held every gather on 01/01 for good. A mailbox source with
+no reader goes through `receipts.import_document` like a portal's -
+`parse_and_import` filed it empty, and again at every gather. The gather
+beats (`tasks._GatherHeartbeat`, like the receipt batches): silent through
+a long step, it was reaped while running, and a second one could start -
+but only while it moves (log or progress changed within `STALE_AFTER`): a
+thread blocked for good in one call is left to the reaper.
+
+**SQLite takes the write lock when a transaction starts**
+(`SQLITE_OPTIONS["transaction_mode"] = "IMMEDIATE"`): in the default mode a
+transaction that had read, then wrote after another connection committed -
+a heartbeat, every 15 s - failed at once with "database is locked", the
+timeout not even tried, and the invoice being imported was lost.
+
+**A job's button follows its status card** (`data-job-control` ↔
+`data-job-active`, ui.js): drawn disabled while the job ran, it stayed so
+after the job ended - only the card was redrawn - and a failed gather
+could not be run again without reloading the page. A dead job is reaped
+where it is polled (`gather_status`, `sales_import_status`), and at startup
+only by the process serving the pages (`apps.serving_requests`): a
+`manage.py shell` used to mark a running gather failed seven seconds in.
 
 A download is complete when **the PDF its own row produces** appears
 (`134_52_14645_<timestamp>_invoice_cus_copy_main.pdf`, named after the row's
@@ -849,6 +1031,130 @@ stores them as "052-014645"; the list page is matched on till and number too
 (`_is_known`), or every credit note is downloaded again on every run. The
 levy and discount lines belong to the product above them **across page
 breaks** too.
+
+**A customer portal is data, not code** (`models.WebsiteInvoiceSource`,
+`scrapers/website.py`, set up on Achats → Sources → a type "Récupérées :
+Site web"). The rent's, the water's, the phone's: a login page, the NAMES of
+the two .env variables holding the credentials (never the values - the
+database is copied and shown on screen, a .env is not; they are read from
+the .env file at each run, so a line added counts without a restart), and
+nothing else required. The scraper does what a person does: refuses the
+cookie banner (only a refusing button is ever clicked, shadow roots
+included), finds the login form - the visible password field, the text
+field in front of it, the button that submits them, identifier and password
+on two pages if the site does that - follows the first link that speaks of
+invoices and is not one (`leads_to_invoices`: a home page listing the
+latest invoices by month had one clicked as the menu) and holds no other
+link (`link_to_follow`: Eau de Paris draws its side menu as one clickable
+block around its entries, first in the page; clicked, it only closed
+itself - nesting read from the page, never from the words; the page script
+clears the marks of its previous read first, or a page drawn in place had
+its hidden menu clicked for its first invoice; and buttons whose address is
+only "#" are not one file, or every invoice but the first was left), or the links named
+under "Liens à suivre", or the page given - and downloads, page after
+page, each invoice of the period, one click every
+`CLICK_INTERVAL_SECONDS`. CSS selectors exist for a site that defeats that,
+folded away under "Réglages avancés".
+
+The deciding is pure Python over what one script reads off the page (every
+link with the text of its row): `periods` (a date is that day, a month
+named - "mai 2026", "05/2026" - that month; a day's figures are not read
+again as a month), `in_window` (a row printing no date is downloaded: nothing
+says it is out), `looks_like_an_invoice` (leads to a PDF, says
+"Télécharger"/"PDF" - in words or by its icon's name, `icon-download…`
+read into `label` - or opens one, "Voir ma facture", **and** sits in a row
+printing a date or an amount), `known_number_in` (a row printing the number
+of an invoice already imported is not clicked). **One link a row**, the one
+that downloads first (`_strength`): Free Mobile's cards offer « Voir ma
+facture » and a button holding only a download icon - nothing on them said
+« Télécharger », and the run found no invoice. A link's row is its table
+row, list item or card - never the block holding the rows: a footer's terms
+of sale climbed to the whole page, whose dates were the invoices', and were
+downloaded as one. A button with little text of its own climbs to the block
+printing a figure (its month, its amount): stopped at the block holding
+only its neighbour « Voir ma facture », it had no date. **A gather
+recognising no invoice link at all fails** (its own line, the period
+offered again, the page kept and its links named): said as "0 found", it
+passed for a quiet month and left nothing to set the site up from. Only a
+file that *starts* like a PDF counts as the download - Chrome's stray
+"downloads.htm" appeared and vanished mid-wait (as on Metro's site).
+
+**How the file is obtained** (`_Visit.download`), each rule a 45-second
+wait per invoice on a real site: a link naming its file is **fetched** with
+the browser's session - no click to wait on (Free Mobile's « Voir ma
+facture » opened a tab a script's click could not); otherwise it is
+**clicked as a person clicks** (`_press`; the script's click only when
+something covers it), in a profile allowing pop-ups and several downloads
+(Chrome held every download of a site after its first, asking a question
+nobody saw) with downloads allowed in every tab (`Browser.setDownloadBehavior`
+- the page's own setting left a new tab without); a tab the click opened is
+**read** for the document it shows, one held in memory too; a click that
+has started nothing - no file, no download under way, no tab - after
+`DOWNLOAD_START_SECONDS` started nothing, and a file landing later is still
+taken (`late_downloads`). A file counts as arrived when it is **new or
+changed** (size, time): Eau de Paris names each file after its invoice, and
+Chrome downloading as told through DevTools writes over a file of the same
+name - a run after the first found every name already there and said
+nothing arrived while the browser showed each download done. Each file is
+moved at once to a name of its own (`_take`), so neither the next invoice
+of the same name nor the next run writes over it. **One invoice once a
+run** (`invoice_key`): a list growing under « Voir plus » (Free Mobile's
+shows five, then eight) was downloaded again from its first row, and paging
+stops when a page brings nothing new. Clicked and none arrived is a failure
+("aucune des N factures cliquées n'est arrivée"), not "nothing to
+download". What
+arrives is imported through `receipts.import_document` with the supplier
+named - never `parse_and_import`, which files a supplier without a reader
+empty - one OCR at a time.
+
+**A person is asked, never impersonated**: a code sent by SMS or a captcha
+(`NeedsAPerson`) waits five minutes for whoever is at the keyboard when the
+source's "Navigateur visible" is ticked, and stops the source with that
+advice when headless. A check standing where the login form will be - a
+slider "faites glisser vers la droite", "non pas à un robot" (TotalEnergies',
+18/09) - is looked for where the form is not, and handed over the same way:
+the scraper had looked for a form twenty seconds and said there was none.
+**A login form on screen is filled, whatever its page says**: Free Mobile's
+explains that a first sign-in asks for "un code reçu par SMS", and read as a
+check, those words stopped every run before its form was filled - "waiting
+for a verification" with nothing to verify. Words count only on a page
+without the login form, and after signing in only beside something to
+answer (an empty field, a slider: `asks_for_a_person`); a field marked for
+a one-time code or a captcha a person can see counts anywhere, never an
+invisible one (a badge scoring the visitor, a frame parked off screen). A
+window closed by hand during the wait is said as such (`alive`): read as an
+empty page, it passed for « vérification faite »; a cancel is heard during
+the wait and before the password goes. Also, from a second review: the
+password field gone is not yet signed in - a code prompt drawn a moment
+later is looked for (`SETTLE_SECONDS`), or the run ended with nothing; a
+search box, a chat or a newsletter field is nothing to answer, and the
+notice every page reCAPTCHA protects prints is no check; a field named for
+a one-time code (`otp`, `sms…`), or a slider over a form, is one; with no
+password on the page, a text field is the identifier only if it says so -
+on a check page the login went into the captcha's answer; a check at the
+identifier step of a two-step login is handed over too; and a page's words
+alone count only once its form has had `WORDS_GRACE_SECONDS` to be drawn.
+The login form is filled and submitted as it is at that moment (fields
+found again for each step): Free Mobile's redraws its button as it is
+filled, and the button found a moment before was clicked, gone. A site turning automated browsers away
+(`RefusedByTheSite`, "The requested URL was rejected" - TotalEnergies' was,
+to a plain browser, at the time of writing) is said as such; nothing tries
+to get past it. Either way the gather goes on with the next source and the
+failure sits on its own line of the progress table. A failure leaves a
+screenshot and the page's HTML under `<scrape dir>/<type>/_debug/`, which is
+what a site that changed is fixed from. "Tester" signs in and lists what a
+gather would download (`list_website_invoices`), downloading nothing - and
+keeps the page it read, found or not, under `<scrape dir>/test-<job>/_debug/`,
+naming the page's links when it recognised no invoice: a new site is set
+up from that ("Liens à suivre", the selectors), never by signing in on the
+owner's behalf.
+
+The type form holds both kinds' fields; the kind not chosen is a
+`<fieldset>` **disabled** as well as hidden. Hidden only, its empty
+required field stopped the browser sending the form, silently: "Tester"
+did nothing, and no mailbox type could be saved. The test client posts
+whatever it is given, so only `test_invoice_type_form_browser` (a real
+Chrome) sees that class of bug.
 
 The mailbox search asks for BEFORE the day **after** the end date: IMAP's
 BEFORE is exclusive (RFC 3501), and the form's end date is today - this
@@ -940,8 +1246,11 @@ the same ceiling, so check it before assuming a save is "just slow".
 
 `pk="abc"` in a filter is a `ValueError`, so a tampered or stale form is a
 500 instead of a message. A view that reads an id by hand (not through a
-form field) checks `posted.isdigit()` first and treats anything else as not
-found (`_forget_price`, `merge_stock_type`, `pos_product_assign`).
+form field) checks `common.is_id(posted)` first and treats anything else as
+not found (`_forget_price`, `merge_stock_type`, `pos_product_assign`, the
+type pages). Not `str.isdigit()`: "²" is a digit to it, and no
+int - the query raised all the same; nor more than 18 digits, past which
+SQLite's integer overflows.
 
 ### Formsets: no spare row on a saved record
 

@@ -392,3 +392,64 @@
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
     else init();
 })();
+
+/* An invoice type's source: the settings of the kind chosen (email or the
+   supplier's site) are shown, the other kind's hidden - both are in the
+   page, and only the chosen kind is saved (views.invoice_type_form). */
+(function () {
+    function show(select) {
+        document.querySelectorAll("[data-source-kind]").forEach(function (section) {
+            // Disabled too: an empty required field of the hidden kind would
+            // stop the browser sending the form, silently.
+            section.hidden = section.disabled = section.getAttribute("data-source-kind") !== select.value;
+        });
+    }
+    document.addEventListener("change", function (event) {
+        if (event.target.matches("select[name=source_kind]")) show(event.target);
+    });
+    function init() {
+        var select = document.querySelector("select[name=source_kind]");
+        if (select) show(select);
+    }
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
+    else init();
+})();
+
+/* A button starting a background job (a gather, the till import) is drawn
+   disabled while its job runs, beside a live dot. The job's status card
+   polls itself and, once the job is over, comes back without
+   data-job-active - but nothing redrew the button: it stayed disabled until
+   the page was reloaded by hand, and a failed gather could not be run again
+   (invoices/tests/test_gather_retry_browser.py). Each control names its
+   card (data-job-control) and follows it after any swap or return to the
+   page. The server still draws the first state, for a page without script. */
+(function () {
+    function sync() {
+        document.querySelectorAll("[data-job-control]").forEach(function (control) {
+            var card = document.getElementById(control.getAttribute("data-job-control"));
+            var running = !!card && card.hasAttribute("data-job-active");
+            if (control.tagName === "BUTTON") control.disabled = running;
+            else control.hidden = !running;
+        });
+    }
+    ["htmx:afterSwap", "htmx:afterSettle", "htmx:historyRestore"].forEach(function (name) {
+        document.addEventListener(name, sync);
+    });
+    window.addEventListener("pageshow", sync);
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", sync);
+    else sync();
+})();
+
+/* A table row leading to a page of its own (data-row-href, the suppliers on
+   the Sources tab): a click anywhere on the row goes there, a click on a
+   link, button or field inside it keeps its own target. The row's first
+   cell holds a real link too - for the keyboard, and to open it apart. */
+(function () {
+    document.addEventListener("click", function (event) {
+        var row = event.target.closest("tr[data-row-href]");
+        if (!row || event.defaultPrevented || event.button !== 0) return;
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        if (event.target.closest("a, button, input, select, textarea, label, summary, form")) return;
+        window.location.href = row.getAttribute("data-row-href");
+    });
+})();

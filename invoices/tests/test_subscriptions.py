@@ -1,14 +1,19 @@
 """One company's two subscriptions filed under one supplier - a box and a
-mobile line - split into two sources.
+mobile line - and the mobile bills moved to a supplier of their own.
 
 A header only adds documents: giving the box's text to the supplier never
 sends the mobile bills away, since they were filed there by the company
-number and web site they print, which the supplier learned from them. And
-moved one at a time they taught their new source nothing: the siblings left
-behind printed the same figures, so nothing was the new source's alone.
-Moved together, they are; what both sides print (the customer's own number)
-still names neither. Where the two sides print the same company number too
-(two meters, two sites), only a header tells them apart.
+number and web site they print, which the supplier learned from them. Moved
+one at a time, the first ones teach their new supplier nothing: the siblings
+left behind print the same figures, so nothing is the new supplier's alone
+until the last one has moved. Moved together (move_documents), they teach
+it at once; what both sides print (the customer's own number) still names
+neither. Where the two sides print the same company number too (two meters,
+two sites), only a header tells them apart.
+
+No page splits a supplier any more (19/09): a source is a supplier of its
+own from the start, and a document filed under the wrong one is moved from
+its own page.
 
 Data invented; the layouts are the two real subscriptions'.
 """
@@ -18,13 +23,13 @@ from decimal import Decimal
 
 from django.contrib.messages import get_messages
 from django.test import TestCase
-from django.urls import reverse
+from django.urls import NoReverseMatch, reverse
 from django.utils import timezone
 
 from inventory.models import Product
 from inventory.services import expense_product
 from inventory.views import charge_suppliers
-from invoices.models import Invoice, Supplier
+from invoices.models import Invoice, Supplier, SupplierChange
 from invoices.receipts import (
     UnrecognisedShopError,
     check_header,
@@ -32,10 +37,10 @@ from invoices.receipts import (
     detect_parser,
     header_choices,
     identifiers_naming,
+    move_documents,
     move_to_shop,
     prints_header,
     recognise_shop,
-    split_documents,
 )
 from tests.factories import make_invoice, make_invoice_line, make_supplier
 
@@ -71,6 +76,11 @@ def messages_of(response):
     return [str(message) for message in get_messages(response.wsgi_request)]
 
 
+def mobile_supplier():
+    """Where the mobile bills belong: a supplier of charges of their own."""
+    return make_supplier(code="MOBILE_X", name="Mobile Exemple", parser_key="", expenses_only=True)
+
+
 class Subscriptions(TestCase):
     """An operator filed as one supplier of charges: three box bills
     recognised by the header a person gave, two mobile bills by the figures
@@ -102,25 +112,27 @@ class Subscriptions(TestCase):
         )
         return invoice
 
-    def split(self, **kwargs):
-        kwargs.setdefault("new_name", "Mobile Exemple")
-        return split_documents(self.operator, self.mobiles, **kwargs)
 
-
-class SplitTests(Subscriptions):
-    def test_one_move_at_a_time_teaches_the_new_source_nothing(self):
-        """What the split is for: the sibling left behind prints the same
-        figures, so they are nobody's alone."""
+class MoveTogetherTests(Subscriptions):
+    def test_one_move_at_a_time_teaches_nothing_until_the_last(self):
+        """The sibling left behind prints the same figures, so they are
+        nobody's alone - until it has moved too: « Changer de fournisseur »
+        on each of them gets there, the last one teaching."""
         mobile = create_shop("Mobile Exemple", expenses_only=True)
         move_to_shop(self.mobiles[0], mobile)
         mobile.refresh_from_db()
         self.assertEqual(mobile.ticket_identifiers, [])
+        move_to_shop(self.mobiles[1], mobile)
+        mobile.refresh_from_db()
+        # Not the customer's own phone, which the wholesaler's invoice prints.
+        self.assertEqual(mobile.ticket_identifiers, [f"siren:{SIREN}", "web:mobile.operateur-exemple.fr"])
 
-    def test_splitting_moves_them_together_and_the_new_source_learns_what_they_share(self):
-        result = self.split()
-        mobile = result.destination
+    def test_moving_them_together_teaches_the_new_supplier_what_they_share(self):
+        mobile = create_shop("Mobile Exemple", expenses_only=True)
+        moved = move_documents(self.mobiles, mobile)
+        mobile.refresh_from_db()
         self.operator.refresh_from_db()
-        self.assertEqual(result.moved, 2)
+        self.assertEqual(moved.count, 2)
         self.assertEqual(
             set(Invoice.objects.filter(supplier=mobile)), set(Invoice.objects.filter(pk__in=[m.pk for m in self.mobiles]))
         )
@@ -130,15 +142,16 @@ class SplitTests(Subscriptions):
         self.assertEqual((self.operator.ticket_identifiers, self.operator.ticket_header), ([], BOX_HEADER))
 
     def test_the_next_invoice_of_each_side_lands_there(self):
-        mobile = self.split().destination
+        mobile = create_shop("Mobile Exemple", expenses_only=True)
+        move_documents(self.mobiles, mobile)
         later = self.today + timedelta(days=1)
         self.assertEqual(detect_parser(mobile_text(later)).supplier_code, mobile.code)
         self.assertEqual(detect_parser(box_text(later)).supplier_code, self.operator.code)
         self.assertIsNone(detect_parser("N de ligne: 06 12 34 56 78\nTOTAL 9,99"))
 
-    def test_a_split_from_charges_is_charges_and_its_lines_take_its_name(self):
-        mobile = self.split().destination
-        self.assertTrue(mobile.expenses_only)
+    def test_charges_moved_together_take_the_new_name(self):
+        mobile = mobile_supplier()
+        move_documents(self.mobiles, mobile)
         for invoice in self.mobiles:
             (line,) = Invoice.objects.get(pk=invoice.pk).lines.all()
             self.assertEqual((line.raw_name, line.printed_ttc, line.total_ht), ("Mobile Exemple", D("9.99"), D("8.33")))
@@ -150,46 +163,29 @@ class SplitTests(Subscriptions):
             [("Mobile Exemple", 2, D("19.98")), ("Operateur Exemple", 3, D("89.97"))],
         )
 
-    def test_a_header_the_staying_documents_print_is_refused_and_nothing_changes(self):
-        with self.assertRaisesMessage(ValueError, "il ne les distingue pas"):
-            self.split(new_header="JEAN EXEMPLE")
-        self.assertFalse(Supplier.objects.filter(name="Mobile Exemple").exists())
-        self.assertEqual(Invoice.objects.filter(supplier=self.operator).count(), 5)
-
-    def test_the_sources_header_cannot_stay_on_documents_that_leave(self):
-        with self.assertRaisesMessage(ValueError, "ils y reviendraient"):
-            split_documents(self.operator, [self.boxes[0], *self.mobiles], new_name="Mobile Exemple")
-        self.assertEqual(Invoice.objects.filter(supplier=self.operator).count(), 5)
-
     def test_nothing_moves_when_one_document_cannot(self):
-        mobile = make_supplier(code="MOBILE_X", name="Mobile Exemple", parser_key="", expenses_only=True)
+        mobile = mobile_supplier()
         make_invoice(supplier=mobile, invoice_number=self.mobiles[1].invoice_number)
         with self.assertRaisesMessage(ValueError, "a déjà un document"):
-            split_documents(self.operator, self.mobiles, destination=mobile)
+            move_documents(self.mobiles, mobile)
         self.assertEqual(Invoice.objects.filter(supplier=self.operator).count(), 5)
         self.assertEqual(Invoice.objects.filter(supplier=mobile).count(), 1)
 
-    def test_an_existing_destination_of_the_other_kind_is_refused(self):
-        goods = make_supplier(code="EPICERIE_X", name="Epicerie Exemple", parser_key="")
-        with self.assertRaisesMessage(ValueError, "cochez ou décochez « Charges »"):
-            split_documents(self.operator, self.mobiles, destination=goods)
-        self.assertEqual(Invoice.objects.filter(supplier=goods).count(), 0)
+    def test_two_documents_carrying_one_number_do_not_go_together(self):
+        """One supplier cannot hold one number twice: moved together, two
+        documents printing it - two suppliers' - would make it so. Refused
+        before anything moves."""
+        other = make_supplier(code="AUTRE_X", name="Autre Exemple", parser_key="", expenses_only=True)
+        twin = make_invoice(supplier=other, invoice_number=self.mobiles[0].invoice_number)
+        mobile = mobile_supplier()
+        with self.assertRaisesMessage(ValueError, f"Deux des documents portent le n° {self.mobiles[0].invoice_number}"):
+            move_documents([*self.mobiles, twin], mobile)
+        self.assertEqual(Invoice.objects.filter(supplier=self.operator).count(), 5)
+        self.assertEqual(Invoice.objects.get(pk=twin.pk).supplier, other)
+        self.assertFalse(Invoice.objects.filter(supplier=mobile).exists())
 
-    def test_a_document_that_would_land_on_the_other_side_undoes_the_split(self):
-        """A box bill whose header line faded stays - and the destination's
-        own header, printed on it, would take it the moment the split was
-        done. Nothing moves."""
-        faded = self.bill(lambda day: box_text(day).replace(f"{BOX_HEADER}  29,99\n", ""), 90, "29.99", "24.99")
-        mobile = make_supplier(
-            code="MOBILE_X", name="Mobile Exemple", parser_key="", expenses_only=True, ticket_header="Facture Box"
-        )
-        with self.assertRaisesMessage(ValueError, "serait reconnu comme un document de Mobile Exemple"):
-            split_documents(self.operator, self.mobiles, destination=mobile)
-        self.assertEqual(Invoice.objects.get(pk=faded.pk).supplier, self.operator)
-        self.assertEqual(Invoice.objects.filter(supplier=mobile).count(), 0)
-
-    def test_the_customers_phone_names_nobody_after_the_split(self):
-        self.split()
+    def test_the_customers_phone_names_nobody_after_the_move(self):
+        move_documents(self.mobiles, mobile_supplier())
         self.assertFalse(
             [supplier.name for supplier in Supplier.objects.all() if "tel:0612345678" in supplier.ticket_identifiers]
         )
@@ -215,86 +211,80 @@ class TwoMetersTests(TestCase):
         )
 
     def test_they_are_told_apart_by_their_headers_only(self):
-        result = split_documents(
-            self.energy, self.roses, new_name="Energie Roses", new_header="SITE ROSES", source_header="SITE LILAS"
-        )
-        roses = result.destination
+        Supplier.objects.filter(pk=self.energy.pk).update(ticket_header="SITE LILAS")
         self.energy.refresh_from_db()
+        roses = make_supplier(
+            code="ENERGIE_ROSES_X", name="Energie Roses", parser_key="", expenses_only=True, ticket_header="SITE ROSES"
+        )
+        move_documents(self.roses, roses)
+        self.energy.refresh_from_db()
+        roses.refresh_from_db()
         self.assertEqual((self.energy.ticket_identifiers, roses.ticket_identifiers), ([], []))
         self.assertEqual(detect_parser("ENERGIE EXEMPLE\nSITE ROSES\nTOTAL 81,00").supplier_code, roses.code)
         self.assertEqual(detect_parser("ENERGIE EXEMPLE\nSITE LILAS\nTOTAL 79,00").supplier_code, self.energy.code)
         self.assertIsNone(detect_parser(f"ENERGIE EXEMPLE\nSIREN {SIREN}\nTOTAL 79,00"))
 
-    def test_a_side_left_named_by_nothing_is_said(self):
-        result = split_documents(self.energy, self.roses, new_name="Energie Roses")
-        self.assertEqual(len(result.warnings), 2)
-        self.assertIn("2 document(s) de Energie Roses ne seraient plus reconnus", result.warnings[1])
 
-
-class SplitPageTests(Subscriptions):
-    def test_the_page_ticks_the_documents_without_the_header_and_posts_what_it_shows(self):
-        url = reverse("invoices:supplier_split", args=[self.operator.pk]) + f"?depuis={self.mobiles[0].pk}"
-        page = self.client.get(url)
-        self.assertEqual(page.status_code, 200)
-        ticked = [row["invoice"] for row in page.context["rows"] if row["ticked"]]
-        self.assertEqual(set(ticked), set(self.mobiles))
-        # Listed first, where they can be checked without scrolling.
-        self.assertEqual([row["ticked"] for row in page.context["rows"]], [True, True, False, False, False])
-        self.assertIn("n° SIREN 900 000 019", page.context["will_name"])
-        response = self.client.post(url, {
-            "documents": [str(invoice.pk) for invoice in ticked],
-            "supplier": "new",
-            "new_name": "Mobile Exemple",
-            "new_header": "",
-            "source_header": page.context["source_header"],
-        })
-        self.assertRedirects(response, reverse("invoices:invoice_edit_lines", args=[self.mobiles[0].pk]), target_status_code=302)
-        self.assertEqual(Invoice.objects.filter(supplier__name="Mobile Exemple").count(), 2)
-        self.assertIn("2 document(s) rangé(s) chez Mobile Exemple", " ".join(messages_of(response)))
-
-    def test_tampered_or_foreign_ids_are_a_message_not_a_500(self):
-        url = reverse("invoices:supplier_split", args=[self.operator.pk])
-        foreign = make_invoice(supplier=make_supplier(code="AUTRE_X", parser_key=""))
-        for posted in (["abc"], [str(foreign.pk)]):
-            response = self.client.post(url, {"documents": posted, "supplier": "new", "new_name": "Mobile Exemple"})
-            self.assertEqual(response.status_code, 200)
-            self.assertIn("n'est pas (ou plus) chez ce fournisseur", " ".join(messages_of(response)))
-        self.assertEqual(Invoice.objects.filter(supplier=self.operator).count(), 5)
-
-    def test_no_split_for_a_configured_till(self):
-        franprix = Supplier.objects.get(code="FRANPRIX")
-        response = self.client.get(reverse("invoices:supplier_split", args=[franprix.pk]))
-        self.assertRedirects(response, reverse("invoices:invoice_type_list"), fetch_redirect_response=False)
-
-    def test_a_document_without_its_suppliers_header_says_so(self):
-        page = self.client.get(reverse("invoices:receipt_review", args=[self.mobiles[0].pk]))
-        self.assertContains(page, "ne porte pas l'en-tête de Operateur Exemple")
-        self.assertContains(page, "n° SIREN 900 000 019")
-        self.assertContains(page, reverse("invoices:supplier_split", args=[self.operator.pk]))
-        box = self.client.get(reverse("invoices:receipt_review", args=[self.boxes[0].pk]))
-        self.assertNotContains(box, "ne porte pas l'en-tête")
-
+class WhatThePagesSayTests(Subscriptions):
     def test_saving_a_header_counts_the_documents_that_do_not_print_it(self):
-        """What someone giving the box's text expected to see leave."""
+        """What someone giving the box's text expected to see leave - and
+        where one that is not the supplier's is moved from."""
         response = self.client.post(
             reverse("invoices:receipt_review", args=[self.boxes[0].pk]),
             {"action": "shop_header", "ticket_header": BOX_HEADER},
         )
         said = " ".join(messages_of(response))
         self.assertIn(f"2 des 5 documents Operateur Exemple ne portent pas « {BOX_HEADER} »", said)
-        self.assertIn("Séparer des documents de Operateur Exemple", said)
+        self.assertIn("Si l'un d'eux n'est pas de Operateur Exemple, changez-le de fournisseur depuis sa page.", said)
+        self.assertNotIn("sépar", said.lower())
 
-    def test_sources_show_what_names_each_supplier_and_the_split(self):
+    def test_sources_show_what_names_each_supplier(self):
         whole = make_supplier(code="EAU_X", name="Eau Exemple", parser_key="", ticket_header="EAU EXEMPLE")
         for day in (1, 2):
             make_invoice(supplier=whole, ocr_text=f"EAU EXEMPLE\nLe {day:02d}/05/2026\nTOTAL 80,00")
         page = self.client.get(reverse("invoices:invoice_type_list"))
         self.assertContains(page, "en-tête sur 3 de ses 5 documents · 2 ne le portent pas")
-        self.assertContains(page, reverse("invoices:supplier_split", args=[self.operator.pk]))
-        # Its header on every document: nothing to say, nothing to split.
-        self.assertNotContains(page, reverse("invoices:supplier_split", args=[whole.pk]))
+        # Its header on every document: nothing to say.
+        self.assertNotContains(page, "en-tête sur 2 de ses 2")
         # A supplier with a reader of its own is listed too, with what names it.
         self.assertContains(page, "Fournisseurs avec leur propre lecteur")
+
+
+class NoSplitAnyMoreTests(Subscriptions):
+    """The owner removed the split on 19/09: a source is a supplier of its
+    own from the start, and a document filed under the wrong one is moved
+    from its own page. Nothing links to it, offers it or points to it."""
+
+    def test_its_page_and_its_kind_of_change_are_gone(self):
+        response = self.client.get(reverse("invoices:supplier_detail", args=[self.operator.pk]) + "separer/")
+        self.assertEqual(response.status_code, 404)
+        with self.assertRaises(NoReverseMatch):
+            reverse("invoices:supplier_split", args=[self.operator.pk])
+        self.assertNotIn("SPLIT", SupplierChange.Kind.values)
+
+    def test_no_page_offers_it(self):
+        """The supplier's page, the Sources tab, a document's page - each
+        offered « Séparer des documents… » on these very documents."""
+        for url in (
+            reverse("invoices:supplier_detail", args=[self.operator.pk]),
+            reverse("invoices:invoice_type_list"),
+            reverse("invoices:receipt_review", args=[self.mobiles[0].pk]),
+        ):
+            page = self.client.get(url)
+            self.assertEqual(page.status_code, 200, url)
+            self.assertNotIn("sépar", page.content.decode().lower(), url)
+
+    def test_a_supplier_kept_for_its_documents_says_to_move_each_one(self):
+        """Said as a verb, not as a button's label: a ticket's page says
+        « Changer d'enseigne », an invoice's « Changer de fournisseur »."""
+        page = self.client.get(reverse("invoices:supplier_delete", args=[self.operator.pk]))
+        shown = " ".join(page.content.decode().split())
+        self.assertIn(
+            "Changez ses documents de fournisseur depuis la page de chacun et rattachez ses types de factures à un "
+            "autre fournisseur, puis revenez ici.",
+            shown,
+        )
+        self.assertNotIn("sépar", shown.lower())
 
 
 class MoveOneTests(Subscriptions):
@@ -322,19 +312,39 @@ class MoveOneTests(Subscriptions):
             "new_header": "Forfait Exemple 5G", "new_expenses": "1",
         })
 
-    def test_a_header_its_siblings_print_points_to_the_split(self):
-        """The sibling left behind is brought together with the others, not
-        one at a time - one at a time, the new source learns nothing."""
-        said = " ".join(messages_of(self.move_first_mobile()))
-        self.assertIn("rangez-les ensemble avec « Séparer des documents de Operateur Exemple »", said)
-        self.assertNotIn("Changer d'enseigne", said)
+    def siblings_named(self):
+        """What is said of the mobile bill left behind under the operator."""
+        return (
+            f"« Forfait Exemple 5G » est aussi imprimé sur Operateur Exemple du {self.mobiles[1].invoice_date:%d/%m/%Y} : "
+            "si ce sont des documents de Mobile Exemple, changez-les de fournisseur depuis la page de chacun."
+        )
 
-    def test_a_header_refused_for_its_siblings_points_to_the_split(self):
+    def test_a_header_its_siblings_print_names_them(self):
+        """The sibling left behind is named, to be moved from its own page -
+        the last one moved teaches the new supplier what they all print."""
+        said = " ".join(messages_of(self.move_first_mobile()))
+        self.assertIn(self.siblings_named(), said)
+        self.assertNotIn("sépar", said.lower())
+
+    def test_a_header_given_from_its_page_names_them_too(self):
+        mobile = create_shop("Mobile Exemple", expenses_only=True)
+        move_to_shop(self.mobiles[0], mobile)
+        response = self.client.post(
+            reverse("invoices:receipt_review", args=[self.mobiles[0].pk]),
+            {"action": "shop_header", "ticket_header": "Forfait Exemple 5G"},
+        )
+        mobile.refresh_from_db()
+        self.assertEqual(mobile.ticket_header, "Forfait Exemple 5G")
+        said = " ".join(messages_of(response))
+        self.assertIn(self.siblings_named(), said)
+        self.assertNotIn("sépar", said.lower())
+
+    def test_a_header_its_siblings_print_is_refused(self):
         self.mobiles += [self.bill(mobile_text, days, "9.99", "8.33") for days in (80, 110, 140)]
         response = self.move_first_mobile()
         said = " ".join(messages_of(response))
         self.assertIn("est imprimé sur 4 tickets", said)
-        self.assertIn("Séparer des documents de Operateur Exemple", said)
+        self.assertNotIn("sépar", said.lower())
         self.assertEqual(Invoice.objects.get(pk=self.mobiles[0].pk).supplier, self.operator)
 
 
@@ -433,19 +443,9 @@ class IdentifiersNamingTests(TestCase):
         self.assertEqual(identifiers_naming(self.texts(4, 4), [], set()), set())
 
 
-class WhatASplitTeachesTests(Subscriptions):
-    """A split teaches what the source knew, corrects whoever else knew what
-    the moved documents print, and says when a side will no longer be
-    recognised."""
-
-    def test_the_customers_number_is_not_learned_when_nobody_else_prints_it(self):
-        """Seven bills of one line print the customer's number on every
-        page: moved together they made it the new source's, and the next
-        caterer's ticket printing it was filed as a charge."""
-        Invoice.objects.filter(supplier__code="GROSSISTE_X").delete()
-        mobile = self.split().destination
-        self.assertNotIn("tel:0612345678", mobile.ticket_identifiers)
-        self.assertIsNone(detect_parser("TRAITEUR DU MARCHE\nTel client 06 12 34 56 78\nTOTAL 45,00"))
+class WhatAMoveTeachesTests(Subscriptions):
+    """A move teaches the new supplier what the documents print, corrects
+    whoever else knew it, and counts the charge lines renamed."""
 
     def test_a_third_supplier_sharing_what_they_print_is_corrected(self):
         """The wholesaler and the operator had both learned the customer's
@@ -456,23 +456,25 @@ class WhatASplitTeachesTests(Subscriptions):
         Supplier.objects.filter(pk=self.operator.pk).update(
             ticket_identifiers=[f"siren:{SIREN}", "tel:0612345678", "web:mobile.operateur-exemple.fr"]
         )
-        self.split()
+        move_documents(self.mobiles, mobile_supplier())
         grossiste.refresh_from_db()
         self.assertEqual(grossiste.ticket_identifiers, [])
         self.assertIsNone(detect_parser("Client : 06 12 34 56 78\nTOTAL 3,00"))
 
-    def test_a_side_that_would_no_longer_be_recognised_is_said(self):
+    def test_what_both_sides_print_is_not_learned(self):
         """Both sides print the company number: the mobile side keeps only
         its web site, and a web site alone names no one."""
         for box in self.boxes:
             box.ocr_text += f"\nSIREN {SIREN}"
             box.save(update_fields=["ocr_text"])
-        result = self.split()
-        self.assertEqual(result.destination.ticket_identifiers, ["web:mobile.operateur-exemple.fr"])
-        self.assertTrue(any("2 document(s) de Mobile Exemple ne seraient plus reconnus" in w for w in result.warnings))
+        mobile = mobile_supplier()
+        move_documents(self.mobiles, mobile)
+        mobile.refresh_from_db()
+        self.assertEqual(mobile.ticket_identifiers, ["web:mobile.operateur-exemple.fr"])
+        self.assertIsNone(detect_parser(mobile_text(self.today + timedelta(days=1))))
 
     def test_the_charge_lines_renamed_are_counted(self):
-        self.assertEqual(self.split().renamed, 2)
+        self.assertEqual(move_documents(self.mobiles, mobile_supplier()).renamed, 2)
 
 
 class ALearnedCompanyNumberBlockingTests(TestCase):
@@ -545,107 +547,12 @@ class MovingKeepsWhatTheLinesDoNotSayTests(Subscriptions):
             ticket = make_invoice(supplier=shop, ocr_text=f"EPICERIE\nVODKA 70CL  15,00\nLe {day:02d}/05/2026")
             create_stock_movement_for_line(make_invoice_line(invoice=ticket, product=product, total_ht="12.50"))
             tickets.append(ticket)
-        result = split_documents(shop, [tickets[1]], new_name="Epicerie Deux")
+        deux = create_shop("Epicerie Deux")
+        moved = move_documents([tickets[1]], deux)
         (line,) = Invoice.objects.get(pk=tickets[1].pk).lines.all()
-        self.assertEqual((line.product.supplier, line.product.stock_type), (result.destination, vodka))
+        self.assertEqual((line.product.supplier, line.product.stock_type), (deux, vodka))
         self.assertEqual(StockMovement.objects.filter(stock_type=vodka).count(), 2)
-        self.assertEqual(result.reclassified, 1)
-
-
-class SplitPageAfterReviewTests(Subscriptions):
-    def url(self):
-        return reverse("invoices:supplier_split", args=[self.operator.pk])
-
-    def post(self, **fields):
-        data = {"documents": [str(m.pk) for m in self.mobiles], "supplier": "new", "new_name": "Mobile Exemple",
-                "new_header": "", "source_header": BOX_HEADER}
-        data.update(fields)
-        return self.client.post(self.url(), data)
-
-    def test_a_refused_split_shows_the_header_as_stored(self):
-        make_supplier(code="GROS2_X", name="Grossiste Deux", parser_key="")
-        response = self.post(new_name="Grossiste Deux", source_header="Facture Box")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.context["source"].ticket_header, BOX_HEADER)
-        self.assertIn("ne peut pas recevoir ces documents", " ".join(messages_of(response)))
-
-    def test_an_existing_source_keeps_its_header(self):
-        mobile = make_supplier(
-            code="MOBILE_X", name="Mobile Exemple", parser_key="", expenses_only=True, ticket_header="MOBILE EXEMPLE SAS"
-        )
-        response = self.post(supplier=str(mobile.pk), new_header="Forfait Exemple 5G")
-        self.assertEqual(response.status_code, 302)
-        mobile.refresh_from_db()
-        self.assertEqual(mobile.ticket_header, "MOBILE EXEMPLE SAS")
-
-    def test_a_source_header_printed_on_the_documents_leaving_says_so(self):
-        response = self.post(source_header="Forfait Exemple 5G")
-        said = " ".join(messages_of(response))
-        self.assertIn("document(s) à ranger", said)
-        self.assertNotIn("qui restent", said)
-
-    def test_ticking_one_of_its_own_says_to_untick_it(self):
-        response = self.post(documents=[str(self.boxes[0].pk)] + [str(m.pk) for m in self.mobiles])
-        self.assertIn("Décochez-les s'ils sont bien de Operateur Exemple", " ".join(messages_of(response)))
-
-    def test_the_preview_says_both_sides_only_for_what_both_print(self):
-        """The source had learned the box's company number too, printed only
-        on the bills that stay: it is not lost."""
-        for box in self.boxes:
-            box.ocr_text += "\nSIREN 800 000 002"
-            box.save(update_fields=["ocr_text"])
-        Supplier.objects.filter(pk=self.operator.pk).update(
-            ticket_identifiers=["siren:800000002", f"siren:{SIREN}", "web:mobile.operateur-exemple.fr"]
-        )
-        page = self.client.get(self.url())
-        self.assertEqual(page.context["stays_with_learned"], [])
-
-    def test_a_document_typed_by_hand_is_not_counted_as_ticked(self):
-        typed = make_invoice(supplier=self.operator)
-        Supplier.objects.filter(pk=self.operator.pk).update(ticket_header="")
-        page = self.client.get(self.url() + f"?depuis={typed.pk}")
-        self.assertEqual(page.context["chosen_count"], 0)
-
-    def test_the_success_says_what_was_renamed(self):
-        response = self.post()
-        self.assertIn("2 ligne(s) de charge portent son nom", " ".join(messages_of(response)))
-
-
-class SameShopFadedHeaderTests(TestCase):
-    """A shop's own ticket whose top the photo lost is not another
-    subscription: it prints the same phone as the others."""
-
-    def setUp(self):
-        self.shop = make_supplier(
-            code="SABAH_X", name="Epicerie Sabah", parser_key="", ticket_header="EPICERIE SABAH",
-            ticket_identifiers=["tel:0123456789"],
-        )
-        for day in (1, 2, 3):
-            make_invoice(supplier=self.shop, ocr_text=f"EPICERIE SABAH\nTEL 01 23 45 67 89\nLe {day:02d}/05/2026")
-        checked = [{"label": "Somme des lignes = total imprimé", "passed": True, "detail": ""}]
-        self.faded = make_invoice(
-            supplier=self.shop, ocr_text="EPIC RIE S BA\nTEL 01 23 45 67 89\nLe 04/05/2026", parse_checks=checked
-        )
-
-    def test_a_header_none_of_its_tickets_print_suggests_no_split(self):
-        """Its logo reads as something else on every ticket: nothing prints
-        the header, so nothing it learned can tell two subscriptions apart."""
-        from invoices.receipts import separable_documents
-
-        Supplier.objects.filter(pk=self.shop.pk).update(ticket_header="DANISH EXEMPLE")
-        self.shop.refresh_from_db()
-        self.assertEqual(separable_documents(self.shop), [])
-        sources = self.client.get(reverse("invoices:invoice_type_list"))
-        self.assertNotContains(sources, reverse("invoices:supplier_split", args=[self.shop.pk]))
-
-    def test_it_is_not_offered_to_split_off(self):
-        from invoices.receipts import separable_documents
-
-        self.assertEqual(separable_documents(self.shop), [])
-        page = self.client.get(reverse("invoices:receipt_review", args=[self.faded.pk]))
-        self.assertNotContains(page, "ne porte pas l'en-tête")
-        sources = self.client.get(reverse("invoices:invoice_type_list"))
-        self.assertNotContains(sources, reverse("invoices:supplier_split", args=[self.shop.pk]))
+        self.assertEqual(moved.reclassified, 1)
 
 
 class HeaderGuessTests(TestCase):

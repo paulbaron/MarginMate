@@ -28,19 +28,15 @@
             print - is moved here, its lines with it.
             {% endcomment %}
             {% comment %}
-            Filed here by something it prints other than its supplier's
-            header - a second subscription of one company, typically. Said
-            with what that was, and the way to split it off with the others
-            like it, which one move at a time cannot do: the siblings left
-            behind print the same figures, and the new source learns nothing.
+            An invoice type filed it here though it prints what names another
+            supplier (Invoice.supplier_doubt): nothing is learned from it until
+            it is validated here - which says it is this supplier's - or moved.
             {% endcomment %}
-            {% if header_missing %}
-                <p class="header-missing">
-                    Ce document ne porte pas l'en-tête de {{ invoice.supplier.name }} (« {{ invoice.supplier.ticket_header }} »)
-                    {% if named_by %}: il y est rangé par son {{ named_by|join:", son " }}{% endif %}.
-                    {{ headerless_count }} des {{ document_count }} documents {{ invoice.supplier.name }} sont dans ce cas.
-                    {% if split_url %}<a href="{{ split_url }}">Séparer des documents de {{ invoice.supplier.name }}…</a>{% endif %}
-                </p>
+            {% if invoice.supplier_doubt %}
+                <div class="message message-warning supplier-doubt">
+                    {{ invoice.supplier_doubt }}
+                    <br>Valider ce document confirme qu'il est de {{ invoice.supplier.name }} ; sinon, « Changer {% if is_receipt %}d'enseigne{% else %}de fournisseur{% endif %} » ci-dessous.
+                </div>
             {% endif %}
             <details class="move-shop">
                 <summary>Pas de chez {{ invoice.supplier.name }} ? Changer {% if is_receipt %}d'enseigne{% else %}de fournisseur{% endif %}</summary>
@@ -50,9 +46,6 @@
                     {% include "invoices/_shop_choice_fields.html" with label="Fournisseur du document" suggested=suggested_header current=invoice.supplier_id ask_header=is_receipt for_invoice=is_invoice ask_expenses=True expenses=charges_default %}
                     <button class="btn btn-small btn-secondary" type="submit">Ranger ce document</button>
                 </form>
-                {% if split_url %}
-                    <p class="muted">Plusieurs documents à ranger ensemble ? <a href="{{ split_url }}">Séparer des documents de {{ invoice.supplier.name }}</a> : ils y vont ensemble, et leur source apprend ce qu'ils impriment.</p>
-                {% endif %}
             </details>
             {% if is_receipt %}
                 {% if can_set_header %}

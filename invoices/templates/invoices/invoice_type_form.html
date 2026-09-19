@@ -7,18 +7,69 @@
         <form method="post">
             {% csrf_token %}
             <h3>Informations générales</h3>
-            {% include "_form_fields.html" with form=type_form %}
+            {% if retour %}<input type="hidden" name="retour" value="{{ retour }}">{% endif %}
+            {% if invoice_type %}<input type="hidden" name="supplier_was" value="{{ supplier_was }}">{% endif %}
+            {% comment %}
+            Enter in a field presses the form's first submit button: it was
+            « Tester », which signs in on a portal. This one, first and out of
+            sight, saves.
+            {% endcomment %}
+            <button class="visually-hidden" type="submit" name="action" value="save" tabindex="-1" aria-hidden="true">Enregistrer</button>
+            {% comment %}
+            Its supplier: one that exists, or a new one made in the same save
+            (« + Nouveau fournisseur… », forms.InvoiceTypeForm). Its name box
+            shows once that is picked (ui.js) and is never an HTML `required`:
+            hidden, it would stop the browser sending the form.
+            {% endcomment %}
+            <div class="form-field shop-choice{% if type_form.supplier.errors or type_form.new_name.errors %} has-error{% endif %}">
+                <label for="type-supplier">Fournisseur<span class="required" aria-hidden="true">*</span></label>
+                <div class="inline-form">
+                    {% include "invoices/_shop_choice_fields.html" with label="Fournisseur" select_id="type-supplier" for_invoice=True ask_expenses=True shop_groups=supplier_groups selected=supplier_selected typed_name=typed_name expenses=typed_expenses suggested="" %}
+                </div>
+                {% for error in type_form.supplier.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+                {% for error in type_form.new_name.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+                {% if invoice_type %}<p class="help"><a href="{% url 'invoices:supplier_detail' invoice_type.supplier_id %}">Ouvrir la fiche de {{ invoice_type.supplier.name }}</a></p>{% endif %}
+            </div>
+            {% include "_form_fields.html" with form=type_form exclude=type_form.supplier_fields %}
 
-            <h3>Source : email</h3>
-            <p class="muted">
-                L'email est recherché dans la boîte mail partagée (voir INVOICE_EMAIL_ADDRESS dans .env). Chaque
-                champ est une expression régulière ; expéditeur/objet/contenu sont testés sur l'email, pièce jointe
-                sur le nom de fichier. Objet et contenu vides = tous. Utilisez "Tester" pour vérifier un motif
-                avant de l'enregistrer - aucun email ni facture n'est modifié ou importé par un test.
-            </p>
-            {% include "_form_fields.html" with form=source_form exclude=test_date_fields %}
+            {% comment %}
+            Both kinds' settings are in the page; the one the choice above
+            names is shown (ui.js, [data-source-kind]) and is the only one
+            sent, validated and saved. The other is disabled as well as
+            hidden: a browser refuses to send a form holding an empty
+            required field, hidden or not, and says so nowhere visible -
+            "Tester" did nothing, and no mailbox type could be saved once the
+            portal's fields were in the page.
+            {% endcomment %}
+            <fieldset class="source-kind" data-source-kind="EMAIL"{% if is_website %} hidden disabled{% endif %}>
+                <h3>Source : email</h3>
+                <p class="muted">
+                    L'email est recherché dans la boîte mail partagée (voir INVOICE_EMAIL_ADDRESS dans .env). Chaque
+                    champ est une expression régulière ; expéditeur/objet/contenu sont testés sur l'email, pièce jointe
+                    sur le nom de fichier. Objet et contenu vides = tous. Utilisez "Tester" pour vérifier un motif
+                    avant de l'enregistrer - aucun email ni facture n'est modifié ou importé par un test.
+                </p>
+                {% include "_form_fields.html" with form=source_form exclude=test_date_fields %}
+            </fieldset>
 
-            <h3>Tester ce motif</h3>
+            <fieldset class="source-kind" data-source-kind="WEBSITE"{% if not is_website %} hidden disabled{% endif %}>
+                <h3>Source : site du fournisseur</h3>
+                <p class="muted">
+                    La récupération se connecte à l'espace client, suit le lien des factures et télécharge celles de
+                    la période, une à une. L'identifiant et le mot de passe restent dans le fichier .env : indiquez ici
+                    le <strong>nom</strong> des deux variables (ex. FREEBOX_LOGIN), jamais leur valeur. Le formulaire de
+                    connexion, le lien « Factures » et les liens de téléchargement sont trouvés seuls ; les sélecteurs
+                    ne servent qu'à un site qui y échappe. « Tester » se connecte et liste ce qui serait téléchargé,
+                    sans rien télécharger ni importer.
+                </p>
+                {% include "_form_fields.html" with form=website_form exclude=website_form.advanced %}
+                <details>
+                    <summary class="muted">Réglages avancés (sélecteurs CSS)</summary>
+                    {% include "_form_fields.html" with form=website_form only=website_form.advanced %}
+                </details>
+            </fieldset>
+
+            <h3>Tester</h3>
             <div class="inline-form">
                 <label for="{{ source_form.test_start_date.id_for_label }}" class="inline-label">{{ source_form.test_start_date.label }}</label>
                 {{ source_form.test_start_date }}
@@ -29,7 +80,7 @@
 
             <p style="margin-top:1.5rem;">
                 <button class="btn" type="submit" name="action" value="save">Enregistrer</button>
-                <a class="btn btn-secondary" href="{% url 'invoices:invoice_type_list' %}">Annuler</a>
+                <a class="btn btn-secondary" href="{% if retour %}{{ retour }}{% else %}{% url 'invoices:invoice_type_list' %}{% endif %}">Annuler</a>
             </p>
         </form>
     </div>

@@ -28,7 +28,7 @@ patterns, the parser that reads them), and the shops a ticket is recognised by.
             {% for invoice_type in invoice_types %}
             <tr>
                 <td><a href="{% url 'invoices:invoice_type_update' invoice_type.pk %}">{{ invoice_type.name }}</a></td>
-                <td class="muted">{{ invoice_type.supplier.name }}</td>
+                <td class="muted"><a href="{% url 'invoices:supplier_detail' invoice_type.supplier.pk %}">{{ invoice_type.supplier.name }}</a></td>
                 <td class="muted">{{ invoice_type.get_source_kind_display }}</td>
                 {# Empty means the one reader, not the AI - which is a supplier of its own. #}
                 <td class="muted">{{ invoice_type.parser_key|default:"Lecteur générique" }}</td>
@@ -45,60 +45,55 @@ patterns, the parser that reads them), and the shops a ticket is recognised by.
     </div>
 {% endif %}
 
-<h2>Enseignes et fournisseurs sans lecteur dédié</h2>
-<p class="muted">
-    Un document est rangé chez l'enseigne dont il porte l'en-tête ou les identifiants (n° SIREN, téléphone, site
-    appris sur ses documents, jamais ce que les documents d'un autre fournisseur impriment aussi — votre propre
-    numéro, par exemple). Un en-tête ajoute des documents, il n'en retire aucun : deux abonnements d'une même
-    société rangés ensemble se séparent avec « Séparer des documents ». Une enseigne inconnue se
-    crée depuis le document lui-même, à l'import, et son en-tête se donne sur la page où il est vérifié.
-    <strong>Cochez « charges »</strong> pour un fournisseur dont les documents ne sont pas une liste de produits :
-    abonnement, loyer, eau, électricité, télésurveillance. Ses factures sont alors enregistrées par poste quand
-    elles en nomment (loyer, provisions), sinon en une ligne par taux de TVA — jamais un produit à classer — et
-    leur total apparaît sur la page Produits sous « Charges et abonnements ». Cocher ou décocher vaut pour les
-    documents déjà importés : ils sont relus et rangés de nouveau.
-</p>
+<div class="section-head" id="fournisseurs">
+    <div>
+        <h2>Enseignes et fournisseurs sans lecteur dédié</h2>
+        <p class="muted">
+            Cliquez sur une ligne pour voir ce qui range ses documents chez lui, le modifier
+            ou voir son historique. Un document est rangé chez l'enseigne dont il porte l'en-tête ou les identifiants
+            (n° SIREN, téléphone, site appris sur ses documents, jamais ce que les documents d'un autre fournisseur
+            impriment aussi — votre propre numéro, par exemple). Un en-tête ajoute des documents, il n'en retire aucun.
+            Un fournisseur de <strong>charges</strong> (abonnement, loyer, eau, électricité…) a ses factures
+            enregistrées par poste ou par taux de TVA, jamais en produits à classer.
+        </p>
+    </div>
+    <div class="actions">
+        <a class="btn" href="{% url 'invoices:supplier_create' %}">+ Nouveau fournisseur</a>
+    </div>
+</div>
 <div class="table-wrap">
 <table data-table data-table-label="enseignes">
     <thead>
-        <tr><th>Enseigne</th><th>Reconnue par</th><th>Charges</th></tr>
+        <tr><th>Enseigne</th><th>Reconnue par</th><th class="num">Documents</th><th>Nature</th></tr>
     </thead>
     <tbody>
         {% for shop in ticket_shops %}
-            <tr>
-                <td>{{ shop.name }}</td>
+            <tr data-row-href="{{ shop.url }}">
+                <td>
+                    <a href="{{ shop.url }}">{{ shop.name }}</a>
+                    {% if shop.to_see %} <span class="status-pill status-NEEDS_REVIEW" title="{{ shop.to_see }} changement{{ shop.to_see|pluralize }} à voir sur sa fiche">À voir</span>{% endif %}
+                </td>
                 <td>
                     {% if shop.names_shop %}{{ shop.names_shop|join:", " }}
-                    {% else %}<span class="muted">caisse déjà connue de l'application</span>{% endif %}
+                    {% elif shop.is_till %}<span class="muted">sa caisse, réglée dans l'application</span>
+                    {% elif not shop.document_count %}<span class="muted">rien encore : attend son premier document</span>
+                    {% else %}<span class="muted">rien : ses documents vous sont demandés à l'import</span>{% endif %}
                     {% comment %}
                     Only where it says something: documents filed here that do
-                    not print the header - another subscription, perhaps. A
-                    header on every one of them needs no line and no split.
+                    not print the header. A header on every one of them needs
+                    no line.
                     {% endcomment %}
                     {% if shop.ticket_header and shop.headerless %}
                         <br><span class="muted">en-tête sur {{ shop.with_header }} de ses {{ shop.document_count }} documents · {{ shop.headerless }} ne le porte{{ shop.headerless|pluralize:"nt" }} pas</span>
                     {% endif %}
-                    {% comment %}
-                    The split is offered where some documents look like another
-                    subscription (receipts.separable_documents) - not for a
-                    ticket whose top faded, nor on every row. A source with no
-                    header is split from one of its documents' pages.
-                    {% endcomment %}
-                    {% if shop.split_url and shop.separable %}
-                        <br><a href="{{ shop.split_url }}">Séparer des documents ({{ shop.separable }} d'un autre abonnement ?)…</a>
-                    {% endif %}
                 </td>
-                <td>
-                    <form method="post" action="{% url 'invoices:supplier_expenses' shop.pk %}" class="inline-form">
-                        {% csrf_token %}
-                        <label class="inline-label" title="Abonnement, loyer, eau, électricité… : ses factures sont enregistrées par poste ou par taux de TVA, aucun produit à classer.">
-                            <input type="checkbox" name="expenses_only" value="1"{% if shop.expenses_only %} checked{% endif %}
-                                   onchange="this.form.requestSubmit ? this.form.requestSubmit() : this.form.submit()">
-                            Charges
-                        </label>
-                        <noscript><button class="btn btn-small btn-secondary" type="submit">Enregistrer</button></noscript>
-                    </form>
+                <td class="num" data-sort="{{ shop.last_date|date:'Y-m-d' }}">
+                    {% if shop.document_count %}
+                        <a href="{% url 'invoices:invoice_list' %}?fournisseur={{ shop.pk }}">{{ shop.document_count }}</a>
+                        {% if shop.last_date %}<br><span class="muted">dernier le {{ shop.last_date|date:"d/m/Y" }}</span>{% endif %}
+                    {% else %}<span class="muted">0</span>{% endif %}
                 </td>
+                <td>{% if shop.expenses_only %}Charges{% else %}Produits{% endif %}</td>
             </tr>
         {% endfor %}
     </tbody>
@@ -117,8 +112,11 @@ by a customer's phone number could not even be seen.
         <thead><tr><th>Fournisseur</th><th>Reconnu par</th></tr></thead>
         <tbody>
             {% for supplier in own_readers %}
-                <tr>
-                    <td>{{ supplier.name }}</td>
+                <tr data-row-href="{{ supplier.url }}">
+                    <td>
+                        <a href="{{ supplier.url }}">{{ supplier.name }}</a>
+                        {% if supplier.to_see %} <span class="status-pill status-NEEDS_REVIEW">À voir</span>{% endif %}
+                    </td>
                     <td>{% if supplier.names_shop %}{{ supplier.names_shop|join:", " }}{% else %}<span class="muted">son lecteur seul (en-tête de ses factures)</span>{% endif %}</td>
                 </tr>
             {% endfor %}

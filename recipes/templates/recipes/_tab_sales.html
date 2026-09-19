@@ -17,7 +17,7 @@ half of the stock variance.
         {% csrf_token %}
         <label class="inline-label">Du <input type="date" name="start_date" value="{{ default_start }}" required></label>
         <label class="inline-label">au <input type="date" name="end_date" value="{{ default_end }}" required></label>
-        <button class="btn" type="submit" {% if job.is_active %}disabled{% endif %}>Récupérer les ventes</button>
+        <button class="btn" type="submit" data-job-control="sales-import-status"{% if job.is_active %} disabled{% endif %}>Récupérer les ventes</button>
     </form>
     <p class="muted small">
         Nécessite <code>LADDITION_EMAIL</code> et <code>LADDITION_PASSWORD</code> dans le fichier <code>.env</code>.

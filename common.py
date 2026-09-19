@@ -13,6 +13,16 @@ from django.db import models
 from django.utils import timezone
 
 
+def is_id(value) -> bool:
+    """Whether `value`, read from a request, is an id: ASCII digits only.
+    str.isdigit() also says yes to "²" or "٣" - and "²" is no int, so the
+    query it reached raised: a 500 where a tampered form gets a message."""
+    # And no longer than an SQLite integer can be: past it, the query
+    # raised OverflowError.
+    return isinstance(value, str) and value.isascii() and value.isdigit() and len(value) <= 18
+
+
+
 def plain_number(value) -> str:
     """A decimal as a person writes it: 0.82, 2, 10, -1 - never "0.820",
     nor the "1E+1" Decimal.normalize() makes of 10. "" for nothing."""

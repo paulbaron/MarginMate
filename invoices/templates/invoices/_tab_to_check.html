@@ -55,6 +55,7 @@ photo, oldest first, and the documents that cannot be used as they are.
                         <td>
                             {% if not invoice.invoice_date %}<span class="status-pill status-ERROR">sans date</span>{% endif %}
                             {% if invoice.status == "ERROR" %}<span class="status-pill status-ERROR">import en échec</span>{% endif %}
+                            {% if invoice.supplier_doubt %}<span class="status-pill status-NEEDS_REVIEW">fournisseur à confirmer</span> <span class="muted">{{ invoice.supplier_doubt|truncatechars:160 }}</span>{% endif %}
                             {% if invoice.error_message %}<span class="muted">{{ invoice.error_message|truncatechars:90 }}</span>{% endif %}
                         </td>
                         <td class="num">{{ invoice.total_ht|floatformat:2 }} €</td>

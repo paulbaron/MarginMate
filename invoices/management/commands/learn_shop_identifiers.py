@@ -39,7 +39,13 @@ class Command(BaseCommand):
         with transaction.atomic():
             read = self.read_documents()
             texts = defaultdict(list)
-            checked = Invoice.objects.filter(Q(reviewed_at__isnull=False) | ~Q(source_text="")).order_by("pk")
+            # Not a document whose supplier is in doubt (Invoice.supplier_doubt):
+            # it is nobody's until a person says whose.
+            checked = (
+                Invoice.objects.filter(Q(reviewed_at__isnull=False) | ~Q(source_text=""))
+                .filter(supplier_doubt="")
+                .order_by("pk")
+            )
             for document in checked:
                 if document.document_text:
                     texts[document.supplier_id].append(document.document_text)

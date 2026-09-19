@@ -407,6 +407,10 @@ th[aria-sort]:not([aria-sort="none"]) > button { color: var(--text); }
 
 .inline-form { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: flex-end; }
 
+/* A part of a form that is sent or not as a whole (an invoice type's source):
+   grouped for the browser, not drawn as a box. */
+fieldset.source-kind { border: 0; margin: 0; padding: 0; min-width: 0; }
+
 label { display: block; margin-bottom: var(--s1); color: var(--text-dim); font-size: 0.85rem; font-weight: 600; }
 
 input, select, textarea {
@@ -427,6 +431,8 @@ select { cursor: pointer; }
 .field { margin-bottom: var(--s3); }
 .field-help { color: var(--muted); font-size: 0.8rem; margin: var(--s1) 0 0; }
 .field-error { color: var(--red); font-size: 0.85rem; margin: var(--s1) 0 0; }
+/* A gather "Terminé" with a source in error says so beside its pill. */
+.source-failures { color: var(--red); font-size: 0.85rem; font-weight: 600; margin-right: var(--s1); }
 
 form.conversion-form {
     display: flex;
@@ -479,6 +485,8 @@ form p { margin: var(--s3) 0; }
     box-shadow: var(--shadow-pop);
 }
 .sources-panel-item { display: flex; align-items: center; gap: var(--s2); font-weight: 500; white-space: nowrap; margin: 0; }
+/* Why a source is left out (Metro paused after its firewall refused). */
+.sources-panel-note { margin: 0 0 var(--s1); max-width: 26rem; font-size: 0.8rem; white-space: normal; }
 
 /* ----------------------------------------------------------------- messages */
 
@@ -1380,3 +1388,39 @@ details.handled[open] > summary { margin-bottom: var(--s2); }
 .invoice-line-row.is-removed .correction-row input { text-decoration: line-through; opacity: 0.45; }
 .invoice-line-row.is-removed .js-remove-line { color: var(--amber); border-color: #574728; }
 .line-tools { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); }
+
+/* Out of sight, still in the page (a form's default button). */
+.visually-hidden {
+    position: absolute !important;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+/* A row leading to a page of its own (ui.js, data-row-href). */
+tr[data-row-href] { cursor: pointer; }
+tr[data-row-href]:hover td { background: var(--bg-raised); }
+
+/* A group of choices in a form (a new supplier's nature, where its invoices arrive). */
+fieldset.choice-group {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: var(--s3) var(--s4);
+    margin: var(--s4) 0;
+    min-width: 0;
+}
+fieldset.choice-group legend { font-weight: 650; padding: 0 var(--s2); }
+.check-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: var(--s1); }
+.check-list label { display: inline-flex; align-items: center; gap: var(--s2); font-weight: 500; margin: 0; }
+.check-list input[type="checkbox"],
+.check-list input[type="radio"] { width: auto; margin: 0; }
+
+/* A supplier created, modified: one column, the check step under it. */
+.supplier-form { max-width: 46rem; display: flex; flex-direction: column; gap: var(--s3); }
+.supplier-form .form-field { margin: 0; }
+.edit-plan { margin: 0; padding-left: var(--s5); display: flex; flex-direction: column; gap: var(--s2); }

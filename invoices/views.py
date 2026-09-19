@@ -13,11 +13,13 @@ from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.generic import DetailView
 
+from common import is_id
+
+from . import supplier_changes
 from .deletion import InvoiceInUseError, blocking_stock_takes, delete_invoice
 from .forms import (
     DOCUMENT_INVOICE,
     DOCUMENT_RECEIPT,
-    NEW_SHOP,
     DocumentHeaderForm,
     EmailInvoiceSourceForm,
     InvoiceTypeForm,
@@ -28,8 +30,8 @@ from .forms import (
     ReceiptBatchUploadForm,
     ReceiptShopForm,
     ShopItemPriceForm,
-    SplitForm,
     VatTableFormSet,
+    WebsiteInvoiceSourceForm,
     line_initial,
 )
 from .importing import (
@@ -110,12 +112,16 @@ def upload_invoice(request):
             if not OCR_LOCK.acquire(timeout=OCR_WAIT_SECONDS):
                 raise RuntimeError("un autre document est en cours de lecture, réessayez dans un instant")
             try:
-                invoice = import_document(
-                    tmp_path,
-                    display_filename=uploaded.name,
-                    supplier=supplier,
-                    chosen_because=f"Fournisseur choisi à l'import de la facture ({supplier.name}).",
-                )
+                with supplier_changes.cause(
+                    f"import de {uploaded.name}, {supplier.name} choisi", by_person=True
+                ), supplier_changes.collect() as changes:
+                    invoice = import_document(
+                        tmp_path,
+                        display_filename=uploaded.name,
+                        supplier=supplier,
+                        chosen_because=f"Fournisseur choisi à l'import de la facture ({supplier.name}).",
+                    )
+                _say_supplier_changes(request, changes)
             finally:
                 OCR_LOCK.release()
     except DuplicateInvoiceError as exc:
@@ -232,19 +238,35 @@ def trigger_gather(request):
     active_job = ScrapeJob.objects.filter(
         kind=ScrapeJob.Kind.GATHER, status__in=[ScrapeJob.Status.PENDING, ScrapeJob.Status.RUNNING]
     ).first()
-    if active_job is None:
+    source_codes = set(request.POST.getlist("sources"))
+    # One sign-in to a paused Metro, asked for on purpose (its own box is
+    # disabled while paused, so this names it).
+    metro_now = request.POST.get("metro_now") == "on"
+    if metro_now:
+        source_codes.add("METRO")
+    if active_job is not None:
+        messages.info(request, "Une recherche est déjà en cours : elle s'affiche ci-dessous.")
+    elif not source_codes:
+        # It ran, searched nothing and said "Terminé".
+        messages.error(request, "Aucune source cochée : rien à rechercher. Cochez-en au moins une sous « Sources ».")
+    else:
         start_date = _parse_date(request.POST.get("start_date"))
         end_date = _parse_date(request.POST.get("end_date"))
-        source_codes = set(request.POST.getlist("sources"))
         active_job = ScrapeJob.objects.create(range_start=start_date, range_end=end_date)
         thread = threading.Thread(
-            target=gather_invoices_task, args=(active_job.id, start_date, end_date, source_codes), daemon=True
+            target=gather_invoices_task,
+            args=(active_job.id, start_date, end_date, source_codes, metro_now),
+            daemon=True,
         )
         thread.start()
-    return redirect("invoices:invoice_list")
+    return redirect(f"{reverse('invoices:invoice_list')}?ajouter=recuperer")
 
 
 def gather_status(request, job_id):
+    # A run whose thread died (the dev server reloading) is said to have
+    # stopped here, where the page asks - nothing else would, and its card
+    # polled, and its button stayed disabled, for good.
+    ScrapeJob.reap_stale()
     job = get_object_or_404(ScrapeJob, pk=job_id)
     response = render(request, "invoices/_gather_status.html", {"job": job})
     # Polled only while the gather runs: a finished answer is its end.
@@ -272,15 +294,50 @@ def invoice_type_list(request):
 
 
 def invoice_type_form(request, pk=None):
+    """A kind of invoice to gather: from the shared mailbox (patterns on
+    the emails) or from the supplier's customer portal (a login page and
+    the names of the .env variables holding the credentials). Only the
+    chosen kind's settings are validated and saved; "Tester" runs either
+    without saving and without importing anything.
+
+    Its supplier can be a new one, made in the same save (and not at all if
+    the type is refused). `?fournisseur=` and `?source=` fill the page in
+    from a supplier's page, and `?retour=` is where it goes back after."""
+    from .receipts import invoice_supplier_choices
+    from .supplier_views import _local_return
+
     invoice_type = get_object_or_404(InvoiceType, pk=pk) if pk else None
     source = getattr(invoice_type, "email_source", None) if invoice_type else None
+    website = getattr(invoice_type, "website_source", None) if invoice_type else None
     test_job = None
+    retour = _local_return(request)
 
     if request.method == "POST":
         type_form = InvoiceTypeForm(request.POST, instance=invoice_type)
-        source_form = EmailInvoiceSourceForm(request.POST, instance=source)
+        is_website = request.POST.get("source_kind") == InvoiceType.SourceKind.WEBSITE
+        # Only the chosen kind's fields are sent (the other's are disabled in
+        # the page); the other kind is shown again as saved, not blank.
+        if is_website:
+            source_form = EmailInvoiceSourceForm(
+                instance=source,
+                initial={
+                    "test_start_date": request.POST.get("test_start_date"),
+                    "test_end_date": request.POST.get("test_end_date"),
+                },
+            )
+            website_form = WebsiteInvoiceSourceForm(request.POST, instance=website, prefix="site")
+        else:
+            source_form = EmailInvoiceSourceForm(request.POST, instance=source)
+            website_form = WebsiteInvoiceSourceForm(instance=website, prefix="site")
 
-        if request.POST.get("action") == "test":
+        if is_website:
+            if request.POST.get("action") == "test":
+                test_job = _test_website(request, type_form, website_form)
+            elif type_form.is_valid() and website_form.is_valid():
+                saved = _save_invoice_type(request, type_form, invoice_type, website_form, "website", retour)
+                if saved is not None:
+                    return saved
+        elif request.POST.get("action") == "test":
             # Only the patterns need to be valid to try them - name/supplier
             # can still be blank/invalid while iterating on a regex.
             if source_form.is_valid():
@@ -303,16 +360,16 @@ def invoice_type_form(request, pk=None):
                 thread.start()
         else:
             if type_form.is_valid() and source_form.is_valid():
-                saved_type = type_form.save(commit=False)
-                saved_type.source_kind = InvoiceType.SourceKind.EMAIL
-                saved_type.save()
-                saved_source = source_form.save(commit=False)
-                saved_source.invoice_type = saved_type
-                saved_source.save()
-                messages.success(request, f"Type de facture enregistré : {saved_type.name}")
-                return redirect("invoices:invoice_type_list")
+                saved = _save_invoice_type(request, type_form, invoice_type, source_form, "email", retour)
+                if saved is not None:
+                    return saved
     else:
-        type_form = InvoiceTypeForm(instance=invoice_type)
+        prefill = {}
+        if invoice_type is None and is_id(request.GET.get("fournisseur", "")):
+            prefill["supplier"] = request.GET["fournisseur"]
+        if invoice_type is None and request.GET.get("source") in InvoiceType.SourceKind.values:
+            prefill["source_kind"] = request.GET["source"]
+        type_form = InvoiceTypeForm(instance=invoice_type, initial=prefill)
         source_form = EmailInvoiceSourceForm(
             instance=source,
             initial={
@@ -320,6 +377,7 @@ def invoice_type_form(request, pk=None):
                 "test_end_date": timezone.localdate(),
             },
         )
+        website_form = WebsiteInvoiceSourceForm(instance=website, prefix="site")
 
     return render(
         request,
@@ -327,13 +385,113 @@ def invoice_type_form(request, pk=None):
         {
             "type_form": type_form,
             "source_form": source_form,
+            "website_form": website_form,
+            "is_website": (type_form["source_kind"].value() or "") == InvoiceType.SourceKind.WEBSITE,
             "test_job": test_job,
             "invoice_type": invoice_type,
             # Rendered by hand beside the "Tester" button rather than among
             # the pattern fields, so the shared partial leaves them out.
             "test_date_fields": ["test_start_date", "test_end_date"],
+            "supplier_groups": invoice_supplier_choices(),
+            "supplier_selected": str(type_form["supplier"].value() or ""),
+            "typed_name": type_form["new_name"].value() or "",
+            "typed_expenses": bool(type_form["new_expenses"].value()),
+            "retour": retour,
+            # What the page was drawn with, carried through a redraw (« Tester
+            # », an error): taken from the database again, a redrawn page
+            # moved the type back unrefused.
+            "supplier_was": _supplier_was(request, type_form, invoice_type),
         },
     )
+
+
+def _supplier_was(request, type_form, invoice_type):
+    if invoice_type is None:
+        return ""
+    seen = getattr(type_form, "supplier_seen", None)
+    if seen is not None:
+        return seen
+    posted = request.POST.get("supplier_was", "") if request.method == "POST" else ""
+    return int(posted) if is_id(posted) else invoice_type.supplier_id
+
+
+def _save_invoice_type(request, type_form, invoice_type, source_form, kind, retour):
+    """The type and its source saved - with its supplier, made now if it is
+    a new one, all in one transaction: a refusal leaves nothing. A type
+    moved to another supplier is recorded on both. None when refused (the
+    reason is on the form)."""
+    from .supplier_views import record_type_moved
+
+    before = invoice_type.supplier if invoice_type is not None else None
+    was = request.POST.get("supplier_was", "")
+    if before is not None and is_id(was) and int(was) != before.pk:
+        # The type moved since this page was drawn (a « Rendre ce type » in
+        # another tab, or the type saved from another tab): saved as it was,
+        # the page moved it back, unseen.
+        type_form.add_error(
+            "supplier",
+            f"« {invoice_type.name} » récupère désormais pour {before.name}, depuis l'ouverture de cette page : "
+            "vérifiez son fournisseur, puis enregistrez de nouveau.",
+        )
+        # Seen now: the page drawn again carries where it is, and saving it
+        # again is a choice made knowingly.
+        type_form.supplier_seen = before.pk
+        return None
+    name = type_form.cleaned_data["name"]
+    try:
+        with transaction.atomic(), supplier_changes.cause(f"type de factures « {name} »", by_person=True):
+            supplier, created = type_form.chosen_supplier()
+            saved_type = type_form.save(commit=False)
+            saved_type.supplier = supplier
+            if kind == "email":
+                saved_type.source_kind = InvoiceType.SourceKind.EMAIL
+            saved_type.save()
+            saved_source = source_form.save(commit=False)
+            saved_source.invoice_type = saved_type
+            saved_source.save()
+            if before is not None and before.pk != supplier.pk:
+                record_type_moved(saved_type, before, supplier)
+    except ValueError as exc:
+        type_form.add_error("new_name", str(exc))
+        return None
+    messages.success(request, f"Type de facture enregistré : {saved_type.name}")
+    if created:
+        messages.info(
+            request,
+            f"{supplier.name} est créé : ce type range chez lui ce qu'il récupère, et il apprend ce que ses documents "
+            "impriment dès le premier.",
+        )
+    if before is not None and before.pk != supplier.pk:
+        messages.info(
+            request,
+            f"« {saved_type.name} » récupère désormais pour {supplier.name} (avant : {before.name}). Les documents "
+            f"déjà récupérés restent chez {before.name} : s'ils sont de {supplier.name}, changez-les de fournisseur "
+            "depuis leur page.",
+        )
+    return redirect(retour or "invoices:invoice_type_list")
+
+
+def _test_website(request, type_form, website_form):
+    """Sign in on the site with the settings as typed and list what a
+    gather would download - nothing saved, nothing downloaded."""
+    from .scrapers.website import WebsiteRecipe
+    from .tasks import test_website_task
+
+    if not website_form.is_valid():
+        return None
+    start = _parse_date(request.POST.get("test_start_date")) or (timezone.localdate() - timedelta(days=90))
+    end = _parse_date(request.POST.get("test_end_date")) or timezone.localdate()
+    site = website_form.save(commit=False)
+    name = (type_form.data.get("name") or "").strip() or "Site"
+    supplier_id = type_form.data.get("supplier") or ""
+    job = ScrapeJob.objects.create(kind=ScrapeJob.Kind.TEST)
+    thread = threading.Thread(
+        target=test_website_task,
+        args=(job.id, WebsiteRecipe.from_source(site, name=name), int(supplier_id) if is_id(supplier_id) else 0, start, end),
+        daemon=True,
+    )
+    thread.start()
+    return job
 
 
 def edit_invoice_lines(request, pk):
@@ -450,7 +608,10 @@ def receipt_batch_assign(request, pk, index):
         messages.error(request, str(exc))
         return redirect("invoices:receipt_batch", pk=batch.pk)
     try:
-        entry = import_with_shop(batch, index, supplier)
+        with supplier_changes.cause(
+            f"import d'un fichier du lot, {supplier.name} choisi", by_person=True
+        ), supplier_changes.collect() as changes:
+            entry = import_with_shop(batch, index, supplier)
     except ShopChoiceError as exc:
         messages.error(request, str(exc))
         return redirect("invoices:receipt_batch", pk=batch.pk)
@@ -458,28 +619,11 @@ def receipt_batch_assign(request, pk, index):
         messages.warning(request, entry["message"])
         return redirect("invoices:receipt_batch", pk=batch.pk)
     messages.success(request, f"{entry['name']} importé comme ticket {supplier.name} : vérifiez-le d'après la photo.")
+    _say_supplier_changes(request, changes)
     if created:
         _say_new_shop(request, supplier)
     # Checked within its import - the batch may still be running meanwhile.
     return redirect(reverse("invoices:receipt_review", args=[entry["invoice_id"]]) + f"?lot={batch.pk}")
-
-
-def _how_to_bring(elsewhere, shop) -> str:
-    """How documents filed elsewhere that print `shop`'s header are brought
-    to it. All of one supplier's: together, from that supplier's split -
-    moved one at a time, the ones still waiting print the same figures and
-    `shop` learns nothing from any of them."""
-    from .receipts import can_split
-
-    owners = {ticket.supplier_id: ticket.supplier for ticket in elsewhere}
-    if len(owners) == 1:
-        (owner,) = owners.values()
-        if can_split(owner):
-            return (
-                f"si ce sont des documents de {shop.name}, rangez-les ensemble avec « Séparer des documents de "
-                f"{owner.name} » (depuis l'un d'eux, ou l'onglet Sources)."
-            )
-    return "si ce sont des tickets de cette enseigne, rangez-les avec « Changer d'enseigne »."
 
 
 def _say_new_shop(request, supplier) -> None:
@@ -494,8 +638,8 @@ def _say_new_shop(request, supplier) -> None:
     if elsewhere:
         messages.warning(
             request,
-            f"« {supplier.ticket_header} » est aussi imprimé sur {describe_tickets(elsewhere)} : "
-            + _how_to_bring(elsewhere, supplier),
+            f"« {supplier.ticket_header} » est aussi imprimé sur {describe_tickets(elsewhere)} : si ce sont des "
+            f"documents de {supplier.name}, changez-les de fournisseur depuis la page de chacun.",
         )
     if not supplier.ticket_header:
         messages.info(
@@ -530,31 +674,65 @@ def supplier_expenses(request, pk):
     already filed are a person's to correct - but gives its products back
     (`importing.stop_expenses`), or the box could not be undone: flagged for
     ever, they reached no queue and no stock page, and correcting a document
-    by hand resolved the very same flagged product."""
+    by hand resolved the very same flagged product.
+
+    Said first, done once confirmed: it rewrites documents already filed,
+    and a box on the Sources tab did it on a click. A POST without
+    `confirme` - a page from before - shows what it would do, and does
+    nothing."""
+    from inventory.models import Product
+
     from .importing import redo_as_expenses, stop_expenses
+    from .models import SupplierChange
 
     supplier = get_object_or_404(Supplier, pk=pk)
-    here = redirect("invoices:invoice_type_list")
-    if request.method != "POST":
-        return here
-    supplier.expenses_only = bool(request.POST.get("expenses_only"))
-    supplier.save(update_fields=["expenses_only"])
-    if not supplier.expenses_only:
-        freed = stop_expenses(supplier)
-        messages.success(
+    fiche = reverse("invoices:supplier_detail", args=[supplier.pk])
+    if request.method == "POST":
+        wanted = bool(request.POST.get("expenses_only"))
+    else:
+        wanted = not supplier.expenses_only
+    if request.method != "POST" or request.POST.get("confirme") != "1":
+        documents = Invoice.objects.filter(supplier=supplier)
+        return render(
             request,
-            f"{supplier.name} redevient un fournisseur de produits. Les documents déjà enregistrés gardent "
-            "leurs lignes : corrigez-les document par document si besoin."
-            + (f" {freed} poste(s) repassent à classer." if freed else ""),
+            "invoices/supplier_expenses_confirm.html",
+            {
+                "supplier": supplier,
+                "wanted": wanted,
+                "unchanged": wanted == supplier.expenses_only,
+                "document_count": documents.count(),
+                "checked_count": documents.filter(reviewed_at__isnull=False).count(),
+                "to_classify": Product.objects.filter(supplier=supplier, stock_type__isnull=True, is_expense=False).count(),
+                "postes": Product.objects.filter(supplier=supplier, is_expense=True).count(),
+                "fiche": fiche,
+            },
         )
-        return here
-    done = redo_as_expenses(supplier)
-    messages.success(
-        request,
-        f"{supplier.name} : ses documents sont des charges - une ligne par taux de TVA, aucun produit à classer"
-        + (f" ({done} document(s) déjà enregistré(s) refaits ainsi)." if done else "."),
-    )
-    return here
+    if wanted == supplier.expenses_only:
+        messages.info(request, f"{supplier.name} est déjà un fournisseur de {'charges' if wanted else 'produits'}.")
+        return redirect(fiche)
+    with supplier_changes.cause(
+        f"« {'Charges' if wanted else 'Produits'} » confirmé sur la fiche de {supplier.name}", by_person=True
+    ):
+        supplier.expenses_only = wanted
+        supplier.save(update_fields=["expenses_only"])
+        if not supplier.expenses_only:
+            freed = stop_expenses(supplier)
+            said = (
+                f"{supplier.name} redevient un fournisseur de produits. Les documents déjà enregistrés gardent "
+                "leurs lignes : corrigez-les document par document si besoin."
+                + (f" {freed} poste(s) repassent à classer." if freed else "")
+            )
+        else:
+            done = redo_as_expenses(supplier)
+            said = (
+                f"{supplier.name} : ses documents sont des charges - une ligne par taux de TVA, aucun produit à classer"
+                + (f" ({done} document(s) déjà enregistré(s) refaits ainsi)." if done else ".")
+            )
+        supplier_changes.record(
+            supplier, SupplierChange.Kind.CHARGES, said, data={"expenses_only": supplier.expenses_only}
+        )
+    messages.success(request, said)
+    return redirect(fiche)
 
 
 def receipt_queue(request):
@@ -682,7 +860,7 @@ def _correction_page(request, invoice):
         formset = _line_formset_for(invoice, document)
     from .receipts import shop_choices
 
-    shop_context = {"shop_groups": shop_choices(), **_recognition_context(invoice)}
+    shop_context = {"shop_groups": shop_choices(), "charges_default": invoice.supplier.expenses_only}
     if is_receipt:
         from .parsers import ticket_parser_for
         from .receipts import (
@@ -742,231 +920,15 @@ def _correction_page(request, invoice):
     )
 
 
-def _recognition_context(invoice) -> dict:
-    """What filed this document under its supplier, when that was not its
-    header, and the way to split it off with the others like it - shown on
-    its page, where someone looking at a second subscription's bill is."""
-    from .identifiers import describe as describe_identifier
-    from .identifiers import document_identifiers
-    from .receipts import can_split, separable_documents
-
-    supplier = invoice.supplier
-    text = invoice.document_text
-    context = {
-        "charges_default": supplier.expenses_only,
-        # A document typed by hand has no text to tell it apart by: it is
-        # moved on its own.
-        "split_url": (reverse("invoices:supplier_split", args=[supplier.pk]) + f"?depuis={invoice.pk}")
-        if can_split(supplier) and text
-        else "",
-        "header_missing": False,
-    }
-    if supplier.ticket_header and text:
-        # Only another subscription's: a ticket of the same shop whose top
-        # the photo lost is not something to split off.
-        separable = separable_documents(supplier)
-        if any(document.pk == invoice.pk for document in separable):
-            context["header_missing"] = True
-            context["named_by"] = [
-                describe_identifier(identifier)
-                for identifier in sorted(document_identifiers(text) & set(supplier.ticket_identifiers or ()))
-            ]
-            context["headerless_count"] = len(separable)
-            context["document_count"] = Invoice.objects.filter(supplier=supplier).count()
-    return context
-
-
-def supplier_split(request, pk):
-    """Split some of a supplier's documents off to another source - one
-    company's two subscriptions filed as one, the box and the mobile line.
-
-    The documents are ticked from what tells them apart: those not printing
-    the supplier's header (the default when it has one), or those printing
-    one of the figures it learned (`?avec=`). They move together, and their
-    new source learns what they print once they all have (receipts.
-    split_documents). `?depuis=` is the document the page was opened from,
-    where it goes back to.
-    """
-    from .identifiers import describe as describe_identifier
-    from .identifiers import document_identifiers
-    from .receipts import (
-        can_split,
-        identifiers_naming,
-        names_shop,
-        prints_header,
-        separable_documents,
-        separating_choices,
-        split_documents,
-    )
-
-    source = get_object_or_404(Supplier, pk=pk)
-    sources_tab = reverse("invoices:invoice_type_list")
-    if not can_split(source):
-        messages.error(
-            request, f"Les documents de {source.name} ne se séparent pas : sa caisse ou son lecteur lui est propre."
-        )
-        return redirect(sources_tab)
-    documents = list(Invoice.objects.filter(supplier=source).order_by("invoice_date", "pk"))
-    posted_from = request.GET.get("depuis", "")
-    start = next((invoice for invoice in documents if str(invoice.pk) == posted_from), None)
-    back = reverse("invoices:invoice_edit_lines", args=[start.pk]) if start is not None else sources_tab
-    learned = list(source.ticket_identifiers or ())
-    by = request.GET.get("avec", "")
-    by = by if by in learned else ""
-
-    if request.method == "POST":
-        form = SplitForm(request.POST, source=source)
-        if form.is_valid():
-            destination = form.cleaned_data["supplier"]
-            is_new = destination == NEW_SHOP
-            # The new source's header box stays in the page when an existing
-            # source is picked (hidden, still posted): given to that source,
-            # it silently replaced a header nobody saw.
-            new_header = form.cleaned_data["new_header"] if is_new else ""
-            source_header = form.cleaned_data["source_header"] if "source_header" in request.POST else None
-            try:
-                result = split_documents(
-                    source,
-                    form.chosen(),
-                    destination=None if is_new else destination,
-                    new_name=form.cleaned_data["new_name"],
-                    new_header=new_header,
-                    source_header=source_header,
-                )
-            except (ValueError, InvoiceLinesInUseError) as exc:
-                messages.error(request, str(exc))
-            else:
-                source.refresh_from_db()
-                said = []
-                if result.renamed:
-                    said.append(f"{result.renamed} ligne(s) de charge portent son nom")
-                if result.reclassified:
-                    said.append(f"{result.reclassified} ligne(s) gardent leur article de stock")
-                messages.success(
-                    request,
-                    f"{result.moved} document(s) rangé(s) chez {result.destination.name}"
-                    + (f" ({', '.join(said)})" if said else "")
-                    + f". {result.destination.name} est reconnue par : "
-                    + (", ".join(names_shop(result.destination)) or "rien encore")
-                    + f" ; {source.name} par : "
-                    + (", ".join(names_shop(source)) or "rien encore")
-                    + ".",
-                )
-                for warning in result.warnings:
-                    messages.warning(request, warning)
-                if new_header or (source_header is not None and source_header != source.ticket_header):
-                    from .receipt_batches import requeue_everywhere
-
-                    requeue_everywhere()
-                return redirect(back)
-            # What the refused split had set on its own copy was rolled back;
-            # the page is drawn from what is stored.
-            source.refresh_from_db()
-        else:
-            messages.error(request, form.error_text())
-        ticked = {value for value in request.POST.getlist("documents") if value.isdigit()}
-    else:
-        form = None
-        if by:
-            ticked = {
-                str(invoice.pk)
-                for invoice in documents
-                if invoice.document_text and by in document_identifiers(invoice.document_text)
-            }
-        elif source.ticket_header:
-            # Another subscription's, not a ticket of the same shop whose top
-            # the photo lost (separable_documents).
-            ticked = {str(invoice.pk) for invoice in separable_documents(source)}
-        elif start is not None and start.document_text:
-            # A document typed by hand has no box to tick on this page.
-            ticked = {str(start.pk)}
-        else:
-            ticked = set()
-
-    rows = []
-    for invoice in documents:
-        text = invoice.document_text
-        printed = document_identifiers(text) if text else set()
-        rows.append(
-            {
-                "invoice": invoice,
-                "has_text": bool(text),
-                "ticked": str(invoice.pk) in ticked,
-                "prints_header": bool(source.ticket_header and text and prints_header(text, source.ticket_header)),
-                "named_by": [describe_identifier(identifier) for identifier in learned if identifier in printed],
-            }
-        )
-    # The ticked ones first: seven documents among thirty-seven, by date,
-    # were scattered down a table nobody would scroll to check them.
-    rows.sort(key=lambda row: (not row["ticked"], getattr(row["invoice"].invoice_date, "toordinal", int)(), row["invoice"].pk))
-    chosen = [row["invoice"] for row in rows if row["ticked"]]
-    staying = [row["invoice"] for row in rows if not row["ticked"]]
-    # What each side would then be recognised by, by the rule learning
-    # uses and with what a split may teach: what the source knew.
-    elsewhere = [
-        ocr or pdf
-        for ocr, pdf in Invoice.objects.exclude(supplier=source).values_list("ocr_text", "source_text")
-        if ocr or pdf
-    ]
-    chosen_texts = [invoice.document_text for invoice in chosen if invoice.document_text]
-    staying_texts = [invoice.document_text for invoice in staying if invoice.document_text]
-    printed_by_chosen = set().union(*(document_identifiers(text) for text in chosen_texts))
-    printed_by_staying = set().union(*(document_identifiers(text) for text in staying_texts))
-    will_name = sorted(
-        identifiers_naming(chosen_texts, elsewhere + staying_texts, printed_by_chosen & set(learned))
-    )
-    source_keeps = identifiers_naming(staying_texts, elsewhere + chosen_texts, set(learned))
-    shops = [
-        supplier
-        for supplier in Supplier.objects.exclude(pk=source.pk).exclude(parser_key=LLM_PARSER_KEY).order_by("name")
-        if supplier.expenses_only == source.expenses_only and can_split(supplier)
-    ]
-    return render(
-        request,
-        "invoices/supplier_split.html",
-        {
-            "source": source,
-            "rows": rows,
-            "chosen_count": len(chosen),
-            "untexted": [row for row in rows if not row["has_text"]],
-            "criteria": [(identifier, describe_identifier(identifier)) for identifier in learned],
-            "by": by,
-            "start": start,
-            "back": back,
-            "will_name": [describe_identifier(identifier) for identifier in will_name],
-            # A web site alone names no one (identified_supplier).
-            "will_recognise": any(not identifier.startswith("web:") for identifier in will_name),
-            "header_choices": separating_choices(chosen, staying) if chosen else [],
-            "shop_groups": [("Sources de même nature", shops)],
-            "selected": (request.POST.get("supplier") if request.method == "POST" else "") or NEW_SHOP,
-            "typed_name": request.POST.get("new_name", "") if request.method == "POST" else "",
-            "typed_header": request.POST.get("new_header", "") if request.method == "POST" else "",
-            "source_header": request.POST.get("source_header", source.ticket_header)
-            if request.method == "POST"
-            else source.ticket_header,
-            "form": form,
-            # Printed on both sides, the source's figures name neither.
-            "stays_with_learned": [
-                describe_identifier(identifier)
-                for identifier in learned
-                if identifier not in will_name
-                and identifier not in source_keeps
-                and identifier in printed_by_chosen
-                and identifier in printed_by_staying
-            ],
-        },
-    )
-
-
 def _lot_of(request):
     """The import a ticket is checked within, if the address names one."""
     posted = request.GET.get("lot", "")
-    return ReceiptBatch.objects.filter(pk=posted).first() if posted.isdigit() else None
+    return ReceiptBatch.objects.filter(pk=posted).first() if is_id(posted) else None
 
 
 def _save_corrections(request, invoice, formset, header_form, vat_form=None) -> bool:
     """Store what the page says. Returns whether it was saved."""
-    from .receipts import learn_identifiers, recheck_after_review
+    from .receipts import _describe, learn_identifiers, recheck_after_review
 
     document = DOCUMENT_RECEIPT if invoice.is_receipt else DOCUMENT_INVOICE
     stored = {line.pk: line for line in invoice.lines.all()}
@@ -1009,6 +971,13 @@ def _save_corrections(request, invoice, formset, header_form, vat_form=None) -> 
                 invoice.printed_total_ttc = header_form.cleaned_data["printed_total_ttc"]
             replace_invoice_lines(invoice, lines)
             fields = ["invoice_date", "printed_total_ttc"]
+            doubted = bool(invoice.supplier_doubt)
+            if doubted:
+                # Validated here, it is this supplier's: stored before the
+                # learning below, which counts it among its documents now.
+                invoice.supplier_doubt = ""
+                invoice.save(update_fields=["supplier_doubt"])
+                messages.info(request, f"Confirmé : ce document est bien de {invoice.supplier.name}.")
             if vat_form is not None:
                 # The VAT table as the page now holds it, before the checks
                 # that compare the lines against it are worked out.
@@ -1020,7 +989,19 @@ def _save_corrections(request, invoice, formset, header_form, vat_form=None) -> 
                 fields += ["parse_checks", "reviewed_at"]
                 # Checked, it is this shop's: its next tickets are
                 # recognised by what this one prints, header or not.
-                learn_identifiers(invoice.supplier, invoice.ocr_text)
+                with supplier_changes.cause(
+                    f"validation de {_describe(invoice)}", invoice=invoice, by_person=True
+                ), supplier_changes.collect() as changes:
+                    learn_identifiers(invoice.supplier, invoice.ocr_text)
+                _say_supplier_changes(request, changes)
+            elif doubted and invoice.source_text:
+                # A digital invoice read by its supplier's own reader learns
+                # at import - not this one, until now.
+                with supplier_changes.cause(
+                    f"validation de {_describe(invoice)}", invoice=invoice, by_person=True
+                ), supplier_changes.collect() as changes:
+                    learn_identifiers(invoice.supplier, invoice.source_text)
+                _say_supplier_changes(request, changes)
             invoice.save(update_fields=fields)
     except InvoiceLinesInUseError as exc:
         messages.error(request, str(exc))
@@ -1075,8 +1056,20 @@ def _reread_from_page(request, invoice) -> None:
         messages.error(request, str(exc))
 
 
+def _say_supplier_changes(request, changes) -> None:
+    """What an act changed in what recognises a supplier, said where it was
+    done - a loss as a warning: on 18/09 one went without a word."""
+    for change in changes:
+        if change.kind != change.Kind.IDENTIFIERS:
+            continue
+        if change.data.get("lost"):
+            messages.warning(request, change.summary)
+        else:
+            messages.info(request, change.summary)
+
+
 def _move_shop(request, invoice) -> None:
-    from .receipts import move_to_shop
+    from .receipts import _describe, move_to_shop
 
     form = ReceiptShopForm(request.POST)
     if not form.is_valid():
@@ -1087,23 +1080,17 @@ def _move_shop(request, invoice) -> None:
         messages.info(request, f"Ce {kind} est déjà rangé chez {invoice.supplier.name}.")
         return
     try:
-        supplier, created = form.shop(ignoring=[invoice])
-        move_to_shop(invoice, supplier)
+        with supplier_changes.cause(
+            f"changement de fournisseur de {_describe(invoice)}", invoice=invoice, by_person=True
+        ), supplier_changes.collect() as changes:
+            supplier, created = form.shop(ignoring=[invoice])
+            move_to_shop(invoice, supplier)
     except (ValueError, InvoiceLinesInUseError) as exc:
-        from .receipts import can_split
-
-        pointer = ""
-        if form.cleaned_data["supplier"] == NEW_SHOP and can_split(invoice.supplier):
-            # Refused because the header is on its siblings: they go
-            # together, or the new supplier learns nothing from any of them.
-            pointer = (
-                f" Pour ranger ensemble plusieurs documents de {invoice.supplier.name} : "
-                f"« Séparer des documents de {invoice.supplier.name} », sur cette page."
-            )
-        messages.error(request, str(exc) + pointer)
+        messages.error(request, str(exc))
         return
     kind = "Ticket" if invoice.is_receipt else "Facture"
     messages.success(request, f"{kind} rangé{'' if invoice.is_receipt else 'e'} chez {supplier.name}.")
+    _say_supplier_changes(request, changes)
     if created:
         _say_new_shop(request, supplier)
 
@@ -1137,7 +1124,8 @@ def _set_shop_header(request, invoice) -> None:
     if elsewhere:
         messages.warning(
             request,
-            f"« {header} » est aussi imprimé sur {describe_tickets(elsewhere)} : " + _how_to_bring(elsewhere, shop),
+            f"« {header} » est aussi imprimé sur {describe_tickets(elsewhere)} : si ce sont des documents de "
+            f"{shop.name}, changez-les de fournisseur depuis la page de chacun.",
         )
     requeued = requeue_everywhere()
     messages.success(
@@ -1151,16 +1139,14 @@ def _set_shop_header(request, invoice) -> None:
 def _say_headerless(request, shop) -> None:
     """A header only adds documents: those of `shop` that do not print it
     stay where something else they print put them. Said, with what that
-    was, since it is exactly what someone giving a second subscription's
-    text expected to see leave."""
+    was, since someone giving a header may expect the others to leave."""
     from .identifiers import describe as describe_identifier
     from .identifiers import document_identifiers
-    from .receipts import can_split, headerless_documents, separable_documents
+    from .receipts import headerless_documents
 
     headerless = headerless_documents(shop)
     if not headerless:
         return
-    separable = separable_documents(shop)
     total = Invoice.objects.filter(supplier=shop).count()
     learned = set(shop.ticket_identifiers or ())
     named_by = sorted({identifier for invoice in headerless for identifier in document_identifiers(invoice.document_text)} & learned)
@@ -1169,13 +1155,7 @@ def _say_headerless(request, shop) -> None:
         f"{len(headerless)} des {total} documents {shop.name} ne portent pas « {shop.ticket_header} » : ils restent "
         f"chez {shop.name}"
         + (f", rangés par son {', son '.join(describe_identifier(i) for i in named_by)}" if named_by else "")
-        + "."
-        + (
-            f" {len(separable)} d'entre eux impriment ce que les autres n'impriment pas : s'ils sont d'un autre "
-            f"abonnement, « Séparer des documents de {shop.name} », sur cette page."
-            if can_split(shop) and separable
-            else ""
-        ),
+        + f". Si l'un d'eux n'est pas de {shop.name}, changez-le de fournisseur depuis sa page.",
     )
 
 
@@ -1185,7 +1165,7 @@ def _forget_price(request, invoice) -> None:
     from .models import ShopItemPrice
 
     posted = request.POST.get("price", "")
-    price = ShopItemPrice.objects.filter(supplier=invoice.supplier, pk=posted).first() if posted.isdigit() else None
+    price = ShopItemPrice.objects.filter(supplier=invoice.supplier, pk=posted).first() if is_id(posted) else None
     if price is None:
         messages.error(request, "Ce prix n'est pas (ou plus) connu pour cette enseigne.")
         return
@@ -1206,7 +1186,7 @@ def _rename_product_from_review(request, invoice):
     product_id = request.POST.get("product", "")
     line = (
         invoice.lines.select_related("product").filter(product_id=product_id).first()
-        if product_id.isdigit()
+        if is_id(product_id)
         else None
     )
     if line is None:
@@ -1371,7 +1351,7 @@ def invoice_bulk_delete(request):
     next_url = _safe_next(request)
     if request.method != "POST":
         return redirect(next_url)
-    ids = [int(value) for value in request.POST.getlist("invoice_ids") if value.isdigit()]
+    ids = [int(value) for value in request.POST.getlist("invoice_ids") if is_id(value)]
     invoices = list(Invoice.objects.filter(pk__in=ids).select_related("supplier").order_by("invoice_date", "pk"))
     if not invoices:
         messages.warning(request, "Aucune facture sélectionnée.")

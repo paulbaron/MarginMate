@@ -12,6 +12,7 @@ Data invented.
 
 from datetime import date, timedelta
 from decimal import Decimal
+from unittest import mock
 
 from django.contrib.messages import get_messages
 from django.test import TestCase
@@ -23,7 +24,8 @@ from inventory.views import review_panel_context
 from invoices.importing import import_parsed_invoice, redo_as_expenses, replace_invoice_lines
 from invoices.receipts import pending_receipts, reread_receipt
 from invoices.models import Invoice, Supplier
-from invoices.parsers.base import ParsedInvoice, ParsedLine
+from invoices.parsers.base import ParseCheck, ParsedInvoice, ParsedLine
+from invoices.tests.test_unknown_shops import staged_file
 from tests.factories import make_product, make_supplier
 
 D = Decimal
@@ -61,6 +63,41 @@ def line(name, total_ht, rate="0.20"):
         raw_name=name, quantity=1, total_volume=D("0"), unit_cost_ht=D(total_ht),
         total_ht=D(total_ht), vat_rate=D(rate),
     )
+
+
+class FetchedChargeTests(TestCase):
+    """A charge fetched by a portal or the mailbox goes through the ticket
+    reader, then is filed by the charge reading - its VAT table here. The
+    ticket reader's checks, about lines the charge reading replaced, were
+    stored over the charge's own: Eau de Paris' water bills, filed at
+    exactly what they charge (HT 303,28 €, TVA 23,92 € at 5,5 % and 10 %,
+    TTC 327,20 €), waited in « À vérifier » saying « 5.5 % supposé » and
+    « lignes 310,15 € HT / ticket 303,28 € »."""
+
+    def test_it_keeps_its_own_checks_and_is_settled(self):
+        from invoices.receipts import ReceiptRead, import_receipt
+
+        water = make_supplier(code="EAU_X", name="Eau Exemple", parser_key="", expenses_only=True)
+        reading = parsed(
+            lines=[line("PRODUCTION ET DISTRIBUTION", "150.00", "0.055"), line("COLLECTE ET TRAITEMENT", "160.15", "0.055")],
+            breakdown=[(D("0.055"), D("142.34"), D("7.82")), (D("0.10"), D("160.94"), D("16.10"))],
+            total=D("327.20"), number="2026100000001", when=date(2026, 4, 10), text="EAU EXEMPLE\nTotal 327,20",
+        )
+        reading.checks = [
+            ParseCheck(label="Taux par article", passed=False, detail="5.5 % supposé, à vérifier."),
+            ParseCheck(label="Somme HT des lignes = base HT du ticket", passed=False, detail="lignes 310.15 € HT / ticket 303.28 € HT"),
+        ]
+        read = ReceiptRead(parser=None, parsed=reading, preview=None, text=reading.source_text)
+        with mock.patch("invoices.receipts.read_receipt", return_value=read):
+            invoice = import_receipt(staged_file(self, "eau.pdf"), supplier=water, chosen_because="Téléchargée par « Eau ».")
+        invoice.refresh_from_db()
+        labels = {check["label"] for check in invoice.parse_checks}
+        self.assertNotIn("Taux par article", labels)
+        self.assertNotIn("Somme HT des lignes = base HT du ticket", labels)
+        self.assertIn("Total de la charge", labels)
+        self.assertEqual(invoice.status, Invoice.Status.COMPLETE)
+        self.assertEqual(invoice.review_state["label"], "Charge")
+        self.assertEqual((invoice.total_ht, invoice.total_ttc), (D("303.28"), D("327.20")))
 
 
 class PosteByPosteTests(TestCase):
@@ -237,14 +274,19 @@ class MarkingTheSupplierTests(TestCase):
         )
         self.url = reverse("invoices:supplier_expenses", args=[self.supplier.pk])
 
-    def test_the_sources_tab_offers_the_box(self):
-        page = self.client.get(reverse("invoices:invoice_type_list"))
-        self.assertContains(page, f'action="{self.url}"')
-        self.assertContains(page, "Charges")
+    def test_the_suppliers_page_offers_it_behind_a_confirmation(self):
+        """A box on the Sources tab rewrote documents on a click."""
+        self.assertContains(self.client.get(reverse("invoices:supplier_detail", args=[self.supplier.pk])), self.url)
+        page = self.client.get(self.url)
+        self.assertContains(page, "Oui, ce sont des charges")
+        # An old page posting the box: shown what it would do, nothing done.
+        self.client.post(self.url, {"expenses_only": "1"})
+        self.supplier.refresh_from_db()
+        self.assertFalse(self.supplier.expenses_only)
 
     def test_ticking_it_redoes_what_is_already_filed(self):
-        response = self.client.post(self.url, {"expenses_only": "1"})
-        self.assertRedirects(response, reverse("invoices:invoice_type_list"))
+        response = self.client.post(self.url, {"expenses_only": "1", "confirme": "1"})
+        self.assertRedirects(response, reverse("invoices:supplier_detail", args=[self.supplier.pk]))
         self.supplier.refresh_from_db()
         self.assertTrue(self.supplier.expenses_only)
         invoice = Invoice.objects.get(pk=self.invoice.pk)
@@ -258,8 +300,8 @@ class MarkingTheSupplierTests(TestCase):
         self.assertTrue(any("1 document" in message for message in messages_of(response)))
 
     def test_unticking_it_leaves_the_documents_alone(self):
-        self.client.post(self.url, {"expenses_only": "1"})
-        response = self.client.post(self.url, {})
+        self.client.post(self.url, {"expenses_only": "1", "confirme": "1"})
+        response = self.client.post(self.url, {"confirme": "1"})
         self.supplier.refresh_from_db()
         self.assertFalse(self.supplier.expenses_only)
         self.assertEqual(Invoice.objects.get(pk=self.invoice.pk).lines.count(), 2)
@@ -533,7 +575,7 @@ class ChargesOnTheProductsPageTests(TestCase):
         poste = Product.objects.get(supplier=self.supplier)
         self.assertTrue(poste.is_expense)
         response = self.client.post(
-            reverse("invoices:supplier_expenses", args=[self.supplier.pk]), {}, follow=True
+            reverse("invoices:supplier_expenses", args=[self.supplier.pk]), {"confirme": "1"}, follow=True
         )
         poste.refresh_from_db()
         self.supplier.refresh_from_db()
@@ -544,8 +586,10 @@ class ChargesOnTheProductsPageTests(TestCase):
         self.assertIn("repassent à classer", " ".join(messages_of(response)))
 
     def test_ticking_it_again_takes_them_back_out(self):
-        self.client.post(reverse("invoices:supplier_expenses", args=[self.supplier.pk]), {})
-        self.client.post(reverse("invoices:supplier_expenses", args=[self.supplier.pk]), {"expenses_only": "1"})
+        self.client.post(reverse("invoices:supplier_expenses", args=[self.supplier.pk]), {"confirme": "1"})
+        self.client.post(
+            reverse("invoices:supplier_expenses", args=[self.supplier.pk]), {"expenses_only": "1", "confirme": "1"}
+        )
         self.assertTrue(all(product.is_expense for product in Product.objects.filter(supplier=self.supplier)))
         self.assertEqual(review_panel_context()["review_total"], 0)
 

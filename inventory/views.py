@@ -17,6 +17,8 @@ from django.utils.dateparse import parse_date
 from django.utils.html import escape
 from django.views.generic import CreateView, ListView, TemplateView, UpdateView
 
+from common import is_id
+
 from .forms import (
     STOCK_TYPE_ENTRY_SUFFIX,
     EntryResolver,
@@ -281,7 +283,7 @@ def selected_period(request) -> StockPeriod | None:
     # than erroring: this is a query parameter, so a stale bookmark, a
     # since-deleted inventory or a hand-typed URL all end up here, and
     # `pk="tomorrow"` raises ValueError rather than simply not matching.
-    if not (take_id or "").isdigit():
+    if not is_id(take_id or ""):
         return None
     closing_take = StockTake.objects.filter(pk=take_id).first()
     return stock_between(closing_take) if closing_take is not None else None
@@ -830,7 +832,7 @@ def merge_stock_type(request, pk):
     source = get_object_or_404(StockType, pk=pk)
     target_id = request.POST.get("target_id", "")
     # A posted id that is not one is not found - not a server error.
-    target = get_object_or_404(StockType, pk=target_id if target_id.isdigit() else None)
+    target = get_object_or_404(StockType, pk=target_id if is_id(target_id) else None)
     if source.unit != target.unit:
         messages.error(
             request,

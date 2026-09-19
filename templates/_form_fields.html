@@ -8,7 +8,8 @@ pour 20%"). Thirteen help texts are defined on the models; they may as well be
 on screen.
 
 Context: `form`. Optional `exclude`, a list of field names the caller renders
-itself somewhere else on the page.
+itself somewhere else on the page - or `only`, the list of the ones to
+render here (a folded "advanced" part, say).
 {% endcomment %}
 {% if form.non_field_errors %}
     <div class="message message-error">
@@ -18,6 +19,7 @@ itself somewhere else on the page.
 <div class="form-grid">
     {% for field in form %}
         {% if field.name in exclude %}
+        {% elif only and field.name not in only %}
         {% elif field.is_hidden %}
             {{ field }}
         {% else %}

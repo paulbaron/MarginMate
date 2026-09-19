@@ -248,7 +248,7 @@ class LearnFromCheckedTicketsCommandTests(TestCase):
         write_pdf(path, [
             "CUISIPRO FRANCE SARL  Tel: 01 98 76 54 32",
             "FACTURE N 7654321 du 07/11/2024",
-            "Client : AU DIPSO  SIRET 900 000 019 10000",
+            "Client : AU COMPTOIR  SIRET 900 000 019 10000",
             "Verre a shot (lot de 12)  8  3,50  28,00",
             "TOTAL TTC  EURO  33,60",
         ])

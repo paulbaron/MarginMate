@@ -9,7 +9,7 @@ parts trigger `documents-changed` when they end).
         <div class="segmented" role="tablist" aria-label="Façon d'ajouter">
             <button type="button" role="tab" data-import-tab="documents" aria-controls="import-documents">📥 Tickets et factures</button>
             <button type="button" role="tab" data-import-tab="recuperer" aria-controls="import-recuperer">
-                🔄 Récupérer (Metro, e-mails){% if latest_job.is_active %} <span class="live-dot" title="Recherche en cours"></span>{% endif %}
+                🔄 Récupérer (Metro, e-mails){% if latest_job.is_active %} <span class="live-dot" data-job-control="gather-status" title="Recherche en cours"></span>{% endif %}
             </button>
         </div>
     </div>
@@ -97,7 +97,7 @@ parts trigger `documents-changed` when they end).
                     <div class="form-field{% if supplier_field.errors or pdf_form.new_name.errors or pdf_form.new_header.errors %} has-error{% endif %}">
                         <label for="pdf-supplier">{{ supplier_field.label }}<span class="required" aria-hidden="true">*</span></label>
                         <div class="shop-choice">
-                            {% include "invoices/_shop_choice_fields.html" with shop_groups=invoice_supplier_groups for_invoice=True label="Fournisseur de la facture" select_id="pdf-supplier" selected=pdf_form.data.supplier typed_name=pdf_form.data.new_name typed_header=pdf_form.data.new_header suggested="" current=None %}
+                            {% include "invoices/_shop_choice_fields.html" with shop_groups=invoice_supplier_groups for_invoice=True label="Fournisseur de la facture" select_id="pdf-supplier" selected=pdf_form.data.supplier typed_name=pdf_form.data.new_name typed_header=pdf_form.data.new_header suggested="" current=None ask_expenses=True expenses=pdf_form.data.new_expenses %}
                         </div>
                         <p class="help">
                             Sans lecteur dédié - ou nouveau -, sa facture est lue comme un ticket : lignes, taux et
@@ -139,17 +139,35 @@ parts trigger `documents-changed` when they end).
                 <summary class="btn btn-small btn-secondary">Sources ({{ gather_sources|length }})</summary>
                 <div class="sources-panel">
                     {% for source in gather_sources %}
-                        <label class="sources-panel-item">
-                            <input type="checkbox" name="sources" value="{{ source.code }}" checked
-                                   data-persist="source:{{ source.code }}" data-persist-durable>
-                            {{ source.label }}
-                        </label>
+                        {% if source.paused %}
+                            {% comment %}
+                            Metro left alone (scrapers/metro.metro_pause): its box
+                            disabled, not only unticked - the browser re-ticked a
+                            box it remembered - and one sign-in only on a separate
+                            request, never remembered.
+                            {% endcomment %}
+                            <label class="sources-panel-item">
+                                <input type="checkbox" name="sources" value="{{ source.code }}" disabled>
+                                {{ source.label }}
+                            </label>
+                            <p class="{% if source.paused.after_block %}field-error{% else %}muted{% endif %} sources-panel-note">{{ source.paused }}</p>
+                            <label class="sources-panel-item">
+                                <input type="checkbox" name="metro_now">
+                                Réessayer {{ source.label }} maintenant (une seule connexion)
+                            </label>
+                        {% else %}
+                            <label class="sources-panel-item">
+                                <input type="checkbox" name="sources" value="{{ source.code }}" checked
+                                       data-persist="source:{{ source.code }}" data-persist-durable>
+                                {{ source.label }}
+                            </label>
+                        {% endif %}
                     {% empty %}
                         <span class="muted">Aucune source configurée : voir l'onglet « Sources ».</span>
                     {% endfor %}
                 </div>
             </details>
-            <button class="btn" type="submit"{% if latest_job.is_active %} disabled{% endif %}>Rechercher de nouvelles factures</button>
+            <button class="btn" type="submit" data-job-control="gather-status"{% if latest_job.is_active %} disabled{% endif %}>Rechercher de nouvelles factures</button>
         </form>
         {% if latest_job %}
             {% include "invoices/_gather_status.html" with job=latest_job %}

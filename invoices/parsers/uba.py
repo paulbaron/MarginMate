@@ -1,4 +1,4 @@
-"""Parser for UBA (Le Dipsomaniac) invoices, ported from the original
+"""Parser for UBA invoices, ported from the original
 ScrapBarInvoices regex/table extractor. UBA's PDF puts VAT info only in the
 free-flowing text (one letter code per line) but the actual product rows only
 show up cleanly via pdfplumber's table extraction, so we cross-reference the

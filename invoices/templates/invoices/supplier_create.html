@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Nouveau fournisseur - MarginMate{% endblock %}
+{% block content %}
+    {% comment %}
+    A supplier before any document of its own (supplier_views.supplier_create):
+    a type can then fetch for it, an import be filed under it, from the first.
+    {% endcomment %}
+    <div class="page-header">
+        <div>
+            <p class="breadcrumb"><a href="{{ back }}">← Achats · Sources</a></p>
+            <h1>Nouveau fournisseur</h1>
+            <p class="page-subtitle">
+                Avant d'avoir reçu le moindre document de lui. Ce que ses documents impriment (n° SIREN, téléphone,
+                site), il l'apprendra du premier que vous lui rangerez.
+            </p>
+        </div>
+    </div>
+
+    <form method="post" class="card supplier-form">
+        {% csrf_token %}
+        {% if retour %}<input type="hidden" name="retour" value="{{ retour }}">{% endif %}
+        {% for error in form.non_field_errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+
+        <p class="form-field">
+            <label for="{{ form.name.id_for_label }}">{{ form.name.label }} *</label>
+            {{ form.name }}
+            {% for error in form.name.errors %}
+                <span class="field-error">{{ error }}{% if taken %} <a href="{% url 'invoices:supplier_detail' taken.pk %}">Ouvrir la fiche de {{ taken.name }}</a>{% endif %}</span>
+            {% endfor %}
+        </p>
+
+        <fieldset class="choice-group">
+            <legend>{{ form.nature.label }}</legend>
+            <ul class="check-list">
+                {% for choice in form.nature %}<li>{{ choice.tag }} <label for="{{ choice.id_for_label }}">{{ choice.choice_label }}</label></li>{% endfor %}
+            </ul>
+            {% for error in form.nature.errors %}<span class="field-error">{{ error }}</span>{% endfor %}
+        </fieldset>
+
+        <p class="form-field">
+            <label for="{{ form.header.id_for_label }}">{{ form.header.label }}</label>
+            {{ form.header }}
+            <span class="muted">{{ form.header.help_text }}</span>
+            {% for error in form.header.errors %}<span class="field-error">{{ error }}</span>{% endfor %}
+        </p>
+
+        <fieldset class="choice-group">
+            <legend>{{ form.arrivee.label }}</legend>
+            <ul class="check-list">
+                {% for choice in form.arrivee %}<li>{{ choice.tag }} <label for="{{ choice.id_for_label }}">{{ choice.choice_label }}</label></li>{% endfor %}
+            </ul>
+            <p class="muted">Par e-mail ou sur son espace client : la page suivante crée le type de factures qui les récupère pour lui.</p>
+        </fieldset>
+
+        <div class="actions">
+            <button class="btn" type="submit">Créer le fournisseur</button>
+            <a class="btn btn-secondary" href="{{ back }}">Annuler</a>
+        </div>
+    </form>
+{% endblock %}

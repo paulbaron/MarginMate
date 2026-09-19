@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Supprimer {{ supplier.name }} - MarginMate{% endblock %}
+{% block content %}
+    {% comment %}
+    Only a supplier nothing rests on is deleted (supplier_views.supplier_delete),
+    after saying what goes with it. Posted without `confirme`, nothing happens.
+    {% endcomment %}
+    <div class="page-header">
+        <div>
+            <p class="breadcrumb"><a href="{{ fiche }}">← {{ supplier.name }}</a></p>
+            <h1>Supprimer {{ supplier.name }} ?</h1>
+        </div>
+    </div>
+
+    <section class="card supplier-form">
+        {% if refused %}
+            <p>{{ supplier.name }} ne peut pas être supprimé : {{ refused }}.</p>
+            <p class="muted">
+                Changez ses documents de fournisseur depuis la page de chacun et rattachez ses types de factures à un
+                autre fournisseur, puis revenez ici.
+            </p>
+            <div class="actions"><a class="btn btn-secondary" href="{{ fiche }}">Revenir à sa fiche</a></div>
+        {% else %}
+            <p>
+                Aucun document n'y est rangé, aucun type de factures ne récupère pour lui.
+                {% if products or prices or aliases %}
+                    Partent avec lui :
+                    {% if products %}{{ products }} produit{{ products|pluralize }} sans aucune ligne{% if prices or aliases %}, {% endif %}{% endif %}
+                    {% if prices %}{{ prices }} prix connu{{ prices|pluralize }}{% if aliases %}, {% endif %}{% endif %}
+                    {% if aliases %}{{ aliases }} libellé{{ aliases|pluralize }} bancaire{{ aliases|pluralize }}{% endif %}
+                    et son historique.
+                {% else %}
+                    Son historique part avec lui.
+                {% endif %}
+            </p>
+            <p><strong>Cela ne se défait pas.</strong></p>
+            <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="confirme" value="1">
+                <div class="actions">
+                    <button class="btn btn-danger" type="submit">Supprimer {{ supplier.name }}</button>
+                    <a class="btn btn-secondary" href="{{ fiche }}">Annuler</a>
+                </div>
+            </form>
+        {% endif %}
+    </section>
+{% endblock %}

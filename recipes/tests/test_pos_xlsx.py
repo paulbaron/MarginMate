@@ -193,7 +193,7 @@ class ParseSalesRowsTests(SimpleTestCase):
         result = parse_rows(
             [
                 ["Etablissement", "Qte", "Nom", "TAG_Salle", "Jour"],
-                ["Le Dipsomaniac", "4", "Pinte IPA", "Bar", "2026-06-01"],
+                ["Bar Exemple", "4", "Pinte IPA", "Bar", "2026-06-01"],
             ]
         )
         self.assertEqual(result.entries, [("Pinte IPA", date(2026, 6, 1), 4)])

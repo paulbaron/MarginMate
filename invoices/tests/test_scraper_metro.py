@@ -75,12 +75,32 @@ class FakeDriver:
     def find_element(self, by, value):
         raise LookupError("no page body in a fake")
 
-    def execute_script(self, script, element):
+    def execute_script(self, script, *args):
+        if script == metro.ROWS_JS:
+            return [(FakeElement(row), row.checkbox_id) for row in self.rows]
+        element = args[0]
         self.clicks.append((element.row.checkbox_id, self.clock.now))
         element.row.on_click()
 
     def save_screenshot(self, path):
         return False
+
+
+class BlankOnceDriver(FakeDriver):
+    """The list read blank once, at its `blank_call`-th reading - as a list
+    caught between two drawings."""
+
+    def __init__(self, rows, clock, blank_call):
+        super().__init__(rows, clock)
+        self.blank_call = blank_call
+        self.reads = 0
+
+    def execute_script(self, script, *args):
+        if script == metro.ROWS_JS:
+            self.reads += 1
+            if self.reads == self.blank_call:
+                return []
+        return super().execute_script(script, *args)
 
 
 class DownloadWindowTests(SimpleTestCase):
@@ -100,11 +120,11 @@ class DownloadWindowTests(SimpleTestCase):
     def lands(self, key, after, suffix=""):
         return lambda: self.clock.at(after, lambda: self.write(self.pdf_name(key, suffix)))
 
-    def run_window(self, rows, known=()):
-        driver = FakeDriver(rows, self.clock)
+    def run_window(self, rows, known=(), run=None, driver=None):
+        driver = driver or FakeDriver(rows, self.clock)
         started = metro._download_window(
             driver, self.dir, len(rows), set(known), self.log.append, lambda: None,
-            sleep=self.clock.sleep, clock=self.clock,
+            sleep=self.clock.sleep, clock=self.clock, run=run,
         )
         return driver, started
 
@@ -130,18 +150,14 @@ class DownloadWindowTests(SimpleTestCase):
         self.assertEqual(self.timeouts(), [])
         self.assertLess(self.clock.now, 5)
 
-    def test_the_next_click_does_not_wait_for_the_previous_file(self):
+    def test_one_download_at_a_time(self):
+        """Three overlapped once, to spare waits a counting bug made long;
+        with the bug gone, a file lands in a second, and one at a time is
+        what a person does (Metro's firewall blocks what hammers it)."""
         slow, fast = "134_53_40586", "134_52_45126"
         driver, _started = self.run_window([Row(slow, self.lands(slow, after=10)), Row(fast, self.lands(fast, after=0.5))])
-        self.assertLess(driver.clicks[1][1], 10)
+        self.assertGreaterEqual(driver.clicks[1][1], 10, "the second download was started with the first outstanding")
         self.assertEqual(self.timeouts(), [])
-
-    def test_never_more_than_three_downloads_outstanding(self):
-        keys = [f"134_52_{number}" for number in range(1, 6)]
-        driver, _started = self.run_window([Row(key, self.lands(key, after=30)) for key in keys])
-        click_times = [clicked_at for _id, clicked_at in driver.clicks]
-        self.assertLess(click_times[2], 30)
-        self.assertGreaterEqual(click_times[3], 30, "a fourth download was started with three outstanding")
 
     def test_clicks_are_spaced_like_a_person_would(self):
         keys = [f"134_52_{number}" for number in range(1, 4)]
@@ -160,10 +176,75 @@ class DownloadWindowTests(SimpleTestCase):
         self.assertEqual(len(self.timeouts()), 1)
         self.assertIn("2/3", self.timeouts()[0])
 
-    def test_downloads_that_keep_failing_stop_the_window(self):
-        driver, started = self.run_window([Row(f"134_52_{number}") for number in range(1, 9)])
-        self.assertLess(started, 8)
-        self.assertTrue(any("Stopping this window" in line for line in self.log))
+    def test_downloads_that_keep_failing_stop_the_run(self):
+        """Not only the window: the next one was searched and clicked on."""
+        with self.assertRaises(metro.MetroError):
+            self.run_window([Row(f"134_52_{number}") for number in range(1, 9)])
+        self.assertEqual(len(self.timeouts()), metro.MAX_CONSECUTIVE_TIMEOUTS)
+
+    def test_the_count_of_failures_runs_across_windows(self):
+        run = metro._Run()
+        self.run_window([Row("134_52_1"), Row("134_52_2")], run=run)
+        with self.assertRaises(metro.MetroError):
+            self.run_window([Row("134_52_3")], run=run)
+
+    def test_rows_are_followed_by_their_number_when_the_list_redraws(self):
+        """A row arrived on top under a click: walked by place, the next
+        place held the row just downloaded - clicked twice - and the last
+        row was never reached."""
+        rows = []
+
+        def first_click():
+            rows.insert(0, Row("134_52_99", self.lands("134_52_99", after=0.3)))
+            self.lands("134_52_1", after=0.3)()
+
+        rows.extend([Row("134_52_1", first_click), Row("134_52_2", self.lands("134_52_2", after=0.3))])
+        driver = FakeDriver(rows, self.clock)
+        self.run_window(list(rows), driver=driver)
+        clicked = [checkbox for checkbox, _at in driver.clicks]
+        self.assertEqual(clicked.count(f"FRA_134_52_1_{STAMP}"), 1)
+        self.assertIn(f"FRA_134_52_2_{STAMP}", clicked)
+        self.assertIn(f"FRA_134_52_99_{STAMP}", clicked)
+
+    def test_a_row_is_counted_as_fetched_once_its_file_landed(self):
+        known = set()
+        rows = [Row("134_52_1", self.lands("134_52_1", after=0.3)), Row("134_52_2")]
+        driver = FakeDriver(rows, self.clock)
+        started = metro._download_window(
+            driver, self.dir, len(rows), known, self.log.append, lambda: None, sleep=self.clock.sleep, clock=self.clock
+        )
+        self.assertEqual(started, 2)
+        self.assertEqual(known, {"134-052-000001"}, "a download that never came was counted as fetched")
+
+    def test_a_row_without_a_readable_number_is_kept_for_the_end_of_the_run(self):
+        """Said once every window has been searched (scrape_metro_invoices),
+        not by stopping the run at the first."""
+        row = Row("134_52_1")
+        row.checkbox_id = "autre"
+        run = metro._Run()
+        self.run_window([row], run=run)
+        self.assertEqual(run.unreadable, ["cette période"])
+
+    def test_a_list_read_blank_between_two_drawings_is_read_again(self):
+        """One read caught the list empty after a click: the window ended
+        there, the rest of its invoices never clicked, and nothing said."""
+        rows = [Row(f"134_52_{n}", self.lands(f"134_52_{n}", after=0.3)) for n in (1, 2, 3)]
+        driver = BlankOnceDriver(rows, self.clock, blank_call=3)
+        self.run_window(list(rows), driver=driver)
+        self.assertEqual(len(driver.clicks), 3)
+
+    def test_a_row_missing_when_its_click_comes_is_tried_again(self):
+        rows = [Row(f"134_52_{n}", self.lands(f"134_52_{n}", after=0.3)) for n in (1, 2)]
+        driver = BlankOnceDriver(rows, self.clock, blank_call=4)
+        self.run_window(list(rows), driver=driver)
+        self.assertIn(f"FRA_134_52_2_{STAMP}", [checkbox for checkbox, _at in driver.clicks])
+
+    def test_fewer_rows_read_than_announced_is_said(self):
+        with self.assertRaises(metro.MetroError):
+            metro._download_window(
+                FakeDriver([Row("134_52_1", self.lands("134_52_1", after=0.3))], self.clock), self.dir, 3, set(),
+                self.log.append, lambda: None, sleep=self.clock.sleep, clock=self.clock,
+            )
 
     def test_a_file_left_by_an_earlier_run_is_not_this_download(self):
         self.write(self.pdf_name("134_52_14645"))

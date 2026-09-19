@@ -85,6 +85,12 @@ SQLITE_OPTIONS = {
     # exactly the shape here: one writer, one poller. Set per connection but
     # persisted in the database file itself.
     "init_command": "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
+    # A transaction that has read, then writes after another connection
+    # committed a write - a job's heartbeat, every 15 s - fails at once with
+    # "database is locked" in SQLite's default (deferred) mode: the timeout
+    # above is not even tried, and the invoice being imported was lost.
+    # Taking the write lock when the transaction starts waits instead.
+    "transaction_mode": "IMMEDIATE",
 }
 
 DATABASES = {
@@ -156,6 +162,9 @@ UBA_EMAIL_ADDRESS = os.environ.get("UBA_EMAIL_ADDRESS", "")
 UBA_EMAIL_APP_PASSWORD = os.environ.get("UBA_EMAIL_APP_PASSWORD", "")
 INVOICE_EMAIL_ADDRESS = os.environ.get("INVOICE_EMAIL_ADDRESS", "") or UBA_EMAIL_ADDRESS
 INVOICE_EMAIL_APP_PASSWORD = os.environ.get("INVOICE_EMAIL_APP_PASSWORD", "") or UBA_EMAIL_APP_PASSWORD
+# Whichever provider the bar's mailbox is at (IMAP over SSL): Gmail unless
+# said otherwise - it used to be written into the fetcher itself.
+INVOICE_IMAP_HOST = os.environ.get("INVOICE_IMAP_HOST", "") or "imap.gmail.com"
 
 # Credentials for the L'Addition till, used to download the "Z digital"
 # sales report (see recipes/pos/laddition.py). Same rule: .env only.

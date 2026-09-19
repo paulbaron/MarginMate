@@ -11,7 +11,7 @@ from bank.matching import InvoiceCandidate, Naming, Payment, match, names_suppli
 METRO, UBA, FRANPRIX, MONOPRIX = 1, 2, 3, 4
 NAMING = {
     METRO: Naming(supplier_words("Metro", "METRO")),
-    UBA: Naming(supplier_words("UBA (Le Dipsomaniac)", "UBA")),
+    UBA: Naming(supplier_words("UBA (Bar Exemple)", "UBA")),
     FRANPRIX: Naming(supplier_words("Franprix", "FRANPRIX")),
     MONOPRIX: Naming(supplier_words("Monoprix", "MONOPRIX")),
 }

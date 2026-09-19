@@ -4,9 +4,9 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from django import forms
 from django.utils import timezone
 
-from common import BlankRowTolerantForm
+from common import BlankRowTolerantForm, is_id
 
-from .models import EmailInvoiceSource, Invoice, InvoiceType, ShopItemPrice, Supplier
+from .models import EmailInvoiceSource, Invoice, InvoiceType, ShopItemPrice, Supplier, WebsiteInvoiceSource
 from .parsers import LLM_PARSER_KEY, PARSER_REGISTRY
 
 
@@ -390,13 +390,38 @@ LineCorrectionFormSet = forms.formset_factory(
 
 
 class InvoiceTypeForm(forms.ModelForm):
+    """A kind of invoice to gather, and whose it is: a supplier that exists,
+    or a new one made in the same save (`supplier` = NEW_SHOP, named in
+    `new_name`) - a supplier not sent a document yet had no way to get the
+    type that fetches its first. The choice is rendered by hand
+    (_shop_choice_fields.html); its name is never an HTML `required`, which
+    hidden would stop the browser sending the form."""
+
+    supplier = forms.CharField(label="Fournisseur", error_messages={"required": "Choisissez le fournisseur."})
+    new_name = forms.CharField(label="Nom du nouveau fournisseur", required=False, max_length=255)
+    new_expenses = forms.BooleanField(label="Charges", required=False)
+
     class Meta:
         model = InvoiceType
-        fields = ["name", "supplier", "parser_key", "is_active"]
-        labels = {"name": "Nom", "supplier": "Fournisseur", "parser_key": "Lecteur", "is_active": "Actif"}
+        fields = ["name", "source_kind", "parser_key", "is_active"]
+        labels = {
+            "name": "Nom",
+            "source_kind": "Récupérées",
+            "parser_key": "Lecteur",
+            "is_active": "Actif",
+        }
+        help_texts = {
+            "source_kind": "Par email (dans la boîte partagée) ou sur le site du fournisseur (espace client).",
+        }
+
+    # Rendered by hand, beside each other (invoice_type_form.html).
+    supplier_fields = ["supplier", "new_name", "new_expenses"]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        if self.instance.pk and "supplier" not in self.initial:
+            self.initial["supplier"] = str(self.instance.supplier_id)
+        self.order_fields(["name", "supplier", "new_name", "new_expenses", "source_kind", "parser_key", "is_active"])
         # No dedicated parser no longer means typing it in: the one reader
         # reads any document's table, totals and VAT (parsers/generic_receipt).
         choices = [("", "— Lecteur générique —")] + [
@@ -412,6 +437,83 @@ class InvoiceTypeForm(forms.ModelForm):
                 "générique ne sait pas lire."
             ),
         )
+
+    def clean_supplier(self):
+        value = self.cleaned_data["supplier"].strip()
+        if value == NEW_SHOP:
+            return NEW_SHOP
+        supplier = Supplier.objects.filter(pk=value).first() if is_id(value) else None
+        if supplier is None:
+            raise forms.ValidationError("Fournisseur inconnu : choisissez-le dans la liste.")
+        return supplier
+
+    def clean(self):
+        from .receipts import supplier_named
+
+        cleaned = super().clean()
+        if cleaned.get("supplier") == NEW_SHOP:
+            name = " ".join(cleaned.get("new_name", "").split())
+            if not name:
+                self.add_error("new_name", "Donnez un nom au nouveau fournisseur.")
+            elif supplier_named(name) is not None:
+                self.add_error("new_name", f"« {name} » existe déjà : choisissez-le dans la liste.")
+        return cleaned
+
+    def chosen_supplier(self):
+        """(supplier, created) - the new one made now, recorded as created
+        with this type (receipts.create_shop). Call it inside the save's
+        transaction: a type refused after it must leave no supplier."""
+        from .receipts import create_shop
+
+        supplier = self.cleaned_data["supplier"]
+        if supplier != NEW_SHOP:
+            return supplier, False
+        return create_shop(self.cleaned_data["new_name"], expenses_only=bool(self.cleaned_data.get("new_expenses"))), True
+
+
+class WebsiteInvoiceSourceForm(forms.ModelForm):
+    """A customer portal's settings. The credentials are the NAMES of .env
+    variables, never the values (models.WebsiteInvoiceSource)."""
+
+    class Meta:
+        model = WebsiteInvoiceSource
+        fields = [
+            "login_url",
+            "username_env",
+            "password_env",
+            "invoices_url",
+            "navigation",
+            "show_browser",
+            "username_selector",
+            "password_selector",
+            "submit_selector",
+            "link_selector",
+            "next_selector",
+        ]
+        labels = {
+            "login_url": "Page de connexion",
+            "username_env": "Variable .env de l'identifiant",
+            "password_env": "Variable .env du mot de passe",
+            "invoices_url": "Page des factures",
+            "navigation": "Liens à suivre",
+            "show_browser": "Navigateur visible",
+            "username_selector": "Champ identifiant (CSS)",
+            "password_selector": "Champ mot de passe (CSS)",
+            "submit_selector": "Bouton de connexion (CSS)",
+            "link_selector": "Liens des factures (CSS)",
+            "next_selector": "Page suivante (CSS)",
+        }
+        widgets = {"navigation": forms.Textarea(attrs={"rows": 2})}
+
+    # The settings a site that defeats the automatic reading needs - folded
+    # away in the page (invoice_type_form.html).
+    advanced = ["username_selector", "password_selector", "submit_selector", "link_selector", "next_selector"]
+
+    def clean_username_env(self):
+        return self.cleaned_data["username_env"].strip().upper()
+
+    def clean_password_env(self):
+        return self.cleaned_data["password_env"].strip().upper()
 
 
 class EmailInvoiceSourceForm(forms.ModelForm):
@@ -515,7 +617,7 @@ class ReceiptShopForm(forms.Form):
         if value == NEW_SHOP:
             return NEW_SHOP
         supplier = (
-            Supplier.objects.exclude(parser_key=LLM_PARSER_KEY).filter(pk=value).first() if value.isdigit() else None
+            Supplier.objects.exclude(parser_key=LLM_PARSER_KEY).filter(pk=value).first() if is_id(value) else None
         )
         if supplier is None:
             raise forms.ValidationError("Enseigne inconnue.")
@@ -549,32 +651,54 @@ class ReceiptShopForm(forms.Form):
         )
 
 
-class SplitForm(ReceiptShopForm):
-    """Some of a supplier's documents, and the source they go to - one that
-    exists, or a new one named here, with the text its documents print that
-    the others do not. The documents are choices among the supplier's own,
-    so a tampered or stale id is a message, never a 500."""
+class SupplierCreateForm(forms.Form):
+    """A supplier set up before its first document - named, of goods or of
+    charges, with the text its documents print at the top when it is known,
+    and how its invoices will come (supplier_views.supplier_create)."""
 
-    documents = forms.MultipleChoiceField(
-        label="Documents",
-        error_messages={
-            "required": "Cochez au moins un document à ranger.",
-            "invalid_choice": "Un des documents cochés n'est pas (ou plus) chez ce fournisseur.",
-        },
+    ARRIVALS = [
+        ("import", "Je les importerai moi-même"),
+        ("EMAIL", "Par e-mail"),
+        ("WEBSITE", "Sur son espace client"),
+    ]
+
+    name = forms.CharField(label="Nom", max_length=255, error_messages={"required": "Donnez-lui un nom."})
+    nature = forms.ChoiceField(
+        label="Nature",
+        choices=[
+            ("produits", "Produits : une ligne par article, à classer"),
+            ("charges", "Charges : abonnement, loyer, eau, électricité…"),
+        ],
+        initial="produits",
+        widget=forms.RadioSelect,
     )
-    source_header = forms.CharField(label="En-tête", required=False, max_length=100)
-    unnamed_error = "Donnez un nom à la nouvelle source."
+    header = forms.CharField(
+        label="En-tête de ses documents (facultatif)",
+        required=False,
+        max_length=100,
+        help_text="Le texte imprimé en haut de ses documents, tel quel ; vous pourrez aussi le choisir sur son premier document.",
+    )
+    arrivee = forms.ChoiceField(label="Ses factures arrivent", choices=ARRIVALS, initial="import", widget=forms.RadioSelect)
 
-    def __init__(self, *args, source, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.source = source
-        self.fields["supplier"].error_messages["required"] = "Choisissez où ranger les documents."
-        self.fields["documents"].choices = [
-            (str(pk), str(pk)) for pk in Invoice.objects.filter(supplier=source).values_list("pk", flat=True)
-        ]
+    def clean_name(self):
+        from .receipts import supplier_named
 
-    def chosen(self) -> list[Invoice]:
-        return list(Invoice.objects.filter(supplier=self.source, pk__in=self.cleaned_data["documents"]))
+        name = " ".join(self.cleaned_data["name"].split())
+        if not name:
+            raise forms.ValidationError("Donnez-lui un nom.")
+        # Kept for the page to link to it.
+        self.taken = supplier_named(name)
+        if self.taken is not None:
+            raise forms.ValidationError(f"« {name} » existe déjà.")
+        return name
+
+    def clean_header(self):
+        from .receipts import check_header
+
+        try:
+            return check_header(self.cleaned_data["header"])
+        except ValueError as exc:
+            raise forms.ValidationError(str(exc)) from exc
 
 
 class InvoiceUploadForm(ReceiptShopForm):
@@ -594,7 +718,7 @@ class InvoiceUploadForm(ReceiptShopForm):
 
     def clean_supplier(self):
         value = self.cleaned_data["supplier"].strip()
-        if value.isdigit() and Supplier.objects.filter(pk=value, parser_key=LLM_PARSER_KEY).exists():
+        if is_id(value) and Supplier.objects.filter(pk=value, parser_key=LLM_PARSER_KEY).exists():
             return Supplier.objects.get(pk=value)
         return super().clean_supplier()
 

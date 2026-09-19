@@ -44,6 +44,12 @@ Every invoice and ticket. Reloads itself when an import ends
                 Import du {{ lot.started_at|date:"d/m/Y H:i" }} <span class="chip-count">{{ invoices|length }}</span>
             </span>
         {% endif %}
+        {% if supplier_filter %}
+            {# From a supplier's page: its documents exactly - "Free" searched found Free Mobile's too. #}
+            <a class="chip active" aria-current="true" href="{% url 'invoices:invoice_list' %}" title="Voir tous les documents">
+                Fournisseur : {{ supplier_filter.name }} ✕
+            </a>
+        {% endif %}
     </div>
 
     {% if active_filter == "sans-date" %}

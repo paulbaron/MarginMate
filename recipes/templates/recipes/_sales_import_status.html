@@ -1,6 +1,7 @@
 <div class="card job-status"
     id="sales-import-status"
     {% if job.is_active %}
+    data-job-active
     hx-get="{% url 'recipes:sales_import_status' job.id %}"
     hx-trigger="every 1s"
     hx-swap="outerHTML"

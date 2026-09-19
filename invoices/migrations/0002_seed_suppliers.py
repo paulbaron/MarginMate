@@ -1,8 +1,11 @@
 from django.db import migrations
 
+# The suppliers that have a reader of their own, named as they name
+# themselves - never after the bar that first used the app: every new
+# database is seeded with these.
 SUPPLIERS = [
     {"code": "METRO", "name": "Metro", "parser_key": "METRO", "is_scrapable": True},
-    {"code": "UBA", "name": "UBA (Le Dipsomaniac)", "parser_key": "UBA", "is_scrapable": True},
+    {"code": "UBA", "name": "UBA", "parser_key": "UBA", "is_scrapable": True},
     {"code": "OTHER", "name": "Autre (analyse IA)", "parser_key": "LLM", "is_scrapable": False},
 ]
 

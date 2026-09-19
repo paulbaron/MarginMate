@@ -649,3 +649,31 @@ class PlatformInvoiceTests(SimpleTestCase):
 
     def test_a_number_the_rules_broke_in_two(self):
         self.assertEqual(READER.parse_text(PLATFORM_INVOICE).invoice_number, "FR-F0000001")
+
+
+class NumberPrintedWithItsDateTests(SimpleTestCase):
+    """« N° X du <date> » is the document's own number, printed with its
+    date, the word « facture » a line or two above it (the water bill's
+    « FACTURE TRIMESTRIELLE », the box's « Facture Freebox »). Looked for
+    beside « facture » only, it was not found: a payment reference - a long
+    digit run in the bill's detail - was taken instead, or a number was
+    made up from the date and the total, and the portal's list, printing
+    the real one, never recognised an invoice already imported."""
+
+    def test_a_water_bills_number(self):
+        bill = WATER_BILL.replace("N 2026100000001", "N° 2026100000001").replace(
+            "TOTAL  110,00  7,85  117,85", "TOTAL  110,00  7,85  117,85\n5300000000000000000000001  117,85"
+        )
+        self.assertEqual(READER.parse_text(bill).invoice_number, "2026100000001")
+
+    def test_a_box_subscriptions_number(self):
+        bill = """Facture Freebox
+n°1400000001 du 19 Janvier 2024
+Abonnement Freebox  29,99
+Total de la facture HT  24,99
+TVA [20.00%]  5,00
+Total TTC  29,99"""
+        self.assertEqual(READER.parse_text(bill).invoice_number, "1400000001")
+
+    def test_a_number_printed_beside_facture_still_comes_first(self):
+        self.assertEqual(READER.parse_text(WINE_INVOICE).invoice_number, "FA-202604-0001")

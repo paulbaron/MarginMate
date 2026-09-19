@@ -205,7 +205,8 @@ def find_matching_emails(
 
     matches: list[EmailMatch] = []
 
-    imap = imaplib.IMAP4_SSL("imap.gmail.com", timeout=FETCH_TIMEOUT_SECONDS)
+    host = getattr(settings, "INVOICE_IMAP_HOST", "") or "imap.gmail.com"
+    imap = imaplib.IMAP4_SSL(host, timeout=FETCH_TIMEOUT_SECONDS)
     imap.login(address, app_password)
     try:
         imap.select("inbox")
@@ -302,6 +303,27 @@ def find_matching_emails(
     return matches
 
 
+UNSAFE_NAME_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def attachment_file_name(name: str, taken: set[str]) -> str:
+    """The name an attachment is written under: what the sender called it,
+    with what a disk refuses replaced ("Facture 01/2026.pdf" raised, and the
+    source stopped), made unique within the run - a second "facture.pdf"
+    wrote over the first, and one invoice was lost without a word. Two runs
+    fetching the same file are told apart at the import, by its digest."""
+    cleaned = UNSAFE_NAME_RE.sub("_", name).strip().rstrip(". ") or "piece-jointe.pdf"
+    stem, dot, extension = cleaned.rpartition(".")
+    if not dot:
+        stem, extension = cleaned, ""
+    candidate, number = cleaned, 1
+    while candidate.lower() in taken:
+        number += 1
+        candidate = f"{stem} ({number}).{extension}" if extension else f"{stem} ({number})"
+    taken.add(candidate.lower())
+    return candidate
+
+
 def scrape_email_invoices(
     download_dir: str,
     start_date: date,
@@ -331,9 +353,10 @@ def scrape_email_invoices(
         should_cancel,
     )
     downloaded: list[tuple[str, date | None]] = []
+    taken: set[str] = set()
     for match in matches:
         for attachment in match.attachments:
-            filepath = os.path.join(download_dir, attachment.filename)
+            filepath = os.path.join(download_dir, attachment_file_name(attachment.filename, taken))
             with open(filepath, "wb") as f:
                 f.write(attachment.content)
             log(f"Downloaded: {attachment.filename}")

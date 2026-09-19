@@ -213,6 +213,17 @@ DOCUMENT_NUMBER_RES = (
     # mandat", the bank's and the same every month, nor "Votre référence
     # contrat", which names the customer.
     re.compile(rf"(?i)\br[ée]f[ée]rence\s+(?:interne|document|facture)\s*:?\s*({REFERENCE})"),
+    # « N° 2026100000001 DU 10 AVRIL 2026 », « n°1400000001 du 19 Janvier
+    # 2024 »: a number printed with its date is the document's own, whatever
+    # stands between it and the word « facture » (« FACTURE TRIMESTRIELLE »
+    # lines above it on a water bill, « Facture Freebox » on a box's). Not
+    # found, a payment reference - a long digit run - was taken, or a number
+    # made up from the date and the total. Last: a number beside « facture »
+    # says more.
+    re.compile(
+        rf"(?i)\b{NUMBER_MARK}\s*:?\s*({REFERENCE})\s+du\s+\d{{1,2}}(?:er)?"
+        r"(?:\s+[a-zéèêûôà]+\.?\s+|[/.-]\d{1,2}[/.-])\d{2,4}"
+    ),
 )
 
 

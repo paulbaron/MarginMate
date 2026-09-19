@@ -157,7 +157,7 @@ what was typed in them across swaps (hx-preserve, stable ids).
                                     <form id="shop-choice-{{ batch.pk }}-{{ forloop.counter0 }}" hx-preserve method="post" action="{% url 'invoices:receipt_batch_assign' batch.pk forloop.counter0 %}" class="inline-form shop-choice">
                                         {% csrf_token %}
                                         {% with label="Enseigne de "|add:entry.name %}
-                                            {% include "invoices/_shop_choice_fields.html" with suggested=entry.header current=None %}
+                                            {% include "invoices/_shop_choice_fields.html" with suggested=entry.header current=None ask_expenses=True %}
                                         {% endwith %}
                                         <button class="btn btn-small" type="submit" data-busy-label="Lecture du ticket…">Importer</button>
                                     </form>

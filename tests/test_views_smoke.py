@@ -225,17 +225,21 @@ class PageSmokeTests(TestCase):
     def test_invoice_create_manual(self):
         self.assertPageOK("invoices:invoice_create_manual")
 
-    def test_supplier_split(self):
-        """A source a subscription can be split off: one with no till and no
-        reader of its own. (A configured till's, like Sabbh here, redirects.)"""
-        operator = make_supplier(code="OPERATEUR_SMOKE", name="Operateur", parser_key="", ticket_header="BOX EXEMPLE")
-        make_invoice(supplier=operator, ocr_text="BOX EXEMPLE\nTOTAL 29,99")
-        make_invoice(supplier=operator, ocr_text="FORFAIT MOBILE\nTOTAL 9,99")
-        response = self.assertPageOK("invoices:supplier_split", pk=operator.pk)
-        self.assertContains(response, "Séparer des documents de Operateur")
-        self.assertEqual(
-            self.client.get(reverse("invoices:supplier_split", args=[self.receipt_supplier.pk])).status_code, 302
+    def test_supplier_pages(self):
+        """A supplier's page and what is done from it - created, modified,
+        its nature switched, deleted."""
+        shop = make_supplier(code="EPICERIE_SMOKE", name="Epicerie", parser_key="", ticket_header="EPICERIE EXEMPLE")
+        make_invoice(supplier=shop, ocr_text="EPICERIE EXEMPLE\nTOTAL 3,00")
+        self.assertContains(self.assertPageOK("invoices:supplier_detail", pk=shop.pk), "Reconnaissance")
+        self.assertPageOK("invoices:supplier_create")
+        self.assertPageOK("invoices:supplier_edit", pk=shop.pk)
+        self.assertPageOK("invoices:supplier_delete", pk=shop.pk)
+        self.assertPageOK("invoices:supplier_expenses", pk=shop.pk)
+        self.assertEqual(self.client.get(reverse("invoices:supplier_list")).status_code, 302)
+        checked = self.client.post(
+            reverse("invoices:supplier_edit", args=[shop.pk]), {"name": "Epicerie Deux", "header": "", "action": "verifier"}
         )
+        assertNoUnrenderedTemplateSyntax(self, checked, "la vérification d'une modification")
 
     def test_invoice_type_list(self):
         self.assertContains(self.assertPageOK("invoices:invoice_type_list"), "Metro - Factures")

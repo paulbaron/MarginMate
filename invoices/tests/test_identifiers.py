@@ -92,6 +92,15 @@ class QuickLookTests(SimpleTestCase):
                 self.assertTrue(document_identifiers(text) & found)
         self.assertFalse(may_print("TOTAL 12,50\nTEL 01 99 99 99 99", found))
 
+    def test_a_reading_kept_is_not_changed_through_what_it_returned(self):
+        """A text's figures are kept once read (a supplier's page reads every
+        document): the set handed out is the caller's own."""
+        text = "TEL 01 23 45 67 89\nwww.brico-exemple.fr"
+        first = document_identifiers(text)
+        first.add("siren:000000000")
+        first.discard("tel:0123456789")
+        self.assertEqual(document_identifiers(text), {"tel:0123456789", "web:brico-exemple.fr"})
+
     def test_as_the_operator_reads_them(self):
         self.assertEqual(
             [describe(f"siren:{SIREN}"), describe("tel:0123456789"), describe("web:brico-exemple.fr")],

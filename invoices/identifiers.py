@@ -14,6 +14,7 @@ Keys are "siren:900000019", "tel:0123456789", "web:brico-exemple.fr".
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 
 # Where nine digits alone are a company number.
 SIREN_LABEL_RE = re.compile(r"(?i)\b(?:siren|siret|rcs)\b")
@@ -60,11 +61,23 @@ def vat_key(siren: str) -> str:
     return f"{(12 + 3 * (int(siren) % 97)) % 97:02d}"
 
 
+# Every stored document (2,2 Mo of text for 880) is read for its figures by
+# a supplier's page and by learning: read again each time, it was most of
+# their half a second. A text read once is kept, by its content.
+READINGS_KEPT = 4096
+
+
 def document_identifiers(text: str) -> set[str]:
+    """What `text` prints that can name a supplier - a set of its own."""
+    return set(_document_identifiers(text))
+
+
+@lru_cache(maxsize=READINGS_KEPT)
+def _document_identifiers(text: str) -> frozenset[str]:
     found: set[str] = set()
     for line in text.splitlines():
         found |= _line_identifiers(line)
-    return found
+    return frozenset(found)
 
 
 def _line_identifiers(line: str) -> set[str]:
@@ -96,8 +109,18 @@ def _line_identifiers(line: str) -> set[str]:
 def may_print(text: str, identifiers) -> bool:
     """Whether `text` can print one of `identifiers` - a quick look before
     reading it for them: their figures or name in it, separators aside."""
-    compact = re.sub(r"[\s.()+-]", "", text.lower())
-    return any(re.sub(r"[.-]", "", identifier.partition(":")[2])[-9:] in compact for identifier in identifiers)
+    compact = _compact(text)
+    return any(_needle(identifier) in compact for identifier in identifiers)
+
+
+@lru_cache(maxsize=READINGS_KEPT)
+def _compact(text: str) -> str:
+    return re.sub(r"[\s.()+-]", "", text.lower())
+
+
+@lru_cache(maxsize=READINGS_KEPT)
+def _needle(identifier: str) -> str:
+    return re.sub(r"[.-]", "", identifier.partition(":")[2])[-9:]
 
 
 def describe(identifier: str) -> str:

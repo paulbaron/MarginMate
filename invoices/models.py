@@ -50,12 +50,69 @@ class Supplier(models.Model):
         default=False,
         help_text="Abonnement, loyer, eau… : une ligne par taux de TVA, aucun produit à classer.",
     )
+    # A site that protects itself (Metro's firewall): when AdminMate last
+    # signed in there - noted before the password is sent, so a run that
+    # dies still counts - and until when it leaves the site alone after a
+    # refusal (scrapers/metro.metro_pause). Kept here, not read from the
+    # gathers' history: that history was deleted once, by a development
+    # session, and every script calling the scraper must obey it too.
+    scrape_last_login_at = models.DateTimeField(null=True, blank=True)
+    scrape_last_block_at = models.DateTimeField(null=True, blank=True)
+    scrape_paused_until = models.DateTimeField(null=True, blank=True)
+    scrape_pause_reason = models.TextField(blank=True)
+    # Figures a person set aside on its page ("Retirer"): never learned
+    # again - UBA relearns at every gather, through its own reader.
+    refused_identifiers = models.JSONField("identifiants écartés à la main", default=list, blank=True)
 
     class Meta:
         ordering = ["name"]
 
     def __str__(self):
         return self.name
+
+
+class SupplierChange(models.Model):
+    """What changed in what recognises a supplier - its name, its header, the
+    figures it learned, an invoice type moved to or from it - when, why, and
+    from which document; shown on its page, and undone from there
+    (supplier_changes).
+
+    On 18/09 the figures a supplier had learned went without a word, as a
+    side effect of a correction validated on one of its documents: nothing
+    said so, nothing kept it. A change nobody asked for is `needs_review`
+    until someone has seen it."""
+
+    class Kind(models.TextChoices):
+        CREATED = "CREATED", "Création"
+        RENAMED = "RENAMED", "Nom"
+        HEADER = "HEADER", "En-tête"
+        IDENTIFIERS = "IDENTIFIERS", "Identifiants"
+        CHARGES = "CHARGES", "Nature"
+        TYPES = "TYPES", "Types de factures"
+        FIRST_DOCUMENT = "FIRST_DOCUMENT", "Premier document"
+
+    supplier = models.ForeignKey(Supplier, on_delete=models.CASCADE, related_name="changes")
+    # The other side of a type moved (TYPES): the supplier it came from or went to.
+    other_supplier = models.ForeignKey(Supplier, on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
+    kind = models.CharField(max_length=20, choices=Kind.choices)
+    summary = models.TextField()
+    cause = models.CharField(max_length=255, blank=True)
+    invoice = models.ForeignKey("Invoice", on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
+    by_person = models.BooleanField(default=False)
+    needs_review = models.BooleanField(default=False)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    # Ties the two sides of one type moved (TYPES) together: undone as one.
+    operation = models.UUIDField(null=True, blank=True, db_index=True)
+    # Before and after, and what moved: what an undo needs.
+    data = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    undone_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at", "-pk"]
+
+    def __str__(self):
+        return f"{self.supplier} · {self.get_kind_display()} · {self.summary[:60]}"
 
 
 class InvoiceType(models.Model):
@@ -70,7 +127,7 @@ class InvoiceType(models.Model):
 
     class SourceKind(models.TextChoices):
         EMAIL = "EMAIL", "Email"
-        WEBSITE = "WEBSITE", "Site web"  # reserved - not yet selectable in the UI
+        WEBSITE = "WEBSITE", "Site web"  # see WebsiteInvoiceSource
 
     name = models.CharField(max_length=255)
     supplier = models.ForeignKey(Supplier, on_delete=models.PROTECT, related_name="invoice_types")
@@ -135,6 +192,76 @@ class EmailInvoiceSource(models.Model):
             raise ValidationError(errors)
 
 
+ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
+class WebsiteInvoiceSource(models.Model):
+    """How to fetch an InvoiceType's invoices from a supplier's customer
+    portal - the rent's, the water's, the phone's - with no code of its own
+    (invoices/scrapers/website.py reads these settings).
+
+    Credentials are never stored here, only the NAMES of the .env variables
+    holding them (FREEBOX_LOGIN / FREEBOX_PASSWORD): the database is copied,
+    backed up and shown on screen, a .env file is not. Every CSS selector is
+    optional - left blank, the scraper finds the login form, the link to the
+    invoices and the download links itself; one is only needed where a
+    site's page defeats that.
+    """
+
+    invoice_type = models.OneToOneField(InvoiceType, on_delete=models.CASCADE, related_name="website_source")
+    login_url = models.URLField(max_length=500, help_text="La page où l'on se connecte.")
+    username_env = models.CharField(
+        max_length=64, help_text="Nom de la variable du fichier .env qui contient l'identifiant (ex. FREEBOX_LOGIN)."
+    )
+    password_env = models.CharField(
+        max_length=64, help_text="Nom de la variable du fichier .env qui contient le mot de passe (ex. FREEBOX_PASSWORD)."
+    )
+    invoices_url = models.URLField(
+        max_length=500,
+        blank=True,
+        help_text="La page qui liste les factures, une fois connecté. Vide : le lien « Factures » de la page est suivi.",
+    )
+    navigation = models.TextField(
+        blank=True,
+        help_text="Liens à suivre dans l'ordre après la connexion, un texte par ligne (ex. « Conso et factures »). "
+        "Vide : le premier lien qui parle de factures.",
+    )
+    username_selector = models.CharField(max_length=300, blank=True, help_text="Sélecteur CSS du champ identifiant (vide : trouvé seul).")
+    password_selector = models.CharField(max_length=300, blank=True, help_text="Sélecteur CSS du champ mot de passe (vide : trouvé seul).")
+    submit_selector = models.CharField(max_length=300, blank=True, help_text="Sélecteur CSS du bouton de connexion (vide : trouvé seul).")
+    link_selector = models.CharField(
+        max_length=300,
+        blank=True,
+        help_text="Sélecteur CSS des liens ou boutons qui téléchargent une facture (vide : ceux qui mènent à un PDF "
+        "ou disent « Télécharger »).",
+    )
+    next_selector = models.CharField(
+        max_length=300,
+        blank=True,
+        help_text="Sélecteur CSS du bouton « page suivante » (vide : « Suivant », « Voir plus »… s'il y en a un).",
+    )
+    show_browser = models.BooleanField(
+        default=False,
+        help_text="Ouvrir la fenêtre du navigateur : pour un site qui demande un code reçu par SMS ou un captcha, "
+        "à saisir vous-même pendant la récupération.",
+    )
+
+    def __str__(self):
+        return f"Site web de {self.invoice_type}"
+
+    def clean(self):
+        errors = {}
+        for field_name in ("username_env", "password_env"):
+            value = getattr(self, field_name)
+            if value and not ENV_NAME_RE.match(value):
+                errors[field_name] = (
+                    "Le nom d'une variable du fichier .env : majuscules, chiffres et _ (ex. FREEBOX_LOGIN) - "
+                    "jamais l'identifiant ou le mot de passe lui-même."
+                )
+        if errors:
+            raise ValidationError(errors)
+
+
 class Invoice(models.Model):
     class Status(models.TextChoices):
         IMPORTED = "IMPORTED", "Importée"
@@ -148,6 +275,14 @@ class Invoice(models.Model):
     source_file = models.FileField(upload_to="invoices/%Y/%m/", blank=True, null=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.IMPORTED)
     error_message = models.TextField(blank=True)
+    # Why this document may be another supplier's than the one it is filed
+    # under: an invoice type fetched it for its supplier, and it prints the
+    # company number or header of another one (receipts.type_supplier_doubt).
+    # Until a person validates it or moves it, it waits to be fixed and
+    # teaches nobody anything. Its own field, not a check: reading the
+    # document again, or as a charge, rewrites the checks, and the doubt
+    # went with them.
+    supplier_doubt = models.TextField(blank=True, default="")
     imported_at = models.DateTimeField(auto_now_add=True)
     # The gap between the supplier's own printed grand total (Montant HT +
     # Droits) and the sum of what we could actually attribute to individual
@@ -291,6 +426,9 @@ class Invoice(models.Model):
     def review_state(self) -> dict:
         """What this document's state is called, wherever it is listed: the
         pill's class (which colours it) and its label."""
+        if self.supplier_doubt:
+            # Before its total or its lines: whose it is comes first.
+            return {"css": self.Status.NEEDS_REVIEW, "label": "Fournisseur à confirmer"}
         if self.waiting_check:
             return {"css": self.Status.NEEDS_REVIEW, "label": "À vérifier"}
         if self.supplier.expenses_only:
@@ -526,6 +664,13 @@ class ScrapeJob(JobLogMixin):
             entry["label"] = label
         entry.update(counts)
         self.save(update_fields=["progress"])
+
+    @property
+    def failed_sources(self) -> list[dict]:
+        """The sources of this run that failed, each on its own line of the
+        progress table (its "error"): one source failing no longer stops the
+        others, so a run can end with some in error and still be "Terminé"."""
+        return [entry for entry in (self.progress or {}).values() if entry.get("error")]
 
 
 class ReceiptBatch(JobLogMixin):

@@ -1,6 +1,15 @@
 from django.contrib import admin
 
-from .models import EmailInvoiceSource, Invoice, InvoiceLine, InvoiceType, ScrapeJob, ShopItemPrice, Supplier
+from .models import (
+    EmailInvoiceSource,
+    Invoice,
+    InvoiceLine,
+    InvoiceType,
+    ScrapeJob,
+    ShopItemPrice,
+    Supplier,
+    SupplierChange,
+)
 
 
 class InvoiceLineInline(admin.TabularInline):
@@ -17,6 +26,21 @@ class EmailInvoiceSourceInline(admin.StackedInline):
 @admin.register(Supplier)
 class SupplierAdmin(admin.ModelAdmin):
     list_display = ["name", "code", "parser_key", "ticket_header", "is_scrapable"]
+    # What names a supplier changes on its own page, where every change is
+    # recorded (SupplierChange) - never here, around the history.
+    readonly_fields = ["code", "ticket_identifiers", "refused_identifiers"]
+
+
+@admin.register(SupplierChange)
+class SupplierChangeAdmin(admin.ModelAdmin):
+    list_display = ["created_at", "supplier", "kind", "summary", "cause", "needs_review", "undone_at"]
+    list_filter = ["kind", "needs_review", "supplier"]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(InvoiceType)

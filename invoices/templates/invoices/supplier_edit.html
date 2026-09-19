@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Modifier {{ supplier.name }} - MarginMate{% endblock %}
+{% block content %}
+    {% comment %}
+    A supplier's name and header, changed after a look at what that does
+    (supplier_views.supplier_edit): « Vérifier les changements » saves
+    nothing; « Enregistrer ces changements » applies them only if the
+    supplier is still as it was checked (`version`). One with no documents
+    saves in one step.
+    {% endcomment %}
+    <div class="page-header">
+        <div>
+            <p class="breadcrumb"><a href="{{ fiche }}">← {{ supplier.name }}</a></p>
+            <h1>Modifier {{ supplier.name }}</h1>
+            <p class="page-subtitle">
+                {% if step == "verifier" %}Ce qui va changer : rien n'est encore enregistré.
+                {% elif document_count %}Rien n'est enregistré avant que vous ayez vu ce que cela change.
+                {% else %}Aucun document n'y est rangé : rien d'autre ne change.{% endif %}
+            </p>
+        </div>
+    </div>
+
+    {% if stale %}
+        <div class="message message-warning">{{ supplier.name }} a changé depuis l'ouverture de cette page : vérifiez ce qui va changer.</div>
+    {% endif %}
+
+    {% if step == "verifier" %}
+        <section class="card supplier-form" aria-labelledby="ce-qui-change">
+            <h2 id="ce-qui-change">Ce qui va changer</h2>
+            {% if plan.refused %}
+                {% for reason in plan.refused %}<p class="field-error">{{ reason }}</p>{% endfor %}
+            {% endif %}
+            {% if plan.said %}
+                <ul class="edit-plan">{% for sentence in plan.said %}<li>{{ sentence }}</li>{% endfor %}</ul>
+            {% elif not plan.refused %}
+                <p>Rien ne change : le nom et l'en-tête sont ceux qu'il a.</p>
+            {% endif %}
+            <form method="post">
+                {% csrf_token %}
+                {% for field, value in posted.items %}<input type="hidden" name="{{ field }}" value="{{ value }}">{% endfor %}
+                <div class="actions">
+                    {% if plan.ok and plan.changes %}
+                        <button class="btn" type="submit" name="action" value="enregistrer">Enregistrer ces changements</button>
+                    {% endif %}
+                    <button class="btn btn-secondary" type="submit" name="action" value="modifier">Revenir au formulaire</button>
+                    <a class="btn btn-secondary" href="{{ fiche }}">Annuler</a>
+                </div>
+            </form>
+        </section>
+    {% else %}
+        <form method="post" class="card supplier-form">
+            {% csrf_token %}
+            <input type="hidden" name="version" value="{{ version }}">
+            <p class="form-field">
+                <label for="supplier-name">Nom</label>
+                <input type="text" id="supplier-name" name="name" maxlength="255" value="{{ name }}" required>
+                {% if supplier.expenses_only %}<span class="muted">Ses lignes de charge et son poste, à son nom, le suivent.</span>{% endif %}
+            </p>
+            {% if header_editable %}
+                <p class="form-field">
+                    <label for="supplier-header">En-tête de ses documents</label>
+                    <input type="text" id="supplier-header" name="header" maxlength="100" value="{{ header }}" data-header-input>
+                    <span class="muted">Le texte imprimé en haut de ses documents, tel quel. Vide : il n'en a pas. Un en-tête n'ajoute que des documents, il n'en retire aucun.</span>
+                </p>
+                {% if chips %}
+                    <p class="muted">
+                        Lignes de son dernier document :
+                        {% for choice in chips %}<button type="button" class="chip" data-header-choice="{{ choice }}">{{ choice }}</button>{% endfor %}
+                    </p>
+                {% endif %}
+            {% else %}
+                <p class="muted">Reconnu par {% if supplier.parser_key %}son lecteur{% else %}sa caisse, réglée dans l'application{% endif %} : pas d'en-tête à lui donner.</p>
+            {% endif %}
+            <div class="actions">
+                {% if document_count %}
+                    <button class="btn" type="submit" name="action" value="verifier">Vérifier les changements</button>
+                {% else %}
+                    <button class="btn" type="submit" name="action" value="enregistrer">Enregistrer</button>
+                {% endif %}
+                <a class="btn btn-secondary" href="{{ fiche }}">Annuler</a>
+            </div>
+        </form>
+    {% endif %}
+{% endblock %}

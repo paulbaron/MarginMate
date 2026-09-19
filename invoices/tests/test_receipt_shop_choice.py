@@ -164,6 +164,13 @@ class ChooseShopInBatchTests(TestCase):
         self.batch.refresh_from_db()
         return response, importer
 
+    def test_a_new_shop_made_from_a_row_can_be_one_of_charges(self):
+        """Made as goods, a rent's new supplier had its rent to classify."""
+        response = self.client.get(self.page)
+        html = response.content.decode()
+        start = html.index(f'action="{self.url}"')
+        self.assertIn('name="new_expenses"', html[start:html.index("</form>", start)])
+
     def test_the_file_is_kept_until_its_shop_is_chosen(self):
         self.assertEqual(self.batch.results[0]["status"], "unrecognised")
         self.assertTrue(os.path.exists(self.file))

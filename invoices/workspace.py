@@ -14,11 +14,13 @@ import re
 from datetime import timedelta
 from decimal import Decimal
 
-from django.db.models import Count, Q
+from django.db.models import Count, Max, Q
 from django.shortcuts import render
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.http import urlencode
+
+from common import is_id
 
 from .forms import InvoiceUploadForm, ReceiptBatchUploadForm
 from .models import Invoice, InvoiceType, ReceiptBatch, ScrapeJob, Supplier
@@ -42,12 +44,16 @@ IS_CHARGE = Q(supplier__expenses_only=True)
 #: said "À vérifier 102" over an empty page.
 TICKET_TO_CHECK = Q(reviewed_at__isnull=True) & ~Q(parse_checks=[]) & ~IS_CHARGE
 #: A document outside that queue that cannot be used as it is: undated (out
-#: of every valuation and of the bank match), failed to import, or a charge
-#: whose own total could not be read (importing.charge_needs_a_look) - it is
-#: in no queue, so this is where it is seen.
+#: of every valuation and of the bank match), failed to import, a charge
+#: whose own total could not be read (importing.charge_needs_a_look), or one
+#: an invoice type fetched whose supplier is in doubt (Invoice.supplier_doubt:
+#: a ticket among them waits in the queue while it is unchecked) - it is in
+#: no queue, so this is where it is seen.
 DOCUMENT_TO_FIX = (
-    Q(parse_checks=[]) & (Q(invoice_date__isnull=True) | Q(status=Invoice.Status.ERROR))
-) | (IS_CHARGE & Q(status=Invoice.Status.NEEDS_REVIEW))
+    (Q(parse_checks=[]) & (Q(invoice_date__isnull=True) | Q(status=Invoice.Status.ERROR)))
+    | (IS_CHARGE & Q(status=Invoice.Status.NEEDS_REVIEW))
+    | (~Q(supplier_doubt="") & ~TICKET_TO_CHECK)
+)
 
 
 def waiting_counts() -> dict:
@@ -104,16 +110,39 @@ def render_purchases(request, tab, *, status=200, **card):
     return render(request, "invoices/purchases.html", context, status=status)
 
 
+def _missed(job: ScrapeJob) -> frozenset:
+    """What a gather did not get: its sources in error, "*" for a run that
+    failed or was cancelled as a whole. Empty for a clean run."""
+    missed = {code for code, entry in (job.progress or {}).items() if entry.get("error")}
+    if job.status in (ScrapeJob.Status.FAILED, ScrapeJob.Status.CANCELLED):
+        missed.add("*")
+    return frozenset(missed)
+
+
+def _missed_again(job: ScrapeJob) -> bool:
+    """The gather before it asked for the same period and missed the same."""
+    previous = (
+        ScrapeJob.objects.filter(kind=ScrapeJob.Kind.GATHER, started_at__lte=job.started_at)
+        .exclude(pk=job.pk)
+        .order_by("-started_at", "-pk")
+        .first()
+    )
+    return previous is not None and previous.range_start == job.range_start and _missed(previous) == _missed(job)
+
+
 def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_form=None) -> dict:
     from .receipts import invoice_supplier_choices
 
     metro = Supplier.objects.filter(code="METRO", is_scrapable=True).first()
-    email_types = list(
-        InvoiceType.objects.filter(is_active=True, source_kind=InvoiceType.SourceKind.EMAIL).select_related("supplier")
-    )
+    # The mailbox's types and the customer portals': both are gathered.
+    email_types = list(InvoiceType.objects.filter(is_active=True).select_related("supplier"))
     gather_sources = []
     if metro:
-        gather_sources.append({"code": "METRO", "label": metro.name})
+        from .scrapers.metro import metro_pause
+
+        # Left alone after its firewall refused, or signed in to lately: the
+        # box is out of reach and the reason said (_import_card.html).
+        gather_sources.append({"code": "METRO", "label": metro.name, "paused": metro_pause()})
     gather_sources += [{"code": f"type-{it.id}", "label": it.name} for it in email_types]
     # From the newest invoice these sources have already brought in: a
     # gather is for what arrived since. The earliest of each source's
@@ -122,7 +151,22 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
     gathered = {it.supplier_id for it in email_types}
     if metro:
         gathered.add(metro.pk)
-    latest_job = ScrapeJob.objects.filter(kind=ScrapeJob.Kind.GATHER).first()
+    ScrapeJob.reap_stale()
+    latest_job = ScrapeJob.objects.filter(kind=ScrapeJob.Kind.GATHER).order_by("-started_at", "-pk").first()
+    gather_start, gather_end = default_gather_start(gathered), timezone.localdate()
+    if latest_job is not None and latest_job.range_start and (
+        latest_job.is_active or (_missed(latest_job) and not _missed_again(latest_job))
+    ):
+        # A run not over, or that did not get everything: its period is
+        # offered again. The default - since the newest invoice brought in -
+        # skipped what it missed, and the dates typed were gone after the
+        # redirect: a retry of 01/01/2026 searched from June. Not when the
+        # same sources failed the same period twice: a portal asking for a
+        # code every time held every gather on 01/01 for good.
+        gather_start = latest_job.range_start
+        asked_until = latest_job.range_end
+        if asked_until and asked_until < timezone.localdate(latest_job.started_at):
+            gather_end = asked_until  # a past period, asked on purpose
 
     recent_batches = list(ReceiptBatch.objects.all()[:5])
     shown = batch
@@ -151,8 +195,8 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
         "pdf_form": pdf_form or InvoiceUploadForm(),
         "invoice_supplier_groups": invoice_supplier_choices(),
         "gather_sources": gather_sources,
-        "default_start_date": default_gather_start(gathered),
-        "default_end_date": timezone.localdate(),
+        "default_start_date": gather_start,
+        "default_end_date": gather_end,
         "latest_job": latest_job,
         "recent_batches": recent_batches,
         "batch": shown,
@@ -247,6 +291,12 @@ def _documents(request, batch) -> dict:
         total=Count("pk"), **{key.replace("-", "_"): Count("pk", filter=q) for key, q in conditions.items()}
     )
     invoices = Invoice.objects.select_related("supplier").prefetch_related("lines")
+    # One supplier's documents exactly, from its page: a search for "Free"
+    # found Free Mobile's too.
+    chosen = request.GET.get("fournisseur", "")
+    supplier_filter = Supplier.objects.filter(pk=chosen).first() if is_id(chosen) else None
+    if supplier_filter is not None:
+        invoices = invoices.filter(supplier=supplier_filter)
     query = request.GET.get("q", "")
     if query:
         invoices = documents_matching(invoices, query)
@@ -281,7 +331,7 @@ def _documents(request, batch) -> dict:
     listed = found if query else counts["total" if not active else active.replace("-", "_")]
     hidden = 0 if everything else max(listed - len(rows), 0)
     posted = request.GET.get("surligner", "")
-    highlight = int(posted) if posted.isdigit() else None
+    highlight = int(posted) if is_id(posted) else None
     if highlight is not None:
         # The document just imported is shown whatever its date: dated last
         # year, it sits past the rows this page renders, and "importée" would
@@ -304,6 +354,7 @@ def _documents(request, batch) -> dict:
         "highlight": highlight,
         "lot": batch,
         "undated_count": counts["sans_date"],
+        "supplier_filter": supplier_filter,
     }
 
 
@@ -325,31 +376,43 @@ def _sources() -> dict:
     under it on its own - its header and the figures it learned - shown,
     since what cannot be seen cannot be put right. For a shop with a header,
     how many of its documents print it: the others were filed there by
-    something else they print, and are what a person splitting two
-    subscriptions of one company is after."""
+    something else they print."""
     from .parsers import LLM_PARSER_KEY, is_ticket_shop
-    from .receipts import can_split, has_own_reader, names_shop, prints_header, separable_documents
+    from .receipts import has_own_reader, names_shop, prints_header
 
     texts: dict[int, list[str]] = {}
     for supplier_id, ocr_text, source_text in Invoice.objects.values_list("supplier_id", "ocr_text", "source_text"):
         if ocr_text or source_text:
             texts.setdefault(supplier_id, []).append(ocr_text or source_text)
+    from .models import SupplierChange
+    from .parsers import ticket_parser_for
+
     counts = dict(Invoice.objects.values_list("supplier_id").annotate(n=Count("id")).values_list("supplier_id", "n"))
+    latest = dict(
+        Invoice.objects.values_list("supplier_id").annotate(last=Max("invoice_date")).values_list("supplier_id", "last")
+    )
+    to_see = dict(
+        SupplierChange.objects.filter(needs_review=True, reviewed_at__isnull=True, undone_at__isnull=True)
+        .values_list("supplier_id")
+        .annotate(n=Count("id"))
+        .values_list("supplier_id", "n")
+    )
     suppliers = list(Supplier.objects.exclude(parser_key=LLM_PARSER_KEY).order_by("name"))
+    for supplier in suppliers:
+        # Each row leads to the supplier's own page (supplier_views).
+        supplier.url = reverse("invoices:supplier_detail", args=[supplier.pk])
+        supplier.last_date = latest.get(supplier.pk)
+        supplier.to_see = to_see.get(supplier.pk, 0)
+        supplier.is_till = ticket_parser_for(supplier.code) is not None
     shops = [supplier for supplier in suppliers if is_ticket_shop(supplier)]
     for shop in shops:
         # Attributes, since a template calls nothing with arguments.
         shop.names_shop = names_shop(shop)
         shop.document_count = counts.get(shop.pk, 0)
-        shop.split_url = (
-            reverse("invoices:supplier_split", args=[shop.pk]) if can_split(shop) and shop.document_count > 1 else ""
-        )
-        shop.with_header = shop.headerless = shop.separable = 0
+        shop.with_header = shop.headerless = 0
         if shop.ticket_header:
             shop.with_header = sum(1 for text in texts.get(shop.pk, ()) if prints_header(text, shop.ticket_header))
             shop.headerless = len(texts.get(shop.pk, ())) - shop.with_header
-            if shop.headerless and shop.split_url:
-                shop.separable = len(separable_documents(shop))
     own_readers = [supplier for supplier in suppliers if has_own_reader(supplier)]
     for supplier in own_readers:
         supplier.names_shop = names_shop(supplier)
