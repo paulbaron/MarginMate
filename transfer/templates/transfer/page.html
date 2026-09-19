@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+{% load assets %}
+{% block title %}Données - MarginMate{% endblock %}
+{% block content %}
+    {% comment %}
+    The picker's own layout. Kept with the page rather than in marginmate.css:
+    nothing else draws these rows, and the page is the one place that shows
+    them.
+    {% endcomment %}
+    <style>
+        .picker { display: grid; gap: var(--s3); margin-bottom: var(--s4); }
+        .picker .choice-group { margin: 0; }
+        .picker-shortcuts { display: flex; gap: var(--s2); margin: 0 0 var(--s2); }
+        .picker-row {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 0 var(--s3);
+            padding: var(--s2) 0;
+            border-top: 1px solid var(--border);
+        }
+        .picker-row:first-of-type { border-top: 0; }
+        .picker-check { display: inline-flex; align-items: center; gap: var(--s2); margin: 0; color: var(--text); font-size: 0.95rem; font-weight: 650; }
+        .picker-check input { margin: 0; }
+        .picker-counts { color: var(--muted); font-size: 0.85rem; text-align: right; }
+        .picker-row > p, .picker-strategy { grid-column: 1 / -1; margin: var(--s1) 0 0; font-size: 0.85rem; }
+        .picker-description { color: var(--text-dim); }
+        .picker-forced { color: var(--amber); }
+        .picker-hint, .picker-disabled { color: var(--muted); }
+        .picker-row.is-disabled { opacity: 0.55; }
+        input.is-forced { cursor: not-allowed; }
+        .picker-strategy { display: flex; flex-wrap: wrap; gap: var(--s1) var(--s4); }
+        .picker-strategy label { display: inline-flex; align-items: center; gap: var(--s1); margin: 0; font-weight: 500; }
+        .picker-strategy input { margin: 0; }
+        .summary-table td:first-child { white-space: normal; }
+        .report-lists ul { margin: var(--s2) 0; padding-left: var(--s5); font-size: 0.88rem; }
+        .transfer-confirm { display: grid; gap: var(--s3); max-width: 36rem; }
+        .pending-list { list-style: none; margin: 0; padding: 0; }
+        .pending-list li { padding: var(--s3) 0; border-top: 1px solid var(--border); }
+        .pending-list li:first-child { border-top: 0; padding-top: 0; }
+        .pending-list p { margin: 0 0 var(--s2); }
+        /* A folder path is one long word: on a phone it pushed the page sideways. */
+        main code { overflow-wrap: anywhere; }
+        @media (max-width: 640px) {
+            .picker-row { grid-template-columns: minmax(0, 1fr); }
+            .picker-counts { text-align: left; }
+        }
+    </style>
+
+    <div class="page-header">
+        <div>
+            <h1>Données</h1>
+            <p class="page-subtitle">
+                Exportez la configuration et les données de MarginMate dans une archive (.zip), importez-en une, ou
+                effacez ce que vous cochez. Avant tout remplacement ou effacement, une sauvegarde est faite dans
+                <code>{{ backup_dir }}</code>.
+            </p>
+        </div>
+    </div>
+
+    {% if busy %}<div class="message message-warning">{{ busy }}</div>{% endif %}
+
+    <nav class="tabs" aria-label="Données">
+        {% for entry in tabs %}
+            <a href="{{ entry.url }}" class="tab{% if entry.active %} active{% endif %}"{% if entry.active %} aria-current="page"{% endif %}>{{ entry.label }}</a>
+        {% endfor %}
+    </nav>
+
+    {% if tab == "export" %}
+        <form method="post" action="{% url 'transfer:data_export' %}" data-transfer-form>
+            {% csrf_token %}
+            {% include "transfer/_picker.html" %}
+            <p class="muted">L'archive contient vos documents, votre banque et vos prix : gardez-la pour vous.</p>
+            {% if picker.factures_mb is not None %}
+                <p class="muted" data-shown-with="factures"{% if "factures" not in picker.checked %} hidden{% endif %}>≈ {{ picker.factures_mb }} Mo avec les fichiers</p>
+            {% endif %}
+            <div class="form-actions">
+                <button type="button" class="btn btn-secondary" data-tick-all data-js-only hidden>Tout cocher</button>
+                <button type="button" class="btn btn-secondary" data-untick-all data-js-only hidden>Tout décocher</button>
+                <button type="submit" class="btn">⬇️ Exporter l'archive</button>
+            </div>
+        </form>
+
+    {% elif tab == "import" %}
+        {% if stage %}
+            <div class="card">
+                <p>
+                    <strong>{% if stage_created_at %}Archive du {{ stage_created_at|date:"d/m/Y" }} à {{ stage_created_at|time:"H:i" }}{% else %}Archive (date illisible){% endif %}</strong>{% if stage_revision %} (MarginMate {{ stage_revision }}){% endif %}{% if stage.backup %} — sauvegarde « {{ stage.backup }} »{% endif %}
+                </p>
+                {% if stage.legacy %}
+                    <p class="muted">
+                        Ancien fichier « marginmate-associations.json » : il ne contient que les associations produits → articles.
+                        Un produit qui manque ici est maintenant créé (l'ancien import le laissait de côté).
+                        Les pertes (%) n'y figurent pas : un article créé prend 10 %.
+                    </p>
+                {% endif %}
+                {% for note in stage.notes %}<p class="muted">{{ note }}</p>{% endfor %}
+            </div>
+            {% if fresh_database %}
+                <div class="message">Base neuve : choisissez « Remplacer » pour que les fournisseurs installés d'office prennent les réglages de l'archive.</div>
+            {% endif %}
+            <form method="post" action="{% url 'transfer:data_import_stage' stage.token %}" data-transfer-form{% if preview %} data-previewed{% endif %}>
+                {% csrf_token %}
+                {% include "transfer/_picker.html" %}
+                <div class="form-actions">
+                    {% comment %}
+                    A full archive starts all ticked: importing one part meant
+                    unticking eight boxes in dependency order (review, 19/09).
+                    {% endcomment %}
+                    <button type="button" class="btn btn-secondary" data-untick-all data-js-only hidden>Tout décocher</button>
+                    <button class="btn btn-secondary" type="submit" name="action" value="previsualiser">Prévisualiser</button>
+                    <button class="btn btn-secondary" type="submit" name="action" value="annuler" formnovalidate>Annuler</button>
+                </div>
+                {% if preview %}
+                    <h2>Aperçu de l'import</h2>
+                    {% include "transfer/_report.html" with report=preview %}
+                    {% if preview_fresh %}
+                        <div class="transfer-confirm" data-after-preview>
+                            {% comment %}
+                            Names the preview on this page: the one stored may
+                            be another tab's, and the confirm is refused then.
+                            {% endcomment %}
+                            <input type="hidden" name="apercu" value="{{ preview.fingerprint }}">
+                            <p>
+                                Une sauvegarde de la base sera faite avant dans <code>{{ backup_dir }}</code>{% if safety_mb %},
+                                ainsi qu'une archive de ce qui change (≈ {{ safety_mb }} Mo){% endif %}.
+                            </p>
+                            <div class="form-actions">
+                                <button class="btn" type="submit" name="action" value="importer">Importer</button>
+                                <button class="btn btn-secondary" type="submit" name="action" value="annuler" formnovalidate>Annuler</button>
+                            </div>
+                        </div>
+                        <p class="message message-warning" data-stale-note hidden>Vous avez changé la sélection : prévisualisez de nouveau.</p>
+                    {% else %}
+                        <p class="message message-warning">Cet aperçu a plus de 30 minutes : prévisualisez de nouveau.</p>
+                    {% endif %}
+                {% endif %}
+            </form>
+        {% else %}
+            {% if report %}
+                <h2>Import terminé</h2>
+                {% include "transfer/_report.html" %}
+            {% endif %}
+            {% if pending %}
+                {% comment %}
+                An archive sent - up to 420 MB - and left for a moment was
+                reachable only through the browser's history until the sweep
+                removed it, 24 h later.
+                {% endcomment %}
+                <div class="card">
+                    <h2>Archives en attente</h2>
+                    <p class="muted">Envoyées mais pas encore importées. Elles sont retirées au bout de 24 h.</p>
+                    <ul class="pending-list">
+                        {% for entry in pending %}
+                            <li>
+                                <p>
+                                    <strong>{% if entry.legacy %}Ancien fichier d'associations{% elif entry.made %}Archive du {{ entry.made|date:"d/m/Y" }} à {{ entry.made|time:"H:i" }}{% else %}Archive (date illisible){% endif %}</strong>{% if entry.backup %} — sauvegarde « {{ entry.backup }} »{% endif %}
+                                    <span class="muted">· envoyée le {{ entry.staged|date:"d/m/Y" }} à {{ entry.staged|time:"H:i" }}</span>
+                                </p>
+                                <p class="muted">{{ entry.parts }}</p>
+                                <div class="form-actions">
+                                    <a class="btn btn-secondary btn-small" href="{{ entry.url }}">Reprendre</a>
+                                    <form method="post" action="{{ entry.url }}">
+                                        {% csrf_token %}
+                                        <button class="btn btn-secondary btn-small" type="submit" name="action" value="annuler">Annuler</button>
+                                    </form>
+                                </div>
+                            </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            {% endif %}
+            <div class="card">
+                <form method="post" action="{% url 'transfer:data_import' %}" enctype="multipart/form-data" class="inline-form">
+                    {% csrf_token %}
+                    <label>
+                        <span class="upload-choice-title">Archive MarginMate (.zip)</span>
+                        <input type="file" name="archive" accept=".zip,.json" required>
+                    </label>
+                    <button class="btn" type="submit">Envoyer l'archive</button>
+                </form>
+                <p class="muted">
+                    Rien n'est importé à l'envoi : vous choisissez ensuite les parties, voyez ce qui changera, puis
+                    confirmez. Un ancien fichier « marginmate-associations.json » est accepté aussi.
+                </p>
+            </div>
+            {% include "transfer/_backups.html" %}
+        {% endif %}
+
+    {% else %}
+        {% if report %}
+            <h2>Effacement terminé</h2>
+            {% include "transfer/_report.html" %}
+        {% endif %}
+        <form method="post" action="{% url 'transfer:data_clear' %}" data-transfer-form{% if preview %} data-previewed{% endif %}>
+            {% csrf_token %}
+            {% include "transfer/_picker.html" %}
+            <div class="form-actions">
+                <button class="btn btn-secondary" type="submit" name="action" value="previsualiser">Voir ce qui sera effacé</button>
+            </div>
+            {% if preview %}
+                <h2>Ce qui sera effacé</h2>
+                {% include "transfer/_report.html" with report=preview %}
+                <div class="card transfer-confirm" data-after-preview>
+                    <input type="hidden" name="apercu" value="{{ preview.fingerprint }}">
+                    <p>Une sauvegarde sera faite avant dans <code>{{ backup_dir }}</code> (≈ {{ safety_mb }} Mo).</p>
+                    <div class="form-field">
+                        <label for="confirmation">Tapez EFFACER pour confirmer</label>
+                        <input type="text" id="confirmation" name="confirmation" autocomplete="off" spellcheck="false">
+                    </div>
+                    <div class="form-actions">
+                        <button class="btn btn-danger" type="submit" name="action" value="effacer">Effacer définitivement</button>
+                    </div>
+                </div>
+                <p class="message message-warning" data-stale-note hidden>Vous avez changé la sélection : voyez de nouveau ce qui sera effacé.</p>
+            {% endif %}
+        </form>
+    {% endif %}
+{% endblock %}
+{% block extra_js %}
+<script src="{% asset 'js/transfer.js' %}" defer></script>
+{% endblock %}

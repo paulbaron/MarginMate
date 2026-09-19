@@ -185,10 +185,24 @@ class PageSmokeTests(TestCase):
         self.assertEqual(self.client.get(reverse("inventory:search_stock_types"), {"q": "vod"}).status_code, 200)
 
     def test_export_associations(self):
-        self.assertPageOK("inventory:export_associations")
+        # Moved to « Données »: the old address opens its Exporter tab.
+        self.assertRedirectsOnGet("inventory:export_associations")
 
     def test_import_associations(self):
-        self.assertPageOK("inventory:import_associations")
+        self.assertRedirectsOnGet("inventory:import_associations")
+
+    # --- transfer (« Données ») ---------------------------------------------
+    def test_data_pages(self):
+        for name in ("transfer:data_home", "transfer:data_import", "transfer:data_clear"):
+            with self.subTest(page=name):
+                self.assertPageOK(name)
+
+    def test_data_post_only_actions(self):
+        self.assertRedirectsOnGet("transfer:data_export")
+        self.assertRedirectsOnGet("transfer:data_import_backup")
+
+    def test_data_unknown_stage_redirects(self):
+        self.assertRedirectsOnGet("transfer:data_import_stage", token="A" * 22)
 
     def test_stock_take_list(self):
         self.assertPageOK("inventory:stock_take_list")
@@ -360,6 +374,11 @@ class EmptyDatabasePageSmokeTests(TestCase):
 
     def test_receipt_queue(self):
         self.assertPageOK("invoices:receipt_queue")
+
+    def test_data_pages(self):
+        for name in ("transfer:data_home", "transfer:data_import", "transfer:data_clear"):
+            with self.subTest(page=name):
+                self.assertPageOK(name)
 
     def test_recipe_list(self):
         self.assertPageOK("recipes:recipe_list")

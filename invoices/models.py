@@ -194,6 +194,37 @@ class EmailInvoiceSource(models.Model):
 
 ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
+#: The .env variables the application reads for itself (config/settings.py,
+#: invoices/apps.py), by family so that one added to a family later is
+#: covered: Metro's sign-in, the mailbox, the till, the AI, Django's own. A
+#: gather types what a portal's variables hold into the portal's page, so a
+#: portal naming one of these would hand Metro's password to any site - and
+#: sign in to Metro outside its firewall's pause. One list, for the source
+#: form and the « Données » import (transfer/sections/sources.py); a test
+#: holds it against every name settings.py reads.
+APP_ENV_PREFIXES = (
+    "DJANGO_",
+    "METRO_",
+    "UBA_EMAIL_",
+    "INVOICE_EMAIL_",
+    "INVOICE_IMAP_",
+    "LADDITION_",
+    "ANTHROPIC_",
+    "SCRAPER_",
+    "PRODUCT_FUZZY_",
+    "RUN_MAIN",
+)
+APP_ENV_REFUSED = (
+    "« {name} » est une variable de l'application elle-même (Metro, la boîte mail, la caisse, l'IA) : "
+    "jamais celle d'un portail"
+)
+
+
+def app_env_name(name) -> bool:
+    """Whether the application reads this .env variable for itself: never
+    one a portal may type into its page."""
+    return isinstance(name, str) and name.startswith(APP_ENV_PREFIXES)
+
 
 class WebsiteInvoiceSource(models.Model):
     """How to fetch an InvoiceType's invoices from a supplier's customer
@@ -258,6 +289,8 @@ class WebsiteInvoiceSource(models.Model):
                     "Le nom d'une variable du fichier .env : majuscules, chiffres et _ (ex. FREEBOX_LOGIN) - "
                     "jamais l'identifiant ou le mot de passe lui-même."
                 )
+            elif app_env_name(value):
+                errors[field_name] = APP_ENV_REFUSED.format(name=value)
         if errors:
             raise ValidationError(errors)
 
@@ -319,6 +352,15 @@ class Invoice(models.Model):
     # a person could not correct: every check that mentioned it was a
     # warning nobody could answer. Typed on the review screen like the rest.
     vat_breakdown = models.JSONField(default=list, blank=True)
+    # Whether that table is one a person saved from the review page - even
+    # empty. An empty table used to mean "never stored" only, and was read
+    # again from the photo (receipts.vat_table): a table emptied on purpose
+    # came back as the reading's, with checks against figures nobody typed
+    # (invoice 842, 19/09).
+    vat_table_typed = models.BooleanField(
+        default=False,
+        help_text="La table de TVA est celle qu'une personne a enregistrée, même vide : elle n'est plus relue.",
+    )
     preview_image = models.ImageField(upload_to="receipts/%Y/%m/", blank=True, null=True)
     # Set when a person has actually looked at the photo and accepted the
     # lines. Distinct from status=COMPLETE, which only means every product

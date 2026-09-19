@@ -9,7 +9,7 @@ from django.contrib import messages
 from django.core import signing
 from django.db import transaction
 from django.db.models import ProtectedError
-from django.http import HttpResponse, JsonResponse
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse, reverse_lazy
 from django.utils import timezone
@@ -683,96 +683,16 @@ def search_stock_types(request):
 
 
 def export_associations(request):
-    """Downloadable snapshot of every product's stock-item classification -
-    a backup of the (often manual, time-consuming) review work, and a way
-    to seed another instance with it instead of starting from zero. Matched
-    back up on import by (supplier name, raw invoice name), the same pair
-    Product itself is uniquely keyed on."""
-    products = Product.objects.filter(stock_type__isnull=False).select_related("stock_type", "supplier")
-    data = [
-        {
-            "supplier": product.supplier.name,
-            "raw_name": product.raw_name,
-            "product_unit": product.unit,
-            "stock_equivalent": str(product.stock_equivalent),
-            "stock_type_name": product.stock_type.name,
-            "stock_type_category": product.stock_type.category,
-            "stock_type_unit": product.stock_type.unit,
-        }
-        for product in products
-    ]
-    payload = json.dumps({"version": 1, "products": data}, ensure_ascii=False, indent=2)
-    response = HttpResponse(payload, content_type="application/json")
-    response["Content-Disposition"] = 'attachment; filename="marginmate-associations.json"'
-    return response
+    """Moved to « Données » (transfer/): the associations are one of the
+    boxes there. The old address - a bookmark, a reverse() - opens that tab
+    with them ticked."""
+    return redirect(reverse("transfer:data_home") + "?cocher=associations")
 
 
 def import_associations(request):
-    """Replays an export_associations file against this instance. Never
-    overwrites an existing classification - a product already linked to a
-    different stock type than the file says is skipped and counted, not
-    silently changed, so importing someone else's work can't clobber your
-    own review decisions."""
-    if request.method != "POST":
-        return render(request, "inventory/import_associations.html")
-
-    upload = request.FILES.get("file")
-    if not upload:
-        messages.error(request, "Choisissez un fichier à importer.")
-        return redirect("inventory:import_associations")
-
-    try:
-        payload = json.loads(upload.read().decode("utf-8"))
-        entries = payload["products"]
-    except (json.JSONDecodeError, UnicodeDecodeError, KeyError, TypeError):
-        messages.error(request, "Fichier invalide ou mal formé.")
-        return redirect("inventory:import_associations")
-
-    applied = 0
-    skipped_conflict = 0
-    skipped_unmatched = 0
-    for entry in entries:
-        try:
-            supplier_name = entry["supplier"]
-            raw_name = entry["raw_name"]
-            stock_type_name = (entry["stock_type_name"] or "").strip()
-        except (KeyError, TypeError):
-            skipped_unmatched += 1
-            continue
-        if not stock_type_name:
-            skipped_unmatched += 1
-            continue
-
-        product = Product.objects.filter(supplier__name=supplier_name, raw_name=raw_name).first()
-        if product is None:
-            skipped_unmatched += 1
-            continue
-
-        if product.stock_type_id is not None:
-            already_matches = product.stock_type.name.lower() == stock_type_name.lower()
-            if already_matches:
-                applied += 1
-            else:
-                skipped_conflict += 1
-            continue
-
-        stock_type = StockType.objects.filter(name__iexact=stock_type_name).first()
-        if stock_type is None:
-            stock_type = StockType.objects.create(
-                name=stock_type_name,
-                category=(entry.get("stock_type_category") or "").strip(),
-                unit=entry.get("stock_type_unit") or UnitChoices.UNIT,
-            )
-        stock_equivalent = _parse_positive_decimal(str(entry.get("stock_equivalent", "1")), default=Decimal("1"))
-        link_product_to_stock_type(product, stock_type, unit=stock_type.unit, stock_equivalent=stock_equivalent or Decimal("1"))
-        applied += 1
-
-    messages.success(
-        request,
-        f"{applied} association(s) appliquée(s), {skipped_conflict} ignorée(s) (déjà classé différemment), "
-        f"{skipped_unmatched} ignorée(s) (produit introuvable dans cette instance).",
-    )
-    return redirect("inventory:stock_list")
+    """Moved to « Données »: its import tab takes the old
+    marginmate-associations.json too (transfer/legacy.py)."""
+    return redirect("transfer:data_import")
 
 
 class CategoryAutocompleteMixin:

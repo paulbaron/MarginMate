@@ -1156,7 +1156,8 @@ def supplier_notices(supplier: Supplier) -> list[dict]:
     """What a supplier's page flags: documents a type fetched that print what
     names another supplier, changes nobody asked for still to be seen,
     nothing that recognises it. The « Enseignes et fournisseurs » tab shows
-    "À voir" on its row for them."""
+    "À voir" on its row for the changes, and lists them at its top
+    (workspace._suppliers)."""
     notices = []
     doubted = list(
         Invoice.objects.filter(supplier=supplier).exclude(supplier_doubt="").order_by("pk").values_list("pk", flat=True)
@@ -1173,10 +1174,21 @@ def supplier_notices(supplier: Supplier) -> list[dict]:
             "count": len(doubted),
             "invoice": doubted[0],
         })
-    to_see = supplier.changes.filter(needs_review=True, reviewed_at__isnull=True, undone_at__isnull=True).count()
+    # The changes themselves, each with why it asks to be seen and its « Vu »
+    # beside it: a count sent the owner to the foot of the page to find out
+    # what it counted, and why it asked was said nowhere.
+    to_see = list(
+        supplier.changes.filter(needs_review=True, reviewed_at__isnull=True, undone_at__isnull=True)
+        .select_related("supplier")
+        .order_by("created_at", "pk")
+    )
     if to_see:
-        notices.append({"kind": "review", "text": f"{to_see} changement{'s' if to_see > 1 else ''} à voir dans l'historique.",
-                        "count": to_see})
+        from .supplier_changes import why_to_see
+
+        for change in to_see:
+            change.why = why_to_see(change)
+        notices.append({"kind": "review", "text": f"{len(to_see)} changement{'s' if len(to_see) > 1 else ''} à voir :",
+                        "count": len(to_see), "changes": to_see})
     if (
         supplier.parser_key != LLM_PARSER_KEY
         and ticket_parser_for(supplier.code) is None
@@ -1464,10 +1476,14 @@ def vat_table(invoice: Invoice) -> list[dict]:
 
     What is stored, or - for a document filed before the table was kept -
     what reading it again says, so an old ticket's row comes up filled in
-    rather than blank.
+    rather than blank. Never for a table a person saved (`vat_table_typed`),
+    even empty: "emptied" and "never stored" were one empty list, and a
+    table emptied on the page came back as the reading's, with checks
+    against figures nobody typed - invoice 842's failed « Somme HT des
+    lignes = base HT du ticket », against a base of 2,61 € it never had.
     """
     rows = invoice.vat_breakdown
-    if not rows and invoice.ocr_text:
+    if not rows and not invoice.vat_table_typed and invoice.ocr_text:
         parser = parser_for(invoice.supplier)
         if parser is not None and hasattr(parser, "parse_text"):
             try:

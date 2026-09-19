@@ -30,6 +30,10 @@ DRAFT_KEY = "marginmate:stock-take-draft:new"
 
 @tag("browser")
 class OldDraftInBrowserTests(StaticLiveServerTestCase):
+    # Its flush then fires no post_migrate: recreated content types broke
+    # every later class restoring its snapshot (tests/test_transaction_cases.py).
+    serialized_rollback = True
+
     @classmethod
     def setUpClass(cls):
         super().setUpClass()

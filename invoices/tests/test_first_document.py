@@ -17,6 +17,7 @@ from unittest import mock
 from django.core.management import call_command
 from django.test import TestCase
 from django.urls import reverse
+from django.utils.html import escape
 
 from invoices.importing import charge_state
 from invoices.models import Invoice, ScrapeJob, Supplier, SupplierChange
@@ -91,6 +92,8 @@ class FirstDocumentTests(TestCase):
         self.assertIn(TYPE_NAME, first.summary)
         fiche = self.client.get(reverse("invoices:supplier_detail", args=[self.caterer.pk]))
         self.assertContains(fiche, "À voir")
+        # And why, at the top of the page (supplier_changes.why_to_see).
+        self.assertContains(fiche, escape("C'est son premier document : rien d'autre ne garantit cette lecture."))
 
     def test_only_the_first_is_recorded_as_such(self):
         self.fetch(bill())

@@ -11,3 +11,5 @@ huey.sqlite3-*
 /scraped_invoices/
 .vscode/
 *.log
+/backups/
+/imports/

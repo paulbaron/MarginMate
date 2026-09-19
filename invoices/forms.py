@@ -788,6 +788,17 @@ class DocumentHeaderForm(forms.Form):
         return check_document_date(self.cleaned_data.get("invoice_date"))
 
 
+#: A VAT table's base and tax: signed (a credit, a discount - an electricity
+#: bill prints "-2,76 €" of HT at 5,5 %) and to four decimals (Monoprix
+#: prints its HT so). Its own words, since a field's error is now shown.
+_VAT_AMOUNT_ERRORS = {
+    "invalid": "Saisissez un nombre.",
+    "max_decimal_places": "Quatre décimales au plus.",
+    "max_digits": "Ce nombre est trop long.",
+    "max_whole_digits": "Ce nombre est trop grand.",
+}
+
+
 class VatRowForm(forms.Form):
     """One rate of the VAT table the document prints.
 
@@ -795,23 +806,44 @@ class VatRowForm(forms.Form):
     the printed side has to be reachable or the check is a warning nobody can
     answer. Blank rows are how a rate is removed, and the spare one at the
     end is how another is added.
+
+    Its fields refused what the page itself drew (views._vat_initial): the
+    stored 5,5 % came back as "5.500", over the rate's two decimals, and a
+    four-decimal base over the amounts' two - on 361 documents, with nothing
+    shown but « Un taux se saisit… » beside three typed values. The page now
+    shows each field's own error, and the row's only when no field has one.
     """
 
     rate = forms.DecimalField(
         label="Taux", required=False, max_digits=5, decimal_places=2, min_value=0, max_value=100,
         widget=forms.NumberInput(attrs={"step": "0.1", "placeholder": "%", "aria-label": "Taux de TVA"}),
+        error_messages={
+            "invalid": "Saisissez un nombre.",
+            "min_value": "Un taux n'est jamais négatif : c'est la base et la TVA d'un avoir qui le sont.",
+            # %% - the validator's message is formatted with its limit.
+            "max_value": "Un taux ne dépasse pas 100 %%.",
+            "max_decimal_places": "Deux décimales au plus.",
+            "max_digits": "Ce nombre est trop long.",
+            "max_whole_digits": "Ce nombre est trop grand.",
+        },
     )
+    # No min: a credit's base and tax are negative. step="any": with "0.01"
+    # the browser refuses a four-decimal base before it is even posted.
     base = forms.DecimalField(
-        label="Base HT", required=False, max_digits=12, decimal_places=2,
-        widget=forms.NumberInput(attrs={"step": "0.01", "placeholder": "Base HT", "aria-label": "Base HT"}),
+        label="Base HT", required=False, max_digits=14, decimal_places=4, error_messages=_VAT_AMOUNT_ERRORS,
+        widget=forms.NumberInput(attrs={"step": "any", "placeholder": "Base HT", "aria-label": "Base HT"}),
     )
     vat = forms.DecimalField(
-        label="TVA", required=False, max_digits=12, decimal_places=2,
-        widget=forms.NumberInput(attrs={"step": "0.01", "placeholder": "TVA", "aria-label": "Montant de TVA"}),
+        label="TVA", required=False, max_digits=14, decimal_places=4, error_messages=_VAT_AMOUNT_ERRORS,
+        widget=forms.NumberInput(attrs={"step": "any", "placeholder": "TVA", "aria-label": "Montant de TVA"}),
     )
 
     def clean(self):
         data = super().clean()
+        if any(self.has_error(name) for name in ("rate", "base", "vat")):
+            # A value refused is missing from `data`: counted as not typed,
+            # the row said to type what is there, and hid what is wrong.
+            return data
         typed = [value for value in (data.get("rate"), data.get("base"), data.get("vat")) if value is not None]
         if typed and len(typed) < 3:
             raise forms.ValidationError("Un taux se saisit avec sa base HT et son montant de TVA.")
@@ -819,14 +851,23 @@ class VatRowForm(forms.Form):
 
     @property
     def row(self) -> list | None:
-        """[rate as a fraction, base, tax], or None for a row left blank."""
+        """[rate as a fraction, base, tax], or None for a row left blank.
+
+        The rate normalized: drawn as "5.50", 0.055 posted back untouched is
+        stored as the "0.055" it was, not "0.0550" (a fraction of at most 1
+        never normalizes to an exponent)."""
         data = getattr(self, "cleaned_data", {})
         if data.get("rate") is None or data.get("base") is None or data.get("vat") is None:
             return None
-        return [str(data["rate"] / Decimal("100")), str(data["base"]), str(data["vat"])]
+        return [str((data["rate"] / Decimal("100")).normalize()), str(data["base"]), str(data["vat"])]
 
 
 VatTableFormSet = forms.formset_factory(VatRowForm, extra=1)
+#: An empty table is drawn with two blank rows: a row is only added by
+#: saving, and a ticket prints two rates (5,5 % and 20 %) as often as one -
+#: with one spare, a table emptied on purpose (Invoice.vat_table_typed) or
+#: never read took two saves to type, the page leaving between them.
+EmptyVatTableFormSet = forms.formset_factory(VatRowForm, extra=2)
 
 
 class ShopItemPriceForm(forms.ModelForm):

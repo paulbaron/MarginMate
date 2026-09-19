@@ -1,0 +1,82 @@
+{% comment %}
+One report for a preview (in the future: « À créer ») and for what was done
+(« Créés »). A summary, not a list to search: no data-table.
+A clear only deletes, and changes what it keeps (a supplier with a reader of
+its own): « À supprimer » comes first and the columns that are always 0 in a
+clear are not drawn - on a phone they pushed the one that counts out of
+sight.
+{% endcomment %}
+<div class="table-wrap">
+    <table class="summary-table">
+        <thead>
+            <tr>
+                <th>Partie</th>
+                {% if report.mode == "clear" %}
+                    {% if report.preview %}
+                        <th class="num">À supprimer</th><th class="num">À modifier</th>
+                    {% else %}
+                        <th class="num">Supprimés</th><th class="num">Modifiés</th>
+                    {% endif %}
+                {% else %}
+                    {% if report.preview %}
+                        <th class="num">À créer</th><th class="num">À modifier</th><th class="num">À supprimer</th>
+                    {% else %}
+                        <th class="num">Créés</th><th class="num">Modifiés</th><th class="num">Supprimés</th>
+                    {% endif %}
+                    <th class="num">Inchangés</th>
+                {% endif %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for section in report.sections %}
+                {% for entity, tally in section.rows %}
+                    <tr>
+                        <td>{{ section.label }} › {{ entity }}</td>
+                        {% if report.mode == "clear" %}
+                            <td class="num">{{ tally.deleted }}</td>
+                            <td class="num">{{ tally.updated }}</td>
+                        {% else %}
+                            <td class="num">{{ tally.created }}</td>
+                            <td class="num">{{ tally.updated }}</td>
+                            <td class="num">{{ tally.deleted }}</td>
+                            <td class="num">{{ tally.unchanged }}</td>
+                        {% endif %}
+                    </tr>
+                {% empty %}
+                    <tr>
+                        <td>{{ section.label }}</td>
+                        <td class="num">0</td><td class="num">0</td>{% if report.mode != "clear" %}<td class="num">0</td><td class="num">0</td>{% endif %}
+                    </tr>
+                {% endfor %}
+            {% endfor %}
+            <tr>
+                <td>Recalculé</td>
+                <td colspan="{% if report.mode == "clear" %}2{% else %}4{% endif %}">{% for label, number in report.rebuilt.items %}{{ label }} : {{ number }}{% if not forloop.last %} · {% endif %}{% empty %}rien{% endfor %}</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+{% for section in report.sections %}
+    {% if section.display_lists %}
+        <div class="report-lists">
+            <h3>{{ section.label }}</h3>
+            {% for list in section.display_lists %}
+                <details class="handled">
+                    <summary>{{ list.title }} ({{ list.total }})</summary>
+                    <ul>{% for item in list.items %}<li>{{ item }}</li>{% endfor %}</ul>
+                    {% if list.more %}<p class="muted">… et {{ list.more }} autres</p>{% endif %}
+                </details>
+            {% endfor %}
+        </div>
+    {% endif %}
+{% endfor %}
+{% for note in report.notes %}<p class="muted">{{ note }}</p>{% endfor %}
+{% if not report.preview %}
+    {% if report.safety %}
+        <p class="muted">
+            {% if report.safety.archive %}Sauvegardes faites avant : <code>{{ report.safety.database }}</code>
+            et <code>{{ report.safety.archive }}</code>.{% else %}Sauvegarde faite avant : <code>{{ report.safety.database }}</code>.{% endif %}
+        </p>
+    {% endif %}
+    <p class="muted">Durée : {{ report.duration_text }} s</p>
+{% endif %}

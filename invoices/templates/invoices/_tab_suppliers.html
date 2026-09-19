@@ -21,6 +21,39 @@ told apart (19/09).
         <a class="btn" href="{% url 'invoices:supplier_create' %}">+ Nouveau fournisseur</a>
     </div>
 </div>
+{% comment %}
+What the tab's « N à voir » counts, said where it lights up: each change,
+oldest first, with why it asks to be seen and how to answer it
+(supplier_changes.why_to_see). It was an amber number and a pill on one row
+among thirty, and the owner could not tell what it was (19/09). « Vu » comes
+back here (retour). A line is the supplier, the day and the summary, with no
+kind before it: every summary already says what it is (« Premier document :
+… », « Ne reconnaît plus … »), and the kind printed first read « Premier
+document du 19/09/2026 : Premier document : … » (UX review, 19/09).
+{% endcomment %}
+{% if changes_to_see %}
+    <div class="message message-warning changes-to-see" id="a-voir">
+        <strong>{{ changes_to_see|length }} changement{{ changes_to_see|length|pluralize }} à voir</strong>
+        {% for change in changes_to_see %}
+            <p>
+                <a href="{% url 'invoices:supplier_detail' change.supplier_id %}">{{ change.supplier.name }}</a>
+                — {{ change.created_at|date:"d/m/Y" }} : {{ change.summary }}
+                <br><span class="muted">{{ change.why }}</span>
+            </p>
+            <div class="actions">
+                {% if change.invoice_id %}
+                    <a class="btn btn-small btn-secondary" href="{% url 'invoices:invoice_edit_lines' change.invoice_id %}">Voir le document</a>
+                {% endif %}
+                <a class="btn btn-small btn-secondary" href="{% url 'invoices:supplier_detail' change.supplier_id %}#historique">Voir la fiche</a>
+                <form method="post" action="{% url 'invoices:supplier_change_seen' change.supplier_id change.pk %}">
+                    {% csrf_token %}
+                    <input type="hidden" name="retour" value="{% url 'invoices:supplier_list' %}">
+                    <button class="btn btn-small" type="submit">Vu</button>
+                </form>
+            </div>
+        {% endfor %}
+    </div>
+{% endif %}
 <div class="table-wrap">
 <table data-table data-table-label="fournisseurs">
     <thead>
@@ -81,7 +114,7 @@ mailbox search); Metro is fetched by a module of its own (workspace.OWN_MODULE).
                 <tr data-row-href="{{ supplier.url }}">
                     <td>
                         <a href="{{ supplier.url }}">{{ supplier.name }}</a>
-                        {% if supplier.to_see %} <span class="status-pill status-NEEDS_REVIEW">À voir</span>{% endif %}
+                        {% if supplier.to_see %} <span class="status-pill status-NEEDS_REVIEW" title="{{ supplier.to_see }} changement{{ supplier.to_see|pluralize }} à voir sur sa fiche">À voir</span>{% endif %}
                     </td>
                     <td>{% if supplier.names_shop %}{{ supplier.names_shop|join:", " }}{% else %}<span class="muted">son lecteur seul (en-tête de ses factures)</span>{% endif %}</td>
                     <td>

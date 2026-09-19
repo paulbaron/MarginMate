@@ -4,7 +4,14 @@ from decimal import Decimal
 from django.db import transaction
 from django.db.models import F, Min, Q
 
-from .models import Product, StockMovement, StockTakeLine, StockType, UnitChoices
+from .models import (
+    MovementKind,
+    Product,
+    StockMovement,
+    StockTakeLine,
+    StockType,
+    UnitChoices,
+)
 
 
 def product_base_amount(invoice_line) -> Decimal:
@@ -411,3 +418,109 @@ def unlink_product(product: Product) -> None:
     product.stock_type = None
     product.save(update_fields=["stock_type"])
     refresh_invoice_statuses_for_product(product)
+
+
+# -- Bulk rebuilds (transfer/rebuild.py) -------------------------------------------
+#
+# An import writes invoice lines and classifications as rows and rebuilds what
+# follows from them once, at the end, instead of calling the services above a
+# line or a product at a time: 3 787 movements at three queries each would hold
+# SQLite's write lock for most of a minute. Each helper keeps exactly the rule
+# of the service it bulks, and inventory/tests/test_rebuild_movements.py runs
+# both on the same rows and compares them - a restored database whose stock
+# nobody could get by using the app would be silently wrong money.
+
+#: How many ids go into one IN (...): SQLite refuses a query with too many
+#: bound parameters, and an import can mark every line there is.
+_IN_BATCH = 500
+
+
+def _batches(ids):
+    ids = sorted(set(ids))
+    for start in range(0, len(ids), _IN_BATCH):
+        yield ids[start:start + _IN_BATCH]
+
+
+def rebuild_purchase_movements(*, line_ids=(), product_ids=()) -> tuple[int, int]:
+    """For the given lines and every line of the given products: delete their
+    PURCHASE movement, then bulk_create one per line whose product is
+    classified, with compute_movement_amounts (the same arithmetic as
+    create_stock_movement_for_line). Returns (deleted, created).
+
+    Deleting first is update_product_conversion's rule (a movement computed
+    with an old factor is recomputed, never patched) and unlink_product's (a
+    product no longer classified books nothing). A line whose movement is of
+    another kind - a loss tied to it in the admin - keeps it and gets no
+    purchase beside it, as create_stock_movement_for_line books nothing on a
+    line that already has a movement: the ledger holds one per line, and that
+    row is someone's data, not derived.
+    """
+    # local import: inventory avoids a hard dependency on invoices otherwise
+    from invoices.models import InvoiceLine
+
+    wanted = set(line_ids)
+    for batch in _batches(product_ids):
+        wanted.update(InvoiceLine.objects.filter(product_id__in=batch).values_list("id", flat=True))
+
+    deleted = created = 0
+    for batch in _batches(wanted):
+        _count, per_model = StockMovement.objects.filter(
+            invoice_line_id__in=batch, kind=MovementKind.PURCHASE
+        ).delete()
+        deleted += per_model.get(StockMovement._meta.label, 0)
+        held = set(StockMovement.objects.filter(invoice_line_id__in=batch).values_list("invoice_line_id", flat=True))
+        movements = []
+        for line in (
+            InvoiceLine.objects.filter(id__in=batch, product__stock_type__isnull=False)
+            .select_related("product")
+            .order_by("id")
+        ):
+            if line.id in held:
+                continue
+            quantity, unit_cost_ht = compute_movement_amounts(line)
+            movements.append(
+                StockMovement(
+                    stock_type_id=line.product.stock_type_id,
+                    quantity=quantity,
+                    unit_cost_ht=unit_cost_ht,
+                    invoice_line=line,
+                )
+            )
+        StockMovement.objects.bulk_create(movements)
+        created += len(movements)
+    return deleted, created
+
+
+def refresh_invoice_statuses(product_ids) -> int:
+    """refresh_invoice_statuses_for_product's rule, for every invoice holding
+    one of these products, in one pass. Returns how many statuses changed.
+
+    The rule reads only the invoice's own lines as they are now, so applying
+    it once per invoice gives what applying it once per product does. Only
+    NEEDS_REVIEW and COMPLETE are ever changed, never ERROR: status also
+    carries what went wrong with an import.
+    """
+    # local import: inventory avoids a hard dependency on invoices otherwise
+    from invoices.models import Invoice, InvoiceLine
+
+    invoice_ids = set()
+    for batch in _batches(product_ids):
+        invoice_ids.update(InvoiceLine.objects.filter(product_id__in=batch).values_list("invoice_id", flat=True))
+
+    changed = 0
+    for batch in _batches(invoice_ids):
+        # Invoice.needs_review_count's rule: a line waits for a stock item,
+        # never a charge's poste.
+        waiting = set(
+            InvoiceLine.objects.filter(
+                invoice_id__in=batch, product__stock_type__isnull=True, product__is_expense=False
+            ).values_list("invoice_id", flat=True)
+        )
+        done = [pk for pk in batch if pk not in waiting]
+        changed += Invoice.objects.filter(id__in=sorted(waiting), status=Invoice.Status.COMPLETE).update(
+            status=Invoice.Status.NEEDS_REVIEW
+        )
+        changed += Invoice.objects.filter(id__in=done, status=Invoice.Status.NEEDS_REVIEW).update(
+            status=Invoice.Status.COMPLETE
+        )
+    return changed

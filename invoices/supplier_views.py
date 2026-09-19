@@ -643,9 +643,13 @@ def supplier_change_undo(request, pk, change_pk):
 
 
 def supplier_change_seen(request, pk, change_pk):
+    """« Vu », from the history, the supplier's page or the « Enseignes et
+    fournisseurs » tab (`retour`): it answers with what it marked, like every
+    action here - the tab's « à voir » going away is not a word."""
     supplier = get_object_or_404(Supplier, pk=pk)
     change = get_object_or_404(SupplierChange, pk=change_pk, supplier=supplier)
     if request.method == "POST" and change.reviewed_at is None:
         change.reviewed_at = timezone.now()
         change.save(update_fields=["reviewed_at"])
+        messages.success(request, f"Vu : {change.get_kind_display().lower()} de {supplier.name}.")
     return redirect(_local_return(request) or fiche_url(supplier) + "#historique")

@@ -146,9 +146,15 @@ class FichePageTests(Subscriptions):
 
         _recheck(self.operator)
         change = SupplierChange.objects.get(supplier=self.operator)
-        self.assertContains(self.client.get(self.fiche), "À voir")
-        self.client.post(reverse("invoices:supplier_change_seen", args=[self.operator.pk, change.pk]))
-        self.assertNotContains(self.client.get(self.fiche), "À voir")
+        page = self.client.get(self.fiche)
+        self.assertContains(page, "À voir")
+        # Why it asks, and how to answer it: a figure lost nobody asked to lose.
+        self.assertContains(page, "Un identifiant lui a été retiré sans que personne ne l&#x27;ait demandé.")
+        response = self.client.post(reverse("invoices:supplier_change_seen", args=[self.operator.pk, change.pk]))
+        self.assertEqual(messages_of(response), ["Vu : identifiants de Operateur Exemple."])
+        page = self.client.get(self.fiche)
+        self.assertNotContains(page, "À voir")
+        self.assertNotContains(page, "sans que personne")
 
     def test_tampered_values_are_a_message_never_an_error_page(self):
         response = self.post("retenir", "tel:0000000000")

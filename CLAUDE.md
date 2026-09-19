@@ -16,8 +16,18 @@ additionally makes an accidental outbound connection fail loudly.
 
 Add `--exclude-tag=browser` for the fast loop: the browser tests drive a
 real headless Chrome (`invoices/tests/test_website_scraper_browser.py`,
-against a customer portal served from the machine) and take a minute and a
-half. They skip themselves where Chrome or its driver is missing.
+against a customer portal served from the machine) and take about nine
+minutes (45 tests, 19/09). They skip themselves where Chrome or its driver is
+missing.
+
+**Every `TransactionTestCase` sets `serialized_rollback = True`** (the
+browser classes, « Données »'s page and safety tests;
+`tests/test_transaction_cases.py` checks it). One that does not fires
+post_migrate when it flushes, which recreates the content types under new
+pks, and the next class restoring its snapshot fails in setUpClass on
+« UNIQUE constraint failed: django_content_type ». Run apart, the fast loop
+and the browser suite each passed; a whole run failed every « Données » page
+test after the browser classes (19/09).
 
 ## The testing contract
 
@@ -404,6 +414,12 @@ rent, and forty-two of them behind the tickets is a queue nobody works
 through - a total that could not be read holds the document in "À vérifier"
 with what is wrong written on it instead.
 
+`refile_as_charge` makes the document's postes inside the savepoint of
+`replace_invoice_lines`. A document a stock take was priced from cannot
+have its lines replaced (InvoiceLinesInUseError) and is left alone, and its
+postes go back with the refusal. Made before it, a poste named after the
+supplier stayed on no line (scratch copy, 19/09).
+
 **A charge keeps its own checks** ("Total de la charge", "Date du ticket":
 `importing.charge_state`). A charge fetched by a portal or the mailbox goes
 through the ticket reader first, and `import_receipt` stored that reader's
@@ -581,6 +597,16 @@ typed half way is refused rather than half read. On the real data that took
 21 unanswerable failures to 6, every one of them pointing at a field: three
 tickets whose lines and printed table genuinely disagree (one by 1,25 €),
 two whose lines miss the total, one charge whose total was never read.
+
+The rate is drawn at two decimals (`_vat_initial`): drawn as "5.500" from
+0.055, it failed its own `decimal_places` invisibly on 361 documents, and the
+row read « Un taux se saisit… » beside three typed values. Bases and taxes
+take four decimals and a sign (a credit, a discount), and a field's own error
+is always shown. A table a person saved - even empty - is theirs
+(`Invoice.vat_table_typed`, set by migration 0031 on the documents validated
+since the table shipped) and is no longer read again from the OCR. An empty
+table is drawn with two blank rows (`EmptyVatTableFormSet`): a row is only
+added by saving, and with one spare a two-rate ticket took two saves.
 
 **The HT check follows the lines as they stand, like the sum**
 (`views._checks_context`, `ht_check`). Validating did rebuild it from the
@@ -1337,6 +1363,270 @@ flat, all four UBA debits of July 2026 were five or six cents above the
 invoice's total; taxed at the rate of the goods carrying duty, all four match
 to the cent. The adjustment still never goes into any product's cost.
 
+« Données » exports a line with its decisions and its links by invoice key;
+an import restores them and never makes one (no automatic matching - the
+report points at « Relancer le rapprochement »), and « Fusionner » never
+overwrites a decision this database holds: a line whose record differs here
+(« pas de facture », « réglée à la main », any field) is a conflict kept
+whole, its links included, and the conflict names the archive's links it did
+not take; a line paying another invoice here is a conflict; a line settled by
+hand here that lacks one of the archive's links keeps lacking it (« réglée à
+la main ici sans payer … »), since `reconcile.unlink` leaves the line exactly
+as an invoice deleted with its payment does. Only an invoice the same run
+brought back (absent when it started) gets its link back. Merged back, the
+export once made again a link a person had undone, and put an AUTO link under
+a « réglée à la main » the automatic pass never revisits.
+
+### Export, import and clear (`transfer/`, « Données »)
+
+One page (`/donnees/`, in the navigation) replaced « Exporter / Importer les
+associations »: three tabs - Exporter, Importer, Effacer - each with the same
+two groups of boxes, « Configuration » (fournisseurs, sources, associations
+produits → articles, recettes, liens recettes ↔ ventes) and « Données »
+(factures et tickets, banque, ventes, inventaires). The owner asked for it on
+19/09; the old addresses redirect there and the old associations JSON still
+imports (`transfer/legacy.py`).
+
+- **A section is a class** (`transfer/sections/`, contract in `base.py`):
+  `count`, `snapshot`, `export`, `load`, `apply`, `prune`, `clear`. What
+  depends on what is **one table**, `transfer/registry.py::INFO`: ticking a
+  section to export or import ticks what it requires; ticking one to clear
+  ticks what requires it (clearing the suppliers clears everything but the
+  bank). The server enforces the same closure the page's JS shows - a
+  selection that is not closed is refused, never completed in silence.
+  The bank requires nothing on purpose: a hard link to the invoices would make
+  « Effacer les factures » wipe the bank too.
+- **Natural keys, never pks** (`transfer/keys.py`): a supplier by its code
+  (then its name), a product by (supplier code, raw name) and **never
+  fuzzy** - an import must not merge two products -, an invoice by (supplier,
+  number), else its stored sha, else its file's sha, with an occurrence for
+  byte-identical documents (two of the real Monoprix tickets), an invoice line
+  by its rank in its invoice, a bank line by its fingerprint. A supplier the
+  fournisseurs section skipped is refused for the rest of the run
+  (`SupplierResolver.refuse`): found by its name instead, its documents would
+  land on the supplier that name belongs to here. A product's folded name
+  finds it only when the archive does not name that product itself
+  (`ImportContext.products()` hands every section a resolver told
+  `keys.archive_product_keys`: the product keys of the associations, the
+  invoices and the stock takes, imported or not). SQLite's case-blind
+  comparison is ASCII only, so the app makes « KLOSTERBRAU FÛT 30L » and
+  « Klosterbrau Fût 30L » two products of one supplier. Imported into an
+  empty database, the second was merged into the first: its classification
+  skipped « en double », its invoice line and litres moved (the till's
+  `TillProducts` has the same rule).
+- **Derived data is rebuilt, not copied** (`transfer/rebuild.py`): purchase
+  movements (`inventory.services.rebuild_purchase_movements`), invoice
+  statuses (`refresh_invoice_statuses`), the till's sales per recipe
+  (`resync_recipe_from_daily_quantities`) and till product totals
+  (`recipes.sales.recount_pos_products`) - each bulk helper proven equal to
+  the per-object service it stands for (`inventory/tests/
+  test_rebuild_movements.py`, `recipes/tests/test_recount_pos_products.py`).
+  A stock take's value is **not** derived: it is frozen, and copied as it is,
+  with its sources re-pointed by key - a take whose invoice line cannot be
+  found, or no longer names the product it was priced from, is refused whole
+  rather than revalued.
+- **An import writes rows; it reads nothing again.** No OCR, no learning, no
+  `SupplierChange` - going through `import_receipt` would have recorded a
+  « premier document » for every supplier and lit « À voir » thirty times.
+  A supplier renamed by an import goes through `rename_supplier` (a charge
+  supplier's postes follow), and the change it records is deleted in the same
+  transaction. An invoice replaced by an import keeps a line a stock take was
+  priced from, updated in place; one whose replacement would remove such a
+  line, or put another product or another name at its rank, stays as it is,
+  and the report says why (`_trail_kept`). Lines are paired by rank, and a
+  line taken out above a priced one after the export shifts every line
+  below it: on a 19/09 copy, 8 of 322 counts came out priced from another
+  product's purchase, and nothing said so. A keep in apply must not rest on
+  data the same run's prune removes. Under « Inventaires » « Remplacer », a
+  count the archive does not name is pruned after the invoices apply, so
+  `_trail_kept` ignores it. It asks `stock_takes.named_takes`, which pairs
+  counts the way that section's apply does (by moment, then by rank among
+  the counts of that moment), so the two cannot disagree. A line only such
+  a count holds goes in the invoices' prune, after the counts' (PROTECT).
+  On a 19/09 copy, a full « Remplacer » restore kept a Monoprix ticket for
+  the count it then deleted, and brought it back one line short. A document
+  whose checks or VAT table are not in the shape the application writes is
+  skipped (« contrôles illisibles », « table de TVA illisible »): stored, one
+  `parse_checks: [1]` took « À vérifier » down.
+- **Fusionner** adds what is missing, fills what a section lists as fillable
+  when it is blank here, and never changes a value that exists (a conflict,
+  said). **Remplacer** makes the section exactly the archive, except what kept
+  data still needs (kept, said). Chosen per section, not per group: a section
+  ticked because another requires it is merged, so « Remplacer les recettes »
+  cannot wipe the classifications the recipe file does not carry. A record
+  keeps the moment it was made (`imported_at`, `created_at`, `recorded_at`,
+  restored after the insert that overwrote them - a product's too, whichever
+  of associations or factures creates it), and that moment is never
+  compared: an export of the same data taken a minute later merges as
+  « inchangé ». A till product « à lier » here is linked as the archive
+  links it (a blank filled: after « Effacer », the links must come back).
+  Nothing records that a person detached one by hand (`links.set_aside`
+  keeps no trace), so the report names each product a merge links or
+  ignores that way, under « À savoir », with how to detach it again. An
+  « ignoré » here is on the model: a conflict, kept.
+- **Prunes and clears run in reverse order**, so a replaced stock take
+  releases its invoice lines before the invoices prune, and « Liens » applies
+  « Ventes »' rule (a till product with no day and no link goes) to the till
+  products it releases when « Ventes » is cleared or replaced in the same run -
+  cleared first, « Ventes » had left 68 empty « à lier » products behind.
+  Happy-hour names are checked against the state an import ends in, so two
+  recipes can swap them.
+- **A row is counted once, as what happens to it.** A clear or a prune of
+  « Liens » removes links, not till products: its report counts « liens
+  retirés » and « statuts « ignoré » retirés » (`till_links.release`, and
+  « Recettes »' clear when it takes links with it); the till product stays,
+  « Ventes »' data. A classification removed from a product that stays is
+  « À modifier » (« produits classés »), and « À supprimer » counts only the
+  products that go (« produits sans facture »). Counted as both, a full clear
+  of the 19/09 copy announced 1 462 products for the 794 it held, and 279
+  till products for 211; it now reads 668 + 126, and 211. « Ventes » counts
+  its per-day rows as « quantités par produit et par jour (caisse) » and the
+  days apart (« jours de caisse »): as « jours de vente », the 15 850 rows of
+  19/09 read as 43 years of sales (211 products over 662 days). The
+  manifest's counts are `count()`'s, under the same labels (« prix connus »
+  is the review page's word, since an « article » is a StockType), so the
+  import tab compares like with like. The AI pseudo-supplier is no supplier
+  on the page: count(), the manifest and the report's « fournisseurs » all
+  leave it out (`suppliers._tally`). A change to it is counted on a row of
+  its own (« fiche de l'analyse IA »), so the preview shows it and the
+  safety archive still takes the section. Counted in the report only, a
+  merge of the 19/09 copy said « 30 inchangés » for the 29 suppliers the
+  page announced. A document updated, or given a file back by a merge,
+  still counts the files it keeps - and, merged without a conflict, its
+  lines - « inchangés » (`InvoicesSection._untouched_files`): a « Remplacer »
+  restore of that copy that updated one ticket counted 1 518 of its 1 520
+  files.
+- **Two steps, and the preview is the real run rolled back**
+  (`runner.run_import(preview=True)`), so what it announces is what happens.
+  Files are only written by the confirm, and removed if it fails; deletions
+  of files happen on commit. And the confirm is held to its preview
+  (`run_import`/`run_clear(expected=)`): just before commit its report is
+  compared with the preview's, and any difference - a ticket imported, a
+  payment linked in the up to 30 minutes between - undoes it
+  (`runner.NotAsPreviewed`) and the page shows the new preview (« La base a
+  changé depuis l'aperçu »). A preview of « 0 à supprimer » had let a
+  document that arrived since be pruned, its photo deleted and in no archive
+  (review, 19/09). The confirm also names the preview on its own page
+  (`views.SHOWN_PREVIEW`, the hidden field `apercu`: `RunReport.fingerprint`,
+  a sha256 of the outcome). A confirm naming another preview, or none, runs
+  nothing and takes no backup; the page shows the stored one (« La base a
+  changé depuis l'aperçu »). With the stage open in two tabs, « Importer »
+  clicked under « 0 à supprimer » ran the preview the other tab had made
+  since, and deleted a ticket that had arrived in between, with its photo
+  (review, 19/09). So a report's notes read the same in the preview and the
+  confirm - a participle, never a tense.
+- **Before any confirmed import or clear**, a SQLite backup of the database,
+  and an importable archive of every section whose rows the run changes or
+  deletes, whichever section's code does it (`safety.sections_at_risk`,
+  chosen from the preview the run is held to): the bank when the invoices'
+  prune or clear takes its payments, imported or not. And every section
+  imported with « Remplacer » that changes at all, creations included:
+  importing that archive back with « Remplacer » is the undo, and only its
+  prune removes what the run created. A bank link a person had undone, made
+  again under a line whose record had not changed, stayed after the undo
+  (review, 19/09). Only a section merged that just fills blanks or adds is
+  left to the database copy. Both go in `backups/` beside the database
+  (gitignored, never deleted by the app, so a confirm undone as
+  `NotAsPreviewed` leaves its backups there). Staged
+  archives wait in `imports/`, **not in media/** (DEBUG serves all of
+  media), listed on the Importer tab (« Archives en attente », Reprendre /
+  Annuler) until the 24 h sweep. Clearing asks for « EFFACER » typed.
+  Putting a database copy back means deleting `db.sqlite3-wal` and `-shm`
+  first, and the page says so: in WAL mode, a `-wal` left by a server stopped
+  hard is read back into whatever file is named db.sqlite3 (a scratch probe,
+  19/09: the copy put back came out holding the newer rows).
+- **The bank's links come back with their invoices, in one import.** When
+  invoices go (« Effacer factures », or a « Remplacer » that prunes a paid
+  invoice), their payments go with them and the lines stay « réglées à la
+  main »; the report says to re-import « Factures et tickets » and
+  « Banque » together from the backup (`sections/invoices.BANK_NOTE`).
+  « Banque » alone restores none of them, since every link names a document
+  that is gone. Imported together, every link comes back (scratch copy
+  19/09: 41 of 41). Imported in two runs, the bank cannot tell those lines
+  from ones a person unlinked: it brings back the AUTO links (10) and reports
+  the hand-settled ones as conflicts (31), with a note (`bank.UNDONE_NOTE`);
+  « Remplacer » on the bank then restores them.
+- **Never exported:** Metro's `scrape_*` fields (the firewall's pause - a
+  restore resetting it would let the next gather sign in), `SupplierChange`
+  (its undo data holds pks), job history, `ai_suggestion` (the review panel
+  fills it again when it is drawn). Suppliers with a reader or a till of their
+  own are never deleted by a clear or a replace; a clear only forgets what
+  they learned.
+- **A portal from an archive is never trusted** (`sections/sources.py`): the
+  next gather types the .env variables it names into the page it names. A
+  portal naming a variable the application reads for itself is refused, by
+  the import and the source form alike (`invoices.models.APP_ENV_PREFIXES`,
+  in `WebsiteInvoiceSource.clean`: Metro, the mailbox, the till, the AI,
+  Django; a test checks the list against config/settings.py). An import
+  never switches a portal on. One it creates, or whose address or variables
+  it changes, arrives inactive, and the report names its address and
+  variables so the owner can tick « Active » after a look. A round trip
+  therefore brings a portal back inactive (`as_restored` in the tests).
+  Merged or replaced, a portal the archive has active and this database has
+  inactive is not a conflict, since « Remplacer » would not switch it on
+  either. It is « inchangée », with a note under « À savoir » saying why and
+  what to do (`sources.LEFT_OFF`: « laissée inactive (un import n'active
+  jamais un portail) »). One active here that the archive has off is still
+  a conflict.
+- **The old associations file** becomes an archive holding only
+  `associations.json`, its suppliers named through placeholder codes « ~1 »…
+  and found by name. Nothing is repaired on the way: a factor of 0, a blank
+  article or a unit that disagrees with its article is skipped with its
+  reason, never turned into 1 or dropped in silence as the old import did. A
+  product it names that this database lacks is now created - under a supplier
+  this database has: the file names no supplier of its own. It never carried
+  an article's losses, so an article it creates takes 10 %.
+- **A product is kept in its article's unit** (`inventory.views.assign_product`
+  mirrors it), and the associations section refuses one that is not: its
+  conversion would no longer mean anything. 0 such products on 19/09.
+- **A poste of charge is a product, not a supplier**: the associations
+  section refuses only a product flagged `is_expense` (assign_product's
+  rule). A supplier turned to charges keeps the products a stock item
+  claimed (`redo_as_expenses`). Refused at the supplier's level, they lost
+  their classification and purchases in a round trip, and their own export
+  never merged as « inchangé ». One the archive classifies but this database
+  lacks is created classified, with `is_expense` False.
+- Everything is refused while a gather or an import job runs: an import holds
+  SQLite's write lock for its whole transaction.
+- The archive (`.zip`, format `marginmate-archive` v1, `manifest.json`, one
+  JSON per section, `files/`) holds the owner's invoices, bank and prices:
+  never in git, never in a fixture. Build and read it streaming - the files
+  are ~420 MB - and never `extractall`: only members the manifest declares are
+  opened, and a dangerous name refuses the whole archive. A member damaged
+  on the way (a CRC, a deflate stream, a local header) is refused in French
+  (`archive.DAMAGED`), and the manifest's counts are shown only when they
+  are numbers: both were a 500. So was text no UTF-8 write takes: half a
+  UTF-16 pair written as a JSON escape (`"\ud800"`) is valid JSON, and is
+  now refused as it is read (`archive.unencodable`, in the manifest, a
+  section or an old associations file). A manifest's `created_at` the page
+  cannot show in local time (year 1 at +14:00 overflows) reads « date
+  illisible » (`archive.shown_moment`): it made the Importer tab itself a
+  500, the page to restore from and the only « Annuler » of that stage.
+
+Test every section the same way (`transfer/tests/support.py`): a round trip
+(export, clear, import, same snapshot by natural keys, files byte-identical),
+importing its own export changes nothing (every record « inchangé » - this is
+what catches a Decimal's places or a time zone), merge versus replace on one
+record of each kind, the preview changing nothing - and all nine at once
+(`test_full_round_trip.py`), since what crosses sections (a stock take's
+invoice line, a payment to a ticket known only by its file) only shows there.
+Rehearse on a scratch copy of the real database, never on it: `preview_start`'s
+server runs on the real one. On the 19/09 copy, through the page: exporting
+everything took 3 s (422 MB, 24 MB of Python memory), clearing everything 5 s
+with its backups, importing it all back with « Remplacer » 5 s to preview and
+9 s to confirm - each confirm held to the preview its page showed, none
+refused -, and the same archive merged again said « inchangé » for every
+record (14 s to preview - it hashes every file - and 4 s), the five portals
+with a note each. On battery (the CPU at 1.9 GHz) every step took about
+twice as long, the merge's preview 30 s. Every row, file and section
+snapshot came back equal to the untouched copy, except what is rebuilt
+(when the purchase movements and the till's sales per recipe were written),
+the review panel's pre-fills, the suppliers' history and those five
+portals: back inactive, since an import never switches one on, and named by
+the merge under « À savoir » (« laissée inactive (un import n'active jamais
+un portail) ») until the owner ticks « Active » - 0 conflicts on the 19/09
+copy.
+
 ### A big POST is rejected before any view runs
 
 Django caps a request at `DATA_UPLOAD_MAX_NUMBER_FIELDS` — **1000 by
@@ -1726,7 +2016,8 @@ The navigation is **Produits & charges** (what was bought, by article, the
 charges, and the products to classify),
 **Achats** (invoices, tickets, their sources and suppliers) and **Recettes & ventes**
 (recipes, till products, sales), each with the count of what waits there
-(`config/navigation.py` decides which link a page lights up). They were
+(`config/navigation.py` decides which link a page lights up), and **Données**
+(export, import, clear). They were
 separate pages, and checking that something added had landed meant going
 back and forth between them. The rules that came with merging them:
 
@@ -1783,9 +2074,16 @@ back and forth between them. The rules that came with merging them:
   « Sources » column naming the sources fetching for each. Each tab builds
   only its own list (`workspace._sources`, `_suppliers`): the suppliers' list
   reads every document's text, and the tab counts are drawn on every page of
-  Achats, so its count is a plain `Supplier` count - amber, the suppliers
-with a change to see (`_changes_to_see`, their rows' « À voir »), as
-« À vérifier » beside it counts what waits. `id="fournisseurs"` stays
+  Achats, so its count is a plain `Supplier` count, grey, and beside it an
+  amber « N à voir » (the suppliers with a change to see, `_changes_to_see`),
+  which the tab lists at its top with why each asks to be seen
+  (`supplier_changes.why_to_see`) and a « Vu » - one number meaning two
+  things, with nothing saying which, was a notification nobody could explain
+  (19/09). Each change is listed as its supplier, its day and its summary,
+  with no kind before it: every summary says what it is, and « Premier
+  document du 19/09/2026 : Premier document : … » is what printing the kind
+  first gave. Validating a supplier's first document answers its « premier
+  document ». `id="fournisseurs"` stays
   on the Sources tab as a pointer to the new tab: an old bookmark's fragment
   never reaches the server, so nothing can redirect it.
 - **Without JavaScript the same forms post and redirect** to the page; the
@@ -1844,6 +2142,19 @@ sort button in every header. Three things to remember:
 `tests/test_ui.py` checks these hold, because all three fail *silently*: the
 page still renders, it just quietly stops working the way every other page
 does.
+
+**The topbar is sticky, so the page leaves its height above what it scrolls
+to** (`html { scroll-padding-top: var(--topbar-room) }` in marginmate.css:
+6rem, 8.5rem under 860 px where the brand sits above the links, 11rem under
+440 px). A fragment - Achats' `#a-voir`, the fiche's `#historique`, the
+stock list's `#a-classer` - and the tab row htmx's boost brings to the top
+when an Achats tab is clicked lower down all landed under it: « 1
+changement à voir » and the supplier's name hidden (UX review, 19/09). The
+room was measured in Chrome width by width (57 px on one line, 82 where the
+links wrap at 861-1000 px, up to 141 px on a phone, 170 with three-digit
+badges under 310 px). A new link in the navigation can make it wrap sooner:
+`invoices/tests/test_changes_to_see.py::TopbarRoomInBrowserTests` checks
+eight widths.
 
 **Dates are always `|date:"d/m/Y"`.** `LANGUAGE_CODE` is `en-us`, so an
 unformatted date renders "March 31, 2026" in an otherwise French interface.

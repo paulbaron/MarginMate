@@ -230,10 +230,14 @@ def refile_as_charge(invoice: Invoice, parsed: ParsedInvoice) -> bool:
     changed = False
     stored = list(invoice.lines.all())
     if not (_already_charges(invoice.supplier, stored, lines) and total == invoice.printed_total_ttc):
-        for line in lines:
-            expense_product(invoice.supplier, line.raw_name)
         try:
             with transaction.atomic():
+                # The postes first, for replace_invoice_lines to find them by
+                # name - and in its savepoint: a replacement refused
+                # (InvoiceLinesInUseError) takes them back. Made before it,
+                # one was left named after the supplier, on no line.
+                for line in lines:
+                    expense_product(invoice.supplier, line.raw_name)
                 replace_invoice_lines(invoice, lines)
                 invoice.printed_total_ttc = total
                 invoice.invoice_date = invoice.invoice_date or parsed.invoice_date

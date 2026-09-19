@@ -50,13 +50,27 @@
     --shadow-pop: 0 8px 28px rgba(0, 0, 0, 0.5);
 
     --content-width: 1240px;
+
+    /* What the sticky topbar covers, left above whatever the page scrolls
+       to (see `html`): 57px on one line, 82px where its links wrap onto a
+       second one (861-1000px wide). Redefined where it wraps more, below. */
+    --topbar-room: 6rem;
     --font: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
     --font-mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
 }
 
 * { box-sizing: border-box; }
 
-html { -webkit-text-size-adjust: 100%; }
+/* The topbar is sticky, so anything scrolled to the top of the page - a
+   link's fragment (#a-voir, #historique, #a-classer), the tab row htmx
+   brings up when an Achats tab is clicked lower down - landed under it:
+   « 1 changement à voir » and the supplier's name hidden, the owner
+   reading from mid-sentence (UX review, 19/09). The browser leaves this
+   much room above what it scrolls to. */
+html {
+    -webkit-text-size-adjust: 100%;
+    scroll-padding-top: var(--topbar-room);
+}
 
 body {
     margin: 0;
@@ -533,6 +547,8 @@ form p { margin: var(--s3) 0; }
 /* ---------------------------------------------------------------- responsive */
 
 @media (max-width: 860px) {
+    /* The brand above the links: up to 112px tall. */
+    :root { --topbar-room: 8.5rem; }
     .topbar-inner { flex-wrap: wrap; padding: var(--s2) var(--s4); gap: var(--s2); }
     nav { gap: 0; }
     nav a { padding: var(--s1) var(--s2); font-size: 0.85rem; }
@@ -542,6 +558,12 @@ form p { margin: var(--s3) 0; }
     .table-wrap { max-height: none; }
     thead th { position: static; }
     h1 { font-size: 1.35rem; }
+}
+
+@media (max-width: 440px) {
+    /* Three rows of links (141px), four with three-digit badges under
+       310px (170px). */
+    :root { --topbar-room: 11rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -9,6 +9,7 @@ threshold), so a passing suite means the same thing on every machine.
 """
 
 import tempfile
+from pathlib import Path
 
 from .settings import *  # noqa: F401,F403
 
@@ -29,6 +30,13 @@ DEBUG = False
 _TEST_TMP = tempfile.mkdtemp(prefix="marginmate-tests-")
 MEDIA_ROOT = _TEST_TMP
 SCRAPE_DOWNLOAD_DIR = _TEST_TMP
+# « Données »'s backups and staged archives: temp too, and in a folder of
+# their own rather than inside MEDIA_ROOT - the transfer tests compare
+# everything under media before and after a preview, and staging outside
+# media is the point (settings.py).
+_TRANSFER_TMP = tempfile.mkdtemp(prefix="marginmate-tests-transfer-")
+DATA_BACKUP_DIR = Path(_TRANSFER_TMP) / "backups"
+DATA_STAGING_DIR = Path(_TRANSFER_TMP) / "imports"
 
 # No credentials => the external integrations raise instead of connecting.
 # See tests.support.NoNetworkTestCase for the belt-and-braces patching.

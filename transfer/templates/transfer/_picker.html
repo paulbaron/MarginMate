@@ -1,0 +1,39 @@
+{% comment %}
+The same two fieldsets on the three tabs. data-forced-by names, for each
+box, every section that ticks it when ticked (registry.forcing): the page's
+script needs no graph of its own. A forced box stays enabled - a disabled
+input is not posted, and the server wants the whole closure.
+{% endcomment %}
+<div class="picker" data-picker data-mode="{{ picker.mode }}">
+    {% for group in picker.groups %}
+        <fieldset class="choice-group" data-group="{{ group.key }}">
+            <legend>{{ group.label }}</legend>
+            {% if picker.mode == "import" %}
+                <p class="picker-shortcuts" data-js-only hidden>
+                    <button type="button" class="btn btn-secondary btn-small" data-all-strategy="fusionner">Tout fusionner</button>
+                    <button type="button" class="btn btn-secondary btn-small" data-all-strategy="remplacer">Tout remplacer</button>
+                </p>
+            {% endif %}
+            {% for row in group.rows %}
+                <div class="picker-row{% if row.disabled %} is-disabled{% endif %}" data-row="{{ row.key }}">
+                    <label class="picker-check">
+                        <input type="checkbox" name="sections" value="{{ row.key }}" data-section="{{ row.key }}" data-forced-by="{{ row.forced_by }}"{% if row.checked %} checked{% endif %}{% if row.disabled %} disabled{% endif %}{% if row.forced %} class="is-forced" aria-disabled="true"{% endif %}>
+                        <span>{{ row.label }}</span>
+                    </label>
+                    <span class="picker-counts">{% if picker.mode == "import" %}{% if row.archive_counts %}archive : {{ row.archive_counts }}{% endif %}{% if row.counts %}{% if row.archive_counts %} — {% endif %}ici : {{ row.counts }}{% endif %}{% else %}{{ row.counts }}{% endif %}</span>
+                    <p class="picker-description">{{ row.description }}</p>
+                    <p class="picker-forced" data-forced-note{% if not row.forced_note %} hidden{% endif %}>{{ row.forced_note }}</p>
+                    {% for hint in row.hints %}<p class="picker-hint">conseillé : {{ hint }}</p>{% endfor %}
+                    {% if row.clear_note %}<p class="picker-hint">à savoir : {{ row.clear_note }}</p>{% endif %}
+                    {% if row.disabled_reason %}<p class="picker-disabled">{{ row.disabled_reason }}</p>{% endif %}
+                    {% if picker.mode == "import" and not row.disabled %}
+                        <div class="picker-strategy" data-strategy-for="{{ row.key }}">
+                            <label><input type="radio" name="strategie-{{ row.key }}" value="fusionner"{% if row.strategy != "remplacer" %} checked{% endif %}> Fusionner <span class="muted">— ajoute ce qui manque, garde ce qui existe</span></label>
+                            <label><input type="radio" name="strategie-{{ row.key }}" value="remplacer"{% if row.strategy == "remplacer" %} checked{% endif %}> Remplacer <span class="muted">— cette partie devient exactement l'archive</span></label>
+                        </div>
+                    {% endif %}
+                </div>
+            {% endfor %}
+        </fieldset>
+    {% endfor %}
+</div>

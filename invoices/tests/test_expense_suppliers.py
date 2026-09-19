@@ -19,14 +19,14 @@ from django.test import TestCase
 from django.utils import timezone
 from django.urls import reverse
 
-from inventory.models import Product, StockMovement
+from inventory.models import Product, StockMovement, StockTakeLineSource
 from inventory.views import review_panel_context
 from invoices.importing import import_parsed_invoice, redo_as_expenses, replace_invoice_lines
 from invoices.receipts import pending_receipts, reread_receipt
 from invoices.models import Invoice, Supplier
 from invoices.parsers.base import ParseCheck, ParsedInvoice, ParsedLine
 from invoices.tests.test_unknown_shops import staged_file
-from tests.factories import make_product, make_supplier
+from tests.factories import make_product, make_stock_take, make_stock_take_line, make_supplier
 
 D = Decimal
 
@@ -312,6 +312,33 @@ class MarkingTheSupplierTests(TestCase):
         self.supplier.save()
         self.assertEqual(redo_as_expenses(self.supplier), 1)
         self.assertEqual(redo_as_expenses(self.supplier), 0)
+
+    def test_a_document_a_count_was_priced_from_is_left_alone_and_leaves_no_poste(self):
+        """Its lines cannot be replaced (InvoiceLinesInUseError), so it is
+        left as it is - and so is everything else: the poste its charge
+        reading would have filed it on was created before the refusal, and
+        stayed behind, named after the supplier, on no line (seen again on
+        a scratch copy, 19/09)."""
+        line = self.invoice.lines.get(raw_name="Abonnement mobile")
+        take_line = make_stock_take_line(
+            make_stock_take(), product=line.product, counted_quantity="1", value_ht="8.33"
+        )
+        StockTakeLineSource.objects.create(
+            stock_take_line=take_line, invoice_line=line, quantity_used=D("1"), unit_cost_ht=D("8.33")
+        )
+        products = set(Product.objects.values_list("pk", "raw_name", "is_expense"))
+        self.supplier.expenses_only = True
+        self.supplier.save()
+
+        self.assertEqual(redo_as_expenses(self.supplier), 0)
+        self.assertFalse(Product.objects.filter(raw_name="Free Exemple").exists())
+        self.assertEqual(Invoice.objects.get(pk=self.invoice.pk).lines.count(), 2)
+        # Only redo_as_expenses' own last step touched the products: the
+        # unclassified ones this supplier sends are postes now.
+        self.assertEqual(
+            set(Product.objects.values_list("pk", "raw_name", "is_expense")),
+            {(pk, name, True) for pk, name, _is_expense in products},
+        )
 
 
 class ReadAgainTests(TestCase):

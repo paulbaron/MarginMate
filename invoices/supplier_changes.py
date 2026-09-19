@@ -76,3 +76,36 @@ def record(supplier, kind, summary: str, *, data=None, other_supplier=None, need
     if rows is not None:
         rows.append(change)
     return change
+
+
+def why_to_see(change) -> str:
+    """Why `change` asks to be seen, and how to answer it - said wherever it
+    is listed (the « Enseignes et fournisseurs » tab, the supplier's page).
+
+    The tab lit an amber number and a row said « À voir », and nothing said
+    what was to be seen or why: the owner could not tell (19/09). Two kinds
+    ask today - a first document (receipts._record_first_document) and a
+    figure lost without anyone asking (receipts.set_identifiers)."""
+    from .models import SupplierChange
+
+    name = change.supplier.name
+    data = change.data or {}
+    if change.kind == SupplierChange.Kind.FIRST_DOCUMENT:
+        if not data.get("learned"):
+            # Recognised by its header, or printing nothing to learn: there
+            # is nothing to take back, only where it is filed to confirm.
+            return (
+                "C'est son premier document : rien d'autre ne garantit cette lecture. Il ne lui a rien appris. "
+                f"S'il est bien de {name}, cliquez « Vu » ; sinon, changez le document de fournisseur."
+            )
+        return (
+            "C'est son premier document : rien d'autre ne garantit cette lecture. Ce qu'il lui a appris rangera "
+            f"désormais chez {name} tout document qui l'imprime. S'il est bien de {name}, cliquez « Vu » ; sinon, "
+            "« Retirer » l'identifiant sur sa fiche ou changez le document de fournisseur."
+        )
+    if change.kind == SupplierChange.Kind.IDENTIFIERS:
+        return (
+            "Un identifiant lui a été retiré sans que personne ne l'ait demandé. S'il le reconnaît encore, "
+            "« Annuler » sur sa fiche le lui rend ; sinon, cliquez « Vu »."
+        )
+    return "Fait automatiquement : vérifiez-le sur sa fiche, puis cliquez « Vu »."

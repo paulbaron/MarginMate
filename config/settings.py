@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     "invoices",
     "recipes",
     "bank",
+    "transfer",
 ]
 
 MIDDLEWARE = [
@@ -145,6 +146,17 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
+
+# « Données » (transfer/). Backups taken before a confirmed import or clear
+# sit beside the database they copy - a copy of db.sqlite3 and, before a
+# « Remplacer » or an « Effacer », an importable archive of what changes. The
+# app never deletes them: deleting data is the owner's act.
+DATA_BACKUP_DIR = Path(DATABASES["default"]["NAME"]).parent / "backups"
+# Archives waiting between their upload and their import, and exports being
+# downloaded. NOT under MEDIA_ROOT: config/urls.py serves all of media when
+# DEBUG is on, so a staged archive of every invoice (~420 MB, IBANs and
+# addresses included) would have been downloadable by its URL.
+DATA_STAGING_DIR = BASE_DIR / "imports"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 

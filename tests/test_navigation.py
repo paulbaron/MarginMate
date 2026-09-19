@@ -14,7 +14,7 @@ from django.urls import reverse
 from recipes.models import PosProduct
 from tests.factories import make_invoice, make_product, make_recipe, make_stock_type, make_supplier
 
-LABELS = ["Produits &amp; charges", "Achats", "Banque", "Recettes &amp; ventes", "Inventaires", "Admin"]
+LABELS = ["Produits &amp; charges", "Achats", "Banque", "Recettes &amp; ventes", "Inventaires", "Données", "Admin"]
 
 
 def nav_links(response):
@@ -47,7 +47,6 @@ class NavigationTests(TestCase):
                 reverse("inventory:stock_list"),
                 reverse("inventory:stock_type_update", args=[stock_type.pk]),
                 reverse("inventory:stock_type_create"),
-                reverse("inventory:import_associations"),
             ],
             "Achats": [
                 reverse("invoices:invoice_list"),
@@ -70,6 +69,7 @@ class NavigationTests(TestCase):
             ],
             "Inventaires": [reverse("inventory:stock_take_list"), reverse("inventory:stock_take_create")],
             "Banque": [reverse("bank:bank_home")],
+            "Données": [reverse("transfer:data_home"), reverse("transfer:data_import"), reverse("transfer:data_clear")],
         }
         for label, urls in pages.items():
             for url in urls:

@@ -131,11 +131,16 @@ class SuppliersTabTests(TestCase):
             sources.assert_called_once()
 
     def test_a_change_to_see_lights_the_tab(self):
-        """Amber, the number is what waits - as beside it on « À vérifier »:
-        the suppliers with a change to see. Quiet, it is every supplier."""
+        """The count is always every supplier, grey; the suppliers with a
+        change to see are an amber « N à voir » beside it, saying so. One
+        number meant both - 29 grey, then 1 amber - with no word or title,
+        and the owner could not tell why there was « 1 » (19/09)."""
         everyone = Supplier.objects.exclude(parser_key=LLM_PARSER_KEY).count()
-        tab = self.client.get(reverse("invoices:invoice_list")).context["tabs"][3]
-        self.assertEqual((tab["attention"], tab["count"]), (False, everyone))
+        page = self.client.get(reverse("invoices:invoice_list"))
+        tab = page.context["tabs"][3]
+        self.assertEqual((tab["attention"], tab["to_see"], tab["count"]), (False, 0, everyone))
+        self.assertEqual(tab["url"], SUPPLIERS)
+        self.assertNotIn("à voir", said(page))
         for summary in ("Appris : un numéro.", "Appris : un site."):
             SupplierChange.objects.create(
                 supplier=self.shop, kind=SupplierChange.Kind.IDENTIFIERS, summary=summary, needs_review=True
@@ -145,17 +150,28 @@ class SuppliersTabTests(TestCase):
             supplier=self.alone, kind=SupplierChange.Kind.IDENTIFIERS, summary="Appris : un numéro.",
             needs_review=True, reviewed_at=timezone.now(),
         )
+        SupplierChange.objects.create(
+            supplier=self.alone, kind=SupplierChange.Kind.IDENTIFIERS, summary="Oublié : un site.",
+            needs_review=True, undone_at=timezone.now(),
+        )
         page = self.client.get(reverse("invoices:invoice_list"))
         tab = page.context["tabs"][3]
-        self.assertEqual((tab["attention"], tab["count"]), (True, 1))
+        self.assertEqual((tab["attention"], tab["to_see"], tab["count"]), (False, 1, everyone))
+        # It leads to the list of what to see, at the top of the tab.
+        self.assertEqual(tab["url"], SUPPLIERS + "#a-voir")
+        self.assertContains(page, f'<span class="count-pill count-pill-quiet">{everyone}</span>', html=True)
         self.assertContains(
-            page, '<span class="count-pill">1</span>', html=True
+            page, '<span class="count-pill" title="1 fournisseur avec un changement à voir">1 à voir</span>', html=True
         )
         SupplierChange.objects.create(
             supplier=self.alone, kind=SupplierChange.Kind.IDENTIFIERS, summary="Appris : un site.", needs_review=True
         )
-        tab = self.client.get(reverse("invoices:invoice_list")).context["tabs"][3]
-        self.assertEqual((tab["attention"], tab["count"]), (True, 2))
+        page = self.client.get(reverse("invoices:invoice_list"))
+        tab = page.context["tabs"][3]
+        self.assertEqual((tab["to_see"], tab["count"]), (2, everyone))
+        self.assertContains(
+            page, '<span class="count-pill" title="2 fournisseurs avec un changement à voir">2 à voir</span>', html=True
+        )
 
     def test_the_suppliers_with_their_own_reader_name_their_sources_too(self):
         """UBA's invoices come by a mailbox source, Metro's by its own module

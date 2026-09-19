@@ -1,0 +1,60 @@
+{% comment %}
+What safety.py left in backups/: the archives import back through this page;
+the database copies only by hand, with the server stopped. The app never
+deletes either.
+{% endcomment %}
+<div class="card">
+    <h2>Ou reprendre une sauvegarde</h2>
+    <p class="muted">
+        Dans <code>{{ backup_dir }}</code>. L'application ne supprime jamais une sauvegarde : c'est à vous de faire
+        le ménage dans ce dossier.
+    </p>
+    {% if zip_backups %}
+        <div class="table-wrap">
+            <table class="summary-table">
+                <thead><tr><th>Archive</th><th>Faite le</th><th class="num">Taille</th><th></th></tr></thead>
+                <tbody>
+                    {% for backup in zip_backups %}
+                        <tr>
+                            <td>{{ backup.name }}</td>
+                            <td>{{ backup.created|date:"d/m/Y" }} à {{ backup.created|time:"H:i" }}</td>
+                            <td class="num">{{ backup.megabytes }} Mo</td>
+                            <td>
+                                <form method="post" action="{% url 'transfer:data_import_backup' %}">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="nom" value="{{ backup.name }}">
+                                    <button class="btn btn-secondary btn-small" type="submit">Importer…</button>
+                                </form>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <p class="muted">Aucune archive de sauvegarde pour l'instant.</p>
+    {% endif %}
+    {% if sqlite_backups %}
+        <h3>Copies de la base</h3>
+        {% comment %}
+            The database runs in WAL mode: a db.sqlite3-wal left beside it by
+            a server stopped hard is read back into whatever file is named
+            db.sqlite3, and the copy put back came out holding the newer rows.
+        {% endcomment %}
+        <p class="muted">Pour revenir à cette base : arrêtez le serveur, supprimez db.sqlite3-wal et db.sqlite3-shm s'ils sont là, puis remplacez db.sqlite3 par ce fichier.</p>
+        <div class="table-wrap">
+            <table class="summary-table">
+                <thead><tr><th>Fichier</th><th>Faite le</th><th class="num">Taille</th></tr></thead>
+                <tbody>
+                    {% for backup in sqlite_backups %}
+                        <tr>
+                            <td>{{ backup.name }}</td>
+                            <td>{{ backup.created|date:"d/m/Y" }} à {{ backup.created|time:"H:i" }}</td>
+                            <td class="num">{{ backup.megabytes }} Mo</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% endif %}
+</div>

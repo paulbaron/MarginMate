@@ -22,6 +22,7 @@ from .forms import (
     DOCUMENT_RECEIPT,
     DocumentHeaderForm,
     EmailInvoiceSourceForm,
+    EmptyVatTableFormSet,
     InvoiceTypeForm,
     InvoiceUploadForm,
     LineCorrectionFormSet,
@@ -785,7 +786,8 @@ def _correction_page(request, invoice):
     price_form = ShopItemPriceForm()
     header = {"invoice_date": invoice.invoice_date, "printed_total_ttc": invoice.printed_total_ttc}
     header_form = DocumentHeaderForm(initial=header)
-    vat_form = VatTableFormSet(prefix="tva", initial=_vat_initial(invoice))
+    vat_initial = _vat_initial(invoice)
+    vat_form = (VatTableFormSet if vat_initial else EmptyVatTableFormSet)(prefix="tva", initial=vat_initial)
     formset = None
 
     if request.method == "POST":
@@ -1005,9 +1007,13 @@ def _save_corrections(request, invoice, formset, header_form, vat_form=None) -> 
                 messages.info(request, f"Confirmé : ce document est bien de {invoice.supplier.name}.")
             if vat_form is not None:
                 # The VAT table as the page now holds it, before the checks
-                # that compare the lines against it are worked out.
+                # that compare the lines against it are worked out - and it
+                # is the person's, even empty: an emptied table was read
+                # again from the photo, and checked against figures nobody
+                # typed (receipts.vat_table).
                 invoice.vat_breakdown = [form.row for form in vat_form if form.row is not None]
-                fields.append("vat_breakdown")
+                invoice.vat_table_typed = True
+                fields += ["vat_breakdown", "vat_table_typed"]
             if invoice.is_receipt:
                 recheck_after_review(invoice)
                 invoice.reviewed_at = timezone.now()
@@ -1027,6 +1033,8 @@ def _save_corrections(request, invoice, formset, header_form, vat_form=None) -> 
                 ), supplier_changes.collect() as changes:
                     learn_identifiers(invoice.supplier, invoice.source_text)
                 _say_supplier_changes(request, changes)
+            if invoice.is_receipt or doubted:
+                _answer_first_document(request, invoice)
             invoice.save(update_fields=fields)
     except InvoiceLinesInUseError as exc:
         messages.error(request, str(exc))
@@ -1034,12 +1042,40 @@ def _save_corrections(request, invoice, formset, header_form, vat_form=None) -> 
     return True
 
 
+def _answer_first_document(request, invoice) -> None:
+    """Validated, a document is its supplier's - which is all that supplier's
+    « premier document » asks (receipts._record_first_document): seen, not
+    left lighting the « Enseignes et fournisseurs » tab. On 19/09 the owner
+    validated Leroy Merlin's first document eight minutes after it was
+    recorded, and the tab went on showing an amber « 1 » nobody could
+    explain. Only the change of the supplier it is validated under: one
+    moved here from another asks that other supplier to look at what it
+    learned from a document that was not its own."""
+    from .models import SupplierChange
+
+    answered = SupplierChange.objects.filter(
+        kind=SupplierChange.Kind.FIRST_DOCUMENT,
+        supplier=invoice.supplier,
+        invoice=invoice,
+        reviewed_at__isnull=True,
+        undone_at__isnull=True,
+    ).update(reviewed_at=timezone.now())
+    if answered:
+        messages.info(request, f"Premier document de {invoice.supplier.name} : vu.")
+
+
 def _vat_initial(invoice) -> list[dict]:
-    """The VAT table as the page shows it: the rate in percent, as printed."""
+    """The VAT table as the page shows it: the rate in percent, as printed.
+
+    At two decimals, the rate field's own (French rates have at most two in
+    percent, receipt_base.read_rate): 0.055 x 100 is "5.500", which the page
+    drew and its own field then refused when posted back - 361 documents
+    could not be saved without retyping their 5,5 %. The base and tax stay
+    as stored (the form takes four decimals)."""
     from .receipts import vat_table
 
     return [
-        {"rate": row["rate"] * Decimal("100"), "base": row["base"], "vat": row["vat"]}
+        {"rate": (row["rate"] * Decimal("100")).quantize(Decimal("0.01")), "base": row["base"], "vat": row["vat"]}
         for row in vat_table(invoice)
     ]
 

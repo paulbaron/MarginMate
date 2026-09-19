@@ -33,11 +33,35 @@
         </div>
     </div>
 
+    {% comment %}
+    A change to see is listed here with why it asks and its « Vu », which
+    comes back to this page: a count sent the owner to the foot of the page
+    to find what it counted, and why it asked was said nowhere
+    (supplier_changes.why_to_see). A change is its day and its summary, as
+    in the history below: the summary says what it is, and its kind printed
+    first read « Premier document du … : Premier document : … ».
+    {% endcomment %}
     {% for notice in notices %}
         <div class="message message-warning supplier-notice">
             {{ notice.text }}
             {% if notice.kind == "review" %}
-                <a href="#historique">À voir</a>
+                <a href="#historique">Voir l'historique</a>
+                {% for change in notice.changes %}
+                    <p>
+                        Le {{ change.created_at|date:"d/m/Y" }} : {{ change.summary }}
+                        <br><span class="muted">{{ change.why }}</span>
+                    </p>
+                    <div class="actions">
+                        {% if change.invoice_id %}
+                            <a class="btn btn-small btn-secondary" href="{% url 'invoices:invoice_edit_lines' change.invoice_id %}">Voir le document</a>
+                        {% endif %}
+                        <form method="post" action="{% url 'invoices:supplier_change_seen' supplier.pk change.pk %}">
+                            {% csrf_token %}
+                            <input type="hidden" name="retour" value="{{ fiche }}">
+                            <button class="btn btn-small" type="submit">Vu</button>
+                        </form>
+                    </div>
+                {% endfor %}
             {% elif notice.kind == "type_check" %}
                 <a class="btn btn-small" href="{% url 'invoices:invoice_edit_lines' notice.invoice %}">Le voir</a>
             {% elif notice.kind == "unrecognised" and not is_till and not own_reader %}

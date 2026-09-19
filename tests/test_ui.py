@@ -316,7 +316,7 @@ class TemplateHygieneTests(TestCase):
         root = pathlib.Path(__file__).resolve().parent.parent
         for path in self.template_files():
             # Name it the way the loader will look it up.
-            for base in ("templates", *[f"{app}/templates" for app in ("inventory", "invoices", "recipes", "bank")]):
+            for base in ("templates", *[f"{app}/templates" for app in ("inventory", "invoices", "recipes", "bank", "transfer")]):
                 candidate = root / base
                 if candidate in path.parents:
                     name = str(path.relative_to(candidate)).replace("\\", "/")
@@ -793,3 +793,42 @@ class LayoutClassTests(TestCase):
                       "explainer", "lead", "breadcrumb"}
         missing = sorted(name for name in structural if name not in defined)
         self.assertEqual(missing, [], f"Structural classes with no CSS rule: {missing}")
+
+
+class TransferReportTableTests(TestCase):
+    """The report of an import or a clear (« Données ») is a summary, not a
+    list to search: no data-table, a row per section and entity, the
+    rebuilt data last, in the future before a confirm and in the past
+    after."""
+
+    def render(self, preview):
+        from django.template.loader import render_to_string
+
+        from transfer.report import RunReport, SectionReport
+
+        section = SectionReport(key="factures", label="Factures et tickets")
+        section.created("documents", 2)
+        section.unchanged("lignes", 5)
+        for number in range(25):
+            section.conflict(f"Facture n° {number} : différente dans l'archive")
+        report = RunReport(mode="import", preview=preview, sections=[section], rebuilt={"mouvements de stock": 3})
+        return render_to_string("transfer/_report.html", {"report": report})
+
+    def test_the_preview_speaks_in_the_future(self):
+        html = self.render(preview=True)
+        self.assertIn('<table class="summary-table">', html)
+        self.assertNotIn("data-table", html)
+        for heading in ("Partie", "À créer", "À modifier", "À supprimer", "Inchangés"):
+            self.assertIn(heading, html)
+        self.assertIn("Factures et tickets › documents", html)
+        self.assertIn("Factures et tickets › lignes", html)
+        self.assertLess(html.index("› lignes"), html.index("Recalculé"))
+        self.assertIn("mouvements de stock : 3", html)
+        self.assertIn("Conflits — gardés tels quels (25)", html)
+        self.assertIn("… et 5 autres", html)
+
+    def test_the_final_report_in_the_past(self):
+        html = self.render(preview=False)
+        for heading in ("Créés", "Modifiés", "Supprimés", "Inchangés"):
+            self.assertIn(heading, html)
+        self.assertNotIn("À créer", html)

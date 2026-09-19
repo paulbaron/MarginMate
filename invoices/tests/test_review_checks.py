@@ -252,8 +252,11 @@ class PrintedVatTableTests(TestCase):
         page = self.client.get(self.url)
         self.assertEqual(
             page.context["vat_form"].initial,
-            [{"rate": D("5.500"), "base": D("0.93"), "vat": D("0.05")}],
+            [{"rate": D("5.50"), "base": D("0.93"), "vat": D("0.05")}],
         )
+        # Equal as numbers, "5.500" was refused by its own field once posted
+        # back (test_vat_table_form): what matters is the text drawn.
+        self.assertEqual(str(page.context["vat_form"].initial[0]["rate"]), "5.50")
         self.assertContains(page, "TVA imprimée sur le document")
 
     def test_typing_the_table_checks_the_lines_against_it(self):
@@ -343,23 +346,6 @@ def diy_ticket(vat_breakdown=(("0.20", "35.00", "7.00"),)):
     return invoice
 
 
-def with_vat_table(response, data: dict) -> dict:
-    """The VAT table block the page posts beside its lines, as it drew it:
-    `page_post` leaves it out, and a post without it keeps the stored table
-    (a page cached before the block existed)."""
-    vat_form = response.context["vat_form"]
-    data = dict(data)
-    data[f"{vat_form.prefix}-TOTAL_FORMS"] = str(vat_form.total_form_count())
-    data[f"{vat_form.prefix}-INITIAL_FORMS"] = str(vat_form.initial_form_count())
-    data[f"{vat_form.prefix}-MIN_NUM_FORMS"] = "0"
-    data[f"{vat_form.prefix}-MAX_NUM_FORMS"] = "1000"
-    for form in vat_form.forms:
-        for name in form.fields:
-            value = form[name].value()
-            data[form.add_prefix(name)] = "" if value is None else str(value)
-    return data
-
-
 class CorrectedLinesHtCheckTests(TestCase):
     """"Somme HT des lignes = base HT du ticket" is worked out from the lines
     as they stand, never kept from the reading.
@@ -382,7 +368,7 @@ class CorrectedLinesHtCheckTests(TestCase):
 
     def correct(self, **changes):
         page = self.client.get(self.url)
-        response = self.client.post(self.url, with_vat_table(page, page_post(page, **changes)))
+        response = self.client.post(self.url, page_post(page, with_vat=True, **changes))
         self.assertEqual(response.status_code, 302)
         self.invoice.refresh_from_db()
         return self.client.get(self.url)

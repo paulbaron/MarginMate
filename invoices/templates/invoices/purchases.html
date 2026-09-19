@@ -20,7 +20,13 @@
     {% comment %}
     The tabs are addresses of their own (bookmarkable, and what the old pages'
     links now open); hx-boost swaps only #workspace, so the import card above
-    - and an import running in it - stays as it is.
+    - and an import running in it - stays as it is. A tab's number says one
+    thing: « Enseignes et fournisseurs » counts its suppliers, and what asks
+    to be seen there is a second pill that says so (workspace.render_purchases).
+    A tab clicked lower down brings the new #workspace to the top of the page
+    (htmx's boost), and a tab with a fragment brings that: marginmate.css
+    leaves the sticky topbar's height above both (--topbar-room), or the tab
+    row and « N changements à voir » landed under it.
     {% endcomment %}
     <div id="workspace" class="workspace">
         <nav class="tabs" aria-label="Achats" hx-boost="true" hx-target="#workspace" hx-select="#workspace" hx-swap="outerHTML">
@@ -28,6 +34,7 @@
                 <a href="{{ entry.url }}" class="tab{% if entry.active %} active{% endif %}"{% if entry.active %} aria-current="page"{% endif %}>
                     {{ entry.label }}
                     <span class="count-pill{% if not entry.attention %} count-pill-quiet{% endif %}">{{ entry.count }}</span>
+                    {% if entry.to_see %}<span class="count-pill" title="{{ entry.to_see }} fournisseur{{ entry.to_see|pluralize }} avec un changement à voir">{{ entry.to_see }} à voir</span>{% endif %}
                 </a>
             {% endfor %}
         </nav>

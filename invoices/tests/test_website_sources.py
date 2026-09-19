@@ -39,7 +39,7 @@ class TypeFormTests(TestCase):
         self.supplier = make_supplier(code="BOX_X", name="Box Exemple", parser_key="", expenses_only=True)
         self.url = reverse("invoices:invoice_type_create")
 
-    def post(self, **fields):
+    def post(self, url=None, **fields):
         data = {
             "name": "Box Exemple - Factures", "supplier": self.supplier.pk, "source_kind": "WEBSITE",
             "parser_key": "", "is_active": "on", "action": "save",
@@ -47,7 +47,7 @@ class TypeFormTests(TestCase):
             "site-password_env": "BOX_PASSWORD", "site-invoices_url": "", "site-navigation": "Mes factures",
         }
         data.update(fields)
-        return self.client.post(self.url, data)
+        return self.client.post(url or self.url, data)
 
     def test_a_website_type_is_saved_with_the_names_of_its_env_variables(self):
         response = self.post()
@@ -64,6 +64,38 @@ class TypeFormTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertFalse(WebsiteInvoiceSource.objects.exists())
         self.assertContains(response, "jamais l&#x27;identifiant ou le mot de passe lui-même")
+
+    def test_a_portal_naming_the_apps_own_variables_is_refused(self):
+        """A gather types what the variables hold into the portal's page:
+        Metro's password into any site, and Metro signed in to outside its
+        firewall's pause. One list with the « Données » import
+        (models.APP_ENV_PREFIXES)."""
+        response = self.post(**{"site-username_env": "metro_email", "site-password_env": "METRO_PASSWORD"})
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(WebsiteInvoiceSource.objects.exists())
+        for name in ("METRO_EMAIL", "METRO_PASSWORD"):
+            self.assertContains(response, f"« {name} » est une variable de l&#x27;application elle-même")
+
+    def test_a_saved_portal_cannot_be_given_the_apps_variables(self):
+        invoice_type = website_type(self.supplier)
+        url = reverse("invoices:invoice_type_update", args=[invoice_type.pk])
+        response = self.post(url, **{"site-password_env": "LADDITION_PASSWORD"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "« LADDITION_PASSWORD » est une variable de l&#x27;application elle-même")
+        self.assertEqual(WebsiteInvoiceSource.objects.get().password_env, "BOX_PASSWORD")
+
+    def test_testing_a_portal_with_the_apps_variables_signs_in_nowhere(self):
+        """« Tester » signs in with the settings as typed, unsaved."""
+        with mock.patch("invoices.views.threading.Thread") as thread:
+            response = self.post(action="test", **{"site-password_env": "INVOICE_EMAIL_APP_PASSWORD"})
+        self.assertEqual(response.status_code, 200)
+        thread.assert_not_called()
+        self.assertFalse(ScrapeJob.objects.exists())
+
+    def test_a_name_that_only_looks_like_the_apps_is_a_portals(self):
+        response = self.post(**{"site-username_env": "METROPOLE_LOGIN", "site-password_env": "METROPOLE_PASSWORD"})
+        self.assertRedirects(response, reverse("invoices:invoice_type_list"))
+        self.assertEqual(WebsiteInvoiceSource.objects.get().username_env, "METROPOLE_LOGIN")
 
     def test_the_page_shows_the_kind_it_is_editing(self):
         invoice_type = website_type(self.supplier)

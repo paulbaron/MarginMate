@@ -97,13 +97,19 @@ def render_purchases(request, tab, *, status=200, **card):
         to_fix=Count("pk", filter=DOCUMENT_TO_FIX),
     )
     waiting = counts["tickets"] + counts["to_fix"]
-    # Amber, a tab's number is what waits there, as « À vérifier »'s does:
-    # the suppliers with a change to see (their rows' « À voir »). Quiet,
-    # every supplier - counted, not listed: the list reads every document's
-    # text, and the tabs are on every page of Achats. Both of its tables are
-    # every supplier but the AI pseudo-supplier.
+    # « Enseignes et fournisseurs » counts every supplier, grey - counted,
+    # not listed: the list reads every document's text, and the tabs are on
+    # every page of Achats. Both of its tables are every supplier but the AI
+    # pseudo-supplier. Beside it, amber, « N à voir »: the suppliers with a
+    # change to see, which the tab lists at its top (#a-voir). One number
+    # meant both - 29 grey, then an amber 1 - with no word nor title, and the
+    # owner could not tell what the « 1 » was (19/09). The fragment stays:
+    # the list sits below the import card, 850 px down; the sticky topbar's
+    # height is left above it by the stylesheet (--topbar-room), since the
+    # list's heading first landed under the bar.
     suppliers = Supplier.objects.exclude(parser_key=LLM_PARSER_KEY)
     to_see = _changes_to_see().filter(supplier__in=suppliers).values("supplier_id").distinct().count()
+    suppliers_url = reverse("invoices:supplier_list")
     context = {
         "tab": tab,
         "tabs": [
@@ -113,8 +119,9 @@ def render_purchases(request, tab, *, status=200, **card):
              "count": waiting, "attention": bool(waiting)},
             {"key": "sources", "label": "Sources", "url": reverse("invoices:invoice_type_list"),
              "count": InvoiceType.objects.count(), "attention": False},
-            {"key": "fournisseurs", "label": "Enseignes et fournisseurs", "url": reverse("invoices:supplier_list"),
-             "count": to_see or suppliers.count(), "attention": bool(to_see)},
+            {"key": "fournisseurs", "label": "Enseignes et fournisseurs",
+             "url": suppliers_url + ("#a-voir" if to_see else ""),
+             "count": suppliers.count(), "attention": False, "to_see": to_see},
         ],
         **_import_card(request, **card),
     }
@@ -414,9 +421,23 @@ def _suppliers() -> dict:
     header and the figures it learned - shown, since what cannot be seen
     cannot be put right, and the sources fetching for it. For a shop with a
     header, how many of its documents print it: the others were filed there
-    by something else they print."""
+    by something else they print.
+
+    Above them, every change to see, oldest first, with why it asks and its
+    « Vu »: what lights the tab's « à voir », said where it lights up rather
+    than as a pill on one row among thirty."""
     from .parsers import LLM_PARSER_KEY, is_ticket_shop
     from .receipts import has_own_reader, names_shop, prints_header
+    from .supplier_changes import why_to_see
+
+    changes_to_see = list(
+        _changes_to_see()
+        .exclude(supplier__parser_key=LLM_PARSER_KEY)
+        .select_related("supplier")
+        .order_by("created_at", "pk")
+    )
+    for change in changes_to_see:
+        change.why = why_to_see(change)
 
     texts: dict[int, list[str]] = {}
     for supplier_id, ocr_text, source_text in Invoice.objects.values_list("supplier_id", "ocr_text", "source_text"):
@@ -460,6 +481,7 @@ def _suppliers() -> dict:
         supplier.names_shop = names_shop(supplier)
         supplier.own_module = supplier.pk in own_module
     return {
+        "changes_to_see": changes_to_see,
         "ticket_shops": shops,
         "own_readers": own_readers,
     }

@@ -205,19 +205,36 @@
                     only one nobody could correct: every check about it was a
                     warning with no answer. Left empty, it simply asks nothing.
                     {% endcomment %}
-                    <details class="explainer vat-table"{% if vat_form.forms|length > 1 %} open{% endif %}>
-                        <summary>TVA imprimée sur le document ({{ vat_form.forms|length|add:"-1" }} taux)</summary>
+                    {% comment %}
+                    Counted from the rows drawn filled (initial_form_count),
+                    not from the rows drawn: an empty table has two spares.
+                    Opened as well where a row was refused, or its error
+                    would be folded away.
+                    {% endcomment %}
+                    <details class="explainer vat-table"{% if vat_form.initial_form_count or vat_form.total_error_count %} open{% endif %}>
+                        <summary>TVA imprimée sur le document ({{ vat_form.initial_form_count }} taux)</summary>
                         <p class="muted">
                             Recopiez la table de TVA du document : chaque taux avec sa base HT et son montant.
+                            Une remise ou un avoir s'écrit en négatif (base et TVA).
                             Elle sert à vérifier les lignes ; laissée vide, elle ne demande rien.
                         </p>
                         {{ vat_form.management_form }}
+                        {% comment %}
+                        Each field's own error, then the row's: with only the
+                        row's, a rate refused for its decimals read « Un taux
+                        se saisit avec sa base HT… » beside three typed values.
+                        {% endcomment %}
                         <div class="vat-rows">
                             {% for row in vat_form %}
                                 <div class="vat-row">
                                     {{ row.rate }} <span class="muted">%</span>
                                     {{ row.base }} <span class="muted">€ HT</span>
                                     {{ row.vat }} <span class="muted">€ TVA</span>
+                                    {% for field in row %}
+                                        {% for error in field.errors %}
+                                            <span class="message message-error">{{ field.label }} : {{ error }}</span>
+                                        {% endfor %}
+                                    {% endfor %}
                                     {% for error in row.non_field_errors %}
                                         <span class="message message-error">{{ error }}</span>
                                     {% endfor %}

@@ -180,6 +180,49 @@ def resync_recipe_from_daily_quantities(recipe: Recipe) -> None:
         RecipeSale.objects.filter(recipe=recipe, source="laddition").exclude(sold_on__in=totals.keys()).delete()
 
 
+#: Till products recounted per query: SQLite caps the parameters of one
+#: statement, and an import may touch every till product at once.
+RECOUNT_BATCH = 500
+
+
+def recount_pos_products(product_ids) -> int:
+    """total_quantity, first_seen, last_seen from PosProductDailyQuantity
+    (sum, min, max; 0/None when no day). Returns how many changed.
+
+    What « Données » rebuilds after importing till days, instead of copying
+    the totals: they are derived from the days, and a copy could only
+    disagree with them. It lands where `tasks._sync_pos_products` does - its
+    total is the same sum, and the dates it widens import after import are
+    exactly the first and last day on file (a day that netted to zero is
+    still a day seen) - which recipes/tests/test_recount_pos_products.py
+    proves against the till import itself.
+    """
+    from django.db.models import Max, Min, Sum
+
+    from .models import PosProduct, PosProductDailyQuantity
+
+    ids = sorted(set(product_ids))
+    changed = 0
+    for start in range(0, len(ids), RECOUNT_BATCH):
+        batch = ids[start:start + RECOUNT_BATCH]
+        days = {
+            row["product_id"]: (row["total"], row["first"], row["last"])
+            for row in PosProductDailyQuantity.objects.filter(product_id__in=batch)
+            .values("product_id")
+            .annotate(total=Sum("quantity"), first=Min("sold_on"), last=Max("sold_on"))
+        }
+        stale = []
+        for product in PosProduct.objects.filter(pk__in=batch):
+            wanted = days.get(product.pk, (0, None, None))
+            if (product.total_quantity, product.first_seen, product.last_seen) != wanted:
+                product.total_quantity, product.first_seen, product.last_seen = wanted
+                stale.append(product)
+        if stale:
+            PosProduct.objects.bulk_update(stale, ["total_quantity", "first_seen", "last_seen"])
+        changed += len(stale)
+    return changed
+
+
 def sales_between(start: date | None, end: date) -> dict[int, int]:
     """{recipe_id: units sold} over a stock-take window.
 

@@ -168,7 +168,7 @@ class ArticleWordingTests(TestCase):
             reverse("inventory:stock_list"),
             reverse("inventory:stock_type_create"),
             reverse("inventory:stock_type_update", args=[gin.pk]),
-            reverse("inventory:import_associations"),
+            reverse("transfer:data_home"),
             reverse("inventory:stock_take_create"),
             reverse("inventory:stock_take_detail", args=[take.pk]),
             reverse("recipes:recipe_create"),
@@ -238,6 +238,14 @@ class ArticleWordingTests(TestCase):
         response = self.client.get(reverse("inventory:stock_list"))
         self.assertContains(response, "<title>Produits & charges - MarginMate</title>")
         self.assertContains(response, "<h1>Produits &amp; charges</h1>")
+
+    def test_export_and_import_lead_to_the_données_page(self):
+        """The two associations buttons became « Données »'s: the export tab
+        with the associations ticked, and the import tab."""
+        response = self.client.get(reverse("inventory:stock_list"))
+        self.assertContains(response, '<a class="btn btn-secondary" href="/donnees/?cocher=associations">⬇️ Exporter…</a>')
+        self.assertContains(response, '<a class="btn btn-secondary" href="/donnees/importer/">⬆️ Importer…</a>')
+        self.assertNotContains(response, "Exporter les associations")
 
     def test_a_name_already_taken_is_refused_in_french(self):
         """Django's own « Stock type with this Name already exists. » was
