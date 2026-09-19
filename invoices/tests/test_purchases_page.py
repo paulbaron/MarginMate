@@ -1,9 +1,10 @@
-"""The "Achats" page: invoices, tickets and invoice types in one place.
+"""The "Achats" page: invoices, tickets, their sources and suppliers in one
+place.
 
 One card adds purchases - ticket photos, a supplier's PDF, or a gather of
-Metro and the mailbox - and shows the import as it runs; below it, three
-tabs: every document, what waits to be checked, and where invoices come
-from. What was just added is found in the list without leaving the page: an
+Metro and the mailbox - and shows the import as it runs; below it, four
+tabs: every document, what waits to be checked, where invoices come from and
+who they are filed under (test_sources_and_suppliers). What was just added is found in the list without leaving the page: an
 import's documents are a filter of their own, a new PDF invoice is
 highlighted and opened in place, and checking an import's tickets one after
 the other ends on that import. OCR and parsers never run: they are replaced.
@@ -21,6 +22,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from invoices.models import Invoice, InvoiceType, ReceiptBatch, ScrapeJob, Supplier
+from invoices.parsers import LLM_PARSER_KEY
 from invoices.tests.page_posts import page_post
 from tests.factories import (
     make_invoice,
@@ -73,18 +75,27 @@ class PurchasesPageTests(TestCase):
         self.assertIn('data-initial-tab=""', opening)
         self.assertEqual(html.count("data-import-tab="), 2)
 
-    def test_the_three_tabs_and_what_waits_in_them(self):
+    def test_the_four_tabs_and_what_waits_in_them(self):
         undated(make_invoice(supplier=self.metro, invoice_number="SANS-DATE"))
         make_invoice_type(supplier=self.metro, name="Metro - Factures")
         response = self.client.get(self.url)
         tabs = response.context["tabs"]
-        self.assertEqual([tab["label"] for tab in tabs], ["Documents", "À vérifier", "Sources"])
-        self.assertEqual([tab["count"] for tab in tabs], [4, 2, InvoiceType.objects.count()])
-        self.assertEqual([tab["active"] for tab in tabs], [True, False, False])
+        self.assertEqual(
+            [tab["label"] for tab in tabs], ["Documents", "À vérifier", "Sources", "Enseignes et fournisseurs"]
+        )
+        self.assertEqual(
+            [tab["count"] for tab in tabs],
+            [4, 2, InvoiceType.objects.count(), Supplier.objects.exclude(parser_key=LLM_PARSER_KEY).count()],
+        )
+        self.assertEqual([tab["active"] for tab in tabs], [True, False, False, False])
 
     def test_every_tab_is_the_same_page(self):
         make_invoice_type(supplier=self.metro, name="Metro - Factures")
-        for name, label in (("invoices:receipt_queue", "À vérifier"), ("invoices:invoice_type_list", "Sources")):
+        for name, label in (
+            ("invoices:receipt_queue", "À vérifier"),
+            ("invoices:invoice_type_list", "Sources"),
+            ("invoices:supplier_list", "Enseignes et fournisseurs"),
+        ):
             with self.subTest(tab=name):
                 response = self.client.get(reverse(name))
                 self.assertEqual([tab["label"] for tab in response.context["tabs"] if tab["active"]], [label])
@@ -296,12 +307,11 @@ class PurchasesPageTests(TestCase):
         self.assertEqual(json.loads(gathered["HX-Trigger"]), {"documents-changed": True})
         self.assertContains(self.client.get(self.url), 'hx-trigger="documents-changed from:body"')
 
-    def test_the_sources_tab_names_the_ticket_shops(self):
+    def test_the_suppliers_tab_names_the_ticket_shops(self):
         self.sabbh.ticket_header = "EPICERIE SABAH"
         self.sabbh.save()
-        response = self.client.get(reverse("invoices:invoice_type_list"))
-        self.assertContains(response, "EPICERIE SABAH")
-        self.assertContains(response, reverse("invoices:invoice_type_create"))
+        self.assertContains(self.client.get(reverse("invoices:supplier_list")), "EPICERIE SABAH")
+        self.assertContains(self.client.get(reverse("invoices:invoice_type_list")), reverse("invoices:invoice_type_create"))
 
 
 class CheckingAnImportTests(TestCase):

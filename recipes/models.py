@@ -800,7 +800,7 @@ class RecipeIngredient(models.Model):
 
     def clean(self):
         if bool(self.stock_type_id) == bool(self.sub_recipe_id):
-            raise ValidationError("Choisissez soit un type de stock, soit une recette - pas les deux, pas aucun.")
+            raise ValidationError("Choisissez soit un article, soit une recette - pas les deux, pas aucun.")
 
     def unit_cost_ht(self, sub_index: int = 0) -> Decimal:
         """Cost per unit of whichever source (stock item or sub-recipe) this
@@ -914,7 +914,7 @@ class SaleDocumentLine(models.Model):
 
     def clean(self):
         if bool(self.recipe_id) == bool(self.stock_type_id):
-            raise ValidationError("Choisissez soit une recette, soit un type de stock — pas les deux.")
+            raise ValidationError("Choisissez soit une recette, soit un article — pas les deux.")
 
     @property
     def source_name(self) -> str:

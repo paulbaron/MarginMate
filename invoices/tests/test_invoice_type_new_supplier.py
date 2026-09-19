@@ -110,7 +110,7 @@ class MovedTypeTests(TestCase):
         came = SupplierChange.objects.get(supplier=self.mobile, kind=SupplierChange.Kind.TYPES)
         self.assertEqual(left.operation, came.operation)
         fiche = self.client.get(reverse("invoices:supplier_detail", args=[self.box.pk]))
-        self.assertContains(fiche, "Rendre ce type à Box Exemple")
+        self.assertContains(fiche, "Rendre cette source à Box Exemple")
         self.client.post(reverse("invoices:supplier_change_undo", args=[self.box.pk, left.pk]))
         self.invoice_type.refresh_from_db()
         self.assertEqual(self.invoice_type.supplier, self.box)
@@ -122,7 +122,7 @@ class MovedTypeTests(TestCase):
         other = make_supplier(code="AUTRE_X", name="Autre Exemple", parser_key="", expenses_only=True)
         InvoiceType.objects.filter(pk=self.invoice_type.pk).update(supplier=other)
         response = self.client.post(reverse("invoices:supplier_change_undo", args=[self.box.pk, left.pk]))
-        self.assertIn("n'est plus chez Mobile Exemple", " ".join(messages_of(response)))
+        self.assertIn("n'est plus chez Mobile Exemple (elle récupère pour Autre Exemple)", " ".join(messages_of(response)))
         self.invoice_type.refresh_from_db()
         self.assertEqual(self.invoice_type.supplier, other)
 

@@ -57,7 +57,7 @@ def ingredient_source_choices(parent_recipe=None) -> list:
         (f"recipe:{r.id}", f"{r.name} ({r.get_yield_unit_display()})")
         for r in recipes_usable_as_ingredients(exclude_pk=exclude_pk)
     ]
-    return [("", "---------"), ("Types de stock", stock_choices), ("Recettes", recipe_choices)]
+    return [("", "---------"), ("Articles", stock_choices), ("Recettes", recipe_choices)]
 
 
 class RecipeForm(forms.ModelForm):
@@ -313,7 +313,7 @@ class SaleDocumentLineForm(BlankRowTolerantModelForm):
             return cleaned
         source = cleaned.get("source")
         if not source:
-            self.add_error("source", "Choisissez une recette ou un type de stock.")
+            self.add_error("source", "Choisissez une recette ou un article.")
             return cleaned
         kind, _, id_str = source.partition(":")
         if kind == "recipe":
@@ -331,7 +331,7 @@ def sale_source_choices() -> list:
         ("", "---------"),
         ("Recettes", [(f"recipe:{r.pk}", r.name) for r in Recipe.objects.order_by("name")]),
         (
-            "Types de stock",
+            "Articles",
             [
                 (f"stock:{st.pk}", f"{st.name} ({st.get_unit_display()})")
                 for st in StockType.objects.order_by("name")

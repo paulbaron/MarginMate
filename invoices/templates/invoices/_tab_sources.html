@@ -1,27 +1,31 @@
 {% comment %}
-Where purchases come from: the invoice types a gather looks for (mailbox
-patterns, the parser that reads them), and the shops a ticket is recognised by.
+Where purchases come from: the sources of invoices (InvoiceType) a gather
+fetches - a mailbox search or a customer portal, each for one supplier, and
+the reader for what it brings. The suppliers have their own tab
+(_tab_suppliers.html).
 {% endcomment %}
 <div class="section-head">
     <div>
-        <h2>Types de factures</h2>
+        <h2>Sources de factures</h2>
         <p class="muted">
-            Comment reconnaître les e-mails d'un fournisseur dans la boîte partagée (expéditeur, objet, contenu)
-            et quel lecteur appliquer à ses factures. « Récupérer » parcourt tous les types actifs.
+            D'où arrivent les factures : la boîte mail partagée (les e-mails d'un fournisseur, reconnus à leur
+            expéditeur, objet ou contenu) ou l'espace client d'un fournisseur. Chaque source récupère pour un seul
+            fournisseur et range chez lui ce qu'elle trouve, lu par le lecteur choisi. « Récupérer » parcourt
+            toutes les sources actives.
         </p>
     </div>
-    <a class="btn" href="{% url 'invoices:invoice_type_create' %}">+ Nouveau type</a>
+    <a class="btn" href="{% url 'invoices:invoice_type_create' %}">+ Nouvelle source</a>
 </div>
 {% if invoice_types %}
     <div class="table-wrap">
-    <table data-table data-table-label="types">
+    <table data-table data-table-label="sources">
         <thead>
             <tr>
                 <th>Nom</th>
                 <th>Fournisseur</th>
-                <th>Source</th>
+                <th>Canal</th>
                 <th>Lecteur</th>
-                <th>Actif</th>
+                <th>Active</th>
             </tr>
         </thead>
         <tbody>
@@ -29,7 +33,7 @@ patterns, the parser that reads them), and the shops a ticket is recognised by.
             <tr>
                 <td><a href="{% url 'invoices:invoice_type_update' invoice_type.pk %}">{{ invoice_type.name }}</a></td>
                 <td class="muted"><a href="{% url 'invoices:supplier_detail' invoice_type.supplier.pk %}">{{ invoice_type.supplier.name }}</a></td>
-                <td class="muted">{{ invoice_type.get_source_kind_display }}</td>
+                <td class="muted">{{ invoice_type.channel }}</td>
                 {# Empty means the one reader, not the AI - which is a supplier of its own. #}
                 <td class="muted">{{ invoice_type.parser_key|default:"Lecteur générique" }}</td>
                 <td>{% if invoice_type.is_active %}✅{% else %}—{% endif %}</td>
@@ -40,87 +44,16 @@ patterns, the parser that reads them), and the shops a ticket is recognised by.
     </div>
 {% else %}
     <div class="empty-state">
-        Aucun type de facture pour le moment.
-        <a class="btn" href="{% url 'invoices:invoice_type_create' %}">+ Nouveau type</a>
+        Aucune source de factures pour le moment.
+        <a class="btn" href="{% url 'invoices:invoice_type_create' %}">+ Nouvelle source</a>
     </div>
 {% endif %}
-
-<div class="section-head" id="fournisseurs">
-    <div>
-        <h2>Enseignes et fournisseurs sans lecteur dédié</h2>
-        <p class="muted">
-            Cliquez sur une ligne pour voir ce qui range ses documents chez lui, le modifier
-            ou voir son historique. Un document est rangé chez l'enseigne dont il porte l'en-tête ou les identifiants
-            (n° SIREN, téléphone, site appris sur ses documents, jamais ce que les documents d'un autre fournisseur
-            impriment aussi — votre propre numéro, par exemple). Un en-tête ajoute des documents, il n'en retire aucun.
-            Un fournisseur de <strong>charges</strong> (abonnement, loyer, eau, électricité…) a ses factures
-            enregistrées par poste ou par taux de TVA, jamais en produits à classer.
-        </p>
-    </div>
-    <div class="actions">
-        <a class="btn" href="{% url 'invoices:supplier_create' %}">+ Nouveau fournisseur</a>
-    </div>
-</div>
-<div class="table-wrap">
-<table data-table data-table-label="enseignes">
-    <thead>
-        <tr><th>Enseigne</th><th>Reconnue par</th><th class="num">Documents</th><th>Nature</th></tr>
-    </thead>
-    <tbody>
-        {% for shop in ticket_shops %}
-            <tr data-row-href="{{ shop.url }}">
-                <td>
-                    <a href="{{ shop.url }}">{{ shop.name }}</a>
-                    {% if shop.to_see %} <span class="status-pill status-NEEDS_REVIEW" title="{{ shop.to_see }} changement{{ shop.to_see|pluralize }} à voir sur sa fiche">À voir</span>{% endif %}
-                </td>
-                <td>
-                    {% if shop.names_shop %}{{ shop.names_shop|join:", " }}
-                    {% elif shop.is_till %}<span class="muted">sa caisse, réglée dans l'application</span>
-                    {% elif not shop.document_count %}<span class="muted">rien encore : attend son premier document</span>
-                    {% else %}<span class="muted">rien : ses documents vous sont demandés à l'import</span>{% endif %}
-                    {% comment %}
-                    Only where it says something: documents filed here that do
-                    not print the header. A header on every one of them needs
-                    no line.
-                    {% endcomment %}
-                    {% if shop.ticket_header and shop.headerless %}
-                        <br><span class="muted">en-tête sur {{ shop.with_header }} de ses {{ shop.document_count }} documents · {{ shop.headerless }} ne le porte{{ shop.headerless|pluralize:"nt" }} pas</span>
-                    {% endif %}
-                </td>
-                <td class="num" data-sort="{{ shop.last_date|date:'Y-m-d' }}">
-                    {% if shop.document_count %}
-                        <a href="{% url 'invoices:invoice_list' %}?fournisseur={{ shop.pk }}">{{ shop.document_count }}</a>
-                        {% if shop.last_date %}<br><span class="muted">dernier le {{ shop.last_date|date:"d/m/Y" }}</span>{% endif %}
-                    {% else %}<span class="muted">0</span>{% endif %}
-                </td>
-                <td>{% if shop.expenses_only %}Charges{% else %}Produits{% endif %}</td>
-            </tr>
-        {% endfor %}
-    </tbody>
-</table>
-</div>
 
 {% comment %}
-The suppliers with a reader of their own are recognised the same way - their
-header, what their documents print - and were shown nowhere: what named UBA
-by a customer's phone number could not even be seen.
+The suppliers were listed here, under #fournisseurs. A bookmark of that
+anchor cannot be redirected (a fragment never reaches the server): it lands
+on this line instead.
 {% endcomment %}
-{% if own_readers %}
-    <h3>Fournisseurs avec leur propre lecteur</h3>
-    <div class="table-wrap">
-    <table data-table data-table-sort-only data-table-label="lecteurs">
-        <thead><tr><th>Fournisseur</th><th>Reconnu par</th></tr></thead>
-        <tbody>
-            {% for supplier in own_readers %}
-                <tr data-row-href="{{ supplier.url }}">
-                    <td>
-                        <a href="{{ supplier.url }}">{{ supplier.name }}</a>
-                        {% if supplier.to_see %} <span class="status-pill status-NEEDS_REVIEW">À voir</span>{% endif %}
-                    </td>
-                    <td>{% if supplier.names_shop %}{{ supplier.names_shop|join:", " }}{% else %}<span class="muted">son lecteur seul (en-tête de ses factures)</span>{% endif %}</td>
-                </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-    </div>
-{% endif %}
+<p class="muted" id="fournisseurs">
+    <a href="{% url 'invoices:supplier_list' %}">Les enseignes et fournisseurs ont leur onglet →</a>
+</p>

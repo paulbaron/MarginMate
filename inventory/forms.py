@@ -21,17 +21,36 @@ class StockTypeForm(forms.ModelForm):
         widgets = {
             "category": forms.TextInput(attrs={"list": "category-datalist", "autocomplete": "off"}),
         }
+        # Django's own is "Stock type with this Name already exists.", in
+        # English, and it is what a rename collision printed on the page.
+        error_messages = {"name": {"unique": "Un article porte déjà ce nom."}}
 
 
 def product_display_name(product: Product) -> str:
     return f"{product.raw_name} — {product.supplier.name}"
 
 
-STOCK_TYPE_ENTRY_SUFFIX = " (type de stock)"
+STOCK_TYPE_ENTRY_SUFFIX = " (article)"
+# What the suffix read before a StockType became an « article » (19/09). A
+# count in progress is kept in the browser as it was typed (the draft net of
+# stock_take_form.html), so an entry carrying it has to keep resolving.
+OLD_STOCK_TYPE_ENTRY_SUFFIXES = (" (type de stock)",)
 
 
 def stock_type_entry_name(stock_type: StockType) -> str:
     return f"{stock_type.name}{STOCK_TYPE_ENTRY_SUFFIX}"
+
+
+def current_entry_name(name: str) -> str:
+    """`name` with an old stock-item suffix put back to today's one."""
+    for old in OLD_STOCK_TYPE_ENTRY_SUFFIXES:
+        if name.endswith(old):
+            return name[: -len(old)] + STOCK_TYPE_ENTRY_SUFFIX
+    return name
+
+
+def is_stock_type_entry(name: str) -> bool:
+    return current_entry_name(name).endswith(STOCK_TYPE_ENTRY_SUFFIX)
 
 
 def _unit_choices_for_product(product: Product, is_discrete: bool) -> tuple[list[list[str]], str]:
@@ -86,7 +105,7 @@ class EntryResolver:
 
     def stock_type(self, name: str) -> StockType | None:
         self._load()
-        return self._stock_types.get(name)
+        return self._stock_types.get(current_entry_name(name))
 
     def first_purchase(self, product: Product):
         """When this product was first delivered, or None if nothing dated
@@ -170,7 +189,7 @@ class StockTakeForm(forms.ModelForm):
 
 class StockTakeLineForm(forms.ModelForm):
     entry_search = forms.CharField(
-        label="Produit ou type de stock",
+        label="Produit ou article",
         required=True,
         widget=forms.TextInput(attrs={"list": "stock-take-entry-datalist", "autocomplete": "off"}),
     )
@@ -209,13 +228,13 @@ class StockTakeLineForm(forms.ModelForm):
             return cleaned
         name = (cleaned.get("entry_search") or "").strip()
         if not name:
-            self.add_error("entry_search", "Choisissez un produit ou un type de stock.")
+            self.add_error("entry_search", "Choisissez un produit ou un article.")
             return cleaned
         unit = cleaned.get("unit")
-        if name.endswith(STOCK_TYPE_ENTRY_SUFFIX):
+        if is_stock_type_entry(name):
             stock_type = self.resolver.stock_type(name)
             if stock_type is None:
-                self.add_error("entry_search", "Type de stock introuvable - choisissez-en un dans la liste proposée.")
+                self.add_error("entry_search", "Article introuvable - choisissez-en un dans la liste proposée.")
                 return cleaned
             first = self.resolver.stock_type_first_purchase(stock_type)
             if self._too_new(first):

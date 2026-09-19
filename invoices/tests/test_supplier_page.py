@@ -20,24 +20,27 @@ def messages_of(response):
     return [str(message) for message in get_messages(response.wsgi_request)]
 
 
-class SourcesTabTests(TestCase):
+class SuppliersTabTests(TestCase):
+    """Achats' « Enseignes et fournisseurs » tab (the foot of the Sources tab
+    until 19/09)."""
+
     def test_rows_lead_to_the_suppliers_page(self):
         shop = make_supplier(code="EPICERIE_X", name="Epicerie Exemple", parser_key="", ticket_header="EPICERIE EXEMPLE")
         make_invoice(supplier=shop, ocr_text="EPICERIE EXEMPLE\nTOTAL 3,00")
-        page = self.client.get(reverse("invoices:invoice_type_list"))
+        page = self.client.get(reverse("invoices:supplier_list"))
         fiche = reverse("invoices:supplier_detail", args=[shop.pk])
         self.assertContains(page, f'data-row-href="{fiche}"')
         self.assertContains(page, f'<a href="{fiche}">Epicerie Exemple</a>', html=True)
 
     def test_a_supplier_with_nothing_yet_is_not_called_a_known_till(self):
         make_supplier(code="NOUVEAU_X", name="Nouveau Exemple", parser_key="")
-        page = self.client.get(reverse("invoices:invoice_type_list"))
+        page = self.client.get(reverse("invoices:supplier_list"))
         self.assertContains(page, "attend son premier document")
         self.assertNotContains(page, "caisse déjà connue")
 
     def test_charges_is_not_a_box_saving_on_a_click(self):
         make_supplier(code="LOYER_X", name="Loyer Exemple", parser_key="", expenses_only=True)
-        page = self.client.get(reverse("invoices:invoice_type_list"))
+        page = self.client.get(reverse("invoices:supplier_list"))
         self.assertNotContains(page, 'name="expenses_only"')
         self.assertContains(page, "Charges")
 
@@ -167,7 +170,7 @@ class FichePageTests(Subscriptions):
 class PagesItHasNotTests(TestCase):
     def test_the_ai_pseudo_supplier_has_no_page(self):
         response = self.client.get(reverse("invoices:supplier_detail", args=[Supplier.objects.get(code="OTHER").pk]))
-        self.assertRedirects(response, reverse("invoices:invoice_type_list"))
+        self.assertRedirects(response, reverse("invoices:supplier_list"))
 
     def test_a_till_has_no_header_to_set(self):
         till = make_supplier(code="FRANPRIX", name="Franprix", parser_key="FRANPRIX")

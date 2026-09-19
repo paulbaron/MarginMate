@@ -139,6 +139,35 @@ What it knows, all arithmetic:
   alone also makes what was paid. Further down, only rows saying what makes
   their amount count, so a charge included in one of them ("Dont éco-part
   DEEE 0,02") no longer breaks the run;
+- a line opening on **« dont »** ("of which") prints part of the item above
+  and is **never an item** (`INCLUDED_RE`): "Dt Ecopart. unit. EcoMob 0.72"
+  under a tool box - Leroy Merlin's till abbreviates it -, "- Dont DDS 0.20"
+  at Mr.Bricolage's. Read as items, those eco-participations put four of
+  Leroy Merlin's seven tickets wrong: the lines 0,92 € over what was paid, an
+  included cent passing within the tolerance (6,00 € for 5,99 €), a shelf
+  whose sub-total no longer restated it and came out as the item instead. A
+  **sub-total** is stepped over when it restates every item read or **those
+  since the last one** (that till prints a sale in blocks, each ending on its
+  own) - never a row printing what no sub-total prints (a VAT code, an EAN,
+  a count and its unit price), nor a row with no name of its own that
+  completes the name printed on the line just above it: a pack of four
+  after two packs of two costs what they do, and so can a worktop's cut on
+  the store's own reference (no EAN); stepped over, either left the block's
+  sub-total to be filed as the item, and every check passed. That row
+  prints its reference beside the amount: an amount **alone** under a name
+  is still a sub-total, printed on two lines ("SOUS TOTAL" / "9.00") - kept
+  as the item « SOUS TOTAL », it made what was paid with the next sale's
+  items, silently too. **A size in
+  one word** ("76X46", "21X35", "16*25") is no count, unless its two numbers
+  multiply into an amount the line prints ("TASSE 2x4 8,00" is two at 4,00:
+  `_is_size`, the money decides): read as 76, a rug's name became a detail
+  line and its price went with it. Measured on the 627 documents the reader
+  reads (scratch copy, 19/09): the seven tickets match their checked lines
+  (three before), 470 documents match against 468, and the three no longer
+  matching are checked lines keeping an old misreading - a slate board filed
+  as "Total" (its ticket prints 2 x 7,95), 16 clamps and 21 battens that are
+  a size. The sub-total's row guards and the amount guards change none of
+  those readings;
 - a **row printing only a product code** takes the name, and the count, of
   the line that named that code above it (`_take_linked_name`): an
   electronics till prints "1  5550001-ENCEINTE PORTABLE XL", then
@@ -163,7 +192,10 @@ What it knows, all arithmetic:
   of a name is a count when the ticket says how many articles it sold
   ("3 ARTICLE(S)", `_count_from_articles`). A count in front of the name
   stays **out of the name** (`_without_leading_count`), or the same
-  champagne bought by six and by twelve is two products that never meet;
+  champagne bought by six and by twelve is two products that never meet -
+  as a whole number only: cut as a prefix, a count of 2 took the first digit
+  off an article number ("2000123"), on 19 rows of Metro's invoices when the
+  ticket reader reads them;
 - a **row printing its price and its amount both ways**, HT and TTC, with no
   tax column ("18  4,50  5,40  81,00  97,20") is read by `_ht_ttc_row`:
   nothing on it adds up, so what proves it is one French rate turning both
@@ -332,14 +364,16 @@ A subscription, a rent, a water bill: there is no product behind them and
 nothing to classify, so `Supplier.expenses_only` (switched from the
 supplier's page, « changer… », behind a confirmation saying what it redoes -
 `importing.redo_as_expenses`, reading each document again from the text it
-kept; the box on the Sources tab saved on a click, and a POST from a page
-still showing it now gets the confirmation) files them by
+kept; a box on the suppliers' list, then on the Sources tab, saved on a
+click, and a POST from a page still showing it now gets the confirmation)
+files them by
 `importing.charge_reading` instead of resolving products. Its lines land on
 `Product.is_expense` products, which reach no stock page, no review queue
-and no stock movement; **Produits** shows what they cost in a fold of its
+and no stock movement; **Produits & charges** shows what they cost in a fold of its
 own ("Charges et abonnements", `inventory.views.charge_suppliers`, over the
-stock-take window or the last twelve months) - charges are not stock, but
-they are spending.
+stock-take window or the last twelve months; outside a period the headline
+also gives their twelve months as « Charges (TTC) », beside « Total
+acheté ») - charges are not stock, but they are spending.
 
 **`Product.is_expense` follows its supplier**, both ways
 (`replace_invoice_lines`, `importing.stop_expenses` when the box is unticked,
@@ -385,6 +419,46 @@ set by `_expense_line` from the figures the document prints): 33,33 € HT at
 20% works back out to 40,00 € where the bill says 39,99 €, and 39,99 € is
 what leaves the bank. Everything that shows what a charge cost adds those
 up, `inventory.views.charge_suppliers` included.
+
+**A credit on a charge is a line like any other**: a count of 1 and a
+negative amount (`LineCorrectionForm`, `charge=`). An electricity bill takes
+the month's subscription back at 5,5 % and bills it again at 20 %, printing
+-2,76 € HT at 5,5 %; the correction page refused it ("Un retour a une
+quantité et un montant négatifs" - the guard against stock worth less than
+nothing, and a charge has no stock, bar the one below), so that bill could
+not be entered at all - nor two rent statements saved untouched, whose deposit given back the
+charge reading files the same way (-3,00 at a count of 1). The count stays
+the one typed: nothing reads a charge's count, and at -1 its unit price would
+read as a charge. A count of -1 at a positive amount is still refused (the
+count says credited, the money charged), and goods keep the guard. Every
+total adds the credit with its sign - `Invoice.total_ttc`, the bank match,
+the charges fold and its rows - and HT and TTC convert as for a positive
+amount, half away from zero. Validated on the page, a charge takes its state
+and its own checks from its total, the one just typed included
+(`charge_state`, in `views._save_corrections`): kept from the import, "Total
+de la charge" went on saying a total typed there was never read, and a
+charge saved with none came out settled. The ticket reader still drops the
+minus of a VAT row (`amount_candidates` is unsigned): that bill was filed at
++2,76 € on its 5,5 % row, its total unread, and waits for the credit to be
+typed.
+
+**Where there is stock, the guard stands** - on a charge too. A product a
+stock item claimed stays one when its supplier turns to charges
+(`redo_as_expenses`: it is stock after all), and a line on it books a
+movement like any line of goods; relaxed on every row of a charge, a credit
+typed there was stock at -30 € the unit. So a charge takes a credit at a
+count of 1 only while none of its supplier's products is stock
+(`views._correction_page`) - the supplier's products rather than the stored
+line's, since a row lands on a product by its name once saved, and a row
+added or renamed onto the stock item is that item (no such supplier on
+19/09). A supplier **leaving charges** turns such credits into returns
+(`importing.stop_expenses`, counted on the confirmation page by
+`charge_credits`), and so does a document moved from charges to a
+supplier of goods (`receipts.move_documents`; both through
+`credit_as_return`): the count negative, the amount as it was. Kept at 1, the
+goods guard refused the row on a document saved untouched, and classifying
+its poste booked stock at a negative unit cost - on 19/09, the three
+deposits given back on two rent statements.
 
 **Every charge opens like a stock item.** The charges fold lives inside
 `#catalogue`, so the page's own toggle script reaches it: a row opens on the
@@ -507,6 +581,27 @@ typed half way is refused rather than half read. On the real data that took
 21 unanswerable failures to 6, every one of them pointing at a field: three
 tickets whose lines and printed table genuinely disagree (one by 1,25 €),
 two whose lines miss the total, one charge whose total was never read.
+
+**The HT check follows the lines as they stand, like the sum**
+(`views._checks_context`, `ht_check`). Validating did rebuild it from the
+lines as saved, but under the label the reading writes too, and the page
+marked any check carrying a `READING_CHECKS` label "(à la lecture du
+ticket)": all 445 documents holding it on 19/09 - three tickets whose
+reading failed it passing under that mark once corrected (two Leroy Merlin,
+read with each item's eco-participation as an item), and the three still
+wrong blamed on the reading. Nor did it move while lines were typed. The
+page now works it out from its lines and its VAT table, and the script
+follows both as they are typed (each line after its promotion, a cent of
+slack a line, as `vat_table_checks`). With no table it is hidden, and a stored one can only
+be the reading's - validating without a table drops it - so that one stays
+marked as read until a table is typed. What stays "as read" after
+validating is about the reading, not the lines: "Confiance OCR", the shop
+checks, an unread total nobody typed. It is a **ticket's** (a charge's
+too, opened as one): a supplier's invoice never showed nor stored it, and
+its lines leave out what the reconciliation adds
+(`Invoice.reconciliation_adjustment`, a duty) where the printed base counts
+it - a table typed there exactly as printed failed it, on 68 of the 84
+invoices carrying one.
 
 The page also **reads the document again** ("Relire le document",
 `receipts.reread_document`): the photo through OCR, or the PDF through its
@@ -699,8 +794,8 @@ that one not its own is moved from its own page (`views._say_headerless`).
 Giving a header never takes a second subscription's documents out of a
 supplier: two subscriptions are two suppliers (next paragraph).
 
-**One source, one supplier.** A type files what it fetches under its
-supplier, whatever it prints (below), so two sources of one company -
+**One source, one supplier.** A source (`InvoiceType`) files what it fetches
+under its supplier, whatever it prints (below), so two sources of one company -
 Free's box and its mobile line - are two suppliers from the start, each
 learning what its own documents print. Filed as one, they needed a page to
 take one subscription back out: a split, chosen, previewed inside a
@@ -710,7 +805,7 @@ that only exists when a source is filed under another's supplier. The
 owner removed it on 19/09 as unneeded, its history kind (`SPLIT`) with it:
 no split had ever been done. The one real case was fixed the same day by a
 data operation. The owner had created Free Mobile and moved the mobile
-portal's type to it from the type form (`TYPES`) - left behind, a type
+portal's source to it from the source form (`TYPES`) - left behind, a source
 files what it fetches back under Free; then Free Mobile's seven bills,
 filed under Free by its SIREN and web sites, went over together through
 `move_documents`. Free Mobile learned its SIREN and web sites but not the
@@ -718,7 +813,7 @@ customer's phone (UBA's documents print it too), Free kept its header
 and its support site, every box bill is recognised as Free and every
 mobile bill as Free Mobile, and no other document moved. A second
 subscription found under one supplier later is the same fix: a supplier of
-its own, its type moved to it, then its documents.
+its own, its source moved to it, then its documents.
 
 **Documents of one source move together** (`receipts.move_documents`, the
 one definition of a move; `move_to_shop` is it for one document, and a
@@ -760,18 +855,23 @@ to the import's message): the headers of **two suppliers** on one document,
 neither inside the other - the longest used to win, and a mobile bill
 advertising the box would have gone to the box - and **a header against a
 company number** another supplier learned. A header still beats another
-supplier's phone or web site. The Sources tab lists every supplier with
-what names it, those with a reader of their own too (UBA, Metro), and how
-many of a shop's documents print its header; a row opens its page.
+supplier's phone or web site. Achats' « Enseignes et fournisseurs » tab
+(`supplier_list`, `workspace._suppliers`) lists every supplier with what
+names it and the sources fetching for it, those with a reader of their own
+too (UBA, Metro), and how many of a shop's documents print its header; a
+row opens its page.
 
 **A supplier has a page of its own** (`supplier_views.py`,
 `/invoices/fournisseurs/<pk>/`): what files its documents under it (header,
 identifiers retained - « Retirer » -, printed but not retained with why -
 « Retenir » when the rule would keep it -, set aside - « Ne plus
-l'écarter »), its invoice types, its history with an undo per change, and
-« Modifier » and « Supprimer… », the latter disabled with the reason when it
-cannot be (a till, a reader of its own, documents filed, a type fetching for
-it). Every action answers where it was taken and is recorded; an undo is
+l'écarter »), its sources (« + Nouvelle source pour X »; Metro has none, and
+says its own module fetches it - `workspace.OWN_MODULE`, what the gather
+card lists it by), its history with
+an undo per change, and « Modifier » and « Supprimer… », the latter disabled
+with the reason when it cannot be (a till, a reader of its own, documents
+filed, a source fetching for it). It leads back to « ← Achats · Enseignes et
+fournisseurs ». Every action answers where it was taken and is recorded; an undo is
 recorded too, marked with what it undoes (`data["undoes"]`), and has no
 undo of its own - offered one, it redid the change in one click, nothing
 shown first; posted by hand, it is refused. A value the page did not offer
@@ -780,11 +880,12 @@ name whatever its case, accented capitals included (`supplier_named`:
 SQLite's case-blind comparison is ASCII only).
 
 - **Created before its first document** (`supplier_create`, « + Nouveau
-  fournisseur » on Sources, or « + Nouveau fournisseur… » in the invoice type
-  form, saved with the type in one transaction - a type refused leaves no
-  supplier). A new source had to name an existing supplier, and one never
-  sent a document did not exist. Where its invoices will come from sends
-  the next page: the type form, filled in (`?fournisseur=&source=&retour=`).
+  fournisseur » on « Enseignes et fournisseurs », or « + Nouveau
+  fournisseur… » in the source form, saved with the source in one
+  transaction - a source refused leaves no supplier). A new source had to
+  name an existing supplier, and one never sent a document did not exist.
+  Where its invoices will come from sends the next page: the source form,
+  filled in (`?fournisseur=&source=&retour=`).
   Its creation is undone by deleting it, while nothing rests on it.
 - **Modified after a look** (`supplier_edit`): « Vérifier les changements »
   says what a rename takes along (a supplier of charges: the lines and the
@@ -794,7 +895,7 @@ SQLite's case-blind comparison is ASCII only).
   on how many of its documents, on how many of others', refused by
   `check_header`) - nothing saved; the save applies only if the supplier is
   as it was checked. One with no documents saves in one step.
-- **Deleted only when empty** (`supplier_delete`): no document, no type;
+- **Deleted only when empty** (`supplier_delete`): no document, no source;
   its unused products, known prices, payee names and history go with it,
   said before.
 - **Its first document** is recorded, to be seen (`FIRST_DOCUMENT`,
@@ -802,7 +903,7 @@ SQLite's case-blind comparison is ASCII only).
   (one recognised by its header teaches nothing). Nothing else vouches for
   a first reading. Suppliers waiting for theirs come first in every import
   choice (`WAITING_GROUP`).
-- **A type files what it fetches under its supplier, whatever it prints -
+- **A source files what it fetches under its supplier, whatever it prints -
   and a document printing what names another supplier teaches nothing**
   (`type_supplier_doubt`, `by_type`: another supplier's header, till or
   learned figures - or the company numbers of others printed beside this
@@ -816,12 +917,13 @@ SQLite's case-blind comparison is ASCII only).
   number the next time it learned; `learn_shop_identifiers` too), and is
   answered by a person: validated on its page (it then teaches, a digital
   invoice included) or moved (`move_documents`). It is not its supplier's
-  first document either: the next one, which teaches, is. A type moved to another
-  supplier is recorded on both and given back from either (`TYPES`); the
-  documents it already fetched stay where they were filed, and the message
-  says to change their supplier from their own pages if they are the new
-  one's. A type page drawn before its type moved (a « Rendre » in another
-  tab, or the type saved from another tab) does not move it back unseen
+  first document either: the next one, which teaches, is. A source moved to another
+  supplier is recorded on both and given back from either (`TYPES`, « Rendre
+  cette source à X »); the documents it already fetched stay where they were
+  filed, and the message says to change their supplier from their own pages
+  if they are the new one's. A source's page drawn before it moved (a
+  « Rendre » in another tab, or the source saved from another tab) does not
+  move it back unseen
   (`supplier_was`). Enter in one of its fields saves: « Tester », the
   form's first button, signed in on a portal.
 
@@ -939,7 +1041,9 @@ PROTECT with a 500 (66 real invoices) - and removes the others, refusing
 (`InvoiceLinesInUseError`, nothing saved) to remove one a count was priced
 from. A refund is a negative count **and** a negative amount (Metro's "1-" /
 "15,00-", on 41 real invoices); a positive count at a negative price is
-refused - stock worth less than nothing is what the FIFO guard exists for.
+refused - stock worth less than nothing is what the FIFO guard exists for
+(not on a charge whose supplier holds no stock item: "A credit on a charge",
+above).
 
 ### Gathering invoices
 
@@ -1033,8 +1137,8 @@ levy and discount lines belong to the product above them **across page
 breaks** too.
 
 **A customer portal is data, not code** (`models.WebsiteInvoiceSource`,
-`scrapers/website.py`, set up on Achats → Sources → a type "Récupérées :
-Site web"). The rent's, the water's, the phone's: a login page, the NAMES of
+`scrapers/website.py`, set up on Achats → Sources → « + Nouvelle source »,
+« Canal : Espace client »). The rent's, the water's, the phone's: a login page, the NAMES of
 the two .env variables holding the credentials (never the values - the
 database is copied and shown on screen, a .env is not; they are read from
 the .env file at each run, so a line added counts without a restart), and
@@ -1149,12 +1253,17 @@ naming the page's links when it recognised no invoice: a new site is set
 up from that ("Liens à suivre", the selectors), never by signing in on the
 owner's behalf.
 
-The type form holds both kinds' fields; the kind not chosen is a
+The source form holds both channels' fields (« Réglages : boîte mail » /
+« Réglages : espace client »); the one not chosen is a
 `<fieldset>` **disabled** as well as hidden. Hidden only, its empty
 required field stopped the browser sending the form, silently: "Tester"
-did nothing, and no mailbox type could be saved. The test client posts
+did nothing, and no mailbox source could be saved. The test client posts
 whatever it is given, so only `test_invoice_type_form_browser` (a real
-Chrome) sees that class of bug.
+Chrome) sees that class of bug. It says first that a source fetches for one
+supplier only. Its channel reads « Canal », « E-mail » / « Espace client »
+from the form (`forms.CHANNELS`), not from `InvoiceType.SourceKind`, whose
+labels stay « Email » / « Site web » (admin only): a label changed on the
+model is a migration to apply to the real database, for a word.
 
 The mailbox search asks for BEFORE the day **after** the end date: IMAP's
 BEFORE is exclusive (RFC 3501), and the form's end date is today - this
@@ -1334,7 +1443,7 @@ purchases were booked.
 sale lines hold their stock item with PROTECT. `merge_stock_types` moves them
 all, in one transaction (a count that measured both items becomes one line
 adding both up) - it used to fail on them after the products had already
-moved. Deleting an item still in use, alone or through "supprimer les types
+moved. Deleting an item still in use, alone or through "supprimer les articles
 vides", is refused with where it is used; "vide" means no product and no
 movement, so a loss written down against an item survives.
 
@@ -1363,7 +1472,7 @@ tiny queries, not a slow one — profile with `connection.queries`, not EXPLAIN.
 with their stock items' movements), so prefetching them at the call site
 bought nothing: every recipe was asked three times over - its usage terms,
 its pools, its allocation - and each ask was a query, with another for the
-movements behind it. That is 290 queries to draw **Produits** and 277 for
+movements behind it. That is 290 queries to draw **Produits & charges** and 277 for
 **Écarts**. `recipes.models.variation_scope()` is the memo made for exactly
 this, and wrapping `quantities_sold` and `compute_variance` in one took them
 to 114 and 109. It is scoped, not cached on the instance: a grouping changes
@@ -1474,7 +1583,13 @@ a period contains). The closing count is the only thing chosen; the opening
 one is whichever came before it, exactly as in `compute_variance`.
 
 All time, the ceiling has to be "everything ever bought" — nothing deducts
-sales from the ledger, so that's all there is. Between two counts both ends
+sales from the ledger, so that's all there is. It is the ledger (bought, less
+the losses written down), not the « Acheté » column beside it, which counts
+the purchases alone (`catalogue_context` sums both from one scan; they differ
+only once a loss is recorded). So the red « Vendu », its « ? » and the
+headline's « Vendu > acheté » say « pertes déclarées déduites »: 11 L sold of
+12 L bought, 2 L broken, is red beside an « Acheté » above it, and « vendu
+plus qu'il n'en a été acheté » alone was false. Between two counts both ends
 were physically measured, which gives a far tighter one:
 
 ```
@@ -1607,8 +1722,9 @@ consumption as unexplained. Amounts are capped (`MAX_SUB_VARIATIONS`).
 
 ### Three workspaces, not eight pages
 
-The navigation is **Produits** (stock and the products to classify),
-**Achats** (invoices, tickets, invoice types) and **Recettes & ventes**
+The navigation is **Produits & charges** (what was bought, by article, the
+charges, and the products to classify),
+**Achats** (invoices, tickets, their sources and suppliers) and **Recettes & ventes**
 (recipes, till products, sales), each with the count of what waits there
 (`config/navigation.py` decides which link a page lights up). They were
 separate pages, and checking that something added had landed meant going
@@ -1620,7 +1736,7 @@ back and forth between them. The rules that came with merging them:
   Tabs are links to those addresses; `hx-boost` swaps only `#workspace`, so
   the import card above keeps a running import as it is.
 - **An action answers where it was taken.** A product classified in the
-  Produits side panel gets the panel back with a note and an undo (the undo
+  side panel of Produits & charges gets the panel back with a note and an undo (the undo
   deletes a stock item the classification created - signed, `UNDO_SALT`),
   and `HX-Trigger: catalogue-changed` makes the list reload itself opened on
   that item. A till product linked from its row gets the row back. A PDF
@@ -1657,9 +1773,21 @@ back and forth between them. The rules that came with merging them:
   vérifier" tab counted `TICKET_TO_CHECK` while the page listed
   `receipts.pending_receipts()`, and when charges were left out of one and
   not the other the tab read "102" over an empty page. `pending_receipts`
-  is that Q and nothing else; the same went for the "Produits" badge, which
+  is that Q and nothing else; the same went for the "Produits & charges" badge, which
   counted the postes of charge the page does not list (110 over 97). When a
   count is cheap to get from the list, take it from the list.
+- **Where invoices come from and who they are filed under are two tabs** of
+  Achats (the owner, 19/09): « Sources » lists the sources of invoices
+  (`InvoiceType`), « Enseignes et fournisseurs » (`supplier_list`, which
+  redirected to `types/#fournisseurs` before) every supplier, with a
+  « Sources » column naming the sources fetching for each. Each tab builds
+  only its own list (`workspace._sources`, `_suppliers`): the suppliers' list
+  reads every document's text, and the tab counts are drawn on every page of
+  Achats, so its count is a plain `Supplier` count - amber, the suppliers
+with a change to see (`_changes_to_see`, their rows' « À voir »), as
+« À vérifier » beside it counts what waits. `id="fournisseurs"` stays
+  on the Sources tab as a pointer to the new tab: an old bookmark's fragment
+  never reaches the server, so nothing can redirect it.
 - **Without JavaScript the same forms post and redirect** to the page; the
   in-place answer is chosen on `HX-Request`.
 - **No out-of-band part beside a `<tr>`**: htmx 1.9 parses a row response
@@ -1668,6 +1796,24 @@ back and forth between them. The rules that came with merging them:
   (`to-link-count`, handled in `ui.js`).
 - A page with a side panel is wider (`container-wide`), and the stock list's
   columns are shares, not pixels, so it fits beside the panel.
+
+**The words on screen, and why** (the owner, 19/09: tell the sources of the
+invoices apart from the « Enseignes et fournisseurs », and the Produits page
+"is not a stock but just a list of every spending (charges) + products
+bought"). An `InvoiceType` is a **source** (« source de factures »: one
+mailbox search or one customer portal, always for one fournisseur); a
+`Supplier` is a **fournisseur** (« enseigne » only on ticket screens, where
+it is what the ticket prints); fetching is **Récupérer**. A `StockType` is an
+**article** - never « type de stock » - and a product no article claims yet
+is **à classer** (a poste of charge never is: « poste de charge »). The
+inventory workspace is **Produits & charges**, and its
+all-time figures say what was bought (« Total acheté », « Acheté »), summed
+from `PURCHASE` movements only, so a loss written down later never makes them
+a lie. « Stock » stays where it is true: between two inventaires, what left
+the shelf, what is missing, the losses, the ceiling of « Vendu ». Internal
+names did not follow (models, fields, url names, context keys, `data-persist`
+and localStorage keys, anchors), nor did texts already stored; these notes
+still say "stock item" and "stock page" for the article and that workspace.
 
 ### UI conventions
 

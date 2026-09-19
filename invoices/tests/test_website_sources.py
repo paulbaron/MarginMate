@@ -1,5 +1,5 @@
 """A supplier's customer portal as a source of invoices, configured on the
-"Types de factures" page with no code: its settings, the "Tester" button,
+"Sources" tab with no code: its settings, the "Tester" button,
 and the gather that reads it beside the mailbox and Metro.
 
 The browser never runs here (test_website_scraper_browser.py drives a real

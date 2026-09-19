@@ -11,15 +11,16 @@
     <datalist id="stock-take-entry-datalist"></datalist>
     <script id="entry-data" type="application/json">{{ entry_data|safe }}</script>
     <script id="saved-values" type="application/json">{{ saved_values|safe }}</script>
+    {{ old_entry_suffixes|json_script:"old-entry-suffixes" }}
     <div class="card">
         <form method="post">
             {% csrf_token %}
             {% include "_form_fields.html" %}
 
-            <h3>Produits / types de stock comptés</h3>
+            <h3>Produits / articles comptés</h3>
             <p class="muted">
-                Entrez soit un produit tel qu'il apparaît sur les factures, soit directement un type de
-                stock si vous ne savez pas exactement quel produit c'est. Pour un produit, choisissez
+                Entrez soit un produit tel qu'il apparaît sur les factures, soit directement un article
+                si vous ne savez pas exactement quel produit c'est. Pour un produit, choisissez
                 ensuite l'unité dans laquelle vous avez compté : en bouteilles/unités, ou mesuré
                 directement (ex. un fond de bouteille en litres).
             </p>
@@ -407,6 +408,26 @@ function discardDraft() {
     try { localStorage.removeItem(DRAFT_KEY); } catch (e) { /* nothing to clean up */ }
 }
 
+// An article typed before 19/09 ended in « (type de stock) », and a draft
+// kept from then still says so: renamed as it is restored, so the row finds
+// its units and its price (the server takes the old name too - see
+// forms.OLD_STOCK_TYPE_ENTRY_SUFFIXES).
+var ENTRY_SUFFIX = "{{ entry_suffix|escapejs }}";
+var OLD_ENTRY_SUFFIXES = [];
+try {
+    OLD_ENTRY_SUFFIXES = JSON.parse(document.getElementById("old-entry-suffixes").textContent);
+} catch (e) {
+    // nothing to rename
+}
+
+function currentEntryName(name) {
+    for (var i = 0; i < OLD_ENTRY_SUFFIXES.length; i++) {
+        var old = OLD_ENTRY_SUFFIXES[i];
+        if (name.slice(-old.length) === old) return name.slice(0, -old.length) + ENTRY_SUFFIX;
+    }
+    return name;
+}
+
 function sameAsOnScreen(draft) {
     var current = collectRows();
     if (current.length !== draft.rows.length) return false;
@@ -432,8 +453,9 @@ function restoreDraft(draft) {
     });
 
     draft.rows.forEach(function (saved) {
-        var row = byEntry[saved.entry] || addLineRow();
-        row.querySelector("input[name$='-entry_search']").value = saved.entry;
+        var entryName = currentEntryName(saved.entry);
+        var row = byEntry[entryName] || addLineRow();
+        row.querySelector("input[name$='-entry_search']").value = entryName;
         updateUnitChoices(row, false);
         row.querySelector("input[name$='-counted_quantity']").value = saved.quantity;
         var unit = row.querySelector("select[name$='-unit']");

@@ -24,7 +24,8 @@ from . import supplier_changes
 from .models import Invoice, InvoiceType, Supplier, SupplierChange
 from .parsers import LLM_PARSER_KEY, ticket_parser_for
 
-SOURCES = "invoices:invoice_type_list"
+#: Achats' « Enseignes et fournisseurs » tab, where every supplier is listed.
+SUPPLIERS = "invoices:supplier_list"
 HISTORY_SHOWN = 30
 
 
@@ -46,17 +47,23 @@ def _supplier(request, pk):
     supplier = get_object_or_404(Supplier, pk=pk)
     if supplier.parser_key == LLM_PARSER_KEY:
         messages.info(request, "Ce fournisseur n'a pas de fiche.")
-        return None, redirect(SOURCES)
+        return None, redirect(SUPPLIERS)
     return supplier, None
 
 
 def supplier_list(request):
-    """The suppliers are listed on the Sources tab."""
-    return redirect(reverse(SOURCES) + "#fournisseurs")
+    """"Achats", on the « Enseignes et fournisseurs » tab: who each document
+    is filed under. It was the foot of the Sources tab, under the sources of
+    invoices - two things the owner asked to tell apart (19/09)."""
+    from .workspace import render_purchases
+
+    return render_purchases(request, "fournisseurs")
 
 
 def supplier_detail(request, pk):
+    from .forms import CHANNELS
     from .receipts import has_own_reader, identifier_report, supplier_notices
+    from .workspace import OWN_MODULE
 
     supplier, away = _supplier(request, pk)
     if away is not None:
@@ -71,6 +78,9 @@ def supplier_detail(request, pk):
         change.undo_label = _undo_label(change)
         change.can_undo = change.undone_at is None and bool(change.undo_label)
         change.to_see = change.needs_review and change.reviewed_at is None and change.undone_at is None
+    invoice_types = list(InvoiceType.objects.filter(supplier=supplier).order_by("name"))
+    for invoice_type in invoice_types:
+        invoice_type.channel = CHANNELS.get(invoice_type.source_kind, invoice_type.get_source_kind_display())
     return render(
         request,
         "invoices/supplier_detail.html",
@@ -83,7 +93,9 @@ def supplier_detail(request, pk):
             "document_count": count,
             "first_date": span["first"],
             "last_date": span["last"],
-            "invoice_types": InvoiceType.objects.filter(supplier=supplier).order_by("name"),
+            "invoice_types": invoice_types,
+            # Metro: fetched by the gather's own module, with no source.
+            "own_module": Supplier.objects.filter(OWN_MODULE, pk=supplier.pk).exists(),
             "delete_refused": delete_refused(supplier),
             "changes": changes,
             "fiche": fiche_url(supplier),
@@ -107,7 +119,7 @@ def _undo_label(change) -> str:
         return f"Rétablir « {data['before']} »" if data.get("before") else "Retirer cet en-tête"
     if change.kind == kind.TYPES:
         came_from = change.supplier if data.get("from") == change.supplier_id else change.other_supplier
-        return f"Rendre ce type à {came_from.name}" if came_from is not None else ""
+        return f"Rendre cette source à {came_from.name}" if came_from is not None else ""
     return "Annuler" if change.kind in UNDO else ""
 
 
@@ -147,7 +159,7 @@ def delete_refused(supplier) -> str:
         return f"{count} document{'s' if count > 1 else ''} y {'sont' if count > 1 else 'est'} rangé{'s' if count > 1 else ''}"
     types = InvoiceType.objects.filter(supplier=supplier).count()
     if types:
-        return f"{types} type{'s' if types > 1 else ''} de factures {'le récupèrent' if types > 1 else 'le récupère'}"
+        return f"{types} source{'s' if types > 1 else ''} {'récupèrent' if types > 1 else 'récupère'} pour lui"
     return ""
 
 
@@ -186,7 +198,7 @@ def supplier_create(request):
             "form": form,
             "taken": getattr(form, "taken", None),
             "retour": retour,
-            "back": retour or reverse(SOURCES) + "#fournisseurs",
+            "back": retour or reverse(SUPPLIERS),
         },
     )
 
@@ -197,7 +209,7 @@ def _say_created(request, supplier) -> None:
     if not supplier.ticket_header:
         messages.success(
             request,
-            f"{supplier.name} est créé. Rien ne le reconnaît encore : un type de factures qui récupère pour lui, "
+            f"{supplier.name} est créé. Rien ne le reconnaît encore : une source qui récupère pour lui, "
             "ou l'import où vous le choisissez, lui apprendra ce que ses documents impriment.",
         )
         return
@@ -389,7 +401,7 @@ def supplier_delete(request, pk):
             messages.error(request, f"{name} n'est pas supprimé : un de ses produits sert encore (inventaire, recette).")
             return redirect(fiche)
         messages.success(request, f"{name} est supprimé.")
-        return redirect(reverse(SOURCES) + "#fournisseurs")
+        return redirect(SUPPLIERS)
     return render(
         request,
         "invoices/supplier_delete.html",
@@ -566,13 +578,13 @@ def _undo_types(request, supplier, change) -> bool:
     came_from = Supplier.objects.filter(pk=data.get("from")).first()
     went_to = Supplier.objects.filter(pk=data.get("to")).first()
     if invoice_type is None or came_from is None or went_to is None:
-        messages.error(request, "Ce type ou l'un des deux fournisseurs n'existe plus : rien n'est rendu.")
+        messages.error(request, "Cette source ou l'un des deux fournisseurs n'existe plus : rien n'est rendu.")
         return False
     if invoice_type.supplier_id != went_to.pk:
         messages.error(
             request,
-            f"« {invoice_type.name} » n'est plus chez {went_to.name} (il récupère pour {invoice_type.supplier.name}) : "
-            "rien n'est rendu.",
+            f"« {invoice_type.name} » n'est plus chez {went_to.name} "
+            f"(elle récupère pour {invoice_type.supplier.name}) : rien n'est rendu.",
         )
         return False
     invoice_type.supplier = came_from

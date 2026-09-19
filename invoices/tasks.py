@@ -263,7 +263,7 @@ def gather_invoices_task(
         job.append_log(f"Gather run failed: {detail}\n{traceback.format_exc()}")
         # The card shows the log's last line in plain view: the reason, not
         # the traceback's last frame.
-        job.append_log(f"Échec de la recherche : {detail[:300]}")
+        job.append_log(f"Échec de la récupération : {detail[:300]}")
         job.status = ScrapeJob.Status.FAILED
     finally:
         heartbeat.stop()

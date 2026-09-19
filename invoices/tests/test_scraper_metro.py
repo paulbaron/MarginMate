@@ -178,15 +178,18 @@ class DownloadWindowTests(SimpleTestCase):
 
     def test_downloads_that_keep_failing_stop_the_run(self):
         """Not only the window: the next one was searched and clicked on."""
-        with self.assertRaises(metro.MetroError):
+        with self.assertRaises(metro.MetroError) as stopped:
             self.run_window([Row(f"134_52_{number}") for number in range(1, 9)])
         self.assertEqual(len(self.timeouts()), metro.MAX_CONSECUTIVE_TIMEOUTS)
+        # One verb for a gather, on the page: « récupérer ».
+        self.assertIn("Le reste viendra à une prochaine récupération.", str(stopped.exception))
 
     def test_the_count_of_failures_runs_across_windows(self):
         run = metro._Run()
         self.run_window([Row("134_52_1"), Row("134_52_2")], run=run)
-        with self.assertRaises(metro.MetroError):
+        with self.assertRaises(metro.MetroError) as stopped:
             self.run_window([Row("134_52_3")], run=run)
+        self.assertIn("Le reste viendra à une prochaine récupération.", str(stopped.exception))
 
     def test_rows_are_followed_by_their_number_when_the_list_redraws(self):
         """A row arrived on top under a click: walked by place, the next

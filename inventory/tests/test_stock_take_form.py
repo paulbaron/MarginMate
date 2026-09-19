@@ -22,7 +22,7 @@ from decimal import Decimal
 from django.test import TestCase
 from django.urls import reverse
 
-from inventory.forms import product_display_name, stock_type_entry_name
+from inventory.forms import product_display_name, stock_take_entry_lookup, stock_type_entry_name
 from inventory.models import StockTake, StockTakeLine, UnitChoices
 from tests.factories import (
     make_invoice,
@@ -135,6 +135,27 @@ class StockTakePayloadTests(TestCase):
             "unit": UnitChoices.LITRE,
         }}
         self.post(self.payload(rows))
+        line = StockTake.objects.get().lines.get()
+        self.assertEqual(line.stock_type, self.vodka)
+        self.assertIsNone(line.product_id)
+
+    def test_an_article_is_offered_as_one(self):
+        """A StockType is an « article » wherever it is read (19/09), the
+        list of what can be counted included."""
+        self.assertEqual(stock_type_entry_name(self.vodka), "Vodka (article)")
+        self.assertIn("Vodka (article)", stock_take_entry_lookup())
+
+    def test_a_count_typed_before_the_rename_still_resolves(self):
+        """A count in progress lives in the browser (localStorage) as it was
+        typed: one started before the rename says « (type de stock) », and
+        comes back to be saved - it must not read « introuvable »."""
+        rows = {0: {
+            "entry_search": "Vodka (type de stock)",
+            "counted_quantity": "3.5",
+            "unit": UnitChoices.LITRE,
+        }}
+        response = self.post(self.payload(rows))
+        self.assertEqual(response.status_code, 302)
         line = StockTake.objects.get().lines.get()
         self.assertEqual(line.stock_type, self.vodka)
         self.assertIsNone(line.product_id)

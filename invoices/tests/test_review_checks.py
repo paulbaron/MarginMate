@@ -11,6 +11,7 @@ their stored reading (`reread_receipt`).
 Structurally faithful, data invented.
 """
 
+from datetime import date
 from decimal import Decimal
 from io import StringIO
 
@@ -20,8 +21,9 @@ from django.urls import reverse
 
 from invoices.models import Invoice, Supplier
 from invoices.receipts import reread_receipt
+from invoices.tests.page_posts import page_post
 from invoices.tests.test_parser_franprix_banner import SUFFIXED_MULTIPLIER
-from tests.factories import make_invoice_line, make_product
+from tests.factories import make_invoice_line, make_product, make_supplier
 
 D = Decimal
 FIVE_FIVE = D("0.055")
@@ -303,3 +305,165 @@ class PrintedVatTableTests(TestCase):
         self.assertIn("TVA 20% cohérente", self.checks())
         self.post(rows=[("5.5", "0.93", "0.05")])
         self.assertNotIn("TVA 20% cohérente", self.checks())
+
+
+HT_CHECK = "Somme HT des lignes = base HT du ticket"
+AS_READ = HT_CHECK + ' <span class="muted">(à la lecture du ticket)</span>'
+# A DIY store's ticket as read: each item is followed by the eco-participation
+# included in its price ("Dt Ecopart. unit. EcoMob 0.60"), which the reading
+# took for an item of its own. The table prints 35,00 € HT at 20 %, paid
+# 42,00 €; the lines as read make 35,70 € HT.
+DIY_READING = [
+    ("CAISSE A OUTILS 50CM", 1, "25.00", "30.00"),
+    ("Dt Ecopart. unit. EcoMob", 1, "0.50", "0.60"),
+    ("BOITE DE RANGEMENT 10L", 3, "10.00", "12.00"),
+    ("Dt Ecopart. unit. EcoMob", 1, "0.20", "0.24"),
+]
+DIY_CHECKS = [
+    {"label": "Somme des lignes = total imprimé", "passed": False, "detail": "lignes 42.84 € / ticket 42.00 € (écart -0.84 €)"},
+    {"label": "TVA 20% cohérente", "passed": True, "detail": "HT 35.00 € x 20% = 7.00 € / ticket 7.00 €"},
+    {"label": HT_CHECK, "passed": False, "detail": "lignes 35.70 € HT / ticket 35.00 € HT (écart -0.70 €)"},
+]
+
+
+def diy_ticket(vat_breakdown=(("0.20", "35.00", "7.00"),)):
+    shop = make_supplier(name="Brico Exemple")
+    invoice = Invoice.objects.create(
+        supplier=shop, invoice_number="055-0000001-001", invoice_date=date(2026, 8, 12), parse_checks=list(DIY_CHECKS),
+        printed_total_ttc=D("42.00"), vat_breakdown=[list(row) for row in vat_breakdown],
+    )
+    products = {}
+    for name, quantity, total_ht, printed in DIY_READING:
+        if name not in products:
+            products[name] = make_product(supplier=shop, raw_name=name)
+        make_invoice_line(
+            invoice=invoice, product=products[name], raw_name=name, read_as=name, quantity=quantity,
+            total_ht=total_ht, vat_rate=D("0.20"), printed_ttc=D(printed),
+        )
+    return invoice
+
+
+def with_vat_table(response, data: dict) -> dict:
+    """The VAT table block the page posts beside its lines, as it drew it:
+    `page_post` leaves it out, and a post without it keeps the stored table
+    (a page cached before the block existed)."""
+    vat_form = response.context["vat_form"]
+    data = dict(data)
+    data[f"{vat_form.prefix}-TOTAL_FORMS"] = str(vat_form.total_form_count())
+    data[f"{vat_form.prefix}-INITIAL_FORMS"] = str(vat_form.initial_form_count())
+    data[f"{vat_form.prefix}-MIN_NUM_FORMS"] = "0"
+    data[f"{vat_form.prefix}-MAX_NUM_FORMS"] = "1000"
+    for form in vat_form.forms:
+        for name in form.fields:
+            value = form[name].value()
+            data[form.add_prefix(name)] = "" if value is None else str(value)
+    return data
+
+
+class CorrectedLinesHtCheckTests(TestCase):
+    """"Somme HT des lignes = base HT du ticket" is worked out from the lines
+    as they stand, never kept from the reading.
+
+    Two DIY-store tickets had been read with the eco-participation under
+    each item as an item of its own - their lines 0,77 € and 7,54 € HT off
+    the base - and the owner corrected them by hand. Validating did rebuild
+    the check from the lines as saved and the table typed
+    (`recheck_after_review`), and it passed; but its label is one the reading
+    writes too, and the page marked every check carrying it "(à la lecture du
+    ticket)" - all 445 documents holding it on 19/09, the three whose reading
+    failed it and whose corrected lines pass among them, and the three whose
+    corrected lines still disagree, blamed on a reading nobody could answer.
+    While the lines were being typed it did not move at all.
+    """
+
+    def setUp(self):
+        self.invoice = diy_ticket()
+        self.url = reverse("invoices:receipt_review", args=[self.invoice.pk])
+
+    def correct(self, **changes):
+        page = self.client.get(self.url)
+        response = self.client.post(self.url, with_vat_table(page, page_post(page, **changes)))
+        self.assertEqual(response.status_code, 302)
+        self.invoice.refresh_from_db()
+        return self.client.get(self.url)
+
+    def stored(self):
+        return next(check for check in self.invoice.parse_checks if check["label"] == HT_CHECK)
+
+    def test_lines_corrected_to_the_base_pass_and_are_not_the_reading(self):
+        # The two eco-participation lines taken out: 25,00 + 10,00 € HT.
+        page = self.correct(**{"form-1-DELETE": "on", "form-3-DELETE": "on"})
+        expected = {
+            "label": HT_CHECK,
+            "passed": True,
+            "detail": "lignes 35.00 € HT / document 35.00 € HT (écart +0.00 €)",
+        }
+        self.assertEqual(self.stored(), expected)
+        self.assertEqual(page.context.get("ht_check"), expected)
+        self.assertContains(page, '<li class="check check-pass" id="live-ht-check"')
+        self.assertNotContains(page, AS_READ)
+        self.assertEqual(page.content.decode().count(HT_CHECK), 1)
+
+    def test_lines_still_wrong_fail_on_the_lines_as_saved(self):
+        # One eco-participation left in: 0,20 € HT over the base.
+        page = self.correct(**{"form-1-DELETE": "on"})
+        expected = {
+            "label": HT_CHECK,
+            "passed": False,
+            "detail": "lignes 35.20 € HT / document 35.00 € HT (écart -0.20 €)",
+        }
+        self.assertEqual(self.stored(), expected)
+        self.assertEqual(page.context.get("ht_check"), expected)
+        self.assertContains(page, '<li class="check check-fail" id="live-ht-check"')
+        self.assertNotContains(page, AS_READ)
+        self.assertEqual(page.content.decode().count(HT_CHECK), 1)
+
+    def test_before_any_correction_the_lines_as_they_stand_against_the_table(self):
+        """The same figures the reading had, but worked out on the page from
+        what it shows - which is what the script follows as they are typed."""
+        page = self.client.get(self.url)
+        self.assertEqual(
+            page.context.get("ht_check"),
+            {"label": HT_CHECK, "passed": False, "detail": "lignes 35.70 € HT / document 35.00 € HT (écart -0.70 €)"},
+        )
+        self.assertContains(page, '<li class="check check-fail" id="live-ht-check" data-tolerance="0.05"')
+        self.assertNotContains(page, AS_READ)
+        self.assertEqual(page.content.decode().count(HT_CHECK), 1)
+
+    def test_with_no_table_the_readings_own_stays_marked_as_read(self):
+        """Validating without a table drops the check, so one stored on a
+        page that shows none can only be the reading's: said so, and set
+        aside by the script once a table is typed."""
+        self.invoice.vat_breakdown = []
+        self.invoice.save(update_fields=["vat_breakdown"])
+        page = self.client.get(self.url)
+        self.assertIsNone(page.context.get("ht_check", "absent"))
+        self.assertContains(page, '<li class="check check-fail" id="live-ht-check" data-tolerance="0.05" hidden>')
+        self.assertContains(page, AS_READ)
+        self.assertContains(page, "data-before-table")
+
+
+class SupplierInvoiceHtCheckTests(TestCase):
+    """The live HT check is a ticket's. A supplier's invoice never showed it
+    and never stores it (recheck_after_review is a ticket's too) - and its
+    lines leave out what the reconciliation adds (a duty,
+    Invoice.reconciliation_adjustment) where the printed base counts it, so a
+    table typed exactly as printed showed a failure, under a label saying
+    « du ticket »."""
+
+    def test_its_page_stays_as_it_was(self):
+        supplier = make_supplier(name="Grossiste Exemple")
+        invoice = Invoice.objects.create(
+            supplier=supplier, invoice_number="F-2026-0815", invoice_date=date(2026, 8, 15),
+            reconciliation_adjustment=D("0.34"), vat_breakdown=[["0.2", "20.34", "4.07"]],
+        )
+        make_invoice_line(
+            invoice=invoice, product=make_product(supplier=supplier, raw_name="SIROP ORGEAT 70CL"),
+            quantity=2, total_ht="20.00", vat_rate=D("0.2"),
+        )
+        self.assertFalse(invoice.is_receipt)
+        page = self.client.get(reverse("invoices:invoice_edit_lines", args=[invoice.pk]))
+        self.assertContains(page, "TVA imprimée sur le document")
+        self.assertIsNone(page.context["ht_check"])
+        self.assertNotContains(page, 'id="live-ht-check"')
+        self.assertNotContains(page, HT_CHECK)

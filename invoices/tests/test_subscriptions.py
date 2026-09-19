@@ -242,7 +242,7 @@ class WhatThePagesSayTests(Subscriptions):
         whole = make_supplier(code="EAU_X", name="Eau Exemple", parser_key="", ticket_header="EAU EXEMPLE")
         for day in (1, 2):
             make_invoice(supplier=whole, ocr_text=f"EAU EXEMPLE\nLe {day:02d}/05/2026\nTOTAL 80,00")
-        page = self.client.get(reverse("invoices:invoice_type_list"))
+        page = self.client.get(reverse("invoices:supplier_list"))
         self.assertContains(page, "en-tête sur 3 de ses 5 documents · 2 ne le portent pas")
         # Its header on every document: nothing to say.
         self.assertNotContains(page, "en-tête sur 2 de ses 2")
@@ -268,6 +268,7 @@ class NoSplitAnyMoreTests(Subscriptions):
         for url in (
             reverse("invoices:supplier_detail", args=[self.operator.pk]),
             reverse("invoices:invoice_type_list"),
+            reverse("invoices:supplier_list"),
             reverse("invoices:receipt_review", args=[self.mobiles[0].pk]),
         ):
             page = self.client.get(url)
@@ -280,7 +281,7 @@ class NoSplitAnyMoreTests(Subscriptions):
         page = self.client.get(reverse("invoices:supplier_delete", args=[self.operator.pk]))
         shown = " ".join(page.content.decode().split())
         self.assertIn(
-            "Changez ses documents de fournisseur depuis la page de chacun et rattachez ses types de factures à un "
+            "Changez ses documents de fournisseur depuis la page de chacun et rattachez ses sources de factures à un "
             "autre fournisseur, puis revenez ici.",
             shown,
         )

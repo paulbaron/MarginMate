@@ -1,7 +1,7 @@
 {% extends "base.html" %}
-{% block title %}{% if invoice_type %}Modifier{% else %}Nouveau{% endif %} type de facture - MarginMate{% endblock %}
+{% block title %}{% if invoice_type %}Modifier la source{% else %}Nouvelle source de factures{% endif %} - MarginMate{% endblock %}
 {% block content %}
-    <h1>{% if invoice_type %}Modifier{% else %}Nouveau{% endif %} type de facture</h1>
+    <h1>{% if invoice_type %}Modifier la source « {{ invoice_type.name }} »{% else %}Nouvelle source de factures{% endif %}</h1>
 
     <div class="card">
         <form method="post">
@@ -26,6 +26,7 @@
                 <div class="inline-form">
                     {% include "invoices/_shop_choice_fields.html" with label="Fournisseur" select_id="type-supplier" for_invoice=True ask_expenses=True shop_groups=supplier_groups selected=supplier_selected typed_name=typed_name expenses=typed_expenses suggested="" %}
                 </div>
+                <p class="help">Une source récupère pour un seul fournisseur : tout ce qu'elle trouve est rangé chez lui.</p>
                 {% for error in type_form.supplier.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
                 {% for error in type_form.new_name.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
                 {% if invoice_type %}<p class="help"><a href="{% url 'invoices:supplier_detail' invoice_type.supplier_id %}">Ouvrir la fiche de {{ invoice_type.supplier.name }}</a></p>{% endif %}
@@ -42,7 +43,7 @@
             portal's fields were in the page.
             {% endcomment %}
             <fieldset class="source-kind" data-source-kind="EMAIL"{% if is_website %} hidden disabled{% endif %}>
-                <h3>Source : email</h3>
+                <h3>Réglages : boîte mail</h3>
                 <p class="muted">
                     L'email est recherché dans la boîte mail partagée (voir INVOICE_EMAIL_ADDRESS dans .env). Chaque
                     champ est une expression régulière ; expéditeur/objet/contenu sont testés sur l'email, pièce jointe
@@ -53,7 +54,7 @@
             </fieldset>
 
             <fieldset class="source-kind" data-source-kind="WEBSITE"{% if not is_website %} hidden disabled{% endif %}>
-                <h3>Source : site du fournisseur</h3>
+                <h3>Réglages : espace client</h3>
                 <p class="muted">
                     La récupération se connecte à l'espace client, suit le lien des factures et télécharge celles de
                     la période, une à une. L'identifiant et le mot de passe restent dans le fichier .env : indiquez ici

@@ -21,7 +21,7 @@ import read what it should, and where each product went.
                     <th class="num">Qté</th>
                     <th class="num">HT</th>
                     <th class="num">TTC</th>
-                    <th>Article de stock</th>
+                    <th>Article</th>
                 </tr>
             </thead>
             <tbody>
@@ -34,6 +34,8 @@ import read what it should, and where each product went.
                         <td>
                             {% if line.product.stock_type %}
                                 {{ line.product.stock_type.name }}
+                            {% elif line.product.is_expense %}
+                                <span class="muted">poste de charge</span>
                             {% else %}
                                 <a class="status-pill status-NEEDS_REVIEW" href="{% url 'inventory:stock_list' %}#a-classer">à classer</a>
                             {% endif %}
@@ -53,7 +55,7 @@ import read what it should, and where each product went.
         {% endif %}
         <a class="btn btn-small btn-secondary" href="{% url 'invoices:invoice_detail' invoice.pk %}">Ouvrir le document</a>
         {% if to_classify %}
-            <span class="muted">{{ to_classify }} produit{{ to_classify|pluralize }} à classer dans <a href="{% url 'inventory:stock_list' %}#a-classer">Produits</a></span>
+            <span class="muted">{{ to_classify }} produit{{ to_classify|pluralize }} à classer dans <a href="{% url 'inventory:stock_list' %}#a-classer">Produits &amp; charges</a></span>
         {% endif %}
     </div>
 </div>

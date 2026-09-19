@@ -441,9 +441,10 @@
 })();
 
 /* A table row leading to a page of its own (data-row-href, the suppliers on
-   the Sources tab): a click anywhere on the row goes there, a click on a
-   link, button or field inside it keeps its own target. The row's first
-   cell holds a real link too - for the keyboard, and to open it apart. */
+   Achats' « Enseignes et fournisseurs » tab): a click anywhere on the row
+   goes there, a click on a link, button or field inside it keeps its own
+   target. The row's first cell holds a real link too - for the keyboard,
+   and to open it apart. */
 (function () {
     document.addEventListener("click", function (event) {
         var row = event.target.closest("tr[data-row-href]");

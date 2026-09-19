@@ -38,7 +38,7 @@ JavaScript the same forms post normally and come back to the page.
 
     {% if review_products %}
         <p class="muted review-panel-lead">
-            Trouvés sur une facture ou un ticket, rangés dans aucun article de stock. Tapez l'article :
+            Trouvés sur une facture ou un ticket, rangés dans aucun article. Tapez l'article :
             la liste montre où le produit va, et l'ouvre dessus une fois classé.
         </p>
         {% if suggested_count %}
@@ -99,7 +99,7 @@ Confiance : {{ confidence_counts.high|default:0 }} haute, {{ confidence_counts.m
                   hx-target="#review-panel-body" hx-swap="outerHTML" class="review-card-form">
                 {% csrf_token %}
                 <label class="review-field review-field-wide">
-                    <span>Article de stock</span>
+                    <span>Article</span>
                     <input type="text" name="stock_type_name" list="stock-type-datalist"
                            class="js-stock-type-name" autocomplete="off" placeholder="ex : Vodka" required
                            data-unit-target="stock-unit-{{ product.id }}"

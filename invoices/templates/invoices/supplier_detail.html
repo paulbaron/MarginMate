@@ -2,13 +2,13 @@
 {% block title %}{{ supplier.name }} - MarginMate{% endblock %}
 {% block content %}
     {% comment %}
-    A supplier's own page: what files its documents under it, its invoice
-    types, its documents, and what changed - each change with its undo
-    (supplier_views). Every button here is a POST that says what it did.
+    A supplier's own page: what files its documents under it, the sources
+    fetching for it, its documents, and what changed - each change with its
+    undo (supplier_views). Every button here is a POST that says what it did.
     {% endcomment %}
     <div class="page-header">
         <div>
-            <p class="breadcrumb"><a href="{% url 'invoices:invoice_type_list' %}#fournisseurs">← Achats · Sources</a></p>
+            <p class="breadcrumb"><a href="{% url 'invoices:supplier_list' %}">← Achats · Enseignes et fournisseurs</a></p>
             <h1>{{ supplier.name }}</h1>
             <p class="page-subtitle">
                 {% if supplier.expenses_only %}Charges{% else %}Produits{% endif %}
@@ -20,7 +20,7 @@
                 {% else %}
                     · <span class="status-pill status-PENDING">En attente de son premier document</span>
                 {% endif %}
-                {% if invoice_types %}· {{ invoice_types|length }} type{{ invoice_types|length|pluralize }} de factures{% endif %}
+                {% if invoice_types %}· {{ invoice_types|length }} source{{ invoice_types|length|pluralize }} de factures{% endif %}
             </p>
         </div>
         <div class="actions">
@@ -142,25 +142,31 @@
     </section>
 
     <section class="card" aria-labelledby="types">
-        <h2 id="types">Types de factures</h2>
+        <h2 id="types">Sources de ses factures</h2>
+        {% if own_module %}
+            <p class="muted">
+                Récupérées par son propre module, avec « Récupérer les nouvelles factures » en haut d'Achats{% if not invoice_types %} : il n'a besoin d'aucune source{% endif %}.
+            </p>
+        {% endif %}
         {% if invoice_types %}
             <ul>
                 {% for invoice_type in invoice_types %}
                     <li>
                         <a href="{% url 'invoices:invoice_type_update' invoice_type.pk %}">{{ invoice_type.name }}</a>
-                        <span class="muted">· {{ invoice_type.get_source_kind_display }}{% if not invoice_type.is_active %} · inactif{% endif %}</span>
+                        <span class="muted">· {{ invoice_type.channel }}{% if not invoice_type.is_active %} · inactive{% endif %}</span>
                     </li>
                 {% endfor %}
             </ul>
+        {% elif own_module %}{# said above: it needs none #}
         {% elif not document_count %}
             <p class="muted">
-                Comment arrivera son premier document ? Par un type de factures qui le récupère pour lui (e-mail, espace
+                Comment arrivera son premier document ? Par une source qui le récupère pour lui (e-mail, espace
                 client), ou par « Importer » en le choisissant sur la ligne du fichier.
             </p>
         {% else %}
-            <p class="muted">Aucun : ses documents arrivent par l'import.</p>
+            <p class="muted">Aucune : ses documents arrivent par l'import.</p>
         {% endif %}
-        <p><a class="btn btn-small btn-secondary" href="{% url 'invoices:invoice_type_create' %}?fournisseur={{ supplier.pk }}&amp;retour={{ fiche|urlencode }}">+ Nouveau type pour {{ supplier.name }}</a></p>
+        <p><a class="btn btn-small btn-secondary" href="{% url 'invoices:invoice_type_create' %}?fournisseur={{ supplier.pk }}&amp;retour={{ fiche|urlencode }}">+ Nouvelle source pour {{ supplier.name }}</a></p>
     </section>
 
     <section class="card" aria-labelledby="historique" id="historique">

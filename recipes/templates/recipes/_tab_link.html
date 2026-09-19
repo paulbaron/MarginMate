@@ -8,7 +8,7 @@
 {% if pending %}
     <div class="card">
         <h3>À lier ({{ pending|length }})</h3>
-        <p class="muted">{{ pending_quantity }} articles vendus ne sont rattachés à aucune recette.</p>
+        <p class="muted">{{ pending_quantity }} unités vendues ne sont rattachées à aucune recette.</p>
         {% comment %}Deliberately NOT wrapping the table: every row already contains
            its own <form>, and nested forms are invalid HTML - the browser
            silently drops the inner one, which would break every per-row

@@ -237,9 +237,13 @@ class LineCorrectionForm(BlankRowTolerantForm):
 
     bookkeeping_fields = ("vat_rate", "amount_source", "read_as", "line_id")
 
-    def __init__(self, *args, document: str = DOCUMENT_INVOICE, **kwargs):
+    def __init__(self, *args, document: str = DOCUMENT_INVOICE, charge: bool = False, **kwargs):
         super().__init__(*args, **kwargs)
         self.document = document
+        # A document of a supplier of charges (Supplier.expenses_only) none of
+        # whose products is stock (views._correction_page): no stock behind
+        # its lines, so a credit on it is a line like any other (see clean).
+        self.charge = charge
         # A ticket's lines are food unless it says otherwise; a supplier's
         # invoice is mostly drink.
         self.fields["vat_rate"].initial = Decimal("5.5") if document == DOCUMENT_RECEIPT else Decimal("20")
@@ -308,9 +312,28 @@ class LineCorrectionForm(BlankRowTolerantForm):
         if quantity == 0:
             self.add_error("quantity", "Une quantité ne peut pas être nulle.")
         elif quantity is not None and amount != 0 and (quantity < 0) != (amount < 0):
-            # A positive count at a negative price is stock worth less than
-            # nothing: the FIFO valuation's worst known failure.
-            self.add_error(field, "Un retour a une quantité et un montant négatifs, un achat les deux positifs.")
+            if not self.charge:
+                # A positive count at a negative price is stock worth less than
+                # nothing: the FIFO valuation's worst known failure.
+                self.add_error(field, "Un retour a une quantité et un montant négatifs, un achat les deux positifs.")
+            elif quantity < 0:
+                # A charge has no stock, so that guard has nothing to guard,
+                # and a credit on it is what its amount says: an electricity
+                # bill takes the month's subscription back at 5,5 % and bills
+                # it again at 20 %, printing "-2,76 €" of HT at 5,5 % - one
+                # line, and the owner typed it as one, at -2,76. It was
+                # refused, and the bill could not be entered at all - nor two
+                # rent statements saved untouched, whose deposit given back
+                # the charge reading files the same way (-3,00 at a count of
+                # 1). Kept at the count typed: nothing reads a charge's count,
+                # and at -1 its unit price would read as a charge of 2,76.
+                # A count of -1 at a positive amount is still refused: the
+                # count says credited, the money says charged, and the total
+                # is wrong one way or the other.
+                self.add_error(
+                    field,
+                    "Sur une charge, le signe est celui du montant : un avoir se saisit avec un montant négatif.",
+                )
         discount = cleaned.get("discount_ttc") or Decimal("0")
         if discount and discount > abs(self._printed_ttc()):
             self.add_error("discount_ttc", "La remise dépasse le montant de la ligne.")
@@ -389,13 +412,22 @@ LineCorrectionFormSet = forms.formset_factory(
 )
 
 
+#: How a source's invoices arrive, as a person reads it. Said here rather
+#: than in InvoiceType.SourceKind: a label changed on the model is a migration
+#: to apply to the real database, for a word.
+CHANNELS = {
+    InvoiceType.SourceKind.EMAIL: "E-mail",
+    InvoiceType.SourceKind.WEBSITE: "Espace client",
+}
+
+
 class InvoiceTypeForm(forms.ModelForm):
-    """A kind of invoice to gather, and whose it is: a supplier that exists,
-    or a new one made in the same save (`supplier` = NEW_SHOP, named in
-    `new_name`) - a supplier not sent a document yet had no way to get the
-    type that fetches its first. The choice is rendered by hand
-    (_shop_choice_fields.html); its name is never an HTML `required`, which
-    hidden would stop the browser sending the form."""
+    """A source of invoices (« source de factures ») to gather, and whose it
+    is: a supplier that exists, or a new one made in the same save
+    (`supplier` = NEW_SHOP, named in `new_name`) - a supplier not sent a
+    document yet had no way to get the source that fetches its first. The
+    choice is rendered by hand (_shop_choice_fields.html); its name is never
+    an HTML `required`, which hidden would stop the browser sending the form."""
 
     supplier = forms.CharField(label="Fournisseur", error_messages={"required": "Choisissez le fournisseur."})
     new_name = forms.CharField(label="Nom du nouveau fournisseur", required=False, max_length=255)
@@ -405,13 +437,15 @@ class InvoiceTypeForm(forms.ModelForm):
         model = InvoiceType
         fields = ["name", "source_kind", "parser_key", "is_active"]
         labels = {
-            "name": "Nom",
-            "source_kind": "Récupérées",
+            "name": "Nom de la source",
+            "source_kind": "Canal",
             "parser_key": "Lecteur",
-            "is_active": "Actif",
+            "is_active": "Active",
         }
         help_texts = {
-            "source_kind": "Par email (dans la boîte partagée) ou sur le site du fournisseur (espace client).",
+            "name": "Ex. « Box - Factures » : c'est ce nom qui apparaît dans « Récupérer ».",
+            "source_kind": "Par e-mail (dans la boîte partagée) ou sur l'espace client du fournisseur (site web).",
+            "is_active": "Inclure cette source dans « Récupérer les nouvelles factures ».",
         }
 
     # Rendered by hand, beside each other (invoice_type_form.html).
@@ -422,6 +456,7 @@ class InvoiceTypeForm(forms.ModelForm):
         if self.instance.pk and "supplier" not in self.initial:
             self.initial["supplier"] = str(self.instance.supplier_id)
         self.order_fields(["name", "supplier", "new_name", "new_expenses", "source_kind", "parser_key", "is_active"])
+        self.fields["source_kind"].choices = [(kind.value, CHANNELS[kind]) for kind in InvoiceType.SourceKind]
         # No dedicated parser no longer means typing it in: the one reader
         # reads any document's table, totals and VAT (parsers/generic_receipt).
         choices = [("", "— Lecteur générique —")] + [
@@ -666,7 +701,7 @@ class SupplierCreateForm(forms.Form):
     nature = forms.ChoiceField(
         label="Nature",
         choices=[
-            ("produits", "Produits : une ligne par article, à classer"),
+            ("produits", "Produits : chaque ligne est un produit, à classer dans un article"),
             ("charges", "Charges : abonnement, loyer, eau, électricité…"),
         ],
         initial="produits",

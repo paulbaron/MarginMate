@@ -1,13 +1,16 @@
-"""The "Achats" page: invoices, tickets and invoice types in one place.
+"""The "Achats" page: invoices, tickets, their sources and suppliers in one
+place.
 
 It used to be four pages - the invoice list, the ticket import, the tickets
 to check and the invoice types - and adding a purchase then checking it had
 landed meant going round them. Now one card on top adds purchases (ticket
 photos, a supplier's PDF, a gather) and shows the import as it runs, and
-three tabs below it list every document, what waits to be checked, and where
-invoices come from. Every one of the old addresses draws this page, on the
-tab or the import it was about (views.invoice_list, receipt_upload,
-receipt_batch, receipt_queue, invoice_type_list...).
+four tabs below it list every document, what waits to be checked, where
+invoices come from (« Sources »: the InvoiceTypes) and who each document is
+filed under (« Enseignes et fournisseurs »). Every one of the old addresses
+draws this page, on the tab or the import it was about (views.invoice_list,
+receipt_upload, receipt_batch, receipt_queue, invoice_type_list,
+supplier_views.supplier_list...).
 """
 
 import re
@@ -22,7 +25,7 @@ from django.utils.http import urlencode
 
 from common import is_id
 
-from .forms import InvoiceUploadForm, ReceiptBatchUploadForm
+from .forms import CHANNELS, InvoiceUploadForm, ReceiptBatchUploadForm
 from .models import Invoice, InvoiceType, ReceiptBatch, ScrapeJob, Supplier
 from .tasks import default_gather_start
 
@@ -54,6 +57,10 @@ DOCUMENT_TO_FIX = (
     | (IS_CHARGE & Q(status=Invoice.Status.NEEDS_REVIEW))
     | (~Q(supplier_doubt="") & ~TICKET_TO_CHECK)
 )
+#: The supplier « Récupérer les nouvelles factures » fetches with a module of
+#: its own rather than through a source (tasks.gather_invoices_task): Metro.
+#: UBA is seeded `is_scrapable` too, but a mailbox source fetches it.
+OWN_MODULE = Q(code="METRO", is_scrapable=True)
 
 
 def waiting_counts() -> dict:
@@ -79,14 +86,24 @@ def first_ticket_to_check(ids) -> tuple[int | None, int]:
 
 
 def render_purchases(request, tab, *, status=200, **card):
-    """The page, on `tab` ("documents", "a-verifier", "sources"), with the
-    import card as `card` says (import_tab, batch, receipt_form, pdf_form)."""
+    """The page, on `tab` ("documents", "a-verifier", "sources",
+    "fournisseurs"), with the import card as `card` says (import_tab, batch,
+    receipt_form, pdf_form)."""
+    from .parsers import LLM_PARSER_KEY
+
     counts = Invoice.objects.aggregate(
         total=Count("pk"),
         tickets=Count("pk", filter=TICKET_TO_CHECK),
         to_fix=Count("pk", filter=DOCUMENT_TO_FIX),
     )
     waiting = counts["tickets"] + counts["to_fix"]
+    # Amber, a tab's number is what waits there, as « À vérifier »'s does:
+    # the suppliers with a change to see (their rows' « À voir »). Quiet,
+    # every supplier - counted, not listed: the list reads every document's
+    # text, and the tabs are on every page of Achats. Both of its tables are
+    # every supplier but the AI pseudo-supplier.
+    suppliers = Supplier.objects.exclude(parser_key=LLM_PARSER_KEY)
+    to_see = _changes_to_see().filter(supplier__in=suppliers).values("supplier_id").distinct().count()
     context = {
         "tab": tab,
         "tabs": [
@@ -96,6 +113,8 @@ def render_purchases(request, tab, *, status=200, **card):
              "count": waiting, "attention": bool(waiting)},
             {"key": "sources", "label": "Sources", "url": reverse("invoices:invoice_type_list"),
              "count": InvoiceType.objects.count(), "attention": False},
+            {"key": "fournisseurs", "label": "Enseignes et fournisseurs", "url": reverse("invoices:supplier_list"),
+             "count": to_see or suppliers.count(), "attention": bool(to_see)},
         ],
         **_import_card(request, **card),
     }
@@ -105,6 +124,8 @@ def render_purchases(request, tab, *, status=200, **card):
         context.update(_documents(request, card.get("batch")))
     elif tab == "a-verifier":
         context.update(_to_check())
+    elif tab == "fournisseurs":
+        context.update(_suppliers())
     else:
         context.update(_sources())
     return render(request, "invoices/purchases.html", context, status=status)
@@ -133,7 +154,7 @@ def _missed_again(job: ScrapeJob) -> bool:
 def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_form=None) -> dict:
     from .receipts import invoice_supplier_choices
 
-    metro = Supplier.objects.filter(code="METRO", is_scrapable=True).first()
+    metro = Supplier.objects.filter(OWN_MODULE).first()
     # The mailbox's types and the customer portals': both are gathered.
     email_types = list(InvoiceType.objects.filter(is_active=True).select_related("supplier"))
     gather_sources = []
@@ -372,11 +393,28 @@ def _to_check() -> dict:
 
 
 def _sources() -> dict:
-    """The invoice types, and every supplier with what files a document
-    under it on its own - its header and the figures it learned - shown,
-    since what cannot be seen cannot be put right. For a shop with a header,
-    how many of its documents print it: the others were filed there by
-    something else they print."""
+    """The sources of invoices (InvoiceType), each with its channel as the
+    form words it (forms.CHANNELS)."""
+    invoice_types = list(InvoiceType.objects.select_related("supplier", "email_source"))
+    for invoice_type in invoice_types:
+        invoice_type.channel = CHANNELS.get(invoice_type.source_kind, invoice_type.get_source_kind_display())
+    return {"invoice_types": invoice_types}
+
+
+def _changes_to_see():
+    """What marks a supplier's row « À voir », and lights its tab: a change
+    to see, neither seen nor undone."""
+    from .models import SupplierChange
+
+    return SupplierChange.objects.filter(needs_review=True, reviewed_at__isnull=True, undone_at__isnull=True)
+
+
+def _suppliers() -> dict:
+    """Every supplier with what files a document under it on its own - its
+    header and the figures it learned - shown, since what cannot be seen
+    cannot be put right, and the sources fetching for it. For a shop with a
+    header, how many of its documents print it: the others were filed there
+    by something else they print."""
     from .parsers import LLM_PARSER_KEY, is_ticket_shop
     from .receipts import has_own_reader, names_shop, prints_header
 
@@ -384,7 +422,6 @@ def _sources() -> dict:
     for supplier_id, ocr_text, source_text in Invoice.objects.values_list("supplier_id", "ocr_text", "source_text"):
         if ocr_text or source_text:
             texts.setdefault(supplier_id, []).append(ocr_text or source_text)
-    from .models import SupplierChange
     from .parsers import ticket_parser_for
 
     counts = dict(Invoice.objects.values_list("supplier_id").annotate(n=Count("id")).values_list("supplier_id", "n"))
@@ -392,11 +429,14 @@ def _sources() -> dict:
         Invoice.objects.values_list("supplier_id").annotate(last=Max("invoice_date")).values_list("supplier_id", "last")
     )
     to_see = dict(
-        SupplierChange.objects.filter(needs_review=True, reviewed_at__isnull=True, undone_at__isnull=True)
+        _changes_to_see()
         .values_list("supplier_id")
         .annotate(n=Count("id"))
         .values_list("supplier_id", "n")
     )
+    sources: dict[int, list] = {}
+    for invoice_type in InvoiceType.objects.order_by("name"):
+        sources.setdefault(invoice_type.supplier_id, []).append(invoice_type)
     suppliers = list(Supplier.objects.exclude(parser_key=LLM_PARSER_KEY).order_by("name"))
     for supplier in suppliers:
         # Each row leads to the supplier's own page (supplier_views).
@@ -404,6 +444,7 @@ def _sources() -> dict:
         supplier.last_date = latest.get(supplier.pk)
         supplier.to_see = to_see.get(supplier.pk, 0)
         supplier.is_till = ticket_parser_for(supplier.code) is not None
+        supplier.sources = sources.get(supplier.pk, [])
     shops = [supplier for supplier in suppliers if is_ticket_shop(supplier)]
     for shop in shops:
         # Attributes, since a template calls nothing with arguments.
@@ -414,10 +455,11 @@ def _sources() -> dict:
             shop.with_header = sum(1 for text in texts.get(shop.pk, ()) if prints_header(text, shop.ticket_header))
             shop.headerless = len(texts.get(shop.pk, ())) - shop.with_header
     own_readers = [supplier for supplier in suppliers if has_own_reader(supplier)]
+    own_module = set(Supplier.objects.filter(OWN_MODULE).values_list("pk", flat=True))
     for supplier in own_readers:
         supplier.names_shop = names_shop(supplier)
+        supplier.own_module = supplier.pk in own_module
     return {
-        "invoice_types": InvoiceType.objects.select_related("supplier", "email_source"),
         "ticket_shops": shops,
         "own_readers": own_readers,
     }

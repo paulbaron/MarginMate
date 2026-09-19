@@ -94,6 +94,9 @@ class SearchableSortableTableTests(TestCase):
         make_invoice_type(name="UBA")
         self.assertEnhancedTable("invoices:invoice_type_list")
 
+    def test_supplier_list(self):
+        self.assertContains(self.assertEnhancedTable("invoices:supplier_list"), 'data-table-label="fournisseurs"')
+
     def test_recipe_list(self):
         self.assertEnhancedTable("recipes:recipe_list")
 
@@ -253,7 +256,7 @@ class PageChromeTests(TestCase):
         make_priced_stock_type(name="Vodka", unit_cost_ht="12", quantity="10")
         response = self.client.get(reverse("inventory:stock_list"))
         self.assertContains(response, "stat-value")
-        self.assertContains(response, "Valeur du stock (HT)")
+        self.assertContains(response, "Total acheté (HT)")
 
     def test_an_empty_list_offers_the_next_step(self):
         """An empty state that only says "nothing here" leaves the reader to

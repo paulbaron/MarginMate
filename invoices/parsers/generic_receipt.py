@@ -129,6 +129,12 @@ COUNT_RE = re.compile(
     r"(?!\s*\d+(?:[.,]\d+)?\s*(?:L|CL|ML|G|KG)\b)(?!\s*\d+(?:[.,]\d+)?\s*[xX×*]\s*\d)",
     re.IGNORECASE,
 )
+# "76X46", a rug's, or "21X35" and "16*25": one word of two whole numbers is
+# a size too - unless the one multiplies the other into an amount the line
+# prints ("TASSE 2x4 8,00": two at 4,00), since a count is what multiplies a
+# unit price into the amount (`_is_size`). Read as 76, the count made the
+# rug's name a detail line, and its price went with it.
+GLUED_SIZE_RE = re.compile(r"(?P<count>\d{1,3})[xX×*](?P<by>\d+)(?![\d.,])")
 # "T11.15": the VAT code T1 glued to 1.15; "T18X0.49": to a count.
 GLUED_CODE_RE = re.compile(r"(?<![A-Za-z0-9])T(\d)(?=-?\d)")
 # "T3XBASILIC": a code, a count and a name with no space between them.
@@ -156,6 +162,11 @@ LETTERS_RE = re.compile(r"[A-Za-zÀ-ÿ]")
 HEADING_RE = re.compile(
     r"^\s*(?P<name>[A-ZÀ-Ÿ][A-ZÀ-Ÿ/ '-]{3,}?)(?P<dots>\.+)\s*(?:(?P<amount>\d{1,4}[.,]\d{2})\s*(?:€|E|EUR)?)?\s*$"
 )
+# « Dont » - "of which" - opens a line printing a part of an amount already
+# counted: "Dt Ecopart. unit. EcoMob 0.72" under a tool box at 24,90 (a DIY
+# till abbreviates it), "- Dont DDS 0.20" under a bottle of acid, "Dont
+# éco-part DEEE 0,10€". The charge is inside the item's price.
+INCLUDED_RE = re.compile(r"(?i)^\W*(?:dont|dt)\b")
 # Words a weight or count line prints around its figures - and the label of
 # a quantity column ("Qté : 0,350 * 25,74  9,01" is a detail line, not an item).
 NOISE_WORDS = {
@@ -323,11 +334,27 @@ def _without_leading_count(name: str | None, count: int | None) -> str | None:
     """"12 BOUTEILLE(S) CHAMPAGNE 75 CL" is twelve of "BOUTEILLE(S) CHAMPAGNE
     75 CL", not a product of its own: a count in front of the name is the
     quantity column, and left in, the same champagne bought by six and by
-    twelve makes two products that never meet."""
+    twelve makes two products that never meet. The count as a whole number
+    only: "2000123 GOBELET" begins with an article number, not with a count
+    of 2, and cut there the product lost the first digit of its code."""
     if not name or not count or count < 2:
         return name
     rest = name[len(str(count)):].lstrip(" .:-xX\u00d7")
-    return rest if name.startswith(str(count)) and LETTERS_RE.search(rest) else name
+    leads = re.match(rf"{re.escape(str(count))}(?![\d.,])", name)
+    return rest if leads and LETTERS_RE.search(rest) else name
+
+
+def _is_size(line: str, count_match, rates) -> bool:
+    """Whether the count `COUNT_RE` found opens one word of two whole numbers
+    ("60X40") that is a size: the money decides, and a size multiplies into
+    no amount the line prints ("2x4 8,00" is two at 4,00)."""
+    size = GLUED_SIZE_RE.match(line, count_match.start())
+    if size is None:
+        return False
+    product = int(size.group("count")) * int(size.group("by"))
+    return not any(
+        _money(match) == product for match in MONEY_RE.finditer(line) if not _inside(match.start("units"), rates)
+    )
 
 
 def _read_line(index: int, line: str, total: Decimal | None = None) -> Reading | None:
@@ -355,7 +382,7 @@ def _read_line(index: int, line: str, total: Decimal | None = None) -> Reading |
     taken = []  # spans of figures that are not money: they end the name
     lead = CODE_LEAD_RE.match(line)
     count = None
-    count_match = COUNT_RE.search(line)
+    count_match = next((match for match in COUNT_RE.finditer(line) if not _is_size(line, match, rates)), None)
     if count_match and not _inside(count_match.start(), rates):
         count = int(count_match.group("count"))
         taken.append(count_match.span())
@@ -805,9 +832,19 @@ class GenericReceiptParser(ReceiptParser):
 
         orphan: tuple[int, Decimal] | None = None  # an amount glued to a heading
         heading_at = -2
+        subtotal_at = -1  # the last sub-total stepped over
         named_codes: dict[str, tuple[str, str | None]] = {}  # code -> (name, count)
         for index, line in enumerate(lines):
             if index < start:
+                continue
+            if INCLUDED_RE.match(line):
+                # A part of the item above, never an item: read as one, the
+                # eco-participation of each tool box made the lines 0,92 more
+                # than what was paid; a cent of it made the one item 6,00 for
+                # 5,99, close enough to pass; and 0,29 of it under a shelf
+                # kept the sub-total under it from restating the items, so
+                # the sub-total came out as an item and the shelf did not.
+                pending = None
                 continue
             linked = LINKED_NAME_RE.match(line)
             if linked and not line_amounts(line):
@@ -849,9 +886,43 @@ class GenericReceiptParser(ReceiptParser):
                 if is_end:
                     items_end = index
                     break
-            if amount is not None and not reading.code and len(items) >= 2 and abs(amount - gross) <= CENTS:
+            block = [item for item in items if item.index > subtotal_at]
+            # The amount of the name above - on a row printing more than it
+            # (the item's reference): an amount alone under its label is a
+            # sub-total printed on two lines, and kept as the item « SOUS
+            # TOTAL » it made what was paid with the next sale's items.
+            names_above = (
+                reading.name is None
+                and pending is not None
+                and pending.index == index - 1
+                and re.search(r"\w", re.sub(r"(?i)€|\bEUR\b", " ", MONEY_RE.sub(" ", line))) is not None
+            )
+            if (
+                amount is not None
+                and not reading.code
+                and not reading.ean
+                and reading.unit is None
+                and not names_above
+                and (
+                    (len(items) >= 2 and abs(amount - gross) <= CENTS)
+                    or (len(block) >= 2 and abs(amount - sum((item.total for item in block), start=ZERO)) <= CENTS)
+                )
+            ):
+                # A sub-total between the items: of all of them, or of those
+                # since the last one - a DIY till prints a sale in blocks,
+                # each ending on its own. Taken for an item, the sub-total
+                # of a block in the middle cuts the items into runs none of
+                # which makes what was paid. Never a row printing what no
+                # sub-total prints - a VAT code, an EAN, a count and its unit
+                # price - nor the amount of the name printed on the line
+                # above it (a row with no name of its own under one): a
+                # pack of four after two packs of two costs what they do, and
+                # so can the cut of a worktop on the store's own reference;
+                # stepped over, either left the block's own sub-total to be
+                # read as the item, and every check passed.
+                subtotal_at = index
                 pending = None
-                continue  # a sub-total between the items
+                continue
             if reading.name and amount is None and reading.count is None and reading.weight is None and reading.unit is None:
                 if orphan is not None and orphan[0] == index - 1:
                     # "FRUITS/LEGUMES. 2,51" over "POMME ZELI": the item's

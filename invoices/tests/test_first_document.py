@@ -172,6 +172,7 @@ class TypeGuardTests(TestCase):
         invoice = self.doubted()
         self.assertEqual(invoice.supplier, self.caterer)
         self.assertIn("n° SIREN 800 000 002 de Grossiste Exemple", invoice.supplier_doubt)
+        self.assertIn("rattachez la source à Grossiste Exemple", invoice.supplier_doubt)
         self.assertEqual(invoice.review_state["label"], "Fournisseur à confirmer")
         self.caterer.refresh_from_db()
         self.grossiste.refresh_from_db()
@@ -180,6 +181,7 @@ class TypeGuardTests(TestCase):
         self.assertEqual(self.grossiste.ticket_identifiers, [f"siren:{OTHER_SIREN}"])
         fiche = self.client.get(reverse("invoices:supplier_detail", args=[self.caterer.pk]))
         self.assertContains(fiche, "ce qui reconnaît un autre fournisseur")
+        self.assertContains(fiche, "1 document récupéré par une source de Traiteur Exemple porte")
         page = self.client.get(reverse("invoices:receipt_review", args=[invoice.pk]))
         self.assertContains(page, "Valider ce document confirme qu'il est de Traiteur Exemple")
 

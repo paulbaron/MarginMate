@@ -32,7 +32,7 @@
 
     {% if job.items_sold or job.recorded %}
         <p style="margin-top:0.75rem;">
-            <strong>{{ job.items_sold }}</strong> articles vendus ·
+            <strong>{{ job.items_sold }}</strong> unités vendues ·
             <strong>{{ job.recorded }}</strong> totaux recette/jour enregistrés
             {% if job.unmatched %}
                 · <a href="{% url 'recipes:pos_product_list' %}"><strong>{{ job.unmatched }}</strong> produits à rattacher</a>

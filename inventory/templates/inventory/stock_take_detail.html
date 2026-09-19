@@ -28,7 +28,7 @@
             <span class="stat-note">au prix réellement payé, achat par achat</span>
         </div>
         <div class="stat">
-            <span class="stat-label">Articles comptés</span>
+            <span class="stat-label">Lignes comptées</span>
             <span class="stat-value">{{ lines|length }}</span>
         </div>
         {% if shortfall_count %}
@@ -42,7 +42,7 @@
 
     {% if shortfall_count %}
         <div class="message">
-            {{ shortfall_count }} article{{ shortfall_count|pluralize }} compté{{ shortfall_count|pluralize }} au-delà
+            {{ shortfall_count }} ligne{{ shortfall_count|pluralize }} comptée{{ shortfall_count|pluralize }} au-delà
             de ce que l'historique d'achats peut expliquer. La part en trop est quand même valorisée, au plus
             ancien prix connu, pour ne pas sous-estimer le total — mais c'est le signe d'un comptage inexact
             ou d'un stock acheté avant le suivi des factures.
@@ -54,7 +54,7 @@
         <table class="sub-table" data-table data-table-label="lignes">
             <thead>
                 <tr>
-                    <th>Produit / type de stock</th>
+                    <th>Produit / article</th>
                     <th>Fournisseur</th>
                     <th class="num">Quantité comptée</th>
                     <th class="num">Valeur (HT)</th>
@@ -65,7 +65,7 @@
                 {% for line in lines %}
                 <tr>
                     <td>
-                        {% if line.product_id %}{{ line.product.raw_name }}{% else %}{{ line.stock_type.name }} <span class="muted">(type de stock)</span>{% endif %}
+                        {% if line.product_id %}{{ line.product.raw_name }}{% else %}{{ line.stock_type.name }} <span class="muted">(article)</span>{% endif %}
                     </td>
                     <td class="muted">{{ line.product.supplier.name|default:"—" }}</td>
                     <td class="num">{{ line.counted_quantity|floatformat:"-4" }} {{ line.get_unit_display }}</td>

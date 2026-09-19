@@ -3,11 +3,11 @@
 {% block content %}
     {% comment %}
     A supplier before any document of its own (supplier_views.supplier_create):
-    a type can then fetch for it, an import be filed under it, from the first.
+    a source can then fetch for it, an import be filed under it, from the first.
     {% endcomment %}
     <div class="page-header">
         <div>
-            <p class="breadcrumb"><a href="{{ back }}">← Achats · Sources</a></p>
+            <p class="breadcrumb"><a href="{{ back }}">{% if retour %}← Retour{% else %}← Achats · Enseignes et fournisseurs{% endif %}</a></p>
             <h1>Nouveau fournisseur</h1>
             <p class="page-subtitle">
                 Avant d'avoir reçu le moindre document de lui. Ce que ses documents impriment (n° SIREN, téléphone,
@@ -49,7 +49,7 @@
             <ul class="check-list">
                 {% for choice in form.arrivee %}<li>{{ choice.tag }} <label for="{{ choice.id_for_label }}">{{ choice.choice_label }}</label></li>{% endfor %}
             </ul>
-            <p class="muted">Par e-mail ou sur son espace client : la page suivante crée le type de factures qui les récupère pour lui.</p>
+            <p class="muted">Par e-mail ou sur son espace client : la page suivante crée la source qui les récupère pour lui.</p>
         </fieldset>
 
         <div class="actions">

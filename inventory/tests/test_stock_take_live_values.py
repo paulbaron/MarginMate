@@ -258,6 +258,13 @@ class LiveLineValueTests(TestCase):
         # 2.1 L is three 70cl bottles of the newest delivery.
         self.assertEqual(data["value_ht"], "60.00")
 
+    def test_a_stock_item_typed_before_the_rename_is_priced_the_same(self):
+        """A draft kept in the browser from before 19/09 names it with the
+        old « (type de stock) »."""
+        data = self.value(entry="Vodka (type de stock)", quantity="2.1", as_of="2026-06-30")
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["value_ht"], "60.00")
+
     def test_an_unknown_entry_says_so_rather_than_guessing(self):
         self.assertFalse(self.value(entry="RIEN DU TOUT")["ok"])
 

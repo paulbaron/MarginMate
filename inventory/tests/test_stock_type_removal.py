@@ -8,7 +8,7 @@ Three things found by looking for bugs away from the day's work:
   was tested with isnull. 62 real count lines were affected.
 * Merging a stock item that a recipe, a count or a sale used crashed after
   its products had already moved, leaving the merge half done.
-* Deleting such an item - on its own or through "supprimer les types vides" -
+* Deleting such an item - on its own or through "supprimer les articles vides" -
   crashed on the same protection.
 """
 

@@ -6,7 +6,8 @@
             <h1>Achats</h1>
             <p class="page-subtitle">
                 Factures des fournisseurs et tickets de caisse : les ajouter, vérifier ce qui a été lu,
-                les retrouver.
+                les retrouver — et régler d'où elles arrivent (Sources) et chez qui elles sont rangées
+                (Enseignes et fournisseurs).
             </p>
         </div>
         <div class="actions">
@@ -35,6 +36,8 @@
             {% include "invoices/_tab_documents.html" %}
         {% elif tab == "a-verifier" %}
             {% include "invoices/_tab_to_check.html" %}
+        {% elif tab == "fournisseurs" %}
+            {% include "invoices/_tab_suppliers.html" %}
         {% else %}
             {% include "invoices/_tab_sources.html" %}
         {% endif %}

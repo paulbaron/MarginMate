@@ -1,7 +1,7 @@
 {% extends "base.html" %}
-{% block title %}Type de stock - MarginMate{% endblock %}
+{% block title %}{% if object %}Modifier l'article{% else %}Nouvel article{% endif %} - MarginMate{% endblock %}
 {% block content %}
-    <h1>{% if object %}Modifier{% else %}Nouveau{% endif %} type de stock</h1>
+    <h1>{% if object %}Modifier l'article « {{ object.name }} »{% else %}Nouvel article{% endif %}</h1>
     <div class="card">
         <form method="post">
             {% csrf_token %}
@@ -19,7 +19,7 @@
     {% if merge_candidate %}
     <div class="card" style="border-color:var(--amber);">
         <p>
-            Un type de stock nommé « <strong>{{ merge_candidate.name }}</strong> » existe déjà
+            Un article nommé « <strong>{{ merge_candidate.name }}</strong> » existe déjà
             ({{ merge_candidate.get_unit_display }}, {{ merge_candidate.products.count }} produit{{ merge_candidate.products.count|pluralize }}).
         </p>
         {% if merge_candidate.unit == current_stock_type.unit %}

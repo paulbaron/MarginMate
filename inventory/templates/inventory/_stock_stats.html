@@ -29,15 +29,23 @@
             </div>
         {% else %}
             <div class="stat">
-                <div class="stat-label">Valeur du stock (HT)</div>
+                <div class="stat-label">Total acheté (HT)</div>
                 <div class="stat-value">{{ total_value_ht|floatformat:2 }} €</div>
+                <div class="stat-note">produits, depuis le début — hors charges</div>
             </div>
             <div class="stat">
-                <div class="stat-label">Valeur du stock (TTC)</div>
+                <div class="stat-label">Total acheté (TTC)</div>
                 <div class="stat-value">{{ total_value_ttc|floatformat:2 }} €</div>
             </div>
+            {% if charge_suppliers %}
+                <div class="stat">
+                    <div class="stat-label">Charges (TTC)</div>
+                    <div class="stat-value">{{ charge_total_ttc|floatformat:2 }} €</div>
+                    <div class="stat-note">sur les douze derniers mois</div>
+                </div>
+            {% endif %}
             <div class="stat">
-                <div class="stat-label">Articles de stock</div>
+                <div class="stat-label">Articles</div>
                 <div class="stat-value">{{ stock_type_count }}</div>
                 <div class="stat-note">dans {{ categories|length }} catégorie{{ categories|length|pluralize }}</div>
             </div>
@@ -45,7 +53,7 @@
                 <div class="stat">
                     <div class="stat-label">Vendu &gt; acheté</div>
                     <div class="stat-value bad">{{ over_stock_count }}</div>
-                    <div class="stat-note">article{{ over_stock_count|pluralize }} dont les ventes dépassent les achats</div>
+                    <div class="stat-note">article{{ over_stock_count|pluralize }} dont les ventes dépassent les achats (pertes déclarées déduites)</div>
                 </div>
             {% endif %}
         {% endif %}

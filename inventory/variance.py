@@ -521,9 +521,9 @@ def _movement_totals(stock_type_ids=None) -> tuple[dict[int, Decimal], dict[int,
     """({stock_type_id: quantity on the ledger}, {stock_type_id: average cost
     per stock unit}) - one scan of StockMovement for both.
 
-    The quantity is the same number the stock page's "Quantité" column shows
-    (StockType.current_quantity): everything bought, less the losses somebody
-    recorded. Nothing deducts sales from the ledger, so it is also "how much
+    The quantity is the ledger (StockType.current_quantity): everything
+    bought, less the losses somebody recorded - the stock page's "Acheté"
+    column is the purchases alone. Nothing deducts sales from the ledger, so it is also "how much
     of this could possibly have been poured" - which is exactly the ceiling
     quantities_sold() has to respect.
 

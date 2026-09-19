@@ -247,7 +247,7 @@ class StockPagePeriodTests(TestCase):
     def test_without_a_period_the_page_is_unchanged(self):
         response = self.page()
         self.assertIsNone(response.context["period"])
-        self.assertContains(response, "Valeur du stock (HT)")
+        self.assertContains(response, "Total acheté (HT)")
         # All time the ceiling is the ledger: 12 L bought, 5 L sold.
         self.assertEqual(self.row(response)["sold"].available, Decimal("12"))
 
@@ -268,7 +268,7 @@ class StockPagePeriodTests(TestCase):
         self.assertContains(response, "Ouverture")
         self.assertContains(response, "Sorti")
         self.assertContains(response, "Manquant")
-        self.assertNotContains(response, "Valeur du stock (HT)")
+        self.assertNotContains(response, "Total acheté (HT)")
 
     def test_the_missing_value_is_totalled(self):
         response = self.page(inventaire=self.closing.pk)

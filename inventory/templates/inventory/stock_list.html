@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}Produits - MarginMate{% endblock %}
+{% block title %}Produits & charges - MarginMate{% endblock %}
 {% block container_class %}{% if review_total %} container-wide{% endif %}{% endblock %}
 {% block content %}
     <div class="page-header">
         <div>
-            <h1>Produits</h1>
+            <h1>Produits &amp; charges</h1>
             {% if period %}
                 <p class="page-subtitle">
                     {% if period.since_beginning %}
@@ -18,8 +18,9 @@
                 </p>
             {% else %}
                 <p class="page-subtitle">
-                    Tout ce que les factures et les tickets ont apporté, rangé par article de stock, avec ce que
-                    ça vaut. Cliquez une ligne pour voir ses achats{% if review_total %} ; les produits pas encore
+                    Tout ce que disent les factures et les tickets : les produits achetés, rangés par article, avec
+                    ce qu'ils ont coûté{% if charge_suppliers %}, et plus bas les charges (loyer, abonnements…){% endif %}.
+                    Cliquez une ligne pour voir ses achats{% if review_total %} ; les produits pas encore
                     rangés attendent dans le panneau « À classer »{% endif %}.
                 </p>
             {% endif %}
@@ -27,9 +28,9 @@
         <div class="actions">
             {% if empty_stock_type_count %}
             <form method="post" action="{% url 'inventory:clear_empty_stock_types' %}"
-                  onsubmit="return confirm('Supprimer {{ empty_stock_type_count }} type(s) de stock sans aucun produit lié ?');">
+                  onsubmit="return confirm('Supprimer {{ empty_stock_type_count }} article(s) sans aucun produit lié ?');">
                 {% csrf_token %}
-                <button class="btn btn-secondary" type="submit">🧹 Vider les types vides ({{ empty_stock_type_count }})</button>
+                <button class="btn btn-secondary" type="submit">🧹 Supprimer les articles vides ({{ empty_stock_type_count }})</button>
             </form>
             {% endif %}
             <a class="btn btn-secondary" href="{% url 'inventory:export_associations' %}">⬇️ Exporter les associations</a>
@@ -51,7 +52,7 @@
                 <form method="get" class="period-picker">
                     <label for="period-select">Période</label>
                     <select name="inventaire" id="period-select" onchange="this.form.submit()">
-                        <option value="">Depuis le début (stock actuel)</option>
+                        <option value="">Depuis le début (tous les achats)</option>
                         {% for take in stock_takes %}
                             <option value="{{ take.pk }}"{% if period.closing_take.pk == take.pk %} selected{% endif %}>
                                 Inventaire du {{ take.taken_at|date:"d/m/Y" }}{% if take.note %} — {{ take.note }}{% endif %}

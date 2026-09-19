@@ -9,7 +9,7 @@ parts trigger `documents-changed` when they end).
         <div class="segmented" role="tablist" aria-label="Façon d'ajouter">
             <button type="button" role="tab" data-import-tab="documents" aria-controls="import-documents">📥 Tickets et factures</button>
             <button type="button" role="tab" data-import-tab="recuperer" aria-controls="import-recuperer">
-                🔄 Récupérer (Metro, e-mails){% if latest_job.is_active %} <span class="live-dot" data-job-control="gather-status" title="Recherche en cours"></span>{% endif %}
+                🔄 Récupérer depuis les sources{% if latest_job.is_active %} <span class="live-dot" data-job-control="gather-status" title="Récupération en cours"></span>{% endif %}
             </button>
         </div>
     </div>
@@ -39,8 +39,8 @@ parts trigger `documents-changed` when they end).
                 <button class="btn" type="submit" data-busy-label="Envoi…">Importer</button>
                 <span class="muted">
                     Chaque fichier est lu selon ce qu'il contient : une facture PDF passe par le lecteur de son
-                    fournisseur quand il en a un, tout le reste par la lecture de ticket. L'enseigne est reconnue
-                    sur le document, et chacun est vérifié contre ses propres totaux.
+                    fournisseur quand il en a un, tout le reste par la lecture de ticket. Son enseigne ou son
+                    fournisseur est reconnu sur le document, et chacun est vérifié contre ses propres totaux.
                 </span>
             </div>
         </form>
@@ -167,7 +167,7 @@ parts trigger `documents-changed` when they end).
                     {% endfor %}
                 </div>
             </details>
-            <button class="btn" type="submit" data-job-control="gather-status"{% if latest_job.is_active %} disabled{% endif %}>Rechercher de nouvelles factures</button>
+            <button class="btn" type="submit" data-job-control="gather-status"{% if latest_job.is_active %} disabled{% endif %}>Récupérer les nouvelles factures</button>
         </form>
         {% if latest_job %}
             {% include "invoices/_gather_status.html" with job=latest_job %}

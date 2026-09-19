@@ -235,7 +235,9 @@ class PageSmokeTests(TestCase):
         self.assertPageOK("invoices:supplier_edit", pk=shop.pk)
         self.assertPageOK("invoices:supplier_delete", pk=shop.pk)
         self.assertPageOK("invoices:supplier_expenses", pk=shop.pk)
-        self.assertEqual(self.client.get(reverse("invoices:supplier_list")).status_code, 302)
+        # Achats' « Enseignes et fournisseurs » tab (it redirected to the foot
+        # of the Sources tab).
+        self.assertContains(self.assertPageOK("invoices:supplier_list"), "Epicerie")
         checked = self.client.post(
             reverse("invoices:supplier_edit", args=[shop.pk]), {"name": "Epicerie Deux", "header": "", "action": "verifier"}
         )
@@ -346,6 +348,9 @@ class EmptyDatabasePageSmokeTests(TestCase):
 
     def test_invoice_type_list(self):
         self.assertPageOK("invoices:invoice_type_list")
+
+    def test_supplier_list(self):
+        self.assertPageOK("invoices:supplier_list")
 
     def test_invoice_create_manual(self):
         self.assertPageOK("invoices:invoice_create_manual")

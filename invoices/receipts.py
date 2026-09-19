@@ -81,6 +81,7 @@ CHOSEN_SHOP_CHECK = "Enseigne choisie à la main"
 IDENTIFIED_CHECK = "Enseigne reconnue"
 UNREAD_CHECK = "Lecture automatique"
 SUM_CHECK = "Somme des lignes = total imprimé"
+HT_CHECK = "Somme HT des lignes = base HT du ticket"
 UNREAD_TOTAL_CHECK = "Total imprimé lu"
 DATE_CHECK = "Date du ticket"
 # One recognition at a time in a request (a shop chosen by hand, a document
@@ -111,10 +112,16 @@ MIN_IDENTIFIER_SHARE = Decimal("0.25")
 # What the parser said about the lines it read. Once a person has corrected
 # the lines, these describe lines that no longer exist: they give way to one
 # check on the lines as they are now (lines_check).
+#
+# The two sums are here as the reading's own verdict only: the page shows
+# both worked out from the lines as they stand - against the total, and
+# against the VAT table's HT base whenever it has a table - and follows them
+# as they are typed (views._checks_context). Validating rebuilds both under
+# the same labels, which is why the page cannot tell them apart by label.
 READING_CHECKS = {
     SUM_CHECK,
     UNREAD_CHECK,
-    "Somme HT des lignes = base HT du ticket",
+    HT_CHECK,
     "Articles = total avant remise",
     "Montants recalculés",
     "Poids rattachés",
@@ -930,7 +937,7 @@ def move_documents(invoices, supplier: Supplier) -> Moved:
     of a move, for one document or several filed together.
 
     Their lines stay as they are and find their products among the new
-    supplier's (the old ones nobody else uses go), and three things the
+    supplier's (the old ones nobody else uses go), and four things the
     lines alone would lose are kept:
 
     - **a charge stays a charge.** Read as goods and moved into a supplier
@@ -945,6 +952,11 @@ def move_documents(invoices, supplier: Supplier) -> Moved:
       new or never classified, takes the same stock item
       (link_product_to_stock_type) - re-resolved as a new product, the
       purchase silently left the stock ledger;
+    - **a credit leaving charges becomes a return** (importing.
+      credit_as_return, as when the supplier itself leaves them): kept at the
+      count of 1 a charge takes it at, a document moved to a supplier of
+      goods could not be saved untouched, and classifying the credit's
+      product booked stock at a negative unit cost;
     - what the documents print is learned by the new supplier **once every
       one of them has moved**, and forgotten by those they leave.
 
@@ -953,7 +965,15 @@ def move_documents(invoices, supplier: Supplier) -> Moved:
     """
     from inventory.services import link_product_to_stock_type
 
-    from .importing import _as_parsed, charge_state, corrected_line, refile_as_charge, replace_invoice_lines
+    from .importing import (
+        _as_parsed,
+        charge_state,
+        corrected_line,
+        credit_as_return,
+        is_charge_credit,
+        refile_as_charge,
+        replace_invoice_lines,
+    )
 
     moving = [invoice for invoice in invoices if invoice.supplier_id != supplier.pk]
     moved = Moved(count=len(moving))
@@ -983,15 +1003,17 @@ def move_documents(invoices, supplier: Supplier) -> Moved:
                 if line.product is not None and line.product.stock_type_id is not None
             }
             renamed = old.expenses_only and supplier.expenses_only
+            leaving_charges = old.expenses_only and not supplier.expenses_only
             lines = []
             for line in stored:
                 name = supplier.name if renamed and line.raw_name == old.name else line.raw_name
                 moved.renamed += name != line.raw_name
-                lines.append(
-                    corrected_line(
-                        line, raw_name=name, quantity=line.quantity, total_ht=line.total_ht, vat_rate=line.vat_rate
-                    )
+                parsed = corrected_line(
+                    line, raw_name=name, quantity=line.quantity, total_ht=line.total_ht, vat_rate=line.vat_rate
                 )
+                if leaving_charges and is_charge_credit(parsed):
+                    credit_as_return(parsed)
+                lines.append(parsed)
             left.setdefault(old.pk, (old, []))[1].append(invoice.document_text)
             fields = ["supplier", "supplier_doubt"]
             invoice.supplier = supplier
@@ -1133,8 +1155,8 @@ def identifier_report(supplier: Supplier) -> dict:
 def supplier_notices(supplier: Supplier) -> list[dict]:
     """What a supplier's page flags: documents a type fetched that print what
     names another supplier, changes nobody asked for still to be seen,
-    nothing that recognises it. The Sources tab shows "À voir" on its row
-    for them."""
+    nothing that recognises it. The « Enseignes et fournisseurs » tab shows
+    "À voir" on its row for them."""
     notices = []
     doubted = list(
         Invoice.objects.filter(supplier=supplier).exclude(supplier_doubt="").order_by("pk").values_list("pk", flat=True)
@@ -1144,7 +1166,7 @@ def supplier_notices(supplier: Supplier) -> list[dict]:
             "kind": "type_check",
             "text": (
                 f"{len(doubted)} document{'s' if len(doubted) > 1 else ''} récupéré{'s' if len(doubted) > 1 else ''} "
-                f"par un type de factures pour {supplier.name} "
+                f"par une source de {supplier.name} "
                 f"{'portent' if len(doubted) > 1 else 'porte'} ce qui reconnaît un autre fournisseur : rien n'en a "
                 "été appris. Validez-le s'il est bien le sien, ou changez-le de fournisseur."
             ),
@@ -1167,8 +1189,8 @@ def supplier_notices(supplier: Supplier) -> list[dict]:
             "kind": "unrecognised",
             "text": (
                 f"Rien ne reconnaît encore {supplier.name} : "
-                + ("son premier document vous sera demandé à l'import, sauf si un type de factures le récupère pour lui."
-                   if empty else "ses documents vous sont demandés à l'import, sauf ceux qu'un type de factures récupère pour lui.")
+                + ("son premier document vous sera demandé à l'import, sauf si une source le récupère pour lui."
+                   if empty else "ses documents vous sont demandés à l'import, sauf ceux qu'une source récupère pour lui.")
             ),
             "count": 0,
         })
@@ -1495,7 +1517,7 @@ def vat_table_checks(invoice: Invoice, table: list[dict] | None = None) -> list[
     slack = max(RECONCILIATION_TOLERANCE, CENTS * invoice.lines.count())
     checks.append(
         {
-            "label": "Somme HT des lignes = base HT du ticket",
+            "label": HT_CHECK,
             "passed": abs(drift) <= slack,
             "detail": f"lignes {lines_ht:.2f} € HT / document {base_total:.2f} € HT (écart {drift:+.2f} €)",
         }
@@ -1530,7 +1552,7 @@ def _vat_check_labels(invoice: Invoice) -> set:
         check["label"]
         for check in invoice.parse_checks
         if check["label"].startswith(("TVA ", "Table TVA"))
-        or check["label"] == "Somme HT des lignes = base HT du ticket"
+        or check["label"] == HT_CHECK
     }
 
 
@@ -1781,7 +1803,7 @@ def type_supplier_doubt(text: str, supplier: Supplier, type_name: str) -> str:
     )
     return (
         f"Récupéré par « {type_name} » pour {supplier.name}, mais il porte {printed} de {other.name} : s'il est de "
-        f"{other.name}, rangez-le chez lui (« Changer de fournisseur ») et rattachez le type à {other.name}. "
+        f"{other.name}, rangez-le chez lui (« Changer de fournisseur ») et rattachez la source à {other.name}. "
         "Rien n'en a été appris."
     )
 

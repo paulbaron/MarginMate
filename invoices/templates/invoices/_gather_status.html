@@ -26,7 +26,7 @@
                     hx-post="{% url 'invoices:gather_cancel' job.id %}"
                     hx-target="#gather-status"
                     hx-swap="outerHTML"
-                    hx-confirm="Annuler cette recherche ?">
+                    hx-confirm="Annuler cette récupération ?">
                     Annuler
                 </button>
             {% endif %}
@@ -42,7 +42,7 @@
         <table style="margin-top:0.75rem;">
             <thead>
                 <tr>
-                    <th>Fournisseur</th>
+                    <th>Source</th>
                     <th class="num">Trouvées</th>
                     {% if job.kind != "TEST" %}<th class="num">Importées</th>{% endif %}
                 </tr>

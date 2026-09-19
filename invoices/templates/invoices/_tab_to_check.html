@@ -28,7 +28,7 @@ photo, oldest first, and the documents that cannot be used as they are.
             <div class="stat-value">{{ with_products_to_classify }}</div>
             <div class="stat-note">
                 facture{{ with_products_to_classify|pluralize }} concernée{{ with_products_to_classify|pluralize }} :
-                <a href="{% url 'inventory:stock_list' %}#a-classer">les classer dans Produits</a>
+                <a href="{% url 'inventory:stock_list' %}#a-classer">les classer dans Produits &amp; charges</a>
             </div>
         </div>
     {% endif %}

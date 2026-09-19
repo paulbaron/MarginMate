@@ -48,7 +48,7 @@ it is narrow, so it scrolls sideways on its own rather than squeezing.
                 {% if entry.line %}
                 <form method="post" action="{% url 'inventory:edit_product_conversion' entry.line.product.id %}"
                       class="conversion-form"
-                      title="Facteur = quantité de stock par article (ex 0.7 pour une bouteille de 70cl). Si la 'Quantité achetée' affichée est déjà la bonne quantité de stock (facture mesurant directement un volume/poids), laissez le facteur à 1 - un facteur ≠1 la multiplierait une deuxième fois.">
+                      title="Facteur = quantité de l'article (dans son unité) contenue dans un produit acheté (ex. 0,7 pour une bouteille de 70 cl). Si la « Quantité achetée » affichée est déjà mesurée dans l'unité de l'article (volume ou poids), laissez 1 - un facteur ≠ 1 la multiplierait une deuxième fois.">
                     {% csrf_token %}
                     <span class="muted">1 produit =</span>
                     <input type="text" name="stock_equivalent" value="{{ entry.stock_equivalent_display }}">
@@ -56,7 +56,7 @@ it is narrow, so it scrolls sideways on its own rather than squeezing.
                     <button type="submit" class="btn btn-small" title="Enregistrer">💾</button>
                 </form>
                 <form method="post" action="{% url 'inventory:remove_product' entry.line.product.id %}"
-                      onsubmit="return confirm('Retirer \'{{ entry.line.product.raw_name|escapejs }}\' du stock ?');">
+                      onsubmit="return confirm('Retirer « {{ entry.line.product.raw_name|escapejs }} » de cet article ? Il repassera dans « À classer ».');">
                     {% csrf_token %}
                     <button type="submit" class="btn btn-small btn-secondary">Retirer</button>
                 </form>

@@ -1,15 +1,16 @@
 """The top navigation: which workspace a page belongs to, and what waits in
 each one.
 
-Three workspaces replaced eight pages - "Produits" (stock and the products to
-classify), "Achats" (invoices, tickets, invoice types) and "Recettes & ventes"
-(recipes, till products, sales) - so a page's link is decided here, once, by
-its app and view, rather than by a list of view names repeated in the
-template for every link.
+Three workspaces replaced eight pages - "Produits & charges" (everything
+bought, ranged by article, the charges, and the products to classify),
+"Achats" (invoices, tickets, their sources and suppliers) and "Recettes &
+ventes" (recipes, till products, sales) - so a page's link is decided here,
+once, by its app and view, rather than by a list of view names repeated in
+the template for every link.
 """
 
 # Views of the inventory app that belong to "Inventaires"; the rest are
-# "Produits".
+# "Produits & charges".
 STOCK_TAKE_VIEWS = {
     "stock_take_list",
     "stock_take_create",

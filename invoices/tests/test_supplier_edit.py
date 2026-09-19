@@ -99,8 +99,8 @@ class CreateTests(TestCase):
         supplier = Supplier.objects.get(name="Cave Exemple")
         self.assertRedirects(response, reverse("invoices:supplier_detail", args=[supplier.pk]))
 
-    def test_the_sources_tab_offers_it(self):
-        self.assertContains(self.client.get(reverse("invoices:invoice_type_list")), CREATE)
+    def test_the_suppliers_tab_offers_it(self):
+        self.assertContains(self.client.get(reverse("invoices:supplier_list")), CREATE)
 
     def test_the_creation_is_undone_by_deleting_it_while_nothing_rests_on_it(self):
         self.create()
@@ -248,7 +248,7 @@ class DeleteTests(TestCase):
         self.client.post(url, {})
         self.assertTrue(Supplier.objects.filter(pk=supplier.pk).exists())
         response = self.client.post(url, {"confirme": "1"})
-        self.assertRedirects(response, reverse("invoices:invoice_type_list") + "#fournisseurs", fetch_redirect_response=False)
+        self.assertRedirects(response, reverse("invoices:supplier_list"), fetch_redirect_response=False)
         self.assertFalse(Supplier.objects.filter(pk=supplier.pk).exists())
         self.assertFalse(Product.objects.filter(raw_name="ARTICLE EXEMPLE").exists())
 
@@ -257,7 +257,7 @@ class DeleteTests(TestCase):
         make_invoice(supplier=with_document, ocr_text="DOC EXEMPLE\nTOTAL 1,00")
         with_type = make_supplier(code="TYPE_X", name="Type Exemple", parser_key="")
         InvoiceType.objects.create(supplier=with_type, name="Type Exemple - e-mail", source_kind=InvoiceType.SourceKind.EMAIL)
-        for supplier, reason in ((with_document, "1 document y est rangé"), (with_type, "1 type de factures")):
+        for supplier, reason in ((with_document, "1 document y est rangé"), (with_type, "1 source récupère pour lui")):
             url = reverse("invoices:supplier_delete", args=[supplier.pk])
             self.assertContains(self.client.get(url), reason)
             response = self.client.post(url, {"confirme": "1"})

@@ -1,4 +1,4 @@
-"""The "Types de factures" form, clicked in a real (headless) Chrome.
+"""The source form (« Nouvelle source de factures »), clicked in a real (headless) Chrome.
 
 The page holds both kinds' settings - the mailbox's patterns and the
 customer portal's login page - and shows the chosen one. A required field

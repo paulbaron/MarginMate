@@ -123,7 +123,7 @@
                     <tr data-child-row>
                         <td colspan="8" class="muted" style="font-size:0.88rem; padding-top:0;">
                             Valorisé en {{ pool.cheapest.name }} ({{ pool.cheapest_unit_cost|floatformat:2 }} € / {{ pool.unit }}<!--
-                            -->{% if pool.cheapest_item_size %}, {{ pool.cheapest_item_size|floatformat:"-3" }} {{ pool.unit }} par article{% endif %})
+                            -->{% if pool.cheapest_item_size %}, {{ pool.cheapest_item_size|floatformat:"-3" }} {{ pool.unit }} par unité achetée{% endif %})
                         </td>
                     </tr>
                     {% endif %}

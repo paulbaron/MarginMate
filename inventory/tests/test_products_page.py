@@ -124,7 +124,7 @@ class ProductsPageTests(TestCase):
             {"stock_type_name": "Rhum", "stock_equivalent": "-1"},
             **HTMX,
         )
-        self.assertContains(response, "L&#x27;équivalence en stock doit être un nombre positif.")
+        self.assertContains(response, "« 1 produit = » doit être un nombre positif.")
         self.assertNotIn("HX-Trigger", response)
         self.pending.refresh_from_db()
         self.assertIsNone(self.pending.stock_type)

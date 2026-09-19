@@ -276,6 +276,32 @@ def redo_as_expenses(supplier: Supplier) -> int:
     return done
 
 
+def charge_credits(supplier: Supplier):
+    """A supplier's lines holding a credit the way a charge takes one: a
+    count above zero at a negative amount (LineCorrectionForm, `charge=`) -
+    what goods refuse."""
+    return InvoiceLine.objects.filter(invoice__supplier=supplier, quantity__gt=0, total_ht__lt=0)
+
+
+def is_charge_credit(line) -> bool:
+    """`line` (an InvoiceLine or a ParsedLine) is what charge_credits finds."""
+    return line.quantity > 0 and line.total_ht < 0
+
+
+def credit_as_return(line) -> None:
+    """A credit filed the way a charge takes one, made a return as goods keep
+    one: the count negative, the amount as it was, so the unit price is what
+    was given back. For a line leaving charges - its supplier leaving them
+    (stop_expenses) or the document moved to a supplier of goods
+    (receipts.move_documents); `line` is an InvoiceLine or a ParsedLine, and
+    the caller saves it."""
+    line.quantity = -line.quantity
+    # A weight goes back with its count (a charge's is 0, and stays so).
+    line.total_volume = -line.total_volume if line.total_volume else line.total_volume
+    line.unit_cost_ht = (line.total_ht / line.quantity).quantize(UNIT_COST)
+
+
+@transaction.atomic
 def stop_expenses(supplier: Supplier) -> int:
     """A supplier that no longer sends charges sells goods again, so its
     postes are products like any others - waiting to be classified.
@@ -285,8 +311,19 @@ def stop_expenses(supplier: Supplier) -> int:
     flagged: unticked, a supplier's products stayed out of the review queue
     and out of the stock pages with nothing on any screen able to free them
     - correcting a document by hand resolved the same flagged product.
-    Returns how many went back.
+
+    A credit filed the way a charge takes one (charge_credits) becomes a
+    return (credit_as_return). Left at a count of 1, the goods guard refused
+    the row on a document saved untouched, and classifying its poste booked
+    stock at a negative unit cost. A movement already booked from one (a
+    stock item the supplier kept) is booked again.
+    Returns how many products went back.
     """
+    for line in charge_credits(supplier):
+        credit_as_return(line)
+        line.save(update_fields=["quantity", "total_volume", "unit_cost_ht"])
+        if StockMovement.objects.filter(invoice_line=line).delete()[0]:
+            create_stock_movement_for_line(line)
     return Product.objects.filter(supplier=supplier, is_expense=True).update(is_expense=False)
 
 

@@ -710,7 +710,7 @@ def _download_window(
             if failures >= MAX_CONSECUTIVE_TIMEOUTS:
                 raise MetroError(
                     f"Metro : {MAX_CONSECUTIVE_TIMEOUTS} téléchargements de suite ne sont jamais arrivés - récupération "
-                    "Metro arrêtée plutôt que de continuer à cliquer. Le reste viendra à une prochaine recherche."
+                    "Metro arrêtée plutôt que de continuer à cliquer. Le reste viendra à une prochaine récupération."
                 )
             if should_cancel():
                 log("Annulé : plus aucun téléchargement Metro.")
@@ -747,7 +747,7 @@ def _download_window(
     if run.failures >= MAX_CONSECUTIVE_TIMEOUTS:
         raise MetroError(
             f"Metro : {MAX_CONSECUTIVE_TIMEOUTS} téléchargements de suite ne sont jamais arrivés - récupération "
-            "Metro arrêtée. Le reste viendra à une prochaine recherche."
+            "Metro arrêtée. Le reste viendra à une prochaine récupération."
         )
     if cancelled:
         return started

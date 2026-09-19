@@ -1,0 +1,98 @@
+{% comment %}
+Who each document is filed under: every supplier, with what recognises it
+and the sources fetching for it (workspace._suppliers). It was the foot of
+the Sources tab; the owner asked for the sources and the suppliers to be
+told apart (19/09).
+{% endcomment %}
+<div class="section-head">
+    <div>
+        <h2>Enseignes et fournisseurs</h2>
+        <p class="muted">
+            Chez qui chaque document est rangé. Un document récupéré par une source va chez le fournisseur de cette
+            source ; un document importé va chez l'enseigne ou le fournisseur dont il porte l'en-tête ou les
+            identifiants (n° SIREN, téléphone, site appris sur ses documents, jamais ce que les documents d'un autre
+            fournisseur impriment aussi — votre propre numéro, par exemple). Un en-tête ajoute des documents, il n'en
+            retire aucun. Un fournisseur de <strong>charges</strong> (abonnement, loyer, eau, électricité…) a ses
+            factures enregistrées par poste ou par taux de TVA, jamais en produits à classer. Cliquez sur une ligne
+            pour ouvrir sa fiche : ce qui le reconnaît, ses sources, son historique.
+        </p>
+    </div>
+    <div class="actions">
+        <a class="btn" href="{% url 'invoices:supplier_create' %}">+ Nouveau fournisseur</a>
+    </div>
+</div>
+<div class="table-wrap">
+<table data-table data-table-label="fournisseurs">
+    <thead>
+        <tr><th>Nom</th><th>Reconnu par</th><th>Sources</th><th class="num">Documents</th><th>Nature</th></tr>
+    </thead>
+    <tbody>
+        {% for shop in ticket_shops %}
+            <tr data-row-href="{{ shop.url }}">
+                <td>
+                    <a href="{{ shop.url }}">{{ shop.name }}</a>
+                    {% if shop.to_see %} <span class="status-pill status-NEEDS_REVIEW" title="{{ shop.to_see }} changement{{ shop.to_see|pluralize }} à voir sur sa fiche">À voir</span>{% endif %}
+                </td>
+                <td>
+                    {% if shop.names_shop %}{{ shop.names_shop|join:", " }}
+                    {% elif shop.is_till %}<span class="muted">sa caisse, réglée dans l'application</span>
+                    {% elif not shop.document_count %}<span class="muted">rien encore : attend son premier document</span>
+                    {% else %}<span class="muted">rien : ses documents vous sont demandés à l'import</span>{% endif %}
+                    {% comment %}
+                    Only where it says something: documents filed here that do
+                    not print the header. A header on every one of them needs
+                    no line.
+                    {% endcomment %}
+                    {% if shop.ticket_header and shop.headerless %}
+                        <br><span class="muted">en-tête sur {{ shop.with_header }} de ses {{ shop.document_count }} documents · {{ shop.headerless }} ne le porte{{ shop.headerless|pluralize:"nt" }} pas</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% for source in shop.sources %}
+                        <a href="{% url 'invoices:invoice_type_update' source.pk %}">{{ source.name }}</a>{% if not source.is_active %} <span class="muted">(inactive)</span>{% endif %}{% if not forloop.last %}<br>{% endif %}
+                    {% empty %}<span class="muted">—</span>{% endfor %}
+                </td>
+                <td class="num" data-sort="{{ shop.last_date|date:'Y-m-d' }}">
+                    {% if shop.document_count %}
+                        <a href="{% url 'invoices:invoice_list' %}?fournisseur={{ shop.pk }}">{{ shop.document_count }}</a>
+                        {% if shop.last_date %}<br><span class="muted">dernier le {{ shop.last_date|date:"d/m/Y" }}</span>{% endif %}
+                    {% else %}<span class="muted">0</span>{% endif %}
+                </td>
+                <td>{% if shop.expenses_only %}Charges{% else %}Produits{% endif %}</td>
+            </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+
+{% comment %}
+The suppliers with a reader of their own are recognised the same way - their
+header, what their documents print - and were shown nowhere: what named UBA
+by a customer's phone number could not even be seen. Their sources too (UBA's
+mailbox search); Metro is fetched by a module of its own (workspace.OWN_MODULE).
+{% endcomment %}
+{% if own_readers %}
+    <h3>Fournisseurs avec leur propre lecteur</h3>
+    <div class="table-wrap">
+    <table data-table data-table-sort-only data-table-label="lecteurs">
+        <thead><tr><th>Fournisseur</th><th>Reconnu par</th><th>Sources</th></tr></thead>
+        <tbody>
+            {% for supplier in own_readers %}
+                <tr data-row-href="{{ supplier.url }}">
+                    <td>
+                        <a href="{{ supplier.url }}">{{ supplier.name }}</a>
+                        {% if supplier.to_see %} <span class="status-pill status-NEEDS_REVIEW">À voir</span>{% endif %}
+                    </td>
+                    <td>{% if supplier.names_shop %}{{ supplier.names_shop|join:", " }}{% else %}<span class="muted">son lecteur seul (en-tête de ses factures)</span>{% endif %}</td>
+                    <td>
+                        {% for source in supplier.sources %}
+                            <a href="{% url 'invoices:invoice_type_update' source.pk %}">{{ source.name }}</a>{% if not source.is_active %} <span class="muted">(inactive)</span>{% endif %}{% if not forloop.last or supplier.own_module %}<br>{% endif %}
+                        {% endfor %}
+                        {% if supplier.own_module %}<span class="muted">son propre module</span>{% elif not supplier.sources %}<span class="muted">—</span>{% endif %}
+                    </td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+{% endif %}

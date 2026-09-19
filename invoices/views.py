@@ -245,10 +245,10 @@ def trigger_gather(request):
     if metro_now:
         source_codes.add("METRO")
     if active_job is not None:
-        messages.info(request, "Une recherche est déjà en cours : elle s'affiche ci-dessous.")
+        messages.info(request, "Une récupération est déjà en cours : elle s'affiche ci-dessous.")
     elif not source_codes:
         # It ran, searched nothing and said "Terminé".
-        messages.error(request, "Aucune source cochée : rien à rechercher. Cochez-en au moins une sous « Sources ».")
+        messages.error(request, "Aucune source cochée : rien à récupérer. Cochez-en au moins une sous « Sources ».")
     else:
         start_date = _parse_date(request.POST.get("start_date"))
         end_date = _parse_date(request.POST.get("end_date"))
@@ -439,7 +439,7 @@ def _save_invoice_type(request, type_form, invoice_type, source_form, kind, reto
         return None
     name = type_form.cleaned_data["name"]
     try:
-        with transaction.atomic(), supplier_changes.cause(f"type de factures « {name} »", by_person=True):
+        with transaction.atomic(), supplier_changes.cause(f"source « {name} »", by_person=True):
             supplier, created = type_form.chosen_supplier()
             saved_type = type_form.save(commit=False)
             saved_type.supplier = supplier
@@ -454,12 +454,12 @@ def _save_invoice_type(request, type_form, invoice_type, source_form, kind, reto
     except ValueError as exc:
         type_form.add_error("new_name", str(exc))
         return None
-    messages.success(request, f"Type de facture enregistré : {saved_type.name}")
+    messages.success(request, f"Source enregistrée : {saved_type.name}")
     if created:
         messages.info(
             request,
-            f"{supplier.name} est créé : ce type range chez lui ce qu'il récupère, et il apprend ce que ses documents "
-            "impriment dès le premier.",
+            f"{supplier.name} est créé : cette source range chez lui ce qu'elle récupère, et il apprend ce que "
+            "ses documents impriment dès le premier.",
         )
     if before is not None and before.pk != supplier.pk:
         messages.info(
@@ -671,7 +671,8 @@ def supplier_expenses(request, pk):
     """Say whether a supplier's documents are charges rather than goods - a
     subscription, the rent, the water. Ticking it files what is already in
     the same way; unticking it leaves the documents alone - the lines of one
-    already filed are a person's to correct - but gives its products back
+    already filed are a person's to correct, bar a credit, which becomes a
+    return - but gives its products back
     (`importing.stop_expenses`), or the box could not be undone: flagged for
     ever, they reached no queue and no stock page, and correcting a document
     by hand resolved the very same flagged product.
@@ -682,7 +683,7 @@ def supplier_expenses(request, pk):
     nothing."""
     from inventory.models import Product
 
-    from .importing import redo_as_expenses, stop_expenses
+    from .importing import charge_credits, redo_as_expenses, stop_expenses
     from .models import SupplierChange
 
     supplier = get_object_or_404(Supplier, pk=pk)
@@ -704,6 +705,8 @@ def supplier_expenses(request, pk):
                 "checked_count": documents.filter(reviewed_at__isnull=False).count(),
                 "to_classify": Product.objects.filter(supplier=supplier, stock_type__isnull=True, is_expense=False).count(),
                 "postes": Product.objects.filter(supplier=supplier, is_expense=True).count(),
+                # Turned into returns on the way back to goods (stop_expenses).
+                "credits": charge_credits(supplier).count(),
                 "fiche": fiche,
             },
         )
@@ -834,7 +837,21 @@ def _correction_page(request, invoice):
                 )
                 return here
         elif action is None:
-            formset = LineCorrectionFormSet(request.POST, form_kwargs={"document": document})
+            # A charge takes a credit line at a count of 1 (LineCorrectionForm.clean)
+            # - not where its supplier still has stock: a product a stock item
+            # claimed stays one under charges (redo_as_expenses), a line on it
+            # books a movement, and a credit there was stock at a negative
+            # unit cost. The supplier's rather than the stored line's: which
+            # product a row lands on is only known once saved, by its name
+            # (replace_invoice_lines), and a row added or renamed onto the
+            # stock item is that stock item.
+            from inventory.models import Product
+
+            charge = (
+                invoice.supplier.expenses_only
+                and not Product.objects.filter(supplier=invoice.supplier, stock_type__isnull=False).exists()
+            )
+            formset = LineCorrectionFormSet(request.POST, form_kwargs={"document": document, "charge": charge})
             header_form = DocumentHeaderForm(request.POST, initial=header)
             # Posted without the block (a page cached before it existed, a
             # request written by hand): the table is left as it was rather
@@ -970,6 +987,14 @@ def _save_corrections(request, invoice, formset, header_form, vat_form=None) -> 
             if header_form.cleaned_data["printed_total_ttc"] is not None:
                 invoice.printed_total_ttc = header_form.cleaned_data["printed_total_ttc"]
             replace_invoice_lines(invoice, lines)
+            if invoice.supplier.expenses_only and document == DOCUMENT_RECEIPT:
+                from .importing import charge_state
+
+                # A charge's own checks and state are its total's, the one
+                # typed here included: kept from the import, "Total de la
+                # charge" said a total just typed was never read, and saved
+                # with none, the charge came out settled.
+                charge_state(invoice, invoice.printed_total_ttc)
             fields = ["invoice_date", "printed_total_ttc"]
             doubted = bool(invoice.supplier_doubt)
             if doubted:
@@ -1020,14 +1045,47 @@ def _vat_initial(invoice) -> list[dict]:
 
 
 def _checks_context(invoice) -> dict:
-    """The checks beside the lines: the one kept up to date as they are
-    typed, and the rest as they were stored."""
-    from .parsers.receipt_base import RECONCILIATION_TOLERANCE
-    from .receipts import READING_CHECKS, SUM_CHECK, lines_check
+    """The checks beside the lines: the two kept up to date as they are
+    typed - the lines against the total, and against the VAT table's HT
+    base - and the rest as they were stored.
 
+    The HT one used to be the stored one, and its label is one the reading
+    writes too: the page marked it "(à la lecture du ticket)" on every
+    document validated since the table was typed here, although validating
+    rebuilds it from the lines as saved - 445 on 19/09, three tickets
+    corrected by hand among them (two Leroy Merlin, read with each item's
+    eco-participation as an item of its own) passing under that mark after
+    their reading had failed it. And it never moved while the lines were
+    typed. It is now worked out from the lines as they stand and the table
+    the page shows, like the sum; with no table there is nothing to work it
+    out from, and a stored one can only be the reading's (validating without
+    a table drops it), so it stays, said as such, until a table is typed.
+
+    A ticket's only, like the stored one (recheck_after_review): a supplier's
+    invoice never showed it, and its lines leave out what the reconciliation
+    adds (Invoice.reconciliation_adjustment, a duty) where the printed base
+    counts it - a table typed there as printed failed it, "du ticket".
+    """
+    from .parsers.receipt_base import RECONCILIATION_TOLERANCE
+    from .receipts import (
+        HT_CHECK,
+        READING_CHECKS,
+        SUM_CHECK,
+        lines_check,
+        vat_table_checks,
+    )
+
+    ht_check = (
+        next((check for check in vat_table_checks(invoice) if check["label"] == HT_CHECK), None)
+        if invoice.is_receipt
+        else None
+    )
+    live = {SUM_CHECK, HT_CHECK} if ht_check is not None else {SUM_CHECK}
     return {
         "live_check": lines_check(invoice),
-        "other_checks": [check for check in invoice.parse_checks if check["label"] != SUM_CHECK],
+        "ht_check": ht_check,
+        "ht_check_label": HT_CHECK,
+        "other_checks": [check for check in invoice.parse_checks if check["label"] not in live],
         "tolerance": RECONCILIATION_TOLERANCE,
         # What the parser said about lines a person may since have corrected:
         # shown as such, and replaced on validation.

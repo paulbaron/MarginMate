@@ -261,7 +261,7 @@ def extract_quantity(
                     effective_qty = name_count
             per_item = Decimal(total_volume) / Decimal(effective_qty)
             if per_item <= SMALL_FORMAT_VOLUME_THRESHOLD or is_container:
-                reason = "contenant (verre/distributeur)" if is_container else f"{per_item}L/article ≤ 33cl"
+                reason = "contenant (verre/distributeur)" if is_container else f"{per_item}L par unité achetée ≤ 33cl"
                 return QuantityGuess(
                     "UNIT", Decimal("1"), "high", f"vendu à l'unité ({reason})",
                     debug={"small_format": reason},
@@ -418,7 +418,7 @@ def extract_quantity(
             "UNIT",
             size_in_base,
             "high" if not approx else "medium",
-            f"taille {size_value}{size_unit} par article" + (" (environ)" if approx else ""),
+            f"taille {size_value}{size_unit} par unité achetée" + (" (environ)" if approx else ""),
             approx,
             debug,
             suggested_stock_unit="KG" if not is_volume else "L",

@@ -153,7 +153,7 @@ def import_laddition_sales_task(job_id: int, start: date, end: date, download_di
         export = parse_sales_exports(paths)
         job.items_sold = export.total_quantity
         job.append_log(
-            f"{len(export.entries)} totaux produit/jour lus ({export.total_quantity} articles vendus)."
+            f"{len(export.entries)} totaux produit/jour lus ({export.total_quantity} unités vendues)."
         )
 
         seen = sync_pos_products(export)

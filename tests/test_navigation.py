@@ -1,7 +1,7 @@
 """The top navigation: three workspaces instead of eight pages.
 
-Stock and its review queue are one page ("Produits"); invoices, tickets and
-invoice types another ("Achats"); recipes, till products and sales a third
+Stock and its review queue are one page ("Produits & charges"); invoices, tickets and
+their sources and suppliers another ("Achats"); recipes, till products and sales a third
 ("Recettes & ventes"). Each link lights up on every page of its workspace -
 and only it - and carries the count of what is waiting there.
 """
@@ -14,7 +14,7 @@ from django.urls import reverse
 from recipes.models import PosProduct
 from tests.factories import make_invoice, make_product, make_recipe, make_stock_type, make_supplier
 
-LABELS = ["Produits", "Achats", "Banque", "Recettes &amp; ventes", "Inventaires", "Admin"]
+LABELS = ["Produits &amp; charges", "Achats", "Banque", "Recettes &amp; ventes", "Inventaires", "Admin"]
 
 
 def nav_links(response):
@@ -43,7 +43,7 @@ class NavigationTests(TestCase):
         recipe = make_recipe(name="Mule")
         stock_type = make_stock_type(name="Vodka")
         pages = {
-            "Produits": [
+            "Produits &amp; charges": [
                 reverse("inventory:stock_list"),
                 reverse("inventory:stock_type_update", args=[stock_type.pk]),
                 reverse("inventory:stock_type_create"),
@@ -53,6 +53,8 @@ class NavigationTests(TestCase):
                 reverse("invoices:invoice_list"),
                 reverse("invoices:receipt_queue"),
                 reverse("invoices:invoice_type_list"),
+                reverse("invoices:supplier_list"),
+                reverse("invoices:supplier_detail", args=[supplier.pk]),
                 reverse("invoices:invoice_type_create"),
                 reverse("invoices:invoice_detail", args=[invoice.pk]),
                 reverse("invoices:invoice_edit_lines", args=[invoice.pk]),
@@ -83,7 +85,7 @@ class NavigationTests(TestCase):
         PosProduct.objects.create(name="Pinte", total_quantity=3)
         PosProduct.objects.create(name="Café", ignored=True)
         links = {label_of(link): link for link in nav_links(self.client.get(reverse("inventory:stock_list")))}
-        self.assertIn('<span class="badge">1</span>', links["Produits"])
+        self.assertIn('<span class="badge">1</span>', links["Produits &amp; charges"])
         self.assertIn('<span class="badge">1</span>', links["Achats"])
         self.assertIn('<span class="badge">1</span>', links["Recettes &amp; ventes"])
         self.assertNotIn("badge", links["Inventaires"])

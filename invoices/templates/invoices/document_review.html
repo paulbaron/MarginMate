@@ -146,8 +146,24 @@
                     <span class="check-label">{{ live_check.label }}</span>
                     <span class="check-detail">{{ live_check.detail }}</span>
                 </li>
+                {% comment %}
+                The lines' HT against the base of the VAT table below, worked
+                out from both as they stand and followed as they are typed -
+                never the reading's verdict, which the page used to show under
+                "(à la lecture du ticket)" on tickets corrected by hand. Drawn
+                hidden when the page has no table: typing one brings it. A
+                ticket's only (views._checks_context): a supplier's invoice
+                never had it, and without the row the script leaves it be.
+                {% endcomment %}
+                {% if is_receipt %}
+                    <li class="check {% if ht_check.passed %}check-pass{% else %}check-fail{% endif %}" id="live-ht-check" data-tolerance="{{ tolerance }}"{% if not ht_check %} hidden{% endif %}>
+                        <span class="check-mark">{% if ht_check.passed %}✓{% else %}✕{% endif %}</span>
+                        <span class="check-label">{{ ht_check_label }}</span>
+                        <span class="check-detail">{{ ht_check.detail }}</span>
+                    </li>
+                {% endif %}
                 {% for check in other_checks %}
-                    <li class="check {% if check.passed %}check-pass{% else %}check-fail{% endif %}">
+                    <li class="check {% if check.passed %}check-pass{% else %}check-fail{% endif %}"{% if check.label == ht_check_label %} data-before-table{% endif %}>
                         <span class="check-mark">{% if check.passed %}✓{% else %}✕{% endif %}</span>
                         <span class="check-label">{{ check.label }}{% if check.label in reading_checks %} <span class="muted">(à la lecture du ticket)</span>{% endif %}</span>
                         {% if check.detail %}<span class="check-detail">{{ check.detail }}</span>{% endif %}
@@ -474,12 +490,65 @@
         hint.hidden = !text;
     }
 
+    // The lines' HT against the VAT table's base, as either is typed: each
+    // line as it will be stored (LineCorrectionForm.amounts - after its
+    // promotion, through its rate) against the bases typed in the table,
+    // with the slack of the check saved on validation (vat_table_checks: a
+    // cent a line, lost to the HT division). No base typed, no check - and
+    // the reading's own, shown while there was no table, gives way.
+    var htCheck = document.getElementById("live-ht-check");
+    function halfUp(value) {
+        return Math.sign(value) * Math.round(Math.abs(value));
+    }
+    function lineHt(row) {
+        var ht = cents(field(row, "total_ht"));
+        var ttc = cents(field(row, "total_ttc"));
+        var discount = cents(field(row, "discount_ttc")) || 0;
+        var rate = parseFloat(String((field(row, "vat_rate") || {}).value || "").replace(",", "."));
+        if (isNaN(rate)) return ht;
+        var factor = 1 + rate / 100;
+        if (!discount) return ht !== null ? ht : (ttc === null ? null : halfUp(ttc / factor));
+        if (ttc === null) ttc = ht === null ? null : halfUp(ht * factor);
+        return ttc === null ? null : halfUp((ttc - discount) / factor);
+    }
+    function refreshHtCheck() {
+        if (!htCheck) return;
+        var base = 0;
+        var typed = false;
+        lines.querySelectorAll("input[name^='tva-'][name$='-base']").forEach(function (box) {
+            var amount = cents(box);
+            if (amount === null) return;
+            base += amount;
+            typed = true;
+        });
+        htCheck.hidden = !typed;
+        document.querySelectorAll("[data-before-table]").forEach(function (item) { item.hidden = typed; });
+        if (!typed) return;
+        var sum = 0;
+        var counted = 0;
+        lines.querySelectorAll("#line-rows .invoice-line-row").forEach(function (row) {
+            if (row.classList.contains("is-removed")) return;
+            var amount = lineHt(row);
+            if (amount === null) return;
+            sum += amount;
+            counted += 1;
+        });
+        var gap = base - sum;
+        var passed = Math.abs(gap) <= Math.max(Math.round(parseFloat(htCheck.dataset.tolerance) * 100), counted);
+        htCheck.classList.toggle("check-pass", passed);
+        htCheck.classList.toggle("check-fail", !passed);
+        htCheck.querySelector(".check-mark").textContent = passed ? "✓" : "✕";
+        htCheck.querySelector(".check-detail").textContent = "lignes " + euros(sum) + " € HT / document " + euros(base)
+            + " € HT (écart " + (gap < 0 ? "-" : "+") + euros(Math.abs(gap)) + " €)";
+    }
+
     // The lines against the total, as they are typed: the same sum (each
     // line to the cent, after its promotion) and tolerance as the check
     // saved on validation.
     var check = document.getElementById("live-lines-check");
     var shownTotal = document.getElementById("document-total");
     function refreshCheck() {
+        refreshHtCheck();
         var sum = 0;
         var discounts = 0;
         var kept = 0;

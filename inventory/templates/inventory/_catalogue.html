@@ -45,7 +45,7 @@ is what those answers trigger.
             </colgroup>
             <thead>
                 <tr>
-                    <th>Type</th>
+                    <th>Article</th>
                     <th class="num">Ouverture</th>
                     <th class="num">Achats</th>
                     <th class="num">Clôture</th>
@@ -74,12 +74,12 @@ is what those answers trigger.
             </colgroup>
             <thead>
                 <tr>
-                    <th>Type</th>
-                    <th class="num">Quantité</th>
+                    <th>Article</th>
+                    <th class="num" title="Quantité achetée, dans l'unité de l'article">Acheté</th>
                     <th class="num">Vendu</th>
                     <th>Unité</th>
-                    <th class="num">Valeur (HT)</th>
-                    <th class="num">Valeur (TTC)</th>
+                    <th class="num">Total HT</th>
+                    <th class="num">Total TTC</th>
                     <th></th>
                 </tr>
             </thead>
@@ -118,10 +118,10 @@ is what those answers trigger.
                     <td class="num" data-sort="{{ row.sold.headline|default_if_none:'' }}">
                         {% if row.sold and row.sold.headline %}
                             <span {% if row.flag_over %}class="sold-over"
-                                  title="Vendu plus qu'il n'en est {% if period %}sorti du stock sur la période{% else %}été acheté{% endif %} : il manque {{ row.sold.missing|floatformat:2 }} {{ row.stock_type.get_unit_display }}. Facture manquante, recette erronée, ou produit caisse mal rattaché."{% endif %}>{{ row.sold.headline|floatformat:2 }}</span>
+                                  title="Vendu plus qu'il n'en {% if period %}est sorti du stock sur la période{% else %}a été acheté, pertes déclarées déduites{% endif %} : il manque {{ row.sold.missing|floatformat:2 }} {{ row.stock_type.get_unit_display }}. Facture manquante, recette erronée, ou produit caisse mal rattaché."{% endif %}>{{ row.sold.headline|floatformat:2 }}</span>
                             {% if row.sold.is_ambiguous %}
                                 <span class="sold-shared"
-                                      title="{% if row.sold.headline_is_estimate %}Estimation{% else %}Dont {{ row.sold.shared|floatformat:2 }} estimé{% endif %} : cet article est proposé en alternative de {{ row.sold.pool_partners }} autre{{ row.sold.pool_partners|pluralize }}, alors les ventes leur sont réparties du plus cher au moins cher, dans la limite de ce qui {% if period %}est sorti du stock{% else %}a été acheté{% endif %} (moins {{ row.stock_type.loss_percent|floatformat:"-2" }} % de perte).">
+                                      title="{% if row.sold.headline_is_estimate %}Estimation{% else %}Dont {{ row.sold.shared|floatformat:2 }} estimé{% endif %} : cet article est proposé en alternative de {{ row.sold.pool_partners }} autre{{ row.sold.pool_partners|pluralize }}, alors les ventes leur sont réparties du plus cher au moins cher, dans la limite de ce qui {% if period %}est sorti du stock{% else %}a été acheté, pertes déclarées déduites{% endif %} (moins {{ row.stock_type.loss_percent|floatformat:"-2" }} % de perte).">
                                     ?
                                 </span>
                             {% endif %}
@@ -180,7 +180,7 @@ is what those answers trigger.
     {% endfor %}
 {% else %}
     <div class="empty-state">
-        Aucun article de stock pour le moment. Classez un produit dans le panneau, créez un article, ou importez une facture pour démarrer.
+        Aucun article pour le moment. Classez un produit dans le panneau, créez un article, ou importez une facture pour démarrer.
     </div>
 {% endif %}
 
@@ -195,8 +195,8 @@ where its documents name several.
 {% if charge_suppliers %}
     <details class="explainer charges" data-persist="charges">
         <summary>
-            Charges et abonnements (hors stock)
-            <span class="muted">— {{ charge_suppliers|length }} fournisseur{{ charge_suppliers|length|pluralize }}, {{ charge_total_ttc|floatformat:2 }} € TTC</span>
+            Charges et abonnements
+            <span class="muted">— {{ charge_suppliers|length }} fournisseur{{ charge_suppliers|length|pluralize }}, {{ charge_total_ttc|floatformat:2 }} € TTC {% if period %}sur la période{% else %}sur 12 mois{% endif %}</span>
         </summary>
         <p class="muted">
             Ces fournisseurs n'ont pas de produits : leurs factures sont enregistrées par poste quand elles

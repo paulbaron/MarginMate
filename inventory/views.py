@@ -20,14 +20,16 @@ from django.views.generic import CreateView, ListView, TemplateView, UpdateView
 from common import is_id
 
 from .forms import (
+    OLD_STOCK_TYPE_ENTRY_SUFFIXES,
     STOCK_TYPE_ENTRY_SUFFIX,
     EntryResolver,
     StockTakeForm,
     StockTakeLineFormSet,
     StockTypeForm,
+    is_stock_type_entry,
     stock_take_entry_lookup,
 )
-from .models import Product, StockMovement, StockTake, StockTakeLine, StockTakeLineSource, StockType, UnitChoices
+from .models import MovementKind, Product, StockMovement, StockTake, StockTakeLine, StockTakeLineSource, StockType, UnitChoices
 from .product_matching_rules import apply_rules_to_pending_products
 from .variance import (
     PeriodStock,
@@ -54,8 +56,9 @@ def existing_categories():
 
 
 class StockListView(TemplateView):
-    """"Produits": every stock item and what it is worth - and, beside them,
-    the products no stock item has claimed yet.
+    """"Produits & charges": every stock item and what was spent on it, the
+    charges under them - and, beside them, the products no stock item has
+    claimed yet.
 
     One page because it is one job: a product is classified in the side
     panel and checked in the list next to it, where it has just landed (the
@@ -80,8 +83,8 @@ def stock_catalogue(request):
 
 
 def catalogue_context(request) -> dict:
-    """The stock list: categories of stock items with their quantities,
-    values and sales - over all time, or the period `?inventaire=` names."""
+    """The list: categories of stock items with what was bought and sold over
+    all time, or what moved over the period `?inventaire=` names."""
     stock_types = list(StockType.objects.all().order_by("category", "name"))
     context = {}
 
@@ -104,15 +107,32 @@ def catalogue_context(request) -> dict:
     # several seconds just to render (8+ MB of HTML). It's fetched
     # lazily per stock type instead, the first time a row is expanded -
     # see stock_type_movements() below.
+    #
+    # Two sets of sums from the one scan. What the page shows all time -
+    # "Acheté", "Total HT/TTC", "Total acheté" - is what was BOUGHT: the
+    # purchases alone, so a loss written down later never makes "acheté" a
+    # lie. The ledger (every movement: bought, less the losses and
+    # corrections) is the stock one: it is how much could have been poured,
+    # the ceiling "Vendu" respects, and it prices an item the way
+    # StockType.current_unit_cost_ht does. The two are the same numbers until
+    # somebody records a loss.
     quantity_by_type: dict[int, Decimal] = {}
     value_ht_by_type: dict[int, Decimal] = {}
+    bought_by_type: dict[int, Decimal] = {}
+    bought_ht_by_type: dict[int, Decimal] = {}
     value_ttc_by_type: dict[int, Decimal] = {}
     values = StockMovement.objects.values_list(
-        "stock_type_id", "quantity", "unit_cost_ht", "invoice_line__total_ht", "invoice_line__vat_rate"
+        "stock_type_id", "kind", "quantity", "unit_cost_ht", "invoice_line__total_ht", "invoice_line__vat_rate"
     )
-    for stock_type_id, quantity, unit_cost_ht, line_total_ht, vat_rate in values:
+    for stock_type_id, kind, quantity, unit_cost_ht, line_total_ht, vat_rate in values:
         quantity_by_type[stock_type_id] = quantity_by_type.get(stock_type_id, Decimal("0")) + quantity
         value_ht_by_type[stock_type_id] = value_ht_by_type.get(stock_type_id, Decimal("0")) + (
+            quantity * unit_cost_ht
+        )
+        if kind != MovementKind.PURCHASE:
+            continue
+        bought_by_type[stock_type_id] = bought_by_type.get(stock_type_id, Decimal("0")) + quantity
+        bought_ht_by_type[stock_type_id] = bought_ht_by_type.get(stock_type_id, Decimal("0")) + (
             quantity * unit_cost_ht
         )
         if line_total_ht is not None:
@@ -123,8 +143,8 @@ def catalogue_context(request) -> dict:
     rows = [
         {
             "stock_type": st,
-            "quantity": quantity_by_type.get(st.id, Decimal("0")),
-            "value_ht": value_ht_by_type.get(st.id, Decimal("0")),
+            "quantity": bought_by_type.get(st.id, Decimal("0")),
+            "value_ht": bought_ht_by_type.get(st.id, Decimal("0")),
             "value_ttc": value_ttc_by_type.get(st.id, Decimal("0")),
         }
         for st in stock_types
@@ -158,9 +178,9 @@ def catalogue_context(request) -> dict:
     context["period"] = period
     context["stock_takes"] = StockTake.objects.all()
     if period is None:
-        # All time. Passing the ledger quantities in is what makes the
-        # "Vendu" column comparable to the "Quantité" column beside it:
-        # they are then literally the same figure.
+        # All time. The ledger quantities are the ceiling: what was bought
+        # (the "Acheté" column beside "Vendu"), less the losses recorded,
+        # which cannot have been sold.
         sold = quantities_sold(unit_costs=unit_costs, available=quantity_by_type)
     else:
         sold = quantities_sold(
@@ -871,7 +891,7 @@ def delete_stock_type(request, pk):
     # COMPLETE despite now containing an unreviewed product again.
     for product in affected_products:
         refresh_invoice_statuses_for_product(product)
-    messages.success(request, f'Type de stock "{name}" supprimé. Les produits associés sont repassés en vérification.')
+    messages.success(request, f"Article « {name} » supprimé. Ses produits repassent dans « À classer ».")
     return redirect("inventory:stock_list")
 
 
@@ -895,11 +915,11 @@ def clear_empty_stock_types(request):
     if deleted or kept:
         messages.success(
             request,
-            f"{deleted} type(s) de stock vide(s) supprimé(s)"
+            f"{deleted} article(s) vide(s) supprimé(s)"
             + (f", {kept} gardé(s) car utilisé(s) dans une recette, un inventaire ou une vente." if kept else "."),
         )
     else:
-        messages.info(request, "Aucun type de stock vide à supprimer.")
+        messages.info(request, "Aucun article vide à supprimer.")
     return redirect("inventory:stock_list")
 
 
@@ -1043,7 +1063,7 @@ def edit_product_conversion(request, product_id):
         messages.error(request, "Facteur invalide.")
         return redirect("inventory:stock_list")
     if product.stock_type is None:
-        messages.error(request, f'"{product.raw_name}" n\'est rattaché à aucun article de stock.')
+        messages.error(request, f"« {product.raw_name} » n'est rangé dans aucun article.")
         return redirect("inventory:stock_list")
     # product.unit always mirrors its stock type's unit now (see
     # assign_product) - there's nothing left for a human to choose here
@@ -1085,7 +1105,7 @@ def approve_all_suggestions(request):
 
         reason = None
         if stock_type is None:
-            reason = "aucun type de stock identifié"
+            reason = "aucun article identifié"
         elif stock_equivalent is None:
             reason = f"facteur de conversion invalide ({suggestion.get('stock_equivalent')!r})"
 
@@ -1147,11 +1167,11 @@ def assign_product(request, product_id):
         # A rent is not stock. The panel never offers one (it lists what
         # needs review, and a charge never does), but the address took it:
         # classified, the rent became bottles, with a stock movement behind.
-        error = f"« {product.raw_name} » est un poste de charge : il n'a pas d'article de stock."
+        error = f"« {product.raw_name} » est un poste de charge : il ne se range dans aucun article."
     elif stock_equivalent is None:
-        error = "L'équivalence en stock doit être un nombre positif."
+        error = "« 1 produit = » doit être un nombre positif."
     elif not name:
-        error = "Donnez un nom de type de stock."
+        error = "Donnez le nom de l'article."
     if error:
         messages.error(request, error)
         return _review_panel(request) if _is_htmx(request) else redirect("inventory:stock_list")
@@ -1295,6 +1315,10 @@ def _stock_take_form_view(request, stock_take):
             "formset": formset,
             "entry_names": entries.keys(),
             "entry_data": json.dumps(entries),
+            # A draft kept in the browser may still name an article the old
+            # way; the page renames it as it restores it.
+            "entry_suffix": STOCK_TYPE_ENTRY_SUFFIX,
+            "old_entry_suffixes": list(OLD_STOCK_TYPE_ENTRY_SUFFIXES),
             # What the already-saved lines are worth, so the running total is
             # right the moment the page opens without valuing anything again
             # (a saved line's value is frozen - see StockTake's docstring).
@@ -1328,7 +1352,7 @@ def value_stock_take_line(request):
         return JsonResponse({"ok": False, "error": "quantity"})
     as_of = parse_date(request.GET.get("as_of") or "") or timezone.localdate()
 
-    if name.endswith(STOCK_TYPE_ENTRY_SUFFIX):
+    if is_stock_type_entry(name):
         stock_type = resolver.stock_type(name)
         if stock_type is None:
             return JsonResponse({"ok": False, "error": "unknown"})
