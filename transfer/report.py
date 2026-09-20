@@ -134,6 +134,15 @@ class SectionReport:
         return shown
 
     def to_json(self) -> dict:
+        return {**self.outcome(), "notes": list(self.notes)}
+
+    def outcome(self) -> dict:
+        """What this section's run DOES: how many of each thing, and every
+        record it names. Not its `notes`, which also say things about what
+        the run leaves alone - « 4 fichiers que plus rien ne cite dans
+        media/ restent tels quels » counts stray files, and that count
+        changed under the owner between a page's preview and its confirm,
+        so every « Effacer » was refused for ever (20/09)."""
         return {
             "key": self.key,
             "label": self.label,
@@ -141,7 +150,6 @@ class SectionReport:
             "conflicts": list(self.conflicts),
             "skipped": list(self.skipped),
             "kept": list(self.kept),
-            "notes": list(self.notes),
             "overflow": dict(self.overflow),
         }
 
@@ -180,12 +188,13 @@ class RunReport:
 
     def outcome(self) -> dict:
         """What the run does, without when or how long: a preview and its
-        confirm on the same input have the same outcome."""
+        confirm on the same input have the same outcome. Notes are left out
+        (SectionReport.outcome says why): a run is what it changes, and a
+        note that counts what it leaves alone made every confirm refuse."""
         return {
             "mode": self.mode,
-            "sections": [section.to_json() for section in self.sections],
+            "sections": [section.outcome() for section in self.sections],
             "rebuilt": dict(self.rebuilt),
-            "notes": list(self.notes),
         }
 
     def same_outcome(self, other: RunReport) -> bool:
@@ -209,7 +218,16 @@ class RunReport:
         return f"{self.duration_s:.1f}".replace(".", ",")
 
     def to_json(self) -> dict:
-        return {**self.outcome(), "preview": self.preview, "safety": self.safety, "duration_s": self.duration_s}
+        # Its sections' notes too (SectionReport.to_json): kept and shown,
+        # only left out of what a preview and its confirm are held to.
+        return {
+            **self.outcome(),
+            "sections": [section.to_json() for section in self.sections],
+            "notes": list(self.notes),
+            "preview": self.preview,
+            "safety": self.safety,
+            "duration_s": self.duration_s,
+        }
 
     @classmethod
     def from_json(cls, data) -> RunReport:

@@ -310,6 +310,19 @@ def _shows(request, stored: dict) -> bool:
     return request.POST.get(SHOWN_PREVIEW, "") == RunReport.from_json(stored).fingerprint
 
 
+def _still_shown(request, fresh: RunReport) -> bool:
+    """Whether a confirm naming another preview than the one stored still
+    names what would happen now: the page announced this very outcome, so
+    running it keeps the promise, whichever preview was stored since.
+
+    Without this, a page whose preview was replaced by any other - the tab
+    left open on the second tick, an earlier confirm that previewed again -
+    was refused for ever: the owner ticked, typed EFFACER and clicked, saw
+    an orange warning and nothing deleted, again and again (20/09)."""
+    posted = request.POST.get(SHOWN_PREVIEW, "")
+    return bool(posted) and posted == fresh.fingerprint
+
+
 def _why_not_shown(request, old_page: str, other_tab: str) -> str:
     """Why a confirm is not the one its page showed: a form drawn before
     this version names no preview at all, and telling the two apart is what
@@ -551,10 +564,13 @@ def data_import_stage(request, token):
                 messages.warning(request, EXPIRED if same and previewed else CHANGED)
                 return redirect("transfer:data_import_stage", token=token)
             if not _shows(request, stage.state["preview"]):
-                # Same boxes, another outcome: the database moved between the
-                # page's preview and the one stored since (another tab), or
-                # the page predates this version. The page now shows the
-                # stored preview, fresh, to be confirmed.
+                # The preview stored is another page's (a second tab, an
+                # earlier confirm). What this page announced still decides:
+                # worked out again, it either says the same - and runs, held
+                # to it - or something changed since and nothing is done.
+                fresh = _preview_import(stage, strategies)
+                if _still_shown(request, fresh):
+                    return _confirm_import(request, stage, strategies)
                 messages.warning(request, _why_not_shown(request, OLD_PAGE_IMPORT, OTHER_TAB_IMPORT))
                 return redirect("transfer:data_import_stage", token=token)
             return _confirm_import(request, stage, strategies)
@@ -674,9 +690,14 @@ def data_clear(request):
                 messages.warning(request, EXPIRED if expired else CHANGED)
                 return redirect("transfer:data_clear")
             if not _shows(request, pending["report"]):
-                # Two tabs share the session: the preview stored is the other
-                # tab's, and the page now shows it. Or the page was drawn
-                # before this version and names no preview at all.
+                # The preview stored is another page's (a second tab, an
+                # earlier confirm that previewed again). What this page
+                # announced still decides: worked out again, it either says
+                # the same - and runs, held to it - or something changed
+                # since and nothing is done.
+                fresh = _preview_clear(request, selected)
+                if _still_shown(request, fresh):
+                    return _confirm_clear(request, selected, fresh)
                 messages.warning(request, _why_not_shown(request, OLD_PAGE_CLEAR, OTHER_TAB_CLEAR))
                 return redirect("transfer:data_clear")
             return _confirm_clear(request, selected, RunReport.from_json(pending["report"]))

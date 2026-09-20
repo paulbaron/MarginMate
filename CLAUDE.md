@@ -1508,17 +1508,26 @@ imports (`transfer/legacy.py`).
   document that arrived since be pruned, its photo deleted and in no archive
   (review, 19/09). The confirm also names the preview on its own page
   (`views.SHOWN_PREVIEW`, the hidden field `apercu`: `RunReport.fingerprint`,
-  a sha256 of the outcome). A confirm naming another preview, or none, runs
-  nothing and takes no backup; the page shows the stored one. With the stage
-  open in two tabs, « Importer » clicked under « 0 à supprimer » ran the
-  preview the other tab had made since, and deleted a ticket that had
-  arrived in between, with its photo (review, 19/09). **Each refusal says
-  which it is**: another tab previewed since (`OTHER_TAB_*`), or the page
-  names no preview at all because it was drawn before this version
-  (`OLD_PAGE_*`, `_why_not_shown`). Told « la base a changé », the owner
-  clicked « Effacer définitivement » on a page open since before the reload,
-  saw nothing happen and went looking for a change nobody had made (20/09). So a report's notes read the same in the preview and the
-  confirm - a participle, never a tense.
+  a sha256 of the outcome). With the stage open in two tabs, « Importer »
+  clicked under « 0 à supprimer » ran the preview the other tab had made
+  since, and deleted a ticket that had arrived in between, with its photo
+  (review, 19/09). **A confirm naming another preview than the one stored is
+  worked out again, and runs when the page's announcement still holds**
+  (`_still_shown`): the guarantee is that the run does what the page said,
+  not that the session's last preview is the page's. Refused outright, it
+  was a dead end - the owner ticked, typed EFFACER and clicked, got an
+  orange warning and nothing deleted, over and over (20/09), because the
+  stored preview had been replaced by one whose only difference was a note
+  counting stray files. **What a run DOES is what it is held to**
+  (`RunReport.outcome`, `SectionReport.outcome`): tallies, conflicts,
+  skipped and kept - never the notes, which also say things about what the
+  run leaves alone (« 4 fichiers que plus rien ne cite dans media/ restent
+  tels quels » changes when a file appears). **A refusal says which it is**:
+  another preview says something else now (`OTHER_TAB_*`), the page names no
+  preview at all, drawn before this version (`OLD_PAGE_*`,
+  `_why_not_shown`), or the database moved between the confirm and its
+  commit (`MOVED_*`). So a report's notes read the same in the preview and
+  the confirm - a participle, never a tense.
 - **Before any confirmed import or clear**, a SQLite backup of the database,
   and an importable archive of every section whose rows the run changes or
   deletes, whichever section's code does it (`safety.sections_at_risk`,

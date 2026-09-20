@@ -650,6 +650,31 @@ class ReportTests(SimpleTestCase):
         self.assertNotEqual(report(2).fingerprint, shown.fingerprint)
         self.assertNotEqual(report(1, mode="clear").fingerprint, shown.fingerprint)
 
+    def test_a_note_about_what_the_run_leaves_alone_is_not_the_run(self):
+        """« 4 fichiers que plus rien ne cite dans media/ restent tels
+        quels » counts files the run never touches, and it changed under the
+        owner between the page's preview and the confirm: every « Effacer »
+        was then refused for ever, the page announcing the same deletions
+        (20/09). What a run DOES - its tallies, its conflicts, what it skips
+        and keeps - is what a preview and its confirm are held to."""
+        from transfer.report import RunReport
+
+        def report(note: str) -> RunReport:
+            section = SectionReport(key="factures", label="Factures et tickets")
+            section.deleted("documents", 893)
+            section.note(note)
+            return RunReport(mode="clear", preview=True, sections=[section], rebuilt={}, notes=[note])
+
+        four = report("4 fichiers que plus rien ne cite dans media/ restent tels quels.")
+        seven = report("7 fichiers que plus rien ne cite dans media/ restent tels quels.")
+        self.assertEqual(four.fingerprint, seven.fingerprint)
+        self.assertTrue(four.same_outcome(seven))
+        # What it does still decides.
+        differs = report("4 fichiers que plus rien ne cite dans media/ restent tels quels.")
+        differs.sections[0].deleted("documents")
+        self.assertNotEqual(differs.fingerprint, four.fingerprint)
+        self.assertFalse(differs.same_outcome(four))
+
 
 class LoneSurrogateTests(SimpleTestCase):
     """Half a UTF-16 pair written as a JSON escape ("\\ud800") is valid JSON,
