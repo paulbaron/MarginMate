@@ -97,7 +97,11 @@
 // (not per user account - this is a single-user app) so reloading the page,
 // or the list reloading itself after a product was classified, doesn't
 // collapse everything you had open back down.
-var EXPANDED_STORAGE_KEY = "marginmate:stock:expanded";
+// ":rows" and not ":expanded": until 20/09 every classification wrote the
+// article's purchases panel in here for good, so a browser that classified
+// a hundred products carried a hundred open panels - 81 000 px of page to
+// search through. The new key starts from what a reader opens themselves.
+var EXPANDED_STORAGE_KEY = "marginmate:stock:rows";
 
 function loadExpandedIds() {
     try {
@@ -113,6 +117,24 @@ function saveExpandedIds(ids) {
     } catch (e) {
         // private browsing / storage disabled - expansion just won't persist
     }
+}
+
+// The purchases panel a classification opened to be seen (revealStockType).
+// It is NOT written into the storage above: a session of classifying left
+// every article's panel open for good, so the next search answered with a
+// page to scroll through (owner, 20/09). It closes by itself at the next
+// reveal, at the next search, or when the reader opens it themselves.
+var revealedDetails = null;
+
+function collapseRevealed() {
+    if (!revealedDetails) return;
+    var target = document.getElementById(revealedDetails);
+    var toggle = document.querySelector('#catalogue [data-toggle="' + revealedDetails + '"]');
+    revealedDetails = null;
+    if (!target || loadExpandedIds().has(target.id)) return;  // theirs now: left alone
+    target.hidden = true;
+    var chevron = toggle && toggle.querySelector(".chevron");
+    if (chevron) chevron.textContent = "▸";
 }
 
 function expandTarget(toggle, target) {
@@ -155,6 +177,9 @@ document.addEventListener("click", function (event) {
     if (!target) return;
 
     var expanded = loadExpandedIds();
+    // Touched by hand, it is theirs: remembered, and no longer the panel a
+    // classification opened for a look.
+    if (toggle.dataset.toggle === revealedDetails) revealedDetails = null;
     if (target.hidden) {
         expandTarget(toggle, target);
         expanded.add(toggle.dataset.toggle);
@@ -203,6 +228,11 @@ function restoreCategoryState(header, table) {
 
 function applySearchFilter(matchedIds) {
     var totalMatches = 0;
+    // Results are rows (CSS .is-searching): what a row has open is left as
+    // it is, only out of the way while the list is being searched.
+    var catalogue = document.getElementById("catalogue");
+    if (catalogue) catalogue.classList.toggle("is-searching", matchedIds !== null);
+    collapseRevealed();
     document.querySelectorAll("#catalogue .category-block").forEach(function (block) {
         var header = block.querySelector(".category-header");
         var table = block.querySelector("table");
@@ -353,7 +383,12 @@ document.addEventListener("input", function (event) {
     if (!box) return;
     clearTimeout(filterTimer);
     var typed = event.target.value.trim();
+    var input = event.target;
     filterTimer = setTimeout(function () {
+        // Saved in the meantime (typed, then « Classer » straight away): its
+        // card is gone, and filtering the list on a name already classified
+        // would undo the reveal the save just did.
+        if (!input.isConnected) return;
         box.value = typed;
         runSearch(typed);
     }, SEARCH_DEBOUNCE_MS);
@@ -410,8 +445,17 @@ document.addEventListener("click", function (event) {
 function revealStockType(id) {
     var row = document.querySelector('#catalogue .stock-row[data-stock-type-id="' + id + '"]');
     if (!row) return;
+    // The search was the name being typed in the panel, and that name has
+    // just been saved: the list goes back to whole, opened on where the
+    // product went. Left filtered, the row was there but its purchases -
+    // what the reveal is for - were hidden with every other panel.
     var box = searchBox();
-    if (row.classList.contains("search-hidden") && box) {
+    if (box) {
+        // Nothing typed a moment ago may filter the list back: the debounce
+        // of the panel's field, and of the box itself, are dropped here.
+        clearTimeout(filterTimer);
+        clearTimeout(searchTimer);
+        searchToken++;
         box.value = "";
         applySearchFilter(null);
         document.getElementById("stock-search-status").hidden = true;
@@ -421,14 +465,17 @@ function revealStockType(id) {
     var expanded = loadExpandedIds();
     if (header && table.hidden) expandTarget(header, table);
     if (header) expanded.add(header.dataset.toggle);
+    saveExpandedIds(expanded);
     var details = document.getElementById(row.dataset.toggle);
     if (details) {
         // The list was drawn after the classification: the purchases it
-        // loads include the product just classified.
+        // loads include the product just classified. Shown to be seen, and
+        // not remembered (collapseRevealed) - one classification after
+        // another, the page grew a panel each time.
+        collapseRevealed();
         expandTarget(row, details);
-        expanded.add(row.dataset.toggle);
+        revealedDetails = details.id;
     }
-    saveExpandedIds(expanded);
     row.scrollIntoView({ block: "center", behavior: "smooth" });
     row.classList.remove("flash");
     void row.offsetWidth;

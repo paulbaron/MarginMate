@@ -2053,7 +2053,16 @@ back and forth between them. The rules that came with merging them:
   side panel of Produits & charges gets the panel back with a note and an undo (the undo
   deletes a stock item the classification created - signed, `UNDO_SALT`),
   and `HX-Trigger: catalogue-changed` makes the list reload itself opened on
-  that item. A till product linked from its row gets the row back. A PDF
+  that item. **What that opens is shown, not remembered** (`revealedDetails`
+  / `collapseRevealed`, key `marginmate:stock:rows`): written into the
+  browser's storage, one classification after another left every article's
+  purchases open - on the real data, a dozen of them made the page 81 000 px
+  tall to search through (owner, 20/09). Only what a reader opens themselves
+  is remembered, and **a search answers with rows** (`#catalogue.is-searching`
+  hides the panels while it filters, and the reveal drops the pending
+  debounce of the panel's field: typed, then « Classer » at once, it filtered
+  the list back onto a name already classified). A till product linked from
+  its row gets the row back. A PDF
   imported comes back highlighted and opened in the list (`?surligner=`);
   the list reloads when an import or a gather ends (`documents-changed`,
   sent by their status partials once they stop polling).

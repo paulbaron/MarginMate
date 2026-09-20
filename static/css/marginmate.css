@@ -333,6 +333,11 @@ th[aria-sort]:not([aria-sort="none"]) > button { color: var(--text); }
 .vat-row input { width: 7rem; }
 
 .search-hidden { display: none !important; }
+/* A search answers with rows: the purchases panels an article has open stay
+   open (this only hides them) but are out of the way while reading the
+   results - looking for an existing article to classify a product into, the
+   answer was a page of open panels to scroll through (owner, 20/09). */
+#catalogue.is-searching tr[data-child-row] { display: none; }
 
 /* ------------------------------------------------------- grouped stock list */
 
