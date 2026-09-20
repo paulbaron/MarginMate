@@ -57,6 +57,26 @@ EXPIRED = "L'aperçu avait plus de 30 minutes : voici le nouvel aperçu, confirm
 #: The confirm was not the previewed run (runner.NotAsPreviewed): undone.
 MOVED_IMPORT = "La base a changé depuis l'aperçu : rien n'a été importé. Voici le nouvel aperçu."
 MOVED_CLEAR = "La base a changé depuis l'aperçu : rien n'a été effacé. Voici le nouvel aperçu."
+#: The confirm came from a page whose form names another preview than the one
+#: stored - another tab has previewed since.
+OTHER_TAB_IMPORT = (
+    "Un autre onglet a prévisualisé depuis : rien n'a été importé. Voici l'aperçu à jour, à confirmer de nouveau."
+)
+OTHER_TAB_CLEAR = (
+    "Un autre onglet a prévisualisé depuis : rien n'a été effacé. Voici l'aperçu à jour, à confirmer de nouveau."
+)
+#: The form names no preview at all: it was drawn before this version - the
+#: owner's « Effacer » did nothing on 20/09 and was told « la base a changé »,
+#: so they went looking for a change nobody had made. The page a redirect
+#: draws carries the field, so confirming again from it works.
+OLD_PAGE_IMPORT = (
+    "Rien n'a été importé : cette page avait été ouverte avant une mise à jour de l'application. "
+    "Voici l'aperçu à jour : vérifiez-le et confirmez de nouveau."
+)
+OLD_PAGE_CLEAR = (
+    "Rien n'a été effacé : cette page avait été ouverte avant une mise à jour de l'application. "
+    "Voici l'aperçu à jour : vérifiez-le et confirmez de nouveau."
+)
 GONE = "Cette archive n'est plus en attente : envoyez-la de nouveau."
 TYPE_EFFACER = "Tapez EFFACER pour confirmer."
 #: Installed by the migrations into every database: a database holding only
@@ -288,6 +308,14 @@ def _shows(request, stored: dict) -> bool:
     """Whether the confirm was clicked on the page showing the preview
     stored. A form that names none was not drawn from it either."""
     return request.POST.get(SHOWN_PREVIEW, "") == RunReport.from_json(stored).fingerprint
+
+
+def _why_not_shown(request, old_page: str, other_tab: str) -> str:
+    """Why a confirm is not the one its page showed: a form drawn before
+    this version names no preview at all, and telling the two apart is what
+    the message has to say - « la base a changé » sent the owner looking for
+    a change nobody had made (20/09)."""
+    return old_page if not request.POST.get(SHOWN_PREVIEW) else other_tab
 
 
 def _backup_message(done: str, backups: dict[str, str]) -> str:
@@ -524,9 +552,10 @@ def data_import_stage(request, token):
                 return redirect("transfer:data_import_stage", token=token)
             if not _shows(request, stage.state["preview"]):
                 # Same boxes, another outcome: the database moved between the
-                # page's preview and the one stored since (another tab). The
-                # page now shows the stored one, fresh, to be confirmed.
-                messages.warning(request, MOVED_IMPORT)
+                # page's preview and the one stored since (another tab), or
+                # the page predates this version. The page now shows the
+                # stored preview, fresh, to be confirmed.
+                messages.warning(request, _why_not_shown(request, OLD_PAGE_IMPORT, OTHER_TAB_IMPORT))
                 return redirect("transfer:data_import_stage", token=token)
             return _confirm_import(request, stage, strategies)
         _preview_import(stage, strategies)
@@ -646,8 +675,9 @@ def data_clear(request):
                 return redirect("transfer:data_clear")
             if not _shows(request, pending["report"]):
                 # Two tabs share the session: the preview stored is the other
-                # tab's, and the page now shows it.
-                messages.warning(request, MOVED_CLEAR)
+                # tab's, and the page now shows it. Or the page was drawn
+                # before this version and names no preview at all.
+                messages.warning(request, _why_not_shown(request, OLD_PAGE_CLEAR, OTHER_TAB_CLEAR))
                 return redirect("transfer:data_clear")
             return _confirm_clear(request, selected, RunReport.from_json(pending["report"]))
         _preview_clear(request, selected)

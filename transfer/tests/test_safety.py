@@ -419,7 +419,7 @@ class ThroughThePageTests(TransactionTestCase):
 
         response = self.client.post(url, {**posted, "action": "importer", "apercu": shown_preview(tab_a)})
         self.assertRedirects(response, url, fetch_redirect_response=False)
-        self.assertEqual(said(response), [views.MOVED_IMPORT])
+        self.assertEqual(said(response), [views.OTHER_TAB_IMPORT])
         self.assertTrue(Invoice.objects.filter(pk=fresh.pk).exists())
         self.assertTrue(default_storage.exists(name))
         self.assertEqual(safety.list_backups(), [])  # refused before any backup

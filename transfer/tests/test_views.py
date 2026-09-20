@@ -419,12 +419,15 @@ class ImportTests(FakeSectionsMixin, TestCase):
         tab_b = shown_preview(self.client.get(self.url))
         self.assertNotIn(tab_b, ("", tab_a))
 
-        for posted in (tab_a, "", "0" * 64):
+        # A form naming no preview was drawn before this version: say so,
+        # rather than « la base a changé », which sent the owner looking for
+        # a change nobody made (20/09, the owner's « Effacer » did nothing).
+        for posted, expected in ((tab_a, views.OTHER_TAB_IMPORT), ("0" * 64, views.OTHER_TAB_IMPORT), ("", views.OLD_PAGE_IMPORT)):
             with self.subTest(posted=posted), mock.patch("transfer.views.safety.before", return_value=BACKUPS) as before:
                 response = self.post("importer", apercu=posted, recettes="remplacer")
                 before.assert_not_called()
                 self.assertRedirects(response, self.url, fetch_redirect_response=False)
-                self.assertEqual(said(response), [views.MOVED_IMPORT])
+                self.assertEqual(said(response), [expected])
                 self.assertTrue(StockType.objects.filter(name="Recette arrivée entre deux aperçus").exists())
                 self.assertEqual(StockType.objects.get(name="Recette A").loss_percent, 12)
                 # The preview shown now is the stored one, still to confirm.
@@ -720,12 +723,14 @@ class ClearTests(FakeSectionsMixin, TestCase):
         tab_b = shown_preview(self.client.get(self.url))
         self.assertNotIn(tab_b, ("", tab_a))
 
-        for posted in (tab_a, ""):
+        # « Effacer » from a page drawn before this version names no preview:
+        # what the owner met on 20/09, told « la base a changé ».
+        for posted, expected in ((tab_a, views.OTHER_TAB_CLEAR), ("", views.OLD_PAGE_CLEAR)):
             with self.subTest(posted=posted):
                 response, before = self.confirm("EFFACER", apercu=posted)
                 before.assert_not_called()
                 self.assertRedirects(response, self.url, fetch_redirect_response=False)
-                self.assertEqual(said(response), [views.MOVED_CLEAR])
+                self.assertEqual(said(response), [expected])
                 self.assertEqual(StockType.objects.filter(category="factures").count(), 2)
                 self.assertEqual(shown_preview(self.client.get(self.url)), tab_b)
 
