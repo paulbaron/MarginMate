@@ -293,9 +293,11 @@ class ClearFromThePageTests(MediaMixin, TransactionTestCase):
         empty_backups()
         self.addCleanup(empty_backups)
         build_everything()
+        # Its own backup (backups/, where only safety.before writes) puts
+        # the portals back as they were - as_restored is for an archive from
+        # anywhere else. Restored inactive, the owner's five portals were
+        # left out of the next gather with nothing saying why (20/09).
         self.before = snapshots()
-        # The portal comes back inactive from the backup (see _check above).
-        self.before["sources"] = as_restored(self.before["sources"])
         self.files = {name: sha(name) for name in named_files()}
         self.code_bound = {supplier.code for supplier in Supplier.objects.all() if code_bound(supplier)}
         self.pause = metro_pause()

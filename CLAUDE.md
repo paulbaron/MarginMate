@@ -1571,10 +1571,16 @@ imports (`transfer/legacy.py`).
   the import and the source form alike (`invoices.models.APP_ENV_PREFIXES`,
   in `WebsiteInvoiceSource.clean`: Metro, the mailbox, the till, the AI,
   Django; a test checks the list against config/settings.py). An import
-  never switches a portal on. One it creates, or whose address or variables
-  it changes, arrives inactive, and the report names its address and
-  variables so the owner can tick « Active » after a look. A round trip
-  therefore brings a portal back inactive (`as_restored` in the tests).
+  never switches a portal on **unless the archive is one this installation
+  wrote itself**: a file in `backups/`, where only `safety.before` writes
+  (`ImportContext.own_backup` - a manifest can claim any `reason`, so the
+  folder is what says it). Restoring its own backup puts the portals back as
+  they were, .env note included. Left inactive, the owner's five portals sat
+  out the next gather, which searched the mailbox only, and nothing on the
+  page said why (20/09). From any other archive, a portal it creates, or
+  whose address or variables it changes, arrives inactive, and the report
+  names its address and variables so the owner can tick « Active » after a
+  look (`as_restored` in the tests is that case).
   Merged or replaced, a portal the archive has active and this database has
   inactive is not a conflict, since « Remplacer » would not switch it on
   either. It is « inchangée », with a note under « À savoir » saying why and

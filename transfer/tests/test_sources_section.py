@@ -9,17 +9,20 @@ Every name, address and pattern below is invented.
 """
 
 import os
+import shutil
 from datetime import datetime
 from datetime import timezone as dt_timezone
+from pathlib import Path
 from unittest import mock
 
+from django.conf import settings
 from django.test import TestCase
 
 from invoices.models import EmailInvoiceSource, InvoiceType, WebsiteInvoiceSource
 from tests.factories import make_supplier
 from transfer import registry
 from transfer.archive import ArchiveError, ArchiveReader
-from transfer.runner import run_clear
+from transfer.runner import run_clear, run_export
 from transfer.sections import sources as section
 from transfer.sections.base import Strategy
 from transfer.tests.support import (
@@ -502,6 +505,52 @@ class RestoredPortalTests(TestCase):
         )
         self.assertEqual(report.notes, [])
         self.assertTrue(InvoiceType.objects.get(name="Eau Essai").is_active)
+
+
+class OwnBackupTests(TestCase):
+    """A safety archive this installation wrote restores a portal as it was.
+
+    After « Effacer », the owner put their data back from the backup the
+    page had just made, and their five portals came back inactive: the next
+    gather fetched the mailbox sources only, and nothing said why (20/09).
+    An import still never switches a portal on from an archive that came
+    from anywhere else - a manifest can claim any reason, so what is
+    trusted is the folder only this app writes into (DATA_BACKUP_DIR)."""
+
+    def setUp(self):
+        self.water = make_supplier(code="EAU_ESSAI", name="Eau Essai", expenses_only=True)
+        portal_source(self.water, "Eau Essai", "EAU_ESSAI")
+        self.assertTrue(InvoiceType.objects.get(name="Eau Essai").is_active)
+
+    def backup_of(self, keys=("sources",)) -> ArchiveReader:
+        """Where safety.before writes: the folder beside the database."""
+        path = Path(settings.DATA_BACKUP_DIR) / "2026-09-20_021413_avant-effacement.zip"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        run_export(set(keys), path, reason="sauvegarde avant effacement", closed=False)
+        reader = ArchiveReader(path)
+        self.addCleanup(reader.close)
+        return reader
+
+    def test_its_own_backup_puts_a_portal_back_as_it_was(self):
+        reader = self.backup_of()
+        run_clear({"sources"}, preview=False, closed=False)
+        report = import_archive(reader, REPLACE).section("sources")
+
+        self.assertTrue(InvoiceType.objects.get(name="Eau Essai").is_active)
+        self.assertEqual(report.notes, [])
+
+    def test_the_same_archive_from_anywhere_else_still_arrives_inactive(self):
+        """Copied out of the backups folder - or forged with that reason."""
+        own = self.backup_of()
+        elsewhere = Path(settings.DATA_STAGING_DIR) / "envoyee.zip"
+        elsewhere.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(own.path, elsewhere)
+        run_clear({"sources"}, preview=False, closed=False)
+        with ArchiveReader(elsewhere) as uploaded:
+            report = import_archive(uploaded, REPLACE).section("sources")
+
+        self.assertFalse(InvoiceType.objects.get(name="Eau Essai").is_active)
+        self.assertEqual(report.notes, [portal_note("créée inactive"), ENV_NOTE])
 
 
 class RefusalTests(TestCase):

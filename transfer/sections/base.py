@@ -163,6 +163,24 @@ class ImportContext:
     def strategy(self, key: str) -> Strategy:
         return self.strategies[key]
 
+    @property
+    def own_backup(self) -> bool:
+        """Whether this archive is one this installation wrote itself: a
+        file in DATA_BACKUP_DIR, where only `safety.before` writes. An
+        uploaded one is staged elsewhere, and a manifest can claim any
+        reason, so the folder is what says it. What it buys: a restore puts
+        a portal back as it was, where any other archive leaves it inactive
+        (sections/sources.py). After « Effacer », the owner's own backup
+        switched their five portals off and the next gather searched the
+        mailbox only (20/09)."""
+        from django.conf import settings
+
+        try:
+            folder = Path(settings.DATA_BACKUP_DIR).resolve()
+            return Path(self.reader.path).resolve().parent == folder
+        except (AttributeError, OSError, TypeError, ValueError):
+            return False
+
     def importing(self, key: str) -> bool:
         return key in self.strategies
 

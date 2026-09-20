@@ -227,7 +227,7 @@ class SourcesSection(Section):
                 report.skip(f"Source « {name} » ({supplier.name}) : {reason}")
                 continue
             if existing is None:
-                record, how = self._trusted(record, kind, None, row_data)
+                record, how = self._trusted(record, kind, None, row_data, own=ctx.own_backup)
                 created = self._create(record, supplier, kind, row_data)
                 self.claimed.add(created.pk)
                 report.created("sources")
@@ -239,7 +239,7 @@ class SourcesSection(Section):
             different = self._differences(existing, record, supplier, kind, row_data)
             if different and replacing:
                 sign_in = self._sign_in(existing, kind, row_data)
-                record, how = self._trusted(record, kind, existing, row_data)
+                record, how = self._trusted(record, kind, existing, row_data, own=ctx.own_backup)
                 # Again: left inactive against the archive's word, a portal
                 # may differ from it in nothing else.
                 if self._differences(existing, record, supplier, kind, row_data):
@@ -265,9 +265,9 @@ class SourcesSection(Section):
                     f"Source « {existing.name} » ({supplier.name}) : différente dans l'archive "
                     f"({said(different, LABELS)}) — gardée telle quelle"
                 )
-        if portals:
-            # Restoring one's own backup on the same computer, the .env was
-            # never touched: the advice is for another computer only.
+        if portals and not ctx.own_backup:
+            # Its own backup was written here, so the .env it reads is this
+            # computer's: the advice belongs to an archive from elsewhere.
             report.note(
                 f"Les identifiants des portails ({', '.join(sorted(portals))}) sont lus dans le fichier .env : "
                 "s'il s'agit d'un autre ordinateur, recopiez-les à la main."
@@ -304,7 +304,7 @@ class SourcesSection(Section):
         current = _row(existing)
         return current is None or bool(codec.differences(current, row_data, SIGN_IN_FIELDS))
 
-    def _trusted(self, record: dict, kind: str, existing, row_data: dict) -> tuple[dict, str]:
+    def _trusted(self, record: dict, kind: str, existing, row_data: dict, *, own: bool = False) -> tuple[dict, str]:
         """The record as an import may write it, and how a portal it leaves
         inactive against the archive is said ("" when it is not). An import
         never switches a portal on: one it creates stays inactive, one whose
@@ -313,7 +313,11 @@ class SourcesSection(Section):
         switched on the portal its first import had left off. Only a portal
         already on here, still signing in where it did with what it did,
         takes the archive's word."""
-        if kind != WEBSITE:
+        if kind != WEBSITE or own:
+            # `own`: an archive this installation wrote (ImportContext.own_backup).
+            # Restoring one's own backup is putting back what was there,
+            # portals included - switched off, the next gather searched the
+            # mailbox only and nothing said why (20/09).
             return record, ""
         wanted = record.get("is_active", True if existing is None else existing.is_active)
         if existing is None:
