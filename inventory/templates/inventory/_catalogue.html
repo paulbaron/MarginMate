@@ -224,7 +224,15 @@ where its documents name several.
                 <thead>
                     <tr>
                         <th>Fournisseur</th>
-                        <th class="num">Documents</th>
+                        {% comment %}
+                        « Free est dit avoir 12 documents alors qu'en réalité il y en a plus »
+                        (20/09): twelve is a year of a monthly subscription, and the row opens
+                        on all 33. The column names its window, and the cell says what the
+                        count is out of when the supplier has older documents.
+                        {% endcomment %}
+                        <th class="num" title="Les documents de la fenêtre des totaux ; la ligne s'ouvre sur tout l'historique">
+                            Documents {% if period %}(période){% else %}(12 mois){% endif %}
+                        </th>
                         <th class="num">Total TTC</th>
                         <th title="Le dernier document reçu, même hors de la fenêtre des totaux">Dernier</th>
                         <th></th>
@@ -235,7 +243,9 @@ where its documents name several.
                         <tr class="stock-row" data-toggle="charge-supplier-{{ row.supplier.pk }}"
                             data-movements-url="{% url 'inventory:charge_supplier_documents' row.supplier.pk %}">
                             <td><span class="chevron">▸</span> {{ row.supplier.name }}</td>
-                            <td class="num">{{ row.documents }}</td>
+                            <td class="num" data-sort="{{ row.documents }}">
+                                {{ row.documents }}{% if row.documents_all != row.documents %} <span class="muted">sur {{ row.documents_all }}</span>{% endif %}
+                            </td>
                             <td class="num">{{ row.total_ttc|floatformat:2 }} €</td>
                             <td data-sort="{{ row.last|date:'Y-m-d' }}">{{ row.last|date:"d/m/Y"|default:"—" }}</td>
                             <td class="row-actions">

@@ -499,7 +499,11 @@ of them, naming one would be a lie about the other, and "—" says nothing.
 Two things the row and the panel do not share, said on the page rather than
 left to be discovered: what a row **opens** is the whole history, where its
 Documents and Total are the window being looked at; and **"Dernier" is the
-last document ever**, window or not. A supplier is listed as soon as it has
+last document ever**, window or not. The column says which window it counts
+("Documents (12 mois)", "(période)") and a row with older documents says
+what its count is out of - « 12 sur 33 » (`documents_all`). Read as the
+total, "12" is a year of a monthly subscription against the 33 bills the
+row opens on, and that is how it was read (owner, 20/09). A supplier is listed as soon as it has
 a document at all - windowed, a water bill arriving twice a year dropped off
 the page between two of them, taking its history with it, and the date is
 exactly what a row with nothing over the window has left to say.

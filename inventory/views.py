@@ -239,7 +239,8 @@ def charge_suppliers(period=None) -> list[dict]:
         documents = documents.filter(invoice_date__gte=since)
     rows: dict[int, dict] = {
         supplier.pk: {
-            "supplier": supplier, "documents": 0, "total_ttc": Decimal("0"), "last": None, "postes": {}
+            "supplier": supplier, "documents": 0, "documents_all": 0, "total_ttc": Decimal("0"),
+            "last": None, "postes": {},
         }
         for supplier in suppliers
     }
@@ -260,10 +261,14 @@ def charge_suppliers(period=None) -> list[dict]:
         rows[invoice.supplier_id]["documents"] += 1
     # The last document ever, inside the window or not: it is what says a
     # supplier has gone quiet, and on a row showing nothing over the window
-    # it is the only thing left to say.
-    for invoice in every_document.exclude(invoice_date=None).only("supplier_id", "invoice_date"):
+    # it is the only thing left to say. How many there are in all is said
+    # beside the window's count: « Free est dit avoir 12 documents alors
+    # qu'en réalité il y en a plus » - twelve is a year of a monthly
+    # subscription, and the row opens on all 33 of them (owner, 20/09).
+    for invoice in every_document.only("supplier_id", "invoice_date"):
         row = rows[invoice.supplier_id]
-        if row["last"] is None or invoice.invoice_date > row["last"]:
+        row["documents_all"] += 1
+        if invoice.invoice_date is not None and (row["last"] is None or invoice.invoice_date > row["last"]):
             row["last"] = invoice.invoice_date
     filed = set(every_document.values_list("supplier_id", flat=True).distinct())
     return [

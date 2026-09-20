@@ -524,6 +524,28 @@ class ChargesOnTheProductsPageTests(TestCase):
         documents = self.client.get(reverse("inventory:charge_supplier_documents", args=[eau.pk]))
         self.assertEqual(len(documents.context["rows"]), 1)
 
+    def test_the_documents_column_says_when_it_counts_the_window_only(self):
+        """« Free est dit avoir 12 documents alors qu'en réalité il y en a
+        plus » (20/09): twelve is a year of a monthly subscription, and the
+        row opens on all 33. The window's count now says what it is out of,
+        and the column names the window."""
+        operator = make_supplier(code="OPERATEUR_X", name="Operateur Exemple", parser_key="", expenses_only=True)
+        today = timezone.localdate()
+        for months, number in ((1, "F-1"), (2, "F-2"), (20, "F-VIEUX")):
+            import_parsed_invoice(
+                operator, parsed(total=D("29.99"), number=number, when=today - timedelta(days=30 * months))
+            )
+        page = self.client.get(reverse("inventory:stock_list"))
+        (row,) = [row for row in page.context["charge_suppliers"] if row["supplier"] == operator]
+
+        self.assertEqual((row["documents"], row["documents_all"]), (2, 3))
+        self.assertContains(page, "Documents (12 mois)")
+        self.assertContains(page, "2 <span class=\"muted\">sur 3</span>", html=False)
+
+        # Everything inside the window: nothing to say twice.
+        (free,) = [row for row in page.context["charge_suppliers"] if row["supplier"] == self.supplier]
+        self.assertEqual(free["documents"], free["documents_all"])
+
     def test_only_a_supplier_of_charges_opens_that_way(self):
         ordinary = make_supplier(code="EPICERIE_X", name="Epicerie Exemple")
         self.assertEqual(
