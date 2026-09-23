@@ -5,12 +5,14 @@ three different formsets across three different apps.
 """
 
 import re
-from datetime import timedelta
+from dataclasses import dataclass
+from datetime import date, timedelta
 from decimal import Decimal
 
 from django import forms
 from django.db import models
 from django.utils import timezone
+from django.utils.dateparse import parse_date
 
 
 def is_id(value) -> bool:
@@ -32,6 +34,111 @@ def plain_number(value) -> str:
     if number == number.to_integral_value():
         return str(number.quantize(Decimal("1")))
     return format(number.normalize(), "f")
+
+
+#: The two query parameters every page reads its window from - « du » and
+#: « au », as the pages say it. One pair of names, so a window survives
+#: being carried from a link on one page to another.
+RANGE_START, RANGE_END = "du", "au"
+
+
+@dataclass(frozen=True)
+class DateRange:
+    """A window a person typed: « du 01/02/2026 au 28/02/2026 ».
+
+    **Both ends are included.** A person asking for the 28th means the 28th,
+    and a document dated that day is in. This is deliberately NOT the
+    half-open window the stock pages slice with (variance.movements_between,
+    recipes.sales.sales_between): there, the opening date belongs to the
+    count taken that day, so a delivery on it is already counted. Here there
+    is no count - only two dates and what falls between them.
+
+    Either end may be missing: « depuis le 1er février » and « jusqu'au 28 »
+    are both windows a person asks for, and neither is an error.
+    """
+
+    start: date | None = None
+    end: date | None = None
+
+    def __bool__(self) -> bool:
+        return self.start is not None or self.end is not None
+
+    def limit(self, queryset, field: str):
+        """`queryset` narrowed to the window on `field`.
+
+        A row whose date is NULL drops out as soon as either end is set: an
+        undated document is in no window (« Sans date » is where those are
+        looked at). `__gte`/`__lte` already exclude NULL in SQL; this is
+        said here because it is a decision, not an accident.
+        """
+        if self.start is not None:
+            queryset = queryset.filter(**{f"{field}__gte": self.start})
+        if self.end is not None:
+            queryset = queryset.filter(**{f"{field}__lte": self.end})
+        return queryset
+
+    def holds(self, day: date | None) -> bool:
+        """Whether `day` is in the window - for what is summed in Python
+        rather than filtered in SQL (a stock movement's effective_date).
+
+        An undated row is never held, the way `limit` drops it; an empty
+        window holds everything, the way `limit` filters nothing.
+        """
+        if day is None:
+            return not self
+        if self.start is not None and day < self.start:
+            return False
+        if self.end is not None and day > self.end:
+            return False
+        return True
+
+    @property
+    def start_value(self) -> str:
+        """What to put in `value=""` of an `<input type="date">`."""
+        return self.start.isoformat() if self.start else ""
+
+    @property
+    def end_value(self) -> str:
+        return self.end.isoformat() if self.end else ""
+
+    @property
+    def parameters(self) -> dict:
+        """The window as query parameters, to hang on a link that must keep
+        it - a filter chip, a tab. Empty when there is no window."""
+        return {
+            key: value
+            for key, value in ((RANGE_START, self.start_value), (RANGE_END, self.end_value))
+            if value
+        }
+
+
+def read_date(value) -> date | None:
+    """One date read from a request, or None for anything else.
+
+    `<input type="date">` posts ISO 8601, which is all this reads. Anything
+    else - a stale bookmark, a hand-typed URL, a browser with no date input
+    where someone wrote "hier" - is no window rather than a 500: parse_date
+    returns None on a shape it doesn't know and RAISES on a shape it does
+    know that is no date ("2026-02-30"), and both mean the same thing here.
+    """
+    try:
+        return parse_date((value or "").strip())
+    except (ValueError, TypeError):
+        return None
+
+
+def date_range(request, start_param: str = RANGE_START, end_param: str = RANGE_END) -> DateRange:
+    """The window `?du=&au=` asks for, empty when it asks for none.
+
+    Two dates the wrong way round are swapped rather than answered with an
+    empty page: « du 28/02 au 01/02 » is a typo, and what the person means
+    by it is unambiguous.
+    """
+    start = read_date(request.GET.get(start_param))
+    end = read_date(request.GET.get(end_param))
+    if start is not None and end is not None and start > end:
+        start, end = end, start
+    return DateRange(start, end)
 
 
 class BlankRowTolerantFormMixin:

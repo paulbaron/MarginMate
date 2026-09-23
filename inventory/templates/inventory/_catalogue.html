@@ -1,11 +1,35 @@
 {% comment %}
 The list of stock items. The page reloads it in place (stock_catalogue) when
 a product is classified in the side panel or sent back: `catalogue-changed`
-is what those answers trigger.
+is what those answers trigger. `catalogue_url` carries the inventaire AND
+the two dates (views.catalogue_context) - the reload re-reads the request,
+so anything missing from that URL is a window silently thrown away by the
+next classification.
 {% endcomment %}
 <div id="catalogue" class="catalogue"
-     hx-get="{% url 'inventory:stock_catalogue' %}{% if period %}?inventaire={{ period.closing_take.pk }}{% endif %}"
+     hx-get="{{ catalogue_url }}"
      hx-trigger="catalogue-changed from:body" hx-swap="outerHTML">
+{% if date_window and not period %}
+    {% comment %}
+    Said here rather than in the page around it: this block is what reloads
+    after a classification, and a count drawn outside it would go on saying
+    what the window held a moment ago.
+    {% endcomment %}
+    <p class="muted date-range-note">
+        {{ date_window_label|capfirst }} : {{ stock_type_count }} article{{ stock_type_count|pluralize }}
+        acheté{{ stock_type_count|pluralize }}{% if categories %}, {{ total_value_ht|floatformat:2 }} € HT
+        / {{ total_value_ttc|floatformat:2 }} € TTC{% endif %}.
+        {% comment %}
+        What a row opens now follows the same dates as the row - « Acheté
+        12 » over forty purchases was the panel arguing with the figure it
+        explains - and the curve deliberately does not: a month of it is two
+        points and « pas assez d'historique ». Saying which is which is the
+        other half of « Free est dit avoir 12 documents alors qu'en réalité
+        il y en a plus » (owner, 20/09).
+        {% endcomment %}
+        {% if categories %}Ouvrez une ligne : ses achats sont ceux de ces dates, 📈 couvre tout l'historique.{% endif %}
+    </p>
+{% endif %}
 {% if categories %}
     {% for category in categories %}
     <div class="category-block">
@@ -88,7 +112,7 @@ is what those answers trigger.
                 {% for row in category.rows %}
                 <tr class="stock-row" data-toggle="details-{{ row.stock_type.id }}"
                     data-stock-type-id="{{ row.stock_type.id }}"
-                    data-movements-url="{% url 'inventory:stock_type_movements' row.stock_type.pk %}">
+                    data-movements-url="{% url 'inventory:stock_type_movements' row.stock_type.pk %}{{ panel_window_query }}">
                     <td>
                         <span class="chevron">▸</span> {{ row.stock_type.name }}
                         {% if period and row.in_period and not row.reliable %}
@@ -180,7 +204,12 @@ is what those answers trigger.
     {% endfor %}
 {% else %}
     <div class="empty-state">
-        Aucun article pour le moment. Classez un produit dans le panneau, créez un article, ou importez une facture pour démarrer.
+        {% if date_window and not period %}
+            Aucun produit acheté {{ date_window_label }} : ces dates sont vides. Choisissez-en d'autres,
+            ou effacez la période pour revoir tous les achats.
+        {% else %}
+            Aucun article pour le moment. Classez un produit dans le panneau, créez un article, ou importez une facture pour démarrer.
+        {% endif %}
     </div>
 {% endif %}
 
@@ -196,15 +225,21 @@ where its documents name several.
     <details class="explainer charges" data-persist="charges">
         <summary>
             Charges et abonnements
-            <span class="muted">— {{ charge_suppliers|length }} fournisseur{{ charge_suppliers|length|pluralize }}, {{ charge_total_ttc|floatformat:2 }} € TTC {% if period %}sur la période{% else %}sur 12 mois{% endif %}</span>
+            <span class="muted">— {{ charge_suppliers|length }} fournisseur{{ charge_suppliers|length|pluralize }}, {{ charge_total_ttc|floatformat:2 }} € TTC {% if period %}sur la période{% elif date_window %}{{ date_window_label }}{% else %}sur 12 mois{% endif %}</span>
         </summary>
         <p class="muted">
             Ces fournisseurs n'ont pas de produits : leurs factures sont enregistrées par poste quand elles
             en nomment (loyer, provisions), sinon en une ligne par taux de TVA. Ouvrez une ligne pour voir ses
             documents, 📈 pour son évolution.
-            Documents et totaux {% if period %}sur la période choisie{% else %}sur les douze derniers mois{% endif %} ;
-            « Dernier » est le dernier document reçu, même hors de cette fenêtre, et ce qu'une ligne ouvre
-            couvre tout l'historique.
+            Documents et totaux {% if period %}sur la période choisie{% elif date_window %}{{ date_window_label }}{% else %}sur les douze derniers mois{% endif %} ;
+            « Dernier » est le dernier document reçu, même hors de cette fenêtre.
+            {% comment %}
+            Under two dates a row opens on the documents it was counted
+            over; under an inventaire, and with nothing asked for, it opens
+            on everything. The curve is whole in all three cases.
+            {% endcomment %}
+            {% if date_window and not period %}Ouvrez une ligne : ses documents sont ceux de ces dates,
+            📈 couvre tout l'historique.{% else %}Ce qu'une ligne ouvre couvre tout l'historique.{% endif %}
         </p>
         <div class="table-wrap">
             <table class="sub-table charges-table" data-table data-table-sort-only data-table-label="charges">
@@ -230,8 +265,14 @@ where its documents name several.
                         on all 33. The column names its window, and the cell says what the
                         count is out of when the supplier has older documents.
                         {% endcomment %}
-                        <th class="num" title="Les documents de la fenêtre des totaux ; la ligne s'ouvre sur tout l'historique">
-                            Documents {% if period %}(période){% else %}(12 mois){% endif %}
+                        <th class="num" title="{% if date_window and not period %}Les documents de ces dates ; la ligne s'ouvre sur les mêmes, 📈 sur tout l'historique{% else %}Les documents de la fenêtre des totaux ; la ligne s'ouvre sur tout l'historique{% endif %}">
+                        {% comment %}
+                        « période » is this page's word for two physical
+                        counts; the free dates are not one, and a column
+                        naming the wrong window is exactly what this header
+                        exists to prevent.
+                        {% endcomment %}
+                            Documents {% if period %}(période){% elif date_window %}(ces dates){% else %}(12 mois){% endif %}
                         </th>
                         <th class="num">Total TTC</th>
                         <th title="Le dernier document reçu, même hors de la fenêtre des totaux">Dernier</th>
@@ -241,7 +282,7 @@ where its documents name several.
                 <tbody>
                     {% for row in charge_suppliers %}
                         <tr class="stock-row" data-toggle="charge-supplier-{{ row.supplier.pk }}"
-                            data-movements-url="{% url 'inventory:charge_supplier_documents' row.supplier.pk %}">
+                            data-movements-url="{% url 'inventory:charge_supplier_documents' row.supplier.pk %}{{ panel_window_query }}">
                             <td><span class="chevron">▸</span> {{ row.supplier.name }}</td>
                             <td class="num" data-sort="{{ row.documents }}">
                                 {{ row.documents }}{% if row.documents_all != row.documents %} <span class="muted">sur {{ row.documents_all }}</span>{% endif %}
@@ -266,7 +307,7 @@ where its documents name several.
                         {% for poste in row.postes %}
                             <tr class="stock-row charge-row" data-child-row
                                 data-toggle="charge-{{ poste.product.pk }}"
-                                data-movements-url="{% url 'inventory:charge_documents' poste.product.pk %}">
+                                data-movements-url="{% url 'inventory:charge_documents' poste.product.pk %}{{ panel_window_query }}">
                                 <td class="muted"><span class="chevron">▸</span>{{ poste.name }}</td>
                                 <td class="num muted">{{ poste.documents }}</td>
                                 <td class="num muted">{{ poste.total_ttc|floatformat:2 }} €</td>

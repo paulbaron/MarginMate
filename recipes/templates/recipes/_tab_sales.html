@@ -1,6 +1,18 @@
 {% comment %}
 What was sold: fetched from the till, typed by hand, or invoiced - the other
 half of the stock variance.
+
+Two pairs of dates live on this tab and they do entirely different things.
+The card just below FETCHES a period from the till. The « Du … au … » of
+« Dernières ventes » only chooses what is displayed - and narrows the three
+cards that say what was sold (ventes, factures de vente, totaux par origine),
+each of which says the period it is showing, because all-time totals above a
+windowed list are read as the window's own figures.
+
+Every action drawn here is posted to the address the reader is on (the
+querystring tag) and its view comes back to it (menu.sales_list_url): posted
+to the bare address, one « Supprimer » put all 8 099 sales back on screen with
+nothing saying the period had been dropped.
 {% endcomment %}
 <div class="card">
     <div class="section-head">
@@ -13,7 +25,7 @@ half of the stock variance.
             </p>
         </div>
     </div>
-    <form method="post" action="{% url 'recipes:trigger_sales_import' %}" class="inline-form">
+    <form method="post" action="{% url 'recipes:trigger_sales_import' %}{% querystring %}" class="inline-form">
         {% csrf_token %}
         <label class="inline-label">Du <input type="date" name="start_date" value="{{ default_start }}" required></label>
         <label class="inline-label">au <input type="date" name="end_date" value="{{ default_end }}" required></label>
@@ -35,7 +47,7 @@ half of the stock variance.
         « {{ manual_source }} » : un import L'Addition corrige ses propres chiffres sans jamais
         les écraser. Ressaisir la même recette au même jour met à jour la quantité.
     </p>
-    <form method="post" action="{% url 'recipes:sales_list' %}" class="inline-form manual-sale">
+    <form method="post" action="{% url 'recipes:sales_list' %}{% querystring %}" class="inline-form manual-sale">
         {% csrf_token %}
         {% for field in form %}
             <label class="stacked-label">
@@ -48,9 +60,27 @@ half of the stock variance.
     </form>
 </div>
 
-{% if totals %}
+{% if totals or date_window %}
 <div class="card">
     <h3>Par origine</h3>
+    {% if date_window %}
+        <p class="muted date-range-note">
+            {{ date_window_label }} : les totaux de cette période seulement (dates choisies plus bas, dans « Dernières ventes »).
+        </p>
+    {% endif %}
+    {% comment %}
+    The one figure on this tab that does not follow the list below it: the
+    search box belongs to « Dernières ventes ». Left unsaid, « 2 lignes / 54
+    unités » standing above a list of one row reads as one of the two being
+    wrong, with no way to tell which.
+    {% endcomment %}
+    {% if sales_query %}
+        <p class="muted small">
+            La recherche « {{ sales_query }} » ne s'applique qu'à la liste « Dernières ventes » : ces totaux
+            comptent toutes les ventes{% if date_window %} de la période{% endif %}.
+        </p>
+    {% endif %}
+    {% if totals %}
     <table class="sub-table">
         <thead><tr><th>Origine</th><th class="num">Lignes</th><th class="num">Unités vendues</th></tr></thead>
         <tbody>
@@ -63,6 +93,9 @@ half of the stock variance.
             {% endfor %}
         </tbody>
     </table>
+    {% else %}
+        <div class="empty-state">Aucune vente sur cette période.</div>
+    {% endif %}
 </div>
 {% endif %}
 
@@ -75,8 +108,22 @@ half of the stock variance.
                 Comptées dans les écarts d'inventaire au même titre que les ventes de la caisse.
             </p>
         </div>
-        <a class="btn btn-secondary" href="{% url 'recipes:sale_document_create' %}">+ Facture de vente</a>
+        <a class="btn btn-secondary" href="{% url 'recipes:sale_document_create' %}{% querystring %}">+ Facture de vente</a>
     </div>
+    {% comment %}
+    The count is the window's own, and is taken before the list is cut down to
+    its most recent: « 3 factures » above a list of none is how a reader
+    concludes the page is broken rather than the period empty.
+    {% endcomment %}
+    {% if date_window %}
+        <p class="muted date-range-note">
+            {{ date_window_label }} : {{ documents_found }} facture{{ documents_found|pluralize }} de vente
+            (période choisie plus bas, dans « Dernières ventes »).
+            {% if documents_hidden %}Seules les {{ documents|length }} plus récentes sont affichées.{% endif %}
+        </p>
+    {% elif documents_hidden %}
+        <p class="muted">Les {{ documents|length }} plus récentes ; {{ documents_hidden }} de plus, plus anciennes.</p>
+    {% endif %}
     {% if documents %}
     <div class="table-wrap">
     <table class="sub-table" data-table data-table-label="factures">
@@ -95,8 +142,8 @@ half of the stock variance.
                 </td>
                 <td class="num">{{ document.total_ttc|floatformat:2 }} €</td>
                 <td class="num row-actions">
-                    <a class="btn btn-small btn-secondary" href="{% url 'recipes:sale_document_update' document.pk %}">Modifier</a>
-                    <form method="post" action="{% url 'recipes:sale_document_delete' document.pk %}"
+                    <a class="btn btn-small btn-secondary" href="{% url 'recipes:sale_document_update' document.pk %}{% querystring %}">Modifier</a>
+                    <form method="post" action="{% url 'recipes:sale_document_delete' document.pk %}{% querystring %}"
                           onsubmit="return confirm('Supprimer cette vente ?');">
                         {% csrf_token %}
                         <button type="submit" class="btn btn-small btn-secondary">Supprimer</button>
@@ -108,7 +155,7 @@ half of the stock variance.
     </table>
     </div>
     {% else %}
-        <div class="empty-state">Aucune facture de vente.</div>
+        <div class="empty-state">{% if date_window %}Aucune facture de vente sur cette période.{% else %}Aucune facture de vente.{% endif %}</div>
     {% endif %}
 </div>
 
@@ -118,23 +165,46 @@ half of the stock variance.
     The search asks the database: the page draws its first rows only, and a box
     filtering what is rendered could not find a sale from last year. The table
     is therefore sort-only.
+
+    Every link and form drawn here carries the window and the search back, or
+    the reader's period vanishes on the next click without anything saying so.
     {% endcomment %}
     <form method="get" class="search-row">
+        {% for name, value in date_window.parameters.items %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
         <span class="table-search">
             <input type="search" name="vente" value="{{ sales_query }}" autocomplete="off"
                    aria-label="Rechercher une vente"
                    placeholder="Rechercher une recette, une date (12/07/2026), une origine…">
         </span>
         <button class="btn btn-small btn-secondary" type="submit">Rechercher</button>
-        {% if sales_query %}<a class="btn btn-small btn-secondary" href="{% url 'recipes:sales_list' %}">Effacer</a>{% endif %}
+        {% if sales_query %}<a class="btn btn-small btn-secondary" href="{% querystring vente=None %}">Effacer la recherche</a>{% endif %}
     </form>
-    {% if sales_query %}
+    <form method="get" class="date-range">
+        {% if sales_query %}<input type="hidden" name="vente" value="{{ sales_query }}">{% endif %}
+        {% if show_all %}<input type="hidden" name="ventes" value="toutes">{% endif %}
+        {# Named, because the card at the top of the page has a « Du … au … » too. #}
+        <span class="muted">Période affichée :</span>
+        <label class="inline-label">Du <input type="date" name="du" value="{{ date_window.start_value }}"></label>
+        <label class="inline-label">au <input type="date" name="au" value="{{ date_window.end_value }}"></label>
+        <button class="btn btn-small btn-secondary" type="submit">Afficher</button>
+        {% if date_window %}<a class="btn btn-small btn-secondary" href="{% querystring du=None au=None %}">Effacer les dates</a>{% endif %}
+    </form>
+    <p class="muted small">
+        Une date seule suffit : « Du » sans « au » affiche tout depuis ce jour-là. Ces dates n'affichent que
+        ce qui est déjà enregistré ; pour aller chercher une période dans la caisse, c'est
+        « Importer les ventes de L'Addition », tout en haut.
+    </p>
+    {% if date_window %}
+        <p class="muted date-range-note">
+            {{ date_window_label }} : {{ sales_found }} vente{{ sales_found|pluralize }}{% if sales_query %} pour « {{ sales_query }} »{% endif %}.
+        </p>
+    {% elif sales_query %}
         <p class="muted">{{ sales_found }} vente{{ sales_found|pluralize }} pour « {{ sales_query }} »</p>
     {% endif %}
     {% if sales_hidden %}
         <p class="muted">
-            Les {{ sales|length }} plus récentes. {{ sales_hidden }} de plus :
-            <a href="?ventes=toutes{% if sales_query %}&vente={{ sales_query|urlencode }}{% endif %}">tout afficher</a>
+            Les {{ sales|length }} plus récentes{% if date_window %} de la période{% endif %}. {{ sales_hidden }} de plus :
+            <a href="{% querystring ventes='toutes' %}">tout afficher</a>
             (la recherche et le tri ne portent que sur ce qui est affiché).
         </p>
     {% endif %}
@@ -153,7 +223,7 @@ half of the stock variance.
                 <td class="muted">{{ sale.source }}</td>
                 <td class="num">
                     {% if sale.source == manual_source %}
-                    <form method="post" action="{% url 'recipes:sales_delete' sale.pk %}"
+                    <form method="post" action="{% url 'recipes:sales_delete' sale.pk %}{% querystring %}"
                           onsubmit="return confirm('Supprimer cette vente ?');">
                         {% csrf_token %}
                         <button type="submit" class="btn btn-small btn-secondary">Supprimer</button>
@@ -166,6 +236,8 @@ half of the stock variance.
     </table>
     </div>
     {% else %}
-        <div class="empty-state">Aucune vente enregistrée pour le moment.</div>
+        <div class="empty-state">
+            {% if date_window %}Aucune vente sur cette période.{% elif sales_query %}Aucune vente pour cette recherche.{% else %}Aucune vente enregistrée pour le moment.{% endif %}
+        </div>
     {% endif %}
 </div>

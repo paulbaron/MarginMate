@@ -15,9 +15,10 @@ from django.urls import reverse, reverse_lazy
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 from django.utils.html import escape
+from django.utils.http import urlencode
 from django.views.generic import CreateView, ListView, TemplateView, UpdateView
 
-from common import is_id
+from common import DateRange, date_range, is_id
 
 from .forms import (
     OLD_STOCK_TYPE_ENTRY_SUFFIXES,
@@ -82,11 +83,68 @@ def stock_catalogue(request):
     return render(request, "inventory/_catalogue_refresh.html", catalogue_context(request))
 
 
+def _window_label(window: DateRange) -> str:
+    """« du 01/02/2026 au 28/02/2026 » - what the page says it is showing.
+
+    Either end alone is a window a person asks for, and « du 01/02/2026 au »
+    reads as a page that lost half of its own question. The three phrasings
+    are built once here rather than as three `{% if %}` in each of the five
+    places on this page that have to name the window.
+    """
+    start = window.start.strftime("%d/%m/%Y") if window.start else ""
+    end = window.end.strftime("%d/%m/%Y") if window.end else ""
+    if start and end:
+        return f"du {start} au {end}"
+    if start:
+        return f"depuis le {start}"
+    if end:
+        return f"jusqu'au {end}"
+    return ""
+
+
+def _panel_doors(request, bare_url: str) -> dict:
+    """What a row's panel applies, and the two doors out of it.
+
+    « tout l'historique » dropped the dates from the URL and nothing on
+    screen offered them back - and a row is fetched exactly once
+    (stock_list.html marks it loaded), so closing and reopening it did not
+    bring them back either: the panel went on answering « tout » under
+    « Acheté 12 » until the whole page was reloaded, which is the very
+    contradiction this window exists to remove. So the link carries the
+    dates with it under `tout=1` - « everything, and remember these dates » -
+    and the whole history offers them back.
+
+    Shared by the two panels so neither can grow its own idea of the door.
+    """
+    asked = date_range(request)
+    showing_all = bool(request.GET.get("tout"))
+    applied = DateRange() if showing_all else asked
+    query = urlencode(asked.parameters)
+    return {
+        "window": applied,
+        "window_label": _window_label(applied),
+        "all_url": f"{bare_url}?{query}&tout=1" if asked else bare_url,
+        # No dates asked, no way back to offer: a panel nobody narrowed says
+        # nothing about windows at all, as it did before any of this.
+        "back_url": f"{bare_url}?{query}" if showing_all and asked else None,
+        "back_label": _window_label(asked),
+    }
+
+
 def catalogue_context(request) -> dict:
     """The list: categories of stock items with what was bought and sold over
-    all time, or what moved over the period `?inventaire=` names."""
+    all time, over the window `?du=&au=` names, or what moved over the period
+    `?inventaire=` names."""
+    period = selected_period(request)
+    asked = date_range(request)
+    # An inventaire is not two dates: it is two physical counts, and the
+    # figures it produces - opening, closing, what left the shelf, what is
+    # missing - come out of them. A free pair of dates cannot produce those,
+    # so the inventaire wins and the page says so, rather than drawing one
+    # period's arithmetic under another period's dates.
+    window = DateRange() if period is not None else asked
     stock_types = list(StockType.objects.all().order_by("category", "name"))
-    context = {}
+    context = {"date_window": asked, "date_window_label": _window_label(asked)}
 
     # Only the per-type totals here - one query for every movement's
     # (quantity, unit_cost_ht, invoice line total/VAT) instead of a
@@ -116,28 +174,74 @@ def catalogue_context(request) -> dict:
     # the ceiling "Vendu" respects, and it prices an item the way
     # StockType.current_unit_cost_ht does. The two are the same numbers until
     # somebody records a loss.
+    #
+    # The window « du … au … » is applied inside this same scan, on columns
+    # fetched with it: StockMovement.effective_date is a PROPERTY, so
+    # narrowing by it over model instances would be a query per movement.
+    # Its fallback order is reproduced exactly below - the movement's own
+    # date, else the invoice's (when the stock arrived, not when the PDF
+    # happened to be imported), else when it was typed in - and a movement
+    # no date can be found for is in no window at all.
     quantity_by_type: dict[int, Decimal] = {}
     value_ht_by_type: dict[int, Decimal] = {}
+    ledger_in_window: dict[int, Decimal] = {}
     bought_by_type: dict[int, Decimal] = {}
     bought_ht_by_type: dict[int, Decimal] = {}
     value_ttc_by_type: dict[int, Decimal] = {}
     values = StockMovement.objects.values_list(
-        "stock_type_id", "kind", "quantity", "unit_cost_ht", "invoice_line__total_ht", "invoice_line__vat_rate"
+        "stock_type_id", "kind", "quantity", "unit_cost_ht", "invoice_line__total_ht", "invoice_line__vat_rate",
+        "invoice_line__printed_ttc", "invoice_line__discount_ttc",
+        "occurred_on", "invoice_line__invoice__invoice_date", "created_at",
     )
-    for stock_type_id, kind, quantity, unit_cost_ht, line_total_ht, vat_rate in values:
+    for (
+        stock_type_id, kind, quantity, unit_cost_ht, line_total_ht, vat_rate,
+        printed_ttc, discount_ttc,
+        occurred_on, invoice_date, created_at,
+    ) in values:
         quantity_by_type[stock_type_id] = quantity_by_type.get(stock_type_id, Decimal("0")) + quantity
         value_ht_by_type[stock_type_id] = value_ht_by_type.get(stock_type_id, Decimal("0")) + (
             quantity * unit_cost_ht
         )
+        # The two sums above are all time whatever the window: they are what
+        # an article COSTS per unit, and a price is not a property of a
+        # window - valued over a window holding one delivery, every bottle
+        # would be worth what that delivery charged.
+        if window and not window.holds(
+            occurred_on or invoice_date or (created_at.date() if created_at else None)
+        ):
+            continue
+        ledger_in_window[stock_type_id] = ledger_in_window.get(stock_type_id, Decimal("0")) + quantity
         if kind != MovementKind.PURCHASE:
             continue
         bought_by_type[stock_type_id] = bought_by_type.get(stock_type_id, Decimal("0")) + quantity
+        # « Total HT » is the line's own amount, the one the document prints
+        # and the one the panel under the row lists - not quantity times
+        # unit_cost_ht, which is that amount divided by the quantity and
+        # stored to four decimals, then multiplied back: 2 000 units at a
+        # real 0,01442 are priced 0,0144 and come back 4 centimes short of
+        # the 28,84 € the invoice charges, and the row read 28,80 € over a
+        # panel whose lines add up to 28,84 €. Only where there is no line at all - a
+        # correction typed by hand - is there nothing but the ledger's own
+        # arithmetic to go on. (`value_ht_by_type` above stays that
+        # arithmetic whatever happens: it is divided by the quantity to
+        # price a unit, the way StockType.current_unit_cost_ht does, and
+        # must keep saying what the ledger holds.)
         bought_ht_by_type[stock_type_id] = bought_ht_by_type.get(stock_type_id, Decimal("0")) + (
-            quantity * unit_cost_ht
+            line_total_ht if line_total_ht is not None else quantity * unit_cost_ht
         )
         if line_total_ht is not None:
+            # InvoiceLine.total_ttc reproduced from the columns this scan
+            # already fetches - the amount the document PRINTED where there
+            # is one, less the promotion beside it, and HT times the rate
+            # only where nothing was printed. Worked out from HT alone, a
+            # facturette printing 39,99 € was counted 40,00 € on the row
+            # while the panel it opens printed 39,99 € under it: one
+            # purchase, two answers, and the panel is now the row's own
+            # lines rather than a different history.
             value_ttc_by_type[stock_type_id] = value_ttc_by_type.get(stock_type_id, Decimal("0")) + (
-                line_total_ht * (vat_rate + Decimal("1"))
+                printed_ttc - discount_ttc
+                if printed_ttc is not None
+                else line_total_ht * (vat_rate + Decimal("1"))
             )
 
     rows = [
@@ -148,6 +252,11 @@ def catalogue_context(request) -> dict:
             "value_ttc": value_ttc_by_type.get(st.id, Decimal("0")),
         }
         for st in stock_types
+        # « Voir seulement les produits achetés entre deux dates »: an
+        # article nothing was bought of over the window is not a row of
+        # zeroes to scroll past, it is not part of the answer at all. Its
+        # category goes with it, having nothing left in it.
+        if not window or st.id in bought_by_type
     ]
     categories = []
     for category, group in groupby(rows, key=lambda row: row["stock_type"].category):
@@ -163,7 +272,9 @@ def catalogue_context(request) -> dict:
     context["categories"] = categories
     context["total_value_ht"] = sum((row["value_ht"] for row in rows), start=0)
     context["total_value_ttc"] = sum((row["value_ttc"] for row in rows), start=0)
-    context["stock_type_count"] = len(stock_types)
+    # The articles the window holds, not every article there is: a count
+    # over one window beside a list over another says 316 above a page of 3.
+    context["stock_type_count"] = len(rows)
     # How much of each item has been sold - see variance.quantities_sold
     # for why it is two numbers rather than one. unit_costs reuses the
     # sums already computed above (same formula as
@@ -174,30 +285,75 @@ def catalogue_context(request) -> dict:
         for stock_type_id, quantity in quantity_by_type.items()
         if quantity
     }
-    period = selected_period(request)
     context["period"] = period
     context["stock_takes"] = StockTake.objects.all()
-    if period is None:
-        # All time. The ledger quantities are the ceiling: what was bought
-        # (the "Acheté" column beside "Vendu"), less the losses recorded,
-        # which cannot have been sold.
-        sold = quantities_sold(unit_costs=unit_costs, available=quantity_by_type)
-    else:
+    if period is not None:
         sold = quantities_sold(
             period.start, period.end, unit_costs=unit_costs, available=period.ceilings()
+        )
+    else:
+        # The ledger quantities are the ceiling: what was bought (the
+        # "Acheté" column beside "Vendu"), less the losses recorded, which
+        # cannot have been sold - over the SAME window as the sales, or the
+        # column lies. All-time purchases against one month of sales would
+        # say nothing is ever missing (see quantities_sold).
+        if window:
+            # Floored at zero the way PeriodStock.sellable is, and for the
+            # same reason: a loss written down inside the window against
+            # stock bought before it would give a negative ceiling, and a
+            # negative ceiling lets an item soak up sales it never covered.
+            available = {
+                stock_type_id: max(Decimal("0"), quantity)
+                for stock_type_id, quantity in ledger_in_window.items()
+            }
+        else:
+            available = quantity_by_type
+        # sales_between EXCLUDES its start day - a sale on the day of a
+        # stock count belongs to the period that count closes. Here the
+        # start is a date a person typed, « du 1er » means the 1st, and
+        # handing it straight over would silently drop that day's sales. So
+        # the day before goes in its place.
+        sold = quantities_sold(
+            window.start - timedelta(days=1) if window.start else None,
+            window.end,
+            unit_costs=unit_costs,
+            available=available,
         )
     _attach_sold(context, categories, sold, period, unit_costs)
 
     context["review_count"] = Product.objects.filter(stock_type__isnull=True, is_expense=False).count()
     context["empty_stock_type_count"] = StockType.objects.filter(products__isnull=True).distinct().count()
-    context["charge_suppliers"] = charge_suppliers(period)
+    # The list reloads itself in place after a product is classified
+    # (_catalogue.html's hx-get), and stock_catalogue reads the request
+    # again - so the URL is the whole of what keeps the reader where they
+    # were. Built here: two optional parameters concatenated by `{% if %}`
+    # in the template was already awkward with one.
+    reload_parameters = {}
+    if period is not None:
+        reload_parameters["inventaire"] = period.closing_take.pk
+    reload_parameters.update(asked.parameters)
+    context["catalogue_url"] = reverse("inventory:stock_catalogue") + (
+        f"?{urlencode(reload_parameters)}" if reload_parameters else ""
+    )
+    # What a row OPENS is the window too, or the panel contradicts the row
+    # it explains: « Acheté 12 » above forty purchases. One string appended
+    # to the three data-movements-url of _catalogue.html rather than an
+    # `{% if %}` fragment per attribute - which is where one of the three
+    # ends up being the one that forgets it.
+    #
+    # From `window` and NOT from `asked`: under a chosen inventaire the
+    # dates are disabled and the panels stay all-history (CLAUDE.md, « what
+    # a row opens is the whole history »), and building this from the
+    # window APPLIED is what makes that true without a second condition.
+    context["panel_window_query"] = f"?{urlencode(window.parameters)}" if window else ""
+    context["charge_suppliers"] = charge_suppliers(period if period is not None else window)
     context["charge_total_ttc"] = sum(
         (row["total_ttc"] for row in context["charge_suppliers"]), Decimal("0")
     )
     return context
 
 
-def charge_suppliers(period=None) -> list[dict]:
+def charge_suppliers(window=None) -> list[dict]:
     """What the suppliers of charges cost - a subscription, the rent, the
     water. They hold no stock, so they are nowhere else on this page; they
     are spending all the same, and seeing it beside the purchases is the
@@ -205,6 +361,14 @@ def charge_suppliers(period=None) -> list[dict]:
 
     Over the window being looked at, or the last twelve months by default:
     an all-time total of a monthly subscription says little.
+
+    One window, two shapes, because both say the same two things: a
+    StockPeriod (« l'inventaire du 31/03 », whose `start` is None for the
+    very first one) and a DateRange (« du 01/02 au 28/02 », whose `end` may
+    be None for « depuis le 1er février »). An empty DateRange is falsy and
+    means nobody asked for a window - which is the twelve months. A second
+    parameter for the second shape would only have let the two disagree
+    about which end is included: here both are, as they were.
 
     **Every supplier is a row that opens**, on its documents and on its
     curve, exactly as a stock item does - the water bill has one poste and
@@ -227,13 +391,15 @@ def charge_suppliers(period=None) -> list[dict]:
         return []
     every_document = Invoice.objects.filter(supplier__in=suppliers)
     documents = every_document.exclude(invoice_date=None)
-    if period is not None:
+    if window:
         # The first stock take's window has no start: it runs from the
-        # beginning, and a None in the filter was a 500.
-        documents = documents.filter(invoice_date__lte=period.end)
-        if period.start is not None:
-            documents = documents.filter(invoice_date__gte=period.start)
-        since = period.start
+        # beginning, and a None in the filter was a 500. « Jusqu'au 28 » has
+        # no start either, and « depuis le 1er » no end.
+        if window.end is not None:
+            documents = documents.filter(invoice_date__lte=window.end)
+        if window.start is not None:
+            documents = documents.filter(invoice_date__gte=window.start)
+        since = window.start
     else:
         since = timezone.localdate() - timedelta(days=365)
         documents = documents.filter(invoice_date__gte=since)
@@ -361,7 +527,22 @@ def _attach_sold(context, categories, sold, period, unit_costs):
     context["column_count"] = 7 if period is None else 10
 
 
-def _stock_type_movement_entries(stock_type):
+def _stock_type_movement_entries(stock_type, window: DateRange | None = None):
+    """The purchases behind one article's row, narrowed to `window`.
+
+    Narrowed on `effective_date` - the movement's own date, else its
+    invoice's, else when it was typed in - because that is exactly what
+    catalogue_context sums the row's « Acheté » and its totals by. Filtered
+    on the invoice's date instead, the panel would not add up to the row it
+    was opened to explain, and a panel disagreeing with its own row is the
+    silently-wrong-money shape this codebase keeps getting bitten by.
+
+    `effective_date` is a property, so the catalogue's scan over every
+    movement there is reads its columns by hand; here it is one article's
+    ledger with its invoice already selected, and reading the property per
+    movement costs no query.
+    """
+    window = window or DateRange()
     movements_qs = (
         StockMovement.objects.filter(stock_type=stock_type)
         .select_related("invoice_line__invoice__supplier", "invoice_line__product")
@@ -369,11 +550,24 @@ def _stock_type_movement_entries(stock_type):
     )
     entries = []
     for m in movements_qs:
+        if not window.holds(m.effective_date):
+            continue
         line = m.invoice_line
         entries.append(
             {
                 "movement": m,
                 "line": line,
+                # The date this movement was SELECTED by, which is the one
+                # to print: the column showed the invoice's date and "—"
+                # for a manual correction, and a row picked out by two dates
+                # then read as a row with no date at all.
+                "date": m.effective_date,
+                # Said only where it is not a purchase: the row above counts
+                # « Acheté » on purchases alone, so a broken bottle listed
+                # here with nothing marking it is a line the reader adds to
+                # a figure that never held it. Marking every line « Achat »
+                # would hide the exception again.
+                "kind_label": None if m.kind == MovementKind.PURCHASE else m.get_kind_display(),
                 "total_ttc": line.total_ttc if line else None,
                 "vat_percent": line.vat_rate * 100 if line else None,
                 # Same fallback the actual stock computation uses (total_volume
@@ -399,6 +593,12 @@ def _stock_type_movement_entries(stock_type):
                 "stock_equivalent_display": (f"{float(line.product.stock_equivalent):g}" if line else None),
             }
         )
+    # Ordered by the date the column PRINTS. The query orders by the
+    # invoice's date, which the panel stopped showing: a delivery invoiced
+    # on 20/01 and received on the 27th came out between the 3rd and the
+    # 14th, and a dated column out of order reads as a bug. Python's sort is
+    # stable, so two movements of one day keep the query's own order.
+    entries.sort(key=lambda entry: entry["date"] or date.min, reverse=True)
     return entries
 
 
@@ -551,7 +751,12 @@ def _charge_document_rows(lines, invoices=()) -> list[dict]:
             {"invoice": line.invoice, "total_ht": Decimal("0"), "total_ttc": Decimal("0")},
         )
         row["total_ht"] += line.total_ht
-        row["total_ttc"] += line.total_ttc
+        # Rounded to the cent line by line, exactly as charge_suppliers
+        # rounds the row this panel explains. `total_ttc` works 29,99 € HT
+        # at 20 % out to 35,988 €: added raw, twelve of them foot 431,86 €
+        # under twelve visible lines of « 35,99 € » and beside a row saying
+        # 431,88 €. Two roundings of one figure is two answers.
+        row["total_ttc"] += line.total_ttc.quantize(Decimal("0.01"))
     ordered = sorted(
         by_document.values(),
         key=lambda row: (row["invoice"].invoice_date or date.min, row["invoice"].pk),
@@ -562,19 +767,35 @@ def _charge_document_rows(lines, invoices=()) -> list[dict]:
     return ordered
 
 
-def _charge_panel(request, title, lines, invoices=()):
+def _charge_panel(request, title, all_url, lines, invoices=None):
     """The documents behind a charge - a supplier's, or one of its postes -
     fetched when its row is opened, like a stock item's purchases. Each
     links to the document it came from.
 
-    All of them, not the window the row totals: the row says what a charge
-    costs now, this says what it has cost, which is what one opens it for.
+    Narrowed to the « Du … au … » the row was counted over, on
+    `invoice_date` - the very filter charge_suppliers uses - so the panel
+    adds up to the row above it. The documents filed with nothing read go
+    through the same filter: they count on the row, so they follow the row.
+
+    Asked with no window it is the whole history, as it always was: the
+    twelve-month default the fold falls back on is not a window a person
+    typed, and a subscription opened to be followed month after month has
+    to show the months.
     """
+    doors = _panel_doors(request, all_url)
+    window = doors["window"]
+    lines = window.limit(lines, "invoice__invoice_date")
+    invoices = window.limit(invoices, "invoice_date") if invoices is not None else ()
     rows = _charge_document_rows(lines, invoices)
     return render(
         request,
         "inventory/_charge_documents.html",
-        {"title": title, "rows": rows, "total_ttc": sum((row["total_ttc"] for row in rows), Decimal("0"))},
+        {
+            "title": title,
+            "rows": rows,
+            "total_ttc": sum((row["total_ttc"] for row in rows), Decimal("0")),
+            **doors,
+        },
     )
 
 
@@ -622,7 +843,10 @@ def _charge_supplier_lines(supplier_id):
 
 
 def charge_documents(request, product_id):
-    return _charge_panel(request, *_poste_lines(product_id))
+    title, lines = _poste_lines(product_id)
+    return _charge_panel(
+        request, title, reverse("inventory:charge_documents", args=[product_id]), lines
+    )
 
 
 def charge_history(request, product_id):
@@ -631,7 +855,13 @@ def charge_history(request, product_id):
 
 def charge_supplier_documents(request, supplier_id):
     supplier, lines = _charge_supplier_lines(supplier_id)
-    return _charge_panel(request, supplier.name, lines, supplier.invoices.select_related("supplier"))
+    return _charge_panel(
+        request,
+        supplier.name,
+        reverse("inventory:charge_supplier_documents", args=[supplier_id]),
+        lines,
+        supplier.invoices.select_related("supplier"),
+    )
 
 
 def charge_supplier_history(request, supplier_id):
@@ -643,14 +873,27 @@ def stock_type_movements(request, pk):
     """Purchase history for one stock type - fetched on demand (see
     StockListView.get_context_data for why this isn't just baked into the
     main page for every stock type up front) the first time its row is
-    expanded, via a plain hx-get/htmx.ajax call from stock_list.html."""
+    expanded, via a plain hx-get/htmx.ajax call from stock_list.html.
+
+    The window comes back in the URL the row carries (`panel_window_query`),
+    and is read here the way stock_catalogue reads it: the request is all
+    this view is given, and a panel that ignored it would answer « Acheté
+    12 » with forty purchases.
+    """
     stock_type = get_object_or_404(StockType, pk=pk)
+    doors = _panel_doors(request, reverse("inventory:stock_type_movements", args=[stock_type.pk]))
+    entries = _stock_type_movement_entries(stock_type, doors["window"])
     return render(
         request,
         "inventory/_stock_type_movements.html",
         {
             "stock_type": stock_type,
-            "movements": _stock_type_movement_entries(stock_type),
+            "movements": entries,
+            # The header is a claim in French about what is under it, and
+            # the row above counts purchases alone: « Achats » over a broken
+            # bottle says this page bought one.
+            "other_movements": any(entry["kind_label"] for entry in entries),
+            **doors,
         },
     )
 

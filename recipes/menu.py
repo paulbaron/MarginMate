@@ -11,11 +11,14 @@ linked to, the till product it is for.
 
 import re
 from datetime import timedelta
+from urllib.parse import urlencode
 
 from django.db.models import Count, Q, Sum
 from django.shortcuts import render
 from django.urls import reverse
 from django.utils import timezone
+
+from common import RANGE_END, RANGE_START, DateRange, date_range
 
 from .forms import MANUAL_SALE_SOURCE, ManualSaleForm
 from .links import suggest_recipe
@@ -33,16 +36,47 @@ def pending_count() -> int:
     return PosProduct.objects.filter(recipe__isnull=True, ignored=False).count()
 
 
+#: Everything the sales tab reads out of its own address: the window, the
+#: search, and whether the list was unfolded. An action posted from the tab
+#: is given these back, and nothing else.
+SALES_TAB_PARAMS = (RANGE_START, RANGE_END, "vente", "ventes")
+
+
+def sales_list_url(request) -> str:
+    """« Recettes & ventes · Ventes » as the reader had it - period, search
+    and « tout afficher » kept.
+
+    Every action on that tab comes back here. Sent back to the bare address,
+    a period typed by hand vanished on the first « Supprimer » or on adding
+    a sale by hand, and the page returned with all 8 099 sales in it: nothing
+    on screen said the dates had been dropped, so the dates read as broken.
+
+    Only the four parameters above travel: an action is posted to whatever
+    address the reader was on, and a redirect echoing that query string whole
+    would hand back anything anyone had hung on it.
+    """
+    url = reverse("recipes:sales_list")
+    kept = {name: value for name in SALES_TAB_PARAMS if (value := request.GET.get(name))}
+    return f"{url}?{urlencode(kept)}" if kept else url
+
+
 def render_menu(request, tab, *, status=200, **extra):
     """The page on `tab` ("recettes", "a-lier", "ventes"); `extra` goes to the
     tab (a bound sale form with its errors)."""
     to_link = pending_count()
+    # The « du … au … » window is the sales tab's, and is read before the
+    # tabs so that tab's own link can carry it: clicking « Ventes » from the
+    # sales page would otherwise silently mean « and now show all 8 000 ».
+    window = date_range(request) if tab == "ventes" else DateRange()
+    sales_url = reverse("recipes:sales_list")
+    if window:
+        sales_url = f"{sales_url}?{urlencode(window.parameters)}"
     tabs = [
         {"key": "recettes", "label": "Recettes", "url": reverse("recipes:recipe_list"),
          "count": Recipe.objects.count(), "attention": False},
         {"key": "a-lier", "label": "À lier", "url": reverse("recipes:pos_product_list"),
          "count": to_link, "attention": bool(to_link)},
-        {"key": "ventes", "label": "Ventes", "url": reverse("recipes:sales_list"), "count": None, "attention": False},
+        {"key": "ventes", "label": "Ventes", "url": sales_url, "count": None, "attention": False},
     ]
     for entry in tabs:
         entry["active"] = entry["key"] == tab
@@ -50,6 +84,7 @@ def render_menu(request, tab, *, status=200, **extra):
     if tab == "ventes":
         extra.setdefault("query", request.GET.get("vente", ""))
         extra.setdefault("show_all", request.GET.get("ventes") == "toutes")
+        extra.setdefault("window", window)
     builders = {"recettes": _recipes, "a-lier": _to_link, "ventes": _sales}
     context.update(builders[tab](**extra))
     return render(request, "recipes/menu.html", context, status=status)
@@ -118,33 +153,74 @@ def _sales_matching(query: str):
 #: them was 2,6 Mo of HTML on one page, and they only ever grow.
 SALES_PAGE_SIZE = 300
 
+#: The same for the sale documents, which are listed whole rather than
+#: searched. Windowed, the count beside them says what the cap hides.
+DOCUMENTS_PAGE_SIZE = 50
 
-def _sales(form=None, query: str = "", show_all: bool = False) -> dict:
+
+def _window_label(window: DateRange) -> str:
+    """The window as the page says it, « Du … au … » - or the half of it a
+    reader asked for, since either end alone is a window.
+
+    Said in words beside every figure the window narrows: a list cut down to
+    two dates without saying so reads as a page that has lost its data.
+    """
+    if window.start and window.end:
+        return f"Du {window.start:%d/%m/%Y} au {window.end:%d/%m/%Y}"
+    if window.start:
+        return f"Depuis le {window.start:%d/%m/%Y}"
+    if window.end:
+        return f"Jusqu'au {window.end:%d/%m/%Y}"
+    return ""
+
+
+def _sales(form=None, query: str = "", show_all: bool = False, window: DateRange | None = None) -> dict:
     """The recent sales, the till import, and a form to add one by hand.
 
     The list was left whole because the table's own box only searches what is
     rendered - so the search is the database's now (a recipe, a date, an
     origin), as on the Achats list, and the page can stop drawing everything.
+
+    `window` narrows everything said about what was SOLD - the sales, the
+    sale documents, the totals by origin - on each one's own date, both ends
+    included. All three or none: all-time totals standing above a windowed
+    list are read as the window's own figures. It has nothing to do with the
+    import card's pair of dates, which says what to fetch from the till, and
+    `default_start`/`default_end`/`last_sale` below stay outside it.
     """
+    window = window or DateRange()
+    sale_documents = window.limit(SaleDocument.objects.all(), "sold_on")
     documents = list(
-        SaleDocument.objects.prefetch_related("lines__recipe", "lines__stock_type").order_by("-sold_on")[:50]
+        sale_documents.prefetch_related("lines__recipe", "lines__stock_type").order_by("-sold_on")[
+            :DOCUMENTS_PAGE_SIZE
+        ]
     )
-    sales = RecipeSale.objects.select_related("recipe").order_by("-sold_on", "recipe__name")
+    documents_found = sale_documents.count()
+    recorded = window.limit(RecipeSale.objects.all(), "sold_on")
+    sales = recorded.select_related("recipe").order_by("-sold_on", "recipe__name")
     query = query.strip()
     if query:
         sales = sales.filter(_sales_matching(query))
     counted = sales.count()
     shown = list(sales if show_all else sales[:SALES_PAGE_SIZE])
-    totals = RecipeSale.objects.values("source").annotate(rows=Count("id"), units=Sum("quantity")).order_by("-units")
+    totals = recorded.values("source").annotate(rows=Count("id"), units=Sum("quantity")).order_by("-units")
     return {
         "form": form or ManualSaleForm(),
         "sales": shown,
         "sales_query": query,
-        "sales_found": counted if query else None,
+        # Counted over the window as well as the search, since that is what
+        # the list beside it shows: counted over the table, the line says
+        # « 5 de plus » under a page of one.
+        "sales_found": counted if query or window else None,
         "sales_hidden": max(counted - len(shown), 0),
+        "show_all": show_all,
+        "date_window": window,
+        "date_window_label": _window_label(window),
         "totals": totals,
         "manual_source": MANUAL_SALE_SOURCE,
         "documents": documents,
+        "documents_found": documents_found,
+        "documents_hidden": max(documents_found - len(documents), 0),
         # The import from the till.
         "job": SalesImportJob.objects.first(),
         "default_start": (timezone.localdate() - timedelta(days=30)).isoformat(),

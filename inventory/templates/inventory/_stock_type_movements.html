@@ -1,4 +1,41 @@
-{% load assets %}{% if movements %}
+{% load assets %}
+{% comment %}
+The whole fragment is wrapped, and « tout l'historique » replaces that
+wrapper rather than the cell it sits in: the charge panel's own link lives
+inside a nested <td>, where `closest td` is the foot of the inner table and
+the panel would be redrawn inside itself. One target both panels can name
+from anywhere within themselves.
+{% endcomment %}
+<div class="row-panel">
+{% if movements %}
+{% if window %}
+{% comment %}
+A panel narrowed by the page's two dates says which two, and the way back to
+the whole history is beside it, one click rather than a trip through the
+toolbar. The curve is not narrowed - a month of it is two points and « pas
+assez d'historique » - so it is not offered here.
+{% endcomment %}
+{% comment %}
+« Achats » is a claim about the lines below, and the row above counts
+purchases alone: a loss or a ledger correction inside the window is listed
+here too, and naming it keeps the header true where the row's « Acheté »
+cannot be argued with.
+{% endcomment %}
+<p class="muted" style="padding:0.75rem 0.9rem 0;">
+    Achats{% if other_movements %} et autres mouvements{% endif %} {{ window_label }} —
+    <a href="{{ all_url }}" hx-get="{{ all_url }}" hx-target="closest .row-panel" hx-swap="outerHTML">tout l'historique</a>
+</p>
+{% elif back_url %}
+{% comment %}
+Widened from a windowed panel: the dates the row is still counted over have
+to be one click away, or « Acheté 12 » sits over the whole history until the
+page is reloaded whole - the row is fetched once and never again.
+{% endcomment %}
+<p class="muted" style="padding:0.75rem 0.9rem 0;">
+    Tout l'historique —
+    <a href="{{ back_url }}" hx-get="{{ back_url }}" hx-target="closest .row-panel" hx-swap="outerHTML">revenir {{ back_label }}</a>
+</p>
+{% endif %}
 {% comment %}
 Nine columns in a row of the list: beside the panel of products to classify
 it is narrow, so it scrolls sideways on its own rather than squeezing.
@@ -34,9 +71,22 @@ it is narrow, so it scrolls sideways on its own rather than squeezing.
                 {% else %}
                     {{ entry.movement.note|default:"Correction manuelle" }}
                 {% endif %}
+                {% comment %}
+                Only what is not a purchase: the row above counts « Acheté »
+                on purchases alone, and a broken bottle listed here with
+                nothing marking it is a line added to a figure that never
+                held it. Marking every line « Achat » would hide it again.
+                {% endcomment %}
+                {% if entry.kind_label %}<span class="muted">({{ entry.kind_label }})</span>{% endif %}
             </td>
             <td class="muted">{{ entry.line.invoice.supplier.name|default:"—" }}</td>
-            <td>{{ entry.line.invoice.invoice_date|date:"d/m/Y"|default:"—" }}</td>
+            {% comment %}
+            The date the movement COUNTS on (views._stock_type_movement_entries),
+            not its invoice's: a manual correction dated by occurred_on printed
+            "—" here, and a row two dates had just picked out then read as a row
+            with no date at all.
+            {% endcomment %}
+            <td>{{ entry.date|date:"d/m/Y"|default:"—" }}</td>
             <td class="num">
                 {{ entry.purchased_quantity|quantity }} {{ entry.purchased_quantity_unit }}
             </td>
@@ -68,5 +118,22 @@ it is narrow, so it scrolls sideways on its own rather than squeezing.
 </table>
 </div>
 {% else %}
-    <p class="muted" style="padding:0.75rem 0.9rem;">Aucun achat enregistré pour le moment.</p>
+    {% comment %}
+    « Aucun achat enregistré pour le moment » says this article was never
+    bought; under two dates the truth is that nothing was bought between
+    them, and the way back has to be on screen rather than found again in
+    the toolbar.
+    {% endcomment %}
+    <p class="muted" style="padding:0.75rem 0.9rem;">
+        {% if window %}
+            Aucun achat {{ window_label }} —
+            <a href="{{ all_url }}" hx-get="{{ all_url }}" hx-target="closest .row-panel" hx-swap="outerHTML">tout l'historique</a>
+        {% elif back_url %}
+            Aucun achat enregistré pour le moment —
+            <a href="{{ back_url }}" hx-get="{{ back_url }}" hx-target="closest .row-panel" hx-swap="outerHTML">revenir {{ back_label }}</a>
+        {% else %}
+            Aucun achat enregistré pour le moment.
+        {% endif %}
+    </p>
 {% endif %}
+</div>

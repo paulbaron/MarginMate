@@ -3,7 +3,8 @@
 {% block content %}
     <div class="page-header">
         <div>
-            <p class="breadcrumb"><a href="{% url 'recipes:sales_list' %}">← Recettes &amp; ventes · ventes</a></p>
+            {# Both ways back keep the period the reader came from: this page is reached from a windowed list and the form posts to its own address, so the save returns to it too. #}
+            <p class="breadcrumb"><a href="{% url 'recipes:sales_list' %}{% querystring %}">← Recettes &amp; ventes · ventes</a></p>
             <h1>{% if document %}Modifier une vente{% else %}Nouvelle facture de vente{% endif %}</h1>
         </div>
     </div>
@@ -48,7 +49,7 @@
 
             <div class="form-actions" style="margin-top:1rem;">
                 <button class="btn" type="submit">Enregistrer</button>
-                <a class="btn btn-secondary" href="{% url 'recipes:sales_list' %}">Annuler</a>
+                <a class="btn btn-secondary" href="{% url 'recipes:sales_list' %}{% querystring %}">Annuler</a>
             </div>
         </form>
     </div>

@@ -3,6 +3,12 @@ The documents behind a charge, opened under its row - a rent month after
 month, a subscription, a water bill. One line per document, each linking to
 the document it came from, exactly as a stock item's purchases do.
 {% endcomment %}
+{% comment %}
+Wrapped so « tout l'historique » has something to replace: its link sits in
+the foot of the table below, where `closest td` is that foot's own cell and
+the panel would be swapped inside itself.
+{% endcomment %}
+<div class="row-panel">
 {% if rows %}
     <div class="sub-table-wrap">
         <table class="sub-table charge-documents">
@@ -49,8 +55,20 @@ the document it came from, exactly as a stock item's purchases do.
             </tbody>
             <tfoot>
                 <tr>
+                    {% comment %}
+                    « — tout l'historique » is a lie under two dates: this
+                    panel then holds the documents the row was counted over,
+                    and says which. The link redraws the panel without the
+                    window; 📈 is the one thing still whole. Widened, it
+                    offers the dates back - the row above is still counted
+                    over them, and it is fetched once and never again.
+                    {% endcomment %}
                     <td colspan="4" class="muted">
-                        {{ rows|length }} document{{ rows|length|pluralize }} — tout l'historique
+                        {{ rows|length }} document{{ rows|length|pluralize }}{% if window %} {{ window_label }} —
+                        <a href="{{ all_url }}" hx-get="{{ all_url }}" hx-target="closest .row-panel" hx-swap="outerHTML">tout l'historique</a>
+                        {% elif back_url %} — tout l'historique,
+                        <a href="{{ back_url }}" hx-get="{{ back_url }}" hx-target="closest .row-panel" hx-swap="outerHTML">revenir {{ back_label }}</a>
+                        {% else %} — tout l'historique{% endif %}
                     </td>
                     <td class="num">{{ total_ttc|floatformat:2 }} €</td>
                     <td></td>
@@ -59,5 +77,21 @@ the document it came from, exactly as a stock item's purchases do.
         </table>
     </div>
 {% else %}
-    <p class="muted" style="padding:0.75rem 0.9rem;">Aucun document pour « {{ title }} ».</p>
+    {% comment %}
+    Nothing between these dates is not « nothing, ever »: the charge that
+    bills twice a year has empty months, and a panel that read as empty for
+    good would send a reader looking for a document that is right there.
+    {% endcomment %}
+    <p class="muted" style="padding:0.75rem 0.9rem;">
+        {% if window %}
+            Aucun document pour « {{ title }} » {{ window_label }} —
+            <a href="{{ all_url }}" hx-get="{{ all_url }}" hx-target="closest .row-panel" hx-swap="outerHTML">tout l'historique</a>
+        {% elif back_url %}
+            Aucun document pour « {{ title }} » —
+            <a href="{{ back_url }}" hx-get="{{ back_url }}" hx-target="closest .row-panel" hx-swap="outerHTML">revenir {{ back_label }}</a>
+        {% else %}
+            Aucun document pour « {{ title }} ».
+        {% endif %}
+    </p>
 {% endif %}
+</div>

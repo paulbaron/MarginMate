@@ -16,6 +16,19 @@
                         expliquent, et ce qui manque.
                     {% endif %}
                 </p>
+            {% elif date_window %}
+                <p class="page-subtitle">
+                    {{ date_window_label|capfirst }} : les produits achetés sur cette période, avec ce qu'ils
+                    ont coûté{% if charge_suppliers %}, et plus bas les charges de la même période{% endif %}.
+                    Les articles dont rien n'a été acheté entre ces dates ne sont pas listés.
+                    {% comment %}
+                    What a row opens is said once, in the note inside
+                    #catalogue: it is the block that reloads itself after a
+                    classification, and it sits against the rows it is
+                    about. Repeated here it would be the same sentence
+                    twice on one screen.
+                    {% endcomment %}
+                </p>
             {% else %}
                 <p class="page-subtitle">
                     Tout ce que disent les factures et les tickets : les produits achetés, rangés par article, avec
@@ -50,6 +63,13 @@
                            placeholder="Rechercher un produit, un article ou une catégorie…">
                 </div>
                 <form method="get" class="period-picker">
+                    {% comment %}
+                    The two dates travel with the select, or choosing
+                    « Depuis le début » to get them back would be the very
+                    click that threw them away.
+                    {% endcomment %}
+                    {% if date_window.start_value %}<input type="hidden" name="du" value="{{ date_window.start_value }}">{% endif %}
+                    {% if date_window.end_value %}<input type="hidden" name="au" value="{{ date_window.end_value }}">{% endif %}
                     <label for="period-select">Période</label>
                     <select name="inventaire" id="period-select" onchange="this.form.submit()">
                         <option value="">Depuis le début (tous les achats)</option>
@@ -60,6 +80,27 @@
                         {% endfor %}
                     </select>
                     <noscript><button class="btn btn-small btn-secondary" type="submit">Afficher</button></noscript>
+                </form>
+                {% comment %}
+                The free window. It keeps the inventaire as a hidden field -
+                and is disabled while there is one: an inventaire is two
+                physical counts, its figures come out of them, and two dates
+                that change nothing must not look as though they would.
+                {% endcomment %}
+                <form method="get" class="date-range">
+                    {% if period %}<input type="hidden" name="inventaire" value="{{ period.closing_take.pk }}">{% endif %}
+                    <label class="inline-label">Du
+                        <input type="date" name="du" value="{{ date_window.start_value }}"{% if period %} disabled{% endif %}>
+                    </label>
+                    <label class="inline-label">au
+                        <input type="date" name="au" value="{{ date_window.end_value }}"{% if period %} disabled{% endif %}>
+                    </label>
+                    <button class="btn btn-small btn-secondary" type="submit"{% if period %} disabled{% endif %}>Afficher</button>
+                    {% if period %}
+                        <span class="muted">Les dates viennent de l'inventaire choisi ; repassez à « Depuis le début » pour en choisir deux.</span>
+                    {% elif date_window %}
+                        <a class="btn btn-small btn-secondary" href="{% url 'inventory:stock_list' %}">Effacer</a>
+                    {% endif %}
                 </form>
                 {% if review_total %}
                     <button type="button" class="btn btn-small" data-panel-open hidden>

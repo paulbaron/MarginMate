@@ -1,6 +1,15 @@
 <div class="stat-row" id="stock-stats"{% if oob %} hx-swap-oob="true"{% endif %}>
-    {% if categories %}
-        {% if period %}
+    {% comment %}
+    « S'il y a des catégories » meant « si la base n'est pas neuve » until
+    two dates could empty them. A window over which nothing was bought but
+    the rent was paid took the whole row away - « Total acheté », « Articles »
+    and « Charges (TTC) » - while the fold below went on showing what those
+    dates cost. A figure that disappears reads as a broken page; nil reads as
+    nil. The inventaire keeps the old guard: its stats are arithmetic on two
+    counts, and there is none to state when nothing was counted.
+    {% endcomment %}
+    {% if period %}
+        {% if categories %}
             <div class="stat">
                 <div class="stat-label">Manquant (HT)</div>
                 <div class="stat-value {% if total_missing_value %}bad{% endif %}">{{ total_missing_value|floatformat:2 }} €</div>
@@ -27,35 +36,35 @@
                 </div>
                 <div class="stat-note">le manque regroupé et valorisé au moins cher</div>
             </div>
-        {% else %}
+        {% endif %}
+    {% elif categories or date_window %}
+        <div class="stat">
+            <div class="stat-label">Total acheté (HT)</div>
+            <div class="stat-value">{{ total_value_ht|floatformat:2 }} €</div>
+            <div class="stat-note">produits, {% if date_window %}{{ date_window_label }}{% else %}depuis le début{% endif %} — hors charges</div>
+        </div>
+        <div class="stat">
+            <div class="stat-label">Total acheté (TTC)</div>
+            <div class="stat-value">{{ total_value_ttc|floatformat:2 }} €</div>
+        </div>
+        {% if charge_suppliers %}
             <div class="stat">
-                <div class="stat-label">Total acheté (HT)</div>
-                <div class="stat-value">{{ total_value_ht|floatformat:2 }} €</div>
-                <div class="stat-note">produits, depuis le début — hors charges</div>
+                <div class="stat-label">Charges (TTC)</div>
+                <div class="stat-value">{{ charge_total_ttc|floatformat:2 }} €</div>
+                <div class="stat-note">{% if date_window %}{{ date_window_label }}{% else %}sur les douze derniers mois{% endif %}</div>
             </div>
+        {% endif %}
+        <div class="stat">
+            <div class="stat-label">Articles</div>
+            <div class="stat-value">{{ stock_type_count }}</div>
+            <div class="stat-note">{% if date_window %}achetés, {% endif %}dans {{ categories|length }} catégorie{{ categories|length|pluralize }}</div>
+        </div>
+        {% if over_stock_count %}
             <div class="stat">
-                <div class="stat-label">Total acheté (TTC)</div>
-                <div class="stat-value">{{ total_value_ttc|floatformat:2 }} €</div>
+                <div class="stat-label">Vendu &gt; acheté</div>
+                <div class="stat-value bad">{{ over_stock_count }}</div>
+                <div class="stat-note">article{{ over_stock_count|pluralize }} dont les ventes dépassent les achats (pertes déclarées déduites)</div>
             </div>
-            {% if charge_suppliers %}
-                <div class="stat">
-                    <div class="stat-label">Charges (TTC)</div>
-                    <div class="stat-value">{{ charge_total_ttc|floatformat:2 }} €</div>
-                    <div class="stat-note">sur les douze derniers mois</div>
-                </div>
-            {% endif %}
-            <div class="stat">
-                <div class="stat-label">Articles</div>
-                <div class="stat-value">{{ stock_type_count }}</div>
-                <div class="stat-note">dans {{ categories|length }} catégorie{{ categories|length|pluralize }}</div>
-            </div>
-            {% if over_stock_count %}
-                <div class="stat">
-                    <div class="stat-label">Vendu &gt; acheté</div>
-                    <div class="stat-value bad">{{ over_stock_count }}</div>
-                    <div class="stat-note">article{{ over_stock_count|pluralize }} dont les ventes dépassent les achats (pertes déclarées déduites)</div>
-                </div>
-            {% endif %}
         {% endif %}
     {% endif %}
     {% if review_count %}

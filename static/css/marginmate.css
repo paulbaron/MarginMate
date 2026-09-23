@@ -417,7 +417,7 @@ th[aria-sort]:not([aria-sort="none"]) > button { color: var(--text); }
     border: 1px solid transparent;
 }
 .status-COMPLETE, .status-SUCCESS, .status-linked { background: var(--green-bg); color: var(--green); border-color: #2f5233; }
-.status-NEEDS_REVIEW, .status-PENDING, .status-pending { background: var(--amber-bg); color: var(--amber); border-color: #574728; }
+.status-NEEDS_REVIEW, .status-PENDING, .status-pending, .status-twice { background: var(--amber-bg); color: var(--amber); border-color: #574728; }
 .status-ERROR, .status-FAILED { background: var(--red-bg); color: var(--red); border-color: #5a2f2c; }
 .status-IMPORTED, .status-RUNNING { background: var(--blue-bg); color: var(--blue); border-color: #2f3d57; }
 .status-CANCELLED, .status-ignored { background: #2a2934; color: var(--muted); border-color: var(--border); }
@@ -552,8 +552,11 @@ form p { margin: var(--s3) 0; }
 /* ---------------------------------------------------------------- responsive */
 
 @media (max-width: 860px) {
-    /* The brand above the links: up to 112px tall. */
-    :root { --topbar-room: 8.5rem; }
+    /* The brand above the links: up to 112px tall - and 141px between 441
+       and 465px, where seven links wrap onto three rows (measured 20/09,
+       badges on: « Marges » is what pushed them there, and 8.5rem left the
+       heading a page scrolled to five pixels under the bar). */
+    :root { --topbar-room: 10rem; }
     .topbar-inner { flex-wrap: wrap; padding: var(--s2) var(--s4); gap: var(--s2); }
     nav { gap: 0; }
     nav a { padding: var(--s1) var(--s2); font-size: 0.85rem; }
@@ -933,6 +936,18 @@ form p { margin: var(--s3) 0; }
 .period-picker { display: flex; align-items: center; gap: var(--s2); }
 .period-picker label { margin: 0; white-space: nowrap; }
 .period-picker select { min-width: 16rem; }
+
+/* « Du … au … »: the window four pages are read through - les produits
+   achetés, les achats, les ventes et la banque. One rule for the four, so
+   the same question is asked the same way and in the same place wherever it
+   is asked. Wraps rather than overflows: it sits in a toolbar beside a
+   search box on a narrow screen. */
+.date-range { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); }
+.date-range label { margin: 0; white-space: nowrap; }
+.date-range input[type="date"] { width: auto; min-width: 9.5rem; }
+/* What the window is showing, said beside it rather than only in the
+   figures: an empty list under two dates must say it is the dates. */
+.date-range-note { margin: 0 0 var(--s3); }
 
 /* Between two counts the table grows from 7 columns to 10 - wide enough to
    scroll rather than squash every figure into illegibility, which is what
@@ -1451,3 +1466,43 @@ fieldset.choice-group legend { font-weight: 650; padding: 0 var(--s2); }
 .supplier-form { max-width: 46rem; display: flex; flex-direction: column; gap: var(--s3); }
 .supplier-form .form-field { margin: 0; }
 .edit-plan { margin: 0; padding-left: var(--s5); display: flex; flex-direction: column; gap: var(--s2); }
+
+/* Marges: « Ce qui a été facturé », the breakdown that is also the selector.
+   A group unfolds to its suppliers or its articles with no script: the
+   <details> in its name cell is only the switch, and :has() shows the rows
+   of its own <tbody>. What is left out stays where it is, dimmed and struck
+   through, so the table still reads down to « Total facturé ». */
+.spend-table .spend-tick { width: 5.5rem; text-align: center; }
+.spend-table .spend-member { display: none; }
+.spend-table tbody:has(details[open]) > .spend-member { display: table-row; }
+.spend-table .spend-member-name { padding-left: var(--s6); }
+.spend-unfold { display: inline-block; }
+.spend-unfold > summary { cursor: pointer; font-weight: 650; }
+.spend-table .is-left-out td:not(.spend-tick) { color: var(--muted); }
+.spend-table .is-left-out td.num { text-decoration: line-through; }
+.spend-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin: var(--s3) 0 var(--s4); }
+.spend-left-out { color: var(--text-dim); max-width: 80ch; margin: 0 0 var(--s4); }
+.stat-selection { border-style: dashed; border-color: var(--border-strong); }
+
+/* Marges: « Articles comptés dans la marge produits », the article's own box
+   a category at a time. It folds like « Ce qui a été facturé » above it (the
+   same <details> switch); each category's form sits in its buttons' cell and
+   the article boxes join it through their form attribute. */
+.flag-table .flag-member { display: none; }
+.flag-table tbody:has(details[open]) > .flag-member { display: table-row; }
+.flag-table .flag-member-name { padding-left: var(--s6); }
+.flag-table .flag-member-name label {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s2);
+    margin: 0 var(--s2) 0 0;
+    color: var(--text);
+    font-size: inherit;
+    font-weight: 500;
+}
+.flag-table .flag-actions { text-align: right; }
+.flag-table .flag-actions form { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--s2); margin: 0; }
+.flag-table .flag-twice { color: var(--amber); }
+.flag-table .flag-state { min-width: 9rem; }
+.flag-table .flag-state-words { white-space: nowrap; }
+.flag-table .flag-save td { padding-left: var(--s6); }

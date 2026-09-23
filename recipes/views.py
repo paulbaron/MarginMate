@@ -22,7 +22,7 @@ from .forms import (
     ingredient_unit_map,
 )
 from .links import LinkError, link, set_aside
-from .menu import pending_count, render_menu, with_suggestion
+from .menu import pending_count, render_menu, sales_list_url, with_suggestion
 from .models import (
     PosProduct,
     Recipe,
@@ -357,7 +357,7 @@ def sales_import(request):
 
 def trigger_sales_import(request):
     if request.method != "POST":
-        return redirect("recipes:sales_list")
+        return redirect(sales_list_url(request))
     # Clear out any run that died without saying so before deciding whether
     # one is genuinely in progress - otherwise a single killed thread locks
     # this page out permanently.
@@ -366,22 +366,22 @@ def trigger_sales_import(request):
         status__in=[SalesImportJob.Status.PENDING, SalesImportJob.Status.RUNNING]
     ).exists():
         messages.error(request, "Une récupération est déjà en cours.")
-        return redirect("recipes:sales_list")
+        return redirect(sales_list_url(request))
 
     start = _parse_date(request.POST.get("start_date"))
     end = _parse_date(request.POST.get("end_date"))
     if not start or not end:
         messages.error(request, "Renseignez les deux dates.")
-        return redirect("recipes:sales_list")
+        return redirect(sales_list_url(request))
     if start > end:
         messages.error(request, "La date de début est après la date de fin.")
-        return redirect("recipes:sales_list")
+        return redirect(sales_list_url(request))
 
     job = SalesImportJob.objects.create(range_start=start, range_end=end)
     threading.Thread(
         target=import_laddition_sales_task, args=(job.id, start, end), daemon=True
     ).start()
-    return redirect("recipes:sales_list")
+    return redirect(sales_list_url(request))
 
 
 def sales_import_status(request, job_id):
@@ -396,7 +396,7 @@ def sales_import_status(request, job_id):
 
 def cancel_sales_import(request, job_id):
     if request.method != "POST":
-        return redirect("recipes:sales_list")
+        return redirect(sales_list_url(request))
     job = get_object_or_404(SalesImportJob, pk=job_id)
     if job.is_active:
         job.cancel_requested = True
@@ -425,7 +425,7 @@ def sales_list(request):
         if form.is_valid():
             sale = form.save()
             messages.success(request, f"{sale.quantity} × {sale.recipe.name} le {sale.sold_on:%d/%m/%Y}.")
-            return redirect("recipes:sales_list")
+            return redirect(sales_list_url(request))
         return render_menu(request, "ventes", form=form)
     return render_menu(request, "ventes")
 
@@ -435,14 +435,14 @@ def sales_delete(request, pk):
     record of what the till reported, and correcting it means re-importing,
     not editing it away."""
     if request.method != "POST":
-        return redirect("recipes:sales_list")
+        return redirect(sales_list_url(request))
     sale = get_object_or_404(RecipeSale, pk=pk)
     if sale.source != MANUAL_SALE_SOURCE:
         messages.error(request, "Seules les ventes saisies à la main peuvent être supprimées ici.")
     else:
         sale.delete()
         messages.success(request, "Vente supprimée.")
-    return redirect("recipes:sales_list")
+    return redirect(sales_list_url(request))
 
 
 def pos_products_bulk(request):
@@ -486,7 +486,7 @@ def sale_document_form(request, pk=None):
                 formset.instance = document
                 formset.save()
             messages.success(request, f"{document} enregistrée.")
-            return redirect("recipes:sales_list")
+            return redirect(sales_list_url(request))
     else:
         form = SaleDocumentForm(instance=document)
         formset = SaleDocumentLineFormSet(instance=document)
@@ -500,9 +500,9 @@ def sale_document_form(request, pk=None):
 
 def sale_document_delete(request, pk):
     if request.method != "POST":
-        return redirect("recipes:sales_list")
+        return redirect(sales_list_url(request))
     document = get_object_or_404(SaleDocument, pk=pk)
     label = str(document)
     document.delete()
     messages.success(request, f"{label} supprimée.")
-    return redirect("recipes:sales_list")
+    return redirect(sales_list_url(request))

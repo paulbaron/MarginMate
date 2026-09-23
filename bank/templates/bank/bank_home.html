@@ -15,7 +15,7 @@
             {% if has_lines %}
                 <form method="post" action="{% url 'bank:bank_reconcile' %}">
                     {% csrf_token %}
-                    <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                    <input type="hidden" name="next" value="{{ page_url }}">
                     <button class="btn btn-secondary" type="submit">Relancer le rapprochement</button>
                 </form>
             {% endif %}
@@ -25,6 +25,7 @@
     <div class="card">
         <form method="post" enctype="multipart/form-data" class="inline-form">
             {% csrf_token %}
+            <input type="hidden" name="next" value="{{ page_url }}">
             <label>
                 <span class="upload-choice-title">Relevés bancaires (CSV)</span>
                 <input type="file" name="files" multiple accept=".csv,text/csv">
@@ -39,7 +40,7 @@
     </div>
 
     {% if has_lines %}
-        <form method="get" class="inline-form">
+        <form method="get" class="date-range">
             <input type="hidden" name="vue" value="{{ view }}">
             <label>
                 Mois
@@ -50,8 +51,30 @@
                     {% endfor %}
                 </select>
             </label>
+            <label class="inline-label">Du
+                <input type="date" name="du" value="{{ date_window.start_value }}"{% if month %} disabled{% endif %}>
+            </label>
+            <label class="inline-label">au
+                <input type="date" name="au" value="{{ date_window.end_value }}"{% if month %} disabled{% endif %}>
+            </label>
             <button class="btn btn-small btn-secondary" type="submit">Afficher</button>
+            {% if date_window %}<a class="btn btn-small btn-secondary" href="{{ clear_window_url }}">Effacer</a>{% endif %}
+            {% if month %}<span class="muted">Le mois choisi l'emporte : « Tous les mois » rend les dates libres.</span>{% endif %}
         </form>
+
+        {% if date_window %}
+            <p class="muted date-range-note">
+                {% if date_window.start and date_window.end %}
+                    Du {{ date_window.start|date:"d/m/Y" }} au {{ date_window.end|date:"d/m/Y" }}
+                {% elif date_window.start %}
+                    Depuis le {{ date_window.start|date:"d/m/Y" }}
+                {% else %}
+                    Jusqu'au {{ date_window.end|date:"d/m/Y" }}
+                {% endif %}
+                (dates de passage en banque) : les montants, les onglets et les bénéficiaires ci-dessous ne
+                comptent que cette période.
+            </p>
+        {% endif %}
 
         <div class="stat-row">
             <div class="stat">
@@ -81,8 +104,7 @@
 
         <div class="filter-tabs">
             {% for tab in tabs %}
-                <a class="filter-tab{% if tab.active %} active{% endif %}"
-                   href="{% url 'bank:bank_home' %}?vue={{ tab.key }}{% if month %}&amp;mois={{ month }}{% endif %}">
+                <a class="filter-tab{% if tab.active %} active{% endif %}" href="{{ tab.url }}">
                     {{ tab.label }}
                     <span class="filter-tab-figure">{{ tab.count }}</span>
                 </a>
@@ -119,7 +141,15 @@
                     </table>
                 </div>
             {% else %}
-                <div class="empty-state"><p>Toutes les dépenses ont leur facture, ou n'en attendent pas.</p></div>
+                <div class="empty-state">
+                    <p>
+                        {% if date_window %}
+                            Aucune dépense sans facture sur cette période.
+                        {% else %}
+                            Toutes les dépenses ont leur facture, ou n'en attendent pas.
+                        {% endif %}
+                    </p>
+                </div>
             {% endif %}
         {% elif rows %}
             <div class="table-wrap">
@@ -168,7 +198,7 @@
                                                     <form method="post" action="{% url 'bank:bank_line_action' line.pk %}" class="inline-form">
                                                         {% csrf_token %}
                                                         <input type="hidden" name="action" value="link">
-                                                        <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                                                        <input type="hidden" name="next" value="{{ page_url }}">
                                                         {% for invoice in option.invoices %}<input type="hidden" name="invoice" value="{{ invoice.pk }}">{% endfor %}
                                                         <span>
                                                             {% for invoice in option.invoices %}{{ invoice.supplier.name }} n° {{ invoice.invoice_number|default:invoice.pk }} {% if invoice.invoice_date %}du {{ invoice.invoice_date|date:"d/m/Y" }}{% else %}sans date{% endif %}{% if not forloop.last %} + {% endif %}{% endfor %}
@@ -183,7 +213,7 @@
                                                 <form method="post" action="{% url 'bank:bank_line_action' line.pk %}" class="inline-form">
                                                     {% csrf_token %}
                                                     <input type="hidden" name="action" value="link">
-                                                    <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                                                    <input type="hidden" name="next" value="{{ page_url }}">
                                                     <select name="invoice" aria-label="Facture réglée par ce paiement">
                                                         <option value="">Choisir une facture…</option>
                                                         {% for invoice, total in row.choices %}
@@ -201,7 +231,7 @@
                                         {% if row.status != "income" %}
                                             <form method="post" action="{% url 'bank:bank_line_action' line.pk %}" class="inline-form">
                                                 {% csrf_token %}
-                                                <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                                                <input type="hidden" name="next" value="{{ page_url }}">
                                                 {% if row.status == "linked" %}
                                                     <button class="btn btn-small btn-secondary" type="submit" name="action" value="unlink">Délier</button>
                                                 {% elif row.status == "todo" %}
@@ -223,7 +253,9 @@
             </div>
         {% else %}
             <div class="empty-state">
-                {% if view == "a-traiter" %}
+                {% if date_window %}
+                    <p>Aucune opération sur cette période.</p>
+                {% elif view == "a-traiter" %}
                     <p>Toutes les dépenses ont leur facture, ou n'en attendent pas.</p>
                 {% else %}
                     <p>Aucune opération ici.</p>

@@ -14,9 +14,9 @@ from django.contrib import messages
 from django.db.models import Prefetch
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
-from django.utils.http import url_has_allowed_host_and_scheme
+from django.utils.http import url_has_allowed_host_and_scheme, urlencode
 
-from common import is_id
+from common import DateRange, date_range, is_id
 
 from invoices.models import Invoice
 
@@ -117,6 +117,13 @@ def bank_home(request):
     month = request.GET.get("mois", "")
     if month not in dict(months):
         month = ""
+    # A month chosen is the answer to the question the free dates ask, so it
+    # takes it whole rather than being crossed with them: two windows on one
+    # page, one of them invisible, is how a figure comes out narrower than
+    # the period the page says it is counting. The inputs are drawn disabled
+    # and no link carries « du »/« au » while a month is on, so the dates
+    # cannot come back on the next click either.
+    window = DateRange() if month else date_range(request)
 
     lines = BankTransaction.objects.prefetch_related(
         Prefetch(
@@ -127,6 +134,12 @@ def bank_home(request):
     if month:
         year, number = (int(part) for part in month.split("-"))
         lines = lines.filter(operation_date__year=year, operation_date__month=number)
+    # On the date the bank booked the operation, which is what « Mois »
+    # filters on too: windowed on the card's own date instead, the two
+    # pickers would disagree about which period a card payment belongs to.
+    # Everything below - the stats, the tab counts, the payee groups - is
+    # built from these rows, so it all follows the window by construction.
+    lines = window.limit(lines, "operation_date")
     rules = reconcile.active_rules()
     rows = [Row(line, *classify(line, rules)) for line in lines]
     by_status = defaultdict(list)
@@ -145,7 +158,13 @@ def bank_home(request):
     }[view]
     _fill(shown)
     tabs = [
-        {"key": key, "label": label, "count": stats["counts"][key], "active": key == view}
+        {
+            "key": key,
+            "label": label,
+            "count": stats["counts"][key],
+            "active": key == view,
+            "url": _page_url(key, month, window),
+        }
         for key, label in VIEWS.items()
     ]
     return render(
@@ -159,6 +178,16 @@ def bank_home(request):
             "stats": stats,
             "months": months,
             "month": month,
+            "date_window": window,
+            # Where every form on this page comes back to. Built from what
+            # the page actually read rather than from request.get_full_path,
+            # so a round trip cannot carry a parameter the page is ignoring
+            # (dates left in the URL under a chosen month) back into view.
+            "page_url": _page_url(view, month, window),
+            "clear_window_url": _page_url(view, "", DateRange()),
+            # Deliberately the whole statement, window or not: windowed, a
+            # period with nothing in it would show « Aucun relevé importé »
+            # and read as an empty database rather than as empty dates.
             "has_lines": BankTransaction.objects.exists(),
         },
     )
@@ -271,10 +300,14 @@ def rule_action(request, pk):
 
 
 def _import_statements(request):
+    # Comes back to the page as it was being read - its tab, its month, its
+    # window - rather than to the bare list: an import made to check a given
+    # period answered by silently showing every other one.
+    back = _back(request)
     uploads = request.FILES.getlist("files")
     if not uploads:
         messages.error(request, "Choisissez au moins un relevé bancaire (fichier CSV).")
-        return redirect("bank:bank_home")
+        return redirect(back)
     created = known = 0
     for upload in uploads:
         if not upload.name.lower().endswith(".csv"):
@@ -294,7 +327,22 @@ def _import_statements(request):
             f"{created} opération(s) importée(s), {known} déjà connue(s) ; "
             f"{linked} paiement(s) rattaché(s) automatiquement à leur facture.",
         )
-    return redirect("bank:bank_home")
+    return redirect(back)
+
+
+def _page_url(view: str, month: str, window: DateRange) -> str:
+    """This page with everything the reader is looking through it kept: the
+    tab, the month and the window travel together.
+
+    The tab links used to paste « ?vue=…&mois=… » together in the template,
+    which is exactly where a new parameter gets forgotten: the window would
+    then fall off the page on the next click, the figures changing with
+    nothing on screen to say why. One place knows the rule instead."""
+    parameters = {"vue": view}
+    if month:
+        parameters["mois"] = month
+    parameters.update(window.parameters)
+    return f"{reverse('bank:bank_home')}?{urlencode(parameters)}"
 
 
 def _back(request) -> str:
