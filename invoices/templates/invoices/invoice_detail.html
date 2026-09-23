@@ -9,12 +9,33 @@
             <p class="muted">
                 {% if invoice.invoice_date %}Datée du {{ invoice.invoice_date|date:"d/m/Y" }}{% else %}Sans date{% endif %}
                 · Importée le {{ invoice.imported_at|date:"d/m/Y à H:i" }}
+                {% comment %}
+                Dit ici plutôt que deviné plus bas : sur cette page, « Total
+                HT » et chaque ligne sont ce que la facture déclare, pas ce
+                qu'une lecture en a tiré.
+                {% endcomment %}
+                {% comment %}
+                La phrase suit ce que la page montre vraiment : là où les
+                totaux du fournisseur ne tiennent pas, le total affiché est
+                celui des lignes et non le BT-112, et « montants issus des
+                données de la facture » serait une promesse que la page
+                vient de rompre (le message rouge ci-dessous dit laquelle).
+                {% endcomment %}
+                {% if invoice.is_einvoice %} · <strong>{% if einvoice_is_credit %}Avoir électronique{% else %}Facture électronique{% endif %} ({{ invoice.einvoice_format }})</strong>{% if invoice.error_message %} : montants déclarés par le fournisseur, qui ne s'accordent pas entre eux{% else %} : montants issus des données de la facture{% endif %}{% endif %}
             </p>
         </div>
         <div class="page-header-actions">
-            <span class="status-pill status-{{ invoice.status }}">{{ invoice.get_status_display }}</span>
+            {% comment %}
+            L'état que lisent toutes les listes (Invoice.review_state), pas
+            le libellé brut du champ : la ligne d'Achats disait « Produits à
+            classer » là où cette page disait « À vérifier », sur le même
+            document - et une facture électronique n'est jamais « à
+            vérifier », c'est tout l'objet de sa lecture.
+            {% endcomment %}
+            <span class="status-pill status-{{ invoice.review_state.css }}">{{ invoice.review_state.label }}</span>
             {% if invoice.source_file %}
-                <a class="btn btn-secondary" href="{{ invoice.source_file.url }}" target="_blank" rel="noopener">Voir le PDF</a>
+                {# Le fichier reçu est la facture légale : un XML s'ouvre tel quel. #}
+                <a class="btn btn-secondary" href="{{ invoice.source_file.url }}" target="_blank" rel="noopener">{% if invoice.is_einvoice %}Voir le fichier reçu{% else %}Voir le PDF{% endif %}</a>
             {% endif %}
             <a class="btn {% if not lines %}btn{% else %}btn-secondary{% endif %}"
                href="{% if invoice.is_receipt %}{% url 'invoices:receipt_review' invoice.pk %}{% else %}{% url 'invoices:invoice_edit_lines' invoice.pk %}{% endif %}">
@@ -70,6 +91,17 @@
             <strong>{{ invoice.reconciliation_adjustment|floatformat:2 }} €</strong> d'écart avec la base HT
             imprimée sur le ticket. L'écart est compté dans le total HT, jamais dans le coût d'un produit.
         </div>
+    {% elif invoice.reconciliation_adjustment and invoice.is_einvoice %}
+        {% comment %}
+        Ici le fournisseur le déclare (BG-20/BG-21, « frais et remises sur la
+        facture » dans les contrôles) : rien n'est déduit d'un écart.
+        {% endcomment %}
+        <div class="message">
+            Cette facture électronique facture <strong>{{ invoice.reconciliation_adjustment|floatformat:2 }} €</strong> HT
+            en dehors de ses lignes — droits, éco-participation, remise sur l'ensemble. Comptés dans le total et
+            dans la base de TVA, comme le fournisseur les déclare, mais imputés à aucun produit : rien ne dit
+            auquel ils reviennent.
+        </div>
     {% elif invoice.reconciliation_adjustment %}
         <div class="message">
             Le total imprimé par le fournisseur dépasse la somme des lignes de
@@ -77,6 +109,20 @@
             vignette sécu) facturés globalement, sans colonne par produit. Ajouté au total, avec sa TVA — les
             droits entrent dans la base de la TVA — pour qu'il corresponde au centime près à ce qui a été
             facturé et prélevé, mais jamais imputé à un produit — rien ne dit auquel il revient.
+        </div>
+    {% endif %}
+
+    {% if einvoice_no_lines %}
+        {% comment %}
+        Sans cette phrase, la ligne reconstituée depuis la table de TVA est
+        assise dans un tableau de lignes ordinaire, et le « À classer » plus
+        haut demande à quel article correspond le fournisseur lui-même.
+        {% endcomment %}
+        <div class="message">
+            Cette {% if einvoice_is_credit %}avoir{% else %}facture{% endif %} électronique
+            <strong>ne détaille aucune ligne</strong> : son profil ne transporte que les totaux et la TVA.
+            La ligne ci-dessous a été reconstituée depuis sa table de TVA pour que son total entre dans les
+            comptes — c'est le total de la facture, pas un article, et il n'y a rien à classer derrière.
         </div>
     {% endif %}
 

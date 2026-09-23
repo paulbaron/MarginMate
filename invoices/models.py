@@ -11,6 +11,17 @@ from django.utils import timezone
 from common import JobLogMixin
 
 
+#: Which attachment of an e-mail is the invoice, by default. Since the
+#: electronic invoicing reform an invoice arrives as a Factur-X PDF **or as
+#: the XML on its own** - a « plateforme agréée », or a supplier, may simply
+#: forward it - and both are the legal invoice. A source still filtering on
+#: `\.pdf$` alone would leave its supplier's invoices in the mailbox without
+#: a word, which is the silent loss this codebase exists to avoid. A pattern
+#: someone has tuned by hand is theirs and is left alone
+#: (migration 0032).
+INVOICE_ATTACHMENT_PATTERN = r"(?i)\.(pdf|xml)$"
+
+
 class Supplier(models.Model):
     """A vendor invoices come from. ``parser_key`` points at an entry in the
     parser registry (invoices/parsers/registry.py); blank, its PDFs are filed
@@ -171,8 +182,8 @@ class EmailInvoiceSource(models.Model):
     attachment_pattern = models.CharField(
         max_length=200,
         blank=True,
-        default=r"(?i)\.pdf$",
-        help_text="Expression régulière testée sur le nom de la pièce jointe.",
+        default=INVOICE_ATTACHMENT_PATTERN,
+        help_text="Expression régulière testée sur le nom de la pièce jointe (PDF ou XML : une facture électronique peut arriver seule).",
     )
 
     def __str__(self):
@@ -327,6 +338,15 @@ class Invoice(models.Model):
     # billed - never attributed to any individual product's own price,
     # since there's no reliable way to know which product it belongs to.
     reconciliation_adjustment = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    # The VAT rate that adjustment carries, when the DOCUMENT states it -
+    # which an EN 16931 invoice does, in BT-96/BT-103. Null everywhere else,
+    # and then adjustment_ttc goes on deducing it from the lines, which is
+    # all a supplier's PDF or a till receipt ever offers. Duty on alcohol is
+    # 20 % on an invoice whose food is at 5,5 %: deduced there, the invoice
+    # is filed below what the bank debits and no check notices.
+    adjustment_vat_rate = models.DecimalField(
+        max_digits=5, decimal_places=4, null=True, blank=True
+    )
     # A photographed receipt's printed total - what was paid. See total_ttc.
     printed_total_ttc = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     # Everything below is only populated for photographed till receipts (see
@@ -372,6 +392,17 @@ class Invoice(models.Model):
     # rather than each costing seconds to recognise only to be refused as a
     # duplicate afterwards.
     source_sha256 = models.CharField(max_length=64, blank=True, db_index=True)
+    # Which EN 16931 document this was read from - "Factur-X" (the XML came
+    # attached to a PDF), "CII" or "UBL" (the XML arrived on its own) - and
+    # blank for every other document, which is what makes it a question the
+    # database can answer. Set by invoices/einvoice.py's import path and by
+    # nothing else, it means: **the figures below are the invoice's own data,
+    # not a reading**. Everything else here infers - OCR reads a photograph,
+    # a regex finds an amount in a column - and `parse_checks` exists to
+    # catch the inferences that are wrong. There is nothing to catch here, so
+    # this document is not a receipt (`is_receipt`), never joins the queue
+    # where receipts are re-typed, and says so on every page that lists it.
+    einvoice_format = models.CharField(max_length=16, blank=True)
 
     class Meta:
         ordering = ["-invoice_date", "-imported_at"]
@@ -411,8 +442,16 @@ class Invoice(models.Model):
         those amounts are within the parser's tolerance of the printed total,
         the printed total is the answer - it is what was paid, and a cent the
         OCR misread must not make the bank payment unmatchable.
+
+        An **electronic invoice states its own total** (BT-112), and its
+        lines are stated in HT: 169,00 at 20% and 25,20 at 5,5% work back out
+        to 229,386 where the invoice says 229,39, and a document filed a
+        fraction of a cent from what the bank will pay is exactly the drift
+        reading the XML exists to remove. Within a cent a line of what the
+        lines make - past that, somebody has edited them, and what they now
+        say wins.
         """
-        from .parsers.receipt_base import RECONCILIATION_TOLERANCE
+        from .parsers.receipt_base import CENTS, RECONCILIATION_TOLERANCE
 
         lines = list(self.lines.all())
         if lines and all(line.printed_ttc is not None for line in lines):
@@ -426,14 +465,38 @@ class Invoice(models.Model):
         total = sum(
             (line.total_ht * (Decimal("1") + line.vat_rate) for line in lines),
             start=Decimal("0"),
-        )
-        return total + self.reconciliation_adjustment * (Decimal("1") + self._adjustment_vat_rate(lines))
+        ) + self.adjustment_ttc
+        if self.einvoice_format and self.printed_total_ttc is not None:
+            slack = max(RECONCILIATION_TOLERANCE, CENTS * len(lines))
+            if abs(self.printed_total_ttc - total) <= slack:
+                return self.printed_total_ttc
+        return total
+
+    @property
+    def adjustment_ttc(self):
+        """The reconciliation adjustment with its VAT on top - duty is part
+        of the VAT base, and added flat every UBA total fell five or six
+        cents short of what the bank debited. One definition, since the
+        correction page checks the lines against the total with it
+        (receipts.lines_check).
+
+        **What the document states beats what the lines suggest.** An
+        electronic invoice carries the charge's own rate (BT-96/BT-103) and
+        `adjustment_vat_rate` holds it; deducing it there put 100,00 € of
+        duty at 5,5 % because the lines beside it were soft drinks, and filed
+        a 1 175,00 € invoice at 1 160,50 € - unmatchable against the bank,
+        understated in « Marges », and with not one failing check, since the
+        checks all work on figures the document states and those balance."""
+        rate = self.adjustment_vat_rate
+        if rate is None:
+            rate = self._adjustment_vat_rate(list(self.lines.all()))
+        return self.reconciliation_adjustment * (Decimal("1") + rate)
 
     @staticmethod
     def _adjustment_vat_rate(lines) -> Decimal:
-        """The rate of the goods the adjustment belongs with: the lines that
-        carry duty when some do, otherwise all of them - by largest HT share
-        when their rates are mixed."""
+        """The rate of the goods the adjustment belongs with, where nothing
+        states one: the lines that carry duty when some do, otherwise all of
+        them - by largest HT share when their rates are mixed."""
         weights = {}
         for line in [line for line in lines if line.taxes] or lines:
             weights[line.vat_rate] = weights.get(line.vat_rate, Decimal("0")) + abs(line.total_ht)
@@ -452,17 +515,37 @@ class Invoice(models.Model):
         return self.lines.filter(product__stock_type__isnull=True, product__is_expense=False).count()
 
     @property
+    def is_einvoice(self) -> bool:
+        """Read from an EN 16931 document's own data (see
+        `einvoice_format`) rather than from a reading of a page."""
+        return bool(self.einvoice_format)
+
+    @property
     def is_receipt(self):
-        """A photographed till receipt rather than a digital invoice."""
-        return bool(self.parse_checks) or bool(self.ocr_text)
+        """A photographed till receipt rather than a digital invoice.
+
+        A check is what makes a document a receipt - which is why an
+        electronic invoice, whose checks are about the SUPPLIER's arithmetic
+        and not about any reading, is never one: as a receipt it would be
+        re-typed from a photo it has not got, read again through OCR, and
+        have its own exact figures replaced on validation
+        (receipts.recheck_after_review).
+        """
+        return (bool(self.parse_checks) or bool(self.ocr_text)) and not self.is_einvoice
 
     @property
     def waiting_check(self) -> bool:
         """Whether it is in the queue of documents to check - the same rule
         as `receipts.pending_receipts`, since a row that says "À vérifier"
         over an empty queue is a row nobody can act on. A charge is never in
-        it: there is nothing to type on a rent."""
-        return bool(self.parse_checks) and self.reviewed_at is None and not self.supplier.expenses_only
+        it: there is nothing to type on a rent. Nor is an electronic
+        invoice: there is nothing to type on exact data either."""
+        return (
+            bool(self.parse_checks)
+            and self.reviewed_at is None
+            and not self.supplier.expenses_only
+            and not self.is_einvoice
+        )
 
     @property
     def review_state(self) -> dict:
@@ -474,11 +557,26 @@ class Invoice(models.Model):
         if self.waiting_check:
             return {"css": self.Status.NEEDS_REVIEW, "label": "À vérifier"}
         if self.supplier.expenses_only:
+            # Before the electronic invoice below: a rent or a subscription
+            # is a charge whichever format it arrived in, and it is filed,
+            # shown and settled as one everywhere else (charge_state).
             return (
                 {"css": self.Status.NEEDS_REVIEW, "label": "Total à vérifier"}
                 if self.status == self.Status.NEEDS_REVIEW
                 else {"css": self.Status.COMPLETE, "label": "Charge"}
             )
+        if self.is_einvoice:
+            # Its figures are the invoice's own, so what is left to say is
+            # whether anything stops it being used: its own totals not
+            # holding, or no date (out of every valuation and of the bank
+            # match). Both are in « Documents à corriger »
+            # (workspace.DOCUMENT_TO_FIX), which is where the rest of that
+            # list waits - never in the ticket queue.
+            if self.error_message:
+                return {"css": self.Status.NEEDS_REVIEW, "label": "À corriger"}
+            if self.status == self.Status.NEEDS_REVIEW:
+                return {"css": self.status, "label": "Produits à classer"}
+            return {"css": self.Status.COMPLETE, "label": "Facture électronique"}
         if self.parse_checks:
             return {"css": self.Status.COMPLETE, "label": "Vérifié"}
         if self.status == self.Status.NEEDS_REVIEW:

@@ -20,7 +20,12 @@ photo, oldest first, and the documents that cannot be used as they are.
     <div class="stat{% if to_fix %} stat-warn{% endif %}">
         <div class="stat-label">Documents à corriger</div>
         <div class="stat-value">{{ to_fix|length }}</div>
-        <div class="stat-note">sans date, ou import en échec</div>
+        {% comment %}
+        Depuis la facture électronique cette liste tient aussi des
+        documents dont les totaux du fournisseur ne s'accordent pas. Le
+        sous-titre ne les nommait pas, et ils arrivaient sans pastille.
+        {% endcomment %}
+        <div class="stat-note">sans date, import en échec, ou totaux du fournisseur</div>
     </div>
     {% if with_products_to_classify %}
         <div class="stat">
@@ -56,10 +61,17 @@ photo, oldest first, and the documents that cannot be used as they are.
                             {% if not invoice.invoice_date %}<span class="status-pill status-ERROR">sans date</span>{% endif %}
                             {% if invoice.status == "ERROR" %}<span class="status-pill status-ERROR">import en échec</span>{% endif %}
                             {% if invoice.supplier_doubt %}<span class="status-pill status-NEEDS_REVIEW">fournisseur à confirmer</span> <span class="muted">{{ invoice.supplier_doubt|truncatechars:160 }}</span>{% endif %}
+                            {% if invoice.is_einvoice and invoice.error_message %}<span class="status-pill status-NEEDS_REVIEW">totaux du fournisseur</span>{% endif %}
                             {% if invoice.error_message %}<span class="muted">{{ invoice.error_message|truncatechars:90 }}</span>{% endif %}
                         </td>
                         <td class="num">{{ invoice.total_ht|floatformat:2 }} €</td>
-                        <td class="num"><a class="btn btn-small" href="{% url 'invoices:invoice_edit_lines' invoice.pk %}">Corriger</a></td>
+                        {% comment %}
+                        « Corriger » sur une facture électronique dont
+                        l'arithmétique du fournisseur ne tient pas : personne
+                        ici ne corrige cela, le fournisseur doit la
+                        réémettre. « Ouvrir » dit ce que le bouton fait.
+                        {% endcomment %}
+                        <td class="num"><a class="btn btn-small" href="{% url 'invoices:invoice_edit_lines' invoice.pk %}">{% if invoice.is_einvoice %}Ouvrir{% else %}Corriger{% endif %}</a></td>
                     </tr>
                 {% endfor %}
             </tbody>

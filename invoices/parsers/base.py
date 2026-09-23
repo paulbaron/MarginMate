@@ -70,6 +70,60 @@ class ParseCheck:
 
 
 @dataclass
+class EInvoiceFacts:
+    """What an EN 16931 invoice states about itself that a ParsedInvoice has
+    nowhere else to put - see `invoices/einvoice.py`.
+
+    Set on a ParsedInvoice by that reader and by nothing else, so `parsed.
+    einvoice is not None` is the one question worth asking downstream: it
+    means the number, the date, the seller, the lines and the totals are the
+    document's own data rather than a reading of a printed page. Everything
+    else in this application infers, and `parse_checks` exists to catch the
+    inferences that are wrong; here there is nothing to catch.
+
+    `carries_no_lines` is the trap. Factur-X's MINIMUM and BASIC WL profiles
+    state the totals and the VAT breakdown and no line at all, which is a
+    VALID invoice, not a failed reading - it has to go down the total-only
+    path (importing.charge_reading) and be SAID, or it looks exactly like a
+    document whose lines could not be read.
+    """
+
+    # CII or UBL - the two EN 16931 syntaxes, told apart by root element.
+    syntax: str = ""
+    # BT-24, the guideline the sender claims to follow ("urn:factur-x.eu:
+    # 1p0:minimum"). Kept for the review screen: it is what explains a
+    # document with no lines.
+    profile: str = ""
+    # BT-27, the seller's registered name. Its SIREN and VAT number go into
+    # ParsedInvoice.source_text instead, where invoices/identifiers.py finds
+    # them - there is one matcher for that and this is not a second.
+    seller_name: str = ""
+    # BT-3 is a credit note (381): money going the other way. Its amounts
+    # are stated positive in the file and come out of the reader with this
+    # codebase's own sign for a return.
+    is_credit_note: bool = False
+    document_type_code: str = ""
+    # The profile stated no line - not "no line could be read".
+    carries_no_lines: bool = False
+    # BT-5. Never anything but EUR: the reader refuses the rest rather than
+    # converting, since a rate is a decision nobody here is entitled to take.
+    currency: str = ""
+    # What the document-level allowances and charges (BG-20/BG-21) were for,
+    # in the sender's own words - the reasons behind
+    # ParsedInvoice.reconciliation_adjustment. An adjustment with no reason
+    # beside it is a figure nobody on the review screen can check.
+    adjustment_reasons: list[str] = field(default_factory=list)
+    # BT-96 / BT-103: the VAT rate those allowances and charges carry, as
+    # the fraction this database stores. None when the document does not
+    # state one, and then Invoice.adjustment_ttc goes on guessing it from
+    # the lines - which is what a supplier's PDF and a till receipt need.
+    # Stated and ignored, it files duty at 20 % as if it were at 5,5 %: on a
+    # 1 175,00 € invoice that is 14,50 € the bank will debit and the invoice
+    # will not show, with every check green.
+    adjustment_vat_rate: Decimal | None = None
+
+
+@dataclass
 class ParsedInvoice:
     supplier_code: str
     invoice_number: str
@@ -103,6 +157,10 @@ class ParsedInvoice:
     # supplier of charges is filed on, one line a rate, since there is no
     # product behind a rent (invoices.importing.expense_lines).
     vat_breakdown: list[tuple[Decimal, Decimal, Decimal]] = field(default_factory=list)
+    # Set by invoices/einvoice.py only, and None for every other reader:
+    # what a Factur-X / UBL / CII document states about itself, and the flag
+    # that its figures are data rather than a reading. See EInvoiceFacts.
+    einvoice: EInvoiceFacts | None = None
 
 
 @dataclass

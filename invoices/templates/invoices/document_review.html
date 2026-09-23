@@ -84,14 +84,14 @@
         </div>
         <div class="actions">
             {% if invoice.source_file %}
-                <a class="btn btn-secondary" href="{{ invoice.source_file.url }}" target="_blank" rel="noopener">{% if source_is_pdf %}Ouvrir le PDF{% else %}Photo d'origine{% endif %}</a>
+                <a class="btn btn-secondary" href="{{ invoice.source_file.url }}" target="_blank" rel="noopener">{% if source_is_pdf %}Ouvrir le PDF{% elif is_einvoice %}Ouvrir le fichier reçu{% else %}Photo d'origine{% endif %}</a>
             {% endif %}
             {% if is_receipt %}
                 <a class="btn btn-secondary" href="{% url 'invoices:invoice_detail' invoice.pk %}">Fiche facture</a>
             {% endif %}
             {% if can_reread %}
                 <form method="post" data-leaves-lines
-                      data-confirm="Relire le document remplace sa date, son total et toutes ses lignes par ce qui sera lu, corrections comprises.{% if is_receipt %} Le ticket repassera dans la liste à vérifier.{% endif %} Continuer ?">
+                      data-confirm="Relire le document remplace sa date, son total et toutes ses lignes par {% if is_einvoice %}ce que la facture déclare{% else %}ce qui sera lu{% endif %}, corrections comprises.{% if is_receipt %} Le ticket repassera dans la liste à vérifier.{% endif %} Continuer ?">
                     {% csrf_token %}
                     <input type="hidden" name="action" value="reread">
                     <button class="btn btn-secondary" type="submit">Relire le document</button>
@@ -111,10 +111,23 @@
 
     <div class="receipt-review">
         <div class="receipt-photo{% if source_is_pdf and not invoice.preview_image %} document-pdf{% endif %}">
-            {% if invoice.preview_image %}
-                <img src="{{ invoice.preview_image.url }}" alt="Photo du ticket">
-            {% elif source_is_pdf %}
+            {% if source_is_pdf %}
+                {% comment %}
+                Le PDF avant la vignette pour une facture électronique : le
+                Factur-X est la facture elle-même, et sa vignette n'en serait
+                qu'une photo.
+                {% endcomment %}
                 <iframe src="{{ invoice.source_file.url }}" title="Le document" class="document-frame"></iframe>
+            {% elif invoice.preview_image %}
+                <img src="{{ invoice.preview_image.url }}" alt="Photo du ticket">
+            {% elif is_einvoice %}
+                {% comment %}
+                Une facture reçue en XML n'a pas de page à regarder : ce
+                qu'elle déclare est montré à côté des lignes, sinon il n'y
+                aurait rien contre quoi les vérifier.
+                {% endcomment %}
+                <div class="ocr-dump" aria-label="La facture électronique telle qu'elle est déclarée">{% for line in source_lines %}{{ line }}
+{% endfor %}</div>
             {% elif invoice.source_file %}
                 <img src="{{ invoice.source_file.url }}" alt="Le document">
             {% else %}
@@ -129,6 +142,15 @@
             has to be read.
             {% endcomment %}
             <h2>Contrôles</h2>
+            {% comment %}
+            Pourquoi le document attend. Arrivé ici depuis « Documents à
+            corriger », la page ne le répétait nulle part : sur une facture
+            sans date, tous les contrôles sont verts et le seul indice était
+            un mot à côté d'un champ vide.
+            {% endcomment %}
+            {% if invoice.error_message %}
+                <div class="message message-error">{{ invoice.error_message }}</div>
+            {% endif %}
             <ul class="check-list">
                 {% comment %}
                 A supplier invoice with no total typed has nothing to be
@@ -141,7 +163,16 @@
                 {% else %}
                     {% firstof "check-fail" as check_state %}{% firstof "✕" as check_mark %}
                 {% endif %}
-                <li class="check {{ check_state }}" id="live-lines-check" data-tolerance="{{ tolerance }}">
+                {% comment %}
+                data-adjustment : ce que le document facture globalement et
+                qu'aucune ligne ne porte (droits, éco-participation, remise
+                sur l'ensemble). Le script l'ajoute à la somme comme le fait
+                le contrôle enregistré (receipts.lines_check) : oublié, une
+                facture juste au centime virait au rouge à la première
+                frappe. 0 sur un ticket, où l'écart est l'arrondi des lignes.
+                {% endcomment %}
+                <li class="check {{ check_state }}" id="live-lines-check" data-tolerance="{{ tolerance }}"
+                    data-adjustment="{{ live_adjustment|stringformat:'.2f' }}">
                     <span class="check-mark">{{ check_mark }}</span>
                     <span class="check-label">{{ live_check.label }}</span>
                     <span class="check-detail">{{ live_check.detail }}</span>
@@ -178,6 +209,32 @@
                     <strong>avant remise</strong>, tel qu'imprimé : tapez-le en TTC ou en HT, l'autre suit.
                     La remise d'une promotion se met à côté. Un nom corrigé dans une ligne ne vaut que pour
                     ce ticket : pour corriger le nom d'un produit partout, ouvrez « Renommer … » sous sa ligne.
+                {% elif einvoice_no_lines %}
+                    {% comment %}
+                    Le profil MINIMUM ne transporte aucune ligne : celle
+                    ci-dessous a été reconstituée depuis la table de TVA
+                    (importing.charge_reading). La présenter comme une
+                    donnée du fournisseur serait faux - et c'est ce que
+                    disait le paragraphe d'à côté, quatre lignes au-dessus
+                    d'un contrôle annonçant que la facture n'a pas de ligne.
+                    {% endcomment %}
+                    Cette {% if einvoice_is_credit %}avoir{% else %}facture{% endif %} électronique
+                    ({{ invoice.einvoice_format }}) <strong>ne détaille aucune ligne</strong> : son profil
+                    n'en transporte pas. La ligne ci-dessous a été reconstituée depuis sa table de TVA pour
+                    que son total entre dans les comptes — ce n'est pas un article, c'est le total de la
+                    facture. Ses montants, eux, sont les données de la facture.
+                {% elif is_einvoice %}
+                    {% comment %}
+                    Rien n'a été lu ici : ces lignes sont celles que la
+                    facture déclare. Elles restent modifiables - on peut
+                    n'être pas d'accord avec son fournisseur - mais la page
+                    ne doit pas faire croire qu'un parseur les a devinées.
+                    {% endcomment %}
+                    Ces lignes sont les <strong>données de {% if einvoice_is_credit %}l'avoir{% else %}la facture{% endif %}</strong>
+                    ({{ invoice.einvoice_format }}) :
+                    son numéro, sa date, ses lignes, sa TVA et ses totaux tels que le fournisseur les déclare,
+                    et non une lecture de la page. Vous pouvez les corriger si vous n'êtes pas d'accord avec
+                    lui ; tapez chaque montant en HT ou en TTC, l'autre suit.
                 {% else %}
                     Corrigez ce que le parseur a mal lu, ou saisissez ce qu'il n'a pas trouvé. Tapez chaque
                     montant en HT ou en TTC, l'autre suit ; le coût unitaire réel en est déduit.
@@ -194,7 +251,11 @@
                     <div class="inline-form receipt-date">
                         <label for="{{ header_form.invoice_date.id_for_label }}">{{ header_form.invoice_date.label }}</label>
                         {{ header_form.invoice_date }}
-                        {% if not invoice.invoice_date %}<span class="muted">non lue</span>{% endif %}
+                        {% comment %}
+                        « non lue » sur une facture électronique : rien n'a
+                        été lu, le fournisseur n'a pas mis de BT-2.
+                        {% endcomment %}
+                        {% if not invoice.invoice_date %}<span class="muted">{% if is_einvoice %}absente de la facture{% else %}non lue{% endif %}</span>{% endif %}
                         <label for="{{ header_form.printed_total_ttc.id_for_label }}">{{ header_form.printed_total_ttc.label }}</label>
                         {{ header_form.printed_total_ttc }}
                         {% if is_receipt and invoice.printed_total_ttc is None %}<span class="muted">non lu sur le ticket</span>{% endif %}
@@ -212,9 +273,20 @@
                     would be folded away.
                     {% endcomment %}
                     <details class="explainer vat-table"{% if vat_form.initial_form_count or vat_form.total_error_count %} open{% endif %}>
-                        <summary>TVA imprimée sur le document ({{ vat_form.initial_form_count }} taux)</summary>
+                        {% comment %}
+                        « imprimée » et « Recopiez » n'ont aucun sens sur une
+                        facture électronique : sa table arrive exacte, et la
+                        recopier à la main est précisément ce que cette
+                        lecture supprime.
+                        {% endcomment %}
+                        <summary>{% if is_einvoice %}TVA déclarée par la facture{% else %}TVA imprimée sur le document{% endif %} ({{ vat_form.initial_form_count }} taux)</summary>
                         <p class="muted">
-                            Recopiez la table de TVA du document : chaque taux avec sa base HT et son montant.
+                            {% if is_einvoice %}
+                                Cette table est celle que la facture déclare : rien n'est à recopier.
+                                Corrigez-la seulement si vous n'êtes pas d'accord avec le fournisseur.
+                            {% else %}
+                                Recopiez la table de TVA du document : chaque taux avec sa base HT et son montant.
+                            {% endif %}
                             Une remise ou un avoir s'écrit en négatif (base et TVA).
                             Elle sert à vérifier les lignes ; laissée vide, elle ne demande rien.
                         </p>
@@ -581,6 +653,11 @@
             if (amount !== null) sum += amount - discount;
             discounts += discount;
         });
+        // What the document charges outside its lines, counted as the saved
+        // check counts it (receipts.adjustment_counted).
+        var adjustment = check ? Math.round(parseFloat(check.dataset.adjustment || "0") * 100) : 0;
+        if (isNaN(adjustment)) adjustment = 0;
+        sum += adjustment;
         if (shownTotal) shownTotal.textContent = euros(sum);
         var count = document.getElementById("line-count");
         if (count) {
@@ -591,13 +668,23 @@
         var paid = cents(lines.querySelector("input[name='printed_total_ttc']"));
         var detail;
         var passed = false;
+        // Word for word what receipts.lines_check writes on validation: the
+        // lines ALONE, then what the document charges outside them, then the
+        // two added up. Folded into "lignes" and announced beside it, the
+        // sentence said 134,40 € + 14,40 € / 134,40 €, which adds up nowhere.
+        var linesOnly = sum - adjustment;
+        var counted = adjustment
+            ? " + " + euros(adjustment) + " € de frais facturés globalement = " + euros(sum) + " €" : "";
+        // Nothing was printed and there is no ticket on a document nobody
+        // photographed (receipts.lines_check says the same).
+        var printed = lines.dataset.document === "receipt" ? "ticket" : "total de la facture";
         if (paid === null) {
-            detail = "lignes " + euros(sum) + " € : saisissez le total pour les vérifier";
+            detail = "lignes " + euros(linesOnly) + " €" + counted + " : saisissez le total pour les vérifier";
         } else {
             var gap = paid - sum;
             passed = Math.abs(gap) <= Math.round(parseFloat(check.dataset.tolerance) * 100);
-            detail = "lignes " + euros(sum) + " € / ticket " + euros(paid) + " € (écart "
-                + (gap < 0 ? "-" : "+") + euros(Math.abs(gap)) + " €)";
+            detail = "lignes " + euros(linesOnly) + " €" + counted + " / " + printed + " "
+                + euros(paid) + " € (écart " + (gap < 0 ? "-" : "+") + euros(Math.abs(gap)) + " €)";
         }
         if (discounts) {
             detail += " - articles " + euros(sum + discounts) + " € moins " + euros(discounts) + " € de remises";

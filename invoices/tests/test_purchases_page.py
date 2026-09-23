@@ -275,7 +275,9 @@ class PurchasesPageTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context["import_tab"], "documents")
-        self.assertContains(response, "Seuls les fichiers PDF sont acceptés.")
+        # A .txt, and not an .xml: an electronic invoice arrives as the XML
+        # on its own and is the legal invoice as much as a PDF is.
+        self.assertContains(response, "Seuls les fichiers PDF et XML (facture électronique) sont acceptés.")
         empty = self.client.post(reverse("invoices:receipt_upload"), {})
         self.assertEqual(empty.status_code, 200)
         self.assertEqual(empty.context["import_tab"], "documents")

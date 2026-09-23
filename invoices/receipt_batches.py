@@ -16,7 +16,7 @@ Every file ends in exactly one state, shown to the operator:
                   the file is kept ("kept") until the operator names the
                   shop (`import_with_shop`), then it becomes ok/duplicate
     error         unreadable file, or something unexpected
-    ignored       not a PDF or a photo (a folder's Thumbs.db)
+    ignored       not a PDF, an XML or a photo (a folder's Thumbs.db)
     cancelled     the batch was stopped before reaching it
 
 A batch where one photo failed silently is worse than one that failed
@@ -98,7 +98,8 @@ def stage_batch(uploads, ignored_names=()) -> ReceiptBatch:
                 handle.write(chunk)
         results.append({"name": upload.name, "stored": stored, "status": "pending"})
     results += [
-        {"name": name, "status": "ignored", "message": "Ni un PDF ni une photo : ignoré."} for name in ignored_names
+        {"name": name, "status": "ignored", "message": "Ni un PDF, ni un XML, ni une photo : ignoré."}
+        for name in ignored_names
     ]
     batch.results = results
     batch.save(update_fields=["results"])
@@ -276,6 +277,13 @@ def _read_file(batch: ReceiptBatch, entry: dict) -> str | None:
         return None
     try:
         invoice = import_document(path, display_filename=entry["name"])
+        # Inside the try, deliberately. _record_import's first act is to
+        # format the invoice's total, and a figure the database cannot read
+        # back raises there - outside every handler, that escaped _read_file
+        # and marked the whole BATCH failed: the file that blew up got no
+        # outcome at all and the files behind it were never read. One bad
+        # file is that file's error and nothing else's.
+        _record_import(entry, invoice)
     except DuplicateInvoiceError as exc:
         entry.update(status="duplicate", message=str(exc))
     except UnrecognisedShopError as exc:
@@ -286,8 +294,6 @@ def _read_file(batch: ReceiptBatch, entry: dict) -> str | None:
     except Exception as exc:  # noqa: BLE001 - reported per file, never aborts the batch
         entry.update(status="error", message=str(exc).strip() or exc.__class__.__name__)
         batch.append_log(f"{entry['name']} : {entry['message']}\n{traceback.format_exc()}")
-    else:
-        _record_import(entry, invoice)
     return path
 
 

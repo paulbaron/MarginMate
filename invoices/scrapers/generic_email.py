@@ -38,6 +38,8 @@ from datetime import date, timedelta
 
 from django.conf import settings
 
+from ..models import INVOICE_ATTACHMENT_PATTERN
+
 FETCH_TIMEOUT_SECONDS = 45  # per IMAP operation - independent of how many emails there are in total
 BATCH_SIZE = 150  # messages per FETCH round trip - comfortably under IMAP servers' command-length limits
 LOG_EVERY = 500  # scanned messages between liveness log lines, so a big date range doesn't look frozen
@@ -172,7 +174,7 @@ def find_matching_emails(
     sender_pattern: str,
     subject_pattern: str = "",
     body_pattern: str = "",
-    attachment_pattern: str = r"(?i)\.pdf$",
+    attachment_pattern: str = INVOICE_ATTACHMENT_PATTERN,
     log=print,
     on_progress=None,
     should_cancel=None,
@@ -201,7 +203,7 @@ def find_matching_emails(
     sender_regex = re.compile(sender_pattern)
     subject_regex = re.compile(subject_pattern) if subject_pattern else None
     body_regex = re.compile(body_pattern) if body_pattern else None
-    attachment_regex = re.compile(attachment_pattern or r"(?i)\.pdf$")
+    attachment_regex = re.compile(attachment_pattern or INVOICE_ATTACHMENT_PATTERN)
 
     matches: list[EmailMatch] = []
 
@@ -331,7 +333,7 @@ def scrape_email_invoices(
     sender_pattern: str,
     subject_pattern: str = "",
     body_pattern: str = "",
-    attachment_pattern: str = r"(?i)\.pdf$",
+    attachment_pattern: str = INVOICE_ATTACHMENT_PATTERN,
     log=print,
     on_progress=None,
     should_cancel=None,

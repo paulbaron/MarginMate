@@ -13,6 +13,13 @@ Every invoice and ticket. Reloads itself when an import ends
     <form method="get" class="search-row" hx-boost="true" hx-target="#workspace"
           hx-select="#workspace" hx-swap="outerHTML">
         {% if active_filter %}<input type="hidden" name="filtre" value="{{ active_filter }}">{% endif %}
+        {% comment %}
+        What the search is typed under, kept: a search that threw away the
+        window or the supplier it was made from had to be made again.
+        {% endcomment %}
+        {% if date_window.start_value %}<input type="hidden" name="du" value="{{ date_window.start_value }}">{% endif %}
+        {% if date_window.end_value %}<input type="hidden" name="au" value="{{ date_window.end_value }}">{% endif %}
+        {% if supplier_filter %}<input type="hidden" name="fournisseur" value="{{ supplier_filter.pk }}">{% endif %}
         {# The magnifying glass is drawn on this wrapper, so it holds the field alone. #}
         <span class="table-search">
             <input type="search" name="q" value="{{ query }}" autocomplete="off"
@@ -21,10 +28,34 @@ Every invoice and ticket. Reloads itself when an import ends
         </span>
         <button class="btn btn-small btn-secondary" type="submit">Rechercher</button>
         {% if query %}
-            <a class="btn btn-small btn-secondary" href="{% url 'invoices:invoice_list' %}"
-               hx-boost="true" hx-target="#workspace" hx-select="#workspace" hx-swap="outerHTML">Effacer</a>
+            {# Each « Effacer » drops its own and says so: one clearing the lot took the dates with it. #}
+            <a class="btn btn-small btn-secondary" href="{{ clear_search_url }}"
+               hx-boost="true" hx-target="#workspace" hx-select="#workspace" hx-swap="outerHTML">Effacer la recherche</a>
         {% endif %}
     </form>
+    {% if not lot and active_filter != "sans-date" %}
+        {% comment %}
+        La période « du … au … », la même que sur Produits & charges, Ventes
+        et la Banque. Elle garde le filtre, la recherche et le fournisseur
+        sous lesquels elle est saisie ; les deux dates sont facultatives, une
+        seule est déjà une période. Pas d'« obligatoire » : « depuis le 1er
+        février » est une question comme une autre.
+        {% endcomment %}
+        <form method="get" class="date-range" hx-boost="true" hx-target="#workspace"
+              hx-select="#workspace" hx-swap="outerHTML">
+            {% if active_filter %}<input type="hidden" name="filtre" value="{{ active_filter }}">{% endif %}
+            {% if query %}<input type="hidden" name="q" value="{{ query }}">{% endif %}
+            {% if supplier_filter %}<input type="hidden" name="fournisseur" value="{{ supplier_filter.pk }}">{% endif %}
+            {% if show_everything %}<input type="hidden" name="tout" value="1">{% endif %}
+            <label class="inline-label">Du <input type="date" name="du" value="{{ date_window.start_value }}"></label>
+            <label class="inline-label">au <input type="date" name="au" value="{{ date_window.end_value }}"></label>
+            <button class="btn btn-small btn-secondary" type="submit">Afficher</button>
+            {% if date_window %}
+                <a class="btn btn-small btn-secondary" href="{{ clear_window_url }}"
+                   hx-boost="true" hx-target="#workspace" hx-select="#workspace" hx-swap="outerHTML">Effacer les dates</a>
+            {% endif %}
+        </form>
+    {% endif %}
     {% if query %}
         <p class="muted">
             {{ found_count }} document{{ found_count|pluralize }} pour « {{ query }} »
@@ -45,17 +76,35 @@ Every invoice and ticket. Reloads itself when an import ends
             </span>
         {% endif %}
         {% if supplier_filter %}
-            {# From a supplier's page: its documents exactly - "Free" searched found Free Mobile's too. #}
-            <a class="chip active" aria-current="true" href="{% url 'invoices:invoice_list' %}" title="Voir tous les documents">
+            {% comment %}
+            From a supplier's page: its documents exactly - "Free" searched found
+            Free Mobile's too. The ✕ drops this supplier and nothing else: it took
+            the period with it, and the reader had to type the dates again.
+            {% endcomment %}
+            <a class="chip active" aria-current="true" href="{{ clear_supplier_url }}" title="Voir tous les documents">
                 Fournisseur : {{ supplier_filter.name }} ✕
             </a>
         {% endif %}
     </div>
 
+    {% if date_window %}
+        {% comment %}
+        La page dit en toutes lettres ce qu'elle montre : une liste vide sous
+        deux dates se lit « rien sur cette période », jamais « cette page est
+        cassée ».
+        {% endcomment %}
+        <p class="muted date-range-note">
+            {% if date_window.start and date_window.end %}Du {{ date_window.start|date:"d/m/Y" }} au {{ date_window.end|date:"d/m/Y" }}{% elif date_window.start %}Depuis le {{ date_window.start|date:"d/m/Y" }}{% else %}Jusqu'au {{ date_window.end|date:"d/m/Y" }}{% endif %} :
+            {% if listed_count %}{{ listed_count }} document{{ listed_count|pluralize }}{% else %}aucun document{% endif %}{% if query %} pour « {{ query }} »{% endif %}{% if supplier_filter %} chez {{ supplier_filter.name }}{% endif %}.
+        </p>
+    {% endif %}
+
     {% if active_filter == "sans-date" %}
         <div class="message">
             Factures et tickets <strong>sans date</strong> : hors de toute valorisation du stock et du rapprochement
             bancaire. Ouvrez chacun et donnez-lui la sienne.
+            {# Le formulaire de période n'est pas affiché ici : c'est la seule liste que deux dates ne peuvent pas trier. #}
+            Cette liste ignore la période « du … au … » — un document sans date n'est dans aucune.
         </div>
     {% elif undated_count and not active_filter and not lot %}
         <div class="message message-error">
@@ -110,7 +159,13 @@ Every invoice and ticket. Reloads itself when an import ends
                         <a href="{% url 'invoices:invoice_detail' invoice.pk %}">{{ invoice.supplier.name }}</a>
                         {% if invoice.pk == highlight %}<span class="new-pill">importée</span>{% endif %}
                     </td>
-                    <td class="muted">{% if invoice.is_receipt %}Ticket{% else %}Facture{% endif %}</td>
+                    {% comment %}
+                    « Facture électronique » plutôt que « Facture » : ses
+                    montants sont les données de la facture (Factur-X, UBL,
+                    CII) et non une lecture, et c'est la seule ligne de ce
+                    tableau qui le dise.
+                    {% endcomment %}
+                    <td class="muted">{% if invoice.is_einvoice %}Facture électronique{% elif invoice.is_receipt %}Ticket{% else %}Facture{% endif %}</td>
                     <td>{{ invoice.invoice_number|default:"—" }}</td>
                     <td data-sort="{{ invoice.invoice_date|date:'Y-m-d' }}">
                         {% if invoice.invoice_date %}{{ invoice.invoice_date|date:"d/m/Y" }}{% else %}<span class="status-pill status-ERROR">sans date</span>{% endif %}
@@ -141,6 +196,13 @@ Every invoice and ticket. Reloads itself when an import ends
         </div>
     {% elif lot %}
         <div class="empty-state">Cet import n'a encore rien importé.</div>
+    {% elif date_window %}
+        {# Avant le filtre : sous deux dates, ce qui manque est la période. #}
+        <div class="empty-state">
+            Aucun document sur cette période.
+            <a href="{{ clear_window_url }}" hx-boost="true" hx-target="#workspace" hx-select="#workspace"
+               hx-swap="outerHTML">Voir toutes les dates</a>
+        </div>
     {% elif active_filter %}
         <div class="empty-state">
             Aucun document ici.

@@ -25,22 +25,33 @@ parts trigger `documents-changed` when they end).
             <div class="upload-choices">
                 <label class="upload-choice">
                     <span class="upload-choice-title">Des fichiers</span>
-                    <span class="muted">Photos de tickets, scans, factures PDF : ensemble, dans le désordre.</span>
+                    <span class="muted">Photos de tickets, scans, factures PDF ou XML : ensemble, dans le désordre.</span>
+                    {# .xml : une facture électronique (Factur-X, UBL, CII) peut arriver seule, sans PDF autour. #}
                     <input type="file" name="files" multiple
-                           accept=".pdf,.jpg,.jpeg,.png,.webp,.tif,.tiff,.bmp,application/pdf,image/*">
+                           accept=".pdf,.xml,.jpg,.jpeg,.png,.webp,.tif,.tiff,.bmp,application/pdf,text/xml,application/xml,image/*">
                 </label>
                 <label class="upload-choice">
                     <span class="upload-choice-title">Un dossier entier</span>
-                    <span class="muted">Ce qui n'est ni PDF ni photo est ignoré ; un document déjà importé est sauté.</span>
+                    <span class="muted">Ce qui n'est ni PDF, ni XML, ni photo est ignoré ; un document déjà importé est sauté.</span>
                     <input type="file" name="files" webkitdirectory directory multiple>
                 </label>
             </div>
             <div class="import-actions">
                 <button class="btn" type="submit" data-busy-label="Envoi…">Importer</button>
                 <span class="muted">
-                    Chaque fichier est lu selon ce qu'il contient : une facture PDF passe par le lecteur de son
-                    fournisseur quand il en a un, tout le reste par la lecture de ticket. Son enseigne ou son
-                    fournisseur est reconnu sur le document, et chacun est vérifié contre ses propres totaux.
+                    Chaque fichier est lu selon ce qu'il contient : une <strong>facture électronique</strong>
+                    (Factur-X, UBL, CII) est lue dans ses propres données — ses montants sont ceux qu'elle
+                    déclare, pas une lecture ; une facture PDF passe par le lecteur de son fournisseur quand il
+                    en a un, tout le reste par la lecture de ticket. Son enseigne ou son fournisseur est reconnu
+                    sur le document, et chacun est vérifié contre ses propres totaux.
+                    {% comment %}
+                    Dit ici aussi, parce que c'est ici que la phrase se lit
+                    comme « le côté facturation électronique est géré » : les
+                    factures sont lues, mais c'est à vous de les rapporter de
+                    la plateforme. Voir _tab_sources.html.
+                    {% endcomment %}
+                    <strong>MarginMate ne va pas chercher vos factures sur votre plateforme de facturation
+                    électronique</strong> : téléchargez-les chez votre comptable et déposez-les ici.
                 </span>
             </div>
         </form>

@@ -17,6 +17,7 @@ from common import is_id
 
 from . import supplier_changes
 from .deletion import InvoiceInUseError, blocking_stock_takes, delete_invoice
+from .einvoice import NO_LINES_CHECK as EINVOICE_NO_LINES
 from .forms import (
     DOCUMENT_INVOICE,
     DOCUMENT_RECEIPT,
@@ -76,6 +77,17 @@ class InvoiceDetailView(DetailView):
         # re-querying per property.
         context["lines"] = list(self.object.lines.all())
         context["has_parser"] = get_parser(self.object.supplier.parser_key) is not None
+        invoice = self.object
+        # See _correction_page for both: « Avoir » was a word no screen said,
+        # and a rebuilt MINIMUM line is not an article.
+        context["einvoice_is_credit"] = (
+            invoice.is_einvoice
+            and invoice.printed_total_ttc is not None
+            and invoice.printed_total_ttc < 0
+        )
+        context["einvoice_no_lines"] = invoice.is_einvoice and any(
+            check["label"] == EINVOICE_NO_LINES for check in invoice.parse_checks
+        )
         return context
 
 
@@ -932,7 +944,32 @@ def _correction_page(request, invoice):
             "lot": lot,
             "lot_query": lot_query,
             "can_reread": _can_reread(invoice),
+            # An electronic invoice's file may be the XML itself, which no
+            # frame can show: the page shows the document as text instead
+            # (the reading written by einvoice._as_text_document).
+            "is_einvoice": invoice.is_einvoice,
+            # MINIMUM and BASIC WL state the totals and no line at all, so the
+            # line below them was rebuilt from the VAT table (charge_reading)
+            # and is NOT something the supplier declared. Said by the check
+            # einvoice.NO_LINES_CHECK, which is where this reads it from -
+            # the lead paragraph called every line the invoice's own data,
+            # four lines above a check saying the invoice carries none.
+            "einvoice_no_lines": invoice.is_einvoice and any(
+                check["label"] == EINVOICE_NO_LINES for check in invoice.parse_checks
+            ),
+            # « Avoir » is a word this application never said out loud: a
+            # credit note read as Factur-X was « Facture électronique » in the
+            # list, in the header and in every check, and only the minus signs
+            # gave it away. BT-112 comes out of the reader already signed, so
+            # a negative stated total IS the credit note - no second field,
+            # and true for one typed by hand too.
+            "einvoice_is_credit": (
+                invoice.is_einvoice
+                and invoice.printed_total_ttc is not None
+                and invoice.printed_total_ttc < 0
+            ),
             "source_is_pdf": bool(invoice.source_file) and invoice.source_file.name.lower().endswith(".pdf"),
+            "source_lines": invoice.source_text.split("\n") if invoice.is_einvoice else [],
             "ocr_lines": invoice.ocr_text.split("\n") if invoice.ocr_text else [],
             **shop_context,
         },
@@ -1117,12 +1154,18 @@ def _checks_context(invoice) -> dict:
         else None
     )
     live = {SUM_CHECK, HT_CHECK} if ht_check is not None else {SUM_CHECK}
+    from .receipts import adjustment_counted
+
     return {
         "live_check": lines_check(invoice),
         "ht_check": ht_check,
         "ht_check_label": HT_CHECK,
         "other_checks": [check for check in invoice.parse_checks if check["label"] not in live],
         "tolerance": RECONCILIATION_TOLERANCE,
+        # Duty charged globally, a document-level charge: part of the total
+        # and of no line, so the script has to count it as the check does or
+        # an invoice that balances turns red at the first keystroke.
+        "live_adjustment": adjustment_counted(invoice),
         # What the parser said about lines a person may since have corrected:
         # shown as such, and replaced on validation.
         "reading_checks": READING_CHECKS,
@@ -1135,6 +1178,10 @@ def _can_reread(invoice) -> bool:
 
     if not invoice.source_file:
         return False
+    if invoice.is_einvoice:
+        # Its own file says everything again, exactly: there is no reader to
+        # be missing, and no photograph to be read differently.
+        return True
     if invoice.is_receipt:
         return parser_for(invoice.supplier) is not None
     parser = get_parser(invoice.supplier.parser_key)

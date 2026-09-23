@@ -23,7 +23,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.http import urlencode
 
-from common import is_id
+from common import RANGE_END, RANGE_START, DateRange, date_range, is_id
 
 from .forms import CHANNELS, InvoiceUploadForm, ReceiptBatchUploadForm
 from .models import Invoice, InvoiceType, ReceiptBatch, ScrapeJob, Supplier
@@ -38,23 +38,34 @@ RECENT = timedelta(hours=48)
 IMPORT_TABS = ("documents", "recuperer")
 OLD_IMPORT_TABS = {"tickets": "documents", "pdf": "documents"}
 
-IS_TICKET = ~Q(parse_checks=[]) | ~Q(ocr_text="")
-IS_INVOICE = Q(parse_checks=[], ocr_text="")
+#: Read from an EN 16931 document's own data (Invoice.einvoice_format): its
+#: figures are the invoice's, not a reading. It carries checks - about the
+#: SUPPLIER's arithmetic - and is a facture all the same, so every list that
+#: tells a ticket from an invoice by those checks has to ask this too.
+IS_EINVOICE = ~Q(einvoice_format="")
+IS_TICKET = (~Q(parse_checks=[]) | ~Q(ocr_text="")) & ~IS_EINVOICE
+IS_INVOICE = Q(parse_checks=[], ocr_text="") | IS_EINVOICE
 #: A supplier of charges: a rent, a subscription (Supplier.expenses_only).
 IS_CHARGE = Q(supplier__expenses_only=True)
 #: The review queue. `receipts.pending_receipts` is this Q and nothing else:
 #: written twice, the tab counted the charges its own list left out, and
-#: said "À vérifier 102" over an empty page.
-TICKET_TO_CHECK = Q(reviewed_at__isnull=True) & ~Q(parse_checks=[]) & ~IS_CHARGE
+#: said "À vérifier 102" over an empty page. An electronic invoice is out of
+#: it for the same reason a charge is: there is nothing to re-type from a
+#: photograph it never had, and its figures are the document's own.
+TICKET_TO_CHECK = Q(reviewed_at__isnull=True) & ~Q(parse_checks=[]) & ~IS_CHARGE & ~IS_EINVOICE
 #: A document outside that queue that cannot be used as it is: undated (out
 #: of every valuation and of the bank match), failed to import, a charge
-#: whose own total could not be read (importing.charge_needs_a_look), or one
-#: an invoice type fetched whose supplier is in doubt (Invoice.supplier_doubt:
-#: a ticket among them waits in the queue while it is unchecked) - it is in
-#: no queue, so this is where it is seen.
+#: whose own total could not be read (importing.charge_needs_a_look), an
+#: electronic invoice whose own totals do not hold or that states no date
+#: (Invoice.error_message - the supplier's arithmetic, reported and never
+#: repaired, which nobody can re-type either), or one an invoice type fetched
+#: whose supplier is in doubt (Invoice.supplier_doubt: a ticket among them
+#: waits in the queue while it is unchecked) - it is in no queue, so this is
+#: where it is seen.
 DOCUMENT_TO_FIX = (
     (Q(parse_checks=[]) & (Q(invoice_date__isnull=True) | Q(status=Invoice.Status.ERROR)))
     | (IS_CHARGE & Q(status=Invoice.Status.NEEDS_REVIEW))
+    | (IS_EINVOICE & (~Q(error_message="") | Q(invoice_date__isnull=True) | Q(status=Invoice.Status.ERROR)))
     | (~Q(supplier_doubt="") & ~TICKET_TO_CHECK)
 )
 #: The supplier « Récupérer les nouvelles factures » fetches with a module of
@@ -308,6 +319,24 @@ FILTERS = {
 }
 
 
+def _list_url(request, *dropped: str) -> str:
+    """This same list of documents without those query parameters: where an
+    « Effacer » leads.
+
+    One button clearing the lot silently undid the other - the window typed
+    in the date form went with the search, and the search with the dates - so
+    each drops its own and its label says which. `surligner` goes with every
+    one of them: that pill is about the document an import just added, and
+    narrowing the list is not about it.
+    """
+    kept = {
+        key: value
+        for key, value in request.GET.items()
+        if value and key != "surligner" and key not in dropped
+    }
+    return reverse("invoices:invoice_list") + (f"?{urlencode(kept)}" if kept else "")
+
+
 def _documents(request, batch) -> dict:
     since = timezone.now() - RECENT
     conditions = {
@@ -315,10 +344,39 @@ def _documents(request, batch) -> dict:
         "recents": Q(imported_at__gte=since),
         "verifies": Q(reviewed_at__gte=since),
     }
-    counts = Invoice.objects.aggregate(
+    active = request.GET.get("filtre", "")
+    if request.GET.get("sans_date"):
+        active = "sans-date"
+    if batch is not None or active not in conditions:
+        active = ""
+    # « Du … au … » (common.date_range), both ends included. Two lists it
+    # does not narrow, and it is dropped outright for them rather than
+    # skipped at each use, so the form, the chips, the note and the rows
+    # cannot disagree about whether there is a window at all:
+    #
+    # * an import's own list is the documents that import brought in - an
+    #   explicit list, not a search, which is why it already ignores the
+    #   filter chips too;
+    # * « Sans date » is where a document with no date is looked at, and a
+    #   document with no date is in no window: under one, that chip would
+    #   open an empty page for ever and read as a broken page rather than as
+    #   the one list two dates cannot narrow.
+    window = date_range(request)
+    if batch is not None or active == "sans-date":
+        window = DateRange()
+
+    counts = window.limit(Invoice.objects.all(), "invoice_date").aggregate(
         total=Count("pk"), **{key.replace("-", "_"): Count("pk", filter=q) for key, q in conditions.items()}
     )
-    invoices = Invoice.objects.select_related("supplier").prefetch_related("lines")
+    # Counted over every document whatever the window, since its chip drops
+    # the window: narrowed by one it is always 0, so the chip and the warning
+    # below would vanish exactly when there are documents no valuation and no
+    # bank match can use.
+    counts["sans_date"] = Invoice.objects.filter(conditions["sans-date"]).count()
+
+    invoices = window.limit(
+        Invoice.objects.select_related("supplier").prefetch_related("lines"), "invoice_date"
+    )
     # One supplier's documents exactly, from its page: a search for "Free"
     # found Free Mobile's too.
     chosen = request.GET.get("fournisseur", "")
@@ -328,18 +386,12 @@ def _documents(request, batch) -> dict:
     query = request.GET.get("q", "")
     if query:
         invoices = documents_matching(invoices, query)
-    active = request.GET.get("filtre", "")
-    if request.GET.get("sans_date"):
-        active = "sans-date"
     if batch is not None:
-        active = ""
         invoices = invoices.filter(pk__in=batch_invoice_ids(batch))
-    elif active in conditions:
+    elif active:
         invoices = invoices.filter(conditions[active])
         if active == "verifies":
             invoices = invoices.order_by("-reviewed_at")
-    else:
-        active = ""
 
     chips = [{"key": "", "label": "Tous", "count": counts["total"]}]
     for key, (label, _condition) in FILTERS.items():
@@ -350,21 +402,31 @@ def _documents(request, batch) -> dict:
     for chip in chips:
         chip["active"] = batch is None and chip["key"] == active
         parameters = {key: value for key, value in (("filtre", chip["key"]), ("q", query)) if value}
+        # Every chip keeps the window, or it silently vanishes on the next
+        # click - except « Sans date », above.
+        if chip["key"] != "sans-date":
+            parameters.update(window.parameters)
         chip["url"] = reverse("invoices:invoice_list") + (f"?{urlencode(parameters)}" if parameters else "")
 
-    found = invoices.count() if query else None
+    found = invoices.count() if query or supplier_filter is not None else None
     everything = request.GET.get("tout") == "1" or batch is not None or active == "sans-date"
     shown = invoices if everything else invoices[:PAGE_SIZE]
     rows = list(shown)
-    listed = found if query else counts["total" if not active else active.replace("-", "_")]
+    # What this list holds. The chip counts follow the window, but know
+    # nothing of a search nor of one supplier's page, and « 875 de plus dans
+    # cette liste » over five documents is the same lie as a chip over an
+    # empty page.
+    listed = found if found is not None else counts["total" if not active else active.replace("-", "_")]
     hidden = 0 if everything else max(listed - len(rows), 0)
     posted = request.GET.get("surligner", "")
     highlight = int(posted) if is_id(posted) else None
     if highlight is not None:
         # The document just imported is shown whatever its date: dated last
         # year, it sits past the rows this page renders, and "importée" would
-        # point at nothing.
-        if not any(invoice.pk == highlight for invoice in rows):
+        # point at nothing. Never under a window, though: the reader asked
+        # about two dates, and a document from outside them slipped into the
+        # answer is exactly the silently wrong figure this page guards against.
+        if not window and not any(invoice.pk == highlight for invoice in rows):
             rows = [
                 *Invoice.objects.filter(pk=highlight).select_related("supplier").prefetch_related("lines"),
                 *rows,
@@ -374,8 +436,9 @@ def _documents(request, batch) -> dict:
     return {
         "invoices": rows,
         "query": query,
-        "found_count": found,
+        "found_count": found if query else None,
         "hidden_count": hidden,
+        "listed_count": listed,
         "show_all_url": request.get_full_path() + ("&" if request.GET else "?") + "tout=1",
         "chips": chips,
         "active_filter": active,
@@ -383,6 +446,11 @@ def _documents(request, batch) -> dict:
         "lot": batch,
         "undated_count": counts["sans_date"],
         "supplier_filter": supplier_filter,
+        "date_window": window,
+        "show_everything": everything,
+        "clear_window_url": _list_url(request, RANGE_START, RANGE_END),
+        "clear_search_url": _list_url(request, "q"),
+        "clear_supplier_url": _list_url(request, "fournisseur"),
     }
 
 

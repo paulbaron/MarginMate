@@ -12,7 +12,7 @@ than Django's default 100 files get through.
 import os
 import shutil
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from unittest import mock
 
 from django.conf import settings
@@ -25,7 +25,7 @@ from PIL import Image
 
 from invoices.forms import ReceiptBatchUploadForm
 from invoices.importing import DuplicateInvoiceError
-from invoices.models import ReceiptBatch, Supplier
+from invoices.models import Invoice, ReceiptBatch, Supplier
 from invoices.ocr import page_images
 from invoices.parsers import ticket_parser_for
 from invoices.parsers.base import ParsedInvoice, ParsedLine
@@ -128,6 +128,36 @@ class RunBatchTests(TestCase):
         self.assertTrue(batch.results[2]["kept"])
         self.assertNotIn("kept", batch.results[3])
         self.assertEqual(batch.progress_percent, 100)
+
+    def test_a_file_that_blows_up_while_being_described_is_that_files_error(self):
+        """`_record_import` ran in the `else:` of the try, outside every
+        handler, and its first act is to format the invoice's total.
+
+        A figure the database cannot read back raises exactly there. That
+        escaped `_read_file`, marked the whole BATCH failed, left the file
+        that blew up with no outcome at all - it WAS imported - and the
+        files behind it were never read. Which is the promise this module
+        is written against: one bad file never stops the others.
+        """
+        good, bad = self._receipt(), self._receipt()
+        # What a stated figure wider than its column does on every read -
+        # on that row alone, as the poisoned invoice's neighbours read fine.
+        stored = Invoice.total_ttc
+
+        def poisoned(self):
+            if self.pk == bad.pk:
+                raise InvalidOperation
+            return stored.fget(self)
+
+        batch = stage_batch([upload("01.pdf"), upload("02.pdf"), upload("03.pdf")])
+        with mock.patch.object(Invoice, "total_ttc", property(poisoned)), mock.patch(
+            "invoices.receipt_batches.import_document", side_effect=[good, bad, good]
+        ) as importer:
+            batch = run_receipt_batch(batch.pk)
+        self.assertEqual(importer.call_count, 3)
+        self.assertEqual(batch.status, ReceiptBatch.Status.SUCCESS)
+        self.assertEqual([entry["status"] for entry in batch.results], ["ok", "error", "ok"])
+        self.assertNotIn("pending", [entry["status"] for entry in batch.results])
 
     def test_an_imported_file_links_to_its_receipt(self):
         receipt = self._receipt()

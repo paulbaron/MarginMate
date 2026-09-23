@@ -16,6 +16,25 @@ the reader for what it brings. The suppliers have their own tab
     </div>
     <a class="btn" href="{% url 'invoices:invoice_type_create' %}">+ Nouvelle source</a>
 </div>
+
+{% comment %}
+Said here, where somebody comes to ask where the invoices come from, because
+the app does NOT fetch them from the plateforme agréée and nothing else on
+screen would admit it. Since 1 September 2026 a supplier bills through such a
+platform; this bar's is held by its accountant, and MarginMate has no account
+on it. A page that stayed silent would let the reader believe the purchases
+arrive by themselves - and a purchase that never arrives is stock that does
+not exist and a margin that is wrong.
+{% endcomment %}
+<div class="message">
+    <strong>Votre plateforme de facturation électronique n'est pas connectée.</strong>
+    Depuis le 1<sup>er</sup> septembre 2026 vos fournisseurs vous adressent leurs factures par une
+    plateforme agréée, et la vôtre est tenue par votre comptable. MarginMate ne va pas la chercher :
+    téléchargez-y vos factures (Factur-X, UBL ou CII) et déposez-les dans « Tickets et factures »
+    ci-dessus. Elles seront lues dans leurs propres données, au centime, sans relecture.
+    Les sources ci-dessous — boîte mail et espaces clients — continuent de fonctionner pour tout le reste.
+</div>
+
 {% if invoice_types %}
     <div class="table-wrap">
     <table data-table data-table-label="sources">

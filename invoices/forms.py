@@ -572,7 +572,12 @@ class EmailInvoiceSourceForm(forms.ModelForm):
 
 from .ocr import IMAGE_EXTENSIONS  # noqa: E402 - kept next to the only thing using it
 
-RECEIPT_EXTENSIONS = (".pdf",) + IMAGE_EXTENSIONS
+#: What the one import takes. `.xml` is there since electronic invoicing:
+#: an EN 16931 invoice reaches the bar as a Factur-X PDF or as the XML on
+#: its own, and the XML is the legal invoice either way - listed as
+#: « ignoré », a folder downloaded from the accountant's platform would lose
+#: every one of them without a word.
+RECEIPT_EXTENSIONS = (".pdf", ".xml") + IMAGE_EXTENSIONS
 
 
 class MultipleFileInput(forms.ClearableFileInput):
@@ -609,7 +614,7 @@ class ReceiptBatchUploadForm(forms.Form):
     files = MultipleFileField(
         label="Photos de tickets",
         required=False,
-        help_text="Des fichiers, ou un dossier entier : PDF, JPG, PNG, WebP ou TIFF.",
+        help_text="Des fichiers, ou un dossier entier : PDF, XML (facture électronique), JPG, PNG, WebP ou TIFF.",
     )
 
     def clean_files(self):
@@ -624,7 +629,7 @@ class ReceiptBatchUploadForm(forms.Form):
         accepted = [upload for upload in uploads if upload.name.lower().endswith(RECEIPT_EXTENSIONS)]
         self.ignored_names = [upload.name for upload in uploads if upload not in accepted]
         if not accepted:
-            raise forms.ValidationError("Aucun PDF ni aucune photo dans la sélection.")
+            raise forms.ValidationError("Aucun PDF, XML ni photo dans la sélection.")
         return accepted
 
 
@@ -741,7 +746,7 @@ class InvoiceUploadForm(ReceiptShopForm):
     its own, any other one (its invoice is read like a ticket), a new one -
     or the AI pseudo-supplier, which only this import offers."""
 
-    source_file = forms.FileField(label="Fichier PDF")
+    source_file = forms.FileField(label="Fichier PDF ou XML")
     unnamed_error = "Donnez un nom au nouveau fournisseur."
 
     def __init__(self, *args, **kwargs):
@@ -758,9 +763,12 @@ class InvoiceUploadForm(ReceiptShopForm):
         return super().clean_supplier()
 
     def clean_source_file(self):
+        """A PDF, or the XML of an electronic invoice - which arrives on its
+        own from a « plateforme agréée » or an e-mail and is the legal
+        invoice as much as a PDF is."""
         uploaded = self.cleaned_data["source_file"]
-        if not uploaded.name.lower().endswith(".pdf"):
-            raise forms.ValidationError("Seuls les fichiers PDF sont acceptés.")
+        if not uploaded.name.lower().endswith((".pdf", ".xml")):
+            raise forms.ValidationError("Seuls les fichiers PDF et XML (facture électronique) sont acceptés.")
         return uploaded
 
 

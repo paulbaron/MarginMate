@@ -56,6 +56,10 @@ INVOICE_FIELDS = (
     "supplier_doubt",
     "imported_at",
     "reconciliation_adjustment",
+    # The rate the document states for that adjustment (BT-96/BT-103).
+    # Dropped by a round trip it would come back null, and the invoice would
+    # be filed at a total the bank never shows - silently.
+    "adjustment_vat_rate",
     "printed_total_ttc",
     "ocr_text",
     "source_text",
@@ -65,6 +69,7 @@ INVOICE_FIELDS = (
     "vat_table_typed",
     "reviewed_at",
     "source_sha256",
+    "einvoice_format",
 )
 FILE_FIELDS = ("source_file", "preview_image")
 LINE_FIELDS = (
@@ -108,6 +113,7 @@ LABELS = {
     "error_message": "erreur",
     "supplier_doubt": "fournisseur à confirmer",
     "reconciliation_adjustment": "ajustement",
+    "adjustment_vat_rate": "taux de l'ajustement",
     "printed_total_ttc": "total imprimé",
     "ocr_text": "texte lu",
     "source_text": "texte du document",
@@ -117,6 +123,7 @@ LABELS = {
     "vat_table_typed": "table de TVA saisie",
     "reviewed_at": "vérification",
     "source_sha256": "empreinte",
+    "einvoice_format": "facture électronique",
     "lines": "lignes",
     "source_file": "fichier",
     "preview_image": "photo",

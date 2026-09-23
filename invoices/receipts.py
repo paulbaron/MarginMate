@@ -42,6 +42,7 @@ from django.db.models import Count, Max, Sum
 from django.db.models.functions import Length
 from django.utils import timezone
 
+from . import einvoice
 from .identifiers import describe as describe_identifier
 from .identifiers import document_identifiers, may_print
 from .importing import DuplicateInvoiceError, import_parsed_invoice
@@ -84,6 +85,8 @@ SUM_CHECK = "Somme des lignes = total imprimé"
 HT_CHECK = "Somme HT des lignes = base HT du ticket"
 UNREAD_TOTAL_CHECK = "Total imprimé lu"
 DATE_CHECK = "Date du ticket"
+# What an electronic invoice charges outside its lines (BG-20/BG-21).
+ADJUSTMENT_CHECK = "Frais et remises sur la facture"
 # One recognition at a time in a request (a shop chosen by hand, a document
 # read again): each is seconds of CPU, and two tabs used to import one file
 # twice.
@@ -1449,26 +1452,58 @@ def lines_check(invoice: Invoice, prefix: str = "") -> dict:
     parser's own tolerance, the one Invoice.total_ttc trusts. Each line counts
     as the review screen shows it, to the cent."""
     lines = list(invoice.lines.all())
-    lines_total = sum((line.total_ttc.quantize(CENTS, rounding=ROUND_HALF_UP) for line in lines), start=Decimal("0"))
+    lines_only = sum((line.total_ttc.quantize(CENTS, rounding=ROUND_HALF_UP) for line in lines), start=Decimal("0"))
+    adjustment = adjustment_counted(invoice)
+    lines_total = lines_only + adjustment
     discounts = sum((line.discount_ttc for line in lines if line.printed_ttc is not None), start=Decimal("0"))
     # The promotions apart, as the page shows them: the articles are what the
     # ticket prints as its total before promotions.
     promotions = (
         f" - articles {lines_total + discounts:.2f} € moins {discounts:.2f} € de remises" if discounts else ""
     )
+    # Duty, an eco-participation, a document-level charge: money the lines do
+    # not carry, which the total does. "lignes" has to mean the LINES, so the
+    # adjustment is added in front of the eye rather than folded into the
+    # figure it is then announced beside - written that way the sentence read
+    # « lignes 134,40 € + 14,40 € de frais / ticket 134,40 € », which does
+    # not add up on any invoice.
+    counted = f" + {adjustment:.2f} € de frais facturés globalement = {lines_total:.2f} €" if adjustment else ""
+    # « ticket » on a document nobody photographed: an electronic invoice and
+    # a supplier's PDF were both being checked against a till receipt that
+    # does not exist, on the first line of the page.
+    printed = "ticket" if invoice.is_receipt else "total de la facture"
     paid = invoice.printed_total_ttc
     if paid is None:
         return {
             "label": SUM_CHECK,
             "passed": False,
-            "detail": f"{prefix}lignes {lines_total:.2f} € : saisissez le total pour les vérifier{promotions}",
+            "detail": f"{prefix}lignes {lines_only:.2f} €{counted} : saisissez le total pour les vérifier{promotions}",
         }
     gap = paid - lines_total
     return {
         "label": SUM_CHECK,
         "passed": abs(gap) <= RECONCILIATION_TOLERANCE,
-        "detail": f"{prefix}lignes {lines_total:.2f} € / ticket {paid:.2f} € (écart {gap:+.2f} €){promotions}",
+        "detail": (
+            f"{prefix}lignes {lines_only:.2f} €{counted} / {printed} {paid:.2f} € "
+            f"(écart {gap:+.2f} €){promotions}"
+        ),
     }
+
+
+def adjustment_counted(invoice: Invoice) -> Decimal:
+    """The reconciliation adjustment where the lines are checked against the
+    total with it - a supplier's invoice, tax included.
+
+    Never a ticket's: there it is the cents each line lost being divided by
+    (1 + taux), which the printed amounts never lost, and added on top six
+    baguettes of 0,49 € came to 2,97 €. On a supplier's invoice it is duty
+    charged globally (or a document-level charge on an electronic invoice),
+    and left out of the sum an invoice that balances to the cent read as
+    failing its own check.
+    """
+    if invoice.is_receipt or not invoice.reconciliation_adjustment:
+        return Decimal("0")
+    return invoice.adjustment_ttc.quantize(CENTS, rounding=ROUND_HALF_UP)
 
 
 def vat_table(invoice: Invoice) -> list[dict]:
@@ -1650,9 +1685,59 @@ def reread_document(invoice: Invoice) -> str:
         path = ""
     if not path or not os.path.exists(path):
         raise RereadError("Le fichier d'origine de ce document est introuvable : rien à relire.")
+    if invoice.is_einvoice:
+        # Its own data again - never its supplier's parser, which would be
+        # handed an XML file, and never OCR, which would be handed a
+        # document whose figures are stated.
+        return _reread_einvoice_file(invoice, path)
     if invoice.is_receipt or isinstance(get_parser(invoice.supplier.parser_key), ReceiptParser):
         return _reread_receipt_file(invoice, path)
     return _reread_invoice_file(invoice, path)
+
+
+def _reread_einvoice_file(invoice: Invoice, path: str) -> str:
+    """Read an electronic invoice's file again: its lines, its date, its
+    total, its VAT table and its checks, as the document states them."""
+    from .importing import refile_as_charge, replace_invoice_lines
+
+    data = einvoice.document_xml(path)
+    if data is None:
+        raise RereadError("Ce fichier ne porte plus de facture électronique : rien à relire.")
+    try:
+        parsed = einvoice.read(data)
+    except einvoice.EInvoiceError as exc:
+        raise RereadError(f"{exc} Le document n'a pas été modifié.") from exc
+    kind = einvoice_format(path, parsed.einvoice)
+    checks = einvoice_checks(kind, parsed.einvoice, parsed)
+    if invoice.supplier.expenses_only:
+        refile_as_charge(invoice, parsed)
+        return f"Facture électronique relue : {invoice.lines.count()} poste(s) de charge."
+    from .importing import charge_reading, credit_as_return, is_charge_credit
+
+    lines = parsed.lines
+    if parsed.einvoice.carries_no_lines:
+        lines = charge_reading(parsed, invoice.supplier.name)[1]
+    # Every line, whatever produced it - see import_einvoice.
+    for line in lines:
+        if is_charge_credit(line):
+            credit_as_return(line)
+    with transaction.atomic():
+        replace_invoice_lines(invoice, lines)
+        invoice.invoice_date = parsed.invoice_date or invoice.invoice_date
+        invoice.printed_total_ttc = parsed.printed_total_ttc
+        invoice.reconciliation_adjustment = parsed.reconciliation_adjustment
+        invoice.adjustment_vat_rate = parsed.einvoice.adjustment_vat_rate
+        invoice.vat_breakdown = [[str(rate), str(base), str(tax)] for rate, base, tax in parsed.vat_breakdown]
+        invoice.vat_table_typed = False
+        invoice.einvoice_format = kind
+        invoice.parse_checks = checks
+        invoice.error_message = " ".join(
+            parsed.warnings + einvoice_date_problem(invoice.invoice_date)
+        )
+        if invoice.error_message:
+            invoice.status = Invoice.Status.NEEDS_REVIEW
+        invoice.save()
+    return f"Facture électronique relue : {len(lines)} ligne(s)."
 
 
 def _reread_receipt_file(invoice: Invoice, path: str) -> str:
@@ -1865,6 +1950,18 @@ def import_document(
 ) -> Invoice:
     """Import one file, whatever it is - the file says which reader it needs.
 
+    **An electronic invoice is read from its own data, first.** A file
+    carrying an EN 16931 XML - a Factur-X PDF, or the XML on its own - goes
+    to `einvoice.read` whatever the supplier and whatever the file looks
+    like. That order is not negotiable: everything below this line INFERS
+    (OCR reads a photograph, a regex finds an amount in a column) and the
+    whole parse_checks apparatus exists to catch the inferences that are
+    wrong, while the XML STATES the number, the date, the seller's SIREN,
+    every line, the VAT breakdown and the totals. A Factur-X PDF handed to
+    the ticket reader - which it would be, since it carries a text layer and
+    prints a perfectly readable page - is a document whose exact figures
+    were sitting inside it, thrown away and replaced by a guess.
+
     A photo or a scan is read as a ticket. A digital document goes through
     its supplier's own reader when that supplier has one (Metro, UBA...) and
     is recognised, by `supplier` or by what the document prints; anything
@@ -1879,6 +1976,12 @@ def import_document(
     known = Invoice.objects.filter(source_sha256=file_sha256(path)).select_related("supplier").first()
     if known is not None:
         raise DuplicateInvoiceError(f"Fichier déjà importé : {_describe(known)}.")
+    xml = einvoice.document_xml(path)
+    if xml is not None:
+        return import_einvoice(
+            path, xml, display_filename=display_filename, supplier=supplier, date_hint=date_hint,
+            chosen_because=chosen_because, by_type=by_type,
+        )
     text = document_text(path)
     if text:
         found = supplier if supplier is not None else document_supplier(text)
@@ -1924,6 +2027,224 @@ def import_invoice_pdf(
     invoice.save(update_fields=["source_sha256", "source_text", "supplier_doubt"])
     learned = [] if doubt else learn_identifiers(supplier, invoice.source_text)
     _record_first_document(supplier, invoice, chosen_because or "lue par son lecteur", learned, invoice.source_text)
+    return invoice
+
+
+def einvoice_format(path: str, facts) -> str:
+    """What to call the document this XML came out of, for the person
+    reading the page: **Factur-X** is the PDF around a CII invoice, so a CII
+    file arriving on its own is a CII file and calling it Factur-X would be
+    a claim about a PDF that never came."""
+    if facts.syntax == einvoice.UBL:
+        return "UBL"
+    return "Factur-X" if path.lower().endswith(".pdf") else einvoice.CII
+
+
+def einvoice_supplier(text: str) -> tuple[Supplier | None, list[str]]:
+    """Whose an electronic invoice is, and what said so.
+
+    What the invoice STATES about its seller comes first - its SIREN and its
+    VAT number, through `identified_supplier`, the one matcher for those.
+    They are data rather than something read off a page, so they beat a
+    header, which is a guess about printed words two companies can share:
+    `recognise_shop` weighs a header first because a ticket's header is all
+    it usually has.
+
+    The header and the configured tills are still asked when nothing stated
+    names anybody - a supplier known only by the words it prints has its
+    first electronic invoice to file like any other, and its SIREN is learnt
+    from it (learn_identifiers). Nobody named is nobody guessed at: the
+    caller raises, and the document waits for a person to say whose it is.
+    """
+    supplier, identifiers = identified_supplier(text)
+    if supplier is not None:
+        return supplier, identifiers
+    parser, found, _conflict = recognise_shop(text)
+    if parser is None:
+        return None, []
+    return Supplier.objects.filter(code=parser.supplier_code).first(), found
+
+
+def einvoice_date_problem(invoice_date: date | None) -> list[str]:
+    """What is wrong with an electronic invoice's date, in one sentence.
+
+    Absent, or outside 2000-today. A date is the one field of an EN 16931
+    document this application cannot simply take as stated: every window,
+    every valuation, the bank match and every margin place the document by
+    it, so one dated 01/01/0001 is in none of them - and, said nowhere, in
+    no queue either. `error_message` is what puts it in « Documents à
+    corriger », beside the one with no date at all.
+
+    Not a refusal of the file: the invoice is real and its figures are
+    exact, and it is the date that has to be typed in.
+    """
+    from .forms import EARLIEST_DOCUMENT_DATE
+
+    if invoice_date is None:
+        return ["Date absente de la facture électronique : saisissez-la dans « Corriger les lignes »."]
+    today = timezone.localdate()
+    if not EARLIEST_DOCUMENT_DATE <= invoice_date <= today:
+        return [
+            f"Date invraisemblable sur la facture électronique ({invoice_date:%d/%m/%Y}) : "
+            "corrigez-la dans « Corriger les lignes »."
+        ]
+    return []
+
+
+def einvoice_checks(kind: str, facts, parsed: ParsedInvoice) -> list[dict]:
+    """What an electronic invoice's page says about itself.
+
+    First what it is - and, under that, the document's own arithmetic as
+    `einvoice._checks` worked it out. Nothing else: the OCR confidence, the
+    shop checks and every check that exists to catch a guess do not apply
+    here, and shown beside exact data they would say that somebody has to go
+    and compare figures with a photograph that does not exist.
+    """
+    said = f"Émise par {facts.seller_name} : s" if facts.seller_name else "S"
+    checks = [
+        {
+            "label": f"Facture électronique ({kind})",
+            "passed": True,
+            "detail": (
+                f"{said}es montants sont les données de la facture (EN 16931), "
+                "et non une lecture de la page."
+            ),
+        }
+    ]
+    if parsed.reconciliation_adjustment:
+        # Duty, an eco-participation, a discount on the whole invoice
+        # (BG-20/BG-21): money no line carries, which the VAT base counts.
+        # Its reasons are stated in the sender's own words, and an amount
+        # with no reason beside it is a figure nobody can check.
+        why = ", ".join(facts.adjustment_reasons) or "motif non précisé par le fournisseur"
+        checks.append({
+            "label": ADJUSTMENT_CHECK,
+            "passed": True,
+            "detail": (
+                f"{parsed.reconciliation_adjustment:+.2f} € HT facturés globalement ({why}) : "
+                "comptés dans le total et dans la base de TVA, imputés à aucune ligne."
+            ),
+        })
+    return checks + [_as_dict(check) for check in parsed.checks]
+
+
+def import_einvoice(
+    path: str,
+    data: bytes,
+    display_filename: str | None = None,
+    supplier: Supplier | None = None,
+    date_hint: date | None = None,
+    chosen_because: str | None = None,
+    by_type: str | None = None,
+) -> Invoice:
+    """File one EN 16931 invoice - a Factur-X PDF, or the XML on its own.
+
+    The file kept is the one received: it is the legal invoice, and a
+    rendering of it is not. Raises EInvoiceError (a ValueError, reported per
+    file by the folder import) when the XML is not one this can read, and
+    UnrecognisedShopError when nothing known answers to the seller it names -
+    a document waits for a person exactly as a PDF of nobody known does,
+    because filing it under a guess would put a whole invoice's lines under
+    the wrong supplier's products.
+    """
+    from .importing import charge_reading, credit_as_return, is_charge_credit
+
+    digest = file_sha256(path)
+    known = Invoice.objects.filter(source_sha256=digest).select_related("supplier").first()
+    if known is not None:
+        raise DuplicateInvoiceError(f"Fichier déjà importé : {_describe(known)}.")
+
+    parsed = einvoice.read(data)
+    facts = parsed.einvoice
+    kind = einvoice_format(path, facts)
+    named_by_hand = supplier is not None
+    if supplier is None:
+        supplier, _identifiers = einvoice_supplier(parsed.source_text)
+        if supplier is None:
+            raise UnrecognisedShopError(
+                f"Facture électronique de « {facts.seller_name or 'fournisseur non nommé'} » : "
+                "aucun fournisseur connu ne porte ce numéro SIREN.",
+                text=parsed.source_text,
+            )
+    parsed.supplier_code = supplier.code
+    # The e-mail's date only where the invoice states none of its own, which
+    # for an EN 16931 document means a sender that left BT-2 out.
+    parsed.invoice_date = parsed.invoice_date or date_hint
+    checks = einvoice_checks(kind, facts, parsed)
+    if named_by_hand:
+        checks.append({
+            "label": CHOSEN_SHOP_CHECK,
+            "passed": True,
+            "detail": chosen_because or f"Rangée chez {supplier.name} à la main.",
+        })
+    if not supplier.expenses_only:
+        if facts.carries_no_lines:
+            # MINIMUM and BASIC WL carry the totals and the VAT breakdown and
+            # no line at all - a valid invoice, not a failed reading. Filed as
+            # it stands it would be an invoice worth nothing, out of every
+            # total and of the bank match, so it takes the total-only path a
+            # charge takes: one line per rate, from the table it does state. A
+            # supplier of charges is already filed that way by
+            # import_parsed_invoice.
+            parsed.lines = charge_reading(parsed, supplier.name)[1]
+        for line in parsed.lines:
+            # A count of 1 at a negative amount is how a charge takes a credit
+            # and how goods book stock at a NEGATIVE unit cost - the FIFO
+            # valuation's worst known failure, which LineCorrectionForm
+            # refuses outright for a supplier of goods. The document produces
+            # that shape two ways: rebuilt from a negative VAT table, and
+            # stated outright, as an ordinary invoice's « REMISE COMMERCIALE
+            # 1 × -60,00 ». Both are a return here, so the guard runs over
+            # every line and not only over the ones this rebuilt.
+            if is_charge_credit(line):
+                credit_as_return(line)
+    doubt = type_supplier_doubt(parsed.source_text, supplier, by_type) if by_type and named_by_hand else ""
+
+    invoice = import_parsed_invoice(
+        supplier, parsed, source_file_path=path,
+        display_filename=display_filename or os.path.basename(path),
+    )
+    problems = list(parsed.warnings)
+    problems.extend(einvoice_date_problem(invoice.invoice_date))
+    invoice.source_text = parsed.source_text
+    invoice.source_sha256 = digest
+    invoice.einvoice_format = kind
+    invoice.adjustment_vat_rate = facts.adjustment_vat_rate
+    invoice.supplier_doubt = doubt
+    # A charge keeps the checks the charge reading has just set
+    # (importing.charge_state), as it does for a ticket: every path that
+    # touches a charge writes those, and one of them would drop these the
+    # next time it ran. That it is an electronic invoice is said by
+    # `einvoice_format` instead, which nothing overwrites and which every
+    # screen reads.
+    if not supplier.expenses_only:
+        invoice.parse_checks = checks
+    # What the supplier's own figures say when they do not hold, and an
+    # absent date: neither is a reading to correct, so neither belongs in the
+    # ticket queue - `error_message` holds the document in « Documents à
+    # corriger » instead (workspace.DOCUMENT_TO_FIX). A charge with nothing
+    # wrong keeps the message the charge reading left, which is about its
+    # total and not about this reading.
+    if problems or not supplier.expenses_only:
+        invoice.error_message = " ".join(problems)
+        if invoice.error_message:
+            invoice.status = Invoice.Status.NEEDS_REVIEW
+    invoice.save(
+        update_fields=[
+            "source_text", "source_sha256", "einvoice_format", "adjustment_vat_rate",
+            "parse_checks", "supplier_doubt", "error_message", "status",
+        ]
+    )
+    # A stated SIREN is the strongest thing a document ever says about its
+    # sender - stronger than the text a PDF prints, which teaches at import
+    # already - so this one teaches too, unless a type's doubt says the
+    # document may not be this supplier's at all.
+    learned = [] if doubt else learn_identifiers(supplier, invoice.source_text)
+    _record_first_document(
+        supplier, invoice,
+        chosen_because or f"lue dans sa facture électronique ({kind})",
+        learned, invoice.source_text,
+    )
     return invoice
 
 
@@ -2075,6 +2396,9 @@ def file_sha256(path: str) -> str:
 __all__ = [
     "PLACEHOLDER_MARKER",
     "DuplicateInvoiceError",
+    "einvoice_format",
+    "einvoice_supplier",
+    "import_einvoice",
     "PricesApplied",
     "ReceiptRead",
     "RereadError",

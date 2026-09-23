@@ -68,6 +68,349 @@ guessed fixture tests a layout that doesn't exist. Metro's "②" footnote
 marker is a real example: substituting a plain "(2)" silently changes which
 store number the regex picks up.
 
+### La facture électronique: the figures are data, not a reading
+
+Since **1 September 2026** every VAT-liable business in France must be able
+to RECEIVE its invoices electronically, and from **1 September 2027** a small
+business must issue them that way too. The mandated formats are the EN 16931
+ones: **Factur-X** (a PDF/A-3 carrying an XML attachment), **UBL** (OASIS
+XML) and **CII** (UN/CEFACT XML, which is what Factur-X embeds).
+`invoices/einvoice.py` reads all three.
+
+**This is the biggest accuracy win in the codebase, and it is a subtraction.**
+Everything else here INFERS: OCR reads a photograph, a regex finds an amount
+in a column, and the whole `parse_checks` apparatus above exists to catch the
+inferences that are wrong. An EN 16931 invoice STATES the number, the date,
+the seller's SIREN, every line, the VAT breakdown and the totals. A Factur-X
+PDF read by the ticket reader is a document whose exact figures were sitting
+inside it, thrown away and replaced by a guess. So the e-invoice check
+belongs **before** everything in `receipts.import_document`, next to
+`ocr.text_layer_pages` - the other place that looks at a file and decides.
+
+**Fetching from the « plateforme agréée » is out of scope.** The owner's
+accountant holds the platform and its name is not known. There is no API
+here, no source kind, nothing contacted. What the reader does is read these
+documents exactly **however they arrive** - by e-mail, from a portal, in the
+folder import, or downloaded by hand from the platform. Measured on the real
+data (read-only, 22/09): none of the PDFs filed carries an embedded XML yet,
+so every fixture is hand-written and there is no corpus to measure against.
+
+**It is not an `InvoiceParser`.** `test_parser_contract.py` forbids a parser
+from overriding `parse()`, which is what keeps every layout testable from
+hand-written pages. This reader works from bytes rather than a layout, so it
+is its own module, the way `ocr.py` is: `embedded_xml(path)`,
+`looks_like_an_invoice(data)`, `read(data)`. Pure - no database, no model,
+no request, nothing on the network. No new dependency either: pdfminer.six
+(through pdfplumber) resolves the PDF attachment, and `xml.etree.
+ElementTree` plus `zlib` do the rest. **Do not add pypdf, pikepdf or lxml.**
+
+`ParsedInvoice.einvoice` (an `EInvoiceFacts`, `parsers/base.py`) is set by
+this reader and by nothing else, so `parsed.einvoice is not None` is the one
+question worth asking downstream: it means the figures are the document's own
+data. Everything the shared shape has nowhere to put - the syntax, the
+profile, the seller's name, whether it is a credit note, whether it carried
+lines, the currency, what the document-level charges were for - lives there.
+
+Six rules, each of them somebody's money:
+
+- **A rate is a percentage in the file and a fraction in the database.** The
+  XML says `20.00`; `InvoiceLine.vat_rate` holds `0.2000`. Read across, every
+  cost downstream is a hundredfold wrong.
+- **A credit note states its amounts POSITIVE.** Type 381 (CII
+  `ram:TypeCode`, UBL's `CreditNote` root; 261 and 396 too) means money going
+  back, and this codebase writes that as a negative count AND a negative
+  amount. The reader signs everything once - lines, VAT breakdown, total,
+  adjustment - so nothing further down has to remember which kind of document
+  it is on. The **unit price stays positive**: it is what one of them costs,
+  and negative beside a negative count it would price the return twice. A
+  charge supplier needs nothing extra - `charge_reading` rebuilds its
+  count-of-1 negative-amount lines from the negative VAT table.
+- **Document-level allowances and charges** (BG-20/BG-21) are duty,
+  eco-participation and discounts, and they become
+  `Invoice.reconciliation_adjustment` - charges positive, allowances
+  negative. A sender may state **only the totals** (BT-107/BT-108) without
+  listing the blocks behind them; read from the blocks alone the adjustment
+  was 0 and the invoice was filed short of what it charges, with its own
+  total check still passing.
+- **MINIMUM and BASIC WL carry no lines at all** - the totals and the VAT
+  breakdown only. That is a VALID invoice, not a failed reading: it goes down
+  the total-only path (`charge_reading`) and the page must SAY so
+  (`NO_LINES_CHECK`, **passing**, naming the profile). A failed check there
+  would park every such invoice in « À vérifier » for ever with nothing
+  anybody could do about it. A document that DID carry lines and lost one is
+  the opposite case and gets its own failed check (`LINES_READ_CHECK`): one
+  is exact, the other is a hole, and they must never read the same.
+- **A check failing here is the SUPPLIER's arithmetic**, not a misreading -
+  reported with both figures and never repaired. They are run on the figures
+  exactly as the file states them: round 12.345 to 12.35 first and the check
+  blames the supplier for this application's own storage. Storage rounds half
+  away from zero, as everywhere else (`total_ht` 2 decimals, `unit_cost_ht`
+  4, `quantity` 3, `vat_rate` 4).
+- **The seller is named through `invoices/identifiers.py`, not a second
+  matcher.** Its SIREN and VAT number are written into
+  `ParsedInvoice.source_text` in the shape that module already reads (the
+  word SIREN or SIRET beside the digits is load-bearing: a bare run of nine
+  digits is a phone number to it otherwise). Three things stay OUT of that
+  text, each a supplier it would name wrongly: the **buyer's** company number
+  (the bar's own, on every supplier's invoice); the **profile URN**, since
+  `urn:cen.eu:en16931:2017` reads as the web site « cen.eu » - a figure EVERY
+  electronic invoice carries, which would be learned by whichever supplier
+  filed enough of them first; and the **file's name**. And the label follows
+  the digits: BT-30 can be a GLN, and « SIREN » in front of one is a lie.
+
+Two more that cost real debugging:
+
+- **A document may state its VAT twice** - BT-110 in the invoice's currency
+  and BT-111 in the currency the seller accounts for tax in - as two
+  identical elements in either order. `currencyID` is what tells them apart;
+  taking the first put a foreign figure beside French ones and failed the
+  total check on an invoice that adds up (same trap on UBL's `cac:TaxTotal`).
+- **The name tree is a tree.** Attachments live in the catalog's
+  `/Names /EmbeddedFiles`, which splits into `/Kids` as soon as a file
+  carries a few; walked one level deep, the invoice of a multi-attachment
+  PDF is simply not there. `/AF` is read too. **Which attachment is the
+  invoice is decided by its root element, never by its name** - ZUGFeRD says
+  zugferd-invoice.xml, XRechnung xrechnung.xml, and a sender may say
+  anything.
+
+**The XML comes from outside**, so the refusals are part of the contract,
+each a French sentence and never a traceback or a hang:
+
+- a **DOCTYPE or ENTITY declaration** is refused before anything parses it.
+  `ElementTree` expands internal entities, so that is the billion-laughs and
+  the external-entity door at once, and an EN 16931 instance never carries
+  one. **Do not swap in a parser that resolves entities.**
+- a **currency other than EUR** is refused, never converted: a conversion
+  rate is a decision nothing here is entitled to take.
+- **well-formed XML that is not an invoice** (and a home-made `<Invoice>`
+  with no UBL namespace - the root element is more than its name).
+- **bytes that are not XML**, and anything **over the cap**. What comes out
+  of a PDF attachment is decompressed with `zlib`'s own bound rather than in
+  one go: a few kilobytes of deflate expand to gigabytes, and the cap is what
+  makes that a message on the import rather than a machine that stops
+  answering. An oversized attachment beside a readable invoice costs nothing.
+
+`EInvoiceError` is a **ValueError** on purpose: `receipt_batches` already
+reports a plain ValueError as one file's error and carries on with the
+folder, which is what a broken or hostile attachment deserves.
+
+**How it arrives, and where it lands.** `receipts.import_document` asks
+`einvoice.document_xml` **first**, before the text layer, before
+`document_supplier` and before any OCR: a Factur-X PDF carries a text layer
+and prints a perfectly readable page, so every other order ends with its
+exact figures thrown away and guessed at again. `document_xml` answers for
+both shapes a document arrives in - the attachment of a PDF, or **the XML on
+its own**, which a platform or a supplier may simply forward. So `.xml` is
+one of the things the one import takes (`forms.RECEIPT_EXTENSIONS`, the
+single-file upload, the folder scan, and an e-mail source's
+`attachment_pattern`, whose default widened to `\.(pdf|xml)$` - only the
+exact old default was rewritten, migration 0032; a pattern someone tuned
+says something a migration does not know). A well-formed XML that is not an
+EN 16931 invoice is **one file's error, in French**: there is no page to
+photograph and no text layer to fall back on, so the alternative to a
+sentence is a traceback out of a PDF renderer.
+
+`Invoice.einvoice_format` - "Factur-X" (the XML came attached to a PDF),
+"CII" or "UBL" (it arrived on its own), blank for everything else - is the
+stored answer, because the lists that have to know are database queries
+(`workspace.py`). **Factur-X is the PDF around a CII invoice**: a CII file
+on its own is CII, and calling it Factur-X is a claim about a file that
+never came.
+
+- **It is not a receipt.** `Invoice.is_receipt` excludes it although it
+  carries `parse_checks`. A check is what makes a document a receipt, and as
+  one this would be queued to be re-typed from a photo it has not got, read
+  again through OCR by « Relire le document », and have its exact figures
+  replaced by `recheck_after_review` on validation. `IS_TICKET`,
+  `IS_INVOICE`, `TICKET_TO_CHECK` and `Invoice.waiting_check` all ask.
+- **What it cannot be used as it stands goes to « Documents à corriger »**
+  (`DOCUMENT_TO_FIX`), never to the ticket queue: its own totals not
+  holding is the SUPPLIER's arithmetic - nobody can re-type that - and an
+  absent date puts it outside every valuation and the bank match. Both
+  reach `error_message`, which is what that list reads.
+- **Its checks say what it is and nothing about a reading**: « Facture
+  électronique (Factur-X) » first, the document's own arithmetic under it,
+  and « Frais et remises sur la facture » when BG-20/BG-21 put money outside
+  the lines - the reasons in the sender's own words beside the amount, since
+  a figure with no reason is one nobody can check. **A supplier of charges
+  keeps the charge's own checks** (`charge_state` rewrites them from every
+  path that touches a charge, and would drop these); there, only
+  `einvoice_format` says what the document is, and every screen reads that
+  rather than a label.
+- **A profile with no lines takes the total-only path for goods too.**
+  `charge_reading` rebuilds one line per rate from the table MINIMUM does
+  state - filed as it stands the invoice would be worth nothing, out of
+  every total and of the bank match - and a credit note's rebuilt line goes
+  through `credit_as_return`, or a count of 1 at a negative amount books
+  stock at a negative unit cost.
+- **The supplier is the one the invoice names.** `receipts.einvoice_supplier`
+  asks `identified_supplier` (the stated SIREN and VAT number) **before**
+  `recognise_shop`, the other way round from a ticket: a header is a guess
+  about printed words two companies can share, and this is data. The header
+  and the tills are still asked when nothing stated names anybody. Nobody
+  named is nobody guessed at - `UnrecognisedShopError`, and the file waits
+  for a person exactly as a PDF of nobody known does. What it states is
+  **learned at import** (`learn_identifiers`), as a PDF's text is: a stated
+  SIREN is the strongest thing a document ever says about its sender.
+- **The file kept is the one received** - the Factur-X PDF or the XML: it is
+  the legal invoice, and `source_sha256` still answers for a folder scanned
+  again. « Relire le document » reads that file's XML again
+  (`_reread_einvoice_file`) and never a parser, which would be handed an XML
+  to open as a PDF.
+- **`Invoice.total_ttc` is the total the invoice states** (BT-112) while the
+  lines are within a cent a line of it: they are stated in HT, and 169,00 at
+  20 % beside 25,20 at 5,5 % works back out to 229,386 where the invoice
+  says 229,39. Past that slack somebody has edited the lines, and what they
+  now say wins.
+- **A check on the correction page counts what the lines do not carry.**
+  `receipts.adjustment_counted` adds `reconciliation_adjustment` (TTC) to
+  the lines for a document that is not a ticket, in the saved check and in
+  the page's script both (`data-adjustment`) - left out, an invoice
+  balancing to the cent read as failing its own check, and turned red at the
+  first keystroke. Never on a ticket, where that figure is the cents each
+  line lost being divided by (1 + taux).
+- **The correction page must not pretend it was read**: it says the lines
+  are the invoice's own data, and for an XML with no page to frame it shows
+  what the document states beside them. They stay editable - a person may
+  still disagree with a supplier - and nothing here is validated the way a
+  ticket is.
+
+**A figure wider than the column behind it is refused, at the door.** SQLite
+accepts it without a word and Django's decimal converter then raises
+`decimal.InvalidOperation` on every **read**, which puts the document beyond
+the reach of the application for good: it can no longer be opened, corrected,
+re-read **or deleted**, and Achats, Marges and its own page all return 500.
+Only raw SQL gets it out. So `einvoice._fits` bounds every Decimal against
+what stores it - `MAX_AMOUNT` (12,2), `MAX_ADJUSTMENT` (10,2), `MAX_UNIT`
+(10,4), `MAX_QUANTITY` (12,3), `MAX_RATE` (5,4, i.e. 999,99 %) - and the
+refusal names the figure, in French, the way a foreign currency is refused.
+Never a truncation: ten billion euros on a bar's invoice is the supplier's
+arithmetic, which this module reports and never rewrites. The cliff is the
+column exactly; 9 999 999 999,99 is read. **A name is the exception** - it is
+cut to 255 (`einvoice._short`), because a name is not money and the exact
+figures beside it are worth keeping. Stored whole it went onto the line, onto
+a new `Product` and onto the page, and past ~50 000 characters SQLite's own
+LIKE limit turned the import into an English `OperationalError`.
+
+**`decimal.InvalidOperation` and `decimal.Overflow` are ArithmeticErrors, not
+ValueErrors.** `1E+500` and `1E+999999999` both parse as Decimals and explode
+on the first sum, so they went past every handler the import has and reached
+the owner as a traceback. `read()` catches `DecimalException` around the
+assembly and re-raises an `EInvoiceError`. The contract - **every refusal is
+an `EInvoiceError`, which is a `ValueError`, carrying a French sentence** - is
+pinned over every hostile fixture in `test_einvoice_limits.py`.
+
+**The encoding is decided BEFORE the DOCTYPE guard**, which is a byte grep:
+in UTF-16 `<!DOCTYPE` is `b"<\0!\0D\0…"` and the grep misses entirely while
+expat reads the BOM and expands every entity. A 2 KB billion-laughs came back
+with a one-million-character seller name; what stopped the machine was
+libexpat's own amplification limit, not this code. An EN 16931 instance is
+UTF-8, so a wide encoding (BOM, NUL in the first four bytes, or a declared
+utf-16/32) is **refused rather than decoded**.
+
+**The attachment cap belongs on what comes OUT of a stream, not on what went
+in.** `MAX_ATTACHMENT_BYTES` bounds the compressed bytes, which bounds
+nothing: 8 MB of double-deflated zeros is terabytes. Every inflate is bounded,
+**each stage of a chain**, and a stream behind a `/DecodeParms` predictor or
+any filter outside Flate is **not decoded at all** (`_Undecodable`, skipped) -
+no Factur-X producer emits one, and pdfminer builds the whole result before
+anything can measure it. Measured before: 148 MB of memory for a 970-byte
+file, and 396 seconds of CPU for a 66 KB one, single-threaded in the folder
+import.
+
+**BT-114 is part of BT-112's identity**: BT-112 = BT-109 + BT-110 + BT-114.
+Ignored, an invoice that balances to the centime is filed as its supplier's
+arithmetic failing, in « Documents à corriger », where nobody can do anything
+about it - a false accusation, which is worse than a silence.
+
+**BG-20/BG-21 carry their own VAT rate** (BT-96/BT-103), and it is stored:
+`Invoice.adjustment_vat_rate` (migration 0033, null everywhere else).
+`adjustment_ttc` uses it when it is there and goes on deducing the rate from
+the lines when it is not - which is all a supplier's PDF or a till receipt
+offers. Deduced on an e-invoice, 100,00 € of duty at 20 % was taxed at the
+5,5 % of the soft drinks beside it: a 1 175,00 € invoice filed at 1 160,50 €,
+unmatchable against the bank, understated in « Marges », **and not one failing
+check** - every check works on the stated figures and those all balance. Several
+at different rates blend into one rate, since that is the shape
+`reconciliation_adjustment` has. **BT-113/BT-115** (already paid, left to pay)
+are said in `source_text`: the purchase is the whole invoice and the bank will
+only ever show the remainder, so the document carries its own reason for not
+matching.
+
+**The sign guard runs over EVERY line, not only the rebuilt ones.** A count of
+1 at a negative amount is how a charge takes a credit and how goods book stock
+at a **negative unit cost** - the FIFO valuation's worst known failure, which
+`LineCorrectionForm` refuses outright for a supplier of goods. An ordinary
+invoice (380) states that shape itself, as « REMISE COMMERCIALE 1 × -60,00 »,
+and the importer was filing a row its own form would reject. `credit_as_return`
+now passes over `parsed.lines` whatever produced them. The **mirror** shape - a
+negative count at a positive amount - is neither a purchase nor a return and
+nothing can decide which it meant, so it is a **failing** check
+(`LINE_SIGN_CHECK`) naming both figures: the supplier's arithmetic, reported
+and never repaired.
+
+**A date outside 2000-today is said on the document, not refused**
+(`receipts.einvoice_date_problem`, beside the absent-date branch and using
+`forms.EARLIEST_DOCUMENT_DATE`). 01/01/0001 put an invoice in no window, no
+valuation, no bank match and no margin - and, with `error_message` empty, in
+no queue either. The invoice is real and its figures are exact; it is the date
+that has to be typed in.
+
+**`receipt_batches._record_import` runs INSIDE the try.** Its first act is to
+format the invoice's total, and in the `else:` of that try - outside every
+handler - a figure that cannot be read back escaped `_read_file` and marked
+the whole **batch** failed: the file that blew up got no outcome at all, and
+the files behind it were never read. One bad file is that file's error.
+
+**« lignes » means the lines.** `receipts.lines_check` prints the lines alone,
+then the adjustment, then the two added up (`lignes 120,00 € + 14,40 € de
+frais facturés globalement = 134,40 € / total de la facture 134,40 €`);
+folded into the first figure and announced beside it, the sentence read
+« lignes 134,40 € + 14,40 € / ticket 134,40 € », which adds up nowhere. And
+**« ticket » only on a receipt**: on an e-invoice and on a supplier's PDF
+nothing was printed and there is no ticket. The page's script says word for
+word what the saved check says (`document_review.html`), or the two disagree
+at the first keystroke.
+
+**What the screens must say**, each of them measured saying something else:
+« **Avoir** » where the stated total is negative (Achats, the document page,
+the correction page - the word existed only inside `source_text`, which is
+never shown for a PDF); a **MINIMUM profile's line was reconstituée depuis sa
+table de TVA** and is the invoice's total rather than an article, said where
+the lead paragraph called every line the supplier's own declaration; the
+document page's pill is **`review_state`**, the same answer every list gives,
+and never `get_status_display` (« À vérifier » on a document an e-invoice can
+never be); « montants issus des données de la facture » is **conditional on
+`error_message`**, since where BT-112 disagrees the page shows the lines; the
+VAT table on an e-invoice is **not something to recopier**; « non lue » on a
+missing date becomes « absente de la facture »; and `error_message` is
+repeated on the correction page, which never said why the document was sent
+there.
+
+**Nothing in the application fetches from the plateforme agréée, and the
+application says so.** The Sources tab and the import card both carry the
+sentence: since 1 September 2026 the invoices arrive through an accredited
+platform, the owner's is held by their accountant, and MarginMate does not go
+and get them - they are downloaded there and dropped in « Tickets et
+factures », where they are read in their own data. Reading them exactly was
+easy to mistake for « the e-invoicing side is handled »; it is not, and a
+screen that does not say so leaves the owner believing it.
+
+Measured on the real data (read-only, 22/09) there is still **not one** of
+these filed: not one of the PDFs carries an embedded XML, and every stored
+documents `.pdf`. So nothing here has been proved against a real invoice -
+the first one that arrives is worth opening beside its page.
+
+Fixtures are in `invoices/tests/einvoice_files.py`, hand-written: namespaces,
+element names, nesting and attributes (`schemeID="0002"`, `format="102"`) are
+the standard's own because that is what the reader keys on; every name,
+SIREN, number and amount is invented. There was nothing to copy and there
+must never be. The PDF/A-3s are **built by the test**
+(`tests/pdf_files.py::write_pdf_with_attachments`, a few hundred bytes of PDF
+syntax with an `/EmbeddedFiles` name tree): a test that needs a binary
+fixture it cannot build is a test nobody can fix, and a real Factur-X invoice
+would carry a supplier's IBAN into a public repository.
+
 ### Facturettes: the input is a photograph
 
 The small-shop receipts (Franprix, Monoprix, Sabbh Oriental, Wing Seng) are
@@ -497,10 +840,12 @@ It prints the tax as an **amount**, never as a rate - on a document with two
 of them, naming one would be a lie about the other, and "—" says nothing.
 
 Two things the row and the panel do not share, said on the page rather than
-left to be discovered: what a row **opens** is the whole history, where its
-Documents and Total are the window being looked at; and **"Dernier" is the
-last document ever**, window or not. The column says which window it counts
-("Documents (12 mois)", "(période)") and a row with older documents says
+left to be discovered: what a row **opens** is the whole history - except
+under « Du … au … », where it is those dates, see below; and **"Dernier" is
+the last document ever**, window or not. The column says which window it counts
+("Documents (12 mois)", "(période)" for an inventaire, "(ces dates)" for a
+free « Du … au … » - « période » is this page's word for two physical counts
+and says nothing about two dates someone typed) and a row with older documents says
 what its count is out of - « 12 sur 33 » (`documents_all`). Read as the
 total, "12" is a year of a monthly subscription against the 33 bills the
 row opens on, and that is how it was read (owner, 20/09). A supplier is listed as soon as it has
@@ -539,12 +884,14 @@ are only asked when it does not.
 **One import for every document.** Tickets and PDF invoices went in through
 two cards, and the person importing had to know which; the Achats page has
 one now (files or a whole folder, of anything), and the file decides
-(`receipts.import_document`): a photo or a scan is read as a ticket, a
+(`receipts.import_document`): a **facture électronique** is read from its
+own data first (see above), then a photo or a scan is read as a ticket, a
 digital document goes through its supplier's own reader when that supplier
 has one (`has_own_reader`) and the document says whose it is - otherwise the
 ticket reader, which reads an invoice's table too. Nothing is guessed from
-the file's name or extension: `ocr.text_layer_pages` says whether it carries
-text, and `detect_shop` who printed it. The import reports each file as what
+the file's name or extension: `einvoice.document_xml` says whether it
+carries an EN 16931 invoice, `ocr.text_layer_pages` whether it carries text,
+and `detect_shop` who printed it. The import reports each file as what
 it became, and links a ticket to its review screen, an invoice to its lines.
 `/invoices/upload/` still takes one PDF with its supplier named by hand -
 folded under the import card, for a document that says nothing about its
@@ -1980,6 +2327,71 @@ Comped drinks (`TAG_Offered`) are **included** in the sales quantities — a
 free drink is poured from the same bottle. Don't also record them as known
 losses or they're subtracted twice.
 
+**The export carries the money, and it is read** (`laddition_xlsx`): `Prix
+TTC`, `Remises TTC` and `Taux` per line, summed per (till product, day) onto
+`PosProductDailyQuantity.revenue_ttc` / `revenue_ht`. The rules below were
+each measured against the whole of the stored exports (tens of thousands of
+lines); **the figures themselves stay out of this file** - it is committed to
+a public repository, and what the bar turns over is nobody else's business.
+Re-measure on a scratch copy when it matters, and keep the number there:
+
+- **`Prix TTC` is the line's own amount, never × `Qte`.** `Qte` is 1 on
+  every line but seven refunds at -1, whose amount is already negative. Both
+  readings agree on this data, which is exactly why a test pins the rule
+  rather than the arithmetic.
+- **HT is worked out per rate**, from the TTC accumulated for that rate: a
+  day mixing food at 10 % and drink at 20 % comes out right, and three sodas
+  at 3,50 are 9,55 HT, not 9,54. A rate that is no French rate leaves that
+  line's HT unknown, counted and shown (`revenue_without_rate_ttc`) - never
+  20 % by default. A refund prints its rate as « -20% »: the minus belongs
+  to the amount, and read as a rate it would lose those lines' HT.
+- **A comped line is already priced 0** (its value sits in `Offerts TTC`),
+  which is what a margin wants: the stock left the shelf and no money came
+  in. `Remises TTC` is 0,00 on every line stored and is taken off anyway, and
+  counted - a column that has never fired is the one that fires silently.
+  **Which SIGN it fires with has never been observed either**, so the
+  arithmetic decides rather than a guess: a discount that would make the line
+  bigger than its own gross price (6,00 € less -1,50 € is 7,50 €, which
+  cannot happen) is not taken, and is counted under `discounts_not_taken`.
+- **A (produit, jour) one of whose lines has no readable amount is left
+  unread**, not filed at what the rest of that day took: it is short of an
+  unknown figure, and the day filed anyway looks perfectly ordinary. It joins
+  the « jours non lus » the margins page already has a banner for
+  (`days_without_amount`, in both logs), and another export that CAN read the
+  day whole still fills it.
+- **Every way a file can fail to be this export answers as
+  `LadditionExportError`.** An .xlsx is a zip, and `scraped_invoices/` is
+  scanned whole: a half-finished download raises `zipfile.BadZipFile`, which
+  is no `XlsxError` and escaped the reader AND the backfill's own
+  « illisible » branch - one such file stopped the other sixteen being read
+  at all, with a traceback.
+- **`PosProductDailyQuantity.quantity` is signed** (recipes/0014, with
+  `RecipeSale.quantity` and `PosProduct.total_quantity`): the seven refunds
+  stored all happen to fall on days the product also sold, but a pint sold
+  Tuesday and taken back Wednesday nets -1 on Wednesday, and on a
+  positive-only column that INSERT failed and rolled back the **whole
+  window's** import, money and quantities alike, every time it was re-run. A
+  sale typed by HAND is still refused below zero (`ManualSaleForm`): nothing
+  types a refund in, and a minus there is a slip. The « Données » archive
+  carries a negative day for the same reason.
+- **`Prix achat HT` is the till's own idea of a cost, 0 nearly everywhere,
+  and is never read.** Costs come from the invoices, through the recipes.
+
+`revenue_read` is the difference between « this day took 0 € » and « nobody
+has read this day's money »: false on every row imported before this, and on
+every row a « Données » archive restores - that archive carries the
+quantities only (`transfer.sections.sales.DAILY_COLUMNS`), so a restore is
+followed by a backfill. `manage.py laddition_backfill_revenue --dry-run`
+fills them from the .xlsx already in `scraped_invoices/`, **contacting
+nothing**: it names each file, the revenue per year and everything it cannot
+match, and **creates no row** - money against a quantity nobody imported
+would be a figure with no stock behind it. A (product, day) printed by two
+overlapping exports replaces itself rather than adding up (no two of the 17
+stored exports disagreed about one). Run at scale on a scratch copy of the
+quantities, it filled every (produit, jour) on file and matched all of them,
+and its revenue reproduced the reader's to the cent - which is the check that
+the reading is right, and the reason it prints a total per year.
+
 A happy-hour variant is a separate till product ("Pinte Blonde" vs "Pinte
 Blonde HH"). Put its till name in the base recipe's `happy_hour_name` and
 both fold into one recipe. `record_sales` therefore aggregates by RESOLVED
@@ -1992,6 +2404,356 @@ its sales kept landing on the recipe, and a product sent back to the worklist
 was relinked by the next import. An ignored till product sells no recipe
 whatever its name (`record_sales` skips it, and does not list it as
 unmatched).
+
+### Les trois marges (`margins/computation.py`)
+
+`margins_for(window: DateRange, left_out=()) -> MarginReport` - pure, no
+request, no template - answers three different questions and blends none of
+them:
+
+- **la marge réelle**: everything that came in against everything that was
+  **invoiced** over the window, goods and charges alike
+  (`Supplier.expenses_only`). « Ai-je gagné de l'argent ce mois-ci. »
+- **la marge produits**: the same income against what the recipes sold
+  actually consumed, plus the articles flagged « compter dans la marge
+  produits ». « Est-ce que je vends assez cher. »
+- **les marges par catégorie**, on both dimensions the till already stores -
+  `PosProduct.category` (Bières, Cocktails, Planches…) and `.typology`
+  (« food, drinks »). Two readings of one till, so they foot to the same
+  revenue, units and cost; the measurement below checks they do.
+
+**HT is the headline, TTC beside it.** The till takes TTC and the invoices
+charge HT. Every amount is a `Money` (both), every margin is worked out on
+the HT, and the products margin has **no** TTC at all - a recipe's cost only
+exists in HT, and the page says so rather than inventing one.
+
+**Coverage is the figure that keeps this honest.** Only a minority of the
+till products have a recipe: the planches, the dips, the coffee have revenue and
+no cost, and counted as costed they print a **100 % margin**. So every unit
+is counted twice - sold, and costed - and `coverage`, `revenue_uncosted`,
+`revenue_coverage` and `top_uncosted` say what the gap is. A slice with no
+costed unit returns **None**, never a number. Measured over all history,
+the money costed is well short of the units costed, and a category can read
+a margin above 90 % on well under half of its money costed. **A margin % is
+never to be shown without its coverage beside it**; on this data that is the
+difference between a figure and a fiction.
+
+**A recipe is costed only when ALL of it is, and per SERVING.**
+`_recipe_costs` keeps a recipe out of the cogs in three cases, all the same
+lie in different clothes - a cost that is only partly known reads as margin:
+
+- its **dearest variation costs 0**: every article in it has been invoiced
+  never (`current_unit_cost_ht` is 0 with no movement behind it);
+- **one article of it** has been invoiced never, and the others have: the
+  recipe then prices at less than it costs and « 100 % chiffré » beside it
+  is false. `_every_ingredient_priced` walks the sub-recipes too, an
+  alternative counts like any other ingredient, and the row is listed under
+  « ingrédient sans prix ». Latent today (every recipe fully priced, read-only
+  on the real database, 20/09); it fires the day a recipe gains an article
+  whose first invoice has not landed, and it moves the margin **up**;
+- it **yields nothing** (`yield_quantity` 0), so there is no per-serving cost
+  to divide out.
+
+And the cost counted is `cost_range / yield_quantity`, **one serving**, not
+one whole preparation - `summary()` prices a full run of the recipe, so a
+syrup made ten glasses at a time costs its batch there.
+`inventory/variance.py` has divided by the yield since it was written, and a
+cogs that did not put the two pages a factor of ten apart over one sale (a
+20,00 € batch yielding 10, five glasses sold: 100,00 € against the 10,00 €
+`quantities_sold` takes out of stock). Latent too - every recipe yields 1 -
+and note the direction is not always the flattering one: the validator
+allows a yield below 1, which costs MORE per serving.
+
+**Linear in ingredients, never in variations.** One pass over the recipes
+sold, inside `recipes.models.variation_scope()`, with the ingredients handed
+to `summary()` - `choice_groups()` builds its own queryset, so a prefetch at
+the call site buys nothing without that. Measured on a scratch copy of the
+real database: **11-12 queries and about half a second** for the whole
+history, a few hundredths for a month.
+A test asserts that costing three times as many recipes costs no more
+queries.
+
+**Every gap is a field, not a zero.** `unread_days` / `unread_units` (a day
+whose money was never read counts its units and its cost, but no revenue -
+so the margin reads LOW, which is the safe direction: putting a year back to
+unread on a scratch copy took the real margin down by a third and more, and
+the page said how many days and units were unread); `revenue_without_rate_ttc`;
+`undated_invoices` / `undated_spend` / `undated_in_spend` (an undated invoice
+is in no window, but over all time there is no window to be outside of, so
+it IS the spending and the flag says which); `hand_typed_units` (a
+`RecipeSale` from another source than the till carries no price anywhere).
+
+**A percentage divides only by a positive revenue.** Zero is not 0 %, and a
+window that only refunded has -8,75 € of margin on -7,50 € of revenue - which
+works out to **+116 %**. A loss printed as a gain is worse than no figure.
+
+**An article sold as itself on a bon de vente is income with no margin.**
+It carries no VAT rate anywhere - a recipe has one, an article does not - so
+its money stays TTC, lands in `revenue_without_rate_ttc` and never reaches
+`revenue.ht`. Its purchase price is therefore left out of the cogs too:
+counted there, the cost came off an HT its revenue never joined, and two
+bottles bought at 3 € and sold at 10 € printed a products margin of
+**-6,00 €**, a profitable sale shown as a loss. Both sides out or neither,
+and the foot of the page names the amount. 0 such lines today.
+
+**The two margins date one purchase on one day.** A flagged article's
+purchase is counted on its **invoice's** date, like everything in
+`spend` - only a movement with no invoice behind it (a correction typed by
+hand) keeps its own. Deliberately NOT `StockMovement.effective_date`, which
+« Produits & charges » sums a row by: that page is about the shelf, this one
+about the bill. Dated by the delivery, an article invoiced 25/02 and
+received 10/03 was in February on « Facturé » and in March on « Achats des
+articles cochés », on one page, with nothing saying so.
+
+**Each invoice is rounded to the cent before it is added** (`_invoice_money`),
+the same rule the charges fold follows: twelve bills printed at 23,99 € must
+foot to 287,88 €, not 287,86 €.
+
+**La marge réelle « sans … » is the same margin with places taken out, never
+a second definition of it.** The one pass over the invoices also puts every
+invoiced euro in exactly one place (`_where_it_went`): a charge's document
+WHOLE on its supplier, a goods line on its article (drawn under the article's
+category as it is today), a goods line no article claims on « à classer », a
+document with no line at all whole on its supplier (a charge) or on « à
+classer » (goods). The duty adjustment (`reconciliation_adjustment`) belongs
+to the invoice, not to a line: it is spread over the lines **pro rata to
+their HT, over the lines with a positive HT only** - signed, a returned
+deposit took a negative share of the beer's duty and the beer more than the
+whole of it. Whatever still separates the rounded places from the invoice's
+own cent-rounded totals (three shares of a duty rounding to one centime too
+many; a receipt paid at its printed total, a few centimes above its printed
+lines) goes on **the invoice's largest place**. That is what makes the rule
+`margins/tests/test_spend_selection.py` pins hold: **with nothing left out
+the places add up to `spend` to the cent, HT and TTC**, so the second margin
+IS the first. And **the revenue never moves**: a purchase belongs to no till
+category, so leaving one out takes away a cost, never a sale - mapping the
+articles' categories onto the till's is not attempted.
+
+The keys are `charges`, `fournisseur:<id>` (a supplier OF CHARGES only - a
+goods supplier's money is its articles'), `categorie:<name as stored>` (the
+blank one is `categorie:` and nothing after), `article:<id>` and
+`a-classer`. A category has no row anywhere, so its name IS its key and has
+to round-trip through `urlencode` exactly, accents and spaces included.
+`_resolve` drops what it does not know - garbled, an id `common.is_id`
+refuses, an article deleted since, a category no article carries - and never
+raises; keeps a known key with nothing in the window (named: « sans
+Consignes » over a month none were bought is still the question asked, and
+reads « rien de facturé » - only then: a keg bought and given back takes out
+0,00 € but WAS invoiced, `Exclusion.invoiced`); and
+counts a place two keys reach (« Charges » and one of its suppliers,
+« Matériel » and one of its articles) once, naming only the group. One query
+per KIND of key; the lines come with their product and article in the one
+prefetch (`Prefetch` + `select_related`), and a test asserts that three times
+the invoices and the keys cost no more queries.
+
+**A blank category is « Catégorie non renseignée »**, not « Sans
+catégorie » - the till already prints a category of its own called
+« _Sans catégorie » (and a typology called « N/D »), and two rows an
+underscore apart meaning two different things is a page nobody can read.
+
+**`StockType.count_in_products_margin`** (« Compter dans la marge produits »,
+on the article's own form and on the Marges page, a category at a time) is
+the paper towels: no recipe consumes them, so
+what was **bought** over the window is the only measure there is, counted
+exactly as « Produits & charges » counts a purchase (the line's own
+`total_ht`). Off by default - an article counted here *and* in a recipe is
+paid for twice. Signed, both ways: flagging an article whose deposits come
+back gave a NEGATIVE month on a scratch copy, which is right and must not be
+clamped. They belong to no till category, so they are the report's and not a
+slice's, and the page has to say where they went. The field rides in the « Données »
+archive (`associations.ARTICLE_FIELDS`): dropped by a round trip it would come
+back unticked and silently *improve* the margin.
+
+**An article ticked AND used in a recipe is paid for twice**, and the help
+text saying not to do it was all there was. `flagged_in_recipes` is one
+query (`RecipeIngredient.objects.filter(stock_type__count_in_products_margin=True)`)
+and the page names them in a warning: ticking the beer's own keg charged it
+once as what the recipe consumed and once as what was bought, and printed a
+negative products margin with no explanation on the screen. `flagged_articles`
+counts what is ticked at all, so « rien de coché » and « coché, rien acheté
+sur cette période » stop printing the same empty table.
+
+**The box's panel reads what the margin reads.** `MarginReport.countable`
+(`CountableCategory` > `CountableArticle`) is every article under its
+category as it is TODAY - alphabetical as a person reads it (accents and
+case aside: SQLite orders by byte), the blank category last as « Catégorie
+non renseignée » - with its box, whether any recipe line names it, and what
+was bought of it over the window. That last figure comes out of the very
+pass `extra_products` is summed from (`_bought_over`: every purchase once,
+the line's own `total_ht`, dated by its invoice, signed), so **what a box
+says ticking it adds is what the products margin moves by, to the cent** -
+two readings would have been two figures free to drift. « Ce qui a été
+facturé » prints another figure for the same article on an invoice carrying duty - it
+adds the line's share of the adjustment, the products margin counts the
+line's own amount - and the panel says so in its own sentence. `flagged_in_recipes`
+is read off the same « used by a recipe » set. Three queries whatever the
+number of articles (the articles, the recipe lines, the purchases); a test
+asserts that three times the articles cost no more. A category's `state` is
+words - « aucun », « 3 sur 70 », « tous » - and it is drawn `opened` when it
+holds an article counted twice, where the tick is.
+
+Measured all-time on a scratch copy (20/09, never the real database), in
+shapes rather than amounts - what the bar turns over stays out of a public
+repository: **the products margin came out far above the real one**, which
+is not good news but arithmetic - only part of the
+revenue has a costed recipe behind it, and the rest is counted at no cost at
+all. That is why no margin is ever printed without its coverage. A quiet
+month with the charges still running came out **negative**, and both category
+dimensions footed identically, which is the check that the two groupings read
+the same sales. Re-measure rather than trusting a figure written down here.
+
+### La page « Marges » (`/marges/`, `margins/views.py`)
+
+The three answers in the owner's own order - la marge réelle, la marge
+produits, les marges par catégorie - each under the sentence saying what it
+counts, because a number nobody can explain is a number nobody will trust.
+The view does no arithmetic: `margins_for` answers and the page says what the
+figures are worth.
+
+**A period is chosen, never assumed.** With no dates the page shows the
+**last twelve months** and names them on screen (the same 365 days the
+charges fold falls back on, `inventory.views.charge_suppliers`): an all-time
+margin mixes three years of purchase prices with three years of selling
+prices. « Depuis le début » is `?tout=1`, a **named period** that wins over
+the dates the way Banque's `?mois=` does - the inputs are drawn disabled -
+and it **keeps** `du`/`au` in the URL so the door swings both ways, as the
+stock page's panels do (« Revenir du … au … »). `?du=&au=` otherwise, both
+ends included, and a date that is no date is the default rather than a 500.
+
+**No margin is printed without its coverage beside it.** Every slice's « Part
+chiffrée » column carries the share AND the words - « tout est chiffré »,
+« le reste n'a pas de recette : marge surestimée », « aucune recette : pas de
+marge calculable », « N € encaissés sans taux de TVA : pas de HT, marge
+faussée » - and a slice with no costed unit prints « — » in its cost and
+margin columns rather than a 100 % margin.
+
+**« Part chiffrée » means the MONEY, in both places it appears**, with the
+units said in the same cell (`SliceRow.units_note`). The column used to be
+the units while the headline was the money: on one category selling 100
+cafés at 2 € with no recipe beside 100 cocktails at 10 € with one, that is
+50 % against 83 % under two identical labels. The words answer the money
+too - read off the unit counts, a row whose units net to what is costed (one
+sold, one taken back at a different price) printed « tout est chiffré »
+under a banner saying the margin was overstated.
+
+**Both tables foot themselves, and the page says why the total is not the
+headline.** The rows are the **till alone**; the headline products margin
+also counts the flagged articles' purchases and the sales made off the till,
+which belong to no till category - a positive margin on a row above a
+negative one on the headline, same money, same screen, nothing bridging them.
+
+**Zero facturé is not zero dépensé.** `invoice_count` is beside « Facturé »
+and a window with none says so in a warning: that is the state of the current
+month, every month, until the suppliers' bills are in, and the page announced
+a 100 % real margin for it.
+
+**Both real margins, never one in place of the other** (the owner, 21/09:
+« sans le Matériel, sans les charges - mais je veux voir la marge globale
+aussi »). What is left out is a VIEW carried in the address like the period -
+`?sans=` repeated, no model field, no migration - so two tabs hold two
+questions and a bookmark keeps its own. « Marge réelle — sans : Matériel,
+Charges » is drawn beside « Marge réelle » only when something is left out,
+with « tout remettre » and a « remettre » per thing. A key inside a group
+also left out is not named (« sans : Matériel », Perceuse unticked inside it),
+so the group's « remettre » puts it back too (`Exclusion.within_key`): it
+put back Matériel alone, and only then named Perceuse, still out.
+
+**The breakdown is the selector.** « Ce qui a été facturé » lists the
+charges (by supplier) and each article category (by article), HT and share
+of the total, every box ticked by default, and says where the question is
+asked that the revenue does not move (« on retire une dépense, pas une
+vente »). It is a GET form, and a checkbox left unticked sends NOTHING: every
+row sends its key under `montre` and a still-ticked box sends it again under
+`garder`, so « left out » is read as **shown and not kept**, never as « not
+sent » - a row a stale page never had (a newer invoice's article) would
+otherwise drop out with nobody touching it, and a key the form never showed
+(nothing in the window) keeps its state. The view answers `montre` with a
+redirect to the clean address (`known_left_out`: `sans` alone, unknown keys
+dropped), **in the order the keys were asked**, what is newly left out after
+them - in the table's order, a « Recalculer » that changed nothing turned
+« sans : Nappe, Matériel » into « sans : Matériel, Nappe ». The column reads
+« Garder », not « Compter », and the page says nothing is saved and that the
+selection lives in the address: the panel below is the one that saves. A category left out keeps its articles' own boxes, so ticking it
+back brings them back. A group unfolds with no script - the `<details>` in its
+name cell is only a switch, and `tbody:has(details[open])` shows its rows -
+and one holding an unticked row is drawn open, since folded the only box
+saying something is out would be out of sight.
+
+**Every link and form back to this page carries `sans` as it carries
+`du`/`au`** (`views._page_url`; `here_url` for a form's `next`; the window
+form's hidden fields; « Effacer » clears the dates and keeps the selection),
+built from the keys the page UNDERSTOOD, so a garbled one does not travel.
+The links to other pages carry the window alone: none of them reads `sans`.
+
+**« Compter dans la marge produits » is ticked from this page too** (the
+owner, 21/09: « pour éviter les allers-retours »), a whole category at a
+time: « Articles comptés dans la marge produits », under the products
+margin - each category with its state in words, how many of its articles a
+recipe uses, what they were bought for over the window, « Tout cocher » /
+« Tout décocher », and unfolding (the same `<details>` switch as the
+breakdown) to each article's own box and what ticking it adds. It is the
+article's own field - the box on its form stays - so unlike `sans` it is a
+setting, and a POST: `margins:count_articles` (`POST /marges/articles/`), a
+GET goes back to the page.
+
+**A post only ever touches the articles its own form showed.** Each
+category is its own form, sitting in its buttons' cell; the article boxes
+join it through their `form` attribute (a form cannot wrap a `<tbody>`). The
+whole-category buttons touch the category as it is TODAY; a newcomer
+classified into it later arrives unticked and the category reads « 31 sur
+32 », which the page says beside the buttons. « Enregistrer » posts the
+category, every article the form showed (`affiche`), the boxes still ticked
+(`coche`) and the boxes it DREW ticked (`etait`), and changes **only what was
+changed on the page**: ticked is drawn unticked and sent back ticked,
+unticked is drawn ticked and not sent back - never « not sent », since an
+unticked box sends nothing and neither does a row the page never had. So an
+article reclassified INTO the category after the page was drawn keeps its
+tick, an id of another category - tampered, or reclassified out - is never
+changed by it, and a page left open does not undo what another tab did
+since: read as « shown and not ticked », it unticked Gobelets ticked
+elsewhere, a box the person never touched nor saw ticked. An id `is_id` refuses, an
+article gone, a category no article carries any more, an unknown action:
+each a message in the panel, never a 500.
+
+**It answers where it was asked.** The forms' `next` is `here_url` plus
+`#articles-comptes` (period, `tout` and `sans` kept), checked with
+`url_has_allowed_host_and_scheme` like Banque's `_back` - off-site, the bare
+page's panel. The redirect lands on the panel, two screens under the page's
+head, so its messages carry the tag `articles-comptes` and are said there:
+`base.html` has a `{% block messages %}` that this page takes over, saying
+every other message at the top as before (`views._messages_by_place`; a test
+puts a message from elsewhere in the cookie and finds it at the top, once).
+Ticking an article a recipe uses says at once that it is now counted twice,
+and the list marks it where its tick is (« compté deux fois »; unticked,
+« dans une recette »).
+
+Under it, `top_uncosted` lists the biggest till products with no recipe,
+linking to « À lier » - **and says what it is a top OF** (« les 12 plus gros
+sur N — N € HT en tout », `uncosted_products` / `uncosted_revenue`): cut at
+twelve in silence, a reader works the list to its end believing the hole is
+closed.
+
+**`unread_days` is said at the top, in a warning, with the command to run**
+(`manage.py laddition_backfill_revenue`, which reads the files on disk and
+goes nowhere near the network). Their units and their cost count and their
+revenue does not, so every margin below reads LOW until it has run - and
+until it does, that banner is the first thing on the page.
+
+The gaps that are not about the margins themselves (revenue with no VAT rate,
+undated invoices, sales typed by hand) are in a `<details>` at the foot,
+« Ce que ces chiffres ne disent pas » - declared, never absorbed, **and named
+in the `<summary>` itself**: on a page whose whole argument is that a gap is
+said rather than absorbed, a closed fold that does not say what it hides is
+one nobody opens.
+
+**« Aucune vente » is asked of the money too.** A day that only refunded is
+stored at quantity 0 with a negative amount, so `no_sales` read off the units
+alone put « Aucune vente enregistrée » over a page showing -15,00 € of
+takings, and offered an import of sales already imported.
+
+**No chart.** The one this page would draw - a bar per category - is the one
+figure that must never be shown without its coverage, and a bar chart has
+nowhere to put « 38 % chiffré ». The tables carry both.
 
 ### One inventory is enough (if the invoices go back far enough)
 
@@ -2145,6 +2907,100 @@ names did not follow (models, fields, url names, context keys, `data-persist`
 and localStorage keys, anchors), nor did texts already stored; these notes
 still say "stock item" and "stock page" for the article and that workspace.
 
+### « Du … au … »: one window, five pages
+
+Five pages are read through a period: **Produits & charges** (the articles
+bought between two dates), **Achats** (the documents), **Ventes** (les ventes,
+les factures de vente et « Par origine »), **Banque** (les opérations) and
+**Marges** (les trois marges, la seule dont la période a un défaut - les 12
+derniers mois - et qui le dit).
+They read it once, through `common.date_range(request)` → `DateRange`, so
+they cannot disagree about what "between these two dates" means:
+
+- `?du=&au=` on every one of them, ISO dates (what `<input type="date">`
+  posts), the context key `date_window`, the class `.date-range`;
+- **both ends are included.** A person asking « au 28 » means the 28th. This
+  is deliberately NOT the half-open window the stock pages slice with
+  (`variance.movements_between`, `recipes.sales.sales_between`), where the
+  opening date belongs to the count taken that day - hand a `DateRange` end
+  to one of those and a day goes silently. `catalogue_context` converts on
+  purpose (`window.start - timedelta(days=1)`) so « Vendu » counts the sales
+  of the `du` day itself;
+- a date that is no date is **no window, never a 500** (`?du=hier`,
+  `2026-02-30`): these arrive from a query string, so a stale bookmark and a
+  hand-typed URL both land there. Two dates the wrong way round are swapped;
+  either end alone is a window (« depuis le 1er », « jusqu'au 28 »);
+- **a row with no date is in no window** - `window.limit` drops it, and
+  `window.holds(None)` is False. That is why « Sans date » on Achats drops
+  the window entirely rather than opening an always-empty list, and why an
+  import's own list (`lot`) ignores it;
+- **the named period wins over the free dates**: `?inventaire=` on Produits &
+  charges (two physical counts produce an opening, a closing and what is
+  missing; two dates cannot) and `?mois=` on Banque. The inputs are then
+  drawn `disabled` with a line saying which, and no link carries `du`/`au`
+  while the preset is on;
+- **every count beside the rows is counted over the same window** - a chip
+  reading « Tickets 412 » over a page of 9 is the bug this invites - and
+  **every link carries it**: chips, tabs, « tout afficher », the htmx
+  `hx-get` that reloads a list in place, the `next` of every form. Build
+  those URLs in the view (`window.parameters` + `urlencode`:
+  `catalogue_url`, `workspace._list_url`, `bank._page_url`,
+  `menu.sales_list_url`), never by pasting `{% if %}` fragments in the
+  template - that is exactly where a parameter gets forgotten;
+- **what a row OPENS is the window too**, on Produits & charges: an
+  article's purchases (`stock_type_movements`, narrowed on
+  `StockMovement.effective_date` - what `catalogue_context` sums the row
+  by, so the panel adds up to its own row) and a charge's documents
+  (`_charge_panel`, on `invoice_date`, what `charge_suppliers` counts by).
+  The three `data-movements-url` carry `panel_window_query`, built from the
+  window **applied** - so a chosen `?inventaire=` keeps its all-history
+  panels - and each panel names its dates with « tout l'historique » beside
+  them (an `hx-get`, `hx-target="closest .row-panel"`: `closest td` is the
+  foot of the charge table, which would redraw the panel inside itself).
+  An empty one says « rien entre ces dates », never « jamais acheté ».
+  That door swings **both ways** (`views._panel_doors`): « tout
+  l'historique » keeps the dates in its URL under **`tout=1`** -
+  « everything, and remember what was asked » - and the widened panel
+  offers them back. Dropped, they were gone for good: a row is fetched
+  exactly once (`stock_list.html` sets `dataset.loaded`), so closing and
+  reopening it did not bring February back either, and the panel went on
+  saying « tout » under « Acheté 12 ». The 📈 **curves are not windowed** and their URLs stay
+  bare: a month of a curve is two points and « pas assez d'historique »,
+  which is a feature removed rather than a window applied - so every
+  sentence about what a row opens has to say which of the two it means.
+
+`charge_suppliers(window)` takes either shape, a `StockPeriod` or a
+`DateRange`, because both say `start` (possibly None) and `end`; an empty
+`DateRange` is falsy and means its twelve-month default.
+
+**A panel holding the row's own documents is read against it**, and four
+disagreements only a window made visible were fixed with it (each a test
+that failed first, `inventory/tests/test_panel_matches_its_row.py`): a
+charge's panel **rounds each line to the cent** the way `charge_suppliers`
+does before adding it up (raw, twelve bills of 19,99 € HT at 20 % footed
+287,86 € under twelve printed lines of « 23,99 € », beside a row saying
+287,88 €); the catalogue's scan works an article's « Total TTC » out of
+`printed_ttc - discount_ttc` where a line printed one, exactly as
+`InvoiceLine.total_ttc` does (from HT alone, a facturette printing 39,99 €
+was 40,00 € on the row and 39,99 € in the panel below it); **« Total HT »
+is the line's own amount**, not `quantity * unit_cost_ht` - that is the
+same amount divided by the quantity, kept to four decimals and multiplied
+back, so 2 000 units charged 28,84 € are priced 0,0144 and come back
+28,80 € over a panel whose lines add up to 28,84 € (invented figures; on a
+copy of the real database it moved a handful of articles by a few centimes,
+20/09). Only
+a movement with no line at all - a correction typed by hand - has nothing
+but the ledger's arithmetic to go on, and `value_ht_by_type` stays that
+arithmetic whatever happens: it is divided by the quantity to price a unit,
+the way `StockType.current_unit_cost_ht` does. And the panel's
+rows are **ordered by the date they print** (`effective_date`), not by the
+invoice's - a delivery invoiced on 20/01 and received on the 27th sorted
+between the 3rd and the 14th. The panel still lists **every movement** of
+the window while the row's « Acheté » counts purchases alone, so its header
+says « Achats et autres mouvements » when one of them is not a purchase and
+each such line names its kind: a broken bottle under « Achats » is the page
+asserting in French that it was bought.
+
 ### UI conventions
 
 `static/css/marginmate.css` holds the design tokens - colours, a 4px spacing
@@ -2177,7 +3033,7 @@ does.
 
 **The topbar is sticky, so the page leaves its height above what it scrolls
 to** (`html { scroll-padding-top: var(--topbar-room) }` in marginmate.css:
-6rem, 8.5rem under 860 px where the brand sits above the links, 11rem under
+6rem, 10rem under 860 px where the brand sits above the links, 11rem under
 440 px). A fragment - Achats' `#a-voir`, the fiche's `#historique`, the
 stock list's `#a-classer` - and the tab row htmx's boost brings to the top
 when an Achats tab is clicked lower down all landed under it: « 1
@@ -2187,6 +3043,15 @@ links wrap at 861-1000 px, up to 141 px on a phone, 170 with three-digit
 badges under 310 px). A new link in the navigation can make it wrap sooner:
 `invoices/tests/test_changes_to_see.py::TopbarRoomInBrowserTests` checks
 eight widths.
+
+**The badges are part of the measurement**, and that test's fixture carries
+them for exactly that reason. Adding « Marges » (20/09) took the links from
+three rows to four between **441 and 465 px** - 141 px against the 136 px
+that 8.5rem gave, so an anchored heading landed five pixels under the bar -
+and every width of that test passed all the same, because its database had
+nothing waiting anywhere and so no badge to widen a link. With a product to
+classify, a ticket to check and a till product to link, 450 px fails, and
+`--topbar-room` is 10rem under 860 px.
 
 **Dates are always `|date:"d/m/Y"`.** `LANGUAGE_CODE` is `en-us`, so an
 unformatted date renders "March 31, 2026" in an otherwise French interface.
