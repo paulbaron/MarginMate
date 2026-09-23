@@ -109,6 +109,26 @@ class SearchableSortableTableTests(TestCase):
         PosProduct.objects.create(name="Mule", total_quantity=12)
         self.assertEnhancedTable("recipes:pos_product_list")
 
+    def test_margins(self):
+        """Its two tables are lists like any other - « quelle catégorie
+        marge le mieux » is a sort, and a page of thirteen rows without one
+        is read line by line."""
+        from datetime import timedelta
+        from recipes.models import PosProduct, PosProductDailyQuantity
+
+        product = PosProduct.objects.create(name="Mule", category="Cocktails", typology="Liquide (Alcool)")
+        PosProductDailyQuantity.objects.create(
+            product=product,
+            # Inside the page's default period whenever this runs: dated in a
+            # fixed month, the test stops covering the table a year later.
+            sold_on=timezone.localdate() - timedelta(days=5),
+            quantity=10,
+            revenue_ttc=Decimal("85.00"),
+            revenue_ht=Decimal("70.83"),
+            revenue_read=True,
+        )
+        self.assertContains(self.assertEnhancedTable("margins:margins_home"), 'data-table-label="catégories"')
+
     def test_stock_take_list(self):
         self.assertEnhancedTable("inventory:stock_take_list")
 
@@ -248,6 +268,7 @@ class PageChromeTests(TestCase):
             "recipes:recipe_list",
             "recipes:sales_list",
             "inventory:stock_take_list",
+            "margins:margins_home",
         ):
             with self.subTest(page=url_name):
                 self.assertContains(self.client.get(reverse(url_name)), "page-subtitle")
@@ -316,7 +337,13 @@ class TemplateHygieneTests(TestCase):
         root = pathlib.Path(__file__).resolve().parent.parent
         for path in self.template_files():
             # Name it the way the loader will look it up.
-            for base in ("templates", *[f"{app}/templates" for app in ("inventory", "invoices", "recipes", "bank", "transfer")]):
+            for base in (
+                "templates",
+                *[
+                    f"{app}/templates"
+                    for app in ("inventory", "invoices", "recipes", "bank", "margins", "transfer")
+                ],
+            ):
                 candidate = root / base
                 if candidate in path.parents:
                     name = str(path.relative_to(candidate)).replace("\\", "/")

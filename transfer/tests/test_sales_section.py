@@ -302,7 +302,6 @@ class SalesRefusalTests(LaneSectionsMixin, TestCase):
 
     def test_days_the_fields_refuse(self):
         def change(rows):
-            rows[0][2] = -3
             rows[1][2] = True
             rows[2][2] = "8"
             rows[3][1] = "2026-02-30"
@@ -313,7 +312,6 @@ class SalesRefusalTests(LaneSectionsMixin, TestCase):
         self.assertEqual(
             run.section("ventes").skipped,
             [
-                "Produit caisse « CAFÉ » le 01/09/2026 : « quantity » : nombre positif attendu (« -3 »)",
                 "Produit caisse « MOJITO CLASSIQUE » le 01/09/2026 : « quantity » : nombre entier attendu (« True »)",
                 "Produit caisse « MOJITO CLASSIQUE » le 02/09/2026 : « quantity » : nombre entier attendu (« 8 »)",
                 "Produit caisse « Mojito HH » : « sold_on » : date illisible (« 2026-02-30 »)",
@@ -321,7 +319,21 @@ class SalesRefusalTests(LaneSectionsMixin, TestCase):
                 "vente par jour n° 9 de l'archive : illisible",
             ],
         )
-        self.assertEqual(PosProductDailyQuantity.objects.count(), 3)
+        self.assertEqual(PosProductDailyQuantity.objects.count(), 4)
+
+    def test_a_day_that_nets_negative_is_a_refund_and_comes_back(self):
+        """A pint sold one day and taken back the next nets -1 on the day of
+        the refund. The archive has to carry it: refused as « nombre positif
+        attendu », a restore silently dropped that day, and the next till
+        import - which nets the same figure - could not write it either."""
+        def change(rows):
+            rows[0][2] = -3
+
+        import_archive(self.edited(daily=change), MERGE)
+
+        self.assertEqual(
+            PosProductDailyQuantity.objects.get(product__name="CAFÉ", sold_on=day(1)).quantity, -3
+        )
 
     def test_a_sale_typed_in_for_a_recipe_unknown_here_is_skipped(self):
         def change(sales):

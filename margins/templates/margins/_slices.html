@@ -1,0 +1,72 @@
+{% comment %}
+Un tableau de tranches - les catégories, les typologies. Les deux lisent le
+même argent, donc ils sont rendus par le même bloc : écrits deux fois, une
+colonne finirait par dire autre chose dans l'un que dans l'autre.
+
+Trois colonnes portent un `data-sort` : leur texte ne se trie pas tout seul
+(un intervalle « 5.00 à 10.00 € », une part suivie de sa phrase), et sans lui
+le tri range « 9,00 » après « 10,00 ». Il est laissé vide quand le coût ou la
+marge est inconnu : à 0, le tri range « coût inconnu » parmi les moins chers,
+ce que la cellule dit justement le contraire.
+
+La « part chiffrée » est celle de l'ARGENT, comme le chiffre en haut de page :
+les unités sont dans la même cellule. Deux parts sous un même mot, l'une en
+euros et l'autre en unités, se contredisaient de 33 points sur un même écran.
+
+Contexte : `rows` (des SliceRow), `total` (un SliceRow, le pied du tableau),
+`label` (ce que le compteur du tableau nomme), `heading` (le titre de la
+première colonne).
+{% endcomment %}
+<div class="table-wrap">
+    <table data-table data-table-label="{{ label }}">
+        <thead>
+            <tr>
+                <th>{{ heading }}</th>
+                <th class="num">Encaissé (HT)</th>
+                <th class="num">Unités</th>
+                <th class="num">Coût (HT)</th>
+                <th class="num">Marge (HT)</th>
+                <th class="num">Marge</th>
+                <th>Part chiffrée</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in rows %}
+                <tr>
+                    <td>{{ row.name }}</td>
+                    <td class="num">{{ row.slice.revenue.ht|floatformat:2 }} €</td>
+                    <td class="num">{{ row.slice.units }}</td>
+                    <td class="num" data-sort="{% if row.slice.is_costed %}{{ row.slice.cost_ht_high }}{% endif %}">
+                        {% if row.slice.is_costed %}{% include "margins/_money_range.html" with low=row.slice.cost_ht_low high=row.slice.cost_ht_high %}{% else %}—{% endif %}
+                    </td>
+                    <td class="num" data-sort="{% if row.slice.margin_ht_low is not None %}{{ row.slice.margin_ht_low }}{% endif %}">
+                        {% include "margins/_money_range.html" with low=row.slice.margin_ht_low high=row.slice.margin_ht_high %}
+                    </td>
+                    <td class="num" data-sort="{% if row.slice.margin_percent_low is not None %}{{ row.slice.margin_percent_low }}{% endif %}">
+                        {% include "margins/_percent_range.html" with low=row.slice.margin_percent_low high=row.slice.margin_percent_high %}
+                    </td>
+                    <td data-sort="{% if row.coverage_percent is not None %}{{ row.coverage_percent }}{% endif %}">
+                        {% if row.coverage_percent is not None %}{{ row.coverage_percent|floatformat:0 }} % — {% endif %}{{ row.note }}{% if row.units_note %} ({{ row.units_note }}){% endif %}
+                    </td>
+                </tr>
+            {% endfor %}
+        </tbody>
+        {% if total %}
+            <tfoot>
+                <tr class="total">
+                    <td>{{ total.name }}</td>
+                    <td class="num">{{ total.slice.revenue.ht|floatformat:2 }} €</td>
+                    <td class="num">{{ total.slice.units }}</td>
+                    <td class="num">
+                        {% if total.slice.is_costed %}{% include "margins/_money_range.html" with low=total.slice.cost_ht_low high=total.slice.cost_ht_high %}{% else %}—{% endif %}
+                    </td>
+                    <td class="num">{% include "margins/_money_range.html" with low=total.slice.margin_ht_low high=total.slice.margin_ht_high %}</td>
+                    <td class="num">{% include "margins/_percent_range.html" with low=total.slice.margin_percent_low high=total.slice.margin_percent_high %}</td>
+                    <td>
+                        {% if total.coverage_percent is not None %}{{ total.coverage_percent|floatformat:0 }} % — {% endif %}{{ total.note }}{% if total.units_note %} ({{ total.units_note }}){% endif %}
+                    </td>
+                </tr>
+            </tfoot>
+        {% endif %}
+    </table>
+</div>

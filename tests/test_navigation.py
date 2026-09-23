@@ -14,7 +14,18 @@ from django.urls import reverse
 from recipes.models import PosProduct
 from tests.factories import make_invoice, make_product, make_recipe, make_stock_type, make_supplier
 
-LABELS = ["Produits &amp; charges", "Achats", "Banque", "Recettes &amp; ventes", "Inventaires", "Données", "Admin"]
+LABELS = [
+    "Produits &amp; charges",
+    "Achats",
+    "Banque",
+    "Recettes &amp; ventes",
+    # Les marges lisent les deux côtés - ce qui est entré, ce qui est
+    # sorti - donc le lien est entre eux plutôt qu'au bout.
+    "Marges",
+    "Inventaires",
+    "Données",
+    "Admin",
+]
 
 
 def nav_links(response):
@@ -69,6 +80,7 @@ class NavigationTests(TestCase):
             ],
             "Inventaires": [reverse("inventory:stock_take_list"), reverse("inventory:stock_take_create")],
             "Banque": [reverse("bank:bank_home")],
+            "Marges": [reverse("margins:margins_home")],
             "Données": [reverse("transfer:data_home"), reverse("transfer:data_import"), reverse("transfer:data_clear")],
         }
         for label, urls in pages.items():

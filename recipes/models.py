@@ -611,7 +611,13 @@ class RecipeSale(models.Model):
 
     recipe = models.ForeignKey(Recipe, related_name="sales", on_delete=models.CASCADE)
     sold_on = models.DateField()
-    quantity = models.PositiveIntegerField()
+    # Signed, because a day can net negative: a pint sold on Tuesday and
+    # refunded on Wednesday is -1 on Wednesday, and this is summed from the
+    # till's own days (resync_recipe_from_daily_quantities). Positive-only,
+    # the INSERT failed and took the whole import's transaction with it. A
+    # sale typed by HAND is still refused below zero by ManualSaleForm:
+    # nothing types a refund in, and a minus there is a slip.
+    quantity = models.IntegerField()
     # Free-form provenance ("manual", "csv", "api:lightspeed") - kept so a
     # bad import can be found and re-run without guessing which rows it wrote.
     source = models.CharField(max_length=50, default="manual")
@@ -702,8 +708,10 @@ class PosProduct(models.Model):
     category = models.CharField(max_length=255, blank=True)
     typology = models.CharField(max_length=255, blank=True)
     # How much this has sold across every import, so the worklist can be
-    # ordered by what actually matters.
-    total_quantity = models.PositiveIntegerField(default=0)
+    # ordered by what actually matters. Signed like the days it is summed
+    # from: a product whose only appearance in an export is a refund has
+    # sold -1 of itself, and that is what the days say.
+    total_quantity = models.IntegerField(default=0)
     first_seen = models.DateField(null=True, blank=True)
     last_seen = models.DateField(null=True, blank=True)
 
@@ -739,7 +747,33 @@ class PosProductDailyQuantity(models.Model):
 
     product = models.ForeignKey(PosProduct, related_name="daily_quantities", on_delete=models.CASCADE)
     sold_on = models.DateField()
-    quantity = models.PositiveIntegerField()
+    #: Signed: the export's `Qte` is -1 on a refund, netted per (produit,
+    #: jour). All seven refunds stored so far happen to fall on days the
+    #: product also sold, so no row has ever gone below zero - but a pint
+    #: refunded the day AFTER it was sold nets -1, and on a positive-only
+    #: column that INSERT failed, rolling back the whole window's import,
+    #: money and quantities alike, every time it was re-run.
+    quantity = models.IntegerField()
+    #: What that day took on this product, from the export's own `Prix TTC`
+    #: (less `Remises TTC`). Signed: a refund day is negative. Never
+    #: positive-only, and never a float.
+    revenue_ttc = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0"))
+    #: The same money without the VAT, worked out per rate at import (see
+    #: laddition_xlsx.parse_rows). VAT is not the bar's money, and the
+    #: invoices it will be compared against are HT.
+    revenue_ht = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0"))
+    #: The part of revenue_ttc whose rate the export did not state, and
+    #: which is therefore NOT in revenue_ht. 0 on every day read so far;
+    #: shown beside the HT rather than hidden, or the HT silently under-
+    #: reports the day.
+    revenue_without_rate_ttc = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0"))
+    #: Whether this day's money was ever read at all. False is « nobody has
+    #: read it » - a day imported before the export's money columns were,
+    #: or one restored from a « Données » archive, which carries the
+    #: quantities only. A margin page must not read that as « took 0 € »:
+    #: one is a gap to fill (manage.py laddition_backfill_revenue), the
+    #: other is a bar that sold nothing.
+    revenue_read = models.BooleanField(default=False)
 
     class Meta:
         constraints = [

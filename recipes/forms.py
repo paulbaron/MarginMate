@@ -1,5 +1,6 @@
 from django import forms
 from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator
 from django.db.models import Q
 from django.utils import timezone
 from django.forms import BaseInlineFormSet, inlineformset_factory
@@ -241,6 +242,11 @@ class ManualSaleForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.fields["recipe"].queryset = Recipe.objects.order_by("name")
         self.fields["sold_on"].initial = timezone.localdate()
+        # RecipeSale.quantity is signed so the till can write a refund back
+        # (a pint sold one day and taken back the next nets -1). Nothing
+        # types a refund in here, so a minus in this box is a slip, and the
+        # guard the model used to give this form for free is kept by hand.
+        self.fields["quantity"].validators.append(MinValueValidator(0))
 
     def validate_unique(self):
         """Skipped deliberately: save() upserts.

@@ -53,7 +53,12 @@ from transfer.archive import ArchiveError
 from transfer.keys import fold, line_ordinals
 from transfer.sections.base import Section
 
-ARTICLE_FIELDS = ("unit", "category", "loss_percent")
+#: `count_in_products_margin` is here because a round trip that dropped it
+#: would make the products margin LOOK BETTER: the flagged articles - the
+#: paper towels, the cups - are a cost that comes back unticked, so it
+#: silently leaves the margin. An archive written before it simply does not
+#: say it, and « not said » is never a conflict (codec.differences).
+ARTICLE_FIELDS = ("unit", "category", "loss_percent", "count_in_products_margin")
 ARTICLE_KNOWN = ("name", *ARTICLE_FIELDS, "created_at")
 #: What « Fusionner » may fill when this database leaves it blank (§6.1).
 ARTICLE_FILLABLE = ("category",)
@@ -66,6 +71,7 @@ FIELD_LABELS = {
     "unit": "unité",
     "category": "catégorie",
     "loss_percent": "pertes",
+    "count_in_products_margin": "marge produits",
     "article": "article",
     "stock_equivalent": "conversion",
     "ean": "EAN",
@@ -120,6 +126,7 @@ class AssociationsSection(Section):
                 article.unit,
                 article.category,
                 codec.dump(article, "loss_percent"),
+                codec.dump(article, "count_in_products_margin"),
                 codec.dump(article, "created_at"),
             )
             for article in StockType.objects.all()

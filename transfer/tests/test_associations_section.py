@@ -158,6 +158,32 @@ class RoundTripTests(TestCase):
 
         self.assertEqual(dict(Invoice.objects.values_list("invoice_number", "status")), statuses)
 
+    def test_an_article_counted_in_the_products_margin_comes_back_counted(self):
+        """Dropped by the round trip, the flag comes back unticked - and the
+        paper towels silently leave the products margin's cost, which makes
+        the margin look BETTER. Exactly the shape of quietly wrong money this
+        archive exists not to produce."""
+        StockType.objects.filter(pk=self.syrup.pk).update(count_in_products_margin=True)
+
+        own_round_trip(self, MERGE)
+
+        flags = dict(StockType.objects.values_list("name", "count_in_products_margin"))
+        self.assertTrue(flags[self.syrup.name])
+        self.assertEqual(sorted(name for name, on in flags.items() if on), [self.syrup.name])
+
+    def test_an_archive_written_before_the_flag_existed_says_nothing_about_it(self):
+        """« Not said » is never a conflict and never a change: an older
+        archive leaves each article's flag exactly as this database has it."""
+        StockType.objects.filter(pk=self.syrup.pk).update(count_in_products_margin=True)
+
+        result = import_payload(
+            payload(articles=[{"name": self.syrup.name, "unit": self.syrup.unit}]), REPLACE
+        )
+
+        self.syrup.refresh_from_db()
+        self.assertTrue(self.syrup.count_in_products_margin)
+        self.assertEqual(result.tallies["articles"].unchanged, 1)
+
     def test_the_articles_keep_their_creation_date(self):
         """auto_now_add writes "now" on insert, bulk_create included."""
         created = dict(StockType.objects.values_list("name", "created_at"))
@@ -851,7 +877,16 @@ class CountAndExportTests(TestCase):
         )
         limes = next(article for article in data["articles"] if article["name"] == "Citrons verts")
         created_at = limes.pop("created_at")
-        self.assertEqual(limes, {"name": "Citrons verts", "unit": "UNIT", "category": "Épicerie", "loss_percent": "0.00"})
+        self.assertEqual(
+            limes,
+            {
+                "name": "Citrons verts",
+                "unit": "UNIT",
+                "category": "Épicerie",
+                "loss_percent": "0.00",
+                "count_in_products_margin": False,
+            },
+        )
         self.assertTrue(created_at.endswith("+00:00"))
         for record in [*data["articles"], *data["products"]]:
             self.assertNotIn("id", record)

@@ -31,6 +31,7 @@ from invoices.models import Supplier, SupplierChange
 from invoices.parsers import LLM_PARSER_KEY
 from invoices.scrapers import website
 from invoices.tests.page_posts import page_post
+from recipes.models import PosProduct
 from tests.factories import make_invoice, make_invoice_line, make_product, make_supplier
 from tests.test_views_smoke import assertNoUnrenderedTemplateSyntax
 
@@ -404,6 +405,18 @@ class TopbarRoomInBrowserTests(StaticLiveServerTestCase):
 
     def setUp(self):
         caterer = make_supplier(code="TRAITEUR_X", name="Traiteur Exemple", parser_key="")
+        # The badges belong in the fixture, because they are what makes the
+        # bar wrap. Without them this class measured a topbar one row shorter
+        # than the owner's: adding « Marges » to the navigation took it to
+        # four rows between 441 and 465 px, five pixels over the room - and
+        # every width here passed all the same (20/09).
+        make_product(supplier=caterer, raw_name="PRODUIT À CLASSER")
+        PosProduct.objects.create(name="Produit caisse à lier", total_quantity=3)
+        make_invoice(
+            supplier=caterer,
+            invoice_number="T-0",
+            parse_checks=[{"label": "Total du ticket", "passed": False, "detail": ""}],
+        )
         first = make_invoice(supplier=caterer, invoice_number="T-1", ocr_text=TEXT)
         SupplierChange.objects.create(
             supplier=caterer, kind=FIRST, summary=SUMMARY, invoice=first, needs_review=True,

@@ -26,6 +26,60 @@ class _Cancelled(Exception):
     pass
 
 
+def _euros(value) -> str:
+    return f"{value:.2f}".replace(".", ",") + " €"
+
+
+def money_log(export) -> list[str]:
+    """What the money columns said, in the import's own log.
+
+    Everything unusual is named: a rate that could not be read (so that
+    revenue has no HT), a discount (a column that has been 0,00 on every
+    line ever exported), a quantity that is not 1 (never seen - and the
+    line's amount is still its own, whatever it says). Left silent, each of
+    those is a margin quietly too large.
+    """
+    if not export.money_columns:
+        return ["Ce fichier ne porte pas les colonnes de prix : aucune recette lue."]
+    lines = [
+        f"Recettes lues : {_euros(export.revenue_ttc)} TTC, {_euros(export.revenue_ht)} HT."
+    ]
+    if export.lines_without_rate:
+        lines.append(
+            f"{export.lines_without_rate} ligne(s) sans taux lisible : "
+            f"{_euros(export.revenue_without_rate_ttc)} TTC sans HT (aucun taux supposé)."
+        )
+    if export.lines_without_amount:
+        lines.append(f"{export.lines_without_amount} ligne(s) sans montant lisible.")
+    if export.days_without_amount:
+        lines.append(
+            f"{export.days_without_amount} (produit, jour) laissé(s) non lu(s) : une de leurs "
+            "lignes n'a pas de montant, donc leur recette serait trop basse d'un montant inconnu."
+        )
+    if export.discounted_lines:
+        lines.append(
+            f"{export.discounted_lines} ligne(s) avec remise, {_euros(export.discount_ttc)} déduits."
+        )
+    if export.discounts_not_taken:
+        lines.append(
+            f"{export.discounts_not_taken} ligne(s) dont la remise n'a pas été déduite : "
+            "elle rendrait la ligne plus grosse que son propre prix - à vérifier."
+        )
+    if export.refund_lines:
+        lines.append(f"{export.refund_lines} ligne(s) de remboursement (quantité négative).")
+    if export.unusual_quantity_lines:
+        lines.append(
+            f"{export.unusual_quantity_lines} ligne(s) à une quantité autre que 1 : le montant lu "
+            "reste « Prix TTC », celui de la ligne - à vérifier."
+        )
+    if export.repeated_days:
+        lines.append(
+            f"{export.repeated_days} (produit, jour) lus dans deux fichiers : la dernière lecture "
+            "remplace, rien ne s'additionne."
+        )
+    return lines
+
+
 def _raise_if_cancelled(job: SalesImportJob) -> None:
     job.refresh_from_db(fields=["cancel_requested"])
     if job.cancel_requested:
@@ -42,6 +96,9 @@ def sync_pos_products(export) -> int:
     instead of piling onto what was already recorded for it - the same
     guarantee record_sales already gives RecipeSale. See that model's
     docstring for what the naive version used to do instead.
+
+    The day's money (`export.money`) is written the same way, and only for
+    the days the export actually priced - see below.
     """
     # One transaction: same lock contention as record_sales.
     with transaction.atomic():
@@ -97,15 +154,47 @@ def _sync_pos_products(export) -> int:
         key = (name, day)
         daily[key] = daily.get(key, 0) + quantity
 
-    PosProductDailyQuantity.objects.bulk_create(
-        [
-            PosProductDailyQuantity(product=products[name], sold_on=day, quantity=quantity)
-            for (name, day), quantity in daily.items()
-        ],
-        update_conflicts=True,
-        unique_fields=["product", "sold_on"],
-        update_fields=["quantity"],
-    )
+    # The money goes in exactly as idempotently, and only where it was
+    # actually read. A day the export carried no money for keeps the money
+    # it already has: re-importing an older download (no `Prix TTC` column
+    # at all), or one window of a period already backfilled, must not quietly
+    # zero a day - a lost revenue reads as a 100 % margin, and nothing on
+    # any page would contradict it.
+    # getattr, because the money is optional on this shape: an export with
+    # no price columns has none, and a caller building the minimum this
+    # function needs (products + entries) must keep working.
+    money = getattr(export, "money", None) or {}
+    priced = [key for key in daily if key in money]
+    unpriced = [key for key in daily if key not in money]
+
+    if priced:
+        PosProductDailyQuantity.objects.bulk_create(
+            [
+                PosProductDailyQuantity(
+                    product=products[name],
+                    sold_on=day,
+                    quantity=daily[(name, day)],
+                    revenue_ttc=money[(name, day)].revenue_ttc,
+                    revenue_ht=money[(name, day)].revenue_ht,
+                    revenue_without_rate_ttc=money[(name, day)].without_rate_ttc,
+                    revenue_read=True,
+                )
+                for name, day in priced
+            ],
+            update_conflicts=True,
+            unique_fields=["product", "sold_on"],
+            update_fields=["quantity", "revenue_ttc", "revenue_ht", "revenue_without_rate_ttc", "revenue_read"],
+        )
+    if unpriced:
+        PosProductDailyQuantity.objects.bulk_create(
+            [
+                PosProductDailyQuantity(product=products[name], sold_on=day, quantity=daily[(name, day)])
+                for name, day in unpriced
+            ],
+            update_conflicts=True,
+            unique_fields=["product", "sold_on"],
+            update_fields=["quantity"],
+        )
 
     touched = list(products.values())
     totals = {
@@ -155,6 +244,8 @@ def import_laddition_sales_task(job_id: int, start: date, end: date, download_di
         job.append_log(
             f"{len(export.entries)} totaux produit/jour lus ({export.total_quantity} unités vendues)."
         )
+        for message in money_log(export):
+            job.append_log(message)
 
         seen = sync_pos_products(export)
         job.append_log(f"{seen} produits de caisse vus.")

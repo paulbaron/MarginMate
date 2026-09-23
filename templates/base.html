@@ -29,6 +29,7 @@
                 <a href="{% url 'invoices:invoice_list' %}"{% if nav_section == "achats" %} class="active"{% endif %}>Achats<span id="nav-count-achats">{% if receipt_review_count_nav %} <span class="badge">{{ receipt_review_count_nav }}</span>{% endif %}</span></a>
                 <a href="{% url 'bank:bank_home' %}"{% if nav_section == "banque" %} class="active"{% endif %}>Banque</a>
                 <a href="{% url 'recipes:recipe_list' %}"{% if nav_section == "recettes" %} class="active"{% endif %}>Recettes &amp; ventes<span id="nav-count-recettes">{% if pos_pending_count_nav %} <span class="badge">{{ pos_pending_count_nav }}</span>{% endif %}</span></a>
+                <a href="{% url 'margins:margins_home' %}"{% if nav_section == "marges" %} class="active"{% endif %}>Marges</a>
                 <a href="{% url 'inventory:stock_take_list' %}"{% if nav_section == "inventaires" %} class="active"{% endif %}>Inventaires</a>
                 <a href="{% url 'transfer:data_home' %}"{% if nav_section == "donnees" %} class="active"{% endif %}>Données</a>
                 <a href="/admin/">Admin</a>
@@ -37,13 +38,20 @@
     </header>
 
     <main class="container{% block container_class %}{% endblock %}">
-        {% if messages %}
-            <ul class="messages">
-                {% for message in messages %}
-                    <li class="message message-{{ message.tags }}">{{ message }}</li>
-                {% endfor %}
-            </ul>
-        {% endif %}
+        {% comment %}
+        A block so that a page can say some of its messages where they were
+        asked instead (Marges' « Articles comptés dans la marge produits »,
+        whose redirect lands on its panel, two screens under this).
+        {% endcomment %}
+        {% block messages %}
+            {% if messages %}
+                <ul class="messages">
+                    {% for message in messages %}
+                        <li class="message message-{{ message.tags }}">{{ message }}</li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+        {% endblock %}
 
         {% block content %}{% endblock %}
     </main>

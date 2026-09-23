@@ -1,0 +1,5 @@
+{% comment %}
+Le même intervalle en pourcentage. Jamais imprimé sans la part chiffrée à
+côté : 90 % sur un tiers des unités chiffrées n'est pas une marge de 90 %.
+{% endcomment %}
+{% if low is None or high is None %}—{% elif low == high %}{{ high|floatformat:1 }} %{% else %}{{ low|floatformat:1 }} à {{ high|floatformat:1 }} %{% endif %}

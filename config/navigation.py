@@ -19,7 +19,13 @@ STOCK_TAKE_VIEWS = {
     "stock_take_variance",
 }
 
-SECTION_BY_APP = {"invoices": "achats", "recipes": "recettes", "bank": "banque", "transfer": "donnees"}
+SECTION_BY_APP = {
+    "invoices": "achats",
+    "recipes": "recettes",
+    "bank": "banque",
+    "margins": "marges",
+    "transfer": "donnees",
+}
 
 
 def section_of(match) -> str:

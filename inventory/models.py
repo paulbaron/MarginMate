@@ -57,6 +57,32 @@ class StockType(models.Model):
         validators=[MinValueValidator(Decimal("0")), MaxValueValidator(Decimal("100"))],
         help_text="Part des achats perdue avant la vente (débordement, fonds de bouteille…). 10 % par défaut.",
     )
+    # « Compter dans la marge produits »: an article no recipe consumes but
+    # that every sale costs all the same - the paper towels, the cups, the
+    # straws. There is no recipe to take them out of stock, so the products
+    # margin counts what was BOUGHT of them over the window; that is the only
+    # measure there is, and the page says so rather than letting the figure
+    # read as consumption.
+    #
+    # Off by default, and meant for articles NO recipe uses: one counted here
+    # and in a recipe is paid for twice, and a margin a few points too low is
+    # exactly the kind of quietly wrong money this app exists to catch.
+    count_in_products_margin = models.BooleanField(
+        "compter dans la marge produits",
+        default=False,
+        # The help text says both halves out loud, because the page it feeds
+        # cannot: what the figure MEANS (purchases, not consumption - there
+        # is no recipe to take these out of stock as a sale is rung up) and
+        # the mistake it invites (an article already in a recipe, paid for
+        # twice, and a margin a few points too low with nothing saying why).
+        help_text=(
+            "Coché, ce qui en a été acheté sur la période compte dans la marge produits : "
+            "l'essuie-tout, les gobelets, les pailles ne sont dans aucune recette, donc rien "
+            "ne les sort du stock quand une vente est tapée et leurs achats sont la seule "
+            "mesure qu'il y ait. À ne pas cocher pour un article qui sert déjà dans une "
+            "recette : il serait compté deux fois, et la page Marges le dit."
+        ),
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

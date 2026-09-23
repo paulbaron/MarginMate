@@ -38,6 +38,7 @@ INSTALLED_APPS = [
     "recipes",
     "bank",
     "transfer",
+    "margins",
 ]
 
 MIDDLEWARE = [

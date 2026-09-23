@@ -8,7 +8,7 @@ from .services import first_purchase_dates, product_counting_ratios
 class StockTypeForm(forms.ModelForm):
     class Meta:
         model = StockType
-        fields = ["name", "unit", "category", "loss_percent"]
+        fields = ["name", "unit", "category", "loss_percent", "count_in_products_margin"]
         # LANGUAGE_CODE is en-us, so an unlabelled field renders its English
         # attribute name ("Loss percent") in an otherwise French interface -
         # same reason StockTakeForm spells its labels out.
@@ -17,6 +17,7 @@ class StockTypeForm(forms.ModelForm):
             "unit": "Unité",
             "category": "Catégorie",
             "loss_percent": "Perte estimée (%)",
+            "count_in_products_margin": "Compter dans la marge produits",
         }
         widgets = {
             "category": forms.TextInput(attrs={"list": "category-datalist", "autocomplete": "off"}),

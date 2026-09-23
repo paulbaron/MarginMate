@@ -1,0 +1,9 @@
+{% comment %}
+Un montant qui est un intervalle dès qu'une recette a un « OU » : les deux
+bouts, ou un seul quand ils sont égaux. Rendu ici plutôt qu'à chaque colonne
+qui en imprime un : écrit six fois, l'un des deux bouts finit par manquer
+quelque part, et une marge lue comme un chiffre unique n'est plus la même
+information. « — » quand il n'y a rien à dire : un coût inconnu n'est pas
+zéro.
+{% endcomment %}
+{% if low is None or high is None %}—{% elif low == high %}{{ high|floatformat:2 }} €{% else %}{{ low|floatformat:2 }} à {{ high|floatformat:2 }} €{% endif %}
