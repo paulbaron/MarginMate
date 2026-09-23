@@ -752,10 +752,12 @@ def _charge_document_rows(lines, invoices=()) -> list[dict]:
         )
         row["total_ht"] += line.total_ht
         # Rounded to the cent line by line, exactly as charge_suppliers
-        # rounds the row this panel explains. `total_ttc` works 29,99 € HT
-        # at 20 % out to 35,988 €: added raw, twelve of them foot 431,86 €
-        # under twelve visible lines of « 35,99 € » and beside a row saying
-        # 431,88 €. Two roundings of one figure is two answers.
+        # rounds the row this panel explains. `total_ttc` works 19,99 € HT
+        # at 20 % out to 23,988 €: added raw, twelve of them foot 287,86 €
+        # under twelve visible lines of « 23,99 € » and beside a row saying
+        # 287,88 €. Two roundings of one figure is two answers. (Invented
+        # figures: a real subscription's price does not belong in a public
+        # repository, even as an example.)
         row["total_ttc"] += line.total_ttc.quantize(Decimal("0.01"))
     ordered = sorted(
         by_document.values(),
