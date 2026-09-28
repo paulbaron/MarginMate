@@ -46,6 +46,15 @@ class ParsedLine:
     # The stored InvoiceLine this one corrects, when a person edits an
     # invoice (see importing.replace_invoice_lines). Parsers never set it.
     line_id: int | None = None
+    # Not a product but a charge on the whole order - delivery - whose cost
+    # belongs on the goods it brought (see InvoiceLine.is_spread_charge).
+    # Set from the correction page's checkbox; parsers never set it, though
+    # one could: nothing below here asks where it came from.
+    is_spread_charge: bool = False
+    # This line's share of those charges, HT. Never typed and never parsed:
+    # importing.spread_charges works it out over the whole document, which is
+    # the only place that sees every line at once.
+    spread_ht: Decimal = Decimal("0")
 
 
 @dataclass
@@ -177,6 +186,15 @@ class PdfPage:
 
     text: str
     tables: list[list[list[str | None]]] = field(default_factory=list)
+    # Where each piece of text sits on the page: one `layout.Row` per line of
+    # `text`, in the same order (so a parser can map line i to row i), each a
+    # list of `layout.Cell(text, x0, x1)`. Filled by ReceiptParser.
+    # parse_ocr_pages from the OCR boxes or the PDF's own words; None for a
+    # page read as text alone - a hand-written fixture, a stored reading
+    # parsed again (ReceiptParser.parse_text) - and every parser has to read
+    # such a page exactly as before. Typed loosely so this module imports
+    # nothing from the layout one.
+    rows: list | None = None
 
 
 class InvoiceParser:

@@ -50,9 +50,12 @@ KEY = "banque"
 # The JSON of §7.7, field by field. The guard test holds every concrete field
 # of the four models to being in one of these or in NOT_EXPORTED, so a field
 # added to a model later cannot be left out in silence.
+# `category` is a decision too - what a person said a spending was for -
+# and nothing rebuilds it: a statement re-imported brings back the line and
+# not one word of it.
 TRANSACTION_FIELDS = (
     "account", "operation_date", "value_date", "card_date", "bank_type", "kind", "label",
-    "counterparty", "amount", "no_invoice", "settled_by_hand", "imported_at",
+    "counterparty", "amount", "no_invoice", "settled_by_hand", "category", "imported_at",
 )
 # Never the import date (§6.4): merging an archive of the same statement taken
 # a minute later is « inchangé », not a conflict.
@@ -61,8 +64,8 @@ TRANSACTION_COMPARED = tuple(name for name in TRANSACTION_FIELDS if name != "imp
 # would fail on insert, so it is skipped with the reason instead.
 TRANSACTION_REQUIRED = ("operation_date", "label", "amount")
 PAYMENT_FIELDS = ("method", "created_at")
-RULE_FIELDS = ("description", "is_active", "created_at")
-RULE_COMPARED = ("description", "is_active")
+RULE_FIELDS = ("description", "is_active", "category", "created_at")
+RULE_COMPARED = ("description", "is_active", "category")
 
 EXPORTED = {
     BankTransaction: ("fingerprint", *TRANSACTION_FIELDS),
@@ -103,6 +106,7 @@ FIELD_LABELS = {
     "amount": "montant",
     "no_invoice": "« pas de facture »",
     "settled_by_hand": "« réglée à la main »",
+    "category": "catégorie",
     "description": "nom",
     "is_active": "active",
 }
@@ -453,8 +457,8 @@ class BankSection(Section):
         # The lines whose links this run decides. A record without "payments"
         # does not say them, and one that could not be read says nothing:
         # their links stay. Under « Remplacer » the lines about to be pruned
-        # lose theirs here, before any is created - a link moving to another
-        # line would otherwise meet its old self on the invoice's one-to-one.
+        # lose theirs here, before any is created, so what is left is exactly
+        # what the archive says and never a link the prune happened to take.
         managed = {line.pk for line, _record, _new in decided}
         if replacing:
             managed |= {line.pk for fingerprint, line in existing.items() if fingerprint not in self._fingerprints}
@@ -520,16 +524,25 @@ class BankSection(Section):
         return found
 
     def _merge_payments(self, report, listed) -> None:
-        """One by one (§6.1): a missing link is added when its invoice is
-        unpaid here and the line does not say otherwise here. A line paying
-        here an invoice the archive does not give it, or marked « pas de
-        facture » here, is a decision this database holds: a conflict. So is
-        a line settled by hand here without a link of the archive's, unless
-        its invoice came with this run: `reconcile.unlink` leaves the line
-        exactly as an invoice deleted with its payment does, and only an
-        invoice absent when the run started cannot have been unlinked here."""
+        """One by one (§6.1): a missing link is added when the line does not
+        say otherwise here. A line paying here an invoice the archive does
+        not give it, or marked « pas de facture » here, is a decision this
+        database holds: a conflict. So is a line settled by hand here
+        without a link of the archive's, unless its invoice came with this
+        run: `reconcile.unlink` leaves the line exactly as an invoice
+        deleted with its payment does, and only an invoice absent when the
+        run started cannot have been unlinked here.
+
+        What holds a link back is always the LINE's own decision, never the
+        invoice being paid elsewhere: an invoice settled in two goes is a
+        link a person made on each of two lines (`bank.models`), and an
+        archive that could not restore the second would quietly undo it.
+        So every lookup here is by the PAIR - keyed by the invoice alone,
+        one payment answered for the other and a plain round trip reported a
+        conflict about a link that was already here.
+        """
         current = list(InvoicePayment.objects.select_related("transaction", "invoice__supplier"))
-        by_invoice = {payment.invoice_id: payment for payment in current}
+        by_pair = {(payment.transaction_id, payment.invoice_id): payment for payment in current}
         by_line = defaultdict(list)
         for payment in current:
             by_line[payment.transaction_id].append(payment)
@@ -539,8 +552,8 @@ class BankSection(Section):
             wanted = {invoice.pk for invoice, _method, _moment in payments}
             others = [payment for payment in by_line.get(line.pk, []) if payment.invoice_id not in wanted]
             for invoice, method, moment in payments:
-                held = by_invoice.get(invoice.pk)
-                if held is not None and held.transaction_id == line.pk:
+                held = by_pair.get((line.pk, invoice.pk))
+                if held is not None:
                     if held.method == method:
                         report.unchanged(PAYMENTS)
                     else:
@@ -549,12 +562,6 @@ class BankSection(Section):
                             f"« {held.get_method_display()} » ici, « {InvoicePayment.Method(method).label} » dans "
                             f"l'archive — gardé tel quel"
                         )
-                    continue
-                if held is not None:
-                    report.conflict(
-                        f"{_operation(line)} : la facture {invoice_label(invoice)} est déjà payée par l'opération du "
-                        f"{held.transaction.operation_date:%d/%m/%Y} — lien ignoré"
-                    )
                     continue
                 if not is_new and line.no_invoice:
                     report.conflict(
@@ -579,7 +586,7 @@ class BankSection(Section):
                     undone = True
                     continue
                 payment = InvoicePayment(transaction=line, invoice=invoice, method=method)
-                by_invoice[invoice.pk] = payment
+                by_pair[(line.pk, invoice.pk)] = payment
                 created.append((payment, moment))
         if undone:
             report.note(UNDONE_NOTE)
@@ -588,25 +595,19 @@ class BankSection(Section):
     def _replace_payments(self, report, listed, managed: set[int]) -> None:
         """The managed lines' links become exactly the archive's. Counted by
         key (line, invoice): what stays is « inchangé », a method that
-        differs is « modifié », and nothing equal is written."""
+        differs is « modifié », and nothing equal is written.
+
+        The pair is the key throughout, and nothing is refused for being
+        « already paid »: the archive's own word is that the invoice is paid
+        by these lines, and a « Remplacer » that dropped the second of them
+        would answer an archive holding two links with one."""
         current = list(InvoicePayment.objects.select_related("transaction", "invoice__supplier"))
-        # Links of lines this run leaves as they are: an archive link to
-        # their invoice cannot be made.
-        fixed = {payment.invoice_id: payment for payment in current if payment.transaction_id not in managed}
         existing = {(payment.transaction_id, payment.invoice_id): payment for payment in current}
-        claimed: dict[int, BankTransaction] = {}
-        wanted: dict[tuple[int, int], tuple] = {}
-        for line, _is_new, payments in listed:
-            for invoice, method, moment in payments:
-                holder = fixed[invoice.pk].transaction if invoice.pk in fixed else claimed.get(invoice.pk)
-                if holder is not None:
-                    report.conflict(
-                        f"{_operation(line)} : la facture {invoice_label(invoice)} est déjà payée par l'opération du "
-                        f"{holder.operation_date:%d/%m/%Y} — lien ignoré"
-                    )
-                    continue
-                claimed[invoice.pk] = line
-                wanted[(line.pk, invoice.pk)] = (line, invoice, method, moment)
+        wanted: dict[tuple[int, int], tuple] = {
+            (line.pk, invoice.pk): (line, invoice, method, moment)
+            for line, _is_new, payments in listed
+            for invoice, method, moment in payments
+        }
 
         doomed = [payment.pk for key, payment in existing.items() if key[0] in managed and key not in wanted]
         if doomed:

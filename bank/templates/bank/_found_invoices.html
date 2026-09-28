@@ -1,0 +1,42 @@
+{% comment %}
+Ce qu'une recherche a trouvé pour UNE opération, seul : la boîte de
+recherche l'échange dans sa propre ligne (bank.views.invoice_search), donc
+ce fragment ne contient ni la page, ni la ligne, ni la boîte elle-même.
+
+À côté des suggestions, jamais à leur place : la facture dont le montant ne
+correspond pas, celle d'il y a six mois, celle qu'une autre opération règle
+déjà. Une facture déjà payée est trouvée aussi, avec ce qui la paie — c'est
+exactement la facture réglée en deux fois, et la cacher ne laisserait aucun
+moyen de le dire.
+{% endcomment %}
+{% if search %}
+    {% if found %}
+        <form method="post" action="{% url 'bank:bank_line_action' line.pk %}">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="link">
+            <input type="hidden" name="next" value="{{ page_url }}">
+            {% for item in found %}
+                <div>
+                    {% if item.here %}
+                        <span class="muted">{{ item.invoice.supplier.name }} n° {{ item.invoice.invoice_number|default:item.invoice.pk }} · {{ item.invoice.invoice_date|date:"d/m/Y"|default:"sans date" }} · {{ item.total|floatformat:2 }} € — déjà rattachée à cette opération</span>
+                    {% else %}
+                        <label>
+                            <input type="checkbox" name="invoice" value="{{ item.invoice.pk }}">
+                            {{ item.invoice.supplier.name }} n° {{ item.invoice.invoice_number|default:item.invoice.pk }} · {{ item.invoice.invoice_date|date:"d/m/Y"|default:"sans date" }} · {{ item.total|floatformat:2 }} €
+                        </label>
+                    {% endif %}
+                    {% for other in item.elsewhere %}
+                        <span class="read-as">Déjà réglée par l'opération du {{ other.paid_on|date:"d/m/Y" }} ({{ other.counterparty|default:other.bank_type }}, {{ other.amount_due|floatformat:2 }} €)</span>
+                    {% endfor %}
+                </div>
+            {% endfor %}
+            <button class="btn btn-small" type="submit">Rattacher les factures choisies</button>
+            {% if more_found %}
+                {# Une liste coupée en silence se lit « la facture n'y est pas ». #}
+                <p class="read-as">{{ more_found }} document{{ more_found|pluralize }} de plus répond{{ more_found|pluralize:"ent" }} à « {{ search }} » : précisez le numéro, la date ou le fournisseur.</p>
+            {% endif %}
+        </form>
+    {% else %}
+        <p class="muted">Aucun document ne répond à « {{ search }} ».</p>
+    {% endif %}
+{% endif %}

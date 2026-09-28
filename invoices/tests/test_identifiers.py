@@ -8,10 +8,12 @@ ones are.
 from django.test import SimpleTestCase
 
 from invoices.identifiers import (
+    TypedIdentifierError,
     describe,
     document_identifiers,
     is_siren,
     may_print,
+    read_typed,
     vat_key,
 )
 
@@ -106,3 +108,71 @@ class QuickLookTests(SimpleTestCase):
             [describe(f"siren:{SIREN}"), describe("tel:0123456789"), describe("web:brico-exemple.fr")],
             ["n° SIREN 900 000 019", "téléphone 01 23 45 67 89", "site brico-exemple.fr"],
         )
+
+
+class TypedTests(SimpleTestCase):
+    """An identifier a person types on a supplier's page.
+
+    The rule that matters: **typed and printed read the same**. Read by two
+    different functions, a SIREN typed by hand and the same SIREN found on a
+    document would be two keys, and the supplier would be recognised by one
+    of them and not the other with nothing on screen able to say why.
+    """
+
+    def test_typed_and_printed_come_out_as_one_key(self):
+        for typed, printed in (
+            (SIREN, f"SIREN {SIREN}"),
+            ("900 000 019", f"RCS Paris {SIREN}"),
+            (f"FR {vat_key(SIREN)} {SIREN}", f"TVA FR{vat_key(SIREN)}{SIREN}"),
+            ("900 000 019 10000", "SIRET 900 000 019 10000"),
+            ("01 23 45 67 89", "Tel 01.23.45.67.89"),
+            ("+33 1 23 45 67 89", "TEL +33 1 23 45 67 89"),
+            ("brico-exemple.fr", "www.brico-exemple.fr"),
+            ("https://brico-exemple.fr", "WWW.BRICO-EXEMPLE.FR"),
+        ):
+            with self.subTest(typed=typed):
+                self.assertEqual({read_typed(typed)}, document_identifiers(printed) & {read_typed(typed)})
+                self.assertIn(read_typed(typed), document_identifiers(printed))
+
+    def test_what_each_shape_comes_out_as(self):
+        self.assertEqual(read_typed(f"  {SIREN}  "), f"siren:{SIREN}")
+        self.assertEqual(read_typed("900 000 019 10000"), f"siren:{SIREN}")
+        self.assertEqual(read_typed(f"FR{vat_key(SIREN)}{SIREN}"), f"siren:{SIREN}")
+        self.assertEqual(read_typed("01 23 45 67 89"), "tel:0123456789")
+        self.assertEqual(read_typed("0123456789"), "tel:0123456789")
+        self.assertEqual(read_typed("WWW.Brico-Exemple.FR"), "web:brico-exemple.fr")
+
+    def test_a_siren_whose_key_is_wrong_is_refused_by_its_key(self):
+        with self.assertRaises(TypedIdentifierError) as refused:
+            read_typed("900000018")
+        self.assertIn("clé de contrôle", str(refused.exception))
+
+    def test_a_number_of_the_wrong_length_says_how_many_digits_it_has(self):
+        with self.assertRaises(TypedIdentifierError) as refused:
+            read_typed("90000001")
+        self.assertIn("8 chiffres", str(refused.exception))
+
+    def test_a_phone_that_does_not_start_with_zero_says_so(self):
+        with self.assertRaises(TypedIdentifierError) as refused:
+            read_typed("11 23 45 67 89")
+        self.assertIn("commence par 0", str(refused.exception))
+
+    def test_something_that_is_no_identifier_at_all(self):
+        for typed in ("", "   ", "Exemple", "12,50"):
+            with self.subTest(typed=typed):
+                with self.assertRaises(TypedIdentifierError):
+                    read_typed(typed)
+
+    def test_a_word_with_a_dot_is_read_as_a_site_and_said_so(self):
+        with self.assertRaises(TypedIdentifierError) as refused:
+            read_typed("exemple.quelquechose")
+        self.assertIn("adresse", str(refused.exception))
+
+    def test_two_identifiers_at_once_are_refused_rather_than_half_taken(self):
+        with self.assertRaises(TypedIdentifierError) as refused:
+            read_typed("01 23 45 67 89 brico-exemple.fr")
+        self.assertIn("un seul", str(refused.exception))
+
+    def test_the_refusal_is_a_value_error(self):
+        # receipts and the views already report a ValueError as a message.
+        self.assertTrue(issubclass(TypedIdentifierError, ValueError))

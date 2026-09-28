@@ -83,6 +83,7 @@ def brute_force_summary(recipe: Recipe, ingredients=None) -> dict:
         return {
             "variation_count": 0,
             "cost_range": None,
+            "cost_per_sale_range": None,
             "margin_range": None,
             "margin_percent_range": None,
             "price_factor_range": None,
@@ -95,6 +96,9 @@ def brute_force_summary(recipe: Recipe, ingredients=None) -> dict:
     return {
         "variation_count": len(variations),
         "cost_range": rng("cost_ht"),
+        # What one sale of each variation costs - the batch above scaled by
+        # Recipe.per_sale, and what every margin on the page is drawn from.
+        "cost_per_sale_range": rng("cost_per_sale_ht"),
         "margin_range": rng("margin_ht"),
         "margin_percent_range": rng("margin_percent"),
         "price_factor_range": rng("price_factor"),

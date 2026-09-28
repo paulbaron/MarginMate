@@ -14,7 +14,7 @@ supplier_views.supplier_list...).
 """
 
 import re
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 
 from django.db.models import Count, Max, Q
@@ -23,7 +23,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.http import urlencode
 
-from common import RANGE_END, RANGE_START, DateRange, date_range, is_id
+from common import RANGE_END, RANGE_START, DateRange, date_range, is_id, search_key
 
 from .forms import CHANNELS, InvoiceUploadForm, ReceiptBatchUploadForm
 from .models import Invoice, InvoiceType, ReceiptBatch, ScrapeJob, Supplier
@@ -65,6 +65,19 @@ TICKET_TO_CHECK = Q(reviewed_at__isnull=True) & ~Q(parse_checks=[]) & ~IS_CHARGE
 DOCUMENT_TO_FIX = (
     (Q(parse_checks=[]) & (Q(invoice_date__isnull=True) | Q(status=Invoice.Status.ERROR)))
     | (IS_CHARGE & Q(status=Invoice.Status.NEEDS_REVIEW))
+    # A supplier's PDF that says what is wrong with it: its lines do not add
+    # up to the total it prints (invoices/parsers/metro.py). It cannot go in
+    # the ticket queue - `parse_checks` is what tells a ticket from an
+    # invoice, and filling it would queue every Metro invoice behind the
+    # photographs - so without this it was counted in no queue at all, which
+    # is the silence the warning exists to break. Dated and finished, it is
+    # done: a scan typed in by hand keeps the message the import left.
+    | (
+        ~IS_CHARGE
+        & ~IS_EINVOICE
+        & Q(parse_checks=[], status=Invoice.Status.NEEDS_REVIEW)
+        & ~Q(error_message="")
+    )
     | (IS_EINVOICE & (~Q(error_message="") | Q(invoice_date__isnull=True) | Q(status=Invoice.Status.ERROR)))
     | (~Q(supplier_doubt="") & ~TICKET_TO_CHECK)
 )
@@ -281,33 +294,100 @@ def batch_rows(batch) -> list[dict]:
 #: tall. "Tout afficher" renders the rest.
 PAGE_SIZE = 250
 
-def documents_matching(invoices, query: str):
-    """The documents a typed search means: a supplier, a number, a date or an
-    amount. The database answers, because the page holds only its first rows
-    - and a box that searches what is rendered cannot find a document from
-    last year.
+#: Past this many words a query is something pasted, not a search. Every
+#: word is a condition ANDed onto the query, and a pasted paragraph builds
+#: one too deep for SQLite to compile. Dropping the tail can only WIDEN the
+#: answer, never hide a document the words named - which is the safe way for
+#: a cap to be wrong.
+MAX_TERMS = 12
 
-    A date is matched as it is written (12/07/2026, 07/2026, 2026), and an
-    amount against what the document charges, the way the list shows it.
+#: A date is a whole word or nothing. A document number carries digits,
+#: dashes and slashes of its own ("047-031286"), and read as a date it would
+#: answer an empty page for the document the reader is holding.
+_A_DAY = re.compile(r"(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})")
+_A_MONTH = re.compile(r"(\d{1,2})[/.-](\d{4})")
+#: A year the bar could have traded in. « 1312 » is not a year here, it is
+#: four digits somebody typed.
+_A_YEAR = re.compile(r"(?:19|20)\d{2}")
+_AN_AMOUNT = re.compile(r"-?\d{1,6}(?:[.,]\d{1,2})?")
+
+
+def _a_date(term: str) -> dict | None:
+    """The date lookups `term` means, or None when it is not exactly a date.
+
+    A day that is no day (« 32/07/2026 ») and a month that is no month
+    (« 13/2025 ») are not dates either: they fall through to being matched
+    against the name and the number, find nothing, and the search answers
+    empty rather than raising on a query string somebody typed.
     """
-    query = query.strip()
-    if not query:
-        return invoices
-    matches = Q(supplier__name__icontains=query) | Q(invoice_number__icontains=query)
-    digits = [part for part in re.split(r"[^0-9]+", query) if part]
-    written = re.fullmatch(r"(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})", query)
+    written = _A_DAY.fullmatch(term)
     if written:
         day, month, year = (int(part) for part in written.groups())
-        matches |= Q(invoice_date__day=day, invoice_date__month=month, invoice_date__year=year)
-    elif re.fullmatch(r"(\d{1,2})[/.-](\d{4})", query):
-        month, year = (int(part) for part in digits)
-        matches |= Q(invoice_date__month=month, invoice_date__year=year)
-    elif re.fullmatch(r"(19|20)\d{2}", query):
-        matches |= Q(invoice_date__year=int(query))
-    amount = re.fullmatch(r"-?\d{1,6}(?:[.,]\d{1,2})?", query)
-    if amount:
-        matches |= Q(printed_total_ttc=Decimal(query.replace(",", ".")))
-    return invoices.filter(matches)
+        try:
+            date(year, month, day)
+        except ValueError:
+            return None
+        return {"invoice_date__day": day, "invoice_date__month": month, "invoice_date__year": year}
+    month_of = _A_MONTH.fullmatch(term)
+    if month_of:
+        month, year = (int(part) for part in month_of.groups())
+        if 1 <= month <= 12:
+            return {"invoice_date__month": month, "invoice_date__year": year}
+        return None
+    if _A_YEAR.fullmatch(term):
+        return {"invoice_date__year": int(term)}
+    return None
+
+
+def _suppliers_named(term: str) -> list[int]:
+    """The suppliers whose name holds `term`, ignoring case AND accents.
+
+    In Python, over a bar's few dozen suppliers, because SQLite's `icontains` folds
+    case but not accents: « epicerie » typed in a hurry has to find
+    « Épicerie du coin », and nobody reaches for the compose key standing at
+    a bar. The DOCUMENTS are never compared this way - there are hundreds of
+    them and the page holds only its first rows, so the database has to
+    answer that part.
+    """
+    wanted = search_key(term)
+    return [
+        pk
+        for pk, name in Supplier.objects.values_list("pk", "name")
+        if wanted in search_key(name)
+    ]
+
+
+def documents_matching(invoices, query: str):
+    """The documents a typed search means: a supplier, a number, a date, an
+    amount - **and any of them together**.
+
+    The words narrow each other. « Grossiste 2025 » is that supplier's
+    documents of 2025, not every document of 2025 plus every document of that
+    supplier; « Grossiste 09/2025 » is its September. Read as one string, as
+    this was, neither found anything at all: no supplier is called « Grossiste
+    2025 », no number holds it, and the whole of it is no date.
+
+    Each word is matched against the name, the number, the date AND the
+    amount, and the words are ANDed. A word is never *only* a date: a
+    document numbered « FA-2031-118 » is still found by « 2031 », which is
+    the number printed on the paper in the reader's hand.
+
+    The database answers, because the page holds only its first rows - a box
+    that searches what is rendered cannot find a document from last year.
+    """
+    terms = query.split()[:MAX_TERMS]
+    for term in terms:
+        matches = Q(invoice_number__icontains=term)
+        named = _suppliers_named(term)
+        if named:
+            matches |= Q(supplier_id__in=named)
+        day = _a_date(term)
+        if day:
+            matches |= Q(**day)
+        if _AN_AMOUNT.fullmatch(term):
+            matches |= Q(printed_total_ttc=Decimal(term.replace(",", ".")))
+        invoices = invoices.filter(matches)
+    return invoices
 
 
 FILTERS = {
@@ -315,8 +395,61 @@ FILTERS = {
     "tickets": ("Tickets", IS_TICKET),
     "recents": ("Ajoutés récemment", None),
     "verifies": ("Vérifiés récemment", None),
+    "non-rapprochees": ("Non rapprochées", None),
     "sans-date": ("Sans date", Q(invoice_date__isnull=True)),
 }
+
+
+#: `unreconciled_q()` looks the first statement up itself; a page that
+#: already knows it passes it in. None is a real answer there - « no
+#: statement at all » - so the two cases need telling apart.
+_LOOK_UP = object()
+
+
+def unreconciled_q(start=_LOOK_UP) -> Q:
+    """Documents no bank line pays, among those the statements could pay.
+
+    « No payment at all » is the bank's own rule, not a second one:
+    `reconcile.unpaid_invoices` is deliberately not « no payment from THIS
+    line », because an invoice settled by two lines is something only a
+    person says. What is added here is the window - before the first
+    statement, unreconciled is not a fact about a document, it is a fact
+    about the statements, and nearly every document with no payment is only
+    that on a real database. Counted whole the chip reads hundreds over the
+    handful somebody can act on, which teaches the reader to ignore it.
+
+    An undated document is kept: it is inside no window, and the matching
+    only ever suggests those - left out, exactly the documents that need a
+    person would be the ones hidden.
+    """
+    if start is _LOOK_UP:
+        from bank.reconcile import statements_start  # here: bank reads this module
+
+        start = statements_start()
+    if start is None:
+        # Nothing imported, so nothing is reconcilable. Never an empty
+        # `pk__in`: that is an EmptyResultSet, which a Count(filter=...)
+        # cannot carry.
+        return Q(pk__isnull=True)
+    return Q(payments__isnull=True) & (Q(invoice_date__gte=start) | Q(invoice_date__isnull=True))
+
+
+def bank_state(invoice, start) -> dict | None:
+    """What a row says about its settlement - beside what `review_state`
+    says about its reading, never instead of it.
+
+    None where the statements have nothing to say: no statement imported at
+    all, or a document older than the first one. « Non rapprochée » written
+    on every document of 2024 is noise, and noise on hundreds of rows is what
+    hides the handful that are really waiting.
+    """
+    payments = list(invoice.payments.all())
+    if payments:
+        paid_on = min(payment.transaction.paid_on for payment in payments)
+        return {"css": "COMPLETE", "label": f"Réglée le {paid_on:%d/%m/%Y}"}
+    if start is None or (invoice.invoice_date is not None and invoice.invoice_date < start):
+        return None
+    return {"css": "NEEDS_REVIEW", "label": "Non rapprochée"}
 
 
 def _list_url(request, *dropped: str) -> str:
@@ -338,11 +471,18 @@ def _list_url(request, *dropped: str) -> str:
 
 
 def _documents(request, batch) -> dict:
+    from bank.reconcile import statements_start  # here: bank reads this module
+
+    # Looked up once and carried: the chip's condition and every row's
+    # settlement ask the same question, and asked twice it is two queries
+    # that can disagree between them within one page.
+    reconciled_from = statements_start()
     since = timezone.now() - RECENT
     conditions = {
         **{key: condition for key, (_label, condition) in FILTERS.items() if condition is not None},
         "recents": Q(imported_at__gte=since),
         "verifies": Q(reviewed_at__gte=since),
+        "non-rapprochees": unreconciled_q(reconciled_from),
     }
     active = request.GET.get("filtre", "")
     if request.GET.get("sans_date"):
@@ -365,9 +505,18 @@ def _documents(request, batch) -> dict:
     if batch is not None or active == "sans-date":
         window = DateRange()
 
-    counts = window.limit(Invoice.objects.all(), "invoice_date").aggregate(
-        total=Count("pk"), **{key.replace("-", "_"): Count("pk", filter=q) for key, q in conditions.items()}
+    # « Non rapprochées » is counted on its own, never folded into the
+    # aggregate below: it asks about `payments`, a multi-valued relation, and
+    # one Count(filter=...) over it puts a LEFT JOIN under ALL of them - an
+    # invoice settled by two lines is then two rows, and every other chip on
+    # the page counts it twice. One extra cheap query instead of six silently
+    # inflated figures.
+    in_window = window.limit(Invoice.objects.all(), "invoice_date")
+    counted = {key: q for key, q in conditions.items() if key != "non-rapprochees"}
+    counts = in_window.aggregate(
+        total=Count("pk"), **{key.replace("-", "_"): Count("pk", filter=q) for key, q in counted.items()}
     )
+    counts["non_rapprochees"] = in_window.filter(conditions["non-rapprochees"]).count()
     # Counted over every document whatever the window, since its chip drops
     # the window: narrowed by one it is always 0, so the chip and the warning
     # below would vanish exactly when there are documents no valuation and no
@@ -375,7 +524,11 @@ def _documents(request, batch) -> dict:
     counts["sans_date"] = Invoice.objects.filter(conditions["sans-date"]).count()
 
     invoices = window.limit(
-        Invoice.objects.select_related("supplier").prefetch_related("lines"), "invoice_date"
+        # `payments__transaction` is what each row says about its settlement
+        # (bank_state): one prefetched query for the page rather than one
+        # per row - see « N+1s hide in per-object properties ».
+        Invoice.objects.select_related("supplier").prefetch_related("lines", "payments__transaction"),
+        "invoice_date",
     )
     # One supplier's documents exactly, from its page: a search for "Free"
     # found Free Mobile's too.
@@ -428,11 +581,19 @@ def _documents(request, batch) -> dict:
         # answer is exactly the silently wrong figure this page guards against.
         if not window and not any(invoice.pk == highlight for invoice in rows):
             rows = [
-                *Invoice.objects.filter(pk=highlight).select_related("supplier").prefetch_related("lines"),
+                *Invoice.objects.filter(pk=highlight)
+                .select_related("supplier")
+                .prefetch_related("lines", "payments__transaction"),
                 *rows,
             ]
         # Stable: the highlighted document first, the rest in their order.
         rows.sort(key=lambda invoice: invoice.pk != highlight)
+    # Said on every row, on every list: a person looking at « Tous » sees
+    # which documents the bank has settled without having to filter for it.
+    # Annotated here, after the highlighted document has been folded in, so
+    # no row can reach the template without it.
+    for invoice in rows:
+        invoice.bank_state = bank_state(invoice, reconciled_from)
     return {
         "invoices": rows,
         "query": query,
@@ -442,6 +603,10 @@ def _documents(request, batch) -> dict:
         "show_all_url": request.get_full_path() + ("&" if request.GET else "?") + "tout=1",
         "chips": chips,
         "active_filter": active,
+        # The first day the statements cover, for the note « Non rapprochées »
+        # owes its reader: a list that silently drops every document older
+        # than the statements reads as a bug rather than as an answer.
+        "reconciled_from": reconciled_from,
         "highlight": highlight,
         "lot": batch,
         "undated_count": counts["sans_date"],

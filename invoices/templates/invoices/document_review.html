@@ -28,15 +28,15 @@
             print - is moved here, its lines with it.
             {% endcomment %}
             {% comment %}
-            An invoice type filed it here though it prints what names another
-            supplier (Invoice.supplier_doubt): nothing is learned from it until
-            it is validated here - which says it is this supplier's - or moved.
+            What names this document's supplier, and what it prints that
+            names another - the general form of Invoice.supplier_doubt, which
+            only ever said the narrow negative case and only when a source
+            had fetched the document. The move form is right under it on
+            purpose: this is the one page a document can be moved from.
             {% endcomment %}
+            {% include "invoices/_filing_block.html" %}
             {% if invoice.supplier_doubt %}
-                <div class="message message-warning supplier-doubt">
-                    {{ invoice.supplier_doubt }}
-                    <br>Valider ce document confirme qu'il est de {{ invoice.supplier.name }} ; sinon, « Changer {% if is_receipt %}d'enseigne{% else %}de fournisseur{% endif %} » ci-dessous.
-                </div>
+                <p class="muted">Valider ce document confirme qu'il est de {{ invoice.supplier.name }} ; sinon, « Changer {% if is_receipt %}d'enseigne{% else %}de fournisseur{% endif %} » ci-dessous.</p>
             {% endif %}
             <details class="move-shop">
                 <summary>Pas de chez {{ invoice.supplier.name }} ? Changer {% if is_receipt %}d'enseigne{% else %}de fournisseur{% endif %}</summary>
@@ -329,10 +329,11 @@
                             <span class="num">TTC</span>
                             {% if is_receipt %}<span class="num">Remise</span>{% endif %}
                             <span class="num">TVA %</span>
+                            <span class="mid" title="Frais à répartir sur les autres lignes">Frais</span>
                             <span></span>
                         </div>
                         {% for line_form in formset %}
-                            <div class="invoice-line-row{% if line_form.DELETE.value %} is-removed{% endif %}">
+                            <div class="invoice-line-row{% if line_form.DELETE.value %} is-removed{% endif %}{% if line_form.is_spread_charge.value %} is-spread-charge{% endif %}">
                                 <div class="correction-row">
                                     <span hidden>{{ line_form.DELETE }}</span>
                                     {{ line_form.product_name }}
@@ -342,12 +343,16 @@
                                     {{ line_form.total_ttc }}
                                     {% if is_receipt %}{{ line_form.discount_ttc }}{% endif %}
                                     {{ line_form.vat_rate }}
+                                    {{ line_form.is_spread_charge }}
                                     {{ line_form.amount_source }}
                                     {{ line_form.read_as }}
                                     {{ line_form.line_id }}
                                     <button type="button" class="btn btn-small btn-secondary js-remove-line" title="Retirer cette ligne" aria-label="Retirer cette ligne">✕</button>
                                 </div>
                                 <p class="unit-price" data-unit-price{% if not line_form.unit_price_hint %} hidden{% endif %}>{{ line_form.unit_price_hint }}</p>
+                                {% if line_form.spread_share %}
+                                    <p class="spread-share">+ {{ line_form.spread_share|floatformat:2 }} € HT de frais répartis : cette ligne revient à {{ line_form.spread_cost|floatformat:2 }} € HT</p>
+                                {% endif %}
                                 {% if line_form.read_hint %}
                                     <p class="read-as">lu sur le ticket : « {{ line_form.read_hint }} » — rattaché au produit ci-dessus</p>
                                 {% endif %}
@@ -377,6 +382,13 @@
                         <button type="button" class="btn btn-small btn-secondary" id="add-line-row">+ Ajouter une ligne</button>
                         <span class="muted" id="line-count" aria-live="polite"></span>
                     </div>
+                    <p class="muted small">
+                        <strong>Frais</strong> : cochez-la sur une ligne qui n'est pas un produit — des frais de port,
+                        de livraison, de préparation. La ligne reste telle que le document l'imprime, dans le total et
+                        dans les contrôles ci-dessus ; ce qu'elle coûte est réparti sur les autres lignes, au prorata
+                        de leur montant HT, et c'est ce prix-là — livraison comprise — qui sert à valoriser le stock
+                        et à calculer les marges. Elle ne compte plus comme un article à classer.
+                    </p>
 
                     <div class="form-actions" style="margin-top:1rem;">
                         <button class="btn" type="submit">
@@ -484,6 +496,7 @@
                 {{ formset.empty_form.total_ttc }}
                 {% if is_receipt %}{{ formset.empty_form.discount_ttc }}{% endif %}
                 {{ formset.empty_form.vat_rate }}
+                {{ formset.empty_form.is_spread_charge }}
                 {{ formset.empty_form.amount_source }}
                 <button type="button" class="btn btn-small btn-secondary js-remove-line" title="Retirer cette ligne" aria-label="Retirer cette ligne">✕</button>
             </div>
@@ -739,8 +752,11 @@
         if (del) del.checked = removed;
         row.querySelectorAll(".correction-row input").forEach(function (box) {
             if (box === del || box.type === "hidden") return;
-            // A saved line is sent, marked for deletion; a new one is not sent.
-            if (del) box.readOnly = removed;
+            // readOnly does nothing to a checkbox: the « frais à répartir »
+            // box of a struck-through row stayed tickable, and ticking it
+            // changed what the other lines cost from a line on its way out.
+            if (box.type === "checkbox") box.disabled = removed;
+            else if (del) box.readOnly = removed;
             else box.disabled = removed;
         });
         if (!del) {
@@ -755,6 +771,19 @@
         else if (hint) unitHint(row);
     }
     lines.querySelectorAll("#line-rows .invoice-line-row.is-removed").forEach(function (row) { setRemoved(row, true); });
+
+    // Ticked or unticked, the row says at once what it now is. The share
+    // itself is NOT worked out here: it is stored when the page is saved
+    // (importing.spread_charges), and a second arithmetic on screen is how
+    // two figures for one number get into this codebase.
+    lines.addEventListener("change", function (event) {
+        var box = event.target.closest(".js-spread-charge");
+        if (!box) return;
+        var row = box.closest(".invoice-line-row");
+        row.classList.toggle("is-spread-charge", box.checked);
+        var share = row.querySelector(".spread-share");
+        if (share && box.checked) share.hidden = true;
+    });
 
     document.addEventListener("click", function (event) {
         var button = event.target.closest(".js-remove-line");

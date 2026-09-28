@@ -74,6 +74,15 @@ class Supplier(models.Model):
     # Figures a person set aside on its page ("Retirer"): never learned
     # again - UBA relearns at every gather, through its own reader.
     refused_identifiers = models.JSONField("identifiants écartés à la main", default=list, blank=True)
+    # Figures a person TYPED on its page rather than letting them be learned:
+    # a subset of `ticket_identifiers`, and the whole of what tells the two
+    # apart. It is an assertion - « ce n° SIREN est le sien », said by
+    # somebody who has the invoice in front of them - so `still_naming`
+    # never takes one back: learning may only forget what it learned itself.
+    # Without this, a SIREN typed for a supplier whose stored documents do
+    # not print it yet was dropped again at the very next import, under a
+    # reason about documents the person never claimed it was on.
+    typed_identifiers = models.JSONField("identifiants saisis à la main", default=list, blank=True)
 
     class Meta:
         ordering = ["name"]
@@ -224,6 +233,11 @@ APP_ENV_PREFIXES = (
     "SCRAPER_",
     "PRODUCT_FUZZY_",
     "RUN_MAIN",
+    # The timesheet signatures (staff/signing.py): the key's passphrase, the
+    # private folder, the site's address - and the mail server's password.
+    "MARGINMATE_",
+    "EMAIL_",
+    "DEFAULT_FROM_EMAIL",
 )
 APP_ENV_REFUSED = (
     "« {name} » est une variable de l'application elle-même (Metro, la boîte mail, la caisse, l'IA) : "
@@ -450,6 +464,30 @@ class Invoice(models.Model):
         reading the XML exists to remove. Within a cent a line of what the
         lines make - past that, somebody has edited them, and what they now
         say wins.
+
+        **A printed total does the same job**, and not only an XML one. A
+        French supplier rounds its VAT once per rate, on that rate's HT
+        subtotal; this sums each line's own product and rounds at the end.
+        The two are the same arithmetic - exactly, `sum(ht * (1 + rate))`
+        is `sum(ht)` plus each bracket's `base * rate` - so all that divides
+        them is WHERE the cent is rounded, which can move the total by at
+        most a cent per bracket. That cent is not cosmetic: `bank.matching`
+        needs `candidate.total == due` to the cent, so an invoice a cent
+        from its debit can never be matched automatically. Metro invoices
+        had been reconciled by hand, or filed a cent away from what they
+        will be debited, for no other reason; and Franprix tickets whose
+        own printed total was right sat a cent under it because only some
+        of their lines kept a printed amount, which is what the branch
+        above asks for.
+
+        The slack is per BRACKET, never per line: `CENTS * len(lines)` on a
+        long wholesaler's invoice would swallow most of a euro, and a gap
+        that size is a row that was not read - a Metro invoice was tens of
+        euros short of its printed total because an own-brand row was
+        dropped.
+        Rescued, it would have filed the right total over wrong lines and
+        hidden the fault entirely. Past a cent a bracket the lines stand,
+        wrong and visible.
         """
         from .parsers.receipt_base import CENTS, RECONCILIATION_TOLERANCE
 
@@ -466,8 +504,11 @@ class Invoice(models.Model):
             (line.total_ht * (Decimal("1") + line.vat_rate) for line in lines),
             start=Decimal("0"),
         ) + self.adjustment_ttc
-        if self.einvoice_format and self.printed_total_ttc is not None:
-            slack = max(RECONCILIATION_TOLERANCE, CENTS * len(lines))
+        if self.printed_total_ttc is not None:
+            if self.einvoice_format:
+                slack = max(RECONCILIATION_TOLERANCE, CENTS * len(lines))
+            else:
+                slack = CENTS * max(1, len({line.vat_rate for line in lines}))
             if abs(self.printed_total_ttc - total) <= slack:
                 return self.printed_total_ttc
         return total
@@ -580,6 +621,13 @@ class Invoice(models.Model):
         if self.parse_checks:
             return {"css": self.Status.COMPLETE, "label": "Vérifié"}
         if self.status == self.Status.NEEDS_REVIEW:
+            # What it says comes before what it is waiting on: a supplier's
+            # PDF whose lines do not add up to its own printed total holds
+            # itself here saying so (invoices/parsers/metro.py), and
+            # "Produits à classer" would name the wrong problem - the same
+            # distinction the electronic-invoice branch above draws.
+            if self.error_message:
+                return {"css": self.status, "label": "À corriger"}
             return {"css": self.status, "label": "Produits à classer"}
         return {"css": self.status, "label": self.get_status_display()}
 
@@ -655,6 +703,24 @@ class InvoiceLine(models.Model):
     # own, and the review screen shows both as printed. `total_ht` is what the
     # line cost after it.
     discount_ttc = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    # This line is not a product: it is a charge the document prints for the
+    # whole order - delivery above all - and what it costs belongs on the
+    # goods it delivered. The line STAYS a line, with its own amount and its
+    # own rate, so every total, every check and the bank match are the
+    # document's own figures; only its COST moves, onto the other lines'
+    # `spread_ht` (see importing.spread_charges).
+    is_spread_charge = models.BooleanField(
+        "frais à répartir",
+        default=False,
+        help_text="Cette ligne n'est pas un produit : son montant est réparti sur les autres lignes de la facture.",
+    )
+    # This line's share of those charges, HT - and **not** part of
+    # `total_ht`, which stays what the supplier priced the goods at. Folded
+    # in there instead it would move money between VAT brackets (Metro
+    # delivers at 20 % invoices whose food is at 5,5 %) and the invoice's own
+    # TTC would stop being the one the bank debits. `cost_ht` is the two
+    # together, and that is what prices a unit.
+    spread_ht = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
     class Meta:
         ordering = ["id"]
@@ -671,6 +737,26 @@ class InvoiceLine(models.Model):
         if self.printed_ttc is not None:
             return self.printed_ttc - self.discount_ttc
         return self.total_ht * (Decimal("1") + self.vat_rate)
+
+    @property
+    def cost_ht(self):
+        """What this line really cost: what the supplier priced it at, plus
+        its share of the charges the invoice spreads over its lines.
+
+        **This is what prices a unit** - the stock movement's `unit_cost_ht`
+        and the FIFO valuation both divide it by the count. `total_ht` is
+        what the DOCUMENT says and is what every total, check and bank match
+        is made of; this is what a bottle actually costs once the delivery
+        that brought it is paid for.
+
+        A spreading line costs nothing itself: its money is already on the
+        lines it was shared over, and counted here too it would be paid for
+        twice. So the lines' costs still add up to `lines_total_ht`, exactly
+        - nothing is created, it only moves.
+        """
+        if self.is_spread_charge:
+            return Decimal("0")
+        return self.total_ht + self.spread_ht
 
     @property
     def vat_percent(self):

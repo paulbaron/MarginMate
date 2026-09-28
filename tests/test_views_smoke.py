@@ -21,6 +21,8 @@ from bank.models import BankTransaction
 from inventory.models import StockMovement, StockType, UnitChoices
 from invoices.models import Invoice, ReceiptBatch, ShopItemPrice
 from recipes.models import PosProduct, PosProductDailyQuantity, Recipe, RecipeSale
+from staff.tests.signing_support import SigningTestMixin
+from tests.support import NoNetworkTestCase
 from tests.factories import (
     make_ingredient,
     make_invoice,
@@ -461,6 +463,31 @@ class EmptyDatabasePageSmokeTests(TestCase):
             self.client.get(reverse("margins:margins_home"), {"du": "2026-03-01"}).status_code, 200
         )
 
+    def test_bank_pages(self):
+        """« Dépenses » divides every share by what left the account, and on
+        a new install nothing has."""
+        for name in ("bank:bank_home", "bank:spending_home", "bank:income_home", "bank:rule_list", "bank:proposals"):
+            with self.subTest(page=name):
+                self.assertPageOK(name)
+
+    def test_the_invoice_search_fragment(self):
+        """A fragment, so `assertPageOK`'s whole-page checks do not apply -
+        but it answers on a line that exists and 404s on one that does not,
+        and it is a GET a stale page can repeat."""
+        line = BankTransaction.objects.create(
+            operation_date=date(2026, 3, 2),
+            amount=Decimal("-12.00"),
+            label="PRLV EXEMPLE",
+            fingerprint="smoke-invoice-search",
+        )
+        url = reverse("bank:invoice_search", args=[line.pk])
+        self.assertEqual(self.client.get(url).status_code, 200)
+        self.assertEqual(self.client.get(url, {"recherche": "rien"}).status_code, 200)
+        assertNoUnrenderedTemplateSyntax(
+            self, self.client.get(url, {"recherche": "rien"}), "la recherche de factures"
+        )
+        self.assertEqual(self.client.get(reverse("bank:invoice_search", args=[999999])).status_code, 404)
+
 
 class RecipeEdgeCaseRenderingTests(TestCase):
     """Recipes whose numbers can't be computed - the pages still have to
@@ -497,7 +524,7 @@ class RecipeEdgeCaseRenderingTests(TestCase):
 
 
 class DateWindowSmokeTests(TestCase):
-    """The four pages read through « du … au … » (common.date_range), under
+    """The pages read through « du … au … » (common.date_range), under
     every window a query string can carry.
 
     These dates arrive from a URL, so the page has to survive whatever is in
@@ -528,6 +555,8 @@ class DateWindowSmokeTests(TestCase):
         "invoices:invoice_list",
         "recipes:sales_list",
         "bank:bank_home",
+        "bank:spending_home",
+        "bank:income_home",
     )
 
     @classmethod
@@ -586,6 +615,8 @@ class DateWindowSmokeTests(TestCase):
             "invoices:invoice_list": "filtre=tickets&q=exemple",
             "recipes:sales_list": "vente=moscow&ventes=toutes",
             "bank:bank_home": "vue=toutes&mois=2026-02",
+            "bank:spending_home": "tout=1",
+            "bank:income_home": "tout=1",
         }
         for page, query in beside.items():
             with self.subTest(page=page):
@@ -611,3 +642,169 @@ class DateWindowSmokeTests(TestCase):
             with self.subTest(page=page):
                 url = f"{reverse(page)}?du=2026-02-01&au=2026-02-28"
                 self.assertEqual(self.client.get(url).status_code, 200, url)
+
+
+class StaffPageSmokeTests(TestCase):
+    """« Personnel »: the employees, an employee, a month saved and one
+    not, its PDF. Every name and address is INVENTED - the repository is
+    public and a timesheet is personal data."""
+
+    SAVED = date(2026, 5, 1)     # four public holidays: the holidays button is drawn
+    UNSAVED = date(2026, 6, 1)
+
+    @classmethod
+    def setUpTestData(cls):
+        from staff.models import Establishment, Employee
+        from staff.timesheet import apply_range
+
+        Establishment.objects.create(
+            pk=Establishment.SINGLETON_PK, name="BAR EXEMPLE", address="12 rue Imaginaire\n75000 PARIS"
+        )
+        cls.person = Employee.objects.create(
+            last_name="Dupont", first_name="Jeanne", tuesday_hours=Decimal("7"), wednesday_hours=Decimal("8")
+        )
+        Employee.objects.create(last_name="Martin", first_name="Paul", friday_hours=Decimal("6"), is_active=False)
+        # Saved, with an absence and a note on it.
+        apply_range(cls.person, cls.SAVED, date(2026, 5, 5), date(2026, 5, 6), "conges", note="demande écrite")
+
+    def assertPageOK(self, name, **kwargs):
+        url = reverse(name, kwargs=kwargs)
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200, f"{name} ({url}) returned {response.status_code}")
+        assertNoUnrenderedTemplateSyntax(self, response, url)
+        return response
+
+    def test_home(self):
+        self.assertContains(self.assertPageOK("staff:home"), "DUPONT Jeanne")
+
+    def test_employee(self):
+        self.assertPageOK("staff:employee", pk=self.person.pk)
+
+    def test_month_saved_and_unsaved(self):
+        for month in (self.SAVED, self.UNSAVED):
+            with self.subTest(month=month):
+                self.assertPageOK("staff:month", pk=self.person.pk, month=month)
+
+    def test_month_pdf(self):
+        for month in (self.SAVED, self.UNSAVED):
+            with self.subTest(month=month):
+                response = self.client.get(reverse("staff:month_pdf", kwargs={"pk": self.person.pk, "month": month}))
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response["Content-Type"], "application/pdf")
+                self.assertTrue(response.content.startswith(b"%PDF-"))
+                self.assertTrue(response["Content-Disposition"].startswith("attachment; "))
+
+    def test_the_post_only_actions_redirect_on_get(self):
+        """A GET on one goes back to its page and writes nothing - still worth
+        hitting, since a broken one raises before it gets to the redirect."""
+        month = {"pk": self.person.pk, "month": self.UNSAVED}
+        for name, kwargs in (
+            ("staff:employee_active", {"pk": self.person.pk}),
+            ("staff:open_month", {"pk": self.person.pk}),
+            ("staff:month_range", month),
+            ("staff:month_holidays_off", month),
+            ("staff:month_reset", month),
+        ):
+            with self.subTest(name=name):
+                self.assertEqual(self.client.get(reverse(name, kwargs=kwargs)).status_code, 302)
+
+    def test_an_empty_install(self):
+        from staff.models import Employee, Establishment, Timesheet
+
+        Timesheet.objects.all().delete()
+        Employee.objects.all().delete()
+        Establishment.objects.all().delete()
+        self.assertPageOK("staff:home")
+
+
+class StaffSignatureSmokeTests(SigningTestMixin, NoNetworkTestCase):
+    """« Personnel »'s monthly signature: the month's page with a request in
+    every state, the owner's files, the employee's pages (the public ones,
+    /personnel/signer/…), and every POST-only action answering a GET. Keys,
+    files and timestamps offline and in a temp folder; names INVENTED."""
+
+    PENDING = date(2026, 6, 1)
+    SIGNED = date(2026, 5, 1)
+    COMPLETE = date(2026, 4, 1)
+    CANCELLED = date(2026, 3, 1)
+
+    def setUp(self):
+        super().setUp()
+        from staff import signature_requests as workflow
+        from staff.models import Employee, Establishment
+        from staff.tests.signing_support import drawn_signature, employer_signature
+        from staff.timesheet import save_month
+
+        Establishment.objects.create(
+            pk=Establishment.SINGLETON_PK, name="BAR EXEMPLE", address="12 rue Imaginaire\n75000 PARIS"
+        )
+        self.person = Employee.objects.create(
+            last_name="Dupont", first_name="Jeanne", tuesday_hours=Decimal("7"), wednesday_hours=Decimal("8")
+        )
+        self.tokens = {}
+        for month in (self.PENDING, self.SIGNED, self.COMPLETE, self.CANCELLED):
+            save_month(self.person, month, [])
+            request, self.tokens[month] = workflow.create_request(self.person, month)
+            if month in (self.SIGNED, self.COMPLETE):
+                session = {}
+                workflow.check_code(request, workflow.issue_code(request, "code_remis"), session)
+                request = workflow.sign_for_employee(
+                    request, drawn_signature(), session=session, statement_accepted=True, reservation="Le 7."
+                )
+            if month == self.COMPLETE:
+                workflow.countersign_request(request, employer_signature())
+            if month == self.CANCELLED:
+                workflow.cancel_request(request, "envoyé par erreur")
+
+    def assertPageOK(self, url, status=200):
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status, url)
+        if response["Content-Type"].startswith("text/html"):
+            assertNoUnrenderedTemplateSyntax(self, response, url)
+        return response
+
+    def test_the_month_s_page_in_every_state(self):
+        for month in (self.PENDING, self.SIGNED, self.COMPLETE, self.CANCELLED):
+            with self.subTest(month=month):
+                self.assertPageOK(reverse("staff:month", args=[self.person.pk, month]))
+
+    def test_the_owner_s_files(self):
+        for month, files in (
+            (self.PENDING, ("document", "preuve")),
+            (self.SIGNED, ("document", "signe-salarie", "dessin", "preuve")),
+            (self.COMPLETE, ("document", "signe-salarie", "signe", "dessin", "dessin-employeur", "preuve")),
+            (self.CANCELLED, ("document", "preuve")),
+        ):
+            for file in files:
+                with self.subTest(month=month, file=file):
+                    self.assertPageOK(reverse("staff:signature_file", args=[self.person.pk, month, 1, file]))
+
+    def test_the_employee_s_pages(self):
+        for month in (self.PENDING, self.SIGNED, self.COMPLETE):
+            token = self.tokens[month]
+            with self.subTest(month=month):
+                self.assertPageOK(reverse("staff:sign", args=[token]))
+                self.assertPageOK(reverse("staff:sign_document", args=[token]))
+                self.assertPageOK(reverse("staff:sign_copy", args=[token]), 404 if month == self.PENDING else 200)
+        self.assertPageOK(reverse("staff:sign", args=[self.tokens[self.CANCELLED]]), 410)
+        self.assertPageOK(reverse("staff:sign", args=["inconnu"]), 404)
+        self.assertPageOK("/personnel/signer/", 404)
+
+    def test_the_post_only_actions_redirect_on_get(self):
+        month = {"pk": self.person.pk, "month": self.PENDING}
+        version = {**month, "version": 1}
+        token = {"token": self.tokens[self.PENDING]}
+        for name, kwargs in (
+            ("staff:signature_send", month),
+            ("staff:month_reopen", month),
+            ("staff:signature_link", version),
+            ("staff:signature_code", version),
+            ("staff:signature_countersign", version),
+            ("staff:signature_cancel", version),
+            ("staff:signature_verify", version),
+            ("staff:sign_send_code", token),
+            ("staff:sign_check_code", token),
+            ("staff:sign_submit", token),
+        ):
+            with self.subTest(name=name):
+                self.assertEqual(self.client.get(reverse(name, kwargs=kwargs)).status_code, 302)

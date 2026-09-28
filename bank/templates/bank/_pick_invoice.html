@@ -1,0 +1,23 @@
+{% comment %}
+La liste des factures non réglées à ces dates, pour une ligne ouverte comme
+pour une ligne déjà rapprochée : une dépense réglant deux livraisons se
+complète ici, sans avoir à trouver un mot qui retrouve la deuxième.
+Une liste coupée le dit : tue, elle se lit « la facture n'y est pas ».
+{% endcomment %}
+{% if row.choices %}
+    <form method="post" action="{% url 'bank:bank_line_action' row.line.pk %}" class="inline-form">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="link">
+        <input type="hidden" name="next" value="{{ page_url }}">
+        <select name="invoice" aria-label="Facture réglée par ce paiement">
+            <option value="">{% if row.status == "linked" %}Rattacher une facture de plus…{% else %}Choisir une facture…{% endif %}</option>
+            {% for invoice, total in row.choices %}
+                <option value="{{ invoice.pk }}">{{ invoice.supplier.name }} n° {{ invoice.invoice_number|default:invoice.pk }} · {{ invoice.invoice_date|date:"d/m/Y"|default:"sans date" }} · {{ total|floatformat:2 }} €</option>
+            {% endfor %}
+        </select>
+        <button class="btn btn-small btn-secondary" type="submit">Rattacher</button>
+        {% if row.more_choices %}
+            <span class="read-as">{{ row.more_choices }} facture{{ row.more_choices|pluralize }} de plus à ces dates : resserrez la période ou cherchez ci-dessous.</span>
+        {% endif %}
+    </form>
+{% endif %}

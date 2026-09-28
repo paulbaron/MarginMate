@@ -761,7 +761,12 @@ class ReceiptParser(InvoiceParser):
         hands the result here rather than letting `parse` redo it - one
         receipt is several seconds of CPU, and a batch is dozens.
         """
-        pages = [PdfPage(text=page.text, tables=[]) for page in ocr_pages]
+        from .layout import rows_from_ocr
+
+        # The text AND where it sits: the reader tells a table's columns from
+        # the positions (see parsers/layout.py), and reads the text alone
+        # where there is no table. Row i is line i of the text.
+        pages = [PdfPage(text=page.text, tables=[], rows=rows_from_ocr(page)) for page in ocr_pages]
         parsed = self.parse_pages(pages, date_hint=date_hint, source_name=source_name)
         self._as_read(parsed, "\n".join(page.text for page in ocr_pages))
         confidences = [page.confidence for page in ocr_pages if page.lines]
@@ -963,6 +968,12 @@ def _derive_from_total(rate: Decimal, expected_total: Decimal, values: list[Deci
     VAT; otherwise it is marked `derived`, and the checks say the table was
     not read - the lines get the right rate, and a person still looks.
     """
+    if any(value == 0 for value in values):
+        # "Total TVA 20 %  0,00" beside a real 5,5 % row: a rate that applies
+        # to nothing on this document. Derived from the total, it stood for a
+        # second bucket the size of the whole invoice, and failed two checks
+        # on a document read right.
+        return VatSummary(rate=rate)
     computed = VatSummary(rate=rate, total_ttc=expected_total).resolve()
     confirmed = any(
         abs(value - computed.base) <= CENTS or abs(value - computed.vat_amount) <= CENTS for value in values

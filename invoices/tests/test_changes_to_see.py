@@ -378,9 +378,12 @@ class TopbarRoomInBrowserTests(StaticLiveServerTestCase):
     on a phone (measured 19/09: 57, 82, 83, 112 and 141 px).
 
     Tagged "browser": `--exclude-tag=browser` for the fast loop. Skipped
-    where Chrome or its driver is missing. Data invented."""
+    where Chrome or its driver is missing. Data invented.
 
-    WIDTHS = (1280, 900, 860, 768, 600, 450, 375, 320)
+    280 px is a folding phone's cover screen: « Personnel » (28/09) took the
+    links to five rows there, 199 px against the 176 px that 11rem left."""
+
+    WIDTHS = (1280, 900, 860, 768, 600, 450, 375, 320, 280)
     HEIGHT = 700
     # Its flush then fires no post_migrate: recreated content types broke
     # every later class restoring its snapshot (tests/test_transaction_cases.py).

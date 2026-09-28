@@ -75,12 +75,47 @@ class ManualInvoiceForm(forms.ModelForm):
         return uploaded
 
 
-class ManualInvoiceLineForm(BlankRowTolerantForm):
+#: The box, word for word, on both pages that type lines. « Frais » alone
+#: would read as the charges the document bills globally, which
+#: receipts.lines_check already calls « frais facturés globalement » and
+#: which are counted OUTSIDE the lines; this one is a line.
+SPREAD_CHARGE_LABEL = "Frais à répartir sur les autres lignes"
+
+
+class SpreadChargeRowMixin:
+    """The « ce n'est pas un produit » box, shared by the two forms that type
+    invoice lines - the correction page and the hand-entry page."""
+
+    @property
+    def carries_spread_charges(self) -> bool:
+        """Whether this row is goods a delivery can be shared over: bought,
+        not given back. `importing.spread_charges` weighs the lines priced
+        above zero only - a signed pro rata would put a negative share of
+        the delivery on a returned keg and more than the whole of it on the
+        beer - so those are the rows that decide whether there is anything
+        to share onto at all."""
+        if not self.cleaned_data or self.cleaned_data.get("is_spread_charge"):
+            return False
+        amount = self.cleaned_data.get("total_ht")
+        if amount is None:
+            amount = self.cleaned_data.get("total_ttc")
+        return amount is not None and amount > 0
+
+
+class ManualInvoiceLineForm(SpreadChargeRowMixin, BlankRowTolerantForm):
     product_name = forms.CharField(label="Produit", max_length=255)
     # Negative for a refund - a deposit crate or pallet given back, printed
     # "1-" / "15,00-" by Metro - with a negative amount to match (clean).
-    quantity = QuantityField(label="Quantité")
+    # Not required: a charge to spread is not sold by the unit (see clean).
+    quantity = QuantityField(label="Quantité", required=False)
     total_ht = forms.DecimalField(label="Total (HT)", max_digits=12, decimal_places=2)
+    # See LineCorrectionForm.is_spread_charge: no `initial`, and never a
+    # bookkeeping field.
+    is_spread_charge = forms.BooleanField(
+        label=SPREAD_CHARGE_LABEL,
+        required=False,
+        widget=forms.CheckboxInput(attrs={"class": "js-spread-charge"}),
+    )
     # Pre-filled, since almost every line is 20% - which means a row where
     # the user typed nothing still submits a VAT rate. That must not make an
     # otherwise-empty row look filled in, or a blank trailing row (and any
@@ -100,9 +135,15 @@ class ManualInvoiceLineForm(BlankRowTolerantForm):
     def clean(self):
         cleaned = super().clean()
         quantity, total = cleaned.get("quantity"), cleaned.get(self.total_field)
-        if quantity == 0:
+        if cleaned.get("is_spread_charge"):
+            # One delivery, counted once - and no stock behind it for the
+            # sign guard below to guard.
+            cleaned["quantity"] = quantity if quantity else Decimal("1")
+        elif quantity is None:
+            self.add_error("quantity", "Saisissez la quantité de la ligne.")
+        elif quantity == 0:
             self.add_error("quantity", "Une quantité ne peut pas être nulle.")
-        elif quantity is not None and total is not None and total != 0 and (quantity < 0) != (total < 0):
+        elif total is not None and total != 0 and (quantity < 0) != (total < 0):
             # A positive count at a negative price is stock worth less than
             # nothing: the FIFO valuation's worst known failure.
             self.add_error(
@@ -112,13 +153,30 @@ class ManualInvoiceLineForm(BlankRowTolerantForm):
         return cleaned
 
 
+#: Said when every row of a document is a charge to spread, or when the only
+#: goods on it were given back. The alternative was to save the charge with
+#: nothing carrying it, which reads on the page as if it had been shared out.
+NOTHING_TO_SPREAD = (
+    "Ces frais n'ont aucune ligne de produit sur laquelle être répartis : "
+    "décochez la case, ou saisissez d'abord les articles de la facture."
+)
+
+
 class BaseManualInvoiceLineFormSet(forms.BaseFormSet):
     def clean(self):
         if any(self.errors):
             return
-        has_line = any(form.cleaned_data and not form.cleaned_data.get("DELETE") for form in self.forms)
-        if not has_line:
+        rows = [form for form in self.forms if form.cleaned_data and not form.cleaned_data.get("DELETE")]
+        if not rows:
             raise forms.ValidationError("Ajoutez au moins un produit.")
+        # Cross-row, so it has no home on a single form: the only place that
+        # sees every line at once. Pro rata of nothing is nothing, and a
+        # delivery saved with no goods under it would sit on the page looking
+        # shared out while every product still cost what it did before.
+        if any(form.cleaned_data.get("is_spread_charge") for form in rows) and not any(
+            form.carries_spread_charges for form in rows
+        ):
+            raise forms.ValidationError(NOTHING_TO_SPREAD)
 
 
 ManualInvoiceLineFormSet = forms.formset_factory(
@@ -179,10 +237,16 @@ def line_initial(line, document: str) -> dict:
         "discount_ttc": line.discount_ttc or None,
         "vat_rate": (rate * Decimal("100")).quantize(CENTS),
         "amount_source": "ttc" if document == DOCUMENT_RECEIPT else "ht",
+        # Per row, never as the field's own `initial`: a field carrying one
+        # makes an invisible gap row (0, 1, 3 - index 2 removed in the
+        # browser) read as filled in, and the save then fails « ce champ est
+        # obligatoire » on a row nobody can see. Three forms here have
+        # already shipped that bug.
+        "is_spread_charge": line.is_spread_charge,
     }
 
 
-class LineCorrectionForm(BlankRowTolerantForm):
+class LineCorrectionForm(SpreadChargeRowMixin, BlankRowTolerantForm):
     """One row of the correction page, the same for a ticket and a supplier
     invoice.
 
@@ -195,7 +259,12 @@ class LineCorrectionForm(BlankRowTolerantForm):
 
     product_name = forms.CharField(label="Produit", max_length=255)
     # Negative for a refund, with a negative amount to match (clean).
-    quantity = QuantityField(label="Qté")
+    #
+    # Not required, so a charge to spread can be typed without one: a
+    # delivery is not sold by the unit, and asking « combien de livraisons »
+    # is a question with no answer. `required` is enforced BEFORE clean(),
+    # so the rule for an ordinary line has to move into clean() with it.
+    quantity = QuantityField(label="Qté", required=False)
     # Kilos of a weighed item, litres of a measured one.
     total_volume = forms.DecimalField(
         label="Poids / volume",
@@ -227,6 +296,18 @@ class LineCorrectionForm(BlankRowTolerantForm):
         widget=forms.NumberInput(attrs={"step": "0.01", "placeholder": "remise"}),
     )
     vat_rate = forms.DecimalField(label="TVA (%)", max_digits=5, decimal_places=2, min_value=Decimal("0"))
+    # « Ce n'est pas un produit » - a delivery, printed once for the whole
+    # order. The line stays exactly as the document prints it, in the total
+    # and in every check; what it costs goes onto the goods it brought
+    # (importing.spread_charges). No `initial` here on purpose - see
+    # line_initial - and NOT a bookkeeping field: a row where somebody
+    # ticked only the box is a row they meant to fill in, and it has to say
+    # what is missing rather than vanish.
+    is_spread_charge = forms.BooleanField(
+        label=SPREAD_CHARGE_LABEL,
+        required=False,
+        widget=forms.CheckboxInput(attrs={"class": "js-spread-charge"}),
+    )
     amount_source = forms.ChoiceField(choices=(("ht", "HT"), ("ttc", "TTC")), required=False, widget=forms.HiddenInput)
     # What OCR read on the ticket, carried through so a corrected line keeps
     # it (InvoiceLine.read_as).
@@ -309,9 +390,17 @@ class LineCorrectionForm(BlankRowTolerantForm):
         if amount is None:
             self.add_error("total_ttc", "Saisissez le montant de la ligne, HT ou TTC.")
             return cleaned
-        if quantity == 0:
+        if cleaned.get("is_spread_charge"):
+            # One delivery, counted once: the box says this line is not sold
+            # by the unit, so a count left blank is a 1 rather than an error,
+            # and the sign guard below has nothing to guard - there is no
+            # stock behind it to be worth less than nothing.
+            cleaned["quantity"] = quantity if quantity else Decimal("1")
+        elif quantity is None:
+            self.add_error("quantity", "Saisissez la quantité de la ligne.")
+        elif quantity == 0:
             self.add_error("quantity", "Une quantité ne peut pas être nulle.")
-        elif quantity is not None and amount != 0 and (quantity < 0) != (amount < 0):
+        elif amount != 0 and (quantity < 0) != (amount < 0):
             if not self.charge:
                 # A positive count at a negative price is stock worth less than
                 # nothing: the FIFO valuation's worst known failure.

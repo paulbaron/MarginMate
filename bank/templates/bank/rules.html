@@ -11,6 +11,11 @@
                 manquante, et le rapprochement automatique la laisse de côté. Une dépense déjà rattachée à sa facture
                 n'est jamais cachée.
             </p>
+            <p class="muted">
+                Une règle peut aussi porter une <strong>catégorie</strong> : ces dépenses se classent alors toutes
+                seules sur <a href="{% url 'bank:spending_home' %}">Dépenses par catégorie</a>, au lieu d'être
+                nommées une par une tous les mois. Ce qu'une personne a tapé sur une opération l'emporte.
+            </p>
         </div>
     </div>
 
@@ -18,6 +23,9 @@
         <form method="post" action="{% url 'bank:rule_list' %}">
             {% csrf_token %}
             {% include "_form_fields.html" with form=form %}
+            <datalist id="spending-category-datalist">
+                {% for name in known_categories %}<option value="{{ name }}"></option>{% endfor %}
+            </datalist>
             <div class="form-actions">
                 <button class="btn btn-secondary" type="submit" name="action" value="test">Tester</button>
                 <button class="btn" type="submit" name="action" value="add">Ajouter la règle</button>
@@ -69,6 +77,7 @@
                     <tr>
                         <th>Nom</th>
                         <th>Motif</th>
+                        <th>Catégorie</th>
                         <th class="num">Dépenses</th>
                         <th class="num">Montant</th>
                         <th>État</th>
@@ -80,6 +89,24 @@
                         <tr>
                             <td>{{ rule.description|default:"—" }}</td>
                             <td><code>{{ rule.pattern }}</code></td>
+                            {% comment %}
+                            Modifiable ici : la page « Dépenses » dit que donner une catégorie à sa règle
+                            est LA façon de ne pas retaper le même mot tous les mois, et toute règle
+                            écrite avant ce champ en est dépourvue. Sans ce formulaire, corriger une
+                            faute de frappe voulait dire supprimer la règle et retaper son motif.
+                            {% endcomment %}
+                            <td data-sort="{{ rule.category }}">
+                                <form method="post" action="{% url 'bank:rule_action' rule.pk %}" class="inline-form">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="action" value="category">
+                                    <input type="text" name="categorie" value="{{ rule.category }}"
+                                           list="spending-category-datalist" autocomplete="off"
+                                           placeholder="Sans catégorie"
+                                           aria-label="Catégorie des dépenses de cette règle">
+                                    <button class="btn btn-small btn-secondary" type="submit">Classer</button>
+                                </form>
+                                {% if rule.category %}<span class="read-as">« {{ rule.category }} »</span>{% endif %}
+                            </td>
                             <td class="num">{{ found.count|default:"0" }}</td>
                             <td class="num" data-sort="{{ found.total|stringformat:'s' }}">
                                 {{ found.total|floatformat:2 }} €

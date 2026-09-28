@@ -6,9 +6,12 @@
     python manage.py laddition_import --from 2026-06-01 --to 2026-06-30 --dry-run
 
 Downloads the "Lignes de ventes" export (splitting the range into windows
-the back office will accept), reads it, and records the sales. Ranges longer
-than two years are handled; --file skips the download and reads one already
-downloaded.
+the back office will accept), reads it, and records what the import job
+records, in its order: the till products and their days (« Ventes », with
+the day's money), the recipes' sales, then the means of payment of every
+till day it read (recipes/payments.py) - which --dry-run reads and reports
+without writing. Ranges longer than two years are handled; --file skips the
+download and reads one already downloaded.
 """
 
 from datetime import date
@@ -16,10 +19,12 @@ from datetime import date
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
+from recipes.payments import record_payments
 from recipes.pos.laddition_download import LadditionDownloadError, download_sales_lines
 from recipes.pos.laddition_xlsx import LadditionExportError, parse_sales_exports
 from recipes.pos.laddition_session import LadditionAuthError
 from recipes.sales import record_sales
+from recipes.tasks import payments_log, sync_pos_products
 
 
 def _as_date(value: str) -> date:
@@ -79,6 +84,10 @@ class Command(BaseCommand):
         )
         if export.skipped:
             self.stdout.write(f"Ignored {export.skipped} row(s) with no usable date/name/quantity.")
+        # The job's own French lines: one wording for what the payments
+        # sheet said, wherever the import runs from.
+        for message in payments_log(export):
+            self.stdout.write(message)
 
         if options["dry_run"]:
             # Resolve names without writing, so the unmatched list can be
@@ -93,6 +102,15 @@ class Command(BaseCommand):
             self._report_unmatched(unknown)
             return
 
+        # The job's order exactly (tasks.import_laddition_sales_task): the
+        # till products and their days - « Ventes », the day's money - then
+        # the recipes' sales, then the payments. Without the first, this
+        # command stored a day's card and cash with no takings behind them:
+        # the very day the backfill refuses to write and « Remplacer »
+        # prunes. One rule for every writer.
+        seen = sync_pos_products(export)
+        self.stdout.write(f"{seen} till product(s) seen.")
+
         result = record_sales(export.entries, source="laddition")
         self.stdout.write(
             self.style.SUCCESS(
@@ -101,6 +119,15 @@ class Command(BaseCommand):
             )
         )
         self._report_unmatched(sorted(set(result.unmatched)))
+
+        if export.payments_read:
+            paid = record_payments(export)
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"Recorded the payments of {paid.days_written} till day(s) "
+                    f"({paid.days_unchanged} already up to date)."
+                )
+            )
 
     def _report_unmatched(self, names):
         if not names:

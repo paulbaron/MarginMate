@@ -37,6 +37,13 @@ class BankTransaction(models.Model):
     fingerprint = models.CharField(max_length=64, unique=True)
     # Rent, salaries, taxes, a loan: nothing to link.
     no_invoice = models.BooleanField(default=False)
+    # What this spending was FOR, typed by a person on « Dépenses », for the
+    # lines no invoice explains. Free text with a datalist of what already
+    # exists, like StockType.category: a list of categories to administer is
+    # one more thing to keep up to date, and the words a person types are the
+    # ones they will look for. Blank means nobody has said - which the page
+    # counts and lists first, never folds into « Autres ».
+    category = models.CharField(max_length=255, blank=True)
     # A person decided this line - linked it, unlinked it, or said there is
     # no invoice - so the automatic pass never touches it again.
     settled_by_hand = models.BooleanField(default=False)
@@ -58,20 +65,36 @@ class BankTransaction(models.Model):
 
 
 class InvoicePayment(models.Model):
-    """One invoice, paid by one bank line. A line can pay several - one debit
-    for two deliveries and a returned deposit - but an invoice is paid once."""
+    """One invoice paid by one bank line - and NEITHER side is exclusive.
+
+    A line pays several invoices (one debit for two deliveries and a
+    returned deposit) and an invoice is paid by several lines (settled in
+    two goes, or a debit split). Both are rare and both are real, and the
+    invoice side used to be a OneToOneField: a person could not record what
+    had happened, which is the one thing this table is for.
+
+    The pair is what cannot repeat: the same invoice twice on the same line
+    says nothing and would count that invoice twice in every figure the page
+    adds up. The constraint refuses it rather than trusting every caller.
+
+    Only a person makes the unusual ones. `reconcile.reconcile` still links
+    an invoice nothing pays yet and nothing else - see there.
+    """
 
     class Method(models.TextChoices):
         AUTO = "AUTO", "Automatique"
         MANUAL = "MANUAL", "À la main"
 
     transaction = models.ForeignKey(BankTransaction, on_delete=models.CASCADE, related_name="payments")
-    invoice = models.OneToOneField("invoices.Invoice", on_delete=models.CASCADE, related_name="payment")
+    invoice = models.ForeignKey("invoices.Invoice", on_delete=models.CASCADE, related_name="payments")
     method = models.CharField(max_length=10, choices=Method.choices)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["invoice__invoice_date", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["transaction", "invoice"], name="unique_transaction_invoice_payment")
+        ]
 
 
 class CounterpartyAlias(models.Model):
@@ -106,6 +129,17 @@ class IgnoreRule(models.Model):
         help_text="Expression régulière cherchée dans le libellé complet, sans tenir compte des majuscules.",
     )
     description = models.CharField("nom", max_length=255, blank=True)
+    #: What the payments this rule catches count as on « Dépenses ». The
+    #: loan, the URSSAF and the salaries are the same spending every month,
+    #: and typing their category one line at a time for ever is work a rule
+    #: already knows how to do. Optional: a rule may well say « nothing to
+    #: link » without claiming to say what the money was for.
+    category = models.CharField(
+        "catégorie",
+        max_length=255,
+        blank=True,
+        help_text="Ce que ces dépenses comptent comme sur « Dépenses ». Facultatif.",
+    )
     is_active = models.BooleanField("active", default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

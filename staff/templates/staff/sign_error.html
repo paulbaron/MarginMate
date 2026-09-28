@@ -1,0 +1,13 @@
+{% extends "staff/public_base.html" %}
+{% comment %}
+Un lien qui ne mène à rien (404), qui ne sert plus (410), une page expirée (403) : une phrase, rien
+d'autre - pas un mot sur une autre demande, pas une trace technique. Contexte : `heading`, `message`.
+{% endcomment %}
+{% block title %}{{ heading }}{% endblock %}
+{% block content %}
+    <section class="public-card">
+        <h1>{{ heading }}</h1>
+        <p>{{ message }}</p>
+        <p class="muted small">En cas de doute, adressez-vous à votre employeur.</p>
+    </section>
+{% endblock %}

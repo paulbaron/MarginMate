@@ -16,7 +16,8 @@ from datetime import date
 from django.conf import settings
 from django.utils import timezone
 
-from .models import PosProduct, PosProductDailyQuantity, SalesImportJob
+from .models import PosDailyPayment, PosProduct, PosProductDailyQuantity, SalesImportJob
+from .payments import by_method, oddities, record_payments
 from .pos.laddition_download import DownloadCancelled, download_sales_lines
 from .pos.laddition_xlsx import parse_sales_exports
 from .sales import record_sales, recipe_lookup
@@ -76,6 +77,44 @@ def money_log(export) -> list[str]:
         lines.append(
             f"{export.repeated_days} (produit, jour) lus dans deux fichiers : la dernière lecture "
             "remplace, rien ne s'additionne."
+        )
+    return lines
+
+
+def payments_log(export) -> list[str]:
+    """What the payments sheet said, in the import's own log - the same
+    care as money_log: a sheet that did not read, a ticket that did not,
+    a ticket paid nothing for a total, all named. The lines import either
+    way; only the payments are at stake here."""
+    lines = [
+        f"Feuille des tickets illisible, paiements non lus : {problem}"
+        for problem in export.payment_sheet_errors
+    ]
+    if not export.payments_read:
+        if not lines:
+            lines.append(
+                "Ce fichier ne porte pas la feuille des tickets (SalesDocument) : aucun moyen de "
+                "paiement lu, ceux déjà enregistrés restent."
+            )
+        return lines
+    methods = ", ".join(
+        f"{PosDailyPayment.label_for(method)} {_euros(payment.amount)}"
+        for method, payment in by_method(export.payments_by_method())
+    )
+    lines.append(
+        f"Paiements lus : {_euros(export.payments_total)} sur {len(export.payment_days)} jour(s), "
+        f"{export.tickets} ticket(s)" + (f" ({methods})." if methods else ".")
+    )
+    lines.extend(oddities(export))
+    if export.payment_sheets_missing:
+        lines.append(
+            f"{export.payment_sheets_missing} fichier(s) sans feuille des tickets : leurs jours gardent "
+            "les paiements déjà enregistrés."
+        )
+    if export.repeated_payment_days:
+        lines.append(
+            f"{export.repeated_payment_days} jour(s) de paiements lus dans deux fichiers : la dernière "
+            "lecture remplace, rien ne s'additionne."
         )
     return lines
 
@@ -246,6 +285,8 @@ def import_laddition_sales_task(job_id: int, start: date, end: date, download_di
         )
         for message in money_log(export):
             job.append_log(message)
+        for message in payments_log(export):
+            job.append_log(message)
 
         seen = sync_pos_products(export)
         job.append_log(f"{seen} produits de caisse vus.")
@@ -260,6 +301,15 @@ def import_laddition_sales_task(job_id: int, start: date, end: date, download_di
         if job.unmatched:
             job.append_log(
                 f"{job.unmatched} produits de caisse sans recette - à traiter dans « Produits caisse »."
+            )
+
+        # After the sales, and on its own: what the bank is paid from, per
+        # day and per means of payment (recipes/payments.py).
+        paid = record_payments(export)
+        if export.payments_read:
+            job.append_log(
+                f"Paiements enregistrés : {paid.days_written} jour(s) de caisse remplacé(s), "
+                f"{paid.days_unchanged} déjà à jour."
             )
         job.status = SalesImportJob.Status.SUCCESS
 

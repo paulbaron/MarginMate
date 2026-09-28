@@ -115,7 +115,20 @@ def build_recipes():
     make_ingredient(soda, tonic, quantity="0.2", group=1)
     make_ingredient(soda, cola, quantity="0.2", group=1)
 
-    syrup = make_recipe("Sirop maison", selling_price_ttc="0", yield_quantity="1.5", yield_unit=UnitChoices.LITRE)
+    # Sold by the glass out of a 1,5 L batch: the one recipe here whose
+    # `sale_quantity` is not the default, so the round trip, the idempotence
+    # and the merge/replace cases all compare a real portion rather than
+    # 1 against 1. Dropped from RECIPE_FIELDS it would come back as 1, which
+    # multiplies what one sale costs and what it takes off the shelf by
+    # 1/0,05 - silently, since the YIELD survives and the page goes on
+    # printing « Produit : 1,50 L ».
+    syrup = make_recipe(
+        "Sirop maison",
+        selling_price_ttc="0",
+        yield_quantity="1.5",
+        yield_unit=UnitChoices.LITRE,
+        sale_quantity=Decimal("0.05"),
+    )
     make_ingredient(syrup, sugar, quantity="0.7500")
 
     mint_recipe = make_recipe("Menthe", selling_price_ttc="3.50", vat_rate="0.10")

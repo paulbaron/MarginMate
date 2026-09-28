@@ -1,0 +1,483 @@
+{% extends "base.html" %}
+{% block title %}Entrées d'argent - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <h1>Entrées d'argent</h1>
+            <p class="page-subtitle">
+                Tout ce qui est <strong>arrivé sur le compte</strong> sur la période, à côté de ce que la caisse dit
+                avoir <strong>encaissé</strong> les mêmes jours : carte, espèces, chèques. D'un côté ce qui a été
+                vendu, de l'autre l'argent reçu.
+            </p>
+            <p class="muted">
+                Ce n'est ni <a href="{{ spending_url }}">Dépenses</a>, qui compte ce qui est sorti du compte, ni
+                <a href="{{ margins_url }}">Marges</a>, qui met les ventes face à ce qui a été facturé. Ici le relevé
+                fait foi pour l'argent reçu, à la date où la banque l'a reçu, et la caisse pour ce qu'elle a
+                encaissé, au jour de la vente.
+            </p>
+        </div>
+        <div class="actions">
+            <a class="btn btn-secondary" href="{{ bank_url }}">Banque</a>
+            <a class="btn btn-secondary" href="{{ spending_url }}">Dépenses par catégorie</a>
+        </div>
+    </div>
+
+    {% if has_lines %}
+        <form method="get" class="date-range">
+            <label class="inline-label">Du
+                <input type="date" name="du" value="{{ date_window.start_value }}"{% if showing_all %} disabled{% endif %}>
+            </label>
+            <label class="inline-label">au
+                <input type="date" name="au" value="{{ date_window.end_value }}"{% if showing_all %} disabled{% endif %}>
+            </label>
+            <button class="btn btn-small btn-secondary" type="submit">Afficher</button>
+            {% if date_window %}<a class="btn btn-small btn-secondary" href="{{ clear_url }}">Effacer</a>{% endif %}
+            {% if showing_all %}
+                <a class="btn btn-small btn-secondary" href="{{ period_url }}">Revenir à une période</a>
+            {% else %}
+                <a class="btn btn-small btn-secondary" href="{{ all_url }}">Tout l'historique</a>
+            {% endif %}
+        </form>
+
+        <p class="muted date-range-note">
+            {% if showing_all %}
+                Tout l'historique du relevé et de la caisse.
+            {% elif is_default %}
+                Les douze derniers mois, du {{ window.start|date:"d/m/Y" }} au {{ window.end|date:"d/m/Y" }} :
+                la période par défaut, faute de dates choisies.
+            {% elif window.start and window.end %}
+                Du {{ window.start|date:"d/m/Y" }} au {{ window.end|date:"d/m/Y" }}
+            {% elif window.start %}
+                Depuis le {{ window.start|date:"d/m/Y" }}
+            {% else %}
+                Jusqu'au {{ window.end|date:"d/m/Y" }}
+            {% endif %}
+            (dates de passage en banque, et jours de caisse ; les deux bornes incluses).
+        </p>
+
+        {% comment %}
+        Ce qui manque d'un côté, dit en haut avec de quoi le combler : un jour
+        de caisse dont les paiements ne sont pas lus compte 0 € encaissés, et
+        se lit comme un jour calme. Et où s'arrête chaque côté, pour qu'un
+        lecteur voie quand l'un a de l'avance sur l'autre.
+        {% endcomment %}
+        {% if report.days_without_payments %}
+            <div class="message message-warning">
+                <strong>{{ report.days_without_payments|length }} jour{{ report.days_without_payments|length|pluralize }}</strong>
+                de caisse de cette période {{ report.days_without_payments|length|pluralize:"a,ont" }} des ventes mais
+                aucun moyen de paiement lu (du {{ report.days_without_payments.0|date:"d/m/Y" }} au
+                {{ report.days_without_payments|last|date:"d/m/Y" }}) : ce que la caisse a encaissé est trop bas
+                d'autant. Pour le combler : <code>manage.py laddition_backfill_payments</code>, qui relit les exports
+                déjà sur le disque et ne va rien chercher en ligne.
+            </div>
+        {% endif %}
+        {% if report.unread_revenue_days %}
+            <div class="message message-warning">
+                Les ventes de <strong>{{ report.unread_revenue_days|length }} jour{{ report.unread_revenue_days|length|pluralize }}</strong>
+                de cette période n'ont pas encore de prix : « Vendu en caisse » ne les compte pas, et les pourboires
+                ne se calculent que sur les jours lus des deux côtés. Pour le combler :
+                <code>manage.py laddition_backfill_revenue</code>, qui relit les exports déjà sur le disque.
+            </div>
+        {% endif %}
+        {% comment %}
+        Où commence et où s'arrête chaque côté : la caisse peut remonter bien
+        avant le relevé, et comparés sur « tout », ses premiers mois se lisaient
+        comme des ventes carte jamais arrivées.
+        {% endcomment %}
+        <p class="muted small">
+            Caisse importée jusqu'au {{ report.last_till_day|date:"d/m/Y"|default:"— (aucune vente)" }} ;
+            {% if report.first_payment_day %}moyens de paiement de la caisse lus du {{ report.first_payment_day|date:"d/m/Y" }} au {{ report.last_payment_day|date:"d/m/Y" }}{% else %}aucun moyen de paiement de la caisse lu{% endif %} ;
+            relevé importé du {{ report.first_statement_day|date:"d/m/Y"|default:"—" }} au {{ report.last_statement_day|date:"d/m/Y"|default:"—" }}.
+            Un côté en avance sur l'autre compte des jours que l'autre ne voit pas encore.
+        </p>
+        {% if report.till_before_statement or report.bank_before_till %}
+            <div class="message message-warning">
+                {% if report.till_before_statement %}
+                    <p>
+                        Du {{ report.till_before_from|date:"d/m/Y" }} au {{ report.till_before_to|date:"d/m/Y" }}, la caisse a encaissé
+                        {{ report.till_before_statement_total|floatformat:2 }} €{% if report.till_card_before_statement %} (dont {{ report.till_card_before_statement|floatformat:2 }} € par carte){% endif %}
+                        sur des jours que le relevé ne couvre pas : il commence le {{ report.first_statement_day|date:"d/m/Y" }}.
+                        L'écart ci-dessous ne les compte pas ; « Vendu en caisse », « Encaissé en caisse » et la colonne de
+                        la caisse, eux, les comptent.
+                    </p>
+                {% endif %}
+                {% if report.bank_before_till %}
+                    <p>
+                        Du {{ report.bank_before_from|date:"d/m/Y" }} au {{ report.bank_before_to|date:"d/m/Y" }},
+                        {{ report.bank_before_till_total|floatformat:2 }} € sont arrivés sur le compte (versements carte comptés au brut,
+                        espèces et chèques déposés) avant le premier jour où la caisse a des moyens de paiement lus, le
+                        {{ report.first_payment_day|date:"d/m/Y" }} : l'écart ci-dessous ne les compte pas.
+                    </p>
+                {% endif %}
+                {% if covered_url %}
+                    <p><a href="{{ covered_url }}">Comparer sur les jours couverts des deux côtés</a>, à partir du {{ report.covered_since|date:"d/m/Y" }}.</p>
+                {% endif %}
+            </div>
+        {% endif %}
+
+        <div class="stat-row">
+            <div class="stat">
+                <span class="stat-label">Arrivé sur le compte</span>
+                <span class="stat-value">{{ report.received_total|floatformat:2 }} €</span>
+                <span class="stat-note">{{ report.received_count }} opération{{ report.received_count|pluralize }}</span>
+            </div>
+            <div class="stat">
+                <span class="stat-label">{{ sources.carte }}</span>
+                <span class="stat-value">{{ report.card_net|floatformat:2 }} €</span>
+                <span class="stat-note">
+                    {{ report.card_count }} versement{{ report.card_count|pluralize }} :
+                    {{ report.card_gross|floatformat:2 }} € encaissés, {{ report.card_commission|floatformat:2 }} € de
+                    commission{% if report.card_commission_rate is not None %} ({{ report.card_commission_rate|floatformat:2 }} %){% endif %}
+                </span>
+            </div>
+            <div class="stat">
+                <span class="stat-label">{{ sources.especes }}</span>
+                <span class="stat-value">{{ report.cash_total|floatformat:2 }} €</span>
+                <span class="stat-note">{{ report.cash_count }} dépôt{{ report.cash_count|pluralize }}</span>
+            </div>
+            {% comment %}
+            Pas de statistique « Chèques remis » : ils sont rares, leur ligne est dans
+            le tableau ci-dessous, et une septième case repoussait la dernière seule
+            sur une deuxième rangée.
+            {% endcomment %}
+            <div class="stat{% if report.unnamed_others %} stat-warn{% endif %}">
+                <span class="stat-label">{{ sources.autres }}</span>
+                <span class="stat-value">{{ report.others_total|floatformat:2 }} €</span>
+                <span class="stat-note">
+                    {{ report.others|length }} opération{{ report.others|length|pluralize }}{% if report.unnamed_others %},
+                    dont <a href="#autres-entrees">{{ report.unnamed_others }} à classer</a>{% endif %}
+                </span>
+            </div>
+            <div class="stat">
+                <span class="stat-label">Vendu en caisse</span>
+                <span class="stat-value">{{ report.takings|floatformat:2 }} €</span>
+                <span class="stat-note">le chiffre d'affaires TTC des jours lus</span>
+            </div>
+            <div class="stat">
+                <span class="stat-label">Encaissé en caisse</span>
+                <span class="stat-value">{{ report.till_total|floatformat:2 }} €</span>
+                <span class="stat-note">
+                    tous moyens de paiement{% if report.tips_days %}, dont {{ report.tips|floatformat:2 }} € de
+                    pourboires et trop-perçus sur les {{ report.tips_days }} jour{{ report.tips_days|pluralize }} lu{{ report.tips_days|pluralize }}
+                    des deux côtés{% endif %}
+                </span>
+            </div>
+        </div>
+
+        {% comment %}
+        Ce que la page reconnaît, dit en clair : une règle qu'on ne voit pas est
+        une règle dont on ne peut pas savoir qu'elle s'est trompée.
+        {% endcomment %}
+        <ul class="muted small">
+            <li><strong>Versement carte</strong> : une entrée dont le libellé porte « TOTAL ENCAISSE &lt;montant&gt; EUROS ».
+                Ce montant est ce que le prestataire des paiements carte a encaissé (brut) ; la ligne du relevé est ce qui
+                est arrivé (net) ; la commission est la différence, telle quelle.</li>
+            <li><strong>Dépôt d'espèces</strong> : le type d'opération « VERSEMENT ESPECES ».
+                <strong>Remise de chèques</strong> : « REMISE CHEQUES ».</li>
+            <li><strong>Autres entrées</strong> : tout le reste (un virement pour une privatisation, un apport, un
+                remboursement…), à classer ci-dessous comme sur « Dépenses ».</li>
+        </ul>
+
+        <h2>Ce que la caisse a encaissé, et ce qui est arrivé sur le compte</h2>
+        <div class="table-wrap">
+            <table data-table data-table-label="moyens de paiement">
+                <thead>
+                    <tr>
+                        <th>Moyen de paiement</th>
+                        <th class="num">Encaissé en caisse</th>
+                        <th class="num">Paiements</th>
+                        {% comment %}
+                        La carte au brut : ce que le prestataire dit avoir encaissé, le chiffre
+                        que la caisse peut égaler. Ce qui est arrivé net est le brut moins la
+                        commission, en colonne à part.
+                        {% endcomment %}
+                        <th class="num">Arrivé sur le compte</th>
+                        <th class="num">Opérations</th>
+                        <th class="num">Écart</th>
+                        <th class="num">Commission</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in report.rows %}
+                        <tr>
+                            <td><strong>{{ row.label }}</strong></td>
+                            <td class="num" data-sort="{{ row.till|default_if_none:''|stringformat:'s' }}">
+                                {% if row.till is not None %}{{ row.till|floatformat:2 }} €{% else %}—{% endif %}
+                            </td>
+                            <td class="num">{% if row.till is not None %}{{ row.till_payments }}{% else %}—{% endif %}</td>
+                            <td class="num" data-sort="{{ row.bank|default_if_none:''|stringformat:'s' }}">
+                                {% if row.bank is not None %}{{ row.bank|floatformat:2 }} €{% if row.net is not None %} brut{% endif %}{% else %}—{% endif %}
+                            </td>
+                            <td class="num">{% if row.bank is not None %}{{ row.bank_count }}{% else %}—{% endif %}</td>
+                            <td class="num" data-sort="{{ row.difference|default_if_none:''|stringformat:'s' }}">
+                                {% if row.difference is not None %}{{ row.difference|floatformat:2 }} €{% else %}—{% endif %}
+                            </td>
+                            <td class="num" data-sort="{{ row.commission|default_if_none:''|stringformat:'s' }}">
+                                {% if row.commission is not None %}{{ row.commission|floatformat:2 }} €{% else %}—{% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <th>Total</th>
+                        <th class="num">{{ report.till_total|floatformat:2 }} €</th>
+                        <th></th>
+                        <th class="num">{{ report.received_total|floatformat:2 }} € net</th>
+                        <th class="num">{{ report.received_count }}</th>
+                        <th></th>
+                        <th class="num">{{ report.card_commission|floatformat:2 }} €</th>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+        {% comment %}
+        Ce que chaque écart veut dire, sous le tableau plutôt que dans une colonne :
+        une phrase par ligne serrait les chiffres, qui sont ce qu'on vient lire.
+        {% endcomment %}
+        <ul class="muted small">
+            {% for row in report.rows %}{% if row.note %}<li><strong>{{ row.label }}</strong> : {{ row.note }}</li>{% endif %}{% endfor %}
+        </ul>
+        {% comment %}
+        Le délai d'un versement carte est dit une fois, sur la ligne Carte
+        (income.NOTES) : répété ici mot pour mot, il se lisait deux fois de suite.
+        {% endcomment %}
+        <p class="muted">
+            L'écart est ce qui est arrivé moins ce que la caisse a encaissé, dit sans jugement : la page ne voit ni
+            le tiroir-caisse ni ce qui a été payé en liquide. L'écart est pris sur les jours que les deux côtés couvrent :
+            ce que la caisse a encaissé avant la première ligne du relevé, ou ce qui est arrivé avant le premier jour de
+            caisse lu, reste dans sa colonne et n'y compte pas. La carte se compare au <strong>brut</strong>, ce que le
+            prestataire dit avoir encaissé ; le total, lui, est ce qui est arrivé, commission déduite.
+        </p>
+
+        <h2 id="solde">Ventes carte pas encore versées</h2>
+        {% if report.balance.reason %}
+            <div class="empty-state">
+                <p>Pas de solde : {{ report.balance.reason }}</p>
+            </div>
+        {% else %}
+            <p class="lead">
+                Ce que la caisse a encaissé par carte, moins ce que les versements carte ont apporté,
+                <strong>compté à partir du {{ report.balance.anchor|date:"d/m/Y" }}</strong> : ce que paie le premier
+                versement du relevé ({{ report.balance.first_payout|date:"d/m/Y" }}). Calculé sur tout l'historique, la
+                période ne fait que choisir ce qui s'affiche.
+            </p>
+            {% if report.last_payout %}
+                <div class="stat-row">
+                    <div class="stat">
+                        <span class="stat-label">Pas encore versé au {{ report.last_payout.entry.day|date:"d/m/Y" }}</span>
+                        <span class="stat-value">{{ report.last_payout.pending|floatformat:2 }} €</span>
+                        <span class="stat-note">après le dernier versement carte de la période</span>
+                    </div>
+                </div>
+            {% else %}
+                <p class="muted">Aucun versement carte de cette période ne compte dans le solde.</p>
+            {% endif %}
+            {% if chart_svg %}
+                {{ chart_svg|safe }}
+            {% endif %}
+            <p class="muted">
+                Le solde reste d'habitude autour d'un niveau : les ventes des derniers jours, pas encore versées.
+                Une <strong>marche</strong> qui ne redescend jamais est une vente carte que le relevé ne montre pas :
+                un ticket réglé en vrai par virement, ou un versement qui n'est pas arrivé. Les chiffres sont dans le
+                <a href="#versements">tableau des versements</a>, en bas de la page.
+            </p>
+        {% endif %}
+
+        {% if report.months %}
+            <h2>Mois par mois</h2>
+            <div class="table-wrap">
+                <table data-table data-table-label="mois">
+                    <thead>
+                        <tr>
+                            <th>Mois</th>
+                            <th class="num">Vendu en caisse</th>
+                            <th class="num">Carte encaissée en caisse</th>
+                            <th class="num">Versements carte (brut)</th>
+                            <th class="num">Commission</th>
+                            <th class="num">Versé (net)</th>
+                            <th class="num">Espèces encaissées en caisse</th>
+                            <th class="num">Espèces déposées</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for month in report.months %}
+                            <tr>
+                                <td data-sort="{{ month.first_day|date:'Y-m-d' }}">{{ month.label }}</td>
+                                <td class="num" data-sort="{{ month.takings|stringformat:'s' }}">{{ month.takings|floatformat:2 }} €</td>
+                                <td class="num" data-sort="{{ month.card_sold|stringformat:'s' }}">{{ month.card_sold|floatformat:2 }} €</td>
+                                <td class="num" data-sort="{{ month.payouts_gross|stringformat:'s' }}">{{ month.payouts_gross|floatformat:2 }} €</td>
+                                <td class="num" data-sort="{{ month.commission|stringformat:'s' }}">{{ month.commission|floatformat:2 }} €</td>
+                                <td class="num" data-sort="{{ month.net|stringformat:'s' }}">{{ month.net|floatformat:2 }} €</td>
+                                <td class="num" data-sort="{{ month.cash_sold|stringformat:'s' }}">{{ month.cash_sold|floatformat:2 }} €</td>
+                                <td class="num" data-sort="{{ month.cash_deposited|stringformat:'s' }}">{{ month.cash_deposited|floatformat:2 }} €</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <p class="muted">
+                La caisse au jour de la vente, la banque au jour où elle a reçu : un versement du 1er paie souvent
+                des ventes du mois d'avant. Le premier et le dernier mois ne comptent que les jours de la période.
+            </p>
+        {% endif %}
+
+        <h2 id="autres-entrees">Autres entrées</h2>
+        {% if report.others %}
+            <p class="muted">
+                Ce que la caisse ne voit pas : un virement pour une privatisation, un apport, le remboursement d'un
+                fournisseur, un prélèvement retourné. Donnez-leur un nom comme sur « Dépenses » (le même champ,
+                une liste des noms déjà donnés à des entrées) ; les non classées d'abord.
+            </p>
+            {% if report.other_categories %}
+                <div class="table-wrap">
+                    <table data-table data-table-label="catégories d'entrées">
+                        <thead>
+                            <tr>
+                                <th>Catégorie</th>
+                                <th class="num">Montant</th>
+                                <th class="num">Opérations</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for category in report.other_categories %}
+                                <tr>
+                                    <td><strong>{{ category.name }}</strong></td>
+                                    <td class="num" data-sort="{{ category.amount|stringformat:'s' }}">{{ category.amount|floatformat:2 }} €</td>
+                                    <td class="num">{{ category.count }}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% endif %}
+            <div class="table-wrap">
+                <table data-table data-table-label="autres entrées">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Payeur</th>
+                            <th class="num">Montant</th>
+                            <th>Catégorie</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for entry in report.others %}
+                            {% with line=entry.line %}
+                                <tr>
+                                    <td data-sort="{{ line.operation_date|date:'Y-m-d' }}">{{ line.operation_date|date:"d/m/Y" }}</td>
+                                    <td>
+                                        <strong>{{ line.counterparty|default:line.bank_type }}</strong>
+                                        <span class="read-as">{{ line.label|truncatechars:90 }}</span>
+                                    </td>
+                                    <td class="num" data-sort="{{ line.amount|stringformat:'s' }}">{{ line.amount|floatformat:2 }} €</td>
+                                    {% comment %}
+                                    data-sort et le nom en texte à côté du champ : la valeur d'un <input>
+                                    n'est ni cherchée ni triée par static/js/datatable.js, qui lit textContent.
+                                    {% endcomment %}
+                                    <td data-sort="{{ entry.category }}">
+                                        <form method="post" action="{% url 'bank:bank_line_action' line.pk %}" class="inline-form">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="action" value="category">
+                                            <input type="hidden" name="next" value="{{ page_url }}#autres-entrees">
+                                            <input type="text" name="categorie" value="{{ line.category }}"
+                                                   list="income-category-datalist" autocomplete="off"
+                                                   placeholder="{{ no_category }}"
+                                                   aria-label="Catégorie de cette entrée">
+                                            <button class="btn btn-small" type="submit">Classer</button>
+                                        </form>
+                                        <span class="read-as">{% if entry.unnamed %}{{ no_category }}{% else %}« {{ entry.category }} »{% endif %}</span>
+                                    </td>
+                                </tr>
+                            {% endwith %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <datalist id="income-category-datalist">
+                {% for name in known_categories %}<option value="{{ name }}"></option>{% endfor %}
+            </datalist>
+        {% else %}
+            <div class="empty-state">
+                <p>Aucune autre entrée sur cette période : tout ce qui est arrivé vient de la carte, des espèces ou des chèques.</p>
+            </div>
+        {% endif %}
+
+        {% comment %}
+        La liste la plus longue en dernier : elle a une ligne par versement, à peu près
+        une par jour, et placée avant « Mois par mois » (la réponse la plus lisible) et
+        « Autres entrées » (le seul travail à faire), elle les repoussait tout en bas.
+        {% endcomment %}
+        <h2 id="versements">Versements carte</h2>
+        {% if report.payouts %}
+            <div class="table-wrap">
+                <table data-table data-table-label="versements carte">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th class="num">Encaissé</th>
+                            <th class="num">Commission</th>
+                            <th class="num">Versé</th>
+                            {% comment %}
+                            « Même montant au centime », jamais « a payé » : un versement n'égale
+                            une suite de jours de caisse qu'une fois sur trois environ, et deux
+                            montants égaux sont tout ce que la page sait.
+                            {% endcomment %}
+                            <th>Ventes carte au même montant</th>
+                            <th class="num">Pas encore versé après</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% comment %}
+                        Le plus récent d'abord : c'est de lui que parle « Pas encore versé au … »,
+                        et une année de versements le mettait à la dernière ligne.
+                        {% endcomment %}
+                        {% for row in report.payouts reversed %}
+                            {% with entry=row.entry %}
+                                <tr>
+                                    <td data-sort="{{ entry.day|date:'Y-m-d' }}">{{ entry.day|date:"d/m/Y" }}</td>
+                                    <td class="num" data-sort="{{ entry.gross|stringformat:'s' }}">{{ entry.gross|floatformat:2 }} €</td>
+                                    <td class="num" data-sort="{{ entry.commission|stringformat:'s' }}">
+                                        {{ entry.commission|floatformat:2 }} €
+                                        {% if entry.commission_rate is not None %}<span class="read-as">{{ entry.commission_rate|floatformat:2 }} %</span>{% endif %}
+                                    </td>
+                                    <td class="num" data-sort="{{ entry.net|stringformat:'s' }}">{{ entry.net|floatformat:2 }} €</td>
+                                    <td data-sort="{{ row.run.0|date:'Y-m-d' }}">
+                                        {% if row.run %}
+                                            {% if row.run.0 == row.run.1 %}
+                                                même montant au centime que les ventes carte du {{ row.run.0|date:"d/m/Y" }}
+                                            {% else %}
+                                                même montant au centime que les ventes carte du {{ row.run.0|date:"d/m/Y" }} au {{ row.run.1|date:"d/m/Y" }}
+                                            {% endif %}
+                                        {% else %}—{% endif %}
+                                    </td>
+                                    <td class="num" data-sort="{{ row.pending|default_if_none:''|stringformat:'s' }}">
+                                        {% if row.pending is not None %}{{ row.pending|floatformat:2 }} €{% else %}<span class="muted">avant la caisse</span>{% endif %}
+                                    </td>
+                                </tr>
+                            {% endwith %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <p class="muted">
+                « Même montant au centime » : des jours de ventes carte qui se suivent, dans les huit jours avant le
+                versement, pas déjà pris par un versement précédent, dont le total est exactement le montant encaissé
+                - les plus récents d'abord, puis le moins de jours. Le prestataire ne regroupe pas les ventes par
+                journée de caisse, et un paiement après minuit change de jour : beaucoup de versements n'ont donc pas
+                de correspondance exacte, sans que rien ne manque. C'est le solde qui le dit.
+            </p>
+        {% else %}
+            <div class="empty-state">
+                <p>Aucun versement carte sur cette période.</p>
+            </div>
+        {% endif %}
+    {% else %}
+        <div class="empty-state">
+            <p>
+                Aucun relevé importé pour l'instant : exportez le compte en CSV depuis le site de la banque, puis
+                importez-le depuis <a href="{{ bank_url }}">Banque</a>.
+            </p>
+        </div>
+    {% endif %}
+{% endblock %}

@@ -14,10 +14,12 @@ aren't:
     right and gets separated from the row it explains the moment you sort.
 """
 
+import tempfile
 from datetime import date, datetime
 from decimal import Decimal
 
-from django.test import TestCase
+from django.contrib.staticfiles.testing import StaticLiveServerTestCase
+from django.test import TestCase, tag
 from django.urls import reverse
 from django.utils import timezone
 
@@ -129,6 +131,32 @@ class SearchableSortableTableTests(TestCase):
         )
         self.assertContains(self.assertEnhancedTable("margins:margins_home"), 'data-table-label="catégories"')
 
+    def test_income(self):
+        """« Entrées d'argent »: its means of payment, its months and its
+        other entries are lists like any other."""
+        from bank.models import BankTransaction
+
+        BankTransaction.objects.create(
+            # Inside the page's default period whenever this runs.
+            operation_date=timezone.localdate(),
+            label="VIR SEPA RECU /FRM CLIENT EXEMPLE",
+            amount=Decimal("50.00"),
+            fingerprint="ui-income",
+        )
+        response = self.assertEnhancedTable("bank:income_home")
+        self.assertContains(response, 'data-table-label="moyens de paiement"')
+        self.assertContains(response, 'data-table-label="autres entrées"')
+
+    def test_staff(self):
+        """« Personnel »: the employees and an employee's months are lists;
+        the month's grid is a form, and is not one."""
+        from staff.models import Employee
+
+        # Invented: the repository is public and a timesheet is personal data.
+        person = Employee.objects.create(last_name="Dupont", first_name="Jeanne", tuesday_hours=7)
+        self.assertContains(self.assertEnhancedTable("staff:home"), 'data-table-label="salariés"')
+        self.assertContains(self.assertEnhancedTable("staff:employee", pk=person.pk), 'data-table-label="mois"')
+
     def test_stock_take_list(self):
         self.assertEnhancedTable("inventory:stock_take_list")
 
@@ -182,7 +210,17 @@ class SortKeyTests(TestCase):
         response = self.client.get(reverse("inventory:stock_list"))
         # Gin is the priciest alternative, so it's the one carrying the
         # estimate - and its sort key must still be the bare number.
-        self.assertContains(response, 'data-sort="4.00"')
+        #
+        # Four decimals rather than two since 25/09/2026, and the same
+        # number: what one sale consumes is scaled by `Recipe.sold_share`
+        # (a multiplication) where it used to be divided by the yield, and
+        # Decimal division normalises an exponent where multiplication adds
+        # it - 0,0400 x 100 is 4,0000 where 0,0400 / 1,0000 x 100 was 4,00.
+        # Nobody reads this: the cell itself prints |floatformat:2, and
+        # datatable.js parses the attribute as a number. What this test is
+        # about is that the attribute is a bare number at all, with none of
+        # the « ? » the estimate badge puts in the cell's own text.
+        self.assertContains(response, 'data-sort="4.0000"')
 
 
 class ChildRowTests(TestCase):
@@ -269,6 +307,8 @@ class PageChromeTests(TestCase):
             "recipes:sales_list",
             "inventory:stock_take_list",
             "margins:margins_home",
+            "bank:income_home",
+            "staff:home",
         ):
             with self.subTest(page=url_name):
                 self.assertContains(self.client.get(reverse(url_name)), "page-subtitle")
@@ -341,7 +381,7 @@ class TemplateHygieneTests(TestCase):
                 "templates",
                 *[
                     f"{app}/templates"
-                    for app in ("inventory", "invoices", "recipes", "bank", "margins", "transfer")
+                    for app in ("inventory", "invoices", "recipes", "bank", "margins", "transfer", "staff")
                 ],
             ):
                 candidate = root / base
@@ -556,6 +596,20 @@ class ChartMarkupTests(TestCase):
         from decimal import Decimal
 
         self.assertEqual(_build_price_history_svg([(date(2026, 1, 1), Decimal("1.50"))]), "")
+
+    def test_the_hover_script_never_writes_markup(self):
+        """The server escapes every name it puts in `data-label`, and
+        `getAttribute` hands the name back DECODED: written into the tooltip
+        as HTML, a category typed as `<img onerror=…>` ran on hover. The
+        tooltip is built from nodes and text only
+        (PieTooltipInBrowserTests drives it in a real Chrome)."""
+        import pathlib
+        import re
+
+        source = (pathlib.Path(__file__).resolve().parent.parent / "static/js/charts.js").read_text(encoding="utf-8")
+        for pattern in (r"\.innerHTML\s*[+]?=", r"\.outerHTML\s*[+]?=", r"insertAdjacentHTML", r"document\.write"):
+            with self.subTest(pattern=pattern):
+                self.assertIsNone(re.search(pattern, source))
 
 
 class FormRenderingTests(TestCase):
@@ -859,3 +913,89 @@ class TransferReportTableTests(TestCase):
         for heading in ("Créés", "Modifiés", "Supprimés", "Inchangés"):
             self.assertIn(heading, html)
         self.assertNotIn("À créer", html)
+
+
+@tag("browser")
+class PieTooltipInBrowserTests(StaticLiveServerTestCase):
+    """A category name typed as markup, hovered on the « Dépenses » pie in a
+    real (headless) Chrome: the tooltip shows the name as text, and nothing
+    the name spells is built into the page.
+
+    The server escapes it (`data-label="&lt;img …"`); what undid that was
+    static/js/charts.js reading the attribute back - decoded - into
+    `innerHTML`, where the image's `onerror` ran. Tagged "browser":
+    `--exclude-tag=browser` for the fast loop. Skipped where Chrome or its
+    driver is missing. Data invented."""
+
+    NAME = '<img id="injected" src="nothing-here" onerror="document.title=\'ran\'">'
+    # Its flush then fires no post_migrate: recreated content types broke
+    # every later class restoring its snapshot (tests/test_transaction_cases.py).
+    serialized_rollback = True
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        try:
+            from invoices.scrapers import website
+
+            cls.driver = website.build_chrome(tempfile.mkdtemp(), True)
+        except Exception as exc:  # noqa: BLE001
+            cls.tearDownClass()
+            raise cls.skipTest(cls, f"Chrome indisponible : {exc}")
+
+    @classmethod
+    def tearDownClass(cls):
+        driver = getattr(cls, "driver", None)
+        if driver is not None:
+            driver.quit()
+        super().tearDownClass()
+
+    def setUp(self):
+        from bank.models import BankTransaction
+
+        for number, (category, amount) in enumerate(((self.NAME, "600.00"), ("Loyer inventé", "400.00"))):
+            BankTransaction.objects.create(
+                operation_date=date(2026, 6, 3 + number),
+                label=f"PRLV SEPA PAYEUR INVENTE {number} REF/{number:04d}",
+                counterparty=f"PAYEUR INVENTE {number}",
+                amount=-Decimal(amount),
+                kind=BankTransaction.Kind.DEBIT,
+                fingerprint=f"pie-tooltip-{number}",
+                category=category,
+            )
+        self.driver.get(f"{self.live_server_url}{reverse('bank:spending_home')}?du=2026-06-01&au=2026-06-30")
+
+    def hover(self, trigger: str) -> dict:
+        """Runs `trigger` on the page, then reads the tooltip back."""
+        return self.driver.execute_script(
+            trigger
+            + """
+            var tip = document.querySelector('.chart-pie [data-chart-tooltip]');
+            return {
+                injected: !!document.getElementById('injected'),
+                elements: Array.prototype.map.call(tip.querySelectorAll('*'), function (e) { return e.tagName; }),
+                text: tip.textContent,
+                title: document.title
+            };
+            """
+        )
+
+    def test_hovering_the_wedge_shows_the_name_as_text(self):
+        found = self.hover(
+            "var slice = document.querySelector('.chart-pie .chart-slice[data-index=\"0\"]');"
+            "slice.dispatchEvent(new MouseEvent('mousemove', {bubbles: true, clientX: 50, clientY: 50}));"
+        )
+        self.assertFalse(found["injected"])
+        self.assertNotIn("IMG", found["elements"])
+        self.assertIn(self.NAME, found["text"])
+        self.assertNotEqual(found["title"], "ran")
+
+    def test_hovering_the_legend_shows_the_name_as_text(self):
+        found = self.hover(
+            "var item = document.querySelector('.chart-pie [data-legend-for=\"0\"]');"
+            "item.dispatchEvent(new MouseEvent('mouseenter', {bubbles: false}));"
+        )
+        self.assertFalse(found["injected"])
+        self.assertNotIn("IMG", found["elements"])
+        self.assertIn(self.NAME, found["text"])
+        self.assertIn("600.00 €", found["text"])

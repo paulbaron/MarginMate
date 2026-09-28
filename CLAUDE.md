@@ -18,7 +18,10 @@ Add `--exclude-tag=browser` for the fast loop: the browser tests drive a
 real headless Chrome (`invoices/tests/test_website_scraper_browser.py`,
 against a customer portal served from the machine) and take about nine
 minutes (45 tests, 19/09). They skip themselves where Chrome or its driver is
-missing.
+missing. They also reach the network by themselves:
+`invoices.scrapers.website.build_chrome` asks webdriver-manager, which looks
+the latest driver up online - from a session that must stay offline, run them
+with the cached chromedriver given by path.
 
 **Every `TransactionTestCase` sets `serialized_rollback = True`** (the
 browser classes, « Données »'s page and safety tests;
@@ -102,7 +105,11 @@ is its own module, the way `ocr.py` is: `embedded_xml(path)`,
 `looks_like_an_invoice(data)`, `read(data)`. Pure - no database, no model,
 no request, nothing on the network. No new dependency either: pdfminer.six
 (through pdfplumber) resolves the PDF attachment, and `xml.etree.
-ElementTree` plus `zlib` do the rest. **Do not add pypdf, pikepdf or lxml.**
+ElementTree` plus `zlib` do the rest. **Do not add pypdf or pikepdf, and do
+not use lxml here.** lxml is installed ONLY as pyHanko's dependency (the
+timesheet signatures, `staff/signing.py`, 28/09); this reader keeps
+`xml.etree.ElementTree`, which every refusal below - the DOCTYPE guard, the
+encodings - is written and tested against.
 
 `ParsedInvoice.einvoice` (an `EInvoiceFacts`, `parsers/base.py`) is set by
 this reader and by nothing else, so `parsed.einvoice is not None` is the one
@@ -711,6 +718,88 @@ waiting to be checked** (`receipts.apply_known_prices`) - one Pita price left
 on. Every known price is applied, each as of its own ticket's date, and a
 checked ticket is never rewritten (except the one the price was typed on).
 
+### La lecture par colonnes (`parsers/layout.py`)
+
+The generic reader reads a line for what its numbers do. An invoice prints a
+TABLE, and read as text its rows give the wrong name ("1 704411 Câble HDMI
+2 m"), pass a row printing its own tax off as the VAT table, and file the
+footer's "Capital" as a purchase. `ReceiptParser.parse_ocr_pages` now hands
+the reader WHERE each piece of text sits (`PdfPage.rows`, one `layout.Row` of
+`Cell(text, x0, x1)` per text line, from a PDF's own words or a photo's
+boxes) and `layout.find_table` says which rows are a table's header, its
+items and its wrapped descriptions, and which columns hold what. A page read
+as text alone (`parse_text`, a hand-written fixture) reads exactly as before:
+measured on the stored readings of every checked ticket with the positions
+left out, the reading is the same but for one DIY ticket read better.
+
+**Three things decide, in this order, and the last one wins.** Alignment:
+cells overlapping horizontally across rows are one column (the OCR's own
+rule). Vocabulary: a line made of the generic words a French or English
+invoice heads its columns with - désignation, référence, quantité, prix
+unitaire, montant, valeur, TVA, remise… - over one to three lines, PROPOSES
+a role per column. Arithmetic CONFIRMS: the quantity column is the one whose
+value times the unit price makes the amount; an amount is HT when its rate
+makes the row's tax, when the row's two unit prices are one rate apart, or
+when another row of the same column proved it (a column is HT or TTC as a
+whole; a row at 0 % proves nothing); a column the header calls "TVA" holds
+rates or taxes, and its cells say which. Without a header, two rows whose
+columns multiply out the same way are a table too.
+
+**What it never does**, each a bug found:
+
+- name a column from its position;
+- take the rightmost figures for the amount because nothing else was found.
+  Under a header the amount column is one the header calls an amount, the
+  one a quantity times a unit price makes, or the only money column, and it
+  has to HOLD the amount of the rows it is for: a column that misses more
+  priced rows than it holds is not the column and the page is no table (a
+  PDF printing each line as one string of text puts its figures wherever the
+  words before them end, and the repo's own hand-written invoice was a
+  one-row table with a truncated name, every check passing);
+- give a header word to more columns than it has roles (a DIY till's column
+  of lone "1"s - the VAT code - became every row's quantity);
+- let the description header name a numeric column, or a numeric role's
+  header word exclude a name lying under it: the figures bound the name, not
+  the words, and a footnoted "2025 (1)" under a row is inside the
+  description, an integer, never 2 025 €;
+- join a sentence, or a line reaching under the figures, onto a name (a
+  one-row table has no row pitch to refuse the shop's terms with);
+- read a body line made of header words ("Prix Unitaire Brut HT: 123,45 €",
+  a figure run into it or not) as an article;
+- trust a header's "HT" alone;
+- or decide what the purchase is: the reader's anchors (the printed total,
+  the VAT table) go on doing that over the readings the columns hand it.
+
+**The reader keeps the say over what the text logic already knows**
+(`GenericReceiptParser._read_items`): a department heading - dots or
+"** … **" - with the product's amount glued on belongs to the name printed
+under it; a line opening on « dont » is part of the item above; a discount, a
+detail, a sub-total inside the table is left to the text reading. A table
+with no quantity column keeps the text's count and the name it was cut from
+("CHAINE D4 X4" is four), and `name_cell_text` cuts a trailing whole number
+as the text reading does, or the same article read two ways is two products.
+A row in HT keeps the TTC it prints (`ItemRow.ttc_printed`): 6,64 HT at 5,5 %
+does not convert back to 7,00.
+
+**« Tableau reconnu » states what the reader DID, not what the table looked
+like** (`LayoutView.report`): the columns found (a column no item row fills
+is left out, a doubled role counted), which of the quantity, unit price,
+amount and rate actually have a column, how many table rows the arithmetic
+kept, the names taken from the text, the rows handed to the text on purpose
+(a calculation, a heading), the lines read outside the table - and it FAILS
+when a table row was left out by the arithmetic or a body row printing money
+was read as text: on a scratch copy of the real data that flagged twice as
+many wrong readings that had passed every check as right ones. The check's
+detail is rendered verbatim on the review screen, in French.
+
+**Fixtures are positions copied from real layouts, every name, code and
+figure invented** - the public repository is audited against the real
+strings AND against every real amount printed even once: a docstring ships
+like code, and the first version quoted real rows. `find_table` is linear in
+the cells times the columns (`_cluster` sweeps left to right;
+`_cluster_pairwise` is the reference its tests compare it with): a quadratic
+grouping took seconds on a page of a few hundred rows.
+
 ### A supplier of charges has no products
 
 A subscription, a rent, a water bill: there is no product behind them and
@@ -1133,6 +1222,86 @@ neither. Every document's figures are read once and kept by their text
 (`identifiers._document_identifiers`, `may_print`): a supplier's page reads
 all 880 documents, and reading them again made it half a second.
 
+**An identifier is TYPED as well as learned** (« Ajouter un identifiant » on
+the supplier's page, `identifiers.read_typed`). Until 25/09 a supplier could
+only be given what its OWN documents already printed (« Retenir », limited to
+`identifier_report`'s `can_keep`) or have one taken away, and on 24/09 that
+cost the owner a two-page repair: one supplier had learned another's SIREN,
+its two phone numbers and its web site, so they had to be removed from it one
+at a time before the rightful supplier could claim them back. Four rules came
+out of it:
+
+- **Typed and printed read the same.** `read_typed` hands what was typed to
+  `_line_identifiers`, the very function that reads a printed page, with the
+  word SIREN in front of it (that is what makes a bare run of nine digits a
+  company number rather than a phone number). Read by a second function, a
+  SIREN typed by hand and the same SIREN found on an invoice would be two
+  keys, and a supplier would be recognised by one of them and not the other
+  with nothing on screen able to say why. Checked on the real data, read-only:
+  every stored identifier round-trips, typed bare or as the page prints it.
+- **The refusal names the fault** - « sa clé de contrôle ne tombe pas juste »,
+  « 8 chiffres : un n° SIREN en a neuf », « commence par 0 », « un seul
+  identifiant à la fois » - because the person typing has the invoice in front
+  of them and a bare « non » is one nobody can answer. `TypedIdentifierError`
+  is a ValueError, like every other refusal that reaches a message.
+- **A figure two suppliers retain names NEITHER** (`identified_supplier`), and
+  that state was rendered nowhere: typing one another supplier holds is
+  therefore refused, the page comes back carrying it (`?deplacer=`), says whose
+  it is, and offers « Le déplacer ici ». The move is **one transaction** - half
+  of it leaves the figure on both suppliers or on neither, and on both every
+  document printing it silently stops being recognised under a success message.
+  It records **two changes sharing one `operation`**, the shape
+  `record_type_moved` uses, so `supplier_change_undo` already marks the pair
+  undone together; `_undo_identifier_move` gives it back from either side and
+  refuses when it has moved on again. Routed to `_undo_identifiers` it would
+  have spoken for one supplier only and left it on both.
+- **What a person typed is never unlearned** (`Supplier.typed_identifiers`,
+  migration 0035; `still_naming(..., typed=)`). Learning may forget what
+  learning found; a typed figure is a statement about that supplier, and
+  `still_naming`'s two rules are about documents stored today - a SIREN typed
+  for a supplier whose filed documents do not print it yet was dropped at the
+  very next import, giving as its reason something the person had never
+  claimed. `set_identifiers` prunes the list when a figure stops naming the
+  supplier at all, so « Retirer » still works; the page marks each one « saisi
+  à la main ». It rides in the « Données » archive (`SUPPLIER_FIELDS`).
+
+**And the recognition SAYS what it is**, in two places, because the order is
+not the one anybody guesses and four of its six steps were on no screen:
+
+- **« Ce qui range un document ici »** on the supplier's page
+  (`receipts.filing_rules`): its sources (« rangé ici quoi qu'il imprime »),
+  the electronic invoice's declared SIREN (the one case where the order
+  inverts and the SIREN beats the header), its till or its own reader (which
+  needs a **SIREN** to start - a phone or a site never launches one), its
+  header (whole words, « ajoute des documents, n'en retire aucun »), the
+  **guard** that a SIREN another supplier retains overrules a header that
+  matched, then each learned identifier. Rules, never counts:
+  `identifier_report` already counts documents and two readings of one count
+  is how they drift.
+- **« Rangé chez X parce que… »** on the document
+  (`receipts.filing_report`, the partial `_filing_block.html`, on the document
+  page and above the move form on the correction page). It is **computed on
+  every render**, because nothing is stored: a document filed by its header
+  records no check, no field and no history, and a digital invoice cannot be
+  given a check at all (a check is what makes a document a receipt). It states
+  **facts** - what the document prints, and who retains each figure - never a
+  second verdict about the order. `names_another` is the view that did not
+  exist: every existing screen asks what a supplier's DOCUMENTS print, this
+  one asks what suppliers RETAIN, which is what actually files a document, and
+  `shared` is the both-sides state that names nobody. One query for the
+  suppliers, no other document ever read - the same cost at nine documents and
+  at nine thousand (pinned by a test).
+
+It generalises `Invoice.supplier_doubt`, which **stays a field**: it is
+queried as a fact (`DOCUMENT_TO_FIX`, `_stored_texts`, `_why_lost`,
+`identifier_report`) and it carries a consequence - a doubted document teaches
+nobody - that would flicker if it were recomputed. Measured on the real data
+(read-only): nearly every document carrying text prints an identifier its
+own supplier retains, the few others print nothing that names anybody, and
+**none** prints one another supplier retains - the alarm is a guard against
+the next such mix-up, not a backlog, and the screens say what they found rather than
+implying they found something.
+
 **Every change of what names a supplier is recorded** (`SupplierChange`,
 `supplier_changes.py`): its name, header, identifiers, nature, a
 type moved, its first document - with the cause of the act it came from (a
@@ -1422,6 +1591,164 @@ refused - stock worth less than nothing is what the FIFO guard exists for
 (not on a charge whose supplier holds no stock item: "A credit on a charge",
 above).
 
+### Des frais répartis sur les lignes : la livraison
+
+A supplier prints « LIVRAISON » once, for the whole order. It is not a
+product, and what it costs belongs on the goods it brought: a bottle that had
+to be delivered costs what it was billed at **plus its share of getting it
+here**, and that is the only figure a margin can be taken against. Ticking
+« Frais » on a row of the correction page (or of the hand-entry page) says
+so - `InvoiceLine.is_spread_charge`, and `spread_ht` on each of the others.
+
+**The line stays a line, and no total moves.** That is the whole design, and
+it is arithmetic rather than taste: Metro delivers at **20 %** invoices whose
+food is at 5,5 % (one invoice can print goods at 0 %, 5,5 % and 20 % and its
+delivery, alone of its kind, at 20 %). Folded into the goods' `total_ht`
+the delivery would be taxed at their rate, and `Invoice.total_ttc` - the
+figure `bank.matching` needs to the cent - would stop being the one the
+supplier debits. So `total_ht` is untouched, `reconciliation_adjustment` is
+untouched, every check and every screen goes on reading the document's own
+figures, and what moves is the **cost**: `InvoiceLine.cost_ht` is
+`total_ht + spread_ht`, and **zero on the charge line itself**, whose money is
+already on the goods. The shares add back up to the charge exactly, so the
+lines' costs still come to `lines_total_ht`. Nothing is created; it only
+moves between lines.
+
+- **Two places turn a line into a price per unit, and both read `cost_ht`**:
+  `inventory.services.compute_movement_amounts` (which writes
+  `StockMovement.unit_cost_ht`, and from there every stock value, recipe cost
+  and margin) and `_fifo_value` (which prices a stock take). One of them
+  reading `total_ht` is a count priced on one basis off a shelf valued on the
+  other - a figure with two definitions, this codebase's oldest sin.
+- **`InvoiceLine.unit_cost_ht` stays the DOCUMENT's unit price**, so the
+  invoice page's « P.U. HT » and « Total HT » columns still multiply out. The
+  delivered price lives on the movement, which is a different question:
+  « what did the supplier charge for one » against « what does one cost me ».
+  The page says the second under the line (« + 0,05 € HT de frais répartis :
+  revient à 12,45 € HT »).
+- **`importing.spread_charges` runs BEFORE the movements are booked**, inside
+  `replace_invoice_lines` and `import_parsed_invoice`. Run after, every
+  movement is created from the cost the line had before the delivery was
+  shared out, and nothing recreates them until somebody happens to save the
+  page again.
+- **Pro rata of what was BOUGHT**: only lines priced above zero weigh. Signed,
+  a returned deposit would take a negative share and the beer beside it more
+  than the whole delivery - the rule, and the reason, `_where_it_went` already
+  follows. Nothing positive to carry it and nothing is shared; the page
+  refuses the save (`forms.NOTHING_TO_SPREAD`) rather than saving a charge
+  that looks shared out while every product still costs what it did.
+- **The leftover centimes go to the largest remainders**, as a ticket's
+  promotion is spread (`generic_receipt._spread`): three lines sharing 1,00 €
+  get 0,34 0,33 0,33. Lost, a euro of delivery a year vanishes out of every
+  cost with nothing saying so. A credit on the delivery is negative and rounds
+  the other way; the same rule covers it.
+- **The product is `is_expense`** - « no stock item, and never will be »,
+  which is exactly what a delivery is. Reusing that flag rather than inventing
+  a second one is what keeps the nav badge, « Produits & charges », « Tout
+  approuver », `assign_product`, `Invoice.needs_review_count`,
+  `refresh_invoice_statuses`, the associations import and the archive all
+  right without being told. `importing.flag_products` is the one writer and it
+  works **both ways**, from the LINE: untick the box and the product is a
+  product again. Left as an article, a delivery held its invoice in « À
+  vérifier » for ever asking which bottle « LIVRAISON » is, and « Tout
+  approuver » would have booked a stock movement for every one ever filed.
+- **The refusal is on the line, not on the product**:
+  `create_stock_movement_for_line` returns None for a spread charge whatever
+  its product has since been classified as, and
+  `rebuild_purchase_movements` filters it out in SQL. A product is classified
+  from three screens; the stock ledger must not depend on nobody having
+  clicked.
+- **« Marges » and « Dépenses » follow the box**
+  (`margins.computation._charges_over_the_goods`): the delivery's HT and TTC
+  go onto the places of the goods it delivered, from the **stored** shares, so
+  the two pages cannot drift from the stock one. The pinned invariant holds -
+  with nothing left out the places add up to the invoice to the cent, HT and
+  TTC, ticked or not (checked on a long real Metro invoice, scratch copy).
+- **A move keeps it, a re-read does not.** `move_documents` passes each
+  stored line's own flag through `corrected_line` (whose default is False,
+  right for a page where unticked means somebody unticked it, and silently
+  wrong there: a moved document came back with its delivery a product again
+  and every unit priced below what it cost). « Relire le document » replaces
+  the lines with what the reader says, corrections included - it says so
+  before it runs, and the box goes with them.
+- **The formset**: `is_spread_charge` is a `BooleanField(required=False)`
+  with **no field-level `initial`** - pre-ticked per row through
+  `forms.line_initial` - and it is **not** a bookkeeping field. An `initial`
+  makes an invisible gap row read as filled in and the save fails « ce champ
+  est obligatoire » where nobody can see it; suppressed as bookkeeping, a row
+  where somebody ticked only the box vanishes in silence. `quantity` is no
+  longer required on either line form: a delivery is not sold by the unit, and
+  `required` is enforced before `clean()`, so the rule for an ordinary row
+  moved into `clean()` with it.
+- **The live checks are untouched.** The charge is printed on the document and
+  is inside its total, so it still counts in `refreshCheck` and
+  `refreshHtCheck` exactly as any row does, and `data-adjustment` stays what
+  it is - money charged OUTSIDE the lines. Folded in there too it would be
+  counted twice. The shares are never on that page's arithmetic: they are a
+  redistribution among rows, and every check there compares the DOCUMENT's own
+  figures.
+
+Measured on the real data (read-only): the deliveries filed before this
+existed are products - Metro's delivery line above all, then web shops'
+delivery and shipping fees - most of them pointing at articles invented for
+them (category « Livraison ») which accumulate units nobody ever consumes.
+**No stock take had been priced from one**, so they are safe to tick; each is
+one box on its own correction page.
+
+### Les suggestions du panneau « À classer » (`inventory/product_matching_rules.py`)
+
+Three sources, asked in this order per product and named on the card: a
+classified NEIGHBOUR (`ClassifiedNeighbours.find`: the same words once sizes,
+pack counts and house-brand prefixes are set aside; the same sizes for an
+article counted by the unit), the RULE table, then the RAW NAME under the
+learned category. The confidence is the least confident of the article and
+the conversion factor (`least_confident`), since « Approuver les N sûres »
+books stock movements from both and a right article at a wrong factor is
+silently wrong money. A rule or a raw name is never « haute » any more:
+measured strictly by leave-one-out, a rule names the right existing article
+about half the time and a raw name almost never. « Approuver les
+suggestions » still takes everything; « Approuver les sûres » takes the
+hautes only.
+
+- **« Haute » needs** the same words spelled the same (a plural allowed, an
+  abbreviation never), an article tracked by volume or weight or - counted
+  by the unit - the same sizes AND the same pack, and a factor that is sure:
+  copied from the same pack without the product's OWN line contradicting it
+  (`_line_settles`: a printed volume on an L/KG article, or a colisage
+  counting the items, make the factor 1 whatever the neighbour says - and
+  both figures are said, in French), or read off a printed size for an L/KG
+  article. Two names printing NO number are never « même conditionnement »:
+  medium, unless the line's own reading is the copied figure
+  (`_reads_the_same`). Another pack of a unit-counted article is medium (the
+  name's count against the supplier's convention); another size of one is
+  low (two sizes of one cup are two articles); « à un mot près » is medium,
+  and low when the shorter name has one word.
+- **Everything is learned from the owner's classifications, never listed.**
+  `tells_apart`: a word that already separates two articles refuses a loose
+  match, in every spelling `alike` accepts (« CONS. » teaches « CONSIGNE »).
+  `two_words` / `alike`: a prefix pairing is refused once both spellings are
+  printed under disjoint articles - « VIN » is not « VINAIGRE » - while a
+  word only ever printed short, « GOB », stays an abbreviation. **Do not add
+  supplier words or OCR spellings to fix a pairing**; file the twin and the
+  index learns it.
+- **A stored suggestion is a snapshot**: it carries `classified_fingerprint`
+  (every classified product's article and factor, every article's name, unit
+  and category) and `neighbour_product_id`.
+  `apply_rules_to_pending_products` (run every time the panel is drawn) and
+  `approve_all_suggestions` (before anything is booked) remake any
+  suggestion that is not `is_current`, so a stale « haute » is never drawn
+  or booked; the approval message says how many were remade (« refaites »)
+  and how many were left because they were no longer sure.
+- `least_confident` answers "low" for an unknown level - nothing unmeasured
+  is ever approved in bulk. A rule's reasoning names the word matched and
+  the article, in French, never the regex.
+- **The benchmark and its counts stay out of the repository** (strict
+  leave-one-out: the index rebuilt WITHOUT the judged product, its words out
+  of the category classifier; the scratchpad's `loo_pipeline.py` and
+  `fix2_measure.py`, which the code comments cite). The repository is public
+  and a count of the owner's products is the owner's business, so the code
+  states its ratios in words.
+
 ### Gathering invoices
 
 **Never make AdminMate contact Metro, a portal or the mailbox from a
@@ -1684,8 +2011,12 @@ within a cent, since a receipt's total is rebuilt from its HT lines (a printed
 7,76 totals 7,75) - is still suggested.
 
 Card payments are matched first, so a receipt goes to its own card payment
-before a debit's wider search sees it. An invoice is paid once
-(`InvoicePayment.invoice` is one-to-one); a line can pay several. Anything a
+before a debit's wider search sees it. **The automatic pass only ever links
+an invoice nothing pays yet at all** - `reconcile.unpaid_invoices`, which the
+suggestions are drawn from too. A second line settling an invoice already
+settled is a decision only a person takes: left to the pass, the next debit
+of the same amount would quietly pay it again, and every figure on the page
+would still add up. Anything a
 person does to a line - link, unlink, "pas de facture" - sets
 `settled_by_hand`, and the automatic pass never touches it again; "Rapprocher
 automatiquement" hands it back. Linking a payee the supplier's own name
@@ -1693,6 +2024,183 @@ doesn't contain records a `CounterpartyAlias`, so next month's payment to it
 links on its own. Re-importing an overlapping export is safe: an operation's
 fingerprint includes its position among identical rows, so two identical
 baguette purchases on one morning stay two lines.
+
+**A line and an invoice link however they really are.**
+`InvoicePayment.invoice` is a ForeignKey (migration `bank/0003`, WRITTEN and
+left to be applied): a line pays several invoices, an invoice is paid by
+several lines - one settled in two goes, one debit split - and what cannot
+repeat is the **pair**, by constraint. The same invoice twice on one line
+says nothing and would be counted twice by every figure the row adds up. The
+one-to-one it replaces was never a rule about money, only about the table,
+and it was the whole of what refused the three things a person could not
+record: an invoice whose amount does not match the debit, two invoices
+chosen by hand on one debit, one invoice across two debits.
+
+- **The suggestions are untouched** (`matching.py`, `row.suggestion`,
+  `row.options`, `row.choices`, `MAX_CHOICES`): they are what attaches a
+  document in one click, and they work. Everything below is built beside
+  them, never in their place.
+- **A person may link any document, whatever it costs.** Each row carries a
+  search (`?ligne=&recherche=`, `views._search`) that asks the DATABASE
+  through `invoices.workspace.documents_matching` - supplier, number, date or
+  amount, the same search « Achats » has - because the page holds one
+  window's rows and the document being looked for is usually outside them.
+  Several are ticked at once. An invoice another line already pays is offered
+  too, **marked with the operation that pays it**: hidden, the invoice
+  settled in two goes would be exactly the one nobody could record. One this
+  line already pays is shown and not offered again.
+- **The pick-list stays on a row that already has an invoice**
+  (`views._fill`, `pick_rows`; the template is `bank/_pick_invoice.html`, one
+  definition for both states). One debit for two deliveries is one of the
+  three things this page was opened up for, and losing the list the moment
+  the first invoice went on left the second reachable only through the
+  search - which needs a word the reader has to know, where the list needs
+  none. The **suggestion** stays for an open row alone: it is the matching's
+  answer to « which invoice is this », and that question has been answered.
+- **Both lists say how many they cut** (`Row.more_choices`, `Row.more_found`;
+  `MAX_CHOICES`, `MAX_FOUND`). A list cut in silence reads as « the document
+  is not there » and the reader stops looking - the lesson `SALES_PAGE_SIZE`
+  and the sales tab's « de plus » already exist for.
+- **An alias is taught only by a link that ADDS UP** (`reconcile._learn_payee`).
+  A `CounterpartyAlias` is permanent, no page shows it, and the automatic
+  pass acts on it next month without asking. Since a person may now link any
+  document at any amount, the one corroboration left is the amount: invoices
+  coming to exactly what left the account say « the bank prints this payee
+  for that supplier ». A link that does **not** add up is the case the search
+  exists for - a part payment, a document found by number months later - and
+  it is evidence about one debit, not about a name; taught from it, one
+  mis-tick in the search box renames the payee for every statement to come
+  and next month's rent quietly settles a wholesaler's invoice. Measured over
+  everything the line pays, so two documents linked one at a time teach
+  exactly as much as both at once.
+- **A suggestion carries a tier, and « Propositions » accepts them in one
+  go** (`/banque/propositions/`, `bank:proposals`; POST
+  `bank:link_proposals`). `Match.tier` is SURE / NEAR_SURE / TO_CONFIRM.
+  SURE is exactly `Match.confident`, derived in `__post_init__` and never set
+  beside it (a non-confident SURE raises), so no tier can be widened without
+  widening the automatic pass on purpose. Each tier's rule is one string in
+  `matching.TIER_RULES`, built from the constants (`RECURRING_DAYS_BEFORE`
+  35 days, `RECURRING_MARGIN` 20 days, `NEAR_SURE_GAP` 0,05 €,
+  `LATER_PAYMENT_WINDOW` 180 days, the phrase `NOT_BY_CARD`) and stated on
+  the page's rules card (`#regles`), so the words cannot drift from the
+  thresholds; the tests read the same constants.
+  - **NEAR_SURE has two rules, both for ONE named supplier**
+    (`_several_suppliers`: a payee naming two suppliers is TO_CONFIRM).
+    `_recurring_tier`: several invoices at exactly this amount, the nearest
+    within 35 days of the payment and every other at least 20 days further -
+    a monthly invoice, and the month's is the one. `_close_tier`: exactly one
+    invoice within 0,05 € of the amount and no other that close - a total
+    rebuilt from HT lines - and, for ANY payment not made by card
+    (`PAID_ON_THE_SPOT` is CARD only: debit, transfer and the bank's own fee
+    lines of kind OTHER are all capped), dated within 35 days too: months of
+    invoices are in reach of a debit, and a recurring supplier whose figure
+    moved by cents has last month's a few cents off the moment this month's
+    is not imported.
+  - **A blank counterparty names a supplier through an alias ONLY.**
+    `Payment.payee` falls back to the label's words without their digits
+    (`payee_of`, `alias_key`: « FRAIS TENUE DE COMPTE N° 000123 DU 05/06/26 »
+    keys as « FRAIS TENUE DE COMPTE N DU », the same under next month's
+    number), and `names_supplier(..., alias_only=True)`
+    (`Payment.payee_from_label`) checks the learnt aliases and nothing else -
+    not a word of the supplier's own name, not the one-letter-off rule.
+    Before it, such a line could never name a supplier; the fallback exists
+    so it can be TAUGHT: `_learn_payee` asks the same question, so a
+    hand-made link that adds up learns the label key and next month's fee
+    line links on its own. A label also carries the bank's text and a motif,
+    so an exact word in it (a supplier « Assurance Exemple », a fee reading
+    « ASSURANCE MOYENS DE PAIEMENT ») would have linked automatically on a
+    coincidence. Measured on the real data (read-only): the fallback changes
+    no verdict on the replayed and open lines.
+  - **Every SURE match says its day distance** (`Match.days_back`,
+    `_sure_reason`: « Facture datée N jours avant le paiement », « à N jours
+    du paiement » for a card, « du jour du paiement », a sum dated by its
+    most recent invoice; None for an undated receipt). For a payment not
+    made by card past 35 days it is `Match.far_back`: the pass links it all
+    the same (a late payment is months - that rule was NOT moved), but
+    « Propositions » does not pre-tick it and says why: once a supplier's
+    other invoices at one figure are linked in a bulk accept, the single
+    exact one left may be another month's, the month's own not imported. A
+    page-only rule (`views.Row.preticked`).
+  - **One invoice, one line** (`views._share_invoices`). An invoice proposed
+    to several rows is marked on each option (« proposée aussi pour
+    l'opération du JJ/MM/AAAA ») and pre-ticked for the FIRST row in
+    `reconcile.pass_order` only - card payments first, then date, then pk,
+    the one order `reconcile()`, `accept_proposals` and the page share - so
+    the page promises exactly what the POST does; the other row
+    (`Row.rival`) says which operation takes the invoice first and is not
+    ticked. Pre-ticked on both, a reader ticking the later line alone linked
+    the wrong one.
+  - **Three groups**, « Certaines » / « Quasi-sûres » / « À confirmer »
+    (`_proposal_group.html`). A SURE line is on the page in two cases only:
+    the pass has not been rerun since the last import (ticked), or a person
+    unlinked the line (« Déliée à la main : pas cochée d'avance »). Each
+    group's heading (`views.GROUP_NOTES`, built from the same constants)
+    states its pre-tick rule and every exception with the figure - a heading
+    reading « cochées d'avance » over an unticked row owes the reader the
+    rule. The bank page's rows carry the tier pill (a link to
+    `bank:proposals#regles`) and the tier's reason.
+  - **`reconcile.accept_proposals` trusts nothing posted**: MISSING, INCOME,
+    NOT_OPEN, RULED_OUT, PAID_MEANWHILE (by another line, or by a proposal
+    accepted a moment before in the same batch - candidates are withdrawn as
+    the pass does), CHANGED (a fresh match no longer offers exactly that
+    set) - each skipped and said. An accepted proposal goes through
+    `link()`: MANUAL, `settled_by_hand`, alias learnt when it adds up.
+  - **Measured** by replays on a scratch copy, read-only, and said here in
+    words only. Replaying every hand-made link with its invoices unpaid,
+    nearly nine in ten land SURE or NEAR_SURE with the truth first, and none
+    of those is wrong; the few TO_CONFIRM ones are part payments and a rent
+    paid late. Every automatic link replays SURE and right. With every link
+    removed at once - the state right after an import, before the pass -
+    about three quarters of the lines are pre-ticked, every one right; the
+    far-back rule withholds a handful (right ones, and one whose invoice was
+    another month's), the rival rule withholds one whose first option was
+    wrong; no invoice is pre-ticked twice, and the simulated POST makes only
+    right links.
+  - **Test fixtures**: `test_matching.FEE_LABEL` and `test_reconcile.FEE_KEY`
+    (the fee wording above, invented), `test_matching.other()` for a
+    kind-OTHER blank-payee payment, `test_proposals.ProposalsPage` (a
+    subscription at three identical monthly invoices, an unnamed card
+    payment, two identical deliveries, a rent with nothing to propose, an
+    income line). Names: the repo's usual suppliers plus « Abonnement
+    Exemple », « Bailleur Exemple », « Alarme Exemple », « Assureur
+    Exemple », « Banque Exemple », « Compta Exemple ».
+- **An income line never settles an invoice** (`views.bank_line_action`). No
+  form is drawn on one, so it is a stale or crafted POST - but linked, the
+  invoice would leave `unpaid_invoices` for ever and read « Payée » on its
+  own page while showing on no tab here and in no figure of « Dépenses »,
+  which counts debits only.
+- **The document's own page compares what was paid with what it costs.**
+  « Payée » is kept for when the two agree; otherwise « Réglée en partie » /
+  « Réglée au-delà » and « X € réglés sur Y € » (`InvoiceDetailView`,
+  `paid_total` / `paid_gap`). That page is where a person goes to find out
+  whether a document is settled, and a 70,00 € debit under a 120,00 € invoice
+  printed « Payée » over a list of amounts nobody added - on an invoice no
+  pass and no pick-list will ever raise again.
+- **Going back on `bank/0003` is not safe** once an invoice is paid by two
+  lines, and it fails half way, with 0004 already un-applied and every typed
+  category gone. The migration's docstring says so. Take the second link off
+  first, or restore the backup.
+- **The gap is said, never repaired.** « Rapprochée » no longer means « adds
+  up », so the row says both figures and the difference (`views.Gap`):
+  « Factures X € pour Y € débités — Z € de plus / de moins que la dépense ».
+  The line stays rapprochée - a person said so - and the figure is what tells
+  a reader next month that half the invoice is settled elsewhere. Hidden, a
+  debit paying half an invoice reads exactly like one paying it whole. The
+  document's own page lists every operation that paid it and says how many;
+  a row whose invoice is also paid elsewhere says which operation.
+- **One invoice comes off at a time** (`reconcile.unlink_invoice`, « Délier »
+  on the invoice; « Tout délier » for the line): with three documents on one
+  debit the only button took all three off. Either way the line stays
+  `settled_by_hand`, even with nothing left on it - the automatic pass
+  putting the link straight back is the one thing a person cannot argue with.
+- **« Données » keys links by the PAIR** (`transfer/sections/bank.py`), and
+  neither « Fusionner » nor « Remplacer » refuses one for being « already
+  paid » any more. What holds a link back is the LINE's own decision here -
+  « pas de facture », paying something else, settled by hand without it -
+  never the invoice being paid elsewhere. Keyed by the invoice alone, one
+  payment answered for the other: merging a database's own export reported a
+  conflict about a link that was already there, and restoring an archive put
+  back one of an invoice's two links and dropped the other.
 
 **Payments that never have an invoice** (a loan, URSSAF, salaries) are
 excluded by `IgnoreRule`: a regular expression searched in the whole label,
@@ -1727,6 +2235,301 @@ as an invoice deleted with its payment does. Only an invoice the same run
 brought back (absent when it started) gets its link back. Merged back, the
 export once made again a link a person had undone, and put an AUTO link under
 a « réglée à la main » the automatic pass never revisits.
+
+### « Dépenses par catégorie » (`/banque/depenses/`, `bank/spending.py`)
+
+**Ce qui est sorti du compte**, sur une période, en catégories, avec un
+camembert. Not « Marges »: that page counts what was **invoiced**, by invoice
+date, and answers « ai-je gagné de l'argent ». This one counts what the bank
+**took**, by the date it took it, invoice or no invoice, and answers « où est
+parti l'argent ». Two bases, two figures, and **each page says which it is**
+and links to the other - read one for the other and neither is worth
+anything. It is TTC throughout: what leaves a bank account is tax included.
+Income is not spending and is nowhere in it.
+
+The base is the statement, so **the categories add back up to what left the
+account, to the cent** (`bank/tests/test_spending.py`). Everything else
+follows from that:
+
+- **A line an invoice explains takes the categories of what that invoice
+  bought**, through `margins.computation.where_it_went(invoice)` - the same
+  split « Marges » reads `spend` off, made **public** for this rather than
+  copied: a figure with two definitions is this codebase's oldest sin.
+  `lines_prefetch(lookup)` is public with it, because « Dépenses » reaches an
+  invoice's lines through a bank line's payments (`invoice__lines`).
+- **A goods line's category is its ARTICLE's category**, a charge's is its
+  **SUPPLIER** - not the « Charges » umbrella « Marges » groups them under.
+  A charge has no article, and the rent, the electricity and the phone are
+  three questions a single slice answers none of. A goods line no article
+  claims stays « Sans article (à classer) », the same words as everywhere.
+- **The invoices give the shape, the bank gives the amount.** Since a line and
+  an invoice link however they really are, the two need not add up. Where the
+  invoices cost **more** than the debit (settled in two goes, a debit split),
+  every place is **scaled down pro rata** to what that line really paid, the
+  remainder on the largest place - counted whole on both lines, an invoice
+  would be bought twice and the page would state a spending that never
+  happened. Where they cost **less**, the difference is money that left with
+  nothing to explain it, and on a line that HAS invoices it is « Sans
+  catégorie » **whatever that line or a rule calls itself**; `uninvoiced`
+  says how much. Named after the line, it sat in the pie under a heading no
+  row on the page can explain or correct - the list below only offers the
+  lines with **no** invoice at all, so that line is not in it, and only
+  « Sans catégorie » carries a figure reconciling it
+  (`unsaid_beyond_the_list`) and a stat pointing at where the missing invoice
+  is found. On a line nothing invoiced at all the difference IS the whole
+  debit, and it takes the line's own category as below.
+- **A line with no invoice takes the category a person typed**
+  (`BankTransaction.category`, free text with a datalist of what already
+  exists - `StockType.category` is the precedent), or the one an active
+  `IgnoreRule` carries (`IgnoreRule.category`, optional: a rule may well say
+  « nothing to link » without claiming to say what for; **edited from the
+  rules page**, `rule_action`'s `category` action, and never the pattern
+  beside it - a page editing what a rule decides ON in passing would silently
+  change which lines it catches. « Dépenses » tells the reader that giving a
+  rule a category is THE way to stop typing the same word every month, and
+  every rule written before that field carries none, so with no control there
+  the advice was not followable). **What a person typed
+  wins**, and the page says which of the two named each line - a rule edited
+  next month must not read as somebody's decision. Both fields ride in the
+  « Données » archive (`transfer/sections/bank.py`), and a category changed
+  here is a conflict kept whole like any other decision: nothing rebuilds it,
+  since a statement imported again brings the line back and not one word of
+  what was said about it. Migration `bank/0004`, **WRITTEN and left to be
+  applied**; blank everywhere until somebody fills one in, so nothing existing
+  changes meaning.
+- **A category is its NAME**, not a key: « Bières » typed on a debit is the
+  same slice as the article category « Bières », and two slices of one name is
+  a chart nobody can read. So the datalist offers the article categories, the
+  suppliers of charges, and every category already typed on a line or a rule.
+  « Sans catégorie » (nobody said) and « Catégorie non renseignée » (an
+  article whose own category is blank) stay **two different words for two
+  different silences**, the way « _Sans catégorie » and « Sans catégorie » do
+  on Marges.
+- **Nothing is forced.** « Sans catégorie » is counted, **listed first** and
+  **never folded into « Autres »**, whatever its size: dropped from the pie it
+  would make every other slice look bigger than it is.
+
+**The page.** « du … au … » as everywhere, defaulting to the last twelve
+months and **saying so on screen**, with « Tout l'historique » (`?tout=1`) as
+on Marges; `common.last_twelve_months()` is now the one definition of that
+phrase, and Marges reads it from there. The pie is a **server-rendered inline
+SVG** (`views._build_spending_pie_svg`, the shape of
+`recipes/views.py::_build_ingredient_pie_svg`; the palette moved to
+`common.PIE_COLORS` so two pies in one app cannot drift into two legends),
+biggest first, at most `MAX_SLICES` wedges with the tail as « Autres » saying
+how many it holds - and **the figures beside it in a table** listing every
+category, its share, its operations and its foot, because a pie nobody can
+read a number off is decoration. A category that came out **negative** over
+the window (a keg given back) is no wedge of a pie: it stays in the table and
+a sentence reconciles `drawn_total` with `total`, never dropped in silence.
+
+Three things the figures on screen owe a reader:
+
+- **A share is rounded to the figure the page prints** (`_share_out`,
+  `SHARE_PLACES`), the rounding put back on the largest - the rule `_scaled`
+  already follows for a centime. An unrounded division printed three equal
+  thirds as « 33.3 % » three times, and a reader adding the legend got
+  99,9 % of a pie that is by construction the whole of what was drawn.
+  « Autres » is the **sum of the shares it folds in**, not a second division,
+  or the legend and the table beside it print two figures for one slice.
+- **« Opérations concernées » is not a total**, and the column, the foot and
+  a sentence all say so: one debit whose invoice spans two article categories
+  counts in both rows, so the column adds to more than the statement's own
+  operation count. Both figures are right; one under the other, on the one
+  page whose argument is that it adds up, they read as a subtraction error.
+- **« Déduit par les factures » is not « what came back on the account ».**
+  `given_back` is the avoirs and consignes carried by the invoices linked to
+  DEBITS. A supplier refunding money on the statement is a credit, which is
+  an entrée d'argent, and this page counts what went out - the stat says so
+  rather than letting its old name (« Rendu sur la période ») promise a
+  figure it does not hold. Counting a credit against a category would mean
+  deciding which credits are refunds and which are takings, and nothing here
+  knows that.
+
+Two figures under one label, said apart: the « Sans catégorie » **stat is the
+table's row** (`unsaid_total`), while the list below it holds the debits with
+**no invoice at all**; `unsaid_beyond_the_list` is what separates them - a
+debit's own invoices falling short - and the stat names it. That list holds
+every line with no invoice, **named or not**, the unnamed first: listed only
+while unnamed, a category typed by mistake would have nowhere left to be
+corrected.
+
+**Classer ne règle rien.** `spending.set_category` leaves `settled_by_hand`
+alone: what the money was for says nothing about whether its invoice is still
+to be found, and set there, naming a spending would quietly take its line out
+of the automatic pass for ever. `clean_category` trims, drops control
+characters and cuts to the column - it arrives from a text input, so a NUL is
+« A string literal cannot contain NUL » on the INSERT and an over-wide string
+is Django's problem on every later read.
+
+**`spending_for` costs four queries whatever the statement holds**
+(`spending.QUERIES`, pinned by a test): the lines, their payments, those
+payments' invoice lines, the rules. An invoice on two lines is read once.
+
+No new navigation link: « Dépenses par catégorie » is reached from Banque's
+own header. Another entry in the topbar moves where the links wrap, which is
+measured width by width by `TopbarRoomInBrowserTests`.
+
+**Hors du camembert.** A category can be left out of THE PIE, and of nothing
+else - the VAT paid over to the State, say: in the pie, it makes every other
+wedge read smaller than it is. It is a VIEW carried in the address like the
+period (`?sans=<nom>` repeated, no model field, no migration), with
+« Marges »' words to the letter (« sans : … », « remettre », « tout
+remettre ») and the page saying nothing is saved:
+
+- **The table and the total do not move.** A left-out category stays a row
+  and stays in `total`, marked (`Category.left_out`, « hors camembert »),
+  with no share: the page's argument is that its rows add back up to what
+  left the account. It is never a wedge and **never folded into « Autres »**,
+  which is a share of what IS drawn; the shares (`_share_out`) and « Autres »
+  (`SMALLEST_SLICE`) are worked out over what remains. `Category.drawn` means
+  « the pie draws it »: money in it AND not left out.
+- **Three totals reconcile the pie with the statement**, pinned by a test:
+  `total == drawn_total + given_back + left_out_total`, each category exactly
+  one of drawn, left out (whatever its sign) or given back (at or below zero,
+  not left out). « Déduit par les factures » reads `report.deducted` (every
+  category at or below zero, left out or not), NOT `given_back`: nothing a
+  reader leaves out of a drawing may move a figure about the money.
+- **What is out is said**, in the line above the pie and in its
+  `aria-label`: a pie that silently lost its biggest wedge reads as a pie of
+  everything. « Sans catégorie » may be left out like any other and is then
+  named like any other. Everything out is no pie and a sentence
+  (`nothing_left_to_draw`).
+- **`sans` carries NAMES, compared CLEANED on both sides.**
+  `spending.left_out_names` passes each through `clean_category`, drops the
+  empty ones and the repeats and keeps the order asked (a NUL or an
+  over-wide name is a view, never a 500); `spending_for` and
+  `views._left_out_rows` compare `clean_category` of the stored names too. A
+  stored name need not be in that shape (a double space on a rule, an
+  article category only trimmed, a supplier's name): compared as stored,
+  such a row unticked came back still in the pie, beside « rien sur cette
+  période » for its own name. Two stored spellings of one name leave
+  together and « sans : » says their sum; a name with nothing in the window
+  is KEPT, and said. `IgnoreRuleForm` stores a rule's category through
+  `clean_category` too. No query is added.
+- **The table is the selector**, the « Marges » way (`common.left_out_from`,
+  under « La page Marges »): « Dans le camembert », a box per row ticked by
+  default, and « Recalculer le camembert », a GET form. The boxes join it
+  through their `form` attribute (`#camembert-choix`, the form under the
+  table): wrapped round the table, the form would also hold datatable.js's
+  search box, and Enter in a field submits its form. The box's cell carries
+  `data-sort` and its state as text (UI conventions).
+- **Every link and form of « Dépenses » carries `sans`** like the period and
+  `classement`, from one builder for the links and the forms' hidden fields
+  (`views._spending_url` / `_spending_fields`): the kind chips, « Tout
+  l'historique », « Revenir à une période », « Effacer » (dates cleared, kind
+  and selection kept), the category forms' `next`, the window form,
+  « Recalculer ». Links to OTHER pages carry the window alone
+  (`_other_page_url`); « Dépenses » → Banque carries the window as applied,
+  and Banque's two header buttons carry Banque's period
+  (`views._bank_period`: a month as its first and last day, every month as
+  `tout=1`) - the one to « Dépenses » did not, beside one that did.
+- **The datalist offers only categories typed on DEBITS**
+  (`known_categories`, `amount < 0`): the same field names a credit on
+  « Entrées d'argent », and an income word offered here files a spending
+  under it.
+
+Tests: `bank/tests/test_spending_left_out.py`, down to the payload a browser
+really sends, read off the page it drew.
+
+### « Entrées d'argent » (`/banque/entrees/`, `bank/income.py`)
+
+**Ce qui est arrivé sur le compte**, beside what the till says it **took**
+on the same days: does the money that came in match what was sold? Neither
+« Dépenses » (what the bank took) nor « Marges » (what was invoiced) - each
+of the three says which it is and links to the other two.
+`income_for(window) -> IncomeReport` is pure like `spending_for`, and costs
+`income.QUERIES` queries whatever the history holds (pinned by a test).
+
+**What each credit is, said on the page** (a recognition nobody can see is
+one nobody can correct) and read the same way by Banque's « Entrées » tab
+(`income.entry_for`, pure, no query per row):
+
+- **A card payout** carries the provider's gross in its label (`PAYOUT_RE`);
+  the line's amount is the net, and the commission is the difference **as it
+  comes** - a net above the gross prints a negative commission, never
+  corrected. Recognised by the WORDS, **never by the provider's name**: a
+  name is the one thing a new contract changes. A number the pattern cannot
+  read whole is **no payout at all**, not a payout with a wrong gross: it
+  lands in « Autres entrées », in sight.
+- **Cash deposited** and **cheques** are read off the bank's operation type,
+  accent- and case-blind (`common.search_key`).
+- **Everything else is « Autres entrées »**, named with the same
+  `BankTransaction.category` and « Classer » form as « Dépenses », « Sans
+  catégorie » first. Each page's datalist offers only what was typed on its
+  own sign (`income.known_categories` credits, `spending.known_categories`
+  debits), and `_moved_out_of_view` runs for debits only. A category typed
+  on a payout or a deposit renames nothing: the rules above name them.
+
+**The till beside it** (`recipes.PosDailyPayment`, under « L'Addition »):
+payments per method over the same days, and the takings (`revenue_ttc` of
+the rows whose money was read, the rule « Marges » follows). `tips` is
+payments less takings **on the days both are read whole** - a day with
+unread takings would count its whole payments as a tip. What the till could
+not read is said at the top with the command that fills it
+(`laddition_backfill_payments`, `laddition_backfill_revenue`).
+
+**Each side says where it starts and stops, and the Écart is taken over the
+days both cover.** The till's payments can reach back long before the
+statement's first line; compared over « tout » - where Banque's « Entrées »
+stat lands - most card takings read as never arrived, with no warning.
+`till_before_statement` and `bank_before_till` (card at the gross, cash,
+cheques; never « Autres entrées », compared with nothing) are counted apart
+and left out of `MethodRow.difference`, while the two columns still show the
+whole window; a warning names what the other side cannot see, and
+« Comparer sur les jours couverts des deux côtés » opens the page from
+`covered_since`. The statement's first and last day are one aggregate:
+`QUERIES` did not grow.
+
+**One row per means of payment.** The card compares the till with the
+payouts' **gross** - the figure the till can equal - the commission in a
+column of its own. Cash: the difference is « gardé en caisse ou payé en
+liquide », said, never judged - the page sees neither the drawer nor what
+was paid in notes. « Avoir » is the till's alone (paid before, usually by
+transfer, an « Autre entrée »); « Autres entrées » the bank's alone.
+
+**A payout is tied to the sales by a RUNNING BALANCE**, « ventes carte pas
+encore versées » (`running_balance`), **never by a claim that it paid given
+days**: the provider's batches do not follow the till's service days and a
+payment after midnight moves, so a payout matches a run of till days to the
+cent only some of the time.
+
+- **Computed over the WHOLE history, shown for the window**: a window never
+  moves it (a test holds that).
+- Only payouts after the till's first card day count. The balance starts at
+  an **anchor**: the day within `ANCHOR_DAYS` before the first payout day
+  whose card sales up to it come closest to what that day's payouts
+  collected, **the latest on a tie**; after each payout it is the card sold
+  since the anchor less every gross paid so far. The page says where it
+  counts from.
+- It sits near a level (the days not yet paid), and **a card sale never paid
+  is a step it never comes back down from** - a ticket settled by transfer, a
+  payout missing. That step is the finding; the page says so under the chart.
+- No card day read, or no payout after the first: no balance, and the page
+  says why (`NO_CARD_DAYS` names the backfill).
+- The chart is `views._build_balance_svg`, one point per payout DAY, with its
+  zero line (UI conventions); its figures are the « Versements carte »
+  table's, the balance after every payout.
+- **An exact run is an annotation**, « même montant au centime »
+  (`exact_runs`): consecutive card days (adjacent among the days that sold
+  by card, so a closed day breaks nothing) within `RUN_DAYS` before the
+  payout, none claimed by an earlier one, summing to its gross to the cent;
+  the run ending latest wins, then the shortest. Taken over the whole
+  history in (date, pk) order, so a window never changes a payout's run.
+  Most payouts have none with nothing missing: the balance says whether
+  money is.
+
+**The period** is « Dépenses »'s exactly (`?du=&au=`, the last twelve months
+said on screen, `?tout=1`; `views._window_fields` is the one spelling of it
+for both pages). « Mois par mois » runs from the first month holding
+anything on either side to the last, never back to the empty years a wide
+window reaches. The till counts by the day of the sale, the bank by the day
+it received - a payout of the 1st pays the month before, and the page says
+so. « Versements carte », a row a day, comes last: earlier, it pushed the
+rest of the page out of reach.
+
+Reached from Banque's header button and its « Entrées » stat, both over
+Banque's period (`_bank_income_url`), and from « Dépenses ». No topbar link.
 
 ### Export, import and clear (`transfer/`, « Données »)
 
@@ -1916,12 +2719,24 @@ imports (`transfer/legacy.py`).
   fills it again when it is drawn). Suppliers with a reader or a till of their
   own are never deleted by a clear or a replace; a clear only forgets what
   they learned.
+- **Nor the till's money and payments.** « Ventes » carries the quantities
+  only; the day's money and `PosDailyPayment` are read again from the files
+  on disk (`laddition_backfill_revenue`, then `laddition_backfill_payments`),
+  and the section's description on the page says so. `count()` leaves the
+  payments out, since the Importer tab compares it with the archive's counts.
+  « Effacer » deletes them all, « Remplacer » those of every day it leaves
+  without till sales, and both add `sales.PAYMENTS_NOTE`, the command that
+  brings them back.
+- **« Personnel » is in no section**: employees, timesheets and signature
+  requests are neither exported nor cleared, and `STAFF_PRIVATE_DIR` is in no
+  archive. Only the SQLite copy taken before a run holds those tables.
 - **A portal from an archive is never trusted** (`sections/sources.py`): the
   next gather types the .env variables it names into the page it names. A
   portal naming a variable the application reads for itself is refused, by
   the import and the source form alike (`invoices.models.APP_ENV_PREFIXES`,
   in `WebsiteInvoiceSource.clean`: Metro, the mailbox, the till, the AI,
-  Django; a test checks the list against config/settings.py). An import
+  Django, the signatures and the mail server; a test checks the list against
+  config/settings.py). An import
   never switches a portal on **unless the archive is one this installation
   wrote itself**: a file in `backups/`, where only `safety.before` writes
   (`ImportContext.own_backup` - a manifest can claim any `reason`, so the
@@ -2364,7 +3179,13 @@ Re-measure on a scratch copy when it matters, and keep the number there:
   scanned whole: a half-finished download raises `zipfile.BadZipFile`, which
   is no `XlsxError` and escaped the reader AND the backfill's own
   « illisible » branch - one such file stopped the other sixteen being read
-  at all, with a traceback.
+  at all, with a traceback. So do, through `laddition_xlsx._unreadable` (both
+  sheets' one list), a zip holding no workbook (`KeyError`), broken XML
+  (`ParseError`), a damaged deflate stream with the zip's directory intact
+  (`zlib.error`) and a truncated one (`EOFError`) - none is a zip error, and
+  the first damaged stream failed a job whose sales had read. NOT
+  `RuntimeError`: `LadditionExportError` and `PaymentsSheetMissing` are
+  RuntimeErrors, and a missing sheet would come back as a broken file.
 - **`PosProductDailyQuantity.quantity` is signed** (recipes/0014, with
   `RecipeSale.quantity` and `PosProduct.total_quantity`): the seven refunds
   stored all happen to fall on days the product also sold, but a pint sold
@@ -2391,6 +3212,71 @@ stored exports disagreed about one). Run at scale on a scratch copy of the
 quantities, it filled every (produit, jour) on file and matched all of them,
 and its revenue reproduced the reader's to the cent - which is the check that
 the reading is right, and the reason it prints a total per year.
+
+**The export also says how each ticket was paid, and that is read too**
+(`recipes/payments.py`, `PosDailyPayment`: `sold_on`, `method`, `amount`,
+`payments`; migration `recipes/0017`, applied to the real database by the
+owner on 28/09 after a backup). The
+`SalesDocument` sheet, one row per ticket, is read beside
+`SalesDocumentLines`: its `Paiements` cell (`CB(4,50)`,
+`Cash(5,00)/CB(3,50)`) is summed per (till day, method), the day being the
+lines' own `Jour`. **The payments, not the tickets' totals, are what reaches
+the bank**: a ticket's payments are its `Total TTC` plus its `Trop perçus` (a
+tip, change not given back), and « Entrées d'argent » compares them with the
+account.
+
+- **One vocabulary, on the model**: `CARD`, `CASH`, `CHEQUE`, `CREDIT`
+  (« Avoir »), `MEAL_VOUCHER`, and two pseudo-methods, `UNREAD` and `UNPAID`.
+  `canonical()` matches the known ones accent- and case-blind
+  (`common.search_key`) and keeps anything else as printed; `label_for()` and
+  `sort_key()` are what a page shows and orders by. The reader imports the
+  model lazily, so `laddition_xlsx` still loads without Django.
+- **A ticket is read whole or not at all.** Outside the strict grammar
+  (`PAYMENTS_GRAMMAR`), a blank method or an amount that is not one
+  (`PAYMENT_AMOUNT`: one decimal separator, two decimals at most - « 1.234,56 »
+  is refused, not guessed) makes the WHOLE ticket unread: kept as its card
+  payment alone, it would look ordinary and be short of its cash. It is filed
+  at its `Total TTC` under `UNREAD`, so the day still adds up, and counted. An
+  empty `Paiements` on a total of 0 is a comped ticket; on any other total it
+  is filed under `UNPAID`, never dropped. Neither has ever fired - which is
+  exactly why each is counted and said in the import's log. Thousands are
+  grouped by a space, a no-break space or a narrow no-break space, whichever
+  the formatter's locale prints (`THOUSANDS_SEPARATORS`; two of them are
+  invisible, see « An invisible character is written as a named escape »).
+- **Checked against the ticket's own arithmetic**: payments that are not
+  `Total TTC` + `Trop perçus` are kept as paid - they are what the bank sees -
+  and counted (`tickets_not_adding_up`). With no `Trop perçus` column nothing
+  is checked, or every tip would read as a mismatch. A ticket id seen twice in
+  one file is read once.
+- **A day is the unit, replaced whole.** Of two overlapping files, the later
+  reading of a day replaces every method of it, a method it lacks included:
+  merged method by method, a day would keep a cash payment its second reading
+  no longer has. `record_payments(export)` rewrites each day the export read in
+  one transaction, and leaves alone a day whose rows already say exactly that
+  (a second run writes nothing, not even new ids). A day the reading does not
+  cover is never touched.
+- **The sheet is optional and never costs the lines.** Missing (an older
+  export): `payments_read` False and nothing replaced - « no sheet » is not
+  « paid nothing ». Unreadable: named in the log (`payment_sheet_errors`), the
+  lines imported all the same. It is parsed apart and taken only whole.
+- **A day's payments only beside a day « Ventes » holds**
+  (`PosProductDailyQuantity`), whoever writes them: payments on a day with no
+  sales are money the sales pages contradict. The import job and
+  `laddition_import` run the same order - `sync_pos_products`,
+  `record_sales`, `record_payments` - and « Remplacer » prunes the payments of
+  a day it leaves without sales.
+- **`manage.py laddition_backfill_payments [--dry-run] [--folder]`** fills the
+  days already imported from the .xlsx in `scraped_invoices/`, **contacting
+  nothing** and reading the ticket sheet alone. The revenue backfill's shape:
+  each file named with what it read, an export without the sheet said as such
+  (`PaymentsSheetMissing`, not « illisible »), an unreadable one stepped over,
+  the days two files disagree about listed (the last reading kept whole),
+  totals per year and method. It writes no day « Ventes » lacks and lists
+  them; a day that paid nothing at all is counted apart, neutrally - listed
+  with those, it asked the owner on every run to import again what no import
+  brings.
+- Known edge: a day with sales whose every ticket was comped stores no row,
+  so it reads like a day never read.
 
 A happy-hour variant is a separate till product ("Pinte Blonde" vs "Pinte
 Blonde HH"). Put its till name in the base recipe's `happy_hour_name` and
@@ -2451,18 +3337,108 @@ lie in different clothes - a cost that is only partly known reads as margin:
   « ingrédient sans prix ». Latent today (every recipe fully priced, read-only
   on the real database, 20/09); it fires the day a recipe gains an article
   whose first invoice has not landed, and it moves the margin **up**;
-- it **yields nothing** (`yield_quantity` 0), so there is no per-serving cost
-  to divide out.
+- it **yields nothing** (`yield_quantity` 0) or **sells nothing**
+  (`sale_quantity` 0), so there is no per-sale cost to divide out.
 
-And the cost counted is `cost_range / yield_quantity`, **one serving**, not
-one whole preparation - `summary()` prices a full run of the recipe, so a
-syrup made ten glasses at a time costs its batch there.
-`inventory/variance.py` has divided by the yield since it was written, and a
-cogs that did not put the two pages a factor of ten apart over one sale (a
-20,00 € batch yielding 10, five glasses sold: 100,00 € against the 10,00 €
-`quantities_sold` takes out of stock). Latent too - every recipe yields 1 -
-and note the direction is not always the flattering one: the validator
-allows a yield below 1, which costs MORE per serving.
+And the cost counted is **one sale**, not one whole preparation -
+`summary()` prices a full run of the recipe, so a syrup made ten glasses at
+a time costs its batch there. `inventory/variance.py` has scaled to the sale
+since it was written, and a cogs that did not put the two pages a factor of
+ten apart over one sale (a 20,00 € batch yielding 10, five glasses sold:
+100,00 € against the 10,00 € `quantities_sold` takes out of stock). Note the
+direction is not always the flattering one: the validator allows a yield
+below 1, which costs MORE per sale.
+
+**How much of a preparation ONE SALE is: `Recipe.sale_quantity`**, in the
+unit the recipe produces, default 1 (`recipes/0015`). A terrine produces
+1,6 kg and is sold in 150 g plates, so `sale_quantity` is 0,15 and one sale
+is 0,15/1,6 of a batch. `Recipe.per_sale(amount)` is the ONE rule that
+scales anything measured over a preparation down to a sale, and both readers
+go through it - `_recipe_costs` here and `variance.recipe_usage_terms` -
+because a cost and a consumption disagreeing about how much of a batch left
+is this codebase's oldest sin. It multiplies THEN divides
+(`amount * sale / yield`), never by a ratio worked out first: 1/11 is not
+exact and `amount * (sale/yield)` rounds twice, which moves a recipe
+yielding 11 in its 28th digit. At `sale_quantity = 1` it is the bare
+division by the yield that both readers did before, to the digit.
+
+**A recipe that is not sold as itself has NO price** (`selling_price_ttc`
+null, `recipes/0016`), and `Recipe.is_sold_directly` is the one question
+anything asks. A house syrup was filed at 0,00 € because the price was
+required, and 0 is a price: its own page put that 0 against what the
+preparation costs and read a negative « marge » and « facteur x0,00 », a loss on
+something nobody ever sold. Blank, there is no margin, no percentage and no
+factor - `_price_metrics` and `_price_factor_range` already answered None to
+a None price, and the pages now say « Pas vendue directement » rather than
+aligning « — ». `sale_quantity` is not asked either (the form leaves it
+optional, blank is 1) and a quantity sold typed with no price is refused:
+two answers that cannot both be true. **Never inferred**: not from being
+used as a sub-recipe (most recipes used as one are SOLD as well - a cocktail
+is poured into a jug and sold by the glass), not from a 0 (somebody
+typed it; a comped drink is sold, at nothing). Existing data is untouched,
+so a preparation filed at 0 keeps its 0 until the owner blanks it.
+A merge keeps a deliberate « pas vendue » - `RecipesSection._update` reports
+a conflict and changes nothing unless « Remplacer » was chosen.
+
+Five traps a review found on it, each a test that failed first:
+
+- **The form compares the VALUE, not what was posted.** `sale_quantity` is
+  `decimal_places=4`, so a saved recipe draws « 1.0000 » in the box and a
+  guard reading the raw string against « 1 » refused the one edit this
+  exists for: opening a preparation filed at 0,00 € and clearing its price.
+- **A field that RAISED is dropped from `cleaned_data`**, so « laissé vide »
+  and « 12,50 » (a comma) look identical there: a typo answered « cette
+  recette n'est pas vendue telle quelle » on a quantity box that was
+  correct. The branch asks `"selling_price_ttc" in self.errors` too.
+- **A happy-hour price is refused with no selling price**, and the header
+  does not print one either: the page read « Pas vendue directement ·
+  Happy hour : 4,80 € », one page saying both. « Vendu par … » is nested the
+  same way - there is no sale to take anything.
+- **A preparation is NOT offered on a bon de vente** (`sale_source_choices`,
+  with `keep=` so a line written before the price was cleared still opens).
+  Offered, a line naming it books its full cost against 0,00 € of revenue -
+  `SaleDocumentLine.total_ttc` has nothing to fall back on and
+  `margins.computation` counts the cost, which is exactly the asymmetry the
+  article-sold-as-itself rule forbids: both sides out, or neither.
+- **The page says only what it has checked.** A blank price says « not
+  sold » and nothing about what uses the recipe, so the fiche asks
+  `used_in` before calling it a preparation - a recipe being drafted has a
+  blank price too, and « utilisée dans aucune recette » is the case worth
+  saying, since nothing then counts what it costs. And where the till DOES
+  sell an unpriced recipe the fiche says so in a warning: the revenue comes
+  from `PosProductDailyQuantity`, never from this field, so « Marges » goes
+  on costing it and the one figure that would give it away is on another
+  page.
+
+**Left alone, and why:** an archive record that OMITS the price now creates
+a « pas vendue » recipe where it used to be refused. That is what every
+other field with a default already does (`category`, `yield_quantity`,
+`vat_rate`, `sale_quantity`), and this app's own exports always carry it -
+making the price special again would be the odd one out.
+
+**`unit_cost_ht`, `unit_cost_bounds` and
+`variance._sub_recipe_usage_per_yield_unit` are per YIELD UNIT and never
+scaled by it**: a parent buys its sub-recipe by the unit produced, and how
+that sub-recipe is sold over the counter is none of the parent's business -
+folded in there, a syrup sold by the glass would price a cocktail using 2 cl
+of it as if it drank the glass.
+
+**A price is what one sale fetches, so the cost beside it has to be one
+sale's.** `_summary` and `_build_variation` put `selling_price_ht` against
+the BATCH cost, which was wrong before any portion existed: a recipe yielding
+10 that costs 6,00 € the batch and sells at 4,00 € HT had its own page and
+the « Recettes » tab read « marge -2,00 € · facteur x0,67 » - sold at a
+loss - while « Marges » costed the same sale at one tenth and read a healthy
+margin. Two pages a factor of the yield apart, on a kind of recipe the till
+really sells. `margin_range`, `margin_percent_range`,
+`price_factor_range` and the variation's own margin, factor and happy-hour
+twin are all drawn from `per_sale` now. **`cost_range` and a variation's
+`cost_ht` stay the whole preparation** - it is what the detail page prints
+as « Coût total pour 1,60 kg » and what `unit_cost_bounds` divides by the
+yield, so scaling it would apply the portion twice; `cost_per_sale_range`
+and `cost_per_sale_ht` sit beside them. `_price_factor_range` keeps its
+group arithmetic in batch terms and scales at its two divisions, since
+`min_cost - group_min + min_positive` only means anything on one scale.
 
 **Linear in ingredients, never in variations.** One pass over the recipes
 sold, inside `recipes.models.variation_scope()`, with the ingredients handed
@@ -2610,6 +3586,14 @@ counts, because a number nobody can explain is a number nobody will trust.
 The view does no arithmetic: `margins_for` answers and the page says what the
 figures are worth.
 
+**The page says which base it counts, in its first sentence, and links to the
+other one.** « Ce qui a été **facturé** … à la date des factures », beside a
+link to « Dépenses par catégorie » carrying the window. It used to open on
+« ce qui est sorti » - the words « Dépenses » uses for the statement - and
+said « facturé » a hundred lines down, where a reader arriving from the
+topbar never sees it: the confusion the rule was written against, live in
+the one direction nobody had guarded.
+
 **A period is chosen, never assumed.** With no dates the page shows the
 **last twelve months** and names them on screen (the same 365 days the
 charges fold falls back on, `inventory.views.charge_suppliers`): an all-time
@@ -2677,7 +3661,12 @@ selection lives in the address: the panel below is the one that saves. A categor
 back brings them back. A group unfolds with no script - the `<details>` in its
 name cell is only a switch, and `tbody:has(details[open])` shows its rows -
 and one holding an unticked row is drawn open, since folded the only box
-saying something is out would be out of sight.
+saying something is out would be out of sight. « Shown and not kept » has
+ONE definition, `common.left_out_from(query, key=None)`, beside
+`LEFT_OUT_PARAM` / `SHOWN_PARAM` / `KEPT_PARAM`, and « Dépenses » reads its
+pie's « Recalculer » through it too. `key` is what two spellings of one row
+are compared by: « Dépenses » passes `spending.clean_category`; « Marges »
+compares keys as sent and lets `known_left_out` canonicalise after.
 
 **Every link and form back to this page carries `sans` as it carries
 `du`/`au`** (`views._page_url`; `here_url` for a form's `next`; the window
@@ -2795,6 +3784,71 @@ For the variance engine this means a nested choice must be pooled too:
 **never capped**, because a pool missing a member reports that member's whole
 consumption as unexplained. Amounts are capped (`MAX_SUB_VARIATIONS`).
 
+### Les recettes qui utilisent un article (`recipes/usage.py`)
+
+« Le sucre augmente, qu'est-ce que je dois reprendre ? » — the « Recettes »
+tab filters on one article, `?article=<pk>`, from a picker listing the
+articles at least one recipe uses with the count of recipes beside each.
+
+**The walk is `inventory.variance.reachable_stock_types` and nothing else.**
+A cocktail whose house syrup contains sugar IS a recipe that uses sugar, and
+that walk already answers it — sub-recipes, alternatives, never capped, with
+the cycle guard that goes with it. A second walker over the same graph is a
+second set of rules about « OU » and nesting, and the two drift apart on the
+first recipe nobody thought of. `article_uses` is a memo around it, keyed by
+**sub-recipe**: one house syrup in thirty cocktails is read once, and the
+« Recettes » tab's query count is per sub-recipe, never per recipe
+(`NestedQueryCountTests.ARTICLE_PICKER_QUERIES` carries that constant, so a
+fourth query is a decision rather than drift). Nothing is enumerated: 20
+either/or ingredients is already a million variations.
+
+**What it costs grows with the number of distinct sub-recipe NODES, and that
+is not bounded today.** `_reached` memoises the top-level sub-recipe, but
+`reachable_stock_types` re-queries every level it walks into, and `_settled`
+asks `variation_count` besides. Measured on invented graphs: one flat syrup
+under thirty cocktails is 16 queries for the page, five syrups of three
+levels 63, ten syrups of three levels under sixty cocktails 113. The guard
+above measures the axis that does not grow. **A memo inside
+`reachable_stock_types` is the fix and it is not free**: that walk carries a
+cycle guard (`seen`), so a result reached inside a cycle is TRUNCATED, and
+caching one of those would silently shrink a variance pool - which reports
+that member's whole consumption as unexplained. Cache only a walk that never
+met the guard, or pass the memo down from `usage.py` and leave the engine
+alone.
+
+**« OU » is a choice, not a certainty**, so every use carries whether it is
+settled, and the row says « peut-être ». A use is settled only when nothing
+on the way is a choice: the ingredient is alone in its group **and**, where
+it is a sub-recipe, that sub-recipe has no variations at all
+(`Recipe.variation_count <= 1`, which is exactly « no choice anywhere below
+it » — that is what catches a « sucre OU miel » syrup used as a fixed
+ingredient). Deliberately cautious in one direction: a syrup whose only
+choice is between two herbs reads as « peut-être » for its sugar, which is
+certain. Understating leaves the recipe in the list with a hedge on it;
+overstating is a purchase made on something that may never be poured.
+
+**The sentence over an all-maybe list says a choice « quelque part », not one
+on each recipe.** A cocktail whose only ingredient is a « sucre OU miel »
+syrup offers no alternative of its own - the choice is inside the syrup, and
+the « Utilisé » column is what says where. « chacune en alternative "OU" »
+named it on the recipe itself, which is false in exactly the shape the
+cautious rule above was written for.
+
+**« Via » names the recipe's OWN sub-recipe, not the deepest one.** Through
+two levels the row still says the one the recipe lists: that is the row the
+reader opens next, and what is inside it is on its own page — where that
+sub-recipe is itself listed as using the article.
+
+**A `?article=` nobody can use is the whole list.** Not an id (`common.is_id`
+— `?article=abc`, `²`, `-3`), an article the picker does not offer, an
+article that no longer exists: these arrive from a query string, so a stale
+bookmark and a hand-typed URL both land there, and an empty page under a
+filter nobody can see reads as a page that has broken. Where the article
+exists but no recipe uses it, the page **says so by name** — a whole list
+with no explanation is the same silence. The filter travels on the recipes
+tab's own link, built in the view (`menu.ARTICLE_PARAM`), and **only when it
+is an id**: a link handing garbage back makes a stale bookmark permanent.
+
 ### Three workspaces, not eight pages
 
 The navigation is **Produits & charges** (what was bought, by article, the
@@ -2820,14 +3874,35 @@ back and forth between them. The rules that came with merging them:
   browser's storage, one classification after another left every article's
   purchases open - on the real data, a dozen of them made the page 81 000 px
   tall to search through (owner, 20/09). Only what a reader opens themselves
-  is remembered, and **a search answers with rows** (`#catalogue.is-searching`
-  hides the panels while it filters, and the reveal drops the pending
-  debounce of the panel's field: typed, then « Classer » at once, it filtered
-  the list back onto a name already classified). A till product linked from
+  is remembered, and **a search answers with rows** (the reveal also drops
+  the pending debounce of the panel's field: typed, then « Classer » at
+  once, it filtered the list back onto a name already classified). A till product linked from
   its row gets the row back. A PDF
   imported comes back highlighted and opened in the list (`?surligner=`);
   the list reloads when an import or a gather ends (`documents-changed`,
   sent by their status partials once they stop polling).
+- **A search narrows the list, not what a row opens.** « I want to be able
+  to unroll the article and see the products bought even if their name
+  doesn't match the search query » (owner, 25/09): the query is how an
+  article is reached, and what it bought is the article's own business -
+  an article found by typing « sucre » opens on every product it bought,
+  cassonade and brand names included. A panel the reader had open before searching is
+  still set aside (the 20/09 rule above); one they unroll **during** the
+  search is theirs and stays (`.search-mine`).
+  Three traps, all of them found by the browser test:
+  - *Set aside is not closed.* Read as closed, the first click on an
+    article "closes" what is already out of sight: the reader clicks,
+    nothing happens, and they have to click twice (`isSetAside`).
+  - *What a row opens leaves with the row.* Narrowing the query hides an
+    article; without `data-child-of` on its panels, its **curve** stayed
+    among the results explaining a row no longer listed.
+  - *Nothing to run, nothing to race.* The flag is a class on the **body**
+    and the hiding is one CSS rule, deliberately not a pass over the rows:
+    the list replaces itself mid-search (a classification, an undo) and
+    reopens what it had open. Measured - the pass ran while htmx was still
+    settling the swap, so the panels came back **after** the only pass that
+    would have set them aside, and sat among the results until the box was
+    cleared. A flag on `#catalogue` itself went with the swapped element.
 - **A bounded list needs a search the database answers.** The table's own
   box (`datatable.js`) only ever sees the rendered rows, so a page that
   shows its first 250 cannot use it: the Eau de Paris invoices sit at the
@@ -2889,6 +3964,11 @@ back and forth between them. The rules that came with merging them:
 - A page with a side panel is wider (`container-wide`), and the stock list's
   columns are shares, not pixels, so it fits beside the panel.
 
+Beside the workspaces, Banque, Marges, **Personnel** (the staff's
+timesheets, `staff/`) and Inventaires are links of their own. A new app
+lights its link only once it is in `navigation.SECTION_BY_APP`, and a new
+link is measured again (UI conventions, the topbar).
+
 **The words on screen, and why** (the owner, 19/09: tell the sources of the
 invoices apart from the « Enseignes et fournisseurs », and the Produits page
 "is not a stock but just a list of every spending (charges) + products
@@ -2907,13 +3987,16 @@ names did not follow (models, fields, url names, context keys, `data-persist`
 and localStorage keys, anchors), nor did texts already stored; these notes
 still say "stock item" and "stock page" for the article and that workspace.
 
-### « Du … au … »: one window, five pages
+### « Du … au … »: one window, seven pages
 
-Five pages are read through a period: **Produits & charges** (the articles
+Seven pages are read through a period: **Produits & charges** (the articles
 bought between two dates), **Achats** (the documents), **Ventes** (les ventes,
-les factures de vente et « Par origine »), **Banque** (les opérations) and
-**Marges** (les trois marges, la seule dont la période a un défaut - les 12
-derniers mois - et qui le dit).
+les factures de vente et « Par origine »), **Banque** (les opérations),
+**Marges** (les trois marges), **Dépenses par catégorie** (ce qui est sorti
+du compte) and **Entrées d'argent** (ce qui y est arrivé). The last three are
+the ones whose period has a **default** - les 12 derniers mois - and all say
+so on screen; `common.last_twelve_months()` is the one definition of that
+phrase, so they cannot name the same period and count two different spans.
 They read it once, through `common.date_range(request)` → `DateRange`, so
 they cannot disagree about what "between these two dates" means:
 
@@ -2947,6 +4030,18 @@ they cannot disagree about what "between these two dates" means:
   `catalogue_url`, `workspace._list_url`, `bank._page_url`,
   `menu.sales_list_url`), never by pasting `{% if %}` fragments in the
   template - that is exactly where a parameter gets forgotten;
+- **between two pages with a default, « tout » travels as `tout=1`**
+  (`bank.views._other_page_url`): an empty window sent bare opens the other
+  page on ITS default, a year, while this one said « tout l'historique ».
+  Marges' own `_elsewhere` still sends it bare;
+- **a GET form carries it as hidden fields**, from the same builder as the
+  links (`bank._page_parameters` → `page_fields`). A GET form submits the
+  fields it holds and nothing else, so a search box on a windowed page whose
+  hidden `du`/`au` are missing answers on everything: the list, the four
+  figures and the tab counts all widen at once with nothing on screen saying
+  the dates were dropped. A test on the URL alone does not see this - assert
+  the fields the page really drew and resubmit them
+  (`bank/tests/test_links.py::search_form_of`);
 - **what a row OPENS is the window too**, on Produits & charges: an
   article's purchases (`stock_type_movements`, narrowed on
   `StockMovement.effective_date` - what `catalogue_context` sums the row
@@ -3001,6 +4096,520 @@ says « Achats et autres mouvements » when one of them is not a purchase and
 each such line names its kind: a broken bottle under « Achats » is the page
 asserting in French that it was bought.
 
+### « Personnel » (`staff/`, `/personnel/`): the monthly timesheets
+
+An employee, his typical week, and each month's « fiche de temps » - a grid
+of days and a one-page PDF he signs (on paper, or as the next section
+says). Migrations `staff/0001`-`0003` were applied to the real database by
+the owner on 28/09, after a backup (`db.sqlite3.bak_20260928_pre_staff`).
+Before that, /personnel/ answered « no such table » - the state of any
+database that has the code and not the migrations - and no other page
+touches a staff table. `staff/timesheet.py` is pure of request and template;
+the views read the request, call it and say in French what happened, and
+the page and the PDF only draw the `MonthSheet` it returns.
+
+**A timesheet is personal data**: every name, address, typical week and
+leave span in the staff tests and docstrings is invented
+(`staff/tests/support.py::TYPICAL_WEEK`). The tests once used the real
+contract week, to the hour - a week identifies somebody as surely as a name.
+
+**The month:**
+
+- **A month nobody saved is not stored.** It is the typical week, worked out
+  each time it is drawn (`planned_days`: « Travail » where the typical hours
+  are above 0, « Repos » elsewhere), so the page and the PDF show exactly
+  what saving would store - the PDF byte for byte, which a test pins. The
+  first save, whichever action makes it (« Enregistrer », « Du … au … », the
+  holidays button), writes EVERY day (`_store`) **and copies the employee's
+  typical week onto the sheet** (`Timesheet` is a `TypicalWeek` too).
+  Everything about a saved month reads that copy (`MonthSheet.planned_week`):
+  each day's typical hours and `differs`, « Semaine type », what was planned,
+  the difference, a day put back to « Travail » without hours. Re-derived
+  from today's week, a signed month came out, once the contract changed,
+  with another « Semaine type » and an overtime nobody worked. Only
+  « Revenir à la semaine type » takes today's week (`Outcome.week_before`,
+  said in its message), and the month's page says when the employee's week
+  is no longer the month's.
+- **Public holidays are never zeroed by themselves**: whether one was worked
+  is the owner's decision. The holiday's name travels with the day, and
+  `mark_holidays_off` (a button) is the only thing making one « Férié
+  chômé ». The Ascension can fall on 1 May or 8 May: `french_public_holidays`
+  joins the two names rather than letting a dict drop one.
+- **A day off is never a day of leave.** « Du … au … » with an absence, or
+  « Travail » with hours, leaves the range's days off as they are
+  (`_is_day_off`: « Repos » this month, or off in the month's typical week)
+  and names them; the holidays button leaves a holiday on a day off alone; a
+  range holding only days off writes nothing. Counted in, a week of leave
+  printed its weekly rest days as leave, on a sheet the employee signs and
+  that leave is taken out of. « Travail » without hours and « Repos » still
+  cover every day.
+- **Only « Travail » has hours**: an absence is 0 h whatever was posted.
+  Enforced three times on purpose - `_settle`/`_store` (bulk writes skip
+  `save()`), `TimesheetDay.save()` (the admin) and a CHECK constraint
+  (`timesheet_day_hours_only_when_worked`) that no `update()` gets round.
+  Hours on a leave day would print without counting.
+- **The difference sets absences aside**: `MonthSummary.difference` is the
+  hours worked less what was planned for the days that were **not** an
+  absence, labelled « Écart hors absences » when there is one. Against every
+  planned day, a month worked exactly as planned but for a week of leave
+  printed the leave as a deficit, under « Lu et approuvé ».
+- **Weeks are ISO weeks**; one straddling two months has a partial total in
+  each (`MonthWeek.partial` is « runs over the month's edge », not « fewer
+  hours »). A 31-day month starting on a Saturday or a Sunday has six week
+  totals - 37 rows, the PDF's worst case.
+- **The month in an address is a path converter** (`staff_month`, years
+  1900-2999): a month that is none is a 404 that reaches no view, and
+  `reverse` refuses it too, so « ← décembre » is not drawn on the first month
+  it allows - a page must not link to its own 404. « This month » is Paris's
+  (`views.this_month`, `timezone.localdate`; tests patch it). Day and month
+  names are this app's constants (`DAY_NAMES`, `MONTH_NAMES`, `month_title`
+  with its elision): `LANGUAGE_CODE` is en-us.
+
+**What was typed:**
+
+- **Hours as typed** (`parse_hours`): « 7 », « 7,5 », « 7.5 », « 7h30 »,
+  « 7:30 », blank = 0. Refused with a French sentence naming the day
+  (`HoursError` is a ValueError, never a 500): negative, over 24, garbage,
+  two figures a space apart (« 1 5 » read as 15 h in silence; « 7 h 30 »
+  still reads), and anything short of two decimals once converted - 7h20 is
+  7,333… h, and rounded it prints a figure nobody typed. Minutes are two
+  digits; digits are ASCII (`[0-9]`, never `\d`, which says yes to « ٣ »).
+  The typical week's fields read hours the same way (`forms.HoursField`: a
+  DecimalField refuses the comma under en-us) and speak French
+  (`Meta.error_messages`). `format_hours` is the one way to print them, page
+  and PDF.
+- **Missing is not blank.** A disabled input is not posted: a field the post
+  did not carry keeps its value (`PostedDay` fields are None), a blank hours
+  field is 0 - so « Du … au … » reads its blank hours with
+  `parse_optional_hours`, never `parse_hours`.
+- **Hours typed on a « Repos » day mean it was worked** - only if it was
+  ALREADY « Repos » before the post. One just switched to « Repos » with its
+  old hours still in the field (no JavaScript) is a day off; only the state
+  before the post tells the two apart, and the first is said
+  (`Outcome.adjustments`).
+- **The grid is not a formset**: every field is named by its day's ISO date
+  (`heures-2026-02-17`), so no gap in row indices can move a day's hours onto
+  its neighbour. Still tested as the browser posts it: `staff/tests/
+  page_forms.py` reads every form off the rendered page (a select's chosen
+  option, a disabled field not sent, the pressed button alone) through a
+  CSRF-enforcing client. The margins helper will not do: it has no `<select>`.
+
+**The pages:**
+
+- A refused save writes nothing and draws the page back as typed (200), each
+  error in its row. Every shortcut (« Du … au … », the holidays, « Revenir à
+  la semaine type ») is a POST answering with a redirect and a message naming
+  what changed - and that the month was saved for the first time, when it
+  was; a GET on one writes nothing. A month a signature request holds is
+  refused by `_store` itself (`MonthLocked`), and every action says so.
+- **« Du … au … » here posts `debut`/`fin`, never `du`/`au`**, the windowed
+  pages' GET period: two forms answering to one name is how a test finds the
+  wrong one. Its days are two `<select>`s of the month's days, `required`
+  with an empty first option (a default day silently chosen is a wrong
+  range) - not `<input type="date">`, which Chrome in English draws
+  mm/dd/yyyy and which can leave the month.
+- « Revenir à la semaine type » wipes the month and is confirmed by a
+  `<details>`, not `data-confirm`: `confirm()` does nothing without
+  JavaScript.
+- **The server never disables an absence's hours field**: without
+  JavaScript, a day switched back to « Travail » takes its hours in the same
+  post. `static/js/timesheet.js` disables it, puts the typical hours back,
+  switches a « Repos » day to « Travail » when hours are typed on it, and
+  recomputes every total, the cards and the orange mark live - in integer
+  hundredths, by the server's rules, « — » for what `parse_hours` refuses,
+  never a total that skipped a figure. The server's figures stay the
+  reference: `test_month_browser.py` saves the grid and checks the page drawn
+  after says what the script said.
+- **Nothing typed is lost without a word.** While the grid holds unsaved
+  changes: « Modifications non enregistrées », the cards in dashes, the
+  browser's prompt on leaving, and a sentence on ← / →, the PDF and the three
+  forms beside the grid (`data-leaves-grid`, `views.LEAVE_WARNING` /
+  `PDF_WARNING`) - those forms reload the month from the database and the PDF
+  prints it as SAVED, so corrections vanished and a sheet could go to be
+  signed without them.
+- A refused employee edit is bound to a second instance: a ModelForm writes
+  what was typed onto its instance while validating, and the page's header
+  showed the refused week. Deactivating posts the state wanted (`actif=0`),
+  never « toggle »; nobody is deleted from the pages (PROTECT: a signed sheet
+  is kept).
+- On a phone the grid's rows are cards, and the grid is in no `.table-wrap`:
+  « Enregistrer » sticks to the bottom of the window, which it cannot do from
+  inside a scroll region.
+- `QueryCountTests` compares each page's queries with one employee and with
+  five holding a year of months - compared, never pinned, since the topbar's
+  badges are other apps' queries.
+
+**The PDF** (`staff/pdf.py`, `render_month_pdf(sheet, establishment=None)`):
+
+- **Written by hand, PDF 1.4 - no PDF library is installed and none is to be
+  added.** The two standard Helvetica fonts, nothing embedded,
+  `/WinAnsiEncoding`, a Flate stream, counted xref offsets; glyph widths from
+  `pdfminer.fontmetrics.FONT_METRICS`, which pdfplumber brings. It draws the
+  sheet it is given and adds nothing up.
+- **One page, always**: the signatures belong under the days they sign for.
+  The rows get what is left (`_row_height`, at most `MAX_ROW_HEIGHT`), so
+  everything else is bounded - the address prints `ADDRESS_LINES` lines, the
+  rest joined onto the last, and every text is cut to its column with « … »,
+  never wrapped. A line added to the summary is for the one-page tests over
+  the worst case to judge.
+- **cp1252, and « ? » rather than an exception** (`printable`): NFC first,
+  format characters dropped, controls and what cp1252 lacks « ? »; the
+  app's minus (U+2212) and the narrow no-break space have exact equivalents
+  and print as them. A name goes through `printable_name` (its nearest
+  letter, never « ? »), and the month's form refuses a note the sheet cannot
+  print (next section). `Canvas.text` takes printable text and does not
+  normalise it again: a second pass ate the leading space of a note.
+- **Deterministic** (no date, no random id), and drawing reads nothing from
+  the database (`assertNumQueries(0)` on a built sheet).
+- **A download writes nothing** - not the month, not the header's row:
+  `Establishment.current()` is a `get_or_create`, so the view reads
+  `.filter(pk=SINGLETON_PK).first()` and passes None. **No name, no header,
+  address included** (`_establishment_lines`), as the page where it is typed
+  says.
+- **`content_disposition(sheet)` is the whole header, in plain ASCII**: an
+  ASCII fallback, then RFC 5987's `filename*` with the exact name. A header
+  Django has to encode comes out as `=?utf-8?b?…?=`, which no browser reads
+  as a file name; `/`, `"` and what no Windows name may hold become « - ».
+- Tested by reading the PDF back through pdfplumber: every day, hour and
+  total as extracted lines, the right alignment of every figure, and the
+  worst case and every month of two years inside the margins with nothing
+  overlapping.
+
+### La signature électronique des fiches de temps (`staff/signing.py`)
+
+The employee signs his MONTH from his phone, through a link; the owner
+countersigns. Open source and costing nothing on purpose (pyHanko 0.37, MIT;
+pinned in requirements.txt with its dependencies), so it can be sold later.
+
+**What it is, in words:** a **simple electronic signature** (eIDAS art. 25,
+Code civil 1366-1367) - never « qualifiée », « avancée » or « équivalente à
+une signature manuscrite », on any screen, message or file (tests look for
+those words). Since Cass. 3e civ. 5 March 2026 the employer must prove its
+reliability if the employee denies signing, so the product is the
+EVIDENCE: the exact document (PAdES, SHA-256), who (a certificate in his
+name, a one-time code), when (a third party's RFC 3161 timestamp), and a
+proof file a person can read, tied to the document by an ID printed in both.
+
+Four modules, each pure of request objects:
+
+- `staff/signing.py` - keys and certificates (an internal authority per
+  installation, the employer's, one per employee made at his first
+  signature; EC P-256, ten years), `freeze` (the saved month's PDF plus BOTH
+  empty fields in one incremental update - its first revision is byte for
+  byte `render_month_pdf(..., electronic=True)`), `sign_as_employee`,
+  `countersign`, `verify`, and the drawn signature's checks
+  (`clean_signature_png`). The stamps are drawn with `pdf.Canvas` inside
+  `pdf.SIGNATURE_BOXES` - **the one definition of where the two boxes are**:
+  the page draws them from it, the fields are placed by it - and both are
+  laid out by `_stamp_style`, the one definition of what a stamp holds.
+  **`electronic=True` is for `freeze` only** (28/09): the boxes of the frozen
+  document say « Signature électronique du salarié / de l'employeur », same
+  size, grey and place (`pdf.ELECTRONIC_SIGNATURE_BOXES`, the same frames -
+  `signing.FIELD_BOXES` places the fields by them), instead of asking for a
+  handwritten date and « Lu et approuvé » over the stamp. The download keeps
+  the paper words **byte for byte** (`test_pdf.PAPER_SHEETS` pins the content
+  stream as it was before the option); documents frozen before keep theirs,
+  are never drawn again, and still sign where their fields are.
+- `staff/signature_requests.py` - the workflow: a request per version of a
+  month (`SignatureRequest`, migration `staff/0003`, applied on the real
+  database 28/09), the link's token (only its SHA-256 is stored), the one-time code
+  (HMAC, 15 minutes, 5 attempts, 3 an hour of EACH kind, remembered in the
+  employee's session for that request only), the month read-only while a
+  request holds it, « Corriger ce mois » (`reopen_month`: annulée /
+  remplacée, files kept), and the events - an **append-only hash chain** per
+  request, its head on the request row, so an event edited, removed or cut
+  off the end no longer adds up (`verify_event_chain`) - unless whoever did
+  it could rewrite the database and worked every hash out again (below).
+- `staff/proof.py` - the proof file, written again after every step.
+- `staff/signature_mail.py` - optional e-mail (off unless EMAIL_HOST is
+  set); a failed send is a sentence and an event, never a 500.
+
+Rules that cost nothing to keep and a lawsuit to lose:
+
+- **A month nobody saved is never sent for signature**: it is the typical
+  week, a planning, not a record (`signing.UNSAVED_MONTH`).
+- **No timestamp, no signature.** The servers of `STAFF_TIMESTAMP_URLS`
+  (DigiCert, then Sectigo) are tried in order; when none answers the
+  signature is REFUSED and nothing is stored but the `timestamp_failed`
+  event. `signing.timestampers()` is looked up at call time: **tests inject
+  pyHanko's `DummyTimeStamper`** through `staff/tests/signing_support.py`
+  (`OfflineTimestamps`, `SigningTestMixin`), settings_test has no server at
+  all, and `tests.support.NoNetworkTestCase` makes pyHanko's HTTP clients
+  fail loudly. Never sign against DigiCert from a test or a coding session.
+- **`STAFF_PRIVATE_DIR`** (env `MARGINMATE_PRIVATE_DIR`, default
+  `private/`, gitignored) holds the keys, the signed PDFs, the drawings, the
+  proof files and deletions.log (« Supprimer… », below) - **never under media/**, which DEBUG serves whole
+  (`private_files.private_dir` refuses it). **Back it up with the database.**
+  Losing it does not make a signed PDF unverifiable (each signature embeds its
+  certificates; `verify` still says what each signature covers is intact and
+  whom it names, and that its certificate « ne se rattache à aucune autorité
+  connue de cette installation (clés perdues ou remplacées ?) »), but the next
+  signature comes from a new authority. So the authority that issued a
+  signer's certificate is **recorded when he signs** (`Signed.issuer_sha256`,
+  `authority_sha256` in the `employee_signed` / `countersigned` events) and
+  the proof file prints that one - never `authority_fingerprint()`, the one
+  on disk today - saying so when today's differs.
+- **`MARGINMATE_SIGNING_PASSPHRASE`** encrypts the private keys; unset they
+  are in clear and `signing.key_warning()` is the line the owner's pages
+  show. Keys written in clear are encrypted at the next signature once it is
+  set. The app must not go online before it is set - nor before the login
+  step, which does not exist yet: only the employee's signing page is meant
+  to stay reachable without an account (its secret link and its code).
+- **Adobe shows « validité inconnue »** for our certificates: a trust
+  warning, not an alteration (`signing.ADOBE_UNKNOWN_VALIDITY`); `verify`
+  checks offline against our authority and, for the timestamps, certifi's
+  Mozilla list.
+- The new env names (`MARGINMATE_*`, `EMAIL_*`, `DEFAULT_FROM_EMAIL`) are in
+  `invoices.models.APP_ENV_PREFIXES`: a portal may never be handed the mail
+  server's password.
+- **Retention**: `manage.py staff_purge_signatures [--dry-run]` deletes a
+  request, its events and its files together, five years after the month
+  (`STAFF_SIGNATURE_RETENTION_YEARS`) - through the ONE function
+  « Supprimer… » uses (below), so each leaves its line in deletions.log. Never
+  run automatically; the month's own timesheet is not touched. The
+  employee's page PROMISES that deletion, so the owner's « Signature »
+  section says, once anything was sent, that running the command is his to
+  do (`SignaturePanel.retention_note`).
+
+**What the evidence rests on** (review of 28/09, each rule a test that
+failed first):
+
+- **The method recorded is the one of the code he TYPED.** `issue_code`
+  keeps a code's method beside it (`code_method`, in 0003) and `check_code`
+  copies it to `identification` when that code is verified. Written at
+  issue, a code asked for by e-mail from another browser - anyone holding
+  the link - after he had typed the one handed over turned the row, the
+  signed event and the proof into « envoyé par e-mail ». `code_verified`
+  says its method in the journal.
+- **The two ways of getting a code do not undo each other.** Three an hour
+  of each (`_codes_in_the_last_hour(…, method)`), and a code by e-mail is
+  refused while the one the employer handed over can still be typed
+  (`HANDED_OVER_CODE_WAITING`); the employer's replaces anything. Shared,
+  two presses of « Recevoir un code par e-mail » voided the employer's code
+  and spent his hour. The page puts typing a waiting code first and says a
+  new one voids it (`waiting_code_method`), and so does the code's e-mail.
+- **What he signed is where the database alone cannot rewrite it.** His
+  reservations, in his own words, and the chain's head at that moment are in
+  his signature's /Reason (`signing.employee_reason`, read back by
+  `signed_reasons`) - inside the signed byte range, under the timestamp; the
+  countersignature seals the head the same way. `verify_event_chain` checks
+  that each sealed head is still in the chain before the event recording
+  that signature: the events before the last signature cannot be rewritten
+  unseen, even by somebody who worked every hash out again and moved the
+  row's head. After it they rest on the database alone, and the proof file
+  says exactly that - never « ajouté après coup ne correspond plus » as if
+  the chain alone resisted a database writer. The proof prints the
+  reservations from the signed PDF, the method and the certified text from
+  the signed event, and names every row value that no longer matches its
+  journal (`proof._row_against_journal`).
+- **What `SignatureEvent.ip` stores is what is hashed**: `_clean_ip` goes
+  through Django's `clean_ipv6_address`, as the column does. Python's
+  `compressed` wrote an IPv4-mapped address (« ::ffff:203.0.113.7 », what a
+  server on [::] reports for every IPv4 client) another way, and an
+  untouched journal read « Journal altéré ».
+- **Nothing technical reaches the employee's page.** `sign_for_employee`
+  says `DOCUMENT_CHANGED` or `NOT_SIGNED` for whatever is the server's (a
+  file gone, keys that do not open) and logs the detail; only his own
+  refusals keep their words (his drawing, the box, the step, no
+  timestamp). `public_views.submit` turns anything unforeseen into the same
+  sentence, a 500 with the traceback in the log - Django's error page under
+  DEBUG shows paths and settings. It had shown STAFF_PRIVATE_DIR's absolute
+  path and the passphrase variable's name.
+- **A certificate's common name holds 64 BYTES of UTF-8** (X.520;
+  `cryptography` raises a plain ValueError past it, which escaped every
+  page as a 500): « Autorité interne de » and a 44-character name with one
+  « é » are already 65. `signing._limited` cuts on the bytes, between two
+  words. The stamps print the name WHOLE (`_signer_lines`: on its own line,
+  smaller down to 5 pt, then over two lines) and write a letter cp1252 lacks
+  as its nearest (`pdf.printable_name`: « Łukasz » is « Lukasz », never
+  « ?ukasz »), as the sheet's « Salarié : » line and header do.
+- **What his phone shows is what he signs, to the character.** The
+  snapshot (version 2) keeps each « Motif / note » cell as the PDF prints
+  it (`pdf.note_cells`: cut with « … », « ? » for what cp1252 lacks), and
+  the PDF draws those same cells. The month's form refuses a note holding a
+  character the sheet cannot print, naming it (`pdf.unprintable_characters`).
+- **The month's page costs the same whatever the number of versions**: every
+  version's events in one prefetch, handed to `verify_event_chain(request,
+  events)` (`SignatureQueryCountTests`). It had cost three queries a version.
+
+**The employer draws his signature too** (the owner, 28/09: « I cannot draw
+my signature as the employer »). « Contresigner… » on the month's page opens
+a pad and the countersignature posts the drawing (`signature_views.DRAWING`,
+a PNG data URL). The pad is the employee's `static/js/signature_pad.js`,
+now generic: any `form[data-signature-form]`, and the frame is watched by a
+ResizeObserver as well as the window's `resize`. Chrome lays a closed
+`<details>` out all the same (the folded canvas measured 542 × 176 and was
+fitted at load, 28/09); the observer is for a browser that gives it no size
+until it is opened - none the tests drive. The page loads the script only
+while there is something to countersign. Each rule a test:
+
+- **Required, and never a 500.** Nothing drawn is stopped by the script
+  (« Dessinez votre signature dans le cadre avant de contresigner. ») and
+  refused by the server with the same words
+  (`signing.EMPLOYER_DRAWING_MISSING`) - a crafted post, or a page drawn
+  before the pad existed, which posts its token alone. **The step is checked
+  before the drawing** (`signature_requests.countersignable`): a page drawn
+  before the employee signed, or after the request moved on, is told the
+  step at the top of the month (a redirect), not to draw. A drawing refused, or no
+  timestamp (503), redraws the page with the sentence beside the pad, the pad
+  open, and the drawing painted back only when it was one
+  (`signature_views._drawn_back`: what was no drawing is never echoed).
+- **The employee's checks** - `signature_png_from_data_url` in the view,
+  `clean_signature_png` inside `signing.countersign` (size, dimensions, ink,
+  encoded again, every other chunk dropped), before anything is signed or
+  timestamped. `countersign` returns the picture it kept (`Signed.drawing`,
+  `drawing_sha256`): what is stored is exactly what was sealed.
+- **One layout for both stamps** (`signing._stamp_style`): the drawing above,
+  « Contresigné électroniquement par … », the moment and the ID at the foot,
+  the same sizes and baselines as the employee's
+  (`test_both_stamps_share_one_layout` reads both appearance streams). A long
+  establishment name is still whole; over two lines it leaves the drawing
+  less height, never the box.
+- **No column, so no migration** (the owner had just migrated the real
+  database through 0003): the picture is `employer_signature.png` in the
+  request's folder (`private_files.EMPLOYER_SIGNATURE_IMAGE`), its SHA-256 in
+  the COUNTERSIGNED event (`signature_requests.EMPLOYER_DRAWING`, read by
+  `employer_drawing_sha256`, from the prefetched events on the owner's page)
+  AND sealed in the countersignature's /Reason (« Contresignature de
+  l'employeur — signature dessinée SHA-256 … — journal … »,
+  `signing.employer_reason`, read back as `SignedReason.drawing`). The proof
+  prints « Signature dessinée de l'employeur : SHA-256 … » from the seal,
+  says it is sealed, and names an anomaly when the journal or the file on
+  disk disagree with it; the owner's panel offers « Signature dessinée de
+  l'employeur (PNG) » beside the employee's (`OwnerFile.sha256`).
+- **« Read and seals nothing » is not « could not be read »** (`proof.
+  _employer_drawing`): once the countersignature's /Reason was read, the seal
+  and the journal are ALWAYS compared - a journal naming a drawing the seal
+  does not hold, or losing one it does, is an « Anomalie ». Compared only when
+  both were non-empty, both tamperings printed as normal (review, 28/09).
+- **Each signer is refused in his own words**: `clean_signature_png(empty=)`
+  - `DRAWING_EMPTY` (« … avant de signer ») for the employee,
+  `EMPLOYER_DRAWING_EMPTY` (« … avant de contresigner ») for the owner, whose
+  single click on the pad is a dot too thin to count as ink.
+- **A request countersigned before 28/09 has no drawing** (a database in use
+  before then may hold one) and reads as it did: no drawing offered, no line about it
+  in the proof, its /Reason without the mark reads `drawing == ""`, its
+  journal still sealed. `signing_support.countersign_without_a_drawing` makes
+  one the old way, step for step, for the tests. Checked on a scratch run
+  (28/09): the new `proof.py` writes such a request's proof byte for byte as
+  the old one did, and describes its events and chain identically.
+
+**The pages.** The owner's side is a section of the month's page,
+« Signature » (`staff/signature_views.py`): « Envoyer pour signature » (by
+e-mail when a server is configured and the employee has an address -
+`Employee.email`, on his form - else only once « Je transmettrai le lien
+moi-même » is ticked), « Nouveau lien », « Code à transmettre par un autre
+canal que le lien », « Contresigner… » (the pad, above), « Annuler la
+demande », « Corriger ce mois », « Vérifier », each version's files (checked
+against their hashes, logged, the proof written again as it is downloaded)
+and journal, and on every version « Supprimer… » (below). While a
+request holds the month the page draws it read-only (`_month_table.html`,
+from the same `month_snapshot` builder the employee's page uses). **The link
+and the code are shown ONCE**, in the answer to the POST that made them -
+not redirected, since carried to the next GET they would sit in the session
+(the database) or a cookie; only their hashes are stored anywhere. **The
+section speaks of the person by name** (« Donnez vous-même un code à DURAND
+Jeanne », « pour que DURAND Jeanne récupère… », « Signé par DURAND Jeanne
+(PDF) ») or in words naming nobody - never « il » beside a woman's name, and
+the pills say « En attente de signature » / « Signée, à contresigner »
+(`signature_views.PANEL_STATUS`; the model's labels stay the record's words,
+in the proof file). A test walks every step for « salarié » outside the
+journal (`test_the_section_speaks_of_her_by_name_never_il`).
+
+The employee's side is `/personnel/signer/<token>/` (`staff/public_views.py`,
+`sign.html`, `public_base.html`): **the only pages meant to stay reachable
+without an account.** They do NOT extend base.html and are rendered without
+the context processors (no navigation, no badges, no owner's message can
+reach them); everything they show comes from the one request the token
+reaches, drawn from its frozen snapshot. Unknown link 404, gone 410, a
+refused CSRF post 403 (`CSRF_FAILURE_VIEW`, French on these paths only) -
+each a plain French page. Headers: `no-store`, `noindex`, a
+Content-Security-Policy allowing the site's own script and stylesheet only
+(so no inline script or `style=` there), and **`Referrer-Policy: same-origin`,
+never `no-referrer`**: with it Chrome posts `Origin: null` and Django's CSRF
+check refused every form of the page - the unit tests passed (the test
+client sends no Origin), the browser test (`test_sign_browser.py`) did not.
+The drawing is `static/js/signature_pad.js` (pointer events, no dependency,
+capped to the 1200 × 400 the server accepts, painted back after a refused
+post). The link is built from `MARGINMATE_SITE_URL` when set - set it before
+going online: otherwise it comes from the request's Host header. A verified
+code is said ONCE (« Code vérifié : vous pouvez signer. », drawn while the
+session is identified; `check_code` adds no notice of its own). Two CSS
+traps the browser test measures at 375 px: « Annuler le dernier trait » /
+« Effacer » are 44 px tap targets beside either pad (`.btn-small` made them
+30; every other `.btn-small` of the owner's pages stays small), and
+`.public-form > label` must leave `.public-check` alone - its
+specificity beat the flex row and put the certification's second line under
+the checkbox.
+
+**Deleting a version: « Supprimer… », in two steps**
+(`staff/signature_deletion.py`; the owner, 28/09: « I would like to be able
+to delete signed time sheets (with double verifications as this can be
+dangerous) »). Every version on the panel, whatever its state, ends with a
+discreet « Supprimer… » - a link, not a form: nothing is deleted from the
+section itself. Each rule a test (`staff/tests/test_signature_deletion.py`;
+a scratch run broke each one in memory and saw its test fail):
+
+- **Step 1** (`signature_delete`, GET then POST) says what goes - the
+  version, its state and dates, every file of its folder by name, the number
+  of events, the proof - and why it is dangerous: the signed sheet and its
+  proof are the employer's evidence of the hours; working-time records are
+  kept 1 year for the labour inspection (D3171-16), 3 for a wage claim
+  (L3245-1), 5 as this app recommends; the deletion is final. Its POST
+  passes only with « Je comprends que la suppression est définitive »
+  ticked AND the phrase typed (`deletion_phrase`, « supprimer juin 2026 »,
+  accent included; `phrase_matches` trims, merges spaces and case-folds).
+  Refused, the page is drawn again as posted (200). Valid, it still deletes
+  nothing: it redirects to step 2 with a token.
+- **The token** (`confirmation_token`): `django.core.signing`, a salt of its
+  own (`TOKEN_SALT`), `max_age` ten minutes, binding the uuid, the status,
+  the document and final hashes step 1 saw, and the hours option. Step 2
+  reads it on GET and POST (`read_confirmation`): missing, tampered or
+  signed for anything else → `TOKEN_INVALID`; too old → `TOKEN_EXPIRED`;
+  another version's → `TOKEN_OTHER`; the version moved meanwhile (signed,
+  countersigned, expired) → `CHANGED` - each back to step 1 with its
+  sentence, nothing deleted, never a 500. The tests move the clock by
+  patching `django.core.signing.time`.
+- **Step 2** (`signature_delete_confirm`): its GET is « Dernière
+  vérification », a summary and ONE red button (`.btn-destroy`); only its
+  POST deletes. A version already gone - the button pressed twice - is said
+  at the month's section.
+- **« Supprimer aussi les heures enregistrées du mois »**, unticked, is
+  offered only on the month's LAST remaining version (`is_last_version`):
+  the Timesheet and its days go, and the month is the typical week again,
+  as if never saved. Checked again at step 2 and inside the function: a
+  version sent between the steps takes the option back (the requests
+  PROTECT the Timesheet - it would otherwise have been a ProtectedError).
+- **ONE function deletes**, `delete_signature_request(request, how=PAGE |
+  PURGE, with_hours=, expected=, ip=)`, and `staff_purge_signatures` calls
+  it too (a test spies on it). One transaction: the row read again (gone,
+  or not what `expected` says → refused), the request deleted (its events
+  cascade), the timesheet when asked, then the tombstone - LAST, inside the
+  transaction, so a line that cannot be written rolls the deletion back:
+  nothing is deleted without its trace. The files go on commit
+  (`transaction.on_commit`): rolled back, they stay with their rows; a
+  folder that cannot be removed then (a file held open on Windows) is a
+  warning beside the success (`Deleted.files_error`), not a 500. Call it
+  outside any transaction of your own. **A TestCase never commits**: its
+  on_commit callbacks run only inside `captureOnCommitCallbacks(execute=
+  True)`, which the tests wrap round the deleting call - and they run when
+  that block ends, after the page has answered.
+- **The tombstone**, `STAFF_PRIVATE_DIR/deletions.log`, outside the
+  database: one JSON line per deleted version, UTF-8, fsynced
+  (`private_files.append_deletion_record`); `read_deletion_records` splits
+  on « \n » only, since a U+2028 in a name is no line end. It holds when
+  (Paris, with its offset), how (« page » / « purge »), the employee's
+  name, the month, the version, the uuid, the state, the SHA-256 of the
+  frozen, signed and countersigned documents, the files, the number of
+  events, whether the hours went, and the client's address (none from the
+  purge). Step 1 says the trace is kept. It keeps the name after the rest
+  is gone - a record of the deletion, which the app never purges.
+- **After**: the public link answers as a link that never existed (404),
+  and a month the deleted version held is editable again. Version numbers
+  follow the highest version REMAINING: the month's only version deleted
+  and the month sent again is a version 1 again, with a new document n° -
+  the uuid is what the stamps and the tombstone name.
+
 ### UI conventions
 
 `static/css/marginmate.css` holds the design tokens - colours, a 4px spacing
@@ -3013,6 +4622,7 @@ existing class to an inline `style=`:
 | A line saying what a page is for | `<p class="page-subtitle">` |
 | Headline figures | `.stat-row` > `.stat` > `.stat-label` / `.stat-value` / `.stat-note` |
 | A table | `<div class="table-wrap"><table data-table data-table-label="factures">` |
+| A row of controls narrowing a list, that is **not** a period | `<form class="filter-row">` — `.date-range` means « du … au … » everywhere, and two forms answering to one name is how a test finds the wrong one |
 
 **Every table gets search and sorting for free** via `static/js/datatable.js`
 — add `data-table` and it grows a search box, a live "12 / 261" count and a
@@ -3023,6 +4633,14 @@ sort button in every header. Three things to remember:
   every March lands together regardless of year.
 - `data-child-row` on a row that explains the row above it (an expanded
   panel, a "valorisé en X" note). Without it, sorting separates the two.
+- **A value living in an `<input>` is invisible to both.** `searchableText`
+  reads `textContent`, so a cell that is only a text field is the empty
+  string: on « Dépenses » a line already named « Loyer » could not be found
+  by typing « Loyer » while one a rule named could (that one prints its name
+  as text beside the field), and a click on that header sorted every row on
+  the empty string, destroying the page's own ordering with no way back but
+  a reload. Print the stored value as text beside the field **and** give the
+  cell a `data-sort`.
 - `data-table-sort-only` when the page already has its own search — the
   stock list's is server-backed and fuzzy, and a second box filtering the
   same rows by a different rule is worse than none.
@@ -3031,18 +4649,40 @@ sort button in every header. Three things to remember:
 page still renders, it just quietly stops working the way every other page
 does.
 
+**A chart is a server-rendered inline SVG**, never a library: four of them
+now (`recipes/views.py::_build_ingredient_pie_svg`,
+`inventory/views.py::_build_price_history_svg`,
+`bank/views.py::_build_spending_pie_svg` and `_build_balance_svg`), all hovered by
+`static/js/charts.js`, which is the only thing Chart.js would have added. The
+palette is `common.PIE_COLORS`, **one list**: two pies in one app drawn from
+two lists that drifted apart read as two different legends. Every name that
+reaches an SVG is escaped where it is built - the result is rendered with
+`|safe`, and those names come from invoice text and from whatever somebody
+typed. A pie carries **its figures in a table beside it** (`.chart-and-figures`):
+one nobody can read a number off is decoration. And nothing is drawn from a
+total that is not positive - a share of nothing is not 0 %. A SIGNED line
+draws its zero, and zero is always on its axis. **`charts.js` builds its
+tooltip from nodes and text only**: the server escapes `data-label`, but
+`getAttribute` hands it back decoded, and through `innerHTML` a category
+typed as markup ran when its wedge was hovered. `tests/test_ui.py` greps
+charts.js for HTML-writing APIs, and `PieTooltipInBrowserTests` hovers such a
+name in Chrome.
+
 **The topbar is sticky, so the page leaves its height above what it scrolls
 to** (`html { scroll-padding-top: var(--topbar-room) }` in marginmate.css:
 6rem, 10rem under 860 px where the brand sits above the links, 11rem under
-440 px). A fragment - Achats' `#a-voir`, the fiche's `#historique`, the
-stock list's `#a-classer` - and the tab row htmx's boost brings to the top
-when an Achats tab is clicked lower down all landed under it: « 1
-changement à voir » and the supplier's name hidden (UX review, 19/09). The
-room was measured in Chrome width by width (57 px on one line, 82 where the
-links wrap at 861-1000 px, up to 141 px on a phone, 170 with three-digit
-badges under 310 px). A new link in the navigation can make it wrap sooner:
+440 px, 13rem under 310 px). A fragment - Achats' `#a-voir`, the fiche's
+`#historique`, the stock list's `#a-classer` - and the tab row htmx's boost
+brings to the top when an Achats tab is clicked lower down all landed under
+it: « 1 changement à voir » and the supplier's name hidden (UX review,
+19/09). The room was measured in Chrome width by width (57 px on one row, 82
+on two, 141 on three, 170 on four, 199 on five; the CSS comments say where
+each starts). A new link in the navigation can make it wrap sooner:
 `invoices/tests/test_changes_to_see.py::TopbarRoomInBrowserTests` checks
-eight widths.
+nine widths. « Personnel », the eighth link, took a folding phone's 280 px
+cover screen to five rows, past what 11rem leaves: the test gained 280 px
+(and failed there first) and the CSS its 13rem. A ninth link is measured
+again, width by width.
 
 **The badges are part of the measurement**, and that test's fixture carries
 them for exactly that reason. Adding « Marges » (20/09) took the links from
@@ -3062,6 +4702,16 @@ A multi-line one prints itself onto the page and executes any tag inside it.
 It still returns 200, so only looking at the output catches it. Use
 `{% comment %}…{% endcomment %}`;
 `tests/test_views_smoke.py::assertNoUnrenderedTemplateSyntax` guards it.
+
+### An invisible character is written as a named escape
+
+A no-break space, a narrow no-break space, a byte order mark: write a new
+one as `"\N{NARROW NO-BREAK SPACE}"`, never as a backslash-u escape nor as
+the character itself. The file-writing tools and bash heredocs have turned
+backslash-u escapes into the real character, which nobody reviewing the
+code can see; several readers already hold their separators that way and
+work, invisibly. Check a new file for invisible
+characters before trusting it.
 
 ### `has_changed()` answers two different questions
 
@@ -3095,4 +4745,6 @@ values and needs a human decision per pair.
 ## Privacy
 
 Real invoice PDFs stay out of git (IBANs, addresses, prices), by explicit
-choice. `.env` is never committed; `db.sqlite3*` is gitignored.
+choice. `.env` is never committed; `db.sqlite3*` is gitignored. So is
+`private/` (the signatures' keys and files). An employee's name, typical
+week and leave are personal data: « Personnel »'s tests invent all three.

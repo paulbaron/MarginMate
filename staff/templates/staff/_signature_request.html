@@ -1,0 +1,209 @@
+{% comment %}
+Une version du mois envoyée pour signature. Contexte : `block` (signature_views.RequestBlock),
+`current` (vrai pour la demande qui tient le mois : ses actions ne sont proposées que là), `signature`.
+Le lien et le code ne s'affichent qu'une fois, dans la réponse qui les a créés : ils ne sont conservés
+nulle part (leur empreinte seule l'est).
+{% endcomment %}
+<div class="signature-request{% if current %} is-current{% endif %}" id="signature-v{{ block.version }}">
+    <p class="signature-request-head">
+        <span class="status-pill {{ block.pill }}">{{ block.status }}</span>
+        <strong>Version {{ block.version }}</strong> · envoyée le {{ block.created }}{% if block.holds_month %} · lien valable jusqu'au {{ block.expires }}{% endif %}
+    </p>
+    <p class="muted small signature-id">Document n° {{ block.request.document_id }}</p>
+    {% if block.request.cancelled_reason %}<p class="small">motif : {{ block.request.cancelled_reason }}</p>{% endif %}
+
+    {% if block.new_link %}
+        <div class="signature-link message message-{{ block.link_level }}">
+            <label for="signature-link">Lien de signature de {{ signature.person.display_name }}</label>
+            <div class="copy-row">
+                <input id="signature-link" type="text" readonly value="{{ block.new_link }}" data-copy-source>
+                <button type="button" class="btn btn-secondary" data-copy="signature-link">Copier</button>
+            </div>
+            <p class="small">{{ block.link_note }}</p>
+            <p class="small">
+                Ce lien ne s'affiche qu'une fois : il n'est conservé nulle part, seule son empreinte l'est. Perdu,
+                « Nouveau lien » en crée un autre — l'ancien cesse alors de fonctionner.
+            </p>
+        </div>
+    {% endif %}
+
+    {% if block.handed_code %}
+        <div class="signature-code message message-warning">
+            <p>Code à transmettre à {{ signature.person.display_name }} : <strong class="handed-code" data-handed-code>{{ block.handed_code }}</strong></p>
+            <p class="small">
+                Valable 15 minutes, une seule fois. Donnez-le de vive voix, par SMS ou en main propre — jamais dans le
+                même message que le lien. Notez-le maintenant : il ne s'affichera plus.
+            </p>
+        </div>
+    {% endif %}
+
+    {% if block.verification %}
+        <div class="signature-report message{% if block.verification_level %} message-{{ block.verification_level }}{% endif %}" data-verification>
+            <p><strong>Vérifié le {{ block.verified_at }}</strong> : {{ block.verification.verdict }}</p>
+            {% if block.verification.signatures %}
+                <ul class="small">
+                    {% for check in block.verification.signatures %}
+                        <li>
+                            Signature {{ check.role }} : {{ check.signer|default:"—" }} — intacte : {% if check.intact %}oui{% else %}non{% endif %} ;
+                            certificat émis par l'autorité interne : {% if check.trusted %}oui{% else %}non{% endif %} ;
+                            {% if check.timestamp %}horodatée le {{ check.timestamp|date:"d/m/Y à H:i" }} par {{ check.timestamp_authority|default:"—" }}{% if not check.timestamp_trusted %} (autorité d'horodatage non reconnue){% endif %}{% else %}pas d'horodatage{% endif %}.
+                        </li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+            {% if block.fingerprint %}<p class="small">Empreinte SHA-256 du certificat de l'autorité interne : <code class="signature-hash">{{ block.fingerprint }}</code></p>{% endif %}
+        </div>
+    {% endif %}
+
+    {% if block.employee_signed_at %}
+        <p class="small">
+            Signé par {{ signature.person.display_name }} le {{ block.employee_signed_at }}{% if block.request.reservation %}, avec des réserves :{% else %}.{% endif %}
+        </p>
+        {% if block.request.reservation %}<blockquote class="signature-reservation">{{ block.request.reservation|linebreaksbr }}</blockquote>{% endif %}
+    {% endif %}
+    {% if block.employer_signed_at %}<p class="small">Contresigné le {{ block.employer_signed_at }}.</p>{% endif %}
+
+    {% if current and block.pending %}
+        <p class="small">En attente de la signature de {{ signature.person.display_name }}.</p>
+        {% if block.mail_to %}
+            <p class="small">Le code à usage unique se demande par e-mail, sur la page du lien.</p>
+            <details class="staff-disclosure">
+                <summary>L'e-mail du code n'arrive pas ?</summary>
+                <p class="small">Donnez vous-même un code à {{ signature.person.display_name }}, par un autre canal que le lien. Le dossier de preuve dira alors que le code vous a été affiché.</p>
+                <form method="post" action="{{ block.code_url }}">
+                    {% csrf_token %}
+                    <button class="btn btn-secondary" type="submit">Code à transmettre par un autre canal que le lien</button>
+                </form>
+            </details>
+        {% else %}
+            <p class="small">Sans e-mail, son code se transmet par un autre canal que le lien : ce bouton l'affiche ici, une seule fois, et le dossier de preuve le dira.</p>
+            <form method="post" action="{{ block.code_url }}">
+                {% csrf_token %}
+                <button class="btn btn-secondary" type="submit">Code à transmettre par un autre canal que le lien</button>
+            </form>
+        {% endif %}
+    {% endif %}
+
+    {% if current and block.employee_signed %}
+        {% comment %}
+        « Contresigner… » ouvre le cadre : l'employeur y dessine sa signature, que la contresignature exige.
+        signature_pad.js (le même que sur la page du salarié) met, à l'envoi, l'image (PNG) dans le champ caché ;
+        un envoi refusé redessine la page ici (#contresigner), le cadre ouvert, la phrase à côté et le dessin
+        repeint quand c'en était un.
+        {% endcomment %}
+        <details class="signature-countersign" id="contresigner"{% if block.countersign_error %} open{% endif %}>
+            <summary class="btn">Contresigner…</summary>
+            <form method="post" action="{{ block.countersign_url }}#contresigner" class="signature-countersign-form" data-signature-form>
+                {% csrf_token %}
+                <p class="small">
+                    Dessinez votre signature : elle s'ajoute à celle de {{ signature.person.display_name }} dans la case
+                    «&nbsp;L'employeur&nbsp;», horodatée par un service tiers ;
+                    {% if block.mail_to %}son exemplaire final lui part par e-mail{% else %}son lien lui donne ensuite son exemplaire final{% endif %}.
+                </p>
+                <p class="field-label" id="countersign-label-v{{ block.version }}">Votre signature, avec la souris ou le doigt</p>
+                <div class="signature-pad">
+                    <canvas data-signature-canvas role="img" aria-labelledby="countersign-label-v{{ block.version }}"></canvas>
+                </div>
+                <div class="signature-pad-actions">
+                    <button type="button" class="btn btn-secondary btn-small" data-signature-undo>Annuler le dernier trait</button>
+                    <button type="button" class="btn btn-secondary btn-small" data-signature-clear>Effacer</button>
+                </div>
+                <input type="hidden" name="{{ block.drawing_field }}" value="{{ block.countersign_drawing }}" data-signature-input>
+                {% if block.countersign_error %}<p class="field-error" role="alert" data-countersign-error>{{ block.countersign_error }}</p>{% endif %}
+                <p class="field-error" data-signature-missing hidden>Dessinez votre signature dans le cadre avant de contresigner.</p>
+                <noscript>
+                    <p class="message message-warning">
+                        La signature se dessine avec JavaScript, désactivé sur ce navigateur : activez-le pour contresigner.
+                    </p>
+                </noscript>
+                <div class="form-actions">
+                    <button class="btn" type="submit">Contresigner le relevé</button>
+                </div>
+            </form>
+        </details>
+    {% endif %}
+
+    {% if current %}
+        <form method="post" action="{{ block.link_url }}" class="inline-form signature-renew">
+            {% csrf_token %}
+            <button class="btn btn-secondary btn-small" type="submit">Nouveau lien</button>
+            <span class="muted small">{% if block.complete %}pour que {{ signature.person.display_name }} récupère son exemplaire final ; {% endif %}l'ancien cessera de fonctionner.</span>
+        </form>
+    {% endif %}
+
+    {% if block.files %}
+        <ul class="signature-files">
+            {% for file in block.files %}<li><a href="{{ file.url }}">{{ file.label }}</a></li>{% endfor %}
+        </ul>
+    {% endif %}
+    <form method="post" action="{{ block.verify_url }}" class="inline-form signature-verify">
+        {% csrf_token %}
+        <button class="btn btn-secondary btn-small" type="submit">Vérifier</button>
+        <span class="muted small">contrôle le document et ses signatures, sans connexion.</span>
+    </form>
+
+    <details class="staff-disclosure signature-journal">
+        <summary>Journal : {{ block.events|length }} événement{{ block.events|length|pluralize }}</summary>
+        <p class="small{% if not block.chain.ok %} field-error{% else %} muted{% endif %}">{{ block.chain.message }}</p>
+        <ol class="signature-events">
+            {% for line in block.events %}
+                <li>
+                    <strong>{{ line.when }}</strong> — {{ line.title }}
+                    {% if line.where %}<span class="signature-event-detail">{{ line.where }}</span>{% endif %}
+                    {% for detail in line.details %}<span class="signature-event-detail">{{ detail }}</span>{% endfor %}
+                </li>
+            {% endfor %}
+        </ol>
+    </details>
+
+    {% if current %}
+        <div class="signature-danger">
+            {% if block.cancellable %}
+                <details class="staff-disclosure">
+                    <summary>Annuler la demande…</summary>
+                    <p class="small">
+                        Son lien cessera de fonctionner et le mois redeviendra modifiable. Les fichiers et le journal de
+                        cette version sont conservés.
+                    </p>
+                    <form method="post" action="{{ block.cancel_url }}">
+                        {% csrf_token %}
+                        <label class="stacked-label">Motif (facultatif)
+                            <input type="text" name="{{ signature.reason_field }}" maxlength="500" autocomplete="off">
+                        </label>
+                        <div class="form-actions">
+                            <button class="btn btn-danger" type="submit">Oui, annuler la demande</button>
+                        </div>
+                    </form>
+                </details>
+            {% endif %}
+            <details class="staff-disclosure">
+                <summary>Corriger ce mois…</summary>
+                <p class="small">
+                    {% if block.complete %}
+                        La version signée et contresignée est conservée, remplacée par la suivante : le mois redevient
+                        modifiable, et une nouvelle version sera à signer.
+                    {% else %}
+                        La demande est annulée — son lien ne fonctionne plus — et le mois redevient modifiable : corrigez-le,
+                        puis envoyez la nouvelle version. Les fichiers de celle-ci sont conservés.
+                    {% endif %}
+                </p>
+                <form method="post" action="{{ signature.reopen_url }}">
+                    {% csrf_token %}
+                    <label class="stacked-label">Ce qui est à corriger (facultatif)
+                        <input type="text" name="{{ signature.reason_field }}" maxlength="500" autocomplete="off">
+                    </label>
+                    <div class="form-actions">
+                        <button class="btn btn-danger" type="submit">Oui, corriger ce mois</button>
+                    </div>
+                </form>
+            </details>
+        </div>
+    {% endif %}
+
+    {% comment %}
+    « Supprimer… » : chaque version, quel que soit son état. Un simple lien vers la première des deux étapes
+    (signature_views.signature_delete) - elle dit ce qui partirait et pourquoi c'est dangereux ; rien ne se
+    supprime depuis cette section.
+    {% endcomment %}
+    <p class="signature-delete"><a href="{{ block.delete_url }}">Supprimer…</a></p>
+</div>

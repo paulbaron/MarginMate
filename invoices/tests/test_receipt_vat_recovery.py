@@ -56,6 +56,20 @@ class DerivedFromTheTotalTests(SimpleTestCase):
         self.assertEqual(summary.rate, FIVE_FIVE)
         self.assertIsNone(summary.base)
 
+    def test_a_zero_tax_printed_beside_its_rate_is_a_bucket_of_nothing(self):
+        """"Total TVA 20 %  0,00" under a table whose rows are all at 5,5 %:
+        derived from the total, that 20 % stood for a second bucket the size
+        of the whole invoice and failed two checks on a document read right.
+        A rate that taxes nothing has no base to derive - and no bucket."""
+        summary = parse_vat_line("Total TVA 20%  0,00  Total HT  30,80", rate=D("0.20"), expected_total=D("32.49"))
+        self.assertEqual(summary.rate, D("0.20"))
+        self.assertIsNone(summary.base)
+        self.assertIsNone(summary.vat_amount)
+        self.assertFalse(summary.derived)
+        # The same footer with a real tax on it is still derived, as before.
+        summary = parse_vat_line("Total TVA 20%  1,20  Total HT  30,80", rate=D("0.20"), expected_total=D("33.36"))
+        self.assertTrue(summary.derived)
+
 
 class InferVatRowTests(SimpleTestCase):
     def test_an_illegible_rate_is_named_by_the_arithmetic(self):

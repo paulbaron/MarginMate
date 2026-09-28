@@ -1,0 +1,54 @@
+{% comment %}
+« Signature », la section du mois côté employeur (staff/signature_views.py). Contexte : `signature`
+(SignaturePanel). Un mois enregistré s'envoie pour signature ; tant qu'une demande le tient (en attente,
+signée par le salarié, ou terminée), la section montre cette demande et ses actions, et la grille du mois
+est en lecture seule. Les versions précédentes (annulées, remplacées, expirées) restent listées avec
+leurs fichiers et leur journal.
+{% endcomment %}
+<section class="card signature-card" id="signature">
+    <h2>Signature</h2>
+    {% if signature.current %}
+        {% include "staff/_signature_request.html" with block=signature.current current=True %}
+    {% elif signature.problem %}
+        <p class="small">{{ signature.problem }}</p>
+    {% else %}
+        {% comment %}
+        data-leaves-grid : timesheet.js demande avant d'envoyer une grille modifiée et pas encore
+        enregistrée - c'est le mois ENREGISTRÉ qui est figé et signé.
+        {% endcomment %}
+        <form method="post" action="{{ signature.send_url }}" class="signature-send" data-leaves-grid="{{ signature.send_warning }}">
+            {% csrf_token %}
+            <p class="small">
+                Le mois tel qu'il est enregistré est figé — un PDF et son relevé — et ne se modifie plus tant que la
+                demande est en cours. {{ signature.person.display_name }} le lit et le signe depuis son téléphone,
+                avec un code à usage unique ; vous le contresignez ensuite.
+            </p>
+            {% if signature.mail_to %}
+                <p class="small">Le lien partira par e-mail à {{ signature.address }} ; il s'affichera aussi ici, avec « Copier », pour l'envoyer autrement.</p>
+            {% else %}
+                <p class="small">{{ signature.why_no_mail|capfirst }} : vous transmettrez le lien vous-même (SMS, messagerie, en main propre), et le code par un autre moyen que le lien.</p>
+                <label class="checkbox-label">
+                    <input type="checkbox" name="{{ signature.hand_over }}" value="1" required>
+                    Je transmettrai le lien moi-même
+                </label>
+            {% endif %}
+            <div class="form-actions">
+                <button class="btn" type="submit">Envoyer pour signature</button>
+            </div>
+        </form>
+    {% endif %}
+
+    {% if signature.earlier %}
+        <h3 class="signature-earlier-title">{% if signature.earlier|length == 1 %}Version précédente{% else %}Versions précédentes{% endif %}</h3>
+        {% for block in signature.earlier %}
+            {% include "staff/_signature_request.html" with block=block current=False %}
+        {% endfor %}
+    {% endif %}
+
+    <div class="signature-notes">
+        {% if signature.any_signature %}<p class="muted small">{{ signature.adobe }}</p>{% endif %}
+        {% if signature.key_warning %}<p class="muted small">{{ signature.key_warning|capfirst }}.</p>{% endif %}
+        {% if signature.retention_note %}<p class="muted small">{{ signature.retention_note }}</p>{% endif %}
+        <p class="muted small">{{ signature.online_warning }}</p>
+    </div>
+</section>

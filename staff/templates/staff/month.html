@@ -1,0 +1,271 @@
+{% extends "base.html" %}
+{% load assets staff_hours %}
+{% block title %}{{ sheet.title }} — {{ sheet.employee_name }} - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <p class="breadcrumb"><a href="{{ employee_url }}">← {{ sheet.employee_name }}</a></p>
+            <h1>{{ sheet.title }} — {{ sheet.employee_name }}</h1>
+            <p class="page-subtitle">
+                {% if signature.locked %}
+                    Semaine type : {{ sheet.weekly_hours_text }} h. Envoyé pour signature : le mois se lit ici tel
+                    qu'il a été figé.
+                {% else %}
+                    Semaine type : {{ sheet.weekly_hours_text }} h. Corrigez les jours qui n'y ressemblent pas, puis
+                    enregistrez : le PDF imprime la fiche telle qu'elle est enregistrée.
+                {% endif %}
+            </p>
+        </div>
+        {% comment %}
+        data-leaves-grid : ce que timesheet.js demande avant de quitter une grille modifiée et pas encore
+        enregistrée - les liens, le PDF (qui imprime la fiche enregistrée, pas l'écran) et les trois
+        formulaires d'à côté, qui rechargent la page depuis la base.
+        {% endcomment %}
+        <div class="actions">
+            {% if previous %}<a class="btn btn-secondary" href="{{ previous.url }}" data-leaves-grid="{{ leave_warning }}">← {{ previous.name }}</a>{% endif %}
+            {% if next %}<a class="btn btn-secondary" href="{{ next.url }}" data-leaves-grid="{{ leave_warning }}">{{ next.name }} →</a>{% endif %}
+            <a class="btn" href="{{ pdf_url }}" data-leaves-grid="{{ pdf_warning }}" data-download>Télécharger la fiche (PDF)</a>
+        </div>
+    </div>
+
+    {% if signature.locked %}
+        {% comment %}
+        Lecture seule : c'est timesheet._store qui refuse d'écrire un mois tenu par une demande, quelle que
+        soit la page qui poste ; celle-ci ne dessine simplement plus la grille ni ses raccourcis.
+        {% endcomment %}
+        <div class="message message-warning" data-locked>
+            {{ signature.current.status }} (version {{ signature.current.version }}) : le mois ne se modifie plus.
+            Pour le corriger : « Corriger ce mois », dans la section Signature.
+        </div>
+    {% endif %}
+    {% if sheet.has_errors %}
+        <div class="message message-error" role="alert">
+            <p><strong>Rien n'a été enregistré.</strong> À corriger, en rouge dans la grille :</p>
+            <ul>
+                {% for error in sheet.errors %}<li>{{ error }}</li>{% endfor %}
+            </ul>
+        </div>
+    {% endif %}
+    {% if not sheet.saved %}
+        <div class="message message-warning">Pas encore enregistrée : ce sont les heures de la semaine type.</div>
+    {% else %}
+        <p class="muted">Enregistrée, modifiée pour la dernière fois le {{ sheet.timesheet.updated_at|date:"d/m/Y" }} à {{ sheet.timesheet.updated_at|date:"H:i" }}.</p>
+        {% if sheet.employee_week_changed and not signature.locked %}
+            <div class="message" data-week-changed>
+                Cette fiche garde la semaine type avec laquelle elle a été enregistrée, {{ sheet.weekly_hours_text }} h ;
+                celle de {{ sheet.employee_name }} est aujourd'hui de {{ sheet.employee_weekly_hours_text }} h.
+                « Revenir à la semaine type » la remplacerait par celle d'aujourd'hui.
+            </div>
+        {% endif %}
+    {% endif %}
+    {% if not employee.is_active and not signature.locked %}
+        <div class="message">{{ sheet.employee_name }} n'est plus parmi les salariés actifs : sa fiche reste modifiable.</div>
+    {% endif %}
+
+    {% comment %}
+    data-live : les chiffres que timesheet.js refait pendant la saisie, à partir de la grille, avant tout
+    enregistrement. Ceux du serveur restent la référence : c'est eux que la page redessine une fois
+    enregistrée.
+    {% endcomment %}
+    <p class="unsaved-note" data-unsaved hidden>Ces chiffres suivent la grille : ses modifications ne sont pas encore enregistrées.</p>
+    <div class="stat-row" data-month-stats>
+        <div class="stat">
+            <div class="stat-label">Heures travaillées</div>
+            <div class="stat-value" data-live="worked">{{ summary.worked_text }} h</div>
+            <div class="stat-note" data-live="days-worked">{{ summary.days_worked_text }} travaillé{{ summary.days_worked|pluralize }}</div>
+        </div>
+        <div class="stat">
+            <div class="stat-label">Prévues par la semaine type</div>
+            <div class="stat-value">{{ summary.planned_text }} h</div>
+            <div class="stat-note" data-live="difference">{% if summary.absence_hours %}dont absences : {{ summary.absence_hours_text }} h · {% endif %}{{ summary.difference_label }} : {{ summary.difference_text }}</div>
+        </div>
+        <div class="stat" data-live="absences">
+            <div class="stat-label">Absences</div>
+            {% if summary.absences %}
+                <ul class="absence-counts">
+                    {% for count in summary.absences %}<li>{{ count.label }} : <strong>{{ count.days_text }}</strong></li>{% endfor %}
+                </ul>
+            {% else %}
+                <div class="stat-value">aucune</div>
+            {% endif %}
+        </div>
+    </div>
+
+    {% if signature.locked %}
+    {% include "staff/_signature.html" %}
+    <section class="month-readonly" aria-labelledby="month-readonly-title">
+        <h2 id="month-readonly-title">Les jours du mois</h2>
+        {% include "staff/_month_table.html" with month=month_table %}
+    </section>
+    {% else %}
+    <div class="timesheet-layout">
+        {% comment %}
+        La grille : UN formulaire, UN « Enregistrer ». Pas de formset : chaque champ porte la date du jour
+        (heures-2026-06-04, motif-…, note-…), si bien qu'aucun trou dans des indices de lignes ne peut
+        décaler les heures d'un jour sur son voisin. Pas de data-table non plus : c'est un éditeur, pas une
+        liste, et le trier le déferait.
+        {% endcomment %}
+        <form method="post" action="{{ save_url }}" class="timesheet-form" id="fiche" data-timesheet-form{% if sheet.has_errors %} data-unsaved-on-load{% endif %}>
+            {% csrf_token %}
+            <p class="muted small timesheet-legend">
+                Un trait orange à gauche : le jour diffère de la semaine type. Heures : 7, 7,5, 7h30 ou 7:30.
+                Une absence (congés, maladie, férié chômé…) compte 0 h ; une demi-journée, c'est « Travail » avec ses heures et une note.
+            </p>
+            <div class="timesheet-grid-wrap">
+                <table class="timesheet-grid" data-timesheet-grid data-absence-kinds="{{ absence_kinds }}">
+                    <thead>
+                        <tr>
+                            <th scope="col">Jour</th>
+                            <th scope="col" class="num">Heures</th>
+                            <th scope="col">Motif</th>
+                            <th scope="col">Note</th>
+                        </tr>
+                    </thead>
+                    {% for week in sheet.weeks %}
+                        <tbody>
+                            {% for day in week.days %}
+                                <tr class="day-row{% if day.differs %} is-changed{% endif %}{% if day.holiday %} is-holiday{% endif %}{% if day.error %} has-error{% endif %}"
+                                    data-typical="{% if day.typical_hours %}{{ day.typical_hours_text }}{% endif %}"
+                                    {% if day.differs %}title="Différent de la semaine type"{% endif %}>
+                                    <th scope="row">
+                                        <span class="day-name">{{ day.name }}</span>
+                                        {% if day.holiday %}<span class="day-holiday">{{ day.holiday_label }}</span>{% endif %}
+                                        <span class="day-typical">semaine type : {% if day.typical_hours %}{{ day.typical_hours_text }} h{% else %}repos{% endif %}</span>
+                                    </th>
+                                    <td class="num">
+                                        <input type="text" name="{{ day.hours_field }}" value="{{ day.hours_input }}"
+                                               inputmode="decimal" autocomplete="off" class="hours-input" data-hours
+                                               aria-label="Heures — {{ day.name }}">
+                                        {% if day.error %}<p class="field-error">{{ day.error }}</p>{% endif %}
+                                    </td>
+                                    <td>
+                                        <select name="{{ day.kind_field }}" data-kind aria-label="Motif — {{ day.name }}">
+                                            {% for value, label in kind_choices %}
+                                                <option value="{{ value }}"{% if value == day.kind %} selected{% endif %}>{{ label }}</option>
+                                            {% endfor %}
+                                        </select>
+                                    </td>
+                                    <td>
+                                        <input type="text" name="{{ day.note_field }}" value="{{ day.note }}" maxlength="255"
+                                               autocomplete="off" class="note-input" placeholder="note"
+                                               aria-label="Note — {{ day.name }}">
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                            <tr class="week-total">
+                                <th scope="row">{{ week.label }}</th>
+                                <td class="num" data-live="week">{{ week.total_text }} h</td>
+                                <td colspan="2" class="muted">semaine type : {{ week.typical_total|hours }} h</td>
+                            </tr>
+                        </tbody>
+                    {% endfor %}
+                    <tfoot>
+                        <tr>
+                            <th scope="row">Total du mois</th>
+                            <td class="num" data-live="worked">{{ summary.worked_text }} h</td>
+                            <td colspan="2" class="muted" data-live="month-note">semaine type : {{ summary.planned_text }} h{% if summary.absence_hours %}, dont absences {{ summary.absence_hours_text }} h{% endif %} ({{ summary.difference_label|lower }} {{ summary.difference_text }})</td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+            <div class="timesheet-save">
+                <button class="btn" type="submit">Enregistrer</button>
+                <strong class="unsaved-note" data-unsaved hidden>Modifications non enregistrées</strong>
+                <span class="muted small">{% if sheet.saved %}Enregistre les {{ sheet.days|length }} jours du mois.{% else %}Le premier enregistrement fixe les {{ sheet.days|length }} jours du mois et leur semaine type : la changer ensuite ne les modifiera plus.{% endif %}</span>
+            </div>
+        </form>
+
+        <aside class="timesheet-aside">
+            <section class="card">
+                <h2>Du … au …</h2>
+                <p class="muted small" data-range-help>
+                    Plusieurs jours d'un coup — « en congés du 11 au 18 ». Les jours de repos de la période restent
+                    des jours de repos : une semaine de congés, ce sont les jours qui auraient été travaillés.
+                </p>
+                <form method="post" action="{{ range_url }}" class="range-form" data-leaves-grid="{{ leave_warning }}">
+                    {% csrf_token %}
+                    <div class="range-days">
+                        <label class="stacked-label">Du
+                            <select name="{{ range_start }}" required>
+                                <option value="">—</option>
+                                {% for day in sheet.days %}<option value="{{ day.iso }}">{{ day.name }}</option>{% endfor %}
+                            </select>
+                        </label>
+                        <label class="stacked-label">au
+                            <select name="{{ range_end }}" required>
+                                <option value="">—</option>
+                                {% for day in sheet.days %}<option value="{{ day.iso }}">{{ day.name }}</option>{% endfor %}
+                            </select>
+                        </label>
+                    </div>
+                    <label class="stacked-label">Motif
+                        <select name="{{ range_kind }}">
+                            {% for value, label in kind_choices %}
+                                <option value="{{ value }}"{% if value == range_default_kind %} selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </label>
+                    <label class="stacked-label">Heures (facultatives)
+                        <input type="text" name="{{ range_hours }}" inputmode="decimal" autocomplete="off" placeholder="semaine type">
+                    </label>
+                    <p class="help">Pour « Travail » seulement. Vides, chaque jour reprend les heures de sa semaine type.</p>
+                    <label class="stacked-label">Note (facultative)
+                        <input type="text" name="{{ range_note }}" maxlength="255" autocomplete="off">
+                    </label>
+                    <div class="form-actions">
+                        <button class="btn btn-secondary" type="submit">Appliquer</button>
+                    </div>
+                </form>
+            </section>
+
+            {% if holidays %}
+                <section class="card">
+                    <h2>Jours fériés</h2>
+                    <ul class="holiday-list">
+                        {% for day, label in holidays %}
+                            <li>{{ label }} <span class="muted">— {{ day.label }}{% if day.is_work %}, {{ day.hours_text }} h{% endif %}</span></li>
+                        {% endfor %}
+                    </ul>
+                    <p class="muted small">
+                        Un jour férié n'est jamais chômé d'office : s'il a été travaillé, il garde ses heures, et
+                        celui qui tombe un jour de repos le reste. Sinon :
+                    </p>
+                    <form method="post" action="{{ holidays_url }}" data-leaves-grid="{{ leave_warning }}">
+                        {% csrf_token %}
+                        <button class="btn btn-secondary" type="submit">Mettre les fériés du mois en Férié chômé</button>
+                    </form>
+                </section>
+            {% endif %}
+
+            {% if sheet.saved %}
+                <section class="card">
+                    <h2>Revenir à la semaine type</h2>
+                    {% comment %}
+                    La confirmation est un <details> plutôt qu'un confirm() : elle marche aussi sans JavaScript,
+                    et c'est tout le mois qui s'efface.
+                    {% endcomment %}
+                    <details class="staff-disclosure">
+                        <summary>Effacer les corrections du mois…</summary>
+                        <p class="small">
+                            Chaque jour {{ of_month }} reprend les heures de la semaine type{% if sheet.employee_week_changed %}
+                            d'aujourd'hui ({{ sheet.employee_weekly_hours_text }} h au lieu de {{ sheet.weekly_hours_text }} h),
+                            qui devient celle de la fiche{% endif %} : les motifs, les heures corrigées et les notes saisis
+                            sont effacés.
+                        </p>
+                        <form method="post" action="{{ reset_url }}" data-leaves-grid="{{ leave_warning }}">
+                            {% csrf_token %}
+                            <button class="btn btn-danger" type="submit">Oui, revenir à la semaine type</button>
+                        </form>
+                    </details>
+                </section>
+            {% endif %}
+
+            {% include "staff/_signature.html" %}
+        </aside>
+    </div>
+    {% endif %}
+{% endblock %}
+{% block extra_js %}
+    <script src="{% asset 'js/timesheet.js' %}" defer></script>
+    {% if signature.current.employee_signed %}<script src="{% asset 'js/signature_pad.js' %}" defer></script>{% endif %}
+{% endblock %}

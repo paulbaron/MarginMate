@@ -5,6 +5,7 @@ three different formsets across three different apps.
 """
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
@@ -25,6 +26,22 @@ def is_id(value) -> bool:
 
 
 
+def search_key(text: str) -> str:
+    """A comparison key that ignores case AND accents - « biere » has to find
+    « Bière », since nobody reaches for the compose key while typing fast at
+    a bar.
+
+    Here rather than in one app because three search boxes now need the same
+    answer (the articles, the documents, the box that attaches a document to
+    a payment), and static/js/datatable.js normalises the same way for every
+    table it draws. SQLite's own `icontains` folds case but not accents, so
+    this runs in Python over the few rows that can be compared that way - a
+    supplier list, never a list of documents.
+    """
+    decomposed = unicodedata.normalize("NFD", text)
+    return "".join(letter for letter in decomposed if not unicodedata.combining(letter)).lower()
+
+
 def plain_number(value) -> str:
     """A decimal as a person writes it: 0.82, 2, 10, -1 - never "0.820",
     nor the "1E+1" Decimal.normalize() makes of 10. "" for nothing."""
@@ -36,10 +53,32 @@ def plain_number(value) -> str:
     return format(number.normalize(), "f")
 
 
+#: The colours the inline SVG charts give their slices, in order. There is
+#: no charting library here (see recipes/views.py::_build_ingredient_pie_svg),
+#: so the palette is data, and it lives in ONE place: two pies in one app
+#: drawn from two lists that drifted apart read as two different legends.
+#:
+#: Sixteen, not eight, since « Dépenses » stopped folding its tail at the
+#: palette's length and started folding it at a share (bank.spending
+#: SMALLEST_SLICE): a page with a dozen real categories then had two wedges
+#: of the same colour, which is a legend that lies. All light enough to read
+#: on the dark panel, and ordered so neighbours differ in hue rather than in
+#: shade alone.
+PIE_COLORS = [
+    "#d99b3f", "#6fbf73", "#e0685f", "#5b9bd9", "#c77dd9", "#d9c73f", "#3fd9c7", "#9fa2ae",
+    "#e89a6a", "#8fd94f", "#d95f9b", "#4fb8d9", "#9b7de0", "#bfae6a", "#5fd99b", "#c9c9d6",
+]
+
 #: The two query parameters every page reads its window from - « du » and
 #: « au », as the pages say it. One pair of names, so a window survives
 #: being carried from a link on one page to another.
 RANGE_START, RANGE_END = "du", "au"
+
+#: How long « les douze derniers mois » is, for the pages whose period has a
+#: default - « Marges » and « Dépenses ». One number: the two say the same
+#: words on screen, and two pages disagreeing about what that phrase covers
+#: is a figure nobody can reconcile with the other page's.
+DEFAULT_WINDOW_DAYS = 365
 
 
 @dataclass(frozen=True)
@@ -127,6 +166,21 @@ def read_date(value) -> date | None:
         return None
 
 
+def last_twelve_months(today=None) -> DateRange:
+    """« Les douze derniers mois », the default period of the pages that
+    have one.
+
+    An all-time figure on those pages mixes three years of purchase prices
+    with three years of selling prices and means very little, so they open
+    on a period and say on screen which one it is. Here rather than in each
+    view because two pages naming the same period and counting two different
+    spans is exactly the kind of quiet disagreement this codebase keeps
+    paying for.
+    """
+    today = today or timezone.localdate()
+    return DateRange(today - timedelta(days=DEFAULT_WINDOW_DAYS), today)
+
+
 def date_range(request, start_param: str = RANGE_START, end_param: str = RANGE_END) -> DateRange:
     """The window `?du=&au=` asks for, empty when it asks for none.
 
@@ -139,6 +193,55 @@ def date_range(request, start_param: str = RANGE_START, end_param: str = RANGE_E
     if start is not None and end is not None and start > end:
         start, end = end, start
     return DateRange(start, end)
+
+
+#: « sans … »: what a page leaves out of one of its figures, as a VIEW carried
+#: in the address like the period - repeated, no model, no migration - so two
+#: tabs hold two questions and a bookmark keeps its own. « Marges » leaves
+#: spending out of a second real margin, « Dépenses » categories out of its
+#: pie; one spelling for both, since a reader carries the habit from one page
+#: to the other.
+LEFT_OUT_PARAM = "sans"
+#: What a « Recalculer » form sends. A checkbox that is not ticked sends
+#: NOTHING, so « left out » cannot be read off what came back alone: every
+#: row the table showed sends its key under `montre`, and the boxes still
+#: ticked send it again under `garder`.
+SHOWN_PARAM = "montre"
+KEPT_PARAM = "garder"
+
+
+def left_out_from(query, key=None) -> list[str]:
+    """What a « Recalculer » leaves out: the rows the form showed and did not
+    send back ticked, after what was left out already and not on the form.
+
+    `query` is the request's GET (a QueryDict: `montre`, `garder` and `sans`
+    all repeat). `key` is what two spellings of one row are compared by - a
+    page whose rows are free text passes its own cleaning, so « TVA » in the
+    address and « TVA » on the form cannot be two rows; the default compares
+    them as sent. What comes back is still the page's to check against what
+    it knows: this only reads the form.
+
+    Read as « shown and not kept », never as « not sent »: an unticked box
+    sends nothing, and so does a row a stale page never had - a newer
+    invoice's article, a category first named since - which read as unticked
+    would drop out with nobody having touched it. A `garder` for a row the
+    form never showed changes nothing either, and a key the form never
+    showed (nothing under it in the window) keeps the state it had.
+
+    In the order they were ASKED, what is newly left out after: in table
+    order, a « Recalculer » that changed nothing turned « sans : Matériel,
+    Rhum » into « sans : Rhum, Matériel ». One definition for every page that
+    has such a form - « Marges » had it alone, and a rule with two
+    definitions is this codebase's oldest sin.
+    """
+    same = key or (lambda value: value)
+    shown = [same(value) for value in query.getlist(SHOWN_PARAM)]
+    kept = {same(value) for value in query.getlist(KEPT_PARAM)}
+    before = [same(value) for value in query.getlist(LEFT_OUT_PARAM)]
+    on_the_form = set(shown)
+    unticked = {one for one in shown if one not in kept}
+    still_out = [one for one in before if one not in on_the_form or one in unticked]
+    return still_out + [one for one in shown if one in unticked and one not in before]
 
 
 class BlankRowTolerantFormMixin:

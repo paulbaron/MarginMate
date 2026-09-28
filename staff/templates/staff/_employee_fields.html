@@ -1,0 +1,41 @@
+{% comment %}
+Le nom, l'e-mail et la semaine type d'un salarié : « Ajouter un salarié » sur la liste, et la page du
+salarié. Contexte : `form` (staff.forms.EmployeeForm). L'e-mail est facultatif : c'est là que partent le
+lien de signature et le code (staff/signature_mail.py).
+
+Les sept jours sont des champs texte, pas des nombres : « 7,5 » et « 7h30 » s'y écrivent (un
+<input type="number"> refuse la virgule selon la langue du navigateur). Un jour vide est un jour de
+repos, et le champ le dit. Le total sous les sept champs est celui du formulaire tel qu'il est
+affiché ; timesheet.js le tient à jour pendant la saisie.
+{% endcomment %}
+{% if form.non_field_errors %}
+    <div class="message message-error">
+        {% for error in form.non_field_errors %}<p>{{ error }}</p>{% endfor %}
+    </div>
+{% endif %}
+<div class="form-grid">
+    {% for field in form.identity_fields %}
+        <div class="form-field{% if field.errors %} has-error{% endif %}">
+            <label for="{{ field.id_for_label }}">
+                {{ field.label }}{% if field.field.required %}<span class="required" aria-hidden="true">*</span>{% endif %}
+            </label>
+            {{ field }}
+            {% if field.help_text %}<p class="help">{{ field.help_text }}</p>{% endif %}
+            {% for error in field.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+        </div>
+    {% endfor %}
+</div>
+<fieldset class="week-fields" data-week>
+    <legend>Semaine type</legend>
+    <p class="help">Les heures de chaque jour : 7, 7,5, 7h30 ou 7:30. Un jour laissé vide est un jour de repos.</p>
+    <div class="week-days">
+        {% for field in form.week_fields %}
+            <div class="form-field{% if field.errors %} has-error{% endif %}">
+                <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+                {{ field }}
+                {% for error in field.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+            </div>
+        {% endfor %}
+    </div>
+    <p class="week-sum">Total de la semaine : <output data-week-total>{{ form.week_total_text|default:"—" }}</output> h / semaine</p>
+</fieldset>

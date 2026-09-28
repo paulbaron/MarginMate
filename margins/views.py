@@ -35,7 +35,6 @@ the panel, with what changed said there.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timedelta
 from decimal import Decimal
 
 from django.contrib import messages
@@ -43,10 +42,17 @@ from django.contrib.messages import get_messages
 from django.db import transaction
 from django.shortcuts import redirect, render
 from django.urls import reverse
-from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme, urlencode
 
-from common import DateRange, date_range, is_id
+from common import (
+    LEFT_OUT_PARAM,
+    SHOWN_PARAM,
+    DateRange,
+    date_range,
+    is_id,
+    last_twelve_months,
+    left_out_from,
+)
 from inventory.models import StockType
 from recipes.models import RecipeIngredient
 
@@ -59,17 +65,12 @@ HUNDRED = Decimal("100")
 #: everything, and remember what was asked so it can be offered back.
 ALL_PARAM = "tout"
 
-#: What the second real margin leaves out, one key per thing
-#: (`computation.CHARGES_KEY`, `category_key`…), repeated.
-LEFT_OUT_PARAM = "sans"
-#: What « Recalculer » sends. A checkbox that is not ticked sends NOTHING, so
-#: « left out » cannot be read off what came back alone: every row the table
-#: showed sends its key under `montre`, and the boxes still ticked send it
-#: again under `garder`. Left out is shown and not kept - and a key the form
-#: never showed (nothing in the window, a newer invoice since) keeps the
-#: state it had.
-SHOWN_PARAM = "montre"
-KEPT_PARAM = "garder"
+# What the second real margin leaves out is one key per thing
+# (`computation.CHARGES_KEY`, `category_key`…), repeated under
+# `LEFT_OUT_PARAM` (« sans »). « Recalculer » sends every row's key under
+# `SHOWN_PARAM` and the boxes still ticked under `common.KEPT_PARAM`: left
+# out is shown and not kept, read by `common.left_out_from` - the one
+# definition « Dépenses » reads its pie's selection with too.
 
 #: « Articles comptés dans la marge produits »: the panel's anchor, and the
 #: tag its messages carry so the page says them there and not at the top -
@@ -91,17 +92,6 @@ UNTICK_ALL = "decocher"
 SAVE = "enregistrer"
 #: How many names a message lists before it says « et N autres ».
 NAMED_AT_MOST = 5
-
-#: The default period. The same 365 days « Produits & charges » falls back on
-#: for its charges, so the two pages cannot disagree about what « les douze
-#: derniers mois » means.
-DEFAULT_DAYS = 365
-
-
-def _last_twelve_months(today=None) -> DateRange:
-    today = today or timezone.localdate()
-    return DateRange(today - timedelta(days=DEFAULT_DAYS), today)
-
 
 def _dates(window: DateRange) -> str:
     """« du 01/02/2026 au 28/02/2026 » - either end alone is a window a person
@@ -215,14 +205,14 @@ def margins_home(request):
         # « Recalculer »: answered with the clean address - `sans` alone, in
         # the page's own spelling - rather than a page drawn under a URL
         # holding every key of the table twice.
-        left_out = known_left_out(_unticked(request))
+        left_out = known_left_out(left_out_from(request.GET))
         return redirect(_page_url(asked, showing_all=showing_all, left_out=left_out))
 
     # The three periods this page can be on, in the order they win. « Tout
     # l'historique » is a named period like Banque's month or Produits &
     # charges' inventaire: it takes the window whole rather than being
     # crossed with the dates, which stay in the URL only to be offered back.
-    window = DateRange() if showing_all else (asked or _last_twelve_months())
+    window = DateRange() if showing_all else (asked or last_twelve_months())
     report = margins_for(window, request.GET.getlist(LEFT_OUT_PARAM))
     # What the page carries on: the keys it understood, never the ones it
     # dropped, so a garbled key does not travel from link to link.
@@ -321,32 +311,16 @@ def margins_home(request):
             "undated_url": f"{reverse('invoices:invoice_list')}?sans_date=1",
             "purchases_url": _elsewhere("inventory:stock_list", window),
             "sales_url": _elsewhere("recipes:sales_list", window),
+            # The other base, named and reachable: this page counts what was
+            # INVOICED and « Dépenses » counts what the bank took, and each
+            # of the two has to say which it is and point at the other or a
+            # reader takes one figure for the other. The window travels, so
+            # the two are read over the same dates.
+            "spending_url": _elsewhere("bank:spending_home", window),
             "to_link_url": reverse("recipes:pos_product_list"),
             "sales_import_url": reverse("recipes:sales_import"),
         },
     )
-
-
-def _unticked(request) -> list[str]:
-    """What « Recalculer » leaves out: the rows the form showed and did not
-    send back ticked, after what was left out already and not on the form.
-
-    Read as « shown and not kept », never as « not sent »: an unticked box
-    sends nothing, and so does a row a stale page never had - a newer
-    invoice's article read as unticked would drop out of the margin with
-    nobody having touched it. A `garder` for a row the form never showed
-    changes nothing either.
-
-    In the order they were ASKED, what is newly left out after: in table
-    order, a « Recalculer » that changed nothing turned « sans : Matériel,
-    Rhum » into « sans : Rhum, Matériel »."""
-    shown = request.GET.getlist(SHOWN_PARAM)
-    kept = set(request.GET.getlist(KEPT_PARAM))
-    on_the_form = set(shown)
-    before = request.GET.getlist(LEFT_OUT_PARAM)
-    unticked = {key for key in shown if key not in kept}
-    still_out = [key for key in before if key not in on_the_form or key in unticked]
-    return still_out + [key for key in shown if key in unticked and key not in before]
 
 
 def _page_url(window: DateRange, *, showing_all: bool, left_out: list[str] | tuple = ()) -> str:

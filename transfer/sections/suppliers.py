@@ -43,6 +43,7 @@ SUPPLIER_FIELDS = (
     "ticket_header",
     "ticket_identifiers",
     "refused_identifiers",
+    "typed_identifiers",
     "expenses_only",
 )
 #: Every other concrete field of Supplier, and why it stays out of the
@@ -59,11 +60,11 @@ PRICE_FIELDS = ("unit_price_ttc", "label", "valid_from", "created_at")
 PRICE_NOT_EXPORTED = {"id": "pk", "supplier": "parent"}
 
 #: What « Fusionner » may fill when this database leaves it blank (§6.1).
-FILLABLE = ("ticket_header", "ticket_identifiers", "refused_identifiers", "parser_key")
+FILLABLE = ("ticket_header", "ticket_identifiers", "refused_identifiers", "typed_identifiers", "parser_key")
 #: Compared to say « inchangé » or a conflict. The code is the key itself.
 COMPARED = tuple(name for name in SUPPLIER_FIELDS if name != "code")
 KNOWN = (*SUPPLIER_FIELDS, "item_prices")
-LIST_FIELDS = ("ticket_identifiers", "refused_identifiers")
+LIST_FIELDS = ("ticket_identifiers", "refused_identifiers", "typed_identifiers")
 
 LABELS = {
     "name": "nom",
@@ -72,6 +73,7 @@ LABELS = {
     "ticket_header": "en-tête",
     "ticket_identifiers": "identifiants",
     "refused_identifiers": "identifiants écartés",
+    "typed_identifiers": "identifiants saisis à la main",
     "expenses_only": "nature",
     "item_prices": "prix connus",
 }
@@ -483,7 +485,7 @@ class SuppliersSection(Section):
             except ValueError as exc:
                 report.note(f"Fournisseur « {supplier.name} » : nom « {record['name']} » non repris — {exc}")
 
-        plain = [name for name in ("ticket_header", "ticket_identifiers", "refused_identifiers", "is_scrapable")
+        plain = [name for name in ("ticket_header", "ticket_identifiers", "refused_identifiers", "typed_identifiers", "is_scrapable")
                  if name in different]
         if "parser_key" in different:
             value = codec.load(type(supplier), "parser_key", record["parser_key"])
@@ -581,7 +583,8 @@ class SuppliersSection(Section):
             # What it learned goes; what a reader or a till is keyed on -
             # its name, its parser, whether it is fetched - and Metro's
             # firewall state stay as they are.
-            reset = {"ticket_header": "", "ticket_identifiers": [], "refused_identifiers": [], "expenses_only": False}
+            reset = {"ticket_header": "", "ticket_identifiers": [], "refused_identifiers": [],
+                     "typed_identifiers": [], "expenses_only": False}
             fields = [name for name, value in reset.items() if getattr(supplier, name) != value]
             for name in fields:
                 setattr(supplier, name, reset[name])

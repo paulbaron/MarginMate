@@ -3,7 +3,7 @@ import os
 import tempfile
 import threading
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from django.contrib import messages
 from django.db import transaction
@@ -14,6 +14,10 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.generic import DetailView
 
 from common import is_id
+
+#: What a bank line is compared against: a document's total to the centime,
+#: the way bank/reconcile.py rounds it before matching.
+CENTS = Decimal("0.01")
 
 from . import supplier_changes
 from .deletion import InvoiceInUseError, blocking_stock_takes, delete_invoice
@@ -68,7 +72,12 @@ class InvoiceDetailView(DetailView):
     context_object_name = "invoice"
 
     def get_queryset(self):
-        return Invoice.objects.select_related("supplier").prefetch_related("lines__product__stock_type")
+        # The bank lines that paid it: several, since a document may be
+        # settled in two goes - one query for the lot rather than one per
+        # payment while the template prints them.
+        return Invoice.objects.select_related("supplier").prefetch_related(
+            "lines__product__stock_type", "payments__transaction"
+        )
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -78,6 +87,11 @@ class InvoiceDetailView(DetailView):
         context["lines"] = list(self.object.lines.all())
         context["has_parser"] = get_parser(self.object.supplier.parser_key) is not None
         invoice = self.object
+        # Why it sits under this supplier: this page prints « Fournisseur à
+        # confirmer » through review_state and never said why.
+        from .receipts import filing_report
+
+        context["filing"] = filing_report(invoice)
         # See _correction_page for both: « Avoir » was a word no screen said,
         # and a rebuilt MINIMUM line is not an article.
         context["einvoice_is_credit"] = (
@@ -87,6 +101,19 @@ class InvoiceDetailView(DetailView):
         )
         context["einvoice_no_lines"] = invoice.is_einvoice and any(
             check["label"] == EINVOICE_NO_LINES for check in invoice.parse_checks
+        )
+        # A link no longer has to add up (bank/reconcile.py): a document may
+        # be attached to a debit that settled half of it, and it then leaves
+        # `reconcile.unpaid_invoices` for ever - no pass and no pick-list
+        # will raise it again. This is THE page a person opens to find out
+        # whether a document was settled, so it has to compare the two
+        # instead of printing « Payée » over a list of amounts nobody adds.
+        payments = list(invoice.payments.all())
+        context["paid_total"] = sum(
+            (payment.transaction.amount_due for payment in payments), Decimal("0")
+        )
+        context["paid_gap"] = context["paid_total"] - invoice.total_ttc.quantize(
+            CENTS, rounding=ROUND_HALF_UP
         )
         return context
 
@@ -194,6 +221,8 @@ def create_manual_invoice(request):
                         unit_cost_ht=(total_ht / quantity).quantize(Decimal("0.0001")) if quantity else Decimal("0"),
                         total_ht=total_ht,
                         vat_rate=line_form.cleaned_data["vat_rate"] / Decimal("100"),
+                        # import_parsed_invoice spreads it over the others.
+                        is_spread_charge=line_form.cleaned_data.get("is_spread_charge", False),
                     )
                 )
             supplier = form.cleaned_data["supplier"]
@@ -944,6 +973,9 @@ def _correction_page(request, invoice):
             "lot": lot,
             "lot_query": lot_query,
             "can_reread": _can_reread(invoice),
+            # What names this document's supplier, and what it prints that
+            # names another - the move form is right under it.
+            "filing": _filing_report(invoice),
             # An electronic invoice's file may be the XML itself, which no
             # frame can show: the page shows the document as text instead
             # (the reading written by einvoice._as_text_document).
@@ -974,6 +1006,12 @@ def _correction_page(request, invoice):
             **shop_context,
         },
     )
+
+
+def _filing_report(invoice):
+    from .receipts import filing_report
+
+    return filing_report(invoice)
 
 
 def _lot_of(request):
@@ -1013,6 +1051,9 @@ def _save_corrections(request, invoice, formset, header_form, vat_form=None) -> 
                 total_ht=amounts["total_ht"],
                 vat_rate=line.vat_rate if line is not None and line_form.untouched(line) else vat_rate,
                 total_volume=line_form.volume(line),
+                # The page's own box, never the stored line's: unticking it
+                # has to give the product back (importing.corrected_line).
+                is_spread_charge=line_form.cleaned_data.get("is_spread_charge", False),
                 **extra,
             )
         )
@@ -1393,8 +1434,10 @@ def _line_formset_for(invoice, document):
     can_rename = document == DOCUMENT_RECEIPT and is_ticket_shop(invoice.supplier)
     initial = []
     renamable = []
+    stored_lines = []
     offered = set()
     for line in invoice.lines.select_related("product"):
+        stored_lines.append(line)
         row = line_initial(line, document)
         if document == DOCUMENT_RECEIPT and line.read_as and line.raw_name == line.read_as:
             row["product_name"] = line.product.raw_name
@@ -1410,9 +1453,15 @@ def _line_formset_for(invoice, document):
             renamable.append((None, ""))
         initial.append(row)
     formset = LineCorrectionFormSet(initial=initial, form_kwargs={"document": document})
-    for form, (product, rename_to) in zip(formset.forms, renamable):
+    for form, (product, rename_to), line in zip(formset.forms, renamable, stored_lines):
         form.renamable_product = product
         form.rename_to = rename_to
+        # What the delivery added to this line, shown under it rather than as
+        # a field: nobody types a share - `importing.spread_charges` works it
+        # out over the whole document - and a box that cannot be typed in is
+        # a box people try to type in.
+        form.spread_share = line.spread_ht or None
+        form.spread_cost = line.cost_ht
     return formset
 
 

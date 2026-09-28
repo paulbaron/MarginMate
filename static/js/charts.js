@@ -9,13 +9,25 @@
  *
  * The tooltip follows the cursor and is pointer-events:none, so it can never
  * sit under the pointer and swallow the next hover.
+ *
+ * The tooltip is built from nodes, and every value read off the chart goes
+ * in as TEXT. The server escapes each name it writes into `data-label`, but
+ * getAttribute() hands it back decoded: written into innerHTML, a category
+ * typed as `<img onerror=…>` on « Dépenses » ran when its wedge was hovered.
  */
 (function () {
     "use strict";
 
-    function showTooltip(chart, tooltip, html, clientX, clientY) {
+    function node(tag, text, className) {
+        var element = document.createElement(tag);
+        if (className) element.className = className;
+        if (text !== null && text !== undefined) element.textContent = text;
+        return element;
+    }
+
+    function showTooltip(chart, tooltip, parts, clientX, clientY) {
         var box = chart.getBoundingClientRect();
-        tooltip.innerHTML = html;
+        tooltip.replaceChildren.apply(tooltip, parts);
         tooltip.style.left = (clientX - box.left) + "px";
         tooltip.style.top = (clientY - box.top) + "px";
         tooltip.setAttribute("data-visible", "");
@@ -60,8 +72,11 @@
             // jitter as the mouse moves within one point's catchment.
             showTooltip(
                 chart, tooltip,
-                "<strong>" + nearest.getAttribute("data-value") + "</strong><br>" +
-                '<span class="muted">' + nearest.getAttribute("data-label") + "</span>",
+                [
+                    node("strong", nearest.getAttribute("data-value")),
+                    node("br"),
+                    node("span", nearest.getAttribute("data-label"), "muted"),
+                ],
                 box.left + px / viewBox.width * box.width,
                 box.top + py / viewBox.height * box.height
             );
@@ -85,11 +100,16 @@
             });
             var slice = slices.filter(function (s) { return s.getAttribute("data-index") === index; })[0];
             if (!slice) return;
+            var swatch = node("span", null, "swatch");
+            swatch.style.background = slice.getAttribute("data-color");
             showTooltip(
                 chart, tooltip,
-                '<span class="swatch" style="background:' + slice.getAttribute("data-color") + ';"></span>' +
-                slice.getAttribute("data-label") + "<br><strong>" +
-                slice.getAttribute("data-value") + "</strong>",
+                [
+                    swatch,
+                    document.createTextNode(slice.getAttribute("data-label")),
+                    node("br"),
+                    node("strong", slice.getAttribute("data-value")),
+                ],
                 clientX, clientY
             );
         }

@@ -186,12 +186,20 @@ next classification.
                         </form>
                     </td>
                 </tr>
-                <tr id="price-history-{{ row.stock_type.id }}" data-child-row hidden>
+                {% comment %}
+                `data-child-of` names the article a panel belongs to, so a
+                search hiding a row hides what that row has open with it:
+                without it the curve of an article dropped by the query was
+                left among the results, explaining a row no longer there.
+                {% endcomment %}
+                <tr id="price-history-{{ row.stock_type.id }}" data-child-row
+                    data-child-of="{{ row.stock_type.id }}" hidden>
                     <td colspan="{{ column_count }}" style="padding:0.75rem 0.9rem;">
                         <p class="muted">Chargement…</p>
                     </td>
                 </tr>
-                <tr id="details-{{ row.stock_type.id }}" data-child-row hidden>
+                <tr id="details-{{ row.stock_type.id }}" data-child-row
+                    data-child-of="{{ row.stock_type.id }}" hidden>
                     <td colspan="{{ column_count }}" style="padding:0;">
                         <p class="muted" style="padding:0.75rem 0.9rem;">Chargement…</p>
                     </td>

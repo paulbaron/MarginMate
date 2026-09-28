@@ -1,5 +1,4 @@
 import json
-import unicodedata
 from collections import Counter
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
@@ -18,7 +17,7 @@ from django.utils.html import escape
 from django.utils.http import urlencode
 from django.views.generic import CreateView, ListView, TemplateView, UpdateView
 
-from common import DateRange, date_range, is_id
+from common import DateRange, date_range, is_id, search_key
 
 from .forms import (
     OLD_STOCK_TYPE_ENTRY_SUFFIXES,
@@ -31,7 +30,7 @@ from .forms import (
     stock_take_entry_lookup,
 )
 from .models import MovementKind, Product, StockMovement, StockTake, StockTakeLine, StockTakeLineSource, StockType, UnitChoices
-from .product_matching_rules import apply_rules_to_pending_products
+from .product_matching_rules import SuggestionContext, apply_rules_to_pending_products, is_current, suggest_for_product
 from .variance import (
     PeriodStock,
     SoldQuantity,
@@ -904,11 +903,14 @@ def _search_normalize(text: str) -> str:
     """Case- AND accent-insensitive comparison key - "biere" has to find
     "Bière", since nobody reaches for the compose key while typing fast at a
     bar. Mirrors the normalisation static/js/datatable.js applies to every
-    other table's search, so the two search boxes in this app behave the
-    same way. SQLite's own `icontains` folds case but not accents, which is
-    why this runs in Python instead."""
-    decomposed = unicodedata.normalize("NFD", text)
-    return "".join(ch for ch in decomposed if not unicodedata.combining(ch)).lower()
+    other table's search, so the search boxes in this app behave the same
+    way. SQLite's own `icontains` folds case but not accents, which is why
+    this runs in Python instead.
+
+    `common.search_key` is the one definition, shared since the documents'
+    search needed the same answer: two normalisers that could drift are two
+    boxes that stop agreeing about what « biere » finds."""
+    return search_key(text)
 
 
 def search_stock_types(request):
@@ -1126,7 +1128,10 @@ def review_panel_context() -> dict:
     """The products no stock item has claimed, for the side panel."""
     # Every pending product gets a suggestion before the panel renders - no
     # separate button to click, no blank rows. Cheap on every visit: it only
-    # touches products with no suggestion yet.
+    # touches products whose stored suggestion is missing or was made against
+    # classifications that have moved since (`is_current`) - a neighbour
+    # re-filed, unlinked, an article gone - so a stale « haute » is never
+    # drawn, let alone approved.
     apply_rules_to_pending_products()
     pending = (
         Product.objects.filter(stock_type__isnull=True, is_expense=False)
@@ -1146,12 +1151,18 @@ def review_panel_context() -> dict:
             "ai_suggestion", flat=True
         )
     )
+    confidence_counts = Counter(s.get("confidence", "?") for s in all_suggestions)
     return {
         "review_products": list(pending[:REVIEW_PANEL_SIZE]),
         "review_total": total,
         "review_more": max(total - REVIEW_PANEL_SIZE, 0),
         "suggested_count": len(all_suggestions),
-        "confidence_counts": Counter(s.get("confidence", "?") for s in all_suggestions),
+        "confidence_counts": confidence_counts,
+        # What « Approuver les N sûres » will take: the same test
+        # approve_all_suggestions applies (SURE_CONFIDENCE), counted here so
+        # the button's label and its confirmation say the same number.
+        "sure_count": confidence_counts.get(SURE_CONFIDENCE, 0),
+        "source_counts": Counter(s.get("source", "?") for s in all_suggestions),
         "fallback_count": sum(1 for s in all_suggestions if s.get("source") == "fallback"),
         "all_stock_types": stock_types,
         # What the panel's script needs to say whether a typed name is an
@@ -1244,11 +1255,17 @@ def edit_product_conversion(request, product_id):
 
 
 def _resolve_suggestion_stock_type(suggestion: dict) -> StockType | None:
+    """The article a suggestion names: the existing one it matched, or the
+    new one it describes. One that matched an article since deleted (an
+    undo, a merge) names NOTHING - made again by name it would resurrect
+    what somebody removed, silently, under « Approuver »."""
     matched_id = suggestion.get("matched_stock_type_id")
     if matched_id:
         stock_type = StockType.objects.filter(pk=matched_id).first()
         if stock_type:
             return stock_type
+        if not suggestion.get("is_new_stock_type", True):
+            return None
     name = (suggestion.get("stock_type_name") or "").strip()
     if not name:
         return None
@@ -1261,15 +1278,54 @@ def _resolve_suggestion_stock_type(suggestion: dict) -> StockType | None:
     return stock_type
 
 
+# The one confidence « Approuver les N sûres » takes: what the leave-one-out
+# benchmark (product_matching_rules, scratchpad loo_pipeline.py) showed right
+# on article, category and conversion factor for every product it named.
+SURE_CONFIDENCE = "high"
+# What the panel's form may post as `confiance`: everything, or the sure ones.
+APPROVE_SCOPES = {"": None, "haute": SURE_CONFIDENCE}
+
+
 def approve_all_suggestions(request):
+    """Link every pending product to its suggestion - all of them, or with
+    `confiance=haute` only those the pipeline is sure of. Read at POST time,
+    so a product classified meanwhile (another tab, the panel itself) is
+    simply no longer pending and is left as it was classified.
+
+    A stored suggestion is a claim about the classifications at the moment
+    the panel was drawn. One made against classifications that have moved
+    since (`is_current`: a neighbour re-filed, an undo, a merge, a rename) is
+    made again here, against the classifications as they stand at the
+    click - this is the moment money is booked - and only booked if it still
+    meets the scope; otherwise it is left to classify, with its new
+    suggestion stored. The classifications this very pass makes do not feed
+    it: the batch is approved as the panel showed it."""
     if request.method != "POST":
         return redirect("inventory:stock_list")
+    scope = request.POST.get("confiance", "")
+    if scope not in APPROVE_SCOPES:
+        messages.error(request, "Choix inconnu : rien n'a été approuvé.")
+        return redirect("inventory:stock_list")
+    only_sure = APPROVE_SCOPES[scope] is not None
 
     products = Product.objects.filter(stock_type__isnull=True, is_expense=False, ai_suggestion__isnull=False)
+    if only_sure:
+        products = products.filter(ai_suggestion__confidence=APPROVE_SCOPES[scope])
+    context = SuggestionContext()
     approved = 0
+    remade = 0
+    no_longer_sure = 0
     skip_reasons = Counter()
-    for product in products:
+    for product in list(products):
         suggestion = product.ai_suggestion
+        if not is_current(suggestion, context.fingerprint):
+            suggestion = suggest_for_product(product, context)
+            product.ai_suggestion = suggestion
+            product.save(update_fields=["ai_suggestion"])
+            remade += 1
+            if only_sure and suggestion.get("confidence") != APPROVE_SCOPES[scope]:
+                no_longer_sure += 1
+                continue
         stock_equivalent = _parse_positive_decimal(str(suggestion.get("stock_equivalent", "")), default=None)
         stock_type = _resolve_suggestion_stock_type(suggestion)
 
@@ -1283,8 +1339,8 @@ def approve_all_suggestions(request):
             skip_reasons[reason] += 1
             # Clear it so the next time the panel is drawn a new suggestion is
             # made (review_panel_context calls apply_rules_to_pending_products,
-            # which only ever touches products with no suggestion yet) instead
-            # of it being permanently stuck with a bad one.
+            # which fills every product whose suggestion is missing or out of
+            # date) instead of it being permanently stuck with a bad one.
             product.ai_suggestion = None
             product.save(update_fields=["ai_suggestion"])
             continue
@@ -1293,18 +1349,26 @@ def approve_all_suggestions(request):
         link_product_to_stock_type(product, stock_type, unit=stock_type.unit, stock_equivalent=stock_equivalent)
         approved += 1
 
+    which = "les suggestions sûres (confiance haute)" if only_sure else "les suggestions"
     skipped = sum(skip_reasons.values())
+    remade_note = ""
+    if remade:
+        remade_note = f" {remade} suggestion(s) refaite(s) d'abord : les classements avaient changé depuis l'affichage."
+    if no_longer_sure:
+        remade_note += f" {no_longer_sure} laissé(s) à classer, leur suggestion refaite n'étant plus sûre."
     if skipped:
         detail = ", ".join(f"{count} ({reason})" for reason, count in skip_reasons.most_common())
         messages.warning(
             request,
-            f"{approved} produit(s) rattaché(s) d'après les suggestions. {skipped} ignoré(s) : {detail}. "
-            "Ces produits sont repassés sans suggestion - une nouvelle sera générée automatiquement.",
+            f"{approved} produit(s) rattaché(s) d'après {which}. {skipped} ignoré(s) : {detail}. "
+            "Ces produits sont repassés sans suggestion - une nouvelle sera générée automatiquement." + remade_note,
         )
     elif approved:
-        messages.success(request, f"{approved} produit(s) rattaché(s) automatiquement d'après les suggestions.")
+        messages.success(request, f"{approved} produit(s) rattaché(s) automatiquement d'après {which}.{remade_note}")
+    elif only_sure:
+        messages.info(request, f"Aucune suggestion sûre à approuver pour le moment.{remade_note}")
     else:
-        messages.info(request, "Aucune suggestion à approuver pour le moment.")
+        messages.info(request, f"Aucune suggestion à approuver pour le moment.{remade_note}")
     return redirect("inventory:stock_list")
 
 

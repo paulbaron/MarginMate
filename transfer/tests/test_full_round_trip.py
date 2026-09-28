@@ -224,7 +224,7 @@ class WholeArchiveTests(MediaMixin, TestCase):
         invoices the others. On the real data all 794 came back dated from
         the import."""
         moments = product_moments()
-        self.assertEqual(len(moments), 5)
+        self.assertEqual(len(moments), 6)
         self._check(REPLACE)
         self.assertEqual(product_moments(), moments)
 

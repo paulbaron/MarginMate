@@ -454,3 +454,34 @@
         window.location.href = row.getAttribute("data-row-href");
     });
 })();
+
+/* « Copier » (data-copy="<id of the field>"): the field's text to the
+   clipboard - the signing link the owner sends by SMS or WhatsApp
+   (staff/templates/staff/_signature_request.html). The field is selected
+   first either way, so where the clipboard is refused (a page served over
+   plain HTTP from another machine) a long press or Ctrl+C still copies it. */
+(function () {
+    document.addEventListener("click", function (event) {
+        var button = event.target.closest("button[data-copy]");
+        if (!button) return;
+        var field = document.getElementById(button.getAttribute("data-copy"));
+        if (!field) return;
+        field.focus();
+        field.select();
+        var label = button.textContent;
+        function said(text) {
+            button.textContent = text;
+            setTimeout(function () { button.textContent = label; }, 2000);
+        }
+        if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(field.value).then(
+                function () { said("Copié"); },
+                function () { said("Sélectionné : Ctrl+C"); }
+            );
+        } else {
+            var copied = false;
+            try { copied = document.execCommand("copy"); } catch (error) { copied = false; }
+            said(copied ? "Copié" : "Sélectionné : Ctrl+C");
+        }
+    });
+})();

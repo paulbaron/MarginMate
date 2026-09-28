@@ -12,6 +12,15 @@ for that reason.
 
 The per-day table is the big one (15 850 rows on 19/09), so it travels as
 compact rows (`daily_columns`) and is written in bulk.
+
+**The money does not travel.** The archive carries the quantities only
+(`DAILY_COLUMNS`): neither a day's takings (`revenue_*` on the per-day rows,
+which a restore leaves « non lu ») nor the till's means of payment per day
+(`PosDailyPayment`). Both are re-read from the exports already on disk -
+`manage.py laddition_backfill_revenue`, then `laddition_backfill_payments`,
+contacting nothing. So a clear deletes the payments, and a « Remplacer »
+deletes those of every day it leaves with no till sales, and both say how to
+bring them back (`PAYMENTS_NOTE`); nothing else here touches them.
 """
 
 from __future__ import annotations
@@ -25,6 +34,7 @@ from django.db.models import Prefetch
 
 from recipes.forms import MANUAL_SALE_SOURCE
 from recipes.models import (
+    PosDailyPayment,
     PosProduct,
     PosProductDailyQuantity,
     RecipeSale,
@@ -58,6 +68,15 @@ LINE_KEYS = ("recipe", "article", "quantity", "unit_price_ttc")
 QUANTITIES, TILL_DAYS = "quantités par produit et par jour (caisse)", "jours de caisse"
 PRODUCTS, MANUAL, DOCUMENTS = "produits caisse", "ventes saisies", "bons de vente"
 LINES, RECIPE_SALES = "lignes de bons de vente", "ventes par recette"
+#: One row is one means of payment on one day, so the label says so - the
+#: lesson of QUANTITIES. Never in count(): the archive does not carry them,
+#: and the import tab compares count() with the archive's counts.
+PAYMENTS = "totaux par jour et par moyen de paiement (caisse)"
+PAYMENTS_NOTE = (
+    "Les moyens de paiement de la caisse ne sont pas dans les archives : "
+    "« manage.py laddition_backfill_payments » les relit des exports déjà téléchargés, pour les jours "
+    "dont les ventes sont enregistrées."
+)
 #: Rows written or deleted per query: SQLite caps a statement's parameters.
 BATCH = 500
 
@@ -545,14 +564,31 @@ class SalesSection(Section):
         if products:
             report.deleted(PRODUCTS, products)
         self.touched.difference_update(orphans)
+
+        # A day « Ventes » no longer holds keeps no payments: money for a
+        # day with no sales is a figure the sales pages contradict (the
+        # backfill's own rule). A day still here keeps its payments - the
+        # archive has none to replace them with.
+        with_sales = set(PosProductDailyQuantity.objects.values_list("sold_on", flat=True).distinct())
+        payments = _delete(
+            PosDailyPayment,
+            [pk for pk, sold_on in PosDailyPayment.objects.values_list("pk", "sold_on") if sold_on not in with_sales],
+        )
+        if payments:
+            report.deleted(PAYMENTS, payments)
+            report.note(PAYMENTS_NOTE)
         self._settle(ctx)
 
     # -- clear ---------------------------------------------------------------------------
     def clear(self, ctx, report) -> None:
         """Every day, every sale per recipe (typed in or the till's), every
-        document. The till products with no link go; a linked or ignored one
-        is the links' and stays, at zero and with no day."""
+        document, every day's payments. The till products with no link go; a
+        linked or ignored one is the links' and stays, at zero and with no
+        day."""
         days, _ = PosProductDailyQuantity.objects.all().delete()
+        payments, _ = PosDailyPayment.objects.all().delete()
+        if payments:
+            report.note(PAYMENTS_NOTE)
         manual = RecipeSale.objects.filter(source=MANUAL_SALE_SOURCE).count()
         _total, per_model = RecipeSale.objects.all().delete()
         till_sales = per_model.get(RecipeSale._meta.label, 0) - manual
@@ -566,7 +602,7 @@ class SalesSection(Section):
         )
         for what, n in (
             (QUANTITIES, days), (PRODUCTS, products), (MANUAL, manual), (RECIPE_SALES, till_sales),
-            (DOCUMENTS, documents), (LINES, lines),
+            (DOCUMENTS, documents), (LINES, lines), (PAYMENTS, payments),
         ):
             if n:
                 report.deleted(what, n)

@@ -24,7 +24,7 @@ Every invoice and ticket. Reloads itself when an import ends
         <span class="table-search">
             <input type="search" name="q" value="{{ query }}" autocomplete="off"
                    aria-label="Rechercher un document"
-                   placeholder="Rechercher un fournisseur, un numéro, une date (12/07/2026), un montant…">
+                   placeholder="Un fournisseur, un numéro, une date, un montant — ou plusieurs à la fois (fournisseur 09/2025)…">
         </span>
         <button class="btn btn-small btn-secondary" type="submit">Rechercher</button>
         {% if query %}
@@ -59,7 +59,7 @@ Every invoice and ticket. Reloads itself when an import ends
     {% if query %}
         <p class="muted">
             {{ found_count }} document{{ found_count|pluralize }} pour « {{ query }} »
-            {% if not found_count %}— essayez le nom du fournisseur, le numéro, une date ou un montant.{% endif %}
+            {% if not found_count %}— les mots se complètent&nbsp;: « fournisseur 2025 », « fournisseur 09/2025 », un numéro, un montant.{% endif %}
         </p>
     {% endif %}
 
@@ -112,6 +112,19 @@ Every invoice and ticket. Reloads itself when an import ends
             hors de toute valorisation du stock et du rapprochement bancaire.
             <a href="{% url 'invoices:invoice_list' %}?filtre=sans-date">Les afficher</a>
         </div>
+    {% elif active_filter == "non-rapprochees" %}
+        {% comment %}
+        Ce que cette liste laisse dehors, dit plutôt que tu : avant le premier
+        relevé, « non rapprochée » n'est pas un fait sur le document mais sur
+        les relevés, et une liste qui écarte des centaines de documents sans le dire se lit
+        comme un bug.
+        {% endcomment %}
+        <p class="muted">
+            Les documents qu'aucune opération bancaire ne règle, depuis le
+            {{ reconciled_from|date:"d/m/Y" }} — le premier jour couvert par les relevés importés.
+            Ce qui est antérieur n'en est pas : les relevés ne remontent pas jusque-là.
+            Un document sans date y figure aussi, le rapprochement ne fait que le proposer.
+        </p>
     {% elif active_filter == "verifies" %}
         <p class="muted">Les tickets vérifiés ces deux derniers jours, le dernier en haut.</p>
     {% elif active_filter == "recents" %}
@@ -177,6 +190,15 @@ Every invoice and ticket. Reloads itself when an import ends
                         their row over a tab that rightly left them out.
                         {% endcomment %}
                         <span class="status-pill status-{{ invoice.review_state.css }}">{{ invoice.review_state.label }}</span>
+                        {% comment %}
+                        Ce que la banque en dit, à côté de ce que le document
+                        dit de sa propre lecture (workspace.bank_state) : rien
+                        du tout pour un document antérieur au premier relevé,
+                        sur lequel la banque n'a rien à dire.
+                        {% endcomment %}
+                        {% if invoice.bank_state %}
+                            <span class="status-pill status-{{ invoice.bank_state.css }}">{{ invoice.bank_state.label }}</span>
+                        {% endif %}
                     </td>
                     <td class="num">{{ invoice.total_ht|floatformat:2 }} €</td>
                     <td class="num">{{ invoice.total_ttc|floatformat:2 }} €</td>

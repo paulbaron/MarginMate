@@ -50,6 +50,7 @@ from rapidfuzz import fuzz
 from rapidfuzz.utils import default_process
 
 from .base import ParseCheck, ParsedInvoice, ParsedLine, PdfPage
+from .layout import AMOUNT, QUANTITY, RATE, UNIT_PRICE, ItemRow, Table, find_table
 from .receipt_base import (
     BANNER_RE,
     CENTS,
@@ -162,6 +163,12 @@ LETTERS_RE = re.compile(r"[A-Za-zÀ-ÿ]")
 HEADING_RE = re.compile(
     r"^\s*(?P<name>[A-ZÀ-Ÿ][A-ZÀ-Ÿ/ '-]{3,}?)(?P<dots>\.+)\s*(?:(?P<amount>\d{1,4}[.,]\d{2})\s*(?:€|E|EUR)?)?\s*$"
 )
+# "** DROGUERIE / OUTILLAGE **", "**PLOMBERIE**": a department heading framed
+# by the same run of markers on both sides - a DIY till's - sometimes with
+# the amount of the item under it glued on, as a dotted heading may be.
+FRAMED_HEADING_RE = re.compile(
+    r"^\s*(?P<frame>[*#=]{2,})\s*(?P<name>[A-ZÀ-Ÿ][A-ZÀ-Ÿ/ ',-]+?)\s*(?P=frame)\s*(?:(?P<amount>\d{1,4}[.,]\d{2})\s*(?:€|E|EUR)?)?\s*$"
+)
 # « Dont » - "of which" - opens a line printing a part of an amount already
 # counted: "Dt Ecopart. unit. EcoMob 0.72" under a tool box at 24,90 (a DIY
 # till abbreviates it), "- Dont DDS 0.20" under a bottle of acid, "Dont
@@ -269,6 +276,10 @@ class Reading:
     # An amount read in HT (a document whose rows add up to its HT base):
     # `total` is then worked out, not printed.
     ht_row: bool = False
+    # A row of a table whose name is the text reading's rather than its
+    # description column's (the count printed inside the name, see
+    # GenericReceiptParser._table_reading): the check says so.
+    name_from_text: bool = False
 
     @property
     def explained(self) -> Decimal | None:
@@ -328,6 +339,21 @@ def read_line(index: int, line: str, total: Decimal | None = None) -> Reading | 
     if reading is not None:
         reading.name = _without_leading_count(reading.name, reading.count)
     return reading
+
+
+def heading_of(line: str) -> tuple[str, Decimal | None] | None:
+    """(name, the amount glued to it or None) when the line is a department
+    heading: upper-case words trailed by dots - three at least, or a slash in
+    the name ("FRUITS/LEGUMES. 2,51") - or framed by the same markers on
+    both sides ("** PLOMBERIE **"). A line printing a figure inside the
+    words is a row, not a heading."""
+    heading = HEADING_RE.match(line)
+    if heading is None or not (len(heading.group("dots")) >= 3 or "/" in heading.group("name")):
+        heading = FRAMED_HEADING_RE.match(line)
+        if heading is None:
+            return None
+    amount = heading.group("amount")
+    return heading.group("name").strip(" ."), Decimal(amount.replace(",", ".")) if amount else None
 
 
 def _without_leading_count(name: str | None, count: int | None) -> str | None:
@@ -431,6 +457,11 @@ def _read_line(index: int, line: str, total: Decimal | None = None) -> Reading |
     name_end = min(tail_starts) if tail_starts else len(line)
     name_text = BANNER_RE.sub(" ", line[prefix_end:name_end])
     name_text = re.sub(r"(?:\s+\d{1,3})+\s*$", "", name_text)  # "BASILIC FRAIS 1", "DADDY 71"
+    if name_end < len(line) and name_text.rstrip().endswith("€") and line[name_end - 1] == "€":
+        # A currency sign GLUED in front of the amount ("Delivery  €6.90") is
+        # never the end of a name. One standing on its own ("C,99€  1,88", a
+        # price misread into the name on a checked ticket) stays as read.
+        name_text = name_text.rstrip()[:-1]
     words = [word for word in re.split(r"\s+", name_text.strip(" .:-#*+|")) if word]
     meaningful = [word for word in words if LETTERS_RE.search(word) and word.lower().strip(".:@,") not in NOISE_WORDS]
     name = " ".join(words) if sum(len(LETTERS_RE.findall(word)) for word in meaningful) >= 2 else None
@@ -646,15 +677,46 @@ class GenericReceiptParser(ReceiptParser):
         self.header_patterns = shop.header_patterns
 
     def parse_pages(self, pages: list[PdfPage], date_hint: date | None = None, source_name: str = "") -> ParsedInvoice:
-        lines = [line for page in pages for line in page.text.split("\n") if line.strip()]
+        lines, view = _lines_and_layout(pages)
         total = printed_total(lines)
-        vat_rows = {index for index in range(len(lines)) if unmarked_vat_row(lines, index) is not None}
-        vat_summaries, rate_only = collect_vat_summaries(lines, total)
+        if view is not None:
+            total = _table_total(lines, view, total)
+        table_items = view.items if view is not None else {}
+        vat_rows = {
+            index for index in range(len(lines)) if index not in table_items and unmarked_vat_row(lines, index) is not None
+        }
+        # A row of the table is not the VAT table, however well its figures
+        # fit the identity: at quantity 1, a row printing its rate and its tax
+        # ("12,40  5,5 %  0,68  12,40") does, and was read as one.
+        vat_lines = [line if index not in view.headed else "" for index, line in enumerate(lines)] if view else lines
+        vat_summaries, rate_only = collect_vat_summaries(vat_lines, total)
+        if view is not None:
+            # Every row of the table prints its rate and its tax, each
+            # confirmed by its own arithmetic, and the rows make what was
+            # paid: the rows are the breakdown, one bucket a rate, for every
+            # rate no printed table was READ for. A rate legible on a footer
+            # line whose amounts were not ("Total TVA 20 %  0,83", "TVA 5,5 %
+            # 4,29 €") says less than the rows do, and derived from the total
+            # it stood for a bucket the size of the whole document - two of
+            # them on a two-rate invoice, failing three checks on a document
+            # read right. A bucket actually printed and read keeps the say.
+            breakdown = _rows_breakdown(view, total)
+            if breakdown:
+                view.taxed_rows = True
+                read = [summary for summary in vat_summaries if not summary.derived]
+                read_rates = {summary.rate for summary in read}
+                vat_summaries = read + [summary for summary in breakdown if summary.rate not in read_rates]
+                rate_only = []
+            elif not vat_summaries and not rate_only:
+                # No table at all, but the rows print their rate: that is the
+                # legible rate, as a VAT row whose amounts were lost would be.
+                # The checks still say the table was not read.
+                rate_only = sorted({item.rate for item in view.items.values() if item.rate is not None})
         totals = ReceiptTotals(printed_total_ttc=total, vat_summaries=vat_summaries, rate_only=rate_only)
         # No VAT table: maybe an HT and a tax printed with no rate beside them.
         untabled = untabled_vat(lines, total) if not vat_summaries and not rate_only else []
 
-        first = segment = self._segment(lines, total, totals, vat_rows, 0, untabled=untabled)
+        first = segment = self._segment(lines, total, totals, vat_rows, 0, untabled=untabled, view=view)
         # Items read up to a total that none of them makes: the document may
         # print its lines again further down - the invoice under the till's
         # ticket, both on one photo, the ticket's half misread. What is found
@@ -662,7 +724,7 @@ class GenericReceiptParser(ReceiptParser):
         # also makes what was paid.
         while segment.chosen is None and segment.end + 1 < len(lines):
             segment = self._segment(
-                lines, total, totals, vat_rows, segment.end + 1, structured_only=True, untabled=untabled
+                lines, total, totals, vat_rows, segment.end + 1, structured_only=True, untabled=untabled, view=view
             )
         if segment.chosen is None:
             segment = first
@@ -688,6 +750,12 @@ class GenericReceiptParser(ReceiptParser):
         gross = sum((item.total for item in items), start=ZERO)
 
         extra: list[ParseCheck] = quantity_checks(quantity_fixes, quantity_problems)
+        if view is not None:
+            # Recognition must be visible, and true: what the columns gave,
+            # what the reader did with the table's rows, and what it read as
+            # text where the table was - failing where the two disagree.
+            passed, detail = view.report(items, lines)
+            extra.append(ParseCheck(label="Tableau reconnu", passed=passed, detail=detail))
         if segment.totals is not None:
             (summary,) = totals.vat_summaries
             extra.append(ParseCheck(
@@ -752,15 +820,16 @@ class GenericReceiptParser(ReceiptParser):
             ],
         )
 
-    def _segment(self, lines, total, totals, vat_rows, start, structured_only=False, untabled=()) -> Segment:
+    def _segment(self, lines, total, totals, vat_rows, start, structured_only=False, untabled=(), view=None) -> Segment:
         """The items read from `start` up to the next total, and the run of
         them that is the purchase (None when none adds up).
 
         `untabled` are the readings of an HT and a tax printed with no rate
         (untabled_vat): one is taken only for rows in HT printed above both
-        lines - it then stands for the VAT table (`segment.totals`)."""
+        lines - it then stands for the VAT table (`segment.totals`). `view`
+        is what the page's positions say (see _lines_and_layout), or None."""
         segment = Segment()
-        items, details, voids, segment.end = self._read_items(lines, total, segment.notes, vat_rows, start)
+        items, details, voids, segment.end = self._read_items(lines, total, segment.notes, vat_rows, start, view=view)
         self._attach_details(
             items, details, voids, segment.weight_problems, segment.quantity_fixes, segment.quantity_problems
         )
@@ -818,7 +887,7 @@ class GenericReceiptParser(ReceiptParser):
 
     # -- reading -----------------------------------------------------------
 
-    def _read_items(self, lines, total, notes, vat_rows=frozenset(), start=0):
+    def _read_items(self, lines, total, notes, vat_rows=frozenset(), start=0, view=None):
         items: list[Reading] = []
         details: list[Reading] = []
         voids: list[Decimal] = []
@@ -837,6 +906,27 @@ class GenericReceiptParser(ReceiptParser):
         for index, line in enumerate(lines):
             if index < start:
                 continue
+            if view is not None:
+                # The page's columns have the say over a line they place: a
+                # row of the table is an item read through its columns; the
+                # header, a wrapped description, a detail inside the table
+                # and the document's head above it are never items. Every
+                # other line is read as text, as before.
+                if index in view.skip:
+                    pending = None
+                    continue
+                row = view.items.get(index)
+                if row is not None and not INCLUDED_RE.match(line):
+                    # A line opening on « dont » is part of the item above
+                    # whatever column its figure sits in: the text logic
+                    # below has the say over it, as over every other line
+                    # (a department heading never reaches here: see
+                    # _lines_and_layout).
+                    reading = self._table_reading(index, line, row, total)
+                    reading.category = category
+                    items.append(reading)
+                    pending = None
+                    continue
             if INCLUDED_RE.match(line):
                 # A part of the item above, never an item: read as one, the
                 # eco-participation of each tool box made the lines 0,92 more
@@ -853,11 +943,10 @@ class GenericReceiptParser(ReceiptParser):
                 named_codes[linked.group("code")] = (
                     FOOTNOTE_MARKS_RE.sub("", linked.group("name")), linked.group("count")
                 )
-            heading = HEADING_RE.match(line)
-            if heading and (len(heading.group("dots")) >= 3 or "/" in heading.group("name")):
-                category, pending, heading_at = heading.group("name").strip(" ."), None, index
-                amount = heading.group("amount")
-                orphan = (index, Decimal(amount.replace(",", "."))) if amount else None
+            heading = heading_of(line)
+            if heading is not None:
+                category, pending, heading_at = heading[0], None, index
+                orphan = (index, heading[1]) if heading[1] is not None else None
                 continue
             reading = read_line(index, line, total) if index not in vat_rows else None
             if reading is None or reading.vat_row:
@@ -986,6 +1075,50 @@ class GenericReceiptParser(ReceiptParser):
             items.append(reading)
             pending = None
         return items, details, voids, items_end
+
+    @staticmethod
+    def _table_reading(index: int, line: str, row: ItemRow, total: Decimal | None) -> Reading:
+        """A row of the table, read through its columns: the name is the
+        description column's text alone, the count the quantity column's -
+        even a lone "1" -, the price and the amount their columns'. What the
+        columns do not say - a VAT code, an EAN, a weight - the text still
+        does; and where the row proves its own HT and rate, it carries them
+        as a row printing its tax does (`_taxed_row`)."""
+        text = _read_line(index, line, total)
+        reading = Reading(index=index, name=row.name or None)
+        if text is not None and not text.vat_row:
+            reading.code, reading.ean, reading.weight = text.code, text.ean, text.weight
+            if not row.counted and text.count is not None:
+                # A table with no quantity column at all: the count is the
+                # text's, as before ("2 x 4,50  9,00", "CHAINE D4 X4"), and
+                # so is the name it cut the count out of - the two go
+                # together, and the tickets already checked hold that name.
+                # The text reading's own checks go on judging the count
+                # (« Quantités recalculées »), and « Tableau reconnu » says
+                # how many names came from the text. A table WITH a quantity
+                # column whose cell is empty on this row is a row of one.
+                reading.count, reading.unit, reading.count_printed = text.count, text.unit, text.count_printed
+                named = _without_leading_count(text.name or reading.name, text.count)
+                reading.name_from_text = named != reading.name
+                reading.name = named
+        if row.ean:
+            reading.ean = row.ean
+        if row.quantity is not None:
+            reading.count, reading.count_printed, reading.unit = row.quantity, True, row.unit_price
+        elif reading.unit is None:
+            reading.unit = row.unit_price
+        reading.total = row.amount
+        if row.ht is not None and row.ttc is not None and row.rate is not None:
+            reading.ht, reading.rate, reading.total = row.ht, row.rate, row.ttc
+            # The TTC worked out from a row in HT is not a printed amount;
+            # one the row prints beside its HT (`ItemRow.ttc_printed`) is,
+            # and a receipt line keeps its printed TTC: 6,64 HT at 5,5 %
+            # does not convert back to the 7,00 the row prints.
+            reading.ht_row = not row.ttc_printed and row.amount == row.ht and row.ttc != row.amount
+        elif row.rate is not None:
+            reading.row_rate = row.rate
+        reading.read_total = reading.total
+        return reading
 
     def _negative(self, reading: Reading, items: list[Reading], voids: list[Decimal]) -> None:
         """A negative amount: an item cancelled ("NUL LIGNE" then the item at
@@ -1239,6 +1372,198 @@ class GenericReceiptParser(ReceiptParser):
         if item.discount:
             line.discount = to_ht(item.total, rate) - total_ht
         return line
+
+
+@dataclass
+class LayoutView:
+    """What the pages' positions say about their lines, over the whole
+    document's line numbering (see parsers/layout.py): the rows that are a
+    table's items, and the lines that are never items - the header, a
+    wrapped description, a detail inside the table, the document's head
+    above a header."""
+
+    tables: list[Table] = field(default_factory=list)
+    items: dict[int, ItemRow] = field(default_factory=dict)
+    skip: set[int] = field(default_factory=set)
+    # The items of a table with a header - a table beyond doubt.
+    headed: set[int] = field(default_factory=set)
+    # Table rows whose description is no name (a calculation, "12,50 €/m2 x
+    # 0,200 m2"), handed to the text reading on purpose: it names them after
+    # the line above.
+    handed: set[int] = field(default_factory=set)
+    # Each table's span over the document's lines, first row to last item.
+    spans: list[tuple[int, int]] = field(default_factory=list)
+    # Set by parse_pages when the VAT breakdown was taken from the rows.
+    taxed_rows: bool = False
+
+    def report(self, items: list[Reading], lines: list[str]) -> tuple[bool, str]:
+        """(passed, detail) of « Tableau reconnu »: the columns found, what
+        they gave - only the columns that exist -, how many of the table's
+        rows the arithmetic kept, which names came from the text, and what
+        was read as text: outside the table (said), inside it on purpose
+        (said), inside it on a line printing no amount of its own - the
+        product under a heading that took its amount (said) - or inside it
+        on a line printing money the columns missed (failing), as does a
+        table row the arithmetic left out. The check states what the reader
+        DID, not what the table looked like."""
+        kept = [item for item in items if item.index in self.items]
+        outside = [item for item in items if item.index not in self.items]
+        within = [
+            item for item in outside
+            if item.index not in self.handed and any(start <= item.index <= end for start, end in self.spans)
+        ]
+        completed = [item for item in within if not line_amounts(lines[item.index])]
+        missed = [item for item in within if item not in completed]
+        elsewhere = [item for item in outside if item.index not in self.handed and item not in within]
+        from_text = [item for item in kept if item.name_from_text]
+        dropped = len(self.items) - len(kept)
+
+        def plural(count, singular, more):
+            return f"{count} {singular if count == 1 else more}"
+
+        def named(some):
+            return ", ".join(f"« {item.name or UNREAD_NAME} »" for item in some)
+
+        roles = {column.role for table in self.tables for column in table.columns}
+        gave = [
+            label for role, label in ((QUANTITY, "la quantité"), (UNIT_PRICE, "le prix unitaire"), (AMOUNT, "le montant"), (RATE, "le taux"))
+            if role in roles
+        ]
+        came = f"{gave[0]} vient de sa colonne" if len(gave) == 1 else f"{', '.join(gave[:-1])} et {gave[-1]} viennent de leurs colonnes"
+        parts = [
+            " / ".join(table.describe() for table in self.tables),
+            f"lu par colonnes : le nom est la désignation seule, {came}",
+        ]
+        if self.taxed_rows:
+            parts.append(
+                "table de TVA reconstituée depuis les lignes du tableau, chacune imprimant son taux et sa TVA "
+                "(montant x taux = TVA sur chaque ligne)"
+            )
+        parts.append(plural(len(kept), "ligne du tableau retenue", "lignes du tableau retenues") + " parmi les articles")
+        if from_text:
+            parts.append(
+                "nom et quantité repris de la lecture texte sur "
+                + plural(len(from_text), "ligne", "lignes")
+                + " (quantité imprimée dans le nom)"
+            )
+        if self.handed:
+            parts.append(
+                plural(len(self.handed), "ligne du tableau dont la désignation n'est pas un nom, lue", "lignes du tableau dont la désignation n'est pas un nom, lues")
+                + " en texte (un calcul, un intitulé de rayon : le nom vient de la ligne voisine)"
+            )
+        if completed:
+            parts.append(
+                plural(len(completed), "ligne lue", "lignes lues")
+                + f" en texte dans le tableau, complétée{'s' if len(completed) > 1 else ''} du montant imprimé sur la ligne au-dessus : {named(completed)}"
+            )
+        if elsewhere:
+            parts.append(plural(len(elsewhere), "ligne lue", "lignes lues") + f" en texte, hors du tableau : {named(elsewhere)}")
+        problems = []
+        if dropped:
+            problems.append(plural(dropped, "ligne du tableau écartée", "lignes du tableau écartées") + " par l'arithmétique")
+        if missed:
+            problems.append(plural(len(missed), "ligne du corps du tableau lue", "lignes du corps du tableau lues") + f" comme texte : {named(missed)}")
+        return not problems, " ; ".join(parts + problems)
+
+
+def _rows_breakdown(view: LayoutView, total: Decimal | None) -> list[VatSummary]:
+    """The VAT table of a document that prints none under its table, when
+    every row of a headed table proves its own rate, HT and TTC (its rate
+    turning its amount into its printed tax, or two unit prices one rate
+    apart - `layout._settle_taxes`) and the rows' TTC make the amount paid:
+    one bucket a rate, its base the rows' HT added up, its tax theirs.
+    Nothing proven on one row, or a purchase the table does not account for
+    (a delivery line under it), and there is no table: the reader then says
+    so, as before, and a person looks. A table found without a header does
+    not prove enough to stand for one."""
+    rows = [view.items[index] for index in sorted(view.headed)]
+    if not rows or total is None or any(row.rate is None or row.ht is None or row.ttc is None for row in rows):
+        return []
+    if abs(sum((row.ttc for row in rows), start=ZERO) - total) > max(CENTS, len(rows) * HALF_CENT):
+        return []
+    buckets: dict[Decimal, list[ItemRow]] = {}
+    for row in rows:
+        buckets.setdefault(row.rate, []).append(row)
+    return [
+        VatSummary(
+            rate=rate,
+            base=sum((row.ht for row in bucket), start=ZERO),
+            vat_amount=sum((row.ttc - row.ht for row in bucket), start=ZERO),
+            total_ttc=sum((row.ttc for row in bucket), start=ZERO),
+        )
+        for rate, bucket in sorted(buckets.items())
+    ]
+
+
+def _table_total(lines: list[str], view: LayoutView, total: Decimal | None) -> Decimal | None:
+    """The total of a document whose table's rows, each proven TTC, add up to
+    an amount printed under the table - when what repetition found instead
+    (`printed_total`: the largest amount printed twice) is one of those
+    rows' own figures. A delivery at quantity one prints its price as its
+    unit price, its amount and again as « frais d'expédition » under the
+    table, where the total is printed once; taken for the total, the
+    delivery alone was the purchase and the goods went unread."""
+    rows = [view.items[index] for index in sorted(view.headed)]
+    if total is None or not rows or any(row.ttc is None or row.ttc != row.amount for row in rows):
+        return total
+    table_sum = sum((row.amount for row in rows), start=ZERO)
+    if total >= table_sum - CENTS or total not in {row.amount for row in rows}:
+        return total
+    if amount_printed(lines, table_sum, start=max(view.headed) + 1) is None:
+        return total
+    return table_sum
+
+
+def _is_a_name(text: str) -> bool:
+    """Whether a description column's text is a name by the text reading's
+    own standard (`_read_line`): not opening on an amount, and two letters
+    at least in words that are not noise."""
+    if not text or MONEY_RE.match(text):
+        return False
+    words = [word for word in text.split() if LETTERS_RE.search(word) and word.lower().strip(".:@,") not in NOISE_WORDS]
+    return sum(len(LETTERS_RE.findall(word)) for word in words) >= 2
+
+
+def _lines_and_layout(pages: list[PdfPage]) -> tuple[list[str], LayoutView | None]:
+    """The document's non-blank lines, and - when the pages carry positions
+    and a table is found on one of them - the layout view over those lines.
+    Row i of a page is line i of its text, so the blank lines dropped from
+    the text are dropped from the rows too, and a page whose rows do not
+    match its text is read as text alone."""
+    lines: list[str] = []
+    view = LayoutView()
+    for page in pages:
+        texts = page.text.split("\n")
+        rows = page.rows if page.rows is not None and len(page.rows) == len(texts) else None
+        if rows is None:
+            lines += [text for text in texts if text.strip()]
+            continue
+        offset = len(lines)
+        page_rows = []
+        for text, row in zip(texts, rows):
+            if text.strip():
+                lines.append(text)
+                page_rows.append(row)
+        table = find_table(page_rows)
+        if table is None:
+            continue
+        view.tables.append(table)
+        for index, item in table.items.items():
+            if not _is_a_name(item.name) or heading_of(lines[offset + index]) is not None:
+                # The description column holds a calculation ("12,50 €/m2 x
+                # 0,200 m2"), nothing at all, or a department heading with
+                # the amount of the product under it glued on ("** DROGUERIE
+                # / OUTILLAGE **  14,90"): the name is the line beside it,
+                # and the text reading knows how to take it from there.
+                view.handed.add(offset + index)
+                continue
+            view.items[offset + index] = item
+            if table.has_header:
+                view.headed.add(offset + index)
+        view.skip.update(offset + index for index in table.inside | table.before)
+        last = table.body_end - 1 if table.body_end is not None else max(table.items)
+        view.spans.append((offset + min(table.header_rows or table.items), offset + max(last, max(table.items))))
+    return lines, (view if view.tables else None)
 
 
 @dataclass

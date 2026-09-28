@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     "bank",
     "transfer",
     "margins",
+    "staff",
 ]
 
 MIDDLEWARE = [
@@ -205,3 +206,43 @@ PRODUCT_FUZZY_MATCH_THRESHOLD = int(os.environ.get("PRODUCT_FUZZY_MATCH_THRESHOL
 SCRAPER_HEADLESS = env_bool("SCRAPER_HEADLESS", True)
 
 SCRAPE_DOWNLOAD_DIR = BASE_DIR / "scraped_invoices"
+
+# --- « Personnel »: the monthly electronic signature of the timesheets ------------
+# (staff/signing.py, staff/signature_requests.py)
+
+# The signing keys, the frozen and signed PDFs, the drawn signatures and the
+# proof files. NEVER under MEDIA_ROOT: config/urls.py serves all of media
+# when DEBUG is on (staff.private_files refuses such a folder). Back it up
+# with the database: it holds the internal authority's key. Losing it does
+# not make a signed PDF unverifiable - each one embeds its certificates -
+# but the next signature would come from a new authority.
+STAFF_PRIVATE_DIR = Path(os.environ.get("MARGINMATE_PRIVATE_DIR", "").strip() or BASE_DIR / "private")
+# Encrypts the private keys on disk (PKCS#8). Unset, they are stored in
+# clear and the owner's pages say so: set it before the app goes online.
+MARGINMATE_SIGNING_PASSPHRASE = os.environ.get("MARGINMATE_SIGNING_PASSPHRASE", "")
+# RFC 3161 timestamp servers (no fee), tried in order: the one piece of evidence
+# the employer does not control. When none answers, the signature is refused.
+STAFF_TIMESTAMP_URLS = [
+    url.strip() for url in os.environ.get("MARGINMATE_TIMESTAMP_URLS", "").split(",") if url.strip()
+] or ["http://timestamp.digicert.com", "http://timestamp.sectigo.com"]
+# A signed month and its evidence are kept this long after the month ends,
+# then deleted by `manage.py staff_purge_signatures` (never run automatically).
+STAFF_SIGNATURE_RETENTION_YEARS = 5
+# What the links sent to an employee start with (« https://bar.example.fr »);
+# blank, the page builds them from the request it answers.
+SITE_URL = os.environ.get("MARGINMATE_SITE_URL", "").strip().rstrip("/")
+# A post refused for its CSRF token is said in French on the employee's
+# signing pages (/personnel/signer/…); everywhere else, Django's own page.
+CSRF_FAILURE_VIEW = "staff.public_views.csrf_failure"
+
+# E-mail, optional and off by default: « configured » means EMAIL_HOST is
+# set. Gmail: smtp.gmail.com, port 587, TLS, and an APP PASSWORD (not the
+# account's own) in EMAIL_HOST_PASSWORD.
+EMAIL_HOST = os.environ.get("EMAIL_HOST", "").strip()
+EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "").strip() or 587)
+EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "").strip()
+EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", True)
+DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "").strip() or EMAIL_HOST_USER or "webmaster@localhost"
+# A mail server that does not answer must not hold a page for minutes.
+EMAIL_TIMEOUT = 20

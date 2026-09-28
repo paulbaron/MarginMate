@@ -324,6 +324,36 @@ def recognise_shop(text: str) -> tuple[ReceiptParser | None, list[str], str]:
     return parser_for(supplier), identifiers, ""
 
 
+def identifier_owners(identifiers=None, suppliers=None) -> dict[str, list[Supplier]]:
+    """Which suppliers HOLD each of `identifiers` today - the question
+    nothing on any page could answer.
+
+    Every list here is built from what a supplier's DOCUMENTS print
+    (`identifier_report`'s « aussi sur 3 documents de X »); this one reads
+    what suppliers have RETAINED, which is what actually files a document.
+    On 24/09 one supplier held another's SIREN, phone and web site, and the
+    only screen that would have said so did not exist: the holder's page
+    called them its own, the rightful supplier's page could not see them, and
+    its invoices were recognised by nobody because an identifier two
+    suppliers hold names neither.
+
+    One query, whatever the number of documents - `suppliers` is passed in
+    by a caller that already has the list. A list a caller mutates is its
+    own; the Supplier rows are shared.
+    """
+    wanted = set(identifiers) if identifiers is not None else None
+    if wanted is not None and not wanted:
+        return {}
+    if suppliers is None:
+        suppliers = Supplier.objects.exclude(parser_key=LLM_PARSER_KEY).exclude(ticket_identifiers=[])
+    owners: dict[str, list[Supplier]] = defaultdict(list)
+    for supplier in suppliers:
+        for identifier in supplier.ticket_identifiers or ():
+            if wanted is None or identifier in wanted:
+                owners[identifier].append(supplier)
+    return dict(owners)
+
+
 def _companies_of_others(text: str, supplier_code: str) -> list[Supplier]:
     """Every supplier, other than `supplier_code`'s, that alone learned a
     company number `text` prints - two of them on one document were no
@@ -448,6 +478,7 @@ def _recheck(supplier: Supplier) -> None:
         known,
         _stored_texts(Invoice.objects.filter(supplier=supplier)),
         _stored_texts(Invoice.objects.exclude(supplier=supplier)),
+        typed=supplier.typed_identifiers or (),
     )
     set_identifiers(supplier, kept, reasons=_why_lost(supplier, known - kept))
 
@@ -467,7 +498,15 @@ def set_identifiers(supplier: Supplier, identifiers, reasons=None, asked: bool =
     if before == after:
         return None
     supplier.ticket_identifiers = sorted(after)
-    supplier.save(update_fields=["ticket_identifiers"])
+    fields = ["ticket_identifiers"]
+    # What a person typed is a subset of what names it: one that stops
+    # naming it stops being typed too, or the list keeps a figure no screen
+    # shows and `still_naming` weighs a statement about nothing.
+    typed = sorted(set(supplier.typed_identifiers or ()) & after)
+    if typed != list(supplier.typed_identifiers or ()):
+        supplier.typed_identifiers = typed
+        fields.append("typed_identifiers")
+    supplier.save(update_fields=fields)
     reasons = reasons or {}
     gained, lost = sorted(after - before), sorted(before - after)
     said = []
@@ -511,12 +550,20 @@ def _why_lost(supplier: Supplier, lost) -> dict:
     return reasons
 
 
-def still_naming(known, own_texts, other_texts) -> set[str]:
+def still_naming(known, own_texts, other_texts, typed=()) -> set[str]:
     """What a supplier knew that still names it: not printed on another
     supplier's documents, and - when it has documents - printed on one of
     its own at least. Documents of another family filed there since (the box
     bills beside the mobile ones) are no reason to forget anything; a
-    supplier with no documents keeps what it holds. No database."""
+    supplier with no documents keeps what it holds. No database.
+
+    **What a person typed is never taken back** (`typed`,
+    Supplier.typed_identifiers). Learning may forget what learning found;
+    an identifier somebody typed with the invoice in front of them is a
+    statement about that supplier, and the rules here are about documents
+    stored today - a SIREN typed for a supplier whose filed documents do not
+    print it yet was dropped at the very next import, giving as its reason
+    something the person had never claimed."""
     kept = set(known)
     own_texts = [text for text in own_texts if text]
     if own_texts and kept:
@@ -530,7 +577,7 @@ def still_naming(known, own_texts, other_texts) -> set[str]:
             break
         if other and may_print(other, kept):
             kept -= document_identifiers(other)
-    return kept
+    return kept | (set(known) & set(typed))
 
 
 def _without_header(supplier: Supplier, texts) -> list[str]:
@@ -1012,7 +1059,15 @@ def move_documents(invoices, supplier: Supplier) -> Moved:
                 name = supplier.name if renamed and line.raw_name == old.name else line.raw_name
                 moved.renamed += name != line.raw_name
                 parsed = corrected_line(
-                    line, raw_name=name, quantity=line.quantity, total_ht=line.total_ht, vat_rate=line.vat_rate
+                    line, raw_name=name, quantity=line.quantity, total_ht=line.total_ht, vat_rate=line.vat_rate,
+                    # Nobody is editing these lines, so each keeps what it
+                    # is. `corrected_line` defaults the box to unticked -
+                    # which is right for the correction page, where an
+                    # unticked box means a person unticked it, and silently
+                    # wrong here: a document moved to another supplier came
+                    # back with its delivery a product again, its shares
+                    # erased and every unit on it priced below what it cost.
+                    is_spread_charge=line.is_spread_charge,
                 )
                 if leaving_charges and is_charge_credit(parsed):
                     credit_as_return(parsed)
@@ -1118,6 +1173,7 @@ def identifier_report(supplier: Supplier) -> dict:
             f"{count} document{'s' if count > 1 else ''} de {name}" for name, count in elsewhere[identifier].most_common(3)
         )
 
+    typed = set(supplier.typed_identifiers or ())
     rows_known = [
         {
             "identifier": identifier,
@@ -1125,6 +1181,10 @@ def identifier_report(supplier: Supplier) -> dict:
             "count": counts[identifier],
             "total": total,
             "elsewhere": where_else(identifier) if identifier in elsewhere else "",
+            # Said on the page: a figure somebody typed is a statement about
+            # this supplier and is never unlearned, where a learned one goes
+            # when its documents stop printing it. Two rules, two words.
+            "typed": identifier in typed,
         }
         for identifier in sorted(known)
     ]
@@ -1153,6 +1213,199 @@ def identifier_report(supplier: Supplier) -> dict:
         "headerless": len(headerless),
         "with_header": total - len(headerless) if supplier.ticket_header else 0,
     }
+
+
+def _first_capital(text: str) -> str:
+    """« n° SIREN 900 000 019 » as a title, with SIREN still in capitals:
+    str.capitalize() lowercases everything after the first letter, and the
+    page read « N° siren »."""
+    return text[:1].upper() + text[1:]
+
+
+def filing_report(invoice: Invoice, suppliers=None) -> dict:
+    """What THIS document prints that names the supplier it is filed under -
+    and what it prints that names another.
+
+    Most documents have nothing stored about why they are where they are: a
+    document filed by its header records no check, no field and no history,
+    and a digital invoice cannot be given a check at all (a check is what
+    makes a document a receipt). So this is worked out from the text the
+    document kept, every time it is shown.
+
+    It states **facts, not a verdict**: what the document prints, and who
+    retains each figure. The ORDER those facts are asked in belongs to
+    `recognise_shop` and is said once, on the supplier's page
+    (`filing_rules`) - restated here it would be a second definition, free
+    to drift from the one that actually files documents.
+
+    `names_another` is the one view nothing had: an identifier is checked
+    against what suppliers RETAIN, not against what their documents print.
+    On 24/09 one supplier retained another's SIREN; the rightful supplier's
+    invoices were recognised by nobody, because a figure two suppliers retain
+    names neither, and no page anywhere said so. `shared` is exactly that state.
+
+    One query for the suppliers - `suppliers` when the caller already has
+    them - and no other document is ever read, so it costs the same whether
+    the database holds nine documents or nine thousand.
+    """
+    text = invoice.document_text
+    report = {
+        "text": bool(text),
+        "names_it": [],
+        "names_another": [],
+        "unknown": [],
+        "doubt": invoice.supplier_doubt,
+    }
+    if not text:
+        return report
+    supplier = invoice.supplier
+    if supplier.ticket_header and prints_header(text, supplier.ticket_header):
+        report["names_it"].append({"kind": "header", "label": f"son en-tête « {supplier.ticket_header} »"})
+    printed = document_identifiers(text)
+    owners = identifier_owners(printed, suppliers=suppliers)
+    held = set(supplier.ticket_identifiers or ())
+    for identifier in sorted(printed):
+        holders = owners.get(identifier, [])
+        others = [holder for holder in holders if holder.pk != supplier.pk]
+        label = describe_identifier(identifier)
+        if identifier in held and not others:
+            report["names_it"].append({"kind": "identifier", "identifier": identifier, "label": f"son {label}"})
+        elif others:
+            report["names_another"].append({
+                "identifier": identifier,
+                "label": label,
+                "holders": others,
+                # Retained on both sides: it names NEITHER, and every
+                # document printing it goes unrecognised in silence.
+                "shared": identifier in held,
+            })
+        else:
+            report["unknown"].append({"identifier": identifier, "label": label})
+    return report
+
+
+def filing_rules(supplier: Supplier, is_till: bool = False, own_reader: bool = False) -> list[dict]:
+    """What files a document under `supplier`, in the order the
+    application really asks it - so that the page states the mechanism
+    rather than a summary of it.
+
+    The order is `receipts.import_document` and `recognise_shop`, and it is
+    not the order anybody guesses: a source beats everything it fetches; an
+    electronic invoice is read on the SIREN it DECLARES before any header;
+    the headers a person gave come before the configured tills; a company
+    number another supplier holds overrules a header that matched; and the
+    learned identifiers are asked only once no header has named anybody.
+    Four of those six were on no screen.
+
+    Each row says what it is, what it does, and - where it applies - what it
+    cannot do, because that is the half the owner could not see. No figure
+    is counted here: `identifier_report` already counts documents, and two
+    readings of one count is how they drift.
+    """
+    from django.urls import reverse
+
+    from .models import InvoiceType
+
+    rules: list[dict] = []
+    sources = list(InvoiceType.objects.filter(supplier=supplier).order_by("name"))
+    if sources:
+        rules.append({
+            "kind": "source",
+            "title": "Récupéré par une de ses sources",
+            "detail": (
+                "Un document que « "
+                + " », « ".join(source.name for source in sources)
+                + " » rapporte est rangé ici quoi qu'il imprime. S'il porte ce qui nomme un autre "
+                "fournisseur, il est rangé ici tout de même et marqué « fournisseur à confirmer »."
+            ),
+        })
+    if supplier.ticket_identifiers and any(key.startswith("siren:") for key in supplier.ticket_identifiers):
+        rules.append({
+            "kind": "einvoice",
+            "title": "Facture électronique : le n° SIREN qu'elle déclare",
+            "detail": (
+                "Sur une facture électronique (Factur-X, UBL, CII), le n° SIREN du vendeur est lu dans "
+                "les données du fichier et passe avant l'en-tête : c'est le seul cas où l'ordre "
+                "s'inverse."
+            ),
+        })
+    if is_till:
+        rules.append({
+            "kind": "till",
+            "title": "Sa caisse, réglée dans l'application",
+            "detail": "Ses tickets sont reconnus à ce que sa caisse imprime : ils n'ont besoin ni d'en-tête ni d'identifiant.",
+        })
+    elif own_reader:
+        rules.append({
+            "kind": "reader",
+            "title": "Son propre lecteur",
+            "detail": (
+                "Ses factures numériques sont lues par son lecteur - mais seulement une fois le document "
+                "reconnu comme le sien par son en-tête ou par un n° SIREN qu'il retient : un téléphone "
+                "ou un site ne suffisent pas à lancer un lecteur."
+            ),
+        })
+    if not is_till:
+        if supplier.ticket_header:
+            rules.append({
+                "kind": "header",
+                "title": f"Son en-tête « {supplier.ticket_header} »",
+                "detail": (
+                    "Cherché mot pour mot dans le texte du document, accents et ponctuation ignorés. "
+                    "Un en-tête ajoute des documents, il n'en retire aucun : un document qui ne le "
+                    "porte pas peut encore être rangé ici par un identifiant."
+                ),
+                "url": reverse("invoices:supplier_edit", args=[supplier.pk]),
+            })
+        else:
+            rules.append({
+                "kind": "header",
+                "title": "Aucun en-tête",
+                "detail": "Rien n'est cherché en haut de ses documents. Ses identifiants ci-dessous sont tout ce qui le nomme.",
+                "url": reverse("invoices:supplier_edit", args=[supplier.pk]),
+                "missing": True,
+            })
+        rules.append({
+            "kind": "guard",
+            "title": "Sauf si le document porte le n° SIREN d'un autre",
+            "detail": (
+                (
+                    "Même reconnu par son en-tête, un document "
+                    if supplier.ticket_header
+                    else "Un document "
+                )
+                + "qui imprime un n° SIREN qu'un autre fournisseur retient n'est rangé nulle part : "
+                "l'enseigne vous est demandée."
+                + (
+                    " Deux en-têtes sur un même document font la même chose."
+                    if supplier.ticket_header
+                    else ""
+                )
+            ),
+        })
+        for identifier in sorted(supplier.ticket_identifiers or ()):
+            rules.append({
+                "kind": "identifier",
+                "identifier": identifier,
+                "title": _first_capital(describe_identifier(identifier)),
+                "detail": (
+                    "Cherché sur les documents qu'aucun en-tête n'a nommés."
+                    + (
+                        " Un site seul ne reconnaît personne : il en faut un autre avec lui."
+                        if identifier.startswith("web:")
+                        else ""
+                    )
+                ),
+                "typed": identifier in (supplier.typed_identifiers or ()),
+            })
+        if not supplier.ticket_header and not supplier.ticket_identifiers:
+            rules.append({
+                "kind": "nothing",
+                "title": "Rien ne le reconnaît pour l'instant",
+                "detail": "Ses documents vous seront demandés à l'import, et il apprendra ce qu'ils impriment.",
+                "missing": True,
+            })
+    return rules
 
 
 def supplier_notices(supplier: Supplier) -> list[dict]:
@@ -1812,6 +2065,11 @@ def _reread_invoice_file(invoice: Invoice, path: str) -> str:
         invoice.reconciliation_adjustment = parsed.reconciliation_adjustment
         if parsed.printed_total_ttc is not None:
             invoice.printed_total_ttc = parsed.printed_total_ttc
+        # The document's own VAT table, like the import stores it - unless a
+        # person typed one, which is theirs and is never read again (see
+        # Invoice.vat_table_typed).
+        if parsed.vat_breakdown and not invoice.vat_table_typed:
+            invoice.vat_breakdown = [[str(rate), str(base), str(tax)] for rate, base, tax in parsed.vat_breakdown]
         invoice.error_message = " ".join(parsed.warnings)
         if invoice.error_message:
             invoice.status = Invoice.Status.NEEDS_REVIEW

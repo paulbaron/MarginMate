@@ -53,5 +53,23 @@ ANTHROPIC_API_KEY = ""
 # Pinned so a test's result never depends on the developer's own .env.
 PRODUCT_FUZZY_MATCH_THRESHOLD = 94
 
+# The timesheet signatures (staff/signing.py): keys, signed PDFs and proof
+# files in a temp folder (the signing tests give each test one of its own),
+# no passphrase unless a test sets one, and NO timestamp server - a test
+# that forgot to inject its own (staff.tests.signing_support) is refused
+# « le service d'horodatage ne répond pas » rather than reaching DigiCert.
+STAFF_PRIVATE_DIR = Path(tempfile.mkdtemp(prefix="marginmate-tests-private-"))
+MARGINMATE_SIGNING_PASSPHRASE = ""
+STAFF_TIMESTAMP_URLS = []
+SITE_URL = ""
+# No mail server: « configured » is EMAIL_HOST set, which a test does with
+# override_settings - and the test runner's locmem backend keeps every
+# message in django.core.mail.outbox.
+EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
+EMAIL_HOST = ""
+EMAIL_HOST_USER = ""
+EMAIL_HOST_PASSWORD = ""
+DEFAULT_FROM_EMAIL = "marginmate@example.invalid"
+
 # Keeps failure output readable when a view raises.
 TEMPLATES[0]["OPTIONS"]["debug"] = False  # noqa: F405

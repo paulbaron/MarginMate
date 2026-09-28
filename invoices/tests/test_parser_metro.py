@@ -169,3 +169,151 @@ class MetroParserTests(SimpleTestCase):
         invoice = parse([PdfPage(text="")])
         self.assertEqual(invoice.lines, [])
         self.assertEqual(invoice.supplier_code, "METRO")
+
+
+# A second page, structurally faithful and wholly invented, for the quirks
+# found on 24/09/2026: the own-brand marker, the "N pour M" promotion, and
+# the totals block the parser used to ignore entirely.
+#
+# It adds up on purpose, so a test can assert that a faithful reading
+# reconciles - and so the fixtures that break it below isolate one fault
+# each:
+#   JUS      35,58 HT @ 5,5%
+#   CAFE     48,69 HT less a 16,23 promotion = 32,46 @ 5,5%   -> B base 68,04
+#   WHISKY   77,25 HT + 10,42 levy           = 87,67 @ 20%    -> D base 87,67
+#   Total HT 155,71   VAT 3,74 + 17,53 = 21,27   Total TTC 176,98
+TOTALS_BODY = """\
+M 03000000123450 1900123 JUS EXEMPLE VP 1L 2,965 6 2 35,58 B
+8000000012345 2300456 CAFE EXEMPLE 1KG CLASSIC 16,230 1 3 48,69 B P
+3 POUR 2 16,23-
+*** Epicerie Total: 84,27
+05010106013120 1933605 WHISKY EXEMPLE 40D 70CL S 40,0 0,280 0,700 12,875 6 1 77,25 D
+Plus : COTIS. SECURITE SOCIALE 10,42 D
+*** Spiritueux Total: 87,67
+Nombre de colis :12 Poids total :3,000 KG Consigne :0 Total H.T. : 155,71
+Dont : COTIS. SECURITE SOCIALE 10,42 D
+Montant hors T.V.A.: 155,71
+⑩ Total Volume effectif: ⑩ Total Volume d'A.P. : Montant H.T. Taux T.V.A. Montant TVA Montant TTC
+M 9,000 68,04 B = 5,50% 3,74 71,78
+S 4,200 87,67 D = 20,00% 17,53 105,20
+155,71 21,27 176,98
+⑬ Total à payer 176,98
+"""
+
+TOTALS_PAGE = PdfPage(text=HEADER + TOTALS_BODY)
+
+JUS_ROW = "M 03000000123450 1900123 JUS EXEMPLE VP 1L 2,965 6 2 35,58 B\n"
+
+
+class MetroOwnBrandColumnTests(SimpleTestCase):
+    """Metro's leftmost "MM" column prints a literal "M " before the EAN on
+    its own-brand rows. LINE_REGEX tolerated only a leading "+ " (consigne)
+    and is applied anchored, so those rows matched nothing, fell through
+    every branch and vanished with no error and no warning.
+
+    A few rows across the invoices filed went that way, their money and
+    their stock with them, and the bank debits paying those invoices could
+    not be matched because of it.
+    """
+
+    def test_own_brand_row_is_parsed_like_any_other(self):
+        line = line_named(parse([TOTALS_PAGE]), "JUS EXEMPLE VP 1L")
+        self.assertEqual(line.total_ht, Decimal("35.58"))
+        self.assertEqual(line.vat_rate, Decimal("0.055"))
+        self.assertEqual(line.quantity, 12)  # colisage 6 x qty 2
+        self.assertEqual(line.colisage, 6)
+
+    def test_the_marker_is_not_taken_for_part_of_the_name(self):
+        names = [line.raw_name for line in parse([TOTALS_PAGE]).lines]
+        self.assertIn("JUS EXEMPLE VP 1L", names)
+        self.assertNotIn("M JUS EXEMPLE VP 1L", names)
+
+
+class MetroPromotionTests(SimpleTestCase):
+    """Metro prints a second promotion format besides "Offre Achetez Plus
+    Payez Moins": "3 POUR 2  16,23-", the case varying between invoices.
+    Unread, the discount is never subtracted and the invoice claims MORE
+    than Metro billed, which overstates every cost and margin computed from
+    those lines.
+    """
+
+    def test_three_for_two_is_subtracted_from_the_total(self):
+        line = line_named(parse([TOTALS_PAGE]), "CAFE EXEMPLE 1KG CLASSIC")
+        self.assertEqual(line.discount, Decimal("16.23"))
+        self.assertEqual(line.total_ht, Decimal("48.69") - Decimal("16.23"))
+
+    def test_the_format_is_read_whatever_its_case(self):
+        lower = PdfPage(text=HEADER + TOTALS_BODY.replace("3 POUR 2", "3 pour 2"))
+        self.assertEqual(line_named(parse([lower]), "CAFE EXEMPLE 1KG CLASSIC").discount, Decimal("16.23"))
+
+    def test_a_promotion_line_is_never_taken_for_a_product(self):
+        names = [line.raw_name for line in parse([TOTALS_PAGE]).lines]
+        self.assertEqual([name for name in names if "POUR" in name.upper()], [])
+
+
+class MetroPrintedTotalsTests(SimpleTestCase):
+    """The parser read no total at all: `printed_total_ttc` was NULL on
+    nearly every Metro invoice and `vat_breakdown` empty on all of them, so
+    nothing compared the lines with the document. That silence is what hid
+    both faults above - the figures were sitting in the text the parser
+    already held.
+    """
+
+    def test_reads_the_total_to_pay(self):
+        self.assertEqual(parse([TOTALS_PAGE]).printed_total_ttc, Decimal("176.98"))
+
+    def test_reads_the_vat_table(self):
+        self.assertEqual(
+            parse([TOTALS_PAGE]).vat_breakdown,
+            [
+                (Decimal("0.055"), Decimal("68.04"), Decimal("3.74")),
+                (Decimal("0.2"), Decimal("87.67"), Decimal("17.53")),
+            ],
+        )
+
+    def test_the_volume_column_is_not_mistaken_for_the_vat_base(self):
+        """Each VAT row may carry a volume in front of its HT base ("M 9,000
+        68,04 B = 5,50%"). A base read greedily swallows the volume and
+        files 9 000 68,04 EUR of goods at 5,5 %."""
+        base = parse([TOTALS_PAGE]).vat_breakdown[0][1]
+        self.assertEqual(base, Decimal("68.04"))
+        self.assertLess(base, Decimal("1000"))
+
+    def test_a_faithful_reading_raises_no_warning(self):
+        self.assertEqual(parse([TOTALS_PAGE]).warnings, [])
+
+    def test_a_dropped_row_is_said_out_loud(self):
+        """The regression that matters: if a row ever stops matching again,
+        the invoice must say so instead of quietly filing a smaller number."""
+        parsed = parse([PdfPage(text=HEADER + TOTALS_BODY.replace(JUS_ROW, ""))])
+        self.assertTrue(parsed.warnings)
+        said = " ".join(parsed.warnings).replace("\xa0", " ")
+        self.assertIn("155,71", said)
+        self.assertIn("120,13", said)
+
+    def test_an_unread_promotion_is_said_out_loud_too(self):
+        """The same check catches the opposite fault: lines claiming MORE
+        than the document's own total."""
+        parsed = parse([PdfPage(text=HEADER + TOTALS_BODY.replace("3 POUR 2 16,23-\n", ""))])
+        self.assertTrue(parsed.warnings)
+
+    def test_a_credit_note_keeps_its_sign(self):
+        """An avoir prints its totals with a TRAILING minus ("65,50-") and
+        the parser stores it negative: read unsigned, every credit note
+        filed would disagree with its own total by twice its value."""
+        avoir = """\
++ 0290123 CAISSE EXEMPLE 24X33CL PLEIN 65,500 1 1- 65,50- A
+Nombre de colis :0 Poids total :0,000 KG Consigne :1- Total H.T. : 65,50-
+65,50- A = 0,00% 0,00 65,50-
+⑬ Total à payer 65,50-
+"""
+        parsed = parse([PdfPage(text=HEADER + avoir)])
+        self.assertEqual(parsed.printed_total_ttc, Decimal("-65.50"))
+        self.assertEqual(parsed.warnings, [])
+
+    def test_a_document_with_no_totals_block_says_nothing(self):
+        """The older fixtures print no totals at all - that is not a fault."""
+        parsed = parse()
+        self.assertIsNone(parsed.printed_total_ttc)
+        self.assertEqual(parsed.vat_breakdown, [])
+        self.assertEqual(parsed.warnings, [])

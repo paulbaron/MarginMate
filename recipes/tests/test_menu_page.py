@@ -30,6 +30,7 @@ def recipe_post(name, **extra):
         "category": "",
         "yield_quantity": "1",
         "yield_unit": "UNIT",
+        "sale_quantity": "1",
         "selling_price_ttc": "8.00",
         "happy_hour_price_ttc": "",
         "vat_rate": "0.20",

@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% comment %}
+« Supprimer… », étape 1 (signature_views.signature_delete, règles dans staff/signature_deletion.py). Contexte :
+`page` (DeletionPage). Ce qui sera détruit, pourquoi c'est dangereux, puis deux vérifications : la case
+« Je comprends… » ET la phrase à taper. Cette page ne supprime rien : son envoi mène à l'étape 2 avec un jeton
+signé (dix minutes, cette version, rien de changé entre-temps). L'option des heures n'existe que sur la
+dernière version du mois : les autres versions sont tirées des mêmes heures. Elle vient APRÈS les deux
+vérifications, dans un cadre rouge qui dit que c'est une option : sous « Deux vérifications », dessinée comme
+« Je comprends… », cocher « les deux » effaçait aussi les heures du mois.
+{% endcomment %}
+{% block title %}Supprimer la version {{ page.version }} {{ page.of_month }} — {{ page.who }} - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <p class="breadcrumb"><a href="{{ page.back_url }}">← {{ page.month_title }} — {{ page.who }}</a></p>
+            <h1>Supprimer la version {{ page.version }} {{ page.of_month }}</h1>
+            <p class="page-subtitle">
+                Étape 1 sur 2 : ce qui serait détruit, et pourquoi c'est dangereux. Rien n'est supprimé sur cette page.
+            </p>
+        </div>
+    </div>
+
+    <div class="deletion">
+        {% if page.errors %}
+            <div class="message message-error" role="alert">
+                <p><strong>Rien n'a été supprimé.</strong></p>
+                {% if page.errors.hours %}<p>{{ page.errors.hours }}</p>{% endif %}
+            </div>
+        {% endif %}
+
+        <section class="card" aria-labelledby="deletion-what">
+            <h2 id="deletion-what">Ce qui sera détruit</h2>
+            <p class="signature-request-head">
+                <span class="status-pill {{ page.pill }}">{{ page.status }}</span>
+                <strong>Version {{ page.version }}</strong> {{ page.of_month }} de {{ page.who }}
+            </p>
+            <p class="muted small signature-id">Document n° {{ page.request.document_id }}</p>
+            <ul class="deletion-facts">
+                <li>envoyée le {{ page.created }}{% if page.holds_month %} · lien valable jusqu'au {{ page.expires }}{% endif %}</li>
+                {% if page.employee_signed_at %}<li>Signé par {{ page.who }} le {{ page.employee_signed_at }}{% if page.request.reservation %}, avec des réserves{% endif %}</li>{% endif %}
+                {% if page.employer_signed_at %}<li>Contresigné le {{ page.employer_signed_at }}</li>{% endif %}
+                {% if page.request.cancelled_reason %}<li>motif : {{ page.request.cancelled_reason }}</li>{% endif %}
+            </ul>
+            <h3>{% if page.files %}Ses {{ page.files|length }} fichier{{ page.files|length|pluralize }}, dans le dossier privé{% else %}Aucun fichier dans le dossier privé{% endif %}</h3>
+            {% if page.files %}
+                <ul class="deletion-files">
+                    {% for file in page.files %}<li><code>{{ file.name }}</code> — {{ file.label }}</li>{% endfor %}
+                </ul>
+            {% endif %}
+            <p>
+                <strong>Journal : {{ page.events }} événement{{ page.events|pluralize }}</strong>, chaînés par leurs
+                empreintes — tout ce qui est arrivé à cette version, avec les adresses IP et les appareils.
+            </p>
+            {% if page.has_proof %}
+                <p>
+                    <strong>Le dossier de preuve</strong> (<code>preuve.pdf</code>) : ce qu'un juge, l'inspection du
+                    travail ou {{ page.who }} lirait pour savoir qui a signé quoi, et quand.
+                </p>
+            {% endif %}
+            {% if page.holds_month %}
+                <p>Cette version tient le mois : son lien de signature ne mènera plus à rien, et le mois redeviendra modifiable.</p>
+            {% endif %}
+        </section>
+
+        <section class="message message-error deletion-danger" aria-labelledby="deletion-why">
+            <h2 id="deletion-why">Pourquoi c'est dangereux</h2>
+            <p>
+                {% if page.signed %}La fiche signée et son dossier de preuve sont la preuve, pour l'employeur, des heures effectuées : sans eux, rien ne montre plus que {{ page.who }} a signé ce relevé.{% else %}Cette version n'est pas signée, mais son document figé et son journal font partie de la preuve, pour l'employeur, des heures effectuées : ce qui a été envoyé, quand, et ce qui s'est passé ensuite.{% endif %}
+            </p>
+            <p>
+                Les relevés du temps de travail sont à conserver : 1 an pour l'inspection du travail (Code du
+                travail, article D3171-16), 3 ans pour une réclamation de salaire (article L3245-1),
+                {{ page.retention_years }} ans recommandés par cette application.
+            </p>
+            <p>
+                <strong>La suppression est définitive</strong> : l'application ne sait pas la défaire. Seule une
+                sauvegarde faite avant — la base de données et le dossier privé, ensemble — la contiendrait encore.
+            </p>
+        </section>
+
+        <form method="post" action="{{ page.step1_url }}" class="card deletion-form">
+            {% csrf_token %}
+            <h2>Deux vérifications</h2>
+            <label class="checkbox-label">
+                <input type="checkbox" name="{{ page.understood_field }}" value="1" required{% if page.understood %} checked{% endif %}>
+                Je comprends que la suppression est définitive
+            </label>
+            {% if page.errors.understood %}<p class="field-error">{{ page.errors.understood }}</p>{% endif %}
+            <label class="deletion-phrase-label" for="deletion-phrase">
+                Pour confirmer, tapez «&nbsp;<span class="deletion-phrase">{{ page.phrase }}</span>&nbsp;»
+            </label>
+            <input id="deletion-phrase" type="text" name="{{ page.phrase_field }}" value="{{ page.typed }}" required
+                   maxlength="200" autocomplete="off" autocapitalize="none" spellcheck="false"{% if page.errors.phrase %} aria-invalid="true"{% endif %}>
+            {% if page.errors.phrase %}<p class="field-error">{{ page.errors.phrase }}</p>{% endif %}
+            {% if page.last_version %}
+                <fieldset class="deletion-option deletion-option-danger">
+                    <legend>Option : les heures du mois aussi</legend>
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="{{ page.hours_field }}" value="1"{% if page.with_hours %} checked{% endif %}>
+                        Supprimer aussi les heures enregistrées du mois
+                    </label>
+                    <p class="help">
+                        Les {{ page.days }} jours enregistrés {{ page.of_month }} seraient effacés : le mois reprendrait la
+                        semaine type, comme s'il n'avait jamais été enregistré. Sans cette case, ils restent, et le mois
+                        {% if page.holds_month %}redevient{% else %}reste{% endif %} modifiable.
+                        Ces jours sont le relevé du temps de travail lui-même (Code du travail, articles D3171-16 et
+                        L3245-1) : effacés, plus rien ne dit ce qui a été travaillé ce mois-là, et le mois montrera la
+                        semaine type à leur place.
+                    </p>
+                </fieldset>
+            {% else %}
+                <p class="small">
+                    Les heures enregistrées du mois restent : d'autres versions {{ page.of_month }} en dépendent. Elles
+                    ne peuvent partir qu'avec la dernière version du mois.
+                </p>
+            {% endif %}
+            <p class="muted small">
+                Une trace de la suppression est gardée hors de la base, dans <code>deletions.log</code> du dossier
+                privé : la date, {{ page.who }}, le mois, la version, le document n°, son état, les empreintes SHA-256
+                de ses documents, et l'adresse IP d'où elle est demandée.
+            </p>
+            <div class="form-actions">
+                <button class="btn btn-danger" type="submit">Continuer vers la dernière vérification</button>
+                <a class="btn btn-secondary" href="{{ page.back_url }}">Ne rien supprimer</a>
+            </div>
+        </form>
+    </div>
+{% endblock %}

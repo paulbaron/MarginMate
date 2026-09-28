@@ -85,23 +85,42 @@ def _cell(ref: str, value) -> str:
     return f'<c r="{ref}"><v>{escape(text)}</v></c>'
 
 
-def write_workbook(rows, folder=None, name="ventes.xlsx") -> str:
-    """One .xlsx holding just the SalesDocumentLines sheet, header first."""
+def _sheet_xml(rows) -> str:
     body = ""
     for number, row in enumerate(rows, start=1):
         cells = "".join(_cell(f"{_letter(at)}{number}", value) for at, value in enumerate(row))
         body += f'<row r="{number}">{cells}</row>'
-    sheet = (
+    return (
         '<?xml version="1.0"?>'
         '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
         f"<sheetData>{body}</sheetData></worksheet>"
     )
+
+
+#: The same workbook with the ticket sheet beside the lines - what the real
+#: export holds (recipes/tests/test_pos_payments.py).
+WORKBOOK_WITH_TICKETS = WORKBOOK.replace(
+    "</sheets>", '<sheet name="SalesDocument" sheetId="2" r:id="rId2"/></sheets>'
+)
+RELS_WITH_TICKETS = RELS.replace(
+    "</Relationships>",
+    '<Relationship Id="rId2" Target="worksheets/sheet2.xml" '
+    'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/>'
+    "</Relationships>",
+)
+
+
+def write_workbook(rows, folder=None, name="ventes.xlsx", tickets=None) -> str:
+    """One .xlsx holding the SalesDocumentLines sheet, header first - and,
+    given `tickets` (rows, header first), the SalesDocument sheet too."""
     path = str(Path(folder or tempfile.mkdtemp()) / name)
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("[Content_Types].xml", CONTENT_TYPES)
-        archive.writestr("xl/workbook.xml", WORKBOOK)
-        archive.writestr("xl/_rels/workbook.xml.rels", RELS)
-        archive.writestr("xl/worksheets/sheet1.xml", sheet)
+        archive.writestr("xl/workbook.xml", WORKBOOK if tickets is None else WORKBOOK_WITH_TICKETS)
+        archive.writestr("xl/_rels/workbook.xml.rels", RELS if tickets is None else RELS_WITH_TICKETS)
+        archive.writestr("xl/worksheets/sheet1.xml", _sheet_xml(rows))
+        if tickets is not None:
+            archive.writestr("xl/worksheets/sheet2.xml", _sheet_xml(tickets))
     return path
 
 

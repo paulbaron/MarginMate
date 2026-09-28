@@ -1,0 +1,376 @@
+{% extends "base.html" %}
+{% block title %}Dépenses - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <h1>Dépenses par catégorie</h1>
+            <p class="page-subtitle">
+                Tout ce qui est <strong>sorti du compte</strong> sur la période, avec ou sans facture. Une dépense
+                que sa facture explique compte dans les catégories de ce que cette facture a acheté ; les autres
+                se classent ici, à la main ou par une règle. Les entrées d'argent n'en font pas
+                partie{% if income_url %} : elles sont sur <a href="{{ income_url }}">Entrées d'argent</a>{% endif %}.
+            </p>
+            <p class="muted">
+                Ce n'est pas la même question que <a href="{{ margins_url }}">Marges</a>, qui compte ce qui a été
+                <strong>facturé</strong>, à la date des factures. Ici c'est le relevé qui fait foi, à la date où la
+                banque a pris l'argent.
+            </p>
+        </div>
+        <div class="actions">
+            <a class="btn btn-secondary" href="{{ bank_url }}">Rapprocher les factures</a>
+            {% if income_url %}<a class="btn btn-secondary" href="{{ income_url }}">Entrées d'argent</a>{% endif %}
+        </div>
+    </div>
+
+    {% if has_lines %}
+        {% comment %}
+        Les champs cachés : ce que la page regarde en plus des dates (le
+        classement de la liste, ce que le camembert laisse de côté). Un
+        formulaire GET n'envoie que ce qu'il contient : sans eux, « Afficher »
+        perdait le classement choisi, et remettrait la TVA dans le camembert.
+        {% endcomment %}
+        <form method="get" class="date-range">
+            {% for name, value in window_fields %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+            <label class="inline-label">Du
+                <input type="date" name="du" value="{{ date_window.start_value }}"{% if showing_all %} disabled{% endif %}>
+            </label>
+            <label class="inline-label">au
+                <input type="date" name="au" value="{{ date_window.end_value }}"{% if showing_all %} disabled{% endif %}>
+            </label>
+            <button class="btn btn-small btn-secondary" type="submit">Afficher</button>
+            {% if date_window %}<a class="btn btn-small btn-secondary" href="{{ clear_url }}">Effacer</a>{% endif %}
+            {% if showing_all %}
+                <a class="btn btn-small btn-secondary" href="{{ period_url }}">Revenir à une période</a>
+            {% else %}
+                <a class="btn btn-small btn-secondary" href="{{ all_url }}">Tout l'historique</a>
+            {% endif %}
+        </form>
+
+        <p class="muted date-range-note">
+            {% if showing_all %}
+                Tout l'historique du relevé.
+            {% elif is_default %}
+                Les douze derniers mois, du {{ window.start|date:"d/m/Y" }} au {{ window.end|date:"d/m/Y" }} :
+                la période par défaut, faute de dates choisies.
+            {% elif window.start and window.end %}
+                Du {{ window.start|date:"d/m/Y" }} au {{ window.end|date:"d/m/Y" }}
+            {% elif window.start %}
+                Depuis le {{ window.start|date:"d/m/Y" }}
+            {% else %}
+                Jusqu'au {{ window.end|date:"d/m/Y" }}
+            {% endif %}
+            (dates de passage en banque).
+        </p>
+
+        <div class="stat-row">
+            <div class="stat">
+                <span class="stat-label">Sorti du compte</span>
+                <span class="stat-value">{{ report.total|floatformat:2 }} €</span>
+                <span class="stat-note">{{ report.operations }} opération{{ report.operations|pluralize }}</span>
+            </div>
+            <div class="stat{% if report.uncategorised %} stat-warn{% endif %}">
+                <span class="stat-label">{{ no_category }}</span>
+                <span class="stat-value">{{ report.unsaid_total|floatformat:2 }} €</span>
+                <span class="stat-note">
+                    {{ report.uncategorised|length }} opération{{ report.uncategorised|pluralize }} sans facture
+                    à classer{% if report.unsaid_beyond_the_list %}, plus
+                    {{ report.unsaid_beyond_the_list|floatformat:2 }} € débités au-delà des factures rattachées{% endif %}
+                </span>
+            </div>
+            {% if report.uninvoiced %}
+                <div class="stat">
+                    <span class="stat-label">Débité au-delà des factures</span>
+                    <span class="stat-value">{{ report.uninvoiced|floatformat:2 }} €</span>
+                    <span class="stat-note">
+                        une facture manque : à chercher sur <a href="{{ bank_url }}">Banque</a>
+                    </span>
+                </div>
+            {% endif %}
+            {% if report.deducted %}
+                {% comment %}
+                Ce n'est PAS « ce qui est revenu sur le compte » : ce sont les avoirs et
+                les consignes portés par les factures rattachées à des débits. Un
+                virement reçu d'un fournisseur est une entrée d'argent, et cette page
+                ne compte que ce qui est sorti. Nommée « Rendu sur la période », cette
+                statistique promettait l'autre chiffre. Lu sur report.deducted, pas
+                given_back : ce que le camembert laisse de côté ne bouge aucun chiffre.
+                {% endcomment %}
+                <div class="stat">
+                    <span class="stat-label">Déduit par les factures</span>
+                    <span class="stat-value">{{ report.deducted|floatformat:2 }} €</span>
+                    <span class="stat-note">
+                        avoirs et consignes portés par les factures rattachées : hors camembert.
+                        Un remboursement reçu sur le relevé est une entrée d'argent et n'est pas compté ici.
+                    </span>
+                </div>
+            {% endif %}
+        </div>
+
+        {% if left_out_rows %}
+            {% comment %}
+            Ce que le camembert laisse de côté, nommé au-dessus de lui : un
+            camembert qui a perdu sa plus grosse part sans le dire se lit comme
+            un camembert de tout. Chaque nom avec ce qu'il porte sur la période
+            - ou « rien sur cette période » : la sélection porte sur des noms,
+            et vaut pour une autre période - et de quoi le remettre.
+            {% endcomment %}
+            <p class="small spend-left-out">
+                <strong>Camembert sans :</strong>
+                {% for row in left_out_rows %}{% if row.category %}{{ row.name }} {{ row.category.amount|floatformat:2 }} €{% else %}{{ row.name }} : rien sur cette période{% endif %} (<a href="{{ row.put_back_url }}">remettre</a>){% if not forloop.last %}, {% endif %}{% endfor %}
+                — {{ report.left_out_total|floatformat:2 }} € hors du camembert sur
+                {{ report.total|floatformat:2 }} € sortis du compte. Le tableau, le total et les chiffres
+                ci-dessus ne changent pas : on retire une part du dessin, pas une dépense.
+                <a href="{{ reset_url }}">tout remettre</a>
+            </p>
+        {% endif %}
+
+        {% if report.categories %}
+            <div class="card">
+                <div class="chart-and-figures">
+                    {% if pie_svg %}
+                        {{ pie_svg|safe }}
+                    {% elif report.nothing_left_to_draw %}
+                        <p class="muted" style="max-width:260px;">
+                            Toutes les catégories de la période sont hors du camembert : il ne reste rien à dessiner.
+                            <a href="{{ reset_url }}">Tout remettre</a>.
+                        </p>
+                    {% endif %}
+                    <div class="table-wrap">
+                        {% comment %}
+                        Le tableau est aussi le sélecteur : chaque catégorie a sa case,
+                        cochée par défaut, qui rejoint le formulaire « Recalculer le
+                        camembert » sous le tableau par son attribut form (la barre de
+                        recherche de la table vit dans ce bloc, et Entrée dans un champ
+                        d'un formulaire l'envoie). Chaque ligne envoie son nom sous
+                        « montre » et, cochée, sous « garder » : une case décochée
+                        n'envoie rien, donc « hors camembert » se lit comme montré et
+                        pas gardé (common.left_out_from).
+                        {% endcomment %}
+                        <table data-table data-table-label="catégories" class="spend-table">
+                            <thead>
+                                <tr>
+                                    <th class="spend-tick" title="Décochée, la catégorie reste dans le tableau et dans le total, mais pas dans le camembert. Rien n'est enregistré.">Dans le camembert</th>
+                                    <th>Catégorie</th>
+                                    <th class="num">Montant</th>
+                                    <th class="num">Part</th>
+                                    {% comment %}
+                                    « Opérations concernées », pas « Opérations » : une dépense dont la facture
+                                    couvre deux catégories compte dans les deux, et la colonne ne fait donc pas
+                                    le pied. Les deux chiffres sont justes ; l'un sous l'autre, ils se lisaient
+                                    comme une soustraction fausse.
+                                    {% endcomment %}
+                                    <th class="num">Opérations concernées</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for category in report.categories %}
+                                    <tr>
+                                        {% comment %}
+                                        data-sort et le texte : une case est un <input>, invisible pour la
+                                        recherche et le tri de la table (static/js/datatable.js lit
+                                        textContent). 1/0 se trie, « hors camembert » se cherche.
+                                        {% endcomment %}
+                                        <td class="spend-tick" data-sort="{% if category.left_out %}0{% else %}1{% endif %}">
+                                            <input type="hidden" name="montre" value="{{ category.name }}" form="camembert-choix">
+                                            <input type="checkbox" name="garder" value="{{ category.name }}" form="camembert-choix"{% if not category.left_out %} checked{% endif %} aria-label="Dans le camembert : {{ category.name }}">
+                                            {% if category.left_out %}<span class="read-as">hors camembert</span>{% endif %}
+                                        </td>
+                                        <td>
+                                            <strong>{{ category.name }}</strong>
+                                            {% if category.by_rule %}
+                                                {% comment %}
+                                                Une règle peut changer le mois prochain : ce qu'elle a classé ne
+                                                doit pas se lire comme la décision de quelqu'un.
+                                                {% endcomment %}
+                                                <span class="read-as">
+                                                    dont {{ category.by_rule }} par règle
+                                                    (<a href="{% url 'bank:rule_list' %}">règles</a>)
+                                                </span>
+                                            {% endif %}
+                                        </td>
+                                        <td class="num" data-sort="{{ category.amount|stringformat:'s' }}">{{ category.amount|floatformat:2 }} €</td>
+                                        {% comment %}
+                                        data-sort : « 12.3 % » se trie comme du texte, et 9 % passerait après 80 %.
+                                        {% endcomment %}
+                                        <td class="num" data-sort="{{ category.share|default_if_none:0|stringformat:'s' }}">
+                                            {% if category.share is not None %}{{ category.share|floatformat:1 }} %{% else %}—{% endif %}
+                                        </td>
+                                        <td class="num">{{ category.operations }}</td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                            <tfoot>
+                                <tr>
+                                    <th></th>
+                                    <th>Total sorti du compte</th>
+                                    <th class="num">{{ report.total|floatformat:2 }} €</th>
+                                    <th class="num"></th>
+                                    <th class="num">{{ report.operations }} au relevé</th>
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
+                </div>
+                <form method="get" id="camembert-choix" class="spend-actions" action="{{ page_path }}">
+                    {% for name, value in selection_fields %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+                    <button class="btn btn-small" type="submit">Recalculer le camembert</button>
+                    {% if left_out %}<a class="btn btn-small btn-secondary" href="{{ reset_url }}">Tout remettre</a>{% endif %}
+                    <span class="muted small">
+                        Décochez ce que le camembert doit laisser de côté (la TVA, par exemple) puis « Recalculer le
+                        camembert » : les parts des autres dépenses se calculent sans elle. La catégorie reste dans
+                        le tableau et dans le total, qui refont toujours ce qui est sorti du compte.
+                        <strong>Rien n'est enregistré</strong> : la sélection vit dans l'adresse de la page — gardez
+                        le lien en favori pour la retrouver, le menu ramène au camembert de tout.
+                    </span>
+                </form>
+                <p class="muted">
+                    {% comment %}
+                    Ce que le camembert ne dessine pas est dit plutôt que retiré en silence :
+                    une part négative ne se dessine pas, une catégorie laissée de côté non
+                    plus, et les trois montants refont ce qui est sorti du compte.
+                    {% endcomment %}
+                    {% if left_out_in_table %}Le camembert dessine {{ report.drawn_total|floatformat:2 }} € des {{ report.total|floatformat:2 }} € sortis du compte : les {{ report.left_out_total|floatformat:2 }} € des catégories laissées hors du camembert{% if report.given_back %} et les {{ report.given_back|floatformat:2 }} € déduits par les factures rattachées (avoirs, consignes), qui ne sont la part de rien,{% endif %} restent dans le tableau. {% elif report.given_back %}Le camembert dessine {{ report.drawn_total|floatformat:2 }} € : les {{ report.given_back|floatformat:2 }} € déduits par les factures rattachées (avoirs, consignes) ne sont la part de rien et restent dans le tableau. {% endif %}Une dépense réglée en plusieurs fois compte sur chaque opération pour ce que cette opération a payé : comptée en entier sur les deux, la facture serait achetée deux fois. Une même opération peut concerner plusieurs catégories, donc la colonne « Opérations concernées » ne fait pas son pied.
+                </p>
+            </div>
+        {% endif %}
+
+        <h2 id="a-classer">Dépenses sans facture</h2>
+        {% if report.without_invoice %}
+            <p class="muted">
+                Aucune facture ne dit ce qu'étaient ces dépenses : elles se classent ici, les non classées d'abord.
+                Une dépense qui revient tous les mois (un prêt, l'URSSAF, les salaires) se classe toute seule en
+                donnant une catégorie à sa <a href="{% url 'bank:rule_list' %}">règle</a> ; ce qui est tapé ici
+                l'emporte sur la règle. Classer une dépense ne dit rien de sa facture : la ligne reste proposée au
+                rapprochement automatique.
+            </p>
+            {% comment %}
+            Les trois façons dont une dépense sans facture porte un nom, chacune
+            avec ce qu'il y en a sur la période. Le filtre resserre CETTE LISTE et
+            rien d'autre : les chiffres au-dessus se lisent sur toute la période,
+            et une page dont l'argument est que ses catégories refont ce qui est
+            sorti du compte ne doit pas avoir l'air de changer l'argent quand on
+            resserre une liste de travail. C'est dit sous les puces.
+
+            Des liens, pas un formulaire : la table a déjà sa propre recherche
+            (static/js/datatable.js), et deux boîtes filtrant les mêmes lignes
+            selon deux règles différentes valent moins qu'une seule.
+            {% endcomment %}
+            <div class="filter-chips" role="group" aria-label="Filtrer les dépenses sans facture">
+                {% for chip in kind_chips %}
+                    <a href="{{ chip.url }}" class="chip{% if chip.active %} active{% endif %}"{% if chip.active %} aria-current="true"{% endif %}>
+                        {{ chip.label }} <span class="chip-count">{{ chip.count }}</span>
+                    </a>
+                {% endfor %}
+            </div>
+            {% if kind %}
+                <p class="muted">
+                    Les chiffres et le camembert ci-dessus ne bougent pas : ils comptent toute la période.
+                    Ce choix ne resserre que cette liste.
+                </p>
+            {% endif %}
+            {% if not report.listed %}
+                {# Une table vide sous une puce qui annonce un nombre se lit comme une page cassée. #}
+                <div class="empty-state">
+                    <p>{{ kind_empty }}</p>
+                </div>
+            {% else %}
+            <div class="table-wrap">
+                <table data-table data-table-label="dépenses sans facture">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Bénéficiaire</th>
+                            <th class="num">Montant</th>
+                            <th>Catégorie</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for spending in report.listed %}
+                            {% with line=spending.line %}
+                                <tr>
+                                    <td data-sort="{{ line.operation_date|date:'Y-m-d' }}">{{ line.operation_date|date:"d/m/Y" }}</td>
+                                    <td>
+                                        <strong>{{ line.counterparty|default:line.bank_type }}</strong>
+                                        <span class="read-as">{{ line.label|truncatechars:90 }}</span>
+                                    </td>
+                                    <td class="num" data-sort="{{ line.amount|stringformat:'s' }}">{{ line.amount_due|floatformat:2 }} €</td>
+                                    {% comment %}
+                                    data-sort : la valeur d'un <input> n'est pas du texte pour la recherche ni
+                                    pour le tri de la table (static/js/datatable.js lit textContent). Sans lui,
+                                    chercher « Loyer » ne trouvait pas la ligne qui porte déjà ce mot, et un clic
+                                    sur l'en-tête triait toutes les lignes sur la chaîne vide.
+                                    {% endcomment %}
+                                    <td data-sort="{{ spending.name }}">
+                                        <form method="post" action="{% url 'bank:bank_line_action' line.pk %}" class="inline-form">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="action" value="category">
+                                            <input type="hidden" name="next" value="{{ page_url }}#a-classer">
+                                            <input type="text" name="categorie" value="{{ line.category }}"
+                                                   list="spending-category-datalist" autocomplete="off"
+                                                   placeholder="{{ no_category }}"
+                                                   aria-label="Catégorie de cette dépense">
+                                            <button class="btn btn-small" type="submit">Classer</button>
+                                        </form>
+                                        {% comment %}
+                                        Qui a nommé cette ligne, dans les mots des
+                                        puces au-dessus. Demandé au Spending
+                                        (spending.by_rule / by_hand), jamais relu sur
+                                        line.category : c'est spending.py qui tranche
+                                        entre ce qui est tapé et ce qu'une règle porte,
+                                        et une deuxième règle ici dirait « à la main »
+                                        d'une ligne que la page compte comme réglée.
+                                        {% endcomment %}
+                                        {% if spending.by_rule %}
+                                            <span class="read-as">
+                                                « {{ spending.name }} » par règle
+                                                {% if spending.rule %}« {{ spending.rule }} »{% endif %}
+                                            </span>
+                                        {% elif spending.by_hand %}
+                                            <span class="read-as">« {{ spending.name }} » à la main</span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            {% endwith %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% if report.not_listed %}
+                {% comment %}
+                Le compte est dit : une liste coupée en silence se lit « il n'y en a pas
+                plus », et c'est la liste de travail de la page. Les non classées et les
+                plus grosses d'abord, donc ce qui reste dehors est le travail qui vaut
+                le moins — les chiffres au-dessus, eux, comptent tout.
+                {% endcomment %}
+                <p class="muted">
+                    {{ report.not_listed }} dépense{{ report.not_listed|pluralize }} sans facture de plus
+                    {% if kind %}dans ce choix{% endif %} sur cette période,
+                    non affichée{{ report.not_listed|pluralize }} ici : resserrez les dates pour les
+                    classer. Les chiffres ci-dessus les comptent toutes.
+                </p>
+            {% endif %}
+            {% endif %}
+        {% else %}
+            <div class="empty-state">
+                <p>
+                    {% if report.operations %}
+                        Toutes les dépenses de cette période ont leur facture.
+                    {% else %}
+                        Aucune dépense sur cette période.
+                    {% endif %}
+                </p>
+            </div>
+        {% endif %}
+
+        <datalist id="spending-category-datalist">
+            {% for name in known_categories %}<option value="{{ name }}"></option>{% endfor %}
+        </datalist>
+    {% else %}
+        <div class="empty-state">
+            <p>
+                Aucun relevé importé pour l'instant : exportez le compte en CSV depuis le site de la banque, puis
+                importez-le depuis <a href="{{ bank_url }}">Banque</a>.
+            </p>
+        </div>
+    {% endif %}
+{% endblock %}

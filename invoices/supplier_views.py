@@ -62,7 +62,7 @@ def supplier_list(request):
 
 def supplier_detail(request, pk):
     from .forms import CHANNELS
-    from .receipts import has_own_reader, identifier_report, supplier_notices
+    from .receipts import filing_rules, has_own_reader, identifier_report, supplier_notices
     from .workspace import OWN_MODULE
 
     supplier, away = _supplier(request, pk)
@@ -99,8 +99,37 @@ def supplier_detail(request, pk):
             "delete_refused": delete_refused(supplier),
             "changes": changes,
             "fiche": fiche_url(supplier),
+            "move_offer": _move_offer(request, supplier),
+            "filing_rules": filing_rules(supplier, is_till=is_till, own_reader=own_reader),
         },
     )
+
+
+def _move_offer(request, supplier) -> dict:
+    """The « Le déplacer ici » the page shows after a typed identifier turned
+    out to name somebody else (`?deplacer=`).
+
+    Carried in the address rather than acted on at once: taking a figure off
+    another supplier is not what « Ajouter » asked for, and the person has
+    to see whose it is before it moves. Anything unreadable in there is no
+    offer at all - it arrives from a query string, so a stale bookmark and a
+    hand-typed URL both land here."""
+    from .identifiers import TypedIdentifierError, describe, read_typed
+    from .receipts import identifier_owners
+
+    typed = request.GET.get("deplacer", "")
+    if not typed:
+        return {}
+    try:
+        identifier = read_typed(typed)
+    except TypedIdentifierError:
+        return {}
+    if identifier in (supplier.ticket_identifiers or ()):
+        return {}
+    holders = [held for held in identifier_owners({identifier}).get(identifier, ()) if held.pk != supplier.pk]
+    if not holders:
+        return {}
+    return {"identifier": identifier, "label": describe(identifier), "holder": holders[0]}
 
 
 def _undo_label(change) -> str:
@@ -117,6 +146,13 @@ def _undo_label(change) -> str:
         return f"Rétablir « {data.get('before', '')} »"
     if change.kind == kind.HEADER:
         return f"Rétablir « {data['before']} »" if data.get("before") else "Retirer cet en-tête"
+    if change.kind == kind.IDENTIFIERS and data.get("moved"):
+        # Either side's history says the same thing: give it back to the one
+        # it came from. `_undo_identifiers` would only ever speak for the
+        # supplier whose page you are on, and the pair must move together.
+        moved = data["moved"]
+        came_from = change.supplier if moved.get("from") == change.supplier_id else change.other_supplier
+        return f"Rendre cet identifiant à {came_from.name}" if came_from is not None else ""
     if change.kind == kind.TYPES:
         came_from = change.supplier if data.get("from") == change.supplier_id else change.other_supplier
         return f"Rendre cette source à {came_from.name}" if came_from is not None else ""
@@ -417,12 +453,102 @@ def supplier_delete(request, pk):
     )
 
 
-ACTIONS = {"retenir": "Retenir", "retirer": "Retirer", "ne_plus_ecarter": "Ne plus l'écarter"}
+ACTIONS = {
+    "retenir": "Retenir",
+    "retirer": "Retirer",
+    "ne_plus_ecarter": "Ne plus l'écarter",
+    "ajouter": "Ajouter",
+    "deplacer": "Le déplacer ici",
+}
+
+
+def _holder_of(identifier: str, excluding):
+    """The supplier that identifier names today, if any - the one question
+    the « Retenir » list could never answer: it is built from what a
+    supplier's DOCUMENTS print, never from what another supplier HOLDS.
+    That is the whole of the 24/09 story - one supplier held another's SIREN, and
+    nothing on either page said so."""
+    from .receipts import identifier_owners
+
+    holders = [
+        holder
+        for holder in identifier_owners({identifier}).get(identifier, ())
+        if holder.pk != excluding.pk
+    ]
+    return holders[0] if holders else None
+
+
+def _typed_identifier(request):
+    """What was typed, as the key this application stores - or (None, the
+    sentence saying why not). The FORM is the guard here, where every other
+    action on this page guards by membership of a list the page offered:
+    a typed figure is in no such list, so it is checked the way
+    identifiers.py builds one (a SIREN by its key, a phone by its pairs, a
+    site by its shape)."""
+    from .identifiers import TypedIdentifierError, read_typed
+
+    try:
+        return read_typed(request.POST.get("valeur", "")), ""
+    except TypedIdentifierError as exc:
+        return None, str(exc)
+
+
+def _move_identifier(request, supplier, identifier, holder) -> None:
+    """Take `identifier` off `holder` and give it to `supplier`, as one
+    operation either side can undo.
+
+    In one transaction on purpose: half of it, and the figure is on both
+    suppliers or on neither. On both, `identified_supplier` names **neither**
+    (one learned by two suppliers names nobody) and every document printing
+    it silently stops being recognised - with a success message on screen.
+    That state is exactly what the owner spent 24/09 undoing by hand.
+    """
+    import uuid
+
+    from .receipts import set_identifiers
+
+    from .identifiers import describe
+
+    label = describe(identifier)
+    with transaction.atomic():
+        left = set_identifiers(
+            holder,
+            set(holder.ticket_identifiers or ()) - {identifier},
+            reasons={identifier: f"déplacé vers {supplier.name}"},
+            asked=True,
+        )
+        arrived = set_identifiers(supplier, set(supplier.ticket_identifiers or ()) | {identifier}, asked=True)
+        supplier.typed_identifiers = sorted(set(supplier.typed_identifiers or ()) | {identifier})
+        supplier.save(update_fields=["typed_identifiers"])
+        # One operation, both histories - the shape record_type_moved uses
+        # for a source moved between suppliers, so supplier_change_undo
+        # already marks the pair undone together. Recorded as two separate
+        # changes, undoing one of them alone leaves the figure on both.
+        operation = uuid.uuid4()
+        moved = {"identifier": identifier, "from": holder.pk, "to": supplier.pk}
+        for change, other in ((left, supplier), (arrived, holder)):
+            if change is None:
+                continue
+            change.operation = operation
+            change.other_supplier = other
+            change.data = {**(change.data or {}), "moved": moved}
+            change.save(update_fields=["operation", "other_supplier", "data"])
+    messages.success(
+        request,
+        f"{label} reconnaît désormais {supplier.name}, et ne reconnaît plus {holder.name}.",
+    )
 
 
 def supplier_identifiers(request, pk):
     """« Retenir » a figure its documents print, « Retirer » one it holds -
-    set aside for good, never learned again - or « Ne plus l'écarter »."""
+    set aside for good, never learned again -, « Ne plus l'écarter », or
+    « Ajouter » one typed by hand.
+
+    A typed figure is the one action here whose value the page did not
+    offer, so the reading is the guard (`_typed_identifier`), and where
+    another supplier already holds it the page says which and offers to move
+    it rather than making two figures out of one.
+    """
     from .identifiers import describe
     from .receipts import _stored_texts, _without_header, identifier_report, identifiers_naming, set_identifiers
 
@@ -472,6 +598,44 @@ def supplier_identifiers(request, pk):
                 f"{label} n'est plus écarté"
                 + (f" et reconnaît de nouveau {supplier.name}." if back else " : ses documents ne l'impriment pas assez pour le reconnaître."),
             )
+        elif action in ("ajouter", "deplacer"):
+            typed, why_not = _typed_identifier(request)
+            if typed is None:
+                messages.error(request, why_not)
+            elif typed in known:
+                messages.info(request, f"{describe(typed)} reconnaît déjà {supplier.name}.")
+            elif typed in refused:
+                messages.error(
+                    request,
+                    f"{describe(typed)} a été écarté de {supplier.name} : rendez-le avec "
+                    "« Ne plus l'écarter » plutôt que de le retaper.",
+                )
+            else:
+                holder = _holder_of(typed, supplier)
+                if holder is None:
+                    set_identifiers(supplier, known | {typed}, asked=True)
+                    supplier.typed_identifiers = sorted(set(supplier.typed_identifiers or ()) | {typed})
+                    supplier.save(update_fields=["typed_identifiers"])
+                    messages.success(
+                        request,
+                        f"{describe(typed)} reconnaît désormais {supplier.name}. "
+                        "Saisi à la main, il ne sera pas oublié tout seul.",
+                    )
+                elif action == "deplacer":
+                    _move_identifier(request, supplier, typed, holder)
+                else:
+                    # Never both at once: an identifier two suppliers hold
+                    # names NEITHER, and every document printing it stops
+                    # being recognised with nothing on any page saying why.
+                    # So the page comes back carrying the figure, saying
+                    # whose it is, with one button to move it.
+                    messages.warning(
+                        request,
+                        f"{describe(typed)} reconnaît {holder.name} aujourd'hui. "
+                        "Deux fournisseurs qui le retiennent n'en font reconnaître aucun : "
+                        f"déplacez-le si ce n'est pas {holder.name}.",
+                    )
+                    return redirect(f"{fiche}?{urlencode({'deplacer': typed})}")
         else:
             messages.error(
                 request, "Cette action ne vaut plus pour cet identifiant (la fiche a changé) : voici la fiche à jour."
@@ -479,14 +643,51 @@ def supplier_identifiers(request, pk):
     return redirect(fiche)
 
 
+def _undo_identifier_move(request, supplier, change) -> bool:
+    """An identifier given back to the supplier it was taken from - refused
+    when it has moved on again since, the way a source given back is.
+
+    Its own path, and not `_undo_identifiers`, because that one works on one
+    supplier: it would give the figure back to the first while the second
+    kept it, and an identifier two suppliers hold names NEITHER - every
+    document printing it silently unrecognised, under a success message.
+    """
+    from .identifiers import describe
+    from .receipts import identifier_owners
+
+    moved = (change.data or {}).get("moved") or {}
+    identifier = moved.get("identifier") or ""
+    came_from = Supplier.objects.filter(pk=moved.get("from")).first()
+    went_to = Supplier.objects.filter(pk=moved.get("to")).first()
+    if not identifier or came_from is None or went_to is None:
+        messages.error(request, "L'un des deux fournisseurs n'existe plus : rien n'est rendu.")
+        return False
+    if identifier not in (went_to.ticket_identifiers or ()):
+        holders = identifier_owners({identifier}).get(identifier, ())
+        where = f" (il reconnaît {holders[0].name})" if holders else ""
+        messages.error(
+            request,
+            f"{describe(identifier)} ne reconnaît plus {went_to.name}{where} : rien n'est rendu.",
+        )
+        return False
+    _move_identifier(request, came_from, identifier, went_to)
+    return True
+
+
 def _undo_identifiers(request, supplier, change) -> bool:
     """What a change gave is taken back; what it took is given back only if
     it still names the supplier - printed on none of another's documents,
-    on one of its own at least - otherwise the reason is said."""
+    on one of its own at least - otherwise the reason is said.
+
+    A change that moved an identifier from one supplier to another is both
+    halves of one thing and is undone as one (`_undo_identifier_move`),
+    from either side's history."""
     from .identifiers import describe
     from .receipts import _stored_texts, _why_lost, set_identifiers, still_naming
 
     data = change.data or {}
+    if data.get("moved"):
+        return _undo_identifier_move(request, supplier, change)
     known = set(supplier.ticket_identifiers or ())
     refused = set(supplier.refused_identifiers or ())
     new_refused = (refused - set(data.get("refused_added", ()))) | set(data.get("refused_removed", ()))

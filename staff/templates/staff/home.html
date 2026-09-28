@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% load assets %}
+{% block title %}Personnel - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <h1>Personnel</h1>
+            <p class="page-subtitle">
+                Les fiches de temps des salariés, une par mois. Chaque salarié a une semaine type (7 h le lundi,
+                8 h le mardi…) : son mois part de là, et il ne reste qu'à corriger les jours qui n'y ressemblent
+                pas — des heures en plus ou en moins, des congés, un arrêt maladie, un jour férié.
+            </p>
+        </div>
+    </div>
+
+    {% if rows %}
+        <div class="table-wrap">
+            <table data-table data-table-label="salariés">
+                <thead>
+                    <tr>
+                        <th>Salarié</th>
+                        <th>Semaine type</th>
+                        <th>{{ this_month_label|capfirst }}</th>
+                        <th>État</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in rows %}
+                        <tr{% if not row.employee.is_active %} class="is-inactive"{% endif %}>
+                            <td><a href="{% url 'staff:employee' row.employee.pk %}"><strong>{{ row.employee.display_name }}</strong></a></td>
+                            <td data-sort="{{ row.employee.weekly_hours|stringformat:'s' }}">{{ row.week }}</td>
+                            <td data-sort="{% if row.this_month_saved %}1{% else %}0{% endif %}">
+                                <a href="{% url 'staff:month' row.employee.pk this_month %}">Fiche {{ this_month_label }}</a>
+                                {% if row.this_month_saved %}
+                                    <span class="status-pill status-linked">enregistrée</span>
+                                {% else %}
+                                    <span class="status-pill status-ignored">semaine type</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if row.employee.is_active %}
+                                    <span class="status-pill status-linked">Actif</span>
+                                {% else %}
+                                    <span class="status-pill status-ignored">Inactif</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="empty-state">
+            <p>
+                Aucun salarié pour l'instant. Commencez par l'<strong>en-tête des fiches</strong> (le nom et
+                l'adresse de l'établissement, imprimés en haut de chaque fiche), puis <strong>ajoutez un
+                salarié</strong> avec sa semaine type : chacun de ses mois partira de là.
+            </p>
+        </div>
+    {% endif %}
+
+    <div class="staff-forms">
+        <section class="card" id="ajouter">
+            <h2>Ajouter un salarié</h2>
+            <form method="post" action="{% url 'staff:home' %}#ajouter">
+                {% csrf_token %}
+                <input type="hidden" name="{{ action_field }}" value="{{ add_employee }}">
+                {% include "staff/_employee_fields.html" with form=employee_form %}
+                <div class="form-actions">
+                    <button class="btn" type="submit">Ajouter le salarié</button>
+                </div>
+            </form>
+        </section>
+
+        <section class="card" id="en-tete">
+            <h2>En-tête des fiches</h2>
+            {% comment %}
+            Rempli une fois pour toutes : une fois le nom saisi, la carte montre ce qui s'imprimera et
+            replie le formulaire. Vide, ou refusé, il reste ouvert.
+            {% endcomment %}
+            <p class="muted">Ce qui s'imprime en haut de chaque fiche de temps. Sans nom, les fiches s'impriment sans en-tête.</p>
+            {% if establishment.name %}
+                <div class="establishment-preview">
+                    <strong>{{ establishment.name }}</strong>
+                    {% for line in establishment.address_lines %}<br>{{ line }}{% endfor %}
+                </div>
+            {% endif %}
+            <details class="staff-disclosure"{% if not establishment.name or establishment_form.errors %} open{% endif %}>
+                <summary>{% if establishment.name %}Modifier l'en-tête{% else %}Saisir le nom et l'adresse{% endif %}</summary>
+                <form method="post" action="{% url 'staff:home' %}#en-tete">
+                    {% csrf_token %}
+                    <input type="hidden" name="{{ action_field }}" value="{{ save_establishment }}">
+                    {% include "_form_fields.html" with form=establishment_form %}
+                    <div class="form-actions">
+                        <button class="btn btn-secondary" type="submit">Enregistrer l'en-tête</button>
+                    </div>
+                </form>
+            </details>
+        </section>
+    </div>
+{% endblock %}
+{% block extra_js %}
+    <script src="{% asset 'js/timesheet.js' %}" defer></script>
+{% endblock %}

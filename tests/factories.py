@@ -198,7 +198,8 @@ def make_recipe(
     n = next(_counter)
     return Recipe.objects.create(
         name=name or f"Recette {n}",
-        selling_price_ttc=_d(selling_price_ttc),
+        # None for a preparation that is not sold as itself.
+        selling_price_ttc=_d(selling_price_ttc) if selling_price_ttc is not None else None,
         vat_rate=_d(vat_rate),
         yield_quantity=_d(yield_quantity),
         **kwargs,

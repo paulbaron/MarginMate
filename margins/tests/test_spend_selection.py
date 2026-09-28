@@ -43,6 +43,8 @@ from margins.computation import (
     margins_for,
     supplier_key,
 )
+from invoices.importing import spread_charges
+from margins import computation
 from recipes.models import PosProduct, PosProductDailyQuantity
 from tests.factories import make_invoice, make_invoice_line, make_product, make_stock_type, make_supplier
 
@@ -498,3 +500,79 @@ class OneReadingOfTheInvoicesTests(SpendFixture, TestCase):
             margins_for(MARCH, keys)
 
         self.assertEqual(len(large), len(small), "une requête par facture ou par ligne s'est glissée")
+
+
+class SpreadChargesGoWhereTheGoodsWentTests(TestCase):
+    """A delivery ticked « frais à répartir » is on the goods everywhere
+    else - the stock movement, the FIFO valuation, every recipe. « Marges »
+    and « Dépenses » share one definition of where an invoice's money went,
+    so it has to be on the goods here too, or the bottles cost one thing on
+    the stock page and another on this one.
+
+    Data invented throughout.
+    """
+
+    def setUp(self):
+        self.supplier = make_supplier(name="Grossiste Exemple")
+        self.beer = make_stock_type("Bière blonde", category="Bières")
+        self.wine = make_stock_type("Vin rouge", category="Vins")
+
+    def invoice_with_a_delivery(self, charge="10.00"):
+        document = make_invoice(supplier=self.supplier, invoice_date=date(2026, 6, 10))
+        for article, total_ht in ((self.beer, "75.00"), (self.wine, "25.00")):
+            make_invoice_line(
+                invoice=document,
+                product=make_product(supplier=self.supplier, stock_type=article),
+                total_ht=total_ht,
+                vat_rate=Decimal("0.20"),
+            )
+        make_invoice_line(
+            invoice=document,
+            product=make_product(supplier=self.supplier, raw_name="LIVRAISON", is_expense=True),
+            raw_name="LIVRAISON",
+            total_ht=charge,
+            vat_rate=Decimal("0.20"),
+            is_spread_charge=True,
+        )
+        spread_charges(list(document.lines.all()))
+        for line in document.lines.all():
+            if not line.is_spread_charge:
+                line.spread_ht = Decimal(charge) * line.total_ht / Decimal("100.00")
+                line.save(update_fields=["spread_ht"])
+        return document
+
+    def test_the_delivery_lands_on_the_articles_it_delivered(self):
+        document = self.invoice_with_a_delivery()
+        places = computation.where_it_went(document)
+        by_name = {place.group_name: money.ht for place, money in places.items()}
+        self.assertEqual(by_name, {"Bières": Decimal("82.50"), "Vins": Decimal("27.50")})
+
+    def test_the_places_still_add_up_to_the_invoice_to_the_cent(self):
+        document = self.invoice_with_a_delivery()
+        places = computation.where_it_went(document)
+        self.assertEqual(
+            sum((money.ht for money in places.values()), Decimal("0")),
+            computation.cents(document.total_ht),
+        )
+        self.assertEqual(
+            sum((money.ttc for money in places.values()), Decimal("0")),
+            computation.cents(document.total_ttc),
+        )
+
+    def test_a_delivery_nothing_can_carry_stays_where_it_is(self):
+        """No goods under it - the charge is whole on its own place, visible,
+        rather than disappearing into a page."""
+        document = make_invoice(supplier=self.supplier, invoice_date=date(2026, 6, 10))
+        make_invoice_line(
+            invoice=document,
+            product=make_product(supplier=self.supplier, raw_name="LIVRAISON", is_expense=True),
+            raw_name="LIVRAISON",
+            total_ht="10.00",
+            vat_rate=Decimal("0.20"),
+            is_spread_charge=True,
+        )
+        places = computation.where_it_went(document)
+        self.assertEqual(
+            sum((money.ht for money in places.values()), Decimal("0")),
+            computation.cents(document.total_ht),
+        )

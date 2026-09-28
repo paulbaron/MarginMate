@@ -86,6 +86,8 @@ LINE_FIELDS = (
     "read_as",
     "printed_ttc",
     "discount_ttc",
+    "is_spread_charge",
+    "spread_ht",
 )
 PRODUCT_FIELDS = ("raw_name", "ean", "is_expense")
 #: Every concrete field of Invoice and InvoiceLine is in INVOICE_FIELDS,
@@ -127,6 +129,8 @@ LABELS = {
     "lines": "lignes",
     "source_file": "fichier",
     "preview_image": "photo",
+    "is_spread_charge": "frais à répartir",
+    "spread_ht": "part des frais répartis",
 }
 FILE_LABELS = {"source_file": "fichier", "preview_image": "photo"}
 RESTORED = {

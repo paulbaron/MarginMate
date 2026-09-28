@@ -127,7 +127,9 @@ INFO: dict[str, SectionInfo] = {
             "ventes", "Ventes", Group.DATA, 80, requires=["recettes"], recommends=["liens_ventes"],
             description=(
                 "Quantités vendues par produit de la caisse et par jour, ventes saisies à la main, bons de "
-                "vente. Les ventes par recette sont recalculées."
+                "vente. Les ventes par recette sont recalculées. Les montants de la caisse (recettes du jour, "
+                "moyens de paiement) ne voyagent pas : ils se relisent des exports déjà téléchargés "
+                "(manage.py laddition_backfill_revenue, puis laddition_backfill_payments)."
             ),
             reasons={"liens_ventes": "Liens recettes ↔ ventes — sinon aucune vente par recette n'est recalculée"},
         ),

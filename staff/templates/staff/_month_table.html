@@ -1,0 +1,44 @@
+{% comment %}
+Un mois en lecture seule, tel qu'un instantané le décrit (staff.signature_requests.month_snapshot) :
+la page du salarié le dessine depuis l'instantané figé avec la demande - des modifications faites
+ensuite ne peuvent pas changer ce qu'il lit - et la page d'un mois en cours de signature depuis le
+même constructeur. Contexte : `month`. La colonne « Motif / note » est la cellule telle que le PDF
+l'imprime (pdf.note_cells : coupée par « … », « ? » pour ce que le PDF ne sait pas écrire) : ce qu'il
+lit est ce qu'il signe. Un jour férié travaillé ou pris autrement le dit en gris d'abord, un jour de
+repos reste vide. Un instantané de version 1 (avant note_cells) montre sa note telle qu'enregistrée.
+{% endcomment %}
+<div class="month-table-wrap">
+    <table class="month-table">
+        <thead>
+            <tr>
+                <th scope="col">Jour</th>
+                <th scope="col" class="num">Heures</th>
+                <th scope="col">Motif / note</th>
+            </tr>
+        </thead>
+        {% for week in month.weeks %}
+            <tbody>
+                {% for day in week.days %}
+                    <tr{% if day.rest %} class="is-rest"{% elif day.absence %} class="is-absence"{% endif %}>
+                        <th scope="row">{{ day.name }}</th>
+                        <td class="num">{{ day.hours }}</td>
+                        <td>{% if day.note_cells is not None %}{% for cell in day.note_cells %}{% if cell.muted %}<span class="muted">{{ cell.text }}</span>{% else %}{{ cell.text }}{% endif %}{% endfor %}{% elif day.holiday and day.kind != "ferie" and not day.rest %}<span class="muted">Férié : {{ day.holiday }}</span>{% if day.note %} — {{ day.note }}{% endif %}{% else %}{{ day.note }}{% endif %}</td>
+                    </tr>
+                {% endfor %}
+                <tr class="week-total">
+                    <th scope="row">{{ week.label }}</th>
+                    <td class="num">{{ week.total }} h</td>
+                    <td></td>
+                </tr>
+            </tbody>
+        {% endfor %}
+    </table>
+</div>
+<div class="month-summary">
+    <h3>Récapitulatif</h3>
+    <ul>
+        {% for label, value in month.summary.hours %}<li>{{ label }} : <strong>{{ value }}</strong></li>{% endfor %}
+        {% for label, value in month.summary.days %}<li>{{ label }} : <strong>{{ value }}</strong></li>{% endfor %}
+    </ul>
+    <p class="muted small">Semaine type : {{ month.weekly_hours }} h</p>
+</div>

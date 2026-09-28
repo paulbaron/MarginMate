@@ -12,6 +12,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from recipes.models import PosProduct
+from staff.models import Employee
 from tests.factories import make_invoice, make_product, make_recipe, make_stock_type, make_supplier
 
 LABELS = [
@@ -22,6 +23,9 @@ LABELS = [
     # Les marges lisent les deux côtés - ce qui est entré, ce qui est
     # sorti - donc le lien est entre eux plutôt qu'au bout.
     "Marges",
+    # Les fiches de temps des salariés : rien à voir avec les marges, mais
+    # placé là, le lien ne déplace aucun de ceux qu'on utilise déjà.
+    "Personnel",
     "Inventaires",
     "Données",
     "Admin",
@@ -53,6 +57,8 @@ class NavigationTests(TestCase):
         invoice = make_invoice(supplier=supplier)
         recipe = make_recipe(name="Mule")
         stock_type = make_stock_type(name="Vodka")
+        # An invented employee: the repository is public.
+        person = Employee.objects.create(last_name="Dupont", first_name="Jeanne", tuesday_hours=7)
         pages = {
             "Produits &amp; charges": [
                 reverse("inventory:stock_list"),
@@ -81,6 +87,11 @@ class NavigationTests(TestCase):
             "Inventaires": [reverse("inventory:stock_take_list"), reverse("inventory:stock_take_create")],
             "Banque": [reverse("bank:bank_home")],
             "Marges": [reverse("margins:margins_home")],
+            "Personnel": [
+                reverse("staff:home"),
+                reverse("staff:employee", args=[person.pk]),
+                reverse("staff:month", args=[person.pk, "2026-06"]),
+            ],
             "Données": [reverse("transfer:data_home"), reverse("transfer:data_import"), reverse("transfer:data_clear")],
         }
         for label, urls in pages.items():

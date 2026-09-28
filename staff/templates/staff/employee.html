@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% load assets %}
+{% block title %}{{ employee.display_name }} - Personnel - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <p class="breadcrumb"><a href="{% url 'staff:home' %}">← Personnel</a></p>
+            <h1>
+                {{ employee.display_name }}
+                {% if not employee.is_active %}<span class="status-pill status-ignored">Inactif</span>{% endif %}
+            </h1>
+            <p class="page-subtitle">Semaine type : {{ week }}</p>
+        </div>
+        <div class="actions">
+            <a class="btn" href="{% url 'staff:month' employee.pk this_month %}">Fiche {{ this_month_label }}</a>
+        </div>
+    </div>
+
+    <h2>Les mois</h2>
+    <div class="table-wrap">
+        <table data-table data-table-label="mois">
+            <thead>
+                <tr>
+                    <th>Mois</th>
+                    <th class="num">Heures travaillées</th>
+                    <th>Absences</th>
+                    <th>Dernier enregistrement</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                    <tr>
+                        <td data-sort="{{ row.sheet.month|date:'Y-m' }}"><a href="{{ row.url }}">{{ row.sheet.label|capfirst }}</a></td>
+                        <td class="num" data-sort="{{ row.sheet.summary.worked_hours|stringformat:'s' }}">{{ row.sheet.summary.worked_text }} h</td>
+                        <td>{{ row.absences|default:"—" }}</td>
+                        <td data-sort="{% if row.saved_at %}{{ row.saved_at|date:'Y-m-d H:i' }}{% endif %}">
+                            {% if row.saved_at %}
+                                {{ row.saved_at|date:"d/m/Y" }} à {{ row.saved_at|date:"H:i" }}
+                            {% else %}
+                                <span class="muted">Pas encore enregistrée : la semaine type</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% comment %}
+    Un mois et une année plutôt qu'un <input type="month"> : Firefox et Safari l'affichent en simple
+    champ texte, et le nom du mois vient ici des constantes de l'application, en français.
+    {% endcomment %}
+    <form method="get" action="{% url 'staff:open_month' employee.pk %}" class="inline-form month-picker">
+        <label class="stacked-label">Ouvrir un autre mois
+            <select name="{{ pick_month }}">
+                {% for number, name in month_choices %}
+                    <option value="{{ number }}"{% if number == this_month.month %} selected{% endif %}>{{ name }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label class="stacked-label">Année
+            <input type="number" name="{{ pick_year }}" value="{{ this_month.year }}" min="{{ first_year }}" max="{{ last_year }}" step="1" required>
+        </label>
+        <button class="btn btn-secondary" type="submit">Ouvrir</button>
+    </form>
+
+    <section class="card" id="semaine-type">
+        <h2>Nom et semaine type</h2>
+        <p class="muted">
+            Changer la semaine type ne modifie <strong>jamais</strong> un mois déjà enregistré : il garde ses
+            heures et la semaine type avec laquelle il a été enregistré, ce que le salarié a signé.
+            {% if saved_count %}
+                {% if saved_count == 1 %}Le mois enregistré ci-dessus reste tel quel ;{% else %}Les {{ saved_count }} mois enregistrés ci-dessus restent tels quels ;{% endif %}
+                les autres suivent la nouvelle semaine type.
+            {% else %}
+                Aucun mois n'est encore enregistré : tous suivront la nouvelle semaine type.
+            {% endif %}
+        </p>
+        <form method="post" action="{% url 'staff:employee' employee.pk %}#semaine-type">
+            {% csrf_token %}
+            {% include "staff/_employee_fields.html" with form=form %}
+            <div class="form-actions">
+                <button class="btn" type="submit">Enregistrer</button>
+            </div>
+        </form>
+    </section>
+
+    <section class="card" id="actif">
+        {% comment %}
+        Jamais de suppression : une fiche signée est un document que l'employeur conserve
+        (Timesheet.employee est PROTECT). Le bouton dit l'état voulu, pas « basculer » : deux clics ne
+        se défont pas l'un l'autre.
+        {% endcomment %}
+        {% if employee.is_active %}
+            <h2>Départ du salarié</h2>
+            <p class="muted">
+                Un salarié qui part n'est pas supprimé : ses fiches signées sont des documents que l'employeur
+                conserve. Désactivé, il passe sous les salariés actifs dans la liste, et ses fiches restent ici.
+            </p>
+            <form method="post" action="{% url 'staff:employee_active' employee.pk %}">
+                {% csrf_token %}
+                <button class="btn btn-secondary" type="submit" name="actif" value="0">Désactiver</button>
+            </form>
+        {% else %}
+            <h2>Salarié inactif</h2>
+            <p class="muted">Ses fiches restent consultables et modifiables ici. Réactivé, il revient parmi les salariés actifs.</p>
+            <form method="post" action="{% url 'staff:employee_active' employee.pk %}">
+                {% csrf_token %}
+                <button class="btn btn-secondary" type="submit" name="actif" value="1">Réactiver</button>
+            </form>
+        {% endif %}
+    </section>
+{% endblock %}
+{% block extra_js %}
+    <script src="{% asset 'js/timesheet.js' %}" defer></script>
+{% endblock %}

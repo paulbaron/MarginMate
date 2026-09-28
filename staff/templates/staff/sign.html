@@ -1,0 +1,191 @@
+{% extends "staff/public_base.html" %}
+{% load assets %}
+{% comment %}
+La page du salarié (staff/public_views.py) : son mois tel qu'il a été figé (l'instantané de la demande),
+« Voir le PDF », son code, sa signature - puis, une fois signé, son exemplaire. Tout vient de LA demande
+que le lien atteint : aucune autre donnée de l'application n'est ici. Écrite pour un téléphone.
+{% endcomment %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+    <header class="public-header">
+        {% if establishment.name %}
+            <p class="public-establishment">
+                <strong>{{ establishment.name }}</strong>{% for line in establishment.address %}<br>{{ line }}{% endfor %}
+            </p>
+        {% endif %}
+        <h1>{{ title }}</h1>
+        <p class="muted small">Document n° {{ document_id }}</p>
+    </header>
+
+    {% if state != "pending" %}
+        {% for level, text in notices %}
+            <p class="message message-{{ level }}" role="status">{{ text }}</p>
+        {% endfor %}
+    {% endif %}
+
+    {% if state == "employee_signed" %}
+        <div class="message message-success" data-signed>
+            <p><strong>Relevé signé le {{ signed_at }}{% if reservation %}, avec vos réserves{% endif %}.</strong></p>
+            <p>Votre employeur va le contresigner : ce lien vous donnera ensuite l'exemplaire final, jusqu'au {{ expires }}.</p>
+        </div>
+        <p class="public-actions"><a class="btn" href="{{ urls.copy }}">Télécharger mon exemplaire signé (PDF)</a></p>
+    {% elif state == "complete" %}
+        <div class="message message-success" data-signed>
+            <p><strong>Relevé signé par vous le {{ signed_at }} et contresigné par {{ establishment.name }} le {{ countersigned_at }}.</strong></p>
+            <p>Ce lien reste valable jusqu'au {{ expires }} : téléchargez votre exemplaire et gardez-le.</p>
+        </div>
+        <p class="public-actions"><a class="btn" href="{{ urls.copy }}">Télécharger l'exemplaire final (PDF)</a></p>
+    {% else %}
+        <p class="public-lead">
+            Vérifiez vos heures ci-dessous. Si tout est juste, signez en bas de la page ; sinon, signez avec des
+            réserves et écrivez ce qui ne va pas. Ce lien est valable jusqu'au {{ expires }}.
+        </p>
+    {% endif %}
+    {% if signed_statement %}
+        <p class="small">Vous avez certifié : « {{ signed_statement }} »</p>
+    {% endif %}
+    {% if reservation and state != "pending" %}
+        <p class="small">Vos réserves :</p>
+        <blockquote class="signature-reservation">{{ reservation|linebreaksbr }}</blockquote>
+    {% endif %}
+
+    <p class="public-actions">
+        <a class="btn btn-secondary" href="{{ urls.document }}" target="_blank" rel="noopener">Voir le PDF</a>
+        <span class="muted small">le relevé tel qu'il vous a été envoyé</span>
+    </p>
+
+    <section class="public-section" aria-labelledby="month-title">
+        <h2 id="month-title">Vos heures</h2>
+        {% include "staff/_month_table.html" with month=month %}
+    </section>
+
+    {% if state == "pending" %}
+        <section class="public-section" id="code" aria-labelledby="code-title">
+            <h2 id="code-title">1. Votre code</h2>
+            {% comment %}
+            Ce qu'une action sur le code vient de dire, ici : la réponse arrive à #code, sous le mois.
+            {% endcomment %}
+            {% for level, text in notices %}
+                <p class="message message-{{ level }}" role="status">{{ text }}</p>
+            {% endfor %}
+            {% if identified %}
+                <p class="message message-success" data-identified>{{ code_verified }}</p>
+            {% elif code_waiting %}
+                {% comment %}
+                Un code peut encore être tapé : le taper vient d'abord. En redemander un par e-mail annule celui qui
+                est en route - le bouton le dit, en second ; le code que l'employeur a remis, lui, ne se remplace pas
+                depuis cette page (signature_requests.HANDED_OVER_CODE_WAITING).
+                {% endcomment %}
+                <form method="post" action="{{ urls.check_code }}" class="public-form">
+                    {% csrf_token %}
+                    <label for="code-field">{% if code_waiting == "code_remis" %}Le code que votre employeur vous a donné{% else %}Le code reçu par e-mail{% endif %}</label>
+                    <div class="code-row">
+                        <input id="code-field" type="text" name="{{ fields.code }}" inputmode="numeric" autocomplete="one-time-code" maxlength="12" required>
+                        <button class="btn" type="submit">Valider le code</button>
+                    </div>
+                </form>
+                {% if code_waiting == "code_remis" %}
+                    <p class="muted small">Votre employeur vient de vous donner un code : tapez-le ci-dessus. Il vaut 15 minutes.</p>
+                {% elif can_email %}
+                    <form method="post" action="{{ urls.send_code }}" class="public-form">
+                        {% csrf_token %}
+                        <button class="btn btn-secondary" type="submit">Renvoyer un code (le précédent ne vaudra plus)</button>
+                        <p class="muted small">Seulement si le premier e-mail n'arrive pas : un nouveau code remplace le précédent.</p>
+                    </form>
+                {% endif %}
+            {% else %}
+                <p>Pour signer, confirmez que c'est bien vous avec un code à usage unique : 6 chiffres, valable 15 minutes.</p>
+                {% if can_email %}
+                    <form method="post" action="{{ urls.send_code }}" class="public-form">
+                        {% csrf_token %}
+                        <button class="btn" type="submit">Recevoir un code par e-mail</button>
+                        <p class="muted small">Il sera envoyé à {{ masked_address }}. Votre employeur peut aussi vous le donner lui-même.</p>
+                    </form>
+                {% else %}
+                    <p class="muted small">Votre employeur vous donne ce code par un autre moyen que ce lien : de vive voix, par SMS…</p>
+                {% endif %}
+                <form method="post" action="{{ urls.check_code }}" class="public-form">
+                    {% csrf_token %}
+                    <label for="code-field">J'ai un code</label>
+                    <div class="code-row">
+                        <input id="code-field" type="text" name="{{ fields.code }}" inputmode="numeric" autocomplete="one-time-code" maxlength="12" required>
+                        <button class="btn btn-secondary" type="submit">Valider le code</button>
+                    </div>
+                </form>
+            {% endif %}
+        </section>
+
+        <section class="public-section" id="signer" aria-labelledby="sign-title">
+            <h2 id="sign-title">2. Signez</h2>
+            {% if error %}<p class="message message-error" role="alert">{{ error }}</p>{% endif %}
+            {% if identified %}
+                {% comment %}
+                signature_pad.js dessine dans le cadre et met, à l'envoi, l'image (PNG) dans le champ caché -
+                rien des tracés eux-mêmes. Une page redessinée après un refus porte le dessin dans ce champ : le
+                script le repeint.
+                {% endcomment %}
+                {% comment %}
+                #signer : une signature refusée redessine la page à son formulaire, où l'erreur est écrite.
+                {% endcomment %}
+                <form method="post" action="{{ urls.submit }}#signer" class="public-form sign-form" data-signature-form>
+                    {% csrf_token %}
+                    <p class="field-label" id="signature-label">Votre signature, avec le doigt ou la souris</p>
+                    <div class="signature-pad">
+                        <canvas data-signature-canvas role="img" aria-labelledby="signature-label"></canvas>
+                    </div>
+                    <div class="signature-pad-actions">
+                        <button type="button" class="btn btn-secondary btn-small" data-signature-undo>Annuler le dernier trait</button>
+                        <button type="button" class="btn btn-secondary btn-small" data-signature-clear>Effacer</button>
+                    </div>
+                    <input type="hidden" name="{{ fields.signature }}" value="{{ posted.signature }}" data-signature-input>
+                    <p class="field-error" data-signature-missing hidden>Dessinez votre signature dans le cadre.</p>
+                    <noscript>
+                        <p class="message message-warning">
+                            La signature se dessine avec JavaScript, désactivé sur ce navigateur : activez-le, ou ouvrez
+                            ce lien dans un autre navigateur.
+                        </p>
+                    </noscript>
+
+                    <label class="public-check">
+                        <input type="checkbox" name="{{ fields.statement }}" value="1" required{% if posted.statement %} checked{% endif %}>
+                        <span>{{ statement }}</span>
+                    </label>
+                    <label class="public-check">
+                        <input type="checkbox" name="{{ fields.reserved }}" value="1" data-reservations-toggle{% if posted.reserved %} checked{% endif %}>
+                        <span>Je signe avec des réserves</span>
+                    </label>
+                    <div class="reservations" data-reservations>
+                        <label for="reservations-field">Mes réserves</label>
+                        <textarea id="reservations-field" name="{{ fields.reservation }}" rows="3" maxlength="2000" placeholder="Par exemple : le 12, j'ai fini à 23 h et non à 22 h.">{{ posted.reservation }}</textarea>
+                    </div>
+
+                    <div class="public-notice">
+                        <h3>Ce qui est enregistré, et pourquoi</h3>
+                        <p>
+                            Quand vous signez, l'application enregistre la date et l'heure, votre adresse IP, votre
+                            appareil (le navigateur utilisé), le dessin de votre signature et vos éventuelles réserves ;
+                            un service d'horodatage indépendant certifie l'heure. C'est la preuve que vous avez signé ce
+                            relevé, s'il était un jour contesté : l'employeur doit décompter le temps de travail, et
+                            pouvoir le prouver.
+                        </p>
+                        <p>
+                            Ces informations sont conservées {{ retention_years }} ans après la fin du mois, puis
+                            effacées. Votre employeur y a accès, et si besoin l'inspection du travail ou un juge. Vous
+                            pouvez lui demander d'y accéder ou de corriger une erreur (RGPD).
+                        </p>
+                        <p>
+                            C'est une signature électronique simple : le relevé signé et son dossier de preuve portent le
+                            même numéro de document.
+                        </p>
+                    </div>
+                    <button class="btn public-submit" type="submit">Signer le relevé</button>
+                </form>
+            {% else %}
+                <p class="muted">Validez d'abord votre code (étape 1) : le cadre de signature apparaîtra ici.</p>
+            {% endif %}
+        </section>
+    {% endif %}
+{% endblock %}
+{% block extra_js %}
+    {% if state == "pending" and identified %}<script src="{% asset 'js/signature_pad.js' %}" defer></script>{% endif %}
+{% endblock %}

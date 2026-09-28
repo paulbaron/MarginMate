@@ -31,6 +31,7 @@
                             <span class="muted">€ · TVA</span>
                             {{ line_form.vat_rate }}
                             <span class="muted">%</span>
+                            <label class="spread-charge-box">{{ line_form.is_spread_charge }} <span>Frais à répartir</span></label>
                             <button type="button" class="btn btn-small btn-secondary js-remove-line">Retirer</button>
                         </div>
                         {% for error in line_form.non_field_errors %}<div class="message message-error">{{ error }}</div>{% endfor %}
@@ -41,6 +42,11 @@
                 {% endfor %}
             </div>
             <button type="button" class="btn btn-small btn-secondary" id="add-line-row">+ Ajouter un produit</button>
+            <p class="muted small">
+                « Frais à répartir » : une ligne qui n'est pas un produit — port, livraison. Elle reste une ligne de
+                la facture ; ce qu'elle coûte est réparti sur les autres au prorata de leur montant HT, et entre dans
+                le prix de revient des articles.
+            </p>
 
             <p style="margin-top:1rem;">
                 <button class="btn" type="submit">Créer la facture</button>
@@ -60,6 +66,7 @@
                 <span class="muted">€ · TVA</span>
                 {{ formset.empty_form.vat_rate }}
                 <span class="muted">%</span>
+                <label class="spread-charge-box">{{ formset.empty_form.is_spread_charge }} <span>Frais à répartir</span></label>
                 <button type="button" class="btn btn-small btn-secondary js-remove-line">Retirer</button>
             </div>
         </div>

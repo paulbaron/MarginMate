@@ -29,13 +29,44 @@ from .registry import register
 
 TVA_LETTER_TO_RATE = {"A": Decimal("0"), "B": Decimal("0.055"), "C": Decimal("0.2"), "D": Decimal("0.2")}
 
+# The leftmost "MM" column prints a literal "M " before the EAN on Metro's
+# own-brand rows, exactly where a consigne prints "+ ". Anchored, and with
+# only "+ " allowed, such rows matched nothing and were dropped in silence -
+# their money and their stock with them. Across every product row of the
+# invoices filed, "M " and "+ " are the only two prefixes that ever occur, so
+# the alternation is closed, not a guess: a wider [A-Z] would start
+# swallowing rows nothing prefixes.
 LINE_REGEX = re.compile(
-    r"(?:\+\s+)?(\d+\s+)?(\d+)\s+(.+?)\s+([A-Z]\s+)?(\d?\d,\d\s+)?(\d+,\d+\s+)?(\d+,\d+\s+)?"
+    r"(?:[+M]\s+)?(\d+\s+)?(\d+)\s+(.+?)\s+([A-Z]\s+)?(\d?\d,\d\s+)?(\d+,\d+\s+)?(\d+,\d+\s+)?"
     r"(\d+,\d+)\s+(\d+\s+)?(\d+-?)\s+(\d+,\d+-?)\s+([A-D])"
 )
 COTIS_SOCIALE_REGEX = re.compile(r"Plus : COTIS\. SECURITE SOCIALE\s+(\d+,\d+)\s+([A-D])")
-DISCOUNT_REGEX = re.compile(r"Offre Achetez Plus Payez Moins\s+(\d+,\d+)-")
+# Two printed forms of the same thing, a bulk promotion taken off the line
+# above. "N pour M" was unread until 24/09/2026, so its discount was never
+# subtracted and the invoice claimed MORE than Metro billed, overstating
+# every cost and margin drawn from those lines. The
+# case varies between invoices ("3 POUR 2", "3 pour 2"), hence IGNORECASE.
+DISCOUNT_REGEX = re.compile(
+    r"(?:Offre\s+Achetez\s+Plus\s+Payez\s+Moins|\d+\s+pour\s+\d+)\s+(\d+,\d+)-",
+    re.IGNORECASE,
+)
 CATEGORY_REGEX = re.compile(r"\*\*\*\s+(.+?)\s+Total:\s+(\d+,\d+)")
+
+# An amount as Metro prints it: French decimal comma, an optional space for
+# thousands, and the trailing minus an avoir uses instead of a leading one.
+# Exactly two decimals is what tells an amount from the three-decimal volume
+# printed beside it in the VAT table ("M 9,000 68,04 B = 5,50%") - read
+# greedily, that row files 9 000 68,04 EUR of goods at 5,5 %.
+_MONEY = r"(?:\d{1,3}(?:[  ]\d{3})*|\d+),\d{2}-?"
+PRINTED_HT_REGEX = re.compile(r"Total\s+H\.T\.\s*:\s*(" + _MONEY + r")")
+PRINTED_TTC_REGEX = re.compile(r"Total\s+[àa]\s+payer\s+(" + _MONEY + r")")
+VAT_ROW_REGEX = re.compile(
+    r"(?:^|\s)(" + _MONEY + r")\s+([A-D])\s*=\s*(\d+,\d+)\s*%\s+(" + _MONEY + r")\s+(" + _MONEY + r")\s*$"
+)
+# Every figure compared here is one Metro printed, so the two sides agree to
+# the cent or something was misread; the slack is for a weight-priced line's
+# rounding, not for a missing row.
+TOTAL_TOLERANCE = Decimal("0.02")
 
 INVOICE_STORE_REGEX = re.compile(r"N[ºo°]\s*FACTURE\s+\S*\((\d+)\)")
 INVOICE_REF_REGEX = re.compile(r"\((\d{3}-\d{6})\)")
@@ -47,7 +78,10 @@ FILENAME_TIMESTAMP_REGEX = re.compile(r"_(\d{14})$")
 def _to_decimal(text: str | None, default: str = "0") -> Decimal:
     if not text:
         return Decimal(default)
-    text = text.strip().replace(",", ".")
+    # The space is French thousands grouping ("1 234,56"), which Decimal()
+    # will not take; it never separates two amounts here, each capture being
+    # a single number.
+    text = text.strip().replace(" ", "").replace(" ", "").replace(",", ".")
     if not text:
         return Decimal(default)
     # Metro prints negative amounts (consigne refunds) with a trailing "-"
@@ -77,6 +111,70 @@ def _to_int(text: str | None, default: int = 0) -> int:
     except ValueError:
         return default
     return -value if negative else value
+
+
+def _fr(value: Decimal) -> str:
+    """An amount the way the invoice prints it, for a message a person reads
+    next to the document itself."""
+    return f"{value:.2f}".replace(".", ",")
+
+
+def _read_printed_totals(full_text: str):
+    """What the invoice says about itself: its HT total, what it asks to be
+    paid, and its VAT table.
+
+    Metro prints all three and this parser read none of them, so nothing
+    ever compared the lines against the document. That silence is the whole
+    reason a dropped own-brand row and an unread promotion could each sit
+    there being wrong: `printed_total_ttc` was NULL on nearly every Metro
+    invoice and `vat_breakdown` empty on all of them, so no check had a
+    second figure to disagree with.
+
+    An avoir prints every one of these with a TRAILING minus and this
+    codebase files a credit note negative, so the sign is part of the
+    reading, not a detail: taken unsigned, every credit note filed would
+    disagree with its own totals by twice its value.
+    """
+    printed_ht = PRINTED_HT_REGEX.search(full_text)
+    printed_ttc = PRINTED_TTC_REGEX.search(full_text)
+    breakdown = []
+    for line in full_text.split("\n"):
+        row = VAT_ROW_REGEX.search(line)
+        if row is None:
+            continue
+        breakdown.append(
+            (_to_decimal(row.group(3)) / Decimal("100"), _to_decimal(row.group(1)), _to_decimal(row.group(4)))
+        )
+    return (
+        _to_decimal(printed_ht.group(1)) if printed_ht else None,
+        _to_decimal(printed_ttc.group(1)) if printed_ttc else None,
+        breakdown,
+    )
+
+
+def _reconciliation_warning(lines_total_ht: Decimal, printed_ht: Decimal | None) -> list[str]:
+    """Say it when the lines and the document disagree.
+
+    Both figures are sums of amounts Metro itself printed, so they agree to
+    the cent unless a row was not read - too little when one was dropped,
+    too much when a discount was not. Said here rather than checked in
+    `parse_checks`, because that field is what tells a photographed ticket
+    from a digital invoice (invoices/workspace.py): filling it for Metro
+    would put every Metro invoice into the receipt review queue. A warning
+    reaches `Invoice.error_message` and holds the document in "À vérifier",
+    which is where a document that cannot be trusted belongs.
+    """
+    if printed_ht is None:
+        return []
+    gap = printed_ht - lines_total_ht
+    if abs(gap) <= TOTAL_TOLERANCE:
+        return []
+    missing = "une ligne n'a pas été lue" if gap > 0 else "une remise n'a pas été déduite"
+    said = (
+        f"Les lignes lues font {_fr(lines_total_ht)} € HT alors que la facture imprime "
+        f"{_fr(printed_ht)} € HT (écart {_fr(gap)} €) : {missing}. Vérifiez le document."
+    )
+    return [said]
 
 
 def _guess_invoice_number_and_date(full_text: str, source_name: str) -> tuple[str, date | None]:
@@ -192,9 +290,16 @@ class MetroParser(InvoiceParser):
         if invoice_date is None:
             invoice_date = date_hint
 
+        parsed_lines = list(lines_by_name.values())
+        printed_ht, printed_ttc, vat_breakdown = _read_printed_totals(full_text)
+        lines_total_ht = sum((line.total_ht for line in parsed_lines), Decimal("0"))
+
         return ParsedInvoice(
             supplier_code=self.supplier_code,
             invoice_number=invoice_number,
             invoice_date=invoice_date,
-            lines=list(lines_by_name.values()),
+            lines=parsed_lines,
+            printed_total_ttc=printed_ttc,
+            vat_breakdown=vat_breakdown,
+            warnings=_reconciliation_warning(lines_total_ht, printed_ht),
         )

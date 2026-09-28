@@ -85,8 +85,10 @@ def pay(line, invoice, method=MANUAL) -> InvoicePayment:
     return payment
 
 
-def make_rule(pattern, description="", is_active=True) -> IgnoreRule:
-    rule = IgnoreRule.objects.create(pattern=pattern, description=description, is_active=is_active)
+def make_rule(pattern, description="", is_active=True, category="") -> IgnoreRule:
+    rule = IgnoreRule.objects.create(
+        pattern=pattern, description=description, is_active=is_active, category=category
+    )
     IgnoreRule.objects.filter(pk=rule.pk).update(created_at=datetime(2026, 7, 20, 8, 30, tzinfo=UTC))
     rule.refresh_from_db()
     return rule
@@ -143,7 +145,9 @@ class BankData:
         pay(self.double, self.invoice_c)
         pay(self.double, self.invoice_d)
         CounterpartyAlias.objects.create(supplier=self.hardware, name="QNORD")
-        make_rule("URSSAF", "Cotisations")
+        # A rule that also says what its payments count as on « Dépenses »,
+        # and one that only says there is nothing to link.
+        make_rule("URSSAF", "Cotisations", category="Cotisations sociales")
         make_rule("PRET LOCAL", "Prêt du local", is_active=False)
 
     def export(self) -> ArchiveReader:
@@ -216,8 +220,8 @@ class ExportTests(BankData, TestCase):
         self.assertEqual(
             payload["rules"],
             [
-                {"pattern": "URSSAF", "description": "Cotisations", "is_active": True, "created_at": "2026-07-20T08:30:00+00:00"},
-                {"pattern": "PRET LOCAL", "description": "Prêt du local", "is_active": False, "created_at": "2026-07-20T08:30:00+00:00"},
+                {"pattern": "URSSAF", "description": "Cotisations", "is_active": True, "category": "Cotisations sociales", "created_at": "2026-07-20T08:30:00+00:00"},
+                {"pattern": "PRET LOCAL", "description": "Prêt du local", "is_active": False, "category": "", "created_at": "2026-07-20T08:30:00+00:00"},
             ],
         )
 
@@ -430,6 +434,41 @@ class MergeAndReplaceTests(BankData, TestCase):
         self.assertEqual(preview.outcome(), import_archive(self.reader, MERGE).outcome())
 
 
+class CategoryTests(BankData, TestCase):
+    """What a spending was FOR - on the line and on the rule that recognises
+    it - is a decision like any other here: a statement imported again brings
+    the line back and not one word of what a person said about it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        BankTransaction.objects.filter(pk=self.unlinked.pk).update(category="Travaux")
+
+    def line(self) -> BankTransaction:
+        return BankTransaction.objects.get(fingerprint=self.unlinked.fingerprint)
+
+    def test_a_category_typed_on_a_line_comes_back_from_the_archive(self):
+        reader = self.export()
+        wipe_bank()
+        import_archive(reader, MERGE)
+        self.assertEqual(self.line().category, "Travaux")
+
+    def test_a_rules_category_comes_back_with_it(self):
+        reader = self.export()
+        wipe_bank()
+        import_archive(reader, MERGE)
+        self.assertEqual(IgnoreRule.objects.get(pattern="URSSAF").category, "Cotisations sociales")
+
+    def test_a_category_changed_here_is_a_conflict_kept_whole(self):
+        """Merging an archive must never rewrite what somebody decided since
+        - and a category is exactly that kind of decision."""
+        reader = self.export()
+        BankTransaction.objects.filter(pk=self.unlinked.pk).update(category="Entretien")
+        run = import_archive(reader, MERGE)
+        self.assertEqual(self.line().category, "Entretien")
+        self.assertIn("catégorie", " ".join(bank_report(run).conflicts))
+
+
 class LinkTests(BankData, TestCase):
     """How a link of the archive meets the links this database has."""
 
@@ -451,7 +490,10 @@ class LinkTests(BankData, TestCase):
         self.assertEqual(list(self.manual.payments.values_list("invoice__invoice_number", flat=True)), ["T-150"])
         self.assertFalse(InvoicePayment.objects.filter(invoice=self.invoice_a).exists())
 
-    def test_an_invoice_paid_here_by_another_line_is_a_conflict(self):
+    def test_a_line_settled_here_does_not_take_an_invoice_another_line_pays(self):
+        """An invoice is no longer paid once - but what holds the link back
+        here is this LINE's own decision: settled by hand without it, so a
+        person took it off. The invoice paying elsewhere says nothing."""
         reader = self.export()
         InvoicePayment.objects.filter(invoice=self.invoice_a).update(transaction=self.unlinked)
         run = import_archive(reader, MERGE)
@@ -459,12 +501,50 @@ class LinkTests(BankData, TestCase):
             bank_report(run).conflicts,
             [
                 (
-                    "Opération du 02/07/2026 (EPICERIE LILAS, -12,30 €) : la facture Épicerie des Lilas n° T-101 du "
-                    "01/07/2026 est déjà payée par l'opération du 10/07/2026 — lien ignoré"
+                    "Opération du 02/07/2026 (EPICERIE LILAS, -12,30 €) : réglée à la main ici sans payer Épicerie "
+                    "des Lilas n° T-101 du 01/07/2026, qu'elle paie dans l'archive — gardée telle quelle"
                 )
             ],
         )
         self.assertEqual(InvoicePayment.objects.get(invoice=self.invoice_a).transaction, self.unlinked)
+
+    def test_a_line_nobody_settled_takes_its_link_although_another_line_pays_it(self):
+        # The automatic pass linked this one and no person touched it; here
+        # the invoice is paid by a second line. Refused, an invoice settled
+        # in two goes could never be restored at all.
+        reader = self.export()
+        InvoicePayment.objects.filter(invoice=self.invoice_b).update(transaction=self.unlinked)
+        run = import_archive(reader, MERGE)
+        self.assertEqual(bank_report(run).conflicts, [])
+        self.assertEqual(
+            set(InvoicePayment.objects.filter(invoice=self.invoice_b).values_list("transaction_id", flat=True)),
+            {self.auto.pk, self.unlinked.pk},
+        )
+
+    def test_an_invoice_paid_by_two_lines_comes_back_on_both(self):
+        pay(self.unlinked, self.invoice_c)
+        reader = self.export()
+        wipe_bank()
+        run = import_archive(reader, MERGE)
+        self.assertEqual(bank_report(run).conflicts, [])
+        self.assertEqual(InvoicePayment.objects.filter(invoice=self.invoice_c).count(), 2)
+
+    def test_replace_puts_an_invoice_paid_by_two_lines_back_on_both(self):
+        pay(self.unlinked, self.invoice_c)
+        reader = self.export()
+        wipe_bank()
+        run = import_archive(reader, REPLACE)
+        self.assertEqual(bank_report(run).conflicts, [])
+        self.assertEqual(InvoicePayment.objects.filter(invoice=self.invoice_c).count(), 2)
+
+    def test_merging_an_export_of_an_invoice_paid_twice_changes_nothing(self):
+        # Both links are already here: « inchangé ». Keyed by the invoice
+        # alone rather than by the pair, the second payment answered for the
+        # first and the round trip reported a conflict about nothing.
+        pay(self.unlinked, self.invoice_c)
+        run = import_archive(self.export(), MERGE)
+        self.assertEqual(bank_report(run).conflicts, [])
+        self.assertEqual((tally(run, PAYMENTS).created, tally(run, PAYMENTS).unchanged), (0, 5))
 
     def test_a_missing_link_of_a_line_nobody_settled_is_added(self):
         # A line the automatic pass linked and no person touched: its link

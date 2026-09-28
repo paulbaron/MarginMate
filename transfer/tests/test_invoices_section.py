@@ -148,6 +148,7 @@ def build_invoices() -> dict:
     bottle = make_product(metro, "VODKA ESSAI 70CL", stock_type=vodka, unit=UnitChoices.UNIT, stock_equivalent="0.7")
     weighed = make_product(metro, "JAMBON ESSAI AU POIDS", stock_type=ham, unit=UnitChoices.KILOGRAM)
     napkins = make_product(metro, "SERVIETTES ESSAI", ean="3000000000017")
+    delivery = make_product(metro, "LIVRAISON ESSAI", is_expense=True)
 
     invoice = imported(
         make_invoice(
@@ -169,7 +170,22 @@ def build_invoices() -> dict:
             vat_rate=D("0.0550"),
         ),
         make_invoice_line(invoice, napkins, quantity=D("2"), total_ht="3.00", unit_cost_ht="1.5000", colisage=2, category="Hygiène"),
+        # A delivery shared over the lines above it: the flag AND the shares
+        # have to ride in the archive, or a restored invoice comes back with
+        # the delivery waiting in the review queue and every unit priced
+        # below what it cost (transfer.sections.invoices.LINE_FIELDS).
+        make_invoice_line(
+            invoice, delivery, raw_name="LIVRAISON ESSAI", quantity=D("1"), total_ht="6.47",
+            unit_cost_ht="6.4700", vat_rate=D("0.2000"), is_spread_charge=True,
+        ),
     ]
+    # The shares first, then the movements - replace_invoice_lines' own
+    # order, and the reason for it: a movement booked before the delivery
+    # was shared out is priced below what the line cost, and nothing
+    # recreates it until somebody happens to save the page again.
+    for line, share in zip(lines, ("5.71", "0", "0.42", "0.30", "0")):
+        line.spread_ht = D(share)
+        line.save(update_fields=["spread_ht"])
     for line in lines:
         services.create_stock_movement_for_line(line)
 
@@ -257,7 +273,7 @@ class GuardTests(MediaMixin, TestCase):
         count = registry.get("factures").count()
         self.assertEqual(
             {name: count[name] for name in ("documents", "lignes", "fichiers")},
-            {"documents": 7, "lignes": 8, "fichiers": 8},
+            {"documents": 7, "lignes": 9, "fichiers": 8},
         )
         self.assertEqual(count["Mo de fichiers"], 0)
 
@@ -349,7 +365,13 @@ class RoundTripTests(MediaMixin, TestCase):
         invoice = Invoice.objects.get(invoice_number="M-0001")
         self.assertEqual(
             [(line.quantity, line.total_ht) for line in invoice.lines.order_by("id")],
-            [(D("6.000"), D("57.00")), (D("-1.000"), D("-9.50")), (D("0.350"), D("4.20")), (D("2.000"), D("3.00"))],
+            [
+                (D("6.000"), D("57.00")),
+                (D("-1.000"), D("-9.50")),
+                (D("0.350"), D("4.20")),
+                (D("2.000"), D("3.00")),
+                (D("1.000"), D("6.47")),
+            ],
         )
         receipt = Invoice.objects.get(source_sha256__gt="")
         self.assertEqual(receipt.vat_breakdown, [["0.055", "-2.76", "-0.15"], ["0.2", "100.00", "20.00"]])
@@ -379,7 +401,7 @@ class IdempotenceTests(MediaMixin, TestCase):
     def test_merge_says_everything_is_unchanged(self):
         report = import_archive(self.reader, MERGE).section("factures")
         self.assertEqual(report.tallies["documents"].unchanged, 7)
-        self.assertEqual(report.tallies["lignes"].unchanged, 8)
+        self.assertEqual(report.tallies["lignes"].unchanged, 9)
         self.assertEqual(report.tallies["fichiers"].unchanged, 8)
         self.assertEqual((report.conflicts, report.skipped, report.kept, report.notes), ([], [], [], []))
         self.assertFalse(report.changes)
@@ -413,7 +435,7 @@ class FileCountTests(MediaMixin, TestCase):
         self.assertEqual(report.tallies["documents"].updated, 1)
         files = report.tallies["fichiers"]
         self.assertEqual((files.created, files.updated, files.deleted, files.unchanged), (0, 0, 0, 8))
-        self.assertEqual(report.tallies["lignes"].unchanged, 8)
+        self.assertEqual(report.tallies["lignes"].unchanged, 9)
 
     def test_a_file_given_back_leaves_the_rest_of_its_document_counted(self):
         default_storage.delete("receipts/2026/09/ticket_essai_apercu.jpg")
@@ -421,7 +443,7 @@ class FileCountTests(MediaMixin, TestCase):
         self.assertEqual(report.tallies["documents"].updated, 1)
         files = report.tallies["fichiers"]
         self.assertEqual((files.created, files.updated, files.deleted, files.unchanged), (1, 0, 0, 7))
-        self.assertEqual(report.tallies["lignes"].unchanged, 8)
+        self.assertEqual(report.tallies["lignes"].unchanged, 9)
 
     def test_a_document_in_conflict_is_counted_by_its_conflict_alone(self):
         # Guard: a document kept as it is, said as a conflict, is not also
@@ -431,7 +453,7 @@ class FileCountTests(MediaMixin, TestCase):
         self.assertEqual(len(report.conflicts), 1)
         self.assertEqual(report.tallies["documents"].unchanged, 6)
         self.assertEqual(report.tallies["fichiers"].unchanged, 6)
-        self.assertEqual(report.tallies["lignes"].unchanged, 7)
+        self.assertEqual(report.tallies["lignes"].unchanged, 8)
 
 
 class MergeAndReplaceTests(MediaMixin, TestCase):

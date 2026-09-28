@@ -18,20 +18,31 @@ c'est là qu'il dit ce qui a changé (views._messages_by_place).
     <div class="page-header">
         <div>
             <h1>Marges</h1>
+            {% comment %}
+            « Facturé » dès la première phrase, et le lien vers « Dépenses » à côté : les
+            deux pages comptent deux choses et chacune doit dire laquelle (voir CLAUDE.md,
+            « Dépenses par catégorie »). « Ce qui est sorti » est le mot que l'autre page
+            emploie pour le relevé, et il était ici le premier mot lu.
+            {% endcomment %}
             <p class="page-subtitle">
-                Ce qui est entré face à ce qui est sorti, sur une période : la marge réelle (toutes les
-                factures, charges comprises), la marge produits (ce que les recettes vendues ont consommé)
-                et le détail par catégorie de la caisse.
+                Ce qui a été <strong>facturé</strong> face à ce qui a été vendu, sur une période, à la date
+                des factures : la marge réelle (toutes les factures, charges comprises), la marge produits
+                (ce que les recettes vendues ont consommé) et le détail par catégorie de la caisse.
+            </p>
+            <p class="muted">
+                Ce n'est pas la même question que <a href="{{ spending_url }}">Dépenses</a>, qui compte ce
+                qui est <strong>sorti du compte</strong>, à la date où la banque a pris l'argent.
             </p>
         </div>
         <div class="actions">
             <a class="btn btn-secondary" href="{{ documents_url }}">Les factures de la période</a>
             <a class="btn btn-secondary" href="{{ sales_url }}">Les ventes de la période</a>
+            <a class="btn btn-secondary" href="{{ spending_url }}">Dépenses par catégorie</a>
         </div>
     </div>
 
     {% comment %}
-    Les dates : les mêmes « du … au … » que les quatre autres pages, avec les
+    Les dates : les mêmes « du … au … » que les cinq autres pages, avec les
     deux bornes incluses (common.date_range). « Depuis le début » est une
     période nommée qui l'emporte sur les dates, comme le mois de Banque ou
     l'inventaire de Produits & charges : les champs sont alors désactivés et

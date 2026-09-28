@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load assets %}
 {% block title %}{{ recipe.name }} - MarginMate{% endblock %}
 {% block content %}
     <div class="page-header">
@@ -18,9 +19,41 @@
     <p class="muted">
         {% if recipe.category %}{{ recipe.category }} · {% endif %}
         Produit : {{ recipe.yield_quantity|floatformat:2 }} {{ recipe.get_yield_unit_display }}
-        · Prix de vente : {{ recipe.selling_price_ttc|floatformat:2 }} € TTC
-        ({{ recipe.selling_price_ht|floatformat:2 }} € HT, TVA {{ recipe.vat_percent|floatformat:0 }} %)
-        {% if recipe.happy_hour_price_ttc %}
+        {% comment %}
+        Ce qu'une vente prélève, dit seulement quand ce n'est pas la
+        préparation entière : sur une recette vendue 1 pour 1, « vendu par 1 »
+        est du bruit sur presque toutes les recettes.
+        {% endcomment %}
+        {% if recipe.is_sold_directly and recipe.servings_per_batch != 1 %}
+            · Vendu par {{ recipe.sale_quantity|quantity }} {{ recipe.get_yield_unit_display }}
+            ({{ recipe.servings_per_batch|floatformat:"-2" }} par préparation)
+        {% endif %}
+        {% comment %}
+        Un prix vide dit « pas vendue directement » et c'est la seule chose qui
+        le dise (Recipe.is_sold_directly) : jamais le fait d'être utilisée dans
+        une autre recette - quinze des seize sous-recettes sont vendues aussi -
+        ni un 0, qui est un prix que quelqu'un a saisi.
+        {% endcomment %}
+        {% if recipe.is_sold_directly %}
+            · Prix de vente : {{ recipe.selling_price_ttc|floatformat:2 }} € TTC
+            ({{ recipe.selling_price_ht|floatformat:2 }} € HT, TVA {{ recipe.vat_percent|floatformat:0 }} %)
+        {% else %}
+            {% comment %}
+            Un prix vide dit « pas vendue » et rien d'autre : il ne dit pas
+            qu'une autre recette l'utilise. L'affirmer serait l'inférence
+            interdite prise à l'envers, et une préparation que personne
+            n'utilise est justement le cas qui mérite d'être dit - rien ne
+            compte alors ce qu'elle coûte.
+            {% endcomment %}
+            · <strong>Pas vendue directement</strong>
+            {% if recipe.used_in.exists %}
+                : une préparation utilisée dans d'autres recettes.
+            {% else %}
+                : et utilisée dans aucune recette — rien ne compte ce qu'elle coûte.
+            {% endif %}
+        {% endif %}
+        {# Un prix en happy hour sur ce qui n'est pas vendu : la page dirait les deux. #}
+        {% if recipe.is_sold_directly and recipe.happy_hour_price_ttc %}
             · Happy hour : {{ recipe.happy_hour_price_ttc|floatformat:2 }} € TTC
             ({{ recipe.happy_hour_price_ht|floatformat:2 }} € HT)
         {% endif %}
@@ -29,6 +62,20 @@
             {% for ri in recipe.used_in.all %}<a href="{% url 'recipes:recipe_detail' ri.recipe_id %}">{{ ri.recipe.name }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
         {% endif %}
     </p>
+
+    {% comment %}
+    Un prix effacé par erreur sur une recette que la caisse vend vraiment
+    retire la marge de cette fiche et de l'onglet Recettes sans que rien ne
+    le signale - et « Marges » continue de la chiffrer, puisque le chiffre
+    d'affaires vient de la caisse et jamais de ce champ.
+    {% endcomment %}
+    {% if not recipe.is_sold_directly and till_products %}
+        <div class="message message-error">
+            Sans prix de vente, mais <strong>la caisse la vend</strong> :
+            {{ units_sold }} vendu{{ units_sold|pluralize }} en tout. Donnez-lui son prix,
+            ou détachez le produit de caisse.
+        </div>
+    {% endif %}
 
     <div class="card till-summary">
         <strong>Vendue en caisse sous</strong>
@@ -144,8 +191,24 @@
         <p class="muted" style="text-align:right; margin-top:0.5rem;">
             Coût total (HT) pour {{ recipe.yield_quantity|floatformat:2 }} {{ recipe.get_yield_unit_display }} :
             <strong style="color:var(--text);">{{ variation.cost_ht|floatformat:2 }} €</strong>
+            {% comment %}
+            Le coût d'UNE VENTE, qui est ce que « Marges » compte et ce que la
+            vente prélève du stock - le coût du lot au-dessus n'est celui d'une
+            vente que si la vente est la préparation entière.
+            {% endcomment %}
+            {% if recipe.servings_per_batch != 1 %}
+                <br>soit, pour une vente de {{ recipe.sale_quantity|quantity }} {{ recipe.get_yield_unit_display }} :
+                <strong style="color:var(--text);">{{ variation.cost_per_sale_ht|floatformat:2 }} €</strong>
+            {% endif %}
         </p>
 
+        {% comment %}
+        Sans prix il n'y a pas de marge, pas de pourcentage et pas de facteur :
+        la page ne les montre pas du tout plutôt que d'aligner des « — », et dit
+        à la place ce qu'il y a à savoir - ce que la préparation coûte est
+        au-dessus.
+        {% endcomment %}
+        {% if recipe.is_sold_directly %}
         <div style="display:flex; gap:2rem; flex-wrap:wrap; margin-top:0.75rem;">
             <p>
                 Marge HT : <strong style="color:var(--green);">{{ variation.margin_ht|floatformat:2 }} €</strong>
@@ -160,6 +223,12 @@
             </p>
             {% endif %}
         </div>
+        {% else %}
+        <p class="muted" style="margin-top:0.75rem;">
+            Pas de marge : cette recette n'est pas vendue telle quelle. Ce qu'elle
+            coûte est compté dans les recettes qui l'utilisent.
+        </p>
+        {% endif %}
 
         {% if pie_svg %}
             <h4 style="margin-top:1rem;">Répartition du coût par ingrédient</h4>

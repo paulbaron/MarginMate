@@ -6,6 +6,8 @@ the sales per recipe an import rebuilds are compared with what the app wrote,
 not with a copy of the rebuild.
 """
 
+import json
+import zipfile
 from datetime import datetime
 from datetime import timezone as dt_timezone
 from decimal import Decimal
@@ -15,6 +17,7 @@ from django.test import TestCase
 from inventory.models import StockType
 from recipes.forms import MANUAL_SALE_SOURCE
 from recipes.models import (
+    PosDailyPayment,
     PosProduct,
     PosProductDailyQuantity,
     Recipe,
@@ -23,9 +26,10 @@ from recipes.models import (
     SaleDocumentLine,
 )
 from transfer.archive import ArchiveError
+from transfer.registry import INFO
 from transfer.runner import run_clear
 from transfer.sections.base import Strategy
-from transfer.sections.sales import SalesSection
+from transfer.sections.sales import PAYMENTS, PAYMENTS_NOTE, SalesSection
 from transfer.sections.till_links import laddition_rows
 from transfer.tests.support import db_fingerprint, forge, import_archive, round_trip
 from transfer.tests.test_recipes_section import LaneSectionsMixin, tally
@@ -386,3 +390,95 @@ class SalesClearTests(LaneSectionsMixin, TestCase):
         self.assertEqual(tally(run, "ventes", "ventes par recette"), (0, 0, 4, 0))
         self.assertEqual(tally(run, "ventes", "bons de vente"), (0, 0, 3, 0))
         self.assertEqual(tally(run, "ventes", "produits caisse"), (0, 0, 1, 0))
+
+
+def pay(n: int, method: str, amount: str, payments: int = 1) -> PosDailyPayment:
+    """A till day's payments by one method (invented amounts)."""
+    return PosDailyPayment.objects.create(sold_on=day(n), method=method, amount=Decimal(amount), payments=payments)
+
+
+def payments_held() -> list[tuple]:
+    return list(PosDailyPayment.objects.values_list("sold_on", "method", "amount"))
+
+
+def archived_payload(reader) -> dict:
+    """The « ventes » section's JSON as the archive holds it."""
+    with zipfile.ZipFile(reader.path) as archive:
+        return json.loads(archive.read("ventes.json"))
+
+
+class SalesPaymentsTests(LaneSectionsMixin, TestCase):
+    """The till's means of payment per day are NOT in the archive: like the
+    day's money, they are re-read from the exports on disk
+    (`manage.py laddition_backfill_payments`). So a clear deletes them and
+    says how to bring them back, a « Remplacer » deletes those of the days
+    it leaves with no sales, and nothing else touches them."""
+
+    def setUp(self):
+        super().setUp()
+        build_sales()  # till days 1, 2 and 3
+
+    def test_the_page_says_the_amounts_do_not_travel(self):
+        self.assertIn("ne voyagent pas", INFO["ventes"].description)
+        self.assertIn("laddition_backfill_payments", INFO["ventes"].description)
+
+    def test_the_archive_does_not_carry_them_and_the_counts_do_not_name_them(self):
+        """count() is what the import tab sets beside the archive's counts:
+        a row the archive cannot carry would read as always missing."""
+        pay(1, PosDailyPayment.CARD, "120.00", 9)
+        reader = self.export(EXPORTED)
+        self.assertNotIn(PAYMENTS, SalesSection().count())
+        self.assertNotIn(PAYMENTS, reader.counts("ventes"))
+        self.assertEqual(set(archived_payload(reader)) & {"payments", "paiements"}, set())
+
+    def test_clear_deletes_every_payment_and_says_how_to_bring_them_back(self):
+        pay(1, PosDailyPayment.CARD, "120.00", 9)
+        pay(1, PosDailyPayment.CASH, "35.50", 4)
+        pay(9, PosDailyPayment.CARD, "12.00")  # a day with no sales stored
+        run = run_clear({"ventes"}, preview=False)
+        self.assertEqual(PosDailyPayment.objects.count(), 0)
+        self.assertEqual(tally(run, "ventes", PAYMENTS), (0, 0, 3, 0))
+        self.assertIn(PAYMENTS_NOTE, run.section("ventes").notes)
+
+    def test_a_preview_of_the_clear_deletes_nothing_and_announces_it(self):
+        pay(1, PosDailyPayment.CARD, "120.00", 9)
+        before = db_fingerprint()
+        preview = run_clear({"ventes"}, preview=True)
+        self.assertEqual(db_fingerprint(), before)
+        self.assertEqual(tally(preview, "ventes", PAYMENTS), (0, 0, 1, 0))
+
+    def test_a_clear_with_no_payments_says_nothing_about_them(self):
+        run = run_clear({"ventes"}, preview=False)
+        self.assertEqual(tally(run, "ventes", PAYMENTS), (0, 0, 0, 0))
+        self.assertNotIn(PAYMENTS_NOTE, run.section("ventes").notes)
+
+    def test_replace_deletes_the_payments_of_the_days_it_leaves_without_sales(self):
+        """Day 3 is gone from the archive: « Remplacer » prunes its sales, and
+        its payments go with them - money for a day « Ventes » does not hold
+        is a figure the sales pages contradict. Day 1 keeps its sales, so it
+        keeps its payments: the archive has none to put in their place."""
+        PosProductDailyQuantity.objects.filter(sold_on=day(3)).delete()
+        reader = self.export(EXPORTED)
+        PosProductDailyQuantity.objects.create(
+            product=PosProduct.objects.get(name="Pinte IPA"), sold_on=day(3), quantity=25
+        )
+        pay(1, PosDailyPayment.CARD, "120.00", 9)
+        pay(3, PosDailyPayment.CARD, "80.00", 6)
+        pay(3, PosDailyPayment.CASH, "14.00", 2)
+        run = import_archive(reader, SALES_REPLACED)
+        self.assertEqual(payments_held(), [(day(1), PosDailyPayment.CARD, Decimal("120.00"))])
+        self.assertEqual(tally(run, "ventes", PAYMENTS), (0, 0, 2, 0))
+        self.assertIn(PAYMENTS_NOTE, run.section("ventes").notes)
+
+    def test_merge_and_replace_of_the_same_data_leave_the_payments_alone(self):
+        pay(1, PosDailyPayment.CARD, "120.00", 9)
+        pay(2, PosDailyPayment.CHEQUE, "50.00")
+        reader = self.export(EXPORTED)
+        for strategy in (MERGE, SALES_REPLACED):
+            with self.subTest(strategy=strategy):
+                before = db_fingerprint()
+                run = import_archive(reader, strategy)
+                self.assertEqual(db_fingerprint(), before)
+                self.assertEqual(tally(run, "ventes", PAYMENTS), (0, 0, 0, 0))
+                self.assertEqual(run.section("ventes").notes, [])
+

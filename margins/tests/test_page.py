@@ -331,6 +331,24 @@ class OneSellingDayTests(TestCase):
     def test_the_page_says_what_it_is_for(self):
         self.assertContains(self.page(), "page-subtitle")
 
+    def test_the_page_says_it_counts_what_was_invoiced_and_points_at_depenses(self):
+        """Two bases, two figures, and each page has to say which it is and
+        link to the other. « Dépenses » does; this one said « ce qui est
+        sorti » in its first sentence - the words the OTHER page uses for the
+        statement - and named « facturé » a hundred lines further down, where
+        a reader arriving from the topbar never sees it.
+        """
+        page = self.page()
+        self.assertContains(page, "facturé")
+        self.assertContains(page, reverse("bank:spending_home"))
+        self.assertContains(page, "sorti du compte")
+
+    def test_the_link_to_depenses_carries_the_period_being_read(self):
+        """The two pages are compared over the same dates or they are not
+        compared at all."""
+        page = self.client.get(reverse("margins:margins_home"), {"du": "2026-06-01", "au": "2026-06-30"})
+        self.assertContains(page, f"{reverse('bank:spending_home')}?du=2026-06-01&amp;au=2026-06-30")
+
 
 class NothingCostedTests(TestCase):
     """A window whose every sale is a planche: there is no products margin to

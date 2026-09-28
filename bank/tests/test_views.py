@@ -69,10 +69,12 @@ class BankPageTests(Fixtures, TestCase):
         self.act(rent, "link", invoice=[self.receipt.pk])
         self.assertEqual(InvoicePayment.objects.get(invoice=self.receipt).transaction, rent)
 
-    def test_an_invoice_already_paid_is_refused_and_said_so(self):
-        response = self.act(self.line("BAILLEUR EXEMPLE"), "link", invoice=[self.metro.pk])
-        self.assertEqual(InvoicePayment.objects.get(invoice=self.metro).transaction, self.line("METRO FRANCE"))
-        self.assertContains(self.client.get(response.url), "Déjà rattachée")
+    def test_an_invoice_already_paid_is_linked_again_and_both_rows_say_so(self):
+        # Rare, and real: one document settled by two operations. What used
+        # to happen here is that the link was refused outright.
+        self.act(self.line("BAILLEUR EXEMPLE"), "link", invoice=[self.metro.pk])
+        self.assertEqual(InvoicePayment.objects.filter(invoice=self.metro).count(), 2)
+        self.assertContains(self.client.get(self.url, {"vue": "rapprochees"}), "Aussi réglée par", count=2)
 
     def test_no_invoice_then_back_to_the_automatic_pass(self):
         rent = self.line("BAILLEUR EXEMPLE")

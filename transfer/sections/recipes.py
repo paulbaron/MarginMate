@@ -41,7 +41,10 @@ from transfer.archive import ArchiveError
 from transfer.keys import fold
 from transfer.sections.base import Section
 
-RECIPE_FIELDS = ("category", "yield_quantity", "yield_unit", "selling_price_ttc", "happy_hour_price_ttc", "vat_rate")
+RECIPE_FIELDS = (
+    "category", "yield_quantity", "yield_unit", "sale_quantity",
+    "selling_price_ttc", "happy_hour_price_ttc", "vat_rate",
+)
 STAMP = "created_at"
 RECIPE_KEYS = ("name", *RECIPE_FIELDS, STAMP, "ingredients")
 INGREDIENT_KEYS = ("group", "article", "recipe", "quantity")
@@ -64,6 +67,7 @@ LABELS = {
     "category": "catégorie",
     "yield_quantity": "quantité produite",
     "yield_unit": "unité produite",
+    "sale_quantity": "quantité vendue",
     "selling_price_ttc": "prix de vente",
     "happy_hour_price_ttc": "prix happy hour",
     "vat_rate": "TVA",

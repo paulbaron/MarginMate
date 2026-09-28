@@ -166,3 +166,68 @@ class RulePageTests(Fixtures, TestCase):
     def test_an_empty_rules_page_offers_the_next_step(self):
         IgnoreRule.objects.all().delete()
         self.assertContains(self.client.get(self.url), "empty-state")
+
+
+class RuleCategoryTests(Fixtures, TestCase):
+    """A rule's category is editable from the rules page.
+
+    « Dépenses » tells the reader that giving a category to a rule is THE way
+    to stop typing the same word every month - and every rule written before
+    that field exists carries none. With no control here, correcting a typo
+    meant deleting the rule and retyping its pattern, with nothing stopping a
+    duplicate.
+    """
+
+    def setUp(self):
+        self.load(debit_row(date(2026, 7, 16), "URSSAF D ILE DE FRANCE", "700,00"))
+        self.rule = IgnoreRule.objects.create(pattern="URSSAF", description="Cotisations")
+        self.url = reverse("bank:rule_list")
+        self.action = reverse("bank:rule_action", args=[self.rule.pk])
+
+    def test_the_page_offers_a_category_for_every_rule(self):
+        page = self.client.get(self.url)
+        self.assertContains(page, 'name="categorie"')
+        self.assertContains(page, 'value="category"')
+        assertNoUnrenderedTemplateSyntax(self, page)
+
+    def test_a_category_given_to_a_rule_is_stored_and_said(self):
+        answer = self.client.post(self.action, {"action": "category", "categorie": "Charges sociales"})
+        self.rule.refresh_from_db()
+        self.assertEqual(self.rule.category, "Charges sociales")
+        self.assertContains(self.client.get(answer.url), "Charges sociales")
+
+    def test_a_category_is_cleaned_the_way_a_lines_own_is(self):
+        """It reaches the same column and the same pie, so it takes the same
+        guards: a control character is « A string literal cannot contain NUL »
+        on the INSERT, and an over-wide string is Django's problem on every
+        read afterwards."""
+        self.client.post(self.action, {"action": "category", "categorie": "Char\x00ges   sociales "})
+        self.rule.refresh_from_db()
+        self.assertEqual(self.rule.category, "Charges sociales")
+
+        self.client.post(self.action, {"action": "category", "categorie": "X" * 400})
+        self.rule.refresh_from_db()
+        self.assertEqual(len(self.rule.category), 255)
+
+    def test_a_category_taken_off_a_rule_says_what_its_spending_counts_as(self):
+        self.rule.category = "Charges sociales"
+        self.rule.save(update_fields=["category"])
+        answer = self.client.post(self.action, {"action": "category", "categorie": ""})
+        self.rule.refresh_from_db()
+        self.assertEqual(self.rule.category, "")
+        self.assertContains(self.client.get(answer.url), "Sans catégorie")
+
+    def test_the_pattern_is_never_touched_by_a_category(self):
+        """Editing what a rule DECIDES ON in passing would silently change
+        which lines it catches."""
+        self.client.post(
+            self.action, {"action": "category", "categorie": "Charges sociales", "pattern": "TOUT"}
+        )
+        self.rule.refresh_from_db()
+        self.assertEqual(self.rule.pattern, "URSSAF")
+
+    def test_a_rules_category_reaches_the_spending_page(self):
+        self.client.post(self.action, {"action": "category", "categorie": "Charges sociales"})
+        page = self.client.get(reverse("bank:spending_home"), {"du": "2026-07-01", "au": "2026-07-31"})
+        self.assertContains(page, "Charges sociales")
+        self.assertContains(page, "par règle")

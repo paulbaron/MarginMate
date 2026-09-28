@@ -123,6 +123,67 @@ def _needle(identifier: str) -> str:
     return re.sub(r"[.-]", "", identifier.partition(":")[2])[-9:]
 
 
+class TypedIdentifierError(ValueError):
+    """What a person typed is not one of these, and the sentence saying so."""
+
+
+#: Said where nothing at all could be read out of what was typed.
+TYPE_ONE = (
+    "Tapez un n° SIREN (neuf chiffres), un n° SIRET, un n° de TVA, "
+    "un numéro de téléphone ou un site (exemple.fr)."
+)
+
+
+def read_typed(text: str) -> str:
+    """One identifier as a person typed it, as the key this module stores.
+
+    **Read by the very function that reads a printed page**
+    (`_line_identifiers`), so a figure typed by hand and the same figure
+    found on a document can never come out as two different keys - which
+    would file one supplier's documents under two rules, one of them
+    invisible. The word SIREN is put in front of it because that is what
+    makes a bare run of nine digits a company number rather than a phone
+    number to that reader; every other shape says what it is on its own.
+
+    Raises `TypedIdentifierError` - a ValueError carrying a French
+    sentence - rather than guessing: a misread identifier names a shop, and
+    a person typing one is entitled to be told which digit is wrong.
+    """
+    typed = " ".join(str(text or "").split())
+    if not typed:
+        raise TypedIdentifierError("Tapez un identifiant.")
+    found = _line_identifiers(f"SIREN {typed}")
+    if len(found) == 1:
+        return next(iter(found))
+    if len(found) > 1:
+        raise TypedIdentifierError(
+            "Tapez un seul identifiant à la fois : "
+            + ", ".join(describe(identifier) for identifier in sorted(found))
+            + "."
+        )
+    raise TypedIdentifierError(_why_not(typed))
+
+
+def _why_not(typed: str) -> str:
+    """Why nothing could be read, named as precisely as the figure allows: a
+    refusal that only says « non » is one nobody can answer."""
+    digits = re.sub(r"\D", "", typed)
+    if not digits and "." in typed:
+        return "Un site s'écrit comme une adresse : exemple.fr."
+    if not digits:
+        return TYPE_ONE
+    if len(digits) == SIREN_LENGTH:
+        return "Ce n'est pas un n° SIREN : sa clé de contrôle ne tombe pas juste. Vérifiez les neuf chiffres."
+    if len(digits) == SIRET_LENGTH:
+        return "Ce n'est pas un n° SIRET : sa clé de contrôle ne tombe pas juste. Vérifiez les quatorze chiffres."
+    if len(digits) == 10:
+        return "Un numéro de téléphone français a dix chiffres et commence par 0 : 01 23 45 67 89."
+    return (
+        f"{len(digits)} chiffre{'s' if len(digits) > 1 else ''} : un n° SIREN en a neuf, "
+        "un n° SIRET quatorze, un téléphone dix."
+    )
+
+
 def describe(identifier: str) -> str:
     """An identifier as the operator reads it."""
     kind, _, value = identifier.partition(":")

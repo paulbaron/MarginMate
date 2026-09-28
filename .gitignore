@@ -5,6 +5,9 @@ db.sqlite3*
 db.sqlite3.bak*
 huey.sqlite3
 huey.sqlite3-*
+# The copies `manage.py test --parallel` makes of the in-memory test
+# database (default_1.sqlite3...), left behind when a run is interrupted.
+default_*.sqlite3
 .env
 /media/
 /staticfiles/
@@ -13,3 +16,6 @@ huey.sqlite3-*
 *.log
 /backups/
 /imports/
+# The timesheet signatures: signing keys, signed PDFs, drawn signatures,
+# proof files (settings.STAFF_PRIVATE_DIR's default).
+/private/

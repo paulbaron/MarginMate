@@ -9,7 +9,7 @@ from django.core.validators import MinValueValidator, MaxValueValidator
 from django.db import models
 from django.utils import timezone
 
-from common import JobLogMixin
+from common import JobLogMixin, search_key
 
 from inventory.models import StockType, UnitChoices
 
@@ -94,6 +94,21 @@ class Recipe(models.Model):
     per-unit price a parent recipe can multiply by however much of it it
     actually uses (unit_cost_ht()).
 
+    `sale_quantity` is the other half, and a different question: how much of
+    that a SINGLE SALE takes, in the same unit. A terrine produces 1,6 kg
+    and is sold in 150 g plates, so one sale is 0,15 of 1,6 - see
+    `sold_share`, which is what the cost and the consumption of one sale are
+    worked out from. It defaults to 1, which is what both readers assumed
+    before it existed, so a recipe that says nothing keeps exactly the cost
+    and the consumption it had.
+
+    The two must not be confused. `unit_cost_ht` and `unit_cost_bounds` are
+    per YIELD UNIT and have nothing to do with `sale_quantity`: a parent
+    recipe buys this one by the unit produced, and how it is sold over the
+    counter is none of the parent's business - folded in there, a syrup sold
+    by the glass would price a cocktail using 2 cl of it as if it drank the
+    glass.
+
     A recipe can also have VARIATIONS: ingredients sharing the same `group`
     (see RecipeIngredient) are alternatives to each other (e.g. "4cl Vodka"
     OR "5cl Gin"), and variations() is the cartesian product of one choice
@@ -123,9 +138,24 @@ class Recipe(models.Model):
         help_text="Quantité produite par une préparation complète de cette recette.",
     )
     yield_unit = models.CharField(max_length=4, choices=UnitChoices.choices, default=UnitChoices.UNIT)
+    sale_quantity = models.DecimalField(
+        max_digits=10, decimal_places=4, default=Decimal("1"),
+        # Positive for the same reason yield_quantity is: it is what a
+        # serving is measured in, and a sale of nothing is not a sale.
+        validators=[MinValueValidator(Decimal("0.0001"))],
+        help_text=(
+            "Ce qu'une vente prélève sur une préparation complète, dans l'unité produite. "
+            "Un cocktail vend 1 pour 1 produit ; une terrine de 1,6 kg vendue en parts de "
+            "150 g vend 0,15."
+        ),
+    )
     selling_price_ttc = models.DecimalField(
-        max_digits=8, decimal_places=2, validators=[MinValueValidator(Decimal("0"))],
-        help_text="Prix de vente affiché (TTC).",
+        max_digits=8, decimal_places=2, null=True, blank=True,
+        validators=[MinValueValidator(Decimal("0"))],
+        help_text=(
+            "Prix de vente affiché (TTC). Laissez vide pour une préparation qui n'est pas "
+            "vendue telle quelle : un sirop, une infusion, utilisés dans d'autres recettes."
+        ),
     )
     happy_hour_price_ttc = models.DecimalField(
         max_digits=8, decimal_places=2, null=True, blank=True,
@@ -182,7 +212,26 @@ class Recipe(models.Model):
         return divisor if divisor else Decimal("1")
 
     @property
-    def selling_price_ht(self) -> Decimal:
+    def is_sold_directly(self) -> bool:
+        """Whether this recipe is sold over the counter as itself.
+
+        A blank price is the ONE thing that says it is not, and nothing
+        infers it. Never from being used as a sub-recipe: most recipes used
+        as one are sold too - a cocktail is poured into a jug and sold by
+        the glass. Never from a 0 either:
+        a 0 is a price somebody typed, and a comped drink is sold, at
+        nothing.
+        """
+        return self.selling_price_ttc is not None
+
+    @property
+    def selling_price_ht(self) -> Decimal | None:
+        """None for a preparation nobody buys - and `_price_metrics` and
+        `_price_factor_range` already answer None to that, which is what
+        keeps a margin off the page rather than printing a loss against a
+        price that does not exist."""
+        if self.selling_price_ttc is None:
+            return None
         return self.selling_price_ttc / self._vat_divisor
 
     @property
@@ -368,12 +417,24 @@ class Recipe(models.Model):
         selling_price_ht = self.selling_price_ht
         # Margin and margin% are highest when the cost is lowest, so the
         # bounds swap over.
-        cheap = self._price_metrics(selling_price_ht, min_cost)
-        dear = self._price_metrics(selling_price_ht, max_cost)
+        # A price is what ONE SALE fetches, so the cost it is put against
+        # has to be one sale's too (`per_sale`). Batch against sale, the page
+        # reads a loss on anything made in quantity: a recipe yielding 10
+        # that costs 6,00 € the batch and sells at 4,00 € HT had its own page
+        # say « marge -2,00 € · facteur x0,67 » while « Marges » costed the
+        # same sale at one tenth and read a healthy margin - two pages of
+        # this app a factor of the yield apart, on a recipe the till sells.
+        cheap = self._price_metrics(selling_price_ht, self.per_sale(min_cost))
+        dear = self._price_metrics(selling_price_ht, self.per_sale(max_cost))
 
         return {
             "variation_count": variation_count,
+            # Deliberately the WHOLE preparation: it is what the detail page
+            # prints as « Coût total pour 1,60 kg » and what
+            # `unit_cost_bounds` divides by the yield for a parent recipe.
+            # Scaled here, the portion would be applied twice.
             "cost_range": (min_cost, max_cost),
+            "cost_per_sale_range": (self.per_sale(min_cost), self.per_sale(max_cost)),
             "margin_range": _bounds(dear["margin_ht"], cheap["margin_ht"]),
             "margin_percent_range": _bounds(dear["margin_percent"], cheap["margin_percent"]),
             "price_factor_range": self._price_factor_range(
@@ -396,7 +457,12 @@ class Recipe(models.Model):
         exactly ONE group pay its own smallest non-zero cost while every other
         stays at its minimum. Any second group going positive only adds.
         """
-        if selling_price_ht is None or not max_cost:
+        # `sale_quantity` guards the same division `max_cost` does: scaled
+        # to a sale of nothing, every cost below is 0. The form and the
+        # model validator both refuse that, so this is only reachable by
+        # writing the column directly - and a factor of price over nothing
+        # is no more printable than one over a free variation.
+        if selling_price_ht is None or not max_cost or not self.sale_quantity:
             return None
         if min_cost > 0:
             min_positive_cost = min_cost
@@ -413,7 +479,13 @@ class Recipe(models.Model):
             min_positive_cost = min(candidates)
         if min_positive_cost <= 0:
             return None
-        return _bounds(selling_price_ht / max_cost, selling_price_ht / min_positive_cost)
+        # Scaled here and not above: `group_mins` and `group_min_positives`
+        # are batch figures, and `min_cost - group_min + min_positive` only
+        # means anything while every term is on that one scale.
+        return _bounds(
+            selling_price_ht / self.per_sale(max_cost),
+            selling_price_ht / self.per_sale(min_positive_cost),
+        )
 
     def variation_at(self, index: int, ingredients=None) -> dict | None:
         """The index-th variation, in the same order variations() lists
@@ -475,8 +547,19 @@ class Recipe(models.Model):
             "name": f"{self.name} ({', '.join(varying_names)})" if varying_names else self.name,
             "breakdown": breakdown,
             "cost_ht": cost_ht,
-            **self._price_metrics(self.selling_price_ht, cost_ht),
-            "happy_hour": self._price_metrics(happy_hour_price_ht, cost_ht) if happy_hour_price_ht else None,
+            # What ONE SALE of this variation costs - `cost_ht` is the whole
+            # preparation, which is the same thing only while a sale is the
+            # whole preparation. The same `sold_share` « Marges » counts with
+            # (margins.computation._recipe_costs), so the page and the margin
+            # cannot print two costs for one sale.
+            "cost_per_sale_ht": self.per_sale(cost_ht),
+            # Against one sale's cost, for the reason `_summary` gives above.
+            **self._price_metrics(self.selling_price_ht, self.per_sale(cost_ht)),
+            "happy_hour": (
+                self._price_metrics(happy_hour_price_ht, self.per_sale(cost_ht))
+                if happy_hour_price_ht
+                else None
+            ),
         }
 
     def variations(self, ingredients=None) -> list[dict]:
@@ -571,10 +654,45 @@ class Recipe(models.Model):
         finally:
             being_costed.discard(self.pk)
 
+    def per_sale(self, amount: Decimal) -> Decimal:
+        """`amount`, measured over one full preparation, scaled to ONE SALE.
+
+        The one definition of it: the cost of a sale (`margins.computation.
+        _recipe_costs`) and what a sale takes off the shelf
+        (`inventory.variance.recipe_usage_terms`) are two pages that must
+        never disagree about how much of a batch left - and they agreed so
+        far only because both divided by the yield while every recipe sold
+        one whole yield.
+
+        Multiplied THEN divided, never by a ratio worked out first: a share
+        of 1/11 is not exact, so `amount * (sale / yield)` rounds twice and
+        comes out a digit away from what the yield alone gives on a recipe
+        that yields 11. One division, as before, and exact wherever
+        the arithmetic allows it (0,15 of 1,6 is 0,09375 on the nose).
+        """
+        return amount * self.sale_quantity / (self.yield_quantity or Decimal("1"))
+
+    @property
+    def sold_share(self) -> Decimal:
+        """What ONE SALE is, as a fraction of one full preparation - the
+        same rule as `per_sale`, asked of 1, so the two cannot drift."""
+        return self.per_sale(Decimal("1"))
+
+    @property
+    def servings_per_batch(self) -> Decimal:
+        """How many sales one full preparation makes - the ratio above the
+        other way round, for a person reading the page."""
+        if not self.sale_quantity:
+            return Decimal("0")
+        return self.yield_quantity / self.sale_quantity
+
     def unit_cost_ht(self, sub_index: int = 0) -> Decimal:
         """Cost per yield_unit - what a parent recipe pays per unit when
         using this recipe as one of its own ingredients. `sub_index` picks
-        which of THIS recipe's variations the parent is using."""
+        which of THIS recipe's variations the parent is using.
+
+        Deliberately NOT scaled by `sale_quantity`: see the class docstring.
+        """
         if not self.yield_quantity:
             return Decimal("0")
         return self.cost_ht(sub_index) / self.yield_quantity
@@ -787,6 +905,118 @@ class PosProductDailyQuantity(models.Model):
         return "ignored" if self.ignored else "pending"
 
 
+class PosDailyPayment(models.Model):
+    """What the till was paid on one day, by one means of payment.
+
+    Read from the export's « SalesDocument » sheet - one row per ticket, its
+    `Paiements` cell « CB(4,50)/Cash(2,00) » - and summed per (day, method)
+    by laddition_xlsx.parse_payment_rows. The payments, not the tickets'
+    totals, because they are what reaches the bank: a ticket's payments are
+    its `Total TTC` plus its `Trop perçus` (a tip, change not given back),
+    on every ticket of every export stored.
+
+    `sold_on` is the till's business day, the same `Jour` the sales lines
+    print and PosProductDailyQuantity.sold_on keeps, so a day's takings and
+    a day's payments sit side by side.
+
+    A day is written whole (recipes.payments.record_payments): read again,
+    every method of that day is replaced, so a day imported half-way through
+    its service is corrected by the next import, and two overlapping exports
+    never add up.
+
+    Not in the « Données » archive, like the day's money on
+    PosProductDailyQuantity: both are re-read from the exports on disk
+    (`manage.py laddition_backfill_payments`).
+    """
+
+    #: The vocabulary, in ONE place: the bank's pages compare these with
+    #: what arrived on the account. Stored as the till spells them; matched
+    #: accent- and case-blind (`canonical`), so « Cheque » and « Chèque »
+    #: are one method, filed under the till's own spelling.
+    CARD = "CB"
+    CASH = "Cash"
+    CHEQUE = "Chèque"
+    #: Paid by a credit note - in a bar, mostly a deposit paid beforehand
+    #: (often by transfer) for a private event. Money that came in on
+    #: another day, by another way.
+    CREDIT = "Avoir"
+    MEAL_VOUCHER = "TR"
+    #: Not methods. A ticket whose `Paiements` could not be read is filed
+    #: here at its `Total TTC`, so the day still adds up to what it took,
+    #: and counted. A ticket that carries no payment at all but a total
+    #: that is not 0 is filed at that total under UNPAID. Neither is ever
+    #: dropped: a day short of a ticket looks exactly like a quiet day.
+    UNREAD = "?"
+    UNPAID = ""
+    #: The order a page lists them in: the ways money reaches the account
+    #: first, then what the till says it could not tell.
+    ORDER = (CARD, CASH, CHEQUE, MEAL_VOUCHER, CREDIT)
+    LABELS = {
+        CARD: "Carte",
+        CASH: "Espèces",
+        CHEQUE: "Chèque",
+        CREDIT: "Avoir",
+        MEAL_VOUCHER: "Titres-restaurant",
+        UNREAD: "Illisible",
+        UNPAID: "Sans paiement enregistré",
+    }
+    #: {folded spelling: the till's own} - see `canonical`. The first
+    #: iterable of a comprehension is the only name a class body lends it.
+    _BY_KEY = {search_key(known): known for known in ORDER}
+
+    sold_on = models.DateField()
+    #: As the till prints it, 40 characters at most (a longer name is cut:
+    #: nothing the till has ever printed comes near).
+    method = models.CharField(max_length=40, blank=True)
+    #: Signed: a refund or change given back in cash is a negative payment
+    #: (« Cash(-1,50) »), netted into its day.
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    #: How many payments of that method the day holds - a ticket paid in
+    #: two card payments counts two. For UNREAD and UNPAID: tickets.
+    payments = models.IntegerField(default=0)
+
+    class Meta:
+        ordering = ["sold_on", "method"]
+        constraints = [
+            models.UniqueConstraint(fields=["sold_on", "method"], name="unique_pos_daily_payment")
+        ]
+
+    def __str__(self):
+        return f"{self.sold_on} {self.label} {self.amount}"
+
+    @property
+    def label(self) -> str:
+        return self.label_for(self.method)
+
+    @classmethod
+    def canonical(cls, method) -> str:
+        """The till's spelling of a method it knows, whatever its accents
+        and case; anything else as printed. `common.search_key` is the one
+        definition of « the same word, accents and case aside »."""
+        text = str(method or "").strip()
+        return cls._BY_KEY.get(search_key(text), text)[:40]
+
+    @classmethod
+    def label_for(cls, method) -> str:
+        """The French name a page shows: « Carte » for CB, « Illisible »
+        for UNREAD, a method nobody has named here as the till prints it."""
+        method = cls.canonical(method)
+        return cls.LABELS.get(method, method)
+
+    @classmethod
+    def sort_key(cls, method) -> tuple:
+        """ORDER first, then any other method by name, then UNREAD, then
+        UNPAID - so a listing never opens on what could not be read."""
+        method = cls.canonical(method)
+        if method in cls.ORDER:
+            return (0, cls.ORDER.index(method), "")
+        if method == cls.UNREAD:
+            return (2, 0, "")
+        if method == cls.UNPAID:
+            return (3, 0, "")
+        return (1, 0, search_key(method))
+
+
 class RecipeIngredient(models.Model):
     """One line of a recipe: a quantity of either a stock item or another
     recipe (exactly one of the two - see the CheckConstraint below and
@@ -965,6 +1195,8 @@ class SaleDocumentLine(models.Model):
         "price" on a stock item, only a cost."""
         if self.unit_price_ttc is not None:
             return self.unit_price_ttc * self.quantity
-        if self.recipe_id:
+        if self.recipe_id and self.recipe.selling_price_ttc is not None:
             return self.recipe.selling_price_ttc * self.quantity
+        # A preparation that is not sold has no price to fall back on, no
+        # more than a stock item sold as itself does.
         return Decimal("0")

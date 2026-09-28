@@ -134,10 +134,17 @@ def compute_movement_amounts(invoice_line) -> tuple[Decimal, Decimal]:
     (see product_base_amount) times its manual stock_equivalent conversion.
     unit_cost_ht is derived from the line's actual total, not from dividing
     twice, so it always reconciles exactly with what was paid.
+
+    `cost_ht`, not `total_ht`: a unit costs what it was billed at **plus its
+    share of what the invoice charged to deliver it**
+    (InvoiceLine.spread_ht). This and `_fifo_value` are the only two places
+    that turn a line into a price per unit, and they must read the same
+    figure - a count priced one way on a shelf valued the other is two
+    answers to one question.
     """
     product: Product = invoice_line.product
     quantity = product_base_amount(invoice_line) * product.stock_equivalent
-    unit_cost_ht = (invoice_line.total_ht / quantity) if quantity else Decimal("0")
+    unit_cost_ht = (invoice_line.cost_ht / quantity) if quantity else Decimal("0")
     return quantity, unit_cost_ht
 
 
@@ -177,7 +184,10 @@ def _fifo_value(lines_with_amounts, counted_quantity: Decimal) -> dict:
         # out at -140 EUR before this guard existed.
         if line_qty <= 0:
             continue
-        line_unit_cost = line.total_ht / line_qty
+        # cost_ht, like compute_movement_amounts: what the line was billed
+        # at plus its share of the invoice's delivery. Read as total_ht here
+        # alone, a count would be priced below the shelf it was counted off.
+        line_unit_cost = line.cost_ht / line_qty
         oldest_unit_cost = line_unit_cost
         used = min(line_qty, remaining)
         total_value += used * line_unit_cost
@@ -292,7 +302,16 @@ def create_stock_movement_for_line(invoice_line) -> StockMovement | None:
 
     No-op if the line's product still needs review, or already has a
     movement (idempotent, safe to call again after linking a product).
+
+    A line carrying charges to spread is never stock, whatever its product
+    has since been classified as: its money is already on the lines it was
+    shared over, and a movement here would book the delivery as goods AND
+    pay for it twice. Asked of the LINE rather than of the product, because
+    a product can be classified from three different screens and the stock
+    ledger must not depend on nobody having clicked.
     """
+    if invoice_line.is_spread_charge:
+        return None
     product: Product = invoice_line.product
     stock_type = product.stock_type
     if stock_type is None:
@@ -471,7 +490,11 @@ def rebuild_purchase_movements(*, line_ids=(), product_ids=()) -> tuple[int, int
         held = set(StockMovement.objects.filter(invoice_line_id__in=batch).values_list("invoice_line_id", flat=True))
         movements = []
         for line in (
-            InvoiceLine.objects.filter(id__in=batch, product__stock_type__isnull=False)
+            # is_spread_charge: create_stock_movement_for_line's own refusal,
+            # in SQL. This path builds its movements directly, so a delivery
+            # named onto a product somebody had already classified as an
+            # article would be booked as stock here and nowhere else.
+            InvoiceLine.objects.filter(id__in=batch, product__stock_type__isnull=False, is_spread_charge=False)
             .select_related("product")
             .order_by("id")
         ):

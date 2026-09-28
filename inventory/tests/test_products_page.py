@@ -194,6 +194,23 @@ class ProductsPageTests(TestCase):
         # The 4.2 litres bought, as written: not "4.200".
         self.assertContains(response, "4.2 Litre")
 
+    def test_every_panel_a_row_opens_names_the_row_it_belongs_to(self):
+        """`data-child-of` is how the page's search hides an article's
+        purchases and its curve along with the article itself; a panel that
+        stopped naming its row would be left among the results, explaining
+        something no longer listed. The behaviour itself is in
+        test_catalogue_search_browser, which the fast loop skips - this is
+        the half of it that can be read off the markup."""
+        self.client.post(
+            reverse("inventory:assign_product", args=[self.pending.pk]),
+            {"stock_type_name": "Rhum", "stock_equivalent": "0.7"},
+        )
+        page = self.client.get(self.url).content.decode()
+        for panel in (f"details-{self.rum.pk}", f"price-history-{self.rum.pk}"):
+            row = re.search(rf'<tr id="{panel}"[^>]*>', page)
+            self.assertIsNotNone(row, f"{panel} absent de la liste")
+            self.assertIn(f'data-child-of="{self.rum.pk}"', row.group(0))
+
     def test_approving_every_suggestion_comes_back_to_the_page(self):
         self.client.get(self.url)  # the suggestions are made as the page is drawn
         response = self.client.post(reverse("inventory:approve_all_suggestions"))

@@ -1,0 +1,43 @@
+{% comment %}
+Why this document sits under this supplier, said where it is looked at.
+Most documents have nothing stored about it - one filed by its header
+records no check, no field and no history - so it is worked out from the
+text the document kept (receipts.filing_report). « names_another » is the
+view nothing had: a figure another supplier RETAINS, which is what one supplier
+held of another's on 24/09 with no page able to say so.
+{% endcomment %}
+{% if filing.text or filing.doubt %}
+    <div class="filing-block{% if filing.names_another %} filing-block-warning{% endif %}">
+        {% if filing.doubt %}<p class="field-error">{{ filing.doubt }}</p>{% endif %}
+        {% if filing.names_it %}
+            <p>
+                <strong>Rangé chez {{ invoice.supplier.name }}</strong> — ce document imprime
+                {% for row in filing.names_it %}{{ row.label }}{% if not forloop.last %}, {% endif %}{% endfor %}.
+            </p>
+        {% elif filing.text %}
+            <p>
+                <strong>Rangé chez {{ invoice.supplier.name }}</strong> —
+                <span class="muted">rien de ce que ce document imprime ne le nomme : il a été rangé ici par une source, par son lecteur, ou à la main.</span>
+            </p>
+        {% endif %}
+        {% for row in filing.names_another %}
+            <p class="field-error">
+                {% if row.shared %}
+                    Son {{ row.label }} est retenu par {{ invoice.supplier.name }} <em>et</em> par
+                    {% for holder in row.holders %}<a href="{% url 'invoices:supplier_detail' holder.pk %}">{{ holder.name }}</a>{% if not forloop.last %}, {% endif %}{% endfor %} :
+                    retenu des deux côtés, il n'en reconnaît aucun.
+                {% else %}
+                    Il imprime le {{ row.label }}, qui reconnaît
+                    {% for holder in row.holders %}<a href="{% url 'invoices:supplier_detail' holder.pk %}">{{ holder.name }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}.
+                {% endif %}
+            </p>
+        {% endfor %}
+        {% if filing.unknown %}
+            <p class="muted">
+                Il imprime aussi
+                {% for row in filing.unknown %}{{ row.label }}{% if not forloop.last %}, {% endif %}{% endfor %} —
+                que personne ne retient.
+            </p>
+        {% endif %}
+    </div>
+{% endif %}

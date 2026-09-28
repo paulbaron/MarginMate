@@ -333,11 +333,19 @@ th[aria-sort]:not([aria-sort="none"]) > button { color: var(--text); }
 .vat-row input { width: 7rem; }
 
 .search-hidden { display: none !important; }
-/* A search answers with rows: the purchases panels an article has open stay
-   open (this only hides them) but are out of the way while reading the
-   results - looking for an existing article to classify a product into, the
-   answer was a page of open panels to scroll through (owner, 20/09). */
-#catalogue.is-searching tr[data-child-row] { display: none; }
+/* A search answers with rows: the panels an article has open stay open (this
+   only hides them) but are set aside while the results are read - looking for
+   an existing article to classify a product into, the answer was a page of
+   open panels to scroll through (owner, 20/09).
+   Except the ones the reader opened themselves during that search
+   (.search-mine): a row unrolled while searching has to show its purchases,
+   all of them, whatever was typed to reach it (owner, 25/09).
+   The flag is on the BODY, not on #catalogue: the list replaces itself
+   mid-search (a classification, an undo) and a flag on it goes with it -
+   the panels reopened on the way back then sat among the results. Said in
+   CSS rather than applied by a pass over the rows for the same reason:
+   nothing to run at the right moment, so nothing to race. */
+body.catalogue-searching #catalogue tr[data-child-row]:not(.search-mine) { display: none; }
 
 /* ------------------------------------------------------- grouped stock list */
 
@@ -555,7 +563,9 @@ form p { margin: var(--s3) 0; }
     /* The brand above the links: up to 112px tall - and 141px between 441
        and 465px, where seven links wrap onto three rows (measured 20/09,
        badges on: « Marges » is what pushed them there, and 8.5rem left the
-       heading a page scrolled to five pixels under the bar). */
+       heading a page scrolled to five pixels under the bar). Eight links
+       since « Personnel » (28/09): three rows up to 490px, 524px with
+       three-digit badges - still 141px. */
     :root { --topbar-room: 10rem; }
     .topbar-inner { flex-wrap: wrap; padding: var(--s2) var(--s4); gap: var(--s2); }
     nav { gap: 0; }
@@ -569,9 +579,16 @@ form p { margin: var(--s3) 0; }
 }
 
 @media (max-width: 440px) {
-    /* Three rows of links (141px), four with three-digit badges under
-       310px (170px). */
+    /* Three rows of links (141px), four under 334px (170px) - under 304px
+       with three-digit badges, measured 28/09 with « Personnel » in. */
     :root { --topbar-room: 11rem; }
+}
+
+@media (max-width: 310px) {
+    /* Five rows (199px) since « Personnel » joined the links (28/09): under
+       281px with one-digit badges - a folding phone's 280px cover screen -
+       and under 304px with three-digit ones. */
+    :root { --topbar-room: 13rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -688,6 +705,16 @@ form p { margin: var(--s3) 0; }
 .chart-legend { display: flex; flex-wrap: wrap; gap: var(--s1) var(--s3); margin-top: var(--s2); font-size: 0.85rem; }
 .chart-legend-item { display: inline-flex; align-items: center; gap: 0.35rem; cursor: default; }
 .chart-legend-item[data-active] { color: var(--text); }
+
+/* A pie beside its own figures: a chart nobody can read a number off is
+   decoration. Wraps on a narrow screen, where the table goes under it. */
+.chart-and-figures {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s4);
+    align-items: flex-start;
+}
+.chart-and-figures > .table-wrap { flex: 1 1 320px; min-width: 0; }
 
 /* ------------------------------------------------------------ bulk select */
 
@@ -1108,17 +1135,26 @@ form p { margin: var(--s3) 0; }
 .correction-head,
 .correction-row {
     display: grid;
-    grid-template-columns: minmax(9rem, 1fr) 3.25rem 4.75rem 5.25rem 5.25rem 4.75rem 3.75rem 2.25rem;
+    grid-template-columns: minmax(9rem, 1fr) 3.25rem 4.75rem 5.25rem 5.25rem 4.75rem 3.75rem 2.75rem 2.25rem;
     gap: var(--s2);
     align-items: center;
 }
 .correction-grid-invoice .correction-head,
 .correction-grid-invoice .correction-row {
-    grid-template-columns: minmax(9rem, 1fr) 3.25rem 4.75rem 6rem 6rem 3.75rem 2.25rem;
+    grid-template-columns: minmax(9rem, 1fr) 3.25rem 4.75rem 6rem 6rem 3.75rem 2.75rem 2.25rem;
 }
 .correction-head { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
 .correction-head .num { text-align: right; }
+.correction-head .mid { text-align: center; }
 .correction-row input { width: 100%; min-width: 0; }
+/* Equal specificity with the rule above, so source order decides: without
+   this the tick box is stretched across its whole grid column. */
+.correction-row input[type="checkbox"] { width: auto; min-width: 0; justify-self: center; }
+/* A line that is not a product: struck through like a removed one, since
+   what it costs has left it for the goods below. */
+.invoice-line-row.is-spread-charge input[name$="-product_name"] { font-style: italic; }
+.spread-share { margin: 0 0 var(--s2) 0; font-size: 0.8rem; color: var(--muted); }
+.spread-charge-box { display: inline-flex; align-items: center; gap: var(--s1); font-size: 0.8rem; color: var(--muted); white-space: nowrap; }
 .correction-row input[type="number"] { text-align: right; padding-left: var(--s1); padding-right: var(--s1); -moz-appearance: textfield; }
 /* No spinners: they ate a third of each amount's box, and nobody types a
    price with arrows. */
@@ -1199,7 +1235,9 @@ tr.is-new > td:first-child { box-shadow: inset 3px 0 0 var(--amber); }
 .review-panel-head { display: flex; justify-content: space-between; align-items: center; gap: var(--s2); }
 .review-panel-head h2 { margin: 0; font-size: 1.1rem; }
 .review-panel-lead { font-size: 0.82rem; margin: var(--s2) 0; }
-.review-panel-approve { margin: 0 0 var(--s2); }
+.review-panel-approve { margin: 0 0 var(--s2); display: flex; flex-wrap: wrap; gap: var(--s2); }
+.explainer ol { max-width: 62ch; color: var(--muted); font-size: 0.88rem; margin: var(--s2) 0 0; padding-left: 1.2rem; }
+.explainer ol li + li { margin-top: var(--s1); }
 .review-panel .messages { margin: var(--s2) 0; }
 .review-panel-done { display: flex; flex-direction: column; align-items: center; gap: var(--s2); padding: var(--s4); }
 
@@ -1346,6 +1384,12 @@ body:has(.container-wide) .topbar-inner { max-width: calc(var(--content-width) +
 .workspace.htmx-request, .workspace .htmx-request { opacity: 0.7; transition: opacity 0.15s; }
 
 .filter-chips { display: flex; flex-wrap: wrap; gap: var(--s2); margin-bottom: var(--s3); }
+/* A row of controls that narrows a list without being a period. Separate
+   from .date-range on purpose: that class means « du … au … » everywhere,
+   and a page carrying both would have two forms answering to one name. */
+.filter-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); margin-bottom: var(--s3); }
+.filter-row label { margin: 0; white-space: nowrap; }
+.filter-row select { width: auto; }
 .chip {
     display: inline-flex;
     align-items: center;
@@ -1506,3 +1550,354 @@ fieldset.choice-group legend { font-weight: 650; padding: 0 var(--s2); }
 .flag-table .flag-state { min-width: 9rem; }
 .flag-table .flag-state-words { white-space: nowrap; }
 .flag-table .flag-save td { padding-left: var(--s6); }
+
+/* A supplier's page: what files a document under it, in the order the
+   application really asks (receipts.filing_rules), and the identifiers a
+   person typed rather than let be learned. */
+.filing-rules { margin: 0 0 var(--s4) 0; padding-left: var(--s4); }
+.filing-rules li { margin-bottom: var(--s2); }
+.filing-rules li.is-missing strong { color: var(--muted); font-weight: 500; }
+.pill-typed {
+    display: inline-block; padding: 0 var(--s2); border-radius: var(--radius-pill);
+    background: var(--amber-bg); color: var(--amber);
+    font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; vertical-align: middle;
+}
+.add-identifier { margin-bottom: var(--s1); }
+.add-identifier input[type="text"] { min-width: 18rem; }
+
+/* Why a document sits where it sits (receipts.filing_report). */
+.filing-block { margin-bottom: var(--s3); padding-left: var(--s3); border-left: 3px solid var(--border); }
+.filing-block p { margin: 0 0 var(--s1) 0; }
+.filing-block-warning { border-left-color: var(--amber); }
+
+/* Banque : le degré de certitude d'une proposition, sur « Sans facture » et « Propositions ». */
+.status-tier-near_sure { background: var(--green-bg); color: var(--green); border-color: #2f5233; }
+.status-tier-to_confirm { background: var(--amber-bg); color: var(--amber); border-color: #574728; }
+.status-tier-sure { background: var(--blue-bg); color: var(--blue); border-color: #2f3d57; }
+.tier-rules { margin: 0 0 var(--s3); padding-left: var(--s5); }
+.tier-rules li { margin-bottom: var(--s2); }
+.proposal-group-title { display: flex; align-items: baseline; gap: var(--s3); flex-wrap: wrap; margin-top: var(--s5); }
+.proposal-group-title .muted { font-size: 0.9rem; font-weight: normal; }
+.proposal-option { margin-top: var(--s1); }
+/* Une facture proposée à plusieurs opérations : dit sur chaque option qui la porte. */
+.proposal-shared { color: var(--amber); font-size: 0.8rem; margin-left: var(--s1); }
+/* Sur « Sans facture », la pastille est un lien vers la règle de son degré (« Propositions », #regles). */
+a.status-pill { text-decoration: none; }
+a.status-pill:hover, a.status-pill:focus { text-decoration: underline; }
+
+/* Personnel: the list, an employee, a month's timesheet (staff/). */
+.staff-forms {
+    display: grid;
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    gap: var(--s4);
+    align-items: start;
+    margin-top: var(--s5);
+}
+.staff-forms .card { margin-bottom: 0; }
+.staff-forms h2, .timesheet-aside h2 { margin-top: 0; }
+.staff-disclosure > summary { cursor: pointer; font-weight: 650; color: var(--text-dim); }
+.staff-disclosure > summary:hover { color: var(--text); }
+.staff-disclosure[open] > summary { margin-bottom: var(--s3); }
+.establishment-preview {
+    padding: var(--s3);
+    margin-bottom: var(--s3);
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius-sm);
+    line-height: 1.4;
+}
+tr.is-inactive > td { color: var(--muted); }
+/* The typical week: seven narrow fields that wrap before they squeeze. */
+.week-fields { border: 0; margin: var(--s4) 0 var(--s3); padding: 0; min-width: 0; }
+.week-fields legend { padding: 0; font-weight: 650; }
+.week-fields .help { margin: var(--s1) 0 var(--s2); font-size: 0.8rem; color: var(--muted); }
+.week-days { display: grid; grid-template-columns: repeat(auto-fill, minmax(4.6rem, 1fr)); gap: var(--s2); }
+.hours-input { text-align: right; font-variant-numeric: tabular-nums; }
+.week-days .hours-input { width: 100%; }
+.week-sum { margin: var(--s2) 0 0; color: var(--text-dim); }
+.week-sum output { color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
+.month-picker { margin: var(--s3) 0 var(--s5); }
+.month-picker select, .month-picker input { width: auto; }
+.month-picker input[type="number"] { width: 6.5rem; }
+
+/* The month: the grid, and its three shortcuts beside it. Not a .table-wrap:
+   that box scrolls on its own, and the grid's « Enregistrer » sticks to the
+   bottom of the WINDOW, which it cannot do from inside a scroll region. */
+.timesheet-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 19rem;
+    gap: var(--s5);
+    align-items: start;
+}
+.timesheet-legend { margin: 0 0 var(--s2); }
+.timesheet-grid-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--panel);
+}
+.timesheet-grid-wrap > table { border-radius: 0; }
+.timesheet-grid th, .timesheet-grid td { padding: 0.3rem 0.6rem; vertical-align: middle; }
+.timesheet-grid thead th { position: static; }
+.timesheet-grid tbody th { font-weight: 600; white-space: nowrap; }
+.timesheet-grid .hours-input { width: 5rem; }
+/* An absence's hours, emptied and disabled by timesheet.js: 0 h, not a field to fill. */
+.timesheet-grid .hours-input:disabled { opacity: 0.35; cursor: not-allowed; }
+.timesheet-grid select { width: auto; max-width: 12rem; }
+.timesheet-grid .note-input { width: 100%; min-width: 9rem; }
+.day-name { display: block; }
+.day-holiday { display: block; color: var(--amber); font-size: 0.75rem; font-weight: 600; }
+.day-typical { display: block; color: var(--muted); font-size: 0.75rem; font-weight: 400; }
+/* A day that is not the typical week: a discreet mark, not a colour flood -
+   most months have a handful, and the grid still has to read as a sheet. */
+.timesheet-grid tr.is-changed > th:first-child { box-shadow: inset 3px 0 0 var(--amber); }
+.timesheet-grid tr.has-error .hours-input { border-color: var(--red); }
+.timesheet-grid .field-error { white-space: normal; text-align: left; min-width: 12rem; }
+.timesheet-grid tr.week-total > * {
+    background: var(--bg-raised);
+    font-weight: 650;
+    border-bottom: 1px solid var(--border-strong);
+}
+.timesheet-grid tr.week-total > td.muted { font-weight: 400; }
+.timesheet-grid tfoot th { background: var(--bg-raised); border-top: 2px solid var(--border-strong); }
+.timesheet-grid tfoot td.muted { font-weight: 400; }
+.timesheet-save {
+    position: sticky;
+    bottom: 0;
+    z-index: 5;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--s3);
+    margin-top: var(--s3);
+    padding: var(--s3) 0;
+    background: var(--bg);
+    border-top: 1px solid var(--border);
+}
+.absence-counts { list-style: none; margin: var(--s1) 0 0; padding: 0; font-size: 0.9rem; }
+/* The grid holds changes not saved (timesheet.js): said beside « Enregistrer »,
+   and the figures above - which follow the typing - drawn in dashes. */
+.unsaved-note { color: var(--amber); font-weight: 650; }
+p.unsaved-note { margin: 0 0 var(--s2); font-size: 0.85rem; }
+.stat-row.is-unsaved .stat { border-style: dashed; border-color: var(--amber); }
+.timesheet-aside .card { padding: var(--s4); }
+/* « Mettre les fériés du mois en Férié chômé » is longer than the column. */
+.timesheet-aside .btn { white-space: normal; text-align: left; }
+.range-form { display: flex; flex-direction: column; gap: var(--s2); }
+.range-form select, .range-form input { width: 100%; }
+.range-form .help { margin: 0; font-size: 0.8rem; color: var(--muted); }
+.range-form .form-actions { margin-top: var(--s1); }
+.range-days { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s2); }
+.holiday-list { margin: 0 0 var(--s2); padding-left: var(--s4); }
+.holiday-list li { margin-bottom: var(--s1); }
+@media (max-width: 1000px) {
+    .staff-forms, .timesheet-layout { grid-template-columns: minmax(0, 1fr); }
+}
+/* On a phone a day is a small card - its name and hours on one line, the
+   motif and the note under them - rather than four columns scrolled
+   sideways, where « Motif » started off the screen. */
+@media (max-width: 600px) {
+    .timesheet-grid, .timesheet-grid tbody, .timesheet-grid tfoot { display: block; }
+    .timesheet-grid thead { display: none; }
+    .timesheet-grid tr {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: var(--s1) var(--s2);
+        padding: var(--s2) var(--s3);
+        border-bottom: 1px solid var(--border);
+    }
+    .timesheet-grid tr > * { display: block; padding: 0; border: 0; background: transparent; }
+    .timesheet-grid tr.day-row > td:nth-child(n + 3),
+    .timesheet-grid tr > td[colspan] { grid-column: 1 / -1; }
+    .timesheet-grid select, .timesheet-grid .note-input { width: 100%; max-width: none; min-width: 0; }
+    .timesheet-grid tr.is-changed { box-shadow: inset 3px 0 0 var(--amber); }
+    .timesheet-grid tr.is-changed > th:first-child { box-shadow: none; }
+    .timesheet-grid tr.week-total, .timesheet-grid tfoot tr { background: var(--bg-raised); }
+    .timesheet-grid tr.week-total > *, .timesheet-grid tfoot tr > * { border: 0; }
+    .timesheet-grid tr.week-total > td[colspan], .timesheet-grid tfoot td[colspan] { font-size: 0.8rem; }
+}
+
+/* The monthly signature (staff/signature_views.py, staff/public_views.py). */
+
+/* A month to read, not to edit: the employee's page, and the owner's month
+   while a request holds it. Three columns that fit a phone as they are. */
+.month-table-wrap {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--panel);
+    overflow: hidden;
+}
+.month-table { border-radius: 0; }
+.month-table th, .month-table td { padding: 0.3rem 0.6rem; vertical-align: top; }
+.month-table thead th { position: static; }
+.month-table tbody th { font-weight: 600; white-space: nowrap; }
+.month-table .num { width: 4.5rem; }
+.month-table tr.is-rest > * { color: var(--muted); font-weight: 400; }
+.month-table tr.week-total > * {
+    background: var(--bg-raised);
+    font-weight: 650;
+    border-bottom: 1px solid var(--border-strong);
+}
+.month-table tr.week-total th { white-space: normal; }
+.month-summary { margin: var(--s3) 0 0; }
+.month-summary h3 { margin-bottom: var(--s2); }
+.month-summary ul { list-style: none; margin: 0 0 var(--s2); padding: 0; }
+.month-summary li { margin-bottom: 2px; }
+.month-readonly { max-width: 46rem; }
+
+/* The owner's « Signature » section. Its buttons wrap: « Code à transmettre
+   par un autre canal que le lien » is wider than a phone (seen at 375 px). */
+.signature-card h3 { margin-top: var(--s4); }
+.signature-card .btn { white-space: normal; text-align: left; }
+.signature-request { padding: var(--s3) 0; border-top: 1px solid var(--border); }
+.signature-card > h2 + .signature-request { border-top: 0; padding-top: 0; }
+.signature-request > * { margin: 0 0 var(--s2); }
+.signature-request > :last-child { margin-bottom: 0; }
+.signature-request-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1) var(--s2); }
+.signature-id, .signature-hash { font-family: var(--font-mono); word-break: break-all; }
+.signature-link label { color: inherit; }
+.copy-row { display: flex; gap: var(--s2); margin: var(--s1) 0 var(--s2); }
+.copy-row input { flex: 1 1 auto; min-width: 0; font-family: var(--font-mono); font-size: 0.85rem; }
+.handed-code { font-size: 1.6rem; letter-spacing: 0.12em; font-variant-numeric: tabular-nums; }
+.signature-report ul { margin: var(--s2) 0; padding-left: var(--s4); }
+.signature-reservation {
+    margin: 0 0 var(--s2);
+    padding: var(--s2) var(--s3);
+    border-left: 3px solid var(--amber);
+    background: var(--bg-raised);
+    border-radius: var(--radius-sm);
+    white-space: normal;
+}
+.signature-files { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: var(--s1) var(--s4); }
+.signature-events { margin: var(--s2) 0 0; padding-left: var(--s5); font-size: 0.88rem; }
+.signature-events li { margin-bottom: var(--s2); }
+.signature-event-detail { display: block; color: var(--muted); font-size: 0.8rem; word-break: break-word; }
+.signature-danger { display: flex; flex-direction: column; gap: var(--s2); margin-top: var(--s3); }
+.signature-danger input[type="text"] { width: 100%; }
+.signature-notes { margin-top: var(--s3); border-top: 1px solid var(--border); padding-top: var(--s2); }
+.signature-notes p { margin: 0 0 var(--s1); }
+/* « Supprimer… » (signature_views.signature_delete): a quiet link on each version, then two
+   pages of their own - what goes and why, the two checks, and the one red button. */
+.signature-delete { font-size: 0.82rem; }
+.signature-delete a { color: var(--muted); }
+.signature-delete a:hover, .signature-delete a:focus-visible { color: var(--red); }
+.deletion { max-width: 46rem; display: flex; flex-direction: column; gap: var(--s4); }
+.deletion > * { margin: 0; }
+.deletion h2 { margin: 0 0 var(--s3); }
+.deletion h3 { margin: var(--s4) 0 var(--s2); font-size: 1rem; }
+.deletion p { margin: 0 0 var(--s2); }
+/* A file's name breaks only where the line is too narrow for it, never mid-word by default. */
+.deletion code { font-family: var(--font-mono); font-size: 0.88em; overflow-wrap: anywhere; }
+.deletion-file { white-space: nowrap; }
+.deletion-id { display: block; margin-top: var(--s1); }
+.deletion-facts, .deletion-files { margin: var(--s2) 0; padding-left: var(--s5); }
+.deletion-facts li, .deletion-files li { margin-bottom: var(--s1); }
+/* The heading says danger in red; the sentences stay in the text colour, to be read. */
+.deletion-danger h2 { color: inherit; }
+.deletion-danger p { color: var(--text); }
+.deletion-danger p:last-child { margin-bottom: 0; }
+.deletion-form { display: flex; flex-direction: column; gap: var(--s3); }
+.deletion-form > * { margin: 0; }
+.deletion-form input[type="text"] { width: 100%; max-width: 24rem; }
+.deletion-option .help { margin: var(--s1) 0 0; font-size: 0.85rem; color: var(--muted); }
+/* The hours option: after the two checks, framed in red, never drawn like one of them. */
+fieldset.deletion-option-danger { border: 1px solid var(--red); border-radius: var(--radius-sm); padding: var(--s3); margin: 0; min-width: 0; }
+.deletion-option-danger legend { color: var(--red); font-weight: 650; padding: 0 var(--s2); }
+.deletion-phrase-label { display: block; color: var(--text); font-weight: 500; }
+.deletion-phrase { font-family: var(--font-mono); font-weight: 650; white-space: nowrap; }
+.deletion-confirm { margin: var(--s4) 0 var(--s3); }
+.btn-destroy { background: var(--red); color: #1f0c0b; border-color: var(--red); }
+.btn-destroy:hover { background: #ef857c; border-color: #ef857c; }
+/* « Contresigner… »: a button opening the employer's drawing pad - a <details>, so it opens
+   without the script (drawing needs it). Open, it steps back to a secondary button: the one
+   that countersigns is under the frame. The frame keeps a phone's proportions on a wide page. */
+.signature-countersign > summary { list-style: none; }
+.signature-countersign > summary::-webkit-details-marker { display: none; }
+.signature-countersign[open] > summary {
+    background: transparent;
+    color: var(--text);
+    border-color: var(--border-strong);
+    margin-bottom: var(--s3);
+}
+.signature-countersign-form { max-width: 34rem; }
+.signature-countersign-form > p { margin: 0 0 var(--s2); }
+.checkbox-label { display: flex; align-items: flex-start; gap: var(--s2); color: var(--text); font-weight: 500; }
+.checkbox-label input { margin-top: 0.3rem; }
+
+/* The employee's page: a phone first, the app's colours, no navigation -
+   so no sticky bar to leave room for above what a fragment scrolls to. */
+html:has(body.public-page) { scroll-padding-top: var(--s4); }
+.public-container { max-width: 42rem; margin: 0 auto; padding: var(--s4); }
+.public-header { margin-bottom: var(--s4); }
+.public-header h1 { font-size: 1.35rem; margin: var(--s2) 0 var(--s1); }
+.public-establishment { margin: 0; color: var(--text-dim); line-height: 1.4; }
+.public-lead { margin: 0 0 var(--s3); }
+.public-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin: 0 0 var(--s4); }
+.public-section { margin-top: var(--s5); }
+.public-section h2 { margin: 0 0 var(--s3); }
+.public-form { margin: 0 0 var(--s4); }
+/* A field's label over its field - not a box's label: `.public-check` is a
+   row (the box beside its wrapped words), and `.public-form > label` alone
+   outweighed it and stacked the words' second line under the box. */
+.public-form > label:not(.public-check), .public-form .field-label { display: block; margin: 0 0 var(--s1); }
+.field-label { color: var(--text-dim); font-size: 0.85rem; font-weight: 600; }
+.code-row { display: flex; gap: var(--s2); }
+.code-row input { width: 9rem; font-size: 1.2rem; letter-spacing: 0.1em; text-align: center; }
+.public-card {
+    margin-top: var(--s6);
+    padding: var(--s5);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--panel);
+}
+.public-card h1 { font-size: 1.3rem; margin-bottom: var(--s3); }
+/* The paper he signs on: white whatever the page's colours, so the dark ink
+   shows - the exported picture itself is transparent. */
+.signature-pad {
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: #ffffff;
+    overflow: hidden;
+}
+.signature-pad canvas {
+    display: block;
+    width: 100%;
+    height: 11rem;
+    touch-action: none;
+    cursor: crosshair;
+}
+.signature-pad-actions { display: flex; flex-wrap: wrap; gap: var(--s3); margin: var(--s2) 0 var(--s3); }
+/* « Annuler le dernier trait » and « Effacer » are tapped with a thumb, beside
+   the frame: 44 px tall at least (WCAG 2.5.5, Apple's guidelines), where
+   .btn-small made them 30 - on the employee's page and beside the employer's
+   pad alike. Every other .btn-small of the owner's pages stays small. */
+.signature-pad-actions .btn { min-height: 44px; padding: 0.5rem var(--s4); font-size: 0.9rem; }
+.public-check {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--s3);
+    margin: 0 0 var(--s3);
+    color: var(--text);
+    font-size: 0.95rem;
+    font-weight: 500;
+}
+.public-check input { width: 1.3rem; height: 1.3rem; flex: 0 0 auto; margin: 0.1rem 0 0; }
+.reservations { margin: 0 0 var(--s3); }
+.reservations textarea { width: 100%; }
+.public-notice {
+    margin: var(--s4) 0;
+    padding: var(--s3);
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--text-dim);
+    font-size: 0.85rem;
+}
+.public-notice h3 { font-size: 0.95rem; margin: 0 0 var(--s2); color: var(--text); }
+.public-notice p { margin: 0 0 var(--s2); }
+.public-notice p:last-child { margin-bottom: 0; }
+.public-submit { width: 100%; justify-content: center; padding: 0.75rem 1rem; font-size: 1rem; }
+@media (max-width: 440px) {
+    .public-container { padding: var(--s4) var(--s4) var(--s6); }
+    .month-table th, .month-table td { padding: 0.28rem 0.45rem; font-size: 0.9rem; }
+    .copy-row { flex-wrap: wrap; }
+}

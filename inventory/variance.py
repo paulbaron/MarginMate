@@ -154,14 +154,20 @@ def recipe_usage_terms(recipe) -> list[list[dict[int, Decimal]]]:
     with several is a choice, and the caller must treat them as a pool rather
     than picking one. A sub-recipe with alternatives of its own contributes
     several entries here, for the same reason.
+
+    « Per serving sold » is `Recipe.per_sale` and not the yield alone: a
+    terrine producing 1,6 kg and sold in 150 g plates gives up 0,15/1,6 of
+    itself a plate, and read per kilo the écarts would report ten times what
+    a plate really took as missing stock. The share IS one over the yield
+    while a recipe sells one whole preparation, which is every recipe filed
+    until a portion is - so nothing here moves for them.
     """
-    yield_quantity = recipe.yield_quantity or Decimal("1")
     terms = []
     for group in recipe.choice_groups():
         options = []
         for ingredient in group:
             for usage in _ingredient_usage_options(ingredient, frozenset({recipe.pk})):
-                options.append({st_id: amount / yield_quantity for st_id, amount in usage.items()})
+                options.append({st_id: recipe.per_sale(amount) for st_id, amount in usage.items()})
         terms.append(options)
     return terms
 

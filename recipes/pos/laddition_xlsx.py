@@ -1,10 +1,15 @@
 """Reading L'Addition's "Lignes de ventes" export.
 
-The workbook has several sheets; the one that matters is
-`SalesDocumentLines` - one row per item on per ticket, with the day it was
-sold, what it was called on the till, and how many. Everything else
-(ProductAnalytics, SalesDocument, ExtraLines, StockMovement) is either a
-consolidation of that or about something else.
+The workbook has several sheets. Two are read:
+
+- `SalesDocumentLines` - one row per item on per ticket, with the day it was
+  sold, what it was called on the till, how many and for how much;
+- `SalesDocument` - one row per ticket, with how it was PAID (`Paiements`,
+  « CB(4,50)/Cash(2,00) »): what the bank is paid from. Optional - see
+  parse_sales_export.
+
+Everything else (ProductAnalytics, ExtraLines, StockMovement) is either a
+consolidation of those or about something else.
 
 `SalesDocumentLines` is used rather than the ready-made per-product totals in
 `ProductAnalytics` for one reason: it carries a DATE per line. That's what
@@ -17,6 +22,7 @@ Columns are looked up by their header text, not by position - the export has
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
@@ -36,6 +42,33 @@ RATE_COLUMN = "Taux"
 #: drink costs, and it is 0 on every row of every export downloaded so far.
 #: Costs come from the invoices, through the recipes.
 
+#: One row per ticket. Its `Jour` is the same business day as the lines'.
+PAYMENTS_SHEET = "SalesDocument"
+TICKET_COLUMN = "ID Ticket"
+#: The ticket's total, dot decimal (« 12.5 »), like the lines' amounts.
+TICKET_TOTAL_COLUMN = "Total TTC"
+#: The tip or change not given back: a ticket's payments add up to its
+#: total PLUS this, on every ticket stored - the check parse_payment_rows
+#: makes on each one.
+OVERPAID_COLUMN = "Trop perçus"
+#: « Method(amount) » joined by « / »: « CB(4,50) », « Cash(5,00)/CB(3,50) »,
+#: « Avoir(1 350,00) ». Comma decimal, a thousands separator, and a minus
+#: on money handed back (« Cash(-1,50) »).
+PAYMENTS_COLUMN = "Paiements"
+_ONE_PAYMENT = r"([^()/]+)\(([^()/]*)\)"
+#: The whole cell or nothing: every ticket stored reads with it, so a cell
+#: it refuses is something new, and is said rather than half-read.
+PAYMENTS_GRAMMAR = re.compile(rf"^{_ONE_PAYMENT}(?:/{_ONE_PAYMENT})*$")
+ONE_PAYMENT = re.compile(_ONE_PAYMENT)
+#: After the thousands separators are taken out: one optional minus, digits,
+#: one decimal separator and at most two decimals. « 1.800,00 » (two
+#: separators) is refused rather than guessed at.
+PAYMENT_AMOUNT = re.compile(r"^-?\d+(?:[.,]\d{1,2})?$")
+#: A space, a no-break space, a narrow no-break space: which one a number
+#: formatter puts between thousands depends on its locale and version.
+#: Written as escapes on purpose - the three are indistinguishable on screen.
+THOUSANDS_SEPARATORS = (" ", " ", " ")
+
 ZERO = Decimal("0")
 CENTS = Decimal("0.01")
 #: The rates France has (invoices/parsers/receipt_base.py keeps the same
@@ -47,6 +80,23 @@ KNOWN_RATES = (ZERO, Decimal("0.021"), Decimal("0.055"), Decimal("0.10"), Decima
 
 class LadditionExportError(RuntimeError):
     pass
+
+
+class PaymentsSheetMissing(LadditionExportError):
+    """The workbook has no `SalesDocument` sheet - an older or another
+    export. Not damage: its lines are still read, its days simply carry no
+    payments."""
+
+
+@dataclass
+class DayPayment:
+    """What one means of payment brought in on one day."""
+
+    #: Signed, summed as printed: change handed back is a negative payment.
+    amount: Decimal = ZERO
+    #: Payments of that method that day (tickets, for the UNREAD and UNPAID
+    #: pseudo-methods - see recipes.models.PosDailyPayment).
+    count: int = 0
 
 
 @dataclass
@@ -120,6 +170,60 @@ class ParsedExport:
     unusual_quantity_lines: int = 0
     #: (till name, day) pairs a later file restated - see parse_sales_exports.
     repeated_days: int = 0
+
+    # -- the payments (the `SalesDocument` sheet) -------------------------------------
+    #: {(day, method): DayPayment}, the method as PosDailyPayment.canonical
+    #: files it. A day in `payment_days` with no key here was read and paid
+    #: nothing (every ticket comped); a day in neither was never read.
+    payments: dict = field(default_factory=dict)
+    #: Every day with at least one ticket row, all-zero ones included: the
+    #: days a writer replaces whole (recipes.payments.record_payments).
+    payment_days: set = field(default_factory=set)
+    #: Whether a payments sheet was read at all. False: nothing about the
+    #: payments may be replaced from this reading.
+    payments_read: bool = False
+    #: Tickets read (after the duplicates), and the rows with no day (the
+    #: export's own « Total » row).
+    tickets: int = 0
+    ticket_rows_skipped: int = 0
+    #: Tickets whose `Paiements` did not read (filed at their total under
+    #: UNREAD), and tickets with no payment but a total that is not 0
+    #: (filed at it under UNPAID). Counted: neither has ever happened, which
+    #: is exactly why they must be said the day they do.
+    unread_payment_tickets: int = 0
+    unpaid_tickets: int = 0
+    #: The same `ID Ticket` twice in one file: read once.
+    duplicate_tickets: int = 0
+    #: Tickets whose payments are not their `Total TTC` plus `Trop perçus`.
+    #: Kept as paid - the payments are what the bank sees - and said.
+    tickets_not_adding_up: int = 0
+    #: Files with no payments sheet, and files whose payments sheet could
+    #: not be read (« name : why ») - their lines are read all the same.
+    payment_sheets_missing: int = 0
+    payment_sheet_errors: list = field(default_factory=list)
+    #: Days a later file restated - see parse_sales_exports.
+    repeated_payment_days: int = 0
+
+    @property
+    def payments_total(self) -> Decimal:
+        return sum((payment.amount for payment in self.payments.values()), ZERO)
+
+    def payments_by_method(self) -> dict[str, DayPayment]:
+        """{method: DayPayment} over every day read."""
+        methods: dict[str, DayPayment] = {}
+        for (_day, method), payment in self.payments.items():
+            total = methods.setdefault(method, DayPayment())
+            total.amount += payment.amount
+            total.count += payment.count
+        return methods
+
+    def payments_by_day(self) -> dict[date, dict[str, DayPayment]]:
+        """{day: {method: DayPayment}} for every day read - an all-comped
+        day as {} (read, nothing paid)."""
+        days: dict[date, dict[str, DayPayment]] = {day: {} for day in self.payment_days}
+        for (day, method), payment in self.payments.items():
+            days.setdefault(day, {})[method] = payment
+        return days
 
     @property
     def total_quantity(self) -> int:
@@ -352,8 +456,214 @@ def parse_rows(rows) -> ParsedExport:
     return result
 
 
+def _payment_amount(text: str) -> Decimal | None:
+    """« 4,50 », « 1 350,00 », « -6,00 » -> Decimal. None when the text is
+    not one amount (PAYMENT_AMOUNT) - never a best guess."""
+    text = str(text or "").strip()
+    for separator in THOUSANDS_SEPARATORS:
+        text = text.replace(separator, "")
+    if not PAYMENT_AMOUNT.match(text):
+        return None
+    return Decimal(text.replace(",", "."))
+
+
+def read_payments(text: str) -> list[tuple[str, Decimal]] | None:
+    """A `Paiements` cell as [(method as printed, amount)], in order.
+
+    [] for an empty cell. None when the cell is not the till's grammar
+    (PAYMENTS_GRAMMAR), a method is blank or an amount does not read: the
+    whole ticket is then unread, never half of it - a ticket read as its
+    card payment alone would look perfectly ordinary and be short of its
+    cash.
+    """
+    text = str(text or "").strip()
+    if not text:
+        return []
+    if not PAYMENTS_GRAMMAR.match(text):
+        return None
+    payments = []
+    for method, amount_text in ONE_PAYMENT.findall(text):
+        method = method.strip()
+        amount = _payment_amount(amount_text)
+        if not method or amount is None:
+            return None
+        payments.append((method, amount))
+    return payments
+
+
+def parse_payment_rows(rows) -> ParsedExport:
+    """Sum raw `SalesDocument` rows (header first) per (day, method).
+
+    Only the payment fields of the result are filled. One ticket is:
+
+    - **paid**: each payment filed under its method, the method matched
+      accent- and case-blind to the till's own spelling
+      (PosDailyPayment.canonical), its amount signed as printed. Checked
+      against the receipt's own arithmetic - payments = `Total TTC` +
+      `Trop perçus` on every ticket stored - and a ticket that does not add
+      up is kept as paid (the payments are what the bank sees) and counted;
+    - **unreadable** (`read_payments` says None): its `Total TTC` filed under
+      UNREAD, so the day still adds up to what it took, and counted;
+    - **empty**: a `Total TTC` of 0 is a comped ticket - nothing paid,
+      nothing filed, its day still read. Any other total is filed under
+      UNPAID, and counted - never dropped.
+
+    A row with no day (the export's « Total » row prints « - ») is skipped
+    and counted; a ticket id seen before in the same file is read once.
+    """
+    # The vocabulary has one home, the model; imported here so this module
+    # still loads where Django is not set up (a probe script, a shell).
+    from recipes.models import PosDailyPayment
+
+    rows = iter(rows)
+    try:
+        header = [str(cell or "").strip() for cell in next(rows)]
+    except StopIteration:
+        raise LadditionExportError(f"The {PAYMENTS_SHEET} sheet is empty.") from None
+    missing = [c for c in (DAY_COLUMN, TICKET_TOTAL_COLUMN, PAYMENTS_COLUMN) if c not in header]
+    if missing:
+        raise LadditionExportError(
+            f"{PAYMENTS_SHEET} is missing the {', '.join(missing)} column(s) - found: {header}"
+        )
+    day_at = header.index(DAY_COLUMN)
+    total_at = header.index(TICKET_TOTAL_COLUMN)
+    payments_at = header.index(PAYMENTS_COLUMN)
+    ticket_at = header.index(TICKET_COLUMN) if TICKET_COLUMN in header else None
+    overpaid_at = header.index(OVERPAID_COLUMN) if OVERPAID_COLUMN in header else None
+
+    def _cell(row, at):
+        return str(row[at] or "").strip() if at is not None and at < len(row) else ""
+
+    result = ParsedExport(payments_read=True)
+    seen: set[str] = set()
+
+    def file(day, method, amount) -> None:
+        payment = result.payments.setdefault((day, PosDailyPayment.canonical(method)), DayPayment())
+        payment.amount += amount
+        payment.count += 1
+
+    for row in rows:
+        day = _to_date(_cell(row, day_at))
+        if day is None:
+            result.ticket_rows_skipped += 1
+            continue
+        ticket = _cell(row, ticket_at)
+        if ticket:
+            if ticket in seen:
+                result.duplicate_tickets += 1
+                continue
+            seen.add(ticket)
+        result.tickets += 1
+        result.payment_days.add(day)
+        total = _to_money(_cell(row, total_at))
+        payments = read_payments(_cell(row, payments_at))
+
+        if payments is None or (not payments and total is None):
+            # Nothing tells what was paid: filed at the ticket's total - or
+            # at 0 when even that is illegible, still counted.
+            result.unread_payment_tickets += 1
+            file(day, PosDailyPayment.UNREAD, total or ZERO)
+            continue
+        if not payments:
+            if total:
+                result.unpaid_tickets += 1
+                file(day, PosDailyPayment.UNPAID, total)
+            continue
+        for method, amount in payments:
+            file(day, method, amount)
+        if overpaid_at is None or total is None:
+            continue  # nothing to check against
+        overpaid_text = _cell(row, overpaid_at)
+        overpaid = _to_money(overpaid_text) if overpaid_text else ZERO
+        if overpaid is not None and sum((amount for _m, amount in payments), ZERO) != total + overpaid:
+            result.tickets_not_adding_up += 1
+    return result
+
+
+def _unreadable():
+    """Every way a file can fail to be this export, as the zip and XML
+    machinery raise it: none of these is an `XlsxError`, and each one that
+    escaped stopped a whole folder being read (see parse_sales_export). A
+    zip holding no workbook at all raises KeyError, malformed XML a
+    ParseError. A member whose deflate stream no longer inflates - the
+    zip's directory intact, the sheet's bytes damaged - raises `zlib.error`,
+    and one whose stream stops before its end marker `EOFError`: neither is
+    a zip error either (« Données » refuses the same damage in its archive,
+    transfer/archive.DAMAGED).
+
+    Deliberately NOT RuntimeError, which zipfile raises for an encrypted
+    member: LadditionExportError and PaymentsSheetMissing are RuntimeErrors,
+    and caught here parse_payments_export would wrap a missing sheet as a
+    broken file."""
+    import zipfile
+    import zlib
+    from xml.etree.ElementTree import ParseError
+
+    from .xlsx_reader import XlsxError
+
+    return (XlsxError, zipfile.BadZipFile, zlib.error, EOFError, OSError, KeyError, ParseError)
+
+
+def _add_payments(result: ParsedExport, path: str) -> None:
+    """The payments sheet of the file just read, onto `result` - or said on
+    it. Neither a file with no such sheet (an older export) nor one whose
+    sheet does not read may cost that file its lines: the sales are read,
+    and the payments are either whole or absent, never half a sheet (the
+    sheet is parsed apart, and only a complete reading is taken)."""
+    from pathlib import Path
+
+    from .xlsx_reader import read_sheet, sheet_names
+
+    try:
+        if PAYMENTS_SHEET not in sheet_names(path):
+            result.payment_sheets_missing += 1
+            return
+        part = parse_payment_rows(read_sheet(path, PAYMENTS_SHEET))
+    except (*_unreadable(), LadditionExportError) as exc:
+        result.payment_sheet_errors.append(f"{Path(path).name} : {exc}")
+        return
+    _take_payments(result, part)
+
+
+def _take_payments(result: ParsedExport, part: ParsedExport) -> None:
+    result.payments = part.payments
+    result.payment_days = part.payment_days
+    result.payments_read = True
+    for counter in _PAYMENT_COUNTERS:
+        setattr(result, counter, getattr(result, counter) + getattr(part, counter))
+
+
+#: The payment counters that are about the READING, summed file after file
+#: like `skipped` - a file read twice counts its tickets twice, which is what
+#: makes a duplicate file visible.
+_PAYMENT_COUNTERS = (
+    "tickets", "ticket_rows_skipped", "unread_payment_tickets", "unpaid_tickets",
+    "duplicate_tickets", "tickets_not_adding_up",
+)
+
+
+def parse_payments_export(path: str) -> ParsedExport:
+    """Read the payments of one downloaded .xlsx, and nothing else - the
+    backfill's reading (laddition_backfill_payments): the lines sheet is the
+    big one, and the payments do not need it.
+
+    Raises PaymentsSheetMissing when the file has no payments sheet, and
+    LadditionExportError for every other way it is not this export.
+    """
+    from .xlsx_reader import read_sheet, sheet_names
+
+    try:
+        if PAYMENTS_SHEET not in sheet_names(path):
+            raise PaymentsSheetMissing(f"no {PAYMENTS_SHEET} sheet")
+        return parse_payment_rows(read_sheet(path, PAYMENTS_SHEET))
+    except _unreadable() as exc:
+        raise LadditionExportError(
+            f"{exc} - is this the 'Lignes de ventes' export?"
+        ) from exc
+
+
 def parse_sales_export(path: str) -> ParsedExport:
-    """Read one downloaded .xlsx.
+    """Read one downloaded .xlsx: its lines, then its payments.
 
     Uses this package's own reader rather than openpyxl, which refuses the
     file outright - see xlsx_reader for the gory details.
@@ -365,17 +675,21 @@ def parse_sales_export(path: str) -> ParsedExport:
     function AND the backfill's own « illisible » branch - one such file
     stopped the other sixteen exports being read at all, with a traceback.
     Every way a file can fail to be this export answers in one type.
-    """
-    import zipfile
 
-    from .xlsx_reader import XlsxError, read_sheet
+    The payments sheet is OPTIONAL: missing or unreadable, it is counted on
+    the result (`payment_sheets_missing`, `payment_sheet_errors`) and the
+    lines import all the same - see _add_payments.
+    """
+    from .xlsx_reader import read_sheet
 
     try:
-        return parse_rows(read_sheet(path, SALES_SHEET))
-    except (XlsxError, zipfile.BadZipFile, OSError) as exc:
+        result = parse_rows(read_sheet(path, SALES_SHEET))
+    except _unreadable() as exc:
         raise LadditionExportError(
             f"{exc} - is this the 'Lignes de ventes' export?"
         ) from exc
+    _add_payments(result, path)
+    return result
 
 
 def parse_sales_exports(paths) -> ParsedExport:
@@ -401,11 +715,19 @@ def parse_sales_exports(paths) -> ParsedExport:
     absent from that file's `money`, so a file that COULD read it fills it -
     the day is kept from whichever reading was complete, and left unread
     only when none was.
+
+    The payments follow the same rule by DAY: a day a later file read again
+    replaces every method of that day (`repeated_payment_days`), a method
+    the later reading lacks included - summed, a folder read twice would
+    have shown twice the card takings; merged method by method, a day could
+    keep a payment its second reading no longer has. A file with no
+    payments sheet, or one that did not read, replaces nothing.
     """
     combined = ParsedExport()
     at: dict[tuple[str, date], int] = {}
     for path in paths:
         part = parse_sales_export(path)
+        _combine_payments(combined, part)
         combined.money_columns = combined.money_columns or part.money_columns
         combined.skipped += part.skipped
         combined.offered += part.offered
@@ -441,3 +763,20 @@ def parse_sales_exports(paths) -> ParsedExport:
     for name, _day, quantity in combined.entries:
         combined.products[name]["quantity"] += quantity
     return combined
+
+
+def _combine_payments(combined: ParsedExport, part: ParsedExport) -> None:
+    """One file's payments onto the folder's - see parse_sales_exports."""
+    combined.payment_sheets_missing += part.payment_sheets_missing
+    combined.payment_sheet_errors.extend(part.payment_sheet_errors)
+    if not part.payments_read:
+        return
+    combined.payments_read = True
+    for counter in _PAYMENT_COUNTERS:
+        setattr(combined, counter, getattr(combined, counter) + getattr(part, counter))
+    restated = combined.payment_days & part.payment_days
+    combined.repeated_payment_days += len(restated)
+    if restated:
+        combined.payments = {key: value for key, value in combined.payments.items() if key[0] not in restated}
+    combined.payments.update(part.payments)
+    combined.payment_days |= part.payment_days

@@ -10,7 +10,7 @@ from django.db.models import Sum
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.html import escape
 
-from common import is_id
+from common import PIE_COLORS, is_id
 
 from .forms import (
     MANUAL_SALE_SOURCE,
@@ -37,7 +37,6 @@ from .tasks import import_laddition_sales_task
 def _existing_categories():
     return Recipe.objects.exclude(category="").values_list("category", flat=True).distinct().order_by("category")
 
-_PIE_COLORS = ["#d99b3f", "#6fbf73", "#e0685f", "#5b9bd9", "#c77dd9", "#d9c73f", "#3fd9c7", "#9fa2ae"]
 
 
 def _build_ingredient_pie_svg(breakdown: list[dict]) -> str:
@@ -68,7 +67,7 @@ def _build_ingredient_pie_svg(breakdown: list[dict]) -> str:
     start_angle = -math.pi / 2  # 12 o'clock
     for index, entry in enumerate(non_zero):
         fraction = float(entry["cost_ht"] / total)
-        color = _PIE_COLORS[index % len(_PIE_COLORS)]
+        color = PIE_COLORS[index % len(PIE_COLORS)]
         name = escape(entry.get("name") or entry["ingredient"].source_name)
         value = f"{entry['cost_ht']:.2f} € · {fraction * 100:.1f} %"
         common = f'data-index="{index}" data-label="{name}" data-value="{value}" data-color="{color}"'

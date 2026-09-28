@@ -17,6 +17,7 @@ quantity extraction here.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 
@@ -432,14 +433,19 @@ def extract_quantity(
     return QuantityGuess("UNIT", Decimal("1"), "low", "aucun indice de quantité trouvé dans le nom", approx, debug)
 
 
+_FETCH_LINE = object()
+
+
 def extract_quantity_for_product(
-    product, force_unit_count: bool = False, assume_volume_tracked: bool = False
+    product, force_unit_count: bool = False, assume_volume_tracked: bool = False, line=_FETCH_LINE
 ) -> QuantityGuess:
     """Convenience wrapper: pulls colisage/quantity/total_volume from the
     product's first invoice line - the same "representative example" the
-    review queue and the matching rules elsewhere already use. See
-    extract_quantity() for what the two override flags do."""
-    line = product.invoice_lines.first()
+    review queue and the matching rules elsewhere already use - or from the
+    `line` handed in (None for "no line") by a caller that has already read
+    it. See extract_quantity() for what the two override flags do."""
+    if line is _FETCH_LINE:
+        line = product.invoice_lines.first()
     if line is None:
         return QuantityGuess("UNIT", Decimal("1"), "low", "aucune ligne de facture")
     return extract_quantity(
@@ -450,6 +456,50 @@ def extract_quantity_for_product(
         force_unit_count=force_unit_count,
         assume_volume_tracked=assume_volume_tracked,
     )
+
+
+def _size_in_base(value: str, unit: str) -> tuple[Decimal, str]:
+    """A printed size as (amount, "L" | "KG") in the base unit, normalised so
+    "33CL", "330ML" and "0,33L" are one and the same size."""
+    if unit in VOLUME_UNITS:
+        return (_to_decimal(value) * VOLUME_UNITS[unit]).normalize(), "L"
+    return (_to_decimal(value) * WEIGHT_UNITS[unit]).normalize(), "KG"
+
+
+def size_signature(raw_name: str) -> Counter:
+    """Every SIZE a name prints, as a multiset of (amount in litres or kilos,
+    kind): "TIMB PAP 25CL" -> {(0.25, "L"): 1}, "FROMAGE 500G" -> {(0.5,
+    "KG"): 1}, a "4/4" tin -> its catering weight.
+
+    A size is a number with a volume or weight unit on it (or a can format).
+    A pack count ("50 TIMB", "X24"), a dimension ("20X20"), a length
+    ("20CM") and any bare number are NOT sizes and stay out: the same cups
+    bought by fifty and by a hundred are one product bought two ways, where
+    a 25cl cup and a 50cl cup are two products. That is the distinction
+    `product_matching_rules.NameShape` needs - `matching.numeric_signature`
+    (every number) answers the stricter question of whether two names are
+    the same PACK, which is what decides whether a neighbour's conversion
+    factor can be copied.
+
+    Same patterns, same masking order as `extract_quantity`, so the two can
+    never disagree about what is a size; but every size is collected rather
+    than the first one found, since a signature has to see all of them.
+    """
+    name = re.sub(r"(?<=[A-Z0-9])ENV", " ENV ", raw_name.upper())
+    sizes: Counter = Counter()
+    for pattern, value_group, unit_group in ((SIZE_X_COUNT_RE, 1, 2), (COUNT_X_SIZE_RE, 2, 3)):
+        for m in list(pattern.finditer(name)):
+            sizes[_size_in_base(m.group(value_group), m.group(unit_group))] += 1
+            name = _mask(name, m)
+    for pattern in (DIMENSION_RE, LENGTH_RE):
+        for m in list(pattern.finditer(name)):
+            name = _mask(name, m)
+    for m in list(CAN_FORMAT_RE.finditer(name)):
+        sizes[(CAN_FORMAT_KG[m.group(1)], "KG")] += 1
+        name = _mask(name, m)
+    for m in SIZE_UNIT_RE.finditer(name):
+        sizes[_size_in_base(m.group(1), m.group(2))] += 1
+    return sizes
 
 
 def strip_size_and_count_tokens(raw_name: str) -> str:

@@ -42,22 +42,65 @@ JavaScript the same forms post normally and come back to the page.
             la liste montre où le produit va, et l'ouvre dessus une fois classé.
         </p>
         {% if suggested_count %}
-            <form method="post" action="{% url 'inventory:approve_all_suggestions' %}"
-                  data-confirm="Approuver {{ suggested_count }} suggestion(s) sans les vérifier une par une ?
+            <div class="review-panel-approve">
+                {% if sure_count %}
+                    <form method="post" action="{% url 'inventory:approve_all_suggestions' %}"
+                          data-confirm="Approuver {{ sure_count }} suggestion(s) de confiance haute sans les vérifier une par une ?
+
+Les autres restent à classer : {{ confidence_counts.medium|default:0 }} de confiance moyenne, {{ confidence_counts.low|default:0 }} de confiance basse."
+                          class="inline-action">
+                        {% csrf_token %}
+                        <input type="hidden" name="confiance" value="haute">
+                        <button class="btn btn-small" type="submit">{% if sure_count == 1 %}Approuver la suggestion sûre{% else %}Approuver les {{ sure_count }} sûres{% endif %}</button>
+                    </form>
+                {% endif %}
+                <form method="post" action="{% url 'inventory:approve_all_suggestions' %}"
+                      data-confirm="Approuver {{ suggested_count }} suggestion(s) sans les vérifier une par une ?
 
 Confiance : {{ confidence_counts.high|default:0 }} haute, {{ confidence_counts.medium|default:0 }} moyenne, {{ confidence_counts.low|default:0 }} basse."
-                  class="review-panel-approve">
-                {% csrf_token %}
-                <button class="btn btn-small btn-secondary" type="submit">{% if suggested_count == 1 %}Approuver la suggestion{% else %}Approuver les {{ suggested_count }} suggestions{% endif %}</button>
-            </form>
-        {% endif %}
-        {% if fallback_count %}
+                      class="inline-action">
+                    {% csrf_token %}
+                    <button class="btn btn-small btn-secondary" type="submit">{% if suggested_count == 1 %}Approuver la suggestion{% else %}Approuver les {{ suggested_count }} suggestions{% endif %}</button>
+                </form>
+            </div>
             <details class="explainer" data-persist="review-help" data-persist-durable>
                 <summary>D'où viennent les propositions</summary>
+                <p>Trois sources, essayées dans cet ordre pour chaque produit :</p>
+                <ol>
+                    <li>
+                        <strong>🔗 Déjà classé</strong> ({{ source_counts.neighbour|default:0 }}) : un produit que vous avez
+                        déjà rangé dit la même chose — mêmes mots une fois retirés les tailles, les quantités par colis
+                        et les marques maison (un pluriel ou une faute de frappe passent ; une abréviation aussi, sauf quand
+                        vos noms impriment les deux mots en entier sous des articles différents — « VIN » n'abrège pas
+                        « VINAIGRE » —, ce qui s'apprend de vos classements), et mêmes tailles pour un article compté à
+                        l'unité. Son article est proposé, et sa conversion reprise quand c'est le même conditionnement
+                        (mêmes nombres imprimés). Confiance haute seulement quand les mots sont identiques (au pluriel
+                        près : une abréviation reste une supposition), que l'article est suivi au litre ou au kilo ou,
+                        compté à l'unité, que c'est aussi la même taille et le même colisage, et que la conversion est
+                        sûre : reprise du voisin sans que la ligne de facture la contredise — un volume imprimé sur la
+                        ligne, ou un colis qui compte déjà les unités, valent 1 quoi qu'en dise le voisin —, ou lue sur la
+                        taille imprimée pour un article suivi au litre ou au kilo. Quand aucun nombre n'est imprimé, rien
+                        ne dit que c'est le même conditionnement : la conversion du voisin est reprise à vérifier
+                        (moyenne), sûre seulement si la ligne de facture se lit de même. Un autre
+                        colisage d'un article compté à l'unité reste moyenne — combien une ligne en compte est une convention
+                        du fournisseur ; une autre taille, basse : vous rangez les tailles à part. « À un mot près » (un mot
+                        de plus d'un côté, jamais un mot qui distingue déjà deux de vos articles) reste moyenne aussi : le
+                        bon article neuf fois sur dix, ce qui n'est pas assez pour approuver en bloc — et basse quand le nom
+                        le plus court n'a qu'un mot. Une proposition est refaite dès que vos classements changent.
+                    </li>
+                    <li>
+                        <strong>📋 Règle</strong> ({{ source_counts.rule|default:0 }}) : sinon, une table de
+                        correspondance (marque ou nom → article). Confiance moyenne au mieux : l'article proposé est
+                        le bon une fois sur deux.
+                    </li>
+                    <li>
+                        <strong>🏷️ Nom brut</strong> ({{ fallback_count }}) : sinon, le nom de facture débarrassé de ses
+                        tailles, dans la catégorie apprise de vos produits déjà classés. Jamais haute : le nom est à vérifier.
+                    </li>
+                </ol>
                 <p>
-                    D'une table de correspondance (marque ou nom → article). Un produit non reconnu est proposé
-                    sous son propre nom, marqué « 🏷️ nom brut » : {{ fallback_count }} dans ce cas.
-                    Vérifiez avant de classer.
+                    La confiance porte sur l'article <em>et</em> sur la conversion « 1 produit = » : c'est la plus faible
+                    des deux. « Approuver les sûres » ne prend que les hautes ; « Approuver les suggestions » prend tout.
                 </p>
             </details>
         {% endif %}
@@ -89,8 +132,8 @@ Confiance : {{ confidence_counts.high|default:0 }} haute, {{ confidence_counts.m
                 {% if lines|length > 3 %}<li class="muted">et {{ lines|length|add:"-3" }} autre{{ lines|length|add:"-3"|pluralize }} achat{{ lines|length|add:"-3"|pluralize }}</li>{% endif %}
             </ul>
             {% if s %}
-                <p class="review-card-suggestion">
-                    {% if s.source == "fallback" %}🏷️ Nom brut{% else %}📋 Suggestion{% endif %}
+                <p class="review-card-suggestion" data-source="{{ s.source }}" data-confidence="{{ s.confidence }}">
+                    {% if s.source == "neighbour" %}🔗 Déjà classé{% elif s.source == "rule" %}📋 Règle{% elif s.source == "fallback" %}🏷️ Nom brut{% else %}📋 Suggestion{% endif %}
                     <span class="muted">(confiance {% if s.confidence == "high" %}haute{% elif s.confidence == "medium" %}moyenne{% elif s.confidence == "low" %}basse{% else %}?{% endif %}) {{ s.reasoning|default:"" }}</span>
                 </p>
             {% endif %}

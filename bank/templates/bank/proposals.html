@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Propositions - Banque - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <h1>Propositions de rattachement</h1>
+            <p class="page-subtitle">
+                Toutes les dépenses encore sans facture pour lesquelles le rapprochement a une proposition, par degré
+                de certitude. Les certaines et les quasi-sûres sont cochées d'avance ; cochez celles à confirmer que
+                vous reconnaissez, choisissez la facture quand plusieurs sont possibles, puis rattachez le tout en une
+                fois.
+            </p>
+        </div>
+        <div class="actions">
+            <a class="btn btn-secondary" href="{{ bank_url }}">Banque</a>
+        </div>
+    </div>
+
+    <div class="card" id="regles">
+        <h2>Comment les propositions sont classées</h2>
+        {% comment %}
+        La règle de chaque degré, dans l'ordre où le rapprochement les applique : un écran qui coche un
+        rattachement d'avance doit dire d'après quelle règle. Les seuils viennent de bank.matching, pas d'ici.
+        {% endcomment %}
+        <ol class="tier-rules">
+            {% for tier, label, rule in tier_rules %}
+                <li><span class="status-pill status-tier-{{ tier }}">{{ label }}</span> {{ rule }}</li>
+            {% endfor %}
+        </ol>
+        <p class="muted">
+            Une facture proposée à plusieurs opérations est signalée sur chacune de leurs options, et n'est cochée
+            d'avance que pour la première dans l'ordre du rapprochement (paiements par carte d'abord, puis par
+            date) : c'est à celle-là que le rattachement groupé la donnerait, les autres seraient laissées de côté
+            et dites.
+        </p>
+        <p class="muted">
+            Une ligne rattachée ici l'est « à la main » : elle ne sera plus touchée par le rapprochement
+            automatique, et si le bénéficiaire imprimé par la banque ne nommait pas le fournisseur, il sera
+            reconnu le mois prochain - seulement quand les factures font exactement le montant débité.
+        </p>
+    </div>
+
+    {% if not has_lines %}
+        <div class="empty-state">
+            <p>Aucun relevé importé pour l'instant : importez-en un depuis <a href="{{ bank_url }}">Banque</a>.</p>
+        </div>
+    {% elif not proposed_count %}
+        <div class="empty-state">
+            <p>
+                Aucune proposition en attente.
+                {% if without_count %}
+                    {{ without_count }} dépense{{ without_count|pluralize }} reste{{ without_count|pluralize:"nt" }} sans facture et
+                    sans proposition : le rapprochement n'a rien trouvé à ces dates - importez les tickets ou factures
+                    manquants, puis « Relancer le rapprochement » sur <a href="{{ bank_url }}">Banque</a>, où chaque
+                    ligne a aussi sa liste et sa recherche.
+                {% endif %}
+            </p>
+        </div>
+    {% else %}
+        <form id="propositions-form" method="post" action="{% url 'bank:link_proposals' %}" data-bulk-select>
+            {% csrf_token %}
+            <input type="hidden" name="next" value="{% url 'bank:proposals' %}">
+            <div class="bulk-bar">
+                <span class="muted" data-bulk-count data-empty="Cochez les propositions à rattacher.">
+                    {{ preticked_count }} sélectionnée{{ preticked_count|pluralize }}
+                </span>
+                <button class="btn" type="submit" data-bulk-submit>Rattacher les propositions cochées</button>
+                {% if without_count %}
+                    <span class="muted">
+                        {{ without_count }} dépense{{ without_count|pluralize }} sans facture n'{{ without_count|pluralize:"a,ont" }} aucune
+                        proposition : voir <a href="{{ bank_url }}">Banque</a>.
+                    </span>
+                {% endif %}
+            </div>
+
+            {% comment %}
+            Une ligne certaine n'est ici que parce que le rapprochement n'a pas été relancé depuis le dernier
+            import - ou parce qu'on l'a déliée à la main, et alors elle n'est pas cochée (la note sur la ligne).
+            Pas cochée non plus quand sa facture est à des mois, ou proposée à une opération servie avant elle :
+            la ligne le dit à chaque fois, et la note de chaque groupe énonce la règle avec son seuil
+            (bank.views.GROUP_NOTES, écrite depuis les constantes de bank.matching).
+            {% endcomment %}
+            {% include "bank/_proposal_group.html" with rows=sure title="Certaines" tier="sure" note=notes.sure %}
+            {% include "bank/_proposal_group.html" with rows=near_sure title="Quasi-sûres" tier="near_sure" note=notes.near_sure %}
+            {% include "bank/_proposal_group.html" with rows=to_confirm title="À confirmer" tier="to_confirm" note=notes.to_confirm %}
+        </form>
+    {% endif %}
+{% endblock %}

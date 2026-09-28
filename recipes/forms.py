@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django import forms
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
@@ -86,12 +88,18 @@ class RecipeForm(forms.ModelForm):
         )
         if self.instance.pk and "pos_products" not in self.initial:
             self.initial["pos_products"] = list(self.instance.pos_products.values_list("pk", flat=True))
+        # Neither has to be filled: a preparation is not sold, so it has no
+        # price and nothing is sold of it. The model keeps sale_quantity NOT
+        # NULL with a default of 1 - « one whole sale » - and clean_ below
+        # puts that back, which a field failing « required » first would
+        # never reach.
+        self.fields["sale_quantity"].required = False
 
     class Meta:
         model = Recipe
         fields = [
             "name", "happy_hour_name", "category", "yield_quantity", "yield_unit",
-            "selling_price_ttc", "happy_hour_price_ttc", "vat_rate",
+            "sale_quantity", "selling_price_ttc", "happy_hour_price_ttc", "vat_rate",
         ]
         labels = {
             "name": "Nom",
@@ -99,6 +107,8 @@ class RecipeForm(forms.ModelForm):
             "category": "Catégorie",
             "yield_quantity": "Quantité produite",
             "yield_unit": "Unité produite",
+            "sale_quantity": "Quantité vendue (dans l'unité produite)",
+            "selling_price_ttc": "Prix de vente (TTC)",
             "selling_price_ttc": "Prix de vente (TTC)",
             "happy_hour_price_ttc": "Prix happy hour (TTC)",
             "vat_rate": "TVA (ex : 0.20 pour 20%)",
@@ -106,6 +116,47 @@ class RecipeForm(forms.ModelForm):
         widgets = {
             "category": forms.TextInput(attrs={"list": "recipe-category-datalist", "autocomplete": "off"}),
         }
+
+    def clean_sale_quantity(self):
+        """Blank is one whole sale - what every recipe meant before the
+        field existed, and what a cocktail means now."""
+        quantity = self.cleaned_data.get("sale_quantity")
+        return Decimal("1") if quantity in (None, "") else quantity
+
+    def clean(self):
+        """A quantity sold, or a happy-hour price, on a recipe that is not
+        sold: two answers that cannot both be true, and kept quietly one of
+        them would go on being shown - « Pas vendue directement » above a
+        happy-hour margin. The price is what says « pas vendue directement »,
+        so it is the one that decides.
+
+        Compared on the CLEANED value, never on what was posted. The box is
+        drawn with the stored figure, which Django renders as « 1.0000 »
+        from the database - so a guard reading the raw string refused the
+        one edit this exists for: opening a preparation filed at 0,00 € and
+        clearing its price. Decimal("1.0000") == Decimal("1"), the string
+        forms are not.
+        """
+        cleaned = super().clean()
+        # A field that RAISED is dropped from cleaned_data, so « laissé
+        # vide » and « 12,50 » (a comma) looked identical here - and a typo
+        # answered « cette recette n'est pas vendue telle quelle » on a
+        # quantity box that was perfectly correct.
+        if cleaned.get("selling_price_ttc") is not None or "selling_price_ttc" in self.errors:
+            return cleaned
+        if cleaned.get("sale_quantity") not in (None, Decimal("1")):
+            self.add_error(
+                "sale_quantity",
+                "Sans prix de vente, cette recette n'est pas vendue telle quelle : "
+                "laissez la quantité vendue vide, ou donnez-lui un prix.",
+            )
+        if cleaned.get("happy_hour_price_ttc") is not None:
+            self.add_error(
+                "happy_hour_price_ttc",
+                "Sans prix de vente, cette recette n'est pas vendue telle quelle : "
+                "elle ne peut pas avoir de prix en happy hour.",
+            )
+        return cleaned
 
 
 class RecipeIngredientForm(BlankRowTolerantModelForm):
@@ -304,8 +355,12 @@ class SaleDocumentLineForm(BlankRowTolerantModelForm):
     def __init__(self, *args, source_choices=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["unit_price_ttc"].required = False
+        # A line already naming a preparation keeps its own choice, or the
+        # document it sits on could not be opened at all.
         self.fields["source"].choices = (
-            source_choices if source_choices is not None else sale_source_choices()
+            source_choices
+            if source_choices is not None
+            else sale_source_choices(keep=self.instance.recipe_id if self.instance.pk else None)
         )
         if self.instance.pk:
             self.initial["source"] = (
@@ -331,11 +386,26 @@ class SaleDocumentLineForm(BlankRowTolerantModelForm):
         return cleaned
 
 
-def sale_source_choices() -> list:
-    """Everything sellable: a recipe, or a stock item sold as itself."""
+def sale_source_choices(keep: int | None = None) -> list:
+    """Everything sellable: a recipe, or a stock item sold as itself.
+
+    A recipe with no price is a preparation and is NOT sellable - offered, a
+    line naming it books its full cost against 0,00 € of revenue
+    (`SaleDocumentLine.total_ttc` has nothing to fall back on) while
+    `margins.computation` counts the cost, which is the asymmetry CLAUDE.md
+    forbids for an article sold as itself: both sides out, or neither. A 0 is
+    a price somebody typed, so a comped drink stays offered.
+
+    `keep` puts one back: a line written before its recipe's price was
+    cleared must still open, and a choice missing from the list is a form
+    that refuses the document rather than a document that can be corrected.
+    """
+    sellable = Recipe.objects.exclude(selling_price_ttc=None)
+    if keep is not None:
+        sellable = Recipe.objects.filter(Q(selling_price_ttc__isnull=False) | Q(pk=keep))
     return [
         ("", "---------"),
-        ("Recettes", [(f"recipe:{r.pk}", r.name) for r in Recipe.objects.order_by("name")]),
+        ("Recettes", [(f"recipe:{r.pk}", r.name) for r in sellable.order_by("name")]),
         (
             "Articles",
             [

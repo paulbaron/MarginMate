@@ -1,0 +1,22 @@
+{% load assets %}<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="referrer" content="same-origin">
+    <title>{% block title %}Signature de votre relevé d'heures{% endblock %}</title>
+    <link rel="stylesheet" href="{% asset 'css/marginmate.css' %}">
+</head>
+{% comment %}
+Les pages du salarié (staff/public_views.py) : les seules faites pour être ouvertes sans compte. Elles
+n'héritent PAS de base.html : ni la navigation de l'employeur, ni ses compteurs, ni ses messages. Aucun
+script ni style en ligne - la Content-Security-Policy de ces pages n'autorise que les fichiers du site.
+{% endcomment %}
+<body class="public-page">
+    <main class="public-container">
+        {% block content %}{% endblock %}
+    </main>
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% comment %}
+« Supprimer… », étape 2 : la dernière vérification (signature_views.signature_delete_confirm). Contexte :
+`page` (DeletionPage, avec son jeton). Un résumé et UN bouton rouge ; seul son envoi supprime, et seulement
+si le jeton de l'étape 1 est encore valable (dix minutes), donné pour cette version, et que rien n'a changé
+depuis. Afficher cette page ne supprime rien.
+{% endcomment %}
+{% block title %}Dernière vérification — version {{ page.version }} {{ page.of_month }} — {{ page.who }} - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <p class="breadcrumb"><a href="{{ page.back_url }}">← {{ page.month_title }} — {{ page.who }}</a></p>
+            <h1>Dernière vérification</h1>
+            <p class="page-subtitle">Étape 2 sur 2 : rien n'est encore supprimé.</p>
+        </div>
+    </div>
+
+    <div class="deletion">
+        <section class="card deletion-summary" aria-labelledby="deletion-summary">
+            <h2 id="deletion-summary">Vous allez supprimer définitivement</h2>
+            <ul class="deletion-facts">
+                <li>
+                    la version {{ page.version }} {{ page.of_month }} de {{ page.who }} —
+                    <span class="status-pill {{ page.pill }}">{{ page.status }}</span>
+                    <span class="muted small signature-id deletion-id">document n° {{ page.request.document_id }}</span>
+                </li>
+                <li>
+                    {% if page.files %}ses {{ page.files|length }} fichier{{ page.files|length|pluralize }}&nbsp;:
+                        {% for file in page.files %}<code class="deletion-file">{{ file.name }}</code>{% if not forloop.last %}, {% endif %}{% endfor %}
+                        {% if page.signed %}— dont le relevé signé{% endif %}{% if page.has_proof %}{% if page.signed %} et{% else %} — dont{% endif %} le dossier de preuve{% endif %}
+                    {% else %}aucun fichier : le dossier privé n'en a pas pour elle{% endif %}
+                </li>
+                <li>son journal de {{ page.events }} événement{{ page.events|pluralize }}</li>
+            </ul>
+            {% if page.with_hours %}
+                <p class="message message-error" role="alert">
+                    <strong>Et les heures enregistrées du mois ({{ page.days }} jours)</strong>&nbsp;: c'est le relevé
+                    du temps de travail lui-même&nbsp;; le mois reprendra la semaine type.
+                </p>
+            {% endif %}
+            {% if not page.with_hours %}<p class="small">Les heures enregistrées du mois restent.</p>{% endif %}
+            {% if page.holds_month %}<p class="small">Son lien de signature ne mènera plus à rien ; le mois {% if page.with_hours %}repartira de la semaine type{% else %}redeviendra modifiable{% endif %}.</p>{% endif %}
+            <p class="small">
+                L'application ne pourra pas la défaire. Une trace en sera gardée dans <code>deletions.log</code>, dans
+                le dossier privé.
+            </p>
+            <form method="post" action="{{ page.step2_url }}" class="form-actions deletion-confirm">
+                {% csrf_token %}
+                <input type="hidden" name="{{ page.token_field }}" value="{{ page.token }}">
+                <button class="btn btn-destroy" type="submit">Supprimer définitivement</button>
+                <a class="btn btn-secondary" href="{{ page.back_url }}">Ne rien supprimer</a>
+            </form>
+            <p class="muted small">Cette vérification vaut {{ page.minutes }} minutes : passé ce délai, il faudra recommencer depuis la première étape.</p>
+        </section>
+    </div>
+{% endblock %}

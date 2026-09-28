@@ -45,7 +45,9 @@ without the charges - and is then drawn TWICE, the global one untouched and
 the second beside it. Every invoiced euro has exactly one place (a supplier
 of charges, an article, or « à classer »), so leaving a place out takes that
 money out and nothing else; the revenue never moves, because a purchase
-belongs to no till category. See `SpendGroup` and `_where_it_went`.
+belongs to no till category. See `SpendGroup` and `_where_it_went`, whose
+public door is `where_it_went(invoice)`: « Dépenses par catégorie » reads the
+same split to say what a bank line bought, rather than working it out again.
 
 **The products margin's own box is read here too**, every article under its
 category (`CountableCategory`), with what was bought of it over the window -
@@ -144,7 +146,7 @@ def article_key(article_id: int) -> str:
     return f"{ARTICLE_PREFIX}{article_id}"
 
 
-def _cents(value: Decimal) -> Decimal:
+def cents(value: Decimal) -> Decimal:
     """Money to the cent, half away from zero - what the rest of the app
     rounds with (InvoiceLine, the charge reading)."""
     return value.quantize(CENTS, rounding=ROUND_HALF_UP)
@@ -730,16 +732,25 @@ def _recipe_costs(recipe_ids: set[int]) -> tuple[dict[int, tuple[Decimal, Decima
         for recipe in recipes:
             ingredients = list(recipe.ingredients.all())
             cost_range = recipe.summary(ingredients)["cost_range"]
-            if cost_range is None or cost_range[1] <= 0 or not recipe.yield_quantity:
+            if (
+                cost_range is None
+                or cost_range[1] <= 0
+                or not recipe.yield_quantity
+                # A sale of nothing costs nothing, and a cost of zero reads
+                # as a 100 % margin - the one figure this page must never
+                # print. Uncosted instead, like a recipe that yields nothing.
+                or not recipe.sale_quantity
+            ):
                 uncosted[recipe.pk] = RECIPE_WITHOUT_COST
                 continue
             if not _every_ingredient_priced(recipe, ingredients, set()):
                 uncosted[recipe.pk] = INGREDIENT_WITHOUT_PRICE
                 continue
-            costs[recipe.pk] = (
-                cost_range[0] / recipe.yield_quantity,
-                cost_range[1] / recipe.yield_quantity,
-            )
+            # What ONE SALE costs: its share of a full preparation
+            # (Recipe.sold_share), which is the yield alone while a recipe
+            # sells one whole batch - every one of them until a portion is
+            # filed - and 0,15/1,6 for a terrine sold by the plate.
+            costs[recipe.pk] = (recipe.per_sale(cost_range[0]), recipe.per_sale(cost_range[1]))
     return costs, uncosted
 
 
@@ -939,7 +950,7 @@ def _total(by_rate: dict[Decimal, Decimal]) -> Decimal:
 def _ht_per_rate(by_rate: dict[Decimal, Decimal]) -> Decimal:
     """The TTC accumulated per rate, taken back to HT once per rate and
     rounded there. Keyed by `Recipe._vat_divisor`, which is never zero."""
-    return sum((_cents(total / divisor) for divisor, total in by_rate.items()), start=ZERO)
+    return sum((cents(total / divisor) for divisor, total in by_rate.items()), start=ZERO)
 
 
 # -- what was invoiced -------------------------------------------------------
@@ -961,10 +972,10 @@ def _read_the_invoices(report: MarginReport, window: DateRange) -> None:
     """
     groups: dict[str, SpendGroup] = {}
     parts: dict[str, SpendPart] = {}
-    for invoice in _invoices(window.limit(Invoice.objects.all(), "invoice_date")):
+    for invoice in with_lines(window.limit(Invoice.objects.all(), "invoice_date")):
         # Each total read once: `total_ttc` walks the lines.
         total_ttc = invoice.total_ttc
-        whole = Money(_cents(invoice.total_ht), _cents(total_ttc))
+        whole = Money(cents(invoice.total_ht), cents(total_ttc))
         target = "spend_charges" if invoice.supplier.expenses_only else "spend_goods"
         setattr(report, target, getattr(report, target) + whole)
         # How many documents the figure is made of: a month nobody has
@@ -996,29 +1007,36 @@ def _read_the_invoices(report: MarginReport, window: DateRange) -> None:
     # of - so with no dates typed those invoices ARE the spending, and
     # `undated_in_spend` says which of the two the figures mean.
     report.undated_in_spend = not window
-    for invoice in _invoices(Invoice.objects.filter(invoice_date__isnull=True)):
+    for invoice in with_lines(Invoice.objects.filter(invoice_date__isnull=True)):
         report.undated_invoices += 1
-        report.undated_spend += _invoice_money(invoice)
+        report.undated_spend += invoice_money(invoice)
 
 
-def _invoices(queryset):
-    # Invoice.total_ht/total_ttc add their lines up in Python (SQLite's own
-    # arithmetic is not exact decimal): without the prefetch that is two
-    # queries per invoice, on every invoice the bar has ever had. The lines
-    # come with their product and its article in the same query, because
-    # `_where_it_went` asks every line whose it is - prefetched as
-    # `lines__product__stock_type` it would be three queries, and asked
-    # line by line one per line, over a year of invoices.
-    return queryset.select_related("supplier").prefetch_related(
-        Prefetch("lines", queryset=InvoiceLine.objects.select_related("product__stock_type"))
-    )
+def lines_prefetch(lookup: str = "lines") -> Prefetch:
+    """The one way to load the lines `where_it_went` reads - public, and
+    taking the lookup, because « Dépenses » reaches them through a bank
+    line's payments (`invoice__lines`) rather than off an invoice queryset.
+
+    Invoice.total_ht/total_ttc add their lines up in Python (SQLite's own
+    arithmetic is not exact decimal): without this that is two queries per
+    invoice, on every invoice the bar has ever had. The lines come with
+    their product and its article in the same query, because `_where_it_went`
+    asks every line whose it is - prefetched as `lines__product__stock_type`
+    it would be three queries, and asked line by line one per line.
+    """
+    return Prefetch(lookup, queryset=InvoiceLine.objects.select_related("product__stock_type"))
 
 
-def _invoice_money(invoice: Invoice) -> Money:
-    return Money(_cents(invoice.total_ht), _cents(invoice.total_ttc))
+def with_lines(queryset):
+    """An Invoice queryset loaded the way `where_it_went` needs it."""
+    return queryset.select_related("supplier").prefetch_related(lines_prefetch())
 
 
-class _Place(NamedTuple):
+def invoice_money(invoice: Invoice) -> Money:
+    return Money(cents(invoice.total_ht), cents(invoice.total_ttc))
+
+
+class Place(NamedTuple):
     """Where a line's money lands (`key`), and the group of the table it is
     drawn under (`group_key`). « à classer » is both."""
 
@@ -1028,14 +1046,14 @@ class _Place(NamedTuple):
     group_name: str
 
 
-_TO_CLASSIFY = _Place(TO_CLASSIFY_KEY, TO_CLASSIFY_NAME, TO_CLASSIFY_KEY, TO_CLASSIFY_NAME)
+_TO_CLASSIFY = Place(TO_CLASSIFY_KEY, TO_CLASSIFY_NAME, TO_CLASSIFY_KEY, TO_CLASSIFY_NAME)
 
 
-def _charge_place(supplier: Supplier) -> _Place:
-    return _Place(supplier_key(supplier.pk), supplier.name, CHARGES_KEY, CHARGES_NAME)
+def _charge_place(supplier: Supplier) -> Place:
+    return Place(supplier_key(supplier.pk), supplier.name, CHARGES_KEY, CHARGES_NAME)
 
 
-def _line_place(line: InvoiceLine) -> _Place:
+def _line_place(line: InvoiceLine) -> Place:
     """A goods line lands on its article, drawn under the article's category
     as it is TODAY. A line whose product no article claims yet is « à
     classer » - and so is a « poste de charge » product on a goods
@@ -1045,7 +1063,7 @@ def _line_place(line: InvoiceLine) -> _Place:
     article = line.product.stock_type
     if article is None:
         return _TO_CLASSIFY
-    return _Place(
+    return Place(
         article_key(article.pk),
         article.name,
         category_key(article.category),
@@ -1053,7 +1071,62 @@ def _line_place(line: InvoiceLine) -> _Place:
     )
 
 
-def _where_it_went(invoice: Invoice, whole: Money, total_ttc: Decimal) -> dict[_Place, Money]:
+def where_it_went(invoice: Invoice) -> dict[Place, Money]:
+    """One invoice's own money in its places, HT and TTC - the public way in.
+
+    « Marges » reads this off the very totals `spend` is summed from, and
+    « Dépenses » reads it again to say what a bank line bought. Copied
+    rather than shared, the two pages would each hold half a definition of
+    « where an invoice's money went », and a figure with two definitions is
+    the oldest bug in this codebase. Load the invoices with `with_lines` or
+    this is two queries per invoice.
+    """
+    # `total_ttc` walks the lines, so it is read once and handed down.
+    total_ttc = invoice.total_ttc
+    return _where_it_went(invoice, Money(cents(invoice.total_ht), cents(total_ttc)), total_ttc)
+
+
+def _charges_over_the_goods(lines, lines_ttc) -> tuple[list[Decimal], list[Decimal], list[bool]]:
+    """The lines' HT and TTC with the charges they spread moved onto the
+    goods they were spread over, and which lines were emptied by that.
+
+    A delivery ticked « frais à répartir » on the correction page is already
+    ON the other lines' cost everywhere else - the stock movement, the FIFO
+    valuation, every recipe. This page is the one definition of where an
+    invoice's money went, and « Dépenses » reads it too, so leaving the
+    delivery under « Sans article » here would mean the bottles cost one
+    thing on the stock page and another on this one.
+
+    Each line's HT is its `cost_ht` - the share was worked out and stored
+    when the lines were saved (importing.spread_charges), so the two pages
+    cannot drift apart. Its TTC follows the same shares, at the charge's own
+    rate, since that is the money the bank will pay. Nothing is created: what
+    leaves the charge lines is exactly what arrives on the goods, so the
+    places still add back up to the invoice's own two totals.
+    """
+    charged = [line.is_spread_charge for line in lines]
+    if not any(charged):
+        return [line.total_ht for line in lines], lines_ttc, charged
+    charge_ht = sum((line.total_ht for line in lines if line.is_spread_charge), start=ZERO)
+    charge_ttc = sum((ttc for ttc, is_charge in zip(lines_ttc, charged) if is_charge), start=ZERO)
+    shared = sum((line.spread_ht for line in lines), start=ZERO)
+    if not charge_ht or not shared:
+        # Nothing carried it - an invoice of nothing but charges, or one
+        # whose goods are all returns. The charge stays where it is, whole
+        # and visible, rather than disappearing into a page.
+        return [line.total_ht for line in lines], lines_ttc, [False] * len(lines)
+    out_ht, out_ttc = [], []
+    for line, ttc in zip(lines, lines_ttc):
+        if line.is_spread_charge:
+            out_ht.append(ZERO)
+            out_ttc.append(ZERO)
+        else:
+            out_ht.append(line.cost_ht)
+            out_ttc.append(ttc + charge_ttc * line.spread_ht / shared)
+    return out_ht, out_ttc, charged
+
+
+def _where_it_went(invoice: Invoice, whole: Money, total_ttc: Decimal) -> dict[Place, Money]:
     """`whole` - the invoice's own two totals, to the cent, exactly as
     `spend` adds them - split over its places so that they add back up to
     it, to the cent, HT and TTC.
@@ -1098,14 +1171,21 @@ def _where_it_went(invoice: Invoice, whole: Money, total_ttc: Decimal) -> dict[_
     # rounding the printed amounts never lost), and what it adds on top of
     # the lines is the printed total's own centimes: remainder, not duty.
     adjustment_ttc = ZERO if printed else total_ttc - sum(lines_ttc, start=ZERO)
-    weights = [line.total_ht if line.total_ht > 0 else ZERO for line in lines]
+    lines_ht, lines_ttc, carried = _charges_over_the_goods(lines, lines_ttc)
+    weights = [
+        line.total_ht if line.total_ht > 0 and not line.is_spread_charge else ZERO for line in lines
+    ]
     if not any(weights):
         weights = [abs(line.total_ht) for line in lines]
     weight_total = sum(weights, start=ZERO)
 
-    raw: dict[_Place, list[Decimal]] = {}
-    for line, ttc, weight in zip(lines, lines_ttc, weights):
-        ht = line.total_ht
+    raw: dict[Place, list[Decimal]] = {}
+    for line, ht, ttc, weight, moved in zip(lines, lines_ht, lines_ttc, weights, carried):
+        if moved:
+            # Its money is on the goods it delivered now. Left in, it would
+            # draw an empty « Sans article » row on a page whose whole
+            # subject is where the money went.
+            continue
         if weight_total:
             ht += adjustment_ht * weight / weight_total
             ttc += adjustment_ttc * weight / weight_total
@@ -1113,7 +1193,7 @@ def _where_it_went(invoice: Invoice, whole: Money, total_ttc: Decimal) -> dict[_
         amounts[0] += ht
         amounts[1] += ttc
 
-    placed = {place: Money(_cents(ht), _cents(ttc)) for place, (ht, ttc) in raw.items()}
+    placed = {place: Money(cents(ht), cents(ttc)) for place, (ht, ttc) in raw.items()}
     largest = max(raw, key=lambda place: abs(raw[place][0]))
     placed[largest] += whole - sum(placed.values(), start=Money())
     return placed
@@ -1347,13 +1427,13 @@ def _read_the_flagged_articles(report: MarginReport, window: DateRange) -> None:
     # « Épicerie » after « Vins » and « abricot » after « Zeste ». The blank
     # category last, like « à classer » in the breakdown above it.
     for holder in categories.values():
-        holder.articles.sort(key=lambda article: (_reading_order(article.name), article.name))
+        holder.articles.sort(key=lambda article: (reading_order(article.name), article.name))
     report.countable = sorted(
-        categories.values(), key=lambda holder: (not holder.name, _reading_order(holder.name), holder.name)
+        categories.values(), key=lambda holder: (not holder.name, reading_order(holder.name), holder.name)
     )
 
 
-def _reading_order(name: str) -> str:
+def reading_order(name: str) -> str:
     """`name` as an alphabetical list files it: accents and case aside."""
     decomposed = unicodedata.normalize("NFD", name)
     return "".join(ch for ch in decomposed if not unicodedata.combining(ch)).casefold()

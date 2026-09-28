@@ -88,6 +88,28 @@
                 {% endif %}
             </p>
 
+            {% comment %}
+            The order the application really asks, said on the page: a
+            source beats what a document prints, an electronic invoice is
+            read on its declared SIREN before any header, the headers a
+            person gave come before the configured tills, a company number
+            another supplier holds overrules a header that matched, and the
+            learned identifiers are asked last. Four of those six were on no
+            screen at all, which is what « je veux que ce soit plus clair »
+            was about (owner, 25/09).
+            {% endcomment %}
+            <h3>Ce qui range un document ici</h3>
+            <ol class="filing-rules">
+                {% for rule in filing_rules %}
+                    <li{% if rule.missing %} class="is-missing"{% endif %}>
+                        <strong>{{ rule.title }}</strong>
+                        {% if rule.typed %}<span class="pill-typed" title="Saisi à la main : il ne sera pas oublié tout seul">saisi à la main</span>{% endif %}
+                        {% if rule.url %}<a class="muted" href="{{ rule.url }}">modifier</a>{% endif %}
+                        <br><span class="muted">{{ rule.detail }}</span>
+                    </li>
+                {% endfor %}
+            </ol>
+
             <h3>Identifiants retenus</h3>
             {% if report.known %}
                 <table data-table data-table-label="identifiants">
@@ -95,7 +117,11 @@
                     <tbody>
                         {% for row in report.known %}
                             <tr>
-                                <td>{{ row.label }}{% if row.identifier|slice:":4" == "web:" %}<br><span class="muted">un site seul ne reconnaît personne</span>{% endif %}</td>
+                                <td>
+                                    {{ row.label }}
+                                    {% if row.typed %}<span class="pill-typed" title="Saisi à la main : l'apprentissage ne le retirera pas">saisi à la main</span>{% endif %}
+                                    {% if row.identifier|slice:":4" == "web:" %}<br><span class="muted">un site seul ne reconnaît personne</span>{% endif %}
+                                </td>
                                 <td>
                                     {% if row.total %}sur {{ row.count }} de ses {{ row.total }} documents{% else %}<span class="muted">aucun de ses documents ne l'imprime encore</span>{% endif %}
                                     {% if row.elsewhere %}<br><span class="field-error">aussi sur {{ row.elsewhere }}</span>{% endif %}
@@ -116,6 +142,46 @@
             {% else %}
                 <p class="muted">Aucun.</p>
             {% endif %}
+
+            {% if move_offer %}
+                <div class="message message-warning">
+                    <strong>{{ move_offer.label }}</strong> reconnaît <a href="{% url 'invoices:supplier_detail' move_offer.holder.pk %}">{{ move_offer.holder.name }}</a> aujourd'hui.
+                    <p class="muted">
+                        Un identifiant que deux fournisseurs retiennent n'en fait reconnaître aucun : il faut
+                        qu'il soit à l'un ou à l'autre. Le déplacer le retire à {{ move_offer.holder.name }} et
+                        le donne à {{ supplier.name }} — les deux fiches le gardent dans leur historique, et
+                        l'une ou l'autre l'annule.
+                    </p>
+                    <form method="post" action="{% url 'invoices:supplier_identifiers' supplier.pk %}" class="inline-form">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="deplacer">
+                        <input type="hidden" name="valeur" value="{{ move_offer.identifier }}">
+                        <button class="btn btn-small" type="submit">Le déplacer ici</button>
+                        <a class="btn btn-small btn-secondary" href="{{ fiche }}">Laisser à {{ move_offer.holder.name }}</a>
+                    </form>
+                </div>
+            {% endif %}
+
+            {% comment %}
+            The one action on this page whose value the page did not offer,
+            so the reading is the guard: identifiers.read_typed hands what is
+            typed to the very function that reads a printed document, and
+            refuses by naming the fault rather than saying « non ».
+            {% endcomment %}
+            <form method="post" action="{% url 'invoices:supplier_identifiers' supplier.pk %}" class="inline-form add-identifier">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="ajouter">
+                <label for="identifier-value">Ajouter un identifiant</label>
+                <input type="text" id="identifier-value" name="valeur" maxlength="120"
+                       placeholder="900 000 019 · 01 23 45 67 89 · exemple.fr"
+                       aria-describedby="identifier-help" required>
+                <button class="btn btn-small" type="submit">Ajouter</button>
+            </form>
+            <p class="muted small" id="identifier-help">
+                Un n° SIREN, un n° SIRET, un n° de TVA, un numéro de téléphone ou un site, tel qu'il est
+                imprimé sur ses documents. Saisi ici, il ne sera pas oublié tout seul : l'apprentissage ne
+                retire que ce qu'il a appris lui-même.
+            </p>
 
             {% if report.printed %}
                 <details{% if not report.known %} open{% endif %}>

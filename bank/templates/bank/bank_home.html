@@ -7,10 +7,16 @@
             <p class="page-subtitle">
                 Chaque dépense du relevé rattachée à la facture ou au ticket qu'elle a payé. Le rattachement est
                 automatique quand le montant est exact au centime, la date cohérente et le fournisseur nommé par
-                la banque ; le reste est proposé, à confirmer ligne par ligne.
+                la banque ; le reste est proposé, à confirmer ligne par ligne ici, ou en série sur
+                « Propositions ».
             </p>
         </div>
         <div class="actions">
+            {% if has_lines %}
+                <a class="btn btn-secondary" href="{% url 'bank:proposals' %}">Propositions à valider</a>
+            {% endif %}
+            <a class="btn btn-secondary" href="{{ spending_url }}">Dépenses par catégorie</a>
+            <a class="btn btn-secondary" href="{{ income_url }}">Entrées d'argent</a>
             <a class="btn btn-secondary" href="{% url 'bank:rule_list' %}">Dépenses sans facture attendue</a>
             {% if has_lines %}
                 <form method="post" action="{% url 'bank:bank_reconcile' %}">
@@ -100,6 +106,19 @@
                     <a href="{% url 'bank:rule_list' %}">règle</a>
                 </span>
             </div>
+            {% comment %}
+            Ce qui est arrivé sur la même période. Le lien ouvre « Entrées d'argent »
+            sur ces dates-là (un mois choisi devient son premier et son dernier
+            jour), où l'argent reçu se lit à côté de ce que la caisse a encaissé.
+            {% endcomment %}
+            <div class="stat">
+                <span class="stat-label">Entrées</span>
+                <span class="stat-value">{{ stats.income_total|floatformat:2 }} €</span>
+                <span class="stat-note">
+                    {{ stats.income_count }} opération{{ stats.income_count|pluralize }} ·
+                    <a href="{{ income_url }}">face aux ventes</a>
+                </span>
+            </div>
         </div>
 
         <div class="filter-tabs">
@@ -175,13 +194,39 @@
                                     <td class="num" data-sort="{{ line.amount|stringformat:'s' }}">{{ line.amount|floatformat:2 }} €</td>
                                     <td>
                                         {% if row.status == "linked" %}
-                                            {% for payment in row.payments %}
+                                            {% for link in row.links %}
                                                 <div>
-                                                    <a href="{% url 'invoices:invoice_detail' payment.invoice.pk %}">{{ payment.invoice.supplier.name }} n° {{ payment.invoice.invoice_number|default:payment.invoice.pk }}</a>
-                                                    <span class="muted">· {{ payment.invoice.invoice_date|date:"d/m/Y"|default:"sans date" }} · {{ payment.invoice.total_ttc|floatformat:2 }} €</span>
-                                                    <span class="status-pill status-linked">{{ payment.get_method_display }}</span>
+                                                    <a href="{% url 'invoices:invoice_detail' link.invoice.pk %}">{{ link.invoice.supplier.name }} n° {{ link.invoice.invoice_number|default:link.invoice.pk }}</a>
+                                                    <span class="muted">· {{ link.invoice.invoice_date|date:"d/m/Y"|default:"sans date" }} · {{ link.total|floatformat:2 }} €</span>
+                                                    <span class="status-pill status-linked">{{ link.payment.get_method_display }}</span>
+                                                    {# Une facture à la fois : « Délier » seul retirait les trois. #}
+                                                    {% if row.payments|length > 1 %}
+                                                        <form method="post" action="{% url 'bank:bank_line_action' line.pk %}" class="inline-form">
+                                                            {% csrf_token %}
+                                                            <input type="hidden" name="action" value="unlink_invoice">
+                                                            <input type="hidden" name="next" value="{{ page_url }}">
+                                                            <input type="hidden" name="invoice" value="{{ link.invoice.pk }}">
+                                                            <button class="btn btn-small btn-secondary" type="submit">Délier</button>
+                                                        </form>
+                                                    {% endif %}
+                                                    {% for other in link.others %}
+                                                        <span class="read-as">Aussi réglée par l'opération du {{ other.paid_on|date:"d/m/Y" }} ({{ other.counterparty|default:other.bank_type }}, {{ other.amount_due|floatformat:2 }} €)</span>
+                                                    {% endfor %}
                                                 </div>
                                             {% endfor %}
+                                            {% if row.gap %}
+                                                {# L'écart est dit, jamais corrigé : la ligne reste rapprochée, et les deux chiffres disent le reste. #}
+                                                <p class="read-as">
+                                                    Factures {{ row.gap.invoiced|floatformat:2 }} € pour {{ row.gap.due|floatformat:2 }} € débités — {{ row.gap.difference|floatformat:2 }} € de {% if row.gap.over %}plus{% else %}moins{% endif %} que la dépense.
+                                                    {% if row.gap.shared %}Une facture est aussi réglée par une autre opération.{% endif %}
+                                                </p>
+                                            {% endif %}
+                                            {% comment %}
+                                            Une dépense qui règle deux livraisons garde la liste : sans elle, la
+                                            deuxième facture ne se rattachait plus qu'en tapant une recherche, et il
+                                            fallait connaître un mot qui la trouve.
+                                            {% endcomment %}
+                                            {% include "bank/_pick_invoice.html" %}
                                         {% elif row.status == "no_invoice" %}
                                             <span class="status-pill status-ignored">Pas de facture attendue</span>
                                             {% if row.rule %}
@@ -190,10 +235,30 @@
                                                 <span class="read-as">marquée à la main</span>
                                             {% endif %}
                                         {% elif row.status == "income" %}
-                                            <span class="muted">Entrée d'argent</span>
+                                            {% comment %}
+                                            Ce qu'est l'entrée, lu comme « Entrées d'argent » la lit
+                                            (bank/income.py) : un versement carte et sa commission, un
+                                            dépôt, ou la catégorie tapée - pas « Entrée d'argent » pour tout.
+                                            {% endcomment %}
+                                            {% with entry=row.entry %}
+                                                {% if entry.gross is not None %}
+                                                    <span>{{ entry.name }} : {{ entry.gross|floatformat:2 }} € encaissés, {{ entry.commission|floatformat:2 }} € de commission</span>
+                                                {% elif entry.unnamed %}
+                                                    <span class="muted">Autre entrée, {{ entry.category|lower }}</span>
+                                                    <a class="read-as" href="{{ income_url }}#autres-entrees">à classer sur « Entrées d'argent »</a>
+                                                {% else %}
+                                                    <span>{{ entry.name }}</span>
+                                                {% endif %}
+                                            {% endwith %}
                                         {% else %}
                                             {% if row.suggestion %}
-                                                <p class="read-as">{{ row.suggestion.reason }}</p>
+                                                <p class="read-as">
+                                                    {# Le degré de certitude, le même mot que sur « Propositions » où il se valide en série ; la pastille mène à la règle. #}
+                                                    <a href="{% url 'bank:proposals' %}#regles" class="status-pill status-tier-{{ row.suggestion.tier }}">{{ row.suggestion.tier_label }}</a>
+                                                    {{ row.suggestion.reason }}
+                                                </p>
+                                                {# La raison du degré : les chiffres sur lesquels la règle a tranché. #}
+                                                {% if row.suggestion.tier_reason %}<p class="read-as">{{ row.suggestion.tier_reason }}</p>{% endif %}
                                                 {% for option in row.options %}
                                                     <form method="post" action="{% url 'bank:bank_line_action' line.pk %}" class="inline-form">
                                                         {% csrf_token %}
@@ -209,22 +274,42 @@
                                                     </form>
                                                 {% endfor %}
                                             {% endif %}
-                                            {% if row.choices %}
-                                                <form method="post" action="{% url 'bank:bank_line_action' line.pk %}" class="inline-form">
-                                                    {% csrf_token %}
-                                                    <input type="hidden" name="action" value="link">
-                                                    <input type="hidden" name="next" value="{{ page_url }}">
-                                                    <select name="invoice" aria-label="Facture réglée par ce paiement">
-                                                        <option value="">Choisir une facture…</option>
-                                                        {% for invoice, total in row.choices %}
-                                                            <option value="{{ invoice.pk }}">{{ invoice.supplier.name }} n° {{ invoice.invoice_number|default:invoice.pk }} · {{ invoice.invoice_date|date:"d/m/Y"|default:"sans date" }} · {{ total|floatformat:2 }} €</option>
-                                                        {% endfor %}
-                                                    </select>
-                                                    <button class="btn btn-small btn-secondary" type="submit">Rattacher</button>
-                                                </form>
-                                            {% elif not row.suggestion %}
+                                            {% include "bank/_pick_invoice.html" %}
+                                            {% if not row.choices and not row.suggestion %}
                                                 <span class="muted">Aucune facture non réglée à ces dates.</span>
                                             {% endif %}
+                                        {% endif %}
+                                        {% if row.status != "income" %}
+                                            {% comment %}
+                                            À côté des suggestions, jamais à leur place : la facture dont le montant ne
+                                            correspond pas, celle d'il y a six mois, celle qu'une autre opération règle
+                                            déjà.
+
+                                            La boîte demande ses résultats seuls et les échange dans sa propre ligne :
+                                            en GET sur la page, elle reconstruisait chaque ligne, chaque onglet et
+                                            chaque chiffre pour changer une cellule — et renvoyait le lecteur en haut
+                                            de la page, à chercher l'opération sur laquelle il était déjà.
+
+                                            Le formulaire reste un vrai GET dessous : sans JavaScript, c'est lui qui
+                                            répond, exactement comme avant. Les deux passent par views._found_for.
+                                            {% endcomment %}
+                                            <form method="get" action="{% url 'bank:bank_home' %}" class="inline-form"
+                                                  hx-get="{% url 'bank:invoice_search' line.pk %}"
+                                                  hx-target="#resultats-{{ line.pk }}" hx-swap="innerHTML"
+                                                  hx-trigger="input delay:400ms, submit">
+                                                {% for name, value in page_fields.items %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+                                                <input type="hidden" name="ligne" value="{{ line.pk }}">
+                                                {# Où « Rattacher » revient, depuis le fragment comme depuis la page. #}
+                                                <input type="hidden" name="next" value="{{ page_url }}">
+                                                <input type="search" name="recherche" value="{{ row.search }}"
+                                                       autocomplete="off"
+                                                       placeholder="Fournisseur, n°, date — ou plusieurs (fournisseur 09/2025)"
+                                                       aria-label="Chercher une facture à rattacher à cette opération">
+                                                <button class="btn btn-small btn-secondary" type="submit">Chercher une facture</button>
+                                            </form>
+                                            <div id="resultats-{{ line.pk }}" aria-live="polite">
+                                                {% include "bank/_found_invoices.html" with search=row.search found=row.found more_found=row.more_found %}
+                                            </div>
                                         {% endif %}
                                     </td>
                                     <td>
@@ -233,7 +318,7 @@
                                                 {% csrf_token %}
                                                 <input type="hidden" name="next" value="{{ page_url }}">
                                                 {% if row.status == "linked" %}
-                                                    <button class="btn btn-small btn-secondary" type="submit" name="action" value="unlink">Délier</button>
+                                                    <button class="btn btn-small btn-secondary" type="submit" name="action" value="unlink">{% if row.payments|length > 1 %}Tout délier{% else %}Délier{% endif %}</button>
                                                 {% elif row.status == "todo" %}
                                                     <button class="btn btn-small btn-secondary" type="submit" name="action" value="no_invoice">Pas de facture</button>
                                                     {% if line.settled_by_hand %}

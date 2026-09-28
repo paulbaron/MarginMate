@@ -25,6 +25,7 @@ SECTION_BY_APP = {
     "bank": "banque",
     "margins": "marges",
     "transfer": "donnees",
+    "staff": "personnel",
 }
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 
 from django.core.files import File
 from django.db import transaction
@@ -62,9 +62,14 @@ def import_parsed_invoice(
         for parsed_line in lines:
             _create_line(invoice, expense_product(supplier, parsed_line.raw_name), parsed_line)
     else:
+        # A delivery typed on the hand-entry page arrives here rather than
+        # through replace_invoice_lines, and its share has to be on the lines
+        # before the movements below are booked from them.
+        spread_charges(lines)
         resolved = resolve_products(
             supplier, [(line.raw_name, line.ean) for line in lines], ocr_tolerant=parsed.from_ocr
         )
+        flag_products(supplier, lines, resolved)
         for parsed_line, (product, _created) in zip(lines, resolved):
             line = _create_line(invoice, product, parsed_line)
             if product.needs_review:
@@ -392,6 +397,103 @@ def _already_charges(supplier: Supplier, stored, wanted) -> bool:
     )
 
 
+CENTS = Decimal("0.01")
+
+
+def spread_charges(lines) -> Decimal:
+    """Share the lines marked `is_spread_charge` over the others, pro rata of
+    what each was priced at, and write each one's share into `spread_ht`.
+    Returns what was shared out.
+
+    Delivery is the case it exists for: a document prints « LIVRAISON » once,
+    for the whole order, and what it costs belongs on the goods it brought -
+    a bottle that had to be delivered costs what it was billed at plus its
+    share of getting it here. That is the only number a margin can be taken
+    against.
+
+    **The charge line keeps its own amount and its own VAT rate**, and stays
+    one of the invoice's lines. Folded into the goods instead, a delivery at
+    20 % would be taxed at the 5,5 % of the food beside it, and the invoice's
+    own TTC - the figure `bank.matching` needs to the cent - would stop being
+    the one the supplier will debit. So nothing here touches `total_ht`: the
+    money moves between lines for COSTING only (`InvoiceLine.cost_ht`), and
+    the shares add back up to the charge exactly, so the lines' costs still
+    come to `lines_total_ht`.
+
+    Pro rata of **what was bought**: only lines priced above zero weigh. A
+    deposit given back is a negative line, and a signed pro rata would put a
+    negative share of the delivery on the returned keg and more than the
+    whole of it on the beer - the same rule, and the same reason, as
+    `margins.computation._where_it_went`. Nothing positive to carry it, and
+    nothing is shared: the charge stays whole on its own line, which is
+    visible, and the page refuses the save rather than doing it in silence
+    (see BaseManualInvoiceLineFormSet.clean).
+
+    The cents left over go to the **largest remainders**, as a ticket's
+    promotion is spread (`parsers.generic_receipt._spread`): three lines
+    sharing 1,00 € get 0,34 0,33 0,33, never 0,33 x 3 with a centime lost.
+    Lost, the shares would not add up to the charge and a euro of delivery a
+    year would vanish out of every cost with nothing saying so.
+    """
+    for line in lines:
+        line.spread_ht = Decimal("0")
+    charge = sum((line.total_ht for line in lines if line.is_spread_charge), start=Decimal("0"))
+    targets = [line for line in lines if not line.is_spread_charge and line.total_ht > 0]
+    base = sum((line.total_ht for line in targets), start=Decimal("0"))
+    if not charge or not base:
+        return Decimal("0")
+    # Multiply then divide, never by a ratio worked out first: a third of a
+    # euro is not 0.33 x anything.
+    exact = [charge * line.total_ht / base for line in targets]
+    shares = [value.quantize(CENTS, rounding=ROUND_DOWN) for value in exact]
+    left = int((charge - sum(shares, start=Decimal("0"))) / CENTS)
+    # Furthest from its exact share first, whichever way the rounding went -
+    # a credit on the delivery is negative and rounds the other way.
+    by_remainder = sorted(range(len(targets)), key=lambda position: (-abs(exact[position] - shares[position]), position))
+    step = CENTS if left > 0 else -CENTS
+    for position in by_remainder[: abs(left)]:
+        shares[position] += step
+    for line, share in zip(targets, shares):
+        line.spread_ht = share
+    return charge
+
+
+def flag_products(supplier: Supplier, parsed_lines, resolved) -> None:
+    """Say which of the products just resolved are not articles.
+
+    `Product.is_expense` is "no stock item, and never will be": it waits in
+    no queue, reaches no stock page, books no movement and is refused by
+    every screen that classifies a product into an article. Two kinds of
+    line are that, and the rule has to be **both ways** for each of them, or
+    a flag set once can never come off again.
+
+    * Every product of a supplier whose documents are charges. A poste
+      renamed by hand must not land in the queue of products to classify -
+      and the flag has to come off when that supplier goes back to selling
+      goods, or a box ticked by mistake leaves its products out of the
+      queue, out of every stock page and out of every stock movement for
+      ever, with no screen able to put them back.
+    * The product a line carrying charges to spread was named onto: a
+      delivery is not an article, and left as one it holds its invoice in
+      « À vérifier » for ever asking which bottle « LIVRAISON » is, offers
+      itself to « Tout approuver », and becomes an article with a stock
+      movement behind it for every delivery ever filed. Untick the box and
+      it is a product again, here and nowhere else.
+
+    Keyed by pk, since two lines naming one product resolve to two separate
+    instances of it and only one of them would be asked.
+    """
+    charged = set()
+    for parsed_line, (product, _created) in zip(parsed_lines, resolved):
+        if parsed_line.is_spread_charge:
+            charged.add(product.pk)
+    for product, _created in resolved:
+        wanted = supplier.expenses_only or product.pk in charged
+        if product.is_expense != wanted:
+            product.is_expense = wanted
+            product.save(update_fields=["is_expense"])
+
+
 def _line_values(parsed_line: ParsedLine) -> dict:
     return {
         "raw_name": parsed_line.raw_name,
@@ -407,6 +509,8 @@ def _line_values(parsed_line: ParsedLine) -> dict:
         "category": parsed_line.category,
         "printed_ttc": parsed_line.printed_ttc,
         "discount_ttc": parsed_line.discount_ttc,
+        "is_spread_charge": parsed_line.is_spread_charge,
+        "spread_ht": parsed_line.spread_ht,
     }
 
 
@@ -444,6 +548,7 @@ def corrected_line(
     total_volume=None,
     discount_ttc=_STORED,
     discount=_STORED,
+    is_spread_charge: bool = False,
 ) -> ParsedLine:
     """A row a person corrected, as the ParsedLine replace_invoice_lines takes.
 
@@ -455,9 +560,16 @@ def corrected_line(
     amount does; `read_as`/`printed_ttc`, when given, are the form's own, and
     so are a weight typed (`total_volume`) and a ticket's promotion
     (`discount_ttc`, with `discount` its HT).
+
+    `is_spread_charge` comes from the page's own checkbox and never from the
+    stored line: a box a person unticks has to free the line again. Its
+    `spread_ht` is left at zero here whatever the stored line said, because
+    only `spread_charges` - which sees the whole document - may set it, and
+    a share kept from before would be a share of a charge that has changed.
     """
     line = ParsedLine(
         raw_name=raw_name,
+        is_spread_charge=is_spread_charge,
         quantity=quantity,
         total_volume=Decimal("0"),
         unit_cost_ht=(total_ht / quantity).quantize(UNIT_COST) if quantity else Decimal("0"),
@@ -574,6 +686,12 @@ def replace_invoice_lines(invoice: Invoice, parsed_lines) -> Invoice:
     an invoice (deletion.remove_orphan_products).
     """
     parsed_lines = list(parsed_lines)
+    # Before anything is written: a share is worked out over the WHOLE
+    # document, and the movements below are booked from it line by line. Run
+    # afterwards, every movement would be created from the cost the line had
+    # before the delivery was shared out, and nothing would recreate them
+    # until somebody happened to save the page again.
+    spread_charges(parsed_lines)
     stored = {line.pk: line for line in invoice.lines.all()}
     corrected = {parsed.line_id for parsed in parsed_lines if parsed.line_id in stored}
     removed = [line for pk, line in stored.items() if pk not in corrected]
@@ -602,17 +720,7 @@ def replace_invoice_lines(invoice: Invoice, parsed_lines) -> Invoice:
     resolved = resolve_products(
         invoice.supplier, [(line.raw_name, line.ean) for line in parsed_lines], ocr_tolerant=ocr_tolerant
     )
-    # A product is a poste of charge exactly when its supplier's documents
-    # are charges: nothing this supplier sends is a product, so a poste
-    # renamed by hand must not land in the queue of products to classify -
-    # and the flag has to come **off** again when the supplier goes back to
-    # selling goods, or a box ticked by mistake leaves its products out of
-    # the queue, out of every stock page and out of every stock movement
-    # for ever, with no screen able to put them back.
-    for product, _created in resolved:
-        if product.is_expense != invoice.supplier.expenses_only:
-            product.is_expense = invoice.supplier.expenses_only
-            product.save(update_fields=["is_expense"])
+    flag_products(invoice.supplier, parsed_lines, resolved)
     for parsed_line, (product, _created) in zip(parsed_lines, resolved):
         # pop: a line named twice (a crafted post) is corrected once.
         line = stored.pop(parsed_line.line_id, None) if parsed_line.line_id in corrected else None

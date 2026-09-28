@@ -178,6 +178,26 @@ function collapseRevealed() {
     if (chevron) chevron.textContent = "▸";
 }
 
+// A panel a live search has set aside (marginmate.css) is hidden but still
+// open: opening it is taking it back out, not toggling `hidden` a second
+// time - read as closed, the first click "closes" what is already out of
+// sight and the reader has to click twice to see anything.
+function isSetAside(target) {
+    return document.body.classList.contains("catalogue-searching")
+        && !target.hidden
+        && !target.classList.contains("search-mine");
+}
+
+// Theirs, opened during this search: shown among the results, and shown
+// whatever they narrow the query to next.
+function openedByHand(target, opening) {
+    if (opening && document.body.classList.contains("catalogue-searching")) {
+        target.classList.add("search-mine");
+    } else {
+        target.classList.remove("search-mine");
+    }
+}
+
 function expandTarget(toggle, target) {
     target.hidden = false;
     var chevron = toggle.querySelector(".chevron");
@@ -200,7 +220,9 @@ document.addEventListener("click", function (event) {
     if (chartToggle) {
         var chartTarget = document.getElementById(chartToggle.dataset.target);
         if (!chartTarget) return;
-        if (chartTarget.hidden) {
+        var opening = chartTarget.hidden || isSetAside(chartTarget);
+        openedByHand(chartTarget, opening);
+        if (opening) {
             chartTarget.hidden = false;
             if (!chartTarget.dataset.loaded) {
                 chartTarget.dataset.loaded = "1";
@@ -221,7 +243,12 @@ document.addEventListener("click", function (event) {
     // Touched by hand, it is theirs: remembered, and no longer the panel a
     // classification opened for a look.
     if (toggle.dataset.toggle === revealedDetails) revealedDetails = null;
-    if (target.hidden) {
+    // Set aside by a search is not closed: read as closed, this first click
+    // would « close » what is already out of sight and the reader would
+    // have to click a second time to see anything.
+    var opening = target.hidden || isSetAside(target);
+    openedByHand(target, opening);
+    if (opening) {
         expandTarget(toggle, target);
         expanded.add(toggle.dataset.toggle);
     } else {
@@ -267,22 +294,42 @@ function restoreCategoryState(header, table) {
     if (chevron) chevron.textContent = isExpanded ? "▾" : "▸";
 }
 
+// Results are rows: a panel an article already had open is set aside while
+// they are read - not every panel for as long as a query is typed. A row
+// the reader unrolls WHILE searching shows its purchases, all of them,
+// whatever was typed to reach it (owner, 25/09); the blanket rule answered
+// that click with nothing at all.
+//
+// Which is which is `.search-mine`, put on by whoever opened it; the rest
+// is one class on the body and a CSS rule (marginmate.css). Nothing walks
+// the rows to hide them, so nothing has to run at the right moment -
+// the list replaces itself mid-search and reopens what it had open, and
+// there is no pass for that swap to race.
 function applySearchFilter(matchedIds) {
     var totalMatches = 0;
-    // Results are rows (CSS .is-searching): what a row has open is left as
-    // it is, only out of the way while the list is being searched.
-    var catalogue = document.getElementById("catalogue");
-    if (catalogue) catalogue.classList.toggle("is-searching", matchedIds !== null);
+    var searching = matchedIds !== null;
+    document.body.classList.toggle("catalogue-searching", searching);
+    if (!searching) {
+        // The next search starts from the reader's page again, not from
+        // what the last one was allowed to keep on screen.
+        document.querySelectorAll("#catalogue .search-mine").forEach(function (row) {
+            row.classList.remove("search-mine");
+        });
+    }
     collapseRevealed();
     document.querySelectorAll("#catalogue .category-block").forEach(function (block) {
         var header = block.querySelector(".category-header");
         var table = block.querySelector("table");
         var matchCount = 0;
         table.querySelectorAll(".stock-row").forEach(function (row) {
-            var detailsRow = document.getElementById(row.dataset.toggle);
             var matches = matchedIds === null || matchedIds.has(row.dataset.stockTypeId);
             row.classList.toggle("search-hidden", !matches);
-            if (detailsRow) detailsRow.classList.toggle("search-hidden", !matches);
+            // Everything that row opens, not just its purchases: its curve
+            // too, or narrowing the search leaves a chart among the results
+            // explaining an article that is no longer one of them.
+            table.querySelectorAll('tr[data-child-of="' + row.dataset.stockTypeId + '"]').forEach(function (child) {
+                child.classList.toggle("search-hidden", !matches);
+            });
             if (matches) matchCount++;
         });
         totalMatches += matchCount;

@@ -58,9 +58,22 @@ class NoNetworkTestCase(TestCase):
 
         # selenium and anthropic are optional at runtime; only guard them if
         # they're actually installed, so the suite still runs without them.
+        # pyHanko's two HTTP timestamp clients (the timesheet signatures,
+        # staff/signing.py) are guarded where they send the request, so an
+        # instance made however it was imported still fails loudly: a test
+        # signs with DummyTimeStamper (staff.tests.signing_support), never
+        # with DigiCert.
         for target, label in (
             ("selenium.webdriver.Chrome", "Selenium/Chrome"),
             ("anthropic.Anthropic", "Anthropic API"),
+            (
+                "pyhanko.sign.timestamps.requests_client.RequestsHTTPTimeStamper.async_request_tsa_response",
+                "timestamp server (RFC 3161)",
+            ),
+            (
+                "pyhanko.sign.timestamps.aiohttp_client.HTTPTimeStamper.async_request_tsa_response",
+                "timestamp server (RFC 3161)",
+            ),
         ):
             try:
                 patcher = mock.patch(target, new=_Forbidden(label))

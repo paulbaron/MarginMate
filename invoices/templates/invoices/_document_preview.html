@@ -32,7 +32,9 @@ import read what it should, and where each product went.
                         <td class="num">{{ line.total_ht|floatformat:2 }} €</td>
                         <td class="num">{{ line.total_ttc|floatformat:2 }} €</td>
                         <td>
-                            {% if line.product.stock_type %}
+                            {% if line.is_spread_charge %}
+                                <span class="muted" title="Réparti sur les autres lignes au prorata de leur montant HT">frais répartis</span>
+                            {% elif line.product.stock_type %}
                                 {{ line.product.stock_type.name }}
                             {% elif line.product.is_expense %}
                                 <span class="muted">poste de charge</span>

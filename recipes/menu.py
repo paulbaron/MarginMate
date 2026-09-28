@@ -18,7 +18,8 @@ from django.shortcuts import render
 from django.urls import reverse
 from django.utils import timezone
 
-from common import RANGE_END, RANGE_START, DateRange, date_range
+from common import RANGE_END, RANGE_START, DateRange, date_range, is_id
+from inventory.models import StockType
 
 from .forms import MANUAL_SALE_SOURCE, ManualSaleForm
 from .links import suggest_recipe
@@ -30,6 +31,7 @@ from .models import (
     SalesImportJob,
     variation_scope,
 )
+from .usage import article_uses
 
 
 def pending_count() -> int:
@@ -41,6 +43,11 @@ def pending_count() -> int:
 #: is given these back, and nothing else.
 SALES_TAB_PARAMS = (RANGE_START, RANGE_END, "vente", "ventes")
 
+#: The recipes tab reads which article the list is filtered on from its own
+#: address, so the filter is a link that can be sent, bookmarked and gone
+#: back to.
+ARTICLE_PARAM = "article"
+
 
 def sales_list_url(request) -> str:
     """« Recettes & ventes · Ventes » as the reader had it - period, search
@@ -48,8 +55,9 @@ def sales_list_url(request) -> str:
 
     Every action on that tab comes back here. Sent back to the bare address,
     a period typed by hand vanished on the first « Supprimer » or on adding
-    a sale by hand, and the page returned with all 8 099 sales in it: nothing
-    on screen said the dates had been dropped, so the dates read as broken.
+    a sale by hand, and the page returned with every sale ever recorded in
+    it: nothing on screen said the dates had been dropped, so the dates read
+    as broken.
 
     Only the four parameters above travel: an action is posted to whatever
     address the reader was on, and a redirect echoing that query string whole
@@ -71,8 +79,19 @@ def render_menu(request, tab, *, status=200, **extra):
     sales_url = reverse("recipes:sales_list")
     if window:
         sales_url = f"{sales_url}?{urlencode(window.parameters)}"
+    # The article filter is the recipes tab's own, and is read here rather
+    # than in the builder so that tab's link can carry it: clicking
+    # « Recettes » while a filter is on would otherwise silently mean « and
+    # now show me all of them ». Built here too, never pasted together in
+    # the template - that is exactly where a parameter gets forgotten.
+    # Only an id travels: garbage in the query string is no filter, and a
+    # link handing it back would make a stale bookmark permanent.
+    article = request.GET.get(ARTICLE_PARAM, "") if tab == "recettes" else ""
+    recipes_url = reverse("recipes:recipe_list")
+    if is_id(article):
+        recipes_url = f"{recipes_url}?{urlencode({ARTICLE_PARAM: article})}"
     tabs = [
-        {"key": "recettes", "label": "Recettes", "url": reverse("recipes:recipe_list"),
+        {"key": "recettes", "label": "Recettes", "url": recipes_url,
          "count": Recipe.objects.count(), "attention": False},
         {"key": "a-lier", "label": "À lier", "url": reverse("recipes:pos_product_list"),
          "count": to_link, "attention": bool(to_link)},
@@ -81,6 +100,8 @@ def render_menu(request, tab, *, status=200, **extra):
     for entry in tabs:
         entry["active"] = entry["key"] == tab
     context = {"tab": tab, "tabs": tabs, "to_link_count": to_link}
+    if tab == "recettes":
+        extra.setdefault("article", article)
     if tab == "ventes":
         extra.setdefault("query", request.GET.get("vente", ""))
         extra.setdefault("show_all", request.GET.get("ventes") == "toutes")
@@ -90,7 +111,16 @@ def render_menu(request, tab, *, status=200, **extra):
     return render(request, "recipes/menu.html", context, status=status)
 
 
-def _recipes() -> dict:
+def _recipes(article: str = "") -> dict:
+    """The recipes, and the picker that narrows them to one article.
+
+    `article` is `?article=` exactly as it arrived. Anything that is not an
+    id, and any article the picker does not offer, is **the whole list**:
+    these come from a query string, so a stale bookmark and a hand-typed URL
+    both land here, and an empty page under a filter nobody can see reads as
+    a page that has broken rather than as a question with no answer. Where
+    the article exists but no recipe uses it, the page says so by name.
+    """
     # Every recipe's ingredients in one extra query, so summary() below
     # never goes back to the database per row.
     recipes = list(Recipe.objects.prefetch_related("ingredients__stock_type__movements", "ingredients__sub_recipe"))
@@ -99,6 +129,28 @@ def _recipes() -> dict:
             # summary() is linear in the number of ingredients, so a recipe
             # with a million variations costs the same here as one with two.
             recipe.summary_data = recipe.summary(list(recipe.ingredients.all()))
+        # Asked over every recipe, filtered or not: the picker has to offer
+        # the articles of the recipes the filter is hiding, or choosing one
+        # would be the only way back to the rest.
+        uses = article_uses(recipes)
+    articles = list(StockType.objects.filter(pk__in=uses.keys()).order_by("name"))
+    choices = [{"article": item, "count": len(uses[item.pk])} for item in articles]
+    chosen = unused = None
+    if is_id(article):
+        wanted = int(article)
+        chosen = next((item for item in articles if item.pk == wanted), None)
+        if chosen is None:
+            unused = StockType.objects.filter(pk=wanted).first()
+    maybe_count = 0
+    if chosen is not None:
+        ways = uses[chosen.pk]
+        recipes = [recipe for recipe in recipes if recipe.pk in ways]
+        for recipe in recipes:
+            recipe.article_uses = ways[recipe.pk]
+            # One certain way is enough: a recipe using sugar directly AND
+            # offering a syrup that may carry more of it still uses sugar.
+            recipe.article_certain = any(use.certain for use in recipe.article_uses)
+        maybe_count = sum(1 for recipe in recipes if not recipe.article_certain)
     till_names: dict[int, list[str]] = {}
     for recipe_id, name in PosProduct.objects.filter(recipe__isnull=False).order_by("name").values_list(
         "recipe_id", "name"
@@ -108,7 +160,17 @@ def _recipes() -> dict:
     for recipe in recipes:
         recipe.till_names = till_names.get(recipe.pk, [])
         recipe.units_sold = units_sold.get(recipe.pk, 0)
-    return {"recipes": recipes, "till_names": till_names, "units_sold": units_sold}
+    return {
+        "recipes": recipes,
+        "till_names": till_names,
+        "units_sold": units_sold,
+        "article_choices": choices,
+        "chosen_article": chosen,
+        "unused_article": unused,
+        "article_count": len(recipes) if chosen is not None else 0,
+        "article_maybe_count": maybe_count,
+        "all_recipes_url": reverse("recipes:recipe_list"),
+    }
 
 
 def with_suggestion(product, recipes):
@@ -149,8 +211,8 @@ def _sales_matching(query: str):
     return matches
 
 
-#: How many sales the page draws before it asks to be asked. All 8 099 of
-#: them was 2,6 Mo of HTML on one page, and they only ever grow.
+#: How many sales the page draws before it asks to be asked. Every one of
+#: them was megabytes of HTML on a single page, and they only ever grow.
 SALES_PAGE_SIZE = 300
 
 #: The same for the sale documents, which are listed whole rather than

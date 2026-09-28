@@ -49,6 +49,13 @@
         <div class="message message-error">{{ invoice.error_message }}</div>
     {% endif %}
 
+    {% comment %}
+    This page renders « Fournisseur à confirmer » through review_state and
+    never said why, and it has no move form of its own: the block carries
+    the reason and « Corriger les lignes » above is the way to move it.
+    {% endcomment %}
+    {% include "invoices/_filing_block.html" %}
+
     <div class="stat-row">
         <div class="stat">
             <span class="stat-label">Total HT</span>
@@ -61,13 +68,26 @@
             <span class="stat-label">Total TTC</span>
             <span class="stat-value">{{ invoice.total_ttc|floatformat:2 }} €</span>
         </div>
-        {% with payment=invoice.payment %}
-        {% if payment %}
-        <div class="stat">
-            <span class="stat-label">Payée</span>
-            <span class="stat-value">{{ payment.transaction.paid_on|date:"d/m/Y" }}</span>
+        {% with payments=invoice.payments.all %}
+        {% if payments %}
+        {# Une facture peut être réglée par plusieurs opérations (payée en deux fois) : les dire toutes, ou la page en montre une et tait le reste. #}
+        {% comment %}
+        Un rattachement n'a plus à tomber juste : une facture peut être liée à un
+        débit qui n'en règle qu'une partie, et elle sort alors des factures non
+        réglées pour toujours. C'est ici qu'on vient savoir si un document est
+        soldé, donc le total des opérations est comparé à ce que la facture coûte
+        — « Payée » est gardé pour le cas où les deux s'accordent.
+        {% endcomment %}
+        <div class="stat{% if paid_gap %} stat-warn{% endif %}">
+            <span class="stat-label">{% if not paid_gap %}Payée{% elif paid_total < invoice.total_ttc %}Réglée en partie{% else %}Réglée au-delà{% endif %}</span>
+            <span class="stat-value">{% if payments|length > 1 %}{{ payments|length }} opérations{% else %}{{ payments.0.transaction.paid_on|date:"d/m/Y" }}{% endif %}</span>
             <span class="stat-note">
-                <a href="{% url 'bank:bank_home' %}?vue=rapprochees">{{ payment.transaction.counterparty|default:payment.transaction.bank_type }} · {{ payment.transaction.amount_due|floatformat:2 }} €</a>
+                {% if paid_gap %}
+                    {{ paid_total|floatformat:2 }} € réglés sur {{ invoice.total_ttc|floatformat:2 }} €.<br>
+                {% endif %}
+                {% for payment in payments %}
+                    <a href="{% url 'bank:bank_home' %}?vue=rapprochees">{% if payments|length > 1 %}{{ payment.transaction.paid_on|date:"d/m/Y" }} · {% endif %}{{ payment.transaction.counterparty|default:payment.transaction.bank_type }} · {{ payment.transaction.amount_due|floatformat:2 }} €</a>{% if not forloop.last %}<br>{% endif %}
+                {% endfor %}
             </span>
         </div>
         {% endif %}
@@ -156,9 +176,16 @@
                             {% elif line.discount %}− {{ line.discount|floatformat:2 }} € HT de remise{% endif %}
                         </span>
                     {% endif %}
+                    {% if line.spread_ht %}
+                        <br><span class="muted" style="font-size:0.8em;">
+                            + {{ line.spread_ht|floatformat:2 }} € HT de frais répartis : revient à {{ line.cost_ht|floatformat:2 }} € HT
+                        </span>
+                    {% endif %}
                 </td>
                 <td>
-                    {% if line.product.stock_type %}
+                    {% if line.is_spread_charge %}
+                        <span class="muted" title="Réparti sur les autres lignes au prorata de leur montant HT">frais répartis</span>
+                    {% elif line.product.stock_type %}
                         <a href="{% url 'inventory:stock_list' %}">{{ line.product.stock_type.name }}</a>
                     {% elif line.product.is_expense %}
                         <span class="muted">poste de charge</span>
