@@ -1196,6 +1196,32 @@ class DeployDocumentTests(SimpleTestCase):
         super().setUp()
         self.deploy = (BASE / "DEPLOY.md").read_text(encoding="utf-8")
 
+    def test_every_path_given_for_the_env_is_written_with_forward_slashes(self):
+        # 30/09, the switch to C:\MarginMate: the production .env was written
+        # with « "C:\MarginMate\data\tenants" » and the server said « La base
+        # des comptes est introuvable » - between double quotes python-dotenv
+        # reads \t as a TAB and \a as a BEL. The owner's own .env writes C:/…,
+        # and every example the document gives must be copyable as it is.
+        lines = [
+            line.strip()
+            for line in self.deploy.splitlines()
+            if re.match(r"\s*MARGINMATE_(TENANTS_ROOT|ACCOUNTS_DB|LOG_DIR)=\S", line)
+        ]
+        self.assertTrue(lines)
+        for line in lines:
+            with self.subTest(line=line):
+                self.assertNotIn("\\", line)
+        self.assertIn("**Écrivez les chemins avec des barres obliques `/`**", self.deploy)
+
+    def test_the_trap_the_forward_slashes_avoid_is_real(self):
+        from io import StringIO
+
+        from dotenv import dotenv_values
+
+        read = dotenv_values(stream=StringIO('A="C:\\MarginMate\\data\\tenants"\nB="C:/MarginMate/data/tenants"\n'))
+        self.assertIn("\t", read["A"])
+        self.assertEqual(read["B"], "C:/MarginMate/data/tenants")
+
     def test_section_10_is_the_two_copies_workflow(self):
         self.assertNotIn("## 10. Mettre à jour le code", self.deploy)
         tenth = section(self.deploy, "## 10. Développer et mettre en ligne une modification")

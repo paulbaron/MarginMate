@@ -798,8 +798,10 @@ class DeploymentFilesTests(SimpleTestCase):
                 self.assertNotIn("C:\\MarginMate", block)
                 self.assertNotIn(f" {serve.DEFAULT_PORT}", block)
         development_env = next(block for block in code_blocks(tenth) if "DJANGO_DEBUG=True" in block)
-        self.assertIn("data-dev\\tenants", development_env)
-        self.assertIn("data-dev\\accounts.sqlite3", development_env)
+        # Forward slashes: between quotes python-dotenv reads « \t » as a TAB
+        # (test_deployment_scripts.DeployDocumentTests pins why).
+        self.assertIn("data-dev/tenants", development_env)
+        self.assertIn("data-dev/accounts.sqlite3", development_env)
         self.assertIn("**jamais sur les données du site**", deploy)
 
     def test_the_log_section_says_who_writes_the_file(self):

@@ -354,9 +354,14 @@ Jusqu'ici le site tournait depuis le dossier de développement, sur
    `C:\MarginMate\data`, par exemple :
 
    ```
-   MARGINMATE_TENANTS_ROOT=C:\MarginMate\data\tenants
-   MARGINMATE_ACCOUNTS_DB=C:\MarginMate\data\accounts.sqlite3
+   MARGINMATE_TENANTS_ROOT="C:/MarginMate/data/tenants"
+   MARGINMATE_ACCOUNTS_DB="C:/MarginMate/data/accounts.sqlite3"
    ```
+
+   **Écrivez les chemins avec des barres obliques `/`**, comme ci-dessus. Entre guillemets, le
+   fichier `.env` lit `\t` comme une tabulation et `\a` comme un autre caractère invisible :
+   `"C:\MarginMate\data\tenants"` désignerait un dossier qui n'existe pas, et le serveur dirait
+   « La base des comptes est introuvable ».
 
    `MARGINMATE_LOG_DIR` reste vide (le journal va dans `C:\MarginMate\data\logs`). Les autres
    lignes restent celles de la section 5.
@@ -383,8 +388,8 @@ Jusqu'ici le site tournait depuis le dossier de développement, sur
    DJANGO_CSRF_TRUSTED_ORIGINS=
    MARGINMATE_HTTPS=
    MARGINMATE_SITE_URL=
-   MARGINMATE_TENANTS_ROOT=C:\Users\<vous>\Desktop\Bar application gestion\data-dev\tenants
-   MARGINMATE_ACCOUNTS_DB=C:\Users\<vous>\Desktop\Bar application gestion\data-dev\accounts.sqlite3
+   MARGINMATE_TENANTS_ROOT="C:/Users/<vous>/Desktop/Bar application gestion/data-dev/tenants"
+   MARGINMATE_ACCOUNTS_DB="C:/Users/<vous>/Desktop/Bar application gestion/data-dev/accounts.sqlite3"
    MARGINMATE_LOG_DIR=
    ```
 
