@@ -80,10 +80,12 @@ Set up 30/09/2026 at the owner's request; README.md, « First-time setup » and
   --no-dev`, deploy.cmd). `[tool.uv] package = false`: the project is run from
   its folder, never built. `uv.lock` was made from the old pip freeze and
   reproduces every production version exactly (python-barcode, httpx and
-  httpcore went: nothing imported them). **`requirements.txt` is a
-  transitional export** of the lock (the `requirements-export` hook keeps it
-  in step) for the one deploy the previous deploy.cmd runs; delete the file
-  and its hook once a deploy has put uv in place (DEPLOY.md 10.6).
+  httpcore went: nothing imported them). **There is no `requirements.txt`**
+  (deleted 01/10/2026 with the hook that exported it): it was the lock's
+  export the previous deploy.cmd installed 05a80b4 from, with pip, and a copy
+  back would be a second list of versions nothing keeps in step
+  (`tests/test_toolchain.py`). A production still before 05a80b4 is finished
+  by hand (DEPLOY.md 10.6), and nothing goes back before it (10.4).
   **`.python-version` (3.11) must stay**: without it `uv sync` threw a
   pip-made `.venv` away and rebuilt it on the first Python it found (mise's)
   - measured 30/09, and production's `.venv`, its downloaded OCR models with
@@ -95,9 +97,9 @@ Set up 30/09/2026 at the owner's request; README.md, « First-time setup » and
 - **prek** (`prek.toml`, `prek install` wires both stages). pre-commit, on
   the staged files: merge markers, files over 1 MB, private keys (the three
   files naming PEM markers excepted), end-of-file and trailing whitespace
-  (never in Python: a string literal's whitespace is data), `uv lock`, the
-  requirements export, `ruff check --fix`, `ruff format`, `ty check` (shown,
-  never blocking). **pre-push is the CI**: `uv lock --check`, ruff check and
+  (never in Python: a string literal's whitespace is data), `uv lock`,
+  `ruff check --fix`, `ruff format`, `ty check` (shown, never blocking).
+  **pre-push is the CI**: `uv lock --check`, ruff check and
   format check and ty over the whole repository, `manage.py check`,
   `makemigrations --check`, and the fast suite with `--parallel 6` (about two
   minutes). A deploy pulls the development folder without pushing: run
@@ -263,12 +265,14 @@ DEPLOY.md, section 10, has the owner's steps (the one-off move included).
   refuses touching nothing when `call uv --version` fails - a shim on the
   PATH answers « mise-shim: failed to execute mise », exit 1, when mise
   itself is not there; with a mark already left, the way back is printed
-  instead. The first deploy of the uv version is run by the PREVIOUS
-  deploy.cmd (pip on `requirements.txt`, a transitional export of uv.lock
-  deleted after the second deploy; DEPLOY.md 10.6), so the way back
-  (`:offline`, `:rollback_instructions`) also says how to install a version
-  without uv.lock: `.venv\Scripts\python.exe -m pip install -r
-  requirements.txt` (uv never ran there). The scripts' labels and variables
+  instead. The first deploy of the uv version, 05a80b4, was run by the
+  PREVIOUS deploy.cmd, with pip on a `requirements.txt` the code no longer
+  has: that deploy.cmd, run on a later version, fails past its merge, and
+  DEPLOY.md 10.6 finishes that deploy by hand. **Nothing names pip** - the
+  way back (`:offline`, `:rollback_instructions`, DEPLOY.md 10.4) installs
+  with uv only, and a version from before uv is not gone back to (the
+  owner, 01/10/2026: its deploy.cmd, back in place, could not deploy the
+  next one). The scripts' labels and variables
   are English; their echo text, `etat.txt` and its keys (`ancien=`,
   `donnees=`, `sauvegarde=`, `etape=`, read back as `MM_NOTE_<key>`), the
   mark folder, the task's name and the `manage.py` commands and options are

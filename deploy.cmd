@@ -355,10 +355,6 @@ echo   cd /d "%MM_APP%"
 echo   git reset --hard VERSION-D-AVANT
 echo   uv sync --locked --no-dev
 echo(
-echo Si ce dossier n'a pas de fichier uv.lock apres le git reset (une version d'avant
-echo le passage a uv), tapez a la place de uv sync :
-echo   .venv\Scripts\python.exe -m pip install -r requirements.txt
-echo(
 echo Puis verifiez ce dossier et relancez le serveur :
 echo(
 echo   .venv\Scripts\python.exe manage.py serve --verifier
@@ -453,8 +449,7 @@ echo le journal (dossier logs des donnees). S'il finit par repondre, la mise en 
 echo faite : effacez seulement la marque (rmdir, ci-dessous). S'il faut revenir en arriere :
 goto :rollback_instructions
 
-rem The way back. Also printed for a mark the previous version's deploy.cmd
-rem left, whose version before may date from before uv: hence the pip line.
+rem The way back, also printed for a mark a deployment left half way.
 :rollback_instructions
 echo(
 echo Pour revenir a la version d'avant, ouvrez une invite de commandes et tapez :
@@ -462,10 +457,6 @@ echo(
 echo   cd /d "%MM_APP%"
 echo   git reset --hard %MM_PREVIOUS%
 echo   uv sync --locked --no-dev
-echo(
-echo Si ce dossier n'a pas de fichier uv.lock apres le git reset (une version d'avant
-echo le passage a uv), tapez a la place de uv sync :
-echo   .venv\Scripts\python.exe -m pip install -r requirements.txt
 echo(
 if not defined MM_BACKUP goto :rollback_without_backup
 echo Si l'echec a eu lieu aux migrations ou apres, remettez aussi les donnees de la

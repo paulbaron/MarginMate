@@ -50,8 +50,8 @@ POWERSHELL = (
 #: back into. They stay French: the deploy.cmd of one version reads what
 #: another wrote, and the owner is shown the file.
 STATE_KEYS = {"PREVIOUS": "ancien", "DATA": "donnees", "BACKUP": "sauvegarde", "STEP": "etape"}
-#: How the way back installs a version from before uv (no uv.lock).
-PIP_FOR_A_VERSION_BEFORE_UV = "echo   .venv\\Scripts\\python.exe -m pip install -r requirements.txt"
+#: pip or its file, named anywhere: the way back installs with uv alone.
+PIP = re.compile(r"\bpip\b|requirements\.txt", flags=re.IGNORECASE)
 
 
 class Script:
@@ -355,11 +355,9 @@ class DeployScriptTests(CmdHygieneMixin, SimpleTestCase):
         self.assertIn("\n### 10.6 Passage à uv (une seule fois)\n", (BASE / "DEPLOY.md").read_text(encoding="utf-8"))
 
     def test_uv_silent_with_a_mark_left_says_the_way_back_first(self):
-        """The first deployment of the uv version is run by the PREVIOUS
-        deploy.cmd. Failing past its merge, it leaves its mark, and the next
-        double-click runs THIS one (the merge brought it) - maybe before uv
-        is set up, which the owner is told to do before the SECOND
-        deployment. The site is down: the way back comes first."""
+        """A mark is a deployment that failed past its merge, or a window
+        closed half way: the site may be down, and the way back comes first,
+        whatever uv answers."""
         self.assertEqual(self.script.section("no_uv")[0], 'if exist "%MM_LOCK%\\" goto :already_running')
 
     def test_step_7_installs_what_uv_lock_says(self):
@@ -380,30 +378,16 @@ class DeployScriptTests(CmdHygieneMixin, SimpleTestCase):
             ["call uv --version >nul", "call uv sync --locked --no-dev"],
         )
 
-    def test_no_pip_is_run_and_pip_is_said_for_a_version_before_uv_only(self):
-        """uv sync takes pip out of .venv, and nothing here runs it. The way
-        back names it for a version from before uv - no uv.lock, uv never
-        ran there, pip is still in .venv: « :offline » may follow a failure
-        of the PREVIOUS deploy.cmd, and so may « :rollback_instructions »,
-        printed for the mark that deploy.cmd left. Everywhere else the way
-        back installs with uv."""
-        self.assertEqual(
-            [line for line in self.script.executed([line for _, line in self.script.commands()]) if "pip" in line], []
-        )
-        said = {}
-        for label in self.script.labels:
-            lines = [line for line in self.script.section(label) if "pip" in line]
-            if lines:
-                said[label] = lines
-        self.assertEqual(
-            said, {"offline": [PIP_FOR_A_VERSION_BEFORE_UV], "rollback_instructions": [PIP_FOR_A_VERSION_BEFORE_UV]}
-        )
-        for label in said:
+    def test_pip_is_neither_run_nor_named(self):
+        """uv sync takes pip out of .venv, and nothing here runs it - nor
+        names it: the way back installs with uv, and a version from before
+        uv is not gone back to (the owner, 01/10/2026). Its requirements.txt
+        is gone from the code, and its deploy.cmd, back in place, would fail
+        the next deployment on it."""
+        self.assertEqual([line for line in self.script.lines if PIP.search(line)], [])
+        for label in ("offline", "rollback_instructions"):
             with self.subTest(label=label):
-                section = self.script.section(label)
-                pip = section.index(PIP_FOR_A_VERSION_BEFORE_UV)
-                self.assertLess(section.index("echo   uv sync --locked --no-dev"), pip)
-                self.assertIn("uv.lock", " ".join(section[pip - 2 : pip]))
+                self.assertIn("echo   uv sync --locked --no-dev", self.script.section(label))
 
     def test_the_wait_is_for_free_or_listening_only(self):
         """:wait_for_port compares its second argument with « listening »:
@@ -1056,9 +1040,8 @@ class OneLineOfTheScriptsRunAloneTests(SimpleTestCase):
         self.assertNotIn("autre mise en ligne", said)
 
     def test_a_mark_left_half_way_prints_the_way_back_from_what_it_noted(self):
-        """etat.txt as the PREVIOUS deploy.cmd writes it - its step 7 was
-        pip: the mark this version reads first is that one's, after the
-        merge that brought this version failed half way."""
+        """etat.txt as deploy.cmd writes it, stopped at step 7: the next run
+        reads it back and says the way back from what it noted."""
         mark = self.folder / "app" / ".git" / "marginmate-deploy"
         mark.mkdir(parents=True)
         commit = "0123456789abcdef0123456789abcdef01234567"
@@ -1067,7 +1050,7 @@ class OneLineOfTheScriptsRunAloneTests(SimpleTestCase):
                 f"ancien={commit}\r\ndonnees=C:\\MarginMate\\data\r\netape=l'arret du serveur\r\n"
                 "etape=la sauvegarde (manage.py backup_data)\r\n"
                 "sauvegarde=C:\\MarginMate\\backups\\2026-10-01_101500\r\n"
-                "etape=l'installation des dependances (pip install -r requirements.txt)\r\n"
+                "etape=l'installation des dependances (uv sync --locked --no-dev)\r\n"
             ).encode("ascii")
         )
         said = self.spoken(
@@ -1080,10 +1063,8 @@ class OneLineOfTheScriptsRunAloneTests(SimpleTestCase):
         )
         self.assertIn("REFUS", said)
         self.assertIn(f"git reset --hard {commit}\r\n  uv sync --locked --no-dev\r\n", said)
-        # The version before may date from before uv: said how to install it.
-        self.assertIn("pas de fichier uv.lock", said)
-        self.assertIn(PIP_FOR_A_VERSION_BEFORE_UV.removeprefix("echo "), said)
-        self.assertIn("pendant\r\nl'installation des dependances (pip install -r requirements.txt), apres", said)
+        self.assertIsNone(PIP.search(said))
+        self.assertIn("pendant\r\nl'installation des dependances (uv sync --locked --no-dev), apres", said)
         self.assertIn('move "C:\\MarginMate\\data" "C:\\MarginMate\\data.echec"', said)
         self.assertIn('robocopy "C:\\MarginMate\\backups\\2026-10-01_101500\\data" "C:\\MarginMate\\data" /E', said)
         self.assertIn(f'rmdir /s /q "{mark}"', said)
@@ -1175,7 +1156,7 @@ class OneLineOfTheScriptsRunAloneTests(SimpleTestCase):
         said = self.spoken(("offline",), MM_APP="C:\\MarginMate\\app\\", MM_PORT="8765", MM_PREVIOUS_SHORT="abc1234")
         self.assertIn("ATTENTION : rien n'ecoute sur 127.0.0.1:8765, le site est hors ligne.", said)
         self.assertIn("  git reset --hard VERSION-D-AVANT\r\n  uv sync --locked --no-dev\r\n", said)
-        self.assertIn(PIP_FOR_A_VERSION_BEFORE_UV.removeprefix("echo "), said)
+        self.assertIsNone(PIP.search(said))
         said = self.spoken(("git_unreadable",), MM_APP="C:\\MarginMate\\app\\")
         self.assertIn('git config --global --add safe.directory "C:/MarginMate/app"', said)
         said = self.spoken(("task_elsewhere",), MM_APP="C:\\MarginMate\\app\\", MM_TASK="MarginMate")
@@ -1514,9 +1495,12 @@ class DeployDocumentTests(SimpleTestCase):
 
     def test_production_installs_with_uv(self):
         """Wherever DEPLOY.md installs the dependencies - the production
-        copy made, the way back - it is what deploy.cmd runs. pip is named
-        once: for going back to a version from before uv (no uv.lock), after
-        uv has taken pip out of .venv."""
+        copy made, the way back - it is what deploy.cmd runs. No command
+        installs with pip any more, and the way back says a version from
+        before uv is not gone back to (the owner, 01/10/2026): its
+        deploy.cmd would fail the next deployment on the requirements.txt
+        the code no longer has. pip is only QUOTED, in 10.6, where that
+        failure is told."""
         tenth = section(self.deploy, "## 10. Développer et mettre en ligne une modification")
         setup = tenth.split("### 10.1 ", 1)[1].split("\n### ", 1)[0]
         back = tenth.split("### 10.4 ", 1)[1].split("\n### ", 1)[0]
@@ -1527,14 +1511,16 @@ class DeployDocumentTests(SimpleTestCase):
         self.assertEqual(
             reset, ["cd /d C:\\MarginMate\\app git reset --hard <version d'avant> uv sync --locked --no-dev"]
         )
-        self.assertEqual(self.deploy.count("pip install"), 1)
-        before_uv = " ".join(back.split("pip install", 1)[0].split()[-40:])
-        self.assertIn("n'a pas de fichier `uv.lock`", before_uv)
-        self.assertIn("-m ensurepip", before_uv)
+        self.assertEqual([block for block in code_blocks(self.deploy) if PIP.search(block) or "ensurepip" in block], [])
+        self.assertNotIn("ensurepip", self.deploy)
+        self.assertIsNone(PIP.search(back))
+        self.assertIn("On ne revient pas avant le passage à uv (section 10.6)", " ".join(back.split()))
+        switch = section(self.deploy, "\n### 10.6 Passage à uv (une seule fois)\n")
+        self.assertIsNone(PIP.search(self.deploy.replace(switch, "")))
 
     def test_the_switch_to_uv_is_told_once(self):
         """10.6, what deploy.cmd's refusal points at: the first deployment
-        of the uv version is run by the PREVIOUS deploy.cmd (pip,
+        of the uv version, 05a80b4, is run by the PREVIOUS deploy.cmd (pip,
         requirements.txt) and asks nothing; uv must answer in
         C:\\MarginMate\\app before the second, from which deploy.cmd runs uv
         and refuses, before touching anything, when it does not."""
@@ -1542,7 +1528,7 @@ class DeployDocumentTests(SimpleTestCase):
         words = " ".join(switch.split())
         for said in (
             "winget install jdx.mise",
-            "**La première mise en ligne**",
+            "**La première mise en ligne** est celle de la version `05a80b4`",
             "`deploy.cmd` d'avant",
             "`requirements.txt`",
             "**nouvelle** invite de commandes",
@@ -1551,12 +1537,53 @@ class DeployDocumentTests(SimpleTestCase):
             "**À partir de la deuxième mise en ligne**",
             "`uv sync --locked --no-dev`",
             "« REFUS : uv ne repond pas »",
-            "`requirements.txt` disparaît du code après cette deuxième mise en ligne",
+            "`requirements.txt` a disparu du code après `05a80b4`",
+            "On ne revient donc pas à une version d'avant le passage à uv (section 10.4)",
         ):
             with self.subTest(said=said):
                 self.assertIn(said, words)
         self.assertLess(words.index("**La première mise en ligne**"), words.index("uv --version"))
         self.assertLess(words.index("uv --version"), words.index("**À partir de la deuxième mise en ligne**"))
+
+    def test_a_production_left_before_uv_is_finished_by_hand(self):
+        """The code has no requirements.txt: a production still before
+        05a80b4 is updated by ITS deploy.cmd, which fails on pip past the
+        merge (the backup made, the server stopped). What 10.6 says it
+        prints is what that deploy.cmd prints, and the way forward is what
+        this version's deploy.cmd runs after its merge, in its order, then
+        the mark that deploy.cmd left removed and the server restarted."""
+        switch = section(self.deploy, "\n### 10.6 Passage à uv (une seule fois)\n")
+        words = " ".join(switch.split())
+        # 79b13b6's deploy.cmd: « echo ECHEC pendant %MM_ETAPE%. » with
+        # MM_ETAPE « l'installation des dependances (pip install -r requirements.txt) ».
+        self.assertIn(
+            "« ECHEC pendant l'installation des dependances (pip install -r requirements.txt) »,"
+            " le code déjà mis à jour, les données sauvegardées et le serveur arrêté",
+            words,
+        )
+        self.assertIn("pas de fichier `mise.toml` dans `C:\\MarginMate\\app`", words)
+        self.assertIn("Ne revenez pas en arrière : faites l'étape 3", words)
+        (forward,) = [block for block in code_blocks(switch) if "migrate_tenants" in block]
+        commands = [line.strip() for line in forward.strip().splitlines()]
+        self.assertEqual(
+            commands,
+            [
+                "uv sync --locked --no-dev",
+                ".venv\\Scripts\\python.exe manage.py migrate_tenants",
+                ".venv\\Scripts\\python.exe manage.py serve --verifier",
+                "rmdir /s /q .git\\marginmate-deploy",
+                "schtasks /run /tn MarginMate",
+            ],
+        )
+        script = Script("deploy.cmd")
+        run = [
+            script.line_of(needle)
+            for needle in ("call uv sync --locked --no-dev", "manage.py migrate_tenants", "manage.py serve --verifier")
+        ]
+        self.assertEqual(run, sorted(run))
+        script.line_of('set "MM_LOCK=%MM_APP%.git\\marginmate-deploy"')
+        script.line_of('schtasks /run /tn "%MM_TASK%"')
+        self.assertEqual(script.lines[script.line_of('set "MM_TASK=')], 'set "MM_TASK=MarginMate"')
         # The same PATH line as README.md's first-time setup.
         readme = (BASE / "README.md").read_text(encoding="utf-8")
         (path_line,) = [line.strip() for line in readme.splitlines() if "mise\\shims" in line]

@@ -504,11 +504,9 @@ et relancez `deploy.cmd`. Pour revenir plus tard sur une version mise en ligne :
    ```
 
    La version d'avant est le premier numéro de « Déployé : ancien..nouveau » ;
-   `git log --oneline` les liste toutes. Une version d'avant le passage à uv (section 10.6) n'a pas
-   de fichier `uv.lock` : pour elle, remplacez la ligne `uv sync` par
-   `.venv\Scripts\python.exe -m ensurepip`, puis
-   `.venv\Scripts\python.exe -m pip install -r requirements.txt` (uv retire pip de `.venv`,
-   `ensurepip` le remet).
+   `git log --oneline` les liste toutes. On ne revient pas avant le passage à uv (section 10.6) :
+   une version d'avant n'a pas de fichier `uv.lock`, et son `deploy.cmd`, remis en place par le
+   retour, ne saurait plus mettre en ligne la suivante.
 3. Si la version retirée apportait des migrations, le code d'avant ne connaît pas les nouvelles
    colonnes : remettez aussi les données de la sauvegarde faite avant la mise en ligne. **Tout ce
    qui a été saisi depuis est alors perdu.**
@@ -568,9 +566,22 @@ ligne :
    ```
 
    Si mise est déjà installé pour le dossier de développement (README.md), c'est déjà fait.
-2. **La première mise en ligne** de cette version se fait comme d'habitude, sans rien de
-   différent : c'est encore le `deploy.cmd` d'avant qui la conduit (il travaille depuis une copie de
-   lui-même), et il installe les dépendances depuis `requirements.txt`, avec pip.
+2. **La première mise en ligne** est celle de la version `05a80b4`, la dernière à porter le fichier
+   `requirements.txt` : elle se fait comme d'habitude, et c'est encore le `deploy.cmd` d'avant qui
+   la conduit (il travaille depuis une copie de lui-même), en installant les dépendances depuis ce
+   fichier, avec pip. Le code ne l'a plus depuis : si la production est restée avant `05a80b4`
+   (pas de fichier `mise.toml` dans `C:\MarginMate\app`), son `deploy.cmd` s'arrête sur « ECHEC
+   pendant l'installation des dependances (pip install -r requirements.txt) », le code déjà mis à
+   jour, les données sauvegardées et le serveur arrêté. Ne revenez pas en arrière : faites
+   l'étape 3, puis finissez la mise en ligne à la main, dans la même invite de commandes :
+
+   ```
+   uv sync --locked --no-dev
+   .venv\Scripts\python.exe manage.py migrate_tenants
+   .venv\Scripts\python.exe manage.py serve --verifier
+   rmdir /s /q .git\marginmate-deploy
+   schtasks /run /tn MarginMate
+   ```
 3. **Avant la mise en ligne suivante**, ouvrez une **nouvelle** invite de commandes (une fenêtre
    ouverte avant l'étape 1 ne voit pas le nouveau PATH) et tapez :
 
@@ -591,8 +602,8 @@ ligne :
    refuse avant de toucher à quoi que ce soit, avec « REFUS : uv ne repond pas » : reprenez
    l'étape 3. Si `uv --version` répond dans une nouvelle invite de commandes et que `deploy.cmd`
    refuse encore, fermez la session Windows et rouvrez-la.
-5. `requirements.txt` disparaît du code après cette deuxième mise en ligne : il ne servait qu'à la
-   première.
+5. `requirements.txt` a disparu du code après `05a80b4` : il ne servait qu'à la première mise en
+   ligne. On ne revient donc pas à une version d'avant le passage à uv (section 10.4).
 
 ## 11. Quand le serveur refuse de démarrer
 

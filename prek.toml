@@ -36,10 +36,6 @@ repo = "local"
 hooks = [
     # --- pre-commit -------------------------------------------------------
     { id = "uv-lock", name = "uv lock", entry = "uv lock", language = "system", files = '^(pyproject\.toml|uv\.lock)$', pass_filenames = false },
-    # Transitional: the deploy.cmd of the versions before uv installs from
-    # requirements.txt. Deleted once one deploy has put uv in place
-    # (DEPLOY.md, section 10).
-    { id = "requirements-export", name = "requirements.txt from uv.lock", entry = "uv export --frozen --no-dev --no-hashes --no-emit-project --no-annotate --quiet --output-file requirements.txt", language = "system", files = '^(pyproject\.toml|uv\.lock|requirements\.txt)$', pass_filenames = false },
     { id = "ruff-check", name = "ruff check", entry = "uv run --locked ruff check --fix --force-exclude", language = "system", types = ["python"] },
     { id = "ruff-format", name = "ruff format", entry = "uv run --locked ruff format --force-exclude", language = "system", types = ["python"] },
     # Warnings are shown, never blocking (pyproject.toml, [tool.ty.rules]);

@@ -1,12 +1,10 @@
 """The toolchain's files agree with one another (CLAUDE.md, « Toolchain »).
 
 mise.toml pins the tools, pyproject.toml and uv.lock the Python packages,
-prek.toml the git hooks; requirements.txt is the transitional export the
-previous deploy.cmd installs from. Each test says what breaks when two of
-them disagree.
+prek.toml the git hooks. Each test says what breaks when two of them
+disagree.
 """
 
-import re
 import tomllib
 from pathlib import Path
 
@@ -17,10 +15,6 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def toml(name):
     return tomllib.loads((ROOT / name).read_text(encoding="utf-8"))
-
-
-def normalised(name):
-    return re.sub(r"[-_.]+", "-", name).lower()
 
 
 class ToolchainFilesTests(SimpleTestCase):
@@ -39,24 +33,17 @@ class ToolchainFilesTests(SimpleTestCase):
             with self.subTest(tool=tool):
                 self.assertRegex(tools[tool], r"^\d+\.\d+\.\d+$")
 
-    def test_requirements_txt_pins_the_lock_s_versions_and_no_dev_tool(self):
-        """The previous deploy.cmd runs pip on it once, on the new code: a pin
-        other than the lock's would put another version in production."""
-        locked = {normalised(p["name"]): p["version"] for p in toml("uv.lock")["package"]}
-        pins = {}
-        for line in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines():
-            line = line.split(";")[0].strip()
-            if line and not line.startswith("#"):
-                name, _, version = line.partition("==")
-                pins[normalised(name)] = version.strip()
-        self.assertTrue(pins)
-        for name, version in pins.items():
-            with self.subTest(package=name):
-                self.assertEqual(locked.get(name), version)
-        for tool in ("ruff", "ty", "django-stubs"):
-            self.assertNotIn(tool, pins)
-        for runtime in ("django", "waitress", "whitenoise", "rapidocr", "onnxruntime", "pyhanko"):
-            self.assertIn(runtime, pins)
+    def test_there_is_no_requirements_txt_and_no_hook_writes_one(self):
+        """requirements.txt was the export of uv.lock the deploy.cmd of the
+        versions before uv installed 05a80b4 from, with pip. Every deploy
+        since installs with uv sync, so a copy back in the code is a second
+        list of versions that nothing reads and nothing keeps in step. The
+        hook that exported it went with it: left in, it wrote the file again
+        at the next commit touching uv.lock."""
+        self.assertFalse((ROOT / "requirements.txt").exists())
+        hooks = [hook for repo in toml("prek.toml")["repos"] for hook in repo["hooks"]]
+        self.assertTrue(hooks)
+        self.assertEqual([hook["id"] for hook in hooks if "requirements" in str(hook)], [])
 
     def test_the_dev_tools_are_a_group_production_leaves_out(self):
         project = toml("pyproject.toml")
