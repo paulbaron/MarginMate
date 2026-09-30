@@ -41,6 +41,8 @@ from django.core.exceptions import SuspiciousFileOperation
 from django.core.files.storage import default_storage
 from django.utils import timezone
 
+from accounts import paths
+from accounts.tenancy import tenant_key
 from transfer import codec, keys, registry
 from transfer.archive import ArchiveError
 from transfer.sections.base import FileRefused, Section
@@ -268,23 +270,30 @@ def _stored(name: str) -> bool:
 
 # -- sizes, for count() ------------------------------------------------------------------
 
-_SIZES: dict = {"token": None, "at": 0.0, "bytes": 0}
+#: (espace, media folder) → (hash of the names, when, bytes). Per espace:
+#: two espaces restored from one archive name the same files, and one slot
+#: for the process gave bar B the size kept for bar A a minute before (and
+#: two bars taking turns recounted every time). One small entry per espace.
+_SIZES: dict[tuple[str, str], tuple[int, float, int]] = {}
 
 
 def _bytes_of(names: frozenset[str]) -> int:
     """Their total size on disk, a missing one counting nothing. Drawn on
-    every visit of the page: 1 520 stat calls, kept a minute."""
+    every visit of the page: 1 520 stat calls, kept a minute - for the
+    bound espace's media folder only."""
+    where = (tenant_key(), os.fspath(paths.media_root()))
     token = hash(names)
     now = time.monotonic()
-    if _SIZES["token"] == token and now - _SIZES["at"] < SIZE_CACHE_SECONDS:
-        return _SIZES["bytes"]
+    kept = _SIZES.get(where)
+    if kept is not None and kept[0] == token and now - kept[1] < SIZE_CACHE_SECONDS:
+        return kept[2]
     total = 0
     for name in names:
         try:
             total += os.path.getsize(default_storage.path(name))
         except (OSError, SuspiciousFileOperation, NotImplementedError, ValueError):
             continue
-    _SIZES.update(token=token, at=now, bytes=total)
+    _SIZES[where] = (token, now, total)
     return total
 
 
@@ -299,11 +308,11 @@ def _named_files() -> set[str]:
 
 def _orphan_files(named: set[str]) -> int:
     """Files under media/invoices and media/receipts no document names - left
-    as they are by a clear, as by everything else."""
-    from django.conf import settings
-
+    as they are by a clear, as by everything else. The bound espace's media
+    (accounts.paths.media_root): walked from one server-wide media folder,
+    every other bar's files counted as this bar's orphans."""
     count = 0
-    root = os.fspath(settings.MEDIA_ROOT)
+    root = os.fspath(paths.media_root())
     for folder in ("invoices", "receipts"):
         for directory, _dirs, files in os.walk(os.path.join(root, folder)):
             for filename in files:

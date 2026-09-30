@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}{% if fmt %}Format « {{ fmt.name }} »{% else %}Nouveau format de bon{% endif %} - MarginMate{% endblock %}
+{% block content %}
+<div class="consignes-page">
+    <p class="breadcrumb"><a href="{% url 'returnables:format_list' %}">← Formats de bons</a></p>
+    <div class="page-header">
+        <div>
+            <h1>{% if fmt %}Format « {{ fmt.name }} »{% else %}Nouveau format de bon{% endif %}</h1>
+            <p class="page-subtitle">
+                Des motifs (des expressions régulières) disent où sont les consignes dans le bon, comment en lire
+                chaque ligne, sa date et son numéro. « Tester » les essaie sur un bon avant de les enregistrer.
+            </p>
+        </div>
+        {% if fmt %}
+            <div class="actions">
+                <a class="btn btn-secondary" href="{% url 'returnables:format_create' %}?depuis={{ fmt.pk }}">Dupliquer</a>
+            </div>
+        {% endif %}
+    </div>
+
+    {% if format_problem %}
+        <p class="message message-error">Motif invalide : {{ format_problem }} — corrigez-le ci-dessous, puis « Relire ».</p>
+    {% endif %}
+    {% if source %}
+        <p class="message">
+            Copie du format « {{ source.name }} » : choisissez son fournisseur, puis testez ses motifs sur un bon de ce
+            fournisseur avant de l'enregistrer.
+        </p>
+    {% endif %}
+
+    <form method="post" action="{{ request.path }}" enctype="multipart/form-data" hx-encoding="multipart/form-data" class="card format-form">
+        {% csrf_token %}
+        {% comment %}
+        Enter in a field presses the form's FIRST submit button: this one,
+        out of sight, tests - it never saves (the trap of
+        invoices/invoice_type_form.html, the other way round).
+        {% endcomment %}
+        <button class="visually-hidden" type="submit" name="action" value="tester" formnovalidate tabindex="-1" aria-hidden="true"
+            hx-post="{{ request.path }}" hx-target="#resultat-test" hx-swap="innerHTML">Tester</button>
+
+        {% if not fmt %}{% include "returnables/_format_tester.html" %}{% endif %}
+
+        {% for title, names, folded, has_errors in form.groups %}
+            {% if folded %}
+                <details class="format-group"{% if has_errors %} open{% endif %}>
+                    <summary>{{ title }}</summary>
+                    {% include "_form_fields.html" with form=form only=names %}
+                </details>
+            {% else %}
+                <fieldset class="format-group">
+                    <legend>{{ title }}</legend>
+                    {% if title == "Récupération par mail" %}<p class="help">Vide = dépôt à la main seulement.</p>{% endif %}
+                    {% include "_form_fields.html" with form=form only=names %}
+                </fieldset>
+            {% endif %}
+        {% endfor %}
+
+        <details class="explainer motif-help">
+            <summary>Écrire un motif</summary>
+            <ul class="motif-cheatsheet">
+                <li><code>\d+</code> un nombre</li>
+                <li><code>.+?</code> du texte</li>
+                <li><code>\s+</code> des espaces</li>
+                <li><code>^</code> début de ligne · <code>$</code> fin de ligne</li>
+                <li><code>(?P&lt;quantite&gt;…)</code> ce qui est lu comme quantité (de même <code>designation</code>, <code>prix</code>, <code>montant</code>, <code>date</code>, <code>numero</code>, <code>reference</code>, <code>total</code>)</li>
+                <li>majuscules et minuscules déjà confondues ; chaque motif est cherché ligne par ligne</li>
+            </ul>
+            <p>Exemple, sur une ligne inventée « {{ uba_line }} » :</p>
+            <p><code class="motif-example">{{ uba_motif }}</code></p>
+            <p>lit la désignation « FÛT EXEMPLE 30 L », la quantité 4, le prix 30.00 et le montant 120.00.</p>
+        </details>
+
+        {% if fmt %}{% include "returnables/_format_tester.html" %}{% endif %}
+
+        <div class="form-actions">
+            <button class="btn" type="submit" name="action" value="enregistrer">Enregistrer</button>
+            <a class="btn btn-secondary" href="{% url 'returnables:format_list' %}">Annuler</a>
+        </div>
+    </form>
+
+    {% if fmt %}
+        {% if slip_count %}
+            <section class="card">
+                <h2>Les bons de ce format</h2>
+                <p class="muted">Enregistrer ne relit pas les bons déjà reçus : « Relire » les lit avec les motifs enregistrés.</p>
+                <form method="post" action="{% url 'returnables:format_reread' fmt.pk %}">
+                    {% csrf_token %}
+                    <button class="btn btn-secondary" type="submit" data-busy-label="Lecture des bons…">{% if slip_count == 1 %}Relire le bon de ce format{% else %}Relire les {{ slip_count }} bons de ce format{% endif %}</button>
+                </form>
+            </section>
+        {% endif %}
+        <details class="danger-zone">
+            <summary>Supprimer le format…</summary>
+            <form method="post" action="{% url 'returnables:format_delete' fmt.pk %}">
+                {% csrf_token %}
+                <p>
+                    {% if slip_count %}Ce format a {{ slip_count }} bon{{ slip_count|pluralize }} : il ne peut pas être supprimé, désactivez-le plutôt.
+                    {% else %}Le format sera supprimé. Aucun bon n'a été lu avec lui.{% endif %}
+                </p>
+                <button class="btn btn-danger" type="submit"{% if slip_count %} disabled{% endif %}>Supprimer le format</button>
+            </form>
+        </details>
+    {% endif %}
+</div>
+{% endblock %}

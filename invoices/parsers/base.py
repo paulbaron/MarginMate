@@ -214,18 +214,22 @@ class InvoiceParser:
     text_extraction_kwargs: dict = {}
 
     def parse(self, pdf_path: str, date_hint: date | None = None) -> ParsedInvoice:
+        """Raises ocr.DocumentTooBig, before any page is read, for a PDF of
+        more than ocr.MAX_PAGES pages; each page is released once its text
+        and tables are taken (ocr.pdf_pages - security review HARDEN-01:
+        this loop read and kept every page of whatever it was handed, and a
+        supplier's reader never reaches the page cap of ocr.page_images)."""
         import os
 
-        import pdfplumber
+        from ..ocr import pdf_pages
 
-        with pdfplumber.open(pdf_path) as pdf:
-            pages = [
-                PdfPage(
-                    text=page.extract_text(**self.text_extraction_kwargs) or "",
-                    tables=page.extract_tables() if self.needs_tables else [],
-                )
-                for page in pdf.pages
-            ]
+        pages = [
+            PdfPage(
+                text=page.extract_text(**self.text_extraction_kwargs) or "",
+                tables=page.extract_tables() if self.needs_tables else [],
+            )
+            for page in pdf_pages(pdf_path)
+        ]
         return self.parse_pages(pages, date_hint=date_hint, source_name=os.path.basename(pdf_path))
 
     def parse_pages(

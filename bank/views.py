@@ -26,20 +26,24 @@ from django.db.models import Prefetch
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import NoReverseMatch, reverse
 from django.utils.html import escape
-from django.utils.http import url_has_allowed_host_and_scheme, urlencode
+from django.utils.http import urlencode
 
 from common import (
     LEFT_OUT_PARAM,
     SHOWN_PARAM,
     DateRange,
     date_range,
+    file_too_big,
     is_id,
     last_twelve_months,
     left_out_from,
+    safe_next,
+    selection_too_big,
 )
 
 from invoices.models import Invoice
 from invoices.workspace import documents_matching
+from recipes.integration import TILL_TO_CONFIGURE, till_allowed
 
 from . import income, matching, reconcile, spending
 from .forms import IgnoreRuleForm
@@ -478,6 +482,11 @@ def income_home(request):
             # « Comparer sur les jours couverts des deux côtés », where one
             # side holds days the other cannot see (`_covered_url`).
             "covered_url": _covered_url(report, window),
+            # What the till could not read is said everywhere; the commands
+            # that fill it only where they can be used (recipes/integration.py).
+            "balance_reason": _balance_reason(report.balance.reason),
+            "till_allowed": till_allowed(),
+            "till_to_configure": TILL_TO_CONFIGURE,
             "chart_svg": _build_balance_svg(report.balance_points),
             "known_categories": income.known_categories(),
             "no_category": spending.NO_CATEGORY,
@@ -866,10 +875,19 @@ def _import_statements(request):
     if not uploads:
         messages.error(request, "Choisissez au moins un relevé bancaire (fichier CSV).")
         return redirect(back)
+    # What an upload may weigh (security audit UPLOAD-1): the selection as a
+    # whole, then each file by its name - a bank's CSV is a few Ko a month.
+    too_heavy = selection_too_big(uploads)
+    if too_heavy:
+        messages.error(request, f"{too_heavy} Aucun relevé n'a été importé.")
+        return redirect(back)
     created = known = 0
     for upload in uploads:
         if not upload.name.lower().endswith(".csv"):
             messages.error(request, f"{upload.name} : seuls les relevés exportés en CSV sont acceptés.")
+            continue
+        if file_too_big(upload):
+            messages.error(request, f"{file_too_big(upload)} Ce relevé n'a pas été importé.")
             continue
         try:
             summary = reconcile.import_statement(upload.read())
@@ -1038,6 +1056,17 @@ def _covered_url(report, window: DateRange) -> str:
     if window.end is not None and window.end < since:
         return ""
     return _income_page_url(DateRange(since, window.end), False)
+
+
+def _balance_reason(reason: str) -> str:
+    """Why « Ventes carte pas encore versées » has no balance, as this espace
+    can act on it. NO_CARD_DAYS names the command that re-reads the till's
+    exports - a command on the server, reading the till the server imports:
+    the owner's (recipes/integration.py). Another espace is told « à
+    configurer » rather than handed a command it cannot run."""
+    if reason == income.NO_CARD_DAYS and not till_allowed():
+        return income.NO_CARD_DAYS_TO_CONFIGURE
+    return reason
 
 
 def _bank_period(month: str, window: DateRange) -> tuple[DateRange, bool]:
@@ -1246,12 +1275,10 @@ def _moved_out_of_view(request, line: BankTransaction) -> str:
 
 
 def _back(request, default: str = "bank:bank_home") -> str:
-    target = request.POST.get("next") or request.GET.get("next") or ""
-    if target and url_has_allowed_host_and_scheme(
-        target, allowed_hosts={request.get_host()}, require_https=request.is_secure()
-    ):
-        return target
-    return reverse(default)
+    """The page the action was made from (`next`) when it is a path of this
+    site (`common.safe_next`: « abc » was a 500, audit LB-5), `default`
+    otherwise."""
+    return safe_next(request, reverse(default))
 
 
 def _months() -> list[tuple[str, str]]:

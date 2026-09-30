@@ -15,13 +15,28 @@ from inventory.services import create_stock_movement_for_line, expense_product
 from .charges import read_charge
 from .deletion import remove_orphan_products
 from .models import Invoice, InvoiceLine, Supplier
-from .ocr import document_text
+from .ocr import check_page_count, document_text
 from .parsers import is_ticket_shop
 from .parsers.base import ParsedInvoice, ParsedLine
 
 
 class DuplicateInvoiceError(Exception):
     """Raised when the (supplier, invoice_number) pair was already imported."""
+
+
+class RoutedToConsignesError(DuplicateInvoiceError):
+    """Not an invoice: a driver's bon de consignes dropped among the
+    purchases (receipts.import_document's guard). It went to Consignes
+    (returnables.slips.store_slip) and no Invoice was made - read as a
+    purchase, its empties taken back became POSITIVE purchase lines, silently
+    wrong money. A DuplicateInvoiceError, so that every caller already saying
+    « not imported, and why » (the upload, a folder's import, the gather)
+    says this sentence instead of failing. `slip`: the bon, when stored or
+    already there."""
+
+    def __init__(self, message: str, slip=None):
+        super().__init__(message)
+        self.slip = slip
 
 
 @transaction.atomic
@@ -626,6 +641,11 @@ def parse_and_import(
     """
     from .parsers import get_parser
 
+    # A PDF past ocr.MAX_PAGES is refused before anything reads a page or
+    # files anything (DocumentTooBig): the AI reader had no cap of its own,
+    # and with no parser the invoice was filed EMPTY before `document_text`
+    # below refused the file (review of the HARDEN-01 fix).
+    check_page_count(pdf_path)
     key = supplier.parser_key if parser_key_override is None else parser_key_override
     parser = get_parser(key)
     if parser is None:

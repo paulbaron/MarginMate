@@ -573,7 +573,10 @@ class WindowTests(TestCase):
         it is not."""
         html = self.html(du=self.recent.isoformat(), au=self.today.isoformat(), tout="1")
 
-        form = html[html.index('class="date-range"') : html.index("</form>")]
+        # The date form's own end: the topbar's « Se déconnecter » form
+        # closes before it on every logged-in page.
+        start = html.index('class="date-range"')
+        form = html[start : html.index("</form>", start)]
         self.assertEqual(form.count("disabled"), 3)
         self.assertIn(f"Revenir du {self.recent.strftime('%d/%m/%Y')}", form)
 

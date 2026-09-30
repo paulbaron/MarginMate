@@ -12,7 +12,6 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
-import pdfplumber
 from django.conf import settings
 
 from .base import InvoiceParser, ParsedInvoice, ParsedLine
@@ -53,8 +52,13 @@ EXTRACTION_TOOL = {
 
 
 def _extract_text(pdf_path: str) -> str:
-    with pdfplumber.open(pdf_path) as pdf:
-        return "\n".join((page.extract_text(y_tolerance=0) or "") for page in pdf.pages)
+    """Every page's text, through `ocr.pdf_pages`: refused (DocumentTooBig)
+    past ocr.MAX_PAGES before a page is read - or the API billed for it -
+    and each page released once read (security review of HARDEN-01: this
+    loop had no cap at all)."""
+    from ..ocr import pdf_pages
+
+    return "\n".join((page.extract_text(y_tolerance=0) or "") for page in pdf_pages(pdf_path))
 
 
 def _to_decimal(value) -> Decimal:
@@ -69,6 +73,16 @@ class LLMFallbackParser(InvoiceParser):
     supplier_code = "LLM"
 
     def parse(self, pdf_path: str, date_hint: date | None = None) -> ParsedInvoice:
+        # The key and its bill are the owner's: from an espace that may not
+        # use the server's accounts, refused before the document is read or
+        # anything is sent (invoices/integrations.py) - whichever path got
+        # here (the PDF import, a source's reader, a gathered attachment).
+        from accounts.tenancy import integrations_allowed
+
+        from invoices import integrations
+
+        if not integrations_allowed():
+            raise RuntimeError(integrations.AI_READING)
         if not settings.ANTHROPIC_API_KEY:
             raise RuntimeError(
                 "ANTHROPIC_API_KEY is not configured - set it in .env to use the AI-assisted invoice parser."

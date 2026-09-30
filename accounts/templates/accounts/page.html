@@ -1,0 +1,31 @@
+{% load assets %}<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex, nofollow">
+    <title>{% block title %}MarginMate{% endblock %}</title>
+    <link rel="stylesheet" href="{% asset 'css/marginmate.css' %}">
+    {% block scripts %}{% endblock %}
+</head>
+{% comment %}
+Les pages des comptes (accounts/pages.py) et « Aucun espace » : ouvertes sans espace choisi. Elles
+n'héritent PAS de base.html - ni la navigation, ni ses compteurs, qui compteraient dans la base de
+quelqu'un. Les messages, si : « Vous êtes déconnecté », « Bienvenue ».
+data-tenant : seulement sur « Espace indisponible » (accounts.middleware._unavailable), dont
+« Se déconnecter » efface les brouillons de l'espace comme celui de base.html (ui.js).
+{% endcomment %}
+<body class="public-page account-page"{% if request.storage_scope %} data-tenant="{{ request.storage_scope }}"{% endif %}{% if request.storage_legacy %} data-tenant-legacy="{{ request.storage_legacy }}"{% endif %}>
+    <main class="public-container">
+        <p class="account-brand">MarginMate</p>
+        {% if messages %}
+            <ul class="messages">
+                {% for message in messages %}
+                    <li class="message message-{{ message.tags }}">{{ message }}</li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+        {% block content %}{% endblock %}
+    </main>
+</body>
+</html>

@@ -1,0 +1,30 @@
+{% comment %}
+What the seller's invoice says of a bon (returnables/invoice_check.py
+InvoiceCheck `check`, and `pill`: views.check_pill): « Facture : » and the
+state in a pill - the whole sentence as its title - then what the sentence
+says beyond it (« Facture : à vérifier BL n° … sur plusieurs factures »),
+never the label word printed before a sentence that says it again; the
+invoices it was read on, each designation's figures, the other credits of
+those invoices (listed, never counted as a gap), and the notes. Read when
+the page is drawn, never stored.
+{% endcomment %}
+<div class="invoice-check">
+    <p class="invoice-check-state">Facture : <span class="status-pill status-{{ pill.css }}" title="{{ pill.title }}">{{ pill.text }}</span>{% if pill.detail %} {{ pill.detail }}{% endif %}</p>
+    {% if check.invoices %}
+        <p class="small">
+            {% for ref in check.invoices %}<a href="{% url 'invoices:invoice_detail' ref.pk %}">Facture {{ ref.label }}</a>{% if not forloop.last %} · {% endif %}{% endfor %}
+        </p>
+    {% endif %}
+    {% if check.rows %}
+        <ul class="invoice-check-rows small">
+            {% for row in check.rows %}<li{% if not row.agrees %} class="is-gap"{% endif %}>{{ row.sentence }}</li>{% endfor %}
+        </ul>
+    {% endif %}
+    {% if check.others %}
+        <p class="small muted">Autres avoirs de la facture (non comparés) :</p>
+        <ul class="invoice-check-rows small muted">
+            {% for other in check.others %}<li>{{ other.sentence }}</li>{% endfor %}
+        </ul>
+    {% endif %}
+    {% for note in check.notes %}<p class="small muted">{{ note|capfirst }}.</p>{% endfor %}
+</div>

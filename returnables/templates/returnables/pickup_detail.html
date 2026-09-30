@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% load assets %}
+{% block title %}Reprise du {{ pickup.date|date:"d/m/Y" }} - MarginMate{% endblock %}
+{% block content %}
+<div class="consignes-page">
+    <p class="breadcrumb"><a href="{% url 'returnables:home' %}">← Consignes</a></p>
+    <div class="page-header">
+        <div>
+            <h1>Reprise du {{ pickup.date|date:"d/m/Y" }}</h1>
+            <p class="page-subtitle">
+                Les vides repris {% if pickup.supplier %}par {{ pickup.supplier.name }}{% else %}sans fournisseur précisé{% endif %},
+                comparés aux bons livrés le même jour. Des photos s'ajoutent ici, une à une ou plusieurs à la fois.
+            </p>
+        </div>
+    </div>
+
+    {% for kind, problem in type_errors %}
+        <p class="message message-error">Type « {{ kind.name }} » : motif invalide : {{ problem }} — <a href="{% url 'returnables:type_list' %}#type-{{ kind.pk }}">corrigez-le</a></p>
+    {% endfor %}
+
+    <section class="card reprise-card">
+        {% include "returnables/_day.html" with view=view retour="" removable=True %}
+    </section>
+
+    <section class="card" id="modifier">
+        <h2>Modifier ou compléter</h2>
+        <form method="post" action="{% url 'returnables:pickup_detail' pickup.pk %}" enctype="multipart/form-data" class="reprise-form" data-reprise-form>
+            {% csrf_token %}
+            {% include "returnables/_pickup_fields.html" with submit_label="Enregistrer les modifications" details_open=True same_day=None %}
+        </form>
+    </section>
+
+    {% comment %}
+    A <details>, not data-confirm: confirm() does nothing without
+    JavaScript (CLAUDE.md « Personnel »).
+    {% endcomment %}
+    <details class="danger-zone">
+        <summary>Supprimer la reprise…</summary>
+        <form method="post" action="{% url 'returnables:pickup_delete' pickup.pk %}">
+            {% csrf_token %}
+            <p>
+                La reprise et {% if view.photos %}ses {{ view.photos|length }} photo{{ view.photos|length|pluralize }}{% else %}ses nombres{% endif %}
+                seront supprimées. Les bons reçus restent : ils attendront une autre reprise de ce jour-là.
+            </p>
+            <button class="btn btn-danger" type="submit">Supprimer la reprise</button>
+        </form>
+    </details>
+</div>
+{% endblock %}
+{% block extra_js %}
+    <script src="{% asset 'js/returnables.js' %}" defer></script>
+{% endblock %}

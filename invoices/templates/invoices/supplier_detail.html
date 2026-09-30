@@ -250,13 +250,26 @@
         {% elif own_module %}{# said above: it needs none #}
         {% elif not document_count %}
             <p class="muted">
+                {% if sources_refused %}
+                Comment arrivera son premier document ? Par « Importer », en le choisissant sur la ligne du fichier.
+                {% else %}
                 Comment arrivera son premier document ? Par une source qui le récupère pour lui (e-mail, espace
                 client), ou par « Importer » en le choisissant sur la ligne du fichier.
+                {% endif %}
             </p>
         {% else %}
             <p class="muted">Aucune : ses documents arrivent par l'import.</p>
         {% endif %}
-        <p><a class="btn btn-small btn-secondary" href="{% url 'invoices:invoice_type_create' %}?fournisseur={{ supplier.pk }}&amp;retour={{ fiche|urlencode }}">+ Nouvelle source pour {{ supplier.name }}</a></p>
+        {% if sources_refused %}
+            {% comment %}
+            The mailbox and the portals are the server's own accounts
+            (invoices/integrations.py): said as on the Sources tab, and no
+            link to a source form that would only say it again.
+            {% endcomment %}
+            <p class="muted">{{ sources_refused }}</p>
+        {% else %}
+            <p><a class="btn btn-small btn-secondary" href="{% url 'invoices:invoice_type_create' %}?fournisseur={{ supplier.pk }}&amp;retour={{ fiche|urlencode }}">+ Nouvelle source pour {{ supplier.name }}</a></p>
+        {% endif %}
     </section>
 
     <section class="card" aria-labelledby="historique" id="historique">

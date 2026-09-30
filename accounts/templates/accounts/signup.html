@@ -1,0 +1,21 @@
+{% extends "accounts/page.html" %}
+{% comment %}
+L'inscription (accounts.pages.signup_view). Contexte : `form` (SignupForm), `refused` (trop d'échecs).
+Le code n'est vérifié qu'une fois tout le reste valide : la page ne dit jamais, pour rien, si un code
+existe.
+{% endcomment %}
+{% block title %}Créer votre espace - MarginMate{% endblock %}
+{% block content %}
+    <section class="public-card account-card">
+        <h1>Créer votre espace</h1>
+        <p class="public-lead">Un espace, c'est votre bar : ses factures, ses articles, ses recettes, sa banque -
+            rien que les vôtres, dans une base à part. L'inscription se fait sur invitation.</p>
+        {% if refused %}<p class="message message-error">{{ refused }}</p>{% endif %}
+        <form method="post" action="{% url 'accounts:signup' %}" class="public-form">
+            {% csrf_token %}
+            {% include "_form_fields.html" %}
+            <button type="submit" class="btn public-submit">Créer l'espace</button>
+        </form>
+        <p class="muted small">Déjà un compte ? <a href="{% url 'accounts:login' %}">Se connecter</a>.</p>
+    </section>
+{% endblock %}

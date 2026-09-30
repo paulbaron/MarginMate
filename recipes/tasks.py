@@ -13,9 +13,11 @@ from django.db import transaction
 from django.db.models import Sum
 from datetime import date
 
-from django.conf import settings
 from django.utils import timezone
 
+from accounts.paths import downloads_dir
+
+from .integration import refusal, till_allowed
 from .models import PosDailyPayment, PosProduct, PosProductDailyQuantity, SalesImportJob
 from .payments import by_method, oddities, record_payments
 from .pos.laddition_download import DownloadCancelled, download_sales_lines
@@ -255,10 +257,24 @@ def _sync_pos_products(export) -> int:
 
 
 def import_laddition_sales_task(job_id: int, start: date, end: date, download_dir: str | None = None) -> None:
+    """The thread's body, started as ``target=bound(import_laddition_sales_task)``
+    (views.trigger_sales_import): it runs bound to the espace that asked, so
+    the job, the sales and the download folder are that espace's, and its
+    connections are closed when it ends."""
     job = SalesImportJob.objects.get(pk=job_id)
+    if not till_allowed():
+        # The page refuses first; this is the thread's own guard, before
+        # anything is downloaded. A sentence, not a traceback.
+        job.status = SalesImportJob.Status.FAILED
+        job.finished_at = timezone.now()
+        job.append_log(refusal())
+        job.save(update_fields=["status", "finished_at"])
+        return
     job.status = SalesImportJob.Status.RUNNING
     job.save(update_fields=["status"])
-    download_dir = download_dir or str(settings.SCRAPE_DOWNLOAD_DIR)
+    # The espace's own folder: the download takes the first new .xlsx that
+    # lands in it.
+    download_dir = download_dir or str(downloads_dir())
 
     try:
         job.append_log(f"Récupération des ventes du {start} au {end}.")

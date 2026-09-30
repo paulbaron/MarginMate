@@ -898,6 +898,19 @@ class ScrapeJob(JobLogMixin):
         others, so a run can end with some in error and still be "Terminé"."""
         return [entry for entry in (self.progress or {}).values() if entry.get("error")]
 
+    @property
+    def slips_only(self) -> bool:
+        """A gather of bons de consignes only - every source of its progress
+        is a format's « bons-<pk> » (tasks._gather_slips), as when the
+        Consignes page asks for it. Its status card then counts « Bons
+        trouvés / Nouveaux » (_gather_status.html, which the polling view
+        renders with the job alone), and Achats never offers its period
+        again (workspace._import_card). A job with no source yet is not:
+        the task puts a gather of bons' formats on its progress before
+        anything can stop it (tasks._name_slip_sources)."""
+        codes = list((self.progress or {}).keys())
+        return bool(codes) and all(str(code).startswith("bons-") for code in codes)
+
 
 class ReceiptBatch(JobLogMixin):
     """A batch of receipt photos imported in the background - typically a

@@ -12,12 +12,11 @@ import os
 import shutil
 from datetime import datetime
 from datetime import timezone as dt_timezone
-from pathlib import Path
 from unittest import mock
 
-from django.conf import settings
 from django.test import TestCase
 
+from accounts import paths
 from invoices.models import EmailInvoiceSource, InvoiceType, WebsiteInvoiceSource
 from tests.factories import make_supplier
 from transfer import registry
@@ -515,7 +514,8 @@ class OwnBackupTests(TestCase):
     gather fetched the mailbox sources only, and nothing said why (20/09).
     An import still never switches a portal on from an archive that came
     from anywhere else - a manifest can claim any reason, so what is
-    trusted is the folder only this app writes into (DATA_BACKUP_DIR)."""
+    trusted is the folder only this app writes into (the espace's backups,
+    accounts.paths.backups_dir)."""
 
     def setUp(self):
         self.water = make_supplier(code="EAU_ESSAI", name="Eau Essai", expenses_only=True)
@@ -524,7 +524,7 @@ class OwnBackupTests(TestCase):
 
     def backup_of(self, keys=("sources",)) -> ArchiveReader:
         """Where safety.before writes: the folder beside the database."""
-        path = Path(settings.DATA_BACKUP_DIR) / "2026-09-20_021413_avant-effacement.zip"
+        path = paths.backups_dir() / "2026-09-20_021413_avant-effacement.zip"
         path.parent.mkdir(parents=True, exist_ok=True)
         run_export(set(keys), path, reason="sauvegarde avant effacement", closed=False)
         reader = ArchiveReader(path)
@@ -542,7 +542,7 @@ class OwnBackupTests(TestCase):
     def test_the_same_archive_from_anywhere_else_still_arrives_inactive(self):
         """Copied out of the backups folder - or forged with that reason."""
         own = self.backup_of()
-        elsewhere = Path(settings.DATA_STAGING_DIR) / "envoyee.zip"
+        elsewhere = paths.staging_dir() / "envoyee.zip"
         elsewhere.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(own.path, elsewhere)
         run_clear({"sources"}, preview=False, closed=False)

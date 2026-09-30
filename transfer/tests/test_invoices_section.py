@@ -25,11 +25,11 @@ from decimal import Decimal
 from pathlib import Path
 from unittest import mock
 
-from django.conf import settings
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 from django.test import TestCase
 
+from accounts import paths
 from bank.models import BankTransaction, InvoicePayment
 from inventory import services
 from inventory.models import (
@@ -79,19 +79,26 @@ def store(name: str, data: bytes) -> str:
 
 
 def media_names() -> set[str]:
-    root = Path(settings.MEDIA_ROOT)
+    """Every file under the folders an import writes to - « Consignes »'
+    photos and bons included, so MediaMixin removes them after a test too."""
+    root = paths.media_root()
     return {
         path.relative_to(root).as_posix()
-        for folder in ("invoices", "receipts")
+        for folder in ("invoices", "receipts", "consignes")
         for path in (root / folder).rglob("*")
         if path.is_file()
     }
 
 
 def named_files() -> set[str]:
-    """The files the documents name - not whatever else other tests left in
-    the shared temp media folder."""
-    return {name for pair in Invoice.objects.values_list("source_file", "preview_image") for name in pair if name}
+    """The files the documents and « Consignes » name - not whatever else
+    other tests left in the shared temp media folder."""
+    from returnables.models import PickupPhoto, Slip
+
+    names = {name for pair in Invoice.objects.values_list("source_file", "preview_image") for name in pair if name}
+    names |= {name for pair in PickupPhoto.objects.values_list("image", "thumb") for name in pair if name}
+    names |= {name for name in Slip.objects.values_list("file", flat=True) if name}
+    return names
 
 
 def sha(name: str) -> str:
@@ -122,8 +129,8 @@ def payment(invoice, n=1) -> InvoicePayment:
 
 
 class MediaMixin:
-    """Every file a test stores or imports is removed after it: MEDIA_ROOT is
-    one temp folder for the whole run."""
+    """Every file a test stores or imports is removed after it: the test
+    espace's media is one temp folder for the whole run (per worker)."""
 
     def setUp(self):
         super().setUp()
@@ -269,7 +276,7 @@ class GuardTests(MediaMixin, TestCase):
 
     def test_count(self):
         build_invoices()
-        section._SIZES["token"] = None
+        section._SIZES.clear()
         count = registry.get("factures").count()
         self.assertEqual(
             {name: count[name] for name in ("documents", "lignes", "fichiers")},

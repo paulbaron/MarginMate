@@ -41,7 +41,7 @@ both read the row):
   PROTECTed by its requests;
 * deletes the request (its events cascade), and the Timesheet with its days
   when asked - the month is then the typical week again, as if never saved;
-* appends the **tombstone** to `STAFF_PRIVATE_DIR/deletions.log`
+* appends the **tombstone** to the private folder's `deletions.log`
   (`private_files.append_deletion_record`) - LAST, still inside the
   transaction: a line that cannot be written rolls the deletion back, so
   nothing is deleted without its trace. The line says when, how (« page »
@@ -54,8 +54,12 @@ both read the row):
   is said on the outcome (`files_error`), never raised: the rows are gone.
 
 The request's public link then reaches nothing, and answers as a link that
-never existed (`signature_requests.resolve_link`: 404). A month the deleted
-version held is editable again.
+never existed (`signature_requests.resolve_link`: 404) - its hash also
+leaves the accounts database's index once the deletion is
+committed (`accounts.links.forget`; left there by a failure, it would still
+answer 404). The tombstone goes to the BOUND espace's private folder: each
+bar keeps its own deletions.log. A month the deleted version held is
+editable again.
 """
 
 from __future__ import annotations
@@ -69,6 +73,8 @@ from functools import partial
 from django.core import signing as django_signing
 from django.db import transaction
 from django.utils import timezone
+
+from accounts import links
 
 from . import private_files
 from .models import SignatureRequest, Timesheet
@@ -312,4 +318,7 @@ def delete_signature_request(
             logger.error("Version %s : la trace de sa suppression n'a pas pu être écrite (%s)", outcome.uuid, error)
             raise DeletionRefused(TRACE_FAILED) from None
         transaction.on_commit(partial(_remove_files, outcome))
+        # The link's hash leaves the index. Robust: a hash left behind
+        # reaches no request - still 404.
+        transaction.on_commit(partial(links.forget, row.token_hash), robust=True)
     return outcome

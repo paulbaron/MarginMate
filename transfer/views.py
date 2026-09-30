@@ -8,6 +8,12 @@ the closure ticked, never completed in silence. Every write is a POST; an
 import and a clear are two steps, the preview first, and the confirm
 refuses a selection other than the one previewed - and a preview other than
 the one on the page it was clicked from (SHOWN_PREVIEW).
+
+One espace per bar: every folder is the bound espace's own (safety,
+staging), the session's entries are keyed by the espace (`session_key`), and
+the page names no folder of the server - a hosted bar can neither read a
+server path nor stop the server to put a database copy back, which the page
+asks the administrator to do instead.
 """
 
 from __future__ import annotations
@@ -16,6 +22,7 @@ import json
 import logging
 import secrets
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from django.contrib import messages
 from django.http import FileResponse
@@ -23,6 +30,7 @@ from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils import timezone
 
+from accounts.tenancy import tenant_key
 from transfer import registry, safety, staging
 from transfer.archive import ArchiveError, DeleteOnClose, shown_moment
 from transfer.registry import GROUP_LABELS, INFO
@@ -41,8 +49,14 @@ from transfer.sections.base import Group, Strategy
 logger = logging.getLogger(__name__)
 
 PREVIEW_MAX_AGE = timedelta(minutes=30)
+#: The session's entries - read and written through `session_key`: the
+#: session is the login's, and one login may work for two espaces (and a
+#: membership may move): unkeyed, A's pending « Effacer » and
+#: A's report were drawn on B's page.
 SESSION_REPORT = "transfer.report"
 SESSION_CLEAR = "transfer.clear"
+#: Where the backups are, as the page says it - never a path.
+BACKUPS_PLACE = "les sauvegardes de votre espace"
 #: The field each confirm form posts: the fingerprint of the preview it shows
 #: (RunReport.fingerprint). The preview stored is the last one made, perhaps
 #: in another tab: « Importer » clicked under « 0 à supprimer » ran a newer
@@ -242,7 +256,7 @@ def _picker(
             rows.append({
                 "key": key,
                 "label": info.label,
-                "description": info.description,
+                "description": registry.description(key),
                 "counts": _counts_text(counts.get(key)),
                 "archive_counts": _counts_text((archive_counts or {}).get(key)),
                 "checked": key in ticked,
@@ -277,6 +291,19 @@ def _picker(
     }
 
 
+# -- the espace ----------------------------------------------------------------------
+
+def session_key(name: str) -> str:
+    """The session entry `name` of the bound espace: `name:<espace id>`."""
+    return f"{name}:{tenant_key()}"
+
+
+def _shown_backups(backups: dict[str, str]) -> dict[str, str]:
+    """The backups as the report keeps and shows them: their names alone,
+    never a server path."""
+    return {kind: Path(path).name if path else "" for kind, path in backups.items()}
+
+
 # -- rendering -----------------------------------------------------------------------
 
 def _render(request, tab: str, *, status: int = 200, **context):
@@ -284,7 +311,9 @@ def _render(request, tab: str, *, status: int = 200, **context):
     context.update(
         tab=tab,
         tabs=[{"key": key, "label": label, "url": reverse(name), "active": key == tab} for key, label, name in TABS],
-        backup_dir=str(safety.backup_path()),
+        # No path on the page: the templates say BACKUPS_PLACE, and send a
+        # database copy's restore to the administrator.
+        backups_place=BACKUPS_PLACE,
     )
     return render(request, "transfer/page.html", context, status=status)
 
@@ -293,10 +322,11 @@ def _pop_report(request, mode: str) -> RunReport | None:
     """The final report, shown once after the redirect."""
     if not request.GET.get("rapport"):
         return None
-    stored = request.session.get(SESSION_REPORT)
+    key = session_key(SESSION_REPORT)
+    stored = request.session.get(key)
     if not stored or stored.get("mode") != mode:
         return None
-    del request.session[SESSION_REPORT]
+    del request.session[key]
     return RunReport.from_json(stored["report"])
 
 
@@ -332,11 +362,9 @@ def _why_not_shown(request, old_page: str, other_tab: str) -> str:
 
 
 def _backup_message(done: str, backups: dict[str, str]) -> str:
-    from pathlib import Path
-
     names = [Path(path).name for path in (backups.get("database"), backups.get("archive")) if path]
     return f"{done}. Sauvegarde{'s' if len(names) > 1 else ''} faite{'s' if len(names) > 1 else ''} avant : " + (
-        " et ".join(names) + f" (dans {safety.backup_path()})."
+        " et ".join(names) + f" (dans {BACKUPS_PLACE})."
     )
 
 
@@ -373,7 +401,7 @@ def data_export(request):
     except Exception as exc:  # said on the page, the temp file removed
         logger.exception("export failed")
         path.unlink(missing_ok=True)
-        messages.error(request, f"L'export a échoué : {exc}")
+        messages.error(request, f"L'export a échoué : {safety.error_text(exc, logged=True)}")
         return redirect("transfer:data_home")
     left_out = manifest.get("notes") or []
     if left_out:
@@ -405,7 +433,7 @@ def data_import(request):
             return redirect("transfer:data_import")
         except OSError as exc:
             logger.exception("staging failed")
-            messages.error(request, f"L'archive n'a pas pu être préparée : {exc}")
+            messages.error(request, f"L'archive n'a pas pu être préparée : {safety.error_text(exc, logged=True)}")
             return redirect("transfer:data_import")
         return redirect("transfer:data_import_stage", token=stage.token)
 
@@ -601,10 +629,10 @@ def _confirm_import(request, stage, strategies: dict[str, Strategy]):
         return redirect("transfer:data_import_stage", token=stage.token)
     except Exception as exc:  # rolled back; the stage is kept to try again
         logger.exception("import failed")
-        messages.error(request, f"L'import a échoué, rien n'a été changé : {exc}")
+        messages.error(request, f"L'import a échoué, rien n'a été changé : {safety.error_text(exc, logged=True)}")
         return redirect("transfer:data_import_stage", token=stage.token)
-    report.safety = backups
-    request.session[SESSION_REPORT] = {"mode": "import", "report": report.to_json()}
+    report.safety = _shown_backups(backups)
+    request.session[session_key(SESSION_REPORT)] = {"mode": "import", "report": report.to_json()}
     staging.discard(stage)
     messages.success(request, _backup_message("Import terminé", backups))
     return redirect(reverse("transfer:data_import") + "?rapport=1")
@@ -613,7 +641,7 @@ def _confirm_import(request, stage, strategies: dict[str, Strategy]):
 # -- Effacer -------------------------------------------------------------------------
 
 def _pending_clear(request) -> dict | None:
-    pending = request.session.get(SESSION_CLEAR)
+    pending = request.session.get(session_key(SESSION_CLEAR))
     if not pending:
         return None
     try:
@@ -638,7 +666,7 @@ def _clear_page(request, user: set[str], *, preview: RunReport | None = None, st
 
 
 def _keep_clear_preview(request, selected: set[str], report: RunReport) -> None:
-    request.session[SESSION_CLEAR] = {
+    request.session[session_key(SESSION_CLEAR)] = {
         "sections": registry.ordered(selected),
         "report": report.to_json(),
         "at": timezone.now().isoformat(),
@@ -684,7 +712,7 @@ def data_clear(request):
     try:
         if action == "effacer":
             if not pending or set(pending["sections"]) != selected:
-                stored = request.session.get(SESSION_CLEAR) or {}
+                stored = request.session.get(session_key(SESSION_CLEAR)) or {}
                 expired = not pending and set(stored.get("sections") or []) == selected
                 _preview_clear(request, selected)
                 messages.warning(request, EXPIRED if expired else CHANGED)
@@ -725,10 +753,10 @@ def _confirm_clear(request, selected: set[str], preview: RunReport):
         return redirect("transfer:data_clear")
     except Exception as exc:  # rolled back
         logger.exception("clear failed")
-        messages.error(request, f"L'effacement a échoué, rien n'a été changé : {exc}")
+        messages.error(request, f"L'effacement a échoué, rien n'a été changé : {safety.error_text(exc, logged=True)}")
         return redirect("transfer:data_clear")
-    report.safety = backups
-    request.session.pop(SESSION_CLEAR, None)
-    request.session[SESSION_REPORT] = {"mode": "clear", "report": report.to_json()}
+    report.safety = _shown_backups(backups)
+    request.session.pop(session_key(SESSION_CLEAR), None)
+    request.session[session_key(SESSION_REPORT)] = {"mode": "clear", "report": report.to_json()}
     messages.success(request, _backup_message("Effacement terminé", backups))
     return redirect(reverse("transfer:data_clear") + "?rapport=1")

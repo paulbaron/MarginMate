@@ -98,8 +98,9 @@ parts trigger `documents-changed` when they end).
         <details class="explainer pdf-import-by-hand" data-persist="pdf-by-hand">
             <summary>Choisir le fournisseur d'une facture PDF soi-même</summary>
             <p class="muted">
-                Utile quand le document ne dit pas de qui il vient, ou pour le confier à l'analyse IA.
+                Utile quand le document ne dit pas de qui il vient{% if not ai_refused %}, ou pour le confier à l'analyse IA{% endif %}.
                 D'ordinaire, laissez l'import ci-dessus le reconnaître.
+                {% if ai_refused %}{{ ai_refused }}{% endif %}
             </p>
             <form method="post" action="{% url 'invoices:invoice_upload' %}" enctype="multipart/form-data" class="pdf-import">
                 {% csrf_token %}
@@ -136,6 +137,14 @@ parts trigger `documents-changed` when they end).
     </div>
 
     <div id="import-recuperer" role="tabpanel" data-import-panel="recuperer" hidden>
+        {% if gather_refused %}
+        {% comment %}
+        Metro, the mailbox and the portals are the server's own accounts
+        (invoices/integrations.py): an espace that may not use them gets the
+        sentence and no form - trigger_gather refuses a post all the same.
+        {% endcomment %}
+        <div class="message">{{ gather_refused }}</div>
+        {% else %}
         <form method="post" action="{% url 'invoices:gather' %}" class="inline-form">
             {% csrf_token %}
             <label class="inline-label">
@@ -180,6 +189,7 @@ parts trigger `documents-changed` when they end).
             </details>
             <button class="btn" type="submit" data-job-control="gather-status"{% if latest_job.is_active %} disabled{% endif %}>Récupérer les nouvelles factures</button>
         </form>
+        {% endif %}
         {% if latest_job %}
             {% include "invoices/_gather_status.html" with job=latest_job %}
         {% endif %}

@@ -217,7 +217,15 @@
         return "t" + all.indexOf(table);
     }
 
-    function sortKeyFor(table) { return "mm:" + location.pathname + ":table-sort:" + tableKey(table); }
+    /** The espace this page belongs to (<body data-tenant>, base.html), as
+     *  ui.js scopes its keys: the same address in another bar is another
+     *  table. Empty on a page no espace is bound to. */
+    function espaceScope() {
+        var espace = document.body ? document.body.getAttribute("data-tenant") : "";
+        return espace ? "espace-" + espace + ":" : "";
+    }
+
+    function sortKeyFor(table) { return "mm:" + espaceScope() + location.pathname + ":table-sort:" + tableKey(table); }
 
     function saveSort(table, index, direction) {
         try { sessionStorage.setItem(sortKeyFor(table), index + ":" + direction); } catch (e) { /* blocked */ }

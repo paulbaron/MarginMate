@@ -18,6 +18,7 @@ read from scraped_invoices/.
 
 from __future__ import annotations
 
+import shutil
 import tempfile
 import zipfile
 from datetime import date
@@ -29,6 +30,7 @@ from xml.sax.saxutils import escape
 from django.core.management import call_command
 from django.test import SimpleTestCase, TestCase, override_settings
 
+from accounts import paths
 from recipes.models import PosProduct, PosProductDailyQuantity
 from recipes.pos.laddition_xlsx import (
     LadditionExportError,
@@ -542,9 +544,12 @@ class BackfillCommandTests(TestCase):
             sum(row.revenue_ttc for row in PosProductDailyQuantity.objects.all()), Decimal("26.00")
         )
 
-    def test_without_a_folder_it_reads_the_downloads_folder(self):
+    def test_without_a_folder_it_reads_the_espace_s_downloads_folder(self):
         out = StringIO()
-        with override_settings(SCRAPE_DOWNLOAD_DIR=self.folder):
+        root = tempfile.mkdtemp(prefix="marginmate-tests-tenants-")
+        self.addCleanup(shutil.rmtree, root, True)
+        with override_settings(TENANTS_ROOT=root):
+            shutil.copytree(self.folder, paths.downloads_dir(), dirs_exist_ok=True)
             call_command("laddition_backfill_revenue", "--dry-run", stdout=out)
         self.assertIn("export-01.xlsx", out.getvalue())
 

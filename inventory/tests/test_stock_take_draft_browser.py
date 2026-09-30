@@ -23,9 +23,9 @@ from django.urls import reverse
 from inventory.models import UnitChoices
 from invoices.scrapers import website
 from tests.factories import make_invoice, make_invoice_line, make_product, make_stock_type, make_supplier
+from tests.runner import log_in_the_browser
 
 WAIT_SECONDS = 10
-DRAFT_KEY = "marginmate:stock-take-draft:new"
 
 
 @tag("browser")
@@ -60,6 +60,8 @@ class OldDraftInBrowserTests(StaticLiveServerTestCase):
         # Ten 70cl bottles at 12 €.
         invoice = make_invoice(supplier=supplier, invoice_date=date(2026, 1, 10))
         make_invoice_line(invoice=invoice, product=product, quantity=10, total_ht="120")
+        # Every page wants a login: the test espace's owner.
+        log_in_the_browser(self.driver, self.live_server_url)
 
     def wait_for(self, condition):
         from selenium.webdriver.support.ui import WebDriverWait
@@ -77,10 +79,11 @@ class OldDraftInBrowserTests(StaticLiveServerTestCase):
             "note": "",
             "rows": [{"entry": "Vodka (type de stock)", "quantity": "2.1", "unit": UnitChoices.LITRE}],
         }
+        # Under the key the page itself uses (its espace's scope included).
         self.script(
-            "var draft = JSON.parse(arguments[1]); draft.savedAt = Date.now();"
-            "localStorage.setItem(arguments[0], JSON.stringify(draft));",
-            DRAFT_KEY, json.dumps(draft),
+            "var draft = JSON.parse(arguments[0]); draft.savedAt = Date.now();"
+            "localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));",
+            json.dumps(draft),
         )
         self.driver.get(url)
         self.wait_for(lambda: self.script("return !document.getElementById('draft-offer').hidden"))

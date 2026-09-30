@@ -20,6 +20,7 @@ from django.utils import timezone
 from invoices.models import InvoiceType, ScrapeJob
 from invoices.scrapers import website
 from tests.factories import make_invoice_type, make_supplier
+from tests.runner import log_in_the_browser
 
 WAIT_SECONDS = 10
 
@@ -69,6 +70,8 @@ class GatherRetryInBrowserTests(StaticLiveServerTestCase):
                 name="Grossiste Exemple - Factures",
                 sender_pattern="factures@grossiste",
             )
+        # Every page wants a login: the test espace's owner.
+        log_in_the_browser(self.driver, self.live_server_url)
 
     def test_the_button_comes_back_when_the_gather_ends(self):
         job = ScrapeJob.objects.create(

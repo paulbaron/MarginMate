@@ -35,7 +35,7 @@ from django.utils import timezone
 
 from staff import private_files, signature_deletion as deletion, signature_requests as requests_
 from staff.models import SignatureEvent, SignatureRequest, Timesheet, TimesheetDay
-from staff.tests.page_forms import as_post, form_posting_to, forms_of
+from staff.tests.page_forms import as_post, form_posting_to, page_forms_of
 from staff.tests.support import employee
 from staff.tests.test_signature_pages import OwnerCase
 from staff.tests.test_views import JUNE, JULY
@@ -449,7 +449,8 @@ class StepTwoTests(DeletionCase):
         (button,) = form.buttons()
         self.assertIn("btn-destroy", button.attrs.get("class", ""))
         self.assertEqual(self.html(page).count("btn-destroy"), 1)
-        self.assertEqual([form.action for form in forms_of(self.html(page)) if form.method == "post"],
+        # The page's own forms: the topbar's « Se déconnecter » aside.
+        self.assertEqual([form.action for form in page_forms_of(self.html(page)) if form.method == "post"],
                          [self.step2_url()])
         self.assertEqual(form.names, ["csrfmiddlewaretoken", deletion.TOKEN_FIELD])
         self.assertKept(request, events)
@@ -840,5 +841,6 @@ class PageFormsTests(DeletionCase):
         page = self.page()
         (href,) = re.findall(r'href="([^"]*/supprimer/)"', self.html(page))
         step1 = self.get(unescape(href))
-        posting = [form for form in forms_of(self.html(step1)) if form.method == "post"]
+        # The page's own forms: the topbar's « Se déconnecter » aside.
+        posting = [form for form in page_forms_of(self.html(step1)) if form.method == "post"]
         self.assertEqual([form.action for form in posting], [self.step1_url()])

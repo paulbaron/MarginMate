@@ -1,6 +1,6 @@
-"""The signatures' files live in a private folder of their own
-(`settings.STAFF_PRIVATE_DIR`), never under media/ - which config/urls.py
-serves whole when DEBUG is on."""
+"""The signatures' files live in a private folder of their own - the
+espace's `private/` (accounts.paths.private_dir), beside its media/ and
+never inside a folder the site serves."""
 
 import hashlib
 import shutil
@@ -11,6 +11,8 @@ from pathlib import Path
 from django.core.exceptions import ImproperlyConfigured
 from django.test import SimpleTestCase, override_settings
 
+from accounts import paths
+from accounts.tenancy import require_tenant
 from staff import private_files
 
 
@@ -19,36 +21,49 @@ class PrivateFolderTests(SimpleTestCase):
         self.root = Path(tempfile.mkdtemp(prefix="marginmate-private-test-"))
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
 
-    def test_a_folder_inside_media_is_refused(self):
-        media = self.root / "media"
-        for inside in (media, media / "private", media / "a" / ".." / "private"):
-            with self.subTest(folder=str(inside)):
-                with override_settings(MEDIA_ROOT=str(media), STAFF_PRIVATE_DIR=inside):
+    def test_a_folder_inside_a_served_one_is_refused(self):
+        static = self.root / "static"
+        for tenants in (static, static / "espaces", static / "a" / ".." / "espaces"):
+            with self.subTest(tenants=str(tenants)):
+                with override_settings(STATIC_ROOT=str(static), TENANTS_ROOT=tenants):
                     with self.assertRaises(ImproperlyConfigured) as caught:
                         private_files.private_dir()
-                    self.assertIn("MEDIA_ROOT", str(caught.exception))
+                    self.assertIn("STATIC_ROOT", str(caught.exception))
 
-    def test_media_inside_the_private_folder_is_refused_too(self):
-        """Serving media would serve the private folder's children."""
-        with override_settings(MEDIA_ROOT=str(self.root / "private" / "media"), STAFF_PRIVATE_DIR=self.root / "private"):
-            with self.assertRaises(ImproperlyConfigured):
-                private_files.private_dir()
+    def test_a_served_folder_inside_the_private_folder_is_refused_too(self):
+        """Serving it would serve the private folder's children."""
+        with override_settings(TENANTS_ROOT=self.root):
+            private = paths.private_dir()
+            with override_settings(STATIC_ROOT=str(private / "static")):
+                with self.assertRaises(ImproperlyConfigured):
+                    private_files.private_dir()
 
-    def test_created_on_demand_beside_media(self):
-        folder = self.root / "private"
-        with override_settings(MEDIA_ROOT=str(self.root / "media"), STAFF_PRIVATE_DIR=folder):
+    def test_media_is_no_served_folder_any_more(self):
+        """Only the old single mode served media (a public /media/ route
+        while DEBUG was on, gone since 29/09/2026): a MEDIA_ROOT around the
+        espaces refuses nothing - nothing serves it."""
+        with override_settings(MEDIA_ROOT=str(self.root), TENANTS_ROOT=self.root / "espaces"):
+            folder = private_files.private_dir()
+        self.assertTrue(folder.is_dir())
+        self.assertTrue(folder.is_relative_to(self.root.resolve()))
+
+    def test_created_on_demand_beside_the_espace_s_media(self):
+        with override_settings(TENANTS_ROOT=self.root):
+            folder = paths.tenant_dir(require_tenant()) / paths.PRIVATE
             self.assertFalse(folder.exists())
             self.assertEqual(private_files.private_dir(), folder.resolve())
             self.assertTrue(folder.is_dir())
+            self.assertEqual(folder.parent, paths.media_root().parent)
 
 
 class RequestFilesTests(SimpleTestCase):
     def setUp(self):
-        self.root = Path(tempfile.mkdtemp(prefix="marginmate-private-test-"))
-        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
-        override = override_settings(STAFF_PRIVATE_DIR=self.root)
+        root = Path(tempfile.mkdtemp(prefix="marginmate-private-test-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        override = override_settings(TENANTS_ROOT=root)
         override.enable()
         self.addCleanup(override.disable)
+        self.root = paths.private_dir()
         self.id = uuid.uuid4()
 
     def test_written_under_signatures_uuid_and_read_back(self):

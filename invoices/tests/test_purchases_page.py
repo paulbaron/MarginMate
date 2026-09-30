@@ -261,11 +261,16 @@ class PurchasesPageTests(TestCase):
 
     def test_a_pdf_that_fails_says_so_on_the_page(self):
         upload = SimpleUploadedFile("facture.pdf", b"%PDF-1.4", content_type="application/pdf")
-        with mock.patch("invoices.receipts.import_document", side_effect=ValueError("illisible")):
+        with mock.patch("invoices.receipts.import_document", side_effect=ValueError("illisible")), \
+                self.assertLogs("invoices.views", "ERROR") as logged:
             response = self.client.post(
                 reverse("invoices:invoice_upload"), {"supplier": self.metro.pk, "source_file": upload}, follow=True
             )
-        self.assertContains(response, "Échec de l&#x27;import : illisible")
+        # Said by kind: the exception's own words - a library's can name the
+        # server's files - go to its log only (security audit LB-3).
+        self.assertContains(response, "Échec de l&#x27;import. Erreur inattendue sur le serveur")
+        self.assertNotContains(response, "illisible")
+        self.assertIn("illisible", "\n".join(logged.output))
         self.assertEqual(response.context["import_tab"], "documents")
 
     def test_a_wrong_file_is_refused_in_the_card(self):

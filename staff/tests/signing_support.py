@@ -12,7 +12,7 @@ RSA-only), and `staff.signing.timestamp_trust_roots` to trust that authority
 
     class MyTests(SigningTestMixin, NoNetworkTestCase): ...
 
-gives each test its own `STAFF_PRIVATE_DIR` and the offline timestamps."""
+gives each test its own private folder and the offline timestamps."""
 
 from __future__ import annotations
 
@@ -33,6 +33,8 @@ from django.test import override_settings
 from PIL import Image, ImageDraw
 from PIL.PngImagePlugin import PngInfo
 from pyhanko.sign.timestamps import DummyTimeStamper
+
+from accounts import paths
 
 #: The offline authority's name, as `verify` reports it.
 FAKE_TSA_NAME = "Horodatage de test (hors ligne)"
@@ -136,15 +138,20 @@ class OfflineTimestamps:
 
 class SigningTestMixin:
     """Each test gets its own private folder (keys, signed files) and signs
-    with the offline timestamps. Put it before the TestCase class."""
+    with the offline timestamps. Put it before the TestCase class.
+
+    The private folder is the test espace's own (accounts.paths.private_dir),
+    under a TENANTS_ROOT of the test's own: no key, no signed file and no
+    deletions.log is left for the next test."""
 
     def setUp(self):
         super().setUp()
-        self.private_dir = Path(tempfile.mkdtemp(prefix="marginmate-signing-test-"))
-        self.addCleanup(shutil.rmtree, self.private_dir, ignore_errors=True)
-        settings_override = override_settings(STAFF_PRIVATE_DIR=self.private_dir, MARGINMATE_SIGNING_PASSPHRASE="")
+        root = Path(tempfile.mkdtemp(prefix="marginmate-signing-test-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        settings_override = override_settings(TENANTS_ROOT=root, MARGINMATE_SIGNING_PASSPHRASE="")
         settings_override.enable()
         self.addCleanup(settings_override.disable)
+        self.private_dir = paths.private_dir()
         self.timestamps = OfflineTimestamps().start()
         self.addCleanup(self.timestamps.stop)
 

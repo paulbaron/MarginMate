@@ -22,11 +22,7 @@
             <option value="{{ cat }}">
         {% endfor %}
     </datalist>
-    <script id="ingredient-units-data" type="application/json">
-        {
-            {% for value, label in ingredient_units.items %}"{{ value }}": "{{ label|escapejs }}"{% if not forloop.last %},{% endif %}{% endfor %}
-        }
-    </script>
+    {{ ingredient_units|json_script:"ingredient-units-data" }}
     <div class="card">
         <form method="post">
             {% csrf_token %}

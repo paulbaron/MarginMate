@@ -1,0 +1,20 @@
+{% extends "accounts/page.html" %}
+{% comment %}
+Un compte connecté qui n'a aucun espace ouvert (accounts.middleware.TenantMiddleware, 403) : une
+phrase et de quoi se déconnecter - jamais une trace, jamais les données de quelqu'un.
+{% endcomment %}
+{% block title %}Aucun espace - MarginMate{% endblock %}
+{% block content %}
+    <section class="public-card account-card">
+        <h1>Aucun espace</h1>
+        <p>Votre compte n'est rattaché à aucun bar pour l'instant, ou son espace est fermé.</p>
+        <p class="muted small">Adressez-vous à la personne qui vous a invité.</p>
+        {% url 'accounts:logout' as logout_url %}
+        {% if logout_url %}
+            <form method="post" action="{{ logout_url }}">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-secondary">Se déconnecter</button>
+            </form>
+        {% endif %}
+    </section>
+{% endblock %}

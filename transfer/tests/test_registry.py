@@ -24,6 +24,7 @@ TABLE = {
     "banque": ("Banque", Group.DATA, 70, (), ("factures", "fournisseurs")),
     "ventes": ("Ventes", Group.DATA, 80, ("recettes",), ("liens_ventes",)),
     "inventaires": ("Inventaires", Group.DATA, 90, ("factures", "associations"), ()),
+    "consignes": ("Consignes", Group.DATA, 100, ("fournisseurs",), ("factures",)),
 }
 
 
@@ -66,6 +67,17 @@ class TableTests(SimpleTestCase):
         wipe the bank too."""
         self.assertEqual(INFO["banque"].requires, ())
         self.assertNotIn("banque", registry.closure({"factures"}, "clear"))
+
+    def test_consignes_go_with_the_suppliers_and_never_with_the_invoices(self):
+        """Formats and reprises name their supplier; a bon is checked against
+        the invoices when a page is drawn, and nothing links the two - so
+        « Effacer les factures » leaves the reprises and their photos."""
+        self.assertIn("consignes", registry.closure({"fournisseurs"}, "clear"))
+        self.assertNotIn("consignes", registry.closure({"factures"}, "clear"))
+        self.assertEqual(registry.closure({"consignes"}, "clear"), {"consignes"})
+        self.assertEqual(registry.closure({"consignes"}, "export"), {"consignes", "fournisseurs"})
+        self.assertIn("vérifier chaque bon", INFO["consignes"].recommend_reason["factures"])
+        self.assertIn("la sauvegarde", INFO["consignes"].clear_note)
 
 
 class ClosureTests(SimpleTestCase):

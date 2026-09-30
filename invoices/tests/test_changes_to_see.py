@@ -33,6 +33,7 @@ from invoices.scrapers import website
 from invoices.tests.page_posts import page_post
 from recipes.models import PosProduct
 from tests.factories import make_invoice, make_invoice_line, make_product, make_supplier
+from tests.runner import log_in_the_browser
 from tests.test_views_smoke import assertNoUnrenderedTemplateSyntax
 
 SUPPLIERS = reverse("invoices:supplier_list")
@@ -381,7 +382,10 @@ class TopbarRoomInBrowserTests(StaticLiveServerTestCase):
     where Chrome or its driver is missing. Data invented.
 
     280 px is a folding phone's cover screen: « Personnel » (28/09) took the
-    links to five rows there, 199 px against the 176 px that 11rem left."""
+    links to five rows there, 199 px against the 176 px that 11rem left.
+
+    Logged in as the test espace's owner, as every page wants: the topbar
+    then carries the bar's name and « Se déconnecter » too."""
 
     WIDTHS = (1280, 900, 860, 768, 600, 450, 375, 320, 280)
     HEIGHT = 700
@@ -436,6 +440,7 @@ class TopbarRoomInBrowserTests(StaticLiveServerTestCase):
                 by_person=True,
             )
         self.fiche = reverse("invoices:supplier_detail", args=[caterer.pk])
+        log_in_the_browser(self.driver, self.live_server_url)
 
     def script(self, source, *args):
         return self.driver.execute_script(source, *args)

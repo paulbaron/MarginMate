@@ -318,6 +318,29 @@ class MergeAndReplaceTests(TestCase):
             "Fournisseur « Épicerie Essai » : 1 produit classé (Associations non remplacées)", report.kept
         )
 
+    def test_replace_keeps_a_supplier_consignes_name_and_says_so(self):
+        """A format of bon and a reprise hold their supplier (PROTECT): kept
+        under the false « un de ses produits sert encore » before, since
+        `_holders` looked at documents, sources and products only."""
+        from returnables.tests.support import make_format, make_pickup
+
+        florist = Supplier.objects.get(code="FLEURISTE_ESSAI")
+        make_format(name="Fleuriste Essai — bon", supplier=florist)
+        grocer = make_supplier(code="EPICERIE_ESSAI", name="Épicerie Essai")
+        make_pickup(supplier=grocer)
+        make_pickup(supplier=grocer)
+        report = import_archive(self.reader, REPLACE).section("fournisseurs")
+        self.assertIn(
+            "Fournisseur « Fleuriste Essai » : 1 format de bon de consignes est à son nom (Consignes non remplacées)",
+            report.kept,
+        )
+        self.assertIn(
+            "Fournisseur « Épicerie Essai » : 2 reprises de consignes sont à son nom (Consignes non remplacées)",
+            report.kept,
+        )
+        self.assertFalse(any("un de ses produits" in line for line in report.kept), report.kept)
+        self.assertEqual(Supplier.objects.filter(code__in=["FLEURISTE_ESSAI", "EPICERIE_ESSAI"]).count(), 2)
+
     def test_replace_deletes_a_suppliers_unused_products_and_says_its_payee_names_go(self):
         florist = Supplier.objects.get(code="FLEURISTE_ESSAI")
         make_product(supplier=florist, raw_name="ROSES")
@@ -643,3 +666,27 @@ class ClearTests(TestCase):
         run = run_clear({"fournisseurs"}, preview=False, closed=False)
         self.assertTrue(Supplier.objects.filter(pk=self.bakery.pk).exists())
         self.assertIn("Fournisseur « Boulangerie Essai » : 1 document y est rangé", run.section("fournisseurs").kept)
+
+    def test_a_supplier_a_reprise_holds_is_kept_with_the_true_reason(self):
+        """Cleared alone (closed=False: the page clears « Consignes » with
+        it), a supplier a reprise holds is kept (PROTECT) - and said so, not
+        « un de ses produits sert encore »."""
+        from returnables.tests.support import make_pickup
+
+        make_pickup(supplier=self.bakery)
+        run = run_clear({"fournisseurs"}, preview=False, closed=False)
+        self.assertTrue(Supplier.objects.filter(pk=self.bakery.pk).exists())
+        self.assertIn(
+            "Fournisseur « Boulangerie Essai » : 1 reprise de consignes est à son nom", run.section("fournisseurs").kept
+        )
+
+    def test_cleared_with_consignes_the_supplier_goes(self):
+        """What the page does: « Consignes » requires the suppliers, so it is
+        cleared first and holds nothing any more."""
+        from returnables.tests.support import make_format, make_pickup
+
+        make_pickup(supplier=self.bakery)
+        make_format(name="Boulangerie Essai — bon", supplier=self.bakery)
+        self.assertIn("consignes", registry.closure({"fournisseurs"}, "clear"))
+        run_clear({"fournisseurs", "consignes"}, preview=False, closed=False)
+        self.assertFalse(Supplier.objects.filter(pk=self.bakery.pk).exists())

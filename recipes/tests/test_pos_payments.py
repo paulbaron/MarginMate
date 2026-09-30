@@ -22,6 +22,7 @@ is read from scraped_invoices/.
 
 from __future__ import annotations
 
+import shutil
 import tempfile
 import zipfile
 from datetime import date
@@ -33,6 +34,7 @@ from unittest import mock
 from django.core.management import call_command
 from django.test import SimpleTestCase, TestCase, override_settings
 
+from accounts import paths
 from recipes.models import PosDailyPayment, PosProduct, PosProductDailyQuantity, SalesImportJob
 from recipes.payments import changed_days, record_payments, replace_days
 from recipes.pos.laddition_xlsx import (
@@ -879,8 +881,11 @@ class BackfillPaymentsCommandTests(TestCase):
         output = self.run_command("--dry-run")
         self.assertIn("1 ticket(s) aux paiements illisibles", output)
 
-    def test_without_a_folder_it_reads_the_downloads_folder(self):
+    def test_without_a_folder_it_reads_the_espace_s_downloads_folder(self):
         out = StringIO()
-        with override_settings(SCRAPE_DOWNLOAD_DIR=self.folder):
+        root = tempfile.mkdtemp(prefix="marginmate-tests-tenants-")
+        self.addCleanup(shutil.rmtree, root, True)
+        with override_settings(TENANTS_ROOT=root):
+            shutil.copytree(self.folder, paths.downloads_dir(), dirs_exist_ok=True)
             call_command("laddition_backfill_payments", "--dry-run", stdout=out)
         self.assertIn("export-01.xlsx", out.getvalue())

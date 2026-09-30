@@ -524,7 +524,7 @@ class VerifyTests(SigningCase):
         final = self.countersigned().pdf
         elsewhere = Path(tempfile.mkdtemp(prefix="marginmate-other-install-"))
         self.addCleanup(shutil.rmtree, elsewhere, ignore_errors=True)
-        with override_settings(STAFF_PRIVATE_DIR=elsewhere):
+        with override_settings(TENANTS_ROOT=elsewhere):
             signing.authority(Establishment(name="AUTRE BAR"))
             result = signing.verify(final)
         self.assertFalse(result.ok)

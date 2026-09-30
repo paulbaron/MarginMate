@@ -52,7 +52,7 @@
             <p class="page-subtitle">
                 Exportez la configuration et les données de MarginMate dans une archive (.zip), importez-en une, ou
                 effacez ce que vous cochez. Avant tout remplacement ou effacement, une sauvegarde est faite dans
-                <code>{{ backup_dir }}</code>.
+                le dossier des sauvegardes de votre espace, sur le serveur.
             </p>
         </div>
     </div>
@@ -121,7 +121,7 @@
                             {% endcomment %}
                             <input type="hidden" name="apercu" value="{{ preview.fingerprint }}">
                             <p>
-                                Une sauvegarde de la base sera faite avant dans <code>{{ backup_dir }}</code>{% if safety_mb %},
+                                Une sauvegarde de la base sera faite avant dans {{ backups_place }}{% if safety_mb %},
                                 ainsi qu'une archive de ce qui change (≈ {{ safety_mb }} Mo){% endif %}.
                             </p>
                             <div class="form-actions">
@@ -202,7 +202,7 @@
                 {% include "transfer/_report.html" with report=preview %}
                 <div class="card transfer-confirm" data-after-preview>
                     <input type="hidden" name="apercu" value="{{ preview.fingerprint }}">
-                    <p>Une sauvegarde sera faite avant dans <code>{{ backup_dir }}</code> (≈ {{ safety_mb }} Mo).</p>
+                    <p>Une sauvegarde sera faite avant dans {{ backups_place }} (≈ {{ safety_mb }} Mo).</p>
                     <div class="form-field">
                         <label for="confirmation">Tapez EFFACER pour confirmer</label>
                         <input type="text" id="confirmation" name="confirmation" autocomplete="off" spellcheck="false">

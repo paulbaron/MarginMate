@@ -14,7 +14,7 @@ no rows means no loop body, so a broken row template never renders.
 from datetime import date
 from decimal import Decimal
 
-from django.test import TestCase
+from django.test import Client, TestCase
 from django.urls import reverse
 
 from bank.models import BankTransaction
@@ -434,6 +434,17 @@ class EmptyDatabasePageSmokeTests(TestCase):
     def test_receipt_queue(self):
         self.assertPageOK("invoices:receipt_queue")
 
+    def test_consignes(self):
+        """With the seeds migration 0002 puts in every database, then
+        without them (« Données » cleared them)."""
+        from returnables.tests.support import no_defaults
+
+        self.assertPageOK("returnables:home")
+        no_defaults()
+        self.assertPageOK("returnables:home")
+        self.assertPageOK("returnables:format_list")
+        self.assertPageOK("returnables:type_list")
+
     def test_data_pages(self):
         for name in ("transfer:data_home", "transfer:data_import", "transfer:data_clear"):
             with self.subTest(page=name):
@@ -717,6 +728,120 @@ class StaffPageSmokeTests(TestCase):
         self.assertPageOK("staff:home")
 
 
+class ConsignesPageSmokeTests(TestCase):
+    """« Consignes »: a reprise with photos compared with its bon, one waiting
+    for its bon, a bon replaced by another, a bon with a line no type
+    recognises. Every value INVENTED (returnables/tests/support.py): the
+    owner's real tickets carry his account and his deliveries."""
+
+    @classmethod
+    def setUpTestData(cls):
+        from returnables.tests.support import CO2_LINE, DELIVERY_DAY, KEG_LINE, make_pickup, make_slip
+
+        cls.pickup = make_pickup(date=DELIVERY_DAY, counts={"Fûts": 3, "Bouteilles CO2": 1}, photos=2, note="Un fût cabossé")
+        cls.waiting = make_pickup(date=date(2026, 2, 20))
+        cls.original = make_slip(lines=(KEG_LINE, CO2_LINE), references=["900001"])
+        cls.replacement = make_slip(lines=(KEG_LINE,), references=["900001"], replaces=True)
+        cls.unknown = make_slip(
+            delivery_date=date(2026, 2, 12), lines=(("PALETTE EXEMPLE", 1, Decimal("12.0000"), Decimal("12.00")),)
+        )
+        cls.line = cls.unknown.lines.get()
+        cls.photo = cls.pickup.photos.first()
+
+    def assertPageOK(self, name, **kwargs):
+        url = reverse(name, kwargs=kwargs)
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200, f"{name} ({url}) returned {response.status_code}")
+        assertNoUnrenderedTemplateSyntax(self, response, url)
+        return response
+
+    def test_home(self):
+        response = self.assertPageOK("returnables:home")
+        self.assertContains(response, "Dernière reprise")
+        self.assertContains(response, "Fûts 3")
+
+    def test_home_showing_everything(self):
+        for which in ("reprises", "bons"):
+            with self.subTest(tout=which):
+                response = self.client.get(reverse("returnables:home") + f"?tout={which}")
+                self.assertEqual(response.status_code, 200)
+                assertNoUnrenderedTemplateSyntax(self, response, which)
+
+    def test_a_reprise(self):
+        for pickup in (self.pickup, self.waiting):
+            with self.subTest(pickup=pickup.pk):
+                self.assertPageOK("returnables:pickup_detail", pk=pickup.pk)
+
+    def test_a_bon(self):
+        for slip in (self.original, self.replacement, self.unknown):
+            with self.subTest(slip=slip.pk):
+                self.assertPageOK("returnables:slip_detail", pk=slip.pk)
+
+    def test_the_settings(self):
+        from returnables.tests.support import seeded_format
+
+        fmt = seeded_format()
+        self.assertPageOK("returnables:format_list")
+        self.assertPageOK("returnables:format_create")
+        self.assertPageOK("returnables:format_edit", pk=fmt.pk)
+        response = self.client.get(reverse("returnables:format_create") + f"?depuis={fmt.pk}")
+        self.assertEqual(response.status_code, 200)
+        assertNoUnrenderedTemplateSyntax(self, response, "?depuis=")
+        self.assertPageOK("returnables:type_list")
+
+    def test_the_post_only_actions_redirect_on_get(self):
+        """A GET on one goes back to a page and writes nothing - still worth
+        hitting, since a broken one raises before it gets to the redirect."""
+        from returnables.models import Pickup, PickupPhoto, ReturnableType, Slip, SlipFormat
+        from returnables.tests.support import seeded_format, seeded_type
+
+        before = (Pickup.objects.count(), PickupPhoto.objects.count(), Slip.objects.count(),
+                  SlipFormat.objects.count(), ReturnableType.objects.count())
+        for name, kwargs in (
+            ("returnables:pickup_delete", {"pk": self.pickup.pk}),
+            ("returnables:pickup_date", {"pk": self.pickup.pk}),
+            ("returnables:photo_delete", {"pk": self.photo.pk}),
+            ("returnables:slip_upload", {}),
+            ("returnables:slip_delete", {"pk": self.original.pk}),
+            ("returnables:slip_reread", {"pk": self.original.pk}),
+            ("returnables:line_classify", {"pk": self.line.pk}),
+            ("returnables:format_delete", {"pk": seeded_format().pk}),
+            ("returnables:format_reread", {"pk": seeded_format().pk}),
+            ("returnables:type_edit", {"pk": seeded_type("Fûts").pk}),
+            ("returnables:type_delete", {"pk": seeded_type("Fûts").pk}),
+        ):
+            with self.subTest(name=name):
+                self.assertEqual(self.client.get(reverse(name, kwargs=kwargs)).status_code, 302)
+        after = (Pickup.objects.count(), PickupPhoto.objects.count(), Slip.objects.count(),
+                 SlipFormat.objects.count(), ReturnableType.objects.count())
+        self.assertEqual(after, before)
+
+    def test_an_empty_install_with_its_seeds(self):
+        """Migration 0002 seeds the three types and UBA's format in every
+        database: « empty » is those and nothing else."""
+        from returnables.models import Pickup, Slip
+
+        Pickup.objects.all().delete()
+        Slip.objects.all().delete()
+        for name in ("returnables:home", "returnables:format_list", "returnables:type_list"):
+            with self.subTest(page=name):
+                self.assertPageOK(name)
+
+    def test_an_empty_install_without_its_seeds(self):
+        """After « Données » cleared them: no type, no format."""
+        from returnables.models import Pickup, Slip
+        from returnables.tests.support import no_defaults
+
+        Pickup.objects.all().delete()
+        Slip.objects.all().delete()
+        no_defaults()
+        response = self.assertPageOK("returnables:home")
+        self.assertContains(response, "Aucune reprise enregistrée")
+        self.assertContains(self.assertPageOK("returnables:format_list"), "Aucun format de bon")
+        self.assertContains(self.assertPageOK("returnables:type_list"), "Aucun type de consigne")
+        self.assertPageOK("returnables:format_create")
+
+
 class StaffSignatureSmokeTests(SigningTestMixin, NoNetworkTestCase):
     """« Personnel »'s monthly signature: the month's page with a request in
     every state, the owner's files, the employee's pages (the public ones,
@@ -808,3 +933,29 @@ class StaffSignatureSmokeTests(SigningTestMixin, NoNetworkTestCase):
         ):
             with self.subTest(name=name):
                 self.assertEqual(self.client.get(reverse(name, kwargs=kwargs)).status_code, 302)
+
+
+class AccountsPagesSmokeTests(TestCase):
+    """The accounts' pages (what they do: accounts/tests), as a visitor
+    nobody logged in reaches them: the login and the signup answer, the
+    logout is a POST."""
+
+    def setUp(self):
+        # Django's own client: anonymous (the suite's logs in on its own).
+        self.client = Client()
+
+    def test_the_login(self):
+        response = self.client.get(reverse("accounts:login"))
+        self.assertEqual(response.status_code, 200)
+        assertNoUnrenderedTemplateSyntax(self, response, "accounts:login")
+
+    def test_the_signup(self):
+        response = self.client.get(reverse("accounts:signup"))
+        self.assertEqual(response.status_code, 200)
+        assertNoUnrenderedTemplateSyntax(self, response, "accounts:signup")
+
+    def test_the_logout_is_post_only(self):
+        self.assertEqual(self.client.get(reverse("accounts:logout")).status_code, 405)
+        self.assertRedirects(
+            self.client.post(reverse("accounts:logout")), reverse("accounts:login"), fetch_redirect_response=False
+        )

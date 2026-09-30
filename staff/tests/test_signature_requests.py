@@ -705,8 +705,13 @@ class RequestModelTests(RequestCase):
         from django.contrib.auth.models import User
         from django.urls import reverse
 
+        from tests.runner import member_of_the_test_espace
+
         request, token = self.create()
-        self.client.force_login(User.objects.create_superuser("proprio", "proprio@example.invalid", "x"))
+        # The admin is a superuser's who works in an espace.
+        self.client.force_login(
+            member_of_the_test_espace(User.objects.create_superuser("proprio", "proprio@example.invalid", "x"))
+        )
         event = request.events.first()
         for name, obj in (("signaturerequest", request), ("signatureevent", event)):
             with self.subTest(model=name):

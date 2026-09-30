@@ -1,4 +1,11 @@
-"""Where the timesheet signatures keep their files: `settings.STAFF_PRIVATE_DIR`.
+"""Where the timesheet signatures keep their files: the private folder,
+`accounts.paths.private_dir()` - the bound espace's own `private/` (under
+TENANTS_ROOT, read at call time, so a test's override_settings redirects
+it), and NOTHING unbound (NoTenantBound).
+One folder per espace is what gives each bar its own signing authority, its
+own employer and employee keys (`keys/employees/<pk>`: pks restart at 1 in
+every espace's database), its own signed files and its own deletions.log -
+`signing.verify` trusts the authorities of THIS folder only.
 
     keys/                          the internal authority, the employer's and each
                                    employee's certificate and private key (staff.signing)
@@ -14,10 +21,12 @@
                                    (staff.signature_deletion): the tombstone kept
                                    outside the database, never rewritten here
 
-**Never under MEDIA_ROOT**: config/urls.py serves all of media when DEBUG is
-on, so a signed timesheet - or a private key - there would be downloadable
-by its address. `private_dir()` refuses such a folder (and a media folder
-inside it) rather than creating it. The files are written whole or not at
+**Never inside a folder the site serves** (STATIC_ROOT, STATICFILES_DIRS):
+a signed timesheet - or a private key - there would be downloadable by its
+address. `private_dir()` refuses such a folder (and a served folder inside
+it) rather than creating it. Media is no served folder: the old single
+mode's public /media/ route is gone (29/09/2026), and an espace's media/ is
+read only through the logged-in file view, which never reaches private/. The files are written whole or not at
 all (a temporary file, then `os.replace`), and the database keeps each
 one's SHA-256: `read_checked` is what notices a file changed on disk.
 
@@ -36,6 +45,8 @@ from pathlib import Path
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+
+from accounts import paths
 
 SIGNATURES = "signatures"
 KEYS = "keys"
@@ -61,9 +72,8 @@ def sha256(data: bytes) -> str:
 
 
 def _served_folders() -> list[tuple[str, Path]]:
+    """The folders the site serves to anyone: the static files'."""
     folders = []
-    if getattr(settings, "MEDIA_ROOT", None):
-        folders.append(("MEDIA_ROOT", Path(settings.MEDIA_ROOT)))
     if getattr(settings, "STATIC_ROOT", None):
         folders.append(("STATIC_ROOT", Path(settings.STATIC_ROOT)))
     for folder in getattr(settings, "STATICFILES_DIRS", ()) or ():
@@ -73,13 +83,15 @@ def _served_folders() -> list[tuple[str, Path]]:
 
 def private_dir() -> Path:
     """The private folder, created on demand - and refused, never created,
-    when it is inside a folder the site serves (or holds one)."""
-    folder = Path(settings.STAFF_PRIVATE_DIR).resolve()
+    when it is inside a folder the site serves (or holds one). The bound
+    espace's `private/`, beside its `media/` and never in it
+    (accounts/paths.py); unbound, NoTenantBound."""
+    folder = Path(paths.private_dir()).resolve()
     for setting, served in _served_folders():
         served = served.resolve()
         if folder == served or folder.is_relative_to(served) or served.is_relative_to(folder):
             raise ImproperlyConfigured(
-                f"STAFF_PRIVATE_DIR ({folder}) ne doit être ni dans {setting} ({served}) ni le contenir : "
+                f"Le dossier privé ({folder}) ne doit être ni dans {setting} ({served}) ni le contenir : "
                 "ce dossier est servi par le site, et les clés et les fiches signées seraient téléchargeables."
             )
     folder.mkdir(parents=True, exist_ok=True)
@@ -90,6 +102,14 @@ def keys_dir() -> Path:
     folder = private_dir() / KEYS
     folder.mkdir(parents=True, exist_ok=True)
     return folder
+
+
+def keys_folder() -> Path:
+    """Where the keys are, creating nothing - for what only reads them
+    (`signing.key_warning`, `authority_certificates`, `authority_fingerprint`).
+    The same folder as `keys_dir`: the bound espace's, NoTenantBound
+    unbound."""
+    return Path(paths.private_dir()) / KEYS
 
 
 def _request_id(request_id) -> str:

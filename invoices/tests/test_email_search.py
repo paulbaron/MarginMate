@@ -9,6 +9,7 @@ No network: the IMAP client is replaced.
 """
 
 import os
+import re
 import tempfile
 from datetime import date
 from unittest import mock
@@ -46,6 +47,97 @@ class DateRangeTests(SimpleTestCase):
             self.search_criteria(date(2026, 12, 31), date(2026, 12, 31)),
             'SINCE "31-Dec-2026" BEFORE "01-Jan-2027"',
         )
+
+
+def fake_mailbox(client, message_bytes: bytes) -> None:
+    """The IMAP client's answers for ONE message in the range: its headers
+    (phase 1), then the whole message (phase 2), each shaped as imaplib
+    returns a FETCH - (info, content) tuples and a closing b")"."""
+    headers = message_bytes.split(b"\n\n", 1)[0] + b"\n\n"
+    client.return_value.search.return_value = ("OK", [b"1"])
+    client.return_value.fetch.side_effect = [
+        ("OK", [(b"1 (BODY[HEADER.FIELDS (FROM SUBJECT DATE)] {%d}" % len(headers), headers), b")"]),
+        ("OK", [(b"1 (BODY[] {%d}" % len(message_bytes), message_bytes), b")"]),
+    ]
+
+
+def bon_mail(content: bytes, sender="mphone@uba.paris") -> bytes:
+    """A driver's mail as UBA sends it: one PDF attached as
+    application/octet-stream. Tour, account, day and ticket invented."""
+    from email.message import EmailMessage
+
+    message = EmailMessage()
+    message["From"] = sender
+    message["To"] = "factures@example.test"
+    message["Subject"] = "Livraison du 10/02/2026 Tour. : ZZZ Compte : 00000"
+    message["Date"] = "Tue, 10 Feb 2026 08:15:02 +0100"
+    message.set_content("Veuillez trouver ci-joint une copie de votre ticket pour la livraison du 10/02/2026")
+    message.add_attachment(content, maintype="application", subtype="octet-stream", filename="T00000000000000001.pdf")
+    return message.as_bytes()
+
+
+@override_settings(INVOICE_EMAIL_ADDRESS="factures@example.test", INVOICE_EMAIL_APP_PASSWORD="x")
+class CompiledMotifsTests(SimpleTestCase):
+    """`compile=`: how the motifs become matchers. Left out, `re.compile`,
+    as for every invoice source and « Tester »; the consignes gather passes
+    returnables.patterns.mail_matcher (checked, case-insensitive, timed)."""
+
+    def search(self, message_bytes, **kwargs):
+        with mock.patch("invoices.scrapers.generic_email.imaplib.IMAP4_SSL") as client:
+            fake_mailbox(client, message_bytes)
+            return find_matching_emails(date(2026, 2, 1), date(2026, 2, 28), log=lambda message: None, **kwargs)
+
+    def test_a_bons_octet_stream_attachment_comes_through(self):
+        """UBA's driver attaches his ticket as application/octet-stream: the
+        attachment is taken by its disposition and name, not its type."""
+        from returnables import patterns
+        from returnables.tests.support import UBA_MOTIFS
+
+        matches = self.search(
+            bon_mail(b"%PDF-1.4 bon exemple"),
+            sender_pattern=UBA_MOTIFS["sender_pattern"],
+            subject_pattern=UBA_MOTIFS["subject_pattern"],
+            attachment_pattern=UBA_MOTIFS["attachment_pattern"],
+            compile=patterns.mail_matcher,
+        )
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0].subject, "Livraison du 10/02/2026 Tour. : ZZZ Compte : 00000")
+        self.assertEqual(matches[0].email_date, date(2026, 2, 10))
+        self.assertEqual(
+            [(attachment.filename, attachment.content) for attachment in matches[0].attachments],
+            [("T00000000000000001.pdf", b"%PDF-1.4 bon exemple")],
+        )
+
+    def test_left_out_it_is_re_as_before(self):
+        """Case-sensitive, as an invoice source's motifs always were."""
+        message = bon_mail(b"%PDF-1.4 bon exemple", sender="MPHONE@UBA.PARIS")
+        self.assertEqual(self.search(message, sender_pattern=r"mphone@uba\.paris"), [])
+        from returnables import patterns
+
+        self.assertEqual(len(self.search(message, sender_pattern=r"mphone@uba\.paris", compile=patterns.mail_matcher)), 1)
+
+    def test_every_motif_goes_through_it(self):
+        compiled = []
+
+        def compile(motif):
+            compiled.append(motif)
+            return re.compile(motif)
+
+        self.search(bon_mail(b"%PDF-1.4"), sender_pattern="uba", subject_pattern="Livraison", body_pattern="ticket",
+                    attachment_pattern=r"\.pdf$", compile=compile)
+        self.assertEqual(compiled, ["uba", "Livraison", "ticket", r"\.pdf$"])
+
+    def test_a_motif_it_refuses_stops_the_search_before_signing_in(self):
+        from returnables.patterns import MotifError
+
+        def refuse(motif):
+            raise MotifError("Motif de mail : refusé.")
+
+        with mock.patch("invoices.scrapers.generic_email.imaplib.IMAP4_SSL") as client:
+            with self.assertRaises(MotifError):
+                find_matching_emails(date(2026, 2, 1), date(2026, 2, 28), sender_pattern="x", compile=refuse,
+                                     log=lambda message: None)
+        client.assert_not_called()
 
 
 class AttachmentFileTests(SimpleTestCase):

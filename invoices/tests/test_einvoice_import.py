@@ -35,11 +35,11 @@ from decimal import Decimal
 from email.message import EmailMessage
 from unittest import mock
 
-from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 
+from accounts import paths
 from invoices import einvoice
 from invoices.forms import ReceiptBatchUploadForm
 from invoices.importing import DuplicateInvoiceError
@@ -80,7 +80,7 @@ PRINTED_PAGE = [
 
 
 def _in(test, name: str) -> str:
-    path = os.path.join(settings.MEDIA_ROOT, name)
+    path = os.path.join(paths.media_root(), name)
     test.addCleanup(lambda: os.path.exists(path) and os.remove(path))
     return path
 
@@ -246,7 +246,7 @@ class ThroughTheFolderImportTests(TestCase):
     def _run(self, *uploads):
         batch = stage_batch(list(uploads))
         self.addCleanup(
-            shutil.rmtree, os.path.join(settings.MEDIA_ROOT, STAGING_DIR, str(batch.pk)), True
+            shutil.rmtree, os.path.join(paths.imports_dir(), STAGING_DIR, str(batch.pk)), True
         )
         return run_receipt_batch(batch.pk)
 

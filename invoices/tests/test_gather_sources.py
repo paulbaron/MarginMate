@@ -98,13 +98,20 @@ class MetroInTheGatherTests(TestCase):
 
     def test_metro_is_contacted_only_when_named(self):
         """A gather started from a shell or a script (source_codes=None) used
-        to sign in to Metro too - most of 31/08's sign-ins were such."""
+        to sign in to Metro too - most of 31/08's sign-ins were such. The
+        mailbox's sources are every eligible one, the seeded format de bon's
+        mails included (returnables, migration 0002): searched once."""
+        from returnables.models import SlipFormat
+
         job = ScrapeJob.objects.create()
         with mock.patch("invoices.tasks.scrape_metro_invoices") as scrape_metro, mock.patch(
             "invoices.tasks.scrape_email_invoices", return_value=[]
-        ):
+        ), mock.patch("invoices.tasks.find_matching_emails", return_value=[]) as find_bons:
             gather_invoices_task(job.id, date(2026, 1, 1), date(2026, 9, 18), None)
         scrape_metro.assert_not_called()
+        seeded = SlipFormat.objects.get(sender_pattern__gt="")
+        find_bons.assert_called_once()
+        self.assertEqual(find_bons.call_args.kwargs["sender_pattern"], seeded.sender_pattern)
 
     def test_one_sign_in_asked_for_passes_the_pause(self):
         _job, scrape_metro, *_ = self.gather(lambda *a, **k: [], metro_now=True)

@@ -134,15 +134,19 @@
 {% endblock %}
 {% block extra_js %}
 <script>
-// Which categories/stock types are expanded is remembered per browser
-// (not per user account - this is a single-user app) so reloading the page,
+// Which categories/stock types are expanded is remembered per browser and
+// per espace (not per user account) so reloading the page,
 // or the list reloading itself after a product was classified, doesn't
 // collapse everything you had open back down.
 // ":rows" and not ":expanded": until 20/09 every classification wrote the
 // article's purchases panel in here for good, so a browser that classified
 // a hundred products carried a hundred open panels - 81 000 px of page to
 // search through. The new key starts from what a reader opens themselves.
-var EXPANDED_STORAGE_KEY = "marginmate:stock:rows";
+// Keyed by espace too (<body data-tenant>, base.html): the ids stored are
+// articles' pks, and one browser used for two bars would open bar A's rows
+// in bar B's list. Empty on a page no espace is bound to.
+var ESPACE_SCOPE = document.body.getAttribute("data-tenant") ? "espace-" + document.body.getAttribute("data-tenant") + ":" : "";
+var EXPANDED_STORAGE_KEY = "marginmate:" + ESPACE_SCOPE + "stock:rows";
 
 function loadExpandedIds() {
     try {
@@ -500,7 +504,7 @@ function syncPanel(focus) {
     });
 }
 
-var PANEL_STORAGE_KEY = "marginmate:stock:panel-closed";
+var PANEL_STORAGE_KEY = "marginmate:" + ESPACE_SCOPE + "stock:panel-closed";
 
 function setPanelClosed(closed) {
     var layout = document.getElementById("products-layout");

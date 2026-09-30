@@ -19,6 +19,9 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Literal
 
+from accounts.tenancy import integrations_allowed
+from invoices.integrations import TO_CONFIGURE
+from recipes.integration import TILL_TO_CONFIGURE
 from transfer.sections.base import Group, Section
 
 logger = logging.getLogger(__name__)
@@ -140,8 +143,48 @@ INFO: dict[str, SectionInfo] = {
                 "pertes saisies."
             ),
         ),
+        # Formats and reprises name their supplier (PROTECT): it requires the
+        # suppliers. Never the invoices: a bon is checked against them when a
+        # page is drawn, nothing links the two, and « Effacer les factures »
+        # must not take the reprises and their photos with it.
+        _info(
+            "consignes", "Consignes", Group.DATA, 100,
+            requires=["fournisseurs"], recommends=["factures"],
+            description=(
+                "Les types de consigne, les formats de bons et leurs motifs, chaque reprise avec ses nombres et "
+                "ses photos, et les bons reçus avec leur PDF et ce qui y a été lu."
+            ),
+            reasons={"factures": "Factures et tickets — pour vérifier chaque bon contre la facture du fournisseur"},
+            clear_note=(
+                "les types de consigne et le format de bon créés à l'installation partent aussi ; la sauvegarde "
+                "prise avant l'effacement les ramène"
+            ),
+        ),
     )
 }
+
+#: What the page says instead where the server's own accounts are not this
+#: espace's (accounts.tenancy.integrations_allowed - a hosted bar): it can
+#: neither edit the server's .env nor run a command on it, so it is told
+#: « à configurer », in the words every other page uses.
+DESCRIPTIONS_TO_CONFIGURE = {
+    "sources": (
+        f"Recherches dans la boîte mail et portails clients : {TO_CONFIGURE}. Un portail importé arrive inactif."
+    ),
+    "ventes": (
+        "Quantités vendues par produit de la caisse et par jour, ventes saisies à la main, bons de vente. Les "
+        "ventes par recette sont recalculées. Les montants de la caisse (recettes du jour, moyens de paiement) ne "
+        f"voyagent pas, et {TILL_TO_CONFIGURE}."
+    ),
+}
+
+
+def description(key: str) -> str:
+    """The section's description as this espace's page shows it."""
+    if not integrations_allowed():
+        return DESCRIPTIONS_TO_CONFIGURE.get(key, INFO[key].description)
+    return INFO[key].description
+
 
 GROUP_LABELS = {Group.CONFIG: "Configuration", Group.DATA: "Données"}
 
@@ -150,6 +193,7 @@ GROUP_LABELS = {Group.CONFIG: "Configuration", Group.DATA: "Données"}
 #: with a log, so the page still draws the sections that are.
 SECTION_MODULES = (
     "suppliers", "sources", "invoices", "associations", "stock_takes", "recipes", "till_links", "sales", "bank",
+    "consignes",
 )
 
 _SECTIONS: dict[str, type[Section]] = {}

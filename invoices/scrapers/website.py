@@ -108,7 +108,19 @@ class WebsiteRecipe:
 def credentials(recipe: WebsiteRecipe, env_file=None, environ=None) -> tuple[str, str]:
     """The login and password the recipe's .env variables hold - read from
     the .env file itself at each run, so a line added there counts without
-    restarting the server, then from the environment."""
+    restarting the server, then from the environment.
+
+    The .env and the environment are the server's, the owner's: a portal
+    typed in another bar's espace could name any of them and send it to a
+    page of its own. So such an espace is refused before anything is read,
+    and the refusal names no variable - « X est absente du fichier .env »
+    would say which ones exist (invoices/integrations.py)."""
+    from accounts.tenancy import integrations_allowed
+
+    from invoices import integrations
+
+    if not integrations_allowed():
+        raise WebsiteError(integrations.PORTALS)
     values = {}
     if env_file is not None and os.path.exists(env_file):
         from dotenv import dotenv_values

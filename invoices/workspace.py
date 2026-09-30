@@ -23,11 +23,13 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.http import urlencode
 
+from accounts.tenancy import integrations_allowed
 from common import RANGE_END, RANGE_START, DateRange, date_range, is_id, search_key
 
+from . import integrations
 from .forms import CHANNELS, InvoiceUploadForm, ReceiptBatchUploadForm
 from .models import Invoice, InvoiceType, ReceiptBatch, ScrapeJob, Supplier
-from .tasks import default_gather_start
+from .tasks import default_gather_start, slips_code, slips_label
 
 #: "Ajoutés récemment", "Vérifiés récemment": what an import or a checking
 #: session has just done, to see it landed.
@@ -85,6 +87,16 @@ DOCUMENT_TO_FIX = (
 #: its own rather than through a source (tasks.gather_invoices_task): Metro.
 #: UBA is seeded `is_scrapable` too, but a mailbox source fetches it.
 OWN_MODULE = Q(code="METRO", is_scrapable=True)
+
+
+def own_module_suppliers():
+    """The suppliers fetched by a module of their own (OWN_MODULE) - none in
+    an espace that may not use the server's accounts (integrations.py): that
+    module signs in to the owner's Metro account, whatever the espace's
+    METRO row says (an import can tick `is_scrapable` again)."""
+    if not integrations_allowed():
+        return Supplier.objects.none()
+    return Supplier.objects.filter(OWN_MODULE)
 
 
 def waiting_counts() -> dict:
@@ -171,13 +183,29 @@ def _missed(job: ScrapeJob) -> frozenset:
     return frozenset(missed)
 
 
+#: How many of the latest gathers are looked through for the latest one
+#: searching invoices (_invoice_gather).
+RECENT_GATHERS = 20
+
+
+def _invoice_gather(jobs):
+    """The first of `jobs` (newest first) that searched invoices - not a
+    gather of bons de consignes only (ScrapeJob.slips_only, the Consignes
+    page's): its period is the bons' own start (returnables.mail.
+    fetch_start), and a failed one offered on Achats pushed the invoices'
+    default start back to it - 90 days on a first run. At most the latest
+    RECENT_GATHERS, looked through in Python (the progress is JSON)."""
+    return next((job for job in jobs[:RECENT_GATHERS] if not job.slips_only), None)
+
+
 def _missed_again(job: ScrapeJob) -> bool:
-    """The gather before it asked for the same period and missed the same."""
-    previous = (
+    """The gather before it asked for the same period and missed the same -
+    the gathers searching invoices only (_invoice_gather)."""
+    previous = _invoice_gather(
         ScrapeJob.objects.filter(kind=ScrapeJob.Kind.GATHER, started_at__lte=job.started_at)
         .exclude(pk=job.pk)
+        .defer("log", "test_matches")
         .order_by("-started_at", "-pk")
-        .first()
     )
     return previous is not None and previous.range_start == job.range_start and _missed(previous) == _missed(job)
 
@@ -185,9 +213,13 @@ def _missed_again(job: ScrapeJob) -> bool:
 def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_form=None) -> dict:
     from .receipts import invoice_supplier_choices
 
-    metro = Supplier.objects.filter(OWN_MODULE).first()
+    # Every source a gather searches is one of the server's own accounts:
+    # in an espace that may not use them the panel says « à configurer »
+    # (_import_card.html), and nothing about them is read.
+    allowed = integrations_allowed()
+    metro = own_module_suppliers().first()
     # The mailbox's types and the customer portals': both are gathered.
-    email_types = list(InvoiceType.objects.filter(is_active=True).select_related("supplier"))
+    email_types = list(InvoiceType.objects.filter(is_active=True).select_related("supplier")) if allowed else []
     gather_sources = []
     if metro:
         from .scrapers.metro import metro_pause
@@ -196,6 +228,15 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
         # box is out of reach and the reason said (_import_card.html).
         gather_sources.append({"code": "METRO", "label": metro.name, "paused": metro_pause()})
     gather_sources += [{"code": f"type-{it.id}", "label": it.name} for it in email_types]
+    if allowed:
+        # The drivers' bons de consignes, each format fetched by mail: they
+        # go to Consignes, never among the invoices (tasks._gather_slips).
+        from returnables.models import SlipFormat
+
+        gather_sources += [
+            {"code": slips_code(fmt), "label": slips_label(fmt)}
+            for fmt in SlipFormat.objects.filter(is_active=True).exclude(sender_pattern="").order_by("name", "pk")
+        ]
     # From the newest invoice these sources have already brought in: a
     # gather is for what arrived since. The earliest of each source's
     # latest used to be taken instead - one supplier billing twice a
@@ -204,10 +245,17 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
     if metro:
         gathered.add(metro.pk)
     ScrapeJob.reap_stale()
-    latest_job = ScrapeJob.objects.filter(kind=ScrapeJob.Kind.GATHER).order_by("-started_at", "-pk").first()
+    gathers = ScrapeJob.objects.filter(kind=ScrapeJob.Kind.GATHER).order_by("-started_at", "-pk")
+    latest_job = gathers.first()
+    # The period offered again is an invoice gather's only: a gather of
+    # bons de consignes alone (the Consignes page's) starts from the bons'
+    # own start, and never holds Achats' period.
+    period_job = latest_job
+    if latest_job is not None and latest_job.slips_only:
+        period_job = _invoice_gather(gathers.defer("log", "test_matches"))
     gather_start, gather_end = default_gather_start(gathered), timezone.localdate()
-    if latest_job is not None and latest_job.range_start and (
-        latest_job.is_active or (_missed(latest_job) and not _missed_again(latest_job))
+    if period_job is not None and period_job.range_start and (
+        period_job.is_active or (_missed(period_job) and not _missed_again(period_job))
     ):
         # A run not over, or that did not get everything: its period is
         # offered again. The default - since the newest invoice brought in -
@@ -215,9 +263,9 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
         # redirect: a retry of 01/01/2026 searched from June. Not when the
         # same sources failed the same period twice: a portal asking for a
         # code every time held every gather on 01/01 for good.
-        gather_start = latest_job.range_start
-        asked_until = latest_job.range_end
-        if asked_until and asked_until < timezone.localdate(latest_job.started_at):
+        gather_start = period_job.range_start
+        asked_until = period_job.range_end
+        if asked_until and asked_until < timezone.localdate(period_job.started_at):
             gather_end = asked_until  # a past period, asked on purpose
 
     recent_batches = list(ReceiptBatch.objects.all()[:5])
@@ -252,6 +300,8 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
         "latest_job": latest_job,
         "recent_batches": recent_batches,
         "batch": shown,
+        "gather_refused": None if allowed else integrations.GATHER,
+        "ai_refused": None if allowed else integrations.AI_READING,
     }
     if shown is not None:
         card.update(batch_status_context(shown))
@@ -282,9 +332,24 @@ def batch_rows(batch) -> list[dict]:
     it read the file, and the page went on showing it: a ticket corrected
     afterwards still read its first total and "À vérifier" on the import it
     came from. The log keeps its own record; this is what is shown.
+
+    A document deleted since is `gone`: the record still names it, and drawn
+    from the record the row read « À vérifier » over a « Vérifier » that led
+    to a 404.
     """
     invoices = Invoice.objects.filter(pk__in=batch_invoice_ids(batch)).select_related("supplier").in_bulk()
-    return [dict(entry, invoice=invoices.get(entry.get("invoice_id"))) for entry in batch.results]
+    rows = []
+    for entry in batch.results:
+        invoice = invoices.get(entry.get("invoice_id"))
+        gone = entry.get("status") == "ok" and bool(entry.get("invoice_id")) and invoice is None
+        rows.append(dict(entry, invoice=invoice, gone=gone))
+    return rows
+
+
+def batch_deleted(batch, pk) -> bool:
+    """Whether this import made document `pk` and it has been deleted since -
+    what an old « Vérifier » link into the import is told."""
+    return pk in batch_invoice_ids(batch) and not Invoice.objects.filter(pk=pk).exists()
 
 
 #: How many documents a list shows before it asks to be asked. Every row is
@@ -638,7 +703,11 @@ def _sources() -> dict:
     invoice_types = list(InvoiceType.objects.select_related("supplier", "email_source"))
     for invoice_type in invoice_types:
         invoice_type.channel = CHANNELS.get(invoice_type.source_kind, invoice_type.get_source_kind_display())
-    return {"invoice_types": invoice_types}
+    return {
+        "invoice_types": invoice_types,
+        # Both channels are the server's own accounts (integrations.py).
+        "sources_refused": None if integrations_allowed() else integrations.SOURCES,
+    }
 
 
 def _changes_to_see():
@@ -709,7 +778,7 @@ def _suppliers() -> dict:
             shop.with_header = sum(1 for text in texts.get(shop.pk, ()) if prints_header(text, shop.ticket_header))
             shop.headerless = len(texts.get(shop.pk, ())) - shop.with_header
     own_readers = [supplier for supplier in suppliers if has_own_reader(supplier)]
-    own_module = set(Supplier.objects.filter(OWN_MODULE).values_list("pk", flat=True))
+    own_module = set(own_module_suppliers().values_list("pk", flat=True))
     for supplier in own_readers:
         supplier.names_shop = names_shop(supplier)
         supplier.own_module = supplier.pk in own_module

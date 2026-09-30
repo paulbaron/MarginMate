@@ -28,7 +28,7 @@ from urllib.parse import unquote
 import pdfplumber
 from django.db import connection
 from django.template.loader import get_template
-from django.test import Client, TestCase
+from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import NoReverseMatch, reverse
 
@@ -63,7 +63,9 @@ class PageTestCase(TestCase):
         patcher = mock.patch("staff.views.this_month", return_value=JUNE)
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.client = Client(enforce_csrf_checks=True)
+        # The suite's client (tests/runner.py): logged in as the espace's
+        # owner, CSRF enforced as a browser's is.
+        self.client = self.client_class(enforce_csrf_checks=True)
 
     def get(self, url, status=200):
         response = self.client.get(url)

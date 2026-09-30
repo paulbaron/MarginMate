@@ -814,7 +814,18 @@ def scrape_metro_invoices(
     Raises MetroError (MetroBlocked for the firewall) carrying the files that
     landed before the stop - and MetroPaused, before any browser starts,
     while Metro is to be left alone (metro_pause), unless a person asked for
-    one sign-in all the same (`ignore_pause`)."""
+    one sign-in all the same (`ignore_pause`).
+
+    The account is the owner's: from an espace that may not use the
+    server's accounts, refused first - before the settings, the pause or a
+    browser (invoices/integrations.py). The pause lives on the METRO row of
+    the espace that signs in, which is therefore the owner's only."""
+    from accounts.tenancy import integrations_allowed
+
+    from invoices import integrations
+
+    if not integrations_allowed():
+        raise MetroError(integrations.METRO)
     if not settings.METRO_EMAIL or not settings.METRO_PASSWORD:
         raise MetroError("METRO_EMAIL / METRO_PASSWORD manquent dans le fichier .env.")
     paused = None if ignore_pause else metro_pause()

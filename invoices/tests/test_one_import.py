@@ -17,11 +17,11 @@ from datetime import date
 from decimal import Decimal
 from unittest import mock
 
-from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 
+from accounts import paths
 from invoices.importing import DuplicateInvoiceError, parse_and_import
 from invoices.models import Invoice, Supplier
 from invoices.parsers.base import ParsedInvoice, ParsedLine
@@ -59,7 +59,7 @@ PARSED = ParsedInvoice(
 
 
 def pdf_upload(test, name, lines):
-    path = os.path.join(settings.MEDIA_ROOT, f"{name}")
+    path = os.path.join(paths.media_root(),f"{name}")
     write_pdf(path, lines)
     test.addCleanup(lambda: os.path.exists(path) and os.remove(path))
     with open(path, "rb") as handle:
@@ -90,7 +90,7 @@ class WhichReaderTests(TestCase):
         self.assertEqual(document_supplier("\n".join(METRO_INVOICE)), self.metro)
 
     def test_and_goes_through_its_supplier_own_reader(self):
-        path = os.path.join(settings.MEDIA_ROOT, "facture.pdf")
+        path = os.path.join(paths.media_root(),"facture.pdf")
         write_pdf(path, METRO_INVOICE)
         self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
         with mock.patch("invoices.parsers.metro.MetroParser.parse", return_value=PARSED) as reader, \
@@ -105,7 +105,7 @@ class WhichReaderTests(TestCase):
     def test_a_file_already_imported_is_refused_before_it_is_read(self):
         """A folder scanned again is mostly documents already in: the file's
         own digest answers, and nothing is opened."""
-        path = os.path.join(settings.MEDIA_ROOT, "facture.pdf")
+        path = os.path.join(paths.media_root(),"facture.pdf")
         write_pdf(path, METRO_INVOICE)
         self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
         with mock.patch("invoices.parsers.metro.MetroParser.parse", return_value=PARSED):
@@ -117,7 +117,7 @@ class WhichReaderTests(TestCase):
 
     def test_a_photo_is_read_as_a_ticket(self):
         make_supplier(code="EPICERIE", name="Épicerie du coin", ticket_header="EPICERIE DU COIN")
-        path = os.path.join(settings.MEDIA_ROOT, "ticket.jpg")
+        path = os.path.join(paths.media_root(),"ticket.jpg")
         with open(path, "wb") as handle:
             handle.write(b"\xff\xd8\xff a photo")
         self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
@@ -131,7 +131,7 @@ class WhichReaderTests(TestCase):
         """Nisbets has no parser of its own: its PDF is read by the ticket
         reader, from its text - never by OCR."""
         shop = make_supplier(code="CUISIPRO", name="Cuisipro", parser_key="", ticket_header="CUISIPRO FRANCE")
-        path = os.path.join(settings.MEDIA_ROOT, "cuisipro.pdf")
+        path = os.path.join(paths.media_root(),"cuisipro.pdf")
         write_pdf(path, [
             "CUISIPRO FRANCE SARL",
             "FACTURE N 7654321 du 07/11/2024",
@@ -154,7 +154,7 @@ class WhatTheDocumentSaysTests(TestCase):
 
     def test_an_invoice_gathered_keeps_its_text(self):
         metro = Supplier.objects.get(code="METRO")
-        path = os.path.join(settings.MEDIA_ROOT, "gathered.pdf")
+        path = os.path.join(paths.media_root(),"gathered.pdf")
         write_pdf(path, METRO_INVOICE)
         self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
         with mock.patch("invoices.parsers.metro.MetroParser.parse", return_value=PARSED):
@@ -164,7 +164,7 @@ class WhatTheDocumentSaysTests(TestCase):
 
     def test_a_photo_filed_by_hand_keeps_none(self):
         """A photo has its reading (`ocr_text`); nothing else is kept."""
-        path = os.path.join(settings.MEDIA_ROOT, "photo.jpg")
+        path = os.path.join(paths.media_root(),"photo.jpg")
         with open(path, "wb") as handle:
             handle.write(b"\xff\xd8\xff a photo")
         self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
@@ -186,7 +186,7 @@ class OneBatchTests(TestCase):
         make_supplier(code="EPICERIE", name="Épicerie du coin", ticket_header="EPICERIE DU COIN")
         photo = SimpleUploadedFile("ticket.jpg", b"\xff\xd8\xff a photo")
         self.batch = stage_batch([photo, pdf_upload(self, "facture.pdf", METRO_INVOICE)])
-        self.addCleanup(shutil.rmtree, os.path.join(settings.MEDIA_ROOT, "receipt_batches", str(self.batch.pk)), True)
+        self.addCleanup(shutil.rmtree, os.path.join(paths.imports_dir(), "receipt_batches",str(self.batch.pk)), True)
 
     def test_each_file_takes_its_own_reader(self):
         with mock.patch("invoices.receipts.recognise", return_value=recognised(UNKNOWN_SHOP)), \
@@ -229,7 +229,7 @@ class OneBatchTests(TestCase):
             "Ramette A4  2  4,00  8,00",
             "TOTAL TTC  8,00",
         ])])
-        self.addCleanup(shutil.rmtree, os.path.join(settings.MEDIA_ROOT, "receipt_batches", str(batch.pk)), True)
+        self.addCleanup(shutil.rmtree, os.path.join(paths.imports_dir(), "receipt_batches",str(batch.pk)), True)
         batch = run_receipt_batch(batch.pk)
         entry = batch.results[0]
         self.assertEqual((entry["status"], entry["kept"]), ("unrecognised", True))

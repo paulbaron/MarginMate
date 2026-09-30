@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import logging
 import os
 import re
 import threading
@@ -42,12 +43,17 @@ from django.db.models import Count, Max, Sum
 from django.db.models.functions import Length
 from django.utils import timezone
 
+from accounts.tenancy import integrations_allowed, tenant_key
+from common import error_for_page
+
 from . import einvoice
 from .identifiers import describe as describe_identifier
 from .identifiers import document_identifiers, may_print
-from .importing import DuplicateInvoiceError, import_parsed_invoice
+from .importing import DuplicateInvoiceError, RoutedToConsignesError, import_parsed_invoice
 from .models import Invoice, InvoiceLine, ShopItemPrice, Supplier, label_for_unit_price
 from .ocr import (
+    DocumentTooBig,
+    check_page_count,
     deskew,
     document_text,
     ocr_prepared_image,
@@ -71,6 +77,8 @@ from .parsers.receipt_base import (
     line_amounts,
 )
 
+logger = logging.getLogger(__name__)
+
 # Wide enough to read a price off on screen, small enough that a batch of
 # thirty receipts doesn't add 50MB to the media folder.
 PREVIEW_MAX_WIDTH = 1000
@@ -89,7 +97,9 @@ DATE_CHECK = "Date du ticket"
 ADJUSTMENT_CHECK = "Frais et remises sur la facture"
 # One recognition at a time in a request (a shop chosen by hand, a document
 # read again): each is seconds of CPU, and two tabs used to import one file
-# twice.
+# twice. One for the process, every espace included, on purpose: it takes
+# turns on the CPU and holds no data, so sharing it mixes nothing between
+# bars (one bar's long OCR only makes another's wait - see the tenancy notes).
 OCR_LOCK = threading.Lock()
 OCR_WAIT_SECONDS = 120
 # A shop's own header text shorter than this would find itself on any ticket.
@@ -216,8 +226,11 @@ def shop_choices() -> list[tuple[str, list[Supplier]]]:
 
 def invoice_supplier_choices() -> list[tuple[str, list[Supplier]]]:
     """What a PDF invoice can be imported under, grouped by how it is read -
-    those waiting for their first document first."""
+    those waiting for their first document first. The AI reading runs on the
+    owner's key: not offered where the server's accounts may not be used
+    (integrations.py; forms.InvoiceUploadForm refuses it when posted)."""
     waiting, suppliers = _waiting_first(list(Supplier.objects.order_by("name")))
+    ai = [supplier for supplier in suppliers if supplier.parser_key == LLM_PARSER_KEY]
     return [
         (WAITING_GROUP, waiting),
         ("Lecteur dédié", [supplier for supplier in suppliers if has_own_reader(supplier)]),
@@ -225,7 +238,7 @@ def invoice_supplier_choices() -> list[tuple[str, list[Supplier]]]:
             "Lue comme un ticket",
             [supplier for supplier in suppliers if supplier.parser_key != LLM_PARSER_KEY and not has_own_reader(supplier)],
         ),
-        ("Analyse IA", [supplier for supplier in suppliers if supplier.parser_key == LLM_PARSER_KEY]),
+        ("Analyse IA", ai if integrations_allowed() else []),
     ]
 
 
@@ -747,7 +760,13 @@ def document_corpus() -> list[tuple[int, str]]:
     again (its reading's length changes): the review page offers header
     chips on every ticket, and paid those 90 ms on each step through the
     queue. It only decides which chips are offered - a header saved is
-    checked against the documents as they are (check_header, no corpus)."""
+    checked against the documents as they are (check_header, no corpus).
+
+    One per espace (accounts.tenancy.tenant_key): the
+    fingerprint is no identity - two fresh espaces, or two restored from one
+    archive, share it, and one bar's chips were offered from another's
+    texts, whose pks tickets_printing then looked up in the wrong database.
+    The CORPUS_ESPACES_KEPT espaces read last are kept."""
     fingerprint = tuple(
         Invoice.objects.aggregate(
             count=Count("pk"),
@@ -756,19 +775,27 @@ def document_corpus() -> list[tuple[int, str]]:
             read=Sum(Length("ocr_text") + Length("source_text")),
         ).values()
     )
+    espace = tenant_key()
     with _CORPUS_LOCK:
-        if _CORPUS.get("fingerprint") != fingerprint:
-            _CORPUS["texts"] = [
+        kept = _CORPUS.pop(espace, None)
+        if kept is None or kept[0] != fingerprint:
+            texts = [
                 (pk, plain_text(ocr_text or source_text))
                 for pk, ocr_text, source_text in Invoice.objects.values_list("pk", "ocr_text", "source_text")
                 if ocr_text or source_text
             ]
-            _CORPUS["fingerprint"] = fingerprint
-        return _CORPUS["texts"]
+            kept = (fingerprint, texts)
+        # Last read last: the oldest goes first when there are too many.
+        _CORPUS[espace] = kept
+        while len(_CORPUS) > CORPUS_ESPACES_KEPT:
+            del _CORPUS[next(iter(_CORPUS))]
+        return kept[1]
 
 
+#: {espace: (fingerprint, texts)}, in the order they were last read.
 _CORPUS: dict = {}
 _CORPUS_LOCK = threading.Lock()
+CORPUS_ESPACES_KEPT = 8
 
 
 def tickets_printing(header: str, ignoring=(), corpus=None) -> list[Invoice]:
@@ -1483,20 +1510,31 @@ class ReceiptRead:
 
 
 def recognise(pdf_path: str):
-    """The document's pages as images, and what each says: a PDF page's own
-    text when it carries some, what the OCR engine read on the deskewed
-    photo otherwise."""
+    """The document's FIRST page as an image - the review screen's preview,
+    `_encode_preview` - and what every page says: a PDF page's own text when
+    it carries some, what the OCR engine read on the deskewed photo
+    otherwise.
+
+    Only the first page's image is kept: every page of 300 dpi held until
+    the end grew with the page count (security audit UPLOAD-1: 50 pages of
+    2 400 pt would have been some 15 Go); the others are dropped once read.
+
+    What a document may cost at all is refused before anything is read:
+    its page count by `text_layer_pages`, which runs first (ocr.pdf_pages,
+    ocr.check_page_count - it used to read every page of the text layer
+    before `page_images` counted them, security review HARDEN-01), its
+    pages' sizes and pixels by `page_images`, before any render. Both raise
+    DocumentTooBig, said on the file's line."""
     layers = text_layer_pages(pdf_path)
     images, pages = [], []
     for position, image in enumerate(page_images(pdf_path)):
         layer = layers[position] if position < len(layers) else None
-        if layer is not None:
+        if layer is None:
+            image = deskew(image)
+            layer = ocr_prepared_image(image)
+        if not images:
             images.append(image)
-            pages.append(layer)
-            continue
-        image = deskew(image)
-        images.append(image)
-        pages.append(ocr_prepared_image(image))
+        pages.append(layer)
     return images, pages
 
 
@@ -2003,6 +2041,13 @@ def _reread_receipt_file(invoice: Invoice, path: str) -> str:
         raise RereadError("Un autre ticket est en cours de lecture : réessayez dans un instant.")
     try:
         read = read_receipt(path, supplier=supplier)
+    except DocumentTooBig as exc:
+        raise RereadError(f"{exc} Le ticket n'a pas été modifié.") from exc
+    except Exception as exc:  # noqa: BLE001 - said to the operator; nothing changed
+        # A file the image or PDF library cannot open raised past every
+        # handler (a 500); its words name the stored file's path (LB-3).
+        said = error_for_page(exc, log=logger, what=f"Relecture du ticket {invoice.pk}")
+        raise RereadError(f"La relecture a échoué, le ticket n'a pas été modifié. {said}") from exc
     finally:
         OCR_LOCK.release()
     parsed = read.parsed
@@ -2050,8 +2095,14 @@ def _reread_invoice_file(invoice: Invoice, path: str) -> str:
         raise RereadError(f"Les factures {invoice.supplier.name} ne sont pas lues automatiquement : rien à relire.")
     try:
         parsed = parser.parse(path, date_hint=invoice.invoice_date)
+    except DocumentTooBig as exc:
+        # The app's own refusal, in its words - as a ticket's re-read says it.
+        raise RereadError(f"{exc} La facture n'a pas été modifiée.") from exc
     except Exception as exc:  # noqa: BLE001 - said to the operator; nothing changed
-        raise RereadError(f"La relecture a échoué ({str(exc).strip() or exc.__class__.__name__}) : rien n'a été modifié.")
+        # By kind, never the exception's own words: a library's name the
+        # stored file's path on the server (audit LB-3) - the log has them.
+        said = error_for_page(exc, log=logger, what=f"Relecture du document {invoice.pk}")
+        raise RereadError(f"La relecture a échoué, rien n'a été modifié. {said}") from exc
     if not parsed.lines:
         raise RereadError("La relecture n'a trouvé aucune ligne : la facture n'a pas été modifiée.")
     if invoice.supplier.expenses_only:
@@ -2198,6 +2249,77 @@ def _record_first_document(supplier: Supplier, invoice: Invoice, how: str, learn
     )
 
 
+def route_consignes(path: str, display_filename: str | None) -> None:
+    """Achats' guard: a PDF that one active format de bon recognises (its
+    « début de la partie » on a line) is a driver's bon de consignes, not a
+    purchase. It is stored in Consignes (returnables.slips.store_slip, «
+    Déposé à la main ») and RoutedToConsignesError says so - no Invoice.
+    Read as a purchase, UBA's bon was filed under UBA (its phone number, a
+    learned identifier) by the ticket reader, the empties taken back as
+    POSITIVE purchase lines: silently wrong money.
+
+    Nothing happens - the import carries on as it always did - for a file
+    that is not a PDF, when no active format has a start motif, and for a
+    PDF the bon reader cannot read (over 5 MB, over 5 pages, a scan: its
+    caps, returnables.reading.pdf_text). A PDF SEVERAL formats recognise is
+    a bon all the same, and refused: which one is for a person to say, on
+    the Consignes page. A format whose start motif runs out of time takes no
+    part (it cannot say)."""
+    if not path.lower().endswith(".pdf"):
+        return
+    from returnables import reading, slips
+    from returnables.comparison import slip_label
+    from returnables.models import Slip, SlipFormat
+
+    formats = [
+        fmt
+        for fmt in SlipFormat.objects.filter(is_active=True).exclude(section_start="").order_by("name", "pk")
+        if fmt.section_start.strip()
+    ]
+    if not formats:
+        return
+    try:
+        if os.path.getsize(path) > reading.MAX_PDF_BYTES:
+            return
+        with open(path, "rb") as handle:
+            content = handle.read()
+    except OSError:
+        return
+    try:
+        text = reading.pdf_text(content)
+    except reading.SlipError:
+        return
+    recognising = []
+    for fmt in formats:
+        try:
+            if reading.detect_format(text, [fmt]) is not None:
+                recognising.append(fmt)
+        except reading.SlipError:
+            continue
+    if not recognising:
+        return
+    if len(recognising) > 1:
+        names = ", ".join(f"« {fmt.name} »" for fmt in recognising)
+        raise RoutedToConsignesError(
+            f"Bon de consignes : plusieurs formats le reconnaissent ({names}) — déposez-le sur la page Consignes "
+            "en choisissant son format ; ce n'est pas une facture."
+        )
+    result = slips.store_slip(
+        content,
+        filename=display_filename or os.path.basename(path),
+        fmt=recognising[0],
+        origin=Slip.Origin.UPLOAD,
+        text=text,
+    )
+    if result.kind == slips.CREATED:
+        said = f"rangé dans Consignes ({slip_label(result.slip.number)})"
+    elif result.slip is not None:
+        said = f"déjà reçu dans Consignes ({slip_label(result.slip.number)})"
+    else:
+        said = f"il n'a pas pu être rangé dans Consignes ({result.message.rstrip('.')}) : déposez-le sur leur page"
+    raise RoutedToConsignesError(f"Bon de consignes : {said} — ce n'est pas une facture.", slip=result.slip)
+
+
 def import_document(
     path: str,
     display_filename: str | None = None,
@@ -2225,6 +2347,11 @@ def import_document(
     is recognised, by `supplier` or by what the document prints; anything
     else is read by the ticket reader, which reads an invoice's table too.
 
+    A driver's bon de consignes is no purchase at all: recognised by a
+    format de bon, it is stored in Consignes and RoutedToConsignesError (a
+    DuplicateInvoiceError) says so - `route_consignes`, after the e-invoice
+    and before any reader.
+
     `by_type`: the name of the invoice type that fetched it for `supplier` -
     filed there whatever it prints, but it teaches nothing when it prints
     what names another supplier (type_supplier_doubt).
@@ -2240,6 +2367,14 @@ def import_document(
             path, xml, display_filename=display_filename, supplier=supplier, date_hint=date_hint,
             chosen_because=chosen_because, by_type=by_type,
         )
+    # Past the e-invoice (read from its attachment, never from its pages),
+    # a PDF of more than ocr.MAX_PAGES pages is refused before anything
+    # reads a page of it: the bon reader below, then the text layer
+    # (DocumentTooBig, said on the file's line - security review HARDEN-01).
+    check_page_count(path)
+    # A driver's bon de consignes is no purchase: it goes to Consignes and
+    # this raises (RoutedToConsignesError) - before any reader sees it.
+    route_consignes(path, display_filename)
     text = document_text(path)
     if text:
         found = supplier if supplier is not None else document_supplier(text)

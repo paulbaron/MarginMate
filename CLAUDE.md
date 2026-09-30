@@ -9,15 +9,20 @@ real per-unit costs out, recipe margins on top.
 .venv/Scripts/python.exe manage.py test --settings=config.settings_test
 ```
 
-`config/settings_test.py` uses an in-memory database, a temp `MEDIA_ROOT`,
+`config/settings_test.py` uses two in-memory databases (the test espace's
+`default` and the central `accounts`, `tests/runner.py`), a temporary
+`TENANTS_ROOT` (every folder is the test espace's, `accounts.paths`), a test
+client logged in as the test espace's owner,
 and **blanks every credential** so no test can reach the real mailbox, the
 real Metro site or the Anthropic API. `tests/support.py::NoNetworkTestCase`
 additionally makes an accidental outbound connection fail loudly.
 
 Add `--exclude-tag=browser` for the fast loop: the browser tests drive a
 real headless Chrome (`invoices/tests/test_website_scraper_browser.py`,
-against a customer portal served from the machine) and take about nine
-minutes (45 tests, 19/09). They skip themselves where Chrome or its driver is
+against a customer portal served from the machine) and take about twelve
+minutes (93 tests in 16 modules on 29/09, eight minutes of it the website
+scraper's 31; list them with `grep -rl 'tag("browser"'` and run them module
+by module). They skip themselves where Chrome or its driver is
 missing. They also reach the network by themselves:
 `invoices.scrapers.website.build_chrome` asks webdriver-manager, which looks
 the latest driver up online - from a session that must stay offline, run them
@@ -31,6 +36,407 @@ pks, and the next class restoring its snapshot fails in setUpClass on
 « UNIQUE constraint failed: django_content_type ». Run apart, the fast loop
 and the browser suite each passed; a whole run failed every « Données » page
 test after the browser classes (19/09).
+
+**A browser test logs its Chrome in** (`tests.runner.log_in_the_browser`, in
+`setUp`: a TransactionTestCase empties the sessions after every test): every
+page but the login, the signup and the employee's signing pages sends a
+visitor to `/connexion/`. Read a storage key through the page's own variable
+(`DRAFT_KEY`, `EXPANDED_STORAGE_KEY`), never a literal: it carries the espace's
+opaque scope - where the page keeps it inside a function (returnables.js),
+build it with `accounts.tenancy.storage_scope`. A class sharing one Chrome
+empties the storage in `setUp`: the next test reads what the last one left.
+
+## One database per bar - the only mode
+
+Every bar is an « espace »: its own SQLite file and folders under
+`TENANTS_ROOT` (the owner's: `../data/tenants/`), the logins and espaces in
+the `accounts` database, a login on every page, each request bound to the
+user's espace (`accounts/tenancy.py`, `accounts/middleware.py`; the module
+docstrings of `accounts/*` are the reference).
+
+**Single mode is gone (29/09/2026).** It was one `db.sqlite3`, no login and
+every folder from a setting, chosen whenever `MARGINMATE_TENANCY` was
+missing: a clone deployed without its .env served every page, the « Données »
+export and `/media/` to anyone (security audit ANON-1). Removed with it:
+`TENANCY_MODE`, `multi_mode()`, the `HOUSE` marker and `Tenant.is_house`,
+the single-mode `DATABASES`, the `/media/` route, `MEDIA_ROOT`/`MEDIA_URL`,
+`STAFF_PRIVATE_DIR` (`MARGINMATE_PRIVATE_DIR`), `SCRAPE_DOWNLOAD_DIR`,
+`DATA_BACKUP_DIR`, `DATA_STAGING_DIR` - business code asks `accounts.paths`
+for a folder. `MARGINMATE_TENANCY` unset or « multi » is ignored; any other
+value is **refused when the settings load** (ImproperlyConfigured - a WSGI
+server runs no system check). `manage.py adopt_database` stays as a one-off
+for a single-mode database still to bring in (the owner's was adopted on
+28/09). `accounts/tests/test_no_single_mode.py` loads the shipped settings
+with an EMPTY environment and no .env and asks every URL anonymously, GET and
+POST: all but the public views (listed there) go to the login.
+
+**A session, a logout and the browser's storage (29/09/2026, security audit
+LOAD-1, LOAD-2, LOAD-3, LB-6; `accounts/tests/test_sessions.py`).**
+- A session belongs to the espace it was opened in: every login writes it
+  (`_marginmate_espace`, `accounts.middleware.pin_the_espace` on
+  `user_logged_in`), and a request whose login now works in another espace -
+  a membership edited in the admin - is logged out and sent to the login page
+  (« Votre accès a changé : reconnectez-vous. »; htmx: 401 + HX-Redirect).
+  Before, every browser still logged in opened the NEW bar's pages, the old
+  bar's shared PC included. `adopt_database` therefore logs its owner out
+  once. A test that moves a membership and keeps the session writes the
+  session's espace itself (transfer/tests/test_tenancy.py).
+- « Se déconnecter » forgets the espace's **drafts** only: ui.js, as a
+  `form.topbar-logout` is sent (base.html's, and the « indisponible » 503
+  page's, which carries the scope for it), removes its `DRAFTS` -
+  `stock-take-draft:*` and `consignes:brouillon` under
+  `marginmate:espace-<scope>:`, and under a legacy session's old id too: an
+  unsaved stock count stayed readable from the public login page. The
+  **preferences stay** (the `mm:` keys - the gather's sources left unticked,
+  Metro included -, datatable sorts, `stock:rows`, `stock:panel-closed`,
+  `achats:import-tab`): the first fix answered `Clear-Site-Data: "storage"`,
+  which emptied them all and ticked Metro again with nothing on screen
+  saying so (review LOGOUT-PREFS). No header, from any logout - the admin's
+  is Django's own and forgets nothing (the superuser's). A new key kept in
+  the browser is a decision: a draft goes into ui.js's `DRAFTS`, anything
+  else into `test_sessions.KEPT_AT_LOGOUT` with why - the test fails on an
+  unclassified `marginmate:` key. A count never saved is lost on an
+  explicit logout.
+- An espace whose database will not open (missing, 0 bytes - which SQLite
+  would take for a new, empty database - or no database: its PRAGMAs fail
+  as the connection opens) answers « Votre espace est
+  momentanément indisponible », a 503 no-store page rendered unbound
+  (`accounts/unavailable.html`), the cause in the log. Only the binding and
+  the opening of its connection are caught, the binding undone; a view's
+  errors stay the view's. The test settings carry no `init_command`: a test
+  of a broken file patches production's in (test_sessions.py).
+- `<body data-tenant>` is an opaque scope (`accounts.tenancy.storage_scope`,
+  16 hex of an HMAC of the pk keyed by SECRET_KEY), no longer the sequential
+  pk, which told every bar how many espaces came before it. Every storage key
+  is still built as « espace-<data-tenant>: », so no page script changed. A
+  session opened BEFORE the change (no `_marginmate_espace` in it) is pinned
+  on its next request and flagged: its pages carry `data-tenant-legacy` (the
+  pk it already saw on every page) and load `static/js/espace_storage_legacy.js`
+  first in the body, which moves THAT pk's keys - never another espace's -
+  under the scope once. A session opened since is never given the pk. Delete
+  the script and the flag two weeks after the deployment (the session age).
+  Changing the SECRET_KEY changes every scope: an unsaved count is then no
+  longer offered back (it only ever lived in that browser).
+
+## Two copies: development and production
+
+Since 30/09/2026 (the owner's decision) the site and the code being edited
+are two copies on the owner's PC, each with its own code, .env and data.
+DEPLOY.md, section 10, has the owner's steps (the one-off move included).
+
+- **PRODUCTION**: code `C:\MarginMate\app`, a git clone whose `origin` is
+  THIS folder (branch `main`); data `C:\MarginMate\data` (`tenants\`,
+  `accounts.sqlite3`, `logs\`); backups `C:\MarginMate\backups\<AAAA-MM-JJ_HHMMSS>\`
+  (`manage.py backup_data`, `accounts/data_backup.py`: every SQLite database
+  through the backup API, checked, the rest as files, the .env, a manifest;
+  a failure is renamed `-INCOMPLET`); its own .env (`DJANGO_DEBUG=False`,
+  `MARGINMATE_HTTPS=1`, absolute paths into `C:\MarginMate\data`). Its
+  `start_production.cmd`, the logon task « MarginMate », `serve` on 8765.
+- **DEVELOPMENT**: this folder, where the owner and coding sessions edit.
+  Its .env says `DJANGO_DEBUG=True`, local hosts only, no `MARGINMATE_HTTPS`,
+  **no integration credentials** (Metro, the mailbox, L'Addition, the AI,
+  the mail server, the portals' variables: blank, so a gather from here
+  refuses instead of reaching Metro), and points `MARGINMATE_TENANTS_ROOT` /
+  `MARGINMATE_ACCOUNTS_DB` at `..\data-dev\` - a copy of a production
+  backup, made by `refresh_dev_data.cmd`. runserver on 8000, which
+  config/wsgi.py refuses to the tunnel anyway. The parent folder's
+  `.claude/launch.json` preview is that runserver, so it now runs on
+  data-dev, no longer on the site's database.
+- **A coding session edits this folder only and never touches `C:\MarginMate`**:
+  not its code, not its data, not its .env, no command run there, no
+  backup read. Production changes only through `deploy.cmd`, double-clicked
+  by the owner in `C:\MarginMate\app`: it takes this folder's COMMITTED
+  `main` (nothing uncommitted travels; no GitHub push is needed - the public
+  repository is pushed only after the owner's privacy audit), refuses while
+  a job runs (`manage.py running_jobs`, exit 1), stops the server, backs up,
+  fast-forwards, `pip install`, `migrate_tenants`, `serve --verifier`,
+  restarts; a failure before the merge restarts the server as it was, a
+  failure after it restarts NOTHING and prints the rollback. A migration
+  shipped therefore reaches production at the next deploy, backed up first.
+- **deploy.cmd runs once at a time, and remembers a run left half way**
+  (review of 30/09, each rule in `test_deployment_scripts.py`): before step
+  1 it takes a MARK, `mkdir .git\marginmate-deploy` (atomic; never a
+  `9>"file"` handle, which `start` would hand to the server's window for its
+  whole life), writes `etat.txt` there from the stop on (`ancien=`,
+  `donnees=`, `sauvegarde=`, every `etape=`) and removes it in `:fin` only
+  when THIS run made it (`MM_LIBERER`) - not after a failure past the merge
+  (`:echec_apres_fusion`, `:serveur_muet`): the next run then refuses and
+  prints the way back from etat.txt, where it used to say « Rien de
+  nouveau » and exit 0 with the site down. « Rien de nouveau » also checks
+  8765 listens. Before the stop it refuses a task « MarginMate » whose
+  action is not this folder's start_production.cmd, and after the stop it
+  asks `running_jobs` again: a job started in the gap was killed, so the old
+  server is restarted and the deploy refused. A git error (« dubious
+  ownership ») is said as one. `migrate_tenants` and `running_jobs` pass
+  over a CLOSED espace that has no base or will not open (serve and DEPLOY
+  §11 tell the owner to close it), `backup_data` lets a file that VANISHED
+  mid-copy go (listed in the manifest, `vanished`), and
+  refresh_dev_data.cmd takes the newest backup with a manifest.json and a
+  data\ folder.
+- **Both scripts ask the settings through `accounts/deployment.py`** (never
+  the .env read by hand): deploy.cmd refuses a folder whose settings say
+  DEBUG or no HTTPS, refresh_dev_data.cmd one that says HTTPS, a data folder
+  that is or holds the code's, and the data folder a backup was taken FROM;
+  both refuse an accounts database outside the data folder (a dev .env left
+  on production's `MARGINMATE_ACCOUNTS_DB` had runserver and
+  `migrate_tenants` work on the live logins).
+  deploy.cmd is in the code it updates and cmd.exe reads a batch file line
+  by line from disk: it copies itself to %TEMP% and runs from the copy. Any
+  .cmd here is ASCII, CRLF (`.gitattributes`), without delayed expansion;
+  `accounts/tests/test_deployment_scripts.py` reads them statically - **never
+  run deploy.cmd or refresh_dev_data.cmd from a session**: they stop the
+  owner's server and move data folders.
+- **data-dev holds real data** (invoices, bank, staff), copied: never into a
+  fixture, a test, a docstring or git - « Fixture privacy » applies to it
+  exactly as to the site's data. A session may run runserver on it, never a
+  gather.
+
+## Mise en ligne / production
+
+The site is served from the owner's PC (29/09/2026): a Cloudflare Tunnel
+(cloudflared, a Windows service the owner installs himself) forwards
+`https://gestion.<domaine>` to `http://127.0.0.1:8765`, where
+`manage.py serve` runs. `DEPLOY.md` (French, for the owner) has his steps and
+the exact `.env` lines; never put the real domain, a token or a key in the
+repo. The security audit of 29/09 (25 findings) is fixed below, each point
+with a test that failed first.
+
+**The tunnel is `serve`'s alone** (review PROD-1). It pointed at 8000,
+runserver's default and both `.claude/launch.json` previews' port, so
+whichever dev server held it was the public site: Django's technical page for
+the public Host under DEBUG (the settings, `request.META` with the .env's
+addresses), every visitor at 127.0.0.1 without it. Three locks:
+- **8765** (`serve.DEFAULT_PORT`), a port no dev tool defaults to; the
+  launch.json files keep 8000. Never give the tunnel or serve 8000 again.
+- **`config/wsgi.py`** - what runserver serves, and any WSGI server loading
+  `config.wsgi` - answers 503 (a French sentence, said once in the console)
+  to a request carrying Cloudflare's headers (`TUNNEL_HEADERS`: CF-Ray,
+  CF-Connecting-IP, CF-Visitor, CDN-Loop). `serve` builds its OWN
+  `WSGIHandler` and never goes through there.
+- **DEPLOY.md adds the public hostname last** (section 6, step 6): runserver
+  stopped, the .env lines in, `serve --verifier` passing and
+  `start_production.cmd` « En ligne » - it used to be section 3, before the
+  .env said DEBUG=False. `accounts/tests/test_serve.py::DeploymentFilesTests`
+  pins that order and the port in every file that names it.
+
+**`manage.py serve`** (`accounts/management/commands/serve.py`, run by
+`start_production.cmd`), in order:
+- DEBUG off whatever .env says: `manage.py` sets `DJANGO_DEBUG=False` before
+  the settings load for `serve` (so a weak key is refused right there), and
+  the command sets `settings.DEBUG = False` again.
+- Every system check, the deployment ones included; ANY unsilenced WARNING
+  or worse refuses, printed with its « À faire ».
+- The migrations of the accounts database, the `_template` and every open
+  espace, and any missing database: each named, **never applied** - the
+  owner backs up `data\` and `.env`, then runs `migrate_tenants`. A new
+  migration therefore stops the production server until he does: say so
+  when you ship one.
+- An EXCLUSIVE socket on 127.0.0.1 (Windows lets a forgotten runserver share
+  a port otherwise): a port in use is refused before any work.
+- `collectstatic --clear` into `STATIC_ROOT`, served by WhiteNoise (the
+  second middleware: the login page needs its stylesheet before any login)
+  from there alone - serve sets `WHITENOISE_USE_FINDERS` and `_AUTOREFRESH`
+  off. Cleared (PROD-3): collectstatic skips a source OLDER than its copy, so
+  a zip, a date-keeping copy or a rollback left the old scripts served under
+  the new `?v=` of `{% asset %}` (which dates the SOURCE).
+- **runserver serves `/static/` from the source folders whatever DEBUG
+  says** (settings: `WHITENOISE_USE_FINDERS = WHITENOISE_AUTOREFRESH = DEBUG
+  or runserver`, PROD-4): with the deployed .env (DEBUG off) Django's
+  runserver adds no static handler, and WhiteNoise's defaults served the copy
+  the last `serve` made - an edit to `static/` did nothing, a new file 404'd.
+- Waitress, 8 threads, **ONE process, on purpose**: the espace binding is
+  per thread, the login limiter counts in Django's LocMemCache (accounts.W002
+  says it is right for one process), the gathers and imports are threads of
+  that process. Never several workers.
+- `--verifier` runs the checks only; `--port`; Ctrl+C stops it cleanly.
+  `manage.py tenant` refuses to wrap `serve` (as runserver and testserver).
+
+**The settings are the environment's** (`config/settings.py`,
+`config/security.py`, the checks in `accounts/checks.py`):
+- `DEBUG` defaults to **False**. `accounts.E007` refuses DEBUG on while
+  `ALLOWED_HOSTS` names a non-local host - in `check`, runserver and
+  `migrate_tenants` too: once the owner's .env names the public host it must
+  say `DJANGO_DEBUG=False`. DEPLOY.md shows how to try DEBUG on the PC, on a
+  COPY of the data (`MARGINMATE_TENANTS_ROOT`, `_ACCOUNTS_DB`, `_LOG_DIR` set
+  to it, PROD-2): the live data is `serve`'s alone. A runserver started there
+  anyway no longer fails serve's running gathers - the startup reaper waits
+  `REAP_DELAY_SECONDS` and takes only the jobs unheard since its process
+  started (see « Gathering invoices ») - but whatever a trial writes, it
+  writes for good.
+- `SECRET_KEY` has no public fallback on a server: DEBUG off and a key that
+  is missing, public (the old fallback, the .env.example placeholder),
+  « django-insecure… », under 50 characters or with fewer than 5 distinct
+  ones is refused **at load** (ImproperlyConfigured, French, the key never
+  printed - a WSGI server runs no check); DEBUG on, the development key and
+  `accounts.W001`; `accounts.E006` in `check` with DEBUG off.
+- `MARGINMATE_HTTPS=1`: secure session and CSRF cookies and HSTS 3600 s
+  (`MARGINMATE_HSTS_SECONDS`), never includeSubDomains nor preload. No
+  `SECURE_SSL_REDIRECT` (Cloudflare's « Always Use HTTPS » does it, and the
+  owner's http://127.0.0.1:8765 has no https) and **no
+  `SECURE_PROXY_SSL_HEADER`**. `CSRF_TRUSTED_ORIGINS` from
+  `DJANGO_CSRF_TRUSTED_ORIGINS`. nosniff, referrer same-origin, COOP and
+  `X-Frame-Options: DENY` are pinned (the file view says SAMEORIGIN itself).
+- Deployment-only checks (`check --deploy`, `serve`): E008 a public host
+  and no « * », E009 the cookies HTTPS-only, E010 `MARGINMATE_SITE_URL` in
+  https and allowed, E011 the espaces and the accounts database OUTSIDE the
+  code folder (their defaults, `tenants/` and `accounts.sqlite3` beside
+  manage.py, are for a developer). security.W005, W008 and W021 are
+  silenced on purpose (comment in settings.py).
+
+**Waitress is the ONE place that trusts the proxy** (`serve.waitress_options`):
+`trusted_proxy` 127.0.0.1 (cloudflared), `trusted_proxy_count` 1 (the
+RIGHT-MOST X-Forwarded-For entry, the one Cloudflare's edge appends),
+X-Forwarded-For and X-Forwarded-Proto only, `clear_untrusted_proxy_headers`.
+`REMOTE_ADDR` and `request.is_secure()` are the visitor's before Django
+runs - the login limiter and the signature proof file read them. **Never
+read X-Forwarded-For or CF-Connecting-IP in Django code**: from anything but
+the tunnel they are whatever the sender wrote. Not verifiable offline: that
+cloudflared adds no hop of its own - DEPLOY.md asks the owner to look at the
+IP of the first proof file signed from a phone (a Cloudflare address there
+means `trusted_proxy_count` 2). `max_request_body_size` is the « Données »
+archive's cap plus its framing (Waitress's 1 GB default refused a big
+archive in English); online, Cloudflare's free plan refuses any body over
+100 MB before us - a big archive is imported from the PC.
+
+**The login limiter** (`accounts/limiter.py`, ANON-4, LIMITER-LOCKOUT): the
+hard stop is 10 failures in 15 minutes per (place, e-mail); a **place** is
+REMOTE_ADDR, an IPv6 client's /64 (Cloudflare hands over the full /128, and
+a /64 is free to rotate in; an IPv4-mapped address counts as its IPv4 - the
+signup's counters too). Beside it, 50 per place across e-mails
+(`IP_LIMIT`) and 100 per e-mail from everywhere (`EMAIL_LIMIT`). A stranger
+who knows the address CAN fill that last one (ten places), and it then held
+the owner out of both doors, the PC included - so it never holds back:
+- **a known device**: every successful login (the login page, the signup,
+  the admin's - `MarginMateAdminSite.login` hands its answer to
+  `limiter.remember_device`) sets the signed `marginmate_appareil` cookie
+  (HttpOnly, SameSite=Lax, Secure with the session cookie, 180 days, keyed
+  hashes of up to 5 addresses, never the addresses). Carrying a valid one
+  for its address, an attempt is judged on its pair, its place and that
+  device's own counter of 10 - never the e-mail's ceiling. A logout keeps it.
+- **the PC itself** (`limiter.directly_from_this_pc`): a loopback
+  REMOTE_ADDR, a Host naming the PC, and no X-Forwarded-*, Forwarded,
+  CF-*, CDN-Loop or Via header - a tunnelled request never qualifies.
+The limits are read at call time (tests patch them).
+
+**The log** (`config/logs.py`, DEPLOY-5): stderr and `marginmate.log` (5 x 5
+MB, rotating) in `MARGINMATE_LOG_DIR`, by default `logs/` beside TENANTS_ROOT
+(`../data/logs/`), the file and folder made at the first record. **Only
+`manage.py serve` writes the file** (`logs.is_the_server(sys.argv)`, PROD-5);
+runserver and every other command log to their console only: on Windows a
+second process holding the file made its rotation fail (WinError 32) and
+every record past the size was dropped;
+django.request at ERROR, django.security and the rest at WARNING (the
+`accounts` logger's forced logouts and 503 causes reach it). Every handler
+cuts `/personnel/signer/<token>/` to 4 characters (`SigningLinkFilter`:
+message, arguments, traceback): the link opens a timesheet for 14 days.
+Waitress keeps no access log. **The test settings say `LOGGING = {}`**: a
+test must never write into `../data/logs`.
+
+**The Content-Security-Policy** (`config/security.py`, DEPLOY-6): every HTML
+response without a policy of its own gets `APP_POLICY` (default-src 'self',
+object-src 'none', base-uri 'none', form-action 'self'); frame-ancestors
+follows X-Frame-Options; non-HTML (the PDF in the invoice's frame) gets
+none; the employee's signing pages and « sandbox » downloads keep theirs.
+script-src keeps 'unsafe-inline' (the inline scripts and `on…` handlers the
+module lists) and 'unsafe-eval' (htmx compiles a trigger filter,
+`_receipt_batch_status.html`); style-src 'unsafe-inline' (`style=`).
+`tests/test_security_headers.py::PolicyFollowsTheTemplatesTests` counts them
+again at every run and fails the day one is no longer needed: then tighten
+the policy. **Code a browser test runs with `execute_script` is exempt from
+the page's CSP**: to test what the page's own code may do, schedule it with
+`setTimeout` from there.
+
+**Error pages**: `templates/400.html`, `403.html`, `404.html`, `500.html`
+and `403_csrf.html` (one layout, `errors/page.html`), French, no path, no
+setting, no reason - the CSRF reason goes to the log. Django's default
+handlers render them.
+
+**What a page may say about an error, a redirect, an upload:**
+- Never `str(exc)` of a library's error on a page (LB-3): PIL's names the
+  server's path. `common.error_for_page(exc, said=(…))` keeps the app's own
+  French refusals (`said`) and turns anything else into one fixed sentence
+  by kind (`SERVER_ERROR`, `UNREADABLE_IMAGE`, `UNREADABLE_PDF`), the detail
+  to the log. Left as they were: the gather's and the till import's job logs
+  (`invoices/tasks.py`, `recipes/tasks.py`), shown in the owner's espace
+  only (`integrations_allowed`), still carry the exception and its
+  traceback.
+- Every `next` / `retour` goes through `common.safe_next(request, default)`
+  or `local_path` (LB-5): it starts with « / », not « // », holds no control
+  character and names an allowed host - `?next=abc` was reversed by
+  `redirect()` and made a 500.
+- Upload caps (UPLOAD-1): 25 MB per file on every upload form
+  (`common.UPLOAD_MAX_FILE_BYTES`, refused in French by the file's name; in
+  a receipt folder that file alone becomes an error line, never written to
+  disk), 100 MB per request (`UPLOAD_MAX_TOTAL_BYTES`), 500 MB for a receipt
+  folder (`invoices.forms.RECEIPT_BATCH_MAX_BYTES`) - counting only the
+  files it STAGES: an ignored video or a refused file is listed and weighs
+  nothing (UPLOAD-TOTAL-IGNORED) -, « Données » its own 4 GB and free-disk
+  check. `invoices/ocr.page_images` weighs a document BEFORE rendering:
+  `MAX_PAGES` 30, `RENDER_MAX_PIXELS` 40 Mpx from `page.get_size()` (a lower
+  resolution down to 100 dpi, then `DocumentTooBig`), `IMAGE_MAX_PIXELS`
+  read from the header. **Tests patch the caps down and use tiny files -
+  never a big render** (the owner's PC froze twice on 29/09).
+- **A PDF's pages are counted before any pdfplumber page is made**
+  (HARDEN-01): pdfplumber keeps every page it read until the file closes,
+  and closing it MAKES every page not made yet - a PDF under 25 MB can hold
+  tens of thousands. `ocr.check_page_count` (pdfminer's own walk of the page
+  tree, stopped at `MAX_PAGES` + 1, never pdfium's count, which believes the
+  /Count a file declares) runs in `receipts.import_document` after the
+  e-invoice and before the bon guard, at the top of
+  `importing.parse_and_import` and before the AI upload's bon guard;
+  `ocr.pdf_pages` is how a reader walks a PDF (refused past the cap, each
+  page closed once read): the text layer, `InvoiceParser.parse`, the AI
+  reader. `einvoice.embedded_xml` opens a pdfminer document, never a
+  pdfplumber one (it runs first, on every PDF). A bon (`returnables.
+  reading.pdf_text`) is counted the same way, to its own 5 pages, before
+  pdfplumber opens it. **Never `len(pdf.pages)` on a file from outside.**
+- **One call into PDFium at a time** (`ocr.PDFIUM_LOCK`, re-entrant): it is
+  not thread-safe, and a folder's thread reads its files without
+  `receipts.OCR_LOCK` beside the requests and the gathers. `page_images`
+  holds it for each call and never while the caller OCRs a page.
+
+**Signing and signup** (staff/, accounts/signup.py):
+- `check_code` reserves a try with ONE conditional UPDATE (`code_attempts__lt`,
+  the same `code_hash`) before comparing, and uses the code up with an
+  UPDATE filtered on that same hash (SIGN-1): read, compare, write back let
+  16 simultaneous guesses through. `staff/tests/test_code_race.py` races
+  threads on a real espace file - the test `default` has no
+  `SQLITE_OPTIONS` (no WAL, no IMMEDIATE), so a threaded test patches
+  production's in.
+- Signature mail is capped (LB-4, `signature_mail.cap_reached`): 3 link or
+  copy mails per request per hour, 60 signature mails per espace per day,
+  failed sends counted. Over a cap the owner's page shows the link
+  « transmettez-le vous-même »; a code by e-mail is refused before any code
+  is issued.
+- The link's `document/` needs no code (ANON-6, decided): the page the link
+  opens already shows everything the PDF holds, and once signed no code can
+  be had while « Voir le PDF » stays offered
+  (`staff/tests/test_link_only_reading.py`).
+- Signup (ANON-5): an address that already has an account gets the SAME
+  sentence, on the same field, as a code that opens nothing; the
+  invitation counts them (`Invitation.refused_addresses`, accounts 0002)
+  and is voided at 3.
+
+**Testing production itself**: `config/settings_test.py` sets a test key of
+its own BEFORE the .env loads (load_dotenv never overrides a set variable),
+pins the hosts and HTTPS values and keeps `LOGGING = {}`. A test of the REAL
+settings runs them in a child process given
+`accounts.tests.test_production_settings.child_environment(...)`: the test
+process's own environment holds the whole .env (load_dotenv put it there),
+and a child inheriting it would take its outcome from the owner's file. The
+settings also read `sys.argv` as manage.py does (only `serve` writes the log
+file; `runserver` reads `/static/` from the source folders), so a child
+standing for a command sets `sys.argv = ["manage.py", "<command>"]` before
+`django.setup()` (`test_production_settings.LOGGED`, `test_serve.MANAGE`).
+`accounts/tests/test_serve.py` mocks the command's Waitress, and runs a real
+one (the proxy wiring) on 127.0.0.1 only, on a port the system picks - never
+8765 nor 8000, where the owner's servers may be running.
+
+**Still on the owner's side at deployment**: his .env lines (DEPLOY.md
+section 5), `migrate_tenants` for accounts 0002, and the old single-mode
+folders still inside the code folder (`db.sqlite3*`, `media/`, `private/`,
+`backups/`, `imports/`, `scraped_invoices/`, the `.bak_20260928` copy) -
+gitignored and never served, to be archived outside the code tree.
 
 ## The testing contract
 
@@ -104,7 +510,8 @@ hand-written pages. This reader works from bytes rather than a layout, so it
 is its own module, the way `ocr.py` is: `embedded_xml(path)`,
 `looks_like_an_invoice(data)`, `read(data)`. Pure - no database, no model,
 no request, nothing on the network. No new dependency either: pdfminer.six
-(through pdfplumber) resolves the PDF attachment, and `xml.etree.
+(pdfplumber's own, opened directly - a pdfplumber document makes every page
+as it closes) resolves the PDF attachment, and `xml.etree.
 ElementTree` plus `zlib` do the rest. **Do not add pypdf or pikepdf, and do
 not use lxml here.** lxml is installed ONLY as pyHanko's dependency (the
 timesheet signatures, `staff/signing.py`, 28/09); this reader keeps
@@ -1107,8 +1514,8 @@ off became the printed one, none went the other way.
 **A folder is a background job** (`invoices/receipt_batches.py`). The upload
 page takes files or a whole folder (`webkitdirectory`; both inputs post as
 `files`), and anything that is neither a PDF nor a photo is listed as ignored
-rather than refusing the selection. Files are staged under
-`media/receipt_batches/<id>/` and a thread imports them one at a time into a
+rather than refusing the selection. Files are staged under the espace's
+`imports/receipt_batches/<id>/` (never in its media/) and a thread imports them one at a time into a
 `ReceiptBatch`, whose page polls with htmx and gives every file exactly one
 outcome - `ok`, `duplicate`, `unrecognised`, `error`, `ignored`, `cancelled` -
 because a receipt that failed silently shows up weeks later as stock never
@@ -1825,8 +2232,17 @@ timeout not even tried, and the invoice being imported was lost.
 after the job ended - only the card was redrawn - and a failed gather
 could not be run again without reloading the page. A dead job is reaped
 where it is polled (`gather_status`, `sales_import_status`), and at startup
-only by the process serving the pages (`apps.serving_requests`): a
+only by runserver's serving process (`apps.serving_requests`): a
 `manage.py shell` used to mark a running gather failed seven seconds in.
+`serve` never reaps at startup (its apps load before it knows it will
+serve: `--verifier`, a second `serve` refused its port). And that reaping
+waits `REAP_DELAY_SECONDS` (two heartbeats and a margin) in a daemon thread
+of its own, then takes only the jobs **not heard from since the process
+started** (`last_heartbeat`, else `started_at`, older than its start),
+checked again as each is written (review PROD-2): run as the apps loaded, a
+runserver started beside `serve` on the same data - the old debug recipe, a
+preview refused its port - marked serve's live gathers FAILED, the Gather
+button came back and a second gather could start beside the first.
 
 A download is complete when **the PDF its own row produces** appears
 (`134_52_14645_<timestamp>_invoice_cus_copy_main.pdf`, named after the row's
@@ -2537,7 +2953,7 @@ One page (`/donnees/`, in the navigation) replaced « Exporter / Importer les
 associations »: three tabs - Exporter, Importer, Effacer - each with the same
 two groups of boxes, « Configuration » (fournisseurs, sources, associations
 produits → articles, recettes, liens recettes ↔ ventes) and « Données »
-(factures et tickets, banque, ventes, inventaires). The owner asked for it on
+(factures et tickets, banque, ventes, inventaires, consignes). The owner asked for it on
 19/09; the old addresses redirect there and the old associations JSON still
 imports (`transfer/legacy.py`).
 
@@ -2692,16 +3108,17 @@ imports (`transfer/legacy.py`).
   prune removes what the run created. A bank link a person had undone, made
   again under a line whose record had not changed, stayed after the undo
   (review, 19/09). Only a section merged that just fills blanks or adds is
-  left to the database copy. Both go in `backups/` beside the database
-  (gitignored, never deleted by the app, so a confirm undone as
-  `NotAsPreviewed` leaves its backups there). Staged
-  archives wait in `imports/`, **not in media/** (DEBUG serves all of
-  media), listed on the Importer tab (« Archives en attente », Reprendre /
+  left to the database copy. Both go in the espace's `backups/` (never
+  deleted by the app, so a confirm undone as `NotAsPreviewed` leaves its
+  backups there; the page names no server path). Staged
+  archives wait in the espace's `staging/`, **not in its media/** (the file
+  view serves media), listed on the Importer tab (« Archives en attente », Reprendre /
   Annuler) until the 24 h sweep. Clearing asks for « EFFACER » typed.
-  Putting a database copy back means deleting `db.sqlite3-wal` and `-shm`
-  first, and the page says so: in WAL mode, a `-wal` left by a server stopped
-  hard is read back into whatever file is named db.sqlite3 (a scratch probe,
-  19/09: the copy put back came out holding the newer rows).
+  Putting a database copy back is the administrator's, server stopped, and
+  means deleting the espace's `db.sqlite3-wal` and `-shm` first: in WAL mode,
+  a `-wal` left by a server stopped hard is read back into whatever file is
+  named db.sqlite3 (a scratch probe, 19/09: the copy put back came out
+  holding the newer rows).
 - **The bank's links come back with their invoices, in one import.** When
   invoices go (« Effacer factures », or a « Remplacer » that prunes a paid
   invoice), their payments go with them and the lines stay « réglées à la
@@ -2728,8 +3145,32 @@ imports (`transfer/legacy.py`).
   without till sales, and both add `sales.PAYMENTS_NOTE`, the command that
   brings them back.
 - **« Personnel » is in no section**: employees, timesheets and signature
-  requests are neither exported nor cleared, and `STAFF_PRIVATE_DIR` is in no
-  archive. Only the SQLite copy taken before a run holds those tables.
+  requests are neither exported nor cleared, and the espace's `private/` is in
+  no archive. Only the SQLite copy taken before a run holds those tables.
+- **« Consignes » is the tenth section** (`sections/consignes.py`, « Données »
+  group, order 100): it requires « fournisseurs » (a format's and a
+  reprise's supplier, by code) and only recommends « factures » (the invoice
+  check is read when a page is drawn, nothing of it is stored). Keys: a type
+  and a format by `search_key` of their name with spaces collapsed (the
+  forms' own uniqueness rule, so « Futs » finds « Fûts »), a reprise by its
+  random `reference`, a bon by its sha256. A merge compares what lies
+  outside a bon's reading (format, origin, names, mail, text, file); the
+  reading is copied when the bon is created, and under « Remplacer » only when
+  its text or its format changed - never compared, never read again (the
+  tests make `pdf_text` and `read_slip_text` fail). The moments come back as
+  they were; `Pickup.updated_at` (« modifiée ici ») and `Slip.read_at`
+  (« relue ici ») never travel. Every motif imported goes through
+  `returnables.patterns` exactly as the forms check it (« motif refusé :
+  <champ> — <raison> »), references and checks are validated (« lecture
+  illisible »), a count outside 1..9 999 is refused before the database's
+  CHECK - each skips its record with its reason. Files only under
+  `consignes/` (`archive.STORAGE_FOLDERS`), written through the same
+  `check_file`/`save_file` as the invoices', old ones deleted on commit; a
+  photo missing from the exporting disk leaves its reprise without it (said),
+  a bon whose PDF was missing is skipped. The seeded types and format are
+  counted and cleared like the rest - the safety archive brings them back.
+  The supplier page and « Données » name the consignes rows holding a
+  supplier (`supplier_views.consignes_refusal`, one sentence for both).
 - **A portal from an archive is never trusted** (`sections/sources.py`): the
   next gather types the .env variables it names into the page it names. A
   portal naming a variable the application reads for itself is refused, by
@@ -2792,7 +3233,7 @@ Test every section the same way (`transfer/tests/support.py`): a round trip
 (export, clear, import, same snapshot by natural keys, files byte-identical),
 importing its own export changes nothing (every record « inchangé » - this is
 what catches a Decimal's places or a time zone), merge versus replace on one
-record of each kind, the preview changing nothing - and all nine at once
+record of each kind, the preview changing nothing - and all ten at once
 (`test_full_round_trip.py`), since what crosses sections (a stock take's
 invoice line, a payment to a ticket known only by its file) only shows there.
 Rehearse on a scratch copy of the real database, never on it: `preview_start`'s
@@ -3175,7 +3616,7 @@ Re-measure on a scratch copy when it matters, and keep the number there:
   (`days_without_amount`, in both logs), and another export that CAN read the
   day whole still fills it.
 - **Every way a file can fail to be this export answers as
-  `LadditionExportError`.** An .xlsx is a zip, and `scraped_invoices/` is
+  `LadditionExportError`.** An .xlsx is a zip, and the espace's `downloads/` is
   scanned whole: a half-finished download raises `zipfile.BadZipFile`, which
   is no `XlsxError` and escaped the reader AND the backfill's own
   « illisible » branch - one such file stopped the other sixteen being read
@@ -3203,7 +3644,7 @@ has read this day's money »: false on every row imported before this, and on
 every row a « Données » archive restores - that archive carries the
 quantities only (`transfer.sections.sales.DAILY_COLUMNS`), so a restore is
 followed by a backfill. `manage.py laddition_backfill_revenue --dry-run`
-fills them from the .xlsx already in `scraped_invoices/`, **contacting
+fills them from the .xlsx already in the espace's `downloads/`, **contacting
 nothing**: it names each file, the revenue per year and everything it cannot
 match, and **creates no row** - money against a quantity nobody imported
 would be a figure with no stock behind it. A (product, day) printed by two
@@ -3266,7 +3707,7 @@ account.
   `record_sales`, `record_payments` - and « Remplacer » prunes the payments of
   a day it leaves without sales.
 - **`manage.py laddition_backfill_payments [--dry-run] [--folder]`** fills the
-  days already imported from the .xlsx in `scraped_invoices/`, **contacting
+  days already imported from the .xlsx in the espace's `downloads/`, **contacting
   nothing** and reading the ticket sheet alone. The revenue backfill's shape:
   each file named with what it read, an export without the sheet said as such
   (`PaymentsSheetMissing`, not « illisible »), an unreadable one stepped over,
@@ -3965,7 +4406,8 @@ back and forth between them. The rules that came with merging them:
   columns are shares, not pixels, so it fits beside the panel.
 
 Beside the workspaces, Banque, Marges, **Personnel** (the staff's
-timesheets, `staff/`) and Inventaires are links of their own. A new app
+timesheets, `staff/`), Inventaires and **Consignes** (the empties handed
+back to the delivery driver, `returnables/`) are links of their own. A new app
 lights its link only once it is in `navigation.SECTION_BY_APP`, and a new
 link is measured again (UI conventions, the topbar).
 
@@ -4336,10 +4778,13 @@ Rules that cost nothing to keep and a lawsuit to lose:
   (`OfflineTimestamps`, `SigningTestMixin`), settings_test has no server at
   all, and `tests.support.NoNetworkTestCase` makes pyHanko's HTTP clients
   fail loudly. Never sign against DigiCert from a test or a coding session.
-- **`STAFF_PRIVATE_DIR`** (env `MARGINMATE_PRIVATE_DIR`, default
-  `private/`, gitignored) holds the keys, the signed PDFs, the drawings, the
-  proof files and deletions.log (« Supprimer… », below) - **never under media/**, which DEBUG serves whole
-  (`private_files.private_dir` refuses it). **Back it up with the database.**
+- **The espace's `private/` folder** (`accounts.paths.private_dir`, under
+  TENANTS_ROOT; single mode's `STAFF_PRIVATE_DIR` / `MARGINMATE_PRIVATE_DIR`
+  went with it on 29/09) holds the keys, the signed PDFs, the drawings, the
+  proof files and deletions.log (« Supprimer… », below) - **never inside a
+  folder the site serves** (STATIC_ROOT, STATICFILES_DIRS:
+  `private_files.private_dir` refuses it), and beside the espace's media/,
+  never in it. **Back it up with the espace's database.**
   Losing it does not make a signed PDF unverifiable (each signature embeds its
   certificates; `verify` still says what each signature covers is intact and
   whom it names, and that its certificate « ne se rattache à aucune autorité
@@ -4352,9 +4797,11 @@ Rules that cost nothing to keep and a lawsuit to lose:
 - **`MARGINMATE_SIGNING_PASSPHRASE`** encrypts the private keys; unset they
   are in clear and `signing.key_warning()` is the line the owner's pages
   show. Keys written in clear are encrypted at the next signature once it is
-  set. The app must not go online before it is set - nor before the login
-  step, which does not exist yet: only the employee's signing page is meant
-  to stay reachable without an account (its secret link and its code).
+  set. The app must not go online before it is set. Every owner's page is
+  behind the login (it did not exist when this was written: single mode's
+  pages said so, `ONLINE_WARNING`, gone with it); only the employee's
+  signing page is meant to stay reachable without an account (its secret
+  link and its code).
 - **Adobe shows « validité inconnue »** for our certificates: a trust
   warning, not an alteration (`signing.ADOBE_UNKNOWN_VALIDITY`); `verify`
   checks offline against our authority and, for the timestamps, certifi's
@@ -4413,7 +4860,7 @@ failed first):
   refusals keep their words (his drawing, the box, the step, no
   timestamp). `public_views.submit` turns anything unforeseen into the same
   sentence, a 500 with the traceback in the log - Django's error page under
-  DEBUG shows paths and settings. It had shown STAFF_PRIVATE_DIR's absolute
+  DEBUG shows paths and settings. It had shown the private folder's (then STAFF_PRIVATE_DIR) absolute
   path and the passphrase variable's name.
 - **A certificate's common name holds 64 BYTES of UTF-8** (X.520;
   `cryptography` raises a plain ValueError past it, which escaped every
@@ -4594,7 +5041,7 @@ a scratch run broke each one in memory and saw its test fail):
   on_commit callbacks run only inside `captureOnCommitCallbacks(execute=
   True)`, which the tests wrap round the deleting call - and they run when
   that block ends, after the page has answered.
-- **The tombstone**, `STAFF_PRIVATE_DIR/deletions.log`, outside the
+- **The tombstone**, the espace's `private/deletions.log`, outside the
   database: one JSON line per deleted version, UTF-8, fsynced
   (`private_files.append_deletion_record`); `read_deletion_records` splits
   on « \n » only, since a U+2028 in a name is no line end. It holds when
@@ -4609,6 +5056,290 @@ a scratch run broke each one in memory and saw its test fail):
   follow the highest version REMAINING: the month's only version deleted
   and the month sent again is a version 1 again, with a new document n° -
   the uuid is what the stamps and the tombstone name.
+
+### « Consignes » (`returnables/`, `/consignes/`): the empties handed back
+
+The kegs, crates and CO2 bottles given back to the delivery driver:
+photographed and counted on the phone before the lorry leaves (a
+**reprise**), then compared with the **bon** the seller's driver e-mails
+(UBA's: one PDF per delivery, a « REPRISE VIDE » part) and with the refund on
+the seller's invoice. Generic on purpose (the owner, 29/09: « other sellers
+with other tickets »): how a bon is read is a **format de bon**, a set of
+**motifs** (regexes) the owner edits and « Teste » on the page. Seeded by
+`returnables/0002` in every database - the test one, the `_template`, every
+espace: three types (« Fûts », « Caisses verre », « Bouteilles CO2 ») and
+« UBA — bon du livreur », whose motifs were checked against the owner's real
+bons (every part found, every line read, every total matched, the re-sends
+and the replacements seen); tests that need an empty app call
+`returnables/tests/support.py::no_defaults()`.
+
+**Migrations - unlike Personnel, other pages read these tables.**
+`returnables/0001`-`0002` are written and applied to test databases only.
+Achats (the « Récupérer » card offers a format's bons), the gather
+(`tasks._gather_slips`), Achats' import (the guard below), the supplier page
+(`delete_refused`) and « Données » (its section, and the after-commit file
+check that walks every FileField) all read the consignes tables: an espace
+with the code and not the migrations breaks THEM, not just /consignes/. The
+owner runs `manage.py migrate_tenants` after a backup; no agent does.
+
+**Words on screen**: « Consignes » is also an article category of Produits
+& charges and a Dépenses category - the page's subtitle says which it is
+(« Les vides rendus au livreur… »). A retrieval is a **reprise**, the
+seller's document a **bon** (never « ticket »: the app's ticket is a till
+receipt), its reading rules a **format de bon**, a regex a **motif**, trying
+one **« Tester »**, a kind of returnable a **type de consigne**. Type names
+are shown exactly as typed, never lower-cased or singularised, and counts
+read « Fûts 15 · Bouteilles CO2 1 » - no grammar to get wrong. Comparison
+rows need no agreement either: « Fûts — compté : 15 · sur le bon : 14 → il
+en manque 1 sur le bon (30,00 €) »; never « Le bon compte … », which reads as
+the idiom first. Sentences built in Python write money with ONE helper,
+`comparison.euros`; templates print `|floatformat:2 €` like every page.
+
+**The motif guard (`patterns.py`) - why it comes first.** `regex` is what
+runs a motif, for its `timeout`. But `regex.compile` has NO timeout and
+EXPANDS counted repetitions: compiling `(?:x{65535}){65535}` allocated about
+50 GB and froze the owner's 16 GB PC twice (29/09). So a motif is compiled
+only after the standard library's pure-Python parser (`re._parser.parse`,
+which expands nothing) has shown its shape and it passed: no VERBOSE in any
+form (under `(?x)` regex reads `{6 5 5 3 5}` as a count, the stdlib as
+text), no `{` that is not a plain count (regex reads `a{e<=1}` as a fuzzy
+constraint), no `[` inside a set, no repetition over 100, no nesting
+multiplying past 1 000, no group nesting deeper than 20 - **and the same
+repetition rules again on `regex`'s OWN parse** (`_check_regex_tree`: the
+Source/Info/`_parse_pattern` that `regex.compile` itself runs, which expands
+nothing either) - then `regex.compile` inside `except Exception`. The second
+tree is not belt and braces: the review of 29/09 walked around a guard that
+read only the stdlib's tree with POSIX classes - `regex` reads `[[:alpha:])(]`
+as ONE set where the stdlib ends it at the first `]` and reads `)(` as group
+brackets, so a 116-character motif had six nested `{100}` for `regex` and
+none for the stdlib (100^6, from any form). **Whatever a check measures, it
+measures on the tree that is compiled.** Its private names (`_regex_core`)
+are pinned by a test, and `regex` is pinned in requirements.txt. Every entry
+point goes through it: the forms, « Données »'s
+import, the reading, a stored motif at each use (a stricter rule, a
+hand-edited archive: the page says « motif invalide : … — corrigez-le »,
+never a 500), and the gather's mail motifs (`patterns.mail_matcher`, passed
+as `find_matching_emails(compile=…)`). **Tests of a refusal patch
+`regex.compile` with a sentinel that fails if called**; never compile a
+refused motif for real to see what happens. **Budgets**, because the 0.25 s
+timeout is per call: a reading has 2 s in all, a page's classification 1 s
+(memoised per designation; what is left is « non classée : motif trop
+lent »), « Relire les N bons » 30 s and says how many are left; every call
+runs `concurrent=True`, and a timeout in a test is SIMULATED (a pattern
+whose search raises TimeoutError), never a real catastrophic match.
+
+**The one writer (`slips.store_slip`)**: the page's upload, the gather and
+Achats' guard all store a bon through it. 5 MB at most, then the sha256 (the
+same bytes are « déjà reçu »); the PDF's text OUTSIDE any transaction (5
+pages, 200 000 characters, pdfminer's zoo of exceptions all « pas un PDF
+lisible », and what pdfminer INFLATES bounded: a 5 MB file can decompress to
+gigabytes, so `reading.bound_pdf_decoding` - installed by the app's
+`ready()`, for the whole process, Achats' PDFs included - caps Flate, LZW
+and RunLength at 64 MB per stream, and one bon's streams share 64 MB through
+`inflate_budget`; past it the bon is « trop long »); the format given or the ONE active format whose start motif
+matches (several is a refusal naming them); the re-send check (same format,
+number, delivery date, references and lines - only for a reading that names
+its bon); a reading that failed is stored anyway (file, text, the failed
+check) so « Relire » can fix it once the format is - a mailed bon refused
+would be lost for good. The file is `bon-<number kept to [0-9A-Za-z-]>.pdf`
+(a captured « 12/34 » or « ../x » is no folder), saved inside the atomic
+block with its row and lines, and deleted by the handlers OUTSIDE it when
+the block fails: Django has no « on rollback ». It never calls an invoice
+importer - a bon read as an invoice files the empties as positive purchase
+lines, silently wrong money.
+
+**Which bons count (`comparison.effective_slips`)**, over EVERY bon of the
+formats involved, never only the ones on screen: a bon's moment is
+(printed_at or received_at, pk), never the mail's date; the same non-blank
+number AND delivery date is one ticket re-sent (the driver mails it again,
+printed the next morning: the latest content, the earliest moment); a bon
+saying « annule et remplace » supersedes every bon sharing a reference with
+it, whatever order they arrived in (the original re-sent after its
+replacement included); only a format with no reference motif falls back on
+the delivery date.
+
+**What is compared, per (supplier, day)**: every reprise of that supplier
+that day is ONE side, counts summed (« 2 reprises ce jour-là,
+additionnées » - a forgotten type saved as a second reprise is no false
+écart), against every bon that counts of that supplier's formats delivered
+that day. A line's type is NOT stored: the first type, in (position, pk)
+order and active or not, one of whose motifs is found in its designation -
+editing a motif reclassifies every line at once, and a type whose motif
+fails stops the search for that line rather than filing it under the next
+one. Status, first that applies: fournisseur non précisé, pas de format de
+bon, en attente du bon, à vérifier (a paired bon's reading failed or one of
+its checks, or a line could not be classified), écart, conforme. An unpaired
+bon within 3 days of an unpaired reprise day is offered to the NEAREST one,
+with « Mettre la reprise au … ». A bon with no line is « aucun vide repris »
+only when its reading passed every check: one whose lines could not be read
+(a layout the line motif no longer matches) is « à vérifier » - said empty,
+it hid empties that were taken.
+
+**The invoice check (`invoice_check.check_many`)**, read when the page is
+drawn and never stored on an invoice: the seller's invoices dated from 7
+days before to 45 days after the delivery (one query over the union of the
+windows, then their negative lines), a reference searched as a whole token
+(fewer than 4 letters or digits is not searched), bons and invoices joined
+where a reference is found and each connected group compared ONCE (one
+ticket's two BLs on two invoices, a monthly invoice refunding several bons),
+each negative line going to the longest bon designation it starts with (the
+bon prints the first 20 characters). Every state is its own sentence;
+negative lines no bon claims are « autres avoirs », never a gap - but never a
+✓ either: a bon with no line whose invoice refunds consignes is
+`OTHERS_ONLY`, « à vérifier » (the bon corrected to kegs that has not
+arrived, a keg returned full), and the green « rien à rembourser ✓ » needs
+BOTH sides empty. A unit price is shown for a type only when every counted
+line of it has one (a line without price never borrows its neighbour's).
+Drawn as « Facture : <short pill> <what the sentence adds> » - the pill's
+title holds the whole sentence.
+
+**Photos (`photos.py`)**: re-encoded on the server, the original never kept -
+JPEG, PNG and WebP only (HEIC is refused in French: no Pillow plugin), the
+size and the pixels checked from the header BEFORE anything is decoded, and
+a JPEG's `draft` scale CHOSEN from the pixel budget (`_draft_scale`: the
+finest of 1, 2, 4, 8 whose decoded size fits) with the size draft really
+gave checked again before `load()` - Pillow picks the scale from the SHORT
+side, so a 59 600 × 3 000 panorama decoded whole (half a gigabyte); a
+progressive JPEG is held to the pixel limit from its header, since libjpeg
+keeps its coefficients full size whatever the scale; upright, at most 2000 px, no
+EXIF left (so no GPS), a 480 px thumbnail beside it; the EXIF date is kept as
+`taken_at` and shown (« Photo du … à … », else « Envoyée le … »), and a
+reprise whose photos were all taken another day says so, with « Dater la
+reprise du … ». A photo Pillow cannot read never refuses the reprise: the
+others are saved, a warning names it. Prepared in memory before the
+transaction, saved inside it, every name already saved deleted if it fails;
+deleting a reprise, a photo or a bon deletes its files ON COMMIT
+(`models.delete_with_files`). Tests use images of a few pixels and patch the
+pixel limits down.
+
+**The pages** (phone-first: 320-375 px, no sideways scroll, targets of 44 px
+at least):
+
+- `/consignes/`: the latest reprise in one line, then « Nouvelle reprise »
+  (the day, « Repris par » and a note folded under « Reprise du … · repris
+  par … · modifier » - on almost every morning nobody touches them - then
+  photos, then one count per ACTIVE type, the first one, the kegs, bigger),
+  then the latest reprise in full, the reprises and the bons received (20
+  each, « tout afficher »), « Ajouter des bons », and the settings' links.
+  The strip and the lists reload themselves on `documents-changed` (the
+  gather's card sends it when it stops polling); the form is outside them,
+  so a count half typed survives.
+- **The counts are not a formset**: `nombre-<type pk>`, blank is 0, a whole
+  number from 0 to 9 999 in ASCII digits. Every refusal the server makes has
+  its twin in the HTML (the date's min/max, a count's pattern and
+  maxlength) and the form never has `novalidate`: a browser never gives the
+  photos back after a refused post. « Rien à enregistrer » is the only
+  refusal the page cannot make first, and it has no photo to lose.
+- **`static/js/returnables.js`** (nodes built with textContent only): the
+  − / + steppers (drawn `hidden`, `type="button"`, `touch-action:
+  manipulation` so fast taps never zoom); after each shot the filled photo
+  input moves into a hidden box of the form and a fresh one takes its place
+  (a camera input holds ONE photo), with previews and « Retirer » (a
+  multiple input's files rebuilt through DataTransfer) and the 11th refused;
+  the draft of the new reprise in localStorage under the espace (12 h,
+  offered back into a blank form - a restored note is named and its folded
+  part opened -, « Effacer » puts back today and the offered « Repris par »,
+  forgotten on `?enregistree=1`); the stale tab (a tab opened yesterday moves
+  its date's max, and its value when it was « today », on `pageshow`).
+  **Enter in a count moves to the next count and never sends the form**:
+  Chrome on Android sends the numeric keypad's ✓ as an Enter, which saved a
+  reprise with the kegs typed and nothing else; the counts say
+  `enterkeyhint="next"`, the last one « done ».
+- What an upload of bons said is drawn IN « Ajouter des bons » (`#bons`,
+  where its redirect lands; `views._messages_by_place`, as Marges does),
+  everything else at the top. A saved photo's « Retirer » and every small
+  button of the app are 44 px, and « Retirer » asks twice (a `<details>`).
+- Under 600 px the topbar scrolls away with the page HERE only
+  (`html:has(.consignes-page)`): its three to five rows took a third of a
+  phone's screen above the count being typed. Every page of the app has
+  `.consignes-page` on its root, and its fields are 1rem (iOS zooms the page
+  in on a smaller one).
+- A format's page: « Tester » is the form's FIRST submit button, hidden, so
+  Enter tests and never saves; it reads a bon received, pasted text or a PDF
+  (read, nothing stored, its text written back into the text box) with the
+  motifs as TYPED, line by line with a tag per line - htmx answers in place,
+  without JavaScript the page is drawn again. « Enregistrer » does not re-read
+  the bons: « Relire les N bons de ce format » does. « Classer comme » on a
+  bon's line adds `^` + its first 60 characters, escaped with readable
+  spaces, to the type chosen, the whole field checked again first.
+- Types: one form per type posting to its own address, no formset. A type
+  counted in a reprise, a format with bons, cannot be deleted (PROTECT):
+  « désactivez-le plutôt ».
+- No `|safe`, no `mark_safe`, no inline script or `style=` in the app (a
+  strict CSP is planned; `tests/test_ui.py` greps for them): every sentence
+  the pure modules build is plain text.
+- **« Récupérer les bons » has no gather of its own**: the page posts to
+  `invoices:gather` - one `sources=bons-<pk>` per active format with a
+  sender, from the earliest of their starts, `retour=/consignes/`, and NO
+  end date (the gather ends on the day it runs: a tab kept open overnight
+  posted yesterday) - so every
+  rule of the gather holds (the espace's right to the mailbox, one gather
+  at a time, a thread bound to the espace), and `trigger_gather` comes back
+  through `common.local_return`. The page shows the running gather, or the
+  latest that fetched bons for ten minutes after it ended; in an espace
+  without the owner's mailbox it says `integrations.SLIPS` instead.
+
+**The gather step** (`invoices/tasks._gather_slips`, `returnables/mail.py`):
+after the mailbox's sources, each active format with a sender is searched
+(code `bons-<pk>`, « Bons de consignes — <format> »; imported inside the
+task, run when `source_codes` is None or names it, never for an empty set),
+contained like any source - its failure is its own line, the run stays
+« Terminé » - and every attachment returned is stored through the writer,
+even when a cancel was asked meanwhile, before the cancel is honoured. Its
+counts are bons: they stay out of `invoices_found` / `invoices_created`. A
+format's start (`mail.fetch_start`) is 3 days before its newest MAILED bon
+(a hand upload never moves it), else 90 days back, never more than 400. Only
+a gather of bons ALONE widens the job's range to it: beside invoices the
+bons' start is a log line (« recherche depuis le … ») and the range stays
+the invoices' - widened, a failed Achats gather offered 90 days again to
+every source, Metro included. A mail's other attachment is « pas un bon … —
+ignoré », a duplicate a log line, the latest reprise's comparison the
+source's NOTE - never an error, which counts as a failed source. A gather of
+bons only (`ScrapeJob.slips_only`) titles its columns « Bons trouvés /
+Nouveaux », and Achats never offers its period again (`workspace
+._invoice_gather`). Achats' « Récupérer » card offers each mail format as a
+source of its own, ticked, only where the mailbox may be used.
+
+**Achats' guard** (`receipts.route_consignes`, in `import_document` after
+the duplicate check and the e-invoice branch, before `document_text`): a PDF
+dropped among the invoices whose text exactly ONE active format's start
+motif recognises is stored as a bon (« Déposé à la main », the text read
+once and handed to `store_slip(text=…)`) and the import says « Bon de
+consignes : rangé dans Consignes (bon n° X) — ce n'est pas une facture. »
+(or « déjà reçu dans Consignes ») through `importing.RoutedToConsignesError`,
+a `DuplicateInvoiceError`: no Invoice. Several formats recognising it is
+refused the same way, naming them - filed as a purchase, it would be
+silently wrong money. Anything else (no format, a PDF over 5 MB or 5 pages,
+no text) is imported as before. The « Analyse IA » upload goes through it
+too, before `parse_and_import`. A folder import draws a routed bon « Rangé
+dans Consignes », and one several formats recognise « Erreur » (stored
+nowhere, said in the batch's log); naming the shop of a kept file that turns
+out to be a bon does the same. Without the guard, UBA's bon was recognised by its printed
+phone number and read as a ticket - the empties filed as purchases. The
+cost: while a format has a start motif (the seeded one does), every PDF
+imported on Achats is read once more by pdfplumber. Not guarded: a mailbox
+source with a reader of its own (`parse_and_import`) and Metro, which never
+go through `import_document` - the seeded UBA invoice source does not match
+a bon's sender or subject (pinned by a test).
+
+**« Données »** (`transfer/sections/consignes.py`, the tenth section, after
+« fournisseurs »): types and formats by their name as their forms compare
+it, a reprise by its random `reference`, a bon by its sha256; a bon's
+reading is copied, never compared nor read again at import; every motif
+imported passes the guard or its record is skipped (« motif refusé : … »),
+and so does every date (a reprise's and a delivery date within 01/01/2000 -
+today + 7, a mail's within today + 1, else « date hors limites »: a
+9999-12-31 read from an archive made every page a 500 once `timedelta` met
+it - the date arithmetic is also clamped, `comparison.shifted`); photos and
+PDFs under `consignes/`, deleted on commit. The details are under
+« Export, import and clear ».
+
+Tests: `returnables/tests/` - the pure modules, the models and seeds, the
+views read off the rendered page (`staff/tests/page_forms.py`, the photos
+and PDFs added as SimpleUploadedFile), two espaces (`test_espaces.py`), and
+a 375 × 667 phone in Chrome (`test_phone_browser.py`, logged in with
+`tests.runner.log_in_the_browser`). Every value in them is invented: the
+owner's real bons carry his account, his driver and his deliveries.
 
 ### UI conventions
 
@@ -4668,6 +5399,17 @@ typed as markup ran when its wedge was hovered. `tests/test_ui.py` greps
 charts.js for HTML-writing APIs, and `PieTooltipInBrowserTests` hovers such a
 name in Chrome.
 
+**Data for a page's script travels in `{{ value|json_script:"id" }}`**, the
+view handing the template the dict itself - never a `json.dumps` string
+printed `|safe`, never an island written by hand. `json.dumps` leaves « < »
+as it is: the inventory form printed every product and article name that
+way, and a name holding « </script> » - a line of a supplier's PDF or
+e-invoice - closed the island and ran as the page's own markup in the bar's
+session (security audit XSS-1, 29/09). `json_script` writes « < » as a
+\u escape that `JSON.parse` reads back unchanged. `tests/test_json_islands.py`
+plants such a name in every island and sweeps the templates and the views
+for the pattern.
+
 **The topbar is sticky, so the page leaves its height above what it scrolls
 to** (`html { scroll-padding-top: var(--topbar-room) }` in marginmate.css:
 6rem, 10rem under 860 px where the brand sits above the links, 11rem under
@@ -4681,8 +5423,15 @@ each starts). A new link in the navigation can make it wrap sooner:
 `invoices/tests/test_changes_to_see.py::TopbarRoomInBrowserTests` checks
 nine widths. « Personnel », the eighth link, took a folding phone's 280 px
 cover screen to five rows, past what 11rem leaves: the test gained 280 px
-(and failed there first) and the CSS its 13rem. A ninth link is measured
-again, width by width.
+(and failed there first) and the CSS its 13rem. « Consignes », the ninth
+(29/09), was measured again width by width in multi mode
+(`accounts/tests/test_topbar_browser.py`, 17 widths, three-digit badges, a
+long espace name, the superuser's « Admin » too): two rows above 1000 px
+(82 px, under 6rem's 96), three between 861 and 960 or so (124 px, under
+8rem), then 112 px from 860 px down, 141 from 465, 170 from 334 and 199 from
+300 - every width inside the room already there, so no rem changed. On /consignes/ itself
+the bar scrolls away under 600 px (`html:has(.consignes-page)`, room 0). A
+tenth link is measured again.
 
 **The badges are part of the measurement**, and that test's fixture carries
 them for exactly that reason. Adding « Marges » (20/09) took the links from
@@ -4746,5 +5495,7 @@ values and needs a human decision per pair.
 
 Real invoice PDFs stay out of git (IBANs, addresses, prices), by explicit
 choice. `.env` is never committed; `db.sqlite3*` is gitignored. So is
-`private/` (the signatures' keys and files). An employee's name, typical
+`private/` (single mode's signatures' keys and files). The espaces - every
+bar's database, files and keys - live outside the code folder (TENANTS_ROOT
+and the accounts database; `../data/` for the owner). An employee's name, typical
 week and leave are personal data: « Personnel »'s tests invent all three.

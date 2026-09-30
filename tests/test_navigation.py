@@ -27,8 +27,12 @@ LABELS = [
     # placé là, le lien ne déplace aucun de ceux qu'on utilise déjà.
     "Personnel",
     "Inventaires",
+    # Les vides rendus au livreur : ouverts sur le téléphone à chaque
+    # livraison. Après « Inventaires » (on y compte aussi), avant « Données »
+    # et « Admin », qui restent au bout : aucun lien déjà utilisé ne bouge.
+    "Consignes",
     "Données",
-    "Admin",
+    # « Admin » follows for a superuser only (accounts/tests/test_admin.py).
 ]
 
 
@@ -59,6 +63,11 @@ class NavigationTests(TestCase):
         stock_type = make_stock_type(name="Vodka")
         # An invented employee: the repository is public.
         person = Employee.objects.create(last_name="Dupont", first_name="Jeanne", tuesday_hours=7)
+        # An invented reprise and bon (returnables/tests/support.py).
+        from returnables.tests.support import make_pickup, make_slip, seeded_format
+
+        pickup = make_pickup()
+        slip = make_slip()
         pages = {
             "Produits &amp; charges": [
                 reverse("inventory:stock_list"),
@@ -91,6 +100,15 @@ class NavigationTests(TestCase):
                 reverse("staff:home"),
                 reverse("staff:employee", args=[person.pk]),
                 reverse("staff:month", args=[person.pk, "2026-06"]),
+            ],
+            "Consignes": [
+                reverse("returnables:home"),
+                reverse("returnables:pickup_detail", args=[pickup.pk]),
+                reverse("returnables:slip_detail", args=[slip.pk]),
+                reverse("returnables:format_list"),
+                reverse("returnables:format_create"),
+                reverse("returnables:format_edit", args=[seeded_format().pk]),
+                reverse("returnables:type_list"),
             ],
             "Données": [reverse("transfer:data_home"), reverse("transfer:data_import"), reverse("transfer:data_clear")],
         }

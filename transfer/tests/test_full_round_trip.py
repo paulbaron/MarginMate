@@ -1,13 +1,14 @@
 """Every section at once (§10.4): the owner's case, a whole database moved.
 
 Each section's own tests round-trip that section, the others standing in or
-left where they are. Here all nine are real and move together - export
+left where they are. Here all ten are real and move together - export
 everything, clear everything, import everything - so what crosses sections
 has to survive the trip too: an invoice line a stock take was priced from,
 a bank payment to a ticket known only by its file (the second of two
 byte-identical ones), a supplier's code named by six sections' records, and
-the purchase movements and the till's sales per recipe rebuilt from what
-came back.
+by « Consignes »' reprise and format of bon (UBA's), the photos of a
+reprise and the PDF of a bon byte for byte, and the purchase movements and
+the till's sales per recipe rebuilt from what came back.
 
 Every name, amount and file below is invented.
 """
@@ -17,10 +18,10 @@ from datetime import date, datetime
 from datetime import timezone as dt_timezone
 from decimal import Decimal
 
-from django.conf import settings
 from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
 
+from accounts import paths
 from bank.models import BankTransaction, CounterpartyAlias, IgnoreRule, InvoicePayment
 from inventory.models import (
     MovementKind,
@@ -32,6 +33,8 @@ from inventory.models import (
 )
 from inventory.services import update_product_conversion
 from invoices.models import ShopItemPrice, Supplier
+from returnables.models import Pickup, PickupPhoto, Slip
+from returnables.tests.support import CO2_LINE, KEG_LINE, make_pickup, make_slip
 from tests.factories import make_movement, make_stock_take, make_stock_take_line
 from transfer import registry, safety
 from transfer.archive import ArchiveReader
@@ -125,6 +128,21 @@ def build_everything() -> dict:
     make_line(date(2026, 8, 5), "URSSAF", "-450.00", kind=BankTransaction.Kind.DEBIT, settled=True, no_invoice=True)
     CounterpartyAlias.objects.create(supplier=leroy, name="LEROY ESS")
     make_rule("URSSAF", "Cotisations")
+
+    # Consignes: the seeded types and UBA format, a reprise with two photos,
+    # and the bon its driver sent - its lines and its PDF - each made at a
+    # moment of its own, which a round trip must put back.
+    pickup = make_pickup(
+        date=date(2026, 8, 12), counts={"Fûts": 14, "Bouteilles CO2": 1}, photos=2, note="Reprise d'essai"
+    )
+    Pickup.objects.filter(pk=pickup.pk).update(created_at=datetime(2026, 8, 12, 7, 55, 3, 125000, tzinfo=UTC))
+    for minute, photo in enumerate(pickup.photos.order_by("id")):
+        PickupPhoto.objects.filter(pk=photo.pk).update(
+            created_at=datetime(2026, 8, 12, 7, 56 + minute, tzinfo=UTC),
+            taken_at=datetime(2026, 8, 12, 7, 50 + minute, tzinfo=UTC),
+        )
+    slip = make_slip(lines=(KEG_LINE, CO2_LINE), number="4321", delivery_date=date(2026, 8, 12), references=["900321"])
+    Slip.objects.filter(pk=slip.pk).update(received_at=datetime(2026, 8, 12, 9, 30, 12, 250000, tzinfo=UTC))
 
     # Every product created on a day of its own: a round trip that forgot
     # to restore the moment would show the import's instead.
@@ -277,7 +295,7 @@ class WholeArchiveTests(MediaMixin, TestCase):
 
 
 def empty_backups():
-    shutil.rmtree(settings.DATA_BACKUP_DIR, ignore_errors=True)
+    shutil.rmtree(paths.backups_dir(), ignore_errors=True)
 
 
 class ClearFromThePageTests(MediaMixin, TransactionTestCase):

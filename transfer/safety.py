@@ -4,14 +4,21 @@ Always a copy of the SQLite database - 10 MB, under a second, and a
 « Fusionner » writes too (it adds products and rebuilds movements). Before a
 « Remplacer » or an « Effacer », also an importable archive of the sections
 that change (`sections_at_risk`), so the page itself can undo it. Both go
-to `backups/` beside the database, and the order is fixed: database,
-archive, then the transaction - a backup that fails changes nothing.
+to the espace's backups folder (`accounts.paths.backups_dir`:
+`<espace>/backups/`), and the order is fixed: database, archive, then the transaction - a backup that
+fails changes nothing.
+
+**One folder per espace.** With one folder for the whole server, every
+bar's Importer tab listed every bar's safety copies, and bar B could stage
+and import bar A's archive - A's invoices, bank and prices. Everything here
+reads the folder at call time, bound to the espace asking.
 
 Backups are never deleted by the app: deleting data is the owner's act.
 """
 
 from __future__ import annotations
 
+import logging
 import re
 import shutil
 import sqlite3
@@ -20,12 +27,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
-from django.conf import settings
 from django.db import connection
 from django.utils import timezone
 
+from accounts import paths
 from transfer import registry
 from transfer.sections.base import Strategy
+
+logger = logging.getLogger(__name__)
 
 #: « 2026-09-19_143012_avant-import.sqlite3 », « …_2.zip » on a collision.
 NAME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}_\d{6})_([a-z-]+)(?:_\d+)?\.(zip|sqlite3)$")
@@ -33,19 +42,41 @@ LABELS = {"import": "avant-import", "effacement": "avant-effacement"}
 REASONS = {"import": "sauvegarde avant import", "effacement": "sauvegarde avant effacement"}
 #: Room asked for on top of what a backup is expected to take.
 MARGIN = 1.2
+#: What the page says of an error it cannot show. The text of an
+#: OSError carries its file's absolute path - the server's layout, the
+#: espaces' folder names - and a hosted bar can do nothing with it; the
+#: detail goes to the server's log.
+SERVER_ERROR = "erreur sur le serveur, à signaler à l'administrateur"
 
 
 class SafetyError(Exception):
     """French, shown as is: nothing was imported or cleared."""
 
 
+def error_text(exc: BaseException, *, logged: bool = False) -> str:
+    """What a page may say of `exc`: this app's own French refusals only (an
+    archive refused, a job running, a backup refused); anything else is
+    `SERVER_ERROR`, and logged with its traceback unless the caller already
+    did (`logged`)."""
+    from transfer.archive import ArchiveError
+    from transfer.runner import Busy
+
+    if isinstance(exc, (ArchiveError, Busy, SafetyError)):
+        return str(exc)
+    if not logged:
+        logger.error("« Données » : une erreur est montrée comme « %s »", SERVER_ERROR, exc_info=exc)
+    return SERVER_ERROR
+
+
 def backup_path() -> Path:
-    """Where backups go, as shown on the page (not created by a GET)."""
-    return Path(settings.DATA_BACKUP_DIR)
+    """Where backups go (accounts.paths.backups_dir, read at call time): the
+    bound espace's own backups/. The page never shows it - the server's
+    layout is nobody's business."""
+    return paths.backups_dir()
 
 
 def backup_dir() -> Path:
-    """settings.DATA_BACKUP_DIR, created on demand."""
+    """backup_path(), created on demand."""
     path = backup_path()
     path.mkdir(parents=True, exist_ok=True)
     return path
@@ -56,13 +87,22 @@ def _stamp() -> str:
 
 
 def _free_name(stem: str, suffix: str) -> Path:
+    """A name nobody has, TAKEN: the file is created empty here (O_EXCL), and
+    the caller writes over it - or removes it when it fails. Checked with
+    exists() and created later, two confirms in the same second (two tabs)
+    were handed one path, and the second ZipFile truncated the first
+    backup."""
     folder = backup_dir()
-    candidate = folder / f"{stem}{suffix}"
-    number = 2
-    while candidate.exists():
-        candidate = folder / f"{stem}_{number}{suffix}"
-        number += 1
-    return candidate
+    number = 1
+    while True:
+        candidate = folder / (f"{stem}{suffix}" if number == 1 else f"{stem}_{number}{suffix}")
+        try:
+            with open(candidate, "xb"):
+                pass
+        except FileExistsError:
+            number += 1
+            continue
+        return candidate
 
 
 def backup_database(label: str, stamp: str | None = None) -> Path:
@@ -72,16 +112,20 @@ def backup_database(label: str, stamp: str | None = None) -> Path:
 
     Django's own connection, not a second one on the file: it sees what this
     process committed, WAL included, and the backup API copies a consistent
-    database even while another connection writes."""
+    database even while another connection writes. In multi mode that
+    connection is the bound espace's: the copy is of its file, into its
+    folder."""
     if connection.in_atomic_block:
         raise RuntimeError("a database backup inside a transaction would copy uncommitted rows")
-    path = _free_name(f"{stamp or _stamp()}_{label}", ".sqlite3")
     connection.ensure_connection()
-    target = sqlite3.connect(str(path))
+    path = _free_name(f"{stamp or _stamp()}_{label}", ".sqlite3")
+    target = None
     try:
+        target = sqlite3.connect(str(path))
         connection.connection.backup(target)
     except BaseException:
-        target.close()
+        if target is not None:
+            target.close()
         path.unlink(missing_ok=True)
         raise
     target.close()
@@ -105,7 +149,11 @@ def safety_export(keys: set[str], label: str, stamp: str | None = None, reason: 
 
 
 def database_size() -> int:
-    name = str(settings.DATABASES["default"]["NAME"])
+    """The size of the database this thread works on: its own connection
+    names the file (the bound espace's in multi mode, where
+    settings.DATABASES names the empty in-memory default). 0 for a database
+    that is no file."""
+    name = str(connection.settings_dict["NAME"])
     if name == ":memory:" or name.startswith("file:"):
         return 0
     try:
@@ -165,26 +213,31 @@ def sections_at_risk(report, *, strategies=None, cleared=()) -> set[str]:
 
 def before(kind: Literal["import", "effacement"], affected: set[str]) -> dict[str, str]:
     """database backup always; section export of `affected` (§6.5) if any.
-    Returns {"database": path, "archive": path or ""} for the report and the message."""
+    Returns {"database": path, "archive": path or ""} for the report and the message.
+
+    The disk checked is the backups folder's: in multi mode every espace
+    shares the server's volume, and nothing yet caps what one espace keeps
+    (the backups are never deleted by the app) - a quota per espace is a
+    later step, noted with the tenancy."""
     label = LABELS[kind]
     stamp = _stamp()
     needed = MARGIN * (database_size() + (estimated_bytes(affected) if affected else 0))
     try:
         free = shutil.disk_usage(backup_dir()).free
     except OSError as exc:
-        raise SafetyError(f"Sauvegarde impossible ({exc}) : rien n'a été changé.") from exc
+        raise SafetyError(f"Sauvegarde impossible ({error_text(exc)}) : rien n'a été changé.") from exc
     if free < needed:
         raise SafetyError("Sauvegarde impossible (pas assez de place sur le disque) : rien n'a été changé.")
     try:
         database = backup_database(label, stamp)
     except Exception as exc:  # said, and nothing runs
-        raise SafetyError(f"Sauvegarde impossible ({exc}) : rien n'a été changé.") from exc
+        raise SafetyError(f"Sauvegarde impossible ({error_text(exc)}) : rien n'a été changé.") from exc
     archive = None
     if affected:
         try:
             archive = safety_export(set(affected), label, stamp, reason=REASONS[kind])
         except Exception as exc:
-            raise SafetyError(f"Sauvegarde impossible ({exc}) : rien n'a été changé.") from exc
+            raise SafetyError(f"Sauvegarde impossible ({error_text(exc)}) : rien n'a été changé.") from exc
     return {"database": str(database), "archive": str(archive) if archive else ""}
 
 
@@ -203,7 +256,9 @@ class Backup:
 
 def list_backups() -> list[Backup]:
     """newest first; only names matching the stamp pattern - whatever else
-    sits in the folder is someone else's."""
+    sits in the folder is someone else's. The bound espace's folder only:
+    another bar's safety copies are never listed, so never offered, staged
+    or imported here (find_backup reads this listing)."""
     folder = backup_path()
     if not folder.is_dir():
         return []

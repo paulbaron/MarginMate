@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Formats de bons - MarginMate{% endblock %}
+{% block content %}
+<div class="consignes-page">
+    <p class="breadcrumb"><a href="{% url 'returnables:home' %}">← Consignes</a></p>
+    <div class="page-header">
+        <div>
+            <h1>Formats de bons</h1>
+            <p class="page-subtitle">
+                Comment le bon de chaque fournisseur est lu : des motifs qui trouvent la partie des consignes, ses
+                lignes, sa date et son numéro - et, s'il arrive par mail, qui l'envoie.
+            </p>
+        </div>
+        <div class="actions">
+            <a class="btn" href="{% url 'returnables:format_create' %}">Nouveau format</a>
+        </div>
+    </div>
+
+    {% if rows %}
+        <div class="table-wrap">
+            <table data-table data-table-label="formats de bons">
+                <thead>
+                    <tr>
+                        <th>Nom</th>
+                        <th>Fournisseur</th>
+                        <th>Récupération</th>
+                        <th class="num">Bons</th>
+                        <th>État</th>
+                        <th data-no-sort></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for fmt, problem in rows %}
+                        <tr data-row-href="{% url 'returnables:format_edit' fmt.pk %}"{% if not fmt.is_active %} class="is-inactive"{% endif %}>
+                            <td><a href="{% url 'returnables:format_edit' fmt.pk %}"><strong>{{ fmt.name }}</strong></a></td>
+                            <td>{{ fmt.supplier.name }}</td>
+                            <td>{% if fmt.sender_pattern %}par mail : <code>{{ fmt.sender_pattern }}</code>{% else %}dépôt à la main seulement{% endif %}</td>
+                            <td class="num">{{ fmt.slip_count }}</td>
+                            <td>
+                                {% if problem %}
+                                    <span class="status-pill status-ERROR" title="{{ problem }}">motif invalide</span>
+                                {% elif fmt.is_active %}
+                                    <span class="status-pill status-linked">actif</span>
+                                {% else %}
+                                    <span class="status-pill status-ignored">inactif</span>
+                                {% endif %}
+                            </td>
+                            <td><a href="{% url 'returnables:format_create' %}?depuis={{ fmt.pk }}">Dupliquer</a></td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% for fmt, problem in rows %}{% if problem %}
+            <p class="message message-error">Format « {{ fmt.name }} » : motif invalide : {{ problem }} — <a href="{% url 'returnables:format_edit' fmt.pk %}">corrigez-le</a></p>
+        {% endif %}{% endfor %}
+    {% else %}
+        <div class="empty-state">
+            <p>
+                Aucun format de bon : sans lui, aucun bon ne peut être lu. <strong>Créez-en un</strong> et essayez-le
+                sur le PDF d'un bon avec « Tester sur un PDF ».
+            </p>
+            <a class="btn" href="{% url 'returnables:format_create' %}">Nouveau format</a>
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

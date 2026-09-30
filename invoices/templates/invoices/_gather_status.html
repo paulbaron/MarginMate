@@ -39,12 +39,17 @@
     {% endif %}
 
     {% if job.progress %}
-        <table style="margin-top:0.75rem;">
+        <table class="job-status-spaced">
             <thead>
                 <tr>
                     <th>Source</th>
-                    <th class="num">Trouvées</th>
-                    {% if job.kind != "TEST" %}<th class="num">Importées</th>{% endif %}
+                    {% comment %}
+                    A gather of bons only (the Consignes page's) counts bons,
+                    not factures: « Trouvées / Importées » are feminine and
+                    mean invoices (ScrapeJob.slips_only).
+                    {% endcomment %}
+                    <th class="num">{% if job.slips_only %}Bons trouvés{% else %}Trouvées{% endif %}</th>
+                    {% if job.kind != "TEST" %}<th class="num">{% if job.slips_only %}Nouveaux{% else %}Importées{% endif %}</th>{% endif %}
                 </tr>
             </thead>
             <tbody>
@@ -64,7 +69,7 @@
         A website's test: what each invoice link found is, and what a gather
         would do with it (scrapers/website.list_website_invoices).
         {% endcomment %}
-        <table style="margin-top:0.75rem;">
+        <table class="job-status-spaced">
             <thead>
                 <tr><th>Ligne de la page</th><th>Date lue</th><th>Lien</th><th>Récupération</th></tr>
             </thead>
@@ -80,7 +85,7 @@
             </tbody>
         </table>
     {% elif job.test_matches %}
-        <table style="margin-top:0.75rem;">
+        <table class="job-status-spaced">
             <thead>
                 <tr>
                     <th>Expéditeur</th>
@@ -101,7 +106,7 @@
             </tbody>
         </table>
     {% elif job.kind == "TEST" and job.status == "SUCCESS" %}
-        <p class="muted" style="margin-top:0.75rem;">Aucun email ne correspond à ces critères sur cette période.</p>
+        <p class="muted job-status-spaced">Aucun email ne correspond à ces critères sur cette période.</p>
     {% endif %}
 
     {% include "_job_console.html" with log=job.log running=job.is_active last_line=job.last_log_line log_lines=job.log_lines console_id="gather-log" %}

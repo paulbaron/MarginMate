@@ -19,12 +19,13 @@ from django.contrib.messages import get_messages
 from django.contrib.staticfiles.testing import StaticLiveServerTestCase
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.http import FileResponse
-from django.test import Client, SimpleTestCase, TestCase, tag
+from django.test import SimpleTestCase, TestCase, tag
 from django.urls import reverse
 from django.utils import timezone
 
 from inventory.models import StockType
 from invoices.models import ScrapeJob, Supplier
+from tests.runner import log_in_the_browser
 from tests.test_views_smoke import assertNoUnrenderedTemplateSyntax
 from transfer import runner, safety, staging, views
 from transfer.archive import ArchiveReader
@@ -344,7 +345,7 @@ class ImportTests(FakeSectionsMixin, TestCase):
         self.assertEqual(
             said(response),
             [("Import terminé. Sauvegardes faites avant : 2026-09-19_143012_avant-effacement.sqlite3 et "
-              f"2026-09-19_143012_avant-effacement.zip (dans {safety.backup_path()}).")],
+              f"2026-09-19_143012_avant-effacement.zip (dans {views.BACKUPS_PLACE}).")],
         )
         report = self.client.get(reverse("transfer:data_import") + "?rapport=1")
         self.assertContains(report, "Import terminé")
@@ -630,11 +631,11 @@ class BackupImportTests(FakeSectionsMixin, TestCase):
         response = self.client.get(reverse("transfer:data_import"))
         self.assertContains(response, self.name)
         self.assertContains(response, "19/09/2026 à 14:30")
-        self.assertContains(response, "remplacez db.sqlite3 par ce fichier")
-        # In WAL mode a db.sqlite3-wal left by a server stopped hard is read
-        # back into whatever file is named db.sqlite3: the copy put back came
-        # out holding the newer rows (scratch probe, 19/09).
-        self.assertContains(response, "supprimez db.sqlite3-wal et db.sqlite3-shm s'ils sont là")
+        # Putting a database copy back is done with the server stopped: what
+        # only the server's operator can do is asked of him, and no path of
+        # the server is shown.
+        self.assertContains(response, "faites-la faire par l'administrateur, en lui donnant le nom du fichier")
+        self.assertNotContains(response, str(safety.backup_path()))
         self.assertContains(response, 'name="nom" value="2026-09-19_143012_avant-effacement.zip"')
         self.assertNotContains(response, 'name="nom" value="2026-09-19_143012_avant-effacement.sqlite3"')
 
@@ -742,7 +743,7 @@ class ClearTests(FakeSectionsMixin, TestCase):
     def test_an_expired_preview_is_said_as_such(self):
         self.preview()
         session = self.client.session
-        session[views.SESSION_CLEAR]["at"] = (timezone.now() - timedelta(minutes=31)).isoformat()
+        session[views.session_key(views.SESSION_CLEAR)]["at"] = (timezone.now() - timedelta(minutes=31)).isoformat()
         session.save()
         response, before = self.confirm("EFFACER")
         before.assert_not_called()
@@ -945,6 +946,11 @@ class PickerInBrowserTests(FakeSectionsMixin, StaticLiveServerTestCase):
             driver.quit()
         super().tearDownClass()
 
+    def setUp(self):
+        super().setUp()
+        # Every page wants a login: the test espace's owner.
+        log_in_the_browser(self.driver, self.live_server_url)
+
     def ticked(self) -> set[str]:
         return set(self.driver.execute_script(
             "return Array.from(document.querySelectorAll('input[name=sections]:checked')).map(b => b.value);"
@@ -972,9 +978,11 @@ class PickerInBrowserTests(FakeSectionsMixin, StaticLiveServerTestCase):
         self.assertEqual(forced, "true")
 
     def test_tout_decocher_after_tout_cocher_on_export(self):
+        from transfer.registry import INFO
+
         self.driver.get(self.live_server_url + reverse("transfer:data_home"))
         self.click("[data-tick-all]")
-        self.assertEqual(len(self.ticked()), 9)
+        self.assertEqual(len(self.ticked()), len(INFO))
         self.click("[data-untick-all]")
         self.assertEqual(self.ticked(), set())
 
@@ -982,7 +990,9 @@ class PickerInBrowserTests(FakeSectionsMixin, StaticLiveServerTestCase):
 class CsrfTests(FakeSectionsMixin, TestCase):
     def test_every_post_needs_its_token(self):
         stage = stage_of({"fournisseurs"})
-        client = Client(enforce_csrf_checks=True)
+        # Logged in as the espace's owner (tests/runner.py): the token is
+        # all that is missing.
+        client = self.client_class(enforce_csrf_checks=True)
         for url in (
             reverse("transfer:data_export"),
             reverse("transfer:data_import"),

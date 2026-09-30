@@ -3,6 +3,20 @@
 {% block content %}
     <h1>{% if invoice_type %}Modifier la source « {{ invoice_type.name }} »{% else %}Nouvelle source de factures{% endif %}</h1>
 
+    {% if sources_refused %}
+    {% comment %}
+    Both channels are the server's own accounts - the owner's mailbox, the
+    .env credentials a portal names (invoices/integrations.py): an espace
+    that may not use them gets the sentence, no form, no « Tester » - and the
+    view refuses a post all the same. No variable, no file named here.
+    {% endcomment %}
+    <div class="card">
+        <div class="message">{{ sources_refused }}</div>
+        <p>
+            <a class="btn btn-secondary" href="{% if retour %}{{ retour }}{% else %}{% url 'invoices:invoice_type_list' %}{% endif %}">Retour</a>
+        </p>
+    </div>
+    {% else %}
     <div class="card">
         <form method="post">
             {% csrf_token %}
@@ -85,6 +99,7 @@
             </p>
         </form>
     </div>
+    {% endif %}
 
     {% if test_job %}
         {% include "invoices/_gather_status.html" with job=test_job %}

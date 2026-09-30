@@ -36,14 +36,13 @@ cookie. « Vérifier » answers the same way, with its report. So does a
 sentence beside the pad, the pad open, the drawing painted back when it was
 one. Every other action redirects to the month's section with a message.
 
-The owner's pages are as open as the rest of the application today - no
-login exists yet - and the section says once that the application must not
-go online before it does (`ONLINE_WARNING`). The employee's page is
+The owner's pages are behind the login (accounts/). The employee's page is
 staff/public_views.py.
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import date
 from urllib.parse import urlencode
@@ -56,18 +55,17 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 
+from accounts.tenancy import integrations_allowed
+from invoices.integrations import TO_CONFIGURE
+
 from . import pdf, private_files, signature_deletion as deletion, signature_mail, signature_requests as workflow, signing
 from .models import Employee, Establishment, SignatureEvent, SignatureRequest, Timesheet
 from .timesheet import month_label, month_sheet, month_title
 
+logger = logging.getLogger(__name__)
+
 Status = SignatureRequest.Status
 
-#: Said once, in the section: no login yet, so not online yet.
-ONLINE_WARNING = (
-    "L'application ne doit pas être mise en ligne avant l'étape de connexion (les comptes) : seule la page de "
-    "signature que le lien ouvre, protégée par ce lien et par un code à usage unique, est faite pour rester "
-    "accessible sans compte."
-)
 #: The box the owner ticks when the link cannot go by e-mail.
 HAND_OVER = "transmettre"
 SEND_WITHOUT_MAIL = (
@@ -90,6 +88,13 @@ RETENTION_NOTE = (
     "Les signatures sont conservées {years} ans après la fin du mois, comme la page de signature l'annonce ; les "
     "effacer ensuite est à faire : manage.py staff_purge_signatures (--dry-run d'abord), rien ne le lance "
     "automatiquement."
+)
+#: RETENTION_NOTE in an espace that runs no command on the server (a hosted
+#: bar, accounts.tenancy.integrations_allowed): the words every other page
+#: uses for what it cannot do yet (invoices/integrations.py).
+RETENTION_NOTE_TO_CONFIGURE = (
+    "Les signatures sont conservées {years} ans après la fin du mois, comme la page de signature l'annonce ; leur "
+    f"effacement ensuite est {TO_CONFIGURE}."
 )
 
 #: A request's state as a pill: the colours the rest of the application gives them.
@@ -348,7 +353,6 @@ class SignaturePanel:
     current: RequestBlock | None       # the request holding the month
     earlier: list                      # the other versions, newest first
     key_warning: str
-    online_warning: str = ONLINE_WARNING
     adobe: str = signing.ADOBE_UNKNOWN_VALIDITY
 
     @property
@@ -400,10 +404,12 @@ class SignaturePanel:
     def retention_note(self) -> str:
         """Once anything was sent: the employee's page promises the deletion
         after the retention years, and nothing runs it by itself - the owner
-        is the one told it is his to run."""
+        is the one told it is his to run. A hosted bar runs no command on
+        the server: it is told « à configurer »."""
         if not (self.current or self.earlier):
             return ""
-        return RETENTION_NOTE.format(years=getattr(settings, "STAFF_SIGNATURE_RETENTION_YEARS", 5))
+        note = RETENTION_NOTE if integrations_allowed() else RETENTION_NOTE_TO_CONFIGURE
+        return note.format(years=getattr(settings, "STAFF_SIGNATURE_RETENTION_YEARS", 5))
 
 
 def _block(request: SignatureRequest, person: Employee, month: date, shown: dict) -> RequestBlock:
@@ -470,6 +476,22 @@ def _render(request, person: Employee, month: date, **shown):
 # -- The actions ------------------------------------------------------------------------------------------------
 
 
+#: A signed file the mail was to carry is missing from the private folder.
+FINAL_COPY_MISSING = (
+    "l'exemplaire signé est introuvable dans le dossier privé de l'espace : restaurez-le depuis la sauvegarde."
+)
+
+
+def _mail_error(error) -> str:
+    """Why a mail could not carry its file: the app's French sentence, or,
+    for a file gone from disk, one of its own - a FileNotFoundError's words
+    are the file's full path on the server (security audit LB-3)."""
+    if isinstance(error, FileNotFoundError):
+        logger.warning("Signature : fichier introuvable pour l'e-mail (%s)", error)
+        return FINAL_COPY_MISSING
+    return str(error)
+
+
 def _link_shown(request, person: Employee, sign_request: SignatureRequest, token: str) -> dict:
     """The link, absolute, mailed when it can be - and what to say under it.
     Mailed as what it is for: « à signer » while he has not signed; with his
@@ -490,7 +512,7 @@ def _link_shown(request, person: Employee, sign_request: SignatureRequest, token
         else:
             outcome = signature_mail.send_link(sign_request, link, **client(request))
     except (signing.SigningError, private_files.AlteredFileError, FileNotFoundError) as error:
-        return {"new_link": link, "link_note": f"L'e-mail n'est pas parti : {error}", "link_level": "warning"}
+        return {"new_link": link, "link_note": f"L'e-mail n'est pas parti : {_mail_error(error)}", "link_level": "warning"}
     if outcome.sent:
         note = f"{outcome.message} Vous pouvez aussi le copier pour l'envoyer autrement (SMS, messagerie)."
     else:
@@ -613,7 +635,7 @@ def signature_countersign(request, pk, month, version):
         try:
             outcome = signature_mail.send_final_copy(sign_request, **client(request))
         except (signing.SigningError, private_files.AlteredFileError, FileNotFoundError) as error:
-            messages.warning(request, f"Son exemplaire final n'a pas été envoyé : {error}")
+            messages.warning(request, f"Son exemplaire final n'a pas été envoyé : {_mail_error(error)}")
         else:
             if outcome.sent:
                 messages.success(request, f"Son exemplaire final est parti par e-mail à {person.email.strip()}.")
@@ -716,7 +738,7 @@ def signature_file(request, pk, month, version, file):
         messages.error(
             request,
             f"Le fichier {spec.name} de la version {sign_request.version} est introuvable dans le dossier privé "
-            "(STAFF_PRIVATE_DIR) : restaurez-le depuis la sauvegarde.",
+            "de l'espace : restaurez-le depuis la sauvegarde.",
         )
         return _back(person, month)
     snapshot = sign_request.month_snapshot or {}

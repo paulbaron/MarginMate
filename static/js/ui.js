@@ -18,7 +18,10 @@
  *                   the annoyance. Opt in with `data-persist-durable`.
  *
  * Keys are scoped by pathname, so two pages can both have a "search" without
- * one clobbering the other.
+ * one clobbering the other - and by espace first (<body data-tenant>, see
+ * base.html): storage belongs to the origin, and the same address, or a box
+ * named after a pk ("type-3"), is another bar's too. With no espace (a page
+ * no espace is bound to) the key carries none.
  */
 (function () {
     "use strict";
@@ -27,8 +30,13 @@
         return element.hasAttribute("data-persist-durable") ? localStorage : sessionStorage;
     }
 
+    function espaceScope() {
+        var espace = document.body ? document.body.getAttribute("data-tenant") : "";
+        return espace ? "espace-" + espace + ":" : "";
+    }
+
     function keyFor(element) {
-        return "mm:" + location.pathname + ":" + element.getAttribute("data-persist");
+        return "mm:" + espaceScope() + location.pathname + ":" + element.getAttribute("data-persist");
     }
 
     /** Storage can throw outright in private mode, and a remembered filter is
@@ -452,6 +460,51 @@
         if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
         if (event.target.closest("a, button, input, select, textarea, label, summary, form")) return;
         window.location.href = row.getAttribute("data-row-href");
+    });
+})();
+
+/* « Se déconnecter » (base.html's form.topbar-logout, and the « indisponible »
+   503 page's, accounts/unavailable.html): the espace's DRAFTS
+   leave with the session (security audit LOAD-2) - an unsaved count's
+   articles and quantities, a reprise's counts and note, readable otherwise
+   by whoever opened the public login page next on that device. Nothing
+   else does: the gather's sources left unticked (Metro, a portal asking for
+   a code at every run), the folds, a table's sort are the owner's choices,
+   and a logout that emptied the whole storage (Clear-Site-Data, gone)
+   ticked Metro again with nothing on screen saying so (review of 29/09,
+   LOGOUT-PREFS). A new draft kept in the browser is added to DRAFTS:
+   accounts/tests/test_sessions.py lists every « marginmate: » key a page
+   builds and fails on one nobody classified. This espace's drafts only -
+   its scope (<body data-tenant>), and the old id of a session from before
+   29/09 (data-tenant-legacy, espace_storage_legacy.js): another bar's count
+   on a shared device is that bar's. */
+(function () {
+    var DRAFTS = ["stock-take-draft:", "consignes:brouillon"];
+    function prefixes() {
+        var found = [];
+        if (!document.body) return found;
+        ["data-tenant", "data-tenant-legacy"].forEach(function (attribute) {
+            var value = document.body.getAttribute(attribute);
+            if (!value) return;
+            DRAFTS.forEach(function (draft) { found.push("marginmate:espace-" + value + ":" + draft); });
+        });
+        return found;
+    }
+    function forgetIn(area, starts) {
+        var mine = [];
+        for (var index = 0; index < area.length; index++) {
+            var name = area.key(index) || "";
+            if (starts.some(function (start) { return name.indexOf(start) === 0; })) mine.push(name);
+        }
+        mine.forEach(function (name) { area.removeItem(name); });
+    }
+    document.addEventListener("submit", function (event) {
+        if (event.defaultPrevented || !event.target.matches("form.topbar-logout")) return;
+        var starts = prefixes();
+        if (!starts.length) return;
+        // Storage can throw outright (private mode): nothing kept to forget.
+        try { forgetIn(window.localStorage, starts); } catch (error) { /* blocked */ }
+        try { forgetIn(window.sessionStorage, starts); } catch (error) { /* blocked */ }
     });
 })();
 

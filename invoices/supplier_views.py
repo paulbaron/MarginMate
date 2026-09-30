@@ -20,7 +20,9 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
 
-from . import supplier_changes
+from accounts.tenancy import integrations_allowed
+
+from . import integrations, supplier_changes
 from .models import Invoice, InvoiceType, Supplier, SupplierChange
 from .parsers import LLM_PARSER_KEY, ticket_parser_for
 
@@ -63,7 +65,7 @@ def supplier_list(request):
 def supplier_detail(request, pk):
     from .forms import CHANNELS
     from .receipts import filing_rules, has_own_reader, identifier_report, supplier_notices
-    from .workspace import OWN_MODULE
+    from .workspace import own_module_suppliers
 
     supplier, away = _supplier(request, pk)
     if away is not None:
@@ -94,8 +96,13 @@ def supplier_detail(request, pk):
             "first_date": span["first"],
             "last_date": span["last"],
             "invoice_types": invoice_types,
-            # Metro: fetched by the gather's own module, with no source.
-            "own_module": Supplier.objects.filter(OWN_MODULE, pk=supplier.pk).exists(),
+            # Metro: fetched by the gather's own module, with no source - only
+            # where the server's Metro account may be used (integrations.py).
+            "own_module": own_module_suppliers().filter(pk=supplier.pk).exists(),
+            # Both channels of a source are the server's own accounts: where
+            # they are not this espace's, said here as on the Sources tab,
+            # and no « + Nouvelle source » leading to a form that only says so.
+            "sources_refused": None if integrations_allowed() else integrations.SOURCES,
             "delete_refused": delete_refused(supplier),
             "changes": changes,
             "fiche": fiche_url(supplier),
@@ -196,7 +203,30 @@ def delete_refused(supplier) -> str:
     types = InvoiceType.objects.filter(supplier=supplier).count()
     if types:
         return f"{types} source{'s' if types > 1 else ''} {'récupèrent' if types > 1 else 'récupère'} pour lui"
-    return ""
+    return consignes_refusal(supplier)
+
+
+def consignes_refusal(supplier) -> str:
+    """What « Consignes » holds of `supplier` - « 1 format de bon de
+    consignes et 3 reprises de consignes sont à son nom » - or "". Both hold
+    it with PROTECT: without this, the page offered « Supprimer… » and the
+    delete then failed on « un de ses produits sert encore », which was
+    false. « Données » says the same words (transfer/sections/suppliers.py
+    `_holders`). Imported here, not at the top: « Consignes » reads the
+    suppliers, not the other way round."""
+    from returnables.models import Pickup, SlipFormat
+
+    formats = SlipFormat.objects.filter(supplier=supplier).count()
+    pickups = Pickup.objects.filter(supplier=supplier).count()
+    parts = []
+    if formats:
+        parts.append(f"{formats} format{'s' if formats > 1 else ''} de bon de consignes")
+    if pickups:
+        parts.append(f"{pickups} reprise{'s' if pickups > 1 else ''} de consignes")
+    if not parts:
+        return ""
+    several = len(parts) > 1 or formats > 1 or pickups > 1
+    return f"{' et '.join(parts)} {'sont' if several else 'est'} à son nom"
 
 
 def supplier_create(request):

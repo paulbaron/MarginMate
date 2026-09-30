@@ -1,0 +1,20 @@
+{% extends "accounts/page.html" %}
+{% comment %}
+La connexion (accounts.pages.LoginPage). Contexte : `form` (LoginForm), `next` (déjà vérifié : une
+adresse de ce site, ou vide), `refused` (trop d'échecs). Le lien vers l'inscription est toujours là.
+{% endcomment %}
+{% block title %}Connexion - MarginMate{% endblock %}
+{% block content %}
+    <section class="public-card account-card">
+        <h1>Connexion</h1>
+        {% if refused %}<p class="message message-error">{{ refused }}</p>{% endif %}
+        <form method="post" action="{% url 'accounts:login' %}" class="public-form">
+            {% csrf_token %}
+            {% include "_form_fields.html" %}
+            {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+            <button type="submit" class="btn public-submit">Se connecter</button>
+        </form>
+        <p class="muted small">Pas encore de compte ? L'inscription se fait avec un code d'invitation :
+            <a href="{% url 'accounts:signup' %}">créer votre espace</a>.</p>
+    </section>
+{% endblock %}

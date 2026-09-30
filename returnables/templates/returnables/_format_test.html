@@ -1,0 +1,64 @@
+{% comment %}
+« Tester »'s answer (views.TestResult `result`): the text line by line with
+what the UNSAVED motifs made of each line (reading.trace), then the checks
+and what was read. htmx puts it in #resultat-test and, out of band, the
+sources with the text tested (`oob`); without JavaScript the same post
+redraws the whole page with it.
+{% endcomment %}
+{% if oob %}{% include "returnables/_tester_sources.html" %}{% endif %}
+{% if result.problem %}
+    <p class="message message-error">{{ result.problem }}</p>
+{% elif result.trace %}
+    {% with reading=result.trace.reading %}
+        <p class="muted">Testé sur {{ result.source }}, avec les motifs de la page - rien n'est enregistré.</p>
+        {% if reading.error %}
+            <p class="message message-error">Lecture impossible : {{ reading.error }}</p>
+        {% endif %}
+        <ul class="check-list test-checks">
+            {% for check in reading.checks %}
+                <li class="check {% if check.passed %}check-pass{% else %}check-fail{% endif %}">
+                    <span class="check-mark">{% if check.passed %}✓{% else %}✕{% endif %}</span>
+                    <span class="check-label">{{ check.label }}</span>
+                    {% if check.detail %}<span class="check-detail">{{ check.detail }}</span>{% endif %}
+                </li>
+            {% endfor %}
+        </ul>
+        <dl class="slip-facts">
+            <dt>Livraison</dt><dd>{% if reading.delivery_date %}{{ reading.delivery_date|date:"d/m/Y" }}{% else %}non lue{% endif %}</dd>
+            <dt>Imprimé le</dt><dd>{% if reading.printed_at %}{{ reading.printed_at|date:"d/m/Y à H:i" }}{% else %}—{% endif %}</dd>
+            <dt>Numéro</dt><dd>{{ reading.number|default:"—" }}</dd>
+            <dt>Références</dt><dd>{% for reference in reading.references %}{{ reference }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}</dd>
+            <dt>Annule et remplace</dt><dd>{% if reading.replaces %}oui{% else %}non{% endif %}</dd>
+            <dt>Total imprimé</dt><dd>{% if reading.printed_total is not None %}{{ reading.printed_total|floatformat:2 }} €{% else %}—{% endif %}</dd>
+            <dt>Remarques</dt><dd>{{ reading.remarks|default:"—" }}</dd>
+        </dl>
+        {% if reading.lines %}
+            <div class="table-wrap">
+                <table class="test-lines">
+                    <thead><tr><th>Désignation</th><th class="num">Quantité</th><th class="num">Prix</th><th class="num">Montant</th></tr></thead>
+                    <tbody>
+                        {% for line in reading.lines %}
+                            <tr>
+                                <td>{{ line.designation }}</td>
+                                <td class="num">{{ line.quantity }}</td>
+                                <td class="num">{% if line.unit_amount is not None %}{{ line.unit_amount|floatformat:2 }} €{% else %}—{% endif %}</td>
+                                <td class="num">{% if line.amount is not None %}{{ line.amount|floatformat:2 }} €{% else %}—{% endif %}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% endif %}
+        <h3>Le texte, ligne par ligne</h3>
+        <ol class="trace-lines">
+            {% for line in result.lines %}
+                <li class="trace-line{% if line.tags %} is-tagged{% endif %}">
+                    <span class="trace-number">{{ line.number }}</span>
+                    <code class="trace-text">{{ line.text }}</code>
+                    {% for tag in line.tags %}<span class="trace-tag">{{ tag.label }}{% if tag.value %} : {{ tag.value }}{% endif %}</span>{% endfor %}
+                </li>
+            {% endfor %}
+        </ol>
+        {% if result.more %}<p class="muted">… et {{ result.more }} ligne{{ result.more|pluralize }} de plus, non affichée{{ result.more|pluralize }}.</p>{% endif %}
+    {% endwith %}
+{% endif %}

@@ -22,6 +22,7 @@ from common import RANGE_END, RANGE_START, DateRange, date_range, is_id
 from inventory.models import StockType
 
 from .forms import MANUAL_SALE_SOURCE, ManualSaleForm
+from .integration import TILL_TO_CONFIGURE, till_allowed
 from .links import suggest_recipe
 from .models import (
     PosProduct,
@@ -283,7 +284,10 @@ def _sales(form=None, query: str = "", show_all: bool = False, window: DateRange
         "documents": documents,
         "documents_found": documents_found,
         "documents_hidden": max(documents_found - len(documents), 0),
-        # The import from the till.
+        # The import from the till - offered only where the server's account
+        # may be used (recipes/integration.py); elsewhere « à configurer ».
+        "till_allowed": till_allowed(),
+        "till_to_configure": TILL_TO_CONFIGURE,
         "job": SalesImportJob.objects.first(),
         "default_start": (timezone.localdate() - timedelta(days=30)).isoformat(),
         "default_end": timezone.localdate().isoformat(),

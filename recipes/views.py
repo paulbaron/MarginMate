@@ -10,6 +10,7 @@ from django.db.models import Sum
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.html import escape
 
+from accounts.tenancy import bound
 from common import PIE_COLORS, is_id
 
 from .forms import (
@@ -21,6 +22,7 @@ from .forms import (
     RecipeIngredientFormSet,
     ingredient_unit_map,
 )
+from .integration import refusal, till_allowed
 from .links import LinkError, link, set_aside
 from .menu import pending_count, render_menu, sales_list_url, with_suggestion
 from .models import (
@@ -357,6 +359,12 @@ def sales_import(request):
 def trigger_sales_import(request):
     if request.method != "POST":
         return redirect(sales_list_url(request))
+    # The server's L'Addition account is the owner's (recipes/integration.py):
+    # the tab draws no form elsewhere, and a post from a page drawn before, or
+    # crafted, is refused here.
+    if not till_allowed():
+        messages.error(request, refusal())
+        return redirect(sales_list_url(request))
     # Clear out any run that died without saying so before deciding whether
     # one is genuinely in progress - otherwise a single killed thread locks
     # this page out permanently.
@@ -377,8 +385,11 @@ def trigger_sales_import(request):
         return redirect(sales_list_url(request))
 
     job = SalesImportJob.objects.create(range_start=start, range_end=end)
+    # bound(): the thread works for this request's espace - its job row, its
+    # sales, its download folder - and closes its connections when it ends.
+    # A new thread starts bound to nothing, and job pk N is another bar's too.
     threading.Thread(
-        target=import_laddition_sales_task, args=(job.id, start, end), daemon=True
+        target=bound(import_laddition_sales_task), args=(job.id, start, end), daemon=True
     ).start()
     return redirect(sales_list_url(request))
 

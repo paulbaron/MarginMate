@@ -88,8 +88,16 @@ c'est là qu'il dit ce qui a changé (views._messages_by_place).
             cette période n'ont pas encore de prix ({{ report.unread_units }} unité{{ report.unread_units|pluralize }}
             vendue{{ report.unread_units|pluralize }}) : leur chiffre d'affaires manque alors que leur coût est bien
             compté, donc <strong>toutes les marges ci-dessous sont trop basses</strong>.
+            {% comment %}
+            The command is the server's: only the espace whose till the
+            server reads is handed it (recipes/integration.py).
+            {% endcomment %}
+            {% if till_allowed %}
             Pour le combler : <code>manage.py laddition_backfill_revenue</code>, qui relit les exports déjà
             sur le disque et ne va rien chercher en ligne.
+            {% else %}
+            Pour le combler : {{ till_to_configure }}.
+            {% endif %}
         </div>
     {% endif %}
 

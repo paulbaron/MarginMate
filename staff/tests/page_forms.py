@@ -191,6 +191,20 @@ def forms_of(html: str) -> list[Form]:
     return parser.forms
 
 
+#: The topbar's « Se déconnecter » (templates/base.html): on every page of a
+#: logged-in owner, and none of the page's own forms.
+LOGOUT_ACTION = "/deconnexion/"
+
+
+def page_forms_of(html: str) -> list[Form]:
+    """The page's own forms: `forms_of` without the topbar's logout form -
+    which must be there, once, on every page an owner is logged in to."""
+    forms = forms_of(html)
+    logout = [form for form in forms if form.action == LOGOUT_ACTION]
+    assert len(logout) == 1, f"{len(logout)} logout forms in the topbar"
+    return [form for form in forms if form.action != LOGOUT_ACTION]
+
+
 def form_posting_to(html: str, action: str, *, method: str = "post", holding: tuple[str, str] | None = None) -> Form:
     """The one form of the page sending to `action` (its fragment aside) -
     and, when two do, the one `holding` a control of that name and value

@@ -34,7 +34,7 @@ from html.parser import HTMLParser
 from urllib.parse import urlsplit
 
 from django.http import QueryDict
-from django.test import Client, TestCase
+from django.test import TestCase
 from django.urls import reverse
 from django.utils.http import urlencode
 
@@ -158,7 +158,8 @@ class ThePanelAsTheBrowserPostsItTests(PanelFixture, TestCase):
     off the page, posted with CSRF enforced."""
 
     def setUp(self):
-        self.browser = Client(enforce_csrf_checks=True)
+        # The suite's client, logged in as the espace's owner (tests/runner.py).
+        self.browser = self.client_class(enforce_csrf_checks=True)
 
     def page(self, **params):
         response = self.browser.get(reverse(PAGE), {**MARCH, **params})

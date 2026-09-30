@@ -209,10 +209,17 @@ def embedded_xml(path: str) -> bytes | None:
         return None
     too_big: list[str] = []
     try:
-        import pdfplumber
+        # pdfminer's document, never pdfplumber's: the attachments live in
+        # the catalog, and closing a pdfplumber document makes every page it
+        # has not made yet - this runs on every PDF, BEFORE the page count
+        # (receipts.import_document), and walked 5 000 pages in 4,5 s to read
+        # no page at all (security review of the HARDEN-01 fix).
+        from pdfminer.pdfdocument import PDFDocument
+        from pdfminer.pdfparser import PDFParser
 
-        with pdfplumber.open(path) as document:
-            for name, stream in _attachments(document.doc):
+        with open(path, "rb") as handle:
+            document = PDFDocument(PDFParser(handle))
+            for name, stream in _attachments(document):
                 try:
                     data = _stream_bytes(stream)
                 except _TooBig:

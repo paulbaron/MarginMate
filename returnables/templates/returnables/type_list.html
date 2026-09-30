@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Types de consigne - MarginMate{% endblock %}
+{% block content %}
+<div class="consignes-page">
+    <p class="breadcrumb"><a href="{% url 'returnables:home' %}">← Consignes</a></p>
+    <div class="page-header">
+        <div>
+            <h1>Types de consigne</h1>
+            <p class="page-subtitle">
+                Ce que l'on compte à chaque reprise (Fûts, Caisses verre…), dans l'ordre du formulaire, et les motifs qui
+                disent de quel type est chaque ligne d'un bon.
+            </p>
+        </div>
+    </div>
+
+    {% comment %}
+    One form per type, each posting to its own address, and one « Nouveau
+    type » - not a formset: nothing here has a row index to shift. Each
+    action carries its card's fragment: a refusal is drawn back at 200, and
+    the browser then scrolls to the card saying why, not to the page's top.
+    {% endcomment %}
+    {% for kind, form, problem in rows %}
+        <section class="card type-card{% if not kind.is_active %} is-inactive{% endif %}" id="type-{{ kind.pk }}">
+            <h2>{{ kind.name }}{% if not kind.is_active %} <span class="status-pill status-ignored">inactif</span>{% endif %}</h2>
+            <p class="muted small">
+                {% if kind.count_rows %}Compté dans {{ kind.count_rows }} reprise{{ kind.count_rows|pluralize }}.{% else %}Compté dans aucune reprise.{% endif %}
+                {% if forloop.first and kind.is_active %}Le premier : son compteur est le grand.{% endif %}
+            </p>
+            {% if problem %}
+                <p class="message message-error">Motif invalide : {{ problem }} — corrigez-le ci-dessous.</p>
+            {% endif %}
+            <form method="post" action="{% url 'returnables:type_edit' kind.pk %}#type-{{ kind.pk }}">
+                {% csrf_token %}
+                {% include "_form_fields.html" with form=form %}
+                <div class="form-actions">
+                    <button class="btn btn-secondary" type="submit">Enregistrer</button>
+                </div>
+            </form>
+            <details class="danger-zone">
+                <summary>Supprimer le type…</summary>
+                <form method="post" action="{% url 'returnables:type_delete' kind.pk %}">
+                    {% csrf_token %}
+                    {% if kind.count_rows %}
+                        <p>Compté dans des reprises, il ne peut pas être supprimé : décochez « Proposé dans le formulaire de reprise » plutôt.</p>
+                        <button class="btn btn-danger" type="submit" disabled>Supprimer le type</button>
+                    {% else %}
+                        <p>Le type et ses motifs seront supprimés ; les lignes de bons qu'il reconnaissait seront « sans type de consigne ».</p>
+                        <button class="btn btn-danger" type="submit">Supprimer le type</button>
+                    {% endif %}
+                </form>
+            </details>
+        </section>
+    {% empty %}
+        <div class="empty-state">
+            <p>Aucun type de consigne : ajoutez-en un ci-dessous (« Fûts » d'abord, c'est lui qui aura le grand compteur).</p>
+        </div>
+    {% endfor %}
+
+    <section class="card" id="nouveau-type">
+        <h2>Nouveau type</h2>
+        <form method="post" action="{% url 'returnables:type_list' %}#nouveau-type">
+            {% csrf_token %}
+            {% include "_form_fields.html" with form=new_form %}
+            <div class="form-actions">
+                <button class="btn" type="submit">Ajouter le type</button>
+            </div>
+        </form>
+    </section>
+
+    <details class="explainer">
+        <summary>Comment une ligne de bon prend son type</summary>
+        <p>
+            Chaque ligne d'un bon prend le premier type, dans l'ordre ci-dessus, dont un motif se trouve dans sa
+            désignation - actif ou non : désactiver un type l'ôte seulement du formulaire de reprise. Modifier un motif
+            reclasse aussitôt toutes les lignes de tous les bons.
+        </p>
+        <p>
+            Un motif est une expression régulière : <code>F[ÛU]TS?\b</code> reconnaît « FÛT » et « FUTS ». Une ligne qu'aucun
+            type ne reconnaît se classe depuis la page de son bon (« Classer comme »).
+        </p>
+    </details>
+</div>
+{% endblock %}

@@ -4,8 +4,10 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from django import forms
 from django.utils import timezone
 
-from common import BlankRowTolerantForm, is_id
+from accounts.tenancy import integrations_allowed
+from common import MEGABYTE, BlankRowTolerantForm, file_too_big, is_id, selection_too_big
 
+from . import integrations
 from .models import EmailInvoiceSource, Invoice, InvoiceType, ShopItemPrice, Supplier, WebsiteInvoiceSource
 from .parsers import LLM_PARSER_KEY, PARSER_REGISTRY
 
@@ -72,6 +74,8 @@ class ManualInvoiceForm(forms.ModelForm):
         uploaded = self.cleaned_data.get("source_file")
         if uploaded and not uploaded.name.lower().endswith(MANUAL_INVOICE_ATTACHMENT_EXTENSIONS):
             raise forms.ValidationError("Seuls les fichiers PDF, JPG ou PNG sont acceptés.")
+        if uploaded and file_too_big(uploaded):
+            raise forms.ValidationError(file_too_big(uploaded))
         return uploaded
 
 
@@ -668,6 +672,17 @@ from .ocr import IMAGE_EXTENSIONS  # noqa: E402 - kept next to the only thing us
 #: every one of them without a word.
 RECEIPT_EXTENSIONS = (".pdf", ".xml") + IMAGE_EXTENSIONS
 
+#: What one folder of tickets may weigh, the files it stages together - an
+#: ignored or refused file is never written, so it does not count (security
+#: audit UPLOAD-1; each file also has common.UPLOAD_MAX_FILE_BYTES, 25 Mo). The
+#: owner's real folder is 42 scans for 12.8 Mo (0.3 Mo each); a phone photo
+#: is 3 to 5 Mo. 500 Mo is 100 to 160 phone photos - months of tickets in
+#: one go - or 1 600 scans like his, within the 2 000 files a request may
+#: carry (DATA_UPLOAD_MAX_NUMBER_FILES), and bounds what one request stages
+#: on the server's disk. Online, Cloudflare's own limit per request (100 Mo
+#: on its free plan) is lower still: a bigger folder goes in several times.
+RECEIPT_BATCH_MAX_BYTES = 500 * MEGABYTE
+
 
 class MultipleFileInput(forms.ClearableFileInput):
     allow_multiple_selected = True
@@ -712,11 +727,30 @@ class ReceiptBatchUploadForm(forms.Form):
         A folder carries whatever else is in it - Thumbs.db, desktop.ini, a
         note - and refusing the whole selection over one of those is how a
         folder upload stops being usable. They are listed as ignored on the
-        batch page instead. Only a selection with nothing usable is refused.
+        batch page instead. A file over 25 Mo (common.UPLOAD_MAX_FILE_BYTES)
+        is set aside the same way, as that file's error (`refused`: its name
+        and the sentence), never written to the server. Refused whole: a
+        selection with nothing usable, and one whose files to be staged weigh
+        over RECEIPT_BATCH_MAX_BYTES - those only: the total bounds what is
+        written to the server's disk, and an ignored or refused file never
+        is (a 200 Mo video beside the photos refused the whole folder).
         """
         uploads = [upload for upload in self.cleaned_data["files"] if upload]
-        accepted = [upload for upload in uploads if upload.name.lower().endswith(RECEIPT_EXTENSIONS)]
-        self.ignored_names = [upload.name for upload in uploads if upload not in accepted]
+        self.refused = []
+        self.ignored_names = []
+        accepted = []
+        for upload in uploads:
+            if not upload.name.lower().endswith(RECEIPT_EXTENSIONS):
+                self.ignored_names.append(upload.name)
+            elif file_too_big(upload):
+                self.refused.append((upload.name, file_too_big(upload)))
+            else:
+                accepted.append(upload)
+        too_heavy = selection_too_big(accepted, RECEIPT_BATCH_MAX_BYTES)
+        if too_heavy:
+            raise forms.ValidationError(too_heavy)
+        if not accepted and self.refused:
+            raise forms.ValidationError(" ".join(message for _name, message in self.refused))
         if not accepted:
             raise forms.ValidationError("Aucun PDF, XML ni photo dans la sélection.")
         return accepted
@@ -848,6 +882,11 @@ class InvoiceUploadForm(ReceiptShopForm):
     def clean_supplier(self):
         value = self.cleaned_data["supplier"].strip()
         if is_id(value) and Supplier.objects.filter(pk=value, parser_key=LLM_PARSER_KEY).exists():
+            # The AI reading runs on the owner's key: not offered in an
+            # espace that may not use the server's accounts, and refused
+            # here when posted all the same (invoices/integrations.py).
+            if not integrations_allowed():
+                raise forms.ValidationError(integrations.AI_READING)
             return Supplier.objects.get(pk=value)
         return super().clean_supplier()
 
@@ -858,6 +897,8 @@ class InvoiceUploadForm(ReceiptShopForm):
         uploaded = self.cleaned_data["source_file"]
         if not uploaded.name.lower().endswith((".pdf", ".xml")):
             raise forms.ValidationError("Seuls les fichiers PDF et XML (facture électronique) sont acceptés.")
+        if file_too_big(uploaded):
+            raise forms.ValidationError(file_too_big(uploaded))
         return uploaded
 
 

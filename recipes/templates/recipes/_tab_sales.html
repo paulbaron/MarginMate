@@ -25,6 +25,12 @@ nothing saying the period had been dropped.
             </p>
         </div>
     </div>
+    {% comment %}
+    The server's L'Addition account is the owner's (recipes/integration.py):
+    another espace gets the sentence and no form - and never the names of the
+    server's variables, which the owner's paragraph gives.
+    {% endcomment %}
+    {% if till_allowed %}
     <form method="post" action="{% url 'recipes:trigger_sales_import' %}{% querystring %}" class="inline-form">
         {% csrf_token %}
         <label class="inline-label">Du <input type="date" name="start_date" value="{{ default_start }}" required></label>
@@ -35,6 +41,9 @@ nothing saying the period had been dropped.
         Nécessite <code>LADDITION_EMAIL</code> et <code>LADDITION_PASSWORD</code> dans le fichier <code>.env</code>.
         La récupération ouvre un navigateur en arrière-plan et peut prendre quelques minutes par tranche de deux ans.
     </p>
+    {% else %}
+    <p class="muted">{{ till_to_configure|capfirst }}.</p>
+    {% endif %}
     {% if job %}
         {% include "recipes/_sales_import_status.html" %}
     {% endif %}

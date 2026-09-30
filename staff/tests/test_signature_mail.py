@@ -111,6 +111,8 @@ class CodeMailTests(MailCase):
         self.assertTrue(outcome.sent)
         body = mail.outbox[0].body
         code = re.search(r"\b([0-9]{6})\b", body).group(1)
+        # The sender is the platform's: the subject names the employer.
+        self.assertIn("BAR EXEMPLE", mail.outbox[0].subject)
         self.assertIn("15 minutes", body)
         self.assertIn("Il remplace tout code demandé avant.", body)
         # The code's method waits beside it; he is identified by e-mail once he types it.
@@ -152,6 +154,7 @@ class FinalCopyTests(MailCase):
         outcome = signature_mail.send_final_copy(done, LINK)
         self.assertTrue(outcome.sent)
         message = mail.outbox[-1]
+        self.assertIn("BAR EXEMPLE", message.subject)
         (name, content, mimetype), = message.attachments
         self.assertEqual(mimetype, "application/pdf")
         self.assertTrue(name.endswith(".pdf"))

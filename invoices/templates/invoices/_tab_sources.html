@@ -14,8 +14,17 @@ the reader for what it brings. The suppliers have their own tab
             toutes les sources actives.
         </p>
     </div>
-    <a class="btn" href="{% url 'invoices:invoice_type_create' %}">+ Nouvelle source</a>
+    {% if not sources_refused %}<a class="btn" href="{% url 'invoices:invoice_type_create' %}">+ Nouvelle source</a>{% endif %}
 </div>
+
+{% if sources_refused %}
+{% comment %}
+The mailbox and the portals' credentials are the server's own accounts
+(invoices/integrations.py): in an espace that may not use them, said here,
+where somebody comes to ask where the invoices come from.
+{% endcomment %}
+<div class="message">{{ sources_refused }}</div>
+{% endif %}
 
 {% comment %}
 Said here, where somebody comes to ask where the invoices come from, because
@@ -32,7 +41,7 @@ not exist and a margin that is wrong.
     plateforme agréée, et la vôtre est tenue par votre comptable. MarginMate ne va pas la chercher :
     téléchargez-y vos factures (Factur-X, UBL ou CII) et déposez-les dans « Tickets et factures »
     ci-dessus. Elles seront lues dans leurs propres données, au centime, sans relecture.
-    Les sources ci-dessous — boîte mail et espaces clients — continuent de fonctionner pour tout le reste.
+    {% if not sources_refused %}Les sources ci-dessous — boîte mail et espaces clients — continuent de fonctionner pour tout le reste.{% endif %}
 </div>
 
 {% if invoice_types %}
@@ -64,7 +73,7 @@ not exist and a margin that is wrong.
 {% else %}
     <div class="empty-state">
         Aucune source de factures pour le moment.
-        <a class="btn" href="{% url 'invoices:invoice_type_create' %}">+ Nouvelle source</a>
+        {% if not sources_refused %}<a class="btn" href="{% url 'invoices:invoice_type_create' %}">+ Nouvelle source</a>{% endif %}
     </div>
 {% endif %}
 

@@ -1,9 +1,10 @@
-from django.conf import settings
 from django.contrib import admin
-from django.urls import include, path, re_path
-from django.views.decorators.clickjacking import xframe_options_sameorigin
-from django.views.static import serve
+from django.urls import include, path
 
+# No /media/ route, whatever DEBUG says: every bar's stored files go through
+# the logged-in view of its own espace (accounts.views.media, /fichiers/…).
+# The old single mode served media publicly here when DEBUG was on; it was
+# removed on 29/09/2026 (accounts/tests/test_no_single_mode.py).
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("invoices/", include("invoices.urls")),
@@ -12,16 +13,8 @@ urlpatterns = [
     path("marges/", include("margins.urls")),
     path("donnees/", include("transfer.urls")),
     path("personnel/", include("staff.urls")),
+    path("consignes/", include("returnables.urls")),
+    # Logins and an espace's stored files (accounts/urls.py).
+    path("", include("accounts.urls")),
     path("", include("inventory.urls")),
 ]
-
-if settings.DEBUG:
-    # An invoice's PDF is shown inside its own correction page, so this site
-    # may frame its uploaded files; every other page keeps DENY.
-    urlpatterns += [
-        re_path(
-            rf"^{settings.MEDIA_URL.lstrip('/')}(?P<path>.*)$",
-            xframe_options_sameorigin(serve),
-            {"document_root": settings.MEDIA_ROOT},
-        )
-    ]

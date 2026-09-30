@@ -20,7 +20,9 @@ which a restore leaves « non lu ») nor the till's means of payment per day
 `manage.py laddition_backfill_revenue`, then `laddition_backfill_payments`,
 contacting nothing. So a clear deletes the payments, and a « Remplacer »
 deletes those of every day it leaves with no till sales, and both say how to
-bring them back (`PAYMENTS_NOTE`); nothing else here touches them.
+bring them back (`PAYMENTS_NOTE`) - or, in an espace whose till the server
+does not import (a hosted bar, which runs no command on the server), that
+this is « à configurer » (`payments_note`); nothing else here touches them.
 """
 
 from __future__ import annotations
@@ -33,6 +35,7 @@ from decimal import Decimal
 from django.db.models import Prefetch
 
 from recipes.forms import MANUAL_SALE_SOURCE
+from recipes.integration import TILL_TO_CONFIGURE, till_allowed
 from recipes.models import (
     PosDailyPayment,
     PosProduct,
@@ -77,6 +80,15 @@ PAYMENTS_NOTE = (
     "« manage.py laddition_backfill_payments » les relit des exports déjà téléchargés, pour les jours "
     "dont les ventes sont enregistrées."
 )
+#: PAYMENTS_NOTE where that command is not this espace's to run: it reads the
+#: exports of the till the server imports, the owner's (recipes/integration.py),
+#: and a hosted bar runs no command on the server.
+PAYMENTS_NOTE_TO_CONFIGURE = f"Les moyens de paiement de la caisse ne sont pas dans les archives, et {TILL_TO_CONFIGURE}."
+
+
+def payments_note() -> str:
+    """What a run that deleted the till's payments says, for the bound espace."""
+    return PAYMENTS_NOTE if till_allowed() else PAYMENTS_NOTE_TO_CONFIGURE
 #: Rows written or deleted per query: SQLite caps a statement's parameters.
 BATCH = 500
 
@@ -576,7 +588,7 @@ class SalesSection(Section):
         )
         if payments:
             report.deleted(PAYMENTS, payments)
-            report.note(PAYMENTS_NOTE)
+            report.note(payments_note())
         self._settle(ctx)
 
     # -- clear ---------------------------------------------------------------------------
@@ -588,7 +600,7 @@ class SalesSection(Section):
         days, _ = PosProductDailyQuantity.objects.all().delete()
         payments, _ = PosDailyPayment.objects.all().delete()
         if payments:
-            report.note(PAYMENTS_NOTE)
+            report.note(payments_note())
         manual = RecipeSale.objects.filter(source=MANUAL_SALE_SOURCE).count()
         _total, per_model = RecipeSale.objects.all().delete()
         till_sales = per_model.get(RecipeSale._meta.label, 0) - manual

@@ -604,10 +604,14 @@ class SuppliersSection(Section):
 
 def _holders(supplier, ctx=None) -> str:
     """What still names a supplier - its documents, its sources, its
-    classified products - or "". With `ctx` (an import), which section left
-    them there by not being replaced."""
+    classified products, the formats of bons and reprises of « Consignes »
+    - or "". With `ctx` (an import), which section left them there by not
+    being replaced. Without the last, a supplier only « Consignes » held
+    (PROTECT) was kept under « un de ses produits sert encore », which was
+    false."""
     from inventory.models import Product
     from invoices.models import Invoice, InvoiceType
+    from invoices.supplier_views import consignes_refusal
 
     def unless(key, label):
         return "" if ctx is None or ctx.replacing(key) else f" ({label} non remplacées)"
@@ -626,6 +630,9 @@ def _holders(supplier, ctx=None) -> str:
     products = Product.objects.filter(supplier=supplier, stock_type__isnull=False).count()
     if products:
         return plural(products, "produit classé", "produits classés") + unless("associations", "Associations")
+    consignes = consignes_refusal(supplier)
+    if consignes:
+        return consignes + unless("consignes", "Consignes")
     return ""
 
 

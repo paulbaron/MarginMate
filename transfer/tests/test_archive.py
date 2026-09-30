@@ -19,13 +19,13 @@ from decimal import Decimal
 from pathlib import Path
 from unittest import mock
 
-from django.conf import settings
 from django.core.exceptions import SuspiciousFileOperation
 from django.core.files import File
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 from django.test import SimpleTestCase, TestCase
 
+from accounts import paths
 from inventory.models import StockType
 from invoices.models import Invoice, InvoiceLine
 from transfer import archive, codec
@@ -71,7 +71,7 @@ def manifest_for(sections=(), files=()):
 
 
 def stored(name: str, data: bytes) -> str:
-    """A file in the test MEDIA_ROOT, under exactly this name."""
+    """A file in the test espace's media, under exactly this name."""
     if default_storage.exists(name):
         default_storage.delete(name)
     return default_storage.save(name, ContentFile(data))
@@ -445,13 +445,26 @@ class StorageNameTests(TestCase):
         self.assertIsNone(storage_name_problem("invoices/2026/09/Monoprix_8EUR44_26_02_2025.pdf"))
         self.assertIsNone(storage_name_problem("receipts/2026/09/0149.jpg"))
 
+    def test_a_consignes_photo_or_bon_name_is_accepted(self):
+        """« Consignes » stores under consignes/ (returnables.models): refused
+        here, every photo and bon of an archive was skipped on import."""
+        self.assertIsNone(storage_name_problem("consignes/photos/2026/09/reprise-20260210-1.jpg"))
+        self.assertIsNone(storage_name_problem("consignes/bons/2026/09/bon-1234.pdf"))
+        for name in ("consignes/../config/x.pdf", "consignes/" + "a" * 100 + ".jpg", "consignesx/a.jpg"):
+            with self.subTest(name=name):
+                self.assertIsNotNone(storage_name_problem(name))
+        self.assertEqual(
+            storage_name_problem("media/x.pdf"),
+            "fichier hors des dossiers des factures, des tickets et des consignes (« media/x.pdf »)",
+        )
+
 
 class AppRevisionTests(SimpleTestCase):
     def tearDown(self):
         archive.app_revision.cache_clear()
 
     def test_read_from_a_branch_ref(self):
-        root = Path(settings.DATA_STAGING_DIR) / "fake-repo"
+        root = paths.staging_dir() / "fake-repo"
         (root / ".git" / "refs" / "heads").mkdir(parents=True, exist_ok=True)
         (root / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
         (root / ".git" / "refs" / "heads" / "main").write_text("3771d9d" + "0" * 33 + "\n")
@@ -460,7 +473,7 @@ class AppRevisionTests(SimpleTestCase):
             self.assertEqual(archive.app_revision(), "3771d9d")
 
     def test_read_from_packed_refs(self):
-        root = Path(settings.DATA_STAGING_DIR) / "fake-repo-packed"
+        root = paths.staging_dir() / "fake-repo-packed"
         (root / ".git").mkdir(parents=True, exist_ok=True)
         (root / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
         (root / ".git" / "packed-refs").write_text("# pack-refs\nabcdef1" + "1" * 33 + " refs/heads/main\n")
@@ -470,7 +483,7 @@ class AppRevisionTests(SimpleTestCase):
 
     def test_none_without_a_repository(self):
         archive.app_revision.cache_clear()
-        with self.settings(BASE_DIR=Path(settings.DATA_STAGING_DIR) / "no-repo-here"):
+        with self.settings(BASE_DIR=paths.staging_dir() / "no-repo-here"):
             self.assertIsNone(archive.app_revision())
 
 

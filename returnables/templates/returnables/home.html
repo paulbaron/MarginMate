@@ -1,0 +1,244 @@
+{% extends "base.html" %}
+{% load assets %}
+{% block title %}Consignes - MarginMate{% endblock %}
+{% block messages %}
+    {% comment %}
+    base.html's messages, except the upload's: its redirect lands on #bons,
+    screens under this, and « Ajouter des bons » says them above its form
+    (views._messages_by_place).
+    {% endcomment %}
+    {% if page_messages %}
+        <ul class="messages">
+            {% for message in page_messages %}
+                <li class="message message-{{ message.level_tag }}">{{ message }}</li>
+            {% endfor %}
+        </ul>
+    {% endif %}
+{% endblock %}
+{% block content %}
+<div class="consignes-page consignes-home">
+    <div class="page-header">
+        <div>
+            <h1>Consignes</h1>
+            <p class="page-subtitle">Les vides rendus au livreur : photographiés, comptés ici, puis comparés au bon qu'il envoie.</p>
+        </div>
+    </div>
+
+    {% comment %}
+    Two parts reload themselves when a gather ends (documents-changed, sent by
+    the gather's card once it stops polling): this strip, and the card and
+    lists under the form. The form is in neither: a count half typed, the
+    photos chosen, survive the reload.
+    {% endcomment %}
+    <div id="consignes-live" hx-get="{{ live_url }}" hx-select="#consignes-live" hx-target="this" hx-swap="outerHTML" hx-trigger="documents-changed from:body">
+        {% if latest %}
+            <p class="reprise-strip">
+                <a href="{% url 'returnables:pickup_detail' latest.pickup.pk %}">Dernière reprise : {{ latest.pickup.date|date:"d/m/Y" }}{% if latest.summary %} · {{ latest.summary }}{% endif %}{% if latest.photos %} · {{ latest.photos|length }} photo{{ latest.photos|length|pluralize }}{% endif %}</a>
+                <span class="status-pill status-{{ latest.day.css }}">{{ latest.day.pill }}</span>
+            </p>
+            {% if latest.day.status == "waiting" and gather_allowed and mail_formats %}
+                {% include "returnables/_gather_form.html" %}
+            {% endif %}
+        {% else %}
+            <p class="empty-state reprise-strip-empty">Aucune reprise enregistrée : photographiez les vides et comptez-les avant que le livreur ne les emporte.</p>
+        {% endif %}
+        {% if gather_running_sentence %}<p class="muted">{{ gather_running_sentence }}</p>{% endif %}
+        {% if gather_job %}{% include "invoices/_gather_status.html" with job=gather_job %}{% endif %}
+    </div>
+
+    <section class="card reprise-new" id="nouvelle-reprise">
+        <h2>Nouvelle reprise</h2>
+        <form method="post" action="{% url 'returnables:home' %}" enctype="multipart/form-data" class="reprise-form" data-reprise-form data-draft data-saved-flag="{{ saved_flag }}">
+            {% csrf_token %}
+            {% include "returnables/_pickup_fields.html" with submit_label="Enregistrer la reprise" details_open=False %}
+        </form>
+    </section>
+
+    <div id="consignes-live-bas" hx-get="{{ live_url }}" hx-select="#consignes-live-bas" hx-target="this" hx-swap="outerHTML" hx-trigger="documents-changed from:body">
+        {% for fmt, problem in broken_formats %}
+            <p class="message message-error">Format « {{ fmt.name }} » : motif invalide : {{ problem }} — <a href="{% url 'returnables:format_edit' fmt.pk %}">corrigez-le</a></p>
+        {% endfor %}
+        {% for kind, problem in type_errors %}
+            <p class="message message-error">Type « {{ kind.name }} » : motif invalide : {{ problem }} — <a href="{% url 'returnables:type_list' %}#type-{{ kind.pk }}">corrigez-le</a></p>
+        {% endfor %}
+
+        {% if latest %}
+            <section class="card reprise-card" id="derniere-reprise">
+                <h2>Dernière reprise</h2>
+                {% include "returnables/_day.html" with view=latest retour=home_url removable=False %}
+                <p><a href="{% url 'returnables:pickup_detail' latest.pickup.pk %}">Voir, modifier ou compléter la reprise</a></p>
+            </section>
+        {% endif %}
+
+        <section class="consignes-list" id="reprises">
+            <h2>Reprises</h2>
+            {% if pickup_rows %}
+                <div class="table-wrap">
+                    <table data-table data-table-label="reprises">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Repris par</th>
+                                <th>Nombres</th>
+                                <th class="num">Photos</th>
+                                <th>Comparaison</th>
+                                <th>Bon</th>
+                                <th>Facture</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in pickup_rows %}
+                                <tr data-row-href="{% url 'returnables:pickup_detail' row.pickup.pk %}">
+                                    <td data-sort="{{ row.pickup.date|date:'Y-m-d' }}"><a href="{% url 'returnables:pickup_detail' row.pickup.pk %}">{{ row.pickup.date|date:"d/m/Y" }}</a></td>
+                                    <td>{% if row.pickup.supplier %}{{ row.pickup.supplier.name }}{% else %}—{% endif %}</td>
+                                    <td>{{ row.summary|default:"—" }}</td>
+                                    <td class="num">{{ row.photo_count }}</td>
+                                    <td><span class="status-pill status-{{ row.day.css }}">{{ row.day.pill }}</span>{% if row.day.summed %} <span class="muted small">{{ row.day.summed_note }}</span>{% endif %}</td>
+                                    <td>{% for slip_pk, label in row.slip_labels %}<a href="{% url 'returnables:slip_detail' slip_pk %}">{{ label }}</a>{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}</td>
+                                    <td>{% for pill in row.checks %}{% if pill %}<span class="status-pill status-{{ pill.css }}" title="{{ pill.title }}">{{ pill.text }}</span> {% endif %}{% empty %}—{% endfor %}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% if pickup_total > listed and show_all != "reprises" %}
+                    <p><a href="{% url 'returnables:home' %}?tout=reprises#reprises">Tout afficher ({{ pickup_total }} reprises)</a></p>
+                {% endif %}
+            {% else %}
+                <p class="muted">Aucune reprise pour l'instant.</p>
+            {% endif %}
+        </section>
+
+        <section class="consignes-list" id="bons-recus">
+            <h2>Bons reçus</h2>
+            {% if slip_rows %}
+                <div class="table-wrap">
+                    <table data-table data-table-label="bons reçus">
+                        <thead>
+                            <tr>
+                                <th>Livraison</th>
+                                <th>Format</th>
+                                <th>N°</th>
+                                <th class="num">Lignes</th>
+                                <th>État</th>
+                                <th>Facture</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in slip_rows %}
+                                <tr data-row-href="{% url 'returnables:slip_detail' row.slip.pk %}">
+                                    <td data-sort="{{ row.slip.delivery_date|date:'Y-m-d' }}"><a href="{% url 'returnables:slip_detail' row.slip.pk %}">{% if row.slip.delivery_date %}{{ row.slip.delivery_date|date:"d/m/Y" }}{% else %}date non lue{% endif %}</a></td>
+                                    <td>{{ row.slip.format.name }}</td>
+                                    <td>{{ row.slip.number|default:"—" }}</td>
+                                    <td class="num">{{ row.line_count }}</td>
+                                    <td><span class="status-pill status-{{ row.state.css }}"{% if row.state.reason %} title="{{ row.state.reason }}"{% endif %}>{{ row.state.pill }}</span></td>
+                                    <td>{% if row.check %}<span class="status-pill status-{{ row.check.css }}" title="{{ row.check.title }}">{{ row.check.text }}</span>{% else %}—{% endif %}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% if slip_total > listed and show_all != "bons" %}
+                    <p><a href="{% url 'returnables:home' %}?tout=bons#bons-recus">Tout afficher ({{ slip_total }} bons)</a></p>
+                {% endif %}
+            {% else %}
+                <p class="muted">Aucun bon reçu pour l'instant : déposez-les ci-dessous, ou récupérez-les depuis la boîte mail.</p>
+            {% endif %}
+        </section>
+    </div>
+
+    <section class="card consignes-upload" id="bons">
+        <h2>Ajouter des bons</h2>
+        {% comment %}
+        What the last upload did, where its redirect lands: a document no
+        format recognises offers « Nouveau format » (views.slip_upload tags it).
+        {% endcomment %}
+        {% if upload_messages %}
+            <ul class="messages">
+                {% for message in upload_messages %}
+                    <li class="message message-{{ message.level_tag }}">{{ message }}{% if new_format_tag in message.extra_tags.split %} <a href="{% url 'returnables:format_create' %}">Nouveau format</a>{% endif %}</li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+        <form method="post" action="{% url 'returnables:slip_upload' %}" enctype="multipart/form-data">
+            {% csrf_token %}
+            <div class="form-grid">
+                <div class="form-field form-field-clearablefile">
+                    <label for="bons-fichiers">Les PDF des bons<span class="required" aria-hidden="true">*</span></label>
+                    <input id="bons-fichiers" type="file" name="bons" accept=".pdf,application/pdf" multiple required>
+                    <p class="help">Plusieurs à la fois : un bon déjà reçu est reconnu et n'est pas ajouté deux fois.</p>
+                </div>
+                <div class="form-field form-field-select">
+                    <label for="bons-format">Format</label>
+                    <select id="bons-format" name="format">
+                        <option value="">Reconnaître automatiquement</option>
+                        {% for fmt in upload_formats %}
+                            <option value="{{ fmt.pk }}">{{ fmt.name }}{% if not fmt.section_start %} (jamais reconnu automatiquement){% endif %}</option>
+                        {% endfor %}
+                    </select>
+                    <p class="help">Un format sans « début de la partie » n'est jamais choisi automatiquement : choisissez-le ici.</p>
+                </div>
+            </div>
+            <div class="form-actions">
+                <button class="btn" type="submit" data-busy-label="Lecture des bons…">Ajouter les bons</button>
+            </div>
+        </form>
+
+        <h3>Récupérer les bons</h3>
+        {% if not gather_allowed %}
+            <p class="message">{{ gather_refused }}</p>
+        {% elif mail_formats %}
+            <ul class="gather-rules">
+                {% for fmt in mail_formats %}
+                    <li>
+                        Les mails dont l'expéditeur correspond à <code>{{ fmt.sender_pattern }}</code>
+                        et l'objet à <code>{{ fmt.subject_pattern }}</code> : leurs pièces jointes
+                        <code>{{ fmt.attachment_pattern }}</code> sont lues comme des bons « {{ fmt.name }} »
+                        ({{ fmt.supplier.name }}).
+                    </li>
+                {% endfor %}
+            </ul>
+            {% comment %}
+            « Déjà en cours » is said once, inside #consignes-live: that part
+            reloads when the gather ends, and the sentence goes with it.
+            {% endcomment %}
+            {% include "returnables/_gather_form.html" %}
+        {% else %}
+            <p class="muted">Aucun format de bon n'a de motif d'expéditeur : ses bons se déposent ici, à la main.</p>
+        {% endif %}
+    </section>
+
+    <p class="consignes-settings">
+        Réglages : <a href="{% url 'returnables:format_list' %}">Formats de bons</a> · <a href="{% url 'returnables:type_list' %}">Types de consigne</a>
+    </p>
+    <details class="explainer">
+        <summary>Comment les reprises sont comparées aux bons</summary>
+        <p>
+            Une reprise est comparée aux bons de son fournisseur livrés le même jour. Toutes les reprises de ce
+            fournisseur ce jour-là sont additionnées, et tous les bons qui comptent aussi : oublier un type puis
+            l'enregistrer dans une deuxième reprise ne crée pas d'écart.
+        </p>
+        <p>
+            Un bon reçu deux fois (le livreur le renvoie, imprimé le lendemain) ne compte qu'une fois. Un bon
+            « annule et remplace » compte à la place de celui qu'il remplace, quel que soit l'ordre d'arrivée.
+        </p>
+        <p>
+            Chaque ligne d'un bon prend le premier type de consigne, dans l'ordre des types, dont un motif se trouve
+            dans sa désignation. Une ligne qu'aucun type ne reconnaît se classe depuis la page du bon (« Classer
+            comme ») ; modifier un motif reclasse aussitôt toutes les lignes.
+        </p>
+        <p>
+            La facture du fournisseur est cherchée de 7 jours avant à 45 jours après la livraison, par le numéro de
+            BL imprimé sur le bon ; ses lignes de consigne remboursées sont comparées aux lignes du bon. Rien n'est
+            écrit sur la facture.
+        </p>
+        <p>
+            Les photos sont réduites et enregistrées sans leurs métadonnées (ni position GPS) ; seule leur date de
+            prise de vue est gardée.
+        </p>
+    </details>
+</div>
+{% endblock %}
+{% block extra_js %}
+    <script src="{% asset 'js/returnables.js' %}" defer></script>
+{% endblock %}

@@ -28,7 +28,7 @@ from django.urls import reverse
 
 from staff import private_files, signature_requests as requests_, signing
 from staff.models import Establishment, SignatureEvent, SignatureRequest, Timesheet
-from staff.signature_views import DRAWING, ONLINE_WARNING
+from staff.signature_views import DRAWING
 from staff.tests.page_forms import as_post, form_posting_to, forms_of
 from staff.tests.signing_support import (
     FailingTimestamper,
@@ -861,6 +861,17 @@ class VerifyAndDownloadTests(OwnerCase):
         (message,) = self.messages_of(response)
         self.assertIn("ne correspond plus à l'empreinte enregistrée", message)
 
+    def test_a_file_gone_from_disk_is_said_without_naming_a_setting(self):
+        """The old single mode's STAFF_PRIVATE_DIR exists no more - and a bar
+        is never shown the name of a server setting anyway."""
+        request, _token = self.create()
+        (private_files.request_dir(request.uuid) / private_files.DOCUMENT).unlink()
+        response = self.client.get(self.route("staff:signature_file", 1, "document"), follow=True)
+        self.assertLandedOn(response, self.url + "#signature")
+        (message,) = self.messages_of(response)
+        self.assertIn("est introuvable dans le dossier privé de l'espace", message)
+        self.assertNotIn("STAFF_PRIVATE_DIR", message)
+
     def test_what_does_not_exist_is_a_404(self):
         self.create()
         other = employee(last_name="Martin", first_name="Paul")
@@ -891,11 +902,13 @@ class SectionTests(OwnerCase):
         self.assertIn("Journal intègre : 2 événements, chaînés par leurs empreintes.", text)
         self.assertIn(f"Document n° {request.uuid}", text)
 
-    def test_two_lines_said_once_the_keys_and_going_online(self):
+    def test_the_keys_line_said_once_and_no_going_online_line_any_more(self):
         text = " ".join(self.text(self.page()).split())
         # « Clé de signature non chiffrée : … », a sentence of its own.
         self.assertEqual(text.lower().count(signing.KEY_WARNING.lower()), 1)
-        self.assertEqual(text.count(ONLINE_WARNING), 1)
+        # The old single mode's « must not go online before the login »:
+        # this page is behind the login now, always.
+        self.assertNotIn("ne doit pas être mise en ligne", text)
         with override_settings(MARGINMATE_SIGNING_PASSPHRASE="phrase d'essai"):
             self.assertNotIn(signing.KEY_WARNING.lower(), " ".join(self.text(self.page()).split()).lower())
 

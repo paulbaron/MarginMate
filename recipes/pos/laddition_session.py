@@ -3,7 +3,9 @@
 Credentials come from the environment (LADDITION_EMAIL / LADDITION_PASSWORD
 in .env) and are typed by the browser at run time - the same arrangement the
 Metro invoice scraper uses. They are never stored in the database, never
-logged, and never committed.
+logged, and never committed. They are the owner's own till, so in multi mode
+only the owner's espace may open a session (recipes/integration.py): the
+refusal comes before a browser starts or a password is read.
 
 This module deliberately stops at "you are logged in and looking at the page
 you asked for". What to click once you're there belongs in whatever module
@@ -26,6 +28,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
+
+from recipes.integration import refusal, till_allowed
 
 REPORTING_ROOT = "https://reporting.laddition.com"
 AUTH_URL = "https://auth.laddition.com/"
@@ -50,6 +54,19 @@ SUBMIT_BUTTON = (By.XPATH, "//button[normalize-space(.)='Valider']")
 
 class LadditionAuthError(RuntimeError):
     pass
+
+
+class LadditionNotAllowed(LadditionAuthError):
+    """This espace may not use the server's L'Addition account
+    (recipes/integration.py). Carries a French sentence and no variable
+    name."""
+
+
+def _refuse_unless_allowed() -> None:
+    """The last guard, wherever the session is opened from: before any
+    browser starts, before any password is read."""
+    if not till_allowed():
+        raise LadditionNotAllowed(refusal())
 
 
 # Chrome network errors that are worth another go rather than a failed run.
@@ -121,6 +138,7 @@ def build_driver(download_dir: str) -> webdriver.Chrome:
 
 def log_in(driver, log=print) -> None:
     """Sign in, unless the session is already authenticated."""
+    _refuse_unless_allowed()
     if not settings.LADDITION_EMAIL or not settings.LADDITION_PASSWORD:
         raise LadditionAuthError("LADDITION_EMAIL / LADDITION_PASSWORD are not configured in .env")
 
@@ -246,7 +264,11 @@ def laddition_session(download_dir: str, path: str = "/v2/shift-details", log=pr
 
         with laddition_session(dir) as driver:
             ...  # driver is on /v2/shift-details, signed in
+
+    Refused (LadditionNotAllowed) in an espace that may not use the
+    server's account, before the browser starts.
     """
+    _refuse_unless_allowed()
     driver = build_driver(download_dir)
     try:
         open_report(driver, path, log=log)

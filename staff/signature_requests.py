@@ -57,6 +57,21 @@ proof file (staff/proof.py) is written again after each step
 « expirée » (with its event) the first time anything looks at it -
 `settle_expiry`, called by `resolve_link`, `open_request` and every action.
 A request already signed never « expires »: only its link does.
+
+**Several espaces.** The link carries no espace and the employee has no
+account, so the accounts database indexes every link's hash under the
+espace that issued it (`accounts.links`): the public page resolves the
+espace from the hash, binds it, then reads the request in that espace's
+database. The index holds exactly the hashes this espace's requests hold -
+written when a link is issued (`create_request`) or renewed (`renew_link`,
+the old hash forgotten), forgotten when its request is deleted or purged
+(`signature_deletion`). A cancelled, superseded or expired request KEEPS
+its link: its page says « annulée », « corrigé depuis » or « expiré » (410)
+- forgotten, it would say « vérifiez qu'il a été copié en entier » (404),
+which is not what happened. `index_links` rebuilds the espace's index from
+its requests (an adopted database, a copy put back). Each espace's keys,
+signed files and deletions.log are in its own private folder
+(`private_files`).
 """
 
 from __future__ import annotations
@@ -70,12 +85,18 @@ import logging
 import secrets
 from dataclasses import dataclass
 from datetime import date, timedelta
+from functools import partial
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
+from django.db.models import F
 from django.utils import timezone
 from django.utils.ipv6 import clean_ipv6_address
+
+from accounts import links
+from accounts.models import SigningLink
+from accounts.tenancy import require_tenant
 
 from . import pdf, private_files, signing
 from .models import Establishment, SignatureEvent, SignatureRequest, Timesheet
@@ -170,6 +191,15 @@ def _now(now=None) -> dt.datetime:
 
 def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def link_hash(token) -> str:
+    """The hash a link is found by - "" for what is no token at all (not a
+    string, empty, far longer than one): nothing is hashed or looked up for
+    it, and it reaches nothing."""
+    if not isinstance(token, str) or not token or len(token) > TOKEN_MAX_LENGTH:
+        return ""
+    return hash_token(token)
 
 
 def statement_text(request: SignatureRequest, version: str | None = None) -> str:
@@ -606,6 +636,11 @@ def create_request(employee, month: date, *, now=None, ip=None, user_agent="") -
                 request, Kind.CREATED, at=now, ip=ip, user_agent=user_agent,
                 detail={"version": request.version, "month": sheet.slug, "document_sha256": request.document_sha256},
             )
+            # The public page finds this espace by the link's hash.
+            # Written here, it rolls this request back if it fails; a
+            # rollback after it leaves a hash no request holds: « lien
+            # inconnu », as it would be anyway.
+            links.register(request.token_hash)
     except IntegrityError:
         # Another request was made for the month in the same instant.
         raise RequestStateError(
@@ -625,11 +660,17 @@ def renew_link(request: SignatureRequest, *, now=None, ip=None, user_agent="") -
             "Cette demande n'est plus en cours : envoyez le mois de nouveau pour obtenir un lien."
         )
     token = secrets.token_urlsafe(32)
+    old_hash = request.token_hash
     request.token_hash = hash_token(token)
     request.expires_at = now + LINK_VALIDITY
+    # The new link is indexed before the row names it, the old one forgotten
+    # once it no longer does: a hash left behind by a failure
+    # reaches no request - « lien inconnu », as it should.
+    links.register(request.token_hash)
     request.save(update_fields=["token_hash", "expires_at"])
     log_event(request, Kind.LINK_RENEWED, at=now, ip=ip, user_agent=user_agent,
               detail={"expires_at": _moment(request.expires_at)})
+    transaction.on_commit(partial(links.forget, old_hash), robust=True)
     return token
 
 
@@ -686,13 +727,14 @@ def reopen_month(timesheet: Timesheet, reason: str = "", *, now=None, ip=None, u
 
 def resolve_link(token, now=None) -> SignatureRequest:
     """The request a link reaches, or LinkError (404 unknown, 410 gone).
-    Nothing about any other request is ever said."""
+    Nothing about any other request is ever said. Looked up in the BOUND
+    espace: the public views bind the one the link's hash is indexed under
+    first (staff/public_views.py)."""
     now = _now(now)
-    if not isinstance(token, str) or not token or len(token) > TOKEN_MAX_LENGTH:
+    token_hash = link_hash(token)
+    if not token_hash:
         raise LinkError(404, UNKNOWN_LINK)
-    request = (
-        SignatureRequest.objects.select_related("timesheet__employee").filter(token_hash=hash_token(token)).first()
-    )
+    request = SignatureRequest.objects.select_related("timesheet__employee").filter(token_hash=token_hash).first()
     if request is None:
         raise LinkError(404, UNKNOWN_LINK)
     request = settle_expiry(request, now)
@@ -703,6 +745,23 @@ def resolve_link(token, now=None) -> SignatureRequest:
     if request.status == Status.EXPIRED or now >= request.expires_at:
         raise LinkError(410, EXPIRED_LINK)
     return request
+
+
+def index_links() -> tuple[int, int]:
+    """Make the accounts database's index of this espace's links hold
+    exactly the hashes its requests hold (bound): the missing ones are
+    registered, the ones no request holds any more are forgotten - for an
+    espace whose database was adopted or put back from a copy. Returns
+    (added, removed)."""
+    tenant = require_tenant()
+    held = set(SignatureRequest.objects.values_list("token_hash", flat=True))
+    indexed = set(SigningLink.objects.filter(tenant=tenant).values_list("token_hash", flat=True))
+    missing = sorted(held - indexed)
+    for token_hash in missing:
+        links.register(token_hash)
+    stale = sorted(indexed - held)
+    links.forget(*stale)
+    return len(missing), len(stale)
 
 
 def _opened_key(request) -> str:
@@ -824,43 +883,78 @@ def is_identified(session, request: SignatureRequest) -> bool:
     return session.get(_session_key(request)) == _moment(request.code_verified_at)
 
 
+#: Said when a guess arriving at the same moment used the code first.
+CODE_JUST_USED = "Ce code vient d'être utilisé : demandez un nouveau code."
+#: How often a guess whose reservation lost the race reads the row again: the
+#: next reading refuses it (no tries left, no code) or finds a new code.
+_RESERVATION_ROUNDS = 3
+
+
 def check_code(request: SignatureRequest, typed, session, *, now=None, ip=None, user_agent="") -> None:
     """Check the code the employee typed; on success remember it in his
     session for this request only and use the code up. Every refusal is a
-    `CodeError` and a `code_failed` event."""
+    `CodeError` and a `code_failed` event.
+
+    **A try is reserved before the code is compared** (security audit
+    SIGN-1): one conditional UPDATE - this very code, fewer than
+    `CODE_MAX_ATTEMPTS` tries so far - counts it, and only a guess that got
+    one is compared. Read, compared, then written back as read + 1, guesses
+    sent together all read the same count: 40 at once were 40 comparisons
+    and the count ended at 1. The code is used up the same way (an UPDATE
+    filtered on it): two right guesses at once identify once. Each write is
+    its own short transaction - IMMEDIATE (settings), so it waits for the
+    write lock instead of failing « database is locked »."""
     now = _now(now)
     request = _waiting(request, now)
-    request.refresh_from_db(fields=["code_hash", "code_sent_at", "code_attempts", "code_method", "identification"])
     digits = "".join(str(typed or "").split())
 
     def refuse(message, reason):
         log_event(request, Kind.CODE_FAILED, at=now, ip=ip, user_agent=user_agent, detail={"reason": reason})
         raise CodeError(message)
 
-    if not request.code_hash:
-        refuse("Aucun code en cours : demandez un nouveau code.", "aucun code en cours")
-    if now > request.code_sent_at + CODE_VALIDITY:
-        refuse("Ce code a expiré (il vaut 15 minutes) : demandez-en un nouveau.", "code expiré")
-    if request.code_attempts >= CODE_MAX_ATTEMPTS:
+    for _round in range(_RESERVATION_ROUNDS):
+        request.refresh_from_db(fields=["code_hash", "code_sent_at", "code_attempts", "code_method", "identification"])
+        if not request.code_hash:
+            refuse("Aucun code en cours : demandez un nouveau code.", "aucun code en cours")
+        if now > request.code_sent_at + CODE_VALIDITY:
+            refuse("Ce code a expiré (il vaut 15 minutes) : demandez-en un nouveau.", "code expiré")
+        if request.code_attempts >= CODE_MAX_ATTEMPTS:
+            refuse("Trop d'essais avec ce code : demandez un nouveau code.", "trop d'essais")
+        stored, method = request.code_hash, request.code_method
+        with transaction.atomic():
+            reserved = SignatureRequest.objects.filter(
+                pk=request.pk, code_hash=stored, code_attempts__lt=CODE_MAX_ATTEMPTS
+            ).update(code_attempts=F("code_attempts") + 1)
+        if reserved:
+            break
+    else:
         refuse("Trop d'essais avec ce code : demandez un nouveau code.", "trop d'essais")
-    if hmac.compare_digest(code_hash(request, digits), request.code_hash):
+    # This try's number, or a later one when guesses arrived together: the
+    # tries left are never said to be more than they are.
+    attempts = SignatureRequest.objects.filter(pk=request.pk).values_list("code_attempts", flat=True).first() or 0
+    request.code_attempts = attempts
+    if hmac.compare_digest(code_hash(request, digits), stored):
         # He is identified by the code he typed - its method, and only now.
         # A verification elsewhere later changes `code_verified_at`, which
         # takes this session's identification away (`is_identified`).
+        identification = method or request.identification
+        with transaction.atomic():
+            used = SignatureRequest.objects.filter(pk=request.pk, code_hash=stored).update(
+                code_hash="", code_verified_at=now, identification=identification
+            )
+        if not used:
+            refuse(CODE_JUST_USED, "code déjà utilisé")
         request.code_hash = ""
         request.code_verified_at = now
-        request.identification = request.code_method or request.identification
-        request.save(update_fields=["code_hash", "code_verified_at", "identification"])
+        request.identification = identification
         log_event(request, Kind.CODE_VERIFIED, at=now, ip=ip, user_agent=user_agent,
                   detail={"method": request.identification})
         session[_session_key(request)] = _moment(now)
         return
-    attempts = request.code_attempts + 1
-    SignatureRequest.objects.filter(pk=request.pk).update(code_attempts=attempts)
-    request.code_attempts = attempts
     left = CODE_MAX_ATTEMPTS - attempts
     if left <= 0:
-        SignatureRequest.objects.filter(pk=request.pk).update(code_hash="")
+        with transaction.atomic():
+            SignatureRequest.objects.filter(pk=request.pk, code_hash=stored).update(code_hash="")
         request.code_hash = ""
         refuse("Code erroné, et c'était le dernier essai : demandez un nouveau code.",
                f"code erroné, essai {attempts} sur {CODE_MAX_ATTEMPTS}")

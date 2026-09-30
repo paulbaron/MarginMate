@@ -1,0 +1,5 @@
+# cmd.exe needs CRLF line ends: with LF alone, « goto :label » and
+# « call :label » can miss a label that straddles one of its 512-byte reads
+# (deploy.cmd, refresh_dev_data.cmd, start_production.cmd). Checked by
+# accounts/tests/test_deployment_scripts.py.
+*.cmd text eol=crlf

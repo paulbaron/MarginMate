@@ -41,6 +41,12 @@ copy .env.example .env
 ```
 
 Edit `.env`:
+- `DJANGO_SECRET_KEY` - required unless `DJANGO_DEBUG=True`: at least 50
+  random characters, from
+  `.venv\Scripts\python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"`.
+  With DEBUG off, a missing or weak key stops the app from starting.
+- `DJANGO_DEBUG` - `False` by default; `True` on your own machine only (the
+  app refuses it beside a public host in `DJANGO_ALLOWED_HOSTS`).
 - `METRO_EMAIL` / `METRO_PASSWORD` - your docs.metro.fr login, needed for the
   "gather new invoices" button to fetch Metro invoices.
 - `UBA_EMAIL_ADDRESS` / `UBA_EMAIL_APP_PASSWORD` - the Gmail account UBA
@@ -56,15 +62,32 @@ committed to git, but you may still want to rotate that Gmail app password
 since it sat in plaintext on disk. `.env` is gitignored here specifically to
 avoid repeating that.
 
-Then:
+Every bar is an « espace » - its own database and folders under
+`MARGINMATE_TENANTS_ROOT` - and every page wants a login (the logins live in
+`MARGINMATE_ACCOUNTS_DB`). Put both outside the code folder in `.env`. Then:
 
 ```bash
-.venv\Scripts\python manage.py migrate
-.venv\Scripts\python manage.py createsuperuser
+.venv\Scripts\python manage.py migrate_tenants
+.venv\Scripts\python manage.py create_invitation
 .venv\Scripts\python manage.py runserver
 ```
 
-Open http://127.0.0.1:8000/. The Django admin is at `/admin/`.
+Open http://127.0.0.1:8000/inscription/ and sign up with the code the second
+command printed: that makes your espace and your login. `migrate_tenants`
+(never plain `migrate`) is also what every update of the code needs, after a
+backup. The Django admin, at `/admin/`, is for superusers only
+(`manage.py createsuperuser --database accounts`; a login needs an espace to
+open any page). There is no mode without a login: the old « single » mode
+was removed on 29/09/2026, and `MARGINMATE_TENANCY` set to anything but
+`multi` stops the app from starting.
+
+`runserver` is for development. Online, the app runs under
+`manage.py serve` (Waitress on 127.0.0.1, behind a Cloudflare Tunnel, started
+by `start_production.cmd`): [DEPLOY.md](DEPLOY.md), in French, lists the steps
+and the `.env` lines. The site runs from a production copy of this repository
+(`C:\MarginMate\app`, its data in `C:\MarginMate\data`); changes are made here,
+committed, and put online with `deploy.cmd` (DEPLOY.md, section 10), which backs
+the data up first (`manage.py backup_data`).
 
 ## Stock item matching
 

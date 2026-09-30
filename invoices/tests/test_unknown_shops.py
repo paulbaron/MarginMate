@@ -15,12 +15,12 @@ from datetime import date
 from decimal import Decimal
 from unittest import mock
 
-from django.conf import settings
 from django.contrib.messages import get_messages
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 
+from accounts import paths
 from inventory.models import Product
 from invoices.forms import ReceiptShopForm
 from invoices.models import Invoice, ShopItemPrice, Supplier
@@ -54,7 +54,7 @@ def messages_of(response):
 
 
 def staged_file(test, name):
-    path = os.path.join(settings.MEDIA_ROOT, name)
+    path = os.path.join(paths.media_root(), name)
     with open(path, "wb") as handle:
         handle.write(b"%PDF-1.4 " + name.encode())
     test.addCleanup(lambda: os.path.exists(path) and os.remove(path))
@@ -266,7 +266,7 @@ class NewShopFromBatchTests(TestCase):
             SimpleUploadedFile("coin-1.pdf", b"%PDF-1.4 un"),
             SimpleUploadedFile("coin-2.pdf", b"%PDF-1.4 deux"),
         ])
-        self.addCleanup(shutil.rmtree, os.path.join(settings.MEDIA_ROOT, "receipt_batches", str(batch.pk)), True)
+        self.addCleanup(shutil.rmtree, os.path.join(paths.imports_dir(), "receipt_batches",str(batch.pk)), True)
         second = UNKNOWN_SHOP.replace("12/03/2026", "13/03/2026")
         with mock.patch("invoices.receipts.recognise", side_effect=[recognised(UNKNOWN_SHOP), recognised(second)]):
             self.batch = run_receipt_batch(batch.pk)

@@ -118,7 +118,14 @@ what was typed in them across swaps (hx-preserve, stable ids).
                 {% for entry in batch_rows %}
                     <tr>
                         <td>{{ entry.name }}</td>
-                        {% if entry.status == "ok" %}
+                        {% if entry.gone %}
+                            {# Deleted since the import: said, and never linked to - its page is gone (workspace.batch_rows). #}
+                            <td class="muted">{{ entry.shop|default:"—" }}</td>
+                            <td class="muted">—</td>
+                            <td class="num muted">—</td>
+                            <td><span class="status-pill status-ignored">Supprimé depuis l'import</span></td>
+                            <td></td>
+                        {% elif entry.status == "ok" %}
                             <td>{{ entry.invoice.supplier.name|default:entry.shop }}</td>
                             <td>{% if entry.invoice %}{{ entry.invoice.invoice_date|date:"d/m/Y"|default:"—" }}{% else %}{{ entry.date|default:"—" }}{% endif %}</td>
                             <td class="num">{% if entry.invoice %}{{ entry.invoice.total_ttc|floatformat:2 }}{% else %}{{ entry.total }}{% endif %} €</td>
@@ -166,7 +173,8 @@ what was typed in them across swaps (hx-preserve, stable ids).
                         {% else %}
                             <td colspan="3" class="muted">{{ entry.message }}</td>
                             <td>
-                                {% if entry.status == "duplicate" %}<span class="status-pill status-CANCELLED">Déjà importé</span>
+                                {% if entry.consignes %}<span class="status-pill status-ignored">Rangé dans Consignes</span>
+                                {% elif entry.status == "duplicate" %}<span class="status-pill status-CANCELLED">Déjà importé</span>
                                 {% elif entry.status == "ignored" %}<span class="status-pill status-CANCELLED">Ignoré</span>
                                 {% elif entry.status == "cancelled" %}<span class="status-pill status-CANCELLED">Non traité</span>
                                 {% else %}<span class="status-pill status-ERROR">Erreur</span>{% endif %}

@@ -27,6 +27,7 @@ from invoices.scrapers import website
 from staff.models import Employee, Timesheet, TimesheetDay
 from staff.tests.support import TYPICAL_WEEK
 from staff.views import LEAVE_WARNING, PDF_WARNING
+from tests.runner import log_in_the_browser
 
 JUNE = date(2026, 6, 1)   # Monday 1 to Tuesday 30: 151,5 h of typical week
 
@@ -76,6 +77,8 @@ class MonthGridInBrowserTests(StaticLiveServerTestCase):
     def setUp(self):
         self.person = Employee.objects.create(last_name="Dupont", first_name="Jeanne", **TYPICAL_WEEK)
         self.path = reverse("staff:month", args=[self.person.pk, JUNE])
+        # The owner's page wants a login: the test espace's owner.
+        log_in_the_browser(self.driver, self.live_server_url)
         self.open(self.path)
 
     def tearDown(self):

@@ -5,6 +5,15 @@ phone, reads his month, identifies himself with a one-time code and signs.
 
 What protects it, and what each view keeps to:
 
+* **Public, and bound to the link's espace** (`_for_the_link`): every view
+  is `@login_not_required` (everything else is denied to a visitor with no
+  account), and the espace is found by the link's hash in the accounts
+  database (`accounts.links.resolve`) - unknown there is the « lien
+  inconnu » page - then bound for the whole view, which reads and writes
+  that espace's database only. Whoever is logged in on the
+  browser changes nothing: TenantMiddleware binds nothing of a visitor's on
+  a public view, so a manager of another bar lending his phone, or an owner
+  of two bars, opens and signs the link in the link's own espace.
 * **The link's secret** (`signature_requests.resolve_link`): only its SHA-256
   is stored. Unknown is a plain French page answering 404; expired,
   cancelled or superseded, 410 - never a traceback, never a word about any
@@ -16,7 +25,13 @@ What protects it, and what each view keeps to:
   messages of the owner's session, no counts of anything).
 * **The one-time code** (`check_code`), remembered in HIS session for THIS
   request only (`is_identified`); the session's key changes once it is
-  verified. Signing needs it; reading the month and the PDF do not.
+  verified. Signing needs it; reading the month and the PDF do not - and
+  the PDF stays so on purpose (security audit ANON-6, 29/09): the page the
+  link opens shows everything the PDF holds, and once he has signed no code
+  can be issued, while « Voir le PDF » and his copy stay offered until the
+  link expires - a code on document/ would hide nothing and lock him out
+  of what he signed (staff/tests/test_link_only_reading.py). The token in
+  the server's logs is the logging filter's to shorten (config).
 * **Nothing technical reaches them**: a signature the server cannot make is
   `signature_requests.DOCUMENT_CHANGED` or `NOT_SIGNED`, its detail in the
   log - and anything unforeseen in `submit` is the same sentence, never
@@ -39,15 +54,20 @@ no dependency: it posts a PNG (a data URL) and nothing of the strokes.
 
 from __future__ import annotations
 
+import functools
 import logging
 
 from django.conf import settings
+from django.contrib.auth.decorators import login_not_required
 from django.http import HttpResponse
 from django.middleware.csrf import get_token
 from django.shortcuts import redirect
 from django.template.loader import render_to_string
 from django.urls import reverse
 from django.views.decorators.clickjacking import xframe_options_sameorigin
+
+from accounts import links
+from accounts.tenancy import bound_tenant
 
 from . import pdf, private_files, signature_mail, signature_requests as workflow, signing
 from .models import SignatureRequest
@@ -132,6 +152,27 @@ def _error(request, message: str, status: int) -> HttpResponse:
         {"heading": HEADINGS.get(status, "Page indisponible"), "message": message},
         status,
     )
+
+
+def _for_the_link(view):
+    """A public view of a link: `@login_not_required`, and run bound to the
+    espace the link's hash is indexed under (`accounts.links.resolve`). A
+    hash indexed
+    nowhere - or under an espace since closed - is « lien inconnu ».
+    Nothing else is bound here, whoever is logged in on the browser
+    (TenantMiddleware binds nothing on a public view). The binding ends with
+    the view: the page is rendered to a string inside it, never lazily
+    after."""
+
+    @functools.wraps(view)
+    def run(request, token, *args, **kwargs):
+        tenant = links.resolve(workflow.link_hash(token))
+        if tenant is None:
+            return _error(request, workflow.UNKNOWN_LINK, 404)
+        with bound_tenant(tenant):
+            return view(request, token, *args, **kwargs)
+
+    return login_not_required(run)
 
 
 def _resolve(request, token):
@@ -243,6 +284,7 @@ def _sign_page(request, token: str, sign_request: SignatureRequest, *, error: st
     return _page(request, "staff/sign.html", context, status)
 
 
+@_for_the_link
 def sign(request, token):
     """The month to read, « Voir le PDF », the code, the drawing - or, once
     signed, his copy. Opening it is « Lien ouvert », once per session."""
@@ -253,6 +295,7 @@ def sign(request, token):
     return _sign_page(request, token, sign_request)
 
 
+@_for_the_link
 def send_code(request, token):
     """« Recevoir un code par e-mail »."""
     sign_request, failure = _resolve(request, token)
@@ -280,6 +323,7 @@ def send_code(request, token):
     return back
 
 
+@_for_the_link
 def check_code(request, token):
     """« J'ai un code »: checked, and on success remembered in this session
     for this request - whose key then changes."""
@@ -300,6 +344,7 @@ def check_code(request, token):
     return back
 
 
+@_for_the_link
 def submit(request, token):
     """« Signer le relevé »: identified in this session, the drawing checked,
     his reservations if he gave some, the certification ticked - then signed
@@ -365,6 +410,7 @@ def _employee_name(sign_request) -> str:
 
 
 @xframe_options_sameorigin
+@_for_the_link
 def document(request, token):
     """« Voir le PDF »: the document frozen when it was sent, shown in the
     browser - checked against its hash first."""
@@ -384,6 +430,7 @@ def document(request, token):
     return _hardened(response, html=False)
 
 
+@_for_the_link
 def copy(request, token):
     """His signed copy - the countersigned one once it exists."""
     sign_request, failure = _resolve(request, token)
@@ -406,6 +453,7 @@ def copy(request, token):
     return _hardened(response, html=False)
 
 
+@login_not_required
 def unknown(request, rest=""):
     """Any other address under signer/: a link that reaches nothing."""
     return _error(request, workflow.UNKNOWN_LINK, 404)

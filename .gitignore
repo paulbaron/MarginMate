@@ -10,12 +10,27 @@ huey.sqlite3-*
 default_*.sqlite3
 .env
 /media/
+# collectstatic's output (manage.py serve runs it at every start).
 /staticfiles/
+# The server's log when MARGINMATE_TENANTS_ROOT is left at its default
+# (config/logs.py): marginmate.log and its rotated copies.
+/logs/
 /scraped_invoices/
 .vscode/
 *.log
 /backups/
 /imports/
 # The timesheet signatures: signing keys, signed PDFs, drawn signatures,
-# proof files (settings.STAFF_PRIVATE_DIR's default).
+# proof files (the old single mode's STAFF_PRIVATE_DIR default). Single mode
+# is gone (29/09/2026), but its folders - media/, scraped_invoices/,
+# backups/, imports/, private/ and db.sqlite3 - may still hold real data in
+# an old working copy: they stay ignored.
 /private/
+# Every bar's database and files (settings.TENANTS_ROOT's default), and the
+# logins' database (MARGINMATE_ACCOUNTS_DB's default).
+/tenants/
+/accounts.sqlite3*
+# The data folders live OUTSIDE this folder (C:\MarginMate\data, ..\data-dev,
+# DEPLOY.md section 10) and hold the real data: never here, never in git.
+/data/
+/data-dev/

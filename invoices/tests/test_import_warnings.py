@@ -12,10 +12,10 @@ from datetime import date
 from decimal import Decimal
 from unittest import mock
 
-from django.conf import settings
 from django.test import TestCase
 from django.urls import reverse
 
+from accounts import paths
 from invoices.importing import parse_and_import
 from invoices.models import Invoice
 from invoices.parsers.base import ParsedInvoice, ParsedLine
@@ -48,7 +48,7 @@ def parsed(lines=(), warnings=()):
 class ImportWarningTests(TestCase):
     def setUp(self):
         self.supplier = make_supplier(code="GROSSISTE", name="Grossiste Exemple", parser_key="GROSSISTE")
-        self.path = os.path.join(settings.MEDIA_ROOT, "grossiste-exemple.pdf")
+        self.path = os.path.join(paths.media_root(),"grossiste-exemple.pdf")
         with open(self.path, "wb") as handle:
             handle.write(b"%PDF-1.4 exemple")
 
@@ -175,7 +175,7 @@ class InvoiceVatTableTests(TestCase):
 
     def setUp(self):
         self.supplier = make_supplier(code="GROSSISTE", name="Grossiste Exemple", parser_key="GROSSISTE")
-        self.path = os.path.join(settings.MEDIA_ROOT, "grossiste-table.pdf")
+        self.path = os.path.join(paths.media_root(),"grossiste-table.pdf")
         with open(self.path, "wb") as handle:
             handle.write(b"%PDF-1.4 exemple")
         make_product(supplier=self.supplier, raw_name="VIN EXEMPLE", stock_type=make_stock_type())

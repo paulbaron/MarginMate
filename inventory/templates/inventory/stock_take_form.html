@@ -9,8 +9,13 @@
     that is wrong until the script runs.
     {% endcomment %}
     <datalist id="stock-take-entry-datalist"></datalist>
-    <script id="entry-data" type="application/json">{{ entry_data|safe }}</script>
-    <script id="saved-values" type="application/json">{{ saved_values|safe }}</script>
+    {% comment %}
+    The names come from supplier documents and whatever was typed: json_script only, never a JSON
+    string printed |safe - a name holding « </script> » closed the island and ran as the page's own
+    markup (security audit XSS-1, tests/test_json_islands.py).
+    {% endcomment %}
+    {{ entry_data|json_script:"entry-data" }}
+    {{ saved_values|json_script:"saved-values" }}
     {{ old_entry_suffixes|json_script:"old-entry-suffixes" }}
     <div class="card">
         <form method="post">
@@ -353,7 +358,13 @@ document.addEventListener("change", function (event) {
 // more: the database stays the only record, and the draft is dropped the
 // moment the inventory is actually saved.
 
-var DRAFT_KEY = "marginmate:stock-take-draft:{{ stock_take.pk|default_if_none:'new' }}";
+// Keyed by espace too (<body data-tenant>, base.html): storage belongs to the
+// origin, and one device counting two bars would offer bar B the rows bar A
+// typed under the same pk (« new » included) - and B's page, finding nothing
+// to offer, would wipe A's draft as it loaded. Empty on a page no espace is
+// bound to. stock_take_detail.html drops the same key.
+var ESPACE_SCOPE = document.body.getAttribute("data-tenant") ? "espace-" + document.body.getAttribute("data-tenant") + ":" : "";
+var DRAFT_KEY = "marginmate:" + ESPACE_SCOPE + "stock-take-draft:{{ stock_take.pk|default_if_none:'new' }}";
 var DRAFT_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 7;
 
 function collectRows() {

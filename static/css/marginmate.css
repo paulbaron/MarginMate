@@ -608,6 +608,11 @@ form p { margin: var(--s3) 0; }
 
 .job-console { margin-top: var(--s3); }
 
+/* The gather's tables and its « nothing found » line, under the head - a
+   class rather than an inline style=: /consignes/ draws this card too, and
+   a strict Content-Security-Policy is planned there. */
+.job-status-spaced { margin-top: var(--s3); }
+
 /* While a job runs, the one line that matters - what it's doing right now -
    sits in plain sight. The wall of scanner output behind it is what people
    found alarming, and it's almost never what they wanted to read. */
@@ -1901,3 +1906,297 @@ html:has(body.public-page) { scroll-padding-top: var(--s4); }
     .month-table th, .month-table td { padding: 0.28rem 0.45rem; font-size: 0.9rem; }
     .copy-row { flex-wrap: wrap; }
 }
+
+/* ------------------------------------------------------------- espaces */
+
+/* Multi mode only (base.html): the bar's name and « Se déconnecter » after
+   the links, outside their <nav>. Above 860 px one over the other, taking
+   as little width from the links as they can: side by side, they took the
+   links from two rows to three between 861 and 960 px, 124 px of bar for
+   96 of room (measured 28/09, three-digit badges). Under 860 px they share
+   the brand's row - a basis of 0 always fits there, the name gives way
+   first (ellipsis) - so the links wrap exactly as before, and the name goes
+   where it would be three letters. Measured width by width by
+   accounts/tests/test_topbar_browser.py. */
+.topbar-account {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    margin-left: auto;
+    flex: none;
+    min-width: 0;
+    font-size: 0.85rem;
+    line-height: 1.35;
+}
+.topbar-espace {
+    min-width: 0;
+    max-width: 12rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-dim);
+    font-weight: 600;
+}
+.topbar-logout { margin: 0; flex: none; }
+.topbar-logout .link-button { color: var(--muted); white-space: nowrap; }
+.topbar-logout .link-button:hover { color: var(--text); }
+
+@media (min-width: 861px) and (max-width: 1000px) {
+    /* Still three rows of links just above 860 px, stacked or not: 124 px
+       at 861 with a name of common length, up to about 950 px with one at
+       the 12rem cap. Only where the name is drawn: a page with no espace
+       (no .topbar-account) keeps the room its links alone take. */
+    html:has(.topbar-account) { --topbar-room: 8rem; }
+}
+@media (max-width: 860px) {
+    .topbar-account { order: 1; flex: 1 1 0; flex-direction: row; justify-content: flex-end; align-items: center; gap: var(--s3); }
+    .topbar-inner > nav { order: 2; }
+}
+@media (max-width: 319px) {
+    .topbar-espace { display: none; }
+}
+
+/* The login, the signup and « Aucun espace » (accounts/page.html): the
+   employee's page layout, one column of fields. */
+.account-brand { margin: var(--s4) 0 0; font-size: 1.15rem; font-weight: 750; color: var(--amber); letter-spacing: -0.02em; }
+.account-card { margin-top: var(--s4); }
+.account-card .form-grid { grid-template-columns: 1fr; }
+
+/* ------------------------------------------------------------- consignes */
+
+/* « Consignes » (returnables/): the empties handed back to the driver,
+   counted on a phone in a cellar. Every page of the app has .consignes-page
+   on its root element. Its fields are 16 px at least - under that iOS Safari
+   zooms the whole page in on focus (the app's inputs are 0.92rem), the
+   table's search box included. Under 600 px the topbar scrolls away with
+   the page here only (its three to five rows took a third of a phone's
+   screen above the count being typed); every other page keeps its sticky
+   bar and the room measured for it. */
+.consignes-page :is(input, select, textarea) { font-size: 1rem; }
+@media (max-width: 600px) {
+    html:has(.consignes-page) .topbar { position: static; }
+    html:has(.consignes-page) { --topbar-room: 0rem; }
+}
+/* Every tap target here is 44 px at least, the small buttons too: « Retirer »
+   under a photo, « Mettre la reprise au … », « Dater la reprise du … »,
+   « Classer » - .btn-small made them 30 (.btn is inline-flex, so min-height
+   holds). */
+.consignes-page .btn-small { min-height: 44px; }
+/* A file name has no space to break at (« Bon_de_livraison_…_000123.pdf »):
+   in a bon's subtitle or an upload's message it pushed the page past a
+   phone's width. The top messages sit outside the page's root. */
+.consignes-page .page-subtitle { overflow-wrap: anywhere; }
+html:has(.consignes-page) .message { overflow-wrap: anywhere; }
+
+/* The latest reprise in one line, above the form. */
+.reprise-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--s2);
+    margin: 0 0 var(--s3);
+    padding: var(--s3);
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+.reprise-strip a { font-weight: 600; color: var(--text); }
+.reprise-strip-empty { padding: var(--s4); margin: 0 0 var(--s3); }
+.gather-form { margin: 0 0 var(--s3); }
+
+/* « Reprise du 12/03/2031 · repris par UBA · modifier »: the day, who and a
+   note, folded - on almost every morning nobody touches them. */
+/* On a wide screen the form keeps a phone's proportions: the − field + of
+   a count stay next to its name. */
+.reprise-form { max-width: 42rem; }
+.reprise-details { margin-bottom: var(--s2); }
+.reprise-details > summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0 var(--s1);
+    min-height: 44px;
+    cursor: pointer;
+    list-style: none;
+    color: var(--text-dim);
+}
+.reprise-details > summary::-webkit-details-marker { display: none; }
+.reprise-details[open] > summary { margin-bottom: var(--s2); }
+.reprise-details-edit { color: var(--amber); text-decoration: underline; }
+
+.reprise-photos, .reprise-counts { border: 0; margin: var(--s4) 0 0; padding: 0; min-width: 0; }
+.reprise-photos legend, .reprise-counts legend { padding: 0; margin-bottom: var(--s2); font-weight: 650; }
+.reprise-photos .upload-choices { grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); margin-bottom: var(--s2); }
+.reprise-photos .upload-choice { min-height: 56px; align-content: center; text-align: center; }
+.photo-previews {
+    list-style: none;
+    margin: var(--s2) 0 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(6.5rem, 1fr));
+    gap: var(--s2);
+}
+.photo-preview { display: grid; gap: var(--s1); align-content: start; }
+.photo-preview img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: var(--radius-sm); }
+.photo-preview span { overflow-wrap: anywhere; }
+
+/* One count per type: the name, then − field +. The first active type (the
+   kegs: almost every reprise is mostly kegs) is bigger. The buttons are
+   thumb-sized and never select text or double-tap-zoom when tapped fast. */
+.count-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--s2) var(--s3);
+    padding: var(--s2) 0;
+    border-bottom: 1px solid var(--border);
+}
+.count-row .field-error { grid-column: 1 / -1; }
+.count-name { margin: 0; color: var(--text); font-size: 1rem; font-weight: 600; }
+.stepper { display: flex; align-items: center; gap: var(--s2); }
+.stepper-btn {
+    min-width: 44px;
+    min-height: 44px;
+    touch-action: manipulation;
+    user-select: none;
+    -webkit-user-select: none;
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    font: inherit;
+    font-size: 1.4rem;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+}
+.stepper-btn:hover { background: var(--panel-hover); }
+.stepper .count-input {
+    width: 4.5rem;
+    min-height: 44px;
+    text-align: center;
+    font-size: 1.2rem;
+    font-variant-numeric: tabular-nums;
+}
+.count-row.is-main .stepper-btn { min-width: 56px; min-height: 56px; font-size: 1.8rem; }
+.count-row.is-main .count-input { width: 6ch; min-height: 56px; padding: 0.2rem 0.3rem; font-size: 2rem; font-weight: 700; }
+@media (max-width: 400px) {
+    .count-row { grid-template-columns: minmax(0, 1fr); }
+}
+
+.draft-notice {
+    margin: var(--s3) 0 0;
+    padding: var(--s2) var(--s3);
+    border: 1px dashed var(--amber);
+    border-radius: var(--radius-sm);
+    color: var(--amber);
+}
+/* « Effacer »: a link-looking button, thumb-sized all the same. */
+.draft-notice .link-button {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 0 var(--s2);
+    text-decoration: underline;
+}
+.reprise-submit { width: 100%; max-width: 30rem; min-height: 48px; justify-content: center; font-size: 1rem; white-space: normal; text-align: center; }
+
+/* A reprise and its comparison: the card on /consignes/, its own page. */
+.reprise-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin: 0 0 var(--s2); }
+.reprise-photo-grid {
+    list-style: none;
+    margin: var(--s3) 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
+    gap: var(--s3);
+}
+.reprise-photo { display: grid; gap: var(--s1); align-content: start; }
+.reprise-photo img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: var(--radius-sm); background: var(--bg); }
+/* A saved photo's « Retirer… » opens its button: one mis-tap under the
+   thumbnail deleted it. */
+.photo-remove > summary { min-height: 44px; padding: 0.6rem 0; cursor: pointer; color: var(--red); font-size: 0.85rem; font-weight: 600; }
+.reprise-date-warning p, .reprise-hint p { margin: 0 0 var(--s2); }
+.reprise-hint {
+    margin: var(--s2) 0;
+    padding: var(--s2) var(--s3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-raised);
+}
+.comparison-list { margin: var(--s3) 0; }
+.invoice-check { margin: var(--s3) 0 0; }
+.invoice-check p { margin: var(--s1) 0; }
+.invoice-check-rows { margin: var(--s1) 0; padding-left: var(--s5); }
+.invoice-check-rows .is-gap { color: var(--red); }
+
+.consignes-list { margin-top: var(--s5); }
+.consignes-upload { margin-top: var(--s5); }
+.consignes-upload h3 { margin: var(--s5) 0 var(--s2); }
+.consignes-settings { margin: var(--s5) 0 var(--s2); color: var(--text-dim); }
+.gather-rules { padding-left: var(--s5); color: var(--text-dim); font-size: 0.9rem; }
+.gather-rules code, .motif-cheatsheet code, .motif-example, .consignes-page td code {
+    font-family: var(--font-mono);
+    font-size: 0.88em;
+    overflow-wrap: anywhere;
+}
+.danger-zone { margin: var(--s5) 0; }
+.danger-zone > summary { cursor: pointer; color: var(--red); font-weight: 600; }
+.danger-zone form { margin-top: var(--s2); }
+
+/* A bon: what its reading found, its lines, the PDF itself. */
+.slip-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--s1) var(--s3); margin: var(--s3) 0; }
+.slip-facts dt { color: var(--muted); }
+.slip-facts dd { margin: 0; overflow-wrap: anywhere; }
+.slip-reread { margin-top: var(--s3); }
+.slip-remarks {
+    white-space: pre-wrap;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    padding: var(--s3);
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+.slip-pdf {
+    display: block;
+    width: 100%;
+    height: 70vh;
+    min-height: 24rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+}
+
+/* A format of bon: its motifs in groups, one column (a motif is long), and
+   « Tester » - the text line by line, each line with what was read of it. */
+.format-form .form-grid { grid-template-columns: minmax(0, 1fr); }
+.format-group { border: 0; padding: 0; margin: 0 0 var(--s4); min-width: 0; }
+.format-group > legend, .format-group > summary { padding: 0; margin-bottom: var(--s2); font-size: 1.05rem; font-weight: 650; }
+details.format-group > summary { cursor: pointer; }
+.motif-input { width: 100%; font-family: var(--font-mono); font-size: 1rem; }
+.motif-cheatsheet { padding-left: var(--s5); color: var(--text-dim); font-size: 0.9rem; }
+.format-tester { margin: var(--s4) 0; padding-top: var(--s3); border-top: 1px solid var(--border); }
+.format-tester h2 { margin-top: 0; }
+.tester-sources { display: grid; gap: var(--s3); margin-bottom: var(--s3); }
+.tester-text { min-height: 8rem; }
+.test-result { margin-top: var(--s3); }
+.trace-lines {
+    list-style: none;
+    margin: var(--s2) 0;
+    padding: 0;
+    max-height: 32rem;
+    overflow: auto;
+    font-size: 0.85rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+.trace-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s1) var(--s2); padding: 0.15rem var(--s2); border-bottom: 1px solid var(--border); }
+.trace-line.is-tagged { background: var(--bg-raised); }
+.trace-number { min-width: 2.5ch; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.trace-text { font-family: var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.trace-tag { display: inline-block; padding: 0 0.45rem; border-radius: var(--radius-pill); background: var(--blue-bg); color: var(--blue); font-size: 0.75rem; }
+
+/* The types of consigne: one card each. */
+.type-card.is-inactive h2 { color: var(--muted); }
+.position-input { width: 6rem; }

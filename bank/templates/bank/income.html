@@ -67,16 +67,26 @@
                 de caisse de cette période {{ report.days_without_payments|length|pluralize:"a,ont" }} des ventes mais
                 aucun moyen de paiement lu (du {{ report.days_without_payments.0|date:"d/m/Y" }} au
                 {{ report.days_without_payments|last|date:"d/m/Y" }}) : ce que la caisse a encaissé est trop bas
-                d'autant. Pour le combler : <code>manage.py laddition_backfill_payments</code>, qui relit les exports
+                d'autant.
+                {% if till_allowed %}
+                Pour le combler : <code>manage.py laddition_backfill_payments</code>, qui relit les exports
                 déjà sur le disque et ne va rien chercher en ligne.
+                {% else %}
+                Pour le combler : {{ till_to_configure }}.
+                {% endif %}
             </div>
         {% endif %}
         {% if report.unread_revenue_days %}
             <div class="message message-warning">
                 Les ventes de <strong>{{ report.unread_revenue_days|length }} jour{{ report.unread_revenue_days|length|pluralize }}</strong>
                 de cette période n'ont pas encore de prix : « Vendu en caisse » ne les compte pas, et les pourboires
-                ne se calculent que sur les jours lus des deux côtés. Pour le combler :
-                <code>manage.py laddition_backfill_revenue</code>, qui relit les exports déjà sur le disque.
+                ne se calculent que sur les jours lus des deux côtés.
+                {% if till_allowed %}
+                Pour le combler : <code>manage.py laddition_backfill_revenue</code>, qui relit les exports déjà
+                sur le disque.
+                {% else %}
+                Pour le combler : {{ till_to_configure }}.
+                {% endif %}
             </div>
         {% endif %}
         {% comment %}
@@ -253,7 +263,7 @@
         <h2 id="solde">Ventes carte pas encore versées</h2>
         {% if report.balance.reason %}
             <div class="empty-state">
-                <p>Pas de solde : {{ report.balance.reason }}</p>
+                <p>Pas de solde : {{ balance_reason }}</p>
             </div>
         {% else %}
             <p class="lead">

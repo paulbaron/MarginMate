@@ -2,7 +2,7 @@
 
 Two halves:
 
-* **FakeSections** stand for the nine real sections, so the harness - the
+* **FakeSections** stand for the ten real sections, so the harness - the
   runner, the views, the safety net - is tested without waiting for the
   lanes and without their data. Each fake keeps its records as articles
   (`StockType`) whose category is its key: real rows, written and rolled
@@ -13,7 +13,8 @@ Two halves:
   folder, forge a hand-edited archive for the refusal tests.
 
 Archives written here are made from the tests' own invented rows, in the
-test settings' temp folders - never from real data.
+test espace's own folders (accounts.paths, under the test settings'
+temporary TENANTS_ROOT) - never from real data.
 """
 
 from __future__ import annotations
@@ -27,9 +28,9 @@ from pathlib import Path
 from typing import ClassVar
 
 from django.apps import apps
-from django.conf import settings
 from django.test import TestCase
 
+from accounts import paths
 from inventory.models import StockType
 from transfer import codec, registry
 from transfer.archive import ArchiveError, ArchiveReader
@@ -169,7 +170,7 @@ def fake_row(key: str, name: str, unit: str = "L", loss_percent: str = "10.00") 
 
 
 class FakeSectionsMixin:
-    """Every test of the class runs with the fakes standing for all nine
+    """Every test of the class runs with the fakes standing for all ten
     sections, whatever lanes have landed."""
 
     fake_keys: tuple[str, ...] | None = None
@@ -187,7 +188,7 @@ class FakeSectionsMixin:
 # -- the helpers of §10.2 ---------------------------------------------------------------
 
 def archive_dir() -> Path:
-    path = Path(settings.DATA_STAGING_DIR) / "test-archives"
+    path = paths.staging_dir() / "test-archives"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -239,9 +240,10 @@ def round_trip(keys, strategy=Strategy.MERGE, *, after_clear=None):
 
 def db_fingerprint() -> str:
     """Every row of every model of the app's own apps, ordered: equal before
-    and after means nothing was written."""
+    and after means nothing was written. An app a section covers and this
+    leaves out makes every « changes nothing » test blind to it."""
     digest = hashlib.sha256()
-    for app_label in ("inventory", "invoices", "recipes", "bank"):
+    for app_label in ("inventory", "invoices", "recipes", "bank", "returnables"):
         for model in sorted(apps.get_app_config(app_label).get_models(), key=lambda m: m._meta.label):
             names = [field.attname for field in model._meta.concrete_fields]
             digest.update(model._meta.label.encode())
@@ -251,8 +253,8 @@ def db_fingerprint() -> str:
 
 
 def media_listing() -> dict[str, str]:
-    """name → sha256 of every file under MEDIA_ROOT."""
-    root = Path(settings.MEDIA_ROOT)
+    """name → sha256 of every file in the espace's media folder."""
+    root = paths.media_root()
     listing = {}
     for folder, _dirs, files in os.walk(root):
         for filename in files:

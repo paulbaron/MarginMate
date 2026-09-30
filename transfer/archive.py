@@ -1,6 +1,7 @@
 """The archive, format version 1 (§4): a zip holding `manifest.json`
 (written last), one `<key>.json` per section, and `files/` - the invoices'
-PDFs and photos under their stored names.
+PDFs and photos, and « Consignes »' photos and bons, under their stored
+names.
 
 Two things drive how it is written and read.
 
@@ -46,7 +47,10 @@ MANIFEST = "manifest.json"
 FILES_PREFIX = "files/"
 CHUNK = 1024 * 1024
 
-# Limits (§4.5). Module constants so tests can patch them small.
+# Limits (§4.5). Module constants so tests can patch them small. They are
+# per archive, not per espace: in multi mode every espace shares the
+# server's disk, and nothing yet caps what one keeps (staged archives until
+# its sweep, backups for ever) - a quota per espace is a later step.
 MAX_ARCHIVE_BYTES = 4 * 1024**3
 MAX_MEMBERS = 100_000
 MAX_FILE_BYTES = 200 * 1024**2
@@ -57,6 +61,13 @@ RATIO_MIN_BYTES = 10 * 1024**2
 
 #: Already compressed: deflating them again costs time for nothing.
 STORED_SUFFIXES = {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".zip", ".xlsx"}
+
+#: Where an import may write a file: the invoices' documents and previews,
+#: and « Consignes »' photos and bons (returnables.models, all under
+#: consignes/). Adding a folder here does not bump VERSION: an older
+#: installation ignores the section it does not know (« partie inconnue
+#: ignorée ») and never reads its files.
+STORAGE_FOLDERS = ("invoices/", "receipts/", "consignes/")
 
 ZIP_MAGIC = b"PK\x03\x04"
 
@@ -106,17 +117,22 @@ def safe_member_name(name: str) -> bool:
 def storage_name_problem(name) -> str | None:
     """Why an import may not write a file under this storage name, or None.
     The name comes from the archive's record, so it is checked like a member
-    name, kept to the two folders documents live in, and must stay inside
-    MEDIA_ROOT once joined (Django's safe_join)."""
+    name, kept to the folders documents live in (`STORAGE_FOLDERS`), and
+    must stay inside the espace's media folder once joined (Django's
+    safe_join; accounts.paths.media_root). Checked against a server-wide
+    MEDIA_ROOT, every file of every archive was refused: the storage writes
+    under the espace's own media/."""
+    from accounts import paths
+
     if not isinstance(name, str) or not safe_member_name(name):
         return f"nom de fichier refusé (« {_shown(name)} »)"
-    if not name.startswith(("invoices/", "receipts/")):
-        return f"fichier hors des dossiers des factures et des tickets (« {_shown(name)} »)"
+    if not name.startswith(STORAGE_FOLDERS):
+        return f"fichier hors des dossiers des factures, des tickets et des consignes (« {_shown(name)} »)"
     if len(name) > 100:
         return f"nom de fichier trop long (« {_shown(name)} »)"
     try:
         path = Path(default_storage.path(name)).resolve()
-        root = Path(settings.MEDIA_ROOT).resolve()
+        root = paths.media_root().resolve()
     except (SuspiciousFileOperation, ValueError, NotImplementedError):
         return f"nom de fichier hors du dossier des fichiers (« {_shown(name)} »)"
     if root not in path.parents:
@@ -178,7 +194,7 @@ def applied_migrations() -> dict[str, str]:
         return {}
     latest: dict[str, str] = {}
     for app, name in applied:
-        if app in ("invoices", "inventory", "recipes", "bank") and name > latest.get(app, ""):
+        if app in ("invoices", "inventory", "recipes", "bank", "returnables") and name > latest.get(app, ""):
             latest[app] = name
     return dict(sorted(latest.items()))
 

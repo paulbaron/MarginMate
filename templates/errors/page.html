@@ -1,0 +1,27 @@
+{% load assets %}<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex, nofollow">
+    <title>{% block title %}Erreur{% endblock %} - MarginMate</title>
+    <link rel="stylesheet" href="{% asset 'css/marginmate.css' %}">
+</head>
+{% comment %}
+Les pages d'erreur (400, 403, 404, 500 et le refus CSRF, config/settings.py) : une phrase en français et
+un lien vers l'accueil - jamais l'adresse demandée, un réglage, un chemin, une trace ni la raison
+technique d'un refus (elles vont au journal, config/logs.py). La 500 est rendue sans la requête ni ses
+processeurs de contexte : rien ici n'en lit. N'hérite pas de base.html : ni navigation, ni compteurs,
+ni messages - une page d'erreur ne consomme pas ceux d'une page à venir.
+{% endcomment %}
+<body class="public-page account-page">
+    <main class="public-container">
+        <p class="account-brand">MarginMate</p>
+        <section class="public-card account-card">
+            <h1>{% block heading %}{% endblock %}</h1>
+            {% block content %}{% endblock %}
+            <p><a href="/">Revenir à l'accueil</a></p>
+        </section>
+    </main>
+</body>
+</html>

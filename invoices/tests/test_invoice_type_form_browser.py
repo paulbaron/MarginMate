@@ -21,6 +21,7 @@ from django.urls import reverse
 from invoices.models import InvoiceType, ScrapeJob, WebsiteInvoiceSource
 from invoices.scrapers import website
 from tests.factories import make_supplier
+from tests.runner import log_in_the_browser
 
 WAIT_SECONDS = 10
 
@@ -49,6 +50,8 @@ class InvoiceTypeFormInBrowserTests(StaticLiveServerTestCase):
 
     def setUp(self):
         self.supplier = make_supplier(code="BOX_X", name="Box Exemple", parser_key="", expenses_only=True)
+        # Every page wants a login: the test espace's owner.
+        log_in_the_browser(self.driver, self.live_server_url)
 
     def open(self, url):
         self.driver.get(self.live_server_url + url)

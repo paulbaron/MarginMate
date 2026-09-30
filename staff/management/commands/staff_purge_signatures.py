@@ -15,8 +15,15 @@ act, and --dry-run says what would go first.
 
 Each request goes through the ONE function the owner's « Supprimer… » uses
 (`staff.signature_deletion.delete_signature_request`, `how="purge"`): its
-own transaction, its files removed once committed, and its line in
-STAFF_PRIVATE_DIR/deletions.log.
+own transaction, its files removed once committed, and its line in the
+private folder's deletions.log.
+
+**Several espaces (multi mode).** The retention is every bar's: run on its
+own, the command purges EVERY espace, each bound in turn - its own
+database, its own private folder and deletions.log, its links forgotten -
+under a heading naming it (staff/management/espaces.py). Through
+`manage.py tenant <dossier> staff_purge_signatures` it purges that espace
+alone.
 """
 
 from django.conf import settings
@@ -24,6 +31,7 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 from staff import signature_deletion
+from staff.management.espaces import for_each_espace
 from staff.models import SignatureRequest
 from staff.timesheet import month_label, next_month
 
@@ -40,7 +48,7 @@ def _expired_before(month, years: int, today) -> bool:
 class Command(BaseCommand):
     help = (
         "Supprime les signatures (demandes, journaux et fichiers) des mois terminés depuis plus de "
-        "STAFF_SIGNATURE_RETENTION_YEARS ans."
+        "STAFF_SIGNATURE_RETENTION_YEARS ans - dans chaque espace en mode multi."
     )
 
     def add_arguments(self, parser):
@@ -49,6 +57,10 @@ class Command(BaseCommand):
     def handle(self, *args, dry_run=False, **options):
         years = int(getattr(settings, "STAFF_SIGNATURE_RETENTION_YEARS", 5))
         today = timezone.localdate()
+        for_each_espace(self, lambda: self._purge(years, today, dry_run))
+
+    def _purge(self, years: int, today, dry_run: bool) -> None:
+        """One database - the one bound (or the only one)."""
         doomed = [
             request
             for request in SignatureRequest.objects.select_related("timesheet__employee").order_by(

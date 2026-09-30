@@ -1,0 +1,23 @@
+{% extends "accounts/page.html" %}
+{% comment %}
+Un compte connecté dont l'espace ne s'ouvre pas - sa base introuvable, un espace en cours de
+restauration (accounts.middleware.TenantMiddleware, 503, jamais gardée par le navigateur) : une
+phrase et de quoi se déconnecter, rendue hors de tout espace. Jamais une trace, un chemin ou un nom
+de dossier : la cause est dans le journal du serveur.
+{% endcomment %}
+{% block title %}Espace indisponible - MarginMate{% endblock %}
+{% block scripts %}{% load assets %}<script src="{% asset 'js/ui.js' %}" defer></script>{% endblock %}
+{% block content %}
+    <section class="public-card account-card">
+        <h1>Votre espace est momentanément indisponible</h1>
+        <p>Ses données ne peuvent pas être ouvertes pour l'instant. Rien n'a été modifié.</p>
+        <p class="muted small">Réessayez dans quelques minutes. Si cela dure, prévenez l'administrateur du service.</p>
+        {% url 'accounts:logout' as logout_url %}
+        {% if logout_url %}
+            <form method="post" action="{{ logout_url }}" class="topbar-logout">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-secondary">Se déconnecter</button>
+            </form>
+        {% endif %}
+    </section>
+{% endblock %}

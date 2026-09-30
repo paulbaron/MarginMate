@@ -16,13 +16,14 @@ from datetime import date, timedelta
 from decimal import Decimal
 from unittest import mock
 
-from django.conf import settings
 from django.contrib.messages import get_messages
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
+from accounts import paths
+from common import SERVER_ERROR
 from invoices import receipts
 from invoices.importing import DuplicateInvoiceError, replace_invoice_lines
 from invoices.models import Invoice, ReceiptBatch, Supplier
@@ -62,7 +63,7 @@ def messages_of(response):
 class ImportAsChosenShopTests(TestCase):
     def setUp(self):
         self.sabbh = Supplier.objects.get(code="SABBH")
-        self.path = os.path.join(settings.MEDIA_ROOT, "ticket-sans-entete.pdf")
+        self.path = os.path.join(paths.media_root(), "ticket-sans-entete.pdf")
         with open(self.path, "wb") as handle:
             handle.write(b"%PDF-1.4 a ticket whose header is gone")
 
@@ -147,14 +148,14 @@ class ChooseShopInBatchTests(TestCase):
             parse_checks=[{"label": "Enseigne choisie à la main", "passed": True, "detail": ""}],
         )
         batch = stage_batch([upload("124_Sabbah.pdf"), upload("deja.pdf")])
-        self.folder = os.path.join(settings.MEDIA_ROOT, "receipt_batches", str(batch.pk))
+        self.folder = os.path.join(paths.imports_dir(), "receipt_batches",str(batch.pk))
         self.addCleanup(shutil.rmtree, self.folder, True)
         outcomes = [UnrecognisedShopError("Enseigne non reconnue sur ce ticket."), DuplicateInvoiceError("Déjà là.")]
         with mock.patch("invoices.receipt_batches.import_document", side_effect=outcomes):
             self.batch = run_receipt_batch(batch.pk)
         self.url = reverse("invoices:receipt_batch_assign", args=[self.batch.pk, 0])
         self.page = reverse("invoices:receipt_batch", args=[self.batch.pk])
-        self.file = os.path.join(settings.MEDIA_ROOT, self.batch.results[0]["stored"])
+        self.file = os.path.join(paths.imports_dir(), self.batch.results[0]["stored"])
 
     def choose(self, supplier=None, url=None, **outcome):
         outcome = outcome or {"return_value": self.receipt}
@@ -180,12 +181,12 @@ class ChooseShopInBatchTests(TestCase):
         """A generic ValueError is a broken file, not an unknown shop:
         choosing a shop would not make it readable."""
         batch = stage_batch([upload("casse.pdf")])
-        self.addCleanup(shutil.rmtree, os.path.join(settings.MEDIA_ROOT, "receipt_batches", str(batch.pk)), True)
+        self.addCleanup(shutil.rmtree, os.path.join(paths.imports_dir(), "receipt_batches",str(batch.pk)), True)
         with mock.patch("invoices.receipt_batches.import_document", side_effect=ValueError("image tronquée")):
             batch = run_receipt_batch(batch.pk)
         self.assertEqual(batch.results[0]["status"], "error")
         self.assertEqual(batch.awaiting_shop_count, 0)
-        self.assertFalse(os.path.exists(os.path.join(settings.MEDIA_ROOT, "receipt_batches", str(batch.pk))))
+        self.assertFalse(os.path.exists(os.path.join(paths.imports_dir(), "receipt_batches",str(batch.pk))))
 
     def test_the_batch_page_offers_the_shops(self):
         response = self.client.get(self.page)
@@ -223,12 +224,21 @@ class ChooseShopInBatchTests(TestCase):
         self.assertFalse(os.path.exists(self.file))
 
     def test_a_failed_import_keeps_the_file_to_try_again(self):
-        response, _ = self.choose(side_effect=RuntimeError("photo illisible"))
+        with self.assertLogs("invoices.receipt_batches", "ERROR") as logged:
+            response, _ = self.choose(side_effect=RuntimeError("photo illisible"))
         self.assertRedirects(response, self.page)
         self.assertEqual(self.batch.results[0]["status"], "unrecognised")
         self.assertTrue(os.path.exists(self.file))
-        self.assertTrue(any("photo illisible" in message for message in messages_of(response)))
-        self.assertIn("photo illisible", self.batch.log)
+        # Said by kind, on the page and in the batch's log; the exception's
+        # own words in the server's log only (security audit LB-3).
+        self.assertTrue(any(
+            "n'a pas pu être importé comme ticket" in message and SERVER_ERROR in message
+            for message in messages_of(response)
+        ))
+        self.assertIn(SERVER_ERROR, self.batch.log)
+        self.assertFalse(any("photo illisible" in message for message in messages_of(response)))
+        self.assertNotIn("photo illisible", self.batch.log)
+        self.assertIn("photo illisible", "\n".join(logged.output))
 
     def test_the_shop_can_be_chosen_while_the_batch_runs(self):
         """No need to wait for a folder of a hundred tickets to check the
@@ -309,7 +319,7 @@ class ChoiceDuringTheRunTests(TestCase):
         self.sabbh = Supplier.objects.get(code="SABBH")
         self.receipt = make_invoice(supplier=self.sabbh, invoice_date=date(2024, 8, 13))
         batch = stage_batch([upload("sans-entete.pdf"), upload("a.pdf"), upload("b.pdf")])
-        self.addCleanup(shutil.rmtree, os.path.join(settings.MEDIA_ROOT, "receipt_batches", str(batch.pk)), True)
+        self.addCleanup(shutil.rmtree, os.path.join(paths.imports_dir(), "receipt_batches",str(batch.pk)), True)
         # A first run left the first file waiting for its shop, and was
         # stopped before the other two.
         batch.results[0].update(status="unrecognised", kept=True, message="Enseigne non reconnue.")

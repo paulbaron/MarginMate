@@ -42,7 +42,7 @@ from django.contrib.messages import get_messages
 from django.db import transaction
 from django.shortcuts import redirect, render
 from django.urls import reverse
-from django.utils.http import url_has_allowed_host_and_scheme, urlencode
+from django.utils.http import urlencode
 
 from common import (
     LEFT_OUT_PARAM,
@@ -52,8 +52,10 @@ from common import (
     is_id,
     last_twelve_months,
     left_out_from,
+    safe_next,
 )
 from inventory.models import StockType
+from recipes.integration import TILL_TO_CONFIGURE, till_allowed
 from recipes.models import RecipeIngredient
 
 from .computation import NO_CATEGORY, Exclusion, Slice, known_left_out, margins_for
@@ -243,6 +245,11 @@ def margins_home(request):
             "clear_url": _page_url(DateRange(), showing_all=False, left_out=left_out),
             # This very page, for a form that answers back to it (`next`).
             "here_url": here_url,
+            # What fills the unread days is a command on the server, which
+            # reads the owner's till's exports: said only in that espace,
+            # « à configurer » elsewhere (recipes/integration.py).
+            "till_allowed": till_allowed(),
+            "till_to_configure": TILL_TO_CONFIGURE,
             # The panel's forms post there and come back here, on the panel.
             "count_articles_url": reverse("margins:count_articles"),
             "articles_next": f"{here_url}#{PANEL}",
@@ -542,11 +549,7 @@ def _agreed(count: int, participle: str) -> str:
 def _back(request) -> str:
     """Where a post answers: its `next` when it is this site's - the page as
     it was read, with its period and its selection - and the panel of the
-    bare page otherwise. Checked like `bank.views._back`: a `next` is
-    something a form carries, and anything can be put in one."""
-    target = request.POST.get("next") or request.GET.get("next") or ""
-    if target and url_has_allowed_host_and_scheme(
-        target, allowed_hosts={request.get_host()}, require_https=request.is_secure()
-    ):
-        return target
-    return f"{reverse('margins:margins_home')}#{PANEL}"
+    bare page otherwise. Checked like every other one (`common.safe_next`):
+    a `next` is something a form carries, and anything can be put in one -
+    « abc » was a 500 (audit LB-5)."""
+    return safe_next(request, f"{reverse('margins:margins_home')}#{PANEL}")

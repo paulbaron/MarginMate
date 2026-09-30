@@ -25,6 +25,15 @@ Three things it will not do:
 `--dry-run` first: it says which files, which days, how many rows it would
 fill, how many it cannot match, and the revenue per year - before anything
 is written.
+
+**The folder is the espace's own** (`accounts.paths.downloads_dir`: the
+espace's downloads/, run as `manage.py tenant <dossier>
+laddition_backfill_revenue`). Every
+export in it is written onto whatever database is bound, so a folder shared
+by two bars would put one bar's till money on the other's days - a « Pinte »
+sold by both on the same day takes the other's revenue, silently. It uses no
+account and contacts nothing, so it is not limited to the owner's espace:
+another espace's folder simply holds its own exports, or none.
 """
 
 from collections import defaultdict
@@ -32,10 +41,11 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
-from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
+from accounts import paths
+from recipes.integration import require_espace
 from recipes.models import PosProduct, PosProductDailyQuantity
 from recipes.pos.laddition_xlsx import LadditionExportError, parse_sales_export
 
@@ -67,12 +77,13 @@ class Command(BaseCommand):
         parser.add_argument(
             "--folder",
             default=None,
-            help="Dossier des .xlsx à lire (par défaut celui des téléchargements).",
+            help="Dossier des .xlsx à lire (par défaut celui des téléchargements de l'espace).",
         )
         parser.add_argument("--dry-run", action="store_true", help="Montrer sans rien enregistrer.")
 
     def handle(self, *args, folder=None, dry_run=False, **options):
-        directory = Path(folder or settings.SCRAPE_DOWNLOAD_DIR)
+        require_espace("laddition_backfill_revenue")
+        directory = Path(folder) if folder else paths.downloads_dir()
         if not directory.is_dir():
             raise CommandError(f"Dossier introuvable : {directory}")
         # "~$…" is Excel's own lock file, not an export.

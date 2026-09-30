@@ -26,6 +26,10 @@ Three things it will not do:
 `--dry-run` first: it says which files, which days, how many it would fill,
 how many it leaves out, and the payments per year and per method - before
 anything is written.
+
+The folder is the espace's own, for the reason laddition_backfill_revenue
+gives: run it as `manage.py tenant <dossier> laddition_backfill_payments` in
+multi mode, and a bar's card and cash totals never land on another's days.
 """
 
 from collections import defaultdict
@@ -33,9 +37,10 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
-from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
+from accounts import paths
+from recipes.integration import require_espace
 from recipes.management.commands.laddition_backfill_revenue import SHOWN, euros
 from recipes.models import PosDailyPayment, PosProductDailyQuantity
 from recipes.payments import by_method, changed_days, day_total, oddities, replace_days
@@ -70,12 +75,13 @@ class Command(BaseCommand):
         parser.add_argument(
             "--folder",
             default=None,
-            help="Dossier des .xlsx à lire (par défaut celui des téléchargements).",
+            help="Dossier des .xlsx à lire (par défaut celui des téléchargements de l'espace).",
         )
         parser.add_argument("--dry-run", action="store_true", help="Montrer sans rien enregistrer.")
 
     def handle(self, *args, folder=None, dry_run=False, **options):
-        directory = Path(folder or settings.SCRAPE_DOWNLOAD_DIR)
+        require_espace("laddition_backfill_payments")
+        directory = Path(folder) if folder else paths.downloads_dir()
         if not directory.is_dir():
             raise CommandError(f"Dossier introuvable : {directory}")
         # "~$…" is Excel's own lock file, not an export.

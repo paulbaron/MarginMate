@@ -157,6 +157,20 @@ class SearchableSortableTableTests(TestCase):
         self.assertContains(self.assertEnhancedTable("staff:home"), 'data-table-label="salariés"')
         self.assertContains(self.assertEnhancedTable("staff:employee", pk=person.pk), 'data-table-label="mois"')
 
+    def test_consignes(self):
+        """« Consignes »: the reprises and the bons received are lists, and
+        so are the formats of bon and a bon's lines; the reprise's form is a
+        form, and is not one."""
+        from returnables.tests.support import make_pickup, make_slip
+
+        make_pickup()
+        slip = make_slip()
+        response = self.assertEnhancedTable("returnables:home")
+        self.assertContains(response, 'data-table-label="reprises"')
+        self.assertContains(response, 'data-table-label="bons reçus"')
+        self.assertContains(self.assertEnhancedTable("returnables:format_list"), 'data-table-label="formats de bons"')
+        self.assertContains(self.assertEnhancedTable("returnables:slip_detail", pk=slip.pk), 'data-table-label="lignes du bon"')
+
     def test_stock_take_list(self):
         self.assertEnhancedTable("inventory:stock_take_list")
 
@@ -221,6 +235,20 @@ class SortKeyTests(TestCase):
         # about is that the attribute is a bare number at all, with none of
         # the « ? » the estimate badge puts in the cell's own text.
         self.assertContains(response, 'data-sort="4.0000"')
+
+    def test_reprise_and_bon_dates_carry_an_iso_sort_key(self):
+        """« Consignes »: a reprise's day and a bon's delivery sort by their
+        ISO date - and read as French dates."""
+        from returnables.tests.support import make_pickup, make_slip
+
+        make_pickup(date=date(2026, 3, 31))
+        make_pickup(date=date(2025, 4, 1))
+        make_slip(delivery_date=date(2026, 2, 5))
+        response = self.client.get(reverse("returnables:home"))
+        for key, shown in (("2026-03-31", "31/03/2026"), ("2025-04-01", "01/04/2025"), ("2026-02-05", "05/02/2026")):
+            with self.subTest(day=key):
+                self.assertContains(response, f'data-sort="{key}"')
+                self.assertContains(response, shown)
 
 
 class ChildRowTests(TestCase):
@@ -309,6 +337,9 @@ class PageChromeTests(TestCase):
             "margins:margins_home",
             "bank:income_home",
             "staff:home",
+            "returnables:home",
+            "returnables:format_list",
+            "returnables:type_list",
         ):
             with self.subTest(page=url_name):
                 self.assertContains(self.client.get(reverse(url_name)), "page-subtitle")
@@ -381,7 +412,10 @@ class TemplateHygieneTests(TestCase):
                 "templates",
                 *[
                     f"{app}/templates"
-                    for app in ("inventory", "invoices", "recipes", "bank", "margins", "transfer", "staff")
+                    for app in (
+                        "accounts", "inventory", "invoices", "recipes", "bank", "margins", "transfer", "staff",
+                        "returnables",
+                    )
                 ],
             ):
                 candidate = root / base
@@ -395,6 +429,93 @@ class TemplateHygieneTests(TestCase):
                     get_template(name)
                 except TemplateSyntaxError as exc:
                     self.fail(f"{name}: {exc}")
+
+
+class ConsignesWritesNoMarkupTests(TestCase):
+    """« Consignes » prints what a stranger wrote: a type's name, a motif, a
+    bon's designations, a mail's subject, a photo's file name. Every
+    sentence its pure modules build is plain text, escaped by the templates -
+    nothing in the app may turn text into markup, and its script builds
+    nodes with textContent (the rule charts.js was caught breaking)."""
+
+    def test_no_safe_filter_nor_mark_safe_in_the_app(self):
+        import pathlib
+        import re
+
+        root = pathlib.Path(__file__).resolve().parent.parent / "returnables"
+        offenders = []
+        for path in root.rglob("*.html"):
+            # What a comment says about |safe is not a use of it.
+            text = re.sub(r"\{% comment %\}.*?\{% endcomment %\}", "", path.read_text(encoding="utf-8"), flags=re.S)
+            for pattern in (r"\|\s*safe(seq)?\b", r"\{%\s*autoescape\s+off"):
+                if re.search(pattern, text):
+                    offenders.append(f"{path.name}: {pattern}")
+        for path in root.rglob("*.py"):
+            if "tests" in path.parts:
+                continue
+            text = path.read_text(encoding="utf-8")
+            for pattern in (r"\bmark_safe\s*\(", r"\bSafeString\s*\(", r"django\.utils\.safestring", r"\bformat_html\s*\("):
+                if re.search(pattern, text):
+                    offenders.append(f"{path.name}: {pattern}")
+        self.assertEqual(offenders, [])
+
+    def test_the_consignes_script_never_writes_markup(self):
+        import pathlib
+        import re
+
+        source = (pathlib.Path(__file__).resolve().parent.parent / "static/js/returnables.js").read_text(encoding="utf-8")
+        for pattern in (r"\.innerHTML\s*[+]?=", r"\.outerHTML\s*[+]?=", r"insertAdjacentHTML", r"document\.write"):
+            with self.subTest(pattern=pattern):
+                self.assertIsNone(re.search(pattern, source))
+
+    def test_no_inline_script_nor_style_in_the_app_s_templates(self):
+        """A strict Content-Security-Policy is planned: the page's script is
+        static/js/returnables.js, its looks marginmate.css."""
+        import pathlib
+        import re
+
+        root = pathlib.Path(__file__).resolve().parent.parent / "returnables" / "templates"
+        for path in root.rglob("*.html"):
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(template=path.name):
+                self.assertIsNone(re.search(r"\sstyle=", text))
+                self.assertIsNone(re.search(r"<script(?![^>]*\ssrc=)", text))
+                self.assertIsNone(re.search(r"<[a-zA-Z][^>]*\son[a-z]+\s*=", text))
+
+    def test_the_gather_card_the_page_includes_has_no_inline_style(self):
+        """/consignes/ draws Achats' gather card (invoices/_gather_status.html)
+        while a gather of bons runs: the CSP the page is written for covers
+        what it includes too. Its spacing was four inline style= (29/09)."""
+        import pathlib
+        import re
+
+        path = pathlib.Path(__file__).resolve().parent.parent / "invoices/templates/invoices/_gather_status.html"
+        text = path.read_text(encoding="utf-8")
+        self.assertIsNone(re.search(r"\sstyle=", text))
+        self.assertIsNone(re.search(r"<script(?![^>]*\ssrc=)", text))
+
+
+class ConsignesStylesheetTests(TestCase):
+    def test_the_phone_rules_are_in_the_stylesheet(self):
+        """The fast loop's guard of what returnables/tests/test_phone_browser.py
+        measures in Chrome: every small button of these pages 44 px tall (a
+        photo's « Retirer » was 30, « Effacer » a line of text), and a file
+        name without spaces wrapped rather than widening the page (in a
+        bon's subtitle, in a message - which sits outside the page's root)."""
+        import pathlib
+        import re
+
+        css = (pathlib.Path(__file__).resolve().parent.parent / "static/css/marginmate.css").read_text(encoding="utf-8")
+        block = css[css.index("/* ------------------------------------------------------------- consignes */"):]
+        for selector, declaration in (
+            (r"\.consignes-page \.btn-small", r"min-height:\s*44px"),
+            (r"\.draft-notice \.link-button", r"min-height:\s*44px"),
+            (r"\.photo-remove > summary", r"min-height:\s*44px"),
+            (r"\.consignes-page \.page-subtitle", r"overflow-wrap:\s*anywhere"),
+            (r"html:has\(\.consignes-page\) \.message", r"overflow-wrap:\s*anywhere"),
+        ):
+            with self.subTest(selector=selector):
+                self.assertRegex(block, selector + r"\s*\{[^}]*" + declaration)
 
 
 class JobConsoleTests(TestCase):
@@ -963,6 +1084,10 @@ class PieTooltipInBrowserTests(StaticLiveServerTestCase):
                 fingerprint=f"pie-tooltip-{number}",
                 category=category,
             )
+        from tests.runner import log_in_the_browser
+
+        # Every page wants a login: the test espace's owner.
+        log_in_the_browser(self.driver, self.live_server_url)
         self.driver.get(f"{self.live_server_url}{reverse('bank:spending_home')}?du=2026-06-01&au=2026-06-30")
 
     def hover(self, trigger: str) -> dict:

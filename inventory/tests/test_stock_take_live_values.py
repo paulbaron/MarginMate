@@ -38,6 +38,7 @@ from tests.factories import (
     make_stock_type,
     make_supplier,
 )
+from tests.test_json_islands import island
 
 
 class FirstPurchaseDateTests(TestCase):
@@ -108,7 +109,8 @@ class EntryAvailabilityTests(TestCase):
 
     def test_the_page_ships_the_dates_to_the_browser(self):
         response = self.client.get(reverse("inventory:stock_take_create"))
-        data = json.loads(response.context["entry_data"])
+        # What the page's script reads: the island json_script printed.
+        data = island(response.content.decode(), "entry-data")
         self.assertEqual(data[product_display_name(self.new)]["available_from"], "2026-06-01")
 
 
@@ -289,7 +291,7 @@ class LiveLineValueTests(TestCase):
             unit=UnitChoices.UNIT, value_ht="60.00",
         )
         response = self.client.get(reverse("inventory:stock_take_update", kwargs={"pk": take.pk}))
-        self.assertEqual(json.loads(response.context["saved_values"]), {str(line.pk): "60.00"})
+        self.assertEqual(island(response.content.decode(), "saved-values"), {str(line.pk): "60.00"})
 
 
 class ResolverQueryCountTests(TestCase):

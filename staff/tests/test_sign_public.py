@@ -46,6 +46,7 @@ from staff.tests.signing_support import (
 )
 from staff.tests.support import employee
 from staff.timesheet import PostedDay, save_month
+from tests import runner
 from tests.support import NoNetworkTestCase
 
 JUNE = date(2026, 6, 1)
@@ -277,9 +278,13 @@ class NothingElseTests(PublicCase):
 
     def test_the_owner_s_messages_never_reach_it(self):
         """The same browser, the owner's page answering with a message not
-        read yet: the employee's page does not draw it, and leaves it."""
+        read yet: the employee's page does not draw it, and leaves it. The
+        owner is logged in on it - his pages want a login (this client,
+        the employee's phone, is Django's own and anonymous)."""
+        self.client.force_login(runner.test_user())
         owner = reverse("staff:employee", args=[self.person.pk])
         page = self.client.get(owner)
+        self.assertEqual(page.status_code, 200)
         form = form_posting_to(page.content.decode(), owner)
         self.client.post(form.action.split("#")[0], as_post(form.submission(values={"first_name": "Jeanne-Marie"})))
         self.assertNotIn("Nom enregistré", self.text(self.get()))

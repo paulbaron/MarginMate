@@ -1,0 +1,86 @@
+{% comment %}
+A reprise's fields, inside its <form> (the new one on /consignes/, the edit on
+the reprise's page): the day, who took the empties and a note folded under
+one line - on almost every morning nobody touches them - then the photos,
+then one count per type, then the button.
+
+Context: form (forms.PickupForm), submit_label, photo_room (how many photos
+may still be added), max_photos, details_open, and on the home page same_day
+/ same_day_summary (a reprise already saved for that day and supplier).
+
+Every refusal of the server has its twin here (the date's min/max, a count's
+pattern and maxlength): a refused post loses the photos, which a browser
+never gives back. The stepper buttons are drawn hidden; returnables.js shows
+them - without JavaScript the field is typed.
+{% endcomment %}
+{% if form.non_field_errors %}
+    <div class="message message-error">
+        {% for error in form.non_field_errors %}<p>{{ error }}</p>{% endfor %}
+    </div>
+{% endif %}
+<details class="reprise-details"{% if details_open or form.details_have_errors %} open{% endif %}>
+    <summary>Reprise du <span data-summary-date>{{ form.shown_date }}</span> · repris par <span data-summary-supplier>{{ form.shown_supplier }}</span> · <span class="reprise-details-edit">modifier</span></summary>
+    <div class="form-grid">
+        {% for field in form %}{% if field.name == "date" or field.name == "supplier" or field.name == "note" %}
+            <div class="form-field form-field-{{ field.widget_type }}{% if field.errors %} has-error{% endif %}">
+                <label for="{{ field.id_for_label }}">
+                    {{ field.label }}{% if field.field.required %}<span class="required" aria-hidden="true">*</span>{% endif %}
+                </label>
+                {{ field }}
+                {% if field.help_text %}<p class="help">{{ field.help_text }}</p>{% endif %}
+                {% for error in field.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+            </div>
+        {% endif %}{% endfor %}
+    </div>
+</details>
+
+{% if same_day %}
+    <p class="message message-warning same-day">
+        Une reprise du {{ same_day.date|date:"d/m/Y" }} est déjà enregistrée{% if same_day_summary %} ({{ same_day_summary }}){% endif %} :
+        <a href="{% url 'returnables:pickup_detail' same_day.pk %}#modifier">la compléter</a>
+    </p>
+{% endif %}
+
+<fieldset class="reprise-photos" data-photos data-max-photos="{{ photo_room }}">
+    <legend>Photos</legend>
+    {% if photo_room %}
+        <div class="upload-choices">
+            <label class="upload-choice" data-photo-slot>
+                <span class="upload-choice-title">Prendre une photo</span>
+                <input type="file" name="photos" accept="image/*" capture="environment" data-photo-capture>
+            </label>
+            <label class="upload-choice" data-photo-slot>
+                <span class="upload-choice-title">Choisir des photos</span>
+                <input type="file" name="photos" accept="image/*" multiple data-photo-gallery>
+            </label>
+        </div>
+        <p class="help">{% if photo_room < max_photos %}Encore {{ photo_room }} photo{{ photo_room|pluralize }} au plus ({{ max_photos }} par reprise).{% else %}{{ max_photos }} photos au plus.{% endif %} Elles sont réduites et enregistrées sans leur position GPS.</p>
+    {% else %}
+        <p class="muted">{{ max_photos }} photos : retirez-en une pour en ajouter une autre.</p>
+    {% endif %}
+    <div class="photo-inputs" data-photo-inputs hidden></div>
+    <p class="field-error" data-photo-refused hidden></p>
+    <ul class="photo-previews" data-photo-previews></ul>
+</fieldset>
+
+<fieldset class="reprise-counts">
+    <legend>Nombres repris</legend>
+    {% for kind, field in form.count_rows %}
+        <div class="count-row{% if forloop.first %} is-main{% endif %}{% if field.errors %} has-error{% endif %}" data-count-row data-type-name="{{ kind.name }}">
+            <label class="count-name" for="{{ field.id_for_label }}">{{ kind.name }}{% if not kind.is_active %} <span class="muted small">(inactif)</span>{% endif %}</label>
+            <div class="stepper">
+                <button type="button" class="stepper-btn" data-step="-1" aria-label="Un de moins : {{ kind.name }}" hidden>−</button>
+                {{ field }}
+                <button type="button" class="stepper-btn" data-step="1" aria-label="Un de plus : {{ kind.name }}" hidden>+</button>
+            </div>
+            {% for error in field.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+        </div>
+    {% empty %}
+        <p class="muted">Aucun type de consigne actif : ajoutez-en un sous <a href="{% url 'returnables:type_list' %}">Types de consigne</a>.</p>
+    {% endfor %}
+</fieldset>
+
+<p class="draft-notice" data-draft-notice hidden></p>
+<div class="form-actions">
+    <button class="btn reprise-submit" type="submit" data-busy-label="Envoi des photos… gardez la page ouverte">{{ submit_label }}</button>
+</div>

@@ -268,6 +268,104 @@ def _finish_line(entries: list[dict]) -> OcrLine:
 # Photo files taken as receipts as they are, without being put into a PDF.
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp")
 
+# What reading one document may cost (security audit UPLOAD-1). A page with
+# no photo is rendered at RENDER_DPI at whatever size its MediaBox DECLARES,
+# and a file of a few hundred bytes declares what it likes: 1200 pt square
+# came out at 5000 px (+96 Mo), the format's 14 400 pt would be 60 000 px
+# square, about 11 Go - in the one process serving every bar. So every page
+# is weighed from its declared size and its images' pixel sizes BEFORE
+# anything is rendered or decoded, and a document that cannot be read within
+# these is refused (DocumentTooBig, said on that file's line).
+#
+#: Pages read in one document: a ticket is one, a supplier's invoice a few.
+#: Counted before ANY page is read - rendered, or its text taken by
+#: pdfplumber (`check_page_count`, `pdf_pages`) - not only before a render.
+MAX_PAGES = 30
+RENDER_DPI = 300
+#: Pixels of one rendered page: 40 Mpx is an A2 sheet at 300 dpi (A4 is 8.7).
+#: A bigger page is rendered at a lower resolution to fit...
+RENDER_MAX_PIXELS = 40_000_000
+#: ...down to 100 dpi, below which print is no longer read: a page that does
+#: not fit even then (1.6 m square) is no ticket and no invoice.
+MIN_RENDER_SCALE = 100 / 72
+#: Pixels of one image taken as it is - a photo file, or a scan's embedded
+#: photo: Pillow's own bomb threshold (89 Mpx), above a 48 Mpx phone photo.
+IMAGE_MAX_PIXELS = 89_478_485
+
+TOO_MANY_PAGES = "Document trop long pour être lu : {pages} pages, {limit} au plus."
+PAGE_TOO_LARGE = (
+    "Page trop grande pour être lue (page {number} : {width} × {height} cm) : ce n'est ni un ticket ni une facture."
+)
+IMAGE_TOO_LARGE = (
+    "Image trop grande pour être lue (page {number} : {pixels} millions de pixels, {limit} au plus)."
+)
+
+
+class DocumentTooBig(ValueError):
+    """A document refused for what reading it would cost. French, for the
+    person: its words are said on the file's line."""
+
+
+#: PDFium is not thread-safe (pypdfium2 says so: one thread at a time in a
+#: process), and `page_images` runs in a folder import's thread
+#: (receipt_batches, which takes no OCR_LOCK), a gather's, and the requests'
+#: - all in the one process serving every bar. Every call into it holds this
+#: lock; a page handed to the caller holds nothing. Re-entrant: a generator
+#: left half read closes its document whenever it is collected, possibly in
+#: a thread already inside the lock.
+PDFIUM_LOCK = threading.RLock()
+
+
+def _centimetres(points: float) -> str:
+    return f"{points / 72 * 2.54:.1f}".replace(".", ",")
+
+
+def _millions(pixels: int) -> str:
+    return f"{pixels / 1_000_000:.0f}"
+
+
+def _check_pixels(width: int, height: int, number: int) -> None:
+    if width * height > IMAGE_MAX_PIXELS:
+        raise DocumentTooBig(
+            IMAGE_TOO_LARGE.format(number=number, pixels=_millions(width * height), limit=_millions(IMAGE_MAX_PIXELS))
+        )
+
+
+def render_scale(width: float, height: float) -> float | None:
+    """The scale a page of `width` × `height` points is rendered at: 300 dpi,
+    or lower to stay within RENDER_MAX_PIXELS - None when even
+    MIN_RENDER_SCALE would not."""
+    scale = RENDER_DPI / 72
+    area = max(width, 1.0) * max(height, 1.0)
+    if area * scale * scale <= RENDER_MAX_PIXELS:
+        return scale
+    # A hair under the exact fit: the renderer rounds each side up.
+    scale = math.sqrt(RENDER_MAX_PIXELS / area) * 0.99
+    return scale if scale >= MIN_RENDER_SCALE else None
+
+
+def _plan_pdf(document, pdfium_raw) -> list:
+    """(page, the one image to take as it is or None, the render scale) for
+    every page - every page weighed before the first is read."""
+    if len(document) > MAX_PAGES:
+        raise DocumentTooBig(TOO_MANY_PAGES.format(pages=len(document), limit=MAX_PAGES))
+    plan = []
+    for number, page in enumerate(document, start=1):
+        width, height = page.get_size()
+        images = list(page.get_objects(filter=(pdfium_raw.FPDF_PAGEOBJ_IMAGE,)))
+        for image in images:
+            _check_pixels(*image.get_px_size(), number)
+        if len(images) == 1 and covers_page(images[0].get_bounds(), width, height):
+            plan.append((page, images[0], None))
+            continue
+        scale = render_scale(width, height)
+        if scale is None:
+            raise DocumentTooBig(
+                PAGE_TOO_LARGE.format(number=number, width=_centimetres(width), height=_centimetres(height))
+            )
+        plan.append((page, None, scale))
+    return plan
+
 
 def page_images(path: str):
     """Yield one PIL image per page.
@@ -279,29 +377,49 @@ def page_images(path: str):
     full-page image (the normal case for a phone scan), else the rendered
     page - which keeps this function total, so the caller never has to
     special-case "no image found".
+
+    Raises DocumentTooBig, before anything is decoded or rendered, for a
+    document whose reading would cost more than MAX_PAGES pages,
+    IMAGE_MAX_PIXELS for a photo, or RENDER_MAX_PIXELS for a rendered page
+    at MIN_RENDER_SCALE (a bigger page is rendered at a lower resolution).
     """
     if path.lower().endswith(IMAGE_EXTENSIONS):
         from PIL import Image, ImageOps, ImageSequence
 
         with Image.open(path) as image:
-            for frame in ImageSequence.Iterator(image):
+            # The header only: nothing is decoded yet.
+            frames = getattr(image, "n_frames", 1)
+            if frames > MAX_PAGES:
+                raise DocumentTooBig(TOO_MANY_PAGES.format(pages=frames, limit=MAX_PAGES))
+            _check_pixels(*image.size, 1)
+            for number, frame in enumerate(ImageSequence.Iterator(image), start=1):
+                _check_pixels(*frame.size, number)
                 yield ImageOps.exif_transpose(frame).convert("RGB")
         return
 
     import pypdfium2 as pdfium
     import pypdfium2.raw as pdfium_raw
 
-    document = pdfium.PdfDocument(path)
+    # One call into PDFium at a time in the process (PDFIUM_LOCK), and none
+    # held while the caller works on a page: its OCR takes seconds.
+    with PDFIUM_LOCK:
+        document = pdfium.PdfDocument(path)
+        try:
+            plan = _plan_pdf(document, pdfium_raw)
+        except BaseException:
+            document.close()
+            raise
     try:
-        for page in document:
-            width, height = page.get_size()
-            images = [obj for obj in page.get_objects() if obj.type == pdfium_raw.FPDF_PAGEOBJ_IMAGE]
-            if len(images) == 1 and covers_page(images[0].get_bounds(), width, height):
-                yield images[0].get_bitmap().to_pil().convert("RGB")
-            else:
-                yield page.render(scale=300 / 72).to_pil().convert("RGB")
+        for page, image, scale in plan:
+            with PDFIUM_LOCK:
+                if image is not None:
+                    picture = image.get_bitmap().to_pil().convert("RGB")
+                else:
+                    picture = page.render(scale=scale).to_pil().convert("RGB")
+            yield picture
     finally:
-        document.close()
+        with PDFIUM_LOCK:
+            document.close()
 
 
 #: How much of its page an embedded image has to cover to be the page - a
@@ -327,8 +445,89 @@ COLUMN_GAP_SHARE = 0.4
 SAME_TEXT_LINE_POINTS = 3
 
 
+def _walk_pages(path: str, limit: int) -> tuple[int, object]:
+    """How many pages pdfplumber would iterate, counted up to `limit`, and
+    the /Count the page tree declares."""
+    import itertools
+
+    from pdfminer.pdfdocument import PDFDocument
+    from pdfminer.pdfpage import PDFPage
+    from pdfminer.pdfparser import PDFParser
+    from pdfminer.pdftypes import resolve1
+
+    with open(path, "rb") as handle:
+        document = PDFDocument(PDFParser(handle))
+        counted = sum(1 for _page in itertools.islice(PDFPage.create_pages(document), limit))
+        tree = resolve1(document.catalog.get("Pages"))
+        declared = resolve1(tree.get("Count")) if isinstance(tree, dict) else None
+    return counted, declared
+
+
+def check_page_count(path: str) -> None:
+    """Refuse (DocumentTooBig) a PDF of more than MAX_PAGES pages before
+    anything reads one of its pages (security review HARDEN-01).
+
+    pdfplumber keeps every page it has read - its characters, its layout -
+    until the file is closed: 0,57 Mo a page of 300 glyphs, 5,7 Mo one of
+    3 000, and a PDF under the 25 Mo upload cap can carry tens of thousands
+    of pages sharing one content stream. The page cap in `page_images` came
+    too late: the text layer (`text_layer_pages`) and a supplier's reader
+    (`InvoiceParser.parse`) had read every page by then.
+
+    Counted as pdfplumber will iterate them - pdfminer's own walk of the
+    page tree, stopped at MAX_PAGES + 1 leaves, so 31 pages and 30 000 cost
+    the same walk (the cross-reference table aside, which opening the file
+    reads anyway). Not pdfium's count: pdfium believes the /Count the tree
+    declares, and a file declaring 1 over 2 000 pages was one page to
+    pdfium and 2 000 to pdfplumber; nor is pdfium safe to call from two
+    threads at once, and this runs in a gather's and a folder import's. The
+    number said is the one the file declares when that is over the cap,
+    else « plus de N ». Measured on a file of 5 000 light pages: refused in
+    half a second and 1,8 Mo, where pdfplumber's own count (`len(pdf.pages)`,
+    every page made) took 4,5 s and 25 Mo.
+
+    Not a PDF (by its name: a photo is `page_images`' to weigh), or one
+    pdfminer cannot open or walk: it passes - what is wrong with it is said
+    by what reads it next, as before."""
+    if path.lower().endswith(".pdf"):
+        _refuse_past_the_cap(path)
+
+
+def _refuse_past_the_cap(path: str) -> None:
+    try:
+        counted, declared = _walk_pages(path, MAX_PAGES + 1)
+    except Exception:  # noqa: BLE001 - pdfminer raises its own zoo for a broken file
+        return
+    if counted > MAX_PAGES:
+        said = declared if isinstance(declared, int) and declared > MAX_PAGES else f"plus de {MAX_PAGES}"
+        raise DocumentTooBig(TOO_MANY_PAGES.format(pages=said, limit=MAX_PAGES))
+
+
+def pdf_pages(path: str):
+    """The pages of the PDF at `path`, through pdfplumber, one at a time -
+    each released (`page.close()`) as soon as the caller moves on, so what
+    reading a document holds is one page's worth, not the whole document's.
+
+    Raises DocumentTooBig before a page is read for more than MAX_PAGES
+    (`check_page_count`, whatever the file is named: pdfplumber reads it as
+    a PDF all the same); pdfplumber is also told to make no more than one
+    page past the cap."""
+    _refuse_past_the_cap(path)
+    import pdfplumber
+
+    with pdfplumber.open(path, pages=range(1, MAX_PAGES + 2)) as document:
+        if len(document.pages) > MAX_PAGES:
+            raise DocumentTooBig(TOO_MANY_PAGES.format(pages=f"plus de {MAX_PAGES}", limit=MAX_PAGES))
+        for page in document.pages:
+            try:
+                yield page
+            finally:
+                page.close()
+
+
 def document_text(path: str) -> str:
-    """The text a digital document carries, or "" for a photo or a scan."""
+    """The text a digital document carries, or "" for a photo or a scan.
+    Raises DocumentTooBig as `text_layer_pages` does."""
     return "\n".join(page.text for page in text_layer_pages(path) if page is not None)
 
 
@@ -337,20 +536,23 @@ def text_layer_pages(path: str) -> list[OcrPage | None]:
     None for a page that is a picture. A digital invoice needs no OCR: its
     own text is exact, and reading a rendering of it could only add errors.
     Not a PDF, or one this can't open: no layer at all - rendering the page
-    says what is wrong with it."""
+    says what is wrong with it.
+
+    A PDF of more than MAX_PAGES pages raises DocumentTooBig, before any
+    page is read (`pdf_pages`) - never swallowed into « no layer » by the
+    handler below, which would send it on to be rendered."""
     if not path.lower().endswith(".pdf"):
         return []
-    import pdfplumber
-
     pages: list[OcrPage | None] = []
     try:
-        with pdfplumber.open(path) as document:
-            for page in document.pages:
-                words = page.extract_words(keep_blank_chars=False, use_text_flow=False)
-                if sum(len(word["text"]) for word in words) < MIN_TEXT_LAYER_CHARS:
-                    pages.append(None)
-                    continue
-                pages.append(OcrPage(lines=_text_lines(words)))
+        for page in pdf_pages(path):
+            words = page.extract_words(keep_blank_chars=False, use_text_flow=False)
+            if sum(len(word["text"]) for word in words) < MIN_TEXT_LAYER_CHARS:
+                pages.append(None)
+                continue
+            pages.append(OcrPage(lines=_text_lines(words)))
+    except DocumentTooBig:
+        raise
     except Exception:  # noqa: BLE001 - pdfminer raises its own zoo for a broken file
         return []
     return pages

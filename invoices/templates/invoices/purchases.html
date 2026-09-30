@@ -53,9 +53,12 @@
 {% block extra_js %}
 <script>
 // The import card: one of three ways to add purchases, the one chosen last
-// remembered (an address can ask for one: ?ajouter=pdf).
+// remembered (an address can ask for one: ?ajouter=pdf). Keyed by espace
+// like every key (<body data-tenant>, base.html): storage belongs to the
+// origin, not to the login.
 (function () {
-    var KEY = "marginmate:achats:import-tab";
+    var ESPACE_SCOPE = document.body.getAttribute("data-tenant") ? "espace-" + document.body.getAttribute("data-tenant") + ":" : "";
+    var KEY = "marginmate:" + ESPACE_SCOPE + "achats:import-tab";
     var card = document.getElementById("ajouter");
     if (!card) return;
 

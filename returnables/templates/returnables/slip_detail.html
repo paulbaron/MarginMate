@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% load assets %}
+{% block title %}{{ title }} - MarginMate{% endblock %}
+{% block content %}
+<div class="consignes-page">
+    <p class="breadcrumb"><a href="{% url 'returnables:home' %}#bons-recus">← Consignes</a></p>
+    <div class="page-header">
+        <div>
+            <h1>{{ title }}</h1>
+            <p class="page-subtitle">
+                Lu avec le format <a href="{% url 'returnables:format_edit' slip.format.pk %}">« {{ slip.format.name }} »</a>
+                ({{ slip.format.supplier.name }}) · {{ slip.get_origin_display }} le {{ slip.received_at|date:"d/m/Y à H:i" }}{% if slip.original_name %} · {{ slip.original_name }}{% endif %}
+            </p>
+        </div>
+    </div>
+
+    {% if format_problem %}
+        <p class="message message-error">Le format « {{ slip.format.name }} » : motif invalide : {{ format_problem }} — <a href="{% url 'returnables:format_edit' slip.format.pk %}">corrigez-le</a>, puis « Relire ».</p>
+    {% endif %}
+    {% for kind, problem in type_errors %}
+        <p class="message message-error">Type « {{ kind.name }} » : motif invalide : {{ problem }} — <a href="{% url 'returnables:type_list' %}#type-{{ kind.pk }}">corrigez-le</a></p>
+    {% endfor %}
+
+    <section class="card">
+        <p><span class="status-pill status-{{ state.css }}">{{ state.pill }}</span>{% if state.reason %} {{ state.reason }}{% endif %}</p>
+        {% if state.superseded %}
+            <p>Le bon qui compte : <a href="{% url 'returnables:slip_detail' state.superseded.final.pk %}">{{ state.superseded.final.title|capfirst }}</a>.</p>
+        {% endif %}
+        {% for other, superseded in replaced %}
+            <p class="muted">{% if superseded.kind == "resent" %}Reçu aussi{% else %}Remplace{% endif %} : <a href="{% url 'returnables:slip_detail' other.pk %}">{{ other.title }}</a> ({{ superseded.pill }}).</p>
+        {% endfor %}
+        {% if day_pickups %}
+            <p>
+                Comparé à {% for pickup in day_pickups %}<a href="{% url 'returnables:pickup_detail' pickup.pk %}">la reprise du {{ pickup.date|date:"d/m/Y" }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}{% if state.day.summed %} ({{ state.day.summed_note }}){% endif %}.
+            </p>
+        {% endif %}
+        {% for pickup in hint_pickups %}
+            <div class="reprise-hint">
+                <p>La reprise la plus proche est <a href="{% url 'returnables:pickup_detail' pickup.pk %}">celle du {{ pickup.date|date:"d/m/Y" }}</a> : est-elle bien datée ?</p>
+                <form method="post" action="{% url 'returnables:pickup_date' pickup.pk %}" class="inline-form">
+                    {% csrf_token %}
+                    <input type="hidden" name="date" value="{{ slip.delivery_date|date:'Y-m-d' }}">
+                    <button class="btn btn-small btn-secondary" type="submit">Mettre la reprise au {{ slip.delivery_date|date:"d/m/Y" }}</button>
+                </form>
+            </div>
+        {% endfor %}
+        {% if check %}{% include "returnables/_invoice_check.html" with check=check pill=check_pill %}{% endif %}
+    </section>
+
+    <section class="card">
+        <h2>Ce que le bon dit</h2>
+        <dl class="slip-facts">
+            <dt>Livraison</dt><dd>{% if slip.delivery_date %}{{ slip.delivery_date|date:"d/m/Y" }}{% else %}non lue{% endif %}</dd>
+            <dt>Imprimé le</dt><dd>{% if slip.printed_at %}{{ slip.printed_at|date:"d/m/Y à H:i" }}{% else %}—{% endif %}</dd>
+            <dt>Numéro</dt><dd>{{ slip.number|default:"—" }}</dd>
+            <dt>Références</dt><dd>{% for reference in info.references %}{{ reference }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}</dd>
+            <dt>Annule et remplace</dt><dd>{% if slip.replaces %}oui{% else %}non{% endif %}</dd>
+            <dt>Total imprimé</dt><dd>{% if slip.printed_total is not None %}{{ slip.printed_total|floatformat:2 }} €{% else %}—{% endif %}</dd>
+            <dt>Lu le</dt><dd>{% if slip.read_at %}{{ slip.read_at|date:"d/m/Y à H:i" }}{% else %}—{% endif %}</dd>
+        </dl>
+        {% if slip.checks %}
+            <ul class="check-list slip-checks">
+                {% for check_row in slip.checks %}
+                    <li class="check {% if check_row.passed %}check-pass{% else %}check-fail{% endif %}">
+                        <span class="check-mark">{% if check_row.passed %}✓{% else %}✕{% endif %}</span>
+                        <span class="check-label">{{ check_row.label }}</span>
+                        {% if check_row.detail %}<span class="check-detail">{{ check_row.detail }}</span>{% endif %}
+                    </li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+        <form method="post" action="{% url 'returnables:slip_reread' slip.pk %}" class="inline-form slip-reread">
+            {% csrf_token %}
+            <button class="btn btn-secondary" type="submit">Relire avec les motifs actuels</button>
+            <span class="muted small">Relit le texte gardé du bon avec le format tel qu'il est maintenant.</span>
+        </form>
+    </section>
+
+    <section class="consignes-list" id="lignes">
+        <h2>Les lignes des consignes</h2>
+        {% if lines %}
+            <div class="table-wrap">
+                <table data-table data-table-label="lignes du bon">
+                    <thead>
+                        <tr>
+                            <th class="num">N°</th>
+                            <th>Désignation</th>
+                            <th class="num">Quantité</th>
+                            <th class="num">Prix</th>
+                            <th class="num">Montant</th>
+                            <th>Type</th>
+                            <th data-no-sort>Classer comme</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for line, found in lines %}
+                            <tr>
+                                <td class="num">{{ line.position }}</td>
+                                <td>{{ line.designation }}</td>
+                                <td class="num">{{ line.quantity }}</td>
+                                <td class="num" data-sort="{{ line.unit_amount|default_if_none:'' }}">{% if line.unit_amount is not None %}{{ line.unit_amount|floatformat:2 }} €{% else %}—{% endif %}</td>
+                                <td class="num" data-sort="{{ line.amount|default_if_none:'' }}">{% if line.amount is not None %}{{ line.amount|floatformat:2 }} €{% else %}—{% endif %}</td>
+                                <td>
+                                    {% if found.returnable_type %}
+                                        {{ found.returnable_type.name }} <span class="muted small">(motif <code>{{ found.motif }}</code>)</span>
+                                    {% else %}
+                                        <span class="muted">{{ found.note }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if not found.returnable_type and types %}
+                                        <form method="post" action="{% url 'returnables:line_classify' line.pk %}" class="inline-form">
+                                            {% csrf_token %}
+                                            <label class="visually-hidden" for="classer-{{ line.pk }}">Classer comme</label>
+                                            <select id="classer-{{ line.pk }}" name="type">
+                                                {% for kind in types %}<option value="{{ kind.pk }}">{{ kind.name }}</option>{% endfor %}
+                                            </select>
+                                            <button class="btn btn-small btn-secondary" type="submit">Classer</button>
+                                        </form>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <p class="muted small">
+                « Classer » ajoute le début de la désignation aux motifs du type choisi : toutes les lignes pareilles, sur
+                tous les bons, sont aussitôt de ce type.
+            </p>
+        {% elif slip.read_error %}
+            <p class="muted">Aucune ligne : le bon n'a pas pu être lu. Corrigez le format, puis « Relire ».</p>
+        {% else %}
+            <p class="muted">Aucune ligne de consigne sur ce bon : rien n'a été repris selon lui.</p>
+        {% endif %}
+        {% if slip.remarks %}
+            <h3>Remarques du bon</h3>
+            <pre class="slip-remarks">{{ slip.remarks }}</pre>
+        {% endif %}
+    </section>
+
+    <section class="card slip-document">
+        <h2>Le bon</h2>
+        <p><a href="{{ slip.file.url }}">Ouvrir le PDF</a>{% if slip.mail_subject %} · mail « {{ slip.mail_subject }} »{% if slip.mail_sender %} de {{ slip.mail_sender }}{% endif %}{% if slip.mail_date %} du {{ slip.mail_date|date:"d/m/Y" }}{% endif %}{% endif %}</p>
+        <iframe class="slip-pdf" src="{{ slip.file.url }}" title="Le bon en PDF"></iframe>
+    </section>
+
+    <details class="danger-zone">
+        <summary>Supprimer le bon…</summary>
+        <form method="post" action="{% url 'returnables:slip_delete' slip.pk %}">
+            {% csrf_token %}
+            <p>Le bon, son PDF et ses lignes seront supprimés. Récupéré à nouveau par mail ou déposé, il reviendrait.</p>
+            <button class="btn btn-danger" type="submit">Supprimer le bon</button>
+        </form>
+    </details>
+</div>
+{% endblock %}
+{% block extra_js %}
+    <script src="{% asset 'js/returnables.js' %}" defer></script>
+{% endblock %}

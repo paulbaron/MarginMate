@@ -12,6 +12,13 @@ the day's money), the recipes' sales, then the means of payment of every
 till day it read (recipes/payments.py) - which --dry-run reads and reports
 without writing. Ranges longer than two years are handled; --file skips the
 download and reads one already downloaded.
+
+In multi mode it runs for one espace (`manage.py tenant <dossier>
+laddition_import …`) and downloads into that espace's own folder. Downloading
+uses the server's L'Addition account, the owner's: refused elsewhere, like
+the page's import (recipes/integration.py), and refused while the page's own
+import runs - the two would sign in to one account at once and each take the
+other's file from the folder. --file uses no account and is never refused.
 """
 
 from datetime import date
@@ -19,6 +26,9 @@ from datetime import date
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
+from accounts import paths
+from recipes.integration import refusal, require_espace, till_allowed
+from recipes.models import SalesImportJob
 from recipes.payments import record_payments
 from recipes.pos.laddition_download import LadditionDownloadError, download_sales_lines
 from recipes.pos.laddition_xlsx import LadditionExportError, parse_sales_exports
@@ -44,7 +54,10 @@ class Command(BaseCommand):
             "--file", action="append", default=[], dest="files",
             help="Read an already-downloaded export instead of fetching one. Repeatable.",
         )
-        parser.add_argument("--download-dir", default=str(settings.SCRAPE_DOWNLOAD_DIR))
+        parser.add_argument(
+            "--download-dir", default=None,
+            help="Where to download (default: the espace's downloads folder).",
+        )
         parser.add_argument("--no-headless", action="store_true", help="Show the browser.")
         parser.add_argument(
             "--dry-run", action="store_true",
@@ -52,6 +65,7 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        require_espace("laddition_import")
         files = options["files"]
         if not files:
             if not options["start"] or not options["end"]:
@@ -59,11 +73,22 @@ class Command(BaseCommand):
             start, end = _as_date(options["start"]), _as_date(options["end"])
             if start > end:
                 raise CommandError("--from is after --to.")
+            if not till_allowed():
+                raise CommandError(refusal())
+            # The page's own rule (views.trigger_sales_import), a dead run
+            # reaped first so that it does not hold this up for ever.
+            SalesImportJob.reap_stale()
+            if SalesImportJob.objects.filter(
+                status__in=[SalesImportJob.Status.PENDING, SalesImportJob.Status.RUNNING]
+            ).exists():
+                raise CommandError(
+                    "Une récupération des ventes est déjà en cours dans l'application : attendez qu'elle finisse."
+                )
             if options["no_headless"]:
                 settings.SCRAPER_HEADLESS = False
             try:
                 files = download_sales_lines(
-                    start, end, options["download_dir"], log=self.stdout.write
+                    start, end, options["download_dir"] or str(paths.downloads_dir()), log=self.stdout.write
                 )
             except (LadditionAuthError, LadditionDownloadError) as exc:
                 raise CommandError(str(exc)) from exc

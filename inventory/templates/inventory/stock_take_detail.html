@@ -95,10 +95,14 @@
 // Reaching this page means a save actually went through, so the browser-side
 // draft of that inventory has done its job and is dropped - see the "draft
 // net" section of stock_take_form.html for why it is cleared here rather
-// than when the form was submitted.
+// than when the form was submitted. The keys are that page's own, espace
+// included (<body data-tenant>, base.html).
+var ESPACE_SCOPE = document.body.getAttribute("data-tenant") ? "espace-" + document.body.getAttribute("data-tenant") + ":" : "";
+var SAVED_DRAFT_KEY = "marginmate:" + ESPACE_SCOPE + "stock-take-draft:{{ stock_take.pk }}";
+var NEW_DRAFT_KEY = "marginmate:" + ESPACE_SCOPE + "stock-take-draft:new";
 try {
-    localStorage.removeItem("marginmate:stock-take-draft:{{ stock_take.pk }}");
-    localStorage.removeItem("marginmate:stock-take-draft:new");
+    localStorage.removeItem(SAVED_DRAFT_KEY);
+    localStorage.removeItem(NEW_DRAFT_KEY);
 } catch (e) {
     // storage unavailable - nothing was ever written, so nothing to clear
 }

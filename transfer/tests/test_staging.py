@@ -10,10 +10,10 @@ from datetime import timedelta
 from pathlib import Path
 from unittest import mock
 
-from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile, TemporaryUploadedFile
 from django.test import TestCase
 
+from accounts import paths
 from transfer import archive, safety, staging
 from transfer.archive import ArchiveError
 from transfer.tests.support import FakeSectionsMixin, export_archive, fake_row, forge
@@ -37,7 +37,7 @@ class StageUploadTests(FakeSectionsMixin, TestCase):
         self.assertEqual(stage.source, "envoi")
         self.assertTrue(stage.archive_path.is_file())
         self.assertEqual(stage.archive_path.read_bytes(), self.archive_path.read_bytes())
-        media = Path(settings.MEDIA_ROOT).resolve()
+        media = paths.media_root().resolve()
         self.assertNotIn(media, stage.archive_path.resolve().parents)
         again = staging.get(stage.token)
         self.assertEqual((again.token, again.sections, again.manifest), (stage.token, stage.sections, stage.manifest))

@@ -36,9 +36,9 @@ from tests.factories import (
     make_stock_type,
     make_supplier,
 )
+from tests.runner import log_in_the_browser
 
 WAIT_SECONDS = 10
-EXPANDED_KEY = "marginmate:stock:rows"
 
 
 @tag("browser")
@@ -91,7 +91,9 @@ class CatalogueSearchInBrowserTests(StaticLiveServerTestCase):
         # What is open is remembered per browser, and the browser is shared
         # by the whole class: a category another test left open is one this
         # one's « open it » click would close. Storage needs an origin, so
-        # the page is loaded before it can be cleared.
+        # the page is loaded before it can be cleared. Logged in first, as
+        # the test espace's owner: every page wants a login.
+        log_in_the_browser(self.driver, self.live_server_url)
         self.driver.get(self.live_server_url + reverse("inventory:stock_list"))
         self.script("localStorage.clear()")
 
@@ -150,7 +152,8 @@ class CatalogueSearchInBrowserTests(StaticLiveServerTestCase):
         )
 
     def kept_open(self) -> list:
-        return sorted(self.script("return JSON.parse(localStorage.getItem(arguments[0]) || '[]')", EXPANDED_KEY))
+        # Under the key the page itself uses (its espace's scope included).
+        return sorted(self.script("return JSON.parse(localStorage.getItem(EXPANDED_STORAGE_KEY) || '[]')"))
 
     def search(self, text):
         self.script(

@@ -25,6 +25,172 @@ def is_id(value) -> bool:
     return isinstance(value, str) and value.isascii() and value.isdigit() and len(value) <= 18
 
 
+def local_path(request, target) -> str:
+    """`target` when it is a path of this site - « /banque/?mois=2026-07 » -
+    and "" for anything else.
+
+    Three things are never followed. Another site (« https://… »,
+    « //ailleurs.example », « /\\ailleurs.example », which a browser reads
+    as « //… »): an open redirect is a link anybody can send to the owner,
+    landing wherever they chose. Anything that does not start with « / »
+    (« abc », « invoices:invoice_list »): Django's
+    url_has_allowed_host_and_scheme accepts it as a relative address, then
+    redirect() takes it for the NAME of a route, finds none and raises
+    NoReverseMatch - a 500 for anybody who edited the address (security
+    audit LB-5). And a control character: « /a%0Ab » passes that check
+    (urlsplit drops the line break) and then fails as a header, another
+    500."""
+    if not isinstance(target, str) or not target.startswith("/") or target.startswith("//"):
+        return ""
+    if any(ord(character) < 32 or ord(character) == 127 for character in target):
+        return ""
+    from django.utils.http import url_has_allowed_host_and_scheme
+
+    if url_has_allowed_host_and_scheme(target, allowed_hosts={request.get_host()}, require_https=request.is_secure()):
+        return target
+    return ""
+
+
+def safe_next(request, default: str, param: str = "next") -> str:
+    """Where `next` (posted, or in the address) asks to go back to - a path
+    of this site (`local_path`) - or `default`, a ready address. The one
+    rule behind every « back to the page that asked » (Achats' deletions,
+    the bank's actions, the margins' panel)."""
+    target = request.POST.get(param) or request.GET.get(param) or ""
+    return local_path(request, target) or default
+
+
+def local_return(request) -> str:
+    """Where `retour` (posted, or in the address) asks to go back to - a path
+    of this site only (`local_path`), "" otherwise. A page posting to another
+    app's route (« Consignes » to Achats' « Récupérer ») comes back to itself
+    through it."""
+    return local_path(request, request.POST.get("retour") or request.GET.get("retour") or "")
+
+
+# -- What an upload may weigh (security audit UPLOAD-1) ----------------------------------------------------------
+
+MEGABYTE = 1024 * 1024
+#: One file sent through any of the app's forms - a ticket's photo or scan, a
+#: supplier's PDF, a bank statement, a hand-typed invoice's receipt. A phone
+#: photo weighs 2 to 8 Mo, a scanned ticket 0.3 Mo (the owner's folder of 42:
+#: 0.74 Mo at most), a supplier's PDF a few hundred Ko: 25 Mo is three times
+#: the heaviest of them and still refuses what is no document at all (a 64 Mo
+#: file named .jpg was staged whole, audit UPLOAD-1). « Données » archives
+#: have their own, larger cap (transfer/archive.py MAX_ARCHIVE_BYTES).
+UPLOAD_MAX_FILE_BYTES = 25 * MEGABYTE
+#: Everything one form sends at once, when it takes several files (the bank's
+#: statements). The folder of tickets has its own, larger one
+#: (invoices.forms.RECEIPT_BATCH_MAX_BYTES).
+UPLOAD_MAX_TOTAL_BYTES = 100 * MEGABYTE
+
+FILE_TOO_BIG = "« {name} » pèse {size} : {limit} au plus par fichier."
+SELECTION_TOO_BIG = "La sélection pèse {size} : {limit} au plus en une fois. Envoyez-la en plusieurs fois."
+
+
+def weight(size: int) -> str:
+    """« 25 Mo », « 612,4 Mo », « 300 Ko » - a file's weight as a page says it."""
+    size = max(int(size or 0), 0)
+    if size < MEGABYTE:
+        return f"{max(-(-size // 1024), 1) if size else 0} Ko"
+    text = f"{size / MEGABYTE:.1f}".rstrip("0").rstrip(".")
+    return f"{text.replace('.', ',')} Mo"
+
+
+def upload_size(upload) -> int:
+    """What an uploaded file weighs (Django counts it as it arrives)."""
+    size = getattr(upload, "size", None)
+    return size if isinstance(size, int) and size >= 0 else 0
+
+
+def file_too_big(upload, limit: int | None = None) -> str:
+    """The sentence refusing `upload` by its name when it weighs more than
+    `limit` (UPLOAD_MAX_FILE_BYTES, read at the call), "" when it does not."""
+    limit = UPLOAD_MAX_FILE_BYTES if limit is None else limit
+    size = upload_size(upload)
+    if size <= limit:
+        return ""
+    return FILE_TOO_BIG.format(name=getattr(upload, "name", "") or "fichier", size=weight(size), limit=weight(limit))
+
+
+def selection_too_big(uploads, limit: int | None = None) -> str:
+    """The sentence refusing a whole selection heavier than `limit`
+    (UPLOAD_MAX_TOTAL_BYTES, read at the call), "" when it is not."""
+    limit = UPLOAD_MAX_TOTAL_BYTES if limit is None else limit
+    total = sum(upload_size(upload) for upload in uploads)
+    if total <= limit:
+        return ""
+    return SELECTION_TOO_BIG.format(size=weight(total), limit=weight(limit))
+
+
+# -- What a page may say of an error (security audit LB-3) --------------------------------------------------------
+
+#: Said of an error that is none of the app's own refusals. Its own words - a
+#: library's, in English, with a file's path on the server: PIL's « cannot
+#: identify image file '<TENANTS_ROOT>\\<espace>\\imports\\…' » was drawn on
+#: the batch page of whichever bar sent a broken photo - go to the server's
+#: log, never to a page.
+SERVER_ERROR = "Erreur inattendue sur le serveur : elle est notée pour l'administrateur."
+UNREADABLE_IMAGE = "Image illisible : le fichier est abîmé, ou ce n'est pas une image."
+UNREADABLE_PDF = "PDF illisible : le fichier est abîmé, ou ce n'est pas un PDF."
+
+_IMAGE_LIBRARIES = ("PIL",)
+_PDF_LIBRARIES = ("pypdfium2", "pdfminer", "pdfplumber")
+
+
+def _raised_in(exc: BaseException) -> str:
+    """The module the exception was raised in (its innermost Python frame)."""
+    trace, module = exc.__traceback__, ""
+    while trace is not None:
+        module = trace.tb_frame.f_globals.get("__name__", "") or ""
+        trace = trace.tb_next
+    return module
+
+
+def _from(module: str, packages) -> bool:
+    return any(module == package or module.startswith(package + ".") for package in packages)
+
+
+def error_kind(exc: BaseException) -> str:
+    """The fixed sentence for an error that is not the app's own: an image or
+    a PDF its library could not read, anything else the server's."""
+    module = _raised_in(exc)
+    try:
+        from PIL import Image, UnidentifiedImageError
+
+        if isinstance(exc, (UnidentifiedImageError, Image.DecompressionBombError)):
+            return UNREADABLE_IMAGE
+    except ImportError:  # pragma: no cover - Pillow is a requirement
+        pass
+    try:
+        from pypdfium2 import PdfiumError
+
+        if isinstance(exc, PdfiumError):
+            return UNREADABLE_PDF
+    except ImportError:  # pragma: no cover - pypdfium2 is a requirement
+        pass
+    if _from(module, _IMAGE_LIBRARIES):
+        return UNREADABLE_IMAGE
+    if _from(module, _PDF_LIBRARIES):
+        return UNREADABLE_PDF
+    return SERVER_ERROR
+
+
+def error_for_page(exc: BaseException, *, said=(), log=None, what: str = "") -> str:
+    """What a page a bar reads may say of `exc`.
+
+    Its own words only when it is one of `said` - the app's refusals, written
+    in French for the person (an electronic invoice refused, a document too
+    long to read). Anything else is a fixed sentence by kind (`error_kind`),
+    and its detail - message and traceback - goes to `log` (a logger), under
+    `what`: the server's log is where a path may be written."""
+    if said and isinstance(exc, said):
+        return str(exc).strip() or SERVER_ERROR
+    kind = error_kind(exc)
+    if log is not None:
+        log.error("%s - montré comme « %s »", what or "Erreur", kind, exc_info=(type(exc), exc, exc.__traceback__))
+    return kind
+
 
 def search_key(text: str) -> str:
     """A comparison key that ignores case AND accents - « biere » has to find

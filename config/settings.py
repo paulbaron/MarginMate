@@ -1,15 +1,37 @@
 """
 Django settings for the MarginMate project.
+
+Production is `manage.py serve` (accounts/management/commands/serve.py):
+Waitress on 127.0.0.1, behind a Cloudflare Tunnel, DEBUG forced off, and
+these settings driven by the environment (.env) - DEPLOY.md lists the lines.
 """
 
 import os
+import sys
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
+
+from .logs import is_the_server, logging_config
+from .security import (
+    DEVELOPMENT_SECRET_KEY,
+    HOW_TO_MAKE_A_KEY,
+    env_list,
+    secret_key_problem,
+)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 load_dotenv(BASE_DIR / ".env")
+
+# What this process is, read from its command line the way manage.py reads
+# it: the production server (`manage.py serve`), the development server
+# (`manage.py runserver`), or anything else - a command, a test run, a WSGI
+# server loading config.wsgi. Two things differ between them: who writes the
+# log file (LOGGING, below) and where /static/ is read from (WhiteNoise).
+_SERVER = is_the_server(sys.argv)
+_RUNSERVER = sys.argv[1:2] == ["runserver"]
 
 
 def env_bool(name, default=False):
@@ -19,20 +41,92 @@ def env_bool(name, default=False):
     return value.strip().lower() in ("1", "true", "yes", "on")
 
 
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "django-insecure-dev-key-change-me")
+# OFF unless the environment says otherwise (security audit ANON-2,
+# DEPLOY-1, LB-1): with DEBUG on, any visitor could get Django's technical
+# pages - the settings with the integrations' logins, the paths, the route
+# map - from a forged Host or an unknown address. A developer's .env says
+# DJANGO_DEBUG=True; `manage.py serve` forces it off whatever .env says
+# (manage.py), and the check accounts.E007 refuses DEBUG on beside a public
+# host in ALLOWED_HOSTS - that is a deployed server.
+DEBUG = env_bool("DJANGO_DEBUG", False)
 
-DEBUG = env_bool("DJANGO_DEBUG", True)
+# No public fallback (DEPLOY-2, ANON-7). DEBUG off, a missing or weak key -
+# the .env.example placeholder, the old fallback, « django-insecure… »,
+# fewer than 50 characters - is refused HERE, at load: a WSGI server runs no
+# system check. DEBUG on (a developer's machine) and no key: the public
+# development key, which accounts.W001 names at every start; a weak key set
+# by hand is refused by accounts.E006 wherever DEBUG is off. Never printed.
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "")
+_KEY_PROBLEM = secret_key_problem(SECRET_KEY)
+if _KEY_PROBLEM and not DEBUG:
+    raise ImproperlyConfigured(f"{_KEY_PROBLEM} (DJANGO_DEBUG est désactivé). {HOW_TO_MAKE_A_KEY}")
+if not SECRET_KEY.strip():
+    SECRET_KEY = DEVELOPMENT_SECRET_KEY
 
-ALLOWED_HOSTS = [h.strip() for h in os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",") if h.strip()]
+# The names this server answers to: the public one (gestion.<domaine>) and
+# the machine's own, for the owner's browser on the PC.
+ALLOWED_HOSTS = env_list(os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1"))
+# Origins a POST may come from besides this site's own address
+# (« https://gestion.<domaine> »). Behind the tunnel the Host header is the
+# public name and Waitress gives the request its https (serve.py), so
+# Django's same-origin check already passes; this list is the explicit say.
+CSRF_TRUSTED_ORIGINS = env_list(os.environ.get("DJANGO_CSRF_TRUSTED_ORIGINS", ""))
+
+# --- HTTPS (security audit ANON-3, DEPLOY-3) -------------------------------------
+# MARGINMATE_HTTPS=1 when the site is reached over HTTPS (the tunnel): the
+# session and CSRF cookies are sent over HTTPS only, and browsers are told to
+# come back over HTTPS (HSTS) - for an hour at first (MARGINMATE_HSTS_SECONDS
+# raises it once everything works), never with includeSubDomains or preload:
+# the domain's other names are not this server's to decide. No
+# SECURE_SSL_REDIRECT: Cloudflare's « Always Use HTTPS » redirects before the
+# tunnel, and here it would send the owner's own http://127.0.0.1:8765 (the
+# production server's port, accounts/management/commands/serve.py) to an
+# https that does not exist. No SECURE_PROXY_SSL_HEADER either: the one place
+# that trusts the proxy's X-Forwarded-Proto and X-Forwarded-For is Waitress
+# (`serve`, trusted_proxy 127.0.0.1), which sets the request's scheme and
+# REMOTE_ADDR before Django sees it - a header Django would trust by itself
+# could be sent by anyone reaching the server another way.
+# `manage.py serve` refuses to start without it (accounts.E009).
+HTTPS = env_bool("MARGINMATE_HTTPS", False)
+SESSION_COOKIE_SECURE = HTTPS
+CSRF_COOKIE_SECURE = HTTPS
+_HSTS = os.environ.get("MARGINMATE_HSTS_SECONDS", "").strip() or "3600"
+if not _HSTS.isascii() or not _HSTS.isdigit():
+    raise ImproperlyConfigured(f"MARGINMATE_HSTS_SECONDS={_HSTS[:20]!r} : un nombre de secondes est attendu (3600 = une heure).")
+SECURE_HSTS_SECONDS = int(_HSTS) if HTTPS else 0
+SECURE_HSTS_INCLUDE_SUBDOMAINS = False
+SECURE_HSTS_PRELOAD = False
+# Django's defaults, said here so that a test pins them. The session cookie is
+# out of JavaScript's reach; the CSRF cookie is not - htmx reads it
+# (base.html).
+SESSION_COOKIE_HTTPONLY = True
+CSRF_COOKIE_HTTPONLY = False
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = "same-origin"
+SECURE_CROSS_ORIGIN_OPENER_POLICY = "same-origin"
+# DENY everywhere; the logged-in file view says SAMEORIGIN itself (the
+# invoice's PDF is shown in a frame of this site).
+X_FRAME_OPTIONS = "DENY"
+
+# `check --deploy` (and `manage.py serve`, which refuses on any warning) is
+# told what this deployment decided on purpose: no SSL redirect here
+# (security.W008, see above), HSTS without includeSubDomains (W005) nor
+# preload (W021).
+SILENCED_SYSTEM_CHECKS = ["security.W005", "security.W008", "security.W021"]
 
 
 INSTALLED_APPS = [
-    "django.contrib.admin",
+    # django.contrib.admin with the project's site: superusers only
+    # (accounts/admin_site.py).
+    "accounts.admin_site.MarginMateAdminConfig",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    # Logins, espaces (one database per bar) and the binding of a thread to
+    # one of them: accounts/tenancy.py.
+    "accounts",
     "inventory",
     "invoices",
     "recipes",
@@ -40,14 +134,32 @@ INSTALLED_APPS = [
     "transfer",
     "margins",
     "staff",
+    # « Consignes »: the empties handed back, and the bons they are compared
+    # with. Achats, the gather, the supplier page and « Données » read its
+    # tables too: an espace needs its migrations (migrate_tenants).
+    "returnables",
 ]
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # /static/ straight from STATIC_ROOT (collectstatic, which `serve` runs at
+    # every start), before anything asks for a login: the login page needs
+    # its stylesheet. Under runserver or DEBUG it serves from the source
+    # folders (WHITENOISE_USE_FINDERS, below STATIC_ROOT).
+    "whitenoise.middleware.WhiteNoiseMiddleware",
+    # The pages' Content-Security-Policy (config/security.py); above
+    # XFrameOptionsMiddleware, whose header it reads on the way out.
+    "config.security.ContentSecurityPolicyMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    # Every page wants a login (public views carry @login_not_required),
+    # then the request runs bound to the user's espace, rendering included -
+    # a public view's never (it binds what it needs, the signing pages their
+    # link's espace).
+    "accounts.middleware.LoginRequiredMiddleware",
+    "accounts.middleware.TenantMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -72,6 +184,9 @@ TEMPLATES = [
     },
 ]
 
+# What runserver (and any WSGI server but ours) serves: it refuses what came
+# through the Cloudflare Tunnel, which is `manage.py serve`'s alone - serve
+# builds its own handler (config/wsgi.py).
 WSGI_APPLICATION = "config.wsgi.application"
 
 
@@ -96,13 +211,71 @@ SQLITE_OPTIONS = {
     "transaction_mode": "IMMEDIATE",
 }
 
+#: The central database's options: the same WAL and wait, a
+#: shorter wait - a login must not hang a minute. IMMEDIATE too: a signup
+#: reads its invitation then writes, which in the default (deferred) mode
+#: fails at once instead of waiting when another login wrote in between.
+#: Its writes are small (a session, a login), so every bar taking this one
+#: file's write lock stays short.
+ACCOUNTS_SQLITE_OPTIONS = {**SQLITE_OPTIONS, "timeout": 20}
+
+# One database per bar (« espace ») under TENANTS_ROOT, the logins in an
+# accounts database, a login on every page (accounts/tenancy.py). That is
+# the ONLY mode. The old « single » mode - one database, no login, every
+# folder from a setting - was what a server got when MARGINMATE_TENANCY was
+# missing, so a deploy without that one variable served every page and
+# every file to anyone (security audit ANON-1); it was removed on
+# 29/09/2026, after the owner's database was adopted into an espace.
+#
+# MARGINMATE_TENANCY is therefore no switch any more. Unset or « multi »
+# (what the owner's .env still says): ignored. ANY OTHER VALUE - « single »
+# above all, or a typo - is REFUSED right here, at load: an installation
+# that still expects a database with no login must be told, not silently
+# moved, and a WSGI server runs no system check, so only a refusal here
+# stops it too. A single-mode database is brought in with
+# `manage.py adopt_database` (a one-off).
+_OLD_TENANCY_SWITCH = os.environ.get("MARGINMATE_TENANCY", "").strip().lower()
+if _OLD_TENANCY_SWITCH not in ("", "multi"):
+    raise ImproperlyConfigured(
+        f"MARGINMATE_TENANCY={_OLD_TENANCY_SWITCH[:20]!r} : le mode « single » (une seule base, aucune connexion) "
+        "n'existe plus. Retirez la ligne MARGINMATE_TENANCY du fichier .env : chaque bar a son espace et chaque "
+        "page demande une connexion. Une ancienne base s'adopte avec « manage.py adopt_database »."
+    )
+
+# Every espace's folder: its db.sqlite3, media/, private/, downloads/,
+# backups/, staging/, imports/ (accounts/paths.py). Outside the code tree in
+# production; never served.
+TENANTS_ROOT = Path(os.environ.get("MARGINMATE_TENANTS_ROOT", "").strip() or BASE_DIR / "tenants")
+
+# The server's log, marginmate.log (config/logs.py: errors, refusals,
+# warnings; the signing links cut short): MARGINMATE_LOG_DIR, or logs/ beside
+# the espaces - ../data/logs/ for the owner. Made at the first line written,
+# and written by `manage.py serve` ALONE: every other process logs to its
+# console (two processes holding the file stopped its rotation on Windows,
+# and records were lost - config/logs.py).
+LOG_DIR = Path(os.environ.get("MARGINMATE_LOG_DIR", "").strip() or TENANTS_ROOT.parent / "logs")
+LOGGING = logging_config(LOG_DIR, server=_SERVER)
+
 DATABASES = {
+    # Unbound, `default` is an EMPTY in-memory database: a business query
+    # nobody bound to an espace fails loudly (« no such table ») instead of
+    # landing in somebody's file. A binding points this thread's `default`
+    # at the espace's own file (accounts.tenancy.bound_tenant).
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+        "NAME": ":memory:",
         "OPTIONS": SQLITE_OPTIONS,
-    }
+    },
+    # Logins, sessions, the admin's log, content types, espaces,
+    # invitations, the signing links' index (accounts/router.py).
+    "accounts": {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": Path(os.environ.get("MARGINMATE_ACCOUNTS_DB", "").strip() or BASE_DIR / "accounts.sqlite3"),
+        "OPTIONS": ACCOUNTS_SQLITE_OPTIONS,
+    },
 }
+
+DATABASE_ROUTERS = ["accounts.router.AccountsRouter"]
 
 
 # An inventory is one formset row per thing counted, and a bar counts
@@ -144,25 +317,37 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 STATICFILES_DIRS = [BASE_DIR / "static"]
+# Filled by collectstatic (`manage.py serve` runs it, --clear, at every start)
+# and served by WhiteNoise. Plain files, no hashed names: `{% asset %}` adds
+# the file's date to its address, and Cloudflare compresses on its side.
 STATIC_ROOT = BASE_DIR / "staticfiles"
+# Where WhiteNoise reads /static/ from. `manage.py serve`: STATIC_ROOT only,
+# indexed once at start (serve sets both off again itself). runserver: the
+# SOURCE folders, looked up at each request, WHATEVER DEBUG SAYS. Left to
+# WhiteNoise's defaults (DEBUG), a runserver with the deployed .env
+# (DJANGO_DEBUG=False, which accounts.E007 demands once the public host is
+# listed) got no static handler from Django and served the copy the last
+# `serve` made: an edited script came back as its old content under a new
+# `?v=` (`{% asset %}` dates the SOURCE), a new one was a 404 (review PROD-4).
+WHITENOISE_USE_FINDERS = WHITENOISE_AUTOREFRESH = DEBUG or _RUNSERVER
 
-MEDIA_URL = "media/"
-MEDIA_ROOT = BASE_DIR / "media"
-
-# « Données » (transfer/). Backups taken before a confirmed import or clear
-# sit beside the database they copy - a copy of db.sqlite3 and, before a
-# « Remplacer » or an « Effacer », an importable archive of what changes. The
-# app never deletes them: deleting data is the owner's act.
-DATA_BACKUP_DIR = Path(DATABASES["default"]["NAME"]).parent / "backups"
-# Archives waiting between their upload and their import, and exports being
-# downloaded. NOT under MEDIA_ROOT: config/urls.py serves all of media when
-# DEBUG is on, so a staged archive of every invoice (~420 MB, IBANs and
-# addresses included) would have been downloadable by its URL.
-DATA_STAGING_DIR = BASE_DIR / "imports"
+# No MEDIA_URL / MEDIA_ROOT: stored files go where accounts.paths.media_root()
+# says, at every call - the bound espace's media/ - and are served only by
+# the logged-in file view (accounts.views.media), never by a /media/ route.
+# Every other folder is the espace's too (accounts/paths.py: private/,
+# downloads/, backups/, staging/, imports/); the settings that named them
+# for the old single mode are gone.
+STORAGES = {
+    "default": {"BACKEND": "accounts.storage.TenantFileSystemStorage"},
+    "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+}
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-LOGIN_URL = "/admin/login/"
+# The login page: every page but the public ones sends there.
+LOGIN_URL = "/connexion/"
+LOGIN_REDIRECT_URL = "/"
+LOGOUT_REDIRECT_URL = "/connexion/"
 
 # --- MarginMate specific settings -------------------------------------------------
 
@@ -205,18 +390,16 @@ PRODUCT_FUZZY_MATCH_THRESHOLD = int(os.environ.get("PRODUCT_FUZZY_MATCH_THRESHOL
 # Run Selenium in headless mode (should stay True for background/server use).
 SCRAPER_HEADLESS = env_bool("SCRAPER_HEADLESS", True)
 
-SCRAPE_DOWNLOAD_DIR = BASE_DIR / "scraped_invoices"
-
 # --- « Personnel »: the monthly electronic signature of the timesheets ------------
 # (staff/signing.py, staff/signature_requests.py)
 
 # The signing keys, the frozen and signed PDFs, the drawn signatures and the
-# proof files. NEVER under MEDIA_ROOT: config/urls.py serves all of media
-# when DEBUG is on (staff.private_files refuses such a folder). Back it up
-# with the database: it holds the internal authority's key. Losing it does
-# not make a signed PDF unverifiable - each one embeds its certificates -
-# but the next signature would come from a new authority.
-STAFF_PRIVATE_DIR = Path(os.environ.get("MARGINMATE_PRIVATE_DIR", "").strip() or BASE_DIR / "private")
+# proof files live in each espace's private/ folder (accounts.paths.private_dir),
+# never served. Back it up with the espace: it holds the internal
+# authority's key. Losing it does not make a signed PDF unverifiable - each
+# one embeds its certificates - but the next signature would come from a new
+# authority. (The old single mode's MARGINMATE_PRIVATE_DIR is ignored.)
+#
 # Encrypts the private keys on disk (PKCS#8). Unset, they are stored in
 # clear and the owner's pages say so: set it before the app goes online.
 MARGINMATE_SIGNING_PASSPHRASE = os.environ.get("MARGINMATE_SIGNING_PASSPHRASE", "")
@@ -232,7 +415,10 @@ STAFF_SIGNATURE_RETENTION_YEARS = 5
 # blank, the page builds them from the request it answers.
 SITE_URL = os.environ.get("MARGINMATE_SITE_URL", "").strip().rstrip("/")
 # A post refused for its CSRF token is said in French on the employee's
-# signing pages (/personnel/signer/…); everywhere else, Django's own page.
+# signing pages (/personnel/signer/…); everywhere else, Django's own page -
+# templates/403_csrf.html, French too and nothing internal (the reason goes to
+# the log, django.security.csrf). The other error pages are templates/400,
+# 403, 404 and 500.html.
 CSRF_FAILURE_VIEW = "staff.public_views.csrf_failure"
 
 # E-mail, optional and off by default: « configured » means EMAIL_HOST is

@@ -13,7 +13,6 @@ from decimal import Decimal
 from pathlib import Path
 from unittest import mock
 
-from django.conf import settings
 from django.contrib.messages import get_messages
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
@@ -22,6 +21,7 @@ from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.urls import reverse
 from django.utils import timezone
 
+from accounts import paths
 from bank import reconcile
 from bank.models import BankTransaction, InvoicePayment
 from invoices.models import Invoice, Supplier
@@ -43,7 +43,7 @@ MERGE, REPLACE = Strategy.MERGE, Strategy.REPLACE
 
 
 def empty_backups():
-    shutil.rmtree(settings.DATA_BACKUP_DIR, ignore_errors=True)
+    shutil.rmtree(paths.backups_dir(), ignore_errors=True)
 
 
 def run_report(mode="import", **tallies) -> RunReport:
@@ -136,6 +136,23 @@ class DatabaseBackupTests(TransactionTestCase):
         self.assertEqual(second.name, "2026-09-19_143012_avant-effacement_2.sqlite3")
 
 
+class FreeNameTests(SimpleTestCase):
+    """A name is taken when it is given: two confirms in the same second
+    (two tabs) were handed one path between its exists() check and its
+    first write, and the second ZipFile truncated the first backup."""
+
+    def setUp(self):
+        empty_backups()
+        self.addCleanup(empty_backups)
+
+    def test_two_names_asked_in_a_row_are_two_files(self):
+        first = safety._free_name("2026-09-19_143012_avant-import", ".zip")
+        second = safety._free_name("2026-09-19_143012_avant-import", ".zip")
+        self.assertEqual(first.name, "2026-09-19_143012_avant-import.zip")
+        self.assertEqual(second.name, "2026-09-19_143012_avant-import_2.zip")
+        self.assertTrue(first.is_file())
+
+
 class ListingTests(TestCase):
     def setUp(self):
         empty_backups()
@@ -197,10 +214,15 @@ class BeforeTests(FakeSectionsMixin, TransactionTestCase):
         self.assertEqual(len(safety.list_backups()), 1)
 
     def test_a_failed_backup_is_said(self):
+        """In words that name no server path: the cause is logged."""
         with mock.patch("transfer.safety.backup_database", side_effect=OSError("disque plein")), \
+                self.assertLogs("transfer.safety", "ERROR") as logged, \
                 self.assertRaises(safety.SafetyError) as caught:
             safety.before("import", set())
-        self.assertEqual(str(caught.exception), "Sauvegarde impossible (disque plein) : rien n'a été changé.")
+        self.assertEqual(
+            str(caught.exception), f"Sauvegarde impossible ({safety.SERVER_ERROR}) : rien n'a été changé."
+        )
+        self.assertIn("disque plein", "\n".join(logged.output))
 
     def test_no_room_is_said_before_anything_is_written(self):
         full = mock.Mock(free=0)
@@ -259,14 +281,15 @@ class ConfirmOrderTests(FakeSectionsMixin, TransactionTestCase):
         self.assertEqual(sorted(backup.kind for backup in safety.list_backups()), ["sqlite"])
 
     def test_a_failed_backup_imports_nothing(self):
-        with mock.patch("transfer.safety.backup_database", side_effect=OSError("disque plein")):
+        with mock.patch("transfer.safety.backup_database", side_effect=OSError("disque plein")), \
+                self.assertLogs("transfer.safety", "ERROR"):
             response = self.preview_then_confirm()
         self.assertRedirects(response, self.url, fetch_redirect_response=False)
         applies = [call for call in FakeSection.calls if call[0] == "apply"]
         self.assertEqual(len(applies), 3)  # the preview's three, and no confirm
         self.assertIsNotNone(staging.get(self.stage.token))
         messages = [str(message) for message in response.wsgi_request._messages]
-        self.assertIn("Sauvegarde impossible (disque plein) : rien n'a été changé.", messages)
+        self.assertIn(f"Sauvegarde impossible ({safety.SERVER_ERROR}) : rien n'a été changé.", messages)
 
     def test_the_strategy_reaches_the_run(self):
         self.preview_then_confirm()
@@ -327,8 +350,10 @@ class ThroughThePageTests(TransactionTestCase):
         return response["Location"]
 
     def archive_taken(self) -> Path:
-        """The archive the last confirm took, as its report names it."""
-        return Path(self.client.session["transfer.report"]["report"]["safety"]["archive"])
+        """The archive the last confirm took, as its report names it: by its
+        name alone, in the espace's backups folder."""
+        report = self.client.session[views.session_key(views.SESSION_REPORT)]["report"]
+        return paths.backups_dir() / report["safety"]["archive"]
 
     def test_payments_a_replace_removes_are_in_the_archive_taken_before(self):
         url = self.stage({"factures", "fournisseurs"})

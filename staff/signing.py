@@ -11,14 +11,16 @@ document (PAdES, SHA-256), who signed it (a certificate in the employee's
 name), and when (an RFC 3161 timestamp from a third party - the one piece of
 evidence the employer does not control).
 
-**Keys** (`settings.STAFF_PRIVATE_DIR/keys/`, `staff.private_files`): one
-internal authority per installation (« Autorité interne de <établissement> »),
+**Keys** (`keys/` in the private folder, `staff.private_files`): one
+internal authority per ESPACE, each bar's private folder its own (« Autorité interne de <établissement> »),
 one certificate for the employer (the establishment's name) and one per
 employee, made at his first signature (CN « DUPONT Jeanne », O the
 establishment). EC P-256, SHA-256, ten years. The private keys are PKCS#8 PEM,
 encrypted with `settings.MARGINMATE_SIGNING_PASSPHRASE` when it is set - and
 keys written in clear before it was set are encrypted at the next signature;
-unset, `key_warning()` is the sentence the owner's pages show. A certificate
+unset, `key_warning()` is the sentence the owner's pages show (in the
+owner's espace only: the passphrase is the platform's, and the operator
+is warned by the system check staff.W001). A certificate
 whose name no longer matches (an employee renamed) is replaced, the old one
 moved to `keys/archive/`: it signed documents. The authority is never
 replaced while its files exist. **Losing it does not make a signed PDF
@@ -67,7 +69,8 @@ third party's time is one the employer could have dated himself.
 `DummyTimeStamper` (staff/tests/signing_support.py); no test ever reaches a
 real server (tests.support.NoNetworkTestCase).
 
-**Verification** (`verify`) is offline: our authority's certificates are
+**Verification** (`verify`) is offline: our authority's certificates - the
+bound espace's, never another bar's - are
 the trust roots for the signers, and the Mozilla list shipped with certifi
 for the timestamp authorities (DigiCert's and Sectigo's roots are in it).
 Adobe Reader shows « validité inconnue » for our certificates
@@ -113,6 +116,8 @@ from pyhanko.sign.validation.generic_cms import extract_tst_data_iter
 from pyhanko.stamp.base import BaseStamp, BaseStampStyle
 from pyhanko_certvalidator import ValidationContext
 from pyhanko_certvalidator.registry import SimpleCertificateStore
+
+from accounts.tenancy import integrations_allowed
 
 from . import pdf, private_files
 
@@ -345,13 +350,27 @@ def _encrypt_clear_keys() -> None:
             _load_key(path)
 
 
+def server_settings_may_be_named() -> bool:
+    """Whether a page may name a server setting (the signing passphrase, the
+    mail server): in the owner's espace only
+    (`Tenant.uses_server_integrations`, the platform owner's own bar).
+    Another bar can change none of them, and is never shown their names."""
+    return integrations_allowed()
+
+
 def key_warning() -> str:
     """The one muted line the owner's pages show while the keys are, or may
     be, stored in clear - "" once they are encrypted. Reads the folder,
-    never creates it."""
+    never creates it.
+
+    Multi mode: said in the owner's espace only (`server_settings_may_be_named`).
+    The passphrase is the platform's: another bar can do nothing about it -
+    the operator is warned by the system check staff.W001 instead."""
+    if not server_settings_may_be_named():
+        return ""
     if _passphrase() is None:
         return KEY_WARNING
-    folder = Path(settings.STAFF_PRIVATE_DIR) / private_files.KEYS
+    folder = private_files.keys_folder()
     if any(not _is_encrypted(path.read_bytes()) for path in _key_files(folder)):
         return KEYS_STILL_CLEAR
     return ""
@@ -451,7 +470,10 @@ def _identity(stem: str, subject: x509.Name, issuer: Identity | None) -> Identit
 
 
 # One process makes an identity at a time: two first signatures at the same
-# second must not make two authorities.
+# second must not make two authorities. Process-global on purpose, espaces
+# included: it only serialises making keys - each espace's live in its own
+# private folder (`private_files.keys_dir()`, resolved from the binding), so
+# holding it for one bar never hands another bar's keys over.
 _KEYS_LOCK = threading.RLock()
 
 
@@ -488,10 +510,12 @@ def employee_identity(employee, establishment) -> Identity:
 
 
 def authority_certificates() -> list[x509.Certificate]:
-    """Every authority this installation has had (the current one and any
-    kept in the archive): the trust roots `verify` checks signers against.
-    Reads the folder, never creates anything."""
-    folder = Path(settings.STAFF_PRIVATE_DIR) / private_files.KEYS
+    """Every authority this espace has had (the current one and any kept in
+    the archive) - the bound espace's only: the trust
+    roots `verify` checks signers against, so another bar's signature is
+    never « émise par l'autorité de l'établissement » here. Reads the
+    folder, never creates anything."""
+    folder = private_files.keys_folder()
     paths = [folder / f"{AUTHORITY_STEM}.cert.pem", *sorted((folder / ARCHIVE).glob(f"{AUTHORITY_STEM}-*.cert.pem"))]
     certificates = []
     for path in paths:
@@ -506,8 +530,7 @@ def authority_certificates() -> list[x509.Certificate]:
 def authority_fingerprint() -> str:
     """The current authority's SHA-256 fingerprint (hex), "" before the first
     signature - what the owner's page and the proof file show."""
-    folder = Path(settings.STAFF_PRIVATE_DIR) / private_files.KEYS
-    path = folder / f"{AUTHORITY_STEM}.cert.pem"
+    path = private_files.keys_folder() / f"{AUTHORITY_STEM}.cert.pem"
     if not path.is_file():
         return ""
     return x509.load_pem_x509_certificate(path.read_bytes()).fingerprint(hashes.SHA256()).hex()

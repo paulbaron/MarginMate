@@ -7,10 +7,14 @@ import traceback
 from datetime import date, timedelta
 
 from django.conf import settings
-from django.db import DatabaseError, connection
+from django.db import DatabaseError
 from django.utils import timezone
 
-from .importing import DuplicateInvoiceError, parse_and_import
+from accounts import paths
+from accounts.tenancy import bound, integrations_allowed
+
+from . import integrations
+from .importing import DuplicateInvoiceError, RoutedToConsignesError, parse_and_import
 from .models import Invoice, InvoiceType, ScrapeJob, Supplier
 from .scrapers.generic_email import find_matching_emails, scrape_email_invoices
 from .scrapers.metro import MetroError, MetroPaused, scrape_metro_invoices
@@ -19,6 +23,18 @@ from .scrapers.website import WebsiteError, WebsiteRecipe, fetch_website_invoice
 DEFAULT_LOOKBACK_DAYS = 90
 OVERLAP_DAYS = 3  # re-check the last few days in case an invoice landed just before the last known one
 HEARTBEAT_SECONDS = 15
+#: A format de bon's source in a gather: "bons-<format pk>" (ScrapeJob.
+#: progress, the gather card's boxes, the Consignes page's hidden sources).
+SLIPS_PREFIX = "bons-"
+
+
+def slips_code(fmt) -> str:
+    return f"{SLIPS_PREFIX}{fmt.pk}"
+
+
+def slips_label(fmt) -> str:
+    """How a format's bons are named on the gather card and its progress."""
+    return f"Bons de consignes — {fmt.name}"
 
 
 class _GatherHeartbeat(threading.Thread):
@@ -30,7 +46,14 @@ class _GatherHeartbeat(threading.Thread):
 
     Only while the gather moves (its log or its progress changes within the
     reaper's STALE_AFTER): beating whatever it did, a thread blocked for good
-    in one call would never be reaped, and every new gather refused."""
+    in one call would never be reaped, and every new gather refused.
+
+    Its thread is a new one, started with nothing bound: the loop is wrapped
+    here, in the gather's own thread - bound to the gather's espace - so the
+    beats go to the gather's job and not to another bar's with the same pk
+    (a FAILED one put back to RUNNING, and blocking its gathers). Unbound in
+    multi mode it refuses to exist (accounts.tenancy.bound). bound() also
+    closes this thread's connection at its end."""
 
     def __init__(self, job_id: int, clock=time.monotonic):
         super().__init__(daemon=True)
@@ -39,13 +62,14 @@ class _GatherHeartbeat(threading.Thread):
         self.clock = clock
         self.seen = None
         self.changed_at = clock()
+        self._loop = bound(self._beat_until_stopped)
 
     def run(self) -> None:
-        try:
-            while not self.stopped.wait(HEARTBEAT_SECONDS):
-                self.beat()
-        finally:
-            connection.close()
+        self._loop()
+
+    def _beat_until_stopped(self) -> None:
+        while not self.stopped.wait(HEARTBEAT_SECONDS):
+            self.beat()
 
     def beat(self) -> None:
         try:
@@ -79,6 +103,25 @@ def _is_cancelled(job: ScrapeJob) -> bool:
 def _raise_if_cancelled(job: ScrapeJob) -> None:
     if _is_cancelled(job):
         raise _Cancelled
+
+
+def _download_dir(name: str) -> str:
+    """Where a source's run downloads: `name` ("metro", "type-<id>",
+    "test-<job id>") under the espace's own downloads folder
+    (accounts.paths.downloads_dir, read now). Those names are ids, and ids
+    restart at 1 in every
+    espace's database: in one shared folder two bars' runs took each other's
+    files - the scrapers decide what « landed » by what appeared there."""
+    return os.path.join(str(paths.downloads_dir()), name)
+
+
+def _refused(job: ScrapeJob, message: str) -> None:
+    """End a job the espace may not run (integrations.py), saying why - in
+    the thread, which is the last place before an account is contacted."""
+    job.append_log(message)
+    job.status = ScrapeJob.Status.FAILED
+    job.finished_at = timezone.now()
+    job.save(update_fields=["status", "finished_at"])
 
 
 def suggested_start_date(supplier_code: str) -> date:
@@ -156,7 +199,8 @@ def gather_invoices_task(
     invoices/views.py) so the request that triggered it returns immediately.
 
     `source_codes`: which sources to actually search, using the same short
-    codes shown in ScrapeJob.progress ("METRO", "type-<id>") - None means
+    codes shown in ScrapeJob.progress ("METRO", "type-<id>", "bons-<id>" -
+    a format de bon's mails, _gather_slips) - None means
     every eligible source **but Metro**, which is signed in to only when
     named: most of the sign-ins that got this machine blocked by Metro's
     firewall came from gathers started from a shell or a script.
@@ -170,8 +214,22 @@ def gather_invoices_task(
     checked before starting each source, and within each: between IMAP
     batches (scrapers/generic_email.py), before each Metro window and
     download, before each portal download.
+
+    Every source it searches is one of the server's own accounts: in an
+    espace that may not use them (integrations.py) nothing is searched, and
+    the job says why - whatever its rows say, since a mailbox source or
+    Metro can be switched back on by an import.
+
+    A gather of bons de consignes alone (the Consignes page's: every code a
+    « bons- » one) is told apart from the first moment (_name_slip_sources)
+    and is the only one whose period the bons' own start widens
+    (_gather_slips): Achats offers a gather's period again, and it must stay
+    the period the invoices were asked for.
     """
     job = ScrapeJob.objects.get(pk=job_id)
+    if not integrations_allowed():
+        _refused(job, integrations.GATHER)
+        return
     job.status = ScrapeJob.Status.RUNNING
     job.range_end = end_date or timezone.localdate()
     job.save(update_fields=["status", "range_end"])
@@ -181,8 +239,12 @@ def gather_invoices_task(
     end = job.range_end
     created_total = 0
     found_total = 0
+    slips_run = bool(source_codes) and all(str(code).startswith(SLIPS_PREFIX) for code in source_codes)
 
     try:
+        slip_formats = _mailed_slip_formats(job)
+        if slips_run:
+            _name_slip_sources(job, slip_formats, source_codes)
         _raise_if_cancelled(job)
         metro_supplier = Supplier.objects.filter(code="METRO", is_scrapable=True).first()
         if metro_supplier and source_codes is not None and "METRO" in source_codes:
@@ -226,6 +288,16 @@ def gather_invoices_task(
             found, imported = _gather_email(job, invoice_type, source, code, start, end)
             found_total += found
             created_total += imported
+
+        # The drivers' bons de consignes, one source per format fetched by
+        # mail. They are no invoices: their counts stay out of the job's
+        # totals, and nothing here imports them as purchases.
+        for slip_format in slip_formats:
+            _raise_if_cancelled(job)
+            code = slips_code(slip_format)
+            if source_codes is not None and code not in source_codes:
+                continue
+            _gather_slips(job, slip_format, code, start_date, end, widen=slips_run)
 
         website_types = list(
             InvoiceType.objects.filter(is_active=True, source_kind=InvoiceType.SourceKind.WEBSITE).select_related(
@@ -278,7 +350,7 @@ def _gather_email(job: ScrapeJob, invoice_type: InvoiceType, source, code: str, 
     Returns (found, imported)."""
     try:
         results = scrape_email_invoices(
-            os.path.join(str(settings.SCRAPE_DOWNLOAD_DIR), code),
+            _download_dir(code),
             start,
             end,
             sender_pattern=source.sender_pattern,
@@ -325,13 +397,107 @@ def _gather_email(job: ScrapeJob, invoice_type: InvoiceType, source, code: str, 
     return len(results), imported
 
 
+def _mailed_slip_formats(job: ScrapeJob) -> list:
+    """The active formats de bon fetched from the mailbox (a sender motif
+    set). Imported here, never at the top of the module: this module is
+    loaded with the URLs. A database without the consignes tables yet (an
+    espace not migrated) is said in the log, and the invoices are gathered
+    all the same."""
+    from returnables.models import SlipFormat
+
+    try:
+        return list(SlipFormat.objects.filter(is_active=True).exclude(sender_pattern="").order_by("name", "pk"))
+    except DatabaseError as exc:
+        job.append_log(f"Bons de consignes : les formats de bon n'ont pas pu être lus ({exc}).")
+        return []
+
+
+def _name_slip_sources(job: ScrapeJob, formats, source_codes) -> None:
+    """Put a gather of bons alone's formats on its progress before anything
+    can stop it - the very line _gather_slips starts with. ScrapeJob.
+    slips_only reads the progress: cancelled while it waited, or its thread
+    killed at once, such a run had no source on it yet and counted as a
+    gather of invoices - Achats offered the bons' start (90 days back) to
+    every source again."""
+    for fmt in formats:
+        code = slips_code(fmt)
+        if code in source_codes:
+            job.update_progress(code, label=slips_label(fmt), found=0, imported=0)
+
+
+def _gather_slips(
+    job: ScrapeJob, fmt, code: str, posted_start: date | None, end: date, *, widen: bool = False
+) -> tuple[int, int]:
+    """One format de bon's mails, contained like a mailbox type
+    (_gather_email): whatever stops it is said on its own line and the
+    other sources run all the same. Returns (found, imported) - bons, kept
+    out of the job's invoice totals.
+
+    From its own start (returnables.mail.fetch_start: the newest bon it
+    brought in by mail, not the invoices' - a hand-dropped bon never moves
+    it). `widen`, for a gather of bons alone only: the job's range widened
+    to it, the period its card shows. Beside invoices it is said in the log
+    and the range left alone - the range is the period Achats offers again
+    after a failure, and 90 days back (no bon mailed yet) went to every
+    source, Metro included, where the invoices had asked for three.
+
+    Its motifs go through the consignes guard (returnables.patterns.
+    mail_matcher: checked, case-insensitive, timed) - a motif anybody's
+    header can make slow must not hang the gather. EVERY attachment the search returned is stored before a cancel
+    is heard: the search stops early on a cancel and hands back what it had,
+    which the next run's start would otherwise skip. Stored through the
+    consignes writer (returnables.slips.store_slip) only - never an import
+    of an invoice. The latest reprise's comparison is the line's note, never
+    its error: an error counts as a failed source (« N source(s) en
+    échec »)."""
+    from functools import partial
+
+    from returnables import mail, patterns
+
+    try:
+        job.update_progress(code, label=slips_label(fmt), found=0, imported=0)
+        start = mail.fetch_start(fmt, posted_start, timezone.localdate())
+        if not widen:
+            job.append_log(f"{slips_label(fmt)} : recherche depuis le {start:%d/%m/%Y}.")
+        elif job.range_start is None or start < job.range_start:
+            job.range_start = start
+            job.save(update_fields=["range_start"])
+        matches = find_matching_emails(
+            start,
+            end,
+            sender_pattern=fmt.sender_pattern,
+            subject_pattern=fmt.subject_pattern,
+            attachment_pattern=fmt.attachment_pattern,
+            log=job.append_log,
+            on_progress=lambda done, total: job.update_progress(code, found=done),
+            should_cancel=lambda: _is_cancelled(job),
+            compile=partial(patterns.mail_matcher, log=job.append_log),
+        )
+        found, imported, note = mail.store_matches(
+            fmt, matches, job.append_log, progress=lambda done, new: job.update_progress(code, found=done, imported=new)
+        )
+        job.update_progress(code, found=found, imported=imported, **({"note": note[:300]} if note else {}))
+        _raise_if_cancelled(job)
+    except _Cancelled:
+        raise
+    except Exception as exc:  # noqa: BLE001 - one source failing is said on its own line
+        detail = str(exc).strip() or exc.__class__.__name__
+        job.append_log(f"{slips_label(fmt)} : échec - {detail}\n{traceback.format_exc()}")
+        # A motif the guard refuses is the format's to correct, not the
+        # mailbox's.
+        said = detail if isinstance(exc, patterns.MotifError) else f"Boîte mail : {detail}"
+        job.update_progress(code, error=said[:300])
+        return 0, 0
+    return found, imported
+
+
 def _gather_metro(job: ScrapeJob, supplier: Supplier, start: date, end: date, metro_now: bool) -> tuple[int, int]:
     """Metro's part of a gather, contained like a portal's: whatever stops it
     - its firewall above all - is said on its own line, what landed before
     the stop is imported, and the other sources run all the same. On 18/09 a
     refusal failed the whole gather: the mailbox and the portals were never
     searched. Returns (found, imported)."""
-    download_dir = os.path.join(str(settings.SCRAPE_DOWNLOAD_DIR), "metro")
+    download_dir = _download_dir("metro")
     files: list[str] = []
     error = ""
     try:
@@ -381,7 +547,7 @@ def _gather_website(job: ScrapeJob, invoice_type: InvoiceType, source, code: str
     try:
         files = fetch_website_invoices(
             WebsiteRecipe.from_source(source, name=invoice_type.name),
-            os.path.join(str(settings.SCRAPE_DOWNLOAD_DIR), code),
+            _download_dir(code),
             start,
             end,
             known_numbers=_known_numbers(invoice_type.supplier),
@@ -444,6 +610,11 @@ def _import_document_file(
         for change in changes:
             job.append_log(f"{os.path.basename(path)} : {change.summary}")
         return True
+    except RoutedToConsignesError as exc:
+        # A driver's bon de consignes, stored in Consignes: no invoice, and
+        # not « already imported » either.
+        job.append_log(f"{os.path.basename(path)} : {exc}")
+        return False
     except DuplicateInvoiceError:
         job.append_log(f"Skipped {path} (already imported)")
         return False
@@ -458,8 +629,13 @@ def _import_document_file(
 def test_website_task(job_id: int, recipe: WebsiteRecipe, supplier_id: int, start_date: date, end_date: date) -> None:
     """Dry run of a website source: signs in and lists what it would
     download, downloading nothing - how a new site's settings are checked
-    before a real gather. Its rows land in job.test_matches."""
+    before a real gather. Its rows land in job.test_matches. The server's
+    .env names the credentials: another bar's espace is refused before any
+    is read (integrations.py)."""
     job = ScrapeJob.objects.get(pk=job_id)
+    if not integrations_allowed():
+        _refused(job, integrations.PORTALS)
+        return
     job.status = ScrapeJob.Status.RUNNING
     job.range_start = start_date
     job.range_end = end_date
@@ -468,7 +644,7 @@ def test_website_task(job_id: int, recipe: WebsiteRecipe, supplier_id: int, star
         supplier = Supplier.objects.filter(pk=supplier_id).first()
         rows = list_website_invoices(
             recipe,
-            os.path.join(str(settings.SCRAPE_DOWNLOAD_DIR), f"test-{job.id}"),
+            _download_dir(f"test-{job.id}"),
             start_date,
             end_date,
             known_numbers=_known_numbers(supplier) if supplier else (),
@@ -505,8 +681,14 @@ def test_email_pattern_task(
     written to disk and nothing is imported. Lets a new invoice type's
     patterns be verified against real mail before it's ever used in a real
     gather run. Cancellable the same way gather_invoices_task is (see its
-    docstring) - a wide test range can scan thousands of emails too."""
+    docstring) - a wide test range can scan thousands of emails too.
+
+    The mailbox is the owner's: from another bar's espace its senders and
+    subjects would be listed there (integrations.py)."""
     job = ScrapeJob.objects.get(pk=job_id)
+    if not integrations_allowed():
+        _refused(job, integrations.MAILBOX)
+        return
     job.status = ScrapeJob.Status.RUNNING
     job.range_start = start_date
     job.range_end = end_date

@@ -239,12 +239,11 @@ class LearnFromCheckedTicketsCommandTests(TestCase):
     def test_the_digital_invoices_already_filed_are_read_for_it(self):
         """A supplier's PDF invoices say who they are too - and the
         customer's own SIREN, on every one of them, then names nobody."""
-        from django.conf import settings
-
+        from accounts import paths
         from invoices.tests.pdf_files import write_pdf
 
         supplier = make_supplier(code="CUISIPRO", name="Cuisipro", parser_key="")
-        path = os.path.join(settings.MEDIA_ROOT, "cuisipro-facture.pdf")
+        path = os.path.join(paths.media_root(), "cuisipro-facture.pdf")
         write_pdf(path, [
             "CUISIPRO FRANCE SARL  Tel: 01 98 76 54 32",
             "FACTURE N 7654321 du 07/11/2024",
@@ -265,3 +264,27 @@ class LearnFromCheckedTicketsCommandTests(TestCase):
         self.assertIn("1 facture(s) numérique(s) lue(s)", out)
         self.assertEqual(supplier.ticket_identifiers, ["tel:0198765432"])
         self.assertIn("CUISIPRO FRANCE", Invoice.objects.get(pk=invoice.pk).source_text)
+
+    def test_a_filed_pdf_past_the_page_cap_is_stepped_over_and_named(self):
+        """`document_text` refuses a PDF past ocr.MAX_PAGES (DocumentTooBig,
+        HARDEN-01): the command stopped on a traceback at the first such
+        file, and learned nothing from the others."""
+        from accounts import paths
+        from invoices import ocr
+        from invoices.tests.test_pdf_page_cap import pdf_of_pages
+
+        supplier = make_supplier(code="LONGUE", name="Longue Exemple", parser_key="")
+        path = os.path.join(paths.media_root(), "longue-facture.pdf")
+        with open(path, "wb") as handle:
+            handle.write(pdf_of_pages(3))
+        self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
+        invoice = make_invoice(supplier=supplier)
+        invoice.source_file.name = "longue-facture.pdf"
+        invoice.save(update_fields=["source_file"])
+
+        with mock.patch.object(ocr, "MAX_PAGES", 2):
+            out = self.run_command()
+        self.assertIn("1 document(s) trop long(s) pour être lu(s), laissé(s) de côté : longue-facture.pdf", out)
+        self.assertEqual(Invoice.objects.get(pk=invoice.pk).source_text, "")
+        # The checked tickets taught their shop all the same.
+        self.assertEqual(self.shop.ticket_identifiers, LEARNED)

@@ -7,11 +7,18 @@ Exists so the connection can be proved on its own, before any report-specific
 clicking is written: run it, watch it sign in and land on the page. With
 --no-headless you can see exactly what it sees, which is how the download
 steps for a given report get worked out in the first place.
+
+It signs in with the server's L'Addition account, the owner's: in multi mode
+it runs for the owner's espace only (`manage.py tenant <dossier>
+laddition_open`), like every other use of that account
+(recipes/integration.py).
 """
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
+from accounts import paths
+from recipes.integration import refusal, require_espace, till_allowed
 from recipes.pos.laddition_session import LadditionAuthError, laddition_session
 
 
@@ -20,7 +27,10 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument("--path", default="/v2/shift-details", help="Reporting path to open.")
-        parser.add_argument("--download-dir", default=str(settings.SCRAPE_DOWNLOAD_DIR))
+        parser.add_argument(
+            "--download-dir", default=None,
+            help="The browser's download folder (default: the espace's downloads folder).",
+        )
         parser.add_argument("--no-headless", action="store_true", help="Show the browser window.")
         parser.add_argument(
             "--keep-open", type=int, default=0, metavar="SECONDS",
@@ -28,11 +38,14 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        require_espace("laddition_open")
+        if not till_allowed():
+            raise CommandError(refusal())
         if options["no_headless"]:
             settings.SCRAPER_HEADLESS = False
         try:
             with laddition_session(
-                options["download_dir"], path=options["path"], log=self.stdout.write
+                options["download_dir"] or str(paths.downloads_dir()), path=options["path"], log=self.stdout.write
             ) as driver:
                 self.stdout.write(self.style.SUCCESS(f"Connected. URL: {driver.current_url}"))
                 self.stdout.write(f"Title: {driver.title}")

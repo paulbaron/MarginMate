@@ -1548,7 +1548,11 @@ def _stock_take_form_view(request, stock_take):
             "form": form,
             "formset": formset,
             "entry_names": entries.keys(),
-            "entry_data": json.dumps(entries),
+            # The data itself, printed by the template's json_script: a name
+            # read off a supplier's document can hold « </script> », which a
+            # json.dumps string printed |safe let out of its island (security
+            # audit XSS-1, tests/test_json_islands.py).
+            "entry_data": entries,
             # A draft kept in the browser may still name an article the old
             # way; the page renames it as it restores it.
             "entry_suffix": STOCK_TYPE_ENTRY_SUFFIX,
@@ -1556,13 +1560,11 @@ def _stock_take_form_view(request, stock_take):
             # What the already-saved lines are worth, so the running total is
             # right the moment the page opens without valuing anything again
             # (a saved line's value is frozen - see StockTake's docstring).
-            "saved_values": json.dumps(
-                {
-                    str(line_form.instance.pk): str(line_form.instance.value_ht)
-                    for line_form in formset.forms
-                    if line_form.instance.pk and line_form.instance.value_ht is not None
-                }
-            ),
+            "saved_values": {
+                str(line_form.instance.pk): str(line_form.instance.value_ht)
+                for line_form in formset.forms
+                if line_form.instance.pk and line_form.instance.value_ht is not None
+            },
         },
     )
 

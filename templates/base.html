@@ -7,6 +7,15 @@
     <title>{% block title %}MarginMate{% endblock %}</title>
     <link rel="stylesheet" href="{% asset 'css/marginmate.css' %}">
     {% comment %}
+    A bar's page (a request bound to its espace): htmx keeps no page. Its
+    history cache holds whole pages (the boosted Achats tabs store each page
+    left) under ONE key of the origin's browser storage, the one key not
+    built through the espace, and draws them on Back: bar A's invoices
+    stayed there for bar B's pages to read. Size 0: it stores none, removes
+    one an older page left, and Back asks the server. Not
+    hx-history="false", which still draws a snapshot already stored.
+    {% endcomment %}{% if request.tenant %}<meta name="htmx-config" content='{"historyCacheSize":0}'>
+    {% endif %}{% comment %}
     htmx is served from static/, not from a CDN. It used to be
     https://unpkg.com/htmx.org@1.9.12, which answers with a 301 before the
     real file - so every page in the app waited on two third-party round
@@ -20,7 +29,23 @@
     <script src="{% asset 'js/datatable.js' %}" defer></script>
     <script src="{% asset 'js/charts.js' %}" defer></script>
 </head>
-<body>
+{% comment %}
+data-tenant: the espace this page belongs to, as an opaque scope
+(accounts.tenancy.storage_scope - 16 hex characters, NOT its id: the
+sequential id told any bar how many espaces were opened before its own,
+security audit LB-6); empty on a page no espace is bound to.
+Every key the scripts write into the browser's storage carries it
+(« espace-<scope>: »): storage belongs to the origin, not to the login, and
+one device used for two bars would otherwise hand bar B the drafts, ticks
+and opened rows bar A left under the same pk. Empty, the keys carry no
+espace.
+data-tenant-legacy, on a session opened before 29/09/2026 only: the id its
+pages keyed the storage with until then; espace_storage_legacy.js, first
+thing in the body so that it runs before any script reading a key, moves
+those keys under the scope (accounts.middleware.LEGACY_STORAGE_SESSION_KEY).
+{% endcomment %}
+<body data-tenant="{{ request.storage_scope|default_if_none:'' }}"{% if request.storage_legacy %} data-tenant-legacy="{{ request.storage_legacy }}"{% endif %}>
+    {% if request.storage_legacy %}<script src="{% asset 'js/espace_storage_legacy.js' %}"></script>{% endif %}
     <header class="topbar">
         <div class="topbar-inner">
             <a class="brand" href="{% url 'inventory:stock_list' %}">MarginMate</a>
@@ -32,9 +57,26 @@
                 <a href="{% url 'margins:margins_home' %}"{% if nav_section == "marges" %} class="active"{% endif %}>Marges</a>
                 <a href="{% url 'staff:home' %}"{% if nav_section == "personnel" %} class="active"{% endif %}>Personnel</a>
                 <a href="{% url 'inventory:stock_take_list' %}"{% if nav_section == "inventaires" %} class="active"{% endif %}>Inventaires</a>
+                <a href="{% url 'returnables:home' %}"{% if nav_section == "consignes" %} class="active"{% endif %}>Consignes</a>
                 <a href="{% url 'transfer:data_home' %}"{% if nav_section == "donnees" %} class="active"{% endif %}>Données</a>
-                <a href="/admin/">Admin</a>
+                {% if user.is_superuser %}<a href="/admin/">Admin</a>{% endif %}
             </nav>
+            {% comment %}
+            A request bound to its espace: the bar's name and « Se déconnecter ». Outside the <nav> -
+            tests/test_navigation.py reads its links - and on the brand's row under 860 px, so the bar
+            is no taller than its links make it (--topbar-room, marginmate.css;
+            accounts/tests/test_topbar_browser.py measures it). The Admin link above is a superuser's
+            only (accounts/admin_site.py).
+            {% endcomment %}
+            {% if request.tenant %}
+                <div class="topbar-account">
+                    <span class="topbar-espace" title="{{ request.tenant.name }}">{{ request.tenant.name }}</span>
+                    <form method="post" action="{% url 'accounts:logout' %}" class="topbar-logout">
+                        {% csrf_token %}
+                        <button type="submit" class="link-button">Se déconnecter</button>
+                    </form>
+                </div>
+            {% endif %}
         </div>
     </header>
 

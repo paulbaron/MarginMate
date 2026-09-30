@@ -15,11 +15,11 @@ import shutil
 from decimal import Decimal
 from unittest import mock
 
-from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 
+from accounts import paths
 from invoices.importing import DuplicateInvoiceError
 from invoices.models import Invoice, Supplier
 from invoices.parsers.base import ParsedInvoice, ParsedLine
@@ -39,7 +39,7 @@ D = Decimal
 
 
 def pdf_bytes(test, lines):
-    path = os.path.join(settings.MEDIA_ROOT, f"source-{test.id()[-20:]}.pdf")
+    path = os.path.join(paths.media_root(),f"source-{test.id()[-20:]}.pdf")
     write_pdf(path, lines)
     test.addCleanup(lambda: os.path.exists(path) and os.remove(path))
     with open(path, "rb") as handle:
@@ -142,7 +142,7 @@ class FiledFromABatchTests(TestCase):
     def setUp(self):
         self.metro = Supplier.objects.get(code="METRO")
         batch = stage_batch([SimpleUploadedFile("metro.pdf", pdf_bytes(self, INVOICE))])
-        self.addCleanup(shutil.rmtree, os.path.join(settings.MEDIA_ROOT, "receipt_batches", str(batch.pk)), True)
+        self.addCleanup(shutil.rmtree, os.path.join(paths.imports_dir(), "receipt_batches",str(batch.pk)), True)
         with mock.patch("invoices.receipt_batches.import_document", side_effect=UnrecognisedShopError("?")):
             self.batch = run_receipt_batch(batch.pk)
 
@@ -158,7 +158,7 @@ class FiledFromABatchTests(TestCase):
         self.assertIn("Facture n F-1042", Invoice.objects.get(pk=invoice.pk).source_text)
 
     def test_a_scan_is_read_as_a_ticket_whatever_the_supplier(self):
-        path = os.path.join(settings.MEDIA_ROOT, self.batch.results[0]["stored"])
+        path = os.path.join(paths.imports_dir(), self.batch.results[0]["stored"])
         with open(path, "wb") as handle:
             handle.write(b"%PDF-1.4 a scan: no text in it")
         receipt = make_invoice(supplier=self.metro, invoice_number="T-1", ocr_text="un ticket")
@@ -173,7 +173,7 @@ class FiledFromABatchTests(TestCase):
 class ImportInvoicePdfTests(TestCase):
     def setUp(self):
         self.metro = Supplier.objects.get(code="METRO")
-        self.path = os.path.join(settings.MEDIA_ROOT, "metro-facture.pdf")
+        self.path = os.path.join(paths.media_root(),"metro-facture.pdf")
         write_pdf(self.path, INVOICE)
         self.addCleanup(lambda: os.path.exists(self.path) and os.remove(self.path))
         self.parsed = ParsedInvoice(

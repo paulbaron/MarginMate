@@ -165,18 +165,21 @@ class ImportContext:
 
     @property
     def own_backup(self) -> bool:
-        """Whether this archive is one this installation wrote itself: a
-        file in DATA_BACKUP_DIR, where only `safety.before` writes. An
-        uploaded one is staged elsewhere, and a manifest can claim any
-        reason, so the folder is what says it. What it buys: a restore puts
-        a portal back as it was, where any other archive leaves it inactive
-        (sections/sources.py). After « Effacer », the owner's own backup
-        switched their five portals off and the next gather searched the
-        mailbox only (20/09)."""
-        from django.conf import settings
+        """Whether this archive is one THIS ESPACE wrote itself: a file in
+        its own backups folder (accounts.paths.backups_dir:
+        `<espace>/backups/`), where only
+        `safety.before`, bound to it, writes. An uploaded one is staged
+        elsewhere, and a manifest can claim any reason, so the folder is
+        what says it. What it buys: a restore puts a portal back as it was,
+        where any other archive leaves it inactive (sections/sources.py).
+        After « Effacer », the owner's own backup switched their five
+        portals off and the next gather searched the mailbox only (20/09).
+        With one folder for every bar, bar A's backup counted as bar B's
+        own, and restored A's portals active in B, naming A's variables."""
+        from accounts import paths
 
         try:
-            folder = Path(settings.DATA_BACKUP_DIR).resolve()
+            folder = paths.backups_dir().resolve()
             return Path(self.reader.path).resolve().parent == folder
         except (AttributeError, OSError, TypeError, ValueError):
             return False

@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import tempfile
 import threading
@@ -7,19 +8,22 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from django.contrib import messages
 from django.db import transaction
+from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.generic import DetailView
 
-from common import is_id
+from accounts.tenancy import bound, integrations_allowed
+from common import error_for_page, is_id, local_return, safe_next
+
+logger = logging.getLogger(__name__)
 
 #: What a bank line is compared against: a document's total to the centime,
 #: the way bank/reconcile.py rounds it before matching.
 CENTS = Decimal("0.01")
 
-from . import supplier_changes
+from . import integrations, supplier_changes
 from .deletion import InvoiceInUseError, blocking_stock_takes, delete_invoice
 from .einvoice import NO_LINES_CHECK as EINVOICE_NO_LINES
 from .forms import (
@@ -51,8 +55,9 @@ from .importing import (
 from .models import Invoice, InvoiceType, ReceiptBatch, ScrapeJob, Supplier
 from .parsers import LLM_PARSER_KEY, get_parser
 from .parsers.base import ParsedInvoice, ParsedLine
+from .receipt_batches import READING_REFUSALS
 from .tasks import gather_invoices_task, test_email_pattern_task
-from .workspace import batch_invoice_ids, batch_status_context, render_purchases
+from .workspace import batch_deleted, batch_invoice_ids, batch_status_context, render_purchases
 
 
 def invoice_list(request):
@@ -118,12 +123,21 @@ class InvoiceDetailView(DetailView):
         return context
 
 
+#: Said when another document is being read: the OCR takes turns.
+OCR_BUSY = "Un autre document est en cours de lecture : réessayez dans un instant."
+
+
+class _OcrBusy(Exception):
+    """The import waited its turn at the OCR in vain (OCR_BUSY)."""
+
+
 def upload_invoice(request):
     """A supplier's PDF, from the import card. With a reader of its own, it is
     shown first in the list, highlighted and opened on its lines. Any other
     supplier's - a new one's included - is read like a ticket and opens on
     the correction page, beside its PDF."""
-    from .receipts import OCR_LOCK, OCR_WAIT_SECONDS, import_document
+    from .ocr import check_page_count
+    from .receipts import OCR_LOCK, OCR_WAIT_SECONDS, route_consignes, import_document
 
     if request.method != "POST":
         return render_purchases(request, "documents", import_tab="pdf")
@@ -144,13 +158,21 @@ def upload_invoice(request):
             for chunk in uploaded.chunks():
                 tmp.write(chunk)
         if supplier.parser_key == LLM_PARSER_KEY:
+            # Achats' guard first, as import_document runs it: a driver's bon
+            # read by the AI (« every purchased product line ») filed the
+            # empties taken back as purchases. RoutedToConsignesError is a
+            # DuplicateInvoiceError: said below, no Invoice. The page count
+            # first, as there too: nothing reads a page of a PDF past
+            # ocr.MAX_PAGES (DocumentTooBig, a READING_REFUSAL).
+            check_page_count(tmp_path)
+            route_consignes(tmp_path, uploaded.name)
             invoice = parse_and_import(tmp_path, supplier, display_filename=uploaded.name)
         else:
             # A scan is OCR, seconds of CPU: one document at a time. The file
             # decides the reader here too - a supplier's own when it has one
             # and the document is digital, the ticket reader otherwise.
             if not OCR_LOCK.acquire(timeout=OCR_WAIT_SECONDS):
-                raise RuntimeError("un autre document est en cours de lecture, réessayez dans un instant")
+                raise _OcrBusy(OCR_BUSY)
             try:
                 with supplier_changes.cause(
                     f"import de {uploaded.name}, {supplier.name} choisi", by_person=True
@@ -167,7 +189,13 @@ def upload_invoice(request):
     except DuplicateInvoiceError as exc:
         messages.warning(request, str(exc))
     except Exception as exc:  # noqa: BLE001 - surfaced to the user, not a crash
-        messages.error(request, f"Échec de l'import : {exc}")
+        # The app's refusals in their words, anything else by kind: never the
+        # exception's own text, which can name the server's files (audit
+        # LB-3) - that goes to the server's log.
+        said = error_for_page(
+            exc, said=(*READING_REFUSALS, _OcrBusy), log=logger, what=f"Import de la facture {uploaded.name!r}"
+        )
+        messages.error(request, f"Échec de l'import. {said}")
     else:
         if created:
             messages.info(request, f"Fournisseur {supplier.name} créé.")
@@ -272,6 +300,15 @@ def _parse_date(value: str | None) -> date | None:
 def trigger_gather(request):
     if request.method != "POST":
         return redirect("invoices:invoice_list")
+    # Back where it was asked from when that is a page of this site (the
+    # Consignes page's « Récupérer les bons » posts retour=/consignes/),
+    # Achats' card otherwise. Every rule below is this view's, whoever asks.
+    back = local_return(request) or f"{reverse('invoices:invoice_list')}?ajouter=recuperer"
+    if not integrations_allowed():
+        # Every source is one of the server's own accounts (integrations.py):
+        # no job, no thread - and « metro_now » is refused with the rest.
+        messages.error(request, integrations.GATHER)
+        return redirect(back)
 
     # Clear out any run that died without saying so before deciding whether
     # one is genuinely in progress - otherwise a single killed thread locks
@@ -295,13 +332,15 @@ def trigger_gather(request):
         start_date = _parse_date(request.POST.get("start_date"))
         end_date = _parse_date(request.POST.get("end_date"))
         active_job = ScrapeJob.objects.create(range_start=start_date, range_end=end_date)
+        # bound(): the thread works in this request's espace - a new thread
+        # starts with nothing bound (accounts/tenancy.py).
         thread = threading.Thread(
-            target=gather_invoices_task,
+            target=bound(gather_invoices_task),
             args=(active_job.id, start_date, end_date, source_codes, metro_now),
             daemon=True,
         )
         thread.start()
-    return redirect(f"{reverse('invoices:invoice_list')}?ajouter=recuperer")
+    return redirect(back)
 
 
 def gather_status(request, job_id):
@@ -353,7 +392,13 @@ def invoice_type_form(request, pk=None):
     website = getattr(invoice_type, "website_source", None) if invoice_type else None
     test_job = None
     retour = _local_return(request)
+    sources_refused = None if integrations_allowed() else integrations.SOURCES
 
+    if request.method == "POST" and sources_refused:
+        # Both channels are the server's own accounts (integrations.py): no
+        # « Tester », no source saved - the page says « à configurer ».
+        messages.error(request, sources_refused)
+        return redirect(request.get_full_path())
     if request.method == "POST":
         type_form = InvoiceTypeForm(request.POST, instance=invoice_type)
         is_website = request.POST.get("source_kind") == InvoiceType.SourceKind.WEBSITE
@@ -387,7 +432,7 @@ def invoice_type_form(request, pk=None):
                 end = source_form.cleaned_data["test_end_date"] or timezone.localdate()
                 test_job = ScrapeJob.objects.create(kind=ScrapeJob.Kind.TEST)
                 thread = threading.Thread(
-                    target=test_email_pattern_task,
+                    target=bound(test_email_pattern_task),
                     args=(
                         test_job.id,
                         start,
@@ -443,6 +488,7 @@ def invoice_type_form(request, pk=None):
             # », an error): taken from the database again, a redrawn page
             # moved the type back unrefused.
             "supplier_was": _supplier_was(request, type_form, invoice_type),
+            "sources_refused": sources_refused,
         },
     )
 
@@ -528,7 +574,7 @@ def _test_website(request, type_form, website_form):
     supplier_id = type_form.data.get("supplier") or ""
     job = ScrapeJob.objects.create(kind=ScrapeJob.Kind.TEST)
     thread = threading.Thread(
-        target=test_website_task,
+        target=bound(test_website_task),
         args=(job.id, WebsiteRecipe.from_source(site, name=name), int(supplier_id) if is_id(supplier_id) else 0, start, end),
         daemon=True,
     )
@@ -584,7 +630,8 @@ def receipt_upload(request):
     form = ReceiptBatchUploadForm(request.POST, request.FILES)
     if not form.is_valid():
         return render_purchases(request, "documents", import_tab="tickets", receipt_form=form)
-    batch = stage_batch(form.cleaned_data["files"], form.ignored_names)
+    # A file over 25 Mo is that file's error, never written (form.refused).
+    batch = stage_batch(form.cleaned_data["files"], form.ignored_names, form.refused)
     start_batch(batch)
     return redirect("invoices:receipt_batch", pk=batch.pk)
 
@@ -788,7 +835,15 @@ def receipt_queue(request):
 
 def receipt_review(request, pk):
     """Check one receipt against its photo, then move to the next."""
-    invoice = get_object_or_404(Invoice.objects.select_related("supplier"), pk=pk)
+    invoice = Invoice.objects.select_related("supplier").filter(pk=pk).first()
+    if invoice is None:
+        # An old « Vérifier » link from an import whose ticket was deleted
+        # since: back to the import, saying so, rather than a bare 404.
+        lot = _lot_of(request)
+        if lot is not None and batch_deleted(lot, pk):
+            messages.warning(request, "Ce ticket a été supprimé depuis l'import : il n'y a plus rien à vérifier.")
+            return redirect("invoices:receipt_batch", pk=lot.pk)
+        raise Http404("No Invoice matches the given query.")
     if not invoice.is_receipt:
         return redirect("invoices:invoice_edit_lines", pk=invoice.pk)
     return _correction_page(request, invoice)
@@ -1472,14 +1527,10 @@ def _line_formset_for(invoice, document):
 
 
 def _safe_next(request, default="invoices:invoice_list"):
-    """Back to the page that asked (the receipt queue, say) - but never to
-    another site: `next` comes from the request, so anyone can write it."""
-    target = request.POST.get("next") or request.GET.get("next") or ""
-    if target and url_has_allowed_host_and_scheme(
-        target, allowed_hosts={request.get_host()}, require_https=request.is_secure()
-    ):
-        return target
-    return reverse(default)
+    """Back to the page that asked (the receipt queue, say) - a path of this
+    site only (`common.safe_next`): `next` comes from the request, so anyone
+    can write it, and « abc » was a 500 (audit LB-5)."""
+    return safe_next(request, reverse(default))
 
 
 def _deletion_entry(invoice, blockers):

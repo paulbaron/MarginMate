@@ -39,6 +39,7 @@ from staff.models import Establishment, SignatureRequest
 from staff.tests.signing_support import FailingTimestamper, OfflineTimestamps, SigningTestMixin, drawn_signature
 from staff.tests.support import employee
 from staff.timesheet import save_month
+from tests.runner import log_in_the_browser
 
 JUNE = date(2026, 6, 1)
 
@@ -255,6 +256,8 @@ class SigningPadInBrowserTests(PadInBrowserCase):
         )
         self.assertGreater(line_count, 1)
         # The owner's pages keep their small buttons: the rule is the employee's page's.
+        # They want the owner's login (the employee's page above needs none).
+        log_in_the_browser(self.driver, self.live_server_url)
         self.open(reverse("staff:month", args=[self.person.pk, JUNE]))
         small = self.driver.find_elements("css selector", ".btn-small")
         self.assertTrue(small)
@@ -294,6 +297,9 @@ class CountersignPadInBrowserTests(PadInBrowserCase):
         code = requests_.issue_code(self.request, SignatureRequest.Identification.CODE_HANDED_OVER)
         requests_.check_code(self.request, code, session)
         requests_.sign_for_employee(self.request, drawn_signature(), session=session, statement_accepted=True)
+        # The month's page is the owner's, behind the login (the employee's
+        # pad above needs none).
+        log_in_the_browser(self.driver, self.live_server_url)
 
     def month_page(self):
         self.open(reverse("staff:month", args=[self.person.pk, JUNE]))

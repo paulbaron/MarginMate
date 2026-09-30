@@ -3,6 +3,9 @@
     python manage.py learn_shop_identifiers --dry-run
     python manage.py learn_shop_identifiers
 
+With one database per bar: `python manage.py tenant <dossier>
+learn_shop_identifiers --dry-run`, one espace at a time.
+
 A ticket checked on the review page teaches its shop its SIREN, phone and web
 site (receipts.learn_identifiers), and so does a digital invoice as it is
 imported; the documents filed before that did not. This goes through them
@@ -18,13 +21,14 @@ name nobody.
 import os
 from collections import defaultdict
 
-from django.conf import settings
+from django.core.exceptions import SuspiciousFileOperation
 from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.db.models import Q
 
 from invoices.identifiers import describe
 from invoices.models import Invoice, Supplier
+from invoices.ocr import DocumentTooBig
 from invoices.receipts import document_text, learn_identifiers
 
 
@@ -36,6 +40,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, dry_run=False, **options):
         learned: dict[str, list[str]] = {}
+        self.too_long: list[str] = []
         with transaction.atomic():
             read = self.read_documents()
             texts = defaultdict(list)
@@ -59,6 +64,11 @@ class Command(BaseCommand):
             self.stdout.write("(essai : rien n'est enregistré)")
         if read:
             self.stdout.write(f"{read} facture(s) numérique(s) lue(s) pour ce qu'elles impriment.")
+        if self.too_long:
+            self.stdout.write(
+                f"{len(self.too_long)} document(s) trop long(s) pour être lu(s), laissé(s) de côté : "
+                + ", ".join(self.too_long)
+            )
         verb = "apprendrait" if dry_run else "a appris"
         if not learned:
             self.stdout.write("Rien de nouveau à apprendre.")
@@ -68,14 +78,27 @@ class Command(BaseCommand):
     def read_documents(self) -> int:
         """Keep what the digital invoices already filed print (`source_text`),
         for those imported before it was kept. A photo has its reading
-        already; a file that has gone, or carries no text, is left alone."""
+        already; a file that has gone, or carries no text, is left alone - and
+        so is one past ocr.MAX_PAGES (DocumentTooBig: no page of it is read),
+        named at the end rather than stopping the command."""
         read = 0
         waiting = Invoice.objects.filter(ocr_text="", source_text="").exclude(source_file="")
         for invoice in waiting.only("pk", "source_file").iterator():
-            path = os.path.join(settings.MEDIA_ROOT, invoice.source_file.name)
+            # Through the storage, which is the espace's own media folder
+            # (accounts/storage.py): run for an espace (`manage.py tenant
+            # <dossier> learn_shop_identifiers`), a folder read any other way
+            # holds none of its files, and every document read as « gone ».
+            try:
+                path = invoice.source_file.path
+            except (NotImplementedError, ValueError, SuspiciousFileOperation):
+                continue
             if not os.path.exists(path):
                 continue
-            text = document_text(path)
+            try:
+                text = document_text(path)
+            except DocumentTooBig:
+                self.too_long.append(os.path.basename(invoice.source_file.name))
+                continue
             if not text:
                 continue
             read += 1
