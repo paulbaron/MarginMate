@@ -33,7 +33,8 @@ from django.urls import reverse
 from django.utils import timezone
 from PIL import Image
 
-from staff import private_files, public_views, signature_requests as requests_, signing
+from staff import private_files, public_views, signing
+from staff import signature_requests as requests_
 from staff.models import Employee, Establishment, SignatureEvent, SignatureRequest, Timesheet, TimesheetDay
 from staff.tests.page_forms import as_post, form_posting_to, forms_of
 from staff.tests.signing_support import (
@@ -51,7 +52,7 @@ from tests.support import NoNetworkTestCase
 
 JUNE = date(2026, 6, 1)
 JULY = date(2026, 7, 1)
-IP = "203.0.113.7"           # TEST-NET-3: an address that belongs to nobody
+IP = "203.0.113.7"  # TEST-NET-3: an address that belongs to nobody
 PHONE = "Mozilla/5.0 (Linux; Android 14) Essai/1.0"
 ADDRESS = "jeanne.dupont@example.invalid"
 MAIL = {"EMAIL_HOST": "smtp.example.invalid"}
@@ -210,7 +211,9 @@ class PageTests(PublicCase):
         text = self.text(page)
         self.assertIn("BAR EXEMPLE", text)
         self.assertIn("12 rue Imaginaire", text)
-        self.assertRegex(unescape(self.html(page)), r"<h1>\s*Relevé d'heures — Mois de juin 2026 — DUPONT Jeanne\s*</h1>")
+        self.assertRegex(
+            unescape(self.html(page)), r"<h1>\s*Relevé d'heures — Mois de juin 2026 — DUPONT Jeanne\s*</h1>"
+        )
         self.assertRegex(self.html(page), r"Mardi 2</th>\s*<td class=\"num\">9</td>\s*<td>inventaire</td>")
         self.assertIn("Total semaine 37,5 h", text)
         self.assertIn("Heures travaillées : 153 h", text)
@@ -221,10 +224,10 @@ class PageTests(PublicCase):
         TimesheetDay.objects.filter(timesheet__employee=self.person, date=date(2026, 6, 2)).update(hours=Decimal("10"))
         self.assertRegex(self.html(self.get()), r"Mardi 2</th>\s*<td class=\"num\">9</td>")
 
-    def test_voir_le_pdf_is_the_frozen_document_shown_inline(self):
+    def test_the_view_pdf_link_is_the_frozen_document_shown_inline(self):
         response = self.get(self.route("staff:sign_document"))
         self.assertEqual(response["Content-Type"], "application/pdf")
-        self.assertTrue(response["Content-Disposition"].startswith('inline; filename="Releve d\'heures DUPONT Jeanne'))
+        self.assertTrue(response["Content-Disposition"].startswith("inline; filename=\"Releve d'heures DUPONT Jeanne"))
         self.assertEqual(response["X-Frame-Options"], "SAMEORIGIN")
         self.assertEqual(response["Cache-Control"], "no-store")
         self.assertEqual(response.content, private_files.read(self.request.uuid, private_files.DOCUMENT))
@@ -247,8 +250,13 @@ class PageTests(PublicCase):
         self.identify()
         text = self.text(self.get())
         for words in (
-            "la date et l'heure", "votre adresse IP", "votre appareil", "le dessin de votre signature",
-            "5 ans après la fin du mois", "signature électronique simple", "RGPD",
+            "la date et l'heure",
+            "votre adresse IP",
+            "votre appareil",
+            "le dessin de votre signature",
+            "5 ans après la fin du mois",
+            "signature électronique simple",
+            "RGPD",
         ):
             with self.subTest(words=words):
                 self.assertIn(words, text)
@@ -274,7 +282,7 @@ class NothingElseTests(PublicCase):
         own = f"/personnel/signer/{self.token}/"
         for address in re.findall(r'(?:href|action|src)="([^"]*)"', html):
             with self.subTest(address=address):
-                self.assertTrue(address.startswith(own) or address.startswith("/static/"), address)
+                self.assertTrue(address.startswith((own, "/static/")), address)
 
     def test_the_owner_s_messages_never_reach_it(self):
         """The same browser, the owner's page answering with a message not
@@ -313,7 +321,9 @@ class NothingElseTests(PublicCase):
         requests_.countersign_request(self.refresh(), employer_signature())
         self.get(self.route("staff:sign_copy"))
         for rows in (
-            SignatureRequest.objects.values(), SignatureEvent.objects.values(), Employee.objects.values(),
+            SignatureRequest.objects.values(),
+            SignatureEvent.objects.values(),
+            Employee.objects.values(),
         ):
             self.assertNotIn(self.token, str(list(rows)))
         for session in Session.objects.all():
@@ -428,11 +438,16 @@ class IdentificationTests(PublicCase):
         answer = self.post(self.form(self.get(), "staff:sign_send_code"))
         html = self.html(answer)
         self.assertLess(html.index('id="code-field"'), html.index(f'action="{self.route("staff:sign_send_code")}"'))
-        check = re.search(r'<form[^>]*action="%s".*?</form>' % re.escape(self.route("staff:sign_check_code")), html, re.S)
+        check = re.search(
+            rf'<form[^>]*action="{re.escape(self.route("staff:sign_check_code"))}".*?</form>', html, re.DOTALL
+        )
         self.assertRegex(check.group(0), r'<button class="btn" type="submit">Valider le code</button>')
-        send = re.search(r'<form[^>]*action="%s".*?</form>' % re.escape(self.route("staff:sign_send_code")), html, re.S)
+        send = re.search(
+            rf'<form[^>]*action="{re.escape(self.route("staff:sign_send_code"))}".*?</form>', html, re.DOTALL
+        )
         self.assertRegex(
-            send.group(0), r'<button class="btn btn-secondary" type="submit">Renvoyer un code \(le précédent ne vaudra plus\)</button>'
+            send.group(0),
+            r'<button class="btn btn-secondary" type="submit">Renvoyer un code \(le précédent ne vaudra plus\)</button>',
         )
         self.assertIn("Il remplace tout code demandé avant.", self.text(answer))
         self.assertIn("Il remplace tout code demandé avant.", mail.outbox[-1].body)
@@ -506,7 +521,7 @@ class SigningTests(PublicCase):
         statement = "Je certifie que ce relevé correspond aux heures que j'ai effectuées en juin 2026."
         for values, message, drawing_kept in (
             ({"certification": False}, f"Cochez « {statement} » pour signer.", True),
-            ({"signature": data_url(png())}, signing.DRAWING_EMPTY, False),   # « avant de signer »
+            ({"signature": data_url(png())}, signing.DRAWING_EMPTY, False),  # « avant de signer »
             ({"signature": "data:image/jpeg;base64,/9j/4AAQ"}, "La signature doit être une image PNG", False),
             ({"signature": data_url(png(1300, 400, (0, 0, 0, 255)))}, "trop grande", False),
             ({"signature": ""}, "La signature n'a pas été reçue", False),
@@ -568,8 +583,10 @@ class SigningTests(PublicCase):
         self.assertIn("Télécharger l'exemplaire final (PDF)", text)
         copy = self.get(self.route("staff:sign_copy"))
         self.assertEqual(hashlib.sha256(copy.content).hexdigest(), request.final_pdf_sha256)
-        self.assertIn("filename*=UTF-8''Relev%C3%A9%20d%27heures%20DUPONT%20Jeanne%20juin%202026%20sign%C3%A9.pdf",
-                      copy["Content-Disposition"])
+        self.assertIn(
+            "filename*=UTF-8''Relev%C3%A9%20d%27heures%20DUPONT%20Jeanne%20juin%202026%20sign%C3%A9.pdf",
+            copy["Content-Disposition"],
+        )
 
 
 class SigningErrorPageTests(PublicCase):
@@ -592,7 +609,10 @@ class SigningErrorPageTests(PublicCase):
         Establishment.objects.filter(pk=Establishment.SINGLETON_PK).update(
             name="Brasserie Imaginaire du Faubourg Saint-Exemple"
         )
-        self.person.last_name, self.person.first_name = "De La Fontaine-Saint-Exemple", "Marie-Hélène Éléonore Françoise"
+        self.person.last_name, self.person.first_name = (
+            "De La Fontaine-Saint-Exemple",
+            "Marie-Hélène Éléonore Françoise",
+        )
         self.person.save()
         answer = self.sign(self.identify())
         self.assertEqual(answer.status_code, 200)

@@ -28,9 +28,17 @@ from tests.factories import make_invoice_line, make_product, make_supplier
 D = Decimal
 FIVE_FIVE = D("0.055")
 IMPORTED_CHECKS = [
-    {"label": "Somme des lignes = total imprimé", "passed": False, "detail": "lignes 0.49 € / ticket 0.98 € (écart +0.49 €)"},
+    {
+        "label": "Somme des lignes = total imprimé",
+        "passed": False,
+        "detail": "lignes 0.49 € / ticket 0.98 € (écart +0.49 €)",
+    },
     {"label": "TVA 5.5% cohérente", "passed": True, "detail": "HT 0.93 € x 5.5% = 0.05 € / ticket 0.05 €"},
-    {"label": "Somme HT des lignes = base HT du ticket", "passed": False, "detail": "lignes 0.46 € HT / ticket 0.93 € HT"},
+    {
+        "label": "Somme HT des lignes = base HT du ticket",
+        "passed": False,
+        "detail": "lignes 0.46 € HT / ticket 0.93 € HT",
+    },
     {"label": "Articles = total avant remise", "passed": False, "detail": "un article manque"},
 ]
 
@@ -38,8 +46,11 @@ IMPORTED_CHECKS = [
 def ticket(printed_total="0.98", reviewed=False, **fields):
     shop = Supplier.objects.get(code="FRANPRIX")
     invoice = Invoice.objects.create(
-        supplier=shop, invoice_number="004211-02-555", parse_checks=list(IMPORTED_CHECKS),
-        printed_total_ttc=None if printed_total is None else D(printed_total), **fields,
+        supplier=shop,
+        invoice_number="004211-02-555",
+        parse_checks=list(IMPORTED_CHECKS),
+        printed_total_ttc=None if printed_total is None else D(printed_total),
+        **fields,
     )
     if reviewed:
         from django.utils import timezone
@@ -47,8 +58,14 @@ def ticket(printed_total="0.98", reviewed=False, **fields):
         invoice.reviewed_at = timezone.now()
         invoice.save(update_fields=["reviewed_at"])
     make_invoice_line(
-        invoice=invoice, product=make_product(supplier=shop, raw_name="PAIN COMPLET"), raw_name="PAIN COMPLET",
-        read_as="PAIN COMPLET", quantity=1, total_ht="0.46", vat_rate=FIVE_FIVE, printed_ttc=D("0.49"),
+        invoice=invoice,
+        product=make_product(supplier=shop, raw_name="PAIN COMPLET"),
+        raw_name="PAIN COMPLET",
+        read_as="PAIN COMPLET",
+        quantity=1,
+        total_ht="0.46",
+        vat_rate=FIVE_FIVE,
+        printed_ttc=D("0.49"),
     )
     return invoice
 
@@ -90,7 +107,9 @@ class ReviewScreenChecksTests(TestCase):
         self.assertContains(response, 'value="0.98"')
         self.assertContains(response, 'id="document-total"')
         self.assertEqual(response.content.decode().count("Somme des lignes = total imprimé"), 1)
-        self.assertContains(response, "Somme HT des lignes = base HT du ticket <span class=\"muted\">(à la lecture du ticket)</span>")
+        self.assertContains(
+            response, 'Somme HT des lignes = base HT du ticket <span class="muted">(à la lecture du ticket)</span>'
+        )
         self.assertNotContains(response, "cohérente <span")
 
     def test_validating_stores_the_check_on_the_lines_as_validated(self):
@@ -154,7 +173,10 @@ class RereadTests(TestCase):
         self.assertTrue(reread_receipt(invoice))
         invoice.refresh_from_db()
         (line,) = invoice.lines.all()
-        self.assertEqual((line.raw_name, line.quantity, line.printed_ttc, line.read_as), ("PAIN COMPLET", 2, D("0.98"), "PAIN COMPLET"))
+        self.assertEqual(
+            (line.raw_name, line.quantity, line.printed_ttc, line.read_as),
+            ("PAIN COMPLET", 2, D("0.98"), "PAIN COMPLET"),
+        )
         self.assertEqual(invoice.printed_total_ttc, D("0.98"))
         self.assertTrue(all(check["passed"] for check in invoice.parse_checks))
 
@@ -323,7 +345,11 @@ DIY_READING = [
     ("Dt Ecopart. unit. EcoMob", 1, "0.20", "0.24"),
 ]
 DIY_CHECKS = [
-    {"label": "Somme des lignes = total imprimé", "passed": False, "detail": "lignes 42.84 € / ticket 42.00 € (écart -0.84 €)"},
+    {
+        "label": "Somme des lignes = total imprimé",
+        "passed": False,
+        "detail": "lignes 42.84 € / ticket 42.00 € (écart -0.84 €)",
+    },
     {"label": "TVA 20% cohérente", "passed": True, "detail": "HT 35.00 € x 20% = 7.00 € / ticket 7.00 €"},
     {"label": HT_CHECK, "passed": False, "detail": "lignes 35.70 € HT / ticket 35.00 € HT (écart -0.70 €)"},
 ]
@@ -332,22 +358,32 @@ DIY_CHECKS = [
 def diy_ticket(vat_breakdown=(("0.20", "35.00", "7.00"),)):
     shop = make_supplier(name="Brico Exemple")
     invoice = Invoice.objects.create(
-        supplier=shop, invoice_number="055-0000001-001", invoice_date=date(2026, 8, 12), parse_checks=list(DIY_CHECKS),
-        printed_total_ttc=D("42.00"), vat_breakdown=[list(row) for row in vat_breakdown],
+        supplier=shop,
+        invoice_number="055-0000001-001",
+        invoice_date=date(2026, 8, 12),
+        parse_checks=list(DIY_CHECKS),
+        printed_total_ttc=D("42.00"),
+        vat_breakdown=[list(row) for row in vat_breakdown],
     )
     products = {}
     for name, quantity, total_ht, printed in DIY_READING:
         if name not in products:
             products[name] = make_product(supplier=shop, raw_name=name)
         make_invoice_line(
-            invoice=invoice, product=products[name], raw_name=name, read_as=name, quantity=quantity,
-            total_ht=total_ht, vat_rate=D("0.20"), printed_ttc=D(printed),
+            invoice=invoice,
+            product=products[name],
+            raw_name=name,
+            read_as=name,
+            quantity=quantity,
+            total_ht=total_ht,
+            vat_rate=D("0.20"),
+            printed_ttc=D(printed),
         )
     return invoice
 
 
 class CorrectedLinesHtCheckTests(TestCase):
-    """"Somme HT des lignes = base HT du ticket" is worked out from the lines
+    """ "Somme HT des lignes = base HT du ticket" is worked out from the lines
     as they stand, never kept from the reading.
 
     Two DIY-store tickets had been read with the eco-participation under
@@ -440,12 +476,18 @@ class SupplierInvoiceHtCheckTests(TestCase):
     def test_its_page_stays_as_it_was(self):
         supplier = make_supplier(name="Grossiste Exemple")
         invoice = Invoice.objects.create(
-            supplier=supplier, invoice_number="F-2026-0815", invoice_date=date(2026, 8, 15),
-            reconciliation_adjustment=D("0.34"), vat_breakdown=[["0.2", "20.34", "4.07"]],
+            supplier=supplier,
+            invoice_number="F-2026-0815",
+            invoice_date=date(2026, 8, 15),
+            reconciliation_adjustment=D("0.34"),
+            vat_breakdown=[["0.2", "20.34", "4.07"]],
         )
         make_invoice_line(
-            invoice=invoice, product=make_product(supplier=supplier, raw_name="SIROP ORGEAT 70CL"),
-            quantity=2, total_ht="20.00", vat_rate=D("0.2"),
+            invoice=invoice,
+            product=make_product(supplier=supplier, raw_name="SIROP ORGEAT 70CL"),
+            quantity=2,
+            total_ht="20.00",
+            vat_rate=D("0.2"),
         )
         self.assertFalse(invoice.is_receipt)
         page = self.client.get(reverse("invoices:invoice_edit_lines", args=[invoice.pk]))

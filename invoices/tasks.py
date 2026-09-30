@@ -14,7 +14,7 @@ from accounts import paths
 from accounts.tenancy import bound, integrations_allowed
 
 from . import integrations
-from .importing import DuplicateInvoiceError, RoutedToConsignesError, parse_and_import
+from .importing import DuplicateInvoiceError, RoutedToReturnablesError, parse_and_import
 from .models import Invoice, InvoiceType, ScrapeJob, Supplier
 from .scrapers.generic_email import find_matching_emails, scrape_email_invoices
 from .scrapers.metro import MetroError, MetroPaused, scrape_metro_invoices
@@ -23,7 +23,7 @@ from .scrapers.website import WebsiteError, WebsiteRecipe, fetch_website_invoice
 DEFAULT_LOOKBACK_DAYS = 90
 OVERLAP_DAYS = 3  # re-check the last few days in case an invoice landed just before the last known one
 HEARTBEAT_SECONDS = 15
-#: A format de bon's source in a gather: "bons-<format pk>" (ScrapeJob.
+#: A slip format's source in a gather: "bons-<format pk>" (ScrapeJob.
 #: progress, the gather card's boxes, the Consignes page's hidden sources).
 SLIPS_PREFIX = "bons-"
 
@@ -33,7 +33,7 @@ def slips_code(fmt) -> str:
 
 
 def slips_label(fmt) -> str:
-    """How a format's bons are named on the gather card and its progress."""
+    """How a format's slips are named on the gather card and its progress."""
     return f"Bons de consignes — {fmt.name}"
 
 
@@ -49,7 +49,7 @@ class _GatherHeartbeat(threading.Thread):
     in one call would never be reaped, and every new gather refused.
 
     Its thread is a new one, started with nothing bound: the loop is wrapped
-    here, in the gather's own thread - bound to the gather's espace - so the
+    here, in the gather's own thread - bound to the gather's tenant - so the
     beats go to the gather's job and not to another bar's with the same pk
     (a FAILED one put back to RUNNING, and blocking its gathers). Unbound in
     multi mode it refuses to exist (accounts.tenancy.bound). bound() also
@@ -107,16 +107,16 @@ def _raise_if_cancelled(job: ScrapeJob) -> None:
 
 def _download_dir(name: str) -> str:
     """Where a source's run downloads: `name` ("metro", "type-<id>",
-    "test-<job id>") under the espace's own downloads folder
+    "test-<job id>") under the tenant's own downloads folder
     (accounts.paths.downloads_dir, read now). Those names are ids, and ids
     restart at 1 in every
-    espace's database: in one shared folder two bars' runs took each other's
+    tenant's database: in one shared folder two bars' runs took each other's
     files - the scrapers decide what « landed » by what appeared there."""
     return os.path.join(str(paths.downloads_dir()), name)
 
 
 def _refused(job: ScrapeJob, message: str) -> None:
-    """End a job the espace may not run (integrations.py), saying why - in
+    """End a job the tenant may not run (integrations.py), saying why - in
     the thread, which is the last place before an account is contacted."""
     job.append_log(message)
     job.status = ScrapeJob.Status.FAILED
@@ -200,7 +200,7 @@ def gather_invoices_task(
 
     `source_codes`: which sources to actually search, using the same short
     codes shown in ScrapeJob.progress ("METRO", "type-<id>", "bons-<id>" -
-    a format de bon's mails, _gather_slips) - None means
+    a slip format's mails, _gather_slips) - None means
     every eligible source **but Metro**, which is signed in to only when
     named: most of the sign-ins that got this machine blocked by Metro's
     firewall came from gathers started from a shell or a script.
@@ -215,14 +215,14 @@ def gather_invoices_task(
     batches (scrapers/generic_email.py), before each Metro window and
     download, before each portal download.
 
-    Every source it searches is one of the server's own accounts: in an
-    espace that may not use them (integrations.py) nothing is searched, and
+    Every source it searches is one of the server's own accounts: in a
+    tenant that may not use them (integrations.py) nothing is searched, and
     the job says why - whatever its rows say, since a mailbox source or
     Metro can be switched back on by an import.
 
-    A gather of bons de consignes alone (the Consignes page's: every code a
+    A gather of returnables slips alone (the Consignes page's: every code a
     « bons- » one) is told apart from the first moment (_name_slip_sources)
-    and is the only one whose period the bons' own start widens
+    and is the only one whose period the slips' own start widens
     (_gather_slips): Achats offers a gather's period again, and it must stay
     the period the invoices were asked for.
     """
@@ -289,7 +289,7 @@ def gather_invoices_task(
             found_total += found
             created_total += imported
 
-        # The drivers' bons de consignes, one source per format fetched by
+        # The drivers' returnables slips, one source per format fetched by
         # mail. They are no invoices: their counts stay out of the job's
         # totals, and nothing here imports them as purchases.
         for slip_format in slip_formats:
@@ -343,7 +343,9 @@ def gather_invoices_task(
         job.save()
 
 
-def _gather_email(job: ScrapeJob, invoice_type: InvoiceType, source, code: str, start: date, end: date) -> tuple[int, int]:
+def _gather_email(
+    job: ScrapeJob, invoice_type: InvoiceType, source, code: str, start: date, end: date
+) -> tuple[int, int]:
     """One mailbox type, contained like a portal: a login refused (a revoked
     app password), a connection lost, is said on its line, and the other
     types and the portals run all the same - it failed the whole gather.
@@ -398,10 +400,10 @@ def _gather_email(job: ScrapeJob, invoice_type: InvoiceType, source, code: str, 
 
 
 def _mailed_slip_formats(job: ScrapeJob) -> list:
-    """The active formats de bon fetched from the mailbox (a sender motif
+    """The active slip formats fetched from the mailbox (a sender pattern
     set). Imported here, never at the top of the module: this module is
-    loaded with the URLs. A database without the consignes tables yet (an
-    espace not migrated) is said in the log, and the invoices are gathered
+    loaded with the URLs. A database without the returnables tables yet (a
+    tenant not migrated) is said in the log, and the invoices are gathered
     all the same."""
     from returnables.models import SlipFormat
 
@@ -413,11 +415,11 @@ def _mailed_slip_formats(job: ScrapeJob) -> list:
 
 
 def _name_slip_sources(job: ScrapeJob, formats, source_codes) -> None:
-    """Put a gather of bons alone's formats on its progress before anything
+    """Put a gather of slips alone's formats on its progress before anything
     can stop it - the very line _gather_slips starts with. ScrapeJob.
     slips_only reads the progress: cancelled while it waited, or its thread
     killed at once, such a run had no source on it yet and counted as a
-    gather of invoices - Achats offered the bons' start (90 days back) to
+    gather of invoices - Achats offered the slips' start (90 days back) to
     every source again."""
     for fmt in formats:
         code = slips_code(fmt)
@@ -428,26 +430,27 @@ def _name_slip_sources(job: ScrapeJob, formats, source_codes) -> None:
 def _gather_slips(
     job: ScrapeJob, fmt, code: str, posted_start: date | None, end: date, *, widen: bool = False
 ) -> tuple[int, int]:
-    """One format de bon's mails, contained like a mailbox type
+    """One slip format's mails, contained like a mailbox type
     (_gather_email): whatever stops it is said on its own line and the
-    other sources run all the same. Returns (found, imported) - bons, kept
+    other sources run all the same. Returns (found, imported) - slips, kept
     out of the job's invoice totals.
 
-    From its own start (returnables.mail.fetch_start: the newest bon it
-    brought in by mail, not the invoices' - a hand-dropped bon never moves
-    it). `widen`, for a gather of bons alone only: the job's range widened
+    From its own start (returnables.mail.fetch_start: the newest slip it
+    brought in by mail, not the invoices' - a hand-dropped slip never moves
+    it). `widen`, for a gather of slips alone only: the job's range widened
     to it, the period its card shows. Beside invoices it is said in the log
     and the range left alone - the range is the period Achats offers again
-    after a failure, and 90 days back (no bon mailed yet) went to every
+    after a failure, and 90 days back (no slip mailed yet) went to every
     source, Metro included, where the invoices had asked for three.
 
-    Its motifs go through the consignes guard (returnables.patterns.
-    mail_matcher: checked, case-insensitive, timed) - a motif anybody's
-    header can make slow must not hang the gather. EVERY attachment the search returned is stored before a cancel
+    Its patterns go through the returnables guard (returnables.patterns.
+    mail_matcher: checked, case-insensitive, timed) - a pattern anybody's
+    header can make slow must not hang the gather. EVERY attachment the
+    search returned is stored before a cancel
     is heard: the search stops early on a cancel and hands back what it had,
     which the next run's start would otherwise skip. Stored through the
-    consignes writer (returnables.slips.store_slip) only - never an import
-    of an invoice. The latest reprise's comparison is the line's note, never
+    returnables writer (returnables.slips.store_slip) only - never an import
+    of an invoice. The latest pickup's comparison is the line's note, never
     its error: an error counts as a failed source (« N source(s) en
     échec »)."""
     from functools import partial
@@ -483,9 +486,9 @@ def _gather_slips(
     except Exception as exc:  # noqa: BLE001 - one source failing is said on its own line
         detail = str(exc).strip() or exc.__class__.__name__
         job.append_log(f"{slips_label(fmt)} : échec - {detail}\n{traceback.format_exc()}")
-        # A motif the guard refuses is the format's to correct, not the
+        # A pattern the guard refuses is the format's to correct, not the
         # mailbox's.
-        said = detail if isinstance(exc, patterns.MotifError) else f"Boîte mail : {detail}"
+        said = detail if isinstance(exc, patterns.PatternError) else f"Boîte mail : {detail}"
         job.update_progress(code, error=said[:300])
         return 0, 0
     return found, imported
@@ -535,10 +538,14 @@ def _gather_metro(job: ScrapeJob, supplier: Supplier, start: date, end: date, me
 
 
 def _known_numbers(supplier: Supplier) -> set[str]:
-    return set(Invoice.objects.filter(supplier=supplier).exclude(invoice_number="").values_list("invoice_number", flat=True))
+    return set(
+        Invoice.objects.filter(supplier=supplier).exclude(invoice_number="").values_list("invoice_number", flat=True)
+    )
 
 
-def _gather_website(job: ScrapeJob, invoice_type: InvoiceType, source, code: str, start: date, end: date) -> tuple[int, int]:
+def _gather_website(
+    job: ScrapeJob, invoice_type: InvoiceType, source, code: str, start: date, end: date
+) -> tuple[int, int]:
     """One customer portal: sign in, download the period's invoices, import
     them as the supplier's documents. A site that fails - turning automated
     browsers away, asking for a code, refusing the password - says so on
@@ -565,7 +572,10 @@ def _gather_website(job: ScrapeJob, invoice_type: InvoiceType, source, code: str
     imported = 0
     for path in files:
         if _import_document_file(
-            job, invoice_type.supplier, path, chosen_because=f"Téléchargée par « {invoice_type.name} ».",
+            job,
+            invoice_type.supplier,
+            path,
+            chosen_because=f"Téléchargée par « {invoice_type.name} ».",
             by_type=invoice_type.name,
         ):
             imported += 1
@@ -588,9 +598,8 @@ def _import_document_file(
     empty, and refused when this very file is in already (its digest). One
     OCR at a time (receipts.OCR_LOCK). `by_type`: the type that fetched it -
     a document printing what names another supplier teaches nothing."""
-    from .receipts import OCR_LOCK, OCR_WAIT_SECONDS, import_document
-
     from . import supplier_changes
+    from .receipts import OCR_LOCK, OCR_WAIT_SECONDS, import_document
 
     if not OCR_LOCK.acquire(timeout=OCR_WAIT_SECONDS):
         job.append_log(f"Skipped {path}: another document was being read for too long")
@@ -610,8 +619,8 @@ def _import_document_file(
         for change in changes:
             job.append_log(f"{os.path.basename(path)} : {change.summary}")
         return True
-    except RoutedToConsignesError as exc:
-        # A driver's bon de consignes, stored in Consignes: no invoice, and
+    except RoutedToReturnablesError as exc:
+        # A driver's returnables slip, stored in Consignes: no invoice, and
         # not « already imported » either.
         job.append_log(f"{os.path.basename(path)} : {exc}")
         return False
@@ -630,7 +639,7 @@ def test_website_task(job_id: int, recipe: WebsiteRecipe, supplier_id: int, star
     """Dry run of a website source: signs in and lists what it would
     download, downloading nothing - how a new site's settings are checked
     before a real gather. Its rows land in job.test_matches. The server's
-    .env names the credentials: another bar's espace is refused before any
+    .env names the credentials: another bar's tenant is refused before any
     is read (integrations.py)."""
     job = ScrapeJob.objects.get(pk=job_id)
     if not integrations_allowed():
@@ -683,7 +692,7 @@ def test_email_pattern_task(
     gather run. Cancellable the same way gather_invoices_task is (see its
     docstring) - a wide test range can scan thousands of emails too.
 
-    The mailbox is the owner's: from another bar's espace its senders and
+    The mailbox is the owner's: from another bar's tenant its senders and
     subjects would be listed there (integrations.py)."""
     job = ScrapeJob.objects.get(pk=job_id)
     if not integrations_allowed():

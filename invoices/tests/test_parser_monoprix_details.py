@@ -34,7 +34,7 @@ def failed(invoice):
 
 class CurrencySignTests(SimpleTestCase):
     def test_a_euro_sign_read_as_a_digit_is_not_a_discount(self):
-        """"8,44€" as "8,448" once made a 0,008 EUR promotion out of nothing."""
+        """ "8,44€" as "8,448" once made a 0,008 EUR promotion out of nothing."""
         invoice = parse(
             "TOMATE INVENTEE  0,79\nCONCOMBRE  1,33\n",
             "2,12",
@@ -49,9 +49,7 @@ class PromotionTests(SimpleTestCase):
     ITEMS = "2X BONBONS INVENTES 7,15  14,30e\nLe 2eme a moins 50% -3,58e\n"
 
     def test_a_promotion_printed_under_its_item_is_charged_to_that_item(self):
-        invoice = parse(
-            self.ITEMS, "10,72", "20%  8,93  1,79  10,72", pre_discount_line="IOTAI HOR: AVANTAGES  14,302"
-        )
+        invoice = parse(self.ITEMS, "10,72", "20%  8,93  1,79  10,72", pre_discount_line="IOTAI HOR: AVANTAGES  14,302")
         (line,) = invoice.lines
         self.assertEqual(line.quantity, 2)
         self.assertEqual((line.printed_ttc, line.discount_ttc), (Decimal("14.30"), Decimal("3.58")))
@@ -62,11 +60,9 @@ class PromotionTests(SimpleTestCase):
         self.assertEqual(failed(invoice), set())
 
     def test_a_misread_total_heading_is_neither_an_item_nor_ignored(self):
-        """"IOTAI HOR: AVANTAGES 14,302" is the pre-discount total. Missed, it
+        """ "IOTAI HOR: AVANTAGES 14,302" is the pre-discount total. Missed, it
         either became a 14,30 EUR product or the discount went unread."""
-        invoice = parse(
-            self.ITEMS, "10,72", "20%  8,93  1,79  10,72", pre_discount_line="IOTAI HOR: AVANTAGES  14,302"
-        )
+        invoice = parse(self.ITEMS, "10,72", "20%  8,93  1,79  10,72", pre_discount_line="IOTAI HOR: AVANTAGES  14,302")
         self.assertEqual(len(invoice.lines), 1)
 
 

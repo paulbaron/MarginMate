@@ -1,12 +1,12 @@
 {% comment %}
-A reprise's fields, inside its <form> (the new one on /consignes/, the edit on
-the reprise's page): the day, who took the empties and a note folded under
+A pickup's fields, inside its <form> (the new one on /consignes/, the edit on
+the pickup's page): the day, who took the empties and a note folded under
 one line - on almost every morning nobody touches them - then the photos,
 then one count per type, then the button.
 
 Context: form (forms.PickupForm), submit_label, photo_room (how many photos
 may still be added), max_photos, details_open, and on the home page same_day
-/ same_day_summary (a reprise already saved for that day and supplier).
+/ same_day_summary (a pickup already saved for that day and supplier).
 
 Every refusal of the server has its twin here (the date's min/max, a count's
 pattern and maxlength): a refused post loses the photos, which a browser
@@ -18,8 +18,8 @@ them - without JavaScript the field is typed.
         {% for error in form.non_field_errors %}<p>{{ error }}</p>{% endfor %}
     </div>
 {% endif %}
-<details class="reprise-details"{% if details_open or form.details_have_errors %} open{% endif %}>
-    <summary>Reprise du <span data-summary-date>{{ form.shown_date }}</span> · repris par <span data-summary-supplier>{{ form.shown_supplier }}</span> · <span class="reprise-details-edit">modifier</span></summary>
+<details class="pickup-details"{% if details_open or form.details_have_errors %} open{% endif %}>
+    <summary>Reprise du <span data-summary-date>{{ form.shown_date }}</span> · repris par <span data-summary-supplier>{{ form.shown_supplier }}</span> · <span class="pickup-details-edit">modifier</span></summary>
     <div class="form-grid">
         {% for field in form %}{% if field.name == "date" or field.name == "supplier" or field.name == "note" %}
             <div class="form-field form-field-{{ field.widget_type }}{% if field.errors %} has-error{% endif %}">
@@ -41,7 +41,7 @@ them - without JavaScript the field is typed.
     </p>
 {% endif %}
 
-<fieldset class="reprise-photos" data-photos data-max-photos="{{ photo_room }}">
+<fieldset class="pickup-photos" data-photos data-max-photos="{{ photo_room }}">
     <legend>Photos</legend>
     {% if photo_room %}
         <div class="upload-choices">
@@ -63,7 +63,7 @@ them - without JavaScript the field is typed.
     <ul class="photo-previews" data-photo-previews></ul>
 </fieldset>
 
-<fieldset class="reprise-counts">
+<fieldset class="pickup-counts">
     <legend>Nombres repris</legend>
     {% for kind, field in form.count_rows %}
         <div class="count-row{% if forloop.first %} is-main{% endif %}{% if field.errors %} has-error{% endif %}" data-count-row data-type-name="{{ kind.name }}">
@@ -82,5 +82,5 @@ them - without JavaScript the field is typed.
 
 <p class="draft-notice" data-draft-notice hidden></p>
 <div class="form-actions">
-    <button class="btn reprise-submit" type="submit" data-busy-label="Envoi des photos… gardez la page ouverte">{{ submit_label }}</button>
+    <button class="btn pickup-submit" type="submit" data-busy-label="Envoi des photos… gardez la page ouverte">{{ submit_label }}</button>
 </div>

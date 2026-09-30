@@ -8,11 +8,10 @@ request open. The page polls SalesImportJob for progress.
 from __future__ import annotations
 
 import traceback
+from datetime import date
 
 from django.db import transaction
 from django.db.models import Sum
-from datetime import date
-
 from django.utils import timezone
 
 from accounts.paths import downloads_dir
@@ -22,7 +21,7 @@ from .models import PosDailyPayment, PosProduct, PosProductDailyQuantity, SalesI
 from .payments import by_method, oddities, record_payments
 from .pos.laddition_download import DownloadCancelled, download_sales_lines
 from .pos.laddition_xlsx import parse_sales_exports
-from .sales import record_sales, recipe_lookup
+from .sales import recipe_lookup, record_sales
 
 
 class _Cancelled(Exception):
@@ -44,9 +43,7 @@ def money_log(export) -> list[str]:
     """
     if not export.money_columns:
         return ["Ce fichier ne porte pas les colonnes de prix : aucune recette lue."]
-    lines = [
-        f"Recettes lues : {_euros(export.revenue_ttc)} TTC, {_euros(export.revenue_ht)} HT."
-    ]
+    lines = [f"Recettes lues : {_euros(export.revenue_ttc)} TTC, {_euros(export.revenue_ht)} HT."]
     if export.lines_without_rate:
         lines.append(
             f"{export.lines_without_rate} ligne(s) sans taux lisible : "
@@ -60,9 +57,7 @@ def money_log(export) -> list[str]:
             "lignes n'a pas de montant, donc leur recette serait trop basse d'un montant inconnu."
         )
     if export.discounted_lines:
-        lines.append(
-            f"{export.discounted_lines} ligne(s) avec remise, {_euros(export.discount_ttc)} déduits."
-        )
+        lines.append(f"{export.discounted_lines} ligne(s) avec remise, {_euros(export.discount_ttc)} déduits.")
     if export.discounts_not_taken:
         lines.append(
             f"{export.discounts_not_taken} ligne(s) dont la remise n'a pas été déduite : "
@@ -88,10 +83,7 @@ def payments_log(export) -> list[str]:
     care as money_log: a sheet that did not read, a ticket that did not,
     a ticket paid nothing for a total, all named. The lines import either
     way; only the payments are at stake here."""
-    lines = [
-        f"Feuille des tickets illisible, paiements non lus : {problem}"
-        for problem in export.payment_sheet_errors
-    ]
+    lines = [f"Feuille des tickets illisible, paiements non lus : {problem}" for problem in export.payment_sheet_errors]
     if not export.payments_read:
         if not lines:
             lines.append(
@@ -258,8 +250,8 @@ def _sync_pos_products(export) -> int:
 
 def import_laddition_sales_task(job_id: int, start: date, end: date, download_dir: str | None = None) -> None:
     """The thread's body, started as ``target=bound(import_laddition_sales_task)``
-    (views.trigger_sales_import): it runs bound to the espace that asked, so
-    the job, the sales and the download folder are that espace's, and its
+    (views.trigger_sales_import): it runs bound to the tenant that asked, so
+    the job, the sales and the download folder are that tenant's, and its
     connections are closed when it ends."""
     job = SalesImportJob.objects.get(pk=job_id)
     if not till_allowed():
@@ -272,7 +264,7 @@ def import_laddition_sales_task(job_id: int, start: date, end: date, download_di
         return
     job.status = SalesImportJob.Status.RUNNING
     job.save(update_fields=["status"])
-    # The espace's own folder: the download takes the first new .xlsx that
+    # The tenant's own folder: the download takes the first new .xlsx that
     # lands in it.
     download_dir = download_dir or str(downloads_dir())
 
@@ -287,18 +279,14 @@ def import_laddition_sales_task(job_id: int, start: date, end: date, download_di
             job.refresh_from_db(fields=["cancel_requested"])
             return job.cancel_requested
 
-        paths = download_sales_lines(
-            start, end, download_dir, log=job.append_log, should_cancel=still_wanted
-        )
+        paths = download_sales_lines(start, end, download_dir, log=job.append_log, should_cancel=still_wanted)
         if not paths:
             raise RuntimeError("Aucun fichier téléchargé.")
         _raise_if_cancelled(job)
 
         export = parse_sales_exports(paths)
         job.items_sold = export.total_quantity
-        job.append_log(
-            f"{len(export.entries)} totaux produit/jour lus ({export.total_quantity} unités vendues)."
-        )
+        job.append_log(f"{len(export.entries)} totaux produit/jour lus ({export.total_quantity} unités vendues).")
         for message in money_log(export):
             job.append_log(message)
         for message in payments_log(export):
@@ -315,9 +303,7 @@ def import_laddition_sales_task(job_id: int, start: date, end: date, download_di
             f"({result.created} nouveaux, {result.updated} mis à jour)."
         )
         if job.unmatched:
-            job.append_log(
-                f"{job.unmatched} produits de caisse sans recette - à traiter dans « Produits caisse »."
-            )
+            job.append_log(f"{job.unmatched} produits de caisse sans recette - à traiter dans « Produits caisse ».")
 
         # After the sales, and on its own: what the bank is paid from, per
         # day and per means of payment (recipes/payments.py).

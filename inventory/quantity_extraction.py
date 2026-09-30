@@ -129,7 +129,7 @@ ENV_RE = re.compile(r"\bENV\b")
 # of liquid product to track - "VERRES BIERE LILITH 58CL" is 58cl-capacity
 # glasses, not 58cl of something poured. A small, closed linguistic class of
 # vessel/dispenser words, not a per-product list - the same reasoning as
-# CONSIGNE_RULES treating a crate's contents as separate from what the
+# _DEPOSIT_RULES treating a crate's contents as separate from what the
 # crate itself is worth. "LAVE VERRE"/"LAVE-VERRE" is excluded on purpose -
 # that's glass-WASHING liquid (a real volume-tracked cleaning product, like
 # "LAVE VITRE"), not glassware itself.
@@ -264,7 +264,10 @@ def extract_quantity(
             if per_item <= SMALL_FORMAT_VOLUME_THRESHOLD or is_container:
                 reason = "contenant (verre/distributeur)" if is_container else f"{per_item}L par unité achetée ≤ 33cl"
                 return QuantityGuess(
-                    "UNIT", Decimal("1"), "high", f"vendu à l'unité ({reason})",
+                    "UNIT",
+                    Decimal("1"),
+                    "high",
+                    f"vendu à l'unité ({reason})",
                     debug={"small_format": reason},
                 )
         unit = "KG" if is_weight else "L"
@@ -390,9 +393,12 @@ def extract_quantity(
             unit = "KG" if size_unit not in VOLUME_UNITS else "L"
             debug["colisage_matches_size"] = f"colisage={colisage} == {size_value}{size_unit}"
             return QuantityGuess(
-                unit, Decimal("1"), "high",
+                unit,
+                Decimal("1"),
+                "high",
                 f"colisage {colisage} = taille {size_value}{size_unit} (déjà reflété)",
-                debug=debug, suggested_stock_unit=unit,
+                debug=debug,
+                suggested_stock_unit=unit,
             )
         if count_value is not None and not count_already_in_colisage:
             # size-per-item AND a genuine extra count neither invoice line nor
@@ -412,9 +418,7 @@ def extract_quantity(
         if not assume_volume_tracked and is_volume and (size_in_base <= SMALL_FORMAT_VOLUME_THRESHOLD or is_container):
             reason = "contenant (verre/distributeur)" if is_container else f"{size_value}{size_unit} ≤ 33cl"
             debug["small_format"] = reason
-            return QuantityGuess(
-                "UNIT", Decimal("1"), "high", f"vendu à l'unité ({reason})", approx, debug
-            )
+            return QuantityGuess("UNIT", Decimal("1"), "high", f"vendu à l'unité ({reason})", approx, debug)
         return QuantityGuess(
             "UNIT",
             size_in_base,

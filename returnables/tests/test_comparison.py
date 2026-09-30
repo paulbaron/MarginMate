@@ -1,8 +1,8 @@
-"""Which bons count, what their lines are, and how a day's reprises compare
+"""Which slips count, what their lines are, and how a day's pickups compare
 with them (returnables/comparison.py).
 
-Every bon, date, number and count is invented (returnables/tests/support.py
-and texts.py). A slow motif is simulated by a spent budget, never run.
+Every slip, date, number and count is invented (returnables/tests/support.py
+and texts.py). A slow pattern is simulated by a spent budget, never run.
 """
 
 from datetime import date, datetime, timedelta
@@ -16,7 +16,7 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from django.utils.safestring import SafeData
 
-from returnables import comparison, patterns
+from returnables import patterns
 from returnables.comparison import (
     DIFFERS,
     INVALID,
@@ -55,7 +55,6 @@ from returnables.tests.support import (
     no_defaults,
     seeded_format,
     seeded_type,
-    uba,
 )
 from tests.support import NoNetworkTestCase
 
@@ -75,7 +74,7 @@ def line(designation, quantity, unit=None, amount=None):
     return SimpleNamespace(designation=designation, quantity=quantity, unit_amount=unit, amount=amount)
 
 
-def keg_line(quantity, unit=D("30.00")):
+def keg_line(quantity, unit=D("30.00")):  # noqa: B008 - a Decimal is immutable, built once on purpose
     amount = None if unit is None else quantity * unit
     return (texts.KEG, quantity, unit, amount)
 
@@ -96,7 +95,7 @@ class WordsTests(SimpleTestCase):
         self.assertEqual(euros(D("-0.00")), f"0,00{NBSP}€")
         self.assertEqual(euros(None), "")
 
-    def test_a_bon_s_label(self):
+    def test_a_slip_s_label(self):
         self.assertEqual(slip_label("1001"), "bon n° 1001")
         self.assertEqual(slip_label("1001", date(2025, 5, 14), with_date=True), "bon n° 1001 du 14/05/2025")
         self.assertEqual(slip_label("", date(2025, 5, 14)), "bon sans numéro du 14/05/2025")
@@ -104,8 +103,10 @@ class WordsTests(SimpleTestCase):
 
     def test_counts_read_name_then_number_the_names_as_typed(self):
         types = texts.seed_types() + [SimpleNamespace(pk=9, name="bouteilles MIXtes", position=0, slip_patterns="")]
-        self.assertEqual(counts_summary({1: 15, 3: 1, 2: 0, 9: 2}, types),
-                         f"bouteilles MIXtes 2 {DOT} Fûts 15 {DOT} Bouteilles CO2 1")
+        self.assertEqual(
+            counts_summary({1: 15, 3: 1, 2: 0, 9: 2}, types),
+            f"bouteilles MIXtes 2 {DOT} Fûts 15 {DOT} Bouteilles CO2 1",
+        )
         self.assertEqual(counts_summary({}, types), "")
 
     def test_the_statuses_and_their_pills(self):
@@ -142,7 +143,7 @@ class ClassifyTests(SimpleTestCase):
         first = SimpleNamespace(pk=7, name="Gaz", position=0, is_active=False, slip_patterns="CO2")
         found = Classifier(texts.seed_types() + [first]).classify(texts.CO2)
         self.assertEqual(found.returnable_type, first)
-        self.assertEqual(found.motif, "CO2")
+        self.assertEqual(found.pattern, "CO2")
 
     def test_the_memo_classifies_a_designation_once(self):
         classifier = Classifier(texts.seed_types())
@@ -152,7 +153,7 @@ class ClassifyTests(SimpleTestCase):
             classifier.classify(texts.KEG)
         self.assertEqual(searched.call_count, calls)
 
-    def test_an_invalid_motif_stops_the_search_it_never_files_the_line_under_the_next_type(self):
+    def test_an_invalid_pattern_stops_the_search_it_never_files_the_line_under_the_next_type(self):
         broken = SimpleNamespace(pk=8, name="Cassé", position=0, slip_patterns="FÛT\n(")
         classifier = Classifier([broken] + texts.seed_types())
         found = classifier.classify(texts.KEG)
@@ -161,7 +162,7 @@ class ClassifyTests(SimpleTestCase):
         self.assertEqual(found.note, "non classée : motif invalide")
         self.assertIn(8, classifier.errors)
 
-    def test_a_spent_budget_is_motif_trop_lent(self):
+    def test_a_spent_budget_is_a_pattern_too_slow(self):
         found = Classifier(texts.seed_types(), Budget(0)).classify(texts.KEG)
         self.assertEqual((found.returnable_type, found.problem), (None, SLOW))
         self.assertEqual(found.note, "non classée : motif trop lent")
@@ -195,17 +196,20 @@ class CompareTests(SimpleTestCase):
             self.rows({2: 2}, [(texts.CRATE, 3, None, None)]).rows[0].sentence,
             f"Caisses verre — compté : 2 {DOT} sur le bon : 3 {ARROW} 1 de plus sur le bon",
         )
-        self.assertEqual(self.rows({1: 15}, [keg_line(15)]).rows[0].sentence,
-                         f"Fûts — compté : 15 {DOT} sur le bon : 15 {CHECK}")
+        self.assertEqual(
+            self.rows({1: 15}, [keg_line(15)]).rows[0].sentence, f"Fûts — compté : 15 {DOT} sur le bon : 15 {CHECK}"
+        )
 
     def test_one_row_per_type_on_either_side_in_the_types_order(self):
         result = self.rows({3: 1, 1: 15}, [(texts.CRATE, 2, D("7.50"), D("15.00")), keg_line(15)])
-        self.assertEqual([(row.name, row.counted, row.on_slips) for row in result.rows],
-                         [("Fûts", 15, 15), ("Caisses verre", 0, 2), ("Bouteilles CO2", 1, 0)])
+        self.assertEqual(
+            [(row.name, row.counted, row.on_slips) for row in result.rows],
+            [("Fûts", 15, 15), ("Caisses verre", 0, 2), ("Bouteilles CO2", 1, 0)],
+        )
         self.assertEqual(result.differing, result.rows[1:])
         self.assertFalse(result.agrees)
 
-    def test_the_bon_s_quantities_are_summed_then_made_absolute(self):
+    def test_the_slip_s_quantities_are_summed_then_made_absolute(self):
         self.assertEqual(self.rows({1: 2}, [keg_line(3), keg_line(-1)]).rows[0].on_slips, 2)
         self.assertEqual(self.rows({1: 3}, [keg_line(-3)]).rows[0].on_slips, 3)
         self.assertTrue(self.rows({1: 3}, [keg_line(-3)]).agrees)
@@ -225,7 +229,7 @@ class CompareTests(SimpleTestCase):
 
     def test_a_counted_line_without_a_price_leaves_the_type_without_a_unit(self):
         """Spec §5: the unit only when EVERY line's unit is equal. A format
-        whose line motif makes the price optional: the 3 missing kegs may
+        whose line pattern makes the price optional: the 3 missing kegs may
         well be of the unpriced kind - never priced at the other line's."""
         row = self.rows({1: 8}, [(texts.KEG, 2, D("30.00"), D("60.00")), (texts.KEG_LONG, 3, None, None)]).rows[0]
         self.assertEqual((row.name, row.counted, row.on_slips), ("Fûts", 8, 5))
@@ -240,8 +244,10 @@ class CompareTests(SimpleTestCase):
         self.assertTrue(row.sentence.endswith("il en manque 2 sur le bon"))
 
     def test_lines_no_type_takes_are_listed_and_the_day_differs(self):
-        result = self.rows({1: 15}, [keg_line(15), (texts.PALLET, 1, D("12.00"), D("12.00")),
-                                     (texts.PALLET, 2, D("12.00"), D("24.00"))])
+        result = self.rows(
+            {1: 15},
+            [keg_line(15), (texts.PALLET, 1, D("12.00"), D("12.00")), (texts.PALLET, 2, D("12.00"), D("24.00"))],
+        )
         self.assertEqual(len(result.unclassified), 1)
         self.assertEqual(result.unclassified[0].sentence, "PALETTE BOIS EUROPE — sur le bon : 3, sans type de consigne")
         self.assertEqual(result.incomplete, [])
@@ -258,23 +264,30 @@ class CompareTests(SimpleTestCase):
             self.assertNotIn("Le bon compte", sentence)
 
 
-# -- Which bons count -------------------------------------------------------------------------------------------------
+# -- Which slips count ------------------------------------------------------------------------------------------------
 
 
 class EffectiveSlipsTests(NoNetworkTestCase):
     def setUp(self):
         self.fmt = seeded_format()
 
-    def bon(self, number, day=DAY, references=(), printed_at=None, replaces=False, fmt=None, lines=(KEG_LINE,)):
-        return make_slip(fmt or self.fmt, number=number, delivery_date=day, references=references,
-                         printed_at=printed_at, replaces=replaces, lines=lines)
+    def new_slip(self, number, day=DAY, references=(), printed_at=None, replaces=False, fmt=None, lines=(KEG_LINE,)):
+        return make_slip(
+            fmt or self.fmt,
+            number=number,
+            delivery_date=day,
+            references=references,
+            printed_at=printed_at,
+            replaces=replaces,
+            lines=lines,
+        )
 
     def superseded(self, *slips):
         return effective_slips(slips)[1]
 
     def test_a_resend_counts_once_and_the_latest_gives_the_content(self):
-        first = self.bon("1001", references=["610001"], printed_at=moment(DAY, 8))
-        again = self.bon("1001", references=["610001"], printed_at=moment(DAY + timedelta(days=1), 7))
+        first = self.new_slip("1001", references=["610001"], printed_at=moment(DAY, 8))
+        again = self.new_slip("1001", references=["610001"], printed_at=moment(DAY + timedelta(days=1), 7))
         kept, superseded = effective_slips([first, again])
         self.assertEqual(kept, [again])
         by, reason = superseded[first.pk]
@@ -283,9 +296,9 @@ class EffectiveSlipsTests(NoNetworkTestCase):
         self.assertEqual(superseded[first.pk].pill, "renvoyé")
         self.assertEqual(reason, "Renvoyé : le bon n° 1001 a été reçu plusieurs fois, le plus récent fait foi.")
 
-    def test_the_same_number_on_two_delivery_dates_is_two_bons(self):
-        one = self.bon("1001", day=DAY)
-        other = self.bon("1001", day=DAY + timedelta(days=30))
+    def test_the_same_number_on_two_delivery_dates_is_two_slips(self):
+        one = self.new_slip("1001", day=DAY)
+        other = self.new_slip("1001", day=DAY + timedelta(days=30))
         self.assertEqual(effective_slips([one, other]), ([one, other], {}))
 
     def test_a_replacement_supersedes_the_original_in_both_arrival_orders(self):
@@ -293,8 +306,13 @@ class EffectiveSlipsTests(NoNetworkTestCase):
             with self.subTest(replacement_first=replacement_first):
                 reference = "620001" if replacement_first else "620002"
                 make = [
-                    lambda: self.bon(f"O{reference}", references=[reference], printed_at=moment(DAY, 7)),
-                    lambda: self.bon(f"R{reference}", references=[reference], printed_at=moment(DAY, 11), replaces=True),
+                    lambda: self.new_slip(f"O{reference}", references=[reference], printed_at=moment(DAY, 7)),  # noqa: B023 - called before the loop moves on
+                    lambda: self.new_slip(
+                        f"R{reference}",  # noqa: B023 - called before the loop moves on
+                        references=[reference],  # noqa: B023 - called before the loop moves on
+                        printed_at=moment(DAY, 11),
+                        replaces=True,
+                    ),
                 ]
                 if replacement_first:
                     replacement, original = make[1](), make[0]()
@@ -304,18 +322,19 @@ class EffectiveSlipsTests(NoNetworkTestCase):
                 self.assertEqual(kept, [replacement])
                 self.assertEqual(superseded[original.pk].kind, REPLACED)
                 self.assertEqual(superseded[original.pk].pill, "annulé et remplacé")
-                self.assertEqual(superseded[original.pk].reason,
-                                 f"Annulé et remplacé par le bon n° R{reference} du 10/02/2026.")
+                self.assertEqual(
+                    superseded[original.pk].reason, f"Annulé et remplacé par le bon n° R{reference} du 10/02/2026."
+                )
 
     def test_a_replacement_wins_even_when_neither_was_printed_with_a_time(self):
-        replacement = self.bon("2", references=["630001"], replaces=True)
-        original = self.bon("1", references=["630001"])
+        replacement = self.new_slip("2", references=["630001"], replaces=True)
+        original = self.new_slip("1", references=["630001"])
         self.assertEqual(effective_slips([original, replacement])[0], [replacement])
 
     def test_the_original_resent_after_its_replacement_still_does_not_count(self):
-        original = self.bon("1005", references=["610006"], printed_at=moment(DAY, 7))
-        replacement = self.bon("1006", references=["610006"], printed_at=moment(DAY, 11), replaces=True)
-        resent = self.bon("1005", references=["610006"], printed_at=moment(DAY + timedelta(days=1), 6))
+        original = self.new_slip("1005", references=["610006"], printed_at=moment(DAY, 7))
+        replacement = self.new_slip("1006", references=["610006"], printed_at=moment(DAY, 11), replaces=True)
+        resent = self.new_slip("1005", references=["610006"], printed_at=moment(DAY + timedelta(days=1), 6))
         kept, superseded = effective_slips([original, replacement, resent])
         self.assertEqual(kept, [replacement])
         self.assertEqual(superseded[resent.pk].kind, REPLACED)
@@ -323,67 +342,70 @@ class EffectiveSlipsTests(NoNetworkTestCase):
         self.assertEqual(superseded[original.pk].final.pk, replacement.pk)
 
     def test_among_replacements_sharing_a_reference_the_latest_wins(self):
-        original = self.bon("1", references=["640001"], printed_at=moment(DAY, 7))
-        first = self.bon("2", references=["640001"], printed_at=moment(DAY, 9), replaces=True)
-        latest = self.bon("3", references=["640001"], printed_at=moment(DAY, 10), replaces=True)
+        original = self.new_slip("1", references=["640001"], printed_at=moment(DAY, 7))
+        first = self.new_slip("2", references=["640001"], printed_at=moment(DAY, 9), replaces=True)
+        latest = self.new_slip("3", references=["640001"], printed_at=moment(DAY, 10), replaces=True)
         kept, superseded = effective_slips([original, first, latest])
         self.assertEqual(kept, [latest])
         self.assertEqual(superseded[first.pk].by.pk, latest.pk)
         self.assertEqual(superseded[original.pk].final.pk, latest.pk)
 
-    def test_a_bon_without_reference_is_never_superseded_by_reference(self):
-        unnamed = self.bon("1", references=[], printed_at=moment(DAY, 7))
-        replacement = self.bon("2", references=["650001"], printed_at=moment(DAY, 9), replaces=True)
+    def test_a_slip_without_reference_is_never_superseded_by_reference(self):
+        unnamed = self.new_slip("1", references=[], printed_at=moment(DAY, 7))
+        replacement = self.new_slip("2", references=["650001"], printed_at=moment(DAY, 9), replaces=True)
         self.assertEqual(effective_slips([unnamed, replacement]), ([unnamed, replacement], {}))
 
-    def test_the_date_fallback_applies_only_to_a_format_with_no_reference_motif(self):
+    def test_the_date_fallback_applies_only_to_a_format_with_no_reference_pattern(self):
         plain = make_format(name="Sans références", reference_patterns="")
-        older = self.bon("1", printed_at=moment(DAY, 6), fmt=plain)
-        original = self.bon("2", printed_at=moment(DAY, 7), fmt=plain)
-        elsewhere = self.bon("4", day=DAY + timedelta(days=1), printed_at=moment(DAY, 8), fmt=plain)
-        replacement = self.bon("3", printed_at=moment(DAY, 11), replaces=True, fmt=plain)
+        older = self.new_slip("1", printed_at=moment(DAY, 6), fmt=plain)
+        original = self.new_slip("2", printed_at=moment(DAY, 7), fmt=plain)
+        elsewhere = self.new_slip("4", day=DAY + timedelta(days=1), printed_at=moment(DAY, 8), fmt=plain)
+        replacement = self.new_slip("3", printed_at=moment(DAY, 11), replaces=True, fmt=plain)
         kept, superseded = effective_slips([older, original, elsewhere, replacement])
         self.assertEqual(kept, [older, elsewhere, replacement])
         self.assertEqual(superseded[original.pk].by.pk, replacement.pk)
         # The seeded format reads references: no fallback, both count.
-        same_day = [self.bon("5", printed_at=moment(DAY, 7)), self.bon("6", printed_at=moment(DAY, 11), replaces=True)]
+        same_day = [
+            self.new_slip("5", printed_at=moment(DAY, 7)),
+            self.new_slip("6", printed_at=moment(DAY, 11), replaces=True),
+        ]
         self.assertEqual(effective_slips(same_day)[1], {})
 
     def test_two_deliveries_on_one_day_without_reference_both_count(self):
         plain = make_format(name="Sans références", reference_patterns="")
         for fmt in (self.fmt, plain):
             with self.subTest(fmt=fmt.name):
-                bons = [self.bon(f"{fmt.pk}-1", fmt=fmt), self.bon(f"{fmt.pk}-2", fmt=fmt)]
-                self.assertEqual(effective_slips(bons), (bons, {}))
+                slips = [self.new_slip(f"{fmt.pk}-1", fmt=fmt), self.new_slip(f"{fmt.pk}-2", fmt=fmt)]
+                self.assertEqual(effective_slips(slips), (slips, {}))
 
-    def test_a_bon_printed_without_a_time_beside_one_printed_with_one(self):
-        printed = self.bon("1001", references=["660001"], printed_at=moment(DAY, 8))
-        unprinted = self.bon("1001", references=["660001"])
+    def test_a_slip_printed_without_a_time_beside_one_printed_with_one(self):
+        printed = self.new_slip("1001", references=["660001"], printed_at=moment(DAY, 8))
+        unprinted = self.new_slip("1001", references=["660001"])
         Slip.objects.filter(pk=unprinted.pk).update(received_at=moment(DAY, 9))
-        kept, superseded = effective_slips([printed, unprinted])
+        kept, _superseded = effective_slips([printed, unprinted])
         self.assertEqual(kept, [unprinted])
         Slip.objects.filter(pk=unprinted.pk).update(received_at=moment(DAY, 7))
         self.assertEqual(effective_slips([printed, unprinted])[0], [printed])
 
-    def test_every_bon_of_the_format_is_read_in_one_query_not_only_the_ones_shown(self):
-        original = self.bon("1", references=["670001"], printed_at=moment(DAY, 7))
-        replacement = self.bon("2", references=["670001"], printed_at=moment(DAY, 9), replaces=True)
+    def test_every_slip_of_the_format_is_read_in_one_query_not_only_the_ones_shown(self):
+        original = self.new_slip("1", references=["670001"], printed_at=moment(DAY, 7))
+        replacement = self.new_slip("2", references=["670001"], printed_at=moment(DAY, 9), replaces=True)
         with self.assertNumQueries(1):
             kept, superseded = effective_slips([original])
         self.assertEqual(kept, [])
         self.assertEqual(superseded[original.pk].by.pk, replacement.pk)
 
-    def test_another_format_s_bons_are_never_compared(self):
+    def test_another_format_s_slips_are_never_compared(self):
         other = make_format(name="Autre", supplier=make_supplier())
-        original = self.bon("1", references=["680001"], printed_at=moment(DAY, 7))
-        elsewhere = self.bon("2", references=["680001"], printed_at=moment(DAY, 9), replaces=True, fmt=other)
+        original = self.new_slip("1", references=["680001"], printed_at=moment(DAY, 7))
+        elsewhere = self.new_slip("2", references=["680001"], printed_at=moment(DAY, 9), replaces=True, fmt=other)
         self.assertEqual(effective_slips([original, elsewhere])[1], {})
 
     def test_an_index_already_loaded_costs_nothing(self):
-        bons = [self.bon("1"), self.bon("2")]
+        slips = [self.new_slip("1"), self.new_slip("2")]
         index = SlipIndex.load({self.fmt.pk})
         with self.assertNumQueries(0):
-            self.assertEqual(effective_slips(bons, index=index)[0], bons)
+            self.assertEqual(effective_slips(slips, index=index)[0], slips)
 
 
 # -- The days -----------------------------------------------------------------------------------------------------------
@@ -396,7 +418,7 @@ class BoardTests(NoNetworkTestCase):
     def day(self, pickup, *others, slips=()):
         return Board.load(pickups=[pickup, *others], slips=slips).day(pickup)
 
-    def test_two_reprises_of_one_day_are_one_side(self):
+    def test_two_pickups_of_one_day_are_one_side(self):
         morning = make_pickup(counts={texts.KEGS: 10})
         evening = make_pickup(counts={texts.KEGS: 5})
         make_slip(lines=[keg_line(15)])
@@ -420,7 +442,7 @@ class BoardTests(NoNetworkTestCase):
         make_format(name="Son format", supplier=seller, is_active=False)
         self.assertEqual(self.day(pickup).status, WAITING)
 
-    def test_waiting_for_the_bon(self):
+    def test_waiting_for_the_slip(self):
         day = self.day(make_pickup())
         self.assertEqual((day.status, day.pill, day.css), (WAITING, "en attente du bon", "pending"))
         self.assertIsNone(day.comparison)
@@ -434,36 +456,46 @@ class BoardTests(NoNetworkTestCase):
             f"Fûts — compté : 15 {DOT} sur le bon : 14 {ARROW} il en manque 1 sur le bon (30,00{NBSP}€)",
         )
 
-    def test_a_bon_with_an_unread_line_is_to_check_before_any_gap(self):
+    def test_a_slip_with_an_unread_line_is_to_check_before_any_gap(self):
         unread = {"label": "Aucune ligne ignorée", "passed": False, "detail": "1 ligne non lue : « CASIER DIVERS »"}
-        bon = make_slip(lines=[keg_line(14)], checks=[unread])
+        slip = make_slip(lines=[keg_line(14)], checks=[unread])
         day = self.day(make_pickup())
         self.assertEqual((day.status, day.pill), (TO_CHECK, "à vérifier"))
-        self.assertEqual(day.reasons, [f"Le bon n° {bon.number} a une ligne non lue : comparaison incomplète."])
+        self.assertEqual(day.reasons, [f"Le bon n° {slip.number} a une ligne non lue : comparaison incomplète."])
         self.assertIsNotNone(day.comparison)
 
-    def test_a_bon_whose_reading_failed_or_a_check_failed_is_to_check(self):
-        broken = make_slip(lines=[], read_error="Motif de ligne : parenthèse non fermée (position 3).",
-                           delivery_date=DAY)
+    def test_a_slip_whose_reading_failed_or_a_check_failed_is_to_check(self):
+        broken = make_slip(
+            lines=[], read_error="Motif de ligne : parenthèse non fermée (position 3).", delivery_date=DAY
+        )
         wrong = {"label": "Total des lignes = total imprimé", "passed": False, "detail": "lignes : 90,00"}
-        other = make_slip(lines=[keg_line(15)], checks=[wrong, {"label": "Aucune ligne ignorée", "passed": False,
-                                                                 "detail": "3 lignes non lues : …"}])
+        other = make_slip(
+            lines=[keg_line(15)],
+            checks=[wrong, {"label": "Aucune ligne ignorée", "passed": False, "detail": "3 lignes non lues : …"}],
+        )
         day = self.day(make_pickup())
         self.assertEqual(day.status, TO_CHECK)
-        self.assertEqual(day.reasons, [
-            f"Le bon n° {broken.number} n'a pas pu être lu (Motif de ligne : parenthèse non fermée (position 3)) : "
-            "comparaison impossible.",
-            f"Le bon n° {other.number} : contrôle « Total des lignes = total imprimé » en échec (lignes : 90,00) : "
-            "comparaison à vérifier.",
-            f"Le bon n° {other.number} a 3 lignes non lues : comparaison incomplète.",
-        ])
+        self.assertEqual(
+            day.reasons,
+            [
+                (
+                    f"Le bon n° {broken.number} n'a pas pu être lu (Motif de ligne : parenthèse non fermée (position 3)) : "
+                    "comparaison impossible."
+                ),
+                (
+                    f"Le bon n° {other.number} : contrôle « Total des lignes = total imprimé » en échec (lignes : 90,00) : "
+                    "comparaison à vérifier."
+                ),
+                f"Le bon n° {other.number} a 3 lignes non lues : comparaison incomplète.",
+            ],
+        )
 
-    def test_a_bon_with_no_delivery_date_is_never_paired(self):
-        bon = make_slip(delivery_date=None)
+    def test_a_slip_with_no_delivery_date_is_never_paired(self):
+        slip = make_slip(delivery_date=None)
         pickup = make_pickup()
-        board = Board.load(pickups=[pickup], slips=[bon])
+        board = Board.load(pickups=[pickup], slips=[slip])
         self.assertEqual(board.day(pickup).status, WAITING)
-        state = board.slip_state(bon)
+        state = board.slip_state(slip)
         self.assertEqual((state.key, state.pill), ("no_date", "date de livraison non lue"))
 
     def test_every_format_of_the_supplier_counts_active_or_not(self):
@@ -471,15 +503,16 @@ class BoardTests(NoNetworkTestCase):
         make_slip(second, lines=[keg_line(15)])
         self.assertEqual(self.day(make_pickup()).status, SAME)
 
-    def test_another_supplier_s_bon_is_never_paired(self):
+    def test_another_supplier_s_slip_is_never_paired(self):
         seller = make_supplier()
         make_slip(make_format(name="Autre", supplier=seller), lines=[keg_line(15)])
         self.assertEqual(self.day(make_pickup()).status, WAITING)
 
-    def test_only_the_bons_that_count_are_compared(self):
+    def test_only_the_slips_that_count_are_compared(self):
         original = make_slip(number="1005", references=["610006"], printed_at=moment(DAY, 7), lines=[keg_line(5)])
-        replacement = make_slip(number="1006", references=["610006"], printed_at=moment(DAY, 11), replaces=True,
-                                lines=[keg_line(4)])
+        replacement = make_slip(
+            number="1006", references=["610006"], printed_at=moment(DAY, 11), replaces=True, lines=[keg_line(4)]
+        )
         pickup = make_pickup(counts={texts.KEGS: 4})
         board = Board.load(pickups=[pickup], slips=[original, replacement])
         day = board.day(pickup)
@@ -492,10 +525,11 @@ class BoardTests(NoNetworkTestCase):
         make_slip(lines=[keg_line(15), (texts.PALLET, 1, D("12.0000"), D("12.00"))])
         day = self.day(make_pickup())
         self.assertEqual(day.status, DIFFERS)
-        self.assertEqual(day.sentence, "Reprise du 10/02/2026 : écart — PALETTE BOIS EUROPE — sur le bon : 1, "
-                                       "sans type de consigne.")
+        self.assertEqual(
+            day.sentence, "Reprise du 10/02/2026 : écart — PALETTE BOIS EUROPE — sur le bon : 1, sans type de consigne."
+        )
 
-    def test_a_type_whose_motif_no_longer_compiles_is_said_never_a_500(self):
+    def test_a_type_whose_pattern_no_longer_compiles_is_said_never_a_500(self):
         broken = make_type(name="Cassé", position=0, slip_patterns="(")
         make_slip(lines=[keg_line(15)])
         pickup = make_pickup()
@@ -518,7 +552,7 @@ class BoardTests(NoNetworkTestCase):
         make_slip(lines=[keg_line(15)])
         self.assertEqual(self.day(make_pickup()).status, SAME)
 
-    def test_a_reprise_not_loaded_cannot_be_asked_about(self):
+    def test_a_pickup_not_loaded_cannot_be_asked_about(self):
         loaded = make_pickup()
         other = make_pickup(date=DAY + timedelta(days=60))
         with self.assertRaises(LookupError):
@@ -526,27 +560,29 @@ class BoardTests(NoNetworkTestCase):
 
 
 class HintTests(NoNetworkTestCase):
-    def test_a_bon_is_offered_to_the_nearest_unpaired_day_only(self):
+    def test_a_slip_is_offered_to_the_nearest_unpaired_day_only(self):
         first = make_pickup(date=DAY)
         second = make_pickup(date=DAY + timedelta(days=3))
-        bon = make_slip(delivery_date=DAY + timedelta(days=2))
-        board = Board.load(pickups=[first, second], slips=[bon])
+        slip = make_slip(delivery_date=DAY + timedelta(days=2))
+        board = Board.load(pickups=[first, second], slips=[slip])
         self.assertEqual(board.day(first).hints, [])
         hints = board.day(second).hints
-        self.assertEqual([(hint.slip.pk, hint.date, hint.days) for hint in hints], [(bon.pk, bon.delivery_date, -1)])
-        self.assertEqual(hints[0].sentence, f"Le bon n° {bon.number} du 12/02/2026 n'a pas de reprise ce jour-là.")
-        state = board.slip_state(bon)
-        self.assertEqual((state.key, state.pill, state.hint_date), ("no_pickup", "sans reprise enregistrée", second.date))
+        self.assertEqual([(hint.slip.pk, hint.date, hint.days) for hint in hints], [(slip.pk, slip.delivery_date, -1)])
+        self.assertEqual(hints[0].sentence, f"Le bon n° {slip.number} du 12/02/2026 n'a pas de reprise ce jour-là.")
+        state = board.slip_state(slip)
+        self.assertEqual(
+            (state.key, state.pill, state.hint_date), ("no_pickup", "sans reprise enregistrée", second.date)
+        )
 
     def test_a_tie_goes_to_the_earlier_day(self):
         earlier = make_pickup(date=DAY)
         later = make_pickup(date=DAY + timedelta(days=2))
-        bon = make_slip(delivery_date=DAY + timedelta(days=1))
+        slip = make_slip(delivery_date=DAY + timedelta(days=1))
         board = Board.load(pickups=[earlier, later])
-        self.assertEqual([hint.slip.pk for hint in board.day(earlier).hints], [bon.pk])
+        self.assertEqual([hint.slip.pk for hint in board.day(earlier).hints], [slip.pk])
         self.assertEqual(board.day(later).hints, [])
 
-    def test_no_hint_beyond_three_days_nor_to_a_day_that_has_its_bon(self):
+    def test_no_hint_beyond_three_days_nor_to_a_day_that_has_its_slip(self):
         paired = make_pickup(date=DAY)
         make_slip(delivery_date=DAY, lines=[keg_line(15)])
         make_slip(delivery_date=DAY + timedelta(days=1))
@@ -557,7 +593,7 @@ class HintTests(NoNetworkTestCase):
         self.assertEqual(board.day(paired).hints, [])
         self.assertEqual(board.day(lonely).hints, [])
 
-    def test_another_supplier_s_bon_is_never_offered(self):
+    def test_another_supplier_s_slip_is_never_offered(self):
         seller = make_supplier()
         make_slip(make_format(name="Autre", supplier=seller), delivery_date=DAY + timedelta(days=1))
         pickup = make_pickup(date=DAY)
@@ -569,11 +605,13 @@ class SlipStateTests(NoNetworkTestCase):
         board = Board.load(slips=slips)
         return [board.slip_state(slip) for slip in slips]
 
-    def test_each_state_of_a_bon(self):
-        resent_first = make_slip(number="1", references=["690001"], printed_at=moment(DAY, 7),
-                                 delivery_date=DAY + timedelta(days=40))
-        resent_last = make_slip(number="1", references=["690001"], printed_at=moment(DAY, 9),
-                                delivery_date=DAY + timedelta(days=40))
+    def test_each_state_of_a_slip(self):
+        resent_first = make_slip(
+            number="1", references=["690001"], printed_at=moment(DAY, 7), delivery_date=DAY + timedelta(days=40)
+        )
+        resent_last = make_slip(
+            number="1", references=["690001"], printed_at=moment(DAY, 9), delivery_date=DAY + timedelta(days=40)
+        )
         unreadable = make_slip(lines=[], read_error="Motif de ligne : le motif est vide.", delivery_date=None)
         nothing = make_slip(lines=[], delivery_date=DAY + timedelta(days=50))
         alone = make_slip(delivery_date=DAY + timedelta(days=60))
@@ -595,11 +633,11 @@ class SlipStateTests(NoNetworkTestCase):
         self.assertEqual(states[2].reason, "Lecture impossible : Motif de ligne : le motif est vide.")
         self.assertEqual(states[5].day.status, DIFFERS)
 
-    def test_a_bon_whose_lines_could_not_be_read_never_says_nothing_was_taken_back(self):
-        """Its part found, its rows no longer matching the line motif (a
+    def test_a_slip_whose_lines_could_not_be_read_never_says_nothing_was_taken_back(self):
+        """Its part found, its rows no longer matching the line pattern (a
         layout change): stored with no line and failed checks. Unpaired, it
         is « à vérifier » with why - « aucun vide repris » would say the
-        opposite of what it lists. A bon read empty keeps its grey pill."""
+        opposite of what it lists. A slip read empty keeps its grey pill."""
         unread = {"label": UNREAD_CHECK, "passed": False, "detail": "2 lignes non lues : « FUT EXEMPLE » ; « CAISSE »"}
         total = {"label": "Total des lignes = total imprimé", "passed": False, "detail": "lignes : 0,00"}
         unreadable = make_slip(lines=[], checks=[unread, total], delivery_date=DAY + timedelta(days=50))
@@ -609,24 +647,26 @@ class SlipStateTests(NoNetworkTestCase):
             [(state.key, state.pill, state.css) for state in states],
             [("to_check", "à vérifier", "pending"), ("nothing_back", "aucun vide repris", "ignored")],
         )
-        self.assertEqual(states[0].reason, f"Le bon n° {unreadable.number} a 2 lignes non lues : comparaison incomplète.")
+        self.assertEqual(
+            states[0].reason, f"Le bon n° {unreadable.number} a 2 lignes non lues : comparaison incomplète."
+        )
         self.assertNotIn("Rien n'a été repris", states[0].reason)
         self.assertEqual(states[1].reason, "Rien n'a été repris selon ce bon.")
 
 
 class CalendarEndsTests(NoNetworkTestCase):
-    """A reprise or a bon dated at either end of the calendar (a damaged
+    """A pickup or a slip dated at either end of the calendar (a damaged
     archive imported before « Données » refused it): the page's window is
     cut at the calendar's ends, never an OverflowError - /consignes/ lists
-    the newest reprise first, so one such row made every drawing a 500."""
+    the newest pickup first, so one such row made every drawing a 500."""
 
-    def test_a_reprise_on_the_calendar_s_last_day(self):
+    def test_a_pickup_on_the_calendar_s_last_day(self):
         pickup = make_pickup(date=date(9999, 12, 31))
         board = Board.load(pickups=[pickup])
         self.assertEqual(board.window, (date(9999, 12, 25), date.max))
         self.assertEqual(board.day(pickup).status, WAITING)
 
-    def test_a_bon_delivered_on_the_calendar_s_first_days(self):
+    def test_a_slip_delivered_on_the_calendar_s_first_days(self):
         first = make_slip(delivery_date=date(1, 1, 2), lines=[keg_line(15)])
         pickup = make_pickup(date=date(1, 1, 2))
         board = Board.load(pickups=[pickup], slips=[first])
@@ -656,7 +696,7 @@ class QueryCountTests(NoNetworkTestCase):
         with CaptureQueriesContext(connection) as captured:
             board = Board.load(pickups=pickups, slips=slips)
             for pickup in pickups:
-                board.day(pickup).sentence
+                board.day(pickup).sentence  # noqa: B018 - read for the queries it costs
             for slip in slips:
                 board.slip_state(slip)
         return len(captured)
@@ -694,11 +734,13 @@ class NoAmbiguousWordsTests(NoNetworkTestCase):
         kegs = make_type(name="fûts INOX", position=1, slip_patterns="F[ÛU]T")
         make_type(name="Caisses", position=2, slip_patterns="CAISSE")
         sentences = []
-        for offset, (counted, lines) in enumerate([
-            (15, [keg_line(15)]),
-            (15, [keg_line(14)]),
-            (2, [keg_line(3), (texts.PALLET, 1, None, None)]),
-        ]):
+        for offset, (counted, lines) in enumerate(
+            [
+                (15, [keg_line(15)]),
+                (15, [keg_line(14)]),
+                (2, [keg_line(3), (texts.PALLET, 1, None, None)]),
+            ]
+        ):
             day = DAY + timedelta(days=10 * offset)
             make_slip(fmt, delivery_date=day, lines=lines)
             pickup = make_pickup(date=day, counts={kegs: counted})

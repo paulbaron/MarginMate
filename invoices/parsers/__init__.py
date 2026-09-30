@@ -41,6 +41,7 @@ def ticket_parser_for(supplier_code: str):
         None,
     )
 
+
 __all__ = [
     "LLM_PARSER_KEY",
     "PARSER_REGISTRY",

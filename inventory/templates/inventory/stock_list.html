@@ -82,8 +82,8 @@
                     <noscript><button class="btn btn-small btn-secondary" type="submit">Afficher</button></noscript>
                 </form>
                 {% comment %}
-                The free window. It keeps the inventaire as a hidden field -
-                and is disabled while there is one: an inventaire is two
+                The free window. It keeps the stock take as a hidden field -
+                and is disabled while there is one: a stock take is two
                 physical counts, its figures come out of them, and two dates
                 that change nothing must not look as though they would.
                 {% endcomment %}
@@ -170,8 +170,8 @@
 // Keyed by espace too (<body data-tenant>, base.html): the ids stored are
 // articles' pks, and one browser used for two bars would open bar A's rows
 // in bar B's list. Empty on a page no espace is bound to.
-var ESPACE_SCOPE = document.body.getAttribute("data-tenant") ? "espace-" + document.body.getAttribute("data-tenant") + ":" : "";
-var EXPANDED_STORAGE_KEY = "marginmate:" + ESPACE_SCOPE + "stock:rows";
+var TENANT_SCOPE = document.body.getAttribute("data-tenant") ? "espace-" + document.body.getAttribute("data-tenant") + ":" : "";
+var EXPANDED_STORAGE_KEY = "marginmate:" + TENANT_SCOPE + "stock:rows";
 
 // Where focusing a field opens an on-screen keyboard - a phone, upright or
 // on its side, a tablet: no field is focused for the reader there (syncPanel,
@@ -542,7 +542,7 @@ function syncPanel(focus) {
     document.querySelectorAll("[data-panel-jump]").forEach(function (link) { link.hidden = !count; });
 }
 
-var PANEL_STORAGE_KEY = "marginmate:" + ESPACE_SCOPE + "stock:panel-closed";
+var PANEL_STORAGE_KEY = "marginmate:" + TENANT_SCOPE + "stock:panel-closed";
 
 function setPanelClosed(closed) {
     var layout = document.getElementById("products-layout");

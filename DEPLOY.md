@@ -324,15 +324,19 @@ Jusqu'ici le site tournait depuis le dossier de développement, sur
    ce qui est enregistré. Rien n'est envoyé sur GitHub.
 2. Arrêtez le serveur : Ctrl+C dans la fenêtre de `start_production.cmd` (et `runserver`, s'il
    tourne).
-3. Dans une invite de commandes, créez la copie de production du code et son Python :
+3. Dans une invite de commandes, créez la copie de production du code et son Python (mise doit
+   déjà être installé : section 10.6, étape 1) :
 
    ```
    mkdir C:\MarginMate
    git clone -b main "C:\Users\<vous>\Desktop\Bar application gestion\AdminMate" C:\MarginMate\app
    cd /d C:\MarginMate\app
-   py -3.11 -m venv .venv
-   .venv\Scripts\python.exe -m pip install -r requirements.txt
+   mise install
+   uv sync --locked --no-dev
    ```
+
+   `uv` crée le dossier `.venv`, avec Python 3.11, et y installe les dépendances : exactement
+   celles du fichier `uv.lock`, sans les outils de développement.
 
 4. Déplacez les données, le serveur étant arrêté :
 
@@ -427,7 +431,8 @@ a réussi :
 1. **Une seule mise en ligne à la fois** : il pose une marque, le dossier
    `C:\MarginMate\app\.git\marginmate-deploy`, et refuse de démarrer si elle est déjà là (une autre
    fenêtre `deploy.cmd` ouverte, ou une mise en ligne restée à moitié : section 10.4). Il y note où
-   il en est (`etat.txt`) et l'efface en finissant.
+   il en est (`etat.txt`) et l'efface en finissant. Avant de la poser, il vérifie que `uv` répond :
+   sinon il refuse, sans rien toucher (section 10.6).
 2. **Refuse de tourner ailleurs qu'en production** : un `.env` qui dit `DJANGO_DEBUG=True`, ou qui
    ne dit pas `MARGINMATE_HTTPS=1`, est celui du dossier de développement. Il refuse aussi une copie
    de production modifiée à la main, qui n'est pas sur `main`, dont la base des comptes n'est pas
@@ -452,7 +457,8 @@ a réussi :
    sauvegarde échoue, il relance le serveur tel qu'il était et s'arrête : rien n'a changé.
 8. **Met le code à jour** (`git merge --ff-only origin/main` : le code avance, rien n'est
    réécrit). Si cela échoue, il remet le code d'avant et relance le serveur.
-9. **Installe les dépendances** (`pip install -r requirements.txt`), **applique les migrations**
+9. **Installe les dépendances** (`uv sync --locked --no-dev` : exactement celles de `uv.lock`, sans
+   les outils de développement), **applique les migrations**
    (`manage.py migrate_tenants`, juste après la sauvegarde) et **vérifie** le serveur
    (`manage.py serve --verifier`). Si l'une de ces étapes échoue, il **ne relance pas** le serveur :
    le nouveau code et les données ne vont peut-être plus ensemble. La fenêtre affiche alors les
@@ -494,11 +500,15 @@ et relancez `deploy.cmd`. Pour revenir plus tard sur une version mise en ligne :
    ```
    cd /d C:\MarginMate\app
    git reset --hard <version d'avant>
-   .venv\Scripts\python.exe -m pip install -r requirements.txt
+   uv sync --locked --no-dev
    ```
 
    La version d'avant est le premier numéro de « Déployé : ancien..nouveau » ;
-   `git log --oneline` les liste toutes.
+   `git log --oneline` les liste toutes. Une version d'avant le passage à uv (section 10.6) n'a pas
+   de fichier `uv.lock` : pour elle, remplacez la ligne `uv sync` par
+   `.venv\Scripts\python.exe -m ensurepip`, puis
+   `.venv\Scripts\python.exe -m pip install -r requirements.txt` (uv retire pip de `.venv`,
+   `ensurepip` le remet).
 3. Si la version retirée apportait des migrations, le code d'avant ne connaît pas les nouvelles
    colonnes : remettez aussi les données de la sauvegarde faite avant la mise en ligne. **Tout ce
    qui a été saisi depuis est alors perdu.**
@@ -536,6 +546,53 @@ une copie d'une sauvegarde de la production :
 Pour une copie toute fraîche, faites d'abord une sauvegarde en production (section 8). Si le code de
 développement a des migrations que la production n'a pas encore, lancez ensuite, dans le dossier de
 développement : `.venv\Scripts\python.exe manage.py migrate_tenants`.
+
+### 10.6 Passage à uv (une seule fois)
+
+Les dépendances de MarginMate (Django, le lecteur de tickets…) s'installent désormais avec
+**uv**, aux versions exactes du fichier `uv.lock`. uv lui-même est installé par **mise**, qui le
+garde à la version que fixe le fichier `mise.toml` du code. La production y passe en deux mises en
+ligne :
+
+1. **Installez mise**, une fois pour tout le PC. Dans une invite de commandes :
+
+   ```
+   winget install jdx.mise
+   ```
+
+   Puis ouvrez **PowerShell** (menu Démarrer, tapez `powershell`) et collez-y cette ligne, qui met
+   les raccourcis de mise (ses « shims ») dans le PATH :
+
+   ```powershell
+   [Environment]::SetEnvironmentVariable("Path", "$env:LOCALAPPDATA\mise\shims;" + [Environment]::GetEnvironmentVariable("Path", "User"), "User")
+   ```
+
+   Si mise est déjà installé pour le dossier de développement (README.md), c'est déjà fait.
+2. **La première mise en ligne** de cette version se fait comme d'habitude, sans rien de
+   différent : c'est encore le `deploy.cmd` d'avant qui la conduit (il travaille depuis une copie de
+   lui-même), et il installe les dépendances depuis `requirements.txt`, avec pip.
+3. **Avant la mise en ligne suivante**, ouvrez une **nouvelle** invite de commandes (une fenêtre
+   ouverte avant l'étape 1 ne voit pas le nouveau PATH) et tapez :
+
+   ```
+   cd /d C:\MarginMate\app
+   mise install
+   uv --version
+   ```
+
+   `mise install` installe les outils aux versions de `mise.toml` (rien, s'ils sont déjà là), et
+   `uv --version` doit répondre par un numéro de version, comme `uv 0.12.20`. Si mise demande
+   s'il faut faire confiance (« trust ») au fichier `mise.toml` de ce dossier, répondez oui : c'est
+   celui du code. Ces commandes ne marchent qu'après la première mise en ligne, qui apporte
+   `mise.toml` dans `C:\MarginMate\app`.
+4. **À partir de la deuxième mise en ligne**, `deploy.cmd` installe les dépendances avec
+   `uv sync --locked --no-dev` : exactement celles de `uv.lock`, sans les outils de développement,
+   et il retire de `.venv` ce que `uv.lock` ne liste pas (pip compris). Si `uv` ne répond pas, il
+   refuse avant de toucher à quoi que ce soit, avec « REFUS : uv ne repond pas » : reprenez
+   l'étape 3. Si `uv --version` répond dans une nouvelle invite de commandes et que `deploy.cmd`
+   refuse encore, fermez la session Windows et rouvrez-la.
+5. `requirements.txt` disparaît du code après cette deuxième mise en ligne : il ne servait qu'à la
+   première.
 
 ## 11. Quand le serveur refuse de démarrer
 

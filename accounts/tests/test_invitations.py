@@ -82,7 +82,7 @@ class CreateInvitationCommandTests(TenancyTestCase):
         return out.getvalue()
 
     def printed_code(self, output):
-        return re.search(r"^\s+([A-Z0-9-]{29})$", output, re.M).group(1)
+        return re.search(r"^\s+([A-Z0-9-]{29})$", output, re.MULTILINE).group(1)
 
     def test_the_code_is_printed_once_and_opens_a_signup(self):
         output = self.run_command("--note", "Bar de la gare (essai)", "--days", "14")
@@ -102,8 +102,13 @@ class CreateInvitationCommandTests(TenancyTestCase):
         password = "Tabouret-Zinc-47"
         response = self.client.post(
             reverse("accounts:signup"),
-            {"code": code, "bar_name": "Bar de la Gare", "email": "gare@example.invalid",
-             "password1": password, "password2": password},
+            {
+                "code": code,
+                "bar_name": "Bar de la Gare",
+                "email": "gare@example.invalid",
+                "password1": password,
+                "password2": password,
+            },
         )
         self.assertRedirects(response, "/", fetch_redirect_response=False)
         self.assertTrue(Tenant.objects.filter(name="Bar de la Gare").exists())

@@ -4,15 +4,14 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('invoices', '0020_invoice_line_decimal_quantity'),
+        ("invoices", "0020_invoice_line_decimal_quantity"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='supplier',
-            name='ticket_identifiers',
-            field=models.JSONField(blank=True, default=list, verbose_name='identifiants lus sur ses documents'),
+            model_name="supplier",
+            name="ticket_identifiers",
+            field=models.JSONField(blank=True, default=list, verbose_name="identifiants lus sur ses documents"),
         ),
     ]

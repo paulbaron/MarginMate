@@ -12,14 +12,14 @@ name), and when (an RFC 3161 timestamp from a third party - the one piece of
 evidence the employer does not control).
 
 **Keys** (`keys/` in the private folder, `staff.private_files`): one
-internal authority per ESPACE, each bar's private folder its own (« Autorité interne de <établissement> »),
+internal authority per TENANT, each bar's private folder its own (« Autorité interne de <établissement> »),
 one certificate for the employer (the establishment's name) and one per
 employee, made at his first signature (CN « DUPONT Jeanne », O the
 establishment). EC P-256, SHA-256, ten years. The private keys are PKCS#8 PEM,
 encrypted with `settings.MARGINMATE_SIGNING_PASSPHRASE` when it is set - and
 keys written in clear before it was set are encrypted at the next signature;
 unset, `key_warning()` is the sentence the owner's pages show (in the
-owner's espace only: the passphrase is the platform's, and the operator
+owner's tenant only: the passphrase is the platform's, and the operator
 is warned by the system check staff.W001). A certificate
 whose name no longer matches (an employee renamed) is replaced, the old one
 moved to `keys/archive/`: it signed documents. The authority is never
@@ -70,7 +70,7 @@ third party's time is one the employer could have dated himself.
 real server (tests.support.NoNetworkTestCase).
 
 **Verification** (`verify`) is offline: our authority's certificates - the
-bound espace's, never another bar's - are
+bound tenant's, never another bar's - are
 the trust roots for the signers, and the Mozilla list shipped with certifi
 for the timestamp authorities (DigiCert's and Sectigo's roots are in it).
 Adobe Reader shows « validité inconnue » for our certificates
@@ -133,7 +133,7 @@ FIELD_BOXES = tuple(zip((EMPLOYEE_FIELD, EMPLOYER_FIELD), pdf.ELECTRONIC_SIGNATU
 #: « du salarié », « de l'employeur » - for the sentences `verify` writes.
 FIELD_ROLES = {EMPLOYEE_FIELD: "du salarié", EMPLOYER_FIELD: "de l'employeur"}
 
-CERTIFICATE_VALIDITY = dt.timedelta(days=3653)   # ten years, leap days included
+CERTIFICATE_VALIDITY = dt.timedelta(days=3653)  # ten years, leap days included
 #: X.520's upper bound for a common name and an organisation name.
 NAME_LIMIT = 64
 #: A timestamp server that does not answer in this many seconds is the next one's turn.
@@ -274,7 +274,7 @@ def _limited(text: str) -> str:
     if len(data) <= NAME_LIMIT:
         return value
     cut = data[:NAME_LIMIT].decode("utf-8", "ignore")
-    if value[len(cut):len(cut) + 1] != " " and " " in cut:
+    if value[len(cut) : len(cut) + 1] != " " and " " in cut:
         cut = cut.rsplit(" ", 1)[0]
     return cut.strip()
 
@@ -291,7 +291,7 @@ def _establishment_name(establishment) -> str:
 
 
 def setup_problem(establishment) -> str:
-    """"" when the establishment can sign, else the French sentence saying
+    """ "" when the establishment can sign, else the French sentence saying
     what is missing - for the owner's page, before anything is sent."""
     return "" if _establishment_name(establishment) else NO_ESTABLISHMENT_NAME
 
@@ -352,7 +352,7 @@ def _encrypt_clear_keys() -> None:
 
 def server_settings_may_be_named() -> bool:
     """Whether a page may name a server setting (the signing passphrase, the
-    mail server): in the owner's espace only
+    mail server): in the owner's tenant only
     (`Tenant.uses_server_integrations`, the platform owner's own bar).
     Another bar can change none of them, and is never shown their names."""
     return integrations_allowed()
@@ -363,7 +363,7 @@ def key_warning() -> str:
     be, stored in clear - "" once they are encrypted. Reads the folder,
     never creates it.
 
-    Multi mode: said in the owner's espace only (`server_settings_may_be_named`).
+    Multi mode: said in the owner's tenant only (`server_settings_may_be_named`).
     The passphrase is the platform's: another bar can do nothing about it -
     the operator is warned by the system check staff.W001 instead."""
     if not server_settings_may_be_named():
@@ -379,7 +379,7 @@ def key_warning() -> str:
 def _certificate(subject: x509.Name, public_key, issuer: Identity | None):
     """The certificate to sign, and the key that signs it (None: the
     authority signs itself)."""
-    now = dt.datetime.now(dt.timezone.utc)
+    now = dt.datetime.now(dt.UTC)
     builder = (
         x509.CertificateBuilder()
         .subject_name(subject)
@@ -393,8 +393,15 @@ def _certificate(subject: x509.Name, public_key, issuer: Identity | None):
     if issuer is None:
         builder = builder.add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True).add_extension(
             x509.KeyUsage(
-                digital_signature=False, content_commitment=False, key_encipherment=False, data_encipherment=False,
-                key_agreement=False, key_cert_sign=True, crl_sign=True, encipher_only=False, decipher_only=False,
+                digital_signature=False,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=True,
+                crl_sign=True,
+                encipher_only=False,
+                decipher_only=False,
             ),
             critical=True,
         )
@@ -404,8 +411,15 @@ def _certificate(subject: x509.Name, public_key, issuer: Identity | None):
             builder.add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
             .add_extension(
                 x509.KeyUsage(
-                    digital_signature=True, content_commitment=True, key_encipherment=False, data_encipherment=False,
-                    key_agreement=False, key_cert_sign=False, crl_sign=False, encipher_only=False, decipher_only=False,
+                    digital_signature=True,
+                    content_commitment=True,
+                    key_encipherment=False,
+                    data_encipherment=False,
+                    key_agreement=False,
+                    key_cert_sign=False,
+                    crl_sign=False,
+                    encipher_only=False,
+                    decipher_only=False,
                 ),
                 critical=True,
             )
@@ -428,7 +442,7 @@ def _archive(stem: str) -> None:
     key_path, cert_path = _paths(stem)
     folder = private_files.keys_dir() / ARCHIVE
     folder.mkdir(parents=True, exist_ok=True)
-    moment = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+    moment = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%S%f")
     base = stem.replace("/", "-")
     for path, suffix in ((key_path, "key.pem"), (cert_path, "cert.pem")):
         if path.exists():
@@ -442,7 +456,7 @@ def _still_good(certificate: x509.Certificate, subject: x509.Name, issuer: Ident
         certificate.verify_directly_issued_by(issuer.certificate)
     except (ValueError, TypeError, InvalidSignature):
         return False
-    return certificate.not_valid_after_utc > dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=1)
+    return certificate.not_valid_after_utc > dt.datetime.now(dt.UTC) + dt.timedelta(days=1)
 
 
 def _issue(stem: str, subject: x509.Name, issuer: Identity | None) -> Identity:
@@ -470,8 +484,8 @@ def _identity(stem: str, subject: x509.Name, issuer: Identity | None) -> Identit
 
 
 # One process makes an identity at a time: two first signatures at the same
-# second must not make two authorities. Process-global on purpose, espaces
-# included: it only serialises making keys - each espace's live in its own
+# second must not make two authorities. Process-global on purpose, tenants
+# included: it only serialises making keys - each tenant's live in its own
 # private folder (`private_files.keys_dir()`, resolved from the binding), so
 # holding it for one bar never hands another bar's keys over.
 _KEYS_LOCK = threading.RLock()
@@ -510,8 +524,8 @@ def employee_identity(employee, establishment) -> Identity:
 
 
 def authority_certificates() -> list[x509.Certificate]:
-    """Every authority this espace has had (the current one and any kept in
-    the archive) - the bound espace's only: the trust
+    """Every authority this tenant has had (the current one and any kept in
+    the archive) - the bound tenant's only: the trust
     roots `verify` checks signers against, so another bar's signature is
     never « émise par l'autorité de l'établissement » here. Reads the
     folder, never creates anything."""
@@ -623,7 +637,12 @@ def _stamp_drawing(png: bytes) -> Image.Image | None:
     margin = 4
     left, top, right, bottom = box
     return image.crop(
-        (max(left - margin, 0), max(top - margin, 0), min(right + margin, image.width), min(bottom + margin, image.height))
+        (
+            max(left - margin, 0),
+            max(top - margin, 0),
+            min(right + margin, image.width),
+            min(bottom + margin, image.height),
+        )
     )
 
 
@@ -668,8 +687,8 @@ def _signer_lines(lead: str, name: str, width: float = _STAMP_WIDTH) -> tuple:
     if len(wrapped) > 2 or " ".join(wrapped) != name:
         first = wrapped[0]
         if name.startswith(first):
-            wrapped = [first, pdf.fit(name[len(first):].strip(), width, pdf.BOLD, size)]
-        else:   # one word wider than the line on its own
+            wrapped = [first, pdf.fit(name[len(first) :].strip(), width, pdf.BOLD, size)]
+        else:  # one word wider than the line on its own
             wrapped = [pdf.fit(name, width, pdf.BOLD, size)]
     return (*lines, *((((line, pdf.BOLD),), size) for line in wrapped))
 
@@ -742,7 +761,9 @@ class _Stamp(BaseStamp):
         if drawing is not None and area_height > 4:
             scale = min(width / drawing.width, area_height / drawing.height)
             image = PdfImage(
-                drawing, writer=self.writer, box=BoxConstraints(width=drawing.width * scale, height=drawing.height * scale)
+                drawing,
+                writer=self.writer,
+                box=BoxConstraints(width=drawing.width * scale, height=drawing.height * scale),
             )
             rendered = image.render()
             self.import_resources(image.resources)
@@ -801,7 +822,7 @@ def _signature_fields(pdf_bytes: bytes) -> dict:
     try:
         reader = PdfFileReader(io.BytesIO(pdf_bytes), strict=False)
         return {name: value is not None for name, value, _ref in fields.enumerate_sig_fields(reader)}
-    except Exception:
+    except Exception:  # noqa: BLE001 - any reading failure is the French UNREADABLE
         raise DocumentError(UNREADABLE) from None
 
 
@@ -815,7 +836,9 @@ def _require(pdf_bytes: bytes, field_name: str, after: str | None = None) -> Non
     if found[field_name]:
         raise DocumentError(f"Ce document porte déjà la signature {FIELD_ROLES.get(field_name, field_name)}.")
     if after is not None and not found.get(after):
-        raise DocumentError("Ce document ne porte pas encore la signature du salarié : l'employeur contresigne en second.")
+        raise DocumentError(
+            "Ce document ne porte pas encore la signature du salarié : l'employeur contresigne en second."
+        )
 
 
 def timestampers() -> list[TimeStamper]:
@@ -942,7 +965,7 @@ def read_reason(text) -> SignedReason:
     if base == REASON_CERTIFIED:
         reservation = ""
     elif base.startswith(REASON_RESERVED) and base.endswith(REASON_RESERVED_END):
-        reservation = base[len(REASON_RESERVED):-len(REASON_RESERVED_END)]
+        reservation = base[len(REASON_RESERVED) : -len(REASON_RESERVED_END)]
     else:
         reservation = None
         drawn = _EMPLOYER_DRAWING.match(base)
@@ -960,7 +983,7 @@ def signed_reasons(pdf_bytes: bytes) -> dict[str, SignedReason]:
             str(embedded.field_name): read_reason(embedded.sig_object.get("/Reason", ""))
             for embedded in reader.embedded_signatures
         }
-    except Exception:
+    except Exception:  # noqa: BLE001 - documented to never raise: {} for bytes that are no PDF
         return {}
 
 
@@ -989,7 +1012,10 @@ def _sign(pdf_bytes: bytes, meta, identity: Identity, style, stampers) -> Signed
         signed = output.getvalue()
         root = identity.issuers[-1] if identity.issuers else identity.certificate
         return Signed(
-            signed, authority_label(stamper), _timestamp_of(signed, meta.field_name), identity.name,
+            signed,
+            authority_label(stamper),
+            _timestamp_of(signed, meta.field_name),
+            identity.name,
             root.fingerprint(hashes.SHA256()).hex(),
         )
     raise TimestampUnavailable(failures)
@@ -1089,7 +1115,9 @@ def _certifi_roots() -> tuple:
     import certifi
 
     with open(certifi.where(), "rb") as handle:
-        return tuple(asn1_x509.Certificate.load(der) for _kind, _headers, der in pem.unarmor(handle.read(), multiple=True))
+        return tuple(
+            asn1_x509.Certificate.load(der) for _kind, _headers, der in pem.unarmor(handle.read(), multiple=True)
+        )
 
 
 def timestamp_trust_roots() -> list:
@@ -1126,8 +1154,8 @@ class SignatureCheck:
     timestamp: dt.datetime | None
     timestamp_trusted: bool
     timestamp_authority: str
-    modification: str       # pyHanko's ModificationLevel: NONE, FORM_FILLING, ANNOTATIONS, OTHER
-    coverage: str           # ENTIRE_FILE, ENTIRE_REVISION, …
+    modification: str  # pyHanko's ModificationLevel: NONE, FORM_FILLING, ANNOTATIONS, OTHER
+    coverage: str  # ENTIRE_FILE, ENTIRE_REVISION, …
     problems: tuple[str, ...] = ()
 
     @property
@@ -1227,7 +1255,9 @@ def _check(embedded, status) -> SignatureCheck:
         )
     stamp_authority = ""
     if stamp is not None and stamp.signing_cert is not None:
-        stamp_authority = str(stamp.signing_cert.subject.native.get("common_name", "") or stamp.signing_cert.subject.human_friendly)
+        stamp_authority = str(
+            stamp.signing_cert.subject.native.get("common_name", "") or stamp.signing_cert.subject.human_friendly
+        )
     return SignatureCheck(
         field=field_name,
         signer=signer,
@@ -1252,10 +1282,8 @@ def verify(pdf_bytes: bytes) -> Verification:
     try:
         reader = PdfFileReader(io.BytesIO(pdf_bytes), strict=False)
         embedded_signatures = list(reader.embedded_signatures)
-        empty = tuple(
-            str(name) for name, value, _ref in fields.enumerate_sig_fields(reader) if value is None
-        )
-    except Exception:
+        empty = tuple(str(name) for name, value, _ref in fields.enumerate_sig_fields(reader) if value is None)
+    except Exception:  # noqa: BLE001 - never raises on a bad file: `error` says it
         return Verification(error=UNREADABLE)
     signer_roots = [_asn1(certificate) for certificate in authority_certificates()]
     stamp_roots = timestamp_trust_roots()
@@ -1268,13 +1296,21 @@ def verify(pdf_bytes: bytes) -> Verification:
                     signer_validation_context=ValidationContext(trust_roots=signer_roots, allow_fetching=False),
                     ts_validation_context=ValidationContext(trust_roots=stamp_roots, allow_fetching=False),
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001 - a signature that cannot be validated is reported, not raised
                 role = FIELD_ROLES.get(str(embedded.field_name), f"« {embedded.field_name} »")
                 checks.append(
                     SignatureCheck(
-                        field=str(embedded.field_name), signer="", intact=False, valid=False, trusted=False,
-                        timestamp=None, timestamp_trusted=False, timestamp_authority="", modification="",
-                        coverage="", problems=(f"la signature {role} est illisible",),
+                        field=str(embedded.field_name),
+                        signer="",
+                        intact=False,
+                        valid=False,
+                        trusted=False,
+                        timestamp=None,
+                        timestamp_trusted=False,
+                        timestamp_authority="",
+                        modification="",
+                        coverage="",
+                        problems=(f"la signature {role} est illisible",),
                     )
                 )
                 continue

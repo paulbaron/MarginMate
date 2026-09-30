@@ -9,7 +9,7 @@ added to what it reads, as SimpleUploadedFile.
 
 Every name, number, date, amount and count is INVENTED
 (returnables/tests/support.py): the owner's real tickets carry his account,
-his driver and his deliveries. Photos are a few pixels; a motif the guard
+his driver and his deliveries. Photos are a few pixels; a pattern the guard
 must refuse never reaches the real `regex.compile` (`RefuseTheFreeze`).
 """
 
@@ -36,7 +36,7 @@ from django.utils import timezone
 from accounts import paths
 from invoices.models import Invoice, ScrapeJob
 from returnables import patterns, views
-from returnables.forms import COUNT_ERROR, NO_DATE_MOTIF, NO_SUBJECT, NOTHING_LEFT, NOTHING_TO_SAVE
+from returnables.forms import COUNT_ERROR, NO_DATE_PATTERN, NO_SUBJECT, NOTHING_LEFT, NOTHING_TO_SAVE
 from returnables.models import (
     MAX_PHOTOS,
     Pickup,
@@ -78,7 +78,7 @@ FREEZE_TOKENS = ("65535", "6 5 5 3 5", "{100,}", "{1 0 0")
 
 class RefuseTheFreeze:
     """Stands in for regex.compile while a page is drawn or a form checked:
-    compiles as usual, EXCEPT a motif of the freeze's shapes, which the guard
+    compiles as usual, EXCEPT a pattern of the freeze's shapes, which the guard
     must have refused before - that call fails the test."""
 
     def __init__(self):
@@ -114,7 +114,22 @@ class _Tree(HTMLParser):
     """Which ids enclose each element: enough to say a form is OUTSIDE a
     part of the page."""
 
-    VOID = {"input", "br", "img", "meta", "link", "hr", "source", "wbr", "area", "base", "col", "embed", "param", "track"}
+    VOID = {
+        "input",
+        "br",
+        "img",
+        "meta",
+        "link",
+        "hr",
+        "source",
+        "wbr",
+        "area",
+        "base",
+        "col",
+        "embed",
+        "param",
+        "track",
+    }
 
     def __init__(self):
         super().__init__(convert_charrefs=True)
@@ -141,7 +156,7 @@ def enclosing_ids(html: str, tag: str, attribute: str) -> list:
 class PageTestCase(TestCase):
     def setUp(self):
         super().setUp()
-        # The suite's client (tests/runner.py): logged in as the espace's
+        # The suite's client (tests/runner.py): logged in as the tenant's
         # owner, CSRF enforced as a browser's is.
         self.client = self.client_class(enforce_csrf_checks=True)
 
@@ -174,7 +189,7 @@ class PageTestCase(TestCase):
     def messages_of(self, response) -> list[str]:
         return [str(message) for message in response.context["messages"]]
 
-    def reprise_form(self, url=HOME):
+    def pickup_form(self, url=HOME):
         return form_posting_to(self.html(url), url)
 
     def count_field(self, type_name) -> str:
@@ -191,7 +206,7 @@ class HomePageTests(PageTestCase):
         self.assertContains(
             response, "Les vides rendus au livreur : photographiés, comptés ici, puis comparés au bon qu'il envoie."
         )
-        self.assertContains(response, 'class="consignes-page consignes-home"')
+        self.assertContains(response, 'class="returnables-page returnables-home"')
         self.assertContains(response, "js/returnables.js?v=")
 
     def test_nothing_yet_says_what_to_do(self):
@@ -200,7 +215,7 @@ class HomePageTests(PageTestCase):
             "Aucune reprise enregistrée : photographiez les vides et comptez-les avant que le livreur ne les emporte.",
         )
 
-    def test_the_strip_names_the_latest_reprise(self):
+    def test_the_strip_names_the_latest_pickup(self):
         make_pickup(date=DELIVERY_DAY - timedelta(days=7), counts={"Fûts": 4})
         make_pickup(counts={"Fûts": 15, "Bouteilles CO2": 1}, photos=2)
         text = self.text(self.get(HOME))
@@ -208,16 +223,16 @@ class HomePageTests(PageTestCase):
 
     def test_the_lists_reload_when_a_gather_ends_and_the_form_is_outside_them(self):
         html = self.html(HOME)
-        for part in ("consignes-live", "consignes-live-bas"):
+        for part in ("returnables-live", "returnables-live-bottom"):
             with self.subTest(part=part):
                 opening = re.search(rf'<div id="{part}"[^>]*>', html).group(0)
                 self.assertIn('hx-trigger="documents-changed from:body"', opening)
                 self.assertIn(f'hx-select="#{part}"', opening)
                 self.assertIn('hx-swap="outerHTML"', opening)
                 self.assertIn(f'hx-get="{HOME}"', opening)
-        (ancestors,) = enclosing_ids(html, "form", "data-reprise-form")
-        self.assertNotIn("consignes-live", ancestors)
-        self.assertNotIn("consignes-live-bas", ancestors)
+        (ancestors,) = enclosing_ids(html, "form", "data-pickup-form")
+        self.assertNotIn("returnables-live", ancestors)
+        self.assertNotIn("returnables-live-bottom", ancestors)
 
     def test_a_list_shown_whole_reloads_whole(self):
         html = self.html(f"{HOME}?tout=reprises")
@@ -226,19 +241,21 @@ class HomePageTests(PageTestCase):
 
     def test_the_form_is_a_plain_multipart_post_the_browser_checks(self):
         html = self.html(HOME)
-        opening = re.search(r"<form [^>]*data-reprise-form[^>]*>", html).group(0)
+        opening = re.search(r"<form [^>]*data-pickup-form[^>]*>", html).group(0)
         self.assertIn('method="post"', opening)
         self.assertIn('enctype="multipart/form-data"', opening)
         self.assertNotIn("novalidate", html)
         self.assertIn(
-            '<button class="btn reprise-submit" type="submit" data-busy-label="Envoi des photos… gardez la page ouverte">'
+            '<button class="btn pickup-submit" type="submit" data-busy-label="Envoi des photos… gardez la page ouverte">'
             "Enregistrer la reprise</button>",
             html,
         )
 
     def test_two_photo_inputs_one_name(self):
         html = self.html(HOME)
-        self.assertIn('<input type="file" name="photos" accept="image/*" capture="environment" data-photo-capture>', html)
+        self.assertIn(
+            '<input type="file" name="photos" accept="image/*" capture="environment" data-photo-capture>', html
+        )
         self.assertIn('<input type="file" name="photos" accept="image/*" multiple data-photo-gallery>', html)
         self.assertIn("Prendre une photo", html)
         self.assertIn("Choisir des photos", html)
@@ -252,54 +269,71 @@ class HomePageTests(PageTestCase):
         self.assertEqual(rows[0][0], " is-main")
         self.assertEqual({css for css, _name in rows[1:]}, {""})
         field = re.search(rf'<input[^>]*name="{self.count_field("Fûts")}"[^>]*>', html).group(0)
-        for attribute in ('type="text"', 'inputmode="numeric"', 'pattern="[0-9]*"', 'maxlength="4"', 'autocomplete="off"',
-                          'placeholder="0"'):
+        for attribute in (
+            'type="text"',
+            'inputmode="numeric"',
+            'pattern="[0-9]*"',
+            'maxlength="4"',
+            'autocomplete="off"',
+            'placeholder="0"',
+        ):
             self.assertIn(attribute, field)
         self.assertNotIn("value=", field)
         # The keypad's key says what it does (returnables.js: Enter moves to
         # the next count and never sends the form): « next », then « done »
         # on the last count.
-        hints = [re.search(rf'<input[^>]*name="{self.count_field(name)}"[^>]*>', html).group(0)
-                 for name in ("Fûts", "Caisses verre", "Bouteilles CO2")]
-        self.assertEqual([re.search(r'enterkeyhint="(\w+)"', hint).group(1) for hint in hints], ["next", "next", "done"])
+        hints = [
+            re.search(rf'<input[^>]*name="{self.count_field(name)}"[^>]*>', html).group(0)
+            for name in ("Fûts", "Caisses verre", "Bouteilles CO2")
+        ]
+        self.assertEqual(
+            [re.search(r'enterkeyhint="(\w+)"', hint).group(1) for hint in hints], ["next", "next", "done"]
+        )
         for label in ("Un de moins : Fûts", "Un de plus : Fûts"):
-            self.assertRegex(html, rf'<button type="button" class="stepper-btn" data-step="-?1" aria-label="{label}" hidden>')
+            self.assertRegex(
+                html, rf'<button type="button" class="stepper-btn" data-step="-?1" aria-label="{label}" hidden>'
+            )
 
     def test_the_date_is_today_in_paris_between_2000_and_today(self):
         with mock.patch("returnables.views.timezone.localdate", return_value=date(2026, 3, 12)):
             html = self.html(HOME)
         field = re.search(r'<input type="date"[^>]*>', html).group(0)
-        for attribute in ('name="date"', 'value="2026-03-12"', 'min="2000-01-01"', 'max="2026-03-12"',
-                          'data-today="2026-03-12"'):
+        for attribute in (
+            'name="date"',
+            'value="2026-03-12"',
+            'min="2000-01-01"',
+            'max="2026-03-12"',
+            'data-today="2026-03-12"',
+        ):
             self.assertIn(attribute, field)
         self.assertIn("Reprise du <span data-summary-date>12/03/2026</span>", html)
         for reserved in ('name="du"', 'name="au"', 'name="debut"', 'name="fin"', "date-range"):
             self.assertNotIn(reserved, html)
 
-    def test_repris_par_starts_on_the_latest_reprise_s_supplier(self):
+    def test_taken_back_by_starts_on_the_latest_pickup_s_supplier(self):
         other = make_supplier("Brasserie Exemple")
         make_pickup(supplier=other)
-        form = self.reprise_form()
+        form = self.pickup_form()
         self.assertEqual(form.control("supplier").value, str(other.pk))
 
-    def test_repris_par_starts_on_the_first_format_s_supplier_before_any_reprise(self):
-        form = self.reprise_form()
+    def test_taken_back_by_starts_on_the_first_format_s_supplier_before_any_pickup(self):
+        form = self.pickup_form()
         self.assertEqual(form.control("supplier").value, str(uba().pk))
 
     def test_suppliers_with_a_format_come_first(self):
         make_supplier("Aaa Premier par le nom")
-        options = [value for value, _selected in self.reprise_form().control("supplier").options]
+        options = [value for value, _selected in self.pickup_form().control("supplier").options]
         self.assertEqual(options[0], "")
         self.assertEqual(options[1], str(uba().pk))
 
-    def test_a_reprise_already_saved_that_day_is_offered_to_complete(self):
+    def test_a_pickup_already_saved_that_day_is_offered_to_complete(self):
         with mock.patch("returnables.views.timezone.localdate", return_value=DELIVERY_DAY):
             pickup = make_pickup(counts={"Fûts": 15})
             response = self.get(HOME)
         self.assertIn("Une reprise du 10/02/2026 est déjà enregistrée (Fûts 15) : la compléter", self.text(response))
-        self.assertContains(response, f'{reverse("returnables:pickup_detail", args=[pickup.pk])}#modifier')
+        self.assertContains(response, f"{reverse('returnables:pickup_detail', args=[pickup.pk])}#modifier")
 
-    def test_the_lists_and_tout_afficher(self):
+    def test_the_lists_and_show_all(self):
         for number in range(views.LISTED + 1):
             make_pickup(date=DELIVERY_DAY - timedelta(days=number), counts={"Fûts": 1 + number})
         html = self.html(HOME)
@@ -316,10 +350,10 @@ class HomePageTests(PageTestCase):
         self.assertIn('<details class="explainer">', html)
 
 
-# -- A new reprise -------------------------------------------------------------------------------------------------------
+# -- A new pickup --------------------------------------------------------------------------------------------------------
 
 
-class NewRepriseTests(PageTestCase):
+class NewPickupTests(PageTestCase):
     def setUp(self):
         super().setUp()
         self.kegs = self.count_field("Fûts")
@@ -334,7 +368,7 @@ class NewRepriseTests(PageTestCase):
     def test_counts_and_photos_are_saved_and_said(self):
         before = media_files()
         response = self.send(
-            self.reprise_form(),
+            self.pickup_form(),
             values={"date": "2026-02-10", self.kegs: "15", self.co2: "1", "note": "Un fût cabossé"},
             files={"photos": [photo("IMG_0001.jpg"), photo("IMG_0002.jpg", size=(3, 4))]},
         )
@@ -352,31 +386,33 @@ class NewRepriseTests(PageTestCase):
         self.assertEqual(len(added), 4)
         for number, row in enumerate(photos, start=1):
             with self.subTest(photo=number):
-                self.assertRegex(row.image.name, rf"^consignes/photos/\d{{4}}/\d{{2}}/reprise-20260210-{number}(_\w+)?\.jpg$")
+                self.assertRegex(
+                    row.image.name, rf"^consignes/photos/\d{{4}}/\d{{2}}/reprise-20260210-{number}(_\w+)?\.jpg$"
+                )
                 self.assertRegex(row.thumb.name, rf"reprise-20260210-{number}-vignette(_\w+)?\.jpg$")
                 self.assertTrue(default_storage.exists(row.image.name))
         self.assertEqual((photos[1].width, photos[1].height), (3, 4))
 
     def test_the_success_is_said_on_the_page_it_lands_on(self):
-        response = self.send(self.reprise_form(), values=self.values(**{"Fûts": "3"}))
+        response = self.send(self.pickup_form(), values=self.values(Fûts="3"))
         self.assertContains(response, "Reprise du 10/02/2026 enregistrée : Fûts 3.")
         self.assertIn("Dernière reprise : 10/02/2026 · Fûts 3", self.text(response))
-        # At the top of the page, where the redirect lands - not with the bons'.
+        # At the top of the page, where the redirect lands - not with the slips'.
         html = response.content.decode()
         self.assertLess(html.index("Reprise du 10/02/2026 enregistrée"), html.index("<h1>Consignes</h1>"))
 
     def test_a_count_left_blank_is_zero_and_zero_is_no_row(self):
-        self.send(self.reprise_form(), values=self.values(**{"Fûts": "12", "Caisses verre": "0", "Bouteilles CO2": ""}))
+        self.send(self.pickup_form(), values=self.values(**{"Fûts": "12", "Caisses verre": "0", "Bouteilles CO2": ""}))
         pickup = Pickup.objects.get()
         self.assertEqual(list(pickup.counts.values_list("returnable_type__name", "quantity")), [("Fûts", 12)])
 
-    def test_photos_alone_are_a_reprise(self):
-        self.send(self.reprise_form(), values=self.values(), files={"photos": [photo()]})
+    def test_photos_alone_are_a_pickup(self):
+        self.send(self.pickup_form(), values=self.values(), files={"photos": [photo()]})
         self.assertEqual((Pickup.objects.count(), PickupPhoto.objects.count(), PickupCount.objects.count()), (1, 1, 0))
 
     def test_nothing_at_all_is_refused_and_writes_nothing(self):
         before = media_files()
-        response = self.send(self.reprise_form(), values=self.values())
+        response = self.send(self.pickup_form(), values=self.values())
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.redirect_chain, [])
         self.assertContains(response, NOTHING_TO_SAVE)
@@ -387,29 +423,31 @@ class NewRepriseTests(PageTestCase):
         for typed in ("1,5", "-1", "10000", "douze", "\N{ARABIC-INDIC DIGIT THREE}", "1 5"):
             with self.subTest(typed=typed):
                 before = media_files()
-                response = self.send(self.reprise_form(), values=self.values(**{"Fûts": typed}), files={"photos": [photo()]})
+                response = self.send(self.pickup_form(), values=self.values(Fûts=typed), files={"photos": [photo()]})
                 self.assertEqual(response.redirect_chain, [])
                 self.assertContains(response, COUNT_ERROR)
                 self.assertEqual(Pickup.objects.count(), 0)
                 self.assertEqual(media_files(), before)
 
     def test_9999_is_the_most(self):
-        self.send(self.reprise_form(), values=self.values(**{"Fûts": "9999"}))
+        self.send(self.pickup_form(), values=self.values(Fûts="9999"))
         self.assertEqual(count_of(Pickup.objects.get(), "Fûts"), 9999)
 
     def test_a_date_in_the_future_or_before_2000_is_refused(self):
         tomorrow = timezone.localdate() + timedelta(days=1)
         for typed in (f"{tomorrow:%Y-%m-%d}", "1999-12-31", "2026-02-30", ""):
             with self.subTest(typed=typed):
-                response = self.send(self.reprise_form(), values={"date": typed, self.kegs: "15"})
+                response = self.send(self.pickup_form(), values={"date": typed, self.kegs: "15"})
                 self.assertEqual(response.redirect_chain, [])
                 self.assertEqual(response.status_code, 200)
-                self.assertContains(response, 'class="reprise-details" open')
+                self.assertContains(response, 'class="pickup-details" open')
                 self.assertEqual(Pickup.objects.count(), 0)
 
-    def test_an_unreadable_photo_never_refuses_the_reprise(self):
+    def test_an_unreadable_photo_never_refuses_the_pickup(self):
         response = self.send(
-            self.reprise_form(), values=self.values(**{"Fûts": "15"}), files={"photos": [photo(), not_an_image("IMG_0002.HEIC")]}
+            self.pickup_form(),
+            values=self.values(Fûts="15"),
+            files={"photos": [photo(), not_an_image("IMG_0002.HEIC")]},
         )
         self.assertEqual(
             self.messages_of(response),
@@ -421,14 +459,14 @@ class NewRepriseTests(PageTestCase):
         self.assertEqual(PickupPhoto.objects.count(), 1)
 
     def test_an_unreadable_photo_and_no_count_is_nothing_to_save(self):
-        response = self.send(self.reprise_form(), values=self.values(), files={"photos": [not_an_image()]})
+        response = self.send(self.pickup_form(), values=self.values(), files={"photos": [not_an_image()]})
         self.assertContains(response, NOTHING_TO_SAVE)
         self.assertContains(response, "Photo non gardée — IMG_0002.HEIC")
         self.assertEqual(Pickup.objects.count(), 0)
 
     def test_the_eleventh_photo_is_not_kept(self):
         uploads = [photo(f"IMG_{number:04d}.jpg") for number in range(MAX_PHOTOS + 1)]
-        response = self.send(self.reprise_form(), values=self.values(), files={"photos": uploads})
+        response = self.send(self.pickup_form(), values=self.values(), files={"photos": uploads})
         self.assertEqual(PickupPhoto.objects.count(), MAX_PHOTOS)
         self.assertIn(
             "10 photos au plus par reprise : 1 photo envoyée en trop n'a pas été gardée.", self.messages_of(response)
@@ -438,18 +476,20 @@ class NewRepriseTests(PageTestCase):
         before = media_files()
         with mock.patch.object(PickupPhoto, "save", side_effect=RuntimeError("disque plein")):
             with self.assertRaises(RuntimeError):
-                self.send(self.reprise_form(), values=self.values(**{"Fûts": "15"}), files={"photos": [photo()]})
+                self.send(self.pickup_form(), values=self.values(Fûts="15"), files={"photos": [photo()]})
         self.assertEqual(Pickup.objects.count(), 0)
         self.assertEqual(media_files(), before)
 
     def test_photos_taken_another_day_are_said_and_the_date_can_follow_them(self):
         evening_before = datetime(2026, 2, 9, 18, 30)
         response = self.send(
-            self.reprise_form(),
-            values=self.values(**{"Fûts": "15"}),
+            self.pickup_form(),
+            values=self.values(Fûts="15"),
             files={"photos": [photo(taken_at=evening_before), photo("IMG_0002.jpg", taken_at=evening_before)]},
         )
-        self.assertIn("Les photos ont été prises le 09/02/2026, la reprise est datée du 10/02/2026.", self.messages_of(response))
+        self.assertIn(
+            "Les photos ont été prises le 09/02/2026, la reprise est datée du 10/02/2026.", self.messages_of(response)
+        )
         pickup = Pickup.objects.get()
         html = response.content.decode()
         self.assertIn("Dater la reprise du 09/02/2026", html)
@@ -466,19 +506,19 @@ class NewRepriseTests(PageTestCase):
         make_pickup(photos=1)
         self.assertRegex(self.text(self.get(HOME)), r"Envoyée le \d{2}/\d{2}/\d{4} à \d{2}:\d{2}")
 
-    def test_nothing_about_a_reprise_touches_the_invoices(self):
-        self.send(self.reprise_form(), values=self.values(**{"Fûts": "15"}))
+    def test_nothing_about_a_pickup_touches_the_invoices(self):
+        self.send(self.pickup_form(), values=self.values(Fûts="15"))
         self.assertEqual(Invoice.objects.count(), 0)
 
 
-# -- A reprise's page ---------------------------------------------------------------------------------------------------
+# -- A pickup's page ----------------------------------------------------------------------------------------------------
 
 
 class PickupPageTests(PageTestCase):
     def url(self, pickup):
         return reverse("returnables:pickup_detail", args=[pickup.pk])
 
-    def test_its_comparison_with_the_day_s_bon(self):
+    def test_its_comparison_with_the_day_s_slip(self):
         pickup = make_pickup(counts={"Fûts": 15})
         slip = make_slip(lines=(KEG_LINE,))
         text = self.text(self.get(self.url(pickup)))
@@ -488,7 +528,7 @@ class PickupPageTests(PageTestCase):
         self.assertIn(f"Bon du jour : bon n° {slip.number} du 10/02/2026", text)
         self.assertIn("Facture : pas encore reçue", text)
 
-    def test_two_reprises_of_one_day_are_one_side(self):
+    def test_two_pickups_of_one_day_are_one_side(self):
         first = make_pickup(counts={"Fûts": 10})
         make_pickup(counts={"Fûts": 5})
         make_slip(lines=(("FÛT INOX 30 L", 15, Decimal("30.0000"), Decimal("450.00")),))
@@ -499,7 +539,7 @@ class PickupPageTests(PageTestCase):
 
     def test_editing_reads_the_form_off_the_page(self):
         pickup = make_pickup(counts={"Fûts": 15, "Bouteilles CO2": 1})
-        form = self.reprise_form(self.url(pickup))
+        form = self.pickup_form(self.url(pickup))
         self.assertEqual(form.control(self.count_field("Fûts")).value, "15")
         response = self.send(form, values={self.count_field("Fûts"): "12", self.count_field("Bouteilles CO2"): ""})
         self.assertEqual(response.redirect_chain[-1], (self.url(pickup), 302))
@@ -508,23 +548,25 @@ class PickupPageTests(PageTestCase):
 
     def test_a_date_changed_is_said(self):
         pickup = make_pickup()
-        response = self.send(self.reprise_form(self.url(pickup)), values={"date": "2026-02-11"})
+        response = self.send(self.pickup_form(self.url(pickup)), values={"date": "2026-02-11"})
         self.assertEqual(
             self.messages_of(response), ["Reprise du 10/02/2026 modifiée (datée désormais du 11/02/2026) : Fûts 15."]
         )
 
     def test_photos_are_added_never_replaced(self):
         pickup = make_pickup(photos=2)
-        response = self.send(self.reprise_form(self.url(pickup)), files={"photos": [photo()]})
+        response = self.send(self.pickup_form(self.url(pickup)), files={"photos": [photo()]})
         self.assertEqual(self.messages_of(response), ["Reprise du 10/02/2026 modifiée : Fûts 15, 1 photo ajoutée."])
         self.assertEqual(pickup.photos.count(), 3)
         self.assertRegex(pickup.photos.order_by("-pk").first().image.name, r"reprise-20260210-3(_\w+)?\.jpg$")
 
-    def test_a_full_reprise_takes_no_more_photos(self):
+    def test_a_full_pickup_takes_no_more_photos(self):
         pickup = make_pickup(photos=MAX_PHOTOS - 1)
-        response = self.send(self.reprise_form(self.url(pickup)), files={"photos": [photo(), photo("IMG_0009.jpg")]})
+        response = self.send(self.pickup_form(self.url(pickup)), files={"photos": [photo(), photo("IMG_0009.jpg")]})
         self.assertEqual(pickup.photos.count(), MAX_PHOTOS)
-        self.assertIn("10 photos au plus par reprise : 1 photo envoyée en trop n'a pas été gardée.", self.messages_of(response))
+        self.assertIn(
+            "10 photos au plus par reprise : 1 photo envoyée en trop n'a pas été gardée.", self.messages_of(response)
+        )
         html = self.html(self.url(pickup))
         self.assertIn("10 photos : retirez-en une pour en ajouter une autre.", html)
         self.assertNotIn('name="photos"', html)
@@ -532,14 +574,14 @@ class PickupPageTests(PageTestCase):
     def test_an_inactive_type_it_counts_stays_on_its_form(self):
         pickup = make_pickup(counts={"Fûts": 15, "Bouteilles CO2": 2})
         ReturnableType.objects.filter(name="Bouteilles CO2").update(is_active=False)
-        form = self.reprise_form(self.url(pickup))
+        form = self.pickup_form(self.url(pickup))
         self.assertEqual(form.control(self.count_field("Bouteilles CO2")).value, "2")
         self.send(form)
         self.assertEqual(count_of(pickup, "Bouteilles CO2"), 2)
 
     def test_editing_it_down_to_nothing_is_refused(self):
         pickup = make_pickup(counts={"Fûts": 15})
-        response = self.send(self.reprise_form(self.url(pickup)), values={self.count_field("Fûts"): ""})
+        response = self.send(self.pickup_form(self.url(pickup)), values={self.count_field("Fûts"): ""})
         self.assertContains(response, NOTHING_LEFT)
         self.assertEqual(count_of(pickup, "Fûts"), 15)
 
@@ -560,7 +602,7 @@ class PickupPageTests(PageTestCase):
 
     def test_removing_a_photo_is_asked_twice(self):
         """Right under the thumbnail's link, one mis-tap deleted the photo:
-        « Retirer… » opens, then « Retirer » removes - as for the reprise."""
+        « Retirer… » opens, then « Retirer » removes - as for the pickup."""
         pickup = make_pickup(photos=1)
         photo_row = pickup.photos.get()
         html = self.html(self.url(pickup))
@@ -572,7 +614,7 @@ class PickupPageTests(PageTestCase):
         # The home card shows the photos without any way to remove them.
         self.assertNotIn(reverse("returnables:photo_delete", args=[photo_row.pk]), self.html(HOME))
 
-    def test_a_reprise_deleted_takes_its_photos_once_committed(self):
+    def test_a_pickup_deleted_takes_its_photos_once_committed(self):
         pickup = make_pickup(photos=2)
         names = [name for photo_row in pickup.photos.all() for name in (photo_row.image.name, photo_row.thumb.name)]
         form = form_posting_to(self.html(self.url(pickup)), reverse("returnables:pickup_delete", args=[pickup.pk]))
@@ -583,7 +625,7 @@ class PickupPageTests(PageTestCase):
         self.assertFalse(Pickup.objects.exists())
         self.assertFalse(any(default_storage.exists(name) for name in names))
 
-    def test_the_bon_of_a_nearby_day_offers_to_move_the_reprise(self):
+    def test_the_slip_of_a_nearby_day_offers_to_move_the_pickup(self):
         pickup = make_pickup(counts={"Fûts": 3})
         make_slip(delivery_date=DELIVERY_DAY + timedelta(days=1), lines=(KEG_LINE,))
         html = self.html(HOME)
@@ -613,13 +655,19 @@ class PickupPageTests(PageTestCase):
         pickup = make_pickup()
         token = forms_of(self.html(self.url(pickup)))[0].control("csrfmiddlewaretoken").value
         url = reverse("returnables:pickup_date", args=[pickup.pk])
-        for retour, landing in ((HOME, HOME), ("https://example.invalid/", self.url(pickup)), ("", self.url(pickup))):
-            with self.subTest(retour=retour):
-                response = self.client.post(url, {"csrfmiddlewaretoken": token, "date": "2026-02-10", "retour": retour})
+        for return_to, landing in (
+            (HOME, HOME),
+            ("https://example.invalid/", self.url(pickup)),
+            ("", self.url(pickup)),
+        ):
+            with self.subTest(return_to=return_to):
+                response = self.client.post(
+                    url, {"csrfmiddlewaretoken": token, "date": "2026-02-10", "retour": return_to}
+                )
                 self.assertEqual(response["Location"], landing)
 
 
-# -- The bons ----------------------------------------------------------------------------------------------------------
+# -- The slips ---------------------------------------------------------------------------------------------------------
 
 
 class SlipUploadTests(PageTestCase):
@@ -631,7 +679,7 @@ class SlipUploadTests(PageTestCase):
 
     def test_two_pdfs_then_the_same_two_again(self):
         before = Invoice.objects.count()
-        files = lambda: [  # noqa: E731 - two fresh uploads each time
+        files = lambda: [
             self.pdf("T0001.pdf", number="4101", references=["800101"]),
             self.pdf("T0002.pdf", number="4102", references=["800102"], lines=(CRATE_LINE,)),
         ]
@@ -679,7 +727,7 @@ class SlipUploadTests(PageTestCase):
         html = response.content.decode()
         said = "scan.pdf : Aucun format de bon ne reconnaît ce document."
         self.assertEqual(html.count(said), 1)
-        section = html.index('<section class="card consignes-upload" id="bons">')
+        section = html.index('<section class="card returnables-upload" id="bons">')
         form = html.index(f'action="{reverse("returnables:slip_upload")}"')
         self.assertLess(section, html.index(said))
         self.assertLess(html.index(said), form)
@@ -720,8 +768,12 @@ class SlipPageTests(PageTestCase):
         return reverse("returnables:slip_detail", args=[slip.pk])
 
     def test_what_the_reading_found(self):
-        slip = make_slip(lines=(KEG_LINE, CO2_LINE), references=["800201"], remarks="REPRISE MARCHANDISE",
-                         checks=[{"label": "Aucune ligne ignorée", "passed": True, "detail": ""}])
+        slip = make_slip(
+            lines=(KEG_LINE, CO2_LINE),
+            references=["800201"],
+            remarks="REPRISE MARCHANDISE",
+            checks=[{"label": "Aucune ligne ignorée", "passed": True, "detail": ""}],
+        )
         response = self.get(self.url(slip))
         text = self.text(response)
         self.assertIn(f"Bon n° {slip.number} du 10/02/2026", text)
@@ -732,28 +784,32 @@ class SlipPageTests(PageTestCase):
         self.assertIn("Aucune ligne ignorée", text)
         self.assertContains(response, f'<iframe class="slip-pdf" src="{slip.file.url}" title="Le bon en PDF"></iframe>')
 
-    def test_a_replaced_bon_says_which_counts(self):
+    def test_a_replaced_slip_says_which_counts(self):
         original = make_slip(references=["800301"])
         replacement = make_slip(references=["800301"], replaces=True)
         text = self.text(self.get(self.url(original)))
         self.assertIn("annulé et remplacé", text)
         self.assertIn(f"Le bon qui compte : Bon n° {replacement.number} du 10/02/2026", text)
-        self.assertIn(f"Remplace : bon n° {original.number} du 10/02/2026 (annulé et remplacé)", self.text(self.get(self.url(replacement))))
+        self.assertIn(
+            f"Remplace : bon n° {original.number} du 10/02/2026 (annulé et remplacé)",
+            self.text(self.get(self.url(replacement))),
+        )
 
-    def test_relire_reads_the_stored_text_again(self):
+    def test_reread_reads_the_stored_text_again(self):
         slip = make_slip(lines=(KEG_LINE,))
         SlipLine.objects.filter(slip=slip).delete()
         Slip.objects.filter(pk=slip.pk).update(read_error="erreur ancienne", checks=[])
         form = form_posting_to(self.html(self.url(slip)), reverse("returnables:slip_reread", args=[slip.pk]))
         response = self.send(form)
         self.assertEqual(
-            self.messages_of(response), [f"Bon n° {slip.number} du 10/02/2026 relu avec les motifs actuels : 1 ligne lue."]
+            self.messages_of(response),
+            [f"Bon n° {slip.number} du 10/02/2026 relu avec les motifs actuels : 1 ligne lue."],
         )
         slip.refresh_from_db()
         self.assertEqual(slip.read_error, "")
         self.assertEqual(list(slip.lines.values_list("designation", "quantity")), [("FÛT INOX 30 L", 3)])
 
-    def test_classer_comme_adds_the_line_s_start_escaped_to_the_type(self):
+    def test_classify_as_adds_the_line_s_start_escaped_to_the_type(self):
         slip = make_slip(lines=(("PALETTE (ESSAI) 1.5/2", 1, Decimal("12.0000"), Decimal("12.00")),))
         line = slip.lines.get()
         html = self.html(self.url(slip))
@@ -761,28 +817,33 @@ class SlipPageTests(PageTestCase):
         crates = seeded_type("Caisses verre")
         form = form_posting_to(html, reverse("returnables:line_classify", args=[line.pk]))
         response = self.send(form, values={"type": str(crates.pk)})
-        motif = r"^PALETTE \(ESSAI\) 1\.5/2"
-        self.assertEqual(motif, "^" + regex.escape("PALETTE (ESSAI) 1.5/2", literal_spaces=True))
+        pattern = r"^PALETTE \(ESSAI\) 1\.5/2"
+        self.assertEqual(pattern, "^" + regex.escape("PALETTE (ESSAI) 1.5/2", literal_spaces=True))
         crates.refresh_from_db()
-        self.assertEqual(crates.slip_patterns.splitlines()[-1], motif)
+        self.assertEqual(crates.slip_patterns.splitlines()[-1], pattern)
         self.assertEqual(
-            self.messages_of(response), [f"Motif « {motif} » ajouté au type « Caisses verre » : la ligne est de ce type."]
+            self.messages_of(response),
+            [f"Motif « {pattern} » ajouté au type « Caisses verre » : la ligne est de ce type."],
         )
         self.assertIn("PALETTE (ESSAI) 1.5/2 1 12.00 € 12.00 € Caisses verre", self.text(response))
 
-    def test_classer_comme_takes_sixty_characters_at_most(self):
+    def test_classify_as_takes_sixty_characters_at_most(self):
         designation = "PALETTE " + "X" * 70
         slip = make_slip(lines=((designation, 1, None, None),))
         pallets = make_type("Palettes", position=4)
-        form = form_posting_to(self.html(self.url(slip)), reverse("returnables:line_classify", args=[slip.lines.get().pk]))
+        form = form_posting_to(
+            self.html(self.url(slip)), reverse("returnables:line_classify", args=[slip.lines.get().pk])
+        )
         self.send(form, values={"type": str(pallets.pk)})
         pallets.refresh_from_db()
         self.assertEqual(pallets.slip_patterns, "^" + regex.escape(designation[:60], literal_spaces=True))
 
-    def test_classer_comme_checks_the_whole_field_again(self):
+    def test_classify_as_checks_the_whole_field_again(self):
         slip = make_slip(lines=(PALLET_LINE,))
         full = make_type("Plein", position=4, slip_patterns="\n".join(f"^MOTIF{number}" for number in range(50)))
-        form = form_posting_to(self.html(self.url(slip)), reverse("returnables:line_classify", args=[slip.lines.get().pk]))
+        form = form_posting_to(
+            self.html(self.url(slip)), reverse("returnables:line_classify", args=[slip.lines.get().pk])
+        )
         response = self.send(form, values={"type": str(full.pk)})
         self.assertEqual(
             self.messages_of(response),
@@ -791,9 +852,11 @@ class SlipPageTests(PageTestCase):
         full.refresh_from_db()
         self.assertEqual(len(full.slip_patterns.splitlines()), 50)
 
-    def test_classer_comme_with_no_type_or_a_type_that_is_no_more(self):
+    def test_classify_as_with_no_type_or_a_type_that_is_no_more(self):
         slip = make_slip(lines=(PALLET_LINE,))
-        form = form_posting_to(self.html(self.url(slip)), reverse("returnables:line_classify", args=[slip.lines.get().pk]))
+        form = form_posting_to(
+            self.html(self.url(slip)), reverse("returnables:line_classify", args=[slip.lines.get().pk])
+        )
         for posted in ("", "abc", "999999"):
             with self.subTest(type=posted):
                 data = as_post(form.submission())
@@ -803,7 +866,7 @@ class SlipPageTests(PageTestCase):
                     self.messages_of(response), ["Choisissez un type de consigne existant : rien n'a été modifié."]
                 )
 
-    def test_classer_comme_says_when_a_type_placed_before_already_takes_the_line(self):
+    def test_classify_as_says_when_a_type_placed_before_already_takes_the_line(self):
         slip = make_slip(lines=(KEG_LINE,))
         later = make_type("Autres", position=9)
         token = forms_of(self.html(self.url(slip)))[0].control("csrfmiddlewaretoken").value
@@ -812,9 +875,11 @@ class SlipPageTests(PageTestCase):
             {"csrfmiddlewaretoken": token, "type": str(later.pk)},
             follow=True,
         )
-        self.assertIn("mais le type « Fûts », placé avant lui, reconnaît déjà cette ligne", self.messages_of(response)[0])
+        self.assertIn(
+            "mais le type « Fûts », placé avant lui, reconnaît déjà cette ligne", self.messages_of(response)[0]
+        )
 
-    def test_a_bon_deleted_takes_its_pdf_once_committed(self):
+    def test_a_slip_deleted_takes_its_pdf_once_committed(self):
         slip = make_slip()
         name = slip.file.name
         form = form_posting_to(self.html(self.url(slip)), reverse("returnables:slip_delete", args=[slip.pk]))
@@ -829,8 +894,8 @@ class SlipPageTests(PageTestCase):
 
 
 class InvoiceLineTests(PageTestCase):
-    """What the seller's invoice says of a bon, as the reprise's card (home
-    and its page) and the bon's page draw it: « Facture : » then the state -
+    """What the seller's invoice says of a slip, as the pickup's card (home
+    and its page) and the slip's page draw it: « Facture : » then the state -
     never the label word printed before a sentence that says it again
     (« facture facture pas encore reçue »)."""
 
@@ -848,10 +913,14 @@ class InvoiceLineTests(PageTestCase):
             supplier=uba(),
             invoice_date=DELIVERY_DAY + timedelta(days=2),
             invoice_number=number,
-            source_text="\n".join(["U.B.A.  EXEMPLE", f"Facture No : {number}", *[f"BL  {ref}  Page  1/1" for ref in references]]),
+            source_text="\n".join(
+                ["U.B.A.  EXEMPLE", f"Facture No : {number}", *[f"BL  {ref}  Page  1/1" for ref in references]]
+            ),
         )
         for raw_name, quantity, total in lines:
-            make_invoice_line(invoice=invoice, raw_name=raw_name, quantity=quantity, total_ht=total, category="Consignes")
+            make_invoice_line(
+                invoice=invoice, raw_name=raw_name, quantity=quantity, total_ht=total, category="Consignes"
+            )
         return invoice
 
     def assertReads(self, url, sentence):
@@ -882,8 +951,8 @@ class InvoiceLineTests(PageTestCase):
         self.assertReads(url, "Facture : rien à rembourser ✓ Facture n° F-EX-4")
         self.assertIn("rien à rembourser ✓", self.text(self.get(HOME)))
 
-    def test_nothing_taken_back_but_other_consignes_refunded_is_to_check(self):
-        """The bon's part is empty (corrected to kegs by a replacement not
+    def test_nothing_taken_back_but_other_returnables_refunded_is_to_check(self):
+        """The slip's part is empty (corrected to kegs by a replacement not
         received yet, a keg returned full) and the invoice refunds kegs: no
         verdict, and never « rien à rembourser »."""
         slip = make_slip(lines=(), references=["800905"])
@@ -907,9 +976,11 @@ class InvoiceLineTests(PageTestCase):
             with self.subTest(url=url):
                 text = self.text(self.get(url))
                 self.assertIn("Facture : à vérifier BL n° 800902 sur plusieurs factures (n° F-EX-2, n° F-EX-3)", text)
-                self.assertNotIn("à vérifier BL n° 800902 sur plusieurs factures (n° F-EX-2, n° F-EX-3) : à vérifier", text)
+                self.assertNotIn(
+                    "à vérifier BL n° 800902 sur plusieurs factures (n° F-EX-2, n° F-EX-3) : à vérifier", text
+                )
 
-    def test_a_replaced_bon(self):
+    def test_a_replaced_slip(self):
         original = make_slip(references=["800903"])
         make_slip(references=["800903"], replaces=True)
         self.assertReads(reverse("returnables:slip_detail", args=[original.pk]), "Facture : sur le bon qui compte")
@@ -927,7 +998,7 @@ class InvoiceLineTests(PageTestCase):
         self.assertEqual(pill.detail, "une phrase assez longue pour ne jamais tenir dans une pastille")
 
 
-# -- Formats of bon -----------------------------------------------------------------------------------------------------
+# -- Slip formats -------------------------------------------------------------------------------------------------------
 
 
 class FormatPageTests(PageTestCase):
@@ -941,7 +1012,7 @@ class FormatPageTests(PageTestCase):
         url = self.url(fmt)
         return form_posting_to(self.html(url + query), url)
 
-    def motifs(self, fmt) -> dict:
+    def stored_patterns(self, fmt) -> dict:
         fmt.refresh_from_db()
         return {name: getattr(fmt, name) for name in views.SlipFormatForm.Meta.fields if name != "supplier"}
 
@@ -963,20 +1034,26 @@ class FormatPageTests(PageTestCase):
         self.assertEqual(self.messages_of(response), ["Format « Brasserie — bon de reprise » enregistré."])
         self.assertEqual((fmt.supplier, fmt.attachment_pattern, fmt.sender_pattern), (supplier, r"(?i)\.pdf$", ""))
 
-    def test_saving_a_format_says_its_bons_were_not_read_again_in_french(self):
+    def test_saving_a_format_says_its_slips_were_not_read_again_in_french(self):
         fmt = seeded_format()
         make_slip()
         one = self.send(self.form(fmt), press=self.SAVE)
         self.assertEqual(
             self.messages_of(one),
-            ["Format « UBA — bon du livreur » enregistré. Son bon n'a pas été relu : « Relire » le lit avec ces motifs."],
+            [
+                "Format « UBA — bon du livreur » enregistré. Son bon n'a pas été relu : « Relire » le lit avec ces motifs."
+            ],
         )
         make_slip()
         two = self.send(self.form(fmt), press=self.SAVE)
         self.assertEqual(
             self.messages_of(two),
-            ["Format « UBA — bon du livreur » enregistré. Ses 2 bons n'ont pas été relus : « Relire » les lit avec ces "
-             "motifs."],
+            [
+                (
+                    "Format « UBA — bon du livreur » enregistré. Ses 2 bons n'ont pas été relus : « Relire » les lit avec ces "
+                    "motifs."
+                )
+            ],
         )
 
     def test_enter_tests_and_never_saves(self):
@@ -997,11 +1074,11 @@ class FormatPageTests(PageTestCase):
         self.assertEqual(response.redirect_chain, [])
         self.assertFalse(SlipFormat.objects.filter(name="Jamais enregistré").exists())
 
-    def test_what_a_motif_must_be(self):
+    def test_what_a_pattern_must_be(self):
         fmt = seeded_format()
-        before = self.motifs(fmt)
+        before = self.stored_patterns(fmt)
         cases = (
-            ({"date_patterns": ""}, NO_DATE_MOTIF),
+            ({"date_patterns": ""}, NO_DATE_PATTERN),
             ({"line_pattern": ""}, "Sans motif de ligne, aucune ligne du bon n'est lue."),
             ({"line_pattern": "^(?P<designation>.+"}, "Motif de ligne : parenthèse non fermée"),
             ({"line_pattern": r"^(?P<designation>.+)$"}, "Motif de ligne : le motif doit contenir"),
@@ -1017,7 +1094,7 @@ class FormatPageTests(PageTestCase):
                 response = self.send(self.form(fmt), press=self.SAVE, values=values)
                 self.assertEqual(response.redirect_chain, [])
                 self.assertIn(said, self.text(response))
-                self.assertEqual(self.motifs(fmt), before)
+                self.assertEqual(self.stored_patterns(fmt), before)
 
     def test_a_name_is_unique_whatever_its_case_and_accents(self):
         other = make_format("Format essai")
@@ -1026,22 +1103,26 @@ class FormatPageTests(PageTestCase):
         other.refresh_from_db()
         self.assertEqual(other.name, "Format essai")
 
-    def test_the_freeze_s_motifs_are_refused_before_anything_compiles_them(self):
+    def test_the_freeze_s_patterns_are_refused_before_anything_compiles_them(self):
         fmt = seeded_format()
-        before = self.motifs(fmt)
+        before = self.stored_patterns(fmt)
         sentinel = RefuseTheFreeze()
         with mock.patch.object(regex, "compile", new=sentinel):
-            for motif in ("(?:x{65535}){65535}", "(?x)(?:x{6 5 5 3 5}){6 5 5 3 5}", "(?:(?:(?:x{100,}){100,}){100,}){100,}"):
-                with self.subTest(motif=motif):
-                    response = self.send(self.form(fmt), press=self.SAVE, values={"line_pattern": motif})
+            for pattern in (
+                "(?:x{65535}){65535}",
+                "(?x)(?:x{6 5 5 3 5}){6 5 5 3 5}",
+                "(?:(?:(?:x{100,}){100,}){100,}){100,}",
+            ):
+                with self.subTest(pattern=pattern):
+                    response = self.send(self.form(fmt), press=self.SAVE, values={"line_pattern": pattern})
                     self.assertContains(response, "Motif de ligne : ")
                     self.assertContains(response, "has-error")
         self.assertEqual(sentinel.refused, [])
-        self.assertEqual(self.motifs(fmt), before)
+        self.assertEqual(self.stored_patterns(fmt), before)
 
     def test_tester_redraws_the_page_with_the_trace_and_saves_nothing(self):
         fmt = seeded_format()
-        before = self.motifs(fmt)
+        before = self.stored_patterns(fmt)
         response = self.send(
             self.form(fmt),
             press=self.TEST,
@@ -1054,12 +1135,12 @@ class FormatPageTests(PageTestCase):
         self.assertIn("ligne lue", text)
         self.assertIn("1 ligne lue", text)
         self.assertIn("800401", text)
-        self.assertEqual(self.motifs(fmt), before)
+        self.assertEqual(self.stored_patterns(fmt), before)
         self.assertEqual(Slip.objects.count(), 0)
 
     def test_tester_answers_htmx_in_place_with_the_sources_out_of_band(self):
         fmt = seeded_format()
-        before = self.motifs(fmt)
+        before = self.stored_patterns(fmt)
         tested = slip_text(number="4302")
         response = self.send(
             self.form(fmt),
@@ -1072,7 +1153,7 @@ class FormatPageTests(PageTestCase):
         self.assertIn('<div id="tester-sources" class="tester-sources" hx-swap-oob="true">', html)
         self.assertIn("Ticket No : 0000004302", unescape(html))
         self.assertIn("ligne lue", html)
-        self.assertEqual(self.motifs(fmt), before)
+        self.assertEqual(self.stored_patterns(fmt), before)
 
     def test_tester_on_a_pdf_stores_nothing_and_keeps_its_text(self):
         fmt = seeded_format()
@@ -1090,13 +1171,13 @@ class FormatPageTests(PageTestCase):
         html = self.html(self.url(seeded_format()))
         self.assertGreater(html.index('name="pdf_essai"'), html.index('name="name"'))
 
-    def test_tester_on_a_bon_received(self):
+    def test_tester_on_a_slip_received(self):
         fmt = seeded_format()
         slip = make_slip(number="4304")
         response = self.send(self.form(fmt), press=self.TEST, values={"tester_sur": str(slip.pk)})
         self.assertIn("Testé sur le bon n° 4304 du 10/02/2026", self.text(response))
 
-    def test_tester_with_nothing_or_a_motif_the_guard_refuses(self):
+    def test_tester_with_nothing_or_a_pattern_the_guard_refuses(self):
         fmt = seeded_format()
         self.assertIn("Rien à tester", self.text(self.send(self.form(fmt), press=self.TEST)))
         response = self.send(
@@ -1110,7 +1191,7 @@ class FormatPageTests(PageTestCase):
         response = self.send(self.form(fmt), press=self.TEST, files={"pdf_essai": [junk]})
         self.assertIn("pas-un-pdf.pdf : Ce fichier n'est pas un PDF lisible.", self.text(response))
 
-    def test_dupliquer(self):
+    def test_duplicate_prefills_a_copy_without_its_supplier(self):
         fmt = seeded_format()
         form = self.form(query=f"?depuis={fmt.pk}")
         self.assertEqual(form.control("name").value, "Copie de UBA — bon du livreur")
@@ -1118,7 +1199,7 @@ class FormatPageTests(PageTestCase):
         self.assertEqual(form.control("supplier").value, "")
         self.assertEqual(self.form(query="?depuis=abc").control("name").value, "")
 
-    def test_relire_les_bons_du_format(self):
+    def test_rereading_the_slips_of_a_format(self):
         slips = [make_slip(), make_slip(lines=(CRATE_LINE,))]
         SlipLine.objects.all().delete()
         fmt = seeded_format()
@@ -1128,7 +1209,7 @@ class FormatPageTests(PageTestCase):
         self.assertEqual(self.messages_of(response), ["2 bons relus avec les motifs actuels."])
         self.assertEqual(sorted(SlipLine.objects.values_list("slip_id", flat=True)), sorted(slip.pk for slip in slips))
 
-    def test_relire_stops_when_its_time_is_spent(self):
+    def test_reread_stops_when_its_time_is_spent(self):
         make_slip()
         make_slip()
         fmt = seeded_format()
@@ -1140,28 +1221,37 @@ class FormatPageTests(PageTestCase):
             ["1 bon relu avec les motifs actuels ; il en reste 1 : « Relire » à nouveau pour les lire."],
         )
 
-    def test_a_format_with_bons_is_not_deleted(self):
+    def test_a_format_with_slips_is_not_deleted(self):
         fmt = seeded_format()
         make_slip()
         token = forms_of(self.html(self.url(fmt)))[0].control("csrfmiddlewaretoken").value
-        response = self.client.post(reverse("returnables:format_delete", args=[fmt.pk]), {"csrfmiddlewaretoken": token}, follow=True)
+        response = self.client.post(
+            reverse("returnables:format_delete", args=[fmt.pk]), {"csrfmiddlewaretoken": token}, follow=True
+        )
         self.assertEqual(
             self.messages_of(response),
             ["Le format « UBA — bon du livreur » a 1 bon : il ne peut pas être supprimé - désactivez-le plutôt."],
         )
         self.assertTrue(SlipFormat.objects.filter(pk=fmt.pk).exists())
 
-    def test_a_format_without_bons_is_deleted(self):
+    def test_a_format_without_slips_is_deleted(self):
         fmt = make_format("Format essai")
-        response = self.send(form_posting_to(self.html(self.url(fmt)), reverse("returnables:format_delete", args=[fmt.pk])))
+        response = self.send(
+            form_posting_to(self.html(self.url(fmt)), reverse("returnables:format_delete", args=[fmt.pk]))
+        )
         self.assertEqual(self.messages_of(response), ["Format « Format essai » supprimé."])
         self.assertFalse(SlipFormat.objects.filter(pk=fmt.pk).exists())
 
-    def test_the_motif_fields_type_like_code(self):
+    def test_the_pattern_fields_type_like_code(self):
         html = self.html(self.url(seeded_format()))
         field = re.search(r'<input[^>]*name="line_pattern"[^>]*>', html).group(0)
-        for attribute in ('class="motif-input"', 'autocapitalize="off"', 'autocorrect="off"', 'spellcheck="false"',
-                          'autocomplete="off"'):
+        for attribute in (
+            'class="pattern-input"',
+            'autocapitalize="off"',
+            'autocorrect="off"',
+            'spellcheck="false"',
+            'autocomplete="off"',
+        ):
             self.assertIn(attribute, field)
         self.assertIn("<summary>Réglages avancés</summary>", html)
         self.assertIn("<summary>Écrire un motif</summary>", html)
@@ -1213,10 +1303,12 @@ class TypePageTests(PageTestCase):
         self.assertContains(response, "Le type « Fûts » existe déjà : choisissez un autre nom.")
         self.assertEqual(ReturnableType.objects.count(), 3)
 
-    def test_a_motif_edited_is_checked_and_a_refusal_keeps_what_was_typed(self):
+    def test_a_pattern_edited_is_checked_and_a_refusal_keeps_what_was_typed(self):
         kegs = seeded_type("Fûts")
         url = reverse("returnables:type_edit", args=[kegs.pk])
-        response = self.send(form_posting_to(self.html(self.URL), url), values={f"type-{kegs.pk}-slip_patterns": "F[ÛU"})
+        response = self.send(
+            form_posting_to(self.html(self.URL), url), values={f"type-{kegs.pk}-slip_patterns": "F[ÛU"}
+        )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.redirect_chain, [])
         self.assertContains(response, "Motifs des bons : ")
@@ -1224,7 +1316,7 @@ class TypePageTests(PageTestCase):
         kegs.refresh_from_db()
         self.assertEqual(kegs.slip_patterns, r"F[ÛU]TS?\b")
 
-    def test_a_motif_edited_reclassifies_at_once(self):
+    def test_a_pattern_edited_reclassifies_at_once(self):
         slip = make_slip(lines=(PALLET_LINE,))
         crates = seeded_type("Caisses verre")
         url = reverse("returnables:type_edit", args=[crates.pk])
@@ -1232,13 +1324,18 @@ class TypePageTests(PageTestCase):
             form_posting_to(self.html(self.URL), url),
             values={f"type-{crates.pk}-slip_patterns": crates.slip_patterns + "\nPALETTE"},
         )
-        self.assertIn("PALETTE EXEMPLE 1 12.00 € 12.00 € Caisses verre", self.text(self.get(reverse("returnables:slip_detail", args=[slip.pk]))))
+        self.assertIn(
+            "PALETTE EXEMPLE 1 12.00 € 12.00 € Caisses verre",
+            self.text(self.get(reverse("returnables:slip_detail", args=[slip.pk]))),
+        )
 
-    def test_a_type_counted_in_a_reprise_is_not_deleted(self):
+    def test_a_type_counted_in_a_pickup_is_not_deleted(self):
         make_pickup(counts={"Fûts": 3})
         kegs = seeded_type("Fûts")
         token = forms_of(self.html(self.URL))[0].control("csrfmiddlewaretoken").value
-        response = self.client.post(reverse("returnables:type_delete", args=[kegs.pk]), {"csrfmiddlewaretoken": token}, follow=True)
+        response = self.client.post(
+            reverse("returnables:type_delete", args=[kegs.pk]), {"csrfmiddlewaretoken": token}, follow=True
+        )
         self.assertEqual(
             self.messages_of(response),
             ["Le type « Fûts » est compté dans des reprises : il ne peut pas être supprimé - désactivez-le plutôt."],
@@ -1250,7 +1347,7 @@ class TypePageTests(PageTestCase):
         response = self.send(form_posting_to(self.html(self.URL), reverse("returnables:type_delete", args=[spare.pk])))
         self.assertEqual(self.messages_of(response), ["Type « Palettes » supprimé."])
 
-    def test_a_type_switched_off_leaves_the_new_reprise_form(self):
+    def test_a_type_switched_off_leaves_the_new_pickup_form(self):
         crates = seeded_type("Caisses verre")
         self.send(
             form_posting_to(self.html(self.URL), reverse("returnables:type_edit", args=[crates.pk])),
@@ -1259,11 +1356,11 @@ class TypePageTests(PageTestCase):
         self.assertNotIn(f"nombre-{crates.pk}", self.html(HOME))
 
 
-# -- A stored motif that fails -------------------------------------------------------------------------------------------
+# -- A stored pattern that fails -----------------------------------------------------------------------------------------
 
 
-class StoredMotifThatFailsTests(PageTestCase):
-    """A motif stored before a stricter rule, or brought by a hand-edited
+class StoredPatternThatFailsTests(PageTestCase):
+    """A pattern stored before a stricter rule, or brought by a hand-edited
     archive, is checked again wherever it is used: the page says « motif
     invalide … corrigez-le », never a 500 - and the guard refuses the
     freeze's shape before anything compiles it."""
@@ -1288,10 +1385,14 @@ class StoredMotifThatFailsTests(PageTestCase):
             ):
                 with self.subTest(url=url):
                     self.assertIn("motif invalide", self.text(self.get(url)).lower())
-            form = form_posting_to(self.html(reverse("returnables:slip_detail", args=[slip.pk])),
-                                   reverse("returnables:slip_reread", args=[slip.pk]))
+            form = form_posting_to(
+                self.html(reverse("returnables:slip_detail", args=[slip.pk])),
+                reverse("returnables:slip_reread", args=[slip.pk]),
+            )
             response = self.send(form)
-            self.assertIn("il n'a pas pu être lu : Motif de ligne : parenthèse non fermée", self.messages_of(response)[0])
+            self.assertIn(
+                "il n'a pas pu être lu : Motif de ligne : parenthèse non fermée", self.messages_of(response)[0]
+            )
         self.assertEqual(sentinel.refused, [])
 
 
@@ -1299,34 +1400,34 @@ class StoredMotifThatFailsTests(PageTestCase):
 
 
 class GatherTests(PageTestCase):
-    """The page asks Achats' gather (invoices:gather) for the bons; it has
+    """The page asks Achats' gather (invoices:gather) for the slips; it has
     no gather of its own. The mailbox is never reached: the thread is
     patched."""
 
     def gather_forms(self, html):
         return [form for form in forms_of(html) if form.action == reverse("invoices:gather")]
 
-    def test_a_reprise_waiting_for_its_bon_offers_recuperer(self):
+    def test_a_pickup_waiting_for_its_slip_offers_fetch(self):
         make_pickup()
         html = self.html(HOME)
         forms = self.gather_forms(html)
-        self.assertEqual(len(forms), 2)   # the strip's, and « Ajouter des bons »'s
+        self.assertEqual(len(forms), 2)  # the strip's, and « Ajouter des bons »'s
         pairs = forms[0].submission()
         self.assertIn(("sources", f"bons-{seeded_format().pk}"), pairs)
         self.assertIn(("retour", HOME), pairs)
         # No end: a tab opened yesterday would post yesterday and miss
-        # today's bon - the gather ends at ITS today (tasks: localdate).
+        # today's slip - the gather ends at ITS today (tasks: localdate).
         self.assertNotIn("end_date", [name for name, _value in pairs])
         self.assertIn("Les mails dont l'expéditeur correspond à", self.text(self.get(HOME)))
 
-    def test_no_mail_format_no_recuperer(self):
+    def test_no_mail_format_no_fetch(self):
         SlipFormat.objects.update(sender_pattern="")
         make_pickup()
         html = self.html(HOME)
         self.assertEqual(self.gather_forms(html), [])
         self.assertIn("Aucun format de bon n'a de motif d'expéditeur", html)
 
-    def test_an_espace_without_the_mailbox_says_so(self):
+    def test_a_tenant_without_the_mailbox_says_so(self):
         make_pickup()
         with mock.patch("returnables.views.integrations_allowed", return_value=False):
             response = self.get(HOME)
@@ -1345,14 +1446,14 @@ class GatherTests(PageTestCase):
             self.assertTrue(all(button.disabled for button in [c for c in form.controls if c.kind == "submit"]))
 
     def test_another_page_s_gather_is_said_once_where_it_reloads(self):
-        """Said inside #consignes-live only: when the gather ends,
+        """Said inside #returnables-live only: when the gather ends,
         documents-changed reloads that part, and the sentence goes with it."""
         ScrapeJob.objects.create(status=ScrapeJob.Status.RUNNING, progress={"METRO": {"label": "Metro"}})
         make_pickup()
         html = self.html(HOME)
         self.assertEqual(html.count(views.ALREADY_GATHERING), 1)
-        self.assertLess(html.index('<div id="consignes-live"'), html.index(views.ALREADY_GATHERING))
-        self.assertLess(html.index(views.ALREADY_GATHERING), html.index('id="nouvelle-reprise"'))
+        self.assertLess(html.index('<div id="returnables-live"'), html.index(views.ALREADY_GATHERING))
+        self.assertLess(html.index(views.ALREADY_GATHERING), html.index('id="new-pickup"'))
 
     def test_the_page_s_own_gather_is_never_said_to_be_another(self):
         """The owner taps « Récupérer les bons »: the page drawn after it
@@ -1367,20 +1468,21 @@ class GatherTests(PageTestCase):
                 self.assertNotContains(response, views.ALREADY_GATHERING)
                 self.assertContains(response, 'id="gather-status"')
 
-    def test_a_gather_of_bons_ended_minutes_ago_is_shown_not_an_old_one(self):
+    def test_a_gather_of_slips_ended_minutes_ago_is_shown_not_an_old_one(self):
         job = ScrapeJob.objects.create(
-            status=ScrapeJob.Status.SUCCESS, progress={f"bons-{seeded_format().pk}": {"label": "Bons", "found": 2}},
+            status=ScrapeJob.Status.SUCCESS,
+            progress={f"bons-{seeded_format().pk}": {"label": "Bons", "found": 2}},
             finished_at=timezone.now() - timedelta(minutes=3),
         )
         shown = self.get(HOME)
         self.assertContains(shown, 'id="gather-status"')
-        self.assertContains(shown, "Bons trouvés")   # a gather of bons only (ScrapeJob.slips_only)
+        self.assertContains(shown, "Bons trouvés")  # a gather of slips only (ScrapeJob.slips_only)
         ScrapeJob.objects.filter(pk=job.pk).update(finished_at=timezone.now() - timedelta(minutes=20))
         self.assertNotContains(self.get(HOME), 'id="gather-status"')
         ScrapeJob.objects.create(status=ScrapeJob.Status.SUCCESS, progress={"METRO": {}}, finished_at=timezone.now())
         self.assertNotContains(self.get(HOME), 'id="gather-status"')
 
-    def test_the_post_reaches_the_gather_with_the_bons_sources(self):
+    def test_the_post_reaches_the_gather_with_the_slip_sources(self):
         make_pickup()
         form = self.gather_forms(self.html(HOME))[0]
         with mock.patch("invoices.views.threading.Thread") as thread:
@@ -1399,8 +1501,8 @@ class GatherTests(PageTestCase):
 
 
 class QueryCountTests(PageTestCase):
-    """Each page reads a fixed number of queries however many reprises,
-    photos, bons and lines it shows (CLAUDE.md « N+1s hide in per-object
+    """Each page reads a fixed number of queries however many pickups,
+    photos, slips and lines it shows (CLAUDE.md « N+1s hide in per-object
     properties »). Compared, never pinned: the topbar's badges are other
     apps' queries."""
 
@@ -1425,7 +1527,7 @@ class QueryCountTests(PageTestCase):
         self.many()
         self.assertEqual(self.count(HOME), one)
 
-    def test_a_reprise_s_page(self):
+    def test_a_pickup_s_page(self):
         pickup = make_pickup(photos=1)
         make_slip()
         url = reverse("returnables:pickup_detail", args=[pickup.pk])
@@ -1437,9 +1539,9 @@ class QueryCountTests(PageTestCase):
         self.many()
         self.assertEqual(self.count(url), one)
 
-    def test_a_bon_s_page(self):
+    def test_a_slip_s_page(self):
         slip = make_slip()
-        # One reprise near it from the start: none at all would skip the
+        # One pickup near it from the start: none at all would skip the
         # prefetch of their counts, a query no list adds.
         make_pickup()
         url = reverse("returnables:slip_detail", args=[slip.pk])
@@ -1450,8 +1552,11 @@ class QueryCountTests(PageTestCase):
         self.assertEqual(self.count(url), one)
 
     def test_the_settings(self):
-        urls = (reverse("returnables:format_list"), reverse("returnables:type_list"),
-                reverse("returnables:format_edit", args=[seeded_format().pk]))
+        urls = (
+            reverse("returnables:format_list"),
+            reverse("returnables:type_list"),
+            reverse("returnables:format_edit", args=[seeded_format().pk]),
+        )
         few = [self.count(url) for url in urls]
         for number in range(4):
             make_format(f"Format essai {number}")
@@ -1464,9 +1569,21 @@ class NotFoundTests(PageTestCase):
     """A bad address is a 404 - a stale bookmark, a photo removed in another
     tab - never a 500, on GET and on POST."""
 
-    ROUTES = ("pickup_detail", "pickup_delete", "pickup_date", "photo_delete", "slip_detail", "slip_delete",
-              "slip_reread", "line_classify", "format_edit", "format_delete", "format_reread", "type_edit",
-              "type_delete")
+    ROUTES = (
+        "pickup_detail",
+        "pickup_delete",
+        "pickup_date",
+        "photo_delete",
+        "slip_detail",
+        "slip_delete",
+        "slip_reread",
+        "line_classify",
+        "format_edit",
+        "format_delete",
+        "format_reread",
+        "type_edit",
+        "type_delete",
+    )
 
     def test_an_unknown_row(self):
         token = forms_of(self.html(HOME))[0].control("csrfmiddlewaretoken").value
@@ -1492,13 +1609,13 @@ class TemplateTests(TestCase):
         self.assertEqual(
             names,
             [
-                "_day.html",               # a reprise and its comparison: the home card, the reprise's page
-                "_format_test.html",       # « Tester »'s answer (htmx, or inside the page)
-                "_format_tester.html",     # « Tester » inside the format's form
-                "_gather_form.html",       # « Récupérer les bons »: a post to Achats' gather
-                "_invoice_check.html",     # what the seller's invoice says of a bon
-                "_pickup_fields.html",     # a reprise's fields: new and edit
-                "_tester_sources.html",    # PDF, bon received, pasted text (swapped out of band)
+                "_day.html",  # a pickup and its comparison: the home card, the pickup's page
+                "_format_test.html",  # « Tester »'s answer (htmx, or inside the page)
+                "_format_tester.html",  # « Tester » inside the format's form
+                "_gather_form.html",  # « Récupérer les bons »: a post to Achats' gather
+                "_invoice_check.html",  # what the seller's invoice says of a slip
+                "_pickup_fields.html",  # a pickup's fields: new and edit
+                "_tester_sources.html",  # PDF, slip received, pasted text (swapped out of band)
                 "format_form.html",
                 "format_list.html",
                 "home.html",
@@ -1529,11 +1646,15 @@ class WordsTests(TestCase):
     def test_the_pages(self):
         pickup = make_pickup(photos=1)
         slip = make_slip()
-        for url in (HOME, reverse("returnables:pickup_detail", args=[pickup.pk]),
-                    reverse("returnables:slip_detail", args=[slip.pk]), reverse("returnables:format_list"),
-                    reverse("returnables:type_list")):
+        for url in (
+            HOME,
+            reverse("returnables:pickup_detail", args=[pickup.pk]),
+            reverse("returnables:slip_detail", args=[slip.pk]),
+            reverse("returnables:format_list"),
+            reverse("returnables:type_list"),
+        ):
             page = re.sub(r"<[^>]+>", " ", self.client.get(url).content.decode()).lower()
-            page = page[page.index("consignes"):]
+            page = page[page.index("consignes") :]
             for word in ("le bon compte", "type de stock", "récupérées", "recherche en cours"):
                 with self.subTest(url=url, word=word):
                     self.assertNotIn(word, page)

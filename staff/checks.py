@@ -1,8 +1,8 @@
 """System checks of « Personnel »: `manage.py check`, and every runserver.
 
-The private keys of EVERY espace's signing authority are encrypted with the
+The private keys of EVERY tenant's signing authority are encrypted with the
 one platform passphrase, MARGINMATE_SIGNING_PASSPHRASE (staff/signing.py).
-Unset, they are all written in clear. Only the owner's espace is told on its
+Unset, they are all written in clear. Only the owner's tenant is told on its
 pages (`signing.key_warning`) - another bar can do nothing about a server
 setting and is never shown its name - so the operator is warned here,
 always (there is no single mode left in which the pages said it to everyone).

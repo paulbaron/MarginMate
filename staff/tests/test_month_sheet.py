@@ -23,10 +23,10 @@ from staff.timesheet import (
     saved_month_sheets,
 )
 
-JUNE = date(2026, 6, 1)      # starts on a Monday, 30 days
-MARCH = date(2026, 3, 1)     # starts on a Sunday, 31 days: six week totals, the most a month can have
+JUNE = date(2026, 6, 1)  # starts on a Monday, 30 days
+MARCH = date(2026, 3, 1)  # starts on a Sunday, 31 days: six week totals, the most a month can have
 FEBRUARY = date(2026, 2, 1)  # starts on a Sunday, 28 days
-MAY = date(2026, 5, 1)       # four public holidays
+MAY = date(2026, 5, 1)  # four public holidays
 
 
 def totals(sheet):
@@ -332,7 +332,10 @@ class TypicalWeekOfASavedMonthTests(TestCase):
         (Christmas on a Friday) by the holidays button."""
         for month, first_save in (
             (date(2026, 10, 1), lambda month: save_month(self.person, month, [])),
-            (date(2026, 11, 1), lambda month: apply_range(self.person, month, date(2026, 11, 3), date(2026, 11, 3), "conges")),
+            (
+                date(2026, 11, 1),
+                lambda month: apply_range(self.person, month, date(2026, 11, 3), date(2026, 11, 3), "conges"),
+            ),
             (date(2026, 12, 1), lambda month: mark_holidays_off(self.person, month)),
         ):
             with self.subTest(month=month):
@@ -354,7 +357,7 @@ class TypicalWeekOfASavedMonthTests(TestCase):
     def test_a_month_nobody_saved_follows_the_new_week(self):
         july = month_sheet(self.person, date(2026, 7, 1))
         self.assertEqual(july.weekly_hours, Decimal("32.5"))
-        self.assertEqual(july.days[3].hours, Decimal("4"))   # Saturday 4 July
+        self.assertEqual(july.days[3].hours, Decimal("4"))  # Saturday 4 July
 
     def test_later_corrections_of_the_month_use_its_week(self):
         """Back to « Travail » with no hours posted, or a « Travail » range
@@ -374,7 +377,7 @@ class TypicalWeekOfASavedMonthTests(TestCase):
         self.assertTrue(outcome.week_changed)
         sheet = month_sheet(self.person, JUNE)
         self.assertEqual(sheet.weekly_hours, Decimal("32.5"))
-        self.assertEqual(sheet.days[5].hours, Decimal("4"))   # Saturday 6
+        self.assertEqual(sheet.days[5].hours, Decimal("4"))  # Saturday 6
         self.assertFalse(any(day.differs for day in sheet.days))
         self.assertEqual(Timesheet.objects.get().saturday_hours, Decimal("4"))
         # Again: the month already is today's week.

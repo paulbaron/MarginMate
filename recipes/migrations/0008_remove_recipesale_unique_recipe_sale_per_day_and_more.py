@@ -4,18 +4,19 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('recipes', '0007_salesimportjob_posproduct'),
+        ("recipes", "0007_salesimportjob_posproduct"),
     ]
 
     operations = [
         migrations.RemoveConstraint(
-            model_name='recipesale',
-            name='unique_recipe_sale_per_day',
+            model_name="recipesale",
+            name="unique_recipe_sale_per_day",
         ),
         migrations.AddConstraint(
-            model_name='recipesale',
-            constraint=models.UniqueConstraint(fields=('recipe', 'sold_on', 'source'), name='unique_recipe_sale_per_day_and_source'),
+            model_name="recipesale",
+            constraint=models.UniqueConstraint(
+                fields=("recipe", "sold_on", "source"), name="unique_recipe_sale_per_day_and_source"
+            ),
         ),
     ]

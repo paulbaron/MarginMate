@@ -55,7 +55,7 @@ class WeightTests(SimpleTestCase):
         self.assertEqual(line_named(invoice, "POMME JULIET X4").total_volume, Decimal("0"))
 
     def test_the_unit_after_the_price_per_kilo_can_read_as_anything(self):
-        """"à 3.49. / <G" is how the current engine reads "@ 3.49 / KG": a
+        """ "à 3.49. / <G" is how the current engine reads "@ 3.49 / KG": a
         price followed by a slash is a price per unit, whatever the unit."""
         body = WEIGHED.replace("@3.49./KG", "à 3.49. / <G")
         invoice = parse(body, "7.10", WEIGHED_VAT)
@@ -69,7 +69,7 @@ class WeightTests(SimpleTestCase):
 
 
 class BannerTests(SimpleTestCase):
-    def test_an_item_glued_to_the_duplicata_banner_keeps_its_price(self):
+    def test_an_item_glued_to_the_duplicate_banner_keeps_its_price(self):
         """Skipping the whole line once took the lemons - and 1,89 EUR - with
         it. The banner stays in the name, where the review screen shows it;
         the money is what must not go."""

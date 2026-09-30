@@ -1,24 +1,24 @@
 """« Consignes » (`/consignes/`): the empties handed back to the delivery
-driver, counted and photographed here, then compared with the bon he sends.
+driver, counted and photographed here, then compared with the slip he sends.
 
 Pages (every one behind the login, like the rest of the app):
 
-* `/consignes/` (`home`), phone-first: the latest reprise in one line, the
+* `/consignes/` (`home`), phone-first: the latest pickup in one line, the
   « Nouvelle reprise » form (photos, one count per type, the kegs' bigger),
-  the latest reprise in full, the reprises and the bons received (20 each,
+  the latest pickup in full, the pickups and the slips received (20 each,
   « tout afficher »), « Ajouter des bons » (upload, « Récupérer les bons »),
   and the settings' links. The strip and the lists reload themselves when a
   gather ends (`documents-changed`); the form is outside them, so a count
   half typed survives.
 * `/consignes/reprises/<pk>/` (`pickup_detail`): the same form to edit it
   (photos can be ADDED, each removed on its own), its comparison with the
-  day's bons, their invoice check, delete.
+  day's slips, their invoice check, delete.
 * `/consignes/bons/<pk>/` (`slip_detail`): what the reading found - checks,
-  lines with the type and the motif that classified each, remarks, the PDF -
-  which bon replaces it, the invoice check, « Relire », « Classer comme ».
-* `/consignes/formats/…` and `/consignes/types/`: the formats of bon (motifs
-  « Testés » on a stored bon, pasted text or a PDF before they are saved)
-  and the types of consigne (one form per type, no formset).
+  lines with the type and the pattern that classified each, remarks, the PDF -
+  which slip replaces it, the invoice check, « Relire », « Classer comme ».
+* `/consignes/formats/…` and `/consignes/types/`: the slip formats (patterns
+  « Testés » on a stored slip, pasted text or a PDF before they are saved)
+  and the returnable types (one form per type, no formset).
 
 Rules:
 
@@ -30,12 +30,12 @@ Rules:
   ONCE per page - a fixed number of queries however many rows), and
   `invoice_check.check_many` once with the board's index. Nothing is
   compared or classified here.
-* **A stored motif that fails is said, never a 500**: « motif invalide : … —
+* **A stored pattern that fails is said, never a 500**: « motif invalide : … —
   corrigez-le », linked to where it is corrected.
 * **The photos are prepared in memory before the transaction** (returnables/
   photos.py: re-encoded, no EXIF left), then saved inside it; if anything
   raises, every file already saved is deleted. A photo Pillow cannot read
-  never refuses the reprise: the others are kept and a warning names it.
+  never refuses the pickup: the others are kept and a warning names it.
 * **No `|safe`, no `mark_safe`**: every sentence built here or in the pure
   modules is plain text, escaped by the templates.
 """
@@ -47,6 +47,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from types import SimpleNamespace
 
+import regex
 from django.contrib import messages
 from django.core.files.base import ContentFile
 from django.db import transaction
@@ -55,8 +56,6 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.dateparse import parse_date
-
-import regex
 
 from accounts.tenancy import integrations_allowed
 from common import is_id
@@ -86,7 +85,7 @@ from returnables.models import (
     delete_files,
     delete_with_files,
 )
-from returnables.patterns import MotifError
+from returnables.patterns import PatternError
 from returnables.photos import PhotoError, prepare_photo
 from returnables.reading import SlipError, clean_text
 
@@ -98,7 +97,7 @@ TEST = "tester"
 SAVE = "enregistrer"
 UNKNOWN_ACTION = "Action inconnue : rien n'a été modifié."
 
-#: The photo inputs of a reprise's form (several, one name).
+#: The photo inputs of a pickup's form (several, one name).
 PHOTOS = "photos"
 #: The upload's files, and its format (blank: recognised).
 UPLOADS = "bons"
@@ -106,13 +105,13 @@ UPLOAD_FORMAT = "format"
 #: The upload's messages are drawn in « Ajouter des bons » (#bons, where its
 #: redirect lands, screens under the top of the page), not at the top;
 #: « Nouveau format » is offered beside a document no format recognises.
-UPLOAD_MESSAGES = "bons"
-NEW_FORMAT = "nouveau-format"
-#: « Tester »'s sources: a stored bon, pasted text, a PDF.
+UPLOAD_MESSAGES = "slips"
+NEW_FORMAT = "new-format"
+#: « Tester »'s sources: a stored slip, pasted text, a PDF.
 TEST_SLIP = "tester_sur"
 TEST_TEXT = "texte_essai"
 TEST_PDF = "pdf_essai"
-#: How many stored bons « Tester sur » offers.
+#: How many stored slips « Tester sur » offers.
 TEST_SLIPS_OFFERED = 50
 #: How many lines of the tested text « Tester » draws.
 TRACE_LINES_SHOWN = 400
@@ -125,9 +124,9 @@ SAVED_FLAG = "enregistree"
 
 #: The gather's card stays on the page this long after it ended.
 GATHER_SHOWN_FOR = timedelta(minutes=10)
-#: The latest gathers searched for one that fetched bons.
+#: The latest gathers searched for one that fetched slips.
 GATHER_JOBS_SEARCHED = 20
-#: The gather's codes for a format's bons (invoices/tasks.py).
+#: The gather's codes for a format's slips (invoices/tasks.py).
 SLIP_SOURCE_PREFIX = "bons-"
 
 ALREADY_GATHERING = (
@@ -143,7 +142,7 @@ def _is_htmx(request) -> bool:
 def _messages_by_place(request) -> tuple[list, list]:
     """(the messages said at the top of the page, the upload's - said in
     « Ajouter des bons », where its redirect lands). Read once here, which
-    also marks them said (Marges' views._messages_by_place)."""
+    also marks them said (margins.views._messages_by_place)."""
     top, uploads = [], []
     for message in messages.get_messages(request):
         (uploads if UPLOAD_MESSAGES in (message.extra_tags or "").split() else top).append(message)
@@ -164,11 +163,11 @@ def _home_url() -> str:
 
 def _back(request, default: str) -> str:
     """Where a small action returns: the home page when it says so (its
-    card holds the same buttons as the reprise's page), else `default`."""
+    card holds the same buttons as the pickup's page), else `default`."""
     return _home_url() if request.POST.get("retour") == _home_url() else default
 
 
-# -- The gather (invoices/tasks.py fetches the bons; this page only asks) --------------------------------------------
+# -- The gather (invoices/tasks.py fetches the slips; this page only asks) -------------------------------------------
 
 
 def slips_refused() -> str:
@@ -179,9 +178,11 @@ def slips_refused() -> str:
 
 def _slips_job():
     """(the gather to show, whether one is running): the latest GATHER that
-    is running, or that fetched bons - shown while it runs and for ten
+    is running, or that fetched slips - shown while it runs and for ten
     minutes after it ended."""
-    jobs = list(ScrapeJob.objects.filter(kind=ScrapeJob.Kind.GATHER).order_by("-started_at", "-pk")[:GATHER_JOBS_SEARCHED])
+    jobs = list(
+        ScrapeJob.objects.filter(kind=ScrapeJob.Kind.GATHER).order_by("-started_at", "-pk")[:GATHER_JOBS_SEARCHED]
+    )
     running = next((job for job in jobs if job.is_active), None)
     job = running or next(
         (job for job in jobs if any(str(code).startswith(SLIP_SOURCE_PREFIX) for code in (job.progress or {}))),
@@ -196,15 +197,18 @@ def _slips_job():
 
 def _gather_context(today: date) -> dict:
     mail_formats = list(
-        SlipFormat.objects.filter(is_active=True).exclude(sender_pattern="").select_related("supplier").order_by("name", "pk")
+        SlipFormat.objects.filter(is_active=True)
+        .exclude(sender_pattern="")
+        .select_related("supplier")
+        .order_by("name", "pk")
     )
     allowed = integrations_allowed()
     job, running = _slips_job() if allowed else (None, False)
     # Each format's own start (returnables.mail: a few days before its newest
-    # MAILED bon, else 90 days back); the gather searches from the earliest.
+    # MAILED slip, else 90 days back); the gather searches from the earliest.
     starts = [fetch_start(fmt, None, today) for fmt in mail_formats] if allowed else []
     # « Déjà en cours » is said of another page's gather only: the one this
-    # page just asked for (bons only, ScrapeJob.slips_only - or no source
+    # page just asked for (slips only, ScrapeJob.slips_only - or no source
     # written yet, its thread barely started) is shown by its card, and the
     # sentence read as if the tap had been ignored.
     another = running and bool(job.progress) and not job.slips_only
@@ -252,7 +256,7 @@ def photos_day(photos) -> date | None:
 
 def photos_date_warning(pickup, photos=None) -> tuple:
     """(sentence, the photos' day) when the photos were all taken on another
-    day than the reprise's - ("", None) otherwise."""
+    day than the pickup's - ("", None) otherwise."""
     day = photos_day(pickup.photos.all() if photos is None else photos)
     if day is None or day == pickup.date:
         return "", None
@@ -262,7 +266,7 @@ def photos_date_warning(pickup, photos=None) -> tuple:
 @dataclass
 class CheckPill:
     """An invoice check in a few words: `text` in a pill of its colour (a
-    table cell, and « Facture : <pill> » on the cards and the bon's page),
+    table cell, and « Facture : <pill> » on the cards and the slip's page),
     the whole sentence as its `title`, and `detail`: what the sentence says
     that the pill and what is drawn under it (the invoices, the rows, the
     other credits, the notes) do not - "" when nothing."""
@@ -285,7 +289,7 @@ _SHORT = {
     invoice_check.TOO_SHORT: "référence trop courte",
     invoice_check.SUPERSEDED: "sur le bon qui compte",
 }
-#: Nothing on the bon, nothing refunded: agreed, but not « remboursé ».
+#: Nothing on the slip, nothing refunded: agreed, but not « remboursé ».
 NOTHING_TO_REFUND = "rien à rembourser \N{CHECK MARK}"
 #: The states whose pill says all their sentence says: « Facture : pas encore
 #: reçue », never « facture facture pas encore reçue ».
@@ -315,25 +319,24 @@ def check_pill(check) -> CheckPill | None:
     if check.state not in _PILL_SAYS_IT:
         detail = check.label
         # « … : à vérifier » after an « à vérifier » pill is said twice.
-        if detail.endswith(f" : {text}"):
-            detail = detail[: -len(f" : {text}")]
+        detail = detail.removesuffix(f" : {text}")
     return CheckPill(text, check.css, check.label, detail)
 
 
 def format_problem(fmt) -> str:
-    """"" when every motif of `fmt` still passes the guard, else why not -
-    a stored motif is never trusted (a stricter rule, a hand-edited
+    """ "" when every pattern of `fmt` still passes the guard, else why not -
+    a stored pattern is never trusted (a stricter rule, a hand-edited
     archive)."""
     try:
         patterns.compile_format(fmt, patterns.FORMAT_FIELDS)
-    except MotifError as error:
+    except PatternError as error:
         return error.message
     return ""
 
 
 @dataclass
 class DayView:
-    """One reprise's comparison, as its card and page draw it."""
+    """One pickup's comparison, as its card and page draw it."""
 
     pickup: Pickup
     day: object
@@ -349,7 +352,7 @@ def _day_view(board: Board, pickup: Pickup, checks: dict) -> DayView:
     day = board.day(pickup)
     photos = shown_photos(pickup)
     warning, photos_date = photos_date_warning(pickup, [shown.photo for shown in photos])
-    # Two bons refunded on one invoice share one check: said once.
+    # Two slips refunded on one invoice share one check: said once.
     invoice_checks, seen = [], set()
     for info in day.slips:
         check = checks.get(info.pk)
@@ -370,12 +373,12 @@ def _day_view(board: Board, pickup: Pickup, checks: dict) -> DayView:
     )
 
 
-# -- The reprise form -------------------------------------------------------------------------------------------------
+# -- The pickup form --------------------------------------------------------------------------------------------------
 
 
 def _form_types(pickup=None) -> list:
     """The types the form counts: the active ones, and - editing - those the
-    reprise already counts, active or not."""
+    pickup already counts, active or not."""
     counted = {count.returnable_type_id for count in pickup.counts.all()} if pickup is not None else set()
     return [kind for kind in ReturnableType.objects.order_by("position", "pk") if kind.is_active or kind.pk in counted]
 
@@ -395,7 +398,7 @@ def _store_photos(pickup: Pickup, prepared: list, start: int, saved: list) -> No
 
 
 def _save_pickup(request, form: PickupForm, pickup: Pickup | None = None) -> Pickup | None:
-    """Save the reprise `form` describes (a new one when `pickup` is None)
+    """Save the pickup `form` describes (a new one when `pickup` is None)
     with the photos of the request, and say what was saved. None when the
     form is refused - its errors are on it, nothing was written."""
     uploads = [upload for upload in request.FILES.getlist(PHOTOS) if getattr(upload, "name", "")]
@@ -475,7 +478,7 @@ def _save_pickup(request, form: PickupForm, pickup: Pickup | None = None) -> Pic
 
 
 def _existing_same_day(form: PickupForm):
-    """The reprise already saved for the day and the supplier the form holds,
+    """The pickup already saved for the day and the supplier the form holds,
     to offer « la compléter » - None when there is none."""
     day = form["date"].value()
     if isinstance(day, str):
@@ -497,11 +500,13 @@ def _existing_same_day(form: PickupForm):
 
 
 def _default_supplier(latest):
-    """Who the new reprise's « Repris par » starts on: the latest reprise's,
+    """Who the new pickup's « Repris par » starts on: the latest pickup's,
     else the supplier of the first active format."""
     if latest is not None and latest.supplier_id:
         return latest.supplier_id
-    first = SlipFormat.objects.filter(is_active=True).order_by("name", "pk").values_list("supplier_id", flat=True).first()
+    first = (
+        SlipFormat.objects.filter(is_active=True).order_by("name", "pk").values_list("supplier_id", flat=True).first()
+    )
     return first
 
 
@@ -541,7 +546,9 @@ def home(request):
 
 def _home_context(request, form: PickupForm, today: date) -> dict:
     show_all = request.GET.get(SHOW_ALL, "")
-    pickups_query = Pickup.objects.select_related("supplier").prefetch_related("counts", "photos").order_by("-date", "-pk")
+    pickups_query = (
+        Pickup.objects.select_related("supplier").prefetch_related("counts", "photos").order_by("-date", "-pk")
+    )
     slips_query = Slip.objects.select_related("format").defer("text").order_by("-received_at", "-pk")
     pickup_total, slip_total = Pickup.objects.count(), Slip.objects.count()
     pickups = list(pickups_query if show_all == "reprises" else pickups_query[:LISTED])
@@ -610,13 +617,11 @@ def _home_context(request, form: PickupForm, today: date) -> dict:
     }
 
 
-# -- A reprise ---------------------------------------------------------------------------------------------------------
+# -- A pickup ----------------------------------------------------------------------------------------------------------
 
 
 def pickup_detail(request, pk):
-    pickup = get_object_or_404(
-        Pickup.objects.select_related("supplier").prefetch_related("counts", "photos"), pk=pk
-    )
+    pickup = get_object_or_404(Pickup.objects.select_related("supplier").prefetch_related("counts", "photos"), pk=pk)
     today = timezone.localdate()
     types = _form_types(pickup)
     if request.method == "POST":
@@ -699,7 +704,7 @@ def photo_delete(request, pk):
     return redirect(detail)
 
 
-# -- The bons ---------------------------------------------------------------------------------------------------------
+# -- The slips --------------------------------------------------------------------------------------------------------
 
 
 def slip_upload(request):
@@ -736,7 +741,7 @@ def slip_detail(request, pk):
     info = board.index.infos[slip.pk]
     lines = [(line, board.classify(line.designation)) for line in info.lines or []]
     check = invoice_check.check_many([slip], index=board.index).get(slip.pk)
-    # The bons this one took the place of (re-sent copies, a bon it cancels).
+    # The slips this one took the place of (re-sent copies, a slip it cancels).
     replaced_infos = [
         (board.index.infos[other_pk], superseded)
         for other_pk, superseded in board.superseded.items()
@@ -804,7 +809,7 @@ def slip_reread(request, pk):
 def line_classify(request, pk):
     """« Classer comme »: `^` and the line's designation (its first 60
     characters, escaped - spaces kept readable) added to the chosen type's
-    motifs, the whole field checked again before it is saved."""
+    patterns, the whole field checked again before it is saved."""
     line = get_object_or_404(SlipLine, pk=pk)
     detail = reverse("returnables:slip_detail", args=[line.slip_id])
     if request.method != "POST":
@@ -814,15 +819,15 @@ def line_classify(request, pk):
     if kind is None:
         messages.error(request, "Choisissez un type de consigne existant : rien n'a été modifié.")
         return redirect(detail)
-    motif = "^" + regex.escape(line.designation[:60], literal_spaces=True)
+    pattern = "^" + regex.escape(line.designation[:60], literal_spaces=True)
     existing = [text.strip() for text in (kind.slip_patterns or "").splitlines() if text.strip()]
-    if motif in existing:
-        messages.info(request, f"Le motif « {motif} » est déjà parmi ceux du type « {kind.name} ».")
+    if pattern in existing:
+        messages.info(request, f"Le motif « {pattern} » est déjà parmi ceux du type « {kind.name} ».")
         return redirect(detail)
-    value = "\n".join([*existing, motif])
+    value = "\n".join([*existing, pattern])
     try:
         patterns.compile_field(patterns.TYPE_FIELD, value)
-    except MotifError as error:
+    except PatternError as error:
         messages.error(request, f"{error.message} Rien n'a été modifié.")
         return redirect(detail)
     kind.slip_patterns = value
@@ -831,19 +836,21 @@ def line_classify(request, pk):
     if now.returnable_type is not None and now.returnable_type.pk != kind.pk:
         messages.warning(
             request,
-            f"Motif « {motif} » ajouté au type « {kind.name} », mais le type « {now.returnable_type.name} », placé "
+            f"Motif « {pattern} » ajouté au type « {kind.name} », mais le type « {now.returnable_type.name} », placé "
             "avant lui, reconnaît déjà cette ligne : changez l'ordre des types.",
         )
     else:
-        messages.success(request, f"Motif « {motif} » ajouté au type « {kind.name} » : la ligne est de ce type.")
+        messages.success(request, f"Motif « {pattern} » ajouté au type « {kind.name} » : la ligne est de ce type.")
     return redirect(detail)
 
 
-# -- Formats of bon -----------------------------------------------------------------------------------------------------
+# -- Slip formats -------------------------------------------------------------------------------------------------------
 
 
 def format_list(request):
-    formats = list(SlipFormat.objects.select_related("supplier").annotate(slip_count=Count("slips")).order_by("name", "pk"))
+    formats = list(
+        SlipFormat.objects.select_related("supplier").annotate(slip_count=Count("slips")).order_by("name", "pk")
+    )
     return render(
         request,
         "returnables/format_list.html",
@@ -867,7 +874,7 @@ def _duplicate_of(request):
 
 
 def _copy_initial(source: SlipFormat) -> dict:
-    """« Dupliquer »: every motif of `source`, a name of its own, no
+    """« Dupliquer »: every pattern of `source`, a name of its own, no
     supplier (a copy is for another seller)."""
     initial = {name: getattr(source, name) for name in SlipFormatForm.Meta.fields if name not in ("name", "supplier")}
     initial["name"] = f"Copie de {source.name}"[:80]
@@ -877,7 +884,7 @@ def _copy_initial(source: SlipFormat) -> dict:
 
 @dataclass
 class TestResult:
-    """What « Tester » shows: the trace of the unsaved motifs on a text, or
+    """What « Tester » shows: the trace of the unsaved patterns on a text, or
     why there is nothing to trace."""
 
     source: str = ""
@@ -895,8 +902,8 @@ class TestResult:
         return max(0, len(self.trace.lines) - TRACE_LINES_SHOWN) if self.trace is not None else 0
 
 
-def _unsaved_motifs(request) -> SimpleNamespace:
-    """The motifs as posted, not as saved: what « Tester » reads with."""
+def _unsaved_patterns(request) -> SimpleNamespace:
+    """The patterns as posted, not as saved: what « Tester » reads with."""
     return SimpleNamespace(**{field.attr: request.POST.get(field.attr, "") for field in patterns.FORMAT_FIELDS})
 
 
@@ -928,7 +935,7 @@ def _test(request, fmt) -> tuple:
         source = f"le {slip_label(slip.number, slip.delivery_date, with_date=True)}"
     if not text.strip():
         return TestResult(problem="Rien à tester : choisissez un bon reçu, un PDF, ou collez le texte d'un bon."), text
-    return TestResult(source=source, trace=reading.trace(text, _unsaved_motifs(request))), text
+    return TestResult(source=source, trace=reading.trace(text, _unsaved_patterns(request))), text
 
 
 def _format_page(request, fmt):
@@ -944,7 +951,13 @@ def _format_page(request, fmt):
                 return render(
                     request,
                     "returnables/_format_test.html",
-                    {"result": result, "fmt": fmt, "tested_text": tested_text, "test_slips": _test_slips(fmt), "oob": True},
+                    {
+                        "result": result,
+                        "fmt": fmt,
+                        "tested_text": tested_text,
+                        "test_slips": _test_slips(fmt),
+                        "oob": True,
+                    },
                 )
             form.is_valid()
         elif action == SAVE:
@@ -978,15 +991,15 @@ def _format_page(request, fmt):
             "slip_count": fmt.slips.count() if fmt is not None else 0,
             "format_problem": format_problem(fmt) if fmt is not None and request.method != "POST" else "",
             "uba_line": UBA_EXAMPLE_LINE,
-            "uba_motif": UBA_EXAMPLE_MOTIF,
+            "uba_pattern": UBA_EXAMPLE_PATTERN,
             "home_url": _home_url(),
         },
     )
 
 
-#: The cheat-sheet's worked example: the seeded UBA line motif on an
+#: The cheat-sheet's worked example: the seeded UBA line pattern on an
 #: INVENTED line.
-UBA_EXAMPLE_MOTIF = (
+UBA_EXAMPLE_PATTERN = (
     r"^(?P<designation>.+?)\s+(?P<quantite>-?\d+)\s+x\s+(?P<prix>-?\d+(?:[.,]\d+)?)\s+=\s+"
     r"(?P<montant>-?\d+(?:[.,]\d+)?)\s*$"
 )
@@ -998,8 +1011,8 @@ def _test_slips(fmt) -> list:
         return []
     return [
         (slip.pk, slip_label(slip.number, slip.delivery_date, with_date=True, capital=True), slip.original_name)
-        # `format` in only(): through `fmt.slips`, Django sets each bon's
-        # format from its format_id - deferred, that is one query per bon.
+        # `format` in only(): through `fmt.slips`, Django sets each slip's
+        # format from its format_id - deferred, that is one query per slip.
         for slip in fmt.slips.only("pk", "format", "number", "delivery_date", "original_name").order_by(
             "-received_at", "-pk"
         )[:TEST_SLIPS_OFFERED]
@@ -1041,7 +1054,7 @@ def format_reread(request, pk):
     return redirect("returnables:format_edit", pk=fmt.pk)
 
 
-# -- Types of consigne ------------------------------------------------------------------------------------------------
+# -- Returnable types -------------------------------------------------------------------------------------------------
 
 
 def _type_page(request, bound=None, new_form=None, status=200):
@@ -1049,13 +1062,20 @@ def _type_page(request, bound=None, new_form=None, status=200):
     classifier = comparison.Classifier(types)
     rows = []
     for kind in types:
-        form = bound if bound is not None and bound.instance.pk == kind.pk else TypeForm(instance=kind, prefix=f"type-{kind.pk}")
+        form = (
+            bound
+            if bound is not None and bound.instance.pk == kind.pk
+            else TypeForm(instance=kind, prefix=f"type-{kind.pk}")
+        )
         rows.append((kind, form, classifier.errors.get(kind.pk, "")))
     if new_form is None:
         next_position = (max((kind.position for kind in types), default=0) + 1) if types else 1
         new_form = TypeForm(prefix="nouveau", initial={"position": next_position, "is_active": True})
     return render(
-        request, "returnables/type_list.html", {"rows": rows, "new_form": new_form, "home_url": _home_url()}, status=status
+        request,
+        "returnables/type_list.html",
+        {"rows": rows, "new_form": new_form, "home_url": _home_url()},
+        status=status,
     )
 
 

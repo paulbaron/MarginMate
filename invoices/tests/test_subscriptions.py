@@ -97,18 +97,22 @@ class Subscriptions(TestCase):
             ticket_header=BOX_HEADER,
             ticket_identifiers=[f"siren:{SIREN}", "web:mobile.operateur-exemple.fr"],
         )
-        self.poste = expense_product(self.operator)
+        self.charge_item = expense_product(self.operator)
         self.boxes = [self.bill(box_text, days, "29.99", "24.99") for days in (10, 40, 70)]
         self.mobiles = [self.bill(mobile_text, days, "9.99", "8.33") for days in (20, 50)]
-        grossiste = make_supplier(code="GROSSISTE_X", name="Grossiste Exemple", parser_key="")
-        make_invoice(supplier=grossiste, source_text="GROSSISTE EXEMPLE\nClient : 06 12 34 56 78\nTOTAL 12,00")
+        wholesaler = make_supplier(code="GROSSISTE_X", name="Grossiste Exemple", parser_key="")
+        make_invoice(supplier=wholesaler, source_text="GROSSISTE EXEMPLE\nClient : 06 12 34 56 78\nTOTAL 12,00")
 
     def bill(self, text_of, days_ago, ttc, ht):
         day = self.today - timedelta(days=days_ago)
         invoice = make_invoice(supplier=self.operator, invoice_date=day, ocr_text=text_of(day))
         make_invoice_line(
-            invoice=invoice, product=self.poste, raw_name=self.operator.name, total_ht=ht,
-            vat_rate=D("0.20"), printed_ttc=D(ttc),
+            invoice=invoice,
+            product=self.charge_item,
+            raw_name=self.operator.name,
+            total_ht=ht,
+            vat_rate=D("0.20"),
+            printed_ttc=D(ttc),
         )
         return invoice
 
@@ -134,7 +138,8 @@ class MoveTogetherTests(Subscriptions):
         self.operator.refresh_from_db()
         self.assertEqual(moved.count, 2)
         self.assertEqual(
-            set(Invoice.objects.filter(supplier=mobile)), set(Invoice.objects.filter(pk__in=[m.pk for m in self.mobiles]))
+            set(Invoice.objects.filter(supplier=mobile)),
+            set(Invoice.objects.filter(pk__in=[m.pk for m in self.mobiles])),
         )
         # Its company number and web site; not the customer's own phone,
         # which the wholesaler's invoice prints too.
@@ -198,7 +203,10 @@ class TwoMetersTests(TestCase):
 
     def setUp(self):
         self.energy = make_supplier(
-            code="ENERGIE_X", name="Energie Exemple", parser_key="", expenses_only=True,
+            code="ENERGIE_X",
+            name="Energie Exemple",
+            parser_key="",
+            expenses_only=True,
             ticket_identifiers=[f"siren:{SIREN}"],
         )
         self.lilas = [self.bill("SITE LILAS", day) for day in (1, 2)]
@@ -299,19 +307,31 @@ class MoveOneTests(Subscriptions):
         url = reverse("invoices:receipt_review", args=[self.mobiles[0].pk])
         page = self.client.get(url)
         self.assertContains(page, 'name="new_expenses" value="1" checked', html=False)
-        self.client.post(url, {
-            "action": "move_shop", "supplier": "new", "new_name": "Mobile Exemple", "new_header": "",
-            "new_expenses": "1",
-        })
+        self.client.post(
+            url,
+            {
+                "action": "move_shop",
+                "supplier": "new",
+                "new_name": "Mobile Exemple",
+                "new_header": "",
+                "new_expenses": "1",
+            },
+        )
         mobile = Supplier.objects.get(name="Mobile Exemple")
         self.assertTrue(mobile.expenses_only)
         self.assertFalse(Product.objects.filter(supplier=mobile, is_expense=False).exists())
 
     def move_first_mobile(self):
-        return self.client.post(reverse("invoices:receipt_review", args=[self.mobiles[0].pk]), {
-            "action": "move_shop", "supplier": "new", "new_name": "Mobile Exemple",
-            "new_header": "Forfait Exemple 5G", "new_expenses": "1",
-        })
+        return self.client.post(
+            reverse("invoices:receipt_review", args=[self.mobiles[0].pk]),
+            {
+                "action": "move_shop",
+                "supplier": "new",
+                "new_name": "Mobile Exemple",
+                "new_header": "Forfait Exemple 5G",
+                "new_expenses": "1",
+            },
+        )
 
     def siblings_named(self):
         """What is said of the mobile bill left behind under the operator."""
@@ -370,11 +390,11 @@ class RecognitionGuardTests(TestCase):
             check_header("ABONNEMENT  box")
 
     def test_the_import_says_which_two_disagree(self):
-        from invoices.tests.test_receipt_shop_choice import recognised
-        from invoices.tests.test_unknown_shops import staged_file
         from unittest import mock
 
         from invoices.receipts import import_receipt
+        from invoices.tests.test_receipt_shop_choice import recognised
+        from invoices.tests.test_unknown_shops import staged_file
 
         make_supplier(code="BOX_X", name="Box Exemple", parser_key="", ticket_header="ABONNEMENT BOX")
         make_supplier(code="MOB_X", name="Mobile Exemple", parser_key="", ticket_identifiers=[f"siren:{SIREN}"])
@@ -414,7 +434,8 @@ class HeaderChoiceTests(TestCase):
             make_invoice(supplier=other, ocr_text=f"AUTRE\n{street}\nTOTAL 1,00")
         shop = make_supplier(code="EPICERIE_X", name="Epicerie Exemple", parser_key="")
         ticket = make_invoice(
-            supplier=shop, ocr_text=f"EPICERIE EXEMPLE\n{street}\nTOTAL 2,00",
+            supplier=shop,
+            ocr_text=f"EPICERIE EXEMPLE\n{street}\nTOTAL 2,00",
             parse_checks=[{"label": "Somme des lignes = total imprimé", "passed": True, "detail": ""}],
         )
         page = self.client.get(reverse("invoices:receipt_review", args=[ticket.pk]))
@@ -452,14 +473,14 @@ class WhatAMoveTeachesTests(Subscriptions):
         """The wholesaler and the operator had both learned the customer's
         number, so it named neither; the operator forgetting it left the
         wholesaler its only owner."""
-        grossiste = Supplier.objects.get(code="GROSSISTE_X")
-        Supplier.objects.filter(pk=grossiste.pk).update(ticket_identifiers=["tel:0612345678"])
+        wholesaler = Supplier.objects.get(code="GROSSISTE_X")
+        Supplier.objects.filter(pk=wholesaler.pk).update(ticket_identifiers=["tel:0612345678"])
         Supplier.objects.filter(pk=self.operator.pk).update(
             ticket_identifiers=[f"siren:{SIREN}", "tel:0612345678", "web:mobile.operateur-exemple.fr"]
         )
         move_documents(self.mobiles, mobile_supplier())
-        grossiste.refresh_from_db()
-        self.assertEqual(grossiste.ticket_identifiers, [])
+        wholesaler.refresh_from_db()
+        self.assertEqual(wholesaler.ticket_identifiers, [])
         self.assertIsNone(detect_parser("Client : 06 12 34 56 78\nTOTAL 3,00"))
 
     def test_what_both_sides_print_is_not_learned(self):
@@ -483,19 +504,17 @@ class ALearnedCompanyNumberBlockingTests(TestCase):
         """A rent supplier had learned the customer's company number while
         it was the only one printing it: every bill of the water company,
         header and all, was then refused - until a person filed one."""
-        loyer = make_supplier(
-            code="LOYER_X", name="Loyer Exemple", parser_key="", ticket_identifiers=[f"siren:{SIREN}"]
-        )
-        make_invoice(supplier=loyer, ocr_text=f"LOYER\nClient SIREN {SIREN}\nTOTAL 800,00")
-        eau = make_supplier(code="EAU_X", name="Eau Exemple", parser_key="", ticket_header="EAU EXEMPLE")
+        rent = make_supplier(code="LOYER_X", name="Loyer Exemple", parser_key="", ticket_identifiers=[f"siren:{SIREN}"])
+        make_invoice(supplier=rent, ocr_text=f"LOYER\nClient SIREN {SIREN}\nTOTAL 800,00")
+        tap_water = make_supplier(code="EAU_X", name="Eau Exemple", parser_key="", ticket_header="EAU EXEMPLE")
         bill = f"EAU EXEMPLE\nClient SIREN {SIREN}\nTOTAL 80,00"
         self.assertIsNone(detect_parser(bill))
         from invoices.receipts import learn_identifiers
 
-        make_invoice(supplier=eau, ocr_text=bill)
-        learn_identifiers(eau, bill)
-        loyer.refresh_from_db()
-        self.assertEqual(loyer.ticket_identifiers, [])
+        make_invoice(supplier=tap_water, ocr_text=bill)
+        learn_identifiers(tap_water, bill)
+        rent.refresh_from_db()
+        self.assertEqual(rent.ticket_identifiers, [])
         self.assertEqual(detect_parser(bill.replace("80,00", "81,00")).supplier_code, "EAU_X")
 
 
@@ -514,21 +533,31 @@ class MovingKeepsWhatTheLinesDoNotSayTests(Subscriptions):
 
     def test_a_document_read_as_goods_moved_into_charges_is_read_again_as_one(self):
         """A rent statement read as a ticket - previous balance, direct
-        debit, rent - kept its three lines as postes: three times what it
-        charges."""
+        debit, rent - kept its three lines as charge items: three times what
+        it charges."""
         from invoices.tests.test_expense_suppliers import STATEMENT
 
-        agence = make_supplier(code="AGENCE_X", name="Agence Exemple", parser_key="")
+        agency = make_supplier(code="AGENCE_X", name="Agence Exemple", parser_key="")
         statement = make_invoice(
-            supplier=agence, ocr_text=STATEMENT, invoice_date=self.today - timedelta(days=5),
+            supplier=agency,
+            ocr_text=STATEMENT,
+            invoice_date=self.today - timedelta(days=5),
             parse_checks=[{"label": "Somme des lignes = total imprimé", "passed": False, "detail": ""}],
         )
         for name in ("SOLDE PRECEDENT", "PRELEVEMENT", "LOYER"):
-            make_invoice_line(invoice=statement, raw_name=name, total_ht="830.00", vat_rate=D("0"), printed_ttc=D("830.00"))
-        response = self.client.post(reverse("invoices:receipt_review", args=[statement.pk]), {
-            "action": "move_shop", "supplier": "new", "new_name": "Bailleur Exemple", "new_header": "",
-            "new_expenses": "1",
-        })
+            make_invoice_line(
+                invoice=statement, raw_name=name, total_ht="830.00", vat_rate=D("0"), printed_ttc=D("830.00")
+            )
+        response = self.client.post(
+            reverse("invoices:receipt_review", args=[statement.pk]),
+            {
+                "action": "move_shop",
+                "supplier": "new",
+                "new_name": "Bailleur Exemple",
+                "new_header": "",
+                "new_expenses": "1",
+            },
+        )
         self.assertEqual(response.status_code, 302)
         (row,) = [row for row in charge_suppliers() if row["supplier"].name == "Bailleur Exemple"]
         self.assertEqual((row["documents"], row["total_ttc"]), (1, D("820.00")))
@@ -548,10 +577,10 @@ class MovingKeepsWhatTheLinesDoNotSayTests(Subscriptions):
             ticket = make_invoice(supplier=shop, ocr_text=f"EPICERIE\nVODKA 70CL  15,00\nLe {day:02d}/05/2026")
             create_stock_movement_for_line(make_invoice_line(invoice=ticket, product=product, total_ht="12.50"))
             tickets.append(ticket)
-        deux = create_shop("Epicerie Deux")
-        moved = move_documents([tickets[1]], deux)
+        second_shop = create_shop("Epicerie Deux")
+        moved = move_documents([tickets[1]], second_shop)
         (line,) = Invoice.objects.get(pk=tickets[1].pk).lines.all()
-        self.assertEqual((line.product.supplier, line.product.stock_type), (deux, vodka))
+        self.assertEqual((line.product.supplier, line.product.stock_type), (second_shop, vodka))
         self.assertEqual(StockMovement.objects.filter(stock_type=vodka).count(), 2)
         self.assertEqual(moved.reclassified, 1)
 
@@ -589,12 +618,16 @@ class CorpusTests(TestCase):
 class ChargesPageAfterReviewTests(TestCase):
     def setUp(self):
         self.water = make_supplier(code="EAU_X", name="Eau Exemple", parser_key="", expenses_only=True)
-        self.poste = expense_product(self.water)
+        self.charge_item = expense_product(self.water)
 
     def bill(self, day, ttc):
         invoice = make_invoice(supplier=self.water, invoice_date=day)
         make_invoice_line(
-            invoice=invoice, product=self.poste, raw_name=self.water.name, total_ht=ttc, vat_rate=D("0"),
+            invoice=invoice,
+            product=self.charge_item,
+            raw_name=self.water.name,
+            total_ht=ttc,
+            vat_rate=D("0"),
             printed_ttc=D(ttc),
         )
         return invoice

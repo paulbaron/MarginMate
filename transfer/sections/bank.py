@@ -54,8 +54,19 @@ KEY = "banque"
 # and nothing rebuilds it: a statement re-imported brings back the line and
 # not one word of it.
 TRANSACTION_FIELDS = (
-    "account", "operation_date", "value_date", "card_date", "bank_type", "kind", "label",
-    "counterparty", "amount", "no_invoice", "settled_by_hand", "category", "imported_at",
+    "account",
+    "operation_date",
+    "value_date",
+    "card_date",
+    "bank_type",
+    "kind",
+    "label",
+    "counterparty",
+    "amount",
+    "no_invoice",
+    "settled_by_hand",
+    "category",
+    "imported_at",
 )
 # Never the import date (§6.4): merging an archive of the same statement taken
 # a minute later is « inchangé », not a conflict.
@@ -112,7 +123,9 @@ FIELD_LABELS = {
 }
 
 # The page's own button, which links what bank.matching is sure of.
-RECONCILE_NOTE = "Pour lier automatiquement les nouvelles opérations : « Relancer le rapprochement » sur la page Banque."
+RECONCILE_NOTE = (
+    "Pour lier automatiquement les nouvelles opérations : « Relancer le rapprochement » sur la page Banque."
+)
 CLEAR_NOTE = (
     "Les opérations reviennent en important de nouveau le relevé de la banque, mais sans leurs liens ni les "
     "décisions prises à la main : celles-ci ne reviennent que d'une archive."
@@ -225,11 +238,19 @@ class BankSection(Section):
             )
         return {
             "transactions": [
-                {"fingerprint": line.fingerprint, **codec.record(line, TRANSACTION_FIELDS), "payments": sorted(by_line[line.pk])}
+                {
+                    "fingerprint": line.fingerprint,
+                    **codec.record(line, TRANSACTION_FIELDS),
+                    "payments": sorted(by_line[line.pk]),
+                }
                 for line in BankTransaction.objects.order_by("fingerprint")
             ],
-            "aliases": sorted([code, name] for code, name in CounterpartyAlias.objects.values_list("supplier__code", "name")),
-            "rules": sorted([rule.pattern, *codec.record(rule, RULE_FIELDS).values()] for rule in IgnoreRule.objects.all()),
+            "aliases": sorted(
+                [code, name] for code, name in CounterpartyAlias.objects.values_list("supplier__code", "name")
+            ),
+            "rules": sorted(
+                [rule.pattern, *codec.record(rule, RULE_FIELDS).values()] for rule in IgnoreRule.objects.all()
+            ),
         }
 
     # -- export ----------------------------------------------------------------
@@ -250,7 +271,9 @@ class BankSection(Section):
             # A code may differ in the database this is imported into (LIDL
             # there, LIDL_2 here): its name lets the invoice keys and the
             # aliases still find their supplier (§5.4).
-            "supplier_names": dict(Supplier.objects.filter(code__in=codes).order_by("code").values_list("code", "name")),
+            "supplier_names": dict(
+                Supplier.objects.filter(code__in=codes).order_by("code").values_list("code", "name")
+            ),
             "transactions": [
                 {
                     "fingerprint": line.fingerprint,
@@ -283,7 +306,9 @@ class BankSection(Section):
                 continue
             payments = record["payments"]
             if not isinstance(payments, list) or not all(isinstance(item, dict) for item in payments):
-                raise ArchiveError("Archive refusée : dans banque.json, les liens d'une opération ne sont pas une liste.")
+                raise ArchiveError(
+                    "Archive refusée : dans banque.json, les liens d'une opération ne sont pas une liste."
+                )
         self.payload = payload
         # What the file names, whatever becomes of its records: prune never
         # deletes a line, rule or name the archive holds, even one it could
@@ -293,7 +318,7 @@ class BankSection(Section):
         self._rule_ids: dict[str, int] = {}
         self._alias_keys: set[tuple[int, str]] = set()
         # The invoices here before the run: the runner loads every section
-        # before the first apply, and by this section's turn the factures
+        # before the first apply, and by this section's turn the invoices
         # section has created its own. An invoice absent from this set came
         # with this run, so no person here can have undone a link to it.
         self._invoices_before: set[int] = set(Invoice.objects.values_list("pk", flat=True))
@@ -512,7 +537,9 @@ class BankSection(Section):
                 continue
             try:
                 method = codec.load(InvoicePayment, "method", payment.get("method"))
-                moment = codec.load(InvoicePayment, "created_at", payment["created_at"]) if "created_at" in payment else None
+                moment = (
+                    codec.load(InvoicePayment, "created_at", payment["created_at"]) if "created_at" in payment else None
+                )
             except codec.FieldValueError as exc:
                 report.skip(f"{_operation(line)} : lien vers {invoice_label(invoice)} : {exc}")
                 continue
@@ -638,7 +665,11 @@ class BankSection(Section):
         # Nothing in any other section points at a bank line, a rule or a
         # payee name: what the archive does not hold goes. The lines' links
         # went in apply (above), before the archive's were made.
-        lines = [pk for pk, fingerprint in BankTransaction.objects.values_list("pk", "fingerprint") if fingerprint not in self._fingerprints]
+        lines = [
+            pk
+            for pk, fingerprint in BankTransaction.objects.values_list("pk", "fingerprint")
+            if fingerprint not in self._fingerprints
+        ]
         if lines:
             report.deleted(OPERATIONS, _delete_ids(BankTransaction, lines))
         rules = [

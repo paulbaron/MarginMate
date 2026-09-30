@@ -7,14 +7,14 @@
     {% endcomment %}
     <div class="page-header">
         <div>
-            <p class="breadcrumb"><a href="{{ fiche }}">← {{ supplier.name }}</a></p>
+            <p class="breadcrumb"><a href="{{ supplier_page }}">← {{ supplier.name }}</a></p>
             <h1>{% if wanted %}Faire de {{ supplier.name }} un fournisseur de charges ?{% else %}Faire de {{ supplier.name }} un fournisseur de produits ?{% endif %}</h1>
         </div>
     </div>
     <div class="card">
         {% if unchanged %}
             <p>{{ supplier.name }} est déjà un fournisseur de {% if wanted %}charges{% else %}produits{% endif %} : rien à faire.</p>
-            <div class="actions"><a class="btn btn-secondary" href="{{ fiche }}">Revenir à la fiche</a></div>
+            <div class="actions"><a class="btn btn-secondary" href="{{ supplier_page }}">Revenir à la fiche</a></div>
         {% else %}
             {% if wanted %}
                 <p>
@@ -32,7 +32,7 @@
                 <p>Ses prochains documents seront lus comme une liste de produits.</p>
                 <ul>
                     <li>Ses {{ document_count }} document{{ document_count|pluralize }} déjà enregistré{{ document_count|pluralize }} garde{{ document_count|pluralize:"nt" }} leurs lignes : corrigez-les un par un si besoin.</li>
-                    {% if postes %}<li>{{ postes }} poste{{ postes|pluralize }} de charge repasse{{ postes|pluralize:"nt" }} « à classer ».</li>{% endif %}
+                    {% if charge_items %}<li>{{ charge_items }} poste{{ charge_items|pluralize }} de charge repasse{{ charge_items|pluralize:"nt" }} « à classer ».</li>{% endif %}
                     {% if credits %}<li>{{ credits }} avoir{{ credits|pluralize }} (une quantité positive à un montant négatif, comme sur une charge) {{ credits|pluralize:"devient un retour,deviennent des retours" }}, comme sur des produits : {{ credits|pluralize:"sa,leur" }} quantité passe en négatif, {{ credits|pluralize:"son,leur" }} montant ne change pas.</li>{% endif %}
                 </ul>
             {% endif %}
@@ -41,7 +41,7 @@
                 {% if wanted %}<input type="hidden" name="expenses_only" value="1">{% endif %}
                 <input type="hidden" name="confirme" value="1">
                 <button class="btn" type="submit">{% if wanted %}Oui, ce sont des charges{% else %}Oui, ce sont des produits{% endif %}</button>
-                <a class="btn btn-secondary" href="{{ fiche }}">Annuler</a>
+                <a class="btn btn-secondary" href="{{ supplier_page }}">Annuler</a>
             </form>
         {% endif %}
     </div>

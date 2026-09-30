@@ -1,8 +1,8 @@
 {% comment %}
-La liste des factures non réglées à ces dates, pour une ligne ouverte comme
-pour une ligne déjà rapprochée : une dépense réglant deux livraisons se
-complète ici, sans avoir à trouver un mot qui retrouve la deuxième.
-Une liste coupée le dit : tue, elle se lit « la facture n'y est pas ».
+The list of the invoices unpaid at these dates, for an open line as
+for a line already linked: a debit settling two deliveries is
+completed here, without having to find a word that finds the second one.
+A cut list says so: kept quiet, it reads as « the invoice is not there ».
 {% endcomment %}
 {% if row.choices %}
     <form method="post" action="{% url 'bank:bank_line_action' row.line.pk %}" class="inline-form">

@@ -108,16 +108,24 @@ class ReviewPageOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         its shop has known prices, so their table is drawn open."""
         shop = make_supplier(name="Épicerie Exemple")
         invoice = make_invoice(
-            supplier=shop, invoice_date=date(2026, 1, 12), ocr_text="EPICERIE EXEMPLE",
+            supplier=shop,
+            invoice_date=date(2026, 1, 12),
+            ocr_text="EPICERIE EXEMPLE",
             parse_checks=[{"label": "Somme des lignes = total imprimé", "passed": True, "detail": ""}],
         )
         for name, total_ht, printed_ttc in LINES:
             make_invoice_line(
-                invoice=invoice, product=make_product(supplier=shop, raw_name=name), raw_name=name,
-                total_ht=total_ht, vat_rate="0.055", printed_ttc=printed_ttc,
+                invoice=invoice,
+                product=make_product(supplier=shop, raw_name=name),
+                raw_name=name,
+                total_ht=total_ht,
+                vat_rate="0.055",
+                printed_ttc=printed_ttc,
             )
         for price, label, valid_from in KNOWN_PRICES:
-            ShopItemPrice.objects.create(supplier=shop, unit_price_ttc=Decimal(price), label=label, valid_from=valid_from)
+            ShopItemPrice.objects.create(
+                supplier=shop, unit_price_ttc=Decimal(price), label=label, valid_from=valid_from
+            )
         invoice.preview_image.save("ticket-exemple.png", ContentFile(tiny_png()), save=False)
         invoice.save(update_fields=["preview_image"])
         self.addCleanup(invoice.preview_image.storage.delete, invoice.preview_image.name)
@@ -174,10 +182,12 @@ class ReviewPageOnAPhoneInBrowserTests(StaticLiveServerTestCase):
     def photo(self):
         """The photo's box as the page draws it, once its image has loaded
         (an image not loaded yet is 0 px tall and nothing overflows)."""
-        self.wait_for(lambda: self.script(
-            "var img = document.querySelector('.receipt-photo img');"
-            "return !!img && img.complete && img.naturalWidth > 0;"
-        ))
+        self.wait_for(
+            lambda: self.script(
+                "var img = document.querySelector('.receipt-photo img');"
+                "return !!img && img.complete && img.naturalWidth > 0;"
+            )
+        )
         return self.script(
             "var box = document.querySelector('.receipt-photo'), style = getComputedStyle(box);"
             "return {position: style.position, overflowY: style.overflowY,"
@@ -221,9 +231,12 @@ class ReviewPageOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         invoice = self.ticket()
         self.device(*PHONE, touch=True)
         self.open(reverse("invoices:receipt_review", args=[invoice.pk]))
-        self.assertTrue(self.script(
-            "var table = document.querySelector('.known-prices table'); return !!table && table.getClientRects().length > 0;"
-        ), "la table des prix connus n'est pas dessinée")
+        self.assertTrue(
+            self.script(
+                "var table = document.querySelector('.known-prices table'); return !!table && table.getClientRects().length > 0;"
+            ),
+            "la table des prix connus n'est pas dessinée",
+        )
         self.assertLessEqual(self.page_width(), PHONE[0])
 
     def test_beside_the_lines_the_photo_still_follows_them(self):

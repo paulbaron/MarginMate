@@ -1,6 +1,6 @@
 {% comment %}
-« Tester », inside the format's form: it posts the page's motifs as they
-are typed (action=tester) - htmx answers in #resultat-test, a page without
+« Tester », inside the format's form: it posts the page's patterns as they
+are typed (action=tester) - htmx answers in #format-test-result, a page without
 JavaScript is drawn again with the result. formnovalidate: a new format is
 tested on a PDF before it has a name or a supplier.
 {% endcomment %}
@@ -10,9 +10,9 @@ tested on a PDF before it has a name or a supplier.
     {% include "returnables/_tester_sources.html" with oob=False %}
     <div class="form-actions">
         <button class="btn btn-secondary" type="submit" name="action" value="tester" formnovalidate
-            hx-post="{{ request.path }}" hx-target="#resultat-test" hx-swap="innerHTML">Tester</button>
+            hx-post="{{ request.path }}" hx-target="#format-test-result" hx-swap="innerHTML">Tester</button>
     </div>
-    <div id="resultat-test" class="test-result" aria-live="polite">
+    <div id="format-test-result" class="test-result" aria-live="polite">
         {% if result %}{% include "returnables/_format_test.html" with oob=False %}{% endif %}
     </div>
 </section>

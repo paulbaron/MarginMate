@@ -81,9 +81,7 @@ class GroupingRoundTripTests(TestCase):
         )
 
     def test_filling_the_blank_row_adds_an_ingredient_not_an_alternative(self):
-        RecipeIngredient.objects.create(
-            recipe=self.recipe, stock_type=self.vodka, quantity=Decimal("0.04"), group=0
-        )
+        RecipeIngredient.objects.create(recipe=self.recipe, stock_type=self.vodka, quantity=Decimal("0.04"), group=0)
         blank_group = self.reopen().forms[-1]["group"].value()
 
         self.post(

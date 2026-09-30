@@ -26,28 +26,28 @@ STOCK_TAKE_VIEWS = {
 }
 
 SECTION_BY_APP = {
-    "invoices": "achats",
-    "recipes": "recettes",
-    "bank": "banque",
-    "margins": "marges",
-    "transfer": "donnees",
-    "staff": "personnel",
-    "returnables": "consignes",
+    "invoices": "purchases",
+    "recipes": "recipes",
+    "bank": "bank",
+    "margins": "margins",
+    "transfer": "data",
+    "staff": "staff",
+    "returnables": "returnables",
 }
 
 #: What the folded topbar says under 860 px (base.html's .topbar-section):
 #: the words of the link a page lights. The links keep their own words in
 #: base.html; tests/test_navigation.py checks each page shows its lit link's.
 SECTION_LABELS = {
-    "produits": "Produits & charges",
-    "achats": "Achats",
-    "banque": "Banque",
-    "recettes": "Recettes & ventes",
-    "marges": "Marges",
-    "personnel": "Personnel",
-    "inventaires": "Inventaires",
-    "consignes": "Consignes",
-    "donnees": "Données",
+    "products": "Produits & charges",
+    "purchases": "Achats",
+    "bank": "Banque",
+    "recipes": "Recettes & ventes",
+    "margins": "Marges",
+    "staff": "Personnel",
+    "stock_takes": "Inventaires",
+    "returnables": "Consignes",
+    "data": "Données",
 }
 
 
@@ -55,7 +55,7 @@ def section_of(match) -> str:
     if match is None:
         return ""
     if match.app_name == "inventory":
-        return "inventaires" if match.url_name in STOCK_TAKE_VIEWS else "produits"
+        return "stock_takes" if match.url_name in STOCK_TAKE_VIEWS else "products"
     return SECTION_BY_APP.get(match.app_name, "")
 
 
@@ -64,7 +64,7 @@ def navigation(request):
     from recipes.models import PosProduct
 
     if current_tenant() is None:
-        # Multi mode, no espace bound (the login, 404 and CSRF pages): no
+        # Multi mode, no tenant bound (the login, 404 and CSRF pages): no
         # section to light, no database to count in.
         return {}
     section = section_of(getattr(request, "resolver_match", None))

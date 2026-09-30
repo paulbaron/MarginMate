@@ -266,7 +266,7 @@ ABSENCE_KINDS = frozenset(
 # (the workflow) and staff/signing.py (the cryptography). The files - the frozen
 # document, the drawn signature, the signed PDFs, the proof file - are NOT in the
 # database: they live in the private folder's signatures/<uuid>/ (staff.private_files:
-# the espace's own private/), and the row keeps their SHA-256.
+# the tenant's own private/), and the row keeps their SHA-256.
 
 
 class SignatureRequest(models.Model):
@@ -300,8 +300,8 @@ class SignatureRequest(models.Model):
     created_at = models.DateTimeField("créée le", default=timezone.now)
     expires_at = models.DateTimeField("lien valable jusqu'au")
     # sha256 of the link's secret: the secret itself is never stored. Multi
-    # mode: indexed under this espace in the accounts database too
-    # (accounts.links), so the public page knows which espace to open.
+    # mode: indexed under this tenant in the accounts database too
+    # (accounts.links), so the public page knows which tenant to open.
     token_hash = models.CharField(max_length=64, unique=True)
     # The month as it was frozen - what the employee's page shows, whatever
     # is edited afterwards (signature_requests.month_snapshot).

@@ -70,13 +70,13 @@ def sales_list_url(request) -> str:
 
 
 def render_menu(request, tab, *, status=200, **extra):
-    """The page on `tab` ("recettes", "a-lier", "ventes"); `extra` goes to the
+    """The page on `tab` ("recipes", "to-link", "sales"); `extra` goes to the
     tab (a bound sale form with its errors)."""
     to_link = pending_count()
     # The « du … au … » window is the sales tab's, and is read before the
     # tabs so that tab's own link can carry it: clicking « Ventes » from the
     # sales page would otherwise silently mean « and now show all 8 000 ».
-    window = date_range(request) if tab == "ventes" else DateRange()
+    window = date_range(request) if tab == "sales" else DateRange()
     sales_url = reverse("recipes:sales_list")
     if window:
         sales_url = f"{sales_url}?{urlencode(window.parameters)}"
@@ -87,27 +87,37 @@ def render_menu(request, tab, *, status=200, **extra):
     # the template - that is exactly where a parameter gets forgotten.
     # Only an id travels: garbage in the query string is no filter, and a
     # link handing it back would make a stale bookmark permanent.
-    article = request.GET.get(ARTICLE_PARAM, "") if tab == "recettes" else ""
+    article = request.GET.get(ARTICLE_PARAM, "") if tab == "recipes" else ""
     recipes_url = reverse("recipes:recipe_list")
     if is_id(article):
         recipes_url = f"{recipes_url}?{urlencode({ARTICLE_PARAM: article})}"
     tabs = [
-        {"key": "recettes", "label": "Recettes", "url": recipes_url,
-         "count": Recipe.objects.count(), "attention": False},
-        {"key": "a-lier", "label": "À lier", "url": reverse("recipes:pos_product_list"),
-         "count": to_link, "attention": bool(to_link)},
-        {"key": "ventes", "label": "Ventes", "url": sales_url, "count": None, "attention": False},
+        {
+            "key": "recipes",
+            "label": "Recettes",
+            "url": recipes_url,
+            "count": Recipe.objects.count(),
+            "attention": False,
+        },
+        {
+            "key": "to-link",
+            "label": "À lier",
+            "url": reverse("recipes:pos_product_list"),
+            "count": to_link,
+            "attention": bool(to_link),
+        },
+        {"key": "sales", "label": "Ventes", "url": sales_url, "count": None, "attention": False},
     ]
     for entry in tabs:
         entry["active"] = entry["key"] == tab
     context = {"tab": tab, "tabs": tabs, "to_link_count": to_link}
-    if tab == "recettes":
+    if tab == "recipes":
         extra.setdefault("article", article)
-    if tab == "ventes":
+    if tab == "sales":
         extra.setdefault("query", request.GET.get("vente", ""))
         extra.setdefault("show_all", request.GET.get("ventes") == "toutes")
         extra.setdefault("window", window)
-    builders = {"recettes": _recipes, "a-lier": _to_link, "ventes": _sales}
+    builders = {"recipes": _recipes, "to-link": _to_link, "sales": _sales}
     context.update(builders[tab](**extra))
     return render(request, "recipes/menu.html", context, status=status)
 
@@ -153,11 +163,13 @@ def _recipes(article: str = "") -> dict:
             recipe.article_certain = any(use.certain for use in recipe.article_uses)
         maybe_count = sum(1 for recipe in recipes if not recipe.article_certain)
     till_names: dict[int, list[str]] = {}
-    for recipe_id, name in PosProduct.objects.filter(recipe__isnull=False).order_by("name").values_list(
-        "recipe_id", "name"
+    for recipe_id, name in (
+        PosProduct.objects.filter(recipe__isnull=False).order_by("name").values_list("recipe_id", "name")
     ):
         till_names.setdefault(recipe_id, []).append(name)
-    units_sold = dict(RecipeSale.objects.values("recipe_id").annotate(units=Sum("quantity")).values_list("recipe_id", "units"))
+    units_sold = dict(
+        RecipeSale.objects.values("recipe_id").annotate(units=Sum("quantity")).values_list("recipe_id", "units")
+    )
     for recipe in recipes:
         recipe.till_names = till_names.get(recipe.pk, [])
         recipe.units_sold = units_sold.get(recipe.pk, 0)
@@ -254,9 +266,7 @@ def _sales(form=None, query: str = "", show_all: bool = False, window: DateRange
     window = window or DateRange()
     sale_documents = window.limit(SaleDocument.objects.all(), "sold_on")
     documents = list(
-        sale_documents.prefetch_related("lines__recipe", "lines__stock_type").order_by("-sold_on")[
-            :DOCUMENTS_PAGE_SIZE
-        ]
+        sale_documents.prefetch_related("lines__recipe", "lines__stock_type").order_by("-sold_on")[:DOCUMENTS_PAGE_SIZE]
     )
     documents_found = sale_documents.count()
     recorded = window.limit(RecipeSale.objects.all(), "sold_on")

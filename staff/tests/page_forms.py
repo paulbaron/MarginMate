@@ -28,8 +28,8 @@ IGNORED_TYPES = ("button", "reset", "file")
 class Control:
     tag: str
     attrs: dict
-    options: list = field(default_factory=list)   # (value, selected) for a <select>
-    text: str = ""                                  # a <textarea>'s content
+    options: list = field(default_factory=list)  # (value, selected) for a <select>
+    text: str = ""  # a <textarea>'s content
 
     @property
     def name(self) -> str | None:
@@ -56,7 +56,7 @@ class Control:
             return self.options[0][0] if self.options else ""
         if self.tag == "textarea":
             # The HTML parser drops the one newline that follows <textarea>.
-            return self.text[1:] if self.text.startswith("\n") else self.text
+            return self.text.removeprefix("\n")
         return self.attrs.get("value", "on" if self.kind in ("checkbox", "radio") else "")
 
 
@@ -136,7 +136,7 @@ class _Forms(HTMLParser):
         self.forms: list[Form] = []
         self._form: Form | None = None
         self._select: Control | None = None
-        self._option: list | None = None     # [value or None, selected, text]
+        self._option: list | None = None  # [value or None, selected, text]
         self._textarea: Control | None = None
 
     def handle_starttag(self, tag, attrs):

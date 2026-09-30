@@ -7,7 +7,7 @@
     {% endcomment %}
     <div class="page-header">
         <div>
-            <p class="breadcrumb"><a href="{{ fiche }}">← {{ supplier.name }}</a></p>
+            <p class="breadcrumb"><a href="{{ supplier_page }}">← {{ supplier.name }}</a></p>
             <h1>Supprimer {{ supplier.name }} ?</h1>
         </div>
     </div>
@@ -19,7 +19,7 @@
                 Changez ses documents de fournisseur depuis la page de chacun et rattachez ses sources de factures à un
                 autre fournisseur, puis revenez ici.
             </p>
-            <div class="actions"><a class="btn btn-secondary" href="{{ fiche }}">Revenir à sa fiche</a></div>
+            <div class="actions"><a class="btn btn-secondary" href="{{ supplier_page }}">Revenir à sa fiche</a></div>
         {% else %}
             <p>
                 Aucun document n'y est rangé, aucune source ne récupère pour lui.
@@ -39,7 +39,7 @@
                 <input type="hidden" name="confirme" value="1">
                 <div class="actions">
                     <button class="btn btn-danger" type="submit">Supprimer {{ supplier.name }}</button>
-                    <a class="btn btn-secondary" href="{{ fiche }}">Annuler</a>
+                    <a class="btn btn-secondary" href="{{ supplier_page }}">Annuler</a>
                 </div>
             </form>
         {% endif %}

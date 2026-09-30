@@ -31,7 +31,7 @@ SUPPLIERS = "invoices:supplier_list"
 HISTORY_SHOWN = 30
 
 
-def fiche_url(supplier) -> str:
+def supplier_page_url(supplier) -> str:
     return reverse("invoices:supplier_detail", args=[supplier.pk])
 
 
@@ -54,7 +54,7 @@ def _supplier(request, pk):
 
 
 def supplier_list(request):
-    """"Achats", on the « Enseignes et fournisseurs » tab: who each document
+    """ "Achats", on the « Enseignes et fournisseurs » tab: who each document
     is filed under. It was the foot of the Sources tab, under the sources of
     invoices - two things the owner asked to tell apart (19/09)."""
     from .workspace import render_purchases
@@ -100,12 +100,12 @@ def supplier_detail(request, pk):
             # where the server's Metro account may be used (integrations.py).
             "own_module": own_module_suppliers().filter(pk=supplier.pk).exists(),
             # Both channels of a source are the server's own accounts: where
-            # they are not this espace's, said here as on the Sources tab,
+            # they are not this tenant's, said here as on the Sources tab,
             # and no « + Nouvelle source » leading to a form that only says so.
             "sources_refused": None if integrations_allowed() else integrations.SOURCES,
             "delete_refused": delete_refused(supplier),
             "changes": changes,
-            "fiche": fiche_url(supplier),
+            "supplier_page": supplier_page_url(supplier),
             "move_offer": _move_offer(request, supplier),
             "filing_rules": filing_rules(supplier, is_till=is_till, own_reader=own_reader),
         },
@@ -177,14 +177,20 @@ def record_type_moved(invoice_type, before, after, undoes=None) -> None:
         data["undoes"] = undoes.pk
     back = "Rendu : " if undoes is not None else ""
     supplier_changes.record(
-        before, SupplierChange.Kind.TYPES,
+        before,
+        SupplierChange.Kind.TYPES,
         f"{back}« {invoice_type.name} » récupère désormais pour {after.name}.",
-        data=data, other_supplier=after, operation=operation,
+        data=data,
+        other_supplier=after,
+        operation=operation,
     )
     supplier_changes.record(
-        after, SupplierChange.Kind.TYPES,
+        after,
+        SupplierChange.Kind.TYPES,
         f"{back}« {invoice_type.name} » récupère désormais pour lui (avant : {before.name}).",
-        data=data, other_supplier=before, operation=operation,
+        data=data,
+        other_supplier=before,
+        operation=operation,
     )
 
 
@@ -203,10 +209,10 @@ def delete_refused(supplier) -> str:
     types = InvoiceType.objects.filter(supplier=supplier).count()
     if types:
         return f"{types} source{'s' if types > 1 else ''} {'récupèrent' if types > 1 else 'récupère'} pour lui"
-    return consignes_refusal(supplier)
+    return returnables_refusal(supplier)
 
 
-def consignes_refusal(supplier) -> str:
+def returnables_refusal(supplier) -> str:
     """What « Consignes » holds of `supplier` - « 1 format de bon de
     consignes et 3 reprises de consignes sont à son nom » - or "". Both hold
     it with PROTECT: without this, the page offered « Supprimer… » and the
@@ -236,7 +242,7 @@ def supplier_create(request):
     from .forms import SupplierCreateForm
     from .receipts import create_shop
 
-    retour = _local_return(request)
+    return_to = _local_return(request)
     if request.method == "POST":
         form = SupplierCreateForm(request.POST)
         if form.is_valid():
@@ -248,13 +254,15 @@ def supplier_create(request):
                 form.add_error(None, str(exc))
             else:
                 _say_created(request, supplier)
-                fiche = fiche_url(supplier)
+                supplier_page = supplier_page_url(supplier)
                 if data["arrivee"] in ("EMAIL", "WEBSITE"):
-                    query = urlencode({"fournisseur": supplier.pk, "source": data["arrivee"], "retour": fiche}, safe="/")
+                    query = urlencode(
+                        {"fournisseur": supplier.pk, "source": data["arrivee"], "retour": supplier_page}, safe="/"
+                    )
                     return redirect(reverse("invoices:invoice_type_create") + "?" + query)
-                if retour:
-                    return redirect(retour + ("&" if "?" in retour else "?") + f"fournisseur={supplier.pk}")
-                return redirect(fiche)
+                if return_to:
+                    return redirect(return_to + ("&" if "?" in return_to else "?") + f"fournisseur={supplier.pk}")
+                return redirect(supplier_page)
     else:
         form = SupplierCreateForm()
     return render(
@@ -263,8 +271,8 @@ def supplier_create(request):
         {
             "form": form,
             "taken": getattr(form, "taken", None),
-            "retour": retour,
-            "back": retour or reverse(SUPPLIERS),
+            "return_to": return_to,
+            "back": return_to or reverse(SUPPLIERS),
         },
     )
 
@@ -300,7 +308,7 @@ def _edit_version(supplier) -> str:
     """What the modification page was drawn from: its name, its header, the
     last change recorded - saving applies only if it is still that."""
     latest = supplier.changes.order_by("-pk").values_list("pk", flat=True).first()
-    return hashlib.sha256(f"{supplier.name}\x00{supplier.ticket_header}\x00{latest}".encode("utf-8")).hexdigest()
+    return hashlib.sha256(f"{supplier.name}\x00{supplier.ticket_header}\x00{latest}".encode()).hexdigest()
 
 
 def _edit_plan(supplier, name, header, header_editable) -> dict:
@@ -323,7 +331,9 @@ def _edit_plan(supplier, name, header, header_editable) -> dict:
                     f" {renamed.lines} ligne{'s' if renamed.lines > 1 else ''} de charge « {renamed.before} »"
                     f" et son poste prennent le nouveau nom."
                 )
-            said.append(sentence + " Son code interne ne change pas ; le rapprochement bancaire garde les libellés déjà appris.")
+            said.append(
+                sentence + " Son code interne ne change pas ; le rapprochement bancaire garde les libellés déjà appris."
+            )
     changing_header = header_editable and header != supplier.ticket_header
     if changing_header and header:
         try:
@@ -367,12 +377,12 @@ def supplier_edit(request, pk):
     supplier, away = _supplier(request, pk)
     if away is not None:
         return away
-    fiche = fiche_url(supplier)
+    supplier_page = supplier_page_url(supplier)
     header_editable = ticket_parser_for(supplier.code) is None and not _own_reader(supplier)
     documents = Invoice.objects.filter(supplier=supplier)
     count = documents.count()
     version = _edit_version(supplier)
-    step, stale, plan = "modifier", False, None
+    step, stale, plan = "edit", False, None
     if request.method == "POST":
         name = " ".join(request.POST.get("name", "").split())
         header = " ".join(request.POST.get("header", "").split()) if header_editable else supplier.ticket_header
@@ -380,12 +390,13 @@ def supplier_edit(request, pk):
         stale = request.POST.get("version") != version
         if action in ("verifier", "enregistrer"):
             plan = _edit_plan(supplier, name, header, header_editable)
-            step = "verifier"
+            step = "review"
             if action == "enregistrer" and not stale and plan["ok"] and plan["changes"]:
                 header_changed = header_editable and header != supplier.ticket_header
                 try:
-                    with transaction.atomic(), supplier_changes.cause(
-                        f"modification de la fiche de {supplier.name}", by_person=True
+                    with (
+                        transaction.atomic(),
+                        supplier_changes.cause(f"modification de la fiche de {supplier.name}", by_person=True),
                     ):
                         if name != supplier.name:
                             rename_supplier(supplier, name)
@@ -400,9 +411,9 @@ def supplier_edit(request, pk):
                         from .receipt_batches import requeue_everywhere
 
                         requeue_everywhere()
-                    return redirect(fiche)
+                    return redirect(supplier_page)
             elif action == "enregistrer" and not plan["changes"]:
-                return redirect(fiche)
+                return redirect(supplier_page)
     else:
         name, header = supplier.name, supplier.ticket_header
     latest = documents.exclude(ocr_text="", source_text="").order_by("-invoice_date", "-pk").first()
@@ -419,7 +430,7 @@ def supplier_edit(request, pk):
         "invoices/supplier_edit.html",
         {
             "supplier": supplier,
-            "fiche": fiche,
+            "supplier_page": supplier_page,
             "step": step,
             "stale": stale and request.method == "POST",
             "plan": plan,
@@ -452,20 +463,22 @@ def supplier_delete(request, pk):
     supplier, away = _supplier(request, pk)
     if away is not None:
         return away
-    fiche = fiche_url(supplier)
+    supplier_page = supplier_page_url(supplier)
     refused = delete_refused(supplier)
     if request.method == "POST" and request.POST.get("confirme") == "1":
         if refused:
             messages.error(request, f"{supplier.name} n'est pas supprimé : {refused}.")
-            return redirect(fiche)
+            return redirect(supplier_page)
         name = supplier.name
         try:
             with transaction.atomic():
                 Product.objects.filter(supplier=supplier).delete()
                 supplier.delete()
         except (ProtectedError, RestrictedError):
-            messages.error(request, f"{name} n'est pas supprimé : un de ses produits sert encore (inventaire, recette).")
-            return redirect(fiche)
+            messages.error(
+                request, f"{name} n'est pas supprimé : un de ses produits sert encore (inventaire, recette)."
+            )
+            return redirect(supplier_page)
         messages.success(request, f"{name} est supprimé.")
         return redirect(SUPPLIERS)
     return render(
@@ -473,7 +486,7 @@ def supplier_delete(request, pk):
         "invoices/supplier_delete.html",
         {
             "supplier": supplier,
-            "fiche": fiche,
+            "supplier_page": supplier_page,
             "refused": refused,
             "prices": ShopItemPrice.objects.filter(supplier=supplier).count(),
             "aliases": CounterpartyAlias.objects.filter(supplier=supplier).count(),
@@ -500,11 +513,7 @@ def _holder_of(identifier: str, excluding):
     nothing on either page said so."""
     from .receipts import identifier_owners
 
-    holders = [
-        holder
-        for holder in identifier_owners({identifier}).get(identifier, ())
-        if holder.pk != excluding.pk
-    ]
+    holders = [holder for holder in identifier_owners({identifier}).get(identifier, ()) if holder.pk != excluding.pk]
     return holders[0] if holders else None
 
 
@@ -535,9 +544,8 @@ def _move_identifier(request, supplier, identifier, holder) -> None:
     """
     import uuid
 
-    from .receipts import set_identifiers
-
     from .identifiers import describe
+    from .receipts import set_identifiers
 
     label = describe(identifier)
     with transaction.atomic():
@@ -585,9 +593,9 @@ def supplier_identifiers(request, pk):
     supplier, away = _supplier(request, pk)
     if away is not None:
         return away
-    fiche = fiche_url(supplier)
+    supplier_page = supplier_page_url(supplier)
     if request.method != "POST":
-        return redirect(fiche)
+        return redirect(supplier_page)
     action = request.POST.get("action", "")
     identifier = request.POST.get("identifier", "")
     report = identifier_report(supplier)
@@ -600,14 +608,17 @@ def supplier_identifiers(request, pk):
             set_identifiers(supplier, known | {identifier}, asked=True)
             messages.success(request, f"{supplier.name} sera reconnu par {label}.")
         elif action == "retirer" and identifier in known:
-            change = set_identifiers(supplier, known - {identifier}, reasons={identifier: "retiré à la main"}, asked=True)
+            change = set_identifiers(
+                supplier, known - {identifier}, reasons={identifier: "retiré à la main"}, asked=True
+            )
             supplier.refused_identifiers = sorted(refused | {identifier})
             supplier.save(update_fields=["refused_identifiers"])
             if change is not None:
                 change.data["refused_added"] = [identifier]
                 change.save(update_fields=["data"])
             messages.success(
-                request, f"{label} ne reconnaît plus {supplier.name}, et ne lui sera plus appris : « Ne plus l'écarter » le rend."
+                request,
+                f"{label} ne reconnaît plus {supplier.name}, et ne lui sera plus appris : « Ne plus l'écarter » le rend.",
             )
         elif action == "ne_plus_ecarter" and identifier in refused:
             supplier.refused_identifiers = sorted(refused - {identifier})
@@ -618,7 +629,8 @@ def supplier_identifiers(request, pk):
             change = set_identifiers(supplier, known | back, asked=True) if back else None
             if change is None:
                 change = supplier_changes.record(
-                    supplier, SupplierChange.Kind.IDENTIFIERS,
+                    supplier,
+                    SupplierChange.Kind.IDENTIFIERS,
                     f"{label} n'est plus écarté : il pourra être appris de nouveau.",
                 )
             change.data["refused_removed"] = [identifier]
@@ -626,7 +638,11 @@ def supplier_identifiers(request, pk):
             messages.success(
                 request,
                 f"{label} n'est plus écarté"
-                + (f" et reconnaît de nouveau {supplier.name}." if back else " : ses documents ne l'impriment pas assez pour le reconnaître."),
+                + (
+                    f" et reconnaît de nouveau {supplier.name}."
+                    if back
+                    else " : ses documents ne l'impriment pas assez pour le reconnaître."
+                ),
             )
         elif action in ("ajouter", "deplacer"):
             typed, why_not = _typed_identifier(request)
@@ -665,12 +681,12 @@ def supplier_identifiers(request, pk):
                         "Deux fournisseurs qui le retiennent n'en font reconnaître aucun : "
                         f"déplacez-le si ce n'est pas {holder.name}.",
                     )
-                    return redirect(f"{fiche}?{urlencode({'deplacer': typed})}")
+                    return redirect(f"{supplier_page}?{urlencode({'deplacer': typed})}")
         else:
             messages.error(
                 request, "Cette action ne vaut plus pour cet identifiant (la fiche a changé) : voici la fiche à jour."
             )
-    return redirect(fiche)
+    return redirect(supplier_page)
 
 
 def _undo_identifier_move(request, supplier, change) -> bool:
@@ -740,7 +756,8 @@ def _undo_identifiers(request, supplier, change) -> bool:
         again = sorted(new_refused - refused)
         freed = sorted(refused - new_refused)
         supplier_changes.record(
-            supplier, SupplierChange.Kind.IDENTIFIERS,
+            supplier,
+            SupplierChange.Kind.IDENTIFIERS,
             "Annulation : "
             + "; ".join(
                 part
@@ -836,7 +853,7 @@ UNDO = {
 def supplier_change_undo(request, pk, change_pk):
     supplier = get_object_or_404(Supplier, pk=pk)
     change = get_object_or_404(SupplierChange, pk=change_pk, supplier=supplier)
-    back = _local_return(request) or fiche_url(supplier) + "#historique"
+    back = _local_return(request) or supplier_page_url(supplier) + "#historique"
     if request.method != "POST":
         return redirect(back)
     if change.undone_at is not None:
@@ -883,4 +900,4 @@ def supplier_change_seen(request, pk, change_pk):
         change.reviewed_at = timezone.now()
         change.save(update_fields=["reviewed_at"])
         messages.success(request, f"Vu : {change.get_kind_display().lower()} de {supplier.name}.")
-    return redirect(_local_return(request) or fiche_url(supplier) + "#historique")
+    return redirect(_local_return(request) or supplier_page_url(supplier) + "#historique")

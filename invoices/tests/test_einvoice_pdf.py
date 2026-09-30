@@ -67,9 +67,7 @@ class EmbeddedXmlTests(SimpleTestCase):
         """`/Names` may be split into `/Kids`, and is as soon as a file
         carries a few attachments. Read one level deep, the invoice of a
         multi-attachment PDF is simply not there."""
-        path = self.build(
-            [("logo.png", LOGO, "Supplement"), ("factur-x.xml", XML, "Data")], nested_names=True
-        )
+        path = self.build([("logo.png", LOGO, "Supplement"), ("factur-x.xml", XML, "Data")], nested_names=True)
         self.assertEqual(einvoice.embedded_xml(path), XML)
 
     def test_declared_through_af_alone(self):
@@ -125,9 +123,7 @@ class EmbeddedXmlTests(SimpleTestCase):
         """A 30 MB delivery photo attached next to a 40 KB invoice is not a
         reason to refuse the invoice."""
         with mock.patch.object(einvoice, "MAX_XML_BYTES", 64 * 1024):
-            path = self.build(
-                [("scan.jpg", b"\x00" * 200_000, "Supplement"), ("factur-x.xml", XML, "Data")]
-            )
+            path = self.build([("scan.jpg", b"\x00" * 200_000, "Supplement"), ("factur-x.xml", XML, "Data")])
             self.assertEqual(einvoice.embedded_xml(path), XML)
 
 

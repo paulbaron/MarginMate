@@ -37,7 +37,7 @@ class SectionInfo:
     order: int
     requires: tuple[str, ...]
     recommends: tuple[str, ...]
-    description: str                 # §3.4
+    description: str  # §3.4
     recommend_reason: dict[str, str]  # recommended key → the hint text of §3.4
     #: What clearing it costs outside what « effacé avec » already ticks -
     #: shown on the Effacer tab instead of the hints, which there read as
@@ -45,7 +45,9 @@ class SectionInfo:
     clear_note: str = ""
 
 
-def _info(key, label, group, order, requires=(), recommends=(), description="", reasons=None, clear_note="") -> SectionInfo:
+def _info(
+    key, label, group, order, requires=(), recommends=(), description="", reasons=None, clear_note=""
+) -> SectionInfo:
     return SectionInfo(
         key, label, group, order, tuple(requires), tuple(recommends), description, dict(reasons or {}), clear_note
     )
@@ -55,7 +57,10 @@ INFO: dict[str, SectionInfo] = {
     info.key: info
     for info in (
         _info(
-            "fournisseurs", "Enseignes et fournisseurs", Group.CONFIG, 10,
+            "fournisseurs",
+            "Enseignes et fournisseurs",
+            Group.CONFIG,
+            10,
             # « prix connus »: what the review page calls them (« Prix connus
             # chez … »); an « article » is a StockType everywhere else.
             description=(
@@ -65,7 +70,11 @@ INFO: dict[str, SectionInfo] = {
             clear_note="la banque perd les noms de payeurs appris pour les fournisseurs effacés",
         ),
         _info(
-            "sources", "Sources de factures", Group.CONFIG, 20, requires=["fournisseurs"],
+            "sources",
+            "Sources de factures",
+            Group.CONFIG,
+            20,
+            requires=["fournisseurs"],
             # An import never switches a portal on (sections/sources.py): the
             # next gather would type the .env variables it names into its page.
             description=(
@@ -75,8 +84,12 @@ INFO: dict[str, SectionInfo] = {
             ),
         ),
         _info(
-            "associations", "Associations produits → articles", Group.CONFIG, 30,
-            requires=["fournisseurs"], recommends=["factures"],
+            "associations",
+            "Associations produits → articles",
+            Group.CONFIG,
+            30,
+            requires=["fournisseurs"],
+            recommends=["factures"],
             description=(
                 "Les articles et, pour chaque produit acheté, l'article qu'il remplit et sa conversion "
                 "(0,7 L par bouteille…). Un produit appartient à un fournisseur."
@@ -85,12 +98,20 @@ INFO: dict[str, SectionInfo] = {
             clear_note="les produits des factures redeviennent « à classer » et leurs achats ne comptent plus en stock",
         ),
         _info(
-            "recettes", "Recettes", Group.CONFIG, 40, requires=["associations"],
+            "recettes",
+            "Recettes",
+            Group.CONFIG,
+            40,
+            requires=["associations"],
             description="Prix, TVA et ingrédients (articles et sous-recettes).",
         ),
         _info(
-            "liens_ventes", "Liens recettes ↔ ventes", Group.CONFIG, 50,
-            requires=["recettes"], recommends=["ventes"],
+            "liens_ventes",
+            "Liens recettes ↔ ventes",
+            Group.CONFIG,
+            50,
+            requires=["recettes"],
+            recommends=["ventes"],
             description=(
                 "Quel produit de la caisse est vendu comme quelle recette, les produits ignorés et les noms "
                 "« happy hour ». Le prochain import de la caisse relie de nouveau d'office les produits qui "
@@ -100,8 +121,12 @@ INFO: dict[str, SectionInfo] = {
             clear_note="les recettes perdent leurs ventes venues de la caisse ; les ventes par jour de la caisse restent",
         ),
         _info(
-            "factures", "Factures et tickets", Group.DATA, 60,
-            requires=["fournisseurs"], recommends=["associations"],
+            "factures",
+            "Factures et tickets",
+            Group.DATA,
+            60,
+            requires=["fournisseurs"],
+            recommends=["associations"],
             description="Chaque document, ses lignes, ce qui a été lu et vérifié, et son fichier (PDF ou photo).",
             reasons={
                 "associations": (
@@ -111,10 +136,13 @@ INFO: dict[str, SectionInfo] = {
             clear_note="la banque perd les paiements de ces factures",
         ),
         _info(
-            "banque", "Banque", Group.DATA, 70, recommends=["factures", "fournisseurs"],
+            "banque",
+            "Banque",
+            Group.DATA,
+            70,
+            recommends=["factures", "fournisseurs"],
             description=(
-                "Opérations importées, leurs liens aux factures, règles « sans facture » et noms de payeurs "
-                "appris."
+                "Opérations importées, leurs liens aux factures, règles « sans facture » et noms de payeurs appris."
             ),
             # In two imports the bank cannot tell a line whose payment went
             # with its invoice from one a person unlinked (bank.UNDONE_NOTE).
@@ -127,7 +155,12 @@ INFO: dict[str, SectionInfo] = {
             },
         ),
         _info(
-            "ventes", "Ventes", Group.DATA, 80, requires=["recettes"], recommends=["liens_ventes"],
+            "ventes",
+            "Ventes",
+            Group.DATA,
+            80,
+            requires=["recettes"],
+            recommends=["liens_ventes"],
             description=(
                 "Quantités vendues par produit de la caisse et par jour, ventes saisies à la main, bons de "
                 "vente. Les ventes par recette sont recalculées. Les montants de la caisse (recettes du jour, "
@@ -137,19 +170,27 @@ INFO: dict[str, SectionInfo] = {
             reasons={"liens_ventes": "Liens recettes ↔ ventes — sinon aucune vente par recette n'est recalculée"},
         ),
         _info(
-            "inventaires", "Inventaires", Group.DATA, 90, requires=["factures", "associations"],
+            "inventaires",
+            "Inventaires",
+            Group.DATA,
+            90,
+            requires=["factures", "associations"],
             description=(
                 "Chaque comptage avec sa valeur figée et les lignes de factures qui l'ont valorisé, et les "
                 "pertes saisies."
             ),
         ),
-        # Formats and reprises name their supplier (PROTECT): it requires the
-        # suppliers. Never the invoices: a bon is checked against them when a
+        # Formats and pickups name their supplier (PROTECT): it requires the
+        # suppliers. Never the invoices: a slip is checked against them when a
         # page is drawn, nothing links the two, and « Effacer les factures »
-        # must not take the reprises and their photos with it.
+        # must not take the pickups and their photos with it.
         _info(
-            "consignes", "Consignes", Group.DATA, 100,
-            requires=["fournisseurs"], recommends=["factures"],
+            "consignes",
+            "Consignes",
+            Group.DATA,
+            100,
+            requires=["fournisseurs"],
+            recommends=["factures"],
             description=(
                 "Les types de consigne, les formats de bons et leurs motifs, chaque reprise avec ses nombres et "
                 "ses photos, et les bons reçus avec leur PDF et ce qui y a été lu."
@@ -164,7 +205,7 @@ INFO: dict[str, SectionInfo] = {
 }
 
 #: What the page says instead where the server's own accounts are not this
-#: espace's (accounts.tenancy.integrations_allowed - a hosted bar): it can
+#: tenant's (accounts.tenancy.integrations_allowed - a hosted bar): it can
 #: neither edit the server's .env nor run a command on it, so it is told
 #: « à configurer », in the words every other page uses.
 DESCRIPTIONS_TO_CONFIGURE = {
@@ -180,7 +221,7 @@ DESCRIPTIONS_TO_CONFIGURE = {
 
 
 def description(key: str) -> str:
-    """The section's description as this espace's page shows it."""
+    """The section's description as this tenant's page shows it."""
     if not integrations_allowed():
         return DESCRIPTIONS_TO_CONFIGURE.get(key, INFO[key].description)
     return INFO[key].description
@@ -192,8 +233,16 @@ GROUP_LABELS = {Group.CONFIG: "Configuration", Group.DATA: "Données"}
 #: there yet (the lanes land one by one) or that fails to import is skipped
 #: with a log, so the page still draws the sections that are.
 SECTION_MODULES = (
-    "suppliers", "sources", "invoices", "associations", "stock_takes", "recipes", "till_links", "sales", "bank",
-    "consignes",
+    "suppliers",
+    "sources",
+    "invoices",
+    "associations",
+    "stock_takes",
+    "recipes",
+    "till_links",
+    "sales",
+    "bank",
+    "returnables",
 )
 
 _SECTIONS: dict[str, type[Section]] = {}
@@ -264,6 +313,7 @@ def swap(classes: dict[str, type[Section]]):
 
 # -- the graph -----------------------------------------------------------------------
 
+
 def ordered(keys: Iterable[str]) -> list[str]:
     return sorted(set(keys), key=lambda key: INFO[key].order)
 
@@ -308,10 +358,7 @@ def forcing(mode: Mode) -> dict[str, list[str]]:
     and « effacé avec … » notes). Transitive already, so the page's script
     needs no graph of its own."""
     reach = dependents if mode == "clear" else needs
-    return {
-        key: [other for other in ordered(INFO) if other != key and key in reach({other})]
-        for key in ordered(INFO)
-    }
+    return {key: [other for other in ordered(INFO) if other != key and key in reach({other})] for key in ordered(INFO)}
 
 
 def missing(selected: Iterable[str], mode: Mode, available: Iterable[str] | None = None) -> set[str]:

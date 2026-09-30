@@ -8,8 +8,8 @@ never by building a large one.
 """
 
 import io
-from datetime import datetime, timedelta
-from datetime import timezone as fixed_offset
+from datetime import UTC, datetime, timedelta
+from typing import cast
 from unittest import mock
 
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -104,7 +104,7 @@ class PreparedPhotoTests(SimpleTestCase):
     def test_its_offset_is_used_when_the_phone_wrote_one(self):
         result = prepare_photo(jpeg(exif=exif_with(taken=TAKEN, offset="+05:00")))
         self.assertEqual(result.taken_at.utcoffset(), timedelta(hours=5))
-        self.assertEqual(result.taken_at, datetime(2025, 6, 14, 3, 14, tzinfo=fixed_offset.utc))
+        self.assertEqual(result.taken_at, datetime(2025, 6, 14, 3, 14, tzinfo=UTC))
 
     def test_the_ifd0_date_is_the_fallback(self):
         result = prepare_photo(jpeg(exif=exif_with(ifd0_date="2025:06:13 19:00:00")))
@@ -141,7 +141,7 @@ class PreparedPhotoTests(SimpleTestCase):
         result = prepare_photo(png(mode="RGBA", color=(0, 0, 0, 0)))
         image = opened(result.jpeg)
         self.assertEqual(image.mode, "RGB")
-        self.assertTrue(all(channel > 240 for channel in image.getpixel((5, 5))))
+        self.assertTrue(all(channel > 240 for channel in cast("tuple[int, ...]", image.getpixel((5, 5)))))
 
     def test_other_modes_are_converted(self):
         for mode, color in (("L", 128), ("P", 3), ("LA", (10, 255)), ("CMYK", (0, 0, 0, 0))):
@@ -170,15 +170,20 @@ class RefusedPhotoTests(SimpleTestCase):
         with mock.patch.object(photos, "PHOTO_MAX_BYTES", 10):
             for uploaded in (jpeg(), SimpleUploadedFile("image.jpg", jpeg()), io.BytesIO(jpeg())):
                 with self.subTest(kind=type(uploaded).__name__):
-                    self.assertEqual(self.assertRefused(uploaded, "trop lourde"),
-                                     "Cette photo est trop lourde (30 Mo au plus).")
+                    self.assertEqual(
+                        self.assertRefused(uploaded, "trop lourde"), "Cette photo est trop lourde (30 Mo au plus)."
+                    )
 
     def test_too_many_pixels_before_any_decoding(self):
-        with mock.patch.object(photos, "PHOTO_MAX_PIXELS", 399), \
-                mock.patch.object(ImageFile.ImageFile, "load", side_effect=AssertionError("decoded")) as load:
+        with (
+            mock.patch.object(photos, "PHOTO_MAX_PIXELS", 399),
+            mock.patch.object(ImageFile.ImageFile, "load", side_effect=AssertionError("decoded")) as load,
+        ):
             message = self.assertRefused(png(size=(20, 20)), "trop grande")
         load.assert_not_called()
-        self.assertEqual(message, "Cette photo est trop grande (20 × 20 pixels) : réglez l'appareil sur une résolution normale.")
+        self.assertEqual(
+            message, "Cette photo est trop grande (20 × 20 pixels) : réglez l'appareil sur une résolution normale."
+        )
         with mock.patch.object(photos, "PHOTO_MAX_PIXELS", 400):
             self.assertEqual(prepare_photo(png(size=(20, 20))).width, 20)
 
@@ -255,8 +260,11 @@ class DecodedSizeTests(SimpleTestCase):
     def test_an_elongated_jpeg_is_decoded_within_the_pixels_not_whole(self):
         # 820 × 30 = 24 600 in its header; side 10: Pillow's scale alone is
         # min(82, 3) → 1/2, 410 × 15 = 6 150 decoded. The pixels ask 1/4.
-        with mock.patch.object(photos, "PHOTO_MAX_SIDE", 10), mock.patch.object(photos, "PHOTO_MAX_PIXELS", 2000), \
-                mock.patch.object(photos, "PHOTO_MAX_PIXELS_JPEG", 30_000):
+        with (
+            mock.patch.object(photos, "PHOTO_MAX_SIDE", 10),
+            mock.patch.object(photos, "PHOTO_MAX_PIXELS", 2000),
+            mock.patch.object(photos, "PHOTO_MAX_PIXELS_JPEG", 30_000),
+        ):
             result, decoded = self.prepared(jpeg(size=(820, 30)))
         self.assertNotIsInstance(result, PhotoError)
         self.assertTrue(decoded)
@@ -265,20 +273,26 @@ class DecodedSizeTests(SimpleTestCase):
         self.assertEqual((result.width, result.height), (10, 1))
 
     def test_one_that_even_an_eighth_cannot_bring_within_is_refused_undecoded(self):
-        with mock.patch.object(photos, "PHOTO_MAX_SIDE", 10), mock.patch.object(photos, "PHOTO_MAX_PIXELS", 100), \
-                mock.patch.object(photos, "PHOTO_MAX_PIXELS_JPEG", 30_000):
+        with (
+            mock.patch.object(photos, "PHOTO_MAX_SIDE", 10),
+            mock.patch.object(photos, "PHOTO_MAX_PIXELS", 100),
+            mock.patch.object(photos, "PHOTO_MAX_PIXELS_JPEG", 30_000),
+        ):
             result, decoded = self.prepared(jpeg(size=(820, 30)))
         self.assertIsInstance(result, PhotoError)
         self.assertEqual(
-            result.message, "Cette photo est trop grande (820 × 30 pixels) : réglez l'appareil sur une résolution normale."
+            result.message,
+            "Cette photo est trop grande (820 × 30 pixels) : réglez l'appareil sur une résolution normale.",
         )
         self.assertEqual(decoded, [])
 
     def test_a_jpeg_draft_cannot_reduce_is_refused_before_it_is_decoded(self):
         # draft() does nothing for a JPEG of several tiles: the size it
         # leaves is the one checked, not the one hoped for.
-        with mock.patch.object(photos, "PHOTO_MAX_PIXELS", 200), \
-                mock.patch("PIL.JpegImagePlugin.JpegImageFile.draft", return_value=None):
+        with (
+            mock.patch.object(photos, "PHOTO_MAX_PIXELS", 200),
+            mock.patch("PIL.JpegImagePlugin.JpegImageFile.draft", return_value=None),
+        ):
             result, decoded = self.prepared(jpeg(size=(40, 20)))
         self.assertIsInstance(result, PhotoError)
         self.assertIn("trop grande (40 × 20 pixels)", result.message)
@@ -328,7 +342,7 @@ class DecodedSizeTests(SimpleTestCase):
 
 
 class TakenAtTests(SimpleTestCase):
-    NOW = datetime(2026, 9, 29, 12, 0, tzinfo=fixed_offset.utc)
+    NOW = datetime(2026, 9, 29, 12, 0, tzinfo=UTC)
 
     def taken(self, sub=None, ifd0=None):
         return taken_at_from_exif(FakeExif(ifd0=ifd0, sub=sub), now=self.NOW)
@@ -340,8 +354,18 @@ class TakenAtTests(SimpleTestCase):
                 self.assertEqual(self.taken({0x9003: value}), expected)
 
     def test_what_is_not_a_date(self):
-        for value in ("", "   ", "\N{NULL}" * 20, "0000:00:00 00:00:00", "2025:02:30 08:00:00", "2025-06-14 08:14:00",
-                      "hier", None, 20250614, b"\xff\xfe"):
+        for value in (
+            "",
+            "   ",
+            "\N{NULL}" * 20,
+            "0000:00:00 00:00:00",
+            "2025:02:30 08:00:00",
+            "2025-06-14 08:14:00",
+            "hier",
+            None,
+            20250614,
+            b"\xff\xfe",
+        ):
             with self.subTest(value=value):
                 self.assertIsNone(self.taken({0x9003: value}))
 

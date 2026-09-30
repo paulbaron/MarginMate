@@ -61,4 +61,6 @@ class Command(BaseCommand):
             else:
                 how_long = f"{days} jours, sans --days ; --days N pour une autre durée, --days 0 pour aucune"
             self.stdout.write(f"Valable pour une inscription, jusqu'au {until} ({how_long}).")
-        self.stdout.write("À saisir sur la page /inscription/, avec le nom du bar, une adresse e-mail et un mot de passe.")
+        self.stdout.write(
+            "À saisir sur la page /inscription/, avec le nom du bar, une adresse e-mail et un mot de passe."
+        )

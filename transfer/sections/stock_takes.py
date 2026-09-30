@@ -19,8 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import Counter, defaultdict
-from datetime import datetime
-from datetime import timezone as dt_timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from django.db.models import Prefetch
@@ -113,7 +112,7 @@ def movement_print(article_name, values) -> str:
         _number(values.get("unit_cost_ht")),
         values.get("note") or "",
         occurred_on.isoformat() if occurred_on else None,
-        created_at.astimezone(dt_timezone.utc).isoformat() if created_at else None,
+        created_at.astimezone(UTC).isoformat() if created_at else None,
     ]
     return hashlib.sha256(json.dumps(content, ensure_ascii=False).encode("utf-8")).hexdigest()
 
@@ -196,8 +195,12 @@ class StockTakesSection(Section):
 
     def snapshot(self):
         takes = list(_takes_with_lines())
-        invoice_ids = {source.invoice_line.invoice_id for take in takes for line in take.lines.all()
-                       for source in line.sources.all()}
+        invoice_ids = {
+            source.invoice_line.invoice_id
+            for take in takes
+            for line in take.lines.all()
+            for source in line.sources.all()
+        }
         invoice_keys = keys.invoice_keys(invoice_ids) if invoice_ids else {}
         ordinals = keys.line_ordinals(invoice_ids)
 
@@ -211,22 +214,26 @@ class StockTakesSection(Section):
                 codec.dump(take, "taken_at"),
                 take.note,
                 codec.dump(take, "created_at"),
-                tuple(sorted(
-                    (
-                        line_key(line),
-                        *(codec.dump(line, name) for name in LINE_FIELDS),
-                        tuple(sorted(
-                            (
-                                tuple(sorted(invoice_keys[source.invoice_line.invoice_id].items())),
-                                ordinals[source.invoice_line_id][1],
-                                source.invoice_line.raw_name,
-                                *(codec.dump(source, name) for name in SOURCE_FIELDS),
-                            )
-                            for source in line.sources.all()
-                        )),
+                tuple(
+                    sorted(
+                        (
+                            line_key(line),
+                            *(codec.dump(line, name) for name in LINE_FIELDS),
+                            tuple(
+                                sorted(
+                                    (
+                                        tuple(sorted(invoice_keys[source.invoice_line.invoice_id].items())),
+                                        ordinals[source.invoice_line_id][1],
+                                        source.invoice_line.raw_name,
+                                        *(codec.dump(source, name) for name in SOURCE_FIELDS),
+                                    )
+                                    for source in line.sources.all()
+                                )
+                            ),
+                        )
+                        for line in take.lines.all()
                     )
-                    for line in take.lines.all()
-                )),
+                ),
             )
             for take in takes
         )
@@ -244,8 +251,12 @@ class StockTakesSection(Section):
     # -- export ----------------------------------------------------------------------
     def export(self, out) -> None:
         takes = list(_takes_with_lines())
-        invoice_ids = {source.invoice_line.invoice_id for take in takes for line in take.lines.all()
-                       for source in line.sources.all()}
+        invoice_ids = {
+            source.invoice_line.invoice_id
+            for take in takes
+            for line in take.lines.all()
+            for source in line.sources.all()
+        }
         invoice_keys = keys.invoice_keys(invoice_ids) if invoice_ids else {}
         ordinals = keys.line_ordinals(invoice_ids)
         supplier_names: dict[str, str] = {}
@@ -263,20 +274,22 @@ class StockTakesSection(Section):
                 line_count += 1
                 if line.product_id:
                     supplier_names[line.product.supplier.code] = line.product.supplier.name
-                lines.append({
-                    "product": [line.product.supplier.code, line.product.raw_name] if line.product_id else None,
-                    "article": line.stock_type.name if line.stock_type_id else None,
-                    **codec.record(line, LINE_FIELDS),
-                    "sources": [
-                        {
-                            "invoice": invoice_keys[source.invoice_line.invoice_id],
-                            "line": ordinals[source.invoice_line_id][1],
-                            "raw_name": source.invoice_line.raw_name,
-                            **codec.record(source, SOURCE_FIELDS),
-                        }
-                        for source in line.sources.all()
-                    ],
-                })
+                lines.append(
+                    {
+                        "product": [line.product.supplier.code, line.product.raw_name] if line.product_id else None,
+                        "article": line.stock_type.name if line.stock_type_id else None,
+                        **codec.record(line, LINE_FIELDS),
+                        "sources": [
+                            {
+                                "invoice": invoice_keys[source.invoice_line.invoice_id],
+                                "line": ordinals[source.invoice_line_id][1],
+                                "raw_name": source.invoice_line.raw_name,
+                                **codec.record(source, SOURCE_FIELDS),
+                            }
+                            for source in line.sources.all()
+                        ],
+                    }
+                )
             records.append({**codec.record(take, ("taken_at", "note", "created_at")), "lines": lines})
         movements = [
             {"article": movement.stock_type.name, **codec.record(movement, MOVEMENT_FIELDS)}
@@ -388,14 +401,16 @@ class StockTakesSection(Section):
             sources = line.get("sources", [])
             if not isinstance(sources, list):
                 raise _Skip(f"les sources de « {product or article} » sont illisibles")
-            parsed.append({
-                "key": key,
-                "product": product,
-                "article": article,
-                "record": line,
-                "values": values,
-                "sources": [self._source(source) for source in sources],
-            })
+            parsed.append(
+                {
+                    "key": key,
+                    "product": product,
+                    "article": article,
+                    "record": line,
+                    "values": values,
+                    "sources": [self._source(source) for source in sources],
+                }
+            )
         return {"note": note, "created_at": created_at, "lines": parsed}
 
     def _line_target(self, line):
@@ -500,9 +515,7 @@ class StockTakesSection(Section):
             codec.differences(here[key], wanted[key]["record"], LINE_FIELDS) for key in wanted
         ):
             different.append("lignes")
-        if any(
-            key in here and self._sources_here(here[key]) != self._sources_in_file(wanted[key]) for key in wanted
-        ):
+        if any(key in here and self._sources_here(here[key]) != self._sources_in_file(wanted[key]) for key in wanted):
             different.append("sources")
         return different
 

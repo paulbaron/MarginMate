@@ -1,16 +1,16 @@
 """The default file storage (settings.STORAGES["default"]): the bound
-espace's media folder, resolved at every call.
+tenant's media folder, resolved at every call.
 
 Django's own FileSystemStorage caches its location on first use - one
-folder per process, whichever espace touched it first. Here `location` is
-`accounts.paths.media_root()` every time: the bound espace's media/, and
+folder per process, whichever tenant touched it first. Here `location` is
+`accounts.paths.media_root()` every time: the bound tenant's media/, and
 NoTenantBound when nothing is bound. Stored names stay relative
-(« invoices/2026/09/x.pdf »): the espace is the folder, never a prefix in
+(« invoices/2026/09/x.pdf »): the tenant is the folder, never a prefix in
 the name - « Données »'s archives only accept names under invoices/ and
 receipts/, and the owner's existing rows carry none.
 
 URLs: the logged-in file view (`accounts:media`), which serves from the
-bound espace's media only. There is no public /media/ route. A storage
+bound tenant's media only. There is no public /media/ route. A storage
 given an explicit `location` keeps Django's own URL (none is made today).
 """
 

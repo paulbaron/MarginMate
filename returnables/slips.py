@@ -1,12 +1,12 @@
-"""The writer: every bon enters the database through `store_slip` - the page's
+"""The writer: every slip enters the database through `store_slip` - the page's
 upload (`store_uploads`), the mailbox gather (returnables/mail.py) and
-Achats' guard (a bon dropped among the invoices) alike - and is read again
+Achats' guard (a slip dropped among the invoices) alike - and is read again
 only through `reread` / `reread_format`.
 
 `store_slip(content, filename=…, fmt=None, origin=…)`, in this order:
 
 1. At most 5 MB (reading.MAX_PDF_BYTES), then the SHA-256: the same bytes
-   twice are one bon - « déjà reçu ».
+   twice are one slip - « déjà reçu ».
 2. The PDF's text, OUTSIDE any transaction (pdfminer takes seconds on a bad
    file, and SQLite's write lock would be held all along). A document that
    is not a PDF, is too long, or has no text layer is refused with the
@@ -14,14 +14,14 @@ only through `reread` / `reread_format`.
 3. The format: the one given, else the one format that recognises the text
    (reading.detect_format - none or several is a refusal). Then the reading,
    with its own 2 s budget, still outside the transaction.
-4. The re-send: a bon of the same format with the same number, delivery
+4. The re-send: a slip of the same format with the same number, delivery
    date, references and lines (the driver e-mails a ticket twice, printed
    again the next morning) is « bon n° X déjà reçu ». Only a reading that
-   says WHICH bon it is (a number or a reference) is ever one: two
-   deliveries of the same three kegs on one day are two bons.
-5. A reading that failed (a motif that no longer compiles, or ran out of
+   says WHICH slip it is (a number or a reference) is ever one: two
+   deliveries of the same three kegs on one day are two slips.
+5. A reading that failed (a pattern that no longer compiles, or ran out of
    time) is STORED - its file, its text, no line, the failed check - so that
-   « Relire » can fix it once the format is corrected. A mailed bon refused
+   « Relire » can fix it once the format is corrected. A mailed slip refused
    here would be lost for good once its mail leaves the gather's overlap.
 6. The file: `bon-<slug>.pdf`, the slug being the number kept to
    [0-9A-Za-z-] and 20 characters (a captured number can hold « / » or
@@ -33,8 +33,8 @@ only through `reread` / `reread_format`.
    and is raised. Django has no « on rollback » hook: that is this code.
 
 Nothing here ever calls receipts.import_document, importing.parse_and_import
-or import_parsed_invoice: a bon is not an invoice (its empties would be filed
-as purchases - silently wrong money), and nothing about a bon is written on
+or import_parsed_invoice: a slip is not an invoice (its empties would be filed
+as purchases - silently wrong money), and nothing about a slip is written on
 an invoice.
 """
 
@@ -64,7 +64,7 @@ DUPLICATE = "duplicate"
 RESEND = "resend"
 REFUSED = "refused"
 #: Only with `skip_non_slips=True` (the gather): read with its format, the
-#: document has no consignes part and no line - a mail's other attachment.
+#: document has no returnables part and no line - a mail's other attachment.
 IGNORED = "ignored"
 
 #: The columns a mail's or a file's texts are cut to (Slip).
@@ -81,7 +81,7 @@ UNEXPECTED = "erreur inattendue : le fichier n'a pas été enregistré, réessay
 
 @dataclass
 class StoreResult:
-    """What became of one document. `slip` is the bon created, or the one
+    """What became of one document. `slip` is the slip created, or the one
     already there (duplicate, re-send); None when refused or ignored.
     `message` is a French sentence WITHOUT the file's name - the caller puts
     « nom : » in front. `reading` is what the format read (None when the
@@ -98,7 +98,7 @@ class StoreResult:
 
 
 def document_text(text) -> str:
-    """The text a bon is read from and stored with: line ends as "\\n",
+    """The text a slip is read from and stored with: line ends as "\\n",
     control characters dropped (a NUL is no character a page can show),
     "\\n" and "\\t" kept."""
     text = (text or "").replace("\r\n", "\n").replace("\r", "\n")
@@ -106,7 +106,7 @@ def document_text(text) -> str:
 
 
 def file_name(number, delivery_date) -> str:
-    """The stored file's name: flat and safe whatever the motif captured -
+    """The stored file's name: flat and safe whatever the pattern captured -
     « 12/34 » is bon-1234.pdf, « ../x » is bon-x.pdf."""
     slug = re.sub(r"[^0-9A-Za-z-]", "", number or "").strip("-")[:SLUG_CHARS].strip("-")
     if not slug and delivery_date is not None:
@@ -115,9 +115,9 @@ def file_name(number, delivery_date) -> str:
 
 
 def not_a_slip(result: SlipReading) -> bool:
-    """A document the format does not recognise as one of its bons: it has a
-    start motif, no line matched it, and nothing was read. A reading that
-    FAILED is not this (its motifs, not the document, are the problem)."""
+    """A document the format does not recognise as one of its slips: it has a
+    start pattern, no line matched it, and nothing was read. A reading that
+    FAILED is not this (its patterns, not the document, are the problem)."""
     return result.error is None and result.section_found is False and not result.lines
 
 
@@ -172,9 +172,9 @@ def _stored(sha: str) -> Slip | None:
 
 
 def _resend_of(fmt, result: SlipReading) -> Slip | None:
-    """The bon this reading is a re-send of: same format, number, delivery
+    """The slip this reading is a re-send of: same format, number, delivery
     date, references and lines (designation, quantity, unit price, amount,
-    in order). Never for a failed reading, nor one that names no bon (no
+    in order). Never for a failed reading, nor one that names no slip (no
     number and no reference)."""
     if result.error is not None or not (result.number or result.references):
         return None
@@ -233,14 +233,14 @@ def store_slip(
     text: str | None = None,
     skip_non_slips: bool = False,
 ) -> StoreResult:
-    """Store one document as a bon (see the module docstring). Never inside a
+    """Store one document as a slip (see the module docstring). Never inside a
     transaction of the caller's: it reads the PDF before writing anything.
 
     `fmt`: the format to read it with; None = the one that recognises it.
     `text`: the PDF's text when the caller already has it from
     reading.pdf_text (Achats' guard), so it is not extracted twice.
     `skip_non_slips` (the gather): a document its format does not recognise
-    as a bon (`not_a_slip`) is IGNORED, not stored."""
+    as a slip (`not_a_slip`) is IGNORED, not stored."""
     if origin not in Slip.Origin.values:
         raise ValueError(f"origin must be one of {Slip.Origin.values}, not {origin!r}")
     if not isinstance(content, (bytes, bytearray, memoryview)):
@@ -409,8 +409,8 @@ def store_uploads(files, fmt=None) -> UploadSummary:
 def reread(slip: Slip, *, budget=None) -> SlipReading:
     """Read `slip` again from the text it was stored with (never the PDF,
     never an invoice reader), with its format as it is NOW, and rewrite its
-    reading and its lines in one atomic block - the motifs run before it.
-    Returns the reading; `slip`'s attributes are updated too. A bon deleted
+    reading and its lines in one atomic block - the patterns run before it.
+    Returns the reading; `slip`'s attributes are updated too. A slip deleted
     meanwhile is left alone."""
     result = reading.read_slip_text(slip.text or "", slip.format, budget=budget)
     fields = _reading_fields(result)
@@ -424,10 +424,10 @@ def reread(slip: Slip, *, budget=None) -> SlipReading:
 
 
 def reread_format(fmt: SlipFormat, *, budget=None) -> tuple[int, int]:
-    """« Relire les N bons de ce format »: every bon of `fmt`, newest first,
-    within REREAD_SECONDS in all. A bon is started only while a whole
+    """« Relire les N bons de ce format »: every slip of `fmt`, newest first,
+    within REREAD_SECONDS in all. A slip is started only while a whole
     reading's time is left - one cut short by the page's budget would be
-    stored as « trop lent » though its motifs are fine. Returns (re-read,
+    stored as « trop lent » though its patterns are fine. Returns (re-read,
     left): the page says how many are left to « Relire » again."""
     budget = budget or patterns.Budget(patterns.REREAD_SECONDS)
     slips = list(Slip.objects.filter(format=fmt).only("pk", "text", "format_id").order_by("-received_at", "-pk"))

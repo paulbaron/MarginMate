@@ -63,11 +63,11 @@ if _KEY_PROBLEM and not DEBUG:
 if not SECRET_KEY.strip():
     SECRET_KEY = DEVELOPMENT_SECRET_KEY
 
-# The names this server answers to: the public one (gestion.<domaine>) and
+# The names this server answers to: the public one (gestion.<domain>) and
 # the machine's own, for the owner's browser on the PC.
 ALLOWED_HOSTS = env_list(os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1"))
 # Origins a POST may come from besides this site's own address
-# (« https://gestion.<domaine> »). Behind the tunnel the Host header is the
+# (« https://gestion.<domain> »). Behind the tunnel the Host header is the
 # public name and Waitress gives the request its https (serve.py), so
 # Django's same-origin check already passes; this list is the explicit say.
 CSRF_TRUSTED_ORIGINS = env_list(os.environ.get("DJANGO_CSRF_TRUSTED_ORIGINS", ""))
@@ -92,7 +92,9 @@ SESSION_COOKIE_SECURE = HTTPS
 CSRF_COOKIE_SECURE = HTTPS
 _HSTS = os.environ.get("MARGINMATE_HSTS_SECONDS", "").strip() or "3600"
 if not _HSTS.isascii() or not _HSTS.isdigit():
-    raise ImproperlyConfigured(f"MARGINMATE_HSTS_SECONDS={_HSTS[:20]!r} : un nombre de secondes est attendu (3600 = une heure).")
+    raise ImproperlyConfigured(
+        f"MARGINMATE_HSTS_SECONDS={_HSTS[:20]!r} : un nombre de secondes est attendu (3600 = une heure)."
+    )
 SECURE_HSTS_SECONDS = int(_HSTS) if HTTPS else 0
 SECURE_HSTS_INCLUDE_SUBDOMAINS = False
 SECURE_HSTS_PRELOAD = False
@@ -124,7 +126,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    # Logins, espaces (one database per bar) and the binding of a thread to
+    # Logins, tenants (one database per bar) and the binding of a thread to
     # one of them: accounts/tenancy.py.
     "accounts",
     "inventory",
@@ -134,9 +136,9 @@ INSTALLED_APPS = [
     "transfer",
     "margins",
     "staff",
-    # « Consignes »: the empties handed back, and the bons they are compared
+    # « Consignes »: the empties handed back, and the slips they are compared
     # with. Achats, the gather, the supplier page and « Données » read its
-    # tables too: an espace needs its migrations (migrate_tenants).
+    # tables too: a tenant needs its migrations (migrate_tenants).
     "returnables",
 ]
 
@@ -155,9 +157,9 @@ MIDDLEWARE = [
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     # Every page wants a login (public views carry @login_not_required),
-    # then the request runs bound to the user's espace, rendering included -
+    # then the request runs bound to the user's tenant, rendering included -
     # a public view's never (it binds what it needs, the signing pages their
-    # link's espace).
+    # link's tenant).
     "accounts.middleware.LoginRequiredMiddleware",
     "accounts.middleware.TenantMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
@@ -225,7 +227,7 @@ ACCOUNTS_SQLITE_OPTIONS = {**SQLITE_OPTIONS, "timeout": 20}
 # folder from a setting - was what a server got when MARGINMATE_TENANCY was
 # missing, so a deploy without that one variable served every page and
 # every file to anyone (security audit ANON-1); it was removed on
-# 29/09/2026, after the owner's database was adopted into an espace.
+# 29/09/2026, after the owner's database was adopted into a tenant.
 #
 # MARGINMATE_TENANCY is therefore no switch any more. Unset or « multi »
 # (what the owner's .env still says): ignored. ANY OTHER VALUE - « single »
@@ -242,14 +244,14 @@ if _OLD_TENANCY_SWITCH not in ("", "multi"):
         "page demande une connexion. Une ancienne base s'adopte avec « manage.py adopt_database »."
     )
 
-# Every espace's folder: its db.sqlite3, media/, private/, downloads/,
+# Every tenant's folder: its db.sqlite3, media/, private/, downloads/,
 # backups/, staging/, imports/ (accounts/paths.py). Outside the code tree in
 # production; never served.
 TENANTS_ROOT = Path(os.environ.get("MARGINMATE_TENANTS_ROOT", "").strip() or BASE_DIR / "tenants")
 
 # The server's log, marginmate.log (config/logs.py: errors, refusals,
 # warnings; the signing links cut short): MARGINMATE_LOG_DIR, or logs/ beside
-# the espaces - ../data/logs/ for the owner. Made at the first line written,
+# the tenants - ../data/logs/ for the owner. Made at the first line written,
 # and written by `manage.py serve` ALONE: every other process logs to its
 # console (two processes holding the file stopped its rotation on Windows,
 # and records were lost - config/logs.py).
@@ -258,15 +260,15 @@ LOGGING = logging_config(LOG_DIR, server=_SERVER)
 
 DATABASES = {
     # Unbound, `default` is an EMPTY in-memory database: a business query
-    # nobody bound to an espace fails loudly (« no such table ») instead of
+    # nobody bound to a tenant fails loudly (« no such table ») instead of
     # landing in somebody's file. A binding points this thread's `default`
-    # at the espace's own file (accounts.tenancy.bound_tenant).
+    # at the tenant's own file (accounts.tenancy.bound_tenant).
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": ":memory:",
         "OPTIONS": SQLITE_OPTIONS,
     },
-    # Logins, sessions, the admin's log, content types, espaces,
+    # Logins, sessions, the admin's log, content types, tenants,
     # invitations, the signing links' index (accounts/router.py).
     "accounts": {
         "ENGINE": "django.db.backends.sqlite3",
@@ -286,8 +288,8 @@ DATABASE_ROUTERS = ["accounts.router.AccountsRouter"]
 # outright with 400 Bad Request, before any view runs, so there is no form to
 # re-render and every count the user typed is gone with no way back.
 #
-# That is not a hypothetical - it is what "j'ai perdu mon inventaire après
-# avoir cliqué sur enregistrer" was. The cap exists to blunt hash-collision
+# That is not a hypothetical - it is what "I lost my stock count after
+# clicking save" was. The cap exists to blunt hash-collision
 # DoS on public sites; this is a single-user app on a laptop, so it is set to
 # a number no real inventory will reach.
 # Covered by inventory/tests/test_stock_take_form.py::BigInventoryTests.
@@ -332,9 +334,9 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 WHITENOISE_USE_FINDERS = WHITENOISE_AUTOREFRESH = DEBUG or _RUNSERVER
 
 # No MEDIA_URL / MEDIA_ROOT: stored files go where accounts.paths.media_root()
-# says, at every call - the bound espace's media/ - and are served only by
+# says, at every call - the bound tenant's media/ - and are served only by
 # the logged-in file view (accounts.views.media), never by a /media/ route.
-# Every other folder is the espace's too (accounts/paths.py: private/,
+# Every other folder is the tenant's too (accounts/paths.py: private/,
 # downloads/, backups/, staging/, imports/); the settings that named them
 # for the old single mode are gone.
 STORAGES = {
@@ -394,8 +396,8 @@ SCRAPER_HEADLESS = env_bool("SCRAPER_HEADLESS", True)
 # (staff/signing.py, staff/signature_requests.py)
 
 # The signing keys, the frozen and signed PDFs, the drawn signatures and the
-# proof files live in each espace's private/ folder (accounts.paths.private_dir),
-# never served. Back it up with the espace: it holds the internal
+# proof files live in each tenant's private/ folder (accounts.paths.private_dir),
+# never served. Back it up with the tenant: it holds the internal
 # authority's key. Losing it does not make a signed PDF unverifiable - each
 # one embeds its certificates - but the next signature would come from a new
 # authority. (The old single mode's MARGINMATE_PRIVATE_DIR is ignored.)

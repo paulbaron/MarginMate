@@ -186,8 +186,8 @@ def _changed_words(days, *, name_them: bool = True, against: str = "") -> str:
 @dataclass(frozen=True)
 class EmployeeRow:
     employee: Employee
-    week: str                  # « Ma 7,5 · Me 6 · Je–Sa 7,5 · 36 h / semaine »
-    this_month_saved: bool     # whether this month's sheet is saved yet
+    week: str  # « Ma 7,5 · Me 6 · Je–Sa 7,5 · 36 h / semaine »
+    this_month_saved: bool  # whether this month's sheet is saved yet
 
 
 def home(request):
@@ -594,7 +594,7 @@ def month_holidays_off(request, pk, month):
         # A page drawn before the month was sent for signature.
         messages.error(request, f"{error} Rien n'a été modifié.")
         return back
-    named ={day: f"{_in_prose(day)} ({name})" for day, name in sorted(holidays.items())}
+    named = {day: f"{_in_prose(day)} ({name})" for day, name in sorted(holidays.items())}
     left = _days_off_left([named[day] for day in outcome.left_alone]) if outcome.left_alone else ""
     marked = [label for day, label in named.items() if day not in outcome.left_alone]
     if not marked:

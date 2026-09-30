@@ -68,10 +68,10 @@ class TableTests(SimpleTestCase):
         self.assertEqual(INFO["banque"].requires, ())
         self.assertNotIn("banque", registry.closure({"factures"}, "clear"))
 
-    def test_consignes_go_with_the_suppliers_and_never_with_the_invoices(self):
-        """Formats and reprises name their supplier; a bon is checked against
+    def test_returnables_go_with_the_suppliers_and_never_with_the_invoices(self):
+        """Formats and pickups name their supplier; a slip is checked against
         the invoices when a page is drawn, and nothing links the two - so
-        « Effacer les factures » leaves the reprises and their photos."""
+        « Effacer les factures » leaves the pickups and their photos."""
         self.assertIn("consignes", registry.closure({"fournisseurs"}, "clear"))
         self.assertNotIn("consignes", registry.closure({"factures"}, "clear"))
         self.assertEqual(registry.closure({"consignes"}, "clear"), {"consignes"})
@@ -140,7 +140,9 @@ class ForcingTests(SimpleTestCase):
     def test_to_export_associations_are_needed_by_recipes_and_stock_takes(self):
         forcing = registry.forcing("export")
         self.assertEqual(forcing["associations"], ["recettes", "liens_ventes", "ventes", "inventaires"])
-        self.assertEqual(forcing["fournisseurs"], [key for key in registry.ordered(ALL) if key not in ("fournisseurs", "banque")])
+        self.assertEqual(
+            forcing["fournisseurs"], [key for key in registry.ordered(ALL) if key not in ("fournisseurs", "banque")]
+        )
         self.assertEqual(forcing["banque"], [])
 
     def test_to_clear_the_arrows_are_reversed(self):
@@ -186,17 +188,23 @@ class RegistrationTests(SimpleTestCase):
     def test_a_missing_or_broken_lane_module_is_skipped_with_a_log(self):
         """The page draws whatever sections are there: a lane not landed yet,
         or one that fails to import, is logged and left out."""
-        with registry.swap({}), mock.patch.object(registry, "_loaded", False), \
-                mock.patch.object(registry, "SECTION_MODULES", ("pas_encore_la",)):
+        with (
+            registry.swap({}),
+            mock.patch.object(registry, "_loaded", False),
+            mock.patch.object(registry, "SECTION_MODULES", ("not_there_yet",)),
+        ):
             with self.assertLogs("transfer.registry", level="INFO") as logs:
                 registry.load_sections()
-            self.assertIn("pas_encore_la", "\n".join(logs.output))
-        with registry.swap({}), mock.patch.object(registry, "_loaded", False), \
-                mock.patch.object(registry, "SECTION_MODULES", ("casse",)), \
-                mock.patch("importlib.import_module", side_effect=SyntaxError("invalid syntax")):
+            self.assertIn("not_there_yet", "\n".join(logs.output))
+        with (
+            registry.swap({}),
+            mock.patch.object(registry, "_loaded", False),
+            mock.patch.object(registry, "SECTION_MODULES", ("broken",)),
+            mock.patch("importlib.import_module", side_effect=SyntaxError("invalid syntax")),
+        ):
             with self.assertLogs("transfer.registry", level="ERROR") as logs:
                 registry.load_sections()
-            self.assertIn("casse", "\n".join(logs.output))
+            self.assertIn("broken", "\n".join(logs.output))
 
     def test_every_key_has_a_registered_section(self):
         """Runs once every lane has landed; until then it says which are

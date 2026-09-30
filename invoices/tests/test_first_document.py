@@ -65,18 +65,23 @@ www.traiteur-exemple.fr"""
 class FirstDocumentTests(TestCase):
     def setUp(self):
         self.caterer = make_supplier(code="TRAITEUR_X", name="Traiteur Exemple", parser_key="")
-        grossiste = make_supplier(code="GROSSISTE_X", name="Grossiste Exemple", parser_key="")
-        make_invoice(supplier=grossiste, ocr_text=f"GROSSISTE EXEMPLE\nClient : {PHONE}\nTOTAL 12,00")
-        self.grossiste = grossiste
+        wholesaler = make_supplier(code="GROSSISTE_X", name="Grossiste Exemple", parser_key="")
+        make_invoice(supplier=wholesaler, ocr_text=f"GROSSISTE EXEMPLE\nClient : {PHONE}\nTOTAL 12,00")
+        self.wholesaler = wholesaler
 
     def fetch(self, text, name="traiteur.pdf", by_type=TYPE_NAME, **kwargs):
         """As a type's gather files it: read as a ticket (no text layer), its
         supplier named by the type."""
         path = staged_file(self, name)
-        with mock.patch("invoices.receipts.recognise", return_value=recognised(text)), \
-                mock.patch("invoices.receipts.document_text", return_value=""):
+        with (
+            mock.patch("invoices.receipts.recognise", return_value=recognised(text)),
+            mock.patch("invoices.receipts.document_text", return_value=""),
+        ):
             return import_document(
-                path, supplier=self.caterer, chosen_because=f"Reçue par e-mail (« {TYPE_NAME} »).", by_type=by_type,
+                path,
+                supplier=self.caterer,
+                chosen_because=f"Reçue par e-mail (« {TYPE_NAME} »).",
+                by_type=by_type,
                 **kwargs,
             )
 
@@ -90,10 +95,12 @@ class FirstDocumentTests(TestCase):
         self.assertEqual(first.invoice, invoice)
         self.assertIn("Il lui a appris : n° SIREN 900 000 019", first.summary)
         self.assertIn(TYPE_NAME, first.summary)
-        fiche = self.client.get(reverse("invoices:supplier_detail", args=[self.caterer.pk]))
-        self.assertContains(fiche, "À voir")
+        supplier_page = self.client.get(reverse("invoices:supplier_detail", args=[self.caterer.pk]))
+        self.assertContains(supplier_page, "À voir")
         # And why, at the top of the page (supplier_changes.why_to_see).
-        self.assertContains(fiche, escape("C'est son premier document : rien d'autre ne garantit cette lecture."))
+        self.assertContains(
+            supplier_page, escape("C'est son premier document : rien d'autre ne garantit cette lecture.")
+        )
 
     def test_only_the_first_is_recorded_as_such(self):
         self.fetch(bill())
@@ -108,18 +115,24 @@ class FirstDocumentTests(TestCase):
     def test_through_a_gather_the_log_says_what_it_taught(self):
         job = ScrapeJob.objects.create()
         path = staged_file(self, "traiteur-gather.pdf")
-        with mock.patch("invoices.receipts.recognise", return_value=recognised(bill())), \
-                mock.patch("invoices.receipts.document_text", return_value=""):
-            self.assertTrue(_import_document_file(
-                job, self.caterer, path, chosen_because=f"Téléchargée par « {TYPE_NAME} ».", by_type=TYPE_NAME
-            ))
+        with (
+            mock.patch("invoices.receipts.recognise", return_value=recognised(bill())),
+            mock.patch("invoices.receipts.document_text", return_value=""),
+        ):
+            self.assertTrue(
+                _import_document_file(
+                    job, self.caterer, path, chosen_because=f"Téléchargée par « {TYPE_NAME} ».", by_type=TYPE_NAME
+                )
+            )
         job.refresh_from_db()
         self.assertIn("Premier document", job.log)
 
     def test_an_upload_naming_it_teaches_it_too(self):
         path = staged_file(self, "upload.pdf")
-        with mock.patch("invoices.receipts.recognise", return_value=recognised(bill())), \
-                mock.patch("invoices.receipts.document_text", return_value=""):
+        with (
+            mock.patch("invoices.receipts.recognise", return_value=recognised(bill())),
+            mock.patch("invoices.receipts.document_text", return_value=""),
+        ):
             import_document(path, supplier=self.caterer)
         self.caterer.refresh_from_db()
         self.assertIn(f"siren:{SIREN}", self.caterer.ticket_identifiers)
@@ -142,7 +155,7 @@ class FirstDocumentTests(TestCase):
             label, waiting = groups[0]
             self.assertEqual(label, WAITING_GROUP)
             self.assertIn(self.caterer, waiting)
-            self.assertNotIn(self.grossiste, waiting)
+            self.assertNotIn(self.wholesaler, waiting)
             self.assertFalse(any(self.caterer in suppliers for _label, suppliers in groups[1:]))
             self.assertFalse(any(supplier.code == "OTHER" for supplier in waiting))
 
@@ -155,15 +168,17 @@ class TypeGuardTests(TestCase):
 
     def setUp(self):
         self.caterer = make_supplier(code="TRAITEUR_X", name="Traiteur Exemple", parser_key="")
-        self.grossiste = make_supplier(
+        self.wholesaler = make_supplier(
             code="GROSSISTE_X", name="Grossiste Exemple", parser_key="", ticket_identifiers=[f"siren:{OTHER_SIREN}"]
         )
-        make_invoice(supplier=self.grossiste, ocr_text=bill(siren=OTHER_SIREN, top="GROSSISTE EXEMPLE"))
+        make_invoice(supplier=self.wholesaler, ocr_text=bill(siren=OTHER_SIREN, top="GROSSISTE EXEMPLE"))
 
     def fetch(self, text, name="douteux.pdf"):
         path = staged_file(self, name)
-        with mock.patch("invoices.receipts.recognise", return_value=recognised(text)), \
-                mock.patch("invoices.receipts.document_text", return_value=""):
+        with (
+            mock.patch("invoices.receipts.recognise", return_value=recognised(text)),
+            mock.patch("invoices.receipts.document_text", return_value=""),
+        ):
             return import_document(
                 path, supplier=self.caterer, chosen_because=f"Reçue par e-mail (« {TYPE_NAME} »).", by_type=TYPE_NAME
             )
@@ -178,13 +193,13 @@ class TypeGuardTests(TestCase):
         self.assertIn("rattachez la source à Grossiste Exemple", invoice.supplier_doubt)
         self.assertEqual(invoice.review_state["label"], "Fournisseur à confirmer")
         self.caterer.refresh_from_db()
-        self.grossiste.refresh_from_db()
+        self.wholesaler.refresh_from_db()
         self.assertEqual(self.caterer.ticket_identifiers, [])
         # Learned, it would have stripped the wholesaler of its own number.
-        self.assertEqual(self.grossiste.ticket_identifiers, [f"siren:{OTHER_SIREN}"])
-        fiche = self.client.get(reverse("invoices:supplier_detail", args=[self.caterer.pk]))
-        self.assertContains(fiche, "ce qui reconnaît un autre fournisseur")
-        self.assertContains(fiche, "1 document récupéré par une source de Traiteur Exemple porte")
+        self.assertEqual(self.wholesaler.ticket_identifiers, [f"siren:{OTHER_SIREN}"])
+        supplier_page = self.client.get(reverse("invoices:supplier_detail", args=[self.caterer.pk]))
+        self.assertContains(supplier_page, "ce qui reconnaît un autre fournisseur")
+        self.assertContains(supplier_page, "1 document récupéré par une source de Traiteur Exemple porte")
         page = self.client.get(reverse("invoices:receipt_review", args=[invoice.pk]))
         self.assertContains(page, "Valider ce document confirme qu'il est de Traiteur Exemple")
 
@@ -198,8 +213,8 @@ class TypeGuardTests(TestCase):
         make_invoice(supplier=self.caterer, ocr_text=bill())
         invoice = self.fetch(bill() + f"\nSIREN {OTHER_SIREN[:3]} {OTHER_SIREN[3:6]} {OTHER_SIREN[6:]}")
         self.assertIn("aussi le n° SIREN 800 000 002 de Grossiste Exemple", invoice.supplier_doubt)
-        self.grossiste.refresh_from_db()
-        self.assertEqual(self.grossiste.ticket_identifiers, [f"siren:{OTHER_SIREN}"])
+        self.wholesaler.refresh_from_db()
+        self.assertEqual(self.wholesaler.ticket_identifiers, [f"siren:{OTHER_SIREN}"])
 
     def test_one_printing_two_other_companies_numbers_beside_its_own_is_flagged(self):
         """Two others' numbers were no doubt at all (one or none was
@@ -214,10 +229,12 @@ class TypeGuardTests(TestCase):
         invoice = self.fetch(bill() + both)
         self.assertIn("Grossiste Exemple", invoice.supplier_doubt)
         self.assertIn("Tiers Exemple", invoice.supplier_doubt)
-        self.grossiste.refresh_from_db()
+        self.wholesaler.refresh_from_db()
         third.refresh_from_db()
-        self.assertEqual((self.grossiste.ticket_identifiers, third.ticket_identifiers),
-                         ([f"siren:{OTHER_SIREN}"], [f"siren:{THIRD_SIREN}"]))
+        self.assertEqual(
+            (self.wholesaler.ticket_identifiers, third.ticket_identifiers),
+            ([f"siren:{OTHER_SIREN}"], [f"siren:{THIRD_SIREN}"]),
+        )
 
     def test_a_doubted_document_is_not_the_first_the_next_one_is(self):
         """It vouches for nothing and taught nothing: recorded as the first,
@@ -232,9 +249,9 @@ class TypeGuardTests(TestCase):
         """Learning counts a doubted document as nobody's; the page refused
         « Retenir » for what it prints."""
         self.doubted()
-        Supplier.objects.filter(pk=self.grossiste.pk).update(ticket_identifiers=[])
-        self.grossiste.refresh_from_db()
-        report = identifier_report(self.grossiste)
+        Supplier.objects.filter(pk=self.wholesaler.pk).update(ticket_identifiers=[])
+        self.wholesaler.refresh_from_db()
+        report = identifier_report(self.wholesaler)
         row = next(row for row in report["printed"] if row["identifier"] == f"siren:{OTHER_SIREN}")
         self.assertTrue(row["can_keep"], row["reason"])
 
@@ -242,18 +259,18 @@ class TypeGuardTests(TestCase):
         """Counted among everybody else's documents, it made the wholesaler
         forget its number the next time the wholesaler learned."""
         self.doubted()
-        make_invoice(supplier=self.grossiste, ocr_text=bill(day=12, siren=OTHER_SIREN, top="GROSSISTE EXEMPLE"))
-        learn_identifiers(self.grossiste, bill(day=12, siren=OTHER_SIREN, top="GROSSISTE EXEMPLE"))
-        self.grossiste.refresh_from_db()
-        self.assertIn(f"siren:{OTHER_SIREN}", self.grossiste.ticket_identifiers)
+        make_invoice(supplier=self.wholesaler, ocr_text=bill(day=12, siren=OTHER_SIREN, top="GROSSISTE EXEMPLE"))
+        learn_identifiers(self.wholesaler, bill(day=12, siren=OTHER_SIREN, top="GROSSISTE EXEMPLE"))
+        self.wholesaler.refresh_from_db()
+        self.assertIn(f"siren:{OTHER_SIREN}", self.wholesaler.ticket_identifiers)
 
     def test_nor_through_the_command_learning_from_every_document(self):
         self.doubted()
         call_command("learn_shop_identifiers", stdout=StringIO())
         self.caterer.refresh_from_db()
-        self.grossiste.refresh_from_db()
+        self.wholesaler.refresh_from_db()
         self.assertEqual(self.caterer.ticket_identifiers, [])
-        self.assertIn(f"siren:{OTHER_SIREN}", self.grossiste.ticket_identifiers)
+        self.assertIn(f"siren:{OTHER_SIREN}", self.wholesaler.ticket_identifiers)
 
     def test_reading_it_again_keeps_the_doubt(self):
         invoice = self.doubted()
@@ -279,11 +296,11 @@ class TypeGuardTests(TestCase):
         """Moved by a person, it is the wholesaler's: the doubt answered, not
         left saying on the wholesaler's page that it may be someone else's."""
         invoice = self.doubted()
-        move_to_shop(invoice, self.grossiste)
+        move_to_shop(invoice, self.wholesaler)
         invoice.refresh_from_db()
         self.assertEqual(invoice.supplier_doubt, "")
-        fiche = self.client.get(reverse("invoices:supplier_detail", args=[self.grossiste.pk]))
-        self.assertNotContains(fiche, "ce qui reconnaît un autre fournisseur")
+        supplier_page = self.client.get(reverse("invoices:supplier_detail", args=[self.wholesaler.pk]))
+        self.assertNotContains(supplier_page, "ce qui reconnaît un autre fournisseur")
 
     def test_validating_it_answers_the_doubt_and_teaches(self):
         invoice = self.doubted()

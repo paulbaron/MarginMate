@@ -56,10 +56,10 @@
         </p>
 
         {% comment %}
-        Ce qui manque d'un côté, dit en haut avec de quoi le combler : un jour
-        de caisse dont les paiements ne sont pas lus compte 0 € encaissés, et
-        se lit comme un jour calme. Et où s'arrête chaque côté, pour qu'un
-        lecteur voie quand l'un a de l'avance sur l'autre.
+        What one side lacks, said at the top with what fills it: a till
+        day whose payments are not read counts 0 € taken, and
+        reads as a quiet day. And where each side stops, so that a
+        reader sees when one is ahead of the other.
         {% endcomment %}
         {% if report.days_without_payments %}
             <div class="message message-warning">
@@ -90,9 +90,9 @@
             </div>
         {% endif %}
         {% comment %}
-        Où commence et où s'arrête chaque côté : la caisse peut remonter bien
-        avant le relevé, et comparés sur « tout », ses premiers mois se lisaient
-        comme des ventes carte jamais arrivées.
+        Where each side starts and stops: the till can reach back well
+        before the statement, and compared over « tout », its first months read
+        as card sales that never arrived.
         {% endcomment %}
         <p class="muted small">
             Caisse importée jusqu'au {{ report.last_till_day|date:"d/m/Y"|default:"— (aucune vente)" }} ;
@@ -132,7 +132,7 @@
                 <span class="stat-note">{{ report.received_count }} opération{{ report.received_count|pluralize }}</span>
             </div>
             <div class="stat">
-                <span class="stat-label">{{ sources.carte }}</span>
+                <span class="stat-label">{{ sources.card }}</span>
                 <span class="stat-value">{{ report.card_net|floatformat:2 }} €</span>
                 <span class="stat-note">
                     {{ report.card_count }} versement{{ report.card_count|pluralize }} :
@@ -141,17 +141,17 @@
                 </span>
             </div>
             <div class="stat">
-                <span class="stat-label">{{ sources.especes }}</span>
+                <span class="stat-label">{{ sources.cash }}</span>
                 <span class="stat-value">{{ report.cash_total|floatformat:2 }} €</span>
                 <span class="stat-note">{{ report.cash_count }} dépôt{{ report.cash_count|pluralize }}</span>
             </div>
             {% comment %}
-            Pas de statistique « Chèques remis » : ils sont rares, leur ligne est dans
-            le tableau ci-dessous, et une septième case repoussait la dernière seule
-            sur une deuxième rangée.
+            No « Chèques remis » stat: they are rare, their row is in
+            the table below, and a seventh box pushed the last one alone
+            onto a second row.
             {% endcomment %}
             <div class="stat{% if report.unnamed_others %} stat-warn{% endif %}">
-                <span class="stat-label">{{ sources.autres }}</span>
+                <span class="stat-label">{{ sources.other }}</span>
                 <span class="stat-value">{{ report.others_total|floatformat:2 }} €</span>
                 <span class="stat-note">
                     {{ report.others|length }} opération{{ report.others|length|pluralize }}{% if report.unnamed_others %},
@@ -175,8 +175,8 @@
         </div>
 
         {% comment %}
-        Ce que la page reconnaît, dit en clair : une règle qu'on ne voit pas est
-        une règle dont on ne peut pas savoir qu'elle s'est trompée.
+        What the page recognises, said plainly: a rule nobody can see is
+        a rule nobody can know was wrong.
         {% endcomment %}
         <ul class="muted small">
             <li><strong>Versement carte</strong> : une entrée dont le libellé porte « TOTAL ENCAISSE &lt;montant&gt; EUROS ».
@@ -197,9 +197,9 @@
                         <th class="num">Encaissé en caisse</th>
                         <th class="num">Paiements</th>
                         {% comment %}
-                        La carte au brut : ce que le prestataire dit avoir encaissé, le chiffre
-                        que la caisse peut égaler. Ce qui est arrivé net est le brut moins la
-                        commission, en colonne à part.
+                        The card at gross: what the provider says it collected, the figure
+                        the till can equal. What arrived net is the gross less the
+                        commission, in a column of its own.
                         {% endcomment %}
                         <th class="num">Arrivé sur le compte</th>
                         <th class="num">Opérations</th>
@@ -242,15 +242,15 @@
             </table>
         </div>
         {% comment %}
-        Ce que chaque écart veut dire, sous le tableau plutôt que dans une colonne :
-        une phrase par ligne serrait les chiffres, qui sont ce qu'on vient lire.
+        What each gap means, under the table rather than in a column:
+        a sentence per row squeezed the figures, which are what one comes to read.
         {% endcomment %}
         <ul class="muted small">
             {% for row in report.rows %}{% if row.note %}<li><strong>{{ row.label }}</strong> : {{ row.note }}</li>{% endif %}{% endfor %}
         </ul>
         {% comment %}
-        Le délai d'un versement carte est dit une fois, sur la ligne Carte
-        (income.NOTES) : répété ici mot pour mot, il se lisait deux fois de suite.
+        A card payout's delay is said once, on the Carte row
+        (income.NOTES): repeated here word for word, it read twice in a row.
         {% endcomment %}
         <p class="muted">
             L'écart est ce qui est arrivé moins ce que la caisse a encaissé, dit sans jugement : la page ne voit ni
@@ -260,7 +260,7 @@
             prestataire dit avoir encaissé ; le total, lui, est ce qui est arrivé, commission déduite.
         </p>
 
-        <h2 id="solde">Ventes carte pas encore versées</h2>
+        <h2 id="card-balance">Ventes carte pas encore versées</h2>
         {% if report.balance.reason %}
             <div class="empty-state">
                 <p>Pas de solde : {{ balance_reason }}</p>
@@ -382,8 +382,8 @@
                                     </td>
                                     <td class="num" data-sort="{{ line.amount|stringformat:'s' }}">{{ line.amount|floatformat:2 }} €</td>
                                     {% comment %}
-                                    data-sort et le nom en texte à côté du champ : la valeur d'un <input>
-                                    n'est ni cherchée ni triée par static/js/datatable.js, qui lit textContent.
+                                    data-sort and the name as text beside the field: the value of an <input>
+                                    is neither searched nor sorted by static/js/datatable.js, which reads textContent.
                                     {% endcomment %}
                                     <td data-sort="{{ entry.category }}">
                                         <form method="post" action="{% url 'bank:bank_line_action' line.pk %}" class="inline-form">
@@ -414,9 +414,9 @@
         {% endif %}
 
         {% comment %}
-        La liste la plus longue en dernier : elle a une ligne par versement, à peu près
-        une par jour, et placée avant « Mois par mois » (la réponse la plus lisible) et
-        « Autres entrées » (le seul travail à faire), elle les repoussait tout en bas.
+        The longest list last: it has one row per payout, about
+        one a day, and placed before « Mois par mois » (the most readable answer) and
+        « Autres entrées » (the only work to do), it pushed them to the very bottom.
         {% endcomment %}
         <h2 id="versements">Versements carte</h2>
         {% if report.payouts %}
@@ -429,9 +429,9 @@
                             <th class="num">Commission</th>
                             <th class="num">Versé</th>
                             {% comment %}
-                            « Même montant au centime », jamais « a payé » : un versement n'égale
-                            une suite de jours de caisse qu'une fois sur trois environ, et deux
-                            montants égaux sont tout ce que la page sait.
+                            « Même montant au centime », never « a payé »: a payout equals
+                            a run of till days only about one time in three, and two
+                            equal amounts are all the page knows.
                             {% endcomment %}
                             <th>Ventes carte au même montant</th>
                             <th class="num">Pas encore versé après</th>
@@ -439,8 +439,8 @@
                     </thead>
                     <tbody>
                         {% comment %}
-                        Le plus récent d'abord : c'est de lui que parle « Pas encore versé au … »,
-                        et une année de versements le mettait à la dernière ligne.
+                        The most recent first: it is the one « Pas encore versé au … » speaks of,
+                        and a year of payouts put it on the last row.
                         {% endcomment %}
                         {% for row in report.payouts reversed %}
                             {% with entry=row.entry %}

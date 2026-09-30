@@ -32,7 +32,10 @@ CHECKBOX = re.compile(r'<input type="checkbox" name="ligne" value="(\d+)"[^>]*>'
 
 def checkboxes(response) -> dict[int, bool]:
     """Each line's checkbox on the page, and whether it is ticked."""
-    return {int(pk): "checked" in tag for tag, pk in ((m.group(0), m.group(1)) for m in CHECKBOX.finditer(response.content.decode()))}
+    return {
+        int(pk): "checked" in tag
+        for tag, pk in ((m.group(0), m.group(1)) for m in CHECKBOX.finditer(response.content.decode()))
+    }
 
 
 def radios(response, line) -> list[str]:
@@ -53,7 +56,8 @@ class ProposalsPage(Fixtures):
         make_supplier(code=SUBSCRIPTION, name="Abonnement Exemple")
         # 23,70 € TTC each (19,75 € HT at 20 %), dated the 2nd of each month.
         self.may, self.june, self.july = (
-            self.invoice(SUBSCRIPTION, date(2026, month, 2), "19.75", invoice_number=f"A-{month:02d}") for month in (5, 6, 7)
+            self.invoice(SUBSCRIPTION, date(2026, month, 2), "19.75", invoice_number=f"A-{month:02d}")
+            for month in (5, 6, 7)
         )
         self.receipt = self.invoice("MONOPRIX", date(2026, 7, 15), "12.38", rate=FIVE_FIVE, invoice_number="T-1")
         # 126,00 € TTC each (105,00 € HT at 20 %).
@@ -215,7 +219,7 @@ class ProposalsPageTests(ProposalsPage, TestCase):
         # contradicted the row under it.
         self.assertContains(response, "sauf celles déliées à la main")
 
-    def test_a_sure_line_reaching_months_back_is_shown_certaine_but_not_ticked(self):
+    def test_a_sure_line_reaching_months_back_is_shown_certain_but_not_ticked(self):
         """The cascade the bulk page makes routine: a supplier debited
         monthly, whose invoices at one figure were all linked in one go, and
         one more debit whose month's invoice is at ANOTHER figure. The one
@@ -281,7 +285,10 @@ class ProposalsPageTests(ProposalsPage, TestCase):
         self.assertContains(response, "l'opération du 06/07/2026")
         self.assertContains(response, "qui la prendrait la première")
         # The group's heading names this exception too.
-        self.assertContains(response, "sauf celles déliées à la main et celles dont la facture est aussi proposée à une opération servie avant elles")
+        self.assertContains(
+            response,
+            "sauf celles déliées à la main et celles dont la facture est aussi proposée à une opération servie avant elles",
+        )
         self.assertContains(response, "1 sélectionnée")
         # POST what the page pre-ticked: one link, nothing skipped, and the
         # later debit comes back a question - its nearest invoice of that
@@ -305,11 +312,15 @@ class AcceptProposalsViewTests(ProposalsPage, TestCase):
         for line, invoice in ((self.subscription, self.july), (self.card, self.receipt)):
             payment = InvoicePayment.objects.get(transaction=line)
             line.refresh_from_db()
-            self.assertEqual((payment.invoice, payment.method, line.settled_by_hand), (invoice, InvoicePayment.Method.MANUAL, True))
+            self.assertEqual(
+                (payment.invoice, payment.method, line.settled_by_hand), (invoice, InvoicePayment.Method.MANUAL, True)
+            )
         # The unticked line is untouched, and the payee the bank does not
         # spell is learnt from the link that added up.
         self.assertFalse(InvoicePayment.objects.filter(transaction=self.metro).exists())
-        self.assertTrue(CounterpartyAlias.objects.filter(supplier=self.receipt.supplier, name="PAYTERM EPICERIE 12").exists())
+        self.assertTrue(
+            CounterpartyAlias.objects.filter(supplier=self.receipt.supplier, name="PAYTERM EPICERIE 12").exists()
+        )
         # Back on the page, with the two gone.
         self.assertEqual(set(checkboxes(response)), {self.metro.pk})
 
@@ -396,7 +407,9 @@ class AcceptProposalsViewTests(ProposalsPage, TestCase):
         self.assertRedirects(response, self.url, fetch_redirect_response=False)
 
     def test_the_per_row_forms_still_work_beside_it(self):
-        self.client.post(reverse("bank:bank_line_action", args=[self.card.pk]), {"action": "link", "invoice": [self.receipt.pk]})
+        self.client.post(
+            reverse("bank:bank_line_action", args=[self.card.pk]), {"action": "link", "invoice": [self.receipt.pk]}
+        )
         self.assertEqual(InvoicePayment.objects.get(transaction=self.card).invoice, self.receipt)
 
 

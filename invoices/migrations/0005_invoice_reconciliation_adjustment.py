@@ -4,15 +4,14 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('invoices', '0004_invoiceline_colisage'),
+        ("invoices", "0004_invoiceline_colisage"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='invoice',
-            name='reconciliation_adjustment',
+            model_name="invoice",
+            name="reconciliation_adjustment",
             field=models.DecimalField(decimal_places=2, default=0, max_digits=10),
         ),
     ]

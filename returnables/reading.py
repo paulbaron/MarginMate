@@ -1,6 +1,6 @@
-"""Reading a bon: its PDF's text, then what a format's motifs find in it.
+"""Reading a slip: its PDF's text, then what a format's patterns find in it.
 
-- `pdf_text(content)` - the text layer of a bon's PDF, bounded before and
+- `pdf_text(content)` - the text layer of a slip's PDF, bounded before and
   while it is extracted (5 MB, 5 pages, 200 000 characters): a 40-page
   invoice dropped by mistake is refused, not extracted whole. Never call it
   inside a transaction: pdfminer takes seconds on a bad file, and SQLite's
@@ -8,20 +8,20 @@
 - **What pdfminer inflates is bounded too** (`bound_pdf_decoding`, done when
   this module is imported, process-wide): the 5 MB are COMPRESSED bytes,
   deflate reaches about 1000:1 and two Flate filters chained far more, so a
-  spoofed mail's bon inflated to gigabytes before any page or character cap
+  spoofed mail's slip inflated to gigabytes before any page or character cap
   applied. pdfminer's Flate (and its retry of a damaged stream, which it
   runs on any zlib.error), LZW and RunLength decoders are replaced by
-  bounded ones: MAX_INFLATE_STAGE bytes a stream and a filter, and a bon's
+  bounded ones: MAX_INFLATE_STAGE bytes a stream and a filter, and a slip's
   streams share MAX_INFLATE_TOTAL (`inflate_budget`). Past it,
   `InflateLimit` - never a zlib.error, which pdfminer would retry without a
-  bound - and the bon is « trop long ». Achats' own pdfplumber pass gets
+  bound - and the slip is « trop long ». Achats' own pdfplumber pass gets
   the per-stream bound as well.
-- `read_slip_text(text, fmt)` - a `SlipReading`: the consignes part's
-  lines, what could not be read, the delivery date, the number, the BL
-  references, « annule et remplace », the printed total, the remarks, and
-  the checks the page shows. `fmt` is any object carrying a format's motif
-  attributes (a SlipFormat, the format form's unsaved values, a test's
-  SimpleNamespace): the module imports no model.
+- `read_slip_text(text, fmt)` - a `SlipReading`: the returnables part's
+  lines, what could not be read, the delivery date, the number, the
+  delivery-note references, « annule et remplace », the printed total, the
+  remarks, and the checks the page shows. `fmt` is any object carrying a
+  format's pattern attributes (a SlipFormat, the format form's unsaved
+  values, a test's SimpleNamespace): the module imports no model.
 - `detect_format(text, formats)` - which format recognises a document.
 - `trace(text, fmt)` - « Tester »: the text line by line, each line with
   what the reading made of it.
@@ -31,19 +31,20 @@ The rules, and why (spec §5; the traps are the owner's real tickets'):
 - A line longer than 500 characters is never matched (it goes to `unread`,
   shown cut to 120): cut for matching, « = 12345 » would read out of
   « = 12345.67 ».
-- Header motifs (date, printed, number, reference, total, replaces) are
-  searched LINE BY LINE, motif order first, then line order: `\\s` never
+- Header patterns (date, printed, number, reference, total, replaces) are
+  searched LINE BY LINE, pattern order first, then line order: `\\s` never
   crosses a line (invoices/parsers/uba.py has been bitten by a `\\s`
-  swallowing a newline), and the first date motif - the BL's date - wins
-  over the print date: a bon re-sent the next day keeps its delivery day.
-- The consignes part starts after the FIRST line matching section_start and
+  swallowing a newline), and the first date pattern - the delivery note's
+  date - wins over the print date: a slip re-sent the next day keeps its
+  delivery day.
+- The returnables part starts after the FIRST line matching section_start and
   ends before the first LATER line matching section_end. A part starting
   again after its end is read once, and a check says so.
 - A captured value counts only when its group took part and is not blank. A
   line whose designation has fewer than 2 letters or digits, or whose
   quantity or amount does not read (or is wider than its column), is
   UNREAD: listed, never guessed.
-- A motif that does not compile any more, or runs out of time, gives a
+- A pattern that does not compile any more, or runs out of time, gives a
   reading with `error` set, no line, one failed check - never a 500.
 
 Budgets: a reading has READING_SECONDS in all (patterns.Budget).
@@ -65,7 +66,7 @@ from types import SimpleNamespace
 from returnables import patterns
 from returnables.patterns import (
     Budget,
-    MotifError,
+    PatternError,
     captured,
     read_amount,
     read_date,
@@ -77,14 +78,14 @@ MAX_PDF_BYTES = 5 * 1024 * 1024
 MAX_PDF_PAGES = 5
 MAX_TEXT_CHARS = 200_000
 #: What pdfminer may inflate: one stream through one filter (everywhere in
-#: this process), and all the streams of one bon together (pdf_text). A
-#: real bon's page is a few KB; an invoice's embedded font a few hundred.
+#: this process), and all the streams of one slip together (pdf_text). A
+#: real slip's page is a few KB; an invoice's embedded font a few hundred.
 MAX_INFLATE_STAGE = 64 * 1024 * 1024
 MAX_INFLATE_TOTAL = 64 * 1024 * 1024
 #: A longer line is never matched, and shown cut to SHOWN_LINE_CHARS.
 MAX_LINE_CHARS = 500
 SHOWN_LINE_CHARS = 120
-#: A consignes part longer than this is refused: the motifs are wrong.
+#: A returnables part longer than this is refused: the patterns are wrong.
 MAX_SECTION_LINES = 300
 MAX_REFERENCES = 20
 MAX_REFERENCE_CHARS = 40
@@ -112,7 +113,7 @@ TEXT_TOO_LONG = f"Ce texte est trop long pour un bon ({MAX_TEXT_CHARS} caractèr
 
 
 class SlipError(Exception):
-    """A document that cannot be read as a bon: `message` is the French
+    """A document that cannot be read as a slip: `message` is the French
     sentence."""
 
     def __init__(self, message: str):
@@ -125,8 +126,8 @@ class SlipError(Exception):
 
 @dataclass
 class ReadLine:
-    """A line of the consignes part, as printed: quantity signed, the unit
-    price (4 decimals) and the amount (2) when the motif has them."""
+    """A line of the returnables part, as printed: quantity signed, the unit
+    price (4 decimals) and the amount (2) when the pattern has them."""
 
     designation: str
     quantity: int
@@ -151,7 +152,7 @@ class Check:
 
 @dataclass
 class SlipReading:
-    """What a format's motifs found in a bon's text. `section_found` is
+    """What a format's patterns found in a slip's text. `section_found` is
     None when the format has no section_start (the whole text is read).
     `error` set means nothing was read: `lines` is empty and `checks` is the
     one failed « Lecture impossible »."""
@@ -371,7 +372,7 @@ _BOUNDED_ZLIB = SimpleNamespace(decompress=bounded_decompress, decompressobj=_Bo
 
 def bound_pdf_decoding() -> None:
     """Put the bounded decoders in pdfminer.pdftypes, for the whole process
-    (idempotent): the bons' reading and Achats' text layer alike. Left as
+    (idempotent): the slips' reading and Achats' text layer alike. Left as
     pdfminer has them: ASCIIHex (shrinks), ASCII85 (4:1 at most, after a
     bounded stage), images (never decoded to read text) and CCITTFax (its
     rows grow with Columns, but pdfminer's pure-Python decoder crawls)."""
@@ -391,7 +392,7 @@ bound_pdf_decoding()
 
 
 def pdf_text(content: bytes) -> str:
-    """The text layer of a bon's PDF, pages joined by a newline - or
+    """The text layer of a slip's PDF, pages joined by a newline - or
     SlipError: over 5 MB, over 5 pages or 200 000 characters (checked while
     extracting, page by page), streams inflating past MAX_INFLATE_STAGE or,
     together, MAX_INFLATE_TOTAL (« trop long »), no text at all (a scan),
@@ -419,7 +420,7 @@ def pdf_text(content: bytes) -> str:
                 texts = _page_texts(pdf)
     except SlipError:
         raise
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - pdfminer's zoo of errors is a French refusal, never a 500
         # However pdfplumber wrapped it (PdfminerException), a decode past
         # its bound left the budget refused.
         if (budget is not None and budget[0] < 0) or inflate_refused(error):
@@ -435,7 +436,7 @@ def _page_count(content: bytes, limit: int) -> int:
     """How many pages pdfplumber would iterate, counted up to `limit`:
     pdfminer's own walk of the page tree, which makes no page and stops
     there, whatever the file declares (security review of the HARDEN-01
-    fix: counted by pdfplumber, a 5 MB bon of some 33 000 light pages took
+    fix: counted by pdfplumber, a 5 MB slip of some 33 000 light pages took
     about 30 s and 100 MB to refuse)."""
     import itertools
 
@@ -524,12 +525,12 @@ def _lines_label(count: int) -> str:
 
 
 class _Reader:
-    """One reading of one text with one format's compiled motifs, keeping
+    """One reading of one text with one format's compiled patterns, keeping
     what it made of each line for « Tester »."""
 
-    def __init__(self, text, motifs: dict, budget: Budget):
+    def __init__(self, text, regexes: dict, budget: Budget):
         self.lines = split_lines(text)
-        self.motifs = motifs
+        self.regexes = regexes
         self.budget = budget
         self.tags = [[] for _ in self.lines]
         self.read_lines = {}
@@ -540,20 +541,20 @@ class _Reader:
     def _usable(self, index: int) -> bool:
         return len(self.lines[index]) <= MAX_LINE_CHARS
 
-    def _first_line(self, motif, begin: int = 0) -> int | None:
+    def _first_line(self, pattern, begin: int = 0) -> int | None:
         for index in range(begin, len(self.lines)):
-            if self._usable(index) and patterns.search(motif, self.lines[index], self.budget):
+            if self._usable(index) and patterns.search(pattern, self.lines[index], self.budget):
                 return index
         return None
 
     def _first_value(self, attr: str, value_of) -> tuple:
-        """The first value `value_of(match)` reads, motif order first, then
+        """The first value `value_of(match)` reads, pattern order first, then
         line order: (value, line index), or (None, None)."""
-        for motif in self.motifs.get(attr, []):
+        for pattern in self.regexes.get(attr, []):
             for index, line in enumerate(self.lines):
                 if not self._usable(index):
                     continue
-                match = patterns.search(motif, line, self.budget)
+                match = patterns.search(pattern, line, self.budget)
                 if match is None:
                     continue
                 value = value_of(match)
@@ -568,24 +569,24 @@ class _Reader:
 
     def _section(self) -> tuple:
         """(first line index, stop index, start index, end index, times the
-        start was found) of the consignes part; first is None when the
-        format has a start motif and no line matches it."""
-        start_motif = next(iter(self.motifs.get("section_start", [])), None)
-        end_motif = next(iter(self.motifs.get("section_end", [])), None)
+        start was found) of the returnables part; first is None when the
+        format has a start pattern and no line matches it."""
+        start_pattern = next(iter(self.regexes.get("section_start", [])), None)
+        end_pattern = next(iter(self.regexes.get("section_end", [])), None)
         start = None
-        if start_motif is not None:
-            start = self._first_line(start_motif)
+        if start_pattern is not None:
+            start = self._first_line(start_pattern)
             if start is None:
                 return None, None, None, None, 0
             first = start + 1
         else:
             first = 0
-        end = self._first_line(end_motif, first) if end_motif is not None else None
+        end = self._first_line(end_pattern, first) if end_pattern is not None else None
         times = 1
-        if start_motif is not None and end is not None:
+        if start_pattern is not None and end is not None:
             index = end + 1
             while True:
-                again = self._first_line(start_motif, index)
+                again = self._first_line(start_pattern, index)
                 if again is None:
                     break
                 times += 1
@@ -615,7 +616,7 @@ class _Reader:
         return ReadLine(designation, quantity, unit, amount), ""
 
     def _lines(self, first: int, stop: int) -> None:
-        line_motif = self.motifs["line_pattern"][0]
+        line_pattern = self.regexes["line_pattern"][0]
         for index in range(first, stop):
             line = self.lines[index]
             if not self._usable(index):
@@ -625,7 +626,7 @@ class _Reader:
             if SEPARATOR.match(line):
                 self._tag(index, "séparateur")
                 continue
-            match = patterns.search(line_motif, line, self.budget)
+            match = patterns.search(line_pattern, line, self.budget)
             if match is None:
                 read, why = None, "ne correspond pas au motif de ligne"
             else:
@@ -667,13 +668,13 @@ class _Reader:
         if index is not None:
             self._tag(index, "n°", reading.number)
 
-        for motif in self.motifs.get("reference_patterns", []):
+        for pattern in self.regexes.get("reference_patterns", []):
             for index, line in enumerate(self.lines):
                 if len(reading.references) >= MAX_REFERENCES:
                     break
                 if not self._usable(index):
                     continue
-                for match in patterns.find_all(motif, line, self.budget):
+                for match in patterns.find_all(pattern, line, self.budget):
                     reference = clean_text(captured(match, "reference"), MAX_REFERENCE_CHARS)
                     if _alnums(reference) < MIN_REFERENCE_ALNUMS or reference in reading.references:
                         continue
@@ -682,9 +683,9 @@ class _Reader:
                     reading.references.append(reference)
                     self._tag(index, "réf.", reference)
 
-        for motif in self.motifs.get("replaces_pattern", []):
+        for pattern in self.regexes.get("replaces_pattern", []):
             for index, line in enumerate(self.lines):
-                if self._usable(index) and patterns.search(motif, line, self.budget):
+                if self._usable(index) and patterns.search(pattern, line, self.budget):
                     reading.replaces = True
                     self._tag(index, "remplace")
 
@@ -695,14 +696,14 @@ class _Reader:
             self._tag(index, "total", french_number(reading.printed_total))
 
     def _remarks(self) -> None:
-        start_motif = next(iter(self.motifs.get("remarks_start", [])), None)
-        if start_motif is None:
+        start_pattern = next(iter(self.regexes.get("remarks_start", [])), None)
+        if start_pattern is None:
             return
-        start = self._first_line(start_motif)
+        start = self._first_line(start_pattern)
         if start is None:
             return
-        end_motif = next(iter(self.motifs.get("remarks_end", [])), None)
-        end = self._first_line(end_motif, start + 1) if end_motif is not None else None
+        end_pattern = next(iter(self.regexes.get("remarks_end", [])), None)
+        end = self._first_line(end_pattern, start + 1) if end_pattern is not None else None
         kept = []
         for index in range(start + 1, end if end is not None else len(self.lines)):
             line = self.lines[index]
@@ -715,16 +716,18 @@ class _Reader:
     def _checks(self, start, end, times) -> list:
         reading = self.reading
         checks = []
-        if self.motifs.get("section_start"):
+        if self.regexes.get("section_start"):
             if start is None:
-                checks.append(Check("Partie des consignes trouvée", False, "aucune ligne ne correspond au motif de début"))
+                checks.append(
+                    Check("Partie des consignes trouvée", False, "aucune ligne ne correspond au motif de début")
+                )
             elif times > 1:
                 checks.append(
                     Check("Partie des consignes trouvée", False, f"trouvée {times} fois : seule la première est lue")
                 )
             else:
                 checks.append(Check("Partie des consignes trouvée", True, f"ligne {start + 1}"))
-        if self.motifs.get("section_end"):
+        if self.regexes.get("section_end"):
             if reading.section_found is False:
                 checks.append(Check("Fin de la partie trouvée", False, "la partie des consignes n'a pas été trouvée"))
             elif end is None:
@@ -749,8 +752,7 @@ class _Reader:
             wrong = [
                 line
                 for line in priced
-                if (line.quantity * line.unit_amount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-                != line.amount
+                if (line.quantity * line.unit_amount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) != line.amount
             ]
             detail = " ; ".join(
                 f"« {line.designation} » : {line.quantity} × {french_number(line.unit_amount)} = "
@@ -782,21 +784,21 @@ class _Reader:
                 )
         if reading.delivery_date is not None:
             checks.append(Check("Date de livraison lue", True, f"{reading.delivery_date:%d/%m/%Y}"))
-        elif self.motifs.get("date_patterns"):
+        elif self.regexes.get("date_patterns"):
             checks.append(Check("Date de livraison lue", False, "aucun motif de date n'a trouvé de date"))
         else:
             checks.append(Check("Date de livraison lue", False, "le format n'a pas de motif de date"))
-        if self.motifs.get("number_patterns"):
+        if self.regexes.get("number_patterns"):
             checks.append(
                 Check("Numéro lu", bool(reading.number), reading.number or "aucun motif de numéro n'a trouvé de numéro")
             )
         return checks
 
     def read(self) -> SlipReading:
-        if not self.motifs.get("line_pattern"):
-            raise MotifError(f"{patterns.FIELD_BY_ATTR['line_pattern'].label} : le motif est vide.")
+        if not self.regexes.get("line_pattern"):
+            raise PatternError(f"{patterns.FIELD_BY_ATTR['line_pattern'].label} : le motif est vide.")
         first, stop, start, end, times = self._section()
-        if self.motifs.get("section_start"):
+        if self.regexes.get("section_start"):
             self.reading.section_found = first is not None
         if start is not None:
             self._tag(start, "début")
@@ -823,28 +825,28 @@ def _read(text, fmt, budget: Budget | None) -> tuple:
     if len(text) > MAX_TEXT_CHARS:
         return _failed(TEXT_TOO_LONG), None
     try:
-        motifs = patterns.compile_format(fmt)
-    except MotifError as error:
+        regexes = patterns.compile_format(fmt)
+    except PatternError as error:
         return _failed(error.message), _Reader(text, {}, budget)
-    reader = _Reader(text, motifs, budget)
+    reader = _Reader(text, regexes, budget)
     try:
         return reader.read(), reader
-    except (MotifError, _ReadingFailed) as error:
+    except (PatternError, _ReadingFailed) as error:
         reader.tags = [[] for _ in reader.lines]
         reader.read_lines = {}
         return _failed(str(error)), reader
 
 
 def read_slip_text(text, fmt, *, budget: Budget | None = None) -> SlipReading:
-    """What `fmt`'s motifs read in `text` (see the module docstring). Never
-    raises for a bad or slow motif: the reading's `error` says it."""
+    """What `fmt`'s patterns read in `text` (see the module docstring). Never
+    raises for a bad or slow pattern: the reading's `error` says it."""
     reading, _reader = _read(text, fmt, budget)
     return reading
 
 
 def trace(text, fmt, *, budget: Budget | None = None) -> Trace:
     """« Tester »: every line of `text` with what the reading made of it -
-    « début », « ligne lue » (désignation · quantité · prix · montant),
+    « début », « ligne lue » (designation · quantity · price · amount),
     « non lue » (and why), « séparateur », « fin », « date »,
     « impression », « n° », « réf. », « total », « remplace », « remarque » -
     and the reading itself."""
@@ -867,9 +869,9 @@ def trace(text, fmt, *, budget: Budget | None = None) -> Trace:
 def detect_format(text, formats):
     """The one format that recognises `text`: only ACTIVE formats WITH a
     section_start take part (a format without one would « recognise » any
-    document its line motif reads a line of). None when none does - « Aucun
+    document its line pattern reads a line of). None when none does - « Aucun
     format de bon ne reconnaît ce document » is the caller's to say; SlipError
-    when several do. A format whose start motif no longer compiles
+    when several do. A format whose start pattern no longer compiles
     recognises nothing (its page says « motif invalide »); one that runs out
     of time stops the detection with a SlipError naming it."""
     field_ = patterns.FIELD_BY_ATTR["section_start"]
@@ -880,13 +882,13 @@ def detect_format(text, formats):
         if not getattr(fmt, "is_active", True) or not (getattr(fmt, "section_start", "") or "").strip():
             continue
         try:
-            (motif,) = patterns.compile_field(field_, fmt.section_start)
-        except MotifError:
+            (pattern,) = patterns.compile_field(field_, fmt.section_start)
+        except PatternError:
             continue
         try:
-            if any(patterns.search(motif, line, budget) for line in lines):
+            if any(patterns.search(pattern, line, budget) for line in lines):
                 found.append(fmt)
-        except MotifError as error:
+        except PatternError as error:
             raise SlipError(
                 f"Le format « {fmt.name} » n'a pas pu être essayé ({error}) : choisissez le format dans la liste."
             ) from None

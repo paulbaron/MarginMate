@@ -20,7 +20,7 @@ which a restore leaves « non lu ») nor the till's means of payment per day
 `manage.py laddition_backfill_revenue`, then `laddition_backfill_payments`,
 contacting nothing. So a clear deletes the payments, and a « Remplacer »
 deletes those of every day it leaves with no till sales, and both say how to
-bring them back (`PAYMENTS_NOTE`) - or, in an espace whose till the server
+bring them back (`PAYMENTS_NOTE`) - or, in a tenant whose till the server
 does not import (a hosted bar, which runs no command on the server), that
 this is « à configurer » (`payments_note`); nothing else here touches them.
 """
@@ -80,15 +80,19 @@ PAYMENTS_NOTE = (
     "« manage.py laddition_backfill_payments » les relit des exports déjà téléchargés, pour les jours "
     "dont les ventes sont enregistrées."
 )
-#: PAYMENTS_NOTE where that command is not this espace's to run: it reads the
+#: PAYMENTS_NOTE where that command is not this tenant's to run: it reads the
 #: exports of the till the server imports, the owner's (recipes/integration.py),
 #: and a hosted bar runs no command on the server.
-PAYMENTS_NOTE_TO_CONFIGURE = f"Les moyens de paiement de la caisse ne sont pas dans les archives, et {TILL_TO_CONFIGURE}."
+PAYMENTS_NOTE_TO_CONFIGURE = (
+    f"Les moyens de paiement de la caisse ne sont pas dans les archives, et {TILL_TO_CONFIGURE}."
+)
 
 
 def payments_note() -> str:
-    """What a run that deleted the till's payments says, for the bound espace."""
+    """What a run that deleted the till's payments says, for the bound tenant."""
     return PAYMENTS_NOTE if till_allowed() else PAYMENTS_NOTE_TO_CONFIGURE
+
+
 #: Rows written or deleted per query: SQLite caps a statement's parameters.
 BATCH = 500
 
@@ -148,7 +152,9 @@ def documents_here() -> dict[tuple[str, int], int]:
     keys: dict[tuple[str, int], int] = {}
     seen: dict[str, int] = defaultdict(int)
     for document in _documents():
-        key = fingerprint(document.reference, document.sold_on, document.note, [_line_shape(line) for line in document.lines.all()])
+        key = fingerprint(
+            document.reference, document.sold_on, document.note, [_line_shape(line) for line in document.lines.all()]
+        )
         keys[(key, seen[key])] = document.pk
         seen[key] += 1
     return keys
@@ -156,7 +162,7 @@ def documents_here() -> dict[tuple[str, int], int]:
 
 def _batches(items: list):
     for start in range(0, len(items), BATCH):
-        yield items[start:start + BATCH]
+        yield items[start : start + BATCH]
 
 
 def _delete(model, pks: list[int]) -> int:
@@ -185,15 +191,24 @@ class SalesSection(Section):
         payload = self._payload()
         return {
             "till_products": sorted(
-                (product.name, product.category, product.typology, product.total_quantity,
-                 codec.dump(product, "first_seen"), codec.dump(product, "last_seen"))
+                (
+                    product.name,
+                    product.category,
+                    product.typology,
+                    product.total_quantity,
+                    codec.dump(product, "first_seen"),
+                    codec.dump(product, "last_seen"),
+                )
                 for product in PosProduct.objects.filter(daily_quantities__isnull=False).distinct()
             ),
             "daily": sorted(tuple(row) for row in payload["daily"]),
             "manual_sales": sorted(
-                (sale["recipe"], sale["sold_on"], sale["quantity"], sale["recorded_at"]) for sale in payload["manual_sales"]
+                (sale["recipe"], sale["sold_on"], sale["quantity"], sale["recorded_at"])
+                for sale in payload["manual_sales"]
             ),
-            "documents": sorted(json.dumps(document, sort_keys=True, ensure_ascii=False) for document in payload["documents"]),
+            "documents": sorted(
+                json.dumps(document, sort_keys=True, ensure_ascii=False) for document in payload["documents"]
+            ),
             # Derived: the till's sales per recipe, rebuilt through the links.
             "laddition": laddition_rows(),
         }
@@ -204,19 +219,21 @@ class SalesSection(Section):
             {"name": name, "category": category, "typology": typology}
             for name, category, typology in PosProduct.objects.filter(
                 pk__in=PosProductDailyQuantity.objects.values("product_id")
-            ).order_by("name").values_list("name", "category", "typology")
+            )
+            .order_by("name")
+            .values_list("name", "category", "typology")
         ]
         daily = [
             [name, sold_on.isoformat(), quantity]
-            for name, sold_on, quantity in PosProductDailyQuantity.objects.order_by("product__name", "sold_on").values_list(
-                "product__name", "sold_on", "quantity"
-            )
+            for name, sold_on, quantity in PosProductDailyQuantity.objects.order_by(
+                "product__name", "sold_on"
+            ).values_list("product__name", "sold_on", "quantity")
         ]
         manual_sales = [
             {"recipe": sale.recipe.name, **codec.record(sale, ("sold_on", "quantity", "recorded_at"))}
-            for sale in RecipeSale.objects.filter(source=MANUAL_SALE_SOURCE).select_related("recipe").order_by(
-                "recipe__name", "sold_on"
-            )
+            for sale in RecipeSale.objects.filter(source=MANUAL_SALE_SOURCE)
+            .select_related("recipe")
+            .order_by("recipe__name", "sold_on")
         ]
         documents = [
             {
@@ -294,7 +311,9 @@ class SalesSection(Section):
             codec.note_unknown(report, record, TILL_KEYS, "produits caisse : ")
             try:
                 codec.load(PosProduct, "name", name)
-                values = {field: codec.load(PosProduct, field, record[field]) for field in DESCRIPTIVE if field in record}
+                values = {
+                    field: codec.load(PosProduct, field, record[field]) for field in DESCRIPTIVE if field in record
+                }
             except codec.FieldValueError as exc:
                 report.skip(f"Produit caisse « {name} » : {exc}")
                 continue
@@ -332,7 +351,12 @@ class SalesSection(Section):
         creates: list[PosProductDailyQuantity] = []
         updates: list[PosProductDailyQuantity] = []
         for position, row in enumerate(self.daily, start=1):
-            if not isinstance(row, list) or len(row) != len(DAILY_COLUMNS) or not isinstance(row[0], str) or not row[0].strip():
+            if (
+                not isinstance(row, list)
+                or len(row) != len(DAILY_COLUMNS)
+                or not isinstance(row[0], str)
+                or not row[0].strip()
+            ):
                 report.skip(f"vente par jour n° {position} de l'archive : illisible")
                 continue
             name, sold_on, quantity = row
@@ -398,7 +422,11 @@ class SalesSection(Section):
             try:
                 sold_on = codec.load(RecipeSale, "sold_on", record.get("sold_on"))
                 quantity = codec.load(RecipeSale, "quantity", record.get("quantity"))
-                stamp = codec.load(RecipeSale, "recorded_at", record["recorded_at"]) if record.get("recorded_at") is not None else None
+                stamp = (
+                    codec.load(RecipeSale, "recorded_at", record["recorded_at"])
+                    if record.get("recorded_at") is not None
+                    else None
+                )
             except codec.FieldValueError as exc:
                 report.skip(f"Vente saisie de « {recipe_name} » : {exc}")
                 continue
@@ -413,7 +441,9 @@ class SalesSection(Section):
             self.manual_keys.add(key)
             found = existing.get(key)
             if found is None:
-                sale = RecipeSale.objects.create(recipe=recipe, sold_on=sold_on, quantity=quantity, source=MANUAL_SALE_SOURCE)
+                sale = RecipeSale.objects.create(
+                    recipe=recipe, sold_on=sold_on, quantity=quantity, source=MANUAL_SALE_SOURCE
+                )
                 if stamp is not None:
                     # auto_now_add stamped it "now"; the archive's is the real one.
                     RecipeSale.objects.filter(pk=sale.pk).update(recorded_at=stamp)
@@ -452,7 +482,9 @@ class SalesSection(Section):
             if key in here:
                 report.unchanged(DOCUMENTS)
                 continue
-            title = f"Bon de vente du {_day(fields['sold_on'])}" + (f" ({fields['reference']})" if fields["reference"] else "")
+            title = f"Bon de vente du {_day(fields['sold_on'])}" + (
+                f" ({fields['reference']})" if fields["reference"] else ""
+            )
             try:
                 resolved = [self._resolve_line(kind, name, recipes, articles) for kind, name, _q, _p in lines]
             except Skip as exc:
@@ -488,7 +520,11 @@ class SalesSection(Section):
                 "sold_on": codec.load(SaleDocument, "sold_on", record.get("sold_on")),
                 "note": codec.load(SaleDocument, "note", record.get("note", "")),
             }
-            stamp = codec.load(SaleDocument, "created_at", record["created_at"]) if record.get("created_at") is not None else None
+            stamp = (
+                codec.load(SaleDocument, "created_at", record["created_at"])
+                if record.get("created_at") is not None
+                else None
+            )
         except codec.FieldValueError as exc:
             raise Skip(str(exc)) from None
         items = record.get("lines", [])
@@ -561,9 +597,7 @@ class SalesSection(Section):
         if manual:
             report.deleted(MANUAL, manual)
 
-        documents = _delete(
-            SaleDocument, [pk for key, pk in documents_here().items() if key not in self.document_keys]
-        )
+        documents = _delete(SaleDocument, [pk for key, pk in documents_here().items() if key not in self.document_keys])
         if documents:
             report.deleted(DOCUMENTS, documents)
 
@@ -613,8 +647,13 @@ class SalesSection(Section):
             total_quantity=0, first_seen=None, last_seen=None
         )
         for what, n in (
-            (QUANTITIES, days), (PRODUCTS, products), (MANUAL, manual), (RECIPE_SALES, till_sales),
-            (DOCUMENTS, documents), (LINES, lines), (PAYMENTS, payments),
+            (QUANTITIES, days),
+            (PRODUCTS, products),
+            (MANUAL, manual),
+            (RECIPE_SALES, till_sales),
+            (DOCUMENTS, documents),
+            (LINES, lines),
+            (PAYMENTS, payments),
         ):
             if n:
                 report.deleted(what, n)

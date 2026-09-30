@@ -159,22 +159,16 @@ class ParseSalesRowsTests(SimpleTestCase):
     def test_lines_for_the_same_product_and_day_are_summed(self):
         """The till writes one row per item rung up, so five pints on one
         ticket is five rows."""
-        result = self.parse(
-            [["2026-06-01", "Pinte Blonde", "2", "NON"], ["2026-06-01", "Pinte Blonde", "3", "NON"]]
-        )
+        result = self.parse([["2026-06-01", "Pinte Blonde", "2", "NON"], ["2026-06-01", "Pinte Blonde", "3", "NON"]])
         self.assertEqual(result.entries, [("Pinte Blonde", date(2026, 6, 1), 5)])
 
     def test_the_same_product_on_different_days_stays_apart(self):
-        result = self.parse(
-            [["2026-06-01", "Pinte Blonde", "2", "NON"], ["2026-06-02", "Pinte Blonde", "3", "NON"]]
-        )
+        result = self.parse([["2026-06-01", "Pinte Blonde", "2", "NON"], ["2026-06-02", "Pinte Blonde", "3", "NON"]])
         self.assertEqual(len(result.entries), 2)
         self.assertEqual(result.days, (date(2026, 6, 1), date(2026, 6, 2)))
 
     def test_the_total_row_is_skipped_and_counted(self):
-        result = self.parse(
-            [["2026-06-01", "Pinte Blonde", "2", "NON"], ["-", "Total", "-", ""]]
-        )
+        result = self.parse([["2026-06-01", "Pinte Blonde", "2", "NON"], ["-", "Total", "-", ""]])
         self.assertEqual(result.total_quantity, 2)
         self.assertEqual(result.skipped, 1)
 
@@ -182,9 +176,7 @@ class ParseSalesRowsTests(SimpleTestCase):
         """A comped drink is poured from the same bottle as a paid one and
         consumes exactly the same stock, so it belongs in the quantity.
         Recording it again as a known loss would subtract it twice."""
-        result = self.parse(
-            [["2026-06-01", "Pinte Blonde", "2", "NON"], ["2026-06-01", "Spritz", "1", "OUI"]]
-        )
+        result = self.parse([["2026-06-01", "Pinte Blonde", "2", "NON"], ["2026-06-01", "Spritz", "1", "OUI"]])
         self.assertEqual(result.total_quantity, 3)
         self.assertEqual(result.offered, 1)
 

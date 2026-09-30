@@ -5,7 +5,7 @@ portal (`WebsiteInvoiceSource`) - nested in it.
 A portal's settings name the `.env` variables holding its login, never
 the login itself: those names are safe in an archive, and the values have
 to be copied by hand to the other computer, which the report says - in the
-owner's espace only. A hosted bar edits no .env on the server and its
+owner's tenant only. A hosted bar edits no .env on the server and its
 portals are « à configurer » (invoices/integrations.py): its notes say
 that instead (`accounts.tenancy.integrations_allowed`).
 
@@ -286,10 +286,7 @@ class SourcesSection(Section):
         """A portal here and in the archive, active there and not here: the
         one difference no import acts on, whatever the strategy (`_trusted`)."""
         return (
-            kind == WEBSITE
-            and existing.source_kind == WEBSITE
-            and "is_active" in different
-            and not existing.is_active
+            kind == WEBSITE and existing.source_kind == WEBSITE and "is_active" in different and not existing.is_active
         )
 
     @staticmethod
@@ -369,7 +366,9 @@ class SourcesSection(Section):
         if unknown:
             raise codec.FieldValueError(f"réglage inconnu : {', '.join(sorted(unknown))}")
 
-        probe = InvoiceType(supplier=supplier, **{name: value for name, value in values.items() if name != "created_at"})
+        probe = InvoiceType(
+            supplier=supplier, **{name: value for name, value in values.items() if name != "created_at"}
+        )
         probe.full_clean()
         row = model(**row_values)
         if existing is not None and existing.source_kind == kind:

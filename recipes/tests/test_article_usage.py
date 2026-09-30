@@ -80,7 +80,7 @@ class ArticleUsesTests(TestCase):
         # the reader opens next, and « Sirop de base » is inside it.
         self.assertEqual(uses[sugar.pk][cocktail.pk], [Use(via="Sirop maison", certain=True)])
 
-    def test_an_ou_group_is_only_a_maybe(self):
+    def test_an_or_group_is_only_a_maybe(self):
         vodka = make_stock_type(name="Vodka maison")
         gin = make_stock_type(name="Gin maison")
         mule = make_recipe(name="Mule du comptoir")
@@ -300,7 +300,7 @@ class ArticlePickerPageTests(TestCase):
         response = self.client.get(LIST_URL, {"article": self.sugar.pk})
 
         tabs = {entry["key"]: entry["url"] for entry in response.context["tabs"]}
-        self.assertEqual(tabs["recettes"], f"{LIST_URL}?article={self.sugar.pk}")
+        self.assertEqual(tabs["recipes"], f"{LIST_URL}?article={self.sugar.pk}")
         self.assertContains(response, f'href="{LIST_URL}?article={self.sugar.pk}"')
 
     def test_the_other_tabs_drop_it_because_it_means_nothing_there(self):
@@ -311,14 +311,14 @@ class ArticlePickerPageTests(TestCase):
         response = self.client.get(LIST_URL, {"article": self.sugar.pk})
 
         tabs = {entry["key"]: entry["url"] for entry in response.context["tabs"]}
-        self.assertNotIn("article", tabs["a-lier"])
-        self.assertNotIn("article", tabs["ventes"])
+        self.assertNotIn("article", tabs["to-link"])
+        self.assertNotIn("article", tabs["sales"])
 
     def test_a_garbled_filter_never_travels(self):
         response = self.client.get(LIST_URL, {"article": "abc"})
 
         tabs = {entry["key"]: entry["url"] for entry in response.context["tabs"]}
-        self.assertEqual(tabs["recettes"], LIST_URL)
+        self.assertEqual(tabs["recipes"], LIST_URL)
 
 
 class ArticlePickerCostTests(TestCase):

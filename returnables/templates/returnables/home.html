@@ -16,7 +16,7 @@
     {% endif %}
 {% endblock %}
 {% block content %}
-<div class="consignes-page consignes-home">
+<div class="returnables-page returnables-home">
     <div class="page-header">
         <div>
             <h1>Consignes</h1>
@@ -30,9 +30,9 @@
     lists under the form. The form is in neither: a count half typed, the
     photos chosen, survive the reload.
     {% endcomment %}
-    <div id="consignes-live" hx-get="{{ live_url }}" hx-select="#consignes-live" hx-target="this" hx-swap="outerHTML" hx-trigger="documents-changed from:body">
+    <div id="returnables-live" hx-get="{{ live_url }}" hx-select="#returnables-live" hx-target="this" hx-swap="outerHTML" hx-trigger="documents-changed from:body">
         {% if latest %}
-            <p class="reprise-strip">
+            <p class="pickup-strip">
                 <a href="{% url 'returnables:pickup_detail' latest.pickup.pk %}">Dernière reprise : {{ latest.pickup.date|date:"d/m/Y" }}{% if latest.summary %} · {{ latest.summary }}{% endif %}{% if latest.photos %} · {{ latest.photos|length }} photo{{ latest.photos|length|pluralize }}{% endif %}</a>
                 <span class="status-pill status-{{ latest.day.css }}">{{ latest.day.pill }}</span>
             </p>
@@ -40,21 +40,21 @@
                 {% include "returnables/_gather_form.html" %}
             {% endif %}
         {% else %}
-            <p class="empty-state reprise-strip-empty">Aucune reprise enregistrée : photographiez les vides et comptez-les avant que le livreur ne les emporte.</p>
+            <p class="empty-state pickup-strip-empty">Aucune reprise enregistrée : photographiez les vides et comptez-les avant que le livreur ne les emporte.</p>
         {% endif %}
         {% if gather_running_sentence %}<p class="muted">{{ gather_running_sentence }}</p>{% endif %}
         {% if gather_job %}{% include "invoices/_gather_status.html" with job=gather_job %}{% endif %}
     </div>
 
-    <section class="card reprise-new" id="nouvelle-reprise">
+    <section class="card pickup-new" id="new-pickup">
         <h2>Nouvelle reprise</h2>
-        <form method="post" action="{% url 'returnables:home' %}" enctype="multipart/form-data" class="reprise-form" data-reprise-form data-draft data-saved-flag="{{ saved_flag }}">
+        <form method="post" action="{% url 'returnables:home' %}" enctype="multipart/form-data" class="pickup-form" data-pickup-form data-draft data-saved-flag="{{ saved_flag }}">
             {% csrf_token %}
             {% include "returnables/_pickup_fields.html" with submit_label="Enregistrer la reprise" details_open=False %}
         </form>
     </section>
 
-    <div id="consignes-live-bas" hx-get="{{ live_url }}" hx-select="#consignes-live-bas" hx-target="this" hx-swap="outerHTML" hx-trigger="documents-changed from:body">
+    <div id="returnables-live-bottom" hx-get="{{ live_url }}" hx-select="#returnables-live-bottom" hx-target="this" hx-swap="outerHTML" hx-trigger="documents-changed from:body">
         {% for fmt, problem in broken_formats %}
             <p class="message message-error">Format « {{ fmt.name }} » : motif invalide : {{ problem }} — <a href="{% url 'returnables:format_edit' fmt.pk %}">corrigez-le</a></p>
         {% endfor %}
@@ -63,14 +63,14 @@
         {% endfor %}
 
         {% if latest %}
-            <section class="card reprise-card" id="derniere-reprise">
+            <section class="card pickup-card" id="last-pickup">
                 <h2>Dernière reprise</h2>
-                {% include "returnables/_day.html" with view=latest retour=home_url removable=False %}
+                {% include "returnables/_day.html" with view=latest return_to=home_url removable=False %}
                 <p><a href="{% url 'returnables:pickup_detail' latest.pickup.pk %}">Voir, modifier ou compléter la reprise</a></p>
             </section>
         {% endif %}
 
-        <section class="consignes-list" id="reprises">
+        <section class="returnables-list" id="reprises">
             <h2>Reprises</h2>
             {% if pickup_rows %}
                 <div class="table-wrap">
@@ -109,7 +109,7 @@
             {% endif %}
         </section>
 
-        <section class="consignes-list" id="bons-recus">
+        <section class="returnables-list" id="bons-recus">
             <h2>Bons reçus</h2>
             {% if slip_rows %}
                 <div class="table-wrap">
@@ -147,7 +147,7 @@
         </section>
     </div>
 
-    <section class="card consignes-upload" id="bons">
+    <section class="card returnables-upload" id="bons">
         <h2>Ajouter des bons</h2>
         {% comment %}
         What the last upload did, where its redirect lands: a document no
@@ -164,13 +164,13 @@
             {% csrf_token %}
             <div class="form-grid">
                 <div class="form-field form-field-clearablefile">
-                    <label for="bons-fichiers">Les PDF des bons<span class="required" aria-hidden="true">*</span></label>
-                    <input id="bons-fichiers" type="file" name="bons" accept=".pdf,application/pdf" multiple required>
+                    <label for="slip-files">Les PDF des bons<span class="required" aria-hidden="true">*</span></label>
+                    <input id="slip-files" type="file" name="bons" accept=".pdf,application/pdf" multiple required>
                     <p class="help">Plusieurs à la fois : un bon déjà reçu est reconnu et n'est pas ajouté deux fois.</p>
                 </div>
                 <div class="form-field form-field-select">
-                    <label for="bons-format">Format</label>
-                    <select id="bons-format" name="format">
+                    <label for="slip-format">Format</label>
+                    <select id="slip-format" name="format">
                         <option value="">Reconnaître automatiquement</option>
                         {% for fmt in upload_formats %}
                             <option value="{{ fmt.pk }}">{{ fmt.name }}{% if not fmt.section_start %} (jamais reconnu automatiquement){% endif %}</option>
@@ -199,7 +199,7 @@
                 {% endfor %}
             </ul>
             {% comment %}
-            « Déjà en cours » is said once, inside #consignes-live: that part
+            « Déjà en cours » is said once, inside #returnables-live: that part
             reloads when the gather ends, and the sentence goes with it.
             {% endcomment %}
             {% include "returnables/_gather_form.html" %}
@@ -208,7 +208,7 @@
         {% endif %}
     </section>
 
-    <p class="consignes-settings">
+    <p class="returnables-settings">
         Réglages : <a href="{% url 'returnables:format_list' %}">Formats de bons</a> · <a href="{% url 'returnables:type_list' %}">Types de consigne</a>
     </p>
     <details class="explainer">

@@ -7,6 +7,7 @@ days, and a gap loses them - and either way the totals still look plausible.
 """
 
 from datetime import date, timedelta
+from itertools import pairwise
 
 from django.test import SimpleTestCase
 
@@ -52,7 +53,7 @@ class DateWindowTests(SimpleTestCase):
         """Every day in the range belongs to exactly one window - anything
         else quietly changes the totals."""
         result = windows("2019-01-01", "2026-09-02")
-        for (_, previous_end), (next_start, _) in zip(result, result[1:]):
+        for (_, previous_end), (next_start, _) in pairwise(result):
             self.assertEqual(next_start, previous_end + timedelta(days=1))
 
     def test_the_windows_cover_the_whole_range_exactly(self):

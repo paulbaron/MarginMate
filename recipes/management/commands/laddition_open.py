@@ -9,7 +9,7 @@ clicking is written: run it, watch it sign in and land on the page. With
 steps for a given report get worked out in the first place.
 
 It signs in with the server's L'Addition account, the owner's: in multi mode
-it runs for the owner's espace only (`manage.py tenant <dossier>
+it runs for the owner's tenant only (`manage.py tenant <folder>
 laddition_open`), like every other use of that account
 (recipes/integration.py).
 """
@@ -18,7 +18,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
 from accounts import paths
-from recipes.integration import refusal, require_espace, till_allowed
+from recipes.integration import refusal, require_tenant_for_command, till_allowed
 from recipes.pos.laddition_session import LadditionAuthError, laddition_session
 
 
@@ -28,17 +28,21 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("--path", default="/v2/shift-details", help="Reporting path to open.")
         parser.add_argument(
-            "--download-dir", default=None,
+            "--download-dir",
+            default=None,
             help="The browser's download folder (default: the espace's downloads folder).",
         )
         parser.add_argument("--no-headless", action="store_true", help="Show the browser window.")
         parser.add_argument(
-            "--keep-open", type=int, default=0, metavar="SECONDS",
+            "--keep-open",
+            type=int,
+            default=0,
+            metavar="SECONDS",
             help="Leave the browser open afterwards, to look around.",
         )
 
     def handle(self, *args, **options):
-        require_espace("laddition_open")
+        require_tenant_for_command("laddition_open")
         if not till_allowed():
             raise CommandError(refusal())
         if options["no_headless"]:

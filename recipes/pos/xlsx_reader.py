@@ -35,7 +35,7 @@ class XlsxError(RuntimeError):
 
 
 def _column_index(cell_ref: str) -> int:
-    """"C7" -> 2. Cells are addressed, not ordered, so an empty cell is
+    """ "C7" -> 2. Cells are addressed, not ordered, so an empty cell is
     simply absent from the row and everything after it would shift left if
     positions were inferred from order."""
     match = _COLUMN_REF.match(cell_ref or "")
@@ -76,10 +76,8 @@ def _sheet_paths(archive: zipfile.ZipFile) -> dict[str, str]:
     """
     workbook = ElementTree.fromstring(archive.read("xl/workbook.xml"))
     rels = ElementTree.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
-    target_by_id = {
-        rel.get("Id"): rel.get("Target") for rel in rels.findall(f"{REL_NS}Relationship")
-    }
-    paths = {}
+    target_by_id = {rel.get("Id"): rel.get("Target") for rel in rels.findall(f"{REL_NS}Relationship")}
+    paths: dict[str, str] = {}
     for sheet in workbook.iter(f"{MAIN_NS}sheet"):
         target = target_by_id.get(sheet.get(f"{DOC_REL_NS}id"))
         if not target:

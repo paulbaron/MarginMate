@@ -34,14 +34,15 @@ class RenameProductTests(TestCase):
     def setUp(self):
         self.shop = Supplier.objects.get(code="FRANPRIX")
         self.product = make_product(supplier=self.shop, raw_name="PAIN SEIGLE BLAND")
-        self.receipt = make_invoice(
-            supplier=self.shop, parse_checks=[{"label": "x", "passed": True, "detail": ""}]
-        )
+        self.receipt = make_invoice(supplier=self.shop, parse_checks=[{"label": "x", "passed": True, "detail": ""}])
 
     def line(self, raw_name, read_as="", product=None, invoice=None):
         return make_invoice_line(
-            invoice=invoice or self.receipt, product=product or self.product, raw_name=raw_name,
-            read_as=read_as, vat_rate=FIVE_FIVE,
+            invoice=invoice or self.receipt,
+            product=product or self.product,
+            raw_name=raw_name,
+            read_as=read_as,
+            vat_rate=FIVE_FIVE,
         )
 
     def test_the_product_takes_the_new_name(self):
@@ -136,12 +137,19 @@ class RenameOnReviewScreenTests(TestCase):
 
     def _receipt(self, read_as="PAIN SEIGIE BLANC"):
         receipt = make_invoice(
-            supplier=self.shop, invoice_date=date(2026, 7, 7),
+            supplier=self.shop,
+            invoice_date=date(2026, 7, 7),
             parse_checks=[{"label": "Somme des lignes = total imprimé", "passed": True, "detail": ""}],
         )
         make_invoice_line(
-            invoice=receipt, product=self.product, raw_name=read_as, read_as=read_as, quantity=1,
-            total_ht="0.46", vat_rate=FIVE_FIVE, printed_ttc=Decimal("0.49"),
+            invoice=receipt,
+            product=self.product,
+            raw_name=read_as,
+            read_as=read_as,
+            quantity=1,
+            total_ht="0.46",
+            vat_rate=FIVE_FIVE,
+            printed_ttc=Decimal("0.49"),
         )
         return receipt
 
@@ -160,8 +168,12 @@ class RenameOnReviewScreenTests(TestCase):
 
     def test_a_product_on_several_lines_is_offered_once(self):
         make_invoice_line(
-            invoice=self.receipt, product=self.product, raw_name="PAIN SEIGLE BLAND", read_as="PAIN SEIGLE BLAND",
-            total_ht="0.46", vat_rate=FIVE_FIVE,
+            invoice=self.receipt,
+            product=self.product,
+            raw_name="PAIN SEIGLE BLAND",
+            read_as="PAIN SEIGLE BLAND",
+            total_ht="0.46",
+            vat_rate=FIVE_FIVE,
         )
         response = self.client.get(self.url)
         self.assertEqual(response.content.decode().count("<summary>Renommer « PAIN SEIGLE BLAND »"), 1)
@@ -195,13 +207,17 @@ class RenameOnReviewScreenTests(TestCase):
         self.assertEqual(elsewhere.raw_name, "CITRON VERT")
 
     def test_an_unnamed_line_offers_no_rename(self):
-        """"Article divers (0.70 EUR/u)" is a placeholder the ticket's
+        """ "Article divers (0.70 EUR/u)" is a placeholder the ticket's
         validation replaces - renaming it would name a product about to go."""
         sabbh = Supplier.objects.get(code="SABBH")
         receipt = make_invoice(supplier=sabbh, parse_checks=[{"label": "x", "passed": True, "detail": ""}])
         make_invoice_line(
-            invoice=receipt, product=make_product(supplier=sabbh, raw_name="Article divers (0.70 EUR/u)"),
-            raw_name="Pain Pita", quantity=3, total_ht="1.99", vat_rate=FIVE_FIVE,
+            invoice=receipt,
+            product=make_product(supplier=sabbh, raw_name="Article divers (0.70 EUR/u)"),
+            raw_name="Pain Pita",
+            quantity=3,
+            total_ht="1.99",
+            vat_rate=FIVE_FIVE,
         )
         response = self.client.get(reverse("invoices:receipt_review", args=[receipt.pk]))
         self.assertNotContains(response, "Renommer « ")

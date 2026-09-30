@@ -33,7 +33,7 @@ class SearchStockTypesTests(TestCase):
         return set(response.json()["ids"])
 
     def test_matches_are_accent_insensitive(self):
-        """"biere" has to find "Bière" - nobody reaches for the compose key
+        """ "biere" has to find "Bière" - nobody reaches for the compose key
         while typing fast at a bar. SQLite's own icontains folds case but
         not accents, which is what made this fail before."""
         beer = make_stock_type(name="Bière triple", unit=UnitChoices.LITRE)

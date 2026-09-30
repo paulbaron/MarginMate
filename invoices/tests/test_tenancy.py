@@ -1,13 +1,13 @@
 """The invoices app with one database per bar.
 
-Real espaces in temporary files (accounts/tests/support.py): a bar's jobs,
+Real tenants in temporary files (accounts/tests/support.py): a bar's jobs,
 files and caches stay its own, whichever thread or process-global structure
 they pass through, and the server's own accounts - Metro, the invoice
 mailbox, the portals' .env credentials, the AI reading - are used from the
-owner's espace only, refused at every entry point elsewhere (views, task
+owner's tenant only, refused at every entry point elsewhere (views, task
 bodies, connectors) with « à configurer ».
 
-Primary keys restart at 1 in every espace's database, so every test here
+Primary keys restart at 1 in every tenant's database, so every test here
 gives both bars a row with the SAME pk: that is how one bar's job, batch or
 download folder would have been taken for the other's. Data invented.
 """
@@ -89,7 +89,7 @@ class _Reached(Exception):
 
 
 class GateTests(TwoTenantsTestCase):
-    """Bar Alpha is the owner's espace; Bar Beta uses none of the server's
+    """Bar Alpha is the owner's tenant; Bar Beta uses none of the server's
     accounts."""
 
     owner_a = True
@@ -104,7 +104,7 @@ class GateTests(TwoTenantsTestCase):
 
     # ------------------------------------------------------------ the views
 
-    def test_a_gather_is_refused_in_an_espace_without_the_servers_accounts(self):
+    def test_a_gather_is_refused_in_a_tenant_without_the_servers_accounts(self):
         codes = self.reopen_the_owners_integrations_in_b()
         self.client.force_login(self.user_b)
         with mock.patch("invoices.views.threading.Thread") as thread:
@@ -116,7 +116,7 @@ class GateTests(TwoTenantsTestCase):
         with bound_tenant(self.bar_b):
             self.assertFalse(ScrapeJob.objects.exists())
 
-    def test_the_owners_gather_runs_in_a_thread_bound_to_the_owners_espace(self):
+    def test_the_owners_gather_runs_in_a_thread_bound_to_the_owners_tenant(self):
         self.client.force_login(self.user_a)
         with mock.patch("invoices.views.threading.Thread") as thread:
             self.client.post(reverse("invoices:gather"), {"sources": ["type-999"]})
@@ -124,7 +124,7 @@ class GateTests(TwoTenantsTestCase):
         self.assertIs(target.__wrapped__, gather_invoices_task)
         self.assertEqual(target.tenant.pk, self.bar_a.pk)
 
-    def test_the_import_card_says_a_configurer_instead_of_the_gather(self):
+    def test_the_import_card_says_to_configure_instead_of_the_gather(self):
         gather = f'action="{reverse("invoices:gather")}"'
         self.client.force_login(self.user_b)
         page = self.client.get(reverse("invoices:invoice_list") + "?ajouter=recuperer")
@@ -134,7 +134,7 @@ class GateTests(TwoTenantsTestCase):
         self.client.force_login(self.user_a)
         self.assertContains(self.client.get(reverse("invoices:invoice_list") + "?ajouter=recuperer"), gather)
 
-    def test_the_source_form_says_a_configurer_and_refuses_every_post(self):
+    def test_the_source_form_says_to_configure_and_refuses_every_post(self):
         self.client.force_login(self.user_b)
         create = reverse("invoices:invoice_type_create")
         page = self.client.get(create)
@@ -144,14 +144,25 @@ class GateTests(TwoTenantsTestCase):
             supplier = make_supplier(code="TRAITEUR_B", name="Traiteur Beta", parser_key="")
             types_before = InvoiceType.objects.count()
         mailbox = {
-            "name": "Traiteur Beta - Factures", "supplier": str(supplier.pk), "source_kind": "EMAIL",
-            "parser_key": "", "is_active": "on", "sender_pattern": r".", "subject_pattern": "",
-            "body_pattern": "", "attachment_pattern": r"\.pdf$",
+            "name": "Traiteur Beta - Factures",
+            "supplier": str(supplier.pk),
+            "source_kind": "EMAIL",
+            "parser_key": "",
+            "is_active": "on",
+            "sender_pattern": r".",
+            "subject_pattern": "",
+            "body_pattern": "",
+            "attachment_pattern": r"\.pdf$",
         }
         portal = {
-            "name": "Box Beta", "supplier": str(supplier.pk), "source_kind": "WEBSITE", "parser_key": "",
-            "is_active": "on", "site-login_url": "https://box.exemple.invalid/login",
-            "site-username_env": "BOX_LOGIN", "site-password_env": "BOX_PASSWORD",
+            "name": "Box Beta",
+            "supplier": str(supplier.pk),
+            "source_kind": "WEBSITE",
+            "parser_key": "",
+            "is_active": "on",
+            "site-login_url": "https://box.exemple.invalid/login",
+            "site-username_env": "BOX_LOGIN",
+            "site-password_env": "BOX_PASSWORD",
         }
         for data in (
             {**mailbox, "action": "test"},
@@ -168,7 +179,7 @@ class GateTests(TwoTenantsTestCase):
             self.assertEqual(InvoiceType.objects.count(), types_before)
             self.assertFalse(ScrapeJob.objects.exists())
 
-    def test_the_sources_tab_says_a_configurer(self):
+    def test_the_sources_tab_says_to_configure(self):
         self.client.force_login(self.user_b)
         page = self.client.get(reverse("invoices:invoice_type_list"))
         self.assertContains(page, TO_CONFIGURE)
@@ -183,7 +194,9 @@ class GateTests(TwoTenantsTestCase):
         self.assertNotContains(page, '<optgroup label="Analyse IA">')
         upload = SimpleUploadedFile("facture.pdf", b"%PDF-1.4 essai", content_type="application/pdf")
         with mock.patch("invoices.views.parse_and_import") as parse:
-            response = self.client.post(reverse("invoices:invoice_upload"), {"supplier": str(ai.pk), "source_file": upload})
+            response = self.client.post(
+                reverse("invoices:invoice_upload"), {"supplier": str(ai.pk), "source_file": upload}
+            )
         parse.assert_not_called()
         self.assertContains(response, TO_CONFIGURE)
         with bound_tenant(self.bar_b):
@@ -191,7 +204,7 @@ class GateTests(TwoTenantsTestCase):
         self.client.force_login(self.user_a)
         self.assertContains(self.client.get(reverse("invoices:invoice_list")), '<optgroup label="Analyse IA">')
 
-    def test_metro_is_not_said_to_be_fetched_by_its_own_module_outside_the_owners_espace(self):
+    def test_metro_is_not_said_to_be_fetched_by_its_own_module_outside_the_owners_tenant(self):
         self.reopen_the_owners_integrations_in_b()
         own = "Récupérées par son propre module"
         with bound_tenant(self.bar_b):
@@ -204,7 +217,7 @@ class GateTests(TwoTenantsTestCase):
         self.client.force_login(self.user_a)
         self.assertContains(self.client.get(reverse("invoices:supplier_detail", args=[metro_a])), own)
 
-    def test_a_supplier_s_page_offers_no_new_source_outside_the_owners_espace(self):
+    def test_a_supplier_s_page_offers_no_new_source_outside_the_owners_tenant(self):
         """Both channels of a source are the server's own accounts: the
         supplier's page says « à configurer » where the Sources tab does, and
         no longer points at a form that only says so."""
@@ -231,10 +244,11 @@ class GateTests(TwoTenantsTestCase):
         codes = self.reopen_the_owners_integrations_in_b()
         with bound_tenant(self.bar_b):
             job = ScrapeJob.objects.create()
-            with mock.patch("invoices.tasks.scrape_metro_invoices") as metro, mock.patch(
-                "invoices.tasks.scrape_email_invoices", return_value=[]
-            ) as mailbox, mock.patch("invoices.tasks.fetch_website_invoices", return_value=[]) as portal, mock.patch(
-                "invoices.tasks._GatherHeartbeat"
+            with (
+                mock.patch("invoices.tasks.scrape_metro_invoices") as metro,
+                mock.patch("invoices.tasks.scrape_email_invoices", return_value=[]) as mailbox,
+                mock.patch("invoices.tasks.fetch_website_invoices", return_value=[]) as portal,
+                mock.patch("invoices.tasks._GatherHeartbeat"),
             ):
                 gather_invoices_task(job.pk, START, END, {"METRO", *codes}, True)
             job.refresh_from_db()
@@ -265,8 +279,9 @@ class GateTests(TwoTenantsTestCase):
         from invoices.scrapers.metro import MetroError, scrape_metro_invoices
 
         with bound_tenant(self.bar_b):
-            with mock.patch("invoices.scrapers.metro.metro_pause", side_effect=_Reached) as pause, mock.patch(
-                "invoices.scrapers.metro._build_driver", side_effect=_Reached
+            with (
+                mock.patch("invoices.scrapers.metro.metro_pause", side_effect=_Reached) as pause,
+                mock.patch("invoices.scrapers.metro._build_driver", side_effect=_Reached),
             ):
                 with self.assertRaises(MetroError) as refused:
                     scrape_metro_invoices(str(paths.downloads_dir() / "metro"), START, END)
@@ -312,9 +327,10 @@ class GateTests(TwoTenantsTestCase):
 
         anthropic = mock.Mock()
         anthropic.Anthropic.side_effect = _Reached
-        with mock.patch.dict(sys.modules, {"anthropic": anthropic}), mock.patch(
-            "invoices.parsers.llm_fallback._extract_text", return_value="FACTURE ESSAI"
-        ) as extract:
+        with (
+            mock.patch.dict(sys.modules, {"anthropic": anthropic}),
+            mock.patch("invoices.parsers.llm_fallback._extract_text", return_value="FACTURE ESSAI") as extract,
+        ):
             with bound_tenant(self.bar_b):
                 with self.assertRaises(RuntimeError) as refused:
                     LLMFallbackParser().parse("facture.pdf")
@@ -328,12 +344,12 @@ class GateTests(TwoTenantsTestCase):
 
 class ThreadTests(TwoTenantsTestCase):
     """A job's thread, and the heartbeat each job starts, work in the
-    database of the espace that started them - never in another bar's row
+    database of the tenant that started them - never in another bar's row
     that happens to share its pk."""
 
     owner_a = True
 
-    def test_a_gathers_thread_updates_its_own_espaces_job(self):
+    def test_a_gathers_thread_updates_its_own_tenants_job(self):
         with bound_tenant(self.bar_b):
             other = ScrapeJob.objects.create()
         self.client.force_login(self.user_a)
@@ -341,9 +357,11 @@ class ThreadTests(TwoTenantsTestCase):
             self.client.post(reverse("invoices:gather"), {"sources": ["type-999"]})
         target, args = thread.call_args.kwargs["target"], thread.call_args.kwargs["args"]
         self.assertEqual(args[0], other.pk, "both jobs share a pk, or this proves nothing")
-        with mock.patch("invoices.tasks.scrape_metro_invoices") as metro, mock.patch(
-            "invoices.tasks.scrape_email_invoices", return_value=[]
-        ), mock.patch("invoices.tasks.fetch_website_invoices", return_value=[]):
+        with (
+            mock.patch("invoices.tasks.scrape_metro_invoices") as metro,
+            mock.patch("invoices.tasks.scrape_email_invoices", return_value=[]),
+            mock.patch("invoices.tasks.fetch_website_invoices", return_value=[]),
+        ):
             run_in_a_thread(target, args)
         metro.assert_not_called()
         with bound_tenant(self.bar_a):
@@ -352,7 +370,7 @@ class ThreadTests(TwoTenantsTestCase):
             other.refresh_from_db()
         self.assertEqual((other.status, other.log), (ScrapeJob.Status.PENDING, ""))
 
-    def test_a_folder_imports_thread_reads_its_own_espaces_batch(self):
+    def test_a_folder_imports_thread_reads_its_own_tenants_batch(self):
         from invoices.receipt_batches import stage_batch, start_batch
 
         with bound_tenant(self.bar_b):
@@ -370,14 +388,14 @@ class ThreadTests(TwoTenantsTestCase):
         with bound_tenant(self.bar_b):
             self.assertEqual(ReceiptBatch.objects.get(pk=other.pk).status, ReceiptBatch.Status.PENDING)
 
-    def test_a_gathers_heartbeat_beats_in_its_own_espace(self):
+    def test_a_gathers_heartbeat_beats_in_its_own_tenant(self):
         """Unbound, a beat flipped FAILED back to RUNNING on whichever row had
         the job's pk - another bar's failed job resurrected, and blocking."""
         from invoices.tasks import _GatherHeartbeat
 
         self.assert_beats_its_own(ScrapeJob, "invoices.tasks.HEARTBEAT_SECONDS", _GatherHeartbeat)
 
-    def test_a_folder_imports_heartbeat_beats_in_its_own_espace(self):
+    def test_a_folder_imports_heartbeat_beats_in_its_own_tenant(self):
         from invoices.receipt_batches import _Heartbeat
 
         self.assert_beats_its_own(ReceiptBatch, "invoices.receipt_batches.HEARTBEAT_SECONDS", _Heartbeat)
@@ -410,11 +428,11 @@ class ThreadTests(TwoTenantsTestCase):
 
 
 class FolderTests(TwoTenantsTestCase):
-    """What an espace stages, downloads and deletes is in its own folder."""
+    """What a tenant stages, downloads and deletes is in its own folder."""
 
     owner_a = True
 
-    def test_a_folder_import_is_staged_in_its_own_espaces_folder(self):
+    def test_a_folder_import_is_staged_in_its_own_tenants_folder(self):
         from invoices.receipt_batches import run_receipt_batch, stage_batch
 
         staged = {}
@@ -428,14 +446,15 @@ class FolderTests(TwoTenantsTestCase):
         self.assertFalse(staged[self.bar_a.pk].is_relative_to(paths.tenant_dir(self.bar_a) / "media"))
         # Alpha's import runs to its end and removes ITS folder, Beta's file
         # waiting in its own untouched.
-        with bound_tenant(self.bar_a), mock.patch(
-            "invoices.receipt_batches.import_document", side_effect=ValueError("illisible")
+        with (
+            bound_tenant(self.bar_a),
+            mock.patch("invoices.receipt_batches.import_document", side_effect=ValueError("illisible")),
         ):
             run_receipt_batch(ReceiptBatch.objects.get().pk)
         self.assertFalse(staged[self.bar_a.pk].parent.exists())
         self.assertEqual(staged[self.bar_b.pk].read_bytes(), b"photo beta")
 
-    def test_a_file_imported_by_hand_in_one_espace_holds_back_no_other_espaces_file(self):
+    def test_a_file_imported_by_hand_in_one_tenant_holds_back_no_other_tenants_file(self):
         """The set of files being imported by hand is one per process: keyed
         by the batch's pk alone, Alpha's hand import of its batch 1, file 0
         left Beta's batch 1, file 0 unrecognised for good."""
@@ -463,14 +482,15 @@ class FolderTests(TwoTenantsTestCase):
 
         with bound_tenant(self.bar_a):
             shop = make_supplier(code="EPICERIE_A", name="Épicerie Alpha", parser_key="")
-            with mock.patch("invoices.receipt_batches._import_with_shop", side_effect=by_hand), mock.patch(
-                "invoices.receipt_batches.start_batch"
+            with (
+                mock.patch("invoices.receipt_batches._import_with_shop", side_effect=by_hand),
+                mock.patch("invoices.receipt_batches.start_batch"),
             ):
                 receipt_batches.import_with_shop(ReceiptBatch.objects.get(), 0, shop)
         self.assertEqual(requeued, {self.bar_a.pk: 0, self.bar_b.pk: 1})
 
-    def test_each_espaces_gather_downloads_into_its_own_folder(self):
-        """Two espaces using the server's accounts (the owner's, and one
+    def test_each_tenants_gather_downloads_into_its_own_folder(self):
+        """Two tenants using the server's accounts (the owner's, and one
         given them) share type ids - the seeded mailbox source is type 1 in
         both - and still never share a download folder."""
         bar_c = self.make_tenant("Bar Gamma", owner=True)
@@ -479,10 +499,11 @@ class FolderTests(TwoTenantsTestCase):
             with bound_tenant(bar):
                 code = f"type-{InvoiceType.objects.get(source_kind=InvoiceType.SourceKind.EMAIL).pk}"
                 gather, test = ScrapeJob.objects.create(), ScrapeJob.objects.create(kind="TEST")
-                with mock.patch("invoices.tasks.scrape_metro_invoices", return_value=[]) as metro, mock.patch(
-                    "invoices.tasks.scrape_email_invoices", return_value=[]
-                ) as mailbox, mock.patch("invoices.tasks.list_website_invoices", return_value=[]) as portal, mock.patch(
-                    "invoices.tasks._GatherHeartbeat"
+                with (
+                    mock.patch("invoices.tasks.scrape_metro_invoices", return_value=[]) as metro,
+                    mock.patch("invoices.tasks.scrape_email_invoices", return_value=[]) as mailbox,
+                    mock.patch("invoices.tasks.list_website_invoices", return_value=[]) as portal,
+                    mock.patch("invoices.tasks._GatherHeartbeat"),
                 ):
                     gather_invoices_task(gather.pk, START, END, {"METRO", code})
                     test_website_task(test.pk, portal_recipe(), 0, START, END)
@@ -494,7 +515,7 @@ class FolderTests(TwoTenantsTestCase):
             self.assertEqual(os.path.basename(mine), os.path.basename(theirs))
             self.assertNotEqual(mine, theirs)
 
-    def test_learn_shop_identifiers_reads_its_own_espaces_files(self):
+    def test_learn_shop_identifiers_reads_its_own_tenants_files(self):
         with bound_tenant(self.bar_a):
             supplier = make_supplier(code="GROSSISTE_A", name="Grossiste Alpha", parser_key="")
             (paths.media_root() / "invoices").mkdir(parents=True, exist_ok=True)
@@ -513,7 +534,7 @@ class FolderTests(TwoTenantsTestCase):
             call_command("learn_shop_identifiers", "--dry-run", stdout=out)
         self.assertIn("1 facture(s) numérique(s) lue(s)", out.getvalue())
 
-    def test_deleting_a_document_leaves_another_espaces_file_of_the_same_name(self):
+    def test_deleting_a_document_leaves_another_tenants_file_of_the_same_name(self):
         name = "invoices/2026/01/facture.pdf"
         for bar, content in ((self.bar_a, b"%PDF alpha"), (self.bar_b, b"%PDF beta")):
             with bound_tenant(bar):
@@ -535,9 +556,10 @@ class ServerDetailsTests(TwoTenantsTestCase):
 
         with bound_tenant(self.bar_b):
             batch = stage_batch([SimpleUploadedFile("ticket.jpg", b"photo")])
-            with mock.patch(
-                "invoices.receipt_batches.import_document", side_effect=RuntimeError("illisible")
-            ), self.assertLogs("invoices.receipt_batches", "ERROR") as logged:
+            with (
+                mock.patch("invoices.receipt_batches.import_document", side_effect=RuntimeError("illisible")),
+                self.assertLogs("invoices.receipt_batches", "ERROR") as logged,
+            ):
                 run_receipt_batch(batch.pk)
             batch.refresh_from_db()
         # The file and a fixed sentence; the exception's own words - a
@@ -551,10 +573,10 @@ class ServerDetailsTests(TwoTenantsTestCase):
 
 
 class CorpusTests(TwoTenantsTestCase):
-    def test_two_espaces_never_share_the_documents_read(self):
+    def test_two_tenants_never_share_the_documents_read(self):
         """Kept between requests by a fingerprint of the documents (count,
         last pk, last import, length read), which two bars can share - two
-        fresh espaces, or two restored from one archive: Beta's header chips
+        fresh tenants, or two restored from one archive: Beta's header chips
         were offered from Alpha's texts."""
         from invoices.receipts import document_corpus
 
@@ -571,9 +593,9 @@ class CorpusTests(TwoTenantsTestCase):
 
 
 class StartupReaperTests(TwoTenantsTestCase):
-    def test_the_server_starting_reaps_every_espace_and_nothing_unbound(self):
+    def test_the_server_starting_reaps_every_tenant_and_nothing_unbound(self):
         """Multi mode: the unbound `default` is nobody's (an empty in-memory
-        database in production), so the reaper binds each espace in turn -
+        database in production), so the reaper binds each tenant in turn -
         and one whose file is missing is stepped over, not a crash."""
         # Their server died a minute ago (invoices/tests/test_startup_reaper.py:
         # only a gather not heard from since this server started is reaped).
@@ -584,9 +606,11 @@ class StartupReaperTests(TwoTenantsTestCase):
                 ScrapeJob.objects.create(status=ScrapeJob.Status.RUNNING, last_heartbeat=a_minute_ago)
         gone = self.make_tenant("Bar Fermé")
         paths.tenant_database(gone).unlink()
-        with mock.patch("invoices.apps.sys.argv", ["manage.py", "runserver"]), mock.patch.dict(
-            "invoices.apps.os.environ", {"RUN_MAIN": "true"}
-        ), mock.patch("invoices.apps.threading.Thread") as thread:
+        with (
+            mock.patch("invoices.apps.sys.argv", ["manage.py", "runserver"]),
+            mock.patch.dict("invoices.apps.os.environ", {"RUN_MAIN": "true"}),
+            mock.patch("invoices.apps.threading.Thread") as thread,
+        ):
             apps.get_app_config("invoices").ready()
         # The reaper's own thread, as the server runs it: started unbound,
         # after its wait (patched out here).

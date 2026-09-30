@@ -165,8 +165,8 @@ class OpenReportTests(SimpleTestCase):
     def test_being_bounced_to_auth_triggers_a_sign_in_then_a_retry(self):
         driver = FakeDriver(
             urls=[
-                "https://auth.laddition.com/",                     # landed on auth
-                "https://auth.laddition.com/",                     # log_in sees the form
+                "https://auth.laddition.com/",  # landed on auth
+                "https://auth.laddition.com/",  # log_in sees the form
                 "https://reporting.laddition.com/v2/shift-details",  # after submitting
                 "https://reporting.laddition.com/v2/shift-details",  # after the retry
             ]
@@ -174,9 +174,7 @@ class OpenReportTests(SimpleTestCase):
         open_report(driver, "/v2/shift-details", log=lambda *a: None)
         self.assertEqual(driver.elements[IDENTIFIER_FIELD].typed, ["bar@example.com"])
         # The report page is requested again once authenticated.
-        self.assertEqual(
-            driver.visited.count("https://reporting.laddition.com/v2/shift-details"), 2
-        )
+        self.assertEqual(driver.visited.count("https://reporting.laddition.com/v2/shift-details"), 2)
 
 
 class NavigationRetryTests(SimpleTestCase):
@@ -260,19 +258,13 @@ class PathNormalisationTests(SimpleTestCase):
         self.assertEqual(self.normalise("v2/shift-details"), "/v2/shift-details")
 
     def test_the_git_bash_mangling_is_undone(self):
-        self.assertEqual(
-            self.normalise("C:/Program Files/Git/v2/shift-details"), "/v2/shift-details"
-        )
+        self.assertEqual(self.normalise("C:/Program Files/Git/v2/shift-details"), "/v2/shift-details")
 
     def test_a_windows_backslash_path_is_undone(self):
-        self.assertEqual(
-            self.normalise(r"C:\Program Files\Git\v2\z-digital"), "/v2/z-digital"
-        )
+        self.assertEqual(self.normalise(r"C:\Program Files\Git\v2\z-digital"), "/v2/z-digital")
 
     def test_a_full_url_is_reduced_to_its_path(self):
-        self.assertEqual(
-            self.normalise("https://reporting.laddition.com/v2/shift-details"), "/v2/shift-details"
-        )
+        self.assertEqual(self.normalise("https://reporting.laddition.com/v2/shift-details"), "/v2/shift-details")
 
     def test_surrounding_whitespace_is_ignored(self):
         self.assertEqual(self.normalise("  /v2/shift-details  "), "/v2/shift-details")

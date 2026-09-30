@@ -1,4 +1,4 @@
-"""Les bords de la fenêtre, une fois la ligne déroulée.
+"""The edges of the window, once the row is unrolled.
 
 `test_panel_window.py` pins what a row of « Produits & charges » opens under
 « Du … au … ». This file is the review of it: the edges this codebase gets
@@ -68,22 +68,20 @@ class ChargePanelEdgesTests(PurchaseWindowTestCase):
 
     def setUp(self):
         super().setUp()
-        self.bailleur = make_supplier(
-            code="BAILLEUR_X", name="Bailleur Exemple", parser_key="", expenses_only=True
-        )
-        self.loyer = make_product(supplier=self.bailleur, raw_name="LOYER", is_expense=True)
+        self.landlord = make_supplier(code="BAILLEUR_X", name="Bailleur Exemple", parser_key="", expenses_only=True)
+        self.rent = make_product(supplier=self.landlord, raw_name="LOYER", is_expense=True)
         for month in (1, 2, 3):
             self.bill(date(2026, month, 5), f"LOYER-2026-{month:02d}", total_ht="500")
 
     def supplier_url(self):
-        return reverse("inventory:charge_supplier_documents", args=[self.bailleur.pk])
+        return reverse("inventory:charge_supplier_documents", args=[self.landlord.pk])
 
-    def poste_url(self):
-        return reverse("inventory:charge_documents", args=[self.loyer.pk])
+    def charge_item_url(self):
+        return reverse("inventory:charge_documents", args=[self.rent.pk])
 
     def bill(self, on: date, number: str, total_ht="100"):
-        invoice = make_invoice(supplier=self.bailleur, invoice_date=on, invoice_number=number)
-        make_invoice_line(invoice=invoice, product=self.loyer, total_ht=total_ht, vat_rate=D("0.20"))
+        invoice = make_invoice(supplier=self.landlord, invoice_date=on, invoice_number=number)
+        make_invoice_line(invoice=invoice, product=self.rent, total_ht=total_ht, vat_rate=D("0.20"))
         return invoice
 
     def test_the_first_and_the_last_day_are_in_the_panel(self):
@@ -100,10 +98,10 @@ class ChargePanelEdgesTests(PurchaseWindowTestCase):
         self.assertNotContains(panel, "BORD-VEILLE")
         self.assertNotContains(panel, "BORD-LENDEMAIN")
 
-    def test_a_poste_panel_has_the_same_edges(self):
+    def test_a_charge_item_panel_has_the_same_edges(self):
         self.bill(date(2026, 2, 28), "BORD-DERNIER")
         self.bill(date(2026, 3, 1), "BORD-LENDEMAIN")
-        panel = self.client.get(self.poste_url(), FEBRUARY)
+        panel = self.client.get(self.charge_item_url(), FEBRUARY)
         self.assertContains(panel, "BORD-DERNIER")
         self.assertNotContains(panel, "BORD-LENDEMAIN")
 
@@ -144,9 +142,7 @@ class ChargePanelEdgesTests(PurchaseWindowTestCase):
         """A document filed with nothing read counts on the row, so it
         counts in the panel - and the two figures are compared here as
         figures, not as a rendered string."""
-        make_invoice(
-            supplier=self.bailleur, invoice_date=date(2026, 2, 20), invoice_number="AVIS-SANS-LIGNE"
-        )
+        make_invoice(supplier=self.landlord, invoice_date=date(2026, 2, 20), invoice_number="AVIS-SANS-LIGNE")
         self.bill(date(2026, 2, 28), "BORD-DERNIER")
         (row,) = self.page(**FEBRUARY).context["charge_suppliers"]
         panel = self.client.get(self.supplier_url(), FEBRUARY)
@@ -166,7 +162,7 @@ class AnArticlePanelAddsUpToItsRowTests(ArticlePanelTestCase):
         self.assertEqual(len(entries), 2)
         self.assertEqual(sum(entry["line"].total_ht for entry in entries), row["value_ht"])
 
-    def test_and_the_quantities_make_its_acheté(self):
+    def test_and_the_quantities_make_its_bought_column(self):
         self.buy(self.vodka, date(2026, 2, 20), quantity="3", total_ht="60")
         row = self.rows(self.page(**FEBRUARY))["Vodka"]
         entries = self.panel(**FEBRUARY).context["movements"]
@@ -205,8 +201,11 @@ class TheDateColumnIsTheEffectiveDateWindowOrNotTests(ArticlePanelTestCase):
 
     def test_a_correction_prints_its_own_date_with_no_window_asked(self):
         make_movement(
-            stock_type=self.vodka, quantity="-2", unit_cost_ht="20",
-            occurred_on=date(2026, 2, 14), note="Casse",
+            stock_type=self.vodka,
+            quantity="-2",
+            unit_cost_ht="20",
+            occurred_on=date(2026, 2, 14),
+            note="Casse",
         )
         panel = self.panel()
         self.assertContains(panel, "14/02/2026")
@@ -221,12 +220,8 @@ class TheDateColumnIsTheEffectiveDateWindowOrNotTests(ArticlePanelTestCase):
         it is the one the row was summed by."""
         invoice = make_invoice(supplier=self.supplier)
         Invoice.objects.filter(pk=invoice.pk).update(invoice_date=None)
-        line = make_invoice_line(
-            invoice=invoice, product=self.product_for(self.vodka), quantity=2, total_ht="40"
-        )
-        movement = make_movement(
-            stock_type=self.vodka, quantity="2", unit_cost_ht="20", invoice_line=line
-        )
+        line = make_invoice_line(invoice=invoice, product=self.product_for(self.vodka), quantity=2, total_ht="40")
+        movement = make_movement(stock_type=self.vodka, quantity="2", unit_cost_ht="20", invoice_line=line)
         StockMovement.objects.filter(pk=movement.pk).update(
             created_at=timezone.make_aware(datetime(2026, 2, 18, 12, 0))
         )
@@ -239,7 +234,7 @@ class TheDateColumnIsTheEffectiveDateWindowOrNotTests(ArticlePanelTestCase):
 class WhatTheListPrintsIsWhatThePanelsAnswerTests(PurchaseWindowTestCase):
     """The URL a row carries is fetched by htmx as it stands, so the list
     and the panel are one promise in two places: the reloaded list has to
-    carry the window too, an inventaire's rows really do open on everything,
+    carry the window too, a stock take's rows really do open on everything,
     and the sentence saying which is printed once."""
 
     def setUp(self):
@@ -247,12 +242,10 @@ class WhatTheListPrintsIsWhatThePanelsAnswerTests(PurchaseWindowTestCase):
         self.vodka = make_stock_type(name="Vodka", unit=UnitChoices.LITRE, category="Spiritueux")
         self.buy(self.vodka, date(2026, 2, 10), quantity="12", total_ht="240")
         self.buy(self.vodka, date(2026, 1, 10), quantity="6", total_ht="120")
-        self.bailleur = make_supplier(
-            code="BAILLEUR_X", name="Bailleur Exemple", parser_key="", expenses_only=True
-        )
-        self.loyer = make_product(supplier=self.bailleur, raw_name="LOYER", is_expense=True)
-        bill = make_invoice(supplier=self.bailleur, invoice_date=date(2026, 2, 5))
-        make_invoice_line(invoice=bill, product=self.loyer, total_ht="500", vat_rate=D("0.20"))
+        self.landlord = make_supplier(code="BAILLEUR_X", name="Bailleur Exemple", parser_key="", expenses_only=True)
+        self.rent = make_product(supplier=self.landlord, raw_name="LOYER", is_expense=True)
+        bill = make_invoice(supplier=self.landlord, invoice_date=date(2026, 2, 5))
+        make_invoice_line(invoice=bill, product=self.rent, total_ht="500", vat_rate=D("0.20"))
 
     def movements_url(self):
         return reverse("inventory:stock_type_movements", args=[self.vodka.pk])
@@ -262,14 +255,9 @@ class WhatTheListPrintsIsWhatThePanelsAnswerTests(PurchaseWindowTestCase):
         is classified: a window lost there is a window lost on every row's
         panel for the rest of the visit, without a word."""
         reloaded = self.client.get(reverse("inventory:stock_catalogue"), FEBRUARY)
-        self.assertContains(
-            reloaded, 'data-movements-url="%s?du=2026-02-01&amp;au=2026-02-28"' % self.movements_url()
-        )
-        self.assertContains(
-            reloaded,
-            'data-movements-url="%s?du=2026-02-01&amp;au=2026-02-28"'
-            % reverse("inventory:charge_supplier_documents", args=[self.bailleur.pk]),
-        )
+        self.assertContains(reloaded, f'data-movements-url="{self.movements_url()}?du=2026-02-01&amp;au=2026-02-28"')
+        documents_url = reverse("inventory:charge_supplier_documents", args=[self.landlord.pk])
+        self.assertContains(reloaded, f'data-movements-url="{documents_url}?du=2026-02-01&amp;au=2026-02-28"')
 
     def test_the_sentence_about_what_a_row_opens_is_printed_once(self):
         """Twice on one screen is the noise the wording was written to
@@ -302,9 +290,9 @@ class WhatTheListPrintsIsWhatThePanelsAnswerTests(PurchaseWindowTestCase):
         self.assertContains(windowed, "la ligne s'ouvre sur les mêmes")
         self.assertContains(self.page(), "Documents (12 mois)")
 
-    def test_under_an_inventaire_the_url_the_page_prints_opens_everything(self):
+    def test_under_a_stock_take_the_url_the_page_prints_opens_everything(self):
         """Asserted through the URL the page actually draws rather than
-        through the context alone: an inventaire is two physical counts with
+        through the context alone: a stock take is two physical counts with
         its own arithmetic, and CLAUDE.md promises its rows the whole
         history."""
         take = make_stock_take(taken_at=timezone.make_aware(datetime(2026, 3, 31, 12, 0)))

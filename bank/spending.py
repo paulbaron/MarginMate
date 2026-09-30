@@ -1,9 +1,9 @@
 """Everything that LEFT the account over a window, by category.
 
 **This is not « Marges ».** Marges counts what was INVOICED, by invoice
-date, and answers « ai-je gagné de l'argent ». This counts what the bank
-took, by the date it took it, invoice or no invoice, and answers « où est
-parti l'argent ». Two bases, two figures, and each page has to say which it
+date, and answers « have I made money ». This counts what the bank
+took, by the date it took it, invoice or no invoice, and answers « where did
+the money go ». Two bases, two figures, and each page has to say which it
 is or a reader will take one for the other. Income is not spending and is
 nowhere in here.
 
@@ -360,9 +360,7 @@ def spending_for(window: DateRange, kind: str = "", left_out=()) -> SpendingRepo
     share, and the shares and « Autres » are worked out over what remains.
     It costs no query - a name is compared with the names already built.
     """
-    report = SpendingReport(
-        window=window, kind=kind if kind in KINDS else "", left_out=left_out_names(left_out)
-    )
+    report = SpendingReport(window=window, kind=kind if kind in KINDS else "", left_out=left_out_names(left_out))
     rules = compile_rules(IgnoreRule.objects.filter(is_active=True))
     categories: dict[str, Category] = {}
     # One reading per invoice, not per payment: an invoice settled in two
@@ -425,9 +423,7 @@ def spending_for(window: DateRange, kind: str = "", left_out=()) -> SpendingRepo
         one.left_out = clean_category(one.name) in asked
     report.drawn_total = sum((one.amount for one in report.categories if one.drawn), ZERO)
     report.left_out_total = sum((one.amount for one in report.categories if one.left_out), ZERO)
-    report.given_back = sum(
-        (one.amount for one in report.categories if not one.drawn and not one.left_out), ZERO
-    )
+    report.given_back = sum((one.amount for one in report.categories if not one.drawn and not one.left_out), ZERO)
     _share_out(report.categories, report.drawn_total)
     report.slices = _slices(report.categories, report.drawn_total)
     # The unnamed first - that is the work - and inside each half the biggest
@@ -453,9 +449,7 @@ def known_categories() -> list[str]:
     # Typed on a DEBIT only. The same field names a credit on « Entrées
     # d'argent », and a word for money that came in (« Privatisation »,
     # « Apport ») offered here would file a spending under an income.
-    names |= set(
-        BankTransaction.objects.filter(amount__lt=0).exclude(category="").values_list("category", flat=True)
-    )
+    names |= set(BankTransaction.objects.filter(amount__lt=0).exclude(category="").values_list("category", flat=True))
     names |= set(IgnoreRule.objects.exclude(category="").values_list("category", flat=True))
     return sorted(names, key=lambda name: (_reading_order(name), name))
 

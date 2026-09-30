@@ -87,8 +87,11 @@ class CatalogueSearchInBrowserTests(StaticLiveServerTestCase):
             (self.gin, "GIN EXEMPLE 70CL"),
         ):
             classified = make_product(
-                supplier=self.supplier, raw_name=name, stock_type=stock_type,
-                unit=UnitChoices.UNIT, stock_equivalent="0.7",
+                supplier=self.supplier,
+                raw_name=name,
+                stock_type=stock_type,
+                unit=UnitChoices.UNIT,
+                stock_equivalent="0.7",
             )
             line = make_invoice_line(invoice=invoice, product=classified, quantity=10, total_ht="120")
             # The row and the panel it opens both read the stock ledger, not
@@ -102,7 +105,7 @@ class CatalogueSearchInBrowserTests(StaticLiveServerTestCase):
         # by the whole class: a category another test left open is one this
         # one's « open it » click would close. Storage needs an origin, so
         # the page is loaded before it can be cleared. Logged in first, as
-        # the test espace's owner: every page wants a login.
+        # the test tenant's owner: every page wants a login.
         log_in_the_browser(self.driver, self.live_server_url)
         self.driver.get(self.live_server_url + reverse("inventory:stock_list"))
         self.script("localStorage.clear()")
@@ -165,7 +168,7 @@ class CatalogueSearchInBrowserTests(StaticLiveServerTestCase):
         )
 
     def kept_open(self) -> list:
-        # Under the key the page itself uses (its espace's scope included).
+        # Under the key the page itself uses (its tenant's scope included).
         return sorted(self.script("return JSON.parse(localStorage.getItem(EXPANDED_STORAGE_KEY) || '[]')"))
 
     def search(self, text):
@@ -196,17 +199,19 @@ class CatalogueSearchInBrowserTests(StaticLiveServerTestCase):
     def open_category(self):
         """A category starts collapsed: its rows are reachable once open."""
         self.script("document.querySelector('#catalogue .category-header td, #catalogue .category-header').click()")
-        self.wait_for(lambda: self.script(
-            "return !!document.querySelector('#catalogue .stock-row') &&"
-            " document.querySelector('#catalogue .stock-row').offsetParent !== null"
-        ))
+        self.wait_for(
+            lambda: self.script(
+                "return !!document.querySelector('#catalogue .stock-row') &&"
+                " document.querySelector('#catalogue .stock-row').offsetParent !== null"
+            )
+        )
 
     def test_a_search_answers_with_rows_not_with_open_panels(self):
         self.open_list()
         self.open_category()
         self.script(
-            "var row = document.querySelector('#catalogue .stock-row[data-stock-type-id=\"%s\"]');"
-            "row.querySelector('td').click()" % self.vodka.pk
+            f"var row = document.querySelector('#catalogue .stock-row[data-stock-type-id=\"{self.vodka.pk}\"]');"
+            "row.querySelector('td').click()"
         )
         self.wait_for(lambda: f"details-{self.vodka.pk}" in self.details_shown())
         self.assertIn(f"details-{self.vodka.pk}", self.kept_open())  # their own choice, remembered
@@ -287,9 +292,7 @@ class CatalogueSearchInBrowserTests(StaticLiveServerTestCase):
         self.script("document.getElementById('catalogue').dataset.before = '1'")
         self.script("document.body.dispatchEvent(new CustomEvent('catalogue-changed', { bubbles: true }))")
         # The list that comes back is a different element: the marker is gone.
-        self.wait_for(lambda: not self.script(
-            "return !!document.getElementById('catalogue').dataset.before"
-        ))
+        self.wait_for(lambda: not self.script("return !!document.getElementById('catalogue').dataset.before"))
         self.wait_for(lambda: self.visible_row_names() == ["Vodka Exemple"])
         self.assertEqual(self.details_shown(), [])
         # Still open, only set aside: one click brings it back.

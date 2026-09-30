@@ -9,11 +9,11 @@
     {% block scripts %}{% endblock %}
 </head>
 {% comment %}
-Les pages des comptes (accounts/pages.py) et « Aucun espace » : ouvertes sans espace choisi. Elles
-n'héritent PAS de base.html - ni la navigation, ni ses compteurs, qui compteraient dans la base de
-quelqu'un. Les messages, si : « Vous êtes déconnecté », « Bienvenue ».
-data-tenant : seulement sur « Espace indisponible » (accounts.middleware._unavailable), dont
-« Se déconnecter » efface les brouillons de l'espace comme celui de base.html (ui.js).
+The accounts' pages (accounts/pages.py) and « Aucun espace »: opened with no tenant chosen. They
+do NOT extend base.html - neither the navigation nor its counters, which would count in somebody's
+database. The messages, yes: « Vous êtes déconnecté », « Bienvenue ».
+data-tenant: only on « Espace indisponible » (accounts.middleware._unavailable), whose
+« Se déconnecter » forgets the tenant's drafts as base.html's does (ui.js).
 {% endcomment %}
 <body class="public-page account-page"{% if request.storage_scope %} data-tenant="{{ request.storage_scope }}"{% endif %}{% if request.storage_legacy %} data-tenant-legacy="{{ request.storage_legacy }}"{% endif %}>
     <main class="public-container">

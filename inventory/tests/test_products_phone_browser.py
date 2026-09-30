@@ -174,19 +174,32 @@ class ProductsOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         for name, unit, category, raw_name, equivalent, quantity, total_ht in (
             ("Farine Exemple", UnitChoices.KILOGRAM, "Cuisine", "FARINE EXEMPLE SAC 25KG", "25", 4, "63.20"),
             ("Gin Exemple", UnitChoices.LITRE, "Spiritueux", "GIN EXEMPLE 70CL", "0.7", 6, "95.40"),
-            ("Liqueur ambrée grillée exemple", UnitChoices.LITRE, "Spiritueux", "LIQUEUR AMBREE EXEMPLE 70CL", "0.7", 3, "41.85"),
+            (
+                "Liqueur ambrée grillée exemple",
+                UnitChoices.LITRE,
+                "Spiritueux",
+                "LIQUEUR AMBREE EXEMPLE 70CL",
+                "0.7",
+                3,
+                "41.85",
+            ),
             # Figures as wide as a bar's year of them.
             ("Vodka Exemple", UnitChoices.LITRE, "Spiritueux", "VODKA EXEMPLE 70CL", "0.7", 240, "12345.67"),
         ):
             article = make_stock_type(name=name, unit=unit, category=category)
             product = make_product(
-                supplier=self.supplier, raw_name=raw_name, stock_type=article, stock_equivalent=equivalent,
+                supplier=self.supplier,
+                raw_name=raw_name,
+                stock_type=article,
+                stock_equivalent=equivalent,
             )
             invoice = make_invoice(supplier=self.supplier, invoice_date=date(2026, 1, 10))
             line = make_invoice_line(invoice=invoice, product=product, quantity=quantity, total_ht=total_ht)
             make_movement(
-                stock_type=article, invoice_line=line,
-                quantity=Decimal(equivalent) * quantity, unit_cost_ht="1.00",
+                stock_type=article,
+                invoice_line=line,
+                quantity=Decimal(equivalent) * quantity,
+                unit_cost_ht="1.00",
             )
             self.articles[name] = article
         # Waiting in the panel, one purchase each.
@@ -194,20 +207,24 @@ class ProductsOnAPhoneInBrowserTests(StaticLiveServerTestCase):
             product = make_product(supplier=self.supplier, raw_name=f"PRODUIT EXEMPLE {number:02d}")
             make_invoice_line(
                 invoice=make_invoice(supplier=self.supplier, invoice_date=date(2026, 2, number)),
-                product=product, quantity=2, total_ht="18",
+                product=product,
+                quantity=2,
+                total_ht="18",
             )
         # The charges: a water bill, and a landlord whose statement names
-        # two postes (rows of their own under his).
+        # two charge items (rows of their own under his).
         water = make_supplier(code="EAU_TEL", name="Eau Exemple", parser_key="", expenses_only=True)
-        eau = make_product(supplier=water, raw_name="EAU", is_expense=True)
+        tap_water = make_product(supplier=water, raw_name="EAU", is_expense=True)
         for month in (1, 2):
             bill = make_invoice(supplier=water, invoice_date=date(2026, month, 5), invoice_number=f"EAU-2026-0{month}")
-            make_invoice_line(invoice=bill, product=eau, total_ht="40", vat_rate="0.055")
+            make_invoice_line(invoice=bill, product=tap_water, total_ht="40", vat_rate="0.055")
         landlord = make_supplier(code="BAIL_TEL", name="Bailleur Exemple", parser_key="", expenses_only=True)
         statement = make_invoice(supplier=landlord, invoice_date=date(2026, 2, 3), invoice_number="BAIL-2026-02")
-        for poste, amount in (("LOYER EXEMPLE", "500"), ("PROVISIONSURCHARGESEXEMPLE", "80")):
-            product = make_product(supplier=landlord, raw_name=poste, is_expense=True)
-            make_invoice_line(invoice=statement, product=product, raw_name=poste, total_ht=amount, vat_rate="0.20")
+        for charge_item, amount in (("LOYER EXEMPLE", "500"), ("PROVISIONSURCHARGESEXEMPLE", "80")):
+            product = make_product(supplier=landlord, raw_name=charge_item, is_expense=True)
+            make_invoice_line(
+                invoice=statement, product=product, raw_name=charge_item, total_ht=amount, vat_rate="0.20"
+            )
 
         log_in_the_browser(self.driver, self.live_server_url)
         self.addCleanup(self.driver.execute_cdp_cmd, "Emulation.clearDeviceMetricsOverride", {})
@@ -234,9 +251,9 @@ class ProductsOnAPhoneInBrowserTests(StaticLiveServerTestCase):
 
     def open(self, query=""):
         self.driver.get(self.live_server_url + reverse("inventory:stock_list") + query)
-        self.wait_for(lambda: self.script(
-            "return document.readyState === 'complete' && !!document.getElementById('catalogue');"
-        ))
+        self.wait_for(
+            lambda: self.script("return document.readyState === 'complete' && !!document.getElementById('catalogue');")
+        )
 
     def first_visit(self, query=""):
         """The page as a first visit draws it. What is open, what is
@@ -274,7 +291,9 @@ class ProductsOnAPhoneInBrowserTests(StaticLiveServerTestCase):
             "return {x: r.left + r.width / 2, y: r.top + r.height / 2};",
             css,
         )
-        self.driver.execute_cdp_cmd("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": r["x"], "y": r["y"]}]})
+        self.driver.execute_cdp_cmd(
+            "Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": r["x"], "y": r["y"]}]}
+        )
         self.driver.execute_cdp_cmd("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
 
     def drawn(self, css) -> bool:
@@ -319,16 +338,18 @@ class ProductsOnAPhoneInBrowserTests(StaticLiveServerTestCase):
             "document.querySelectorAll('#catalogue .category-header').forEach(function (header) {"
             " var table = document.getElementById(header.dataset.toggle); if (table && table.hidden) header.click(); });"
         )
-        self.wait_for(lambda: self.script(
-            "return Array.from(document.querySelectorAll('#catalogue table.stock-table'))"
-            ".every(function (table) { return !table.hidden; });"
-        ))
+        self.wait_for(
+            lambda: self.script(
+                "return Array.from(document.querySelectorAll('#catalogue table.stock-table'))"
+                ".every(function (table) { return !table.hidden; });"
+            )
+        )
 
     def open_the_charges(self):
         self.script("var fold = document.querySelector('details.charges'); fold.open = true;")
-        self.wait_for(lambda: self.script(
-            "return document.querySelector('.charges-table tbody tr').getClientRects().length > 0;"
-        ))
+        self.wait_for(
+            lambda: self.script("return document.querySelector('.charges-table tbody tr').getClientRects().length > 0;")
+        )
 
     def assertTheCardsFit(self, selector, at_least=1):
         found = self.script(MEASURE_CARDS, selector)
@@ -371,17 +392,22 @@ class ProductsOnAPhoneInBrowserTests(StaticLiveServerTestCase):
             {"type": "mouseWheel", "x": point["x"], "y": point["y"], "deltaX": 0, "deltaY": 400},
         )
         after = self.settled_scroll()
-        self.assertGreater(after - before, 100, f"{where}: the page stayed at {before:.0f} px - the panel held the wheel")
+        self.assertGreater(
+            after - before, 100, f"{where}: the page stayed at {before:.0f} px - the panel held the wheel"
+        )
 
     def swipe_up(self, x, y, distance):
         """A finger put down, drawn up `distance` px in ten moves, lifted.
         Touch events by hand: Input.synthesizeScrollGesture moves nothing
         in this headless Chrome, anywhere on the page (measured 30/09), and
         a test on it would pass over the very trap it is for."""
-        self.driver.execute_cdp_cmd("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]})
+        self.driver.execute_cdp_cmd(
+            "Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]}
+        )
         for step in range(1, 11):
             self.driver.execute_cdp_cmd(
-                "Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": x, "y": y - distance * step / 10}]},
+                "Input.dispatchTouchEvent",
+                {"type": "touchMove", "touchPoints": [{"x": x, "y": y - distance * step / 10}]},
             )
             time.sleep(0.016)
         self.driver.execute_cdp_cmd("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
@@ -413,7 +439,9 @@ class ProductsOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         the list the same way, and the same wheel stopped on it."""
         self.as_a_window(1100, 900)
         self.open()
-        self.assertEqual(self.script("return getComputedStyle(document.getElementById('a-classer')).position;"), "static")
+        self.assertEqual(
+            self.script("return getComputedStyle(document.getElementById('a-classer')).position;"), "static"
+        )
         self.unfold()
         self.assertTheWheelMovesThePage("1100 px")
 
@@ -429,10 +457,13 @@ class ProductsOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         self.assertEqual((position, overflow, overscroll), ("sticky", "auto", "contain"))
         self.assertEqual(self.cards_drawn(), WAITING)
         self.assertEqual(self.unfold_says(), "")
-        self.assertEqual(self.script(
-            "return Array.from(document.querySelectorAll('.review-panel-jump'))"
-            ".filter(function (link) { return link.getClientRects().length > 0; }).length;"
-        ), 0)
+        self.assertEqual(
+            self.script(
+                "return Array.from(document.querySelectorAll('.review-panel-jump'))"
+                ".filter(function (link) { return link.getClientRects().length > 0; }).length;"
+            ),
+            0,
+        )
 
     # -- one product at a time ----------------------------------------------------------------------
 
@@ -475,10 +506,13 @@ class ProductsOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         self.tap(label)
         self.wait_for(lambda: self.cards_drawn() == 1)
         self.settled_scroll()
-        self.assertTrue(self.script(
-            "var r = document.querySelector('#review-panel-body .review-card').getBoundingClientRect();"
-            "return r.bottom > 0 && r.top < window.innerHeight;"
-        ), "folded back, the first product is off the screen")
+        self.assertTrue(
+            self.script(
+                "var r = document.querySelector('#review-panel-body .review-card').getBoundingClientRect();"
+                "return r.bottom > 0 && r.top < window.innerHeight;"
+            ),
+            "folded back, the first product is off the screen",
+        )
 
     def test_the_keyboard_unfolds_them_too(self):
         """Out of sight, the box is still the control a keyboard reaches."""
@@ -534,11 +568,15 @@ class ProductsOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         self.assertTrue(self.drawn(".review-panel-head .review-panel-jump"), "no « La liste ↓ » in the panel's head")
         self.assertFalse(self.in_sight_under_the_bar("#articles"))
         self.tap(".review-panel-head .review-panel-jump")
-        self.wait_for(lambda: self.in_sight_under_the_bar("#articles"), message="« La liste ↓ » did not land on the list")
+        self.wait_for(
+            lambda: self.in_sight_under_the_bar("#articles"), message="« La liste ↓ » did not land on the list"
+        )
 
         self.assertFalse(self.in_sight_under_the_bar("#a-classer"))
         self.tap(".table-toolbar [data-panel-jump]")
-        self.wait_for(lambda: self.in_sight_under_the_bar("#a-classer"), message="« ↑ À classer » did not land on the panel")
+        self.wait_for(
+            lambda: self.in_sight_under_the_bar("#a-classer"), message="« ↑ À classer » did not land on the panel"
+        )
 
     def test_the_toolbars_button_brings_the_panel_back_to_the_reader(self):
         """« Masquer » folds the panel away; the toolbar's « Produits à
@@ -602,7 +640,9 @@ class ProductsOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         self.assertAlmostEqual(first["left"], head["left"], delta=1, msg="the buttons do not start at the page's edge")
         self.assertAlmostEqual(second["right"], head["right"], delta=1, msg="the first two buttons do not fill the row")
         self.assertAlmostEqual(first["width"], second["width"], delta=1, msg="two buttons of two widths")
-        self.assertAlmostEqual(third["left"], first["left"], delta=1, msg="the third button does not start a second row")
+        self.assertAlmostEqual(
+            third["left"], first["left"], delta=1, msg="the third button does not start a second row"
+        )
         self.assertGreater(third["top"], first["top"] + 1, "the third button does not start a second row")
         self.assertEqual([button["height"] for button in buttons if button["height"] < 44], [])
 
@@ -623,10 +663,13 @@ class ProductsOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         its three buttons inside it and a thumb's size."""
         self.open_every_category()
         self.assertTheCardsFit("#catalogue table.stock-table > tbody > tr.stock-row", at_least=4)
-        self.assertEqual(self.script(
-            "return Array.from(document.querySelectorAll('#catalogue table.stock-table > thead'))"
-            ".map(function (head) { return getComputedStyle(head).display; });"
-        ), ["none", "none"])
+        self.assertEqual(
+            self.script(
+                "return Array.from(document.querySelectorAll('#catalogue table.stock-table > thead'))"
+                ".map(function (head) { return getComputedStyle(head).display; });"
+            ),
+            ["none", "none"],
+        )
         self.assertTheRowsButtonsAreThumbSized()
         self.assertThePageFitsTheScreen(WIDTH)
 
@@ -641,15 +684,23 @@ class ProductsOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         ):
             article = self.articles[name]
             make_stock_take_line(
-                stock_take=take, product=None, stock_type=article, counted_quantity=counted, unit=article.unit,
+                stock_take=take,
+                product=None,
+                stock_type=article,
+                counted_quantity=counted,
+                unit=article.unit,
             )
         self.open(f"?inventaire={closing.pk}")
         self.open_every_category()
         self.assertTheCardsFit("#catalogue table.stock-table-period > tbody > tr.stock-row", at_least=4)
-        self.assertEqual(self.script(
-            "return Array.from(document.querySelectorAll('#catalogue .stock-table-wrap'))"
-            ".filter(function (wrap) { return wrap.scrollWidth > wrap.clientWidth + 1; }).length;"
-        ), 0, "a category still scrolls sideways")
+        self.assertEqual(
+            self.script(
+                "return Array.from(document.querySelectorAll('#catalogue .stock-table-wrap'))"
+                ".filter(function (wrap) { return wrap.scrollWidth > wrap.clientWidth + 1; }).length;"
+            ),
+            0,
+            "a category still scrolls sideways",
+        )
         self.assertTheRowsButtonsAreThumbSized()
         self.assertThePageFitsTheScreen(WIDTH)
 
@@ -669,28 +720,35 @@ class ProductsOnAPhoneInBrowserTests(StaticLiveServerTestCase):
                     str(flour.pk),
                 )
                 purchases = f"#details-{flour.pk} .movements-table > tbody > tr"
-                self.wait_for(lambda rows=purchases: self.script("return !!document.querySelector(arguments[0]);", rows))
+                self.wait_for(
+                    lambda rows=purchases: self.script("return !!document.querySelector(arguments[0]);", rows)
+                )
                 self.assertTheCardsFit(purchases)
                 self.assertEqual(
-                    sorted(self.script(
-                        "return Array.from(document.querySelectorAll(arguments[0] + ' button'))"
-                        ".map(function (b) { return b.textContent.trim(); });",
-                        purchases,
-                    )),
+                    sorted(
+                        self.script(
+                            "return Array.from(document.querySelectorAll(arguments[0] + ' button'))"
+                            ".map(function (b) { return b.textContent.trim(); });",
+                            purchases,
+                        )
+                    ),
                     ["Retirer", "💾"],
                 )
                 self.assertThePageFitsTheScreen(width)
 
     def test_the_charges_rows_fit(self):
         """The charges' fixed columns printed a date wider than its column
-        on a phone. A supplier and his postes - one a name with no space -
+        on a phone. A supplier and his charge items - one a name with no space -
         as cards, « Documents (12 mois) » over its count."""
         self.open_the_charges()
         self.assertTheCardsFit("#catalogue .charges-table > tbody > tr.stock-row", at_least=4)
-        self.assertEqual(self.script(
-            "var cell = document.querySelector('#catalogue .charges-table > tbody > tr.stock-row > td[data-label]');"
-            "return getComputedStyle(cell, '::before').content;"
-        ), '"Documents (12 mois)"')
+        self.assertEqual(
+            self.script(
+                "var cell = document.querySelector('#catalogue .charges-table > tbody > tr.stock-row > td[data-label]');"
+                "return getComputedStyle(cell, '::before').content;"
+            ),
+            '"Documents (12 mois)"',
+        )
         self.assertThePageFitsTheScreen(WIDTH)
 
     # -- never wider than the phone -----------------------------------------------------------------
@@ -708,9 +766,10 @@ class ProductsOnAPhoneInBrowserTests(StaticLiveServerTestCase):
                 self.as_a_phone(width)
                 self.open()
                 # The long word is the first product (they come by name).
-                self.assertIn(LONG_WORD, self.script(
-                    "return document.querySelector('#review-panel-body .review-card').textContent;"
-                ))
+                self.assertIn(
+                    LONG_WORD,
+                    self.script("return document.querySelector('#review-panel-body .review-card').textContent;"),
+                )
                 self.assertThePageFitsTheScreen(width)
 
     # -- classifying on a phone ---------------------------------------------------------------------
@@ -763,10 +822,13 @@ class ProductsOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         # … but nothing pulls the reader away from the panel.
         self.assertFalse(self.a_panel_field_is_focused(), "a field of the panel was focused: the keyboard comes up")
         self.assertLess(abs(after - before), 150, f"the page moved from {before:.0f} to {after:.0f} px")
-        self.assertTrue(self.script(
-            "var field = document.querySelector('#review-panel-body .js-stock-type-name').getBoundingClientRect();"
-            "return field.top >= 0 && field.bottom <= window.innerHeight;"
-        ), "the next product's field is off the screen")
+        self.assertTrue(
+            self.script(
+                "var field = document.querySelector('#review-panel-body .js-stock-type-name').getBoundingClientRect();"
+                "return field.top >= 0 && field.bottom <= window.innerHeight;"
+            ),
+            "the next product's field is off the screen",
+        )
 
         # « classé dans … » takes the reader to it, when asked.
         self.tap("#review-panel-body .classified-note a[data-reveal-stock-type]")
@@ -780,11 +842,16 @@ class ProductsOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         self.as_a_phone(915, 412)
         self.open()
         self.assertTrue(
-            self.script("return matchMedia('(hover: none) and (pointer: coarse)').matches;"), "no touch screen emulated",
+            self.script("return matchMedia('(hover: none) and (pointer: coarse)').matches;"),
+            "no touch screen emulated",
         )
-        self.assertEqual(self.script("return getComputedStyle(document.getElementById('a-classer')).position;"), "static")
+        self.assertEqual(
+            self.script("return getComputedStyle(document.getElementById('a-classer')).position;"), "static"
+        )
         vodka = self.articles["Vodka Exemple"]
-        self.script("document.querySelector('#review-panel-body .js-stock-type-name').scrollIntoView({block: 'center'});")
+        self.script(
+            "document.querySelector('#review-panel-body .js-stock-type-name').scrollIntoView({block: 'center'});"
+        )
         before = self.settled_scroll()
 
         self.classify_the_first_as("Vodka Exemple")
@@ -804,18 +871,25 @@ class ProductsOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         self.as_a_window(700, 800)
         self.open()
         self.assertFalse(
-            self.script("return matchMedia('(hover: none) and (pointer: coarse)').matches;"), "a touch screen emulated",
+            self.script("return matchMedia('(hover: none) and (pointer: coarse)').matches;"),
+            "a touch screen emulated",
         )
-        self.assertEqual(self.script("return getComputedStyle(document.getElementById('a-classer')).position;"), "static")
+        self.assertEqual(
+            self.script("return getComputedStyle(document.getElementById('a-classer')).position;"), "static"
+        )
 
         self.classify_the_first_as("Vodka Exemple")
-        self.wait_for(lambda: self.a_panel_field_is_focused(), message="after « Classer », no field of the next product focused")
+        self.wait_for(
+            lambda: self.a_panel_field_is_focused(), message="after « Classer », no field of the next product focused"
+        )
 
         self.driver.find_element("css selector", "#review-panel-body .review-panel-head [data-panel-close]").click()
         self.wait_for(lambda: not self.drawn("#a-classer"))
         self.driver.find_element("css selector", "button[data-panel-open]").click()
         self.wait_for(lambda: self.drawn("#a-classer"))
-        self.wait_for(lambda: self.a_panel_field_is_focused(), message="« Produits à classer » focused no field of the panel")
+        self.wait_for(
+            lambda: self.a_panel_field_is_focused(), message="« Produits à classer » focused no field of the panel"
+        )
 
     def test_beside_the_list_classifying_is_as_it_was(self):
         """1400 px, a mouse: the next field is focused for the next name,
@@ -832,11 +906,14 @@ class ProductsOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         self.open()
         self.open_every_category()
         self.script("window.scrollTo(0, 0);")
-        self.assertTrue(self.script(
-            "var row = document.querySelector('#catalogue .stock-row[data-stock-type-id=\"' + arguments[0] + '\"]');"
-            "return row.getBoundingClientRect().top > window.innerHeight;",
-            str(vodka.pk),
-        ), "the vodka's row is on the screen already")
+        self.assertTrue(
+            self.script(
+                "var row = document.querySelector('#catalogue .stock-row[data-stock-type-id=\"' + arguments[0] + '\"]');"
+                "return row.getBoundingClientRect().top > window.innerHeight;",
+                str(vodka.pk),
+            ),
+            "the vodka's row is on the screen already",
+        )
 
         self.classify_the_first_as("Vodka Exemple")
         self.wait_for(lambda: self.details_open(vodka))

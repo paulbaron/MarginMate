@@ -1,9 +1,9 @@
 {% comment %}
-« Signature », la section du mois côté employeur (staff/signature_views.py). Contexte : `signature`
-(SignaturePanel). Un mois enregistré s'envoie pour signature ; tant qu'une demande le tient (en attente,
-signée par le salarié, ou terminée), la section montre cette demande et ses actions, et la grille du mois
-est en lecture seule. Les versions précédentes (annulées, remplacées, expirées) restent listées avec
-leurs fichiers et leur journal.
+« Signature », the employer's section of the month (staff/signature_views.py). Context: `signature`
+(SignaturePanel). A saved month is sent for signature; while a request holds it (waiting, signed by the
+employee, or finished), the section shows that request and its actions, and the month's grid is
+read-only. The earlier versions (cancelled, superseded, expired) stay listed with their files and their
+journal.
 {% endcomment %}
 <section class="card signature-card" id="signature">
     <h2>Signature</h2>
@@ -13,8 +13,8 @@ leurs fichiers et leur journal.
         <p class="small">{{ signature.problem }}</p>
     {% else %}
         {% comment %}
-        data-leaves-grid : timesheet.js demande avant d'envoyer une grille modifiée et pas encore
-        enregistrée - c'est le mois ENREGISTRÉ qui est figé et signé.
+        data-leaves-grid: timesheet.js asks before sending a grid changed and not saved yet - it is the
+        SAVED month that is frozen and signed.
         {% endcomment %}
         <form method="post" action="{{ signature.send_url }}" class="signature-send" data-leaves-grid="{{ signature.send_warning }}">
             {% csrf_token %}

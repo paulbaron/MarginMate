@@ -27,16 +27,14 @@ from decimal import Decimal
 from .base import InvoiceParser, ParsedInvoice, ParsedLine, PdfPage
 from .registry import register
 
-LINE_REGEX = re.compile(
-    r"^(\S+)\s+(.+?)\s+(\S+)\s+(\d+)\s+(?:(\d+,\d+)\s+(\d+,\d+)\s+)?(\d)\s*$"
-)
+LINE_REGEX = re.compile(r"^(\S+)\s+(.+?)\s+(\S+)\s+(\d+)\s+(?:(\d+,\d+)\s+(\d+,\d+)\s+)?(\d)\s*$")
 REFERENCE_REGEX = re.compile(r"Référence\s*:\s*(\S+)")
 DATE_REGEX = re.compile(r"Date\s*:\s*(\d{2}/\d{2}/\d{2})")
 # "Code Taux Montant" footer table - the only lines with this exact "digit
-# taux,xx montant,xx" shape are the TVA codes actually used on this invoice,
+# rate,xx amount,xx" shape are the VAT codes actually used on this invoice,
 # e.g. "4 20,00 60,20" (code 4 = 20.00%, collecting 60,20 EUR of VAT) - codes
-# printed with no taux/montant (unused on this invoice) are simply skipped.
-TVA_CODE_REGEX = re.compile(r"^(\d)\s+(\d+,\d+)\s+(\d+,\d+)\s*$", re.MULTILINE)
+# printed with no rate/amount (unused on this invoice) are simply skipped.
+VAT_CODE_REGEX = re.compile(r"^(\d)\s+(\d+,\d+)\s+(\d+,\d+)\s*$", re.MULTILINE)
 
 
 def _to_decimal(text: str | None, default: str = "0") -> Decimal:
@@ -47,7 +45,7 @@ def _to_decimal(text: str | None, default: str = "0") -> Decimal:
         return Decimal(default)
     try:
         return Decimal(text)
-    except Exception:
+    except Exception:  # noqa: BLE001 - an unreadable amount reads as the default
         return Decimal(default)
 
 
@@ -56,9 +54,7 @@ class CecinaParser(InvoiceParser):
     supplier_code = "CECINA"
     # Text-only: this layout's tables come out with merged cells.
 
-    def parse_pages(
-        self, pages: list[PdfPage], date_hint: date | None = None, source_name: str = ""
-    ) -> ParsedInvoice:
+    def parse_pages(self, pages: list[PdfPage], date_hint: date | None = None, source_name: str = "") -> ParsedInvoice:
         lines_by_code: dict[str, ParsedLine] = {}
         full_text_parts: list[str] = []
 
@@ -66,21 +62,20 @@ class CecinaParser(InvoiceParser):
             text = page.text
             full_text_parts.append(text)
 
-            tva_rate_by_code = {
-                match.group(1): _to_decimal(match.group(2)) / Decimal("100")
-                for match in TVA_CODE_REGEX.finditer(text)
+            vat_rate_by_code = {
+                match.group(1): _to_decimal(match.group(2)) / Decimal("100") for match in VAT_CODE_REGEX.finditer(text)
             }
 
             for line in text.split("\n"):
                 match = LINE_REGEX.match(line.strip())
                 if not match:
                     continue
-                code, designation, unit, quantity_raw, unit_price_raw, amount_raw, tva_code = match.groups()
+                code, designation, unit, quantity_raw, _unit_price_raw, amount_raw, vat_code = match.groups()
                 if unit.lower() not in ("unité", "carton", "colis"):
                     continue  # a stray numeric-looking line that isn't really a product row
                 quantity = int(quantity_raw)
                 amount = _to_decimal(amount_raw)
-                vat_rate = tva_rate_by_code.get(tva_code, Decimal("0"))
+                vat_rate = vat_rate_by_code.get(vat_code, Decimal("0"))
 
                 parsed_line = lines_by_code.get(code)
                 if parsed_line is None:
@@ -109,7 +104,7 @@ class CecinaParser(InvoiceParser):
         date_match = DATE_REGEX.search(full_text)
         if date_match:
             try:
-                invoice_date = datetime.strptime(date_match.group(1), "%d/%m/%y").date()
+                invoice_date = datetime.strptime(date_match.group(1), "%d/%m/%y").date()  # noqa: DTZ007 - a printed date, read into .date()
             except ValueError:
                 pass
 

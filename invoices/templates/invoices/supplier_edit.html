@@ -10,10 +10,10 @@
     {% endcomment %}
     <div class="page-header">
         <div>
-            <p class="breadcrumb"><a href="{{ fiche }}">← {{ supplier.name }}</a></p>
+            <p class="breadcrumb"><a href="{{ supplier_page }}">← {{ supplier.name }}</a></p>
             <h1>Modifier {{ supplier.name }}</h1>
             <p class="page-subtitle">
-                {% if step == "verifier" %}Ce qui va changer : rien n'est encore enregistré.
+                {% if step == "review" %}Ce qui va changer : rien n'est encore enregistré.
                 {% elif document_count %}Rien n'est enregistré avant que vous ayez vu ce que cela change.
                 {% else %}Aucun document n'y est rangé : rien d'autre ne change.{% endif %}
             </p>
@@ -24,9 +24,9 @@
         <div class="message message-warning">{{ supplier.name }} a changé depuis l'ouverture de cette page : vérifiez ce qui va changer.</div>
     {% endif %}
 
-    {% if step == "verifier" %}
-        <section class="card supplier-form" aria-labelledby="ce-qui-change">
-            <h2 id="ce-qui-change">Ce qui va changer</h2>
+    {% if step == "review" %}
+        <section class="card supplier-form" aria-labelledby="what-changes">
+            <h2 id="what-changes">Ce qui va changer</h2>
             {% if plan.refused %}
                 {% for reason in plan.refused %}<p class="field-error">{{ reason }}</p>{% endfor %}
             {% endif %}
@@ -43,7 +43,7 @@
                         <button class="btn" type="submit" name="action" value="enregistrer">Enregistrer ces changements</button>
                     {% endif %}
                     <button class="btn btn-secondary" type="submit" name="action" value="modifier">Revenir au formulaire</button>
-                    <a class="btn btn-secondary" href="{{ fiche }}">Annuler</a>
+                    <a class="btn btn-secondary" href="{{ supplier_page }}">Annuler</a>
                 </div>
             </form>
         </section>
@@ -77,7 +77,7 @@
                 {% else %}
                     <button class="btn" type="submit" name="action" value="enregistrer">Enregistrer</button>
                 {% endif %}
-                <a class="btn btn-secondary" href="{{ fiche }}">Annuler</a>
+                <a class="btn btn-secondary" href="{{ supplier_page }}">Annuler</a>
             </div>
         </form>
     {% endif %}

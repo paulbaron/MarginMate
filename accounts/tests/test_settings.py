@@ -1,5 +1,5 @@
 """The settings (config/settings.py) and their system checks
-(accounts/checks.py). One database per espace, a login on every page - the
+(accounts/checks.py). One database per tenant, a login on every page - the
 only mode since single mode was removed (29/09/2026).
 
 The real settings module is loaded in a child process, with every path set
@@ -57,7 +57,11 @@ def load_settings(**environment) -> subprocess.CompletedProcess:
     # owner's .env (load_dotenv never overrides a variable that is SET), and
     # his own values would decide. Set to "" they are set, so .env cannot
     # fill them.
-    for name in set(re.findall(r"MARGINMATE_[A-Z_]+", (Path(settings.BASE_DIR) / "config" / "settings.py").read_text(encoding="utf-8"))):
+    for name in set(
+        re.findall(
+            r"MARGINMATE_[A-Z_]+", (Path(settings.BASE_DIR) / "config" / "settings.py").read_text(encoding="utf-8")
+        )
+    ):
         env[name] = ""
     # The developer's .env went into this process's environment: what it
     # says about DEBUG and the hosts must not decide (a server's .env names
@@ -70,6 +74,7 @@ def load_settings(**environment) -> subprocess.CompletedProcess:
     env["PYTHONIOENCODING"] = "utf-8"
     return subprocess.run(
         [sys.executable, "-c", PROBE],
+        check=False,
         cwd=settings.BASE_DIR,
         env=env,
         capture_output=True,
@@ -84,7 +89,7 @@ def probe(**environment) -> dict:
     line = next((line for line in result.stdout.splitlines() if line.startswith("REPORT")), None)
     if line is None:
         raise AssertionError(result.stderr[-3000:])
-    return json.loads(line[len("REPORT"):])
+    return json.loads(line[len("REPORT") :])
 
 
 class SettingsFromTheEnvironmentTests(SimpleTestCase):
@@ -96,8 +101,8 @@ class SettingsFromTheEnvironmentTests(SimpleTestCase):
             "DJANGO_SECRET_KEY": secrets.token_urlsafe(50),
         }
 
-    def test_one_database_per_espace_with_no_switch_at_all(self):
-        """No MARGINMATE_TENANCY: the espaces and the login all the same -
+    def test_one_database_per_tenant_with_no_switch_at_all(self):
+        """No MARGINMATE_TENANCY: the tenants and the login all the same -
         single mode was what a missing switch used to mean."""
         report = probe(**self.environment)
         self.assertFalse(report["old_switch"])
@@ -110,7 +115,7 @@ class SettingsFromTheEnvironmentTests(SimpleTestCase):
         middleware = report["middleware"]
         auth = middleware.index("django.contrib.auth.middleware.AuthenticationMiddleware")
         self.assertEqual(
-            middleware[auth + 1:auth + 3],
+            middleware[auth + 1 : auth + 3],
             ["accounts.middleware.LoginRequiredMiddleware", "accounts.middleware.TenantMiddleware"],
         )
         self.assertEqual(report["checks"], [])
@@ -161,10 +166,16 @@ class ChecksTests(SimpleTestCase):
     def test_the_settings_need_their_folders_and_databases(self):
         memory = {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
         cases = [
-            ({"TENANTS_ROOT": "", "DATABASES": {"default": memory, "accounts": {"NAME": "c.sqlite3"}}}, ["accounts.E002"]),
+            (
+                {"TENANTS_ROOT": "", "DATABASES": {"default": memory, "accounts": {"NAME": "c.sqlite3"}}},
+                ["accounts.E002"],
+            ),
             ({"TENANTS_ROOT": "espaces", "DATABASES": {"default": memory}}, ["accounts.E003"]),
             (
-                {"TENANTS_ROOT": "espaces", "DATABASES": {"default": {"NAME": "vrai.sqlite3"}, "accounts": {"NAME": "c.sqlite3"}}},
+                {
+                    "TENANTS_ROOT": "espaces",
+                    "DATABASES": {"default": {"NAME": "vrai.sqlite3"}, "accounts": {"NAME": "c.sqlite3"}},
+                },
                 ["accounts.E004"],
             ),
             ({"TENANTS_ROOT": "espaces", "DATABASES": {"default": memory, "accounts": {"NAME": "c.sqlite3"}}}, []),

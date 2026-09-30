@@ -1,5 +1,5 @@
 """« Créer votre espace » (accounts/pages.py, accounts/signup.py), in multi
-mode for real: a valid invitation makes a login, an espace and its
+mode for real: a valid invitation makes a login, a tenant and its
 membership, all or nothing; the code is looked at only once everything else
 is valid, and a used, expired or unknown one reads the same; failures are
 counted. Names and addresses invented."""
@@ -73,7 +73,7 @@ class SignupTests(SignupTestCase):
         self.assertNotContains(response, "<nav")
         assertNoUnrenderedTemplateSyntax(self, response, SIGNUP)
 
-    def test_a_valid_signup_makes_the_login_the_espace_and_the_membership_then_logs_in(self):
+    def test_a_valid_signup_makes_the_login_the_tenant_and_the_membership_then_logs_in(self):
         response = self.post()
         self.assertRedirects(response, "/", fetch_redirect_response=False)
 
@@ -101,13 +101,13 @@ class SignupTests(SignupTestCase):
         self.assertIsNotNone(self.invitation.used_at)
         self.assertEqual(self.invitation.used_by, user)
 
-        # Logged in, in his new espace: its name in the topbar, the owner's
+        # Logged in, in his new tenant: its name in the topbar, the owner's
         # integrations off in it.
         self.assertEqual(int(self.client.session["_auth_user_id"]), user.pk)
         home = self.client.get("/", follow=True)
         self.assertEqual(home.status_code, 200)
         self.assertContains(home, "Bienvenue : l&#x27;espace « Le Zinc d&#x27;Essai » est prêt.")
-        self.assertContains(home, 'class="topbar-espace"')
+        self.assertContains(home, 'class="topbar-tenant"')
         with bound_tenant(tenant):
             self.assertFalse(Supplier.objects.get(code="METRO").is_scrapable)
             self.assertFalse(InvoiceType.objects.filter(source_kind="EMAIL", is_active=True).exists())
@@ -188,14 +188,14 @@ class SignupTests(SignupTestCase):
 
 
 class SignupAllOrNothingTests(SignupTestCase):
-    def test_a_failure_after_the_espace_exists_leaves_nothing(self):
+    def test_a_failure_after_the_tenant_exists_leaves_nothing(self):
         with mock.patch.object(Membership.objects, "create", side_effect=RuntimeError("panne d'essai")):
             with self.assertRaisesMessage(RuntimeError, "panne d'essai"):
                 signup.sign_up(code=self.code, bar_name="Bar Raté", email="rate@example.invalid", password=PASSWORD)
         self.assertNothingMade()
         self.assertUnused()
 
-    def test_a_failure_while_the_espace_is_made_leaves_nothing(self):
+    def test_a_failure_while_the_tenant_is_made_leaves_nothing(self):
         with mock.patch.object(provisioning, "_migrate_bound", side_effect=RuntimeError("panne d'essai")):
             with self.assertRaisesMessage(RuntimeError, "panne d'essai"):
                 signup.sign_up(code=self.code, bar_name="Bar Raté", email="rate@example.invalid", password=PASSWORD)
@@ -213,8 +213,8 @@ class SignupAllOrNothingTests(SignupTestCase):
         self.assertEqual(refused.exception.field, "code")
         self.assertNothingMade()
 
-    def test_the_espace_is_made_outside_the_accounts_transaction(self):
-        """Copying and migrating an espace takes seconds whenever the
+    def test_the_tenant_is_made_outside_the_accounts_transaction(self):
+        """Copying and migrating a tenant takes seconds whenever the
         template is behind the code. Inside the accounts database's
         transaction - IMMEDIATE: SQLite's write lock from its first statement
         - every login and every session write of every bar waited for it."""
@@ -227,19 +227,21 @@ class SignupAllOrNothingTests(SignupTestCase):
 
             return run
 
-        with mock.patch.object(provisioning, "copy_database", watching("copie", provisioning.copy_database)), \
-                mock.patch.object(provisioning, "_migrate_bound", watching("migrate", provisioning._migrate_bound)):
-            user, tenant = signup.sign_up(
+        with (
+            mock.patch.object(provisioning, "copy_database", watching("copie", provisioning.copy_database)),
+            mock.patch.object(provisioning, "_migrate_bound", watching("migrate", provisioning._migrate_bound)),
+        ):
+            _user, tenant = signup.sign_up(
                 code=self.code, bar_name="Bar Rapide", email="rapide@example.invalid", password=PASSWORD
             )
         self.assertEqual(seen, [("copie", False), ("migrate", False)])
         self.assertEqual(Membership.objects.get().tenant, tenant)
         self.assertTrue(paths.tenant_database(tenant).is_file())
 
-    def test_a_code_or_an_address_taken_while_the_espace_was_made_leaves_nothing(self):
+    def test_a_code_or_an_address_taken_while_the_tenant_was_made_leaves_nothing(self):
         """The code and the address are checked again with the rows, in the
-        short transaction: taken by another signup while this one's espace
-        was being copied, the signup is refused and that espace removed."""
+        short transaction: taken by another signup while this one's tenant
+        was being copied, the signup is refused and that tenant removed."""
         real_copy = provisioning.copy_database
 
         def code_taken(*args, **kwargs):
@@ -259,7 +261,9 @@ class SignupAllOrNothingTests(SignupTestCase):
                                 code=self.code, bar_name="Bar Lent", email="lente@example.invalid", password=PASSWORD
                             )
                     # Both said on the code's field, in the same words (ANON-5).
-                    self.assertEqual((refused.exception.field, refused.exception.message), ("code", signup.CODE_REFUSED))
+                    self.assertEqual(
+                        (refused.exception.field, refused.exception.message), ("code", signup.CODE_REFUSED)
+                    )
                     self.assertFalse(Tenant.objects.exists())
                     self.assertFalse(Membership.objects.exists())
                     self.assertEqual([p.name for p in paths.tenants_root().iterdir()], [paths.TEMPLATE_DIR])
@@ -271,13 +275,15 @@ class SignupAllOrNothingTests(SignupTestCase):
                     get_user_model().objects.all().delete()
                     Invitation.objects.filter(pk=self.invitation.pk).update(used_at=None, used_by=None)
 
-    def test_a_refused_code_makes_no_espace_at_all(self):
+    def test_a_refused_code_makes_no_tenant_at_all(self):
         """Refused before anything is copied: a wrong code costs a query,
-        never an espace made and thrown away."""
+        never a tenant made and thrown away."""
         with mock.patch.object(provisioning, "copy_database") as copy:
             with self.assertRaises(signup.SignupRefused):
                 signup.sign_up(
-                    code="ABCD-EFGH-JKLM-NPQR-STUV-WXYZ", bar_name="Bar Faux", email="faux@example.invalid",
+                    code="ABCD-EFGH-JKLM-NPQR-STUV-WXYZ",
+                    bar_name="Bar Faux",
+                    email="faux@example.invalid",
                     password=PASSWORD,
                 )
         copy.assert_not_called()

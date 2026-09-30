@@ -118,12 +118,47 @@ DATE_RE = re.compile(r"(?<!\d)(\d{2})[-/.](\d{2})[-/.]((?:19|20)\d{2})")
 # written in, and 26 documents were filed with no date at all - counting in no
 # stock valuation and matching no payment.
 MONTHS = {
-    "janvier": 1, "fevrier": 2, "mars": 3, "avril": 4, "mai": 5, "juin": 6,
-    "juillet": 7, "aout": 8, "septembre": 9, "octobre": 10, "novembre": 11, "decembre": 12,
-    "janv": 1, "fevr": 2, "fev": 2, "avr": 4, "juil": 7, "sept": 9, "oct": 10, "nov": 11, "dec": 12,
-    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6, "july": 7,
-    "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
-    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "jun": 6, "jul": 7, "aug": 8, "sep": 9,
+    "janvier": 1,
+    "fevrier": 2,
+    "mars": 3,
+    "avril": 4,
+    "mai": 5,
+    "juin": 6,
+    "juillet": 7,
+    "aout": 8,
+    "septembre": 9,
+    "octobre": 10,
+    "novembre": 11,
+    "decembre": 12,
+    "janv": 1,
+    "fevr": 2,
+    "fev": 2,
+    "avr": 4,
+    "juil": 7,
+    "sept": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
+    "january": 1,
+    "february": 2,
+    "march": 3,
+    "april": 4,
+    "may": 5,
+    "june": 6,
+    "july": 7,
+    "august": 8,
+    "september": 9,
+    "october": 10,
+    "november": 11,
+    "december": 12,
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
 }
 WRITTEN_DATE_RE = re.compile(
     r"(?<!\d)(\d{1,2})(?:er)?\s+([A-Za-zÀ-ÿ´`^¨]{3,12})\s+((?:19|20)\d{2})(?!\d)", re.IGNORECASE
@@ -206,9 +241,10 @@ def printed_total(lines: list[str]) -> Decimal | None:
         # 0.20 paper bag the total, and the 11.20 of ham a "promotion"; and a
         # water bill, where every item row prints its own tax, made its 27,42
         # subscription the 260,63 € it charges.
-        if len(distinct) >= 2 and abs(
-            sum((total for _rate, _base, _vat, total in distinct), start=Decimal("0")) - candidate
-        ) <= CENTS:
+        if (
+            len(distinct) >= 2
+            and abs(sum((total for _rate, _base, _vat, total in distinct), start=Decimal("0")) - candidate) <= CENTS
+        ):
             return candidate
     table, _rate_only = collect_vat_summaries(lines, None)
     read = [summary for summary in table if not summary.derived and summary.total_ttc is not None]
@@ -279,10 +315,14 @@ def _ht_and_tax(lines: list[str], repeated: list[Decimal]) -> Decimal | None:
         for tax in repeated
         if 0 < tax < base
         and base + tax in printed
-        and len([
-            rate for rate in KNOWN_VAT_RATES
-            if abs((base * rate).quantize(CENTS, rounding=ROUND_HALF_UP) - tax) <= CENTS
-        ]) == 1
+        and len(
+            [
+                rate
+                for rate in KNOWN_VAT_RATES
+                if abs((base * rate).quantize(CENTS, rounding=ROUND_HALF_UP) - tax) <= CENTS
+            ]
+        )
+        == 1
     }
     return found.pop() if len(found) == 1 else None
 
@@ -430,11 +470,9 @@ def read_date(text: str, date_hint: date | None = None) -> date | None:
     is the first date it prints, before the day it will be debited."""
     figures = DATE_RE.search(text)
     written_dates = [
-        (match.start(), match.group(2), match.group(1), match.group(3))
-        for match in WRITTEN_DATE_RE.finditer(text)
+        (match.start(), match.group(2), match.group(1), match.group(3)) for match in WRITTEN_DATE_RE.finditer(text)
     ] + [
-        (match.start(), match.group(1), match.group(2), match.group(3))
-        for match in MONTH_FIRST_DATE_RE.finditer(text)
+        (match.start(), match.group(1), match.group(2), match.group(3)) for match in MONTH_FIRST_DATE_RE.finditer(text)
     ]
     for start, name, day, year in sorted(written_dates):
         month = MONTHS.get(_plain_month(name))
@@ -483,7 +521,7 @@ class VatSummary:
     # arithmetic, not evidence, and the checks report the table as unread.
     derived: bool = False
 
-    def resolve(self) -> "VatSummary":
+    def resolve(self) -> VatSummary:
         """Fill in whatever the table did not print, and normalise `base` to
         a tax-exclusive figure."""
         rate, base, vat, ttc = self.rate, self.base, self.vat_amount, self.total_ttc
@@ -690,10 +728,7 @@ def build_checks(
             ParseCheck(
                 label="Somme HT des lignes = base HT du ticket",
                 passed=within_rounding,
-                detail=(
-                    f"lignes {lines_total_ht:.2f} € HT / ticket {printed_ht:.2f} € HT "
-                    f"(écart {ht_drift:+.2f} €)"
-                ),
+                detail=(f"lignes {lines_total_ht:.2f} € HT / ticket {printed_ht:.2f} € HT (écart {ht_drift:+.2f} €)"),
             )
         )
         # The HT base is the figure the invoice total should land on, so it
@@ -749,9 +784,7 @@ class ReceiptParser(InvoiceParser):
 
         from invoices.ocr import ocr_pdf
 
-        return self.parse_ocr_pages(
-            ocr_pdf(pdf_path), date_hint=date_hint, source_name=os.path.basename(pdf_path)
-        )
+        return self.parse_ocr_pages(ocr_pdf(pdf_path), date_hint=date_hint, source_name=os.path.basename(pdf_path))
 
     def parse_ocr_pages(self, ocr_pages, date_hint: date | None = None, source_name: str = "") -> ParsedInvoice:
         """Run this parser over pages that have already been recognised.
@@ -839,7 +872,7 @@ def assign_rates_by_bucket(
 
 
 def format_rate(rate: Decimal) -> str:
-    """"5.5" / "20" - never "2E+1", which is what Decimal.normalize() gives
+    """ "5.5" / "20" - never "2E+1", which is what Decimal.normalize() gives
     for a whole-number percentage and what the review screen showed once."""
     return f"{(rate * Decimal('100')).quantize(CENTS).normalize():f}"
 
@@ -849,9 +882,7 @@ def _decimal_places(value: Decimal) -> int:
     return -exponent if isinstance(exponent, int) and exponent < 0 else 0
 
 
-def parse_vat_line(
-    text: str, rate: Decimal | None = None, expected_total: Decimal | None = None
-) -> VatSummary | None:
+def parse_vat_line(text: str, rate: Decimal | None = None, expected_total: Decimal | None = None) -> VatSummary | None:
     """Read one row of a receipt's VAT table.
 
     The four shops print the same three numbers in four different column
@@ -898,11 +929,17 @@ def parse_vat_line(
             readings = []
             if abs(as_exclusive - vat) <= VAT_IDENTITY_TOLERANCE:
                 readings.append(
-                    (abs(as_exclusive - vat), VatSummary(rate=resolved_rate, base=base, vat_amount=vat, total_ttc=base + vat))
+                    (
+                        abs(as_exclusive - vat),
+                        VatSummary(rate=resolved_rate, base=base, vat_amount=vat, total_ttc=base + vat),
+                    )
                 )
             if abs(as_inclusive - vat) <= VAT_IDENTITY_TOLERANCE:
                 readings.append(
-                    (abs(as_inclusive - vat), VatSummary(rate=resolved_rate, base=base - vat, vat_amount=vat, total_ttc=base))
+                    (
+                        abs(as_inclusive - vat),
+                        VatSummary(rate=resolved_rate, base=base - vat, vat_amount=vat, total_ttc=base),
+                    )
                 )
             for identity_error, candidate in readings:
                 # A row whose third column confirms the total is a better

@@ -21,10 +21,10 @@
     {% endcomment %}
     <script src="{% asset 'js/topbar.js' %}"></script>
     {% comment %}
-    A bar's page (a request bound to its espace): htmx keeps no page. Its
+    A bar's page (a request bound to its tenant): htmx keeps no page. Its
     history cache holds whole pages (the boosted Achats tabs store each page
     left) under ONE key of the origin's browser storage, the one key not
-    built through the espace, and draws them on Back: bar A's invoices
+    built through the tenant, and draws them on Back: bar A's invoices
     stayed there for bar B's pages to read. Size 0: it stores none, removes
     one an older page left, and Back asks the server. Not
     hx-history="false", which still draws a snapshot already stored.
@@ -44,22 +44,22 @@
     <script src="{% asset 'js/charts.js' %}" defer></script>
 </head>
 {% comment %}
-data-tenant: the espace this page belongs to, as an opaque scope
+data-tenant: the tenant this page belongs to, as an opaque scope
 (accounts.tenancy.storage_scope - 16 hex characters, NOT its id: the
-sequential id told any bar how many espaces were opened before its own,
-security audit LB-6); empty on a page no espace is bound to.
+sequential id told any bar how many tenants were opened before its own,
+security audit LB-6); empty on a page no tenant is bound to.
 Every key the scripts write into the browser's storage carries it
 (« espace-<scope>: »): storage belongs to the origin, not to the login, and
 one device used for two bars would otherwise hand bar B the drafts, ticks
 and opened rows bar A left under the same pk. Empty, the keys carry no
-espace.
+tenant.
 data-tenant-legacy, on a session opened before 29/09/2026 only: the id its
-pages keyed the storage with until then; espace_storage_legacy.js, first
+pages keyed the storage with until then; tenant_storage_legacy.js, first
 thing in the body so that it runs before any script reading a key, moves
 those keys under the scope (accounts.middleware.LEGACY_STORAGE_SESSION_KEY).
 {% endcomment %}
 <body data-tenant="{{ request.storage_scope|default_if_none:'' }}"{% if request.storage_legacy %} data-tenant-legacy="{{ request.storage_legacy }}"{% endif %}>
-    {% if request.storage_legacy %}<script src="{% asset 'js/espace_storage_legacy.js' %}"></script>{% endif %}
+    {% if request.storage_legacy %}<script src="{% asset 'js/tenant_storage_legacy.js' %}"></script>{% endif %}
     <header class="topbar">
         <div class="topbar-inner">
             <a class="brand" href="{% url 'inventory:stock_list' %}">MarginMate</a>
@@ -88,19 +88,19 @@ those keys under the scope (accounts.middleware.LEGACY_STORAGE_SESSION_KEY).
             {% endcomment %}
             <div class="topbar-menu" id="topbar-menu">
             <nav aria-label="Navigation principale">
-                <a href="{% url 'inventory:stock_list' %}"{% if nav_section == "produits" %} class="active"{% endif %}>Produits &amp; charges<span id="nav-count-produits">{% if review_count_nav %} <span class="badge">{{ review_count_nav }}</span>{% endif %}</span></a>
-                <a href="{% url 'invoices:invoice_list' %}"{% if nav_section == "achats" %} class="active"{% endif %}>Achats<span id="nav-count-achats">{% if receipt_review_count_nav %} <span class="badge">{{ receipt_review_count_nav }}</span>{% endif %}</span></a>
-                <a href="{% url 'bank:bank_home' %}"{% if nav_section == "banque" %} class="active"{% endif %}>Banque</a>
-                <a href="{% url 'recipes:recipe_list' %}"{% if nav_section == "recettes" %} class="active"{% endif %}>Recettes &amp; ventes<span id="nav-count-recettes">{% if pos_pending_count_nav %} <span class="badge">{{ pos_pending_count_nav }}</span>{% endif %}</span></a>
-                <a href="{% url 'margins:margins_home' %}"{% if nav_section == "marges" %} class="active"{% endif %}>Marges</a>
-                <a href="{% url 'staff:home' %}"{% if nav_section == "personnel" %} class="active"{% endif %}>Personnel</a>
-                <a href="{% url 'inventory:stock_take_list' %}"{% if nav_section == "inventaires" %} class="active"{% endif %}>Inventaires</a>
-                <a href="{% url 'returnables:home' %}"{% if nav_section == "consignes" %} class="active"{% endif %}>Consignes</a>
-                <a href="{% url 'transfer:data_home' %}"{% if nav_section == "donnees" %} class="active"{% endif %}>Données</a>
+                <a href="{% url 'inventory:stock_list' %}"{% if nav_section == "products" %} class="active"{% endif %}>Produits &amp; charges<span id="nav-count-products">{% if review_count_nav %} <span class="badge">{{ review_count_nav }}</span>{% endif %}</span></a>
+                <a href="{% url 'invoices:invoice_list' %}"{% if nav_section == "purchases" %} class="active"{% endif %}>Achats<span id="nav-count-purchases">{% if receipt_review_count_nav %} <span class="badge">{{ receipt_review_count_nav }}</span>{% endif %}</span></a>
+                <a href="{% url 'bank:bank_home' %}"{% if nav_section == "bank" %} class="active"{% endif %}>Banque</a>
+                <a href="{% url 'recipes:recipe_list' %}"{% if nav_section == "recipes" %} class="active"{% endif %}>Recettes &amp; ventes<span id="nav-count-recipes">{% if pos_pending_count_nav %} <span class="badge">{{ pos_pending_count_nav }}</span>{% endif %}</span></a>
+                <a href="{% url 'margins:margins_home' %}"{% if nav_section == "margins" %} class="active"{% endif %}>Marges</a>
+                <a href="{% url 'staff:home' %}"{% if nav_section == "staff" %} class="active"{% endif %}>Personnel</a>
+                <a href="{% url 'inventory:stock_take_list' %}"{% if nav_section == "stock_takes" %} class="active"{% endif %}>Inventaires</a>
+                <a href="{% url 'returnables:home' %}"{% if nav_section == "returnables" %} class="active"{% endif %}>Consignes</a>
+                <a href="{% url 'transfer:data_home' %}"{% if nav_section == "data" %} class="active"{% endif %}>Données</a>
                 {% if user.is_superuser %}<a href="/admin/">Admin</a>{% endif %}
             </nav>
             {% comment %}
-            A request bound to its espace: the bar's name and « Se déconnecter ». Outside the <nav> -
+            A request bound to its tenant: the bar's name and « Se déconnecter ». Outside the <nav> -
             tests/test_navigation.py reads its links. Above 860 px they come after the links. Under
             860 px without topbar.js they sit on the brand's row, so the bar is no taller than its
             links make it (--topbar-room, marginmate.css); with topbar.js they are at the foot of
@@ -109,7 +109,7 @@ those keys under the scope (accounts.middleware.LEGACY_STORAGE_SESSION_KEY).
             {% endcomment %}
             {% if request.tenant %}
                 <div class="topbar-account">
-                    <span class="topbar-espace" title="{{ request.tenant.name }}">{{ request.tenant.name }}</span>
+                    <span class="topbar-tenant" title="{{ request.tenant.name }}">{{ request.tenant.name }}</span>
                     <form method="post" action="{% url 'accounts:logout' %}" class="topbar-logout">
                         {% csrf_token %}
                         <button type="submit" class="link-button">Se déconnecter</button>

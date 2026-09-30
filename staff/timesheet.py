@@ -57,6 +57,7 @@ from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from functools import cached_property, lru_cache
+from typing import cast
 
 from django.db import transaction
 
@@ -64,7 +65,8 @@ from .models import ABSENCE_KINDS, MAX_DAY_HOURS, WEEKDAY_FIELDS, Employee, Time
 
 Kind = TimesheetDay.Kind
 KIND_CHOICES = Kind.choices
-KIND_LABELS = dict(Kind.choices)
+# The labels are plain strings (no gettext_lazy): the stubs' `str | _StrPromise` is wider than what is there.
+KIND_LABELS = cast(dict[str, str], dict(Kind.choices))
 WORK = Kind.WORK.value
 REST = Kind.REST.value
 PUBLIC_HOLIDAY = Kind.PUBLIC_HOLIDAY.value
@@ -80,8 +82,18 @@ NOTE_MAX_LENGTH = TimesheetDay._meta.get_field("note").max_length
 DAY_NAMES = ("Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche")
 DAY_ABBREVIATIONS = ("Lu", "Ma", "Me", "Je", "Ve", "Sa", "Di")
 MONTH_NAMES = (
-    "janvier", "février", "mars", "avril", "mai", "juin",
-    "juillet", "août", "septembre", "octobre", "novembre", "décembre",
+    "janvier",
+    "février",
+    "mars",
+    "avril",
+    "mai",
+    "juin",
+    "juillet",
+    "août",
+    "septembre",
+    "octobre",
+    "novembre",
+    "décembre",
 )
 
 #: The years a month in an address may name. A month's page links to the
@@ -453,10 +465,10 @@ class MonthDay:
     hours: Decimal
     kind: str
     note: str
-    holiday: str             # « Assomption », "" when the day is no public holiday
-    typical_hours: Decimal   # what the typical week plans for this weekday
-    hours_input: str         # what the hours field shows: the hours, or the text typed when the page answers an error
-    error: str = ""          # French, for this day, when a post was refused
+    holiday: str  # « Assomption », "" when the day is no public holiday
+    typical_hours: Decimal  # what the typical week plans for this weekday
+    hours_input: str  # what the hours field shows: the hours, or the text typed when the page answers an error
+    error: str = ""  # French, for this day, when a post was refused
 
     @property
     def name(self) -> str:
@@ -649,10 +661,10 @@ class MonthSheet:
     """One employee's month: what the page edits and the PDF prints."""
 
     employee: Employee
-    month: date                    # always the 1st
-    days: tuple[MonthDay, ...]     # every day of the month, in order
-    timesheet: Timesheet | None    # None: not saved yet, the days are the typical week
-    errors: tuple[str, ...] = ()   # French, when the page answers a refused post
+    month: date  # always the 1st
+    days: tuple[MonthDay, ...]  # every day of the month, in order
+    timesheet: Timesheet | None  # None: not saved yet, the days are the typical week
+    errors: tuple[str, ...] = ()  # French, when the page answers a refused post
 
     @property
     def saved(self) -> bool:
@@ -751,7 +763,7 @@ class PostedDay:
     hours: Decimal | None = None
     kind: str | None = None
     note: str | None = None
-    hours_text: str | None = None   # as typed, to draw back into the field with an error
+    hours_text: str | None = None  # as typed, to draw back into the field with an error
     error: str = ""
 
 
@@ -930,11 +942,11 @@ def saved_month_sheets(employee: Employee) -> list[MonthSheet]:
 class Outcome:
     """What a write did, for the message the page answers with."""
 
-    timesheet: Timesheet | None     # None only when nothing was written
-    created: bool                   # this write saved the month for the first time
-    changed: tuple[date, ...]       # the days now different from before (saved, or the typical week)
-    touched: tuple[date, ...]       # the days the action was about
-    adjustments: tuple[str, ...] = ()   # French: what was read otherwise than posted
+    timesheet: Timesheet | None  # None only when nothing was written
+    created: bool  # this write saved the month for the first time
+    changed: tuple[date, ...]  # the days now different from before (saved, or the typical week)
+    touched: tuple[date, ...]  # the days the action was about
+    adjustments: tuple[str, ...] = ()  # French: what was read otherwise than posted
     # « Revenir à la semaine type » only: the month's weekly hours before it
     # took the employee's week of today, when that week was another one.
     week_before: Decimal | None = None
@@ -1013,7 +1025,7 @@ def _store(employee, month, timesheet, before, after, touched, adjustments=(), *
 
 
 def _unprintable(note: str) -> str:
-    """"" - or the sentence refusing a note that holds a character the
+    """ "" - or the sentence refusing a note that holds a character the
     printed sheet cannot write (`pdf.unprintable_characters`): it would print
     « ? », and the employee signs the printed sheet."""
     from .pdf import unprintable_characters
@@ -1041,9 +1053,7 @@ def _checked_note(note: str | None) -> str | None:
     return note
 
 
-def save_month(
-    employee: Employee, month: date, posted_days: Iterable[PostedDay] | Mapping[date, PostedDay]
-) -> Outcome:
+def save_month(employee: Employee, month: date, posted_days: Iterable[PostedDay] | Mapping[date, PostedDay]) -> Outcome:
     """Save the month from what the form posted, in one transaction: the
     sheet is created on the first save, and every day of the month is
     written (a day not posted keeps its current value). An absence is 0 h

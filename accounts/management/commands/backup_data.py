@@ -33,18 +33,18 @@ class Command(BaseCommand):
         parser.add_argument(
             "--sans-env",
             action="store_true",
-            dest="sans_env",
+            dest="without_env",
             help="Ne pas copier le fichier .env (il contient la clé secrète, la phrase de passe, les mots de passe).",
         )
         parser.add_argument(
             "--chemin-dans",
-            dest="chemin_dans",
+            dest="write_path_to",
             help="Écrire le chemin du dossier de la sauvegarde dans ce fichier une fois fini (deploy.cmd le lit).",
         )
 
-    def handle(self, *args, dest=None, sans_env=False, chemin_dans=None, **options):
+    def handle(self, *args, dest=None, without_env=False, write_path_to=None, **options):
         try:
-            folder = data_backup.make_backup(dest, with_env=not sans_env, say=self.stdout.write)
+            folder = data_backup.make_backup(dest, with_env=not without_env, say=self.stdout.write)
         except data_backup.BackupError as exc:
             if exc.folder is not None:
                 self.stderr.write(
@@ -52,8 +52,8 @@ class Command(BaseCommand):
                     "utilisable. Supprimez-le une fois le problème compris."
                 )
             raise CommandError(f"Sauvegarde non faite : {exc}") from exc
-        if chemin_dans:
-            Path(chemin_dans).write_text(f"{folder}\n", encoding="utf-8")
+        if write_path_to:
+            Path(write_path_to).write_text(f"{folder}\n", encoding="utf-8")
         self.stdout.write(
             "Gardez plusieurs sauvegardes, dont une copie hors de ce PC (disque externe, dossier synchronisé) : "
             "une sauvegarde sur le même disque ne survit pas à ce disque."

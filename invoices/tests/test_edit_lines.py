@@ -39,7 +39,6 @@ def messages_of(response):
 
 
 class HtEditorTests(TestCase):
-
     def setUp(self):
         self.metro = Supplier.objects.get(code="METRO")
         self.vodka = make_stock_type("Vodka", unit=UnitChoices.LITRE)
@@ -48,8 +47,16 @@ class HtEditorTests(TestCase):
         )
         self.invoice = Invoice.objects.create(supplier=self.metro, invoice_number="134-056-000001")
         self.line = make_invoice_line(
-            invoice=self.invoice, product=product, quantity=6, total_volume="4.2", total_ht="62.40",
-            taxes="2.40", discount="1.00", colisage=6, category="Spiritueux", vat_rate=D("0.20"),
+            invoice=self.invoice,
+            product=product,
+            quantity=6,
+            total_volume="4.2",
+            total_ht="62.40",
+            taxes="2.40",
+            discount="1.00",
+            colisage=6,
+            category="Spiritueux",
+            vat_rate=D("0.20"),
         )
         create_stock_movement_for_line(self.line)
         self.url = reverse("invoices:invoice_edit_lines", args=[self.invoice.pk])
@@ -135,7 +142,8 @@ class HtEditorTests(TestCase):
 
     def _price_a_count_from(self, line):
         count = make_stock_take_line(
-            stock_take=make_stock_take(taken_at=datetime(2026, 7, 1, 21, 0)), product=line.product,
+            stock_take=make_stock_take(taken_at=datetime(2026, 7, 1, 21, 0)),
+            product=line.product,
             unit=UnitChoices.UNIT,
         )
         StockTakeLineSource.objects.create(
@@ -184,8 +192,14 @@ class ReceiptReviewKeepsWhatItDoesNotShowTests(TestCase):
             supplier=shop, invoice_number="000401", parse_checks=[{"label": "x", "passed": True, "detail": ""}]
         )
         line = make_invoice_line(
-            invoice=invoice, product=make_product(supplier=shop, raw_name="CITRON VERT"), raw_name="CITRON VERT",
-            read_as="CITRON VERT", quantity=1, total_volume="4.184", total_ht="11.86", vat_rate=D("0.055"),
+            invoice=invoice,
+            product=make_product(supplier=shop, raw_name="CITRON VERT"),
+            raw_name="CITRON VERT",
+            read_as="CITRON VERT",
+            quantity=1,
+            total_volume="4.184",
+            total_ht="11.86",
+            vat_rate=D("0.055"),
             printed_ttc=D("12.51"),
         )
         url = reverse("invoices:receipt_review", args=[invoice.pk])

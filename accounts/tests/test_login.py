@@ -1,7 +1,7 @@
 """« Connexion » and « Se déconnecter » (accounts/pages.py), in multi mode
 for real: the login by e-mail, where it sends back to (this site only), the
 failure limiter (accounts/limiter.py), CSRF, and the logout - for a user
-with no espace too. Addresses invented (the documentation ranges: 192.0.2.x,
+with no tenant too. Addresses invented (the documentation ranges: 192.0.2.x,
 198.51.100.x, 203.0.113.x and 2001:db8::/32)."""
 
 import base64
@@ -64,7 +64,7 @@ class LoginTests(LimiterCacheMixin, TwoTenantsTestCase):
         self.assertNotIn("badge", page)
         assertNoUnrenderedTemplateSyntax(self, response, LOGIN)
 
-    def test_a_login_by_e_mail_opens_his_espace(self):
+    def test_a_login_by_e_mail_opens_his_tenant(self):
         response = self.log_in("  Alpha@Example.INVALID ")
         self.assertRedirects(response, "/", fetch_redirect_response=False)
         page = self.client.get(reverse("invoices:supplier_list"))
@@ -559,7 +559,9 @@ class Ipv6PlacesTests(LimiterCacheMixin, TwoTenantsTestCase):
     def test_the_place_s_ceiling_counts_a_64_as_one_place(self):
         with mock.patch.object(limiter, "IP_LIMIT", 12):
             for n in range(12):
-                self.assertEqual(self.post(f"essai{n}@example.invalid", ip=f"2001:db8:1:1:{n + 1:x}::1").status_code, 200)
+                self.assertEqual(
+                    self.post(f"essai{n}@example.invalid", ip=f"2001:db8:1:1:{n + 1:x}::1").status_code, 200
+                )
             self.assertEqual(self.post(BETA, PASSWORD, ip="2001:db8:1:1:ffff::1").status_code, 429)
             self.assertEqual(self.post(BETA, PASSWORD, ip="2001:db8:1:2::1").status_code, 302)
 
@@ -665,7 +667,7 @@ class ThroughWaitressTests(SimpleTestCase):
         self.seen.clear()
         call(self.server.application, environ(peer, **headers))
         (seen,) = self.seen
-        return limiter.directly_from_this_pc(WSGIRequest(seen))
+        return limiter.directly_from_this_pc(WSGIRequest(seen))  # ty: ignore[too-many-positional-arguments]  # a stubs-only __new__; Django's HttpRequest has none
 
     def test_a_browser_on_the_pc_is_the_pc(self):
         self.assertTrue(self.is_the_pc("127.0.0.1", HTTP_HOST="127.0.0.1:8765"))
@@ -681,7 +683,10 @@ class ThroughWaitressTests(SimpleTestCase):
                 "HTTP_X_FORWARDED_FOR": "127.0.0.1, 203.0.113.9",
                 "HTTP_HOST": "127.0.0.1:8765",
             },
-            "a forwarded address that is the PC's": {"HTTP_X_FORWARDED_FOR": "127.0.0.1", "HTTP_HOST": "127.0.0.1:8765"},
+            "a forwarded address that is the PC's": {
+                "HTTP_X_FORWARDED_FOR": "127.0.0.1",
+                "HTTP_HOST": "127.0.0.1:8765",
+            },
             "no X-Forwarded-For at all": {**without_for, "HTTP_HOST": "127.0.0.1:8765"},
             "Cloudflare's marks alone": {"HTTP_CF_RAY": "8c0ffee000000000-CDG", "HTTP_HOST": "127.0.0.1:8765"},
         }.items():
@@ -723,7 +728,9 @@ class AdminLoginLimiterTests(LimiterCacheMixin, TwoTenantsTestCase):
 
     def test_the_login_page_s_failures_hold_the_admin_back_too(self):
         for n in range(limiter.LIMIT):
-            self.client.post(LOGIN, {"username": "alpha@example.invalid", "password": f"faux-{n}"}, REMOTE_ADDR="192.0.2.50")
+            self.client.post(
+                LOGIN, {"username": "alpha@example.invalid", "password": f"faux-{n}"}, REMOTE_ADDR="192.0.2.50"
+            )
         with mock.patch("django.contrib.auth.forms.authenticate", return_value=None) as checked:
             self.admin_attempt(PASSWORD)
         checked.assert_not_called()
@@ -805,7 +812,7 @@ class LogoutTests(LimiterCacheMixin, TwoTenantsTestCase):
         self.assertEqual(client.post(LOGOUT).status_code, 403)
         self.assertIn("_auth_user_id", client.session)
 
-    def test_a_login_with_no_espace_can_still_leave(self):
+    def test_a_login_with_no_tenant_can_still_leave(self):
         nobody = self.make_member(self.bar_b, "sans-espace@example.invalid")
         nobody.memberships.all().delete()
         self.client.force_login(nobody)

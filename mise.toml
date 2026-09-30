@@ -1,0 +1,16 @@
+# The project's tools, pinned: `mise install` installs them. The Python
+# packages live in pyproject.toml (locked in uv.lock) and are installed by
+# `uv sync`; the git hooks in prek.toml are wired by `prek install`. See
+# README.md, "Development".
+[tools]
+# The minor version pyproject.toml's requires-python asks for, and the one
+# .python-version names: uv reads that file, and without it uv throws an
+# existing .venv away to rebuild it on the Python it finds first (this one) -
+# production's .venv, its OCR models included, at the next deploy.
+python = "3.11"
+uv = "0.12.20"
+prek = "0.5.4"
+
+[settings]
+# A shell where mise is activated also activates the project's .venv.
+python.uv_venv_auto = true

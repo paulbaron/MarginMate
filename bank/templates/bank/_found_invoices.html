@@ -1,13 +1,13 @@
 {% comment %}
-Ce qu'une recherche a trouvé pour UNE opération, seul : la boîte de
-recherche l'échange dans sa propre ligne (bank.views.invoice_search), donc
-ce fragment ne contient ni la page, ni la ligne, ni la boîte elle-même.
+What a search found for ONE operation, alone: the search box swaps
+it into its own row (bank.views.invoice_search), so this fragment holds
+neither the page, nor the row, nor the box itself.
 
-À côté des suggestions, jamais à leur place : la facture dont le montant ne
-correspond pas, celle d'il y a six mois, celle qu'une autre opération règle
-déjà. Une facture déjà payée est trouvée aussi, avec ce qui la paie — c'est
-exactement la facture réglée en deux fois, et la cacher ne laisserait aucun
-moyen de le dire.
+Beside the suggestions, never in their place: the invoice whose amount
+does not match, the one from six months ago, the one another operation
+already settles. An invoice already paid is found too, with what pays
+it — that is exactly the invoice settled in two goes, and hiding it would
+leave no way to say so.
 {% endcomment %}
 {% if search %}
     {% if found %}
@@ -32,7 +32,7 @@ moyen de le dire.
             {% endfor %}
             <button class="btn btn-small" type="submit">Rattacher les factures choisies</button>
             {% if more_found %}
-                {# Une liste coupée en silence se lit « la facture n'y est pas ». #}
+                {# A list cut in silence reads as « the invoice is not there ». #}
                 <p class="read-as">{{ more_found }} document{{ more_found|pluralize }} de plus répond{{ more_found|pluralize:"ent" }} à « {{ search }} » : précisez le numéro, la date ou le fournisseur.</p>
             {% endif %}
         </form>

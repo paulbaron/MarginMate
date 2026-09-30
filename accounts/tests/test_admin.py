@@ -1,5 +1,5 @@
 """The admin (accounts/admin_site.py, accounts/admin.py): superusers only, on
-their own espace."""
+their own tenant."""
 
 from django.contrib import admin
 from django.contrib.auth import get_user_model
@@ -38,7 +38,7 @@ class MultiModeAdminTests(TwoTenantsTestCase):
                 self.assertEqual(response.status_code, 302)
                 self.assertTrue(response["Location"].startswith(reverse("admin:login")), response["Location"])
 
-    def test_a_superuser_works_on_his_own_espace(self):
+    def test_a_superuser_works_on_his_own_tenant(self):
         get_user_model().objects.filter(pk=self.user_a.pk).update(is_staff=True, is_superuser=True)
         self.client.force_login(self.user_a)
         self.assertEqual(self.client.get(reverse("admin:index")).status_code, 200)
@@ -49,7 +49,7 @@ class MultiModeAdminTests(TwoTenantsTestCase):
             with self.subTest(model=name):
                 self.assertEqual(self.client.get(reverse(f"admin:accounts_{name}_changelist")).status_code, 200)
 
-    def test_an_espace_is_never_added_here_nor_its_owner_s_accounts_handed_out(self):
+    def test_a_tenant_is_never_added_here_nor_its_owner_s_accounts_handed_out(self):
         get_user_model().objects.filter(pk=self.user_a.pk).update(is_staff=True, is_superuser=True)
         self.client.force_login(self.user_a)
         self.assertEqual(self.client.get(reverse("admin:accounts_tenant_add")).status_code, 403)
@@ -69,10 +69,10 @@ class MultiModeAdminTests(TwoTenantsTestCase):
         labels = [label_of(link) for link in nav_links(self.client.get(reverse("inventory:stock_list")))]
         self.assertEqual(labels, [*LABELS, "Admin"])
 
-    def test_a_superuser_cannot_close_his_own_espace_here(self):
-        """The admin needs an open espace like every page: closing his own
+    def test_a_superuser_cannot_close_his_own_tenant_here(self):
+        """The admin needs an open tenant like every page: closing his own
         one click away shut it on him (« Aucun espace »), and the admin is
-        where an espace is reopened. Another bar's « actif » stays his."""
+        where a tenant is reopened. Another bar's « actif » stays his."""
         get_user_model().objects.filter(pk=self.user_a.pk).update(is_staff=True, is_superuser=True)
         self.client.force_login(self.user_a)
         change = reverse("admin:accounts_tenant_change", args=[self.bar_a.pk])
@@ -91,13 +91,13 @@ class MultiModeAdminTests(TwoTenantsTestCase):
         self.assertFalse(self.bar_b.is_active)
 
 
-class SuperuserWithNoEspaceTests(TenancyTestCase):
-    """The admin needs an open espace like every page: a superuser with none
+class SuperuserWithNoTenantTests(TenancyTestCase):
+    """The admin needs an open tenant like every page: a superuser with none
     - made by `createsuperuser --database accounts` before `adopt_database`,
-    or whose espace was closed - reads « Aucun espace » there too, the
+    or whose tenant was closed - reads « Aucun espace » there too, the
     central rows' pages included (then: `manage.py shell`)."""
 
-    def test_the_admin_says_aucun_espace(self):
+    def test_the_admin_says_no_tenant(self):
         operator = get_user_model().objects.create_superuser(
             username="exploitant@example.invalid", email="exploitant@example.invalid", password="x"
         )
@@ -109,10 +109,10 @@ class SuperuserWithNoEspaceTests(TenancyTestCase):
                 self.assertContains(response, "Aucun espace", status_code=403)
 
 
-class OneOwnerEspaceInTheAdminTests(TenancyTestCase):
-    """accounts.E005 (at most one OPEN espace using the server's accounts)
+class OneOwnerTenantInTheAdminTests(TenancyTestCase):
+    """accounts.E005 (at most one OPEN tenant using the server's accounts)
     held in the admin too: « utilise les accès du serveur » is read-only
-    there, but « actif » reopened an owner's espace that adopt_database
+    there, but « actif » reopened an owner's tenant that adopt_database
     --leave-current had closed, next to the one open - two Metro pauses on
     one account until the next restart's check said so."""
 
@@ -142,11 +142,13 @@ class OneOwnerEspaceInTheAdminTests(TenancyTestCase):
         self.assertNotIn("accounts.E005", [issue.id for issue in run_checks()])
 
     def test_with_none_open_it_reopens(self):
-        self.assertRedirects(self.reopen(self.old), reverse("admin:accounts_tenant_changelist"), fetch_redirect_response=False)
+        self.assertRedirects(
+            self.reopen(self.old), reverse("admin:accounts_tenant_changelist"), fetch_redirect_response=False
+        )
         self.old.refresh_from_db()
         self.assertTrue(self.old.is_active)
 
-    def test_an_espace_without_the_server_s_accounts_reopens_whatever_is_open(self):
+    def test_a_tenant_without_the_server_s_accounts_reopens_whatever_is_open(self):
         self.make_tenant("Bar Proprio", owner=True)
         closed = self.make_tenant("Bar Voisin Fermé")
         Tenant.objects.filter(pk=closed.pk).update(is_active=False)

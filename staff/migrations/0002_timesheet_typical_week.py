@@ -7,8 +7,9 @@ never recorded its week, so it is given its employee's week as it stands -
 the only record there is, and the one those sheets were drawn from until
 now."""
 
-import django.core.validators
 from decimal import Decimal
+
+import django.core.validators
 from django.db import migrations, models
 
 WEEKDAY_FIELDS = (
@@ -46,7 +47,6 @@ def copy_the_employees_week(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
         ("staff", "0001_initial"),
     ]

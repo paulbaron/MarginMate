@@ -45,7 +45,7 @@ class PeriodsTests(SimpleTestCase):
         self.assertEqual(periods("Février 2024"), [(date(2024, 2, 1), date(2024, 2, 29))])
 
     def test_a_days_figures_are_not_read_again_as_a_month(self):
-        """"12/05/2026" also contains "05/2026"."""
+        """ "12/05/2026" also contains "05/2026"."""
         self.assertEqual(periods("12/05/2026"), [(date(2026, 5, 12), date(2026, 5, 12))])
 
     def test_what_is_no_date(self):
@@ -77,10 +77,18 @@ class LinkTests(SimpleTestCase):
         self.assertTrue(looks_like_an_invoice(self.link(download=True, row="02/05/2026")))
 
     def test_the_footers_terms_are_a_pdf_too_but_print_no_date_or_amount(self):
-        self.assertFalse(looks_like_an_invoice(self.link(href="https://x.fr/cgv.pdf", text="CGV (PDF)", row="Mentions légales CGV (PDF)")))
+        self.assertFalse(
+            looks_like_an_invoice(
+                self.link(href="https://x.fr/cgv.pdf", text="CGV (PDF)", row="Mentions légales CGV (PDF)")
+            )
+        )
 
     def test_a_navigation_link_is_not_an_invoice(self):
-        self.assertFalse(looks_like_an_invoice(self.link(text="Mes factures", href="https://x.fr/factures", row="Accueil Mes factures")))
+        self.assertFalse(
+            looks_like_an_invoice(
+                self.link(text="Mes factures", href="https://x.fr/factures", row="Accueil Mes factures")
+            )
+        )
         self.assertFalse(looks_like_an_invoice(self.link(text="Télécharger", href="mailto:a@b.fr", row="12/05/2026")))
 
 
@@ -94,8 +102,12 @@ class IconAndViewLinkTests(SimpleTestCase):
         self.assertTrue(looks_like_an_invoice(Candidate(0, label="icon-download-2-line", row=self.ROW)))
 
     def test_a_link_opening_the_invoice_is_one(self):
-        self.assertTrue(looks_like_an_invoice(Candidate(0, text="Voir ma facture", href="https://x.fr/v/1", row=self.ROW)))
-        self.assertFalse(looks_like_an_invoice(Candidate(0, text="Voir ma facture", href="https://x.fr/v/1", row="Aide")))
+        self.assertTrue(
+            looks_like_an_invoice(Candidate(0, text="Voir ma facture", href="https://x.fr/v/1", row=self.ROW))
+        )
+        self.assertFalse(
+            looks_like_an_invoice(Candidate(0, text="Voir ma facture", href="https://x.fr/v/1", row="Aide"))
+        )
         # The way to the list is not an invoice, whatever it says.
         self.assertFalse(looks_like_an_invoice(Candidate(0, text="Mes factures", href="https://x.fr/f", row="Accueil")))
 
@@ -110,15 +122,26 @@ class IconAndViewLinkTests(SimpleTestCase):
 
 class NavigationTests(SimpleTestCase):
     def test_the_menu_entry_speaking_of_invoices_is_followed(self):
-        self.assertTrue(leads_to_invoices(Candidate(0, text="Mes factures", href="https://x.fr/factures", row="Accueil Mes factures")))
+        self.assertTrue(
+            leads_to_invoices(
+                Candidate(0, text="Mes factures", href="https://x.fr/factures", row="Accueil Mes factures")
+            )
+        )
         self.assertTrue(leads_to_invoices(Candidate(0, text="Conso et factures", href="https://x.fr/conso", row="")))
 
     def test_an_invoice_on_the_page_is_not_the_way_to_the_invoices(self):
         """A home page listing the latest invoices, each a link named after
         its month: clicking one as if it were the menu opened a PDF."""
-        self.assertFalse(leads_to_invoices(Candidate(
-            0, text="Facture de mai 2026", href="https://x.fr/facture_pdf.pl?no=1", row="Facture de mai 2026 39,99 €"
-        )))
+        self.assertFalse(
+            leads_to_invoices(
+                Candidate(
+                    0,
+                    text="Facture de mai 2026",
+                    href="https://x.fr/facture_pdf.pl?no=1",
+                    row="Facture de mai 2026 39,99 €",
+                )
+            )
+        )
         self.assertFalse(leads_to_invoices(Candidate(0, text="Télécharger la facture", href="https://x.fr/f", row="")))
 
     def test_a_link_not_speaking_of_invoices_is_not_followed(self):
@@ -144,7 +167,11 @@ class NavigationTests(SimpleTestCase):
         """A card around the invoices' link, with a "Voir" button in it, is
         the way - not a link further down that says "facturation"."""
         card = Candidate(4, text="Mes factures Voir", href="https://x.fr/factures", holds=(5,))
-        links = [card, Candidate(5, text="Voir"), Candidate(9, text="Modifier mon adresse de facturation", href="https://x.fr/profil")]
+        links = [
+            card,
+            Candidate(5, text="Voir"),
+            Candidate(9, text="Modifier mon adresse de facturation", href="https://x.fr/profil"),
+        ]
         self.assertIs(link_to_follow(links), card)
         self.assertIsNone(link_to_follow([Candidate(1, text="Mon compte")]))
 
@@ -224,7 +251,9 @@ class ChooseTests(SimpleTestCase):
             Candidate(3, text="Télécharger", href="https://x.fr/f/3.pdf", row="Facture F-10001 du 12/05/2026"),
             Candidate(4, text="Accueil", href="https://x.fr/", row="Accueil"),
         ]
-        decided = [(candidate.index, decision) for candidate, decision in choose(links, *MAY, known_numbers=["F-10001"])]
+        decided = [
+            (candidate.index, decision) for candidate, decision in choose(links, *MAY, known_numbers=["F-10001"])
+        ]
         self.assertEqual(decided, [(0, "à télécharger"), (2, "hors période"), (3, "déjà importée (F-10001)")])
 
     def test_buttons_leading_nowhere_but_their_script_are_not_one_file(self):
@@ -243,7 +272,9 @@ class ChooseTests(SimpleTestCase):
 
 
 class CredentialsTests(SimpleTestCase):
-    recipe = WebsiteRecipe(name="Box Exemple", login_url="https://x.fr/login", username_env="BOX_LOGIN", password_env="BOX_PASSWORD")
+    recipe = WebsiteRecipe(
+        name="Box Exemple", login_url="https://x.fr/login", username_env="BOX_LOGIN", password_env="BOX_PASSWORD"
+    )
 
     def test_they_are_read_from_the_env_file_at_each_run(self):
         """A line added to .env counts without restarting the server."""
@@ -267,8 +298,13 @@ class CredentialsTests(SimpleTestCase):
         credentials_set = mock.patch.dict(os.environ, {"BOX_LOGIN": "jean", "BOX_PASSWORD": "secret"})
         with tempfile.TemporaryDirectory() as folder, credentials_set, self.assertRaises(WebsiteError) as raised:
             fetch_website_invoices(
-                self.recipe, folder, date(2026, 5, 1), date(2026, 5, 31), log=lambda message: None,
-                driver_factory=no_browser, env_file=None,
+                self.recipe,
+                folder,
+                date(2026, 5, 1),
+                date(2026, 5, 31),
+                log=lambda message: None,
+                driver_factory=no_browser,
+                env_file=None,
             )
         self.assertIn("navigateur", str(raised.exception))
 
@@ -297,7 +333,9 @@ class CancelWhileWaitingTests(SimpleTestCase):
             name="Mobile Exemple", login_url="https://x.fr/login", username_env="A", password_env="B", show_browser=True
         )
         with tempfile.TemporaryDirectory() as folder:
-            visit = website._Visit(recipe, folder, lambda message: None, lambda: True, lambda *args: OpenBrowser(), headless=False)
+            visit = website._Visit(
+                recipe, folder, lambda message: None, lambda: True, lambda *args: OpenBrowser(), headless=False
+            )
             with mock.patch.object(website, "POLL_SECONDS", 0.01), self.assertRaises(WebsiteError) as raised:
                 visit._hand_over(before_login=True)
         self.assertIn("annulée", str(raised.exception))
@@ -337,11 +375,21 @@ class DownloadFolderTests(SimpleTestCase):
             visit = self.visit(folder)
             visit.start_downloads()
             path = os.path.join(folder, "facture.pdf")
-            with open(path, "wb") as handle:
-                handle.write(b"%PDF-1.4 first")
-            (first,) = visit._take(visit._new_pdfs())
-            with open(path, "wb") as handle:
-                handle.write(b"%PDF-1.4 second")
-            (second,) = visit._take(visit._new_pdfs())
+            # Both taken within one tick of the clock: the name must still be
+            # new (Windows' clock can hand the same microseconds out twice).
+            from invoices.scrapers import website
+
+            tick = mock.Mock(wraps=website.datetime)
+            tick.now.return_value = website.datetime(2026, 9, 30, 21, 0, 0, 123456)
+            with mock.patch.object(website, "datetime", tick):
+                with open(path, "wb") as handle:
+                    handle.write(b"%PDF-1.4 first")
+                (first,) = visit._take(visit._new_pdfs())
+                with open(path, "wb") as handle:
+                    handle.write(b"%PDF-1.4 second")
+                (second,) = visit._take(visit._new_pdfs())
             self.assertNotEqual(first, second)
-            self.assertEqual((open(first, "rb").read(), open(second, "rb").read()), (b"%PDF-1.4 first", b"%PDF-1.4 second"))
+            self.assertEqual(
+                (open(first, "rb").read(), open(second, "rb").read()),  # noqa: SIM115 - read at once, closed as it is dropped
+                (b"%PDF-1.4 first", b"%PDF-1.4 second"),
+            )

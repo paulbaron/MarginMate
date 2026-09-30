@@ -60,9 +60,7 @@ def numeric_signature(name: str) -> Counter:
     return signature
 
 
-def find_product(
-    supplier, raw_name: str, ean: str = "", ocr_tolerant: bool = False, readings=None
-) -> Product | None:
+def find_product(supplier, raw_name: str, ean: str = "", ocr_tolerant: bool = False, readings=None) -> Product | None:
     """The existing product `raw_name` names (steps 1-4 above), or None.
     `readings` is handed to `ocr_match`."""
     raw_name = raw_name.strip()
@@ -98,9 +96,7 @@ def find_product(
     return None
 
 
-def resolve_product(
-    supplier, raw_name: str, ean: str = "", ocr_tolerant: bool = False
-) -> tuple[Product, bool]:
+def resolve_product(supplier, raw_name: str, ean: str = "", ocr_tolerant: bool = False) -> tuple[Product, bool]:
     """`ocr_tolerant` is for names read off a photo by a recogniser (see
     `ocr_match`). Off by default: a digital PDF has no OCR mistakes to
     forgive, so forgiving them there would only add ways to merge two real

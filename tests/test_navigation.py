@@ -30,16 +30,17 @@ LABELS = [
     "Achats",
     "Banque",
     "Recettes &amp; ventes",
-    # Les marges lisent les deux côtés - ce qui est entré, ce qui est
-    # sorti - donc le lien est entre eux plutôt qu'au bout.
+    # The margins read both sides - what came in, what went out - so
+    # the link sits between them rather than at the end.
     "Marges",
-    # Les fiches de temps des salariés : rien à voir avec les marges, mais
-    # placé là, le lien ne déplace aucun de ceux qu'on utilise déjà.
+    # The employees' timesheets: nothing to do with the margins, but
+    # placed there the link moves none of those already in use.
     "Personnel",
     "Inventaires",
-    # Les vides rendus au livreur : ouverts sur le téléphone à chaque
-    # livraison. Après « Inventaires » (on y compte aussi), avant « Données »
-    # et « Admin », qui restent au bout : aucun lien déjà utilisé ne bouge.
+    # The empties handed back to the delivery driver: opened on the phone
+    # at every delivery. After « Inventaires » (counting happens there too),
+    # before « Données » and « Admin », which stay at the end: no link
+    # already in use moves.
     "Consignes",
     "Données",
     # « Admin » follows for a superuser only (accounts/tests/test_admin.py).
@@ -48,13 +49,13 @@ LABELS = [
 
 def nav_links(response):
     html = response.content.decode()
-    nav = html[html.index("<nav"):html.index("</nav>")]
-    return re.findall(r"<a [^>]*>.*?</a>", nav, flags=re.S)
+    nav = html[html.index("<nav") : html.index("</nav>")]
+    return re.findall(r"<a [^>]*>.*?</a>", nav, flags=re.DOTALL)
 
 
 def label_of(link):
     inner = re.sub(r"^<a [^>]*>|</a>$", "", link)
-    return re.sub(r"<[^>]+>", "", re.sub(r"<span class=\"badge\">.*?</span>", "", inner, flags=re.S)).strip()
+    return re.sub(r"<[^>]+>", "", re.sub(r"<span class=\"badge\">.*?</span>", "", inner, flags=re.DOTALL)).strip()
 
 
 def active_labels(response):
@@ -65,13 +66,13 @@ def topbar_of(response) -> str:
     """The page's <header class="topbar">, as HTML."""
     html = response.content.decode()
     start = html.index('<header class="topbar">')
-    return html[start:html.index("</header>", start)]
+    return html[start : html.index("</header>", start)]
 
 
 def section_shown(response):
     """What the folded bar says the page is (its .topbar-section), as HTML -
     None when it draws none."""
-    found = re.findall(r'<span class="topbar-section">(.*?)</span>', topbar_of(response), flags=re.S)
+    found = re.findall(r'<span class="topbar-section">(.*?)</span>', topbar_of(response), flags=re.DOTALL)
     return found[0].strip() if len(found) == 1 else None
 
 
@@ -95,7 +96,7 @@ class NavigationTests(TestCase):
         stock_type = make_stock_type(name="Vodka")
         # An invented employee: the repository is public.
         person = Employee.objects.create(last_name="Dupont", first_name="Jeanne", tuesday_hours=7)
-        # An invented reprise and bon (returnables/tests/support.py).
+        # An invented pickup and slip (returnables/tests/support.py).
         from returnables.tests.support import make_pickup, make_slip, seeded_format
 
         pickup = make_pickup()
@@ -209,11 +210,11 @@ class MenuButtonTests(TestCase):
         self.assertLess(menu, header.index("<nav"))
         self.assertLess(header.index("</button>", button), menu)
         # What the button says, and the dot's words for a screen reader.
-        inside = header[button:header.index("</button>", button)]
+        inside = header[button : header.index("</button>", button)]
         self.assertIn("<span>Menu</span>", inside)
         self.assertIn('<span class="topbar-waiting-text visually-hidden">, du travail en attente</span>', inside)
         # Nothing of it in the navigation: its links are the workspaces.
-        self.assertNotIn("data-topbar-toggle", header[header.index("<nav"):header.index("</nav>")])
+        self.assertNotIn("data-topbar-toggle", header[header.index("<nav") : header.index("</nav>")])
         self.assertEqual([label_of(link) for link in nav_links(response)], LABELS)
 
     def test_the_script_runs_in_the_head_before_the_bar(self):
@@ -222,7 +223,7 @@ class MenuButtonTests(TestCase):
         one. So it is in the head, after the stylesheet it switches, with no
         defer nor async - and once, htmx never swapping the head in again."""
         html = self.page().content.decode()
-        head = html[:html.index("</head>")]
+        head = html[: html.index("</head>")]
         scripts = re.findall(r"<script\b[^>]*\bsrc=\"[^\"]*js/topbar\.js[^\"]*\"[^>]*>", html)
         self.assertEqual(len(scripts), 1, scripts)
         (script,) = scripts

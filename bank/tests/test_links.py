@@ -136,7 +136,7 @@ class SeveralInvoicesOnOneLineTests(LinkPage, TestCase):
         self.assertContains(page, "72.00")
         self.assertContains(page, "48.00 € de moins que la dépense")
 
-    def test_a_line_that_does_not_add_up_is_rapprochee_all_the_same(self):
+    def test_a_line_that_does_not_add_up_is_reconciled_all_the_same(self):
         """A person said this debit paid that invoice. The figure is what
         tells them it is not the whole story - not a tab hiding the line."""
         debit = self.line(PAYEE, "-120.00")
@@ -407,7 +407,7 @@ class UnlinkTests(LinkPage, TestCase):
         self.assertEqual(self.invoices_of(self.debit), {"F-0001", "F-0002", "F-0003"})
         self.assertContains(self.client.get(response.url), "Choisissez la facture")
 
-    def test_pas_de_facture_attendue_still_clears_every_link(self):
+    def test_no_invoice_expected_still_clears_every_link(self):
         self.act(self.debit, "no_invoice")
         self.debit.refresh_from_db()
         self.assertFalse(self.debit.payments.exists())

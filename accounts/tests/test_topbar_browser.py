@@ -80,7 +80,7 @@ const room = parseFloat(getComputedStyle(document.documentElement).scrollPadding
 const brand = document.querySelector('.brand').getBoundingClientRect();
 const account = document.querySelector('.topbar-account');
 const button = account.querySelector('button').getBoundingClientRect();
-const name = account.querySelector('.topbar-espace');
+const name = account.querySelector('.topbar-tenant');
 return {
     ready: document.documentElement.classList.contains('topbar-menu-ready'),
     height: bar.height, room: room,
@@ -114,7 +114,7 @@ return {
     dot: drawn(document.querySelector('.topbar-waiting')),
     dotWords: drawn(document.querySelector('.topbar-waiting-text')),
     linksDrawn: Array.prototype.filter.call(document.querySelectorAll('.topbar nav a'), drawn).length,
-    accountDrawn: drawn(document.querySelector('.topbar-espace')) || drawn(document.querySelector('.topbar-logout button')),
+    accountDrawn: drawn(document.querySelector('.topbar-tenant')) || drawn(document.querySelector('.topbar-logout button')),
     barContent: document.querySelector('.topbar-inner').scrollWidth,
 };
 """
@@ -138,8 +138,10 @@ var item = function (e, label) { return Object.assign(box(e), {label: label, rea
 """
 
 #: The menu opened: every item of it, where it is and whether a finger finds it.
-OPENED = HIT + """
-var name = document.querySelector('.topbar-espace');
+OPENED = (
+    HIT
+    + """
+var name = document.querySelector('.topbar-tenant');
 return {
     bar: box(document.querySelector('.topbar')),
     menu: box(document.getElementById('topbar-menu')),
@@ -150,6 +152,7 @@ return {
     logout: item(document.querySelector('.topbar-logout button'), 'Se déconnecter'),
 };
 """
+)
 
 #: Where the page is under the bar.
 PAGE_POSITION = "return [window.scrollY, document.querySelector('main').getBoundingClientRect().top];"
@@ -168,7 +171,7 @@ var menu = document.getElementById('topbar-menu');
 return {
     menu: menu ? getComputedStyle(menu).display : null,
     boxes: [].concat(boxes('.topbar'), boxes('.brand'), boxes('.topbar nav'), boxes('.topbar nav a'),
-                     boxes('.topbar nav .badge'), boxes('.topbar-account'), boxes('.topbar-espace'),
+                     boxes('.topbar nav .badge'), boxes('.topbar-account'), boxes('.topbar-tenant'),
                      boxes('.topbar-logout button')),
 };
 """
@@ -275,7 +278,9 @@ class TopbarInChrome:
 
     def touch(self, x, y):
         """A finger's tap at (x, y), as the phone sends it."""
-        self.driver.execute_cdp_cmd("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]})
+        self.driver.execute_cdp_cmd(
+            "Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]}
+        )
         self.driver.execute_cdp_cmd("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
 
     def tap(self, css):
@@ -284,12 +289,18 @@ class TopbarInChrome:
     def drag(self, x, y, to_y, steps=12):
         """A finger put down at (x, y), dragged to (x, to_y) and held there
         before it lifts: no fling goes on scrolling after the test looked."""
-        self.driver.execute_cdp_cmd("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]})
+        self.driver.execute_cdp_cmd(
+            "Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]}
+        )
         for step in range(1, steps + 1):
             at = y + (to_y - y) * step / steps
-            self.driver.execute_cdp_cmd("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": x, "y": at}]})
+            self.driver.execute_cdp_cmd(
+                "Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": x, "y": at}]}
+            )
         time.sleep(0.3)
-        self.driver.execute_cdp_cmd("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": x, "y": to_y}]})
+        self.driver.execute_cdp_cmd(
+            "Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": x, "y": to_y}]}
+        )
         self.driver.execute_cdp_cmd("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
 
     def still(self, source):
@@ -322,7 +333,7 @@ class TopbarInChrome:
 
 
 @tag("browser")
-class TopbarOfAnEspaceInBrowserTests(TopbarInChrome, TenancyTestCase, StaticLiveServerTestCase):
+class TopbarOfATenantInBrowserTests(TopbarInChrome, TenancyTestCase, StaticLiveServerTestCase):
     """The bar's shape width by width: the bar that was (above 860 px, and
     at every width without the script) and the folded one."""
 
@@ -367,7 +378,9 @@ class TopbarOfAnEspaceInBrowserTests(TopbarInChrome, TenancyTestCase, StaticLive
                 if without_the_script:
                     self.script("document.documentElement.classList.remove('topbar-menu-ready');")
                 m = self.script(MEASURE)
-                rows.append(f"{width:>5} px: bar {m['height']:.0f} / room {m['room']:.0f}, name {m['nameShown']:.0f} px")
+                rows.append(
+                    f"{width:>5} px: bar {m['height']:.0f} / room {m['room']:.0f}, name {m['nameShown']:.0f} px"
+                )
                 where = f"{name[:22]}…, {width} px"
                 if m["ready"] == without_the_script:
                     problems.append(f"{where}: topbar-menu-ready on <html>: {m['ready']}")
@@ -431,10 +444,14 @@ class TopbarOfAnEspaceInBrowserTests(TopbarInChrome, TenancyTestCase, StaticLive
                 where = f"{name[:22]}…, {width} px"
                 toggle = m["toggle"]
                 if not m["ready"] or toggle is None:
-                    problems.append(f"{where}: not folded (topbar-menu-ready {m['ready']}, « Menu » drawn {bool(toggle)})")
+                    problems.append(
+                        f"{where}: not folded (topbar-menu-ready {m['ready']}, « Menu » drawn {bool(toggle)})"
+                    )
                     continue
                 if m["bar"]["height"] > ONE_ROW or m["bar"]["height"] > m["room"]:
-                    problems.append(f"{where}: folded, the bar is {m['bar']['height']:.0f} px tall (room {m['room']:.0f})")
+                    problems.append(
+                        f"{where}: folded, the bar is {m['bar']['height']:.0f} px tall (room {m['room']:.0f})"
+                    )
                 if m["room"] != FOLDED_ROOM:
                     problems.append(f"{where}: the room is {m['room']:.0f} px, a one-row bar's is {FOLDED_ROOM}")
                 if m["linksDrawn"] or m["accountDrawn"]:
@@ -444,15 +461,20 @@ class TopbarOfAnEspaceInBrowserTests(TopbarInChrome, TenancyTestCase, StaticLive
                 if min(toggle["width"], toggle["height"]) < THUMB:
                     problems.append(f"{where}: « Menu » is {toggle['width']:.0f} × {toggle['height']:.0f} px")
                 if toggle["left"] < 0 or toggle["right"] > width:
-                    problems.append(f"{where}: « Menu » is off the screen ({toggle['left']:.0f} - {toggle['right']:.0f})")
+                    problems.append(
+                        f"{where}: « Menu » is off the screen ({toggle['left']:.0f} - {toggle['right']:.0f})"
+                    )
                 if m["brand"]["height"] < THUMB or m["brand"]["left"] < 0 or m["brand"]["right"] > toggle["left"]:
                     problems.append(f"{where}: the brand is {m['brand']['height']:.0f} px tall, or under « Menu »")
                 if not (m["dot"] and m["dotWords"]):
                     problems.append(f"{where}: no dot on « Menu » with every counting link carrying a badge")
                 section = m["section"]
                 if width >= SECTION_FROM and (
-                    section is None or section["text"] != "Achats" or section["width"] < 30
-                    or section["left"] < m["brand"]["right"] or section["right"] > toggle["left"]
+                    section is None
+                    or section["text"] != "Achats"
+                    or section["width"] < 30
+                    or section["left"] < m["brand"]["right"]
+                    or section["right"] > toggle["left"]
                 ):
                     problems.append(f"{where}: the section's name is {section}")
                 if width < SECTION_FROM and section is not None:
@@ -523,13 +545,17 @@ class TopbarOfAnEspaceInBrowserTests(TopbarInChrome, TenancyTestCase, StaticLive
                 overflow = self.script(PAGE_OVERFLOW, width)
                 where = f"{width} px, {scale}"
                 toggle = m["toggle"]
-                rows.append(f"{where}: « Menu » {toggle and (round(toggle['left']), round(toggle['right']))}, "
-                            f"row {m['barContent']}, page {overflow['page']}")
+                rows.append(
+                    f"{where}: « Menu » {toggle and (round(toggle['left']), round(toggle['right']))}, "
+                    f"row {m['barContent']}, page {overflow['page']}"
+                )
                 if toggle is None:
                     problems.append(f"{where}: no « Menu »")
                     continue
                 if toggle["left"] < 0 or toggle["right"] > width:
-                    problems.append(f"{where}: « Menu » at {toggle['left']:.0f} - {toggle['right']:.0f}, off the screen")
+                    problems.append(
+                        f"{where}: « Menu » at {toggle['left']:.0f} - {toggle['right']:.0f}, off the screen"
+                    )
                 if min(toggle["width"], toggle["height"]) < THUMB:
                     problems.append(f"{where}: « Menu » is {toggle['width']:.0f} × {toggle['height']:.0f} px")
                 if m["brand"]["right"] > toggle["left"] + 0.5:
@@ -646,12 +672,16 @@ class TopbarMenuInBrowserTests(TopbarInChrome, TenancyTestCase, StaticLiveServer
                 menu = self.script(OPENED)["menu"]
                 self.assertLessEqual(menu["bottom"], height, menu)
                 self.assertGreater(
-                    self.script("var m = document.getElementById('topbar-menu'); return m.scrollHeight - m.clientHeight;"), 0,
+                    self.script(
+                        "var m = document.getElementById('topbar-menu'); return m.scrollHeight - m.clientHeight;"
+                    ),
+                    0,
                     "the menu fits the screen: nothing to prove",
                 )
                 before = self.script(PAGE_POSITION)
                 found = self.script(
-                    HIT + """
+                    HIT
+                    + """
                     var items = Array.prototype.slice.call(document.querySelectorAll('.topbar nav a, .topbar-logout button'));
                     return items.map(function (e) {
                         e.scrollIntoView({block: 'nearest'});
@@ -760,14 +790,16 @@ class TopbarMenuInBrowserTests(TopbarInChrome, TenancyTestCase, StaticLiveServer
             reverse("bank:bank_home"),
         )
         x, y = 20, height - 12
-        under = "var e = document.elementFromPoint(arguments[0], arguments[1]); return e ? (e.id || e.className) : null;"
+        under = (
+            "var e = document.elementFromPoint(arguments[0], arguments[1]); return e ? (e.id || e.className) : null;"
+        )
         self.assertEqual(self.script(under, x, y), "sous-le-voile")
         self.open_the_menu()
         self.assertLess(self.script(OPENED)["menu"]["bottom"], y - 8, "the point is under the menu, not the veil")
         self.assertEqual(self.script(under, x, y), "topbar")
         self.click_at(x, y)
         self.wait_for(lambda: self.expanded() == "false")
-        time.sleep(0.5)   # a link followed would have left the page by now
+        time.sleep(0.5)  # a link followed would have left the page by now
         self.assertEqual(self.script("return window.pageMark;"), "toujours là")
         self.assertEqual(self.script("return location.pathname;"), reverse("invoices:invoice_list"))
         # Shut, the veil is gone: the link is what a click there reaches again.
@@ -819,10 +851,10 @@ class TopbarMenuInBrowserTests(TopbarInChrome, TenancyTestCase, StaticLiveServer
         self.device(*self.PHONE)
         self.open(reverse("recipes:pos_product_list"))
         badges = "return Array.from(document.querySelectorAll('.topbar nav .badge')).map(function (b) { return b.parentNode.id; });"
-        self.assertEqual(self.script(badges), ["nav-count-recettes"])
+        self.assertEqual(self.script(badges), ["nav-count-recipes"])
         self.assertTrue(self.folded()["dot"])
         count = "document.dispatchEvent(new CustomEvent('to-link-count', {detail: {value: arguments[0]}}));"
-        drawn = "return document.getElementById('nav-count-recettes').innerHTML;"
+        drawn = "return document.getElementById('nav-count-recipes').innerHTML;"
 
         self.script(count, 0)
         self.wait_for(lambda: not self.folded()["dot"])
@@ -836,9 +868,9 @@ class TopbarMenuInBrowserTests(TopbarInChrome, TenancyTestCase, StaticLiveServer
 
         self.script(count, "<b>9</b>")
         self.assertEqual(self.script(drawn), ' <span class="badge">&lt;b&gt;9&lt;/b&gt;</span>')
-        self.assertEqual(self.script("return document.querySelectorAll('#nav-count-recettes b').length;"), 0)
+        self.assertEqual(self.script("return document.querySelectorAll('#nav-count-recipes b').length;"), 0)
 
-    def test_after_a_back_through_the_achats_tabs_one_tap_opens_it(self):
+    def test_after_a_back_through_the_purchases_tabs_one_tap_opens_it(self):
         """Achats' tabs are boosted, and a Back to one (htmx keeps no page
         here) swaps the whole body in again, bar included: the listeners are
         on the document, so the new bar needs nothing, and one tap is one
@@ -861,7 +893,9 @@ class TopbarMenuInBrowserTests(TopbarInChrome, TenancyTestCase, StaticLiveServer
         self.open_the_menu()
         # Still open once nothing moves: a listener there twice would have
         # shut it on the same tap.
-        self.assertEqual(self.still("return document.querySelector('[data-topbar-toggle]').getAttribute('aria-expanded');"), "true")
+        self.assertEqual(
+            self.still("return document.querySelector('[data-topbar-toggle]').getAttribute('aria-expanded');"), "true"
+        )
         self.assertTrue(all(link["reachable"] for link in self.script(OPENED)["links"]))
 
     def test_loaded_twice_one_tap_still_opens_it(self):

@@ -54,8 +54,8 @@ class GatherRetryInBrowserTests(StaticLiveServerTestCase):
 
     def state(self):
         return self.driver.execute_script(
-            "const button = document.querySelector('#import-recuperer button[type=submit]');"
-            "const dot = document.querySelector('#ajouter .live-dot');"
+            "const button = document.querySelector('#import-fetch button[type=submit]');"
+            "const dot = document.querySelector('#add-card .live-dot');"
             "return {disabled: button.disabled, dot: !!dot && !dot.hidden,"
             " status: (document.querySelector('#gather-status .status-pill') || {}).textContent};"
         )
@@ -70,7 +70,7 @@ class GatherRetryInBrowserTests(StaticLiveServerTestCase):
                 name="Grossiste Exemple - Factures",
                 sender_pattern="factures@grossiste",
             )
-        # Every page wants a login: the test espace's owner.
+        # Every page wants a login: the test tenant's owner.
         log_in_the_browser(self.driver, self.live_server_url)
 
     def test_the_button_comes_back_when_the_gather_ends(self):
@@ -86,5 +86,5 @@ class GatherRetryInBrowserTests(StaticLiveServerTestCase):
         self.assertEqual(self.state()["dot"], False)
 
         with mock.patch("invoices.views.gather_invoices_task"), mock.patch("invoices.tasks.gather_invoices_task"):
-            self.driver.find_element("css selector", "#import-recuperer button[type=submit]").click()
+            self.driver.find_element("css selector", "#import-fetch button[type=submit]").click()
             self.wait_for(lambda: ScrapeJob.objects.count() == 2)

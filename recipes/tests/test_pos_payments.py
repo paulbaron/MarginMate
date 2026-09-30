@@ -95,9 +95,7 @@ class PaymentsCellTests(SimpleTestCase):
         self.assertEqual(read_payments("CB(4,50)"), [("CB", Decimal("4.50"))])
 
     def test_several_payments_in_order(self):
-        self.assertEqual(
-            read_payments("Cash(5,00)/CB(3,50)"), [("Cash", Decimal("5.00")), ("CB", Decimal("3.50"))]
-        )
+        self.assertEqual(read_payments("Cash(5,00)/CB(3,50)"), [("Cash", Decimal("5.00")), ("CB", Decimal("3.50"))])
 
     def test_an_empty_cell_is_no_payment_not_an_unreadable_one(self):
         self.assertEqual(read_payments(""), [])
@@ -120,14 +118,14 @@ class PaymentsCellTests(SimpleTestCase):
         """None, not a partial list: a ticket kept as its card payment alone
         would look perfectly ordinary and be short of its cash."""
         for text in (
-            "Carte 4,50",          # no brackets
-            "CB(4,50)/",           # a trailing separator
+            "Carte 4,50",  # no brackets
+            "CB(4,50)/",  # a trailing separator
             "CB(4,50)/Cash(2,00",  # a bracket never closed
-            "(4,50)",              # no method
-            "CB(1,00)/ (2,00)",    # a blank method
-            "CB(quatre)",          # no amount
-            "CB(1.800,00)",        # two decimal separators: refused, not guessed
-            "CB(4,505)",           # three decimals is no amount of money
+            "(4,50)",  # no method
+            "CB(1,00)/ (2,00)",  # a blank method
+            "CB(quatre)",  # no amount
+            "CB(1.800,00)",  # two decimal separators: refused, not guessed
+            "CB(4,505)",  # three decimals is no amount of money
             "-",
         ):
             with self.subTest(text=text):
@@ -148,30 +146,36 @@ class PaymentRowsTests(SimpleTestCase):
         self.assertTrue(result.payments_read)
 
     def test_payments_sum_per_day_and_method_and_count_one_each(self):
-        result = self.parse([
-            ticket("2026-06-01", 1, "14.5", "CB(10,00)/CB(4,50)"),
-            ticket("2026-06-01", 2, "8.5", "Cash(5,00)/CB(3,50)"),
-            ticket("2026-06-02", 3, "4", "CB(4,00)"),
-        ])
+        result = self.parse(
+            [
+                ticket("2026-06-01", 1, "14.5", "CB(10,00)/CB(4,50)"),
+                ticket("2026-06-01", 2, "8.5", "Cash(5,00)/CB(3,50)"),
+                ticket("2026-06-02", 3, "4", "CB(4,00)"),
+            ]
+        )
         self.assertEqual(paid(result, june(1), CB), (Decimal("18.00"), 3))
         self.assertEqual(paid(result, june(1), CASH), (Decimal("5.00"), 1))
         self.assertEqual(paid(result, june(2), CB), (Decimal("4.00"), 1))
         self.assertEqual(result.payments_total, Decimal("27.00"))
 
     def test_a_refund_nets_into_its_day(self):
-        result = self.parse([
-            ticket("2026-06-01", 1, "8.5", "Cash(10,00)/Cash(-1,50)"),
-            ticket("2026-06-01", 2, "-6", "CB(-6,00)"),
-        ])
+        result = self.parse(
+            [
+                ticket("2026-06-01", 1, "8.5", "Cash(10,00)/Cash(-1,50)"),
+                ticket("2026-06-01", 2, "-6", "CB(-6,00)"),
+            ]
+        )
         self.assertEqual(paid(result, june(1), CASH), (Decimal("8.50"), 2))
         self.assertEqual(paid(result, june(1), CB), (Decimal("-6.00"), 1))
 
     def test_large_amounts_with_each_separator(self):
-        result = self.parse([
-            ticket("2026-06-01", 1, "1350", "Avoir(1 350,00)"),
-            ticket("2026-06-01", 2, "1250", "Chèque(1 250,00)"),
-            ticket("2026-06-01", 3, "2000", "CB(2 000,00)"),
-        ])
+        result = self.parse(
+            [
+                ticket("2026-06-01", 1, "1350", "Avoir(1 350,00)"),
+                ticket("2026-06-01", 2, "1250", "Chèque(1 250,00)"),
+                ticket("2026-06-01", 3, "2000", "CB(2 000,00)"),
+            ]
+        )
         self.assertEqual(paid(result, june(1), CREDIT), (Decimal("1350.00"), 1))
         self.assertEqual(paid(result, june(1), CHEQUE), (Decimal("1250.00"), 1))
         self.assertEqual(paid(result, june(1), CB), (Decimal("2000.00"), 1))
@@ -194,20 +198,24 @@ class PaymentRowsTests(SimpleTestCase):
     def test_a_cell_that_does_not_read_files_the_tickets_total_under_unread(self):
         """So the day still adds up to what it took, and the page can say
         how much of it nobody can attribute."""
-        result = self.parse([
-            ticket("2026-06-01", 1, "9.5", "CB(7,50)/Cash(2,00"),
-            ticket("2026-06-01", 2, "4.5", "CB(4,50)"),
-        ])
+        result = self.parse(
+            [
+                ticket("2026-06-01", 1, "9.5", "CB(7,50)/Cash(2,00"),
+                ticket("2026-06-01", 2, "4.5", "CB(4,50)"),
+            ]
+        )
         self.assertEqual(paid(result, june(1), UNREAD), (Decimal("9.5"), 1))
         self.assertEqual(paid(result, june(1), CB), (Decimal("4.50"), 1))
         self.assertNotIn((june(1), CASH), result.payments)
         self.assertEqual(result.unread_payment_tickets, 1)
 
     def test_an_unreadable_ticket_whose_total_does_not_read_either_is_still_counted(self):
-        result = self.parse([
-            ticket("2026-06-01", 1, "n/a", "CB(quatre)"),
-            ticket("2026-06-01", 2, "n/a", ""),
-        ])
+        result = self.parse(
+            [
+                ticket("2026-06-01", 1, "n/a", "CB(quatre)"),
+                ticket("2026-06-01", 2, "n/a", ""),
+            ]
+        )
         self.assertEqual(paid(result, june(1), UNREAD), (Decimal("0"), 2))
         self.assertEqual(result.unread_payment_tickets, 2)
 
@@ -218,10 +226,12 @@ class PaymentRowsTests(SimpleTestCase):
         self.assertEqual(result.tickets, 1)
 
     def test_a_ticket_printed_twice_in_one_file_is_read_once(self):
-        result = self.parse([
-            ticket("2026-06-01", 1, "4.5", "CB(4,50)"),
-            ticket("2026-06-01", 1, "4.5", "CB(4,50)"),
-        ])
+        result = self.parse(
+            [
+                ticket("2026-06-01", 1, "4.5", "CB(4,50)"),
+                ticket("2026-06-01", 1, "4.5", "CB(4,50)"),
+            ]
+        )
         self.assertEqual(paid(result, june(1), CB), (Decimal("4.50"), 1))
         self.assertEqual(result.duplicate_tickets, 1)
 
@@ -234,13 +244,15 @@ class PaymentRowsTests(SimpleTestCase):
     def test_a_method_is_one_method_whatever_its_accents_and_case(self):
         """« Cheque », « chèque » and « CHÈQUE » are one method, stored as the
         till spells it. A method nobody named here stays as printed."""
-        result = self.parse([
-            ticket("2026-06-01", 1, "10", "Cheque(10,00)"),
-            ticket("2026-06-01", 2, "20", "chèque(20,00)"),
-            ticket("2026-06-01", 3, "30", "CHÈQUE(30,00)"),
-            ticket("2026-06-01", 4, "4", "cb(4,00)"),
-            ticket("2026-06-01", 5, "6", "Bon cadeau(6,00)"),
-        ])
+        result = self.parse(
+            [
+                ticket("2026-06-01", 1, "10", "Cheque(10,00)"),
+                ticket("2026-06-01", 2, "20", "chèque(20,00)"),
+                ticket("2026-06-01", 3, "30", "CHÈQUE(30,00)"),
+                ticket("2026-06-01", 4, "4", "cb(4,00)"),
+                ticket("2026-06-01", 5, "6", "Bon cadeau(6,00)"),
+            ]
+        )
         self.assertEqual(paid(result, june(1), CHEQUE), (Decimal("60.00"), 3))
         self.assertEqual(paid(result, june(1), CB), (Decimal("4.00"), 1))
         self.assertEqual(paid(result, june(1), "Bon cadeau"), (Decimal("6.00"), 1))
@@ -266,10 +278,12 @@ class PaymentRowsTests(SimpleTestCase):
         self.assertEqual(parse_payment_rows([header, row]).tickets_not_adding_up, 0)
 
     def test_columns_are_found_by_name_not_position(self):
-        result = parse_payment_rows([
-            ["Paiements", "Total TTC", "Jour"],
-            ["CB(4,50)", "4.5", "2026-06-01"],
-        ])
+        result = parse_payment_rows(
+            [
+                ["Paiements", "Total TTC", "Jour"],
+                ["CB(4,50)", "4.5", "2026-06-01"],
+            ]
+        )
         self.assertEqual(paid(result, june(1), CB), (Decimal("4.50"), 1))
 
     def test_a_missing_column_says_which_one(self):
@@ -294,8 +308,15 @@ class MethodVocabularyTests(SimpleTestCase):
 
     def test_the_known_methods_are_stored_in_the_tills_spelling(self):
         for printed, stored_as in (
-            ("CB", CB), ("cb", CB), ("Cash", CASH), ("CASH", CASH), ("Cheque", CHEQUE), ("chèque", CHEQUE),
-            ("avoir", CREDIT), ("tr", PosDailyPayment.MEAL_VOUCHER), ("  CB ", CB),
+            ("CB", CB),
+            ("cb", CB),
+            ("Cash", CASH),
+            ("CASH", CASH),
+            ("Cheque", CHEQUE),
+            ("chèque", CHEQUE),
+            ("avoir", CREDIT),
+            ("tr", PosDailyPayment.MEAL_VOUCHER),
+            ("  CB ", CB),
         ):
             with self.subTest(printed=printed):
                 self.assertEqual(PosDailyPayment.canonical(printed), stored_as)
@@ -309,8 +330,20 @@ class MethodVocabularyTests(SimpleTestCase):
 
     def test_the_french_names(self):
         self.assertEqual(
-            [PosDailyPayment.label_for(method) for method in (CB, CASH, CHEQUE, CREDIT, "TR", UNREAD, UNPAID, "Bon cadeau")],
-            ["Carte", "Espèces", "Chèque", "Avoir", "Titres-restaurant", "Illisible", "Sans paiement enregistré", "Bon cadeau"],
+            [
+                PosDailyPayment.label_for(method)
+                for method in (CB, CASH, CHEQUE, CREDIT, "TR", UNREAD, UNPAID, "Bon cadeau")
+            ],
+            [
+                "Carte",
+                "Espèces",
+                "Chèque",
+                "Avoir",
+                "Titres-restaurant",
+                "Illisible",
+                "Sans paiement enregistré",
+                "Bon cadeau",
+            ],
         )
         self.assertEqual(PosDailyPayment.label_for("cheque"), "Chèque")
         self.assertEqual(PosDailyPayment(method=CASH).label, "Espèces")
@@ -359,7 +392,9 @@ def _workbook_with_ticket_xml(ticket_xml: str, folder=None, name="ventes.xlsx") 
         archive.writestr("[Content_Types].xml", CONTENT_TYPES)
         archive.writestr("xl/workbook.xml", WORKBOOK_WITH_TICKETS)
         archive.writestr("xl/_rels/workbook.xml.rels", RELS_WITH_TICKETS)
-        archive.writestr("xl/worksheets/sheet1.xml", _sheet_xml([HEADER, line("2026-06-01", "Pinte Exemple", "7.50", "20%")]))
+        archive.writestr(
+            "xl/worksheets/sheet1.xml", _sheet_xml([HEADER, line("2026-06-01", "Pinte Exemple", "7.50", "20%")])
+        )
         archive.writestr("xl/worksheets/sheet2.xml", ticket_xml)
     return path
 
@@ -371,7 +406,9 @@ class ReadingAFileTests(SimpleTestCase):
     LINES = [HEADER, line("2026-06-01", "Pinte Exemple", "7.50", "20%")]
 
     def test_a_workbook_with_both_sheets_reads_both(self):
-        path = write_workbook(self.LINES, tickets=[TICKET_HEADER, ticket("2026-06-01", 1, "7.5", "CB(7,50)"), TOTAL_ROW])
+        path = write_workbook(
+            self.LINES, tickets=[TICKET_HEADER, ticket("2026-06-01", 1, "7.5", "CB(7,50)"), TOTAL_ROW]
+        )
         result = parse_sales_export(path)
         self.assertEqual(result.entries, [("Pinte Exemple", june(1), 1)])
         self.assertTrue(result.payments_read)
@@ -387,7 +424,9 @@ class ReadingAFileTests(SimpleTestCase):
         self.assertEqual(result.payment_sheet_errors, [])
 
     def test_a_ticket_sheet_that_does_not_read_costs_the_lines_nothing(self):
-        path = write_workbook(self.LINES, tickets=[["Jour", "Total TTC"], ["2026-06-01", "7.5"]], name="sans-paiements.xlsx")
+        path = write_workbook(
+            self.LINES, tickets=[["Jour", "Total TTC"], ["2026-06-01", "7.5"]], name="sans-paiements.xlsx"
+        )
         result = parse_sales_export(path)
         self.assertEqual(result.entries, [("Pinte Exemple", june(1), 1)])
         self.assertFalse(result.payments_read)
@@ -428,7 +467,9 @@ class ReadingAFileTests(SimpleTestCase):
         lost with it, and the import job failed on a file whose sales
         were fine."""
         path = with_a_damaged_ticket_sheet(
-            write_workbook(self.LINES, tickets=[TICKET_HEADER, ticket("2026-06-01", 1, "7.5", "CB(7,50)")], name="abime.xlsx")
+            write_workbook(
+                self.LINES, tickets=[TICKET_HEADER, ticket("2026-06-01", 1, "7.5", "CB(7,50)")], name="abime.xlsx"
+            )
         )
         result = parse_sales_export(path)
         self.assertEqual(result.entries, [("Pinte Exemple", june(1), 1)])
@@ -514,16 +555,21 @@ class RecordPaymentsTests(TestCase):
         return parse_payment_rows([TICKET_HEADER, *tickets])
 
     def test_one_row_per_day_and_method(self):
-        record_payments(self.export(
-            ticket("2026-06-01", 1, "14.5", "CB(10,00)/CB(4,50)"),
-            ticket("2026-06-01", 2, "5", "Cash(5,00)"),
-            ticket("2026-06-02", 3, "12.5", ""),
-        ))
-        self.assertEqual(stored(), [
-            (june(1), CB, Decimal("14.50"), 2),
-            (june(1), CASH, Decimal("5.00"), 1),
-            (june(2), UNPAID, Decimal("12.50"), 1),
-        ])
+        record_payments(
+            self.export(
+                ticket("2026-06-01", 1, "14.5", "CB(10,00)/CB(4,50)"),
+                ticket("2026-06-01", 2, "5", "Cash(5,00)"),
+                ticket("2026-06-02", 3, "12.5", ""),
+            )
+        )
+        self.assertEqual(
+            stored(),
+            [
+                (june(1), CB, Decimal("14.50"), 2),
+                (june(1), CASH, Decimal("5.00"), 1),
+                (june(2), UNPAID, Decimal("12.50"), 1),
+            ],
+        )
 
     def test_recording_the_same_reading_twice_changes_nothing(self):
         """Not deleted and written back: the same rows, the same ids."""
@@ -533,22 +579,29 @@ class RecordPaymentsTests(TestCase):
         second = record_payments(export)
         self.assertEqual((first.days_written, first.rows_created), (1, 2))
         self.assertEqual((second.days_written, second.days_unchanged, second.rows_created), (0, 1, 0))
-        self.assertEqual(list(PosDailyPayment.objects.values_list("pk", "sold_on", "method", "amount", "payments")), before)
+        self.assertEqual(
+            list(PosDailyPayment.objects.values_list("pk", "sold_on", "method", "amount", "payments")), before
+        )
 
     def test_a_day_read_again_is_replaced_and_the_others_left_alone(self):
         """A day imported half-way through its service is corrected by the
         next import - a method it no longer has goes - and a day the new
         reading does not cover keeps what it had."""
-        record_payments(self.export(
-            ticket("2026-06-01", 1, "7.5", "CB(7,50)"),
-            ticket("2026-06-01", 2, "2", "Cash(2,00)"),
-            ticket("2026-06-02", 3, "4.5", "CB(4,50)"),
-        ))
+        record_payments(
+            self.export(
+                ticket("2026-06-01", 1, "7.5", "CB(7,50)"),
+                ticket("2026-06-01", 2, "2", "Cash(2,00)"),
+                ticket("2026-06-02", 3, "4.5", "CB(4,50)"),
+            )
+        )
         result = record_payments(self.export(ticket("2026-06-01", 1, "9", "CB(9,00)")))
-        self.assertEqual(stored(), [
-            (june(1), CB, Decimal("9.00"), 1),
-            (june(2), CB, Decimal("4.50"), 1),
-        ])
+        self.assertEqual(
+            stored(),
+            [
+                (june(1), CB, Decimal("9.00"), 1),
+                (june(2), CB, Decimal("4.50"), 1),
+            ],
+        )
         self.assertEqual((result.days_written, result.rows_deleted, result.rows_created), (1, 2, 1))
 
     def test_a_day_read_with_nothing_paid_is_emptied(self):
@@ -585,23 +638,31 @@ class PaymentsLogTests(SimpleTestCase):
     """What the import says about the payments, in its own log."""
 
     def test_what_came_in_per_method(self):
-        said = payments_log(parse_payment_rows([
-            TICKET_HEADER,
-            ticket("2026-06-01", 1, "9.5", "CB(7,50)/Cash(2,00)"),
-            ticket("2026-06-02", 2, "4.5", "CB(4,50)"),
-        ]))
-        self.assertIn(
-            "Paiements lus : 14,00 € sur 2 jour(s), 2 ticket(s) (Carte 12,00 €, Espèces 2,00 €).", said
+        said = payments_log(
+            parse_payment_rows(
+                [
+                    TICKET_HEADER,
+                    ticket("2026-06-01", 1, "9.5", "CB(7,50)/Cash(2,00)"),
+                    ticket("2026-06-02", 2, "4.5", "CB(4,50)"),
+                ]
+            )
         )
+        self.assertIn("Paiements lus : 14,00 € sur 2 jour(s), 2 ticket(s) (Carte 12,00 €, Espèces 2,00 €).", said)
 
     def test_everything_unusual_is_named(self):
-        said = " ".join(payments_log(parse_payment_rows([
-            TICKET_HEADER,
-            ticket("2026-06-01", 1, "9.5", "CB(7,50"),
-            ticket("2026-06-01", 2, "4.5", ""),
-            ticket("2026-06-01", 3, "4.5", "CB(6,00)"),
-            ticket("2026-06-01", 3, "4.5", "CB(6,00)"),
-        ])))
+        said = " ".join(
+            payments_log(
+                parse_payment_rows(
+                    [
+                        TICKET_HEADER,
+                        ticket("2026-06-01", 1, "9.5", "CB(7,50"),
+                        ticket("2026-06-01", 2, "4.5", ""),
+                        ticket("2026-06-01", 3, "4.5", "CB(6,00)"),
+                        ticket("2026-06-01", 3, "4.5", "CB(6,00)"),
+                    ]
+                )
+            )
+        )
         self.assertIn("1 ticket(s) aux paiements illisibles", said)
         self.assertIn("« Illisible »", said)
         self.assertIn("1 ticket(s) sans paiement mais avec un total", said)
@@ -730,7 +791,9 @@ class BackfillPaymentsCommandTests(TestCase):
         self.folder = tempfile.mkdtemp()
         lines = [HEADER, line("2026-06-01", "Pinte Exemple", "7.50", "20%")]
         write_workbook(
-            lines, folder=self.folder, name="export-01.xlsx",
+            lines,
+            folder=self.folder,
+            name="export-01.xlsx",
             tickets=[
                 TICKET_HEADER,
                 ticket("2026-06-01", 1, "7.5", "CB(7,50)"),
@@ -742,7 +805,9 @@ class BackfillPaymentsCommandTests(TestCase):
         # A second download whose window overlaps the first one's last day,
         # and runs a day past what « Ventes » holds.
         write_workbook(
-            lines, folder=self.folder, name="export-02.xlsx",
+            lines,
+            folder=self.folder,
+            name="export-02.xlsx",
             tickets=[
                 TICKET_HEADER,
                 ticket("2026-06-02", 3, "9.5", "CB(7,50)/Cash(2,00)"),
@@ -782,32 +847,37 @@ class BackfillPaymentsCommandTests(TestCase):
         """Money for a day « Ventes » does not hold would be a figure the
         sales pages contradict: said, never written."""
         output = self.run_command()
-        self.assertEqual(stored(), [
-            (june(1), CB, Decimal("7.50"), 1),
-            (june(1), CASH, Decimal("3.50"), 1),
-            (june(2), CB, Decimal("7.50"), 1),
-            (june(2), CASH, Decimal("2.00"), 1),
-        ])
+        self.assertEqual(
+            stored(),
+            [
+                (june(1), CB, Decimal("7.50"), 1),
+                (june(1), CASH, Decimal("3.50"), 1),
+                (june(2), CB, Decimal("7.50"), 1),
+                (june(2), CASH, Decimal("2.00"), 1),
+            ],
+        )
         self.assertIn("1 jour(s) sans ventes enregistrées ici, 7,50 € payés", output)
         self.assertIn("le 03/06/2026 : 7,50 €", output)
 
     def test_a_day_read_from_two_files_is_not_counted_twice(self):
         self.run_command()
-        self.assertEqual(
-            sum(amount for day, _m, amount, _c in stored() if day == june(2)), Decimal("9.50")
-        )
+        self.assertEqual(sum(amount for day, _m, amount, _c in stored() if day == june(2)), Decimal("9.50"))
 
     def test_running_it_twice_changes_nothing_the_second_time(self):
         self.run_command()
         before = list(PosDailyPayment.objects.values_list("pk", "sold_on", "method", "amount", "payments"))
         output = self.run_command()
-        self.assertEqual(list(PosDailyPayment.objects.values_list("pk", "sold_on", "method", "amount", "payments")), before)
+        self.assertEqual(
+            list(PosDailyPayment.objects.values_list("pk", "sold_on", "method", "amount", "payments")), before
+        )
         self.assertIn("0 jour(s) de caisse à remplir.", output)
         self.assertIn("2 jour(s) déjà à jour.", output)
 
     def test_two_files_that_disagree_about_a_day_say_so_and_the_last_one_wins_whole(self):
         write_workbook(
-            [HEADER, line("2026-06-02", "Pinte Exemple", "7.50", "20%")], folder=self.folder, name="export-03.xlsx",
+            [HEADER, line("2026-06-02", "Pinte Exemple", "7.50", "20%")],
+            folder=self.folder,
+            name="export-03.xlsx",
             tickets=[TICKET_HEADER, ticket("2026-06-02", 3, "9.5", "CB(9,50)")],
         )
         output = self.run_command()
@@ -826,8 +896,10 @@ class BackfillPaymentsCommandTests(TestCase):
         stopped the folder with a traceback, the good files unwritten."""
         with_a_damaged_ticket_sheet(
             write_workbook(
-                [HEADER, line("2026-06-01", "Pinte Exemple", "7.50", "20%")], folder=self.folder,
-                name="export-00-abime.xlsx", tickets=[TICKET_HEADER, ticket("2026-06-01", 1, "7.5", "CB(7,50)")],
+                [HEADER, line("2026-06-01", "Pinte Exemple", "7.50", "20%")],
+                folder=self.folder,
+                name="export-00-abime.xlsx",
+                tickets=[TICKET_HEADER, ticket("2026-06-01", 1, "7.5", "CB(7,50)")],
             )
         )
         output = self.run_command()
@@ -840,19 +912,25 @@ class BackfillPaymentsCommandTests(TestCase):
         it. Counted among the days « left aside », it asked the owner on
         every run to import again what no import can bring."""
         write_workbook(
-            [HEADER, line("2026-06-01", "Pinte Exemple", "7.50", "20%")], folder=self.folder, name="export-03.xlsx",
+            [HEADER, line("2026-06-01", "Pinte Exemple", "7.50", "20%")],
+            folder=self.folder,
+            name="export-03.xlsx",
             tickets=[TICKET_HEADER, ticket("2026-06-04", 5, "0", ""), ticket("2026-06-04", 6, "0", "")],
         )
         output = self.run_command()
         self.assertIn("1 jour(s) sans ventes enregistrées ici, 7,50 € payés", output)
         self.assertNotIn("le 04/06/2026", output)
-        self.assertIn("1 jour(s) lus sans rien de payé (tickets à 0 €) et sans ventes enregistrées : rien à y écrire.", output)
+        self.assertIn(
+            "1 jour(s) lus sans rien de payé (tickets à 0 €) et sans ventes enregistrées : rien à y écrire.", output
+        )
         self.assertEqual([row for row in stored() if row[0] == june(4)], [])
 
     def test_with_only_such_days_the_import_is_not_asked_for(self):
         folder = tempfile.mkdtemp()
         write_workbook(
-            [HEADER, line("2026-06-01", "Pinte Exemple", "7.50", "20%")], folder=folder, name="offerts.xlsx",
+            [HEADER, line("2026-06-01", "Pinte Exemple", "7.50", "20%")],
+            folder=folder,
+            name="offerts.xlsx",
             tickets=[TICKET_HEADER, ticket("2026-06-04", 5, "0", "")],
         )
         out = StringIO()
@@ -861,7 +939,9 @@ class BackfillPaymentsCommandTests(TestCase):
         self.assertNotIn("sans ventes enregistrées ici", out.getvalue())
 
     def test_an_export_without_the_ticket_sheet_is_said_as_such(self):
-        write_workbook([HEADER, line("2026-06-01", "Pinte Exemple", "7.50", "20%")], folder=self.folder, name="ancien.xlsx")
+        write_workbook(
+            [HEADER, line("2026-06-01", "Pinte Exemple", "7.50", "20%")], folder=self.folder, name="ancien.xlsx"
+        )
         output = self.run_command("--dry-run")
         self.assertIn("ancien.xlsx : pas de feuille des tickets", output)
 
@@ -875,13 +955,15 @@ class BackfillPaymentsCommandTests(TestCase):
 
     def test_what_is_unusual_in_a_file_is_named_under_it(self):
         write_workbook(
-            [HEADER, line("2026-06-01", "Pinte Exemple", "7.50", "20%")], folder=self.folder, name="export-03.xlsx",
+            [HEADER, line("2026-06-01", "Pinte Exemple", "7.50", "20%")],
+            folder=self.folder,
+            name="export-03.xlsx",
             tickets=[TICKET_HEADER, ticket("2026-06-01", 9, "4.5", "CB(4,50")],
         )
         output = self.run_command("--dry-run")
         self.assertIn("1 ticket(s) aux paiements illisibles", output)
 
-    def test_without_a_folder_it_reads_the_espace_s_downloads_folder(self):
+    def test_without_a_folder_it_reads_the_tenant_s_downloads_folder(self):
         out = StringIO()
         root = tempfile.mkdtemp(prefix="marginmate-tests-tenants-")
         self.addCleanup(shutil.rmtree, root, True)

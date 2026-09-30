@@ -105,9 +105,7 @@ def write_factur_x(test, name: str, fixture: str = CII_TWO_RATES, lines=None) ->
 def seller(**kwargs) -> Supplier:
     """The supplier the fixtures' SIREN names, as the application would know
     it: something it filed before taught it that company number."""
-    return make_supplier(
-        code="BRASSERIE", name="Brasserie du Canal", ticket_identifiers=[SIREN], **kwargs
-    )
+    return make_supplier(code="BRASSERIE", name="Brasserie du Canal", ticket_identifiers=[SIREN], **kwargs)
 
 
 def labels(invoice) -> list[str]:
@@ -122,9 +120,10 @@ class TheXmlIsReadFirstTests(TestCase):
 
     def test_a_factur_x_pdf_is_read_from_its_xml_and_nothing_else_is_asked(self):
         path = write_factur_x(self, "facture-x.pdf")
-        with mock.patch(
-            "invoices.receipts.document_text", side_effect=AssertionError("le texte de la page a été lu")
-        ), mock.patch("invoices.receipts.recognise", side_effect=AssertionError("l'OCR a tourné")):
+        with (
+            mock.patch("invoices.receipts.document_text", side_effect=AssertionError("le texte de la page a été lu")),
+            mock.patch("invoices.receipts.recognise", side_effect=AssertionError("l'OCR a tourné")),
+        ):
             invoice = import_document(path, display_filename="facture-x.pdf")
         self.assertEqual(invoice.supplier, self.supplier)
         self.assertEqual(invoice.einvoice_format, "Factur-X")
@@ -136,8 +135,10 @@ class TheXmlIsReadFirstTests(TestCase):
         self.assertEqual(invoice.invoice_number, "FA-2026-0042")
         self.assertEqual(invoice.invoice_date, date(2026, 9, 3))
         self.assertEqual(
-            [(line.raw_name, line.quantity, line.unit_cost_ht, line.total_ht, line.vat_rate)
-             for line in invoice.lines.all()],
+            [
+                (line.raw_name, line.quantity, line.unit_cost_ht, line.total_ht, line.vat_rate)
+                for line in invoice.lines.all()
+            ],
             [
                 ("BIERE BLONDE FUT 30L", D("2.000"), D("84.5000"), D("169.00"), D("0.2000")),
                 ("SIROP CITRON 1L", D("6.000"), D("4.2000"), D("25.20"), D("0.0550")),
@@ -155,9 +156,7 @@ class TheXmlIsReadFirstTests(TestCase):
         # Stored as the fraction this database holds, to four decimals: the
         # XML says 20.00 and 5.50, and read across every cost downstream
         # would be a hundredfold wrong.
-        self.assertEqual(
-            invoice.vat_breakdown, [["0.2000", "169.00", "33.80"], ["0.0550", "25.20", "1.39"]]
-        )
+        self.assertEqual(invoice.vat_breakdown, [["0.2000", "169.00", "33.80"], ["0.0550", "25.20", "1.39"]])
 
     def test_nothing_says_this_was_a_reading(self):
         """`ocr_text` is what makes a document a receipt and `ocr_confidence`
@@ -172,12 +171,15 @@ class TheXmlIsReadFirstTests(TestCase):
         """The check costs a look at the file's attachments and changes
         nothing for the PDFs already filed, none of which carries one."""
         make_supplier(code="CUISIPRO", name="Cuisipro", ticket_header="CUISIPRO FRANCE")
-        path = write_pdf(_in(self, "ordinaire.pdf"), [
-            "CUISIPRO FRANCE SARL",
-            "FACTURE N 7654321 du 07/11/2024",
-            "Verre a shot  8  3,50  28,00",
-            "TOTAL TTC  EURO  33,60",
-        ])
+        path = write_pdf(
+            _in(self, "ordinaire.pdf"),
+            [
+                "CUISIPRO FRANCE SARL",
+                "FACTURE N 7654321 du 07/11/2024",
+                "Verre a shot  8  3,50  28,00",
+                "TOTAL TTC  EURO  33,60",
+            ],
+        )
         invoice = import_document(path, display_filename="ordinaire.pdf")
         self.assertEqual(invoice.einvoice_format, "")
         self.assertFalse(invoice.is_einvoice)
@@ -245,9 +247,7 @@ class ThroughTheFolderImportTests(TestCase):
 
     def _run(self, *uploads):
         batch = stage_batch(list(uploads))
-        self.addCleanup(
-            shutil.rmtree, os.path.join(paths.imports_dir(), STAGING_DIR, str(batch.pk)), True
-        )
+        self.addCleanup(shutil.rmtree, os.path.join(paths.imports_dir(), STAGING_DIR, str(batch.pk)), True)
         return run_receipt_batch(batch.pk)
 
     def test_an_xml_and_a_factur_x_pdf_go_in_side_by_side(self):
@@ -255,7 +255,7 @@ class ThroughTheFolderImportTests(TestCase):
             SimpleUploadedFile("facture.xml", CII_TWO_RATES.encode("utf-8")),
             SimpleUploadedFile(
                 "droits.pdf",
-                open(write_factur_x(self, "staged.pdf", CII_DOCUMENT_CHARGE), "rb").read(),
+                open(write_factur_x(self, "staged.pdf", CII_DOCUMENT_CHARGE), "rb").read(),  # noqa: SIM115 - read at once, closed as it is dropped
             ),
         )
         self.assertEqual([entry["status"] for entry in batch.results], ["ok", "ok"])
@@ -371,10 +371,10 @@ class WhatItIsWorthTests(TestCase):
     def test_a_credit_note_is_money_going_the_other_way(self):
         path = write_xml(self, "avoir.xml", CII_CREDIT_NOTE)
         invoice = import_document(path, display_filename="avoir.xml")
-        line, = invoice.lines.all()
+        (line,) = invoice.lines.all()
         # A negative count AND a negative amount, this codebase's own
-        # convention for a return: read at face value an avoir would double
-        # the purchase it cancels.
+        # convention for a return: read at face value a credit note would
+        # double the purchase it cancels.
         self.assertEqual(line.quantity, D("-1.000"))
         self.assertEqual(line.total_ht, D("-84.50"))
         self.assertEqual(line.unit_cost_ht, D("84.5000"))
@@ -395,7 +395,7 @@ class WhatItIsWorthTests(TestCase):
         read like a document whose lines could not be read."""
         path = write_xml(self, "minimum.xml", CII_MINIMUM)
         invoice = import_document(path, display_filename="minimum.xml")
-        line, = invoice.lines.all()
+        (line,) = invoice.lines.all()
         self.assertEqual((line.total_ht, line.vat_rate), (D("120.00"), D("0.2000")))
         self.assertEqual(invoice.total_ttc, D("144.00"))
         said = [check for check in invoice.parse_checks if check["label"] == einvoice.NO_LINES_CHECK]
@@ -405,15 +405,15 @@ class WhatItIsWorthTests(TestCase):
 
     def test_a_supplier_of_charges_is_filed_as_a_charge(self):
         """A subscription is a charge whichever format it arrives in: one
-        line per VAT rate, on a poste, and its own checks - which every path
-        that touches a charge rewrites, and which would drop an electronic
-        invoice's the next time one ran."""
+        line per VAT rate, on a charge item, and its own checks - which
+        every path that touches a charge rewrites, and which would drop an
+        electronic invoice's the next time one ran."""
         Supplier.objects.filter(pk=self.supplier.pk).update(expenses_only=True)
         invoice = import_document(write_xml(self, "abonnement.xml", CII_MINIMUM))
         self.assertEqual(invoice.einvoice_format, "CII")
         self.assertEqual(labels(invoice), ["Total de la charge"])
         self.assertEqual(invoice.review_state["label"], "Charge")
-        line, = invoice.lines.all()
+        (line,) = invoice.lines.all()
         self.assertTrue(line.product.is_expense)
         self.assertEqual(invoice.total_ttc, D("144.00"))
 
@@ -422,7 +422,7 @@ class WhatItIsWorthTests(TestCase):
         of 1 a negative amount would book stock at a negative unit cost."""
         fixture = CII_MINIMUM.replace("<ram:TypeCode>380</ram:TypeCode>", "<ram:TypeCode>381</ram:TypeCode>")
         invoice = import_document(write_xml(self, "avoir-minimum.xml", fixture))
-        line, = invoice.lines.all()
+        (line,) = invoice.lines.all()
         self.assertEqual((line.quantity, line.total_ht), (D("-1.000"), D("-120.00")))
         self.assertEqual(line.unit_cost_ht, D("120.0000"))
 
@@ -447,7 +447,7 @@ class NotATicketTests(TestCase):
         self.assertFalse(Invoice.objects.filter(TICKET_TO_CHECK, pk=invoice.pk).exists())
         self.assertFalse(invoice.waiting_check)
 
-    def test_an_invoice_whose_own_totals_disagree_waits_in_a_corriger(self):
+    def test_an_invoice_whose_own_totals_disagree_waits_among_the_documents_to_fix(self):
         """The supplier's arithmetic, reported with both figures and never
         repaired - and in the one list where a document nobody can re-type
         is seen."""
@@ -470,7 +470,7 @@ class OnTheScreenTests(TestCase):
         self.supplier = seller()
         self.invoice = import_document(write_factur_x(self, "facture-x.pdf"), display_filename="facture-x.pdf")
 
-    def test_the_achats_list_calls_it_a_facture_electronique(self):
+    def test_the_purchases_list_calls_it_an_electronic_invoice(self):
         page = self.client.get(reverse("invoices:invoice_list"))
         self.assertContains(page, "Facture électronique")
         self.assertNotContains(page, ">Ticket<")
@@ -504,7 +504,7 @@ class OnTheScreenTests(TestCase):
         self.assertContains(page, "BIERE BLONDE FUT 30L")
         self.assertContains(page, 'id="document-lines"')
 
-    def test_the_a_verifier_tab_lists_one_whose_totals_disagree(self):
+    def test_the_to_check_tab_lists_one_whose_totals_disagree(self):
         # Another number: this supplier's FA-2026-0042 went in at setUp, and
         # two documents of one number are the same document.
         fixture = CII_TOTALS_DISAGREE.replace("FA-2026-0042", "FA-2026-0043")
@@ -519,9 +519,7 @@ class OnTheScreenTests(TestCase):
         document's own figures on the page there would be nothing to check
         them against - and an <img> pointed at an XML file is a broken
         image."""
-        invoice = import_document(
-            write_xml(self, "seule.xml", CII_TWO_RATES.replace("FA-2026-0042", "FA-2026-0044"))
-        )
+        invoice = import_document(write_xml(self, "seule.xml", CII_TWO_RATES.replace("FA-2026-0042", "FA-2026-0044")))
         page = self.client.get(reverse("invoices:invoice_edit_lines", args=[invoice.pk]))
         self.assertEqual(page.status_code, 200)
         self.assertContains(page, "Ouvrir le fichier reçu")
@@ -538,9 +536,7 @@ class OnTheScreenTests(TestCase):
         with mock.patch("invoices.receipts.recognise", side_effect=AssertionError("l'OCR a tourné")):
             self.client.post(reverse("invoices:invoice_edit_lines", args=[self.invoice.pk]), {"action": "reread"})
         self.invoice.refresh_from_db()
-        self.assertEqual(
-            [line.total_ht for line in self.invoice.lines.all()], [D("169.00"), D("25.20")]
-        )
+        self.assertEqual([line.total_ht for line in self.invoice.lines.all()], [D("169.00"), D("25.20")])
 
     def test_the_live_check_counts_the_duty_the_lines_do_not_carry(self):
         """A document-level charge is part of the total the invoice states:
@@ -636,19 +632,21 @@ class ALineTheSupplierSignedItsOwnWayTests(TestCase):
 
     def test_a_discount_line_becomes_a_return(self):
         invoice = import_document(write_xml(self, "remise.xml", CII_DISCOUNT_LINE))
-        rows = [(line.raw_name, line.quantity, line.unit_cost_ht, line.total_ht)
-                for line in invoice.lines.order_by("raw_name")]
+        rows = [
+            (line.raw_name, line.quantity, line.unit_cost_ht, line.total_ht)
+            for line in invoice.lines.order_by("raw_name")
+        ]
         self.assertEqual(
             rows,
-            [("BIERE BLONDE FUT 30L", D("2.000"), D("84.5000"), D("169.00")),
-             ("REMISE COMMERCIALE", D("-1.000"), D("60.0000"), D("-60.00"))],
+            [
+                ("BIERE BLONDE FUT 30L", D("2.000"), D("84.5000"), D("169.00")),
+                ("REMISE COMMERCIALE", D("-1.000"), D("60.0000"), D("-60.00")),
+            ],
         )
 
     def test_no_line_is_a_positive_count_at_a_negative_amount(self):
         invoice = import_document(write_xml(self, "remise.xml", CII_DISCOUNT_LINE))
-        self.assertEqual(
-            [line.raw_name for line in invoice.lines.filter(quantity__gt=0, total_ht__lt=0)], []
-        )
+        self.assertEqual([line.raw_name for line in invoice.lines.filter(quantity__gt=0, total_ht__lt=0)], [])
 
     def test_the_invoices_total_is_untouched(self):
         """The sign is the stock's business; the money must not move."""
@@ -666,9 +664,13 @@ class ALineTheSupplierSignedItsOwnWayTests(TestCase):
         for line in invoice.lines.all():
             form = LineCorrectionForm(
                 {
-                    "line_id": line.pk, "product_name": line.raw_name, "quantity": line.quantity,
-                    "total_volume": line.total_volume, "total_ht": line.total_ht,
-                    "vat_rate": D("0.20"), "amount_source": "ht",
+                    "line_id": line.pk,
+                    "product_name": line.raw_name,
+                    "quantity": line.quantity,
+                    "total_volume": line.total_volume,
+                    "total_ht": line.total_ht,
+                    "vat_rate": D("0.20"),
+                    "amount_source": "ht",
                 },
                 charge=False,
             )
@@ -730,12 +732,12 @@ class WhatTheScreensCallItTests(TestCase):
     def setUp(self):
         self.supplier = seller()
 
-    def test_a_credit_note_is_called_an_avoir_on_its_page(self):
+    def test_a_credit_note_is_named_as_such_on_its_page(self):
         invoice = import_document(write_factur_x(self, "avoir.pdf", CII_CREDIT_NOTE))
         page = self.client.get(reverse("invoices:invoice_detail", args=[invoice.pk]))
         self.assertContains(page, "Avoir électronique")
 
-    def test_a_credit_note_is_called_an_avoir_on_the_correction_page(self):
+    def test_a_credit_note_is_named_as_such_on_the_correction_page(self):
         invoice = import_document(write_factur_x(self, "avoir.pdf", CII_CREDIT_NOTE))
         page = self.client.get(reverse("invoices:invoice_edit_lines", args=[invoice.pk]))
         # The lead paragraph above the lines, which said « la facture ».

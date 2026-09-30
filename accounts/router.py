@@ -2,7 +2,7 @@
 
 The logins, sessions, admin log, content types and this app's rows go to
 the `accounts` alias; everything else is left to `default`, which a binding
-makes the espace's own file (accounts/tenancy.py). config/settings.py
+makes the tenant's own file (accounts/tenancy.py). config/settings.py
 always configures both (the single mode that had only `default` is gone).
 
 No business model has a foreign key to auth, contenttypes or accounts
@@ -14,7 +14,7 @@ from django.db import DEFAULT_DB_ALIAS
 
 ACCOUNTS_ALIAS = "accounts"
 
-#: The apps whose rows are central, not an espace's.
+#: The apps whose rows are central, not a tenant's.
 ACCOUNTS_APPS = frozenset({"auth", "contenttypes", "sessions", "admin", "accounts"})
 
 

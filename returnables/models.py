@@ -1,31 +1,31 @@
 """« Consignes »: the empties handed back to the delivery driver, counted
-and photographed here, then compared with the bon he sends.
+and photographed here, then compared with the slip he sends.
 
 Three kinds of rows, and nothing stored that can be worked out:
 
 - **What was handed back** - a `Pickup` (« reprise »): a day, who took the
-  empties (« Repris par », a supplier), a note, a `PickupCount` per type of
-  consigne (« Fûts 15 ») and up to `MAX_PHOTOS` photos taken before the
+  empties (« Repris par », a supplier), a note, a `PickupCount` per
+  returnable type (« Fûts 15 ») and up to `MAX_PHOTOS` photos taken before the
   lorry left (`PickupPhoto`, re-encoded on the server: the phone's original
   is never kept - returnables/photos.py).
 - **What the seller says he took** - a `Slip` (« bon », the PDF his driver
   e-mails or somebody drops on the page) and its `SlipLine`s, read by the
-  motifs of a `SlipFormat` (« format de bon »: user regexes, one set per
-  seller - returnables/reading.py). The reading is stored on the bon and
+  patterns of a `SlipFormat` (« format de bon »: user regexes, one set per
+  seller - returnables/reading.py). The reading is stored on the slip and
   rewritten by every (re)reading; a line's TYPE is not stored: it is worked
-  out when the line is drawn, from the `ReturnableType` motifs, so editing a
-  motif reclassifies every line at once.
+  out when the line is drawn, from the `ReturnableType` patterns, so editing a
+  pattern reclassifies every line at once.
 - **The vocabulary** - a `ReturnableType` (« type de consigne »: Fûts,
   Caisses verre, Bouteilles CO2…), seeded by migration 0002 in every
-  database, the test one and every espace included.
+  database, the test one and every tenant included.
 
 The comparison of the two sides (returnables/comparison.py) and the check
 against the seller's invoices (returnables/invoice_check.py) are computed
-when a page is drawn, never stored: nothing about a bon is written on an
+when a page is drawn, never stored: nothing about a slip is written on an
 invoice.
 
 Money is `Decimal`, never float (CLAUDE.md « Money is always Decimal »).
-Every file is on the default storage - the espace's own media, served at
+Every file is on the default storage - the tenant's own media, served at
 /fichiers/ - under consignes/, with `max_length` 100 (what « Données »
 accepts), and is deleted ON COMMIT with its row (`delete_with_files`): a
 rolled-back deletion must not have thrown the photo away already. No
@@ -38,7 +38,7 @@ import secrets
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models, transaction
 
-#: At most this many photos per reprise: the page refuses the eleventh, the
+#: At most this many photos per pickup: the page refuses the eleventh, the
 #: server keeps the first ten and says so.
 MAX_PHOTOS = 10
 
@@ -61,8 +61,8 @@ PHOTO_FOLDER = "consignes/photos/%Y/%m/"
 
 
 def new_reference() -> str:
-    """A reprise's natural key: 16 hex characters, random, never shown.
-    What « Données » names a reprise by - its date and its counts can be
+    """A pickup's natural key: 16 hex characters, random, never shown.
+    What « Données » names a pickup by - its date and its counts can be
     edited, so neither can be its key. A module function, not a lambda, so
     the migration can name it."""
     return secrets.token_hex(8)
@@ -73,16 +73,16 @@ class ReturnableType(models.Model):
     Its name is shown EXACTLY as typed - never lower-cased or singularised -
     and counts are written name then number (« Fûts 15 »).
 
-    `slip_patterns` holds the motifs that recognise a bon's line as this
+    `slip_patterns` holds the patterns that recognise a slip's line as this
     type, one per line, searched case-insensitively in the line's
-    designation. Classification uses EVERY type that has motifs, active or
+    designation. Classification uses EVERY type that has patterns, active or
     not, in (position, pk) order, first match wins; `is_active` only takes
-    the type off the new-reprise form. A type that counts were made with
+    the type off the new-pickup form. A type that counts were made with
     cannot be deleted (PROTECT): it is deactivated instead."""
 
     name = models.CharField("nom", max_length=60, unique=True)
     # The form's order - and the FIRST active type gets the big stepper (the
-    # kegs: almost every reprise is mostly kegs).
+    # kegs: almost every pickup is mostly kegs).
     position = models.PositiveSmallIntegerField("ordre", default=0)
     is_active = models.BooleanField("actif", default=True)
     slip_patterns = models.TextField(
@@ -102,13 +102,13 @@ class ReturnableType(models.Model):
 
 
 class SlipFormat(models.Model):
-    """« Format de bon »: how one seller's bon is read, and where it comes
-    from. Every rule is a motif (a regex, checked by returnables/patterns.py
+    """« Format de bon »: how one seller's slip is read, and where it comes
+    from. Every rule is a pattern (a regex, checked by returnables/patterns.py
     before it is ever compiled - never trusted as stored), and a « one per
-    line » field holds several motifs tried in order.
+    line » field holds several patterns tried in order.
 
-    The mail motifs are optional: a blank sender means the format is never
-    fetched from the mailbox, only dropped on the page. A format with bons
+    The mail patterns are optional: a blank sender means the format is never
+    fetched from the mailbox, only dropped on the page. A format with slips
     cannot be deleted (PROTECT): it is deactivated instead."""
 
     name = models.CharField("nom", max_length=80, unique=True)
@@ -121,18 +121,18 @@ class SlipFormat(models.Model):
     is_active = models.BooleanField("actif", default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
-    # -- Récupération par mail (blank sender = upload only) --
+    # -- Fetching by mail (blank sender = upload only) --
     sender_pattern = models.CharField("motif de l'expéditeur", max_length=300, blank=True)
     subject_pattern = models.CharField("motif de l'objet", max_length=300, blank=True)
     attachment_pattern = models.CharField("motif de la pièce jointe", max_length=200, default=r"(?i)\.pdf$")
 
-    # -- Les lignes --
+    # -- The lines --
     section_start = models.CharField("début de la partie des consignes", max_length=300, blank=True)
     section_end = models.CharField("fin de la partie des consignes", max_length=300, blank=True)
     line_pattern = models.CharField("motif de ligne", max_length=500)
     date_patterns = models.TextField("motifs de la date de livraison")
 
-    # -- Réglages avancés --
+    # -- Advanced settings --
     printed_patterns = models.TextField("motifs de la date d'impression", blank=True)
     number_patterns = models.TextField("motifs du numéro", blank=True)
     reference_patterns = models.TextField("motifs des références", blank=True)
@@ -151,12 +151,12 @@ class SlipFormat(models.Model):
 
 
 class Slip(models.Model):
-    """A bon: the PDF as received (`file`, `sha256` - the same bytes twice
-    are one bon) and the text its reading used (`text`, what « Relire »
-    reads again). The fields under « Reading » are what the format's motifs
+    """A slip: the PDF as received (`file`, `sha256` - the same bytes twice
+    are one slip) and the text its reading used (`text`, what « Relire »
+    reads again). The fields under « Reading » are what the format's patterns
     found, rewritten by every (re)reading (returnables/slips.py); `checks`
     says what the reading verified (`[{"label", "passed", "detail"}]`), and
-    `read_error` why it could read nothing (a bon whose reading failed is
+    `read_error` why it could read nothing (a slip whose reading failed is
     kept, with its file and text, so « Relire » can fix it)."""
 
     class Origin(models.TextChoices):
@@ -175,13 +175,14 @@ class Slip(models.Model):
     text = models.TextField("texte lu", blank=True)
 
     # -- Reading (rewritten by every reading) --
-    # The BL's date: the day the goods came and the empties went, which a
-    # re-send printed the next day does not change.
+    # The delivery note's date: the day the goods came and the empties
+    # went, which a re-send printed the next day does not change.
     delivery_date = models.DateField("date de livraison", null=True, blank=True)
     printed_at = models.DateTimeField("imprimé le", null=True, blank=True)
     number = models.CharField("numéro", max_length=40, blank=True)
-    # The BL numbers (at most 20, each at most 40 characters): what the bon
-    # shares with the seller's invoice, and with the bon it replaces.
+    # The delivery-note numbers (at most 20, each at most 40 characters):
+    # what the slip shares with the seller's invoice, and with the slip it
+    # replaces.
     references = models.JSONField("références", default=list, blank=True)
     replaces = models.BooleanField("annule et remplace", default=False)
     printed_total = models.DecimalField("total imprimé", max_digits=12, decimal_places=2, null=True, blank=True)
@@ -203,11 +204,11 @@ class Slip(models.Model):
 
 
 class SlipLine(models.Model):
-    """One line of a bon's consignes part, as printed: the designation (a
+    """One line of a slip's returnables part, as printed: the designation (a
     ticket may cut it - UBA's cuts it to 20 characters), the quantity signed
     as printed (|q| ≤ 99 999), the unit price and the amount when read. Its
     type is NOT stored: returnables.comparison.classify works it out when
-    it is drawn, so a motif edited reclassifies it at once."""
+    it is drawn, so a pattern edited reclassifies it at once."""
 
     slip = models.ForeignKey(Slip, on_delete=models.CASCADE, related_name="lines")
     position = models.PositiveSmallIntegerField("rang")
@@ -227,12 +228,10 @@ class SlipLine(models.Model):
 
 class Pickup(models.Model):
     """« Reprise »: the empties taken back one day, counted and photographed
-    before the lorry left. All the reprises of one supplier on one day are
-    compared as one with that day's bons (returnables/comparison.py)."""
+    before the lorry left. All the pickups of one supplier on one day are
+    compared as one with that day's slips (returnables/comparison.py)."""
 
-    reference = models.CharField(
-        "référence", max_length=16, unique=True, default=new_reference, editable=False
-    )
+    reference = models.CharField("référence", max_length=16, unique=True, default=new_reference, editable=False)
     date = models.DateField("date")
     supplier = models.ForeignKey(
         "invoices.Supplier",
@@ -256,7 +255,7 @@ class Pickup(models.Model):
 
 
 class PickupCount(models.Model):
-    """How many of one type a reprise handed back. Zero is no row: a count
+    """How many of one type a pickup handed back. Zero is no row: a count
     is 1 to `MAX_COUNT`, which the database enforces too."""
 
     pickup = models.ForeignKey(Pickup, on_delete=models.CASCADE, related_name="counts")
@@ -307,15 +306,15 @@ class PickupPhoto(models.Model):
 
 # -- Deleting with the files -------------------------------------------------------------------------------------
 # A row's files are not deleted with the row: the storage knows nothing of the
-# database. So every deletion of a reprise, a photo or a bon goes through
+# database. So every deletion of a pickup, a photo or a slip goes through
 # `delete_with_files`, which collects the (storage, name) pairs BEFORE the
 # delete and removes them only once the transaction commits - rolled back, the
 # rows and their files both stay (invoices/deletion.py, the same rule).
 
 
 def files_of(obj) -> list[tuple]:
-    """The (storage, name) of every file `obj` holds - a reprise's photos
-    and thumbnails, a photo's two files, a bon's PDF - that deleting `obj`
+    """The (storage, name) of every file `obj` holds - a pickup's photos
+    and thumbnails, a photo's two files, a slip's PDF - that deleting `obj`
     would leave behind. [] for a row with no file (a type, a format, a
     count, a line)."""
     if isinstance(obj, Pickup):
@@ -339,7 +338,7 @@ def delete_files(files) -> None:
 
 
 def delete_with_files(obj):
-    """Delete `obj` (a reprise, a photo, a bon - or any row of this app) and,
+    """Delete `obj` (a pickup, a photo, a slip - or any row of this app) and,
     once the transaction commits, the files it held. Returns what
     `Model.delete()` returns. Raises what it raises too: a type or a format
     still in use is a `ProtectedError`, which the page turns into

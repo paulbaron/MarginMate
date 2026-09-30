@@ -9,9 +9,9 @@
     <link rel="stylesheet" href="{% asset 'css/marginmate.css' %}">
 </head>
 {% comment %}
-Les pages du salarié (staff/public_views.py) : les seules faites pour être ouvertes sans compte. Elles
-n'héritent PAS de base.html : ni la navigation de l'employeur, ni ses compteurs, ni ses messages. Aucun
-script ni style en ligne - la Content-Security-Policy de ces pages n'autorise que les fichiers du site.
+The employee's pages (staff/public_views.py): the only ones made to be opened without an account. They
+do NOT extend base.html: neither the employer's navigation, nor his counts, nor his messages. No inline
+script or style - these pages' Content-Security-Policy allows the site's own files only.
 {% endcomment %}
 <body class="public-page">
     <main class="public-container">

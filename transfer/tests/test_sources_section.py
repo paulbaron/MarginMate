@@ -10,8 +10,7 @@ Every name, address and pattern below is invented.
 
 import os
 import shutil
-from datetime import datetime
-from datetime import timezone as dt_timezone
+from datetime import UTC, datetime
 from unittest import mock
 
 from django.test import TestCase
@@ -33,7 +32,6 @@ from transfer.tests.support import (
 )
 
 MERGE, REPLACE = Strategy.MERGE, Strategy.REPLACE
-UTC = dt_timezone.utc
 SECRET = "mot-de-passe-du-portail-essai"
 
 
@@ -65,12 +63,12 @@ def portal_source(supplier, name, prefix, created=None) -> InvoiceType:
 def build_sources():
     """The seeded « UBA - Factures », a shop's mailbox search (one paused),
     and a portal."""
-    cave = make_supplier(code="CAVE_ESSAI", name="Cave Essai")
+    cellar = make_supplier(code="CAVE_ESSAI", name="Cave Essai")
     water = make_supplier(code="EAU_ESSAI", name="Eau Essai", expenses_only=True)
-    email_source(cave, "Cave Essai - Factures", r"(?i)factures@cave\.example", subject="(?i)facture")
-    email_source(cave, "Cave Essai - Avoirs", r"(?i)avoirs@cave\.example", active=False)
+    email_source(cellar, "Cave Essai - Factures", r"(?i)factures@cave\.example", subject="(?i)facture")
+    email_source(cellar, "Cave Essai - Avoirs", r"(?i)avoirs@cave\.example", active=False)
     portal_source(water, "Eau Essai", "EAU_ESSAI")
-    return cave, water
+    return cellar, water
 
 
 def as_restored(snapshot: list) -> list:
@@ -177,12 +175,12 @@ class MergeAndReplaceTests(TestCase):
     """One source changed, one only here, one only in the archive."""
 
     def setUp(self):
-        self.cave, self.water = build_sources()
+        self.cellar, self.water = build_sources()
         self.reader = export_archive({"sources"}, closed=False)
         self.addCleanup(self.reader.close)
         EmailInvoiceSource.objects.filter(invoice_type__name="Cave Essai - Factures").update(subject_pattern="(?i)note")
         InvoiceType.objects.filter(name="Eau Essai").delete()
-        email_source(self.cave, "Cave Essai - Relances", r"(?i)relances@cave\.example")
+        email_source(self.cellar, "Cave Essai - Relances", r"(?i)relances@cave\.example")
 
     def test_merge(self):
         report = import_archive(self.reader, MERGE).section("sources")
@@ -190,7 +188,9 @@ class MergeAndReplaceTests(TestCase):
             report.conflicts,
             ["Source « Cave Essai - Factures » (Cave Essai) : différente dans l'archive (objet) — gardée telle quelle"],
         )
-        self.assertEqual(EmailInvoiceSource.objects.get(invoice_type__name="Cave Essai - Factures").subject_pattern, "(?i)note")
+        self.assertEqual(
+            EmailInvoiceSource.objects.get(invoice_type__name="Cave Essai - Factures").subject_pattern, "(?i)note"
+        )
         self.assertTrue(InvoiceType.objects.filter(name="Cave Essai - Relances").exists())
         self.assertEqual(report.tallies["sources"].created, 1)
         portal = WebsiteInvoiceSource.objects.get(invoice_type__name="Eau Essai")
@@ -207,9 +207,7 @@ class MergeAndReplaceTests(TestCase):
         self.assertFalse(EmailInvoiceSource.objects.filter(sender_pattern__contains="relances").exists())
         tally = report.tallies["sources"]
         self.assertEqual((tally.created, tally.updated, tally.deleted, tally.unchanged), (1, 1, 1, 2))
-        self.assertEqual(
-            InvoiceType.objects.get(name="Eau Essai").created_at, datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
-        )
+        self.assertEqual(InvoiceType.objects.get(name="Eau Essai").created_at, datetime(2026, 6, 1, 9, 0, tzinfo=UTC))
         self.assertFalse(InvoiceType.objects.get(name="Eau Essai").is_active)
         self.assertEqual(report.notes, [portal_note("créée inactive"), ENV_NOTE])
 
@@ -323,8 +321,12 @@ class PortalTrustTests(TestCase):
 
     def test_every_family_of_the_apps_variables_is_refused(self):
         for name in (
-            "INVOICE_EMAIL_APP_PASSWORD", "UBA_EMAIL_APP_PASSWORD", "LADDITION_PASSWORD", "ANTHROPIC_API_KEY",
-            "DJANGO_SECRET_KEY", "METRO_PASSWORD",
+            "INVOICE_EMAIL_APP_PASSWORD",
+            "UBA_EMAIL_APP_PASSWORD",
+            "LADDITION_PASSWORD",
+            "ANTHROPIC_API_KEY",
+            "DJANGO_SECRET_KEY",
+            "METRO_PASSWORD",
         ):
             with self.subTest(name=name):
                 report = self._import(forged_portal(username_env="PORTAIL_ESSAI_LOGIN", password_env=name))
@@ -344,7 +346,7 @@ class PortalTrustTests(TestCase):
         from invoices import models
 
         self.assertIs(section.app_env_name, models.app_env_name)
-        text =(Path(settings.BASE_DIR) / "config" / "settings.py").read_text(encoding="utf-8")
+        text = (Path(settings.BASE_DIR) / "config" / "settings.py").read_text(encoding="utf-8")
         names = set(re.findall(r"""(?:environ\.get|env_bool)\(\s*["']([A-Z][A-Z0-9_]*)["']""", text))
         self.assertIn("METRO_PASSWORD", names)
         self.assertEqual({name for name in names if not section.app_env_name(name)}, set())
@@ -485,22 +487,30 @@ class RestoredPortalTests(TestCase):
         WebsiteInvoiceSource.objects.filter(invoice_type__name="Eau Essai").update(navigation="Autre chemin")
         report = import_archive(self.reader, MERGE).section("sources")
         self.assertEqual(
-            report.conflicts, ["Source « Eau Essai » (Eau Essai) : différente dans l'archive (navigation) — gardée telle quelle"]
+            report.conflicts,
+            ["Source « Eau Essai » (Eau Essai) : différente dans l'archive (navigation) — gardée telle quelle"],
         )
         self.assertEqual(report.notes, [portal_note(LEFT_OFF)])
 
     def test_a_portal_on_here_that_the_archive_has_off_is_still_a_conflict(self):
         """That one « Remplacer » does settle: it switches the portal off."""
         InvoiceType.objects.filter(name="Eau Essai").update(is_active=True)
-        with ArchiveReader(forge(self.reader, sources=lambda payload: {
-            **payload,
-            "sources": [
-                {**record, "is_active": False} if record["name"] == "Eau Essai" else record for record in payload["sources"]
-            ],
-        })) as off:
+        with ArchiveReader(
+            forge(
+                self.reader,
+                sources=lambda payload: {
+                    **payload,
+                    "sources": [
+                        {**record, "is_active": False} if record["name"] == "Eau Essai" else record
+                        for record in payload["sources"]
+                    ],
+                },
+            )
+        ) as off:
             report = import_archive(off, MERGE).section("sources")
         self.assertEqual(
-            report.conflicts, ["Source « Eau Essai » (Eau Essai) : différente dans l'archive (active) — gardée telle quelle"]
+            report.conflicts,
+            ["Source « Eau Essai » (Eau Essai) : différente dans l'archive (active) — gardée telle quelle"],
         )
         self.assertEqual(report.notes, [])
         self.assertTrue(InvoiceType.objects.get(name="Eau Essai").is_active)
@@ -514,7 +524,7 @@ class OwnBackupTests(TestCase):
     gather fetched the mailbox sources only, and nothing said why (20/09).
     An import still never switches a portal on from an archive that came
     from anywhere else - a manifest can claim any reason, so what is
-    trusted is the folder only this app writes into (the espace's backups,
+    trusted is the folder only this app writes into (the tenant's backups,
     accounts.paths.backups_dir)."""
 
     def setUp(self):
@@ -612,7 +622,9 @@ class RefusalTests(TestCase):
 
     def test_an_unknown_kind_is_skipped(self):
         report = self._import(self._edit("Cave Essai - Avoirs", source_kind="FAX"))
-        self.assertIn("Source « Cave Essai - Avoirs » (Cave Essai) : « source_kind » : valeur inconnue (« FAX »)", report.skipped)
+        self.assertIn(
+            "Source « Cave Essai - Avoirs » (Cave Essai) : « source_kind » : valeur inconnue (« FAX »)", report.skipped
+        )
 
     def test_an_unknown_field_is_noted_once(self):
         def change(payload):

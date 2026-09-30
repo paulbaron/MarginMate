@@ -1,10 +1,10 @@
 {% comment %}
-Un degré de certitude de « Propositions » : ses lignes, chacune avec sa case,
-son ou ses options, la raison du rapprochement et celle du degré. Une ligne
-à une seule option porte son option en champ caché ; à plusieurs, un bouton
-radio par option, coché d'avance sur la première seulement quand la ligne
-l'est. Les cases pointent vers le formulaire par form= : c'est ce que
-static/js/ui.js compte (data-bulk-select).
+One certainty tier of « Propositions »: its lines, each with its box,
+its option or options, the reason for the match and the reason for the
+tier. A line with a single option carries it in a hidden field; with
+several, one radio button per option, pre-ticked on the first only when
+the line is. The boxes point at the form through form=: that is what
+static/js/ui.js counts (data-bulk-select).
 {% endcomment %}
 {% if rows %}
     <h2 class="proposal-group-title">
@@ -28,7 +28,7 @@ static/js/ui.js compte (data-bulk-select).
                     {% with line=row.line %}
                         <tr>
                             <td class="select-col">
-                                <input type="checkbox" name="ligne" value="{{ line.pk }}" form="propositions-form" data-bulk-item
+                                <input type="checkbox" name="ligne" value="{{ line.pk }}" form="proposals-form" data-bulk-item
                                        {% if row.preticked %}checked{% endif %}
                                        aria-label="Rattacher l'opération du {{ line.paid_on|date:'d/m/Y' }}, {{ line.amount_due|floatformat:2 }} €">
                             </td>
@@ -40,7 +40,7 @@ static/js/ui.js compte (data-bulk-select).
                                     <span class="read-as">Déliée à la main : pas cochée d'avance.</span>
                                 {% endif %}
                                 {% if row.rival %}
-                                    {# Une facture, une ligne : celle que le rattachement groupé servirait la première garde sa case cochée. #}
+                                    {# One invoice, one line: the one the bulk link would serve first keeps its box ticked. #}
                                     <span class="read-as">Facture proposée aussi pour l'opération du {{ row.rival.paid_on|date:"d/m/Y" }} ({{ row.rival.amount_due|floatformat:2 }} €), qui la prendrait la première : pas cochée d'avance.</span>
                                 {% endif %}
                             </td>
@@ -65,7 +65,7 @@ static/js/ui.js compte (data-bulk-select).
                                         {% for invoice in option.invoices %}<a href="{% url 'invoices:invoice_detail' invoice.pk %}">{{ invoice.supplier.name }} n° {{ invoice.invoice_number|default:invoice.pk }}</a> {% if invoice.invoice_date %}du {{ invoice.invoice_date|date:"d/m/Y" }}{% else %}sans date{% endif %}{% if not forloop.last %} + {% endif %}{% endfor %}
                                         · {{ option.total|floatformat:2 }} €
                                         {% if option.gap %}
-                                            {# L'écart est dit, jamais corrigé. #}
+                                            {# The gap is said, never corrected. #}
                                             <span class="status-pill status-NEEDS_REVIEW">écart {{ option.gap|floatformat:2 }} €</span>
                                         {% endif %}
                                         {% if option.also_for %}

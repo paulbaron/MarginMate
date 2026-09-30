@@ -80,7 +80,7 @@ class MonoprixFrenchTests(SimpleTestCase):
         self.invoice = parse(FRENCH)
 
     def test_only_the_two_products_are_lines(self):
-        """"CB EMV 8,40" and "Rendu (ESPECES) 0,00" have exactly the shape of
+        """ "CB EMV 8,40" and "Rendu (ESPECES) 0,00" have exactly the shape of
         a priced item line and are not items."""
         self.assertEqual(len(self.invoice.lines), 2)
         self.assertEqual(

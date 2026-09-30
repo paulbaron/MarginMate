@@ -53,7 +53,9 @@ class GroupBoxesIntoLinesTests(SimpleTestCase):
         heights pairs each name with the price of the row above."""
         slope = math.tan(math.radians(6))
         boxes = []
-        for row, (name, price) in enumerate((("BAGUETTE BLANC", "T1 0.49"), ("CITRON 500G", "T1 2.29"), ("ORANGE", "T1 3.21"))):
+        for row, (name, price) in enumerate(
+            (("BAGUETTE BLANC", "T1 0.49"), ("CITRON 500G", "T1 2.29"), ("ORANGE", "T1 3.21"))
+        ):
             y = 100 + 50 * row
             boxes.append(box(name, 200, y, 300, degrees=6))
             boxes.append(box(price, 800, y + slope * 600, 120, degrees=6))

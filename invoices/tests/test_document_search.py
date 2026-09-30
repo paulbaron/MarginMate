@@ -52,9 +52,7 @@ class DocumentSearchTests(TestCase):
         self.grocer = make_supplier(name=GROCER)
         # One wholesaler, four dates: this is what « fournisseur 2025 » and
         # « fournisseur 09/2025 » have to tell apart.
-        self.september = make_invoice(
-            supplier=self.wholesaler, invoice_number="A-1001", invoice_date=date(2025, 9, 14)
-        )
+        self.september = make_invoice(supplier=self.wholesaler, invoice_number="A-1001", invoice_date=date(2025, 9, 14))
         self.march = make_invoice(supplier=self.wholesaler, invoice_number="A-1002", invoice_date=date(2025, 3, 2))
         self.old = make_invoice(supplier=self.wholesaler, invoice_number="A-0900", invoice_date=date(2024, 9, 14))
         self.july = make_invoice(supplier=self.wholesaler, invoice_number="A-1177", invoice_date=date(2026, 7, 12))
@@ -134,18 +132,14 @@ class DocumentSearchTests(TestCase):
         """« 047-031286 » is shaped like a date and is not one: three digits,
         then six. Read as a date it would be a crash or an empty page; it is
         the number of the document the reader is holding."""
-        numbered = make_invoice(
-            supplier=self.spring, invoice_number="047-031286", invoice_date=date(2026, 1, 8)
-        )
+        numbered = make_invoice(supplier=self.spring, invoice_number="047-031286", invoice_date=date(2026, 1, 8))
         self.assertEqual(self.found("047-031286"), {numbered.pk})
         self.assertEqual(self.found("Sources 047-031286"), {numbered.pk})
 
     def test_a_year_inside_a_number_is_still_found(self):
         """A document numbered after a year it is not dated in: the token is
         matched against the number as well as the date, so both answer."""
-        numbered = make_invoice(
-            supplier=self.spring, invoice_number="FA-2031-118", invoice_date=date(2026, 5, 5)
-        )
+        numbered = make_invoice(supplier=self.spring, invoice_number="FA-2031-118", invoice_date=date(2026, 5, 5))
         self.assertIn(numbered.pk, self.found("2031"))
         self.assertEqual(self.found("Sources 2031"), {numbered.pk})
 
@@ -181,11 +175,11 @@ class SearchHelpTests(TestCase):
     """Both pages say what may be typed - a search whose rules nobody states
     is a box people type one word into for ever."""
 
-    def test_the_achats_list_says_a_supplier_and_a_date_may_be_typed(self):
+    def test_the_purchases_list_says_a_supplier_and_a_date_may_be_typed(self):
         page = self.client.get(reverse("invoices:invoice_list")).content.decode()
         self.assertIn("fournisseur 09/2025", page)
 
-    def test_the_achats_list_says_it_again_when_a_search_finds_nothing(self):
+    def test_the_purchases_list_says_it_again_when_a_search_finds_nothing(self):
         response = self.client.get(reverse("invoices:invoice_list"), {"q": "introuvable"})
         self.assertEqual(response.context["found_count"], 0)
         self.assertIn("fournisseur 09/2025", response.content.decode())

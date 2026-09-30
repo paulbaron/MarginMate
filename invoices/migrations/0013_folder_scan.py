@@ -4,31 +4,43 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('invoices', '0012_seed_receipt_shops'),
+        ("invoices", "0012_seed_receipt_shops"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='ReceiptBatch',
+            name="ReceiptBatch",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('last_heartbeat', models.DateTimeField(blank=True, null=True)),
-                ('status', models.CharField(choices=[('PENDING', 'En attente'), ('RUNNING', 'En cours'), ('SUCCESS', 'Terminé'), ('FAILED', 'Échoué'), ('CANCELLED', 'Annulé')], default='PENDING', max_length=20)),
-                ('cancel_requested', models.BooleanField(default=False)),
-                ('log', models.TextField(blank=True)),
-                ('results', models.JSONField(blank=True, default=list)),
-                ('started_at', models.DateTimeField(auto_now_add=True)),
-                ('finished_at', models.DateTimeField(blank=True, null=True)),
+                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
+                ("last_heartbeat", models.DateTimeField(blank=True, null=True)),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[
+                            ("PENDING", "En attente"),
+                            ("RUNNING", "En cours"),
+                            ("SUCCESS", "Terminé"),
+                            ("FAILED", "Échoué"),
+                            ("CANCELLED", "Annulé"),
+                        ],
+                        default="PENDING",
+                        max_length=20,
+                    ),
+                ),
+                ("cancel_requested", models.BooleanField(default=False)),
+                ("log", models.TextField(blank=True)),
+                ("results", models.JSONField(blank=True, default=list)),
+                ("started_at", models.DateTimeField(auto_now_add=True)),
+                ("finished_at", models.DateTimeField(blank=True, null=True)),
             ],
             options={
-                'ordering': ['-started_at'],
+                "ordering": ["-started_at"],
             },
         ),
         migrations.AddField(
-            model_name='invoice',
-            name='source_sha256',
+            model_name="invoice",
+            name="source_sha256",
             field=models.CharField(blank=True, db_index=True, max_length=64),
         ),
     ]

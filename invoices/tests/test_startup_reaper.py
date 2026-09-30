@@ -38,9 +38,11 @@ INTERRUPTED = "Interrompu par un redémarrage du serveur."
 def start_the_dev_server():
     """ready() as the dev server's serving child runs it. Returns the mock
     Thread class, holding what the reaper's thread was made with."""
-    with mock.patch("invoices.apps.sys.argv", ["manage.py", "runserver"]), mock.patch.dict(
-        "invoices.apps.os.environ", {"RUN_MAIN": "true"}
-    ), mock.patch("invoices.apps.threading.Thread") as thread:
+    with (
+        mock.patch("invoices.apps.sys.argv", ["manage.py", "runserver"]),
+        mock.patch.dict("invoices.apps.os.environ", {"RUN_MAIN": "true"}),
+        mock.patch("invoices.apps.threading.Thread") as thread,
+    ):
         apps.get_app_config("invoices").ready()
     return thread
 
@@ -82,15 +84,20 @@ class ServingRequestsTests(TestCase):
         """`serve` loads its apps before it knows it will serve: its
         --verifier, or a second `serve` refused the port, would reap the
         gathers of the server already running (invoices/apps.py)."""
-        for argv in (["manage.py", "serve"], ["manage.py", "serve", "--verifier"], ["manage.py", "serve", "--port", "8002"]):
+        for argv in (
+            ["manage.py", "serve"],
+            ["manage.py", "serve", "--verifier"],
+            ["manage.py", "serve", "--port", "8002"],
+        ):
             with self.subTest(argv=argv):
                 self.assertFalse(serving_requests(argv, {"RUN_MAIN": "true"}))
 
     def test_a_shell_starting_leaves_a_running_gather_alone(self):
         job = gather()
-        with mock.patch("invoices.apps.sys.argv", ["manage.py", "shell"]), mock.patch(
-            "invoices.apps.threading.Thread"
-        ) as thread:
+        with (
+            mock.patch("invoices.apps.sys.argv", ["manage.py", "shell"]),
+            mock.patch("invoices.apps.threading.Thread") as thread,
+        ):
             apps.get_app_config("invoices").ready()
         thread.assert_not_called()
         job.refresh_from_db()
@@ -170,17 +177,21 @@ class ReaperThreadTests(TestCase):
         self.assertLess(REAP_DELAY_SECONDS, ScrapeJob.STALE_AFTER.total_seconds())
 
     def test_its_own_thread_closes_its_connections_and_only_its_own(self):
-        with mock.patch("invoices.apps._wait"), mock.patch("invoices.apps.reap_interrupted_gathers"), mock.patch.object(
-            connections, "close_all"
-        ) as close_all:
+        with (
+            mock.patch("invoices.apps._wait"),
+            mock.patch("invoices.apps.reap_interrupted_gathers"),
+            mock.patch.object(connections, "close_all") as close_all,
+        ):
             invoices_apps._reap_after_delay(timezone.now(), threading.get_ident())
             close_all.assert_not_called()
             invoices_apps._reap_after_delay(timezone.now(), threading.get_ident() + 1)
             close_all.assert_called_once_with()
 
     def test_a_reaper_that_fails_says_so_in_the_log_and_raises_nothing(self):
-        with mock.patch("invoices.apps._wait"), mock.patch(
-            "invoices.apps.reap_interrupted_gathers", side_effect=RuntimeError("base verrouillée")
-        ), self.assertLogs("invoices.apps", "ERROR") as logged:
+        with (
+            mock.patch("invoices.apps._wait"),
+            mock.patch("invoices.apps.reap_interrupted_gathers", side_effect=RuntimeError("base verrouillée")),
+            self.assertLogs("invoices.apps", "ERROR") as logged,
+        ):
             invoices_apps._reap_after_delay(timezone.now(), threading.get_ident())
         self.assertIn("nettoyage des récupérations interrompues", logged.output[0])

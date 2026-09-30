@@ -1,4 +1,4 @@
-"""The photos of a reprise: taken on a phone, re-encoded here, the original
+"""The photos of a pickup: taken on a phone, re-encoded here, the original
 never kept.
 
 `prepare_photo(uploaded)` turns one upload into a `PreparedPhoto`: a JPEG of
@@ -141,7 +141,7 @@ def taken_at_from_exif(exif, now: datetime | None = None) -> datetime | None:
     Zero, blank, unparseable, or outside [2000-01-01, now + 1 day]: None."""
     try:
         sub = exif.get_ifd(EXIF_IFD)
-    except Exception:
+    except Exception:  # noqa: BLE001 - an Exif IFD that will not read leaves the time unknown
         sub = {}
     paris = timezone.get_default_timezone()
     offset = _OFFSET.fullmatch(_exif_text(sub.get(OFFSET_TIME_ORIGINAL)))
@@ -211,7 +211,7 @@ def prepare_photo(uploaded, *, now: datetime | None = None) -> PreparedPhoto:
             image = Image.open(stream, formats=READABLE_FORMATS)
         except Image.DecompressionBombError:
             raise PhotoError("Cette photo est trop grande : réglez l'appareil sur une résolution normale.") from None
-        except Exception:
+        except Exception:  # noqa: BLE001 - a malformed header is a French message, never a 500
             # OSError (UnidentifiedImageError: HEIC, a PDF, text…),
             # SyntaxError and ValueError from a plugin's header parser - and
             # whatever else a malformed header raises: never a 500.
@@ -235,7 +235,7 @@ def prepare_photo(uploaded, *, now: datetime | None = None) -> PreparedPhoto:
         try:
             taken_at = taken_at_from_exif(image.getexif(), now)
             exif_read = True
-        except Exception:
+        except Exception:  # noqa: BLE001 - EXIF that will not read leaves the time unknown
             taken_at, exif_read = None, False
 
         try:
@@ -243,7 +243,7 @@ def prepare_photo(uploaded, *, now: datetime | None = None) -> PreparedPhoto:
             # exactly `scale`: both of its ratios fall in [scale, 2 × scale)
             # (a side shorter than `scale` gives less - checked just below).
             image.draft("RGB", (max(1, width // scale), max(1, height // scale)))
-        except Exception:
+        except Exception:  # noqa: BLE001 - a damaged photo is a French message, never a 500
             raise PhotoError(DAMAGED) from None
         # What draft GAVE, not what it was asked: it reduces nothing for a
         # JPEG of several tiles, and the others decode whole.
@@ -257,13 +257,13 @@ def prepare_photo(uploaded, *, now: datetime | None = None) -> PreparedPhoto:
             image.load()
         except Image.DecompressionBombError:
             raise _too_big(width, height) from None
-        except Exception:
+        except Exception:  # noqa: BLE001 - a damaged photo is a French message, never a 500
             raise PhotoError(DAMAGED) from None
 
         if exif_read:
             try:
                 ImageOps.exif_transpose(image, in_place=True)
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 - a photo that cannot be turned upright is kept as taken
                 pass
 
         flat = None
@@ -277,7 +277,7 @@ def prepare_photo(uploaded, *, now: datetime | None = None) -> PreparedPhoto:
                 small.thumbnail((THUMB_SIDE, THUMB_SIDE))
                 thumb = _jpeg(small, THUMB_QUALITY)
             size = flat.size
-        except Exception:
+        except Exception:  # noqa: BLE001 - a damaged photo is a French message, never a 500
             raise PhotoError(DAMAGED) from None
         finally:
             if flat is not None and flat is not image:

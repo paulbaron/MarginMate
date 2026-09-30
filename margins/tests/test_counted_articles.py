@@ -71,9 +71,7 @@ def category_of(report, name):
 
 
 def article_of(report, article):
-    return next(
-        row for category in report.countable for row in category.articles if row.pk == article.pk
-    )
+    return next(row for category in report.countable for row in category.articles if row.pk == article.pk)
 
 
 class CountableFixture:
@@ -137,10 +135,10 @@ class EveryArticleUnderItsCategoryTests(CountableFixture, TestCase):
     def test_every_article_is_listed_even_one_never_bought(self):
         """The box is a setting, not a purchase: an article bought in no
         window at all can still be ticked."""
-        materiel = category_of(margins_for(MARCH), "Matériel")
+        equipment = category_of(margins_for(MARCH), "Matériel")
 
         self.assertEqual(
-            [row.name for row in materiel.articles], ["Nappe en lin", "Perceuse sans fil", "Tabouret haut"]
+            [row.name for row in equipment.articles], ["Nappe en lin", "Perceuse sans fil", "Tabouret haut"]
         )
         stool = article_of(margins_for(MARCH), self.stool)
         self.assertFalse(stool.was_bought)
@@ -172,7 +170,7 @@ class TheStateInWordsTests(CountableFixture, TestCase):
         self.assertEqual(category_of(report, "Consommables").state, "1 sur 3")
         self.assertEqual(category_of(report, "Spiritueux").state, "tous")
 
-    def test_an_article_classified_into_a_ticked_category_later_reads_n_sur_m(self):
+    def test_an_article_classified_into_a_ticked_category_later_reads_n_of_m(self):
         """« Tout cocher » ticks what the category holds TODAY: a newcomer
         arrives unticked, and « 3 sur 4 » is how that is seen."""
         tick(self.drill, self.cloth, self.stool)

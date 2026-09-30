@@ -53,7 +53,7 @@ class FakeTimestampAuthority:
     def __init__(self):
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, FAKE_TSA_NAME)])
-        now = dt.datetime.now(dt.timezone.utc)
+        now = dt.datetime.now(dt.UTC)
         certificate = (
             x509.CertificateBuilder()
             .subject_name(name)
@@ -68,11 +68,13 @@ class FakeTimestampAuthority:
         )
         self.certificate = _der(certificate)
         self.key = asn1_keys.PrivateKeyInfo.load(
-            key.private_bytes(serialization.Encoding.DER, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+            key.private_bytes(
+                serialization.Encoding.DER, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+            )
         )
 
     @classmethod
-    def shared(cls) -> "FakeTimestampAuthority":
+    def shared(cls) -> FakeTimestampAuthority:
         if cls._made is None:
             cls._made = cls()
         return cls._made
@@ -140,7 +142,7 @@ class SigningTestMixin:
     """Each test gets its own private folder (keys, signed files) and signs
     with the offline timestamps. Put it before the TestCase class.
 
-    The private folder is the test espace's own (accounts.paths.private_dir),
+    The private folder is the test tenant's own (accounts.paths.private_dir),
     under a TENANTS_ROOT of the test's own: no key, no signed file and no
     deletions.log is left for the next test."""
 
@@ -213,7 +215,8 @@ def countersign_without_a_drawing(request, *, now=None, ip=None, user_agent="Bur
     from django.utils import timezone
     from pyhanko.sign import fields, signers
 
-    from staff import pdf, private_files, signature_requests as workflow, signing
+    from staff import pdf, private_files, signing
+    from staff import signature_requests as workflow
     from staff.models import Establishment, SignatureEvent, SignatureRequest
 
     now = now or timezone.now()
@@ -252,7 +255,11 @@ def countersign_without_a_drawing(request, *, now=None, ip=None, user_agent="Bur
         )
         private_files.write(request.uuid, private_files.FINAL, signed.pdf)
         workflow.log_event(
-            request, SignatureEvent.Kind.COUNTERSIGNED, at=now, ip=ip, user_agent=user_agent,
+            request,
+            SignatureEvent.Kind.COUNTERSIGNED,
+            at=now,
+            ip=ip,
+            user_agent=user_agent,
             detail={
                 "final_sha256": final_sha,
                 "timestamp_authority": signed.authority,

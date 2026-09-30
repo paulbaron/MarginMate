@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Marges - MarginMate{% endblock %}
 {% comment %}
-Les messages de la page, sauf ceux du panneau « Articles comptés dans la
-marge produits » : sa redirection atterrit sur lui, deux écrans plus bas, et
-c'est là qu'il dit ce qui a changé (views._messages_by_place).
+The page's messages, except those of the « Articles comptés dans la
+marge produits » panel: its redirect lands on it, two screens further down, and
+that is where it says what changed (views._messages_by_place).
 {% endcomment %}
 {% block messages %}
     {% if page_messages %}
@@ -19,10 +19,10 @@ c'est là qu'il dit ce qui a changé (views._messages_by_place).
         <div>
             <h1>Marges</h1>
             {% comment %}
-            « Facturé » dès la première phrase, et le lien vers « Dépenses » à côté : les
-            deux pages comptent deux choses et chacune doit dire laquelle (voir CLAUDE.md,
-            « Dépenses par catégorie »). « Ce qui est sorti » est le mot que l'autre page
-            emploie pour le relevé, et il était ici le premier mot lu.
+            « Facturé » from the first sentence, and the link to « Dépenses » beside it: the
+            two pages count two things and each has to say which (see CLAUDE.md,
+            « Dépenses par catégorie »). « Ce qui est sorti » is the word the other page
+            uses for the statement, and here it was the first word read.
             {% endcomment %}
             <p class="page-subtitle">
                 Ce qui a été <strong>facturé</strong> face à ce qui a été vendu, sur une période, à la date
@@ -42,11 +42,11 @@ c'est là qu'il dit ce qui a changé (views._messages_by_place).
     </div>
 
     {% comment %}
-    Les dates : les mêmes « du … au … » que les cinq autres pages, avec les
-    deux bornes incluses (common.date_range). « Depuis le début » est une
-    période nommée qui l'emporte sur les dates, comme le mois de Banque ou
-    l'inventaire de Produits & charges : les champs sont alors désactivés et
-    les dates restent dans l'adresse, pour pouvoir être rendues.
+    The dates: the same « du … au … » as the five other pages, with both
+    ends included (common.date_range). « Depuis le début » is a
+    named period that wins over the dates, like Banque's month or
+    Produits & charges' stock take: the fields are then disabled and
+    the dates stay in the address, so they can be given back.
     {% endcomment %}
     <form method="get" class="date-range">
         {% for key in left_out %}<input type="hidden" name="sans" value="{{ key }}">{% endfor %}
@@ -89,7 +89,7 @@ c'est là qu'il dit ce qui a changé (views._messages_by_place).
             vendue{{ report.unread_units|pluralize }}) : leur chiffre d'affaires manque alors que leur coût est bien
             compté, donc <strong>toutes les marges ci-dessous sont trop basses</strong>.
             {% comment %}
-            The command is the server's: only the espace whose till the
+            The command is the server's: only the tenant whose till the
             server reads is handed it (recipes/integration.py).
             {% endcomment %}
             {% if till_allowed %}
@@ -144,9 +144,9 @@ c'est là qu'il dit ce qui a changé (views._messages_by_place).
             </div>
         </div>
         {% comment %}
-        La seconde marge réelle, à côté de la première et jamais à sa place :
-        le propriétaire veut les deux sous les yeux. Rien de décoché, rien
-        d'affiché ici.
+        The second real margin, beside the first and never in its place:
+        the owner wants both in sight. Nothing unticked, nothing
+        shown here.
         {% endcomment %}
         {% if report.exclusions %}
             <div class="stat stat-selection">
@@ -172,9 +172,9 @@ c'est là qu'il dit ce qui a changé (views._messages_by_place).
 
     <div class="card">
         {% comment %}
-        Les ventes hors caisse ne sont nommées que s'il y en a : « 0,00 € HT
-        (0,00 € TTC) » sur une page de chiffres se lit comme un chiffre, et
-        celui-là ne dit rien du tout.
+        The sales made off the till are named only when there are some: « 0,00 € HT
+        (0,00 € TTC) » on a page of figures reads as a figure, and
+        that one says nothing at all.
         {% endcomment %}
         <p>
             <strong>Ce qui est entré</strong> — caisse {{ report.revenue_till.ht|floatformat:2 }} € HT
@@ -197,10 +197,10 @@ c'est là qu'il dit ce qui a changé (views._messages_by_place).
     </div>
 
     {% comment %}
-    Le pendant, pour la marge réelle, de la phrase sur la part chiffrée : zéro
-    facturé n'est pas zéro dépensé. C'est l'état de tous les mois en cours,
-    jusqu'à ce que les factures soient rentrées - et sans cette phrase la page
-    annonce 100 % de marge.
+    The counterpart, for the real margin, of the sentence on the costed share: zero
+    invoiced is not zero spent. It is the state of every current month,
+    until the invoices are in - and without this sentence the page
+    announces a 100 % margin.
     {% endcomment %}
     {% if not report.invoice_count and report.revenue.ht > 0 %}
         <p class="message message-warning">
@@ -212,15 +212,15 @@ c'est là qu'il dit ce qui a changé (views._messages_by_place).
     {% endif %}
 
     {% comment %}
-    Le détail du facturé est aussi le sélecteur : chaque ligne a sa case,
-    cochée par défaut. Un formulaire GET, qui envoie pour chaque ligne sa clé
-    sous « montre » et, cochée, sous « garder » : une case décochée n'envoie
-    rien, donc « laissé de côté » se lit comme montré et pas gardé
-    (views._unticked). Une catégorie se déplie sans script : le details de sa
-    cellule n'est qu'un interrupteur, et :has() montre les lignes de son
+    The breakdown of what was invoiced is also the selector: each row has its box,
+    ticked by default. A GET form, which sends each row's key
+    under « montre » and, ticked, under « garder »: an unticked box sends
+    nothing, so « laissé de côté » reads as shown and not kept
+    (common.left_out_from). A category unfolds with no script: the details in its
+    cell is only a switch, and :has() shows the rows of its
     tbody (marginmate.css).
     {% endcomment %}
-    <h3 id="facture">Ce qui a été facturé</h3>
+    <h3 id="invoiced-breakdown">Ce qui a été facturé</h3>
     <p class="muted small">
         Où est allé l'argent facturé sur la période : les charges fournisseur par fournisseur, les
         marchandises par catégorie d'article puis article par article, chacune avec sa part du total.
@@ -321,9 +321,9 @@ c'est là qu'il dit ce qui a changé (views._messages_by_place).
             <div class="stat-label">Coût des recettes vendues (HT)</div>
             <div class="stat-value">{% if report.is_costed %}{% include "margins/_money_range.html" with low=report.cogs_low high=report.cogs_high %}{% else %}—{% endif %}</div>
             {% comment %}
-            Les unités de caisse ET les portions vendues hors caisse : le coût
-            les compte toutes les deux, et la note n'en nommait qu'une - 100 €
-            « pour 10 unités » quand 40 portions de plus étaient dedans.
+            The till's units AND the servings sold off the till: the cost
+            counts both, and the note named only one - 100 €
+            « pour 10 unités » when 40 more servings were in it.
             {% endcomment %}
             <div class="stat-note">
                 {{ report.costed_units }} unité{{ report.costed_units|pluralize }} de caisse chiffrée{{ report.costed_units|pluralize }}{% if report.document_costed_units %} + {{ report.document_costed_units|floatformat:"-2" }} hors caisse{% endif %}{% if report.cogs_low != report.cogs_high %} — de la variation la moins chère à la plus chère{% endif %}
@@ -356,10 +356,10 @@ c'est là qu'il dit ce qui a changé (views._messages_by_place).
     </div>
 
     {% comment %}
-    La phrase qui empêche cette page de mentir : une marge produits se calcule
-    sur tout le chiffre d'affaires mais ne connaît le coût que d'une partie
-    des ventes. Sur les données réelles, une bonne part de l'argent n'est pas
-    chiffrée - une marge affichée sans cette phrase est lue comme un résultat.
+    The sentence that keeps this page from lying: a products margin is worked out
+    over the whole revenue but knows the cost of only part
+    of the sales. On the real data, a good share of the money is not
+    costed - a margin shown without this sentence is read as a result.
     {% endcomment %}
     {% if report.flagged_in_recipes %}
         <p class="message message-warning">
@@ -393,9 +393,9 @@ c'est là qu'il dit ce qui a changé (views._messages_by_place).
     {% endif %}
 
     {% comment %}
-    « Rien de coché » et « coché, rien acheté sur cette période » donnaient le
-    même écran vide : le nombre d'articles cochés est le seul qui les
-    distingue, et il est dit dans les deux cas.
+    « Rien de coché » and « coché, rien acheté sur cette période » gave the
+    same empty screen: the number of articles ticked is the only thing that
+    tells them apart, and it is said in both cases.
     {% endcomment %}
     {% if not report.flagged_articles %}
         <p class="muted small">
@@ -439,17 +439,17 @@ c'est là qu'il dit ce qui a changé (views._messages_by_place).
     {% endif %}
 
     {% comment %}
-    « Articles comptés dans la marge produits » : la case de la fiche de
-    l'article, ici, une catégorie à la fois (le propriétaire, 21/09 : « pour
-    éviter les allers-retours »). Chaque catégorie a son formulaire POST
-    (views.count_articles), rangé dans la cellule de ses boutons ; les cases
-    de ses articles s'y rattachent par l'attribut form, parce qu'un
-    formulaire ne peut pas envelopper un tbody. Chaque article envoie son id
-    sous « affiche » et, coché, sous « coche » : une case décochée n'envoie
-    rien, donc « décoché » se lit comme affiché et pas coché. Une case dessinée
-    cochée l'envoie aussi sous « etait » : seul ce qui a été changé sur la page
-    change, pas ce qu'un autre onglet a fait depuis. Une catégorie
-    se déplie sans script, comme « Ce qui a été facturé ».
+    « Articles comptés dans la marge produits »: the box on the article's
+    form, here, one category at a time (the owner, 21/09: « to avoid
+    going back and forth »). Each category has its own POST form
+    (views.count_articles), placed in the cell of its buttons; the boxes
+    of its articles join it through the form attribute, because a
+    form cannot wrap a tbody. Each article sends its id
+    under « affiche » and, ticked, under « coche »: an unticked box sends
+    nothing, so « décoché » reads as shown and not ticked. A box drawn
+    ticked also sends it under « etait »: only what was changed on the page
+    changes, not what another tab has done since. A category
+    unfolds with no script, like « Ce qui a été facturé ».
     {% endcomment %}
     <h3 id="{{ panel }}">Articles comptés dans la marge produits</h3>
     {% for message in panel_messages %}
@@ -488,7 +488,7 @@ c'est là qu'il dit ce qui a changé (views._messages_by_place).
                             </td>
                             <td class="num">{{ category.bought_ht|floatformat:2 }} €{% if category.ticked and not category.all_ticked %}<div class="muted small">dont {{ category.counted_ht|floatformat:2 }} € comptés</div>{% endif %}</td>
                             <td class="flag-actions">
-                                <form id="compter-{{ forloop.counter }}" method="post" action="{{ count_articles_url }}">
+                                <form id="count-articles-{{ forloop.counter }}" method="post" action="{{ count_articles_url }}">
                                     {% csrf_token %}
                                     <input type="hidden" name="next" value="{{ articles_next }}">
                                     <input type="hidden" name="categorie" value="{{ category.name }}">
@@ -500,9 +500,9 @@ c'est là qu'il dit ce qui a changé (views._messages_by_place).
                         {% for article in category.articles %}
                             <tr class="flag-member">
                                 <td class="flag-member-name" colspan="2">
-                                    <input type="hidden" form="compter-{{ forloop.parentloop.counter }}" name="affiche" value="{{ article.pk }}">
-                                    {% if article.ticked %}<input type="hidden" form="compter-{{ forloop.parentloop.counter }}" name="etait" value="{{ article.pk }}">{% endif %}
-                                    <label><input type="checkbox" form="compter-{{ forloop.parentloop.counter }}" name="coche" value="{{ article.pk }}"{% if article.ticked %} checked{% endif %}> {{ article.name }}</label>
+                                    <input type="hidden" form="count-articles-{{ forloop.parentloop.counter }}" name="affiche" value="{{ article.pk }}">
+                                    {% if article.ticked %}<input type="hidden" form="count-articles-{{ forloop.parentloop.counter }}" name="etait" value="{{ article.pk }}">{% endif %}
+                                    <label><input type="checkbox" form="count-articles-{{ forloop.parentloop.counter }}" name="coche" value="{{ article.pk }}"{% if article.ticked %} checked{% endif %}> {{ article.name }}</label>
                                     {% if article.counted_twice %}<span class="status-pill status-twice">compté deux fois</span>{% elif article.in_recipe %}<span class="muted small">dans une recette : le cocher le compterait deux fois</span>{% endif %}
                                 </td>
                                 <td class="num">{% if article.was_bought %}{{ article.bought.ht|floatformat:2 }} €{% else %}<span class="muted">rien acheté</span>{% endif %}</td>
@@ -511,7 +511,7 @@ c'est là qu'il dit ce qui a changé (views._messages_by_place).
                         {% endfor %}
                         <tr class="flag-member flag-save">
                             <td colspan="4">
-                                <button class="btn btn-small" type="submit" form="compter-{{ forloop.counter }}" name="action" value="enregistrer">Enregistrer les cases de {{ category.label }}</button>
+                                <button class="btn btn-small" type="submit" form="count-articles-{{ forloop.counter }}" name="action" value="enregistrer">Enregistrer les cases de {{ category.label }}</button>
                             </td>
                         </tr>
                     </tbody>
@@ -534,9 +534,9 @@ c'est là qu'il dit ce qui a changé (views._messages_by_place).
     {% if report.top_uncosted %}
         <h3>Ventes sans coût connu</h3>
         {% comment %}
-        La liste est coupée à douze et ne le disait pas : sur les données
-        réelles il y a bien plus de produits derrière, et un lecteur qui va au bout
-        des douze croit avoir fait le tour.
+        The list is cut at twelve and did not say so: on the real
+        data there are many more products behind it, and a reader who gets to the end
+        of the twelve believes they have been through them all.
         {% endcomment %}
         <p class="muted small">
             {% if report.uncosted_products > report.top_uncosted|length %}
@@ -582,11 +582,11 @@ c'est là qu'il dit ce qui a changé (views._messages_by_place).
     </p>
 
     {% comment %}
-    Le pied de chaque tableau dit son propre total, et la phrase dit pourquoi
-    il n'est pas la marge produits d'en haut : celle-ci compte en plus les
-    articles cochés et les ventes hors caisse, qui n'ont pas de catégorie de
-    caisse. Sans les deux, une catégorie à 44 % de marge se lisait au-dessus
-    d'une marge produits à -36 %, sur le même argent et le même écran.
+    Each table's foot states its own total, and the sentence says why
+    it is not the products margin at the top: that one also counts the
+    ticked articles and the sales made off the till, which have no till
+    category. Without the two, a category at a 44 % margin read above
+    a products margin at -36 %, on the same money and the same screen.
     {% endcomment %}
     {% if categories %}
         {% include "margins/_slices.html" with rows=categories total=categories_total label="catégories" heading="Catégorie" %}
@@ -603,9 +603,9 @@ c'est là qu'il dit ce qui a changé (views._messages_by_place).
     {% if report.revenue_without_rate_ttc or report.undated_invoices or report.hand_typed_units %}
         <details class="explainer">
             {% comment %}
-            Les manques sont nommés dans le résumé lui-même : sur une page dont
-            tout l'argument est « un trou se dit, il ne s'absorbe pas », un
-            repli fermé qui ne dit pas ce qu'il cache ne se lit jamais.
+            The gaps are named in the summary itself: on a page whose
+            whole argument is « a gap is said, not absorbed », a
+            closed fold that does not say what it hides is never read.
             {% endcomment %}
             <summary>
                 Ce que ces chiffres ne disent pas{% if report.revenue_without_rate_ttc %} — {{ report.revenue_without_rate_ttc|floatformat:2 }} € sans taux de TVA{% endif %}{% if report.undated_invoices %} — {{ report.undated_invoices }} facture{{ report.undated_invoices|pluralize }} sans date{% endif %}{% if report.hand_typed_units %} — {{ report.hand_typed_units }} unité{{ report.hand_typed_units|pluralize }} saisie{{ report.hand_typed_units|pluralize }} à la main{% endif %}

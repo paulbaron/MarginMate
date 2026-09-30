@@ -3,7 +3,7 @@ pages, the pages the navigation links to (the bar's own name in the topbar,
 never the other's), then EVERY plain route of the URLconf and one page per
 app on the bar's own rows - each answers without an error, renders its
 template completely and holds nothing of the other bar. Both databases
-number their rows from 1, so every pk names a row in BOTH espaces: a page
+number their rows from 1, so every pk names a row in BOTH tenants: a page
 reading the wrong database would show the other bar's row, not a 404."""
 
 from datetime import date
@@ -81,7 +81,7 @@ class AccountsPagesSmokeTests(TwoTenantsTestCase):
                     response = self.client.get(reverse(name))
                     self.assertEqual(response.status_code, 200)
                     assertNoUnrenderedTemplateSyntax(self, response, name)
-                    self.assertContains(response, f'<span class="topbar-espace" title="Bar {mine}">Bar {mine}</span>')
+                    self.assertContains(response, f'<span class="topbar-tenant" title="Bar {mine}">Bar {mine}</span>')
                     self.assertNotContains(response, other)
 
 
@@ -112,7 +112,7 @@ class EveryPageSmokeTests(TwoTenantsTestCase):
                 fingerprint=f"empreinte-{word}",
             )
             person = employee(last_name=word, first_name="Essai")
-            # A reprise the bar's supplier took back, with a note of its own.
+            # A pickup the bar's supplier took back, with a note of its own.
             pickup = make_pickup(supplier=supplier, counts={"Fûts": 4}, note=f"Vides {word}")
         return [
             reverse("invoices:invoice_detail", args=[invoice.pk]),

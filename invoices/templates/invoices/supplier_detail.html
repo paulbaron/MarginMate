@@ -57,7 +57,7 @@
                         {% endif %}
                         <form method="post" action="{% url 'invoices:supplier_change_seen' supplier.pk change.pk %}">
                             {% csrf_token %}
-                            <input type="hidden" name="retour" value="{{ fiche }}">
+                            <input type="hidden" name="retour" value="{{ supplier_page }}">
                             <button class="btn btn-small" type="submit">Vu</button>
                         </form>
                     </div>
@@ -70,8 +70,8 @@
         </div>
     {% endfor %}
 
-    <section class="card" aria-labelledby="reconnaissance">
-        <h2 id="reconnaissance">Reconnaissance</h2>
+    <section class="card" aria-labelledby="recognition">
+        <h2 id="recognition">Reconnaissance</h2>
         {% if is_till %}
             <p>Reconnue par sa caisse, réglée dans l'application : ses tickets n'ont besoin ni d'en-tête ni d'identifiant.</p>
         {% else %}
@@ -159,7 +159,7 @@
                         <input type="hidden" name="action" value="deplacer">
                         <input type="hidden" name="valeur" value="{{ move_offer.identifier }}">
                         <button class="btn btn-small" type="submit">Le déplacer ici</button>
-                        <a class="btn btn-small btn-secondary" href="{{ fiche }}">Laisser à {{ move_offer.holder.name }}</a>
+                        <a class="btn btn-small btn-secondary" href="{{ supplier_page }}">Laisser à {{ move_offer.holder.name }}</a>
                     </form>
                 </div>
             {% endif %}
@@ -272,7 +272,7 @@
             {% endcomment %}
             <p class="muted">{{ sources_refused }}</p>
         {% else %}
-            <p><a class="btn btn-small btn-secondary" href="{% url 'invoices:invoice_type_create' %}?fournisseur={{ supplier.pk }}&amp;retour={{ fiche|urlencode }}">+ Nouvelle source pour {{ supplier.name }}</a></p>
+            <p><a class="btn btn-small btn-secondary" href="{% url 'invoices:invoice_type_create' %}?fournisseur={{ supplier.pk }}&amp;retour={{ supplier_page|urlencode }}">+ Nouvelle source pour {{ supplier.name }}</a></p>
         {% endif %}
     </section>
 

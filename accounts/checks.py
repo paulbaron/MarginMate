@@ -1,15 +1,15 @@
-"""System checks of the espaces and of the server: `manage.py check`,
+"""System checks of the tenants and of the server: `manage.py check`,
 every runserver, and `manage.py serve`, which also runs the deployment ones
 (`check --deploy`) and refuses to start on any warning.
 
 Always run - there is no mode left in which they would have nothing to say
 (the single mode, and its accounts.E001 « unknown mode », were removed on
-29/09/2026). They refuse to start without somewhere to keep the espaces
+29/09/2026). They refuse to start without somewhere to keep the tenants
 (TENANTS_ROOT), without the accounts database, or with a `default` that is
 a real file - unbound, `default` must be an EMPTY in-memory database, so a
 query nobody bound fails loudly instead of landing in that file
-(E002-E004). They refuse more than one open espace using the server's own
-accounts (`one_owner_espace`, E005), and warn about a cache the login
+(E002-E004). They refuse more than one open tenant using the server's own
+accounts (`one_owner_tenant`, E005), and warn about a cache the login
 limiter cannot count in (`limiter_cache`, W002).
 
 The server's own (security audit DEPLOY-1, DEPLOY-2, ANON-7, ANON-3):
@@ -24,7 +24,7 @@ The server's own (security audit DEPLOY-1, DEPLOY-2, ANON-7, ANON-3):
 * deployment only (`check --deploy`, `serve`): ALLOWED_HOSTS with a public
   name and no « * » (E008), the cookies HTTPS-only (E009), the signing
   links' MARGINMATE_SITE_URL in https and allowed (E010), and every bar's
-  data - the espaces, the accounts database - outside the code's folder
+  data - the tenants, the accounts database - outside the code's folder
   (E011): left at their defaults they sit beside manage.py, where updating
   or cleaning the code goes.
 
@@ -284,14 +284,14 @@ def limiter_cache(app_configs=None, **kwargs):
 
 
 @register()
-def one_owner_espace(app_configs=None, **kwargs):
-    """At most ONE open espace uses the server's own accounts
+def one_owner_tenant(app_configs=None, **kwargs):
+    """At most ONE open tenant uses the server's own accounts
     (`Tenant.uses_server_integrations`: Metro, the invoice mailbox,
     L'Addition, the AI reading, the portals' .env credentials).
 
     They are one set of accounts with one state. Metro's pause - 24 hours
     between two sign-ins, a week after a refusal - lives on the METRO row of
-    the espace that signs in: two such espaces would each keep a pause of
+    the tenant that signs in: two such tenants would each keep a pause of
     their own and sign in to the one account twice as often, which is how
     its firewall blocks the owner. adopt_database refuses to make a second
     one and the admin shows the box read-only; this is for one set by hand.
@@ -322,7 +322,7 @@ def one_owner_espace(app_configs=None, **kwargs):
             hint=(
                 "Un seul le peut - un seul compte Metro, une seule pause. Retirez « utilise les accès du "
                 "serveur » aux autres, ou fermez-les (actif décoché) : manage.py shell, puis "
-                "Tenant.objects.filter(dir_name=\"<dossier>\").update(uses_server_integrations=False)."
+                'Tenant.objects.filter(dir_name="<dossier>").update(uses_server_integrations=False).'
             ),
             id="accounts.E005",
         )

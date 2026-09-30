@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% comment %}
-« Supprimer… », étape 2 : la dernière vérification (signature_views.signature_delete_confirm). Contexte :
-`page` (DeletionPage, avec son jeton). Un résumé et UN bouton rouge ; seul son envoi supprime, et seulement
-si le jeton de l'étape 1 est encore valable (dix minutes), donné pour cette version, et que rien n'a changé
-depuis. Afficher cette page ne supprime rien.
+« Supprimer… », step 2: the last check (signature_views.signature_delete_confirm). Context: `page`
+(DeletionPage, with its token). A summary and ONE red button; only sending it deletes, and only if step 1's
+token is still valid (ten minutes), given for this version, and nothing has changed since. Showing this
+page deletes nothing.
 {% endcomment %}
 {% block title %}Dernière vérification — version {{ page.version }} {{ page.of_month }} — {{ page.who }} - MarginMate{% endblock %}
 {% block content %}

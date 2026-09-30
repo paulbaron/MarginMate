@@ -28,7 +28,7 @@ class LinkError(ValueError):
 
 
 def plain(text: str) -> str:
-    """"Spritz Apérol (HH)" -> "spritz aperol hh"."""
+    """ "Spritz Apérol (HH)" -> "spritz aperol hh"."""
     decomposed = unicodedata.normalize("NFD", text or "")
     unaccented = "".join(char for char in decomposed if not unicodedata.combining(char)).lower()
     return " ".join(re.sub(r"[^a-z0-9]+", " ", unaccented).split())

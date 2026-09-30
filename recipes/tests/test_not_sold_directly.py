@@ -1,4 +1,4 @@
-"""Une recette qui n'est pas vendue telle quelle.
+"""A recipe that is not sold as it is.
 
 A house syrup, an infusion: a preparation used inside other recipes and never
 sold over the counter. It was filed at 0,00 € because the price was required,
@@ -158,9 +158,7 @@ class TheFormTests(TestCase):
         saved = Recipe.objects.get(name="Sirop")
         drawn = str(RecipeForm(instance=saved)["sale_quantity"].value())
         self.assertEqual(drawn, "1.0000")
-        form = RecipeForm(
-            form_data(name="Sirop", selling_price_ttc="", sale_quantity=drawn), instance=saved
-        )
+        form = RecipeForm(form_data(name="Sirop", selling_price_ttc="", sale_quantity=drawn), instance=saved)
         self.assertTrue(form.is_valid(), form.errors)
         self.assertIsNone(form.save().selling_price_ttc)
 
@@ -168,14 +166,12 @@ class TheFormTests(TestCase):
         make_recipe(name="Sirop", selling_price_ttc=None)
         saved = Recipe.objects.get(name="Sirop")
         drawn = str(RecipeForm(instance=saved)["sale_quantity"].value())
-        form = RecipeForm(
-            form_data(name="Sirop", selling_price_ttc="", sale_quantity=drawn), instance=saved
-        )
+        form = RecipeForm(form_data(name="Sirop", selling_price_ttc="", sale_quantity=drawn), instance=saved)
         self.assertTrue(form.is_valid(), form.errors)
 
     def test_a_happy_hour_price_without_a_selling_price_is_refused(self):
         """A price in happy hour on something that is not sold is the same
-        contradiction, and it escaped the guard: the fiche would print
+        contradiction, and it escaped the guard: the page would print
         « Pas vendue directement » above a happy-hour margin."""
         form = RecipeForm(form_data(selling_price_ttc="", happy_hour_price_ttc="4.00"))
         self.assertFalse(form.is_valid())
@@ -208,7 +204,7 @@ class ThePagesTests(Fixtures, TestCase):
         self.assertNotContains(page, "Pas vendue directement")
 
 
-class ItIsNotOfferedOnABonDeVenteTests(Fixtures, TestCase):
+class ItIsNotOfferedOnASaleDocumentTests(Fixtures, TestCase):
     """« Vendu » lists what can be sold, and a preparation cannot.
 
     Offered, a line naming it books its full cost against 0,00 € of revenue

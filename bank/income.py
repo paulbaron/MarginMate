@@ -75,9 +75,7 @@ RATE_PLACES = Decimal("0.01")
 #: thousands grouped by spaces). Anything else - no number, a number the
 #: pattern cannot read whole - is NOT a payout: it falls to « Autres
 #: entrées », where it is seen, rather than being read as a wrong gross.
-PAYOUT_RE = re.compile(
-    r"TOTAL\s+ENCAISS[EÉ]\s+(\d{1,3}(?:\s\d{3})+|\d+)(?:[.,](\d+))?\s+EUROS?\b", re.IGNORECASE
-)
+PAYOUT_RE = re.compile(r"TOTAL\s+ENCAISS[EÉ]\s+(\d{1,3}(?:\s\d{3})+|\d+)(?:[.,](\d+))?\s+EUROS?\b", re.IGNORECASE)
 #: The bank types of the two deposits, compared accent- and case-blind
 #: (`common.search_key`), so « ESPÈCES » and « Especes » are one type.
 CASH_TYPE = "versement especes"
@@ -85,7 +83,7 @@ CHEQUE_TYPE = "remise cheque"
 
 #: Where a credit came from - one vocabulary for the report, the page and
 #: « Banque »'s « Entrées » tab.
-CARD, CASH, CHEQUE, OTHER = "carte", "especes", "cheques", "autres"
+CARD, CASH, CHEQUE, OTHER = "card", "cash", "cheque", "other"
 SOURCES = {
     CARD: "Versements carte",
     CASH: "Espèces déposées",
@@ -312,9 +310,9 @@ NO_CARD_DAYS = (
     "aucun paiement par carte n'est lu en caisse. Les moyens de paiement se relisent depuis les exports "
     "déjà téléchargés : manage.py laddition_backfill_payments."
 )
-#: NO_CARD_DAYS where that command is not this espace's to run: it reads the
+#: NO_CARD_DAYS where that command is not this tenant's to run: it reads the
 #: exports of the till the server imports, the owner's (recipes/integration.py).
-#: Chosen by the view (`views._balance_reason`), which knows the espace.
+#: Chosen by the view (`views._balance_reason`), which knows the tenant.
 NO_CARD_DAYS_TO_CONFIGURE = f"aucun paiement par carte n'est lu en caisse, et {TILL_TO_CONFIGURE}."
 NO_PAYOUT = "aucun versement carte sur le relevé après le premier jour de caisse lu."
 
@@ -478,7 +476,9 @@ def income_for(window: DateRange) -> IncomeReport:
     # worked out from the first payout on, so that a window cannot change
     # them. Windowed here, in Python, with the one definition of « in the
     # window » that is not SQL (`DateRange.holds`).
-    entries = [entry_for(line) for line in BankTransaction.objects.filter(amount__gt=0).order_by("operation_date", "pk")]
+    entries = [
+        entry_for(line) for line in BankTransaction.objects.filter(amount__gt=0).order_by("operation_date", "pk")
+    ]
     payments = list(PosDailyPayment.objects.values_list("sold_on", "method", "amount", "payments"))
     # Where each side starts and stops - read before the loops below, which
     # set apart what one side holds on days the other cannot see. The
@@ -519,20 +519,14 @@ def income_for(window: DateRange) -> IncomeReport:
         by_source[entry.source][1] += 1
         # Money in before the till's first day of payments read pays sales
         # the till never read: compared, it reads as money from nowhere.
-        if (
-            report.first_payment_day is not None
-            and entry.day < report.first_payment_day
-            and entry.source in COMPARED
-        ):
+        if report.first_payment_day is not None and entry.day < report.first_payment_day and entry.source in COMPARED:
             amount = entry.gross if entry.source == CARD else entry.net
             if amount:
                 bank_before[entry.source] += amount
                 bank_before_days.append(entry.day)
         month = month_of(entry.day)
         if entry.source == CARD:
-            report.payouts.append(
-                PayoutRow(entry, runs.get(entry.line.pk), report.balance.pending.get(entry.line.pk))
-            )
+            report.payouts.append(PayoutRow(entry, runs.get(entry.line.pk), report.balance.pending.get(entry.line.pk)))
             month.payouts_gross += entry.gross
             month.net += entry.net
             month.commission += entry.commission
@@ -719,9 +713,7 @@ NOTES = {
     ),
     CASH: "La différence est gardée en caisse ou payée en liquide : la page ne sait pas laquelle.",
     CHEQUE: "Un chèque se remet quand on passe à la banque, pas le jour de la vente.",
-    PosDailyPayment.CREDIT: (
-        "Réglé par un acompte encaissé avant, souvent par virement : voir « Autres entrées »."
-    ),
+    PosDailyPayment.CREDIT: ("Réglé par un acompte encaissé avant, souvent par virement : voir « Autres entrées »."),
     PosDailyPayment.UNREAD: "Tickets dont la caisse n'a pas pu lire les paiements, comptés à leur total.",
     PosDailyPayment.UNPAID: "Tickets sans paiement enregistré, comptés à leur total.",
     OTHER: "Ce que la caisse ne voit pas : un virement reçu, un apport, un remboursement.",
@@ -800,7 +792,9 @@ def _method_rows(report: IncomeReport, till: dict[str, TillMethod]) -> list[Meth
         )
     if report.others:
         rows.append(
-            MethodRow(OTHER, "Autres entrées", bank=report.others_total, bank_count=len(report.others), note=NOTES[OTHER])
+            MethodRow(
+                OTHER, "Autres entrées", bank=report.others_total, bank_count=len(report.others), note=NOTES[OTHER]
+            )
         )
     return rows
 
@@ -835,7 +829,5 @@ def known_categories() -> list[str]:
     spending ones (`spending.known_categories` reads debits only): a word
     for money that went out offered for money that came in files an income
     under a spending's name."""
-    names = set(
-        BankTransaction.objects.filter(amount__gt=0).exclude(category="").values_list("category", flat=True)
-    )
+    names = set(BankTransaction.objects.filter(amount__gt=0).exclude(category="").values_list("category", flat=True))
     return sorted(names, key=lambda name: (search_key(name), name))

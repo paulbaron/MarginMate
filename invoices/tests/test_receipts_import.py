@@ -57,7 +57,9 @@ class LabelForUnitPriceTests(TestCase):
     def test_a_dated_entry_takes_over_from_its_date(self):
         ShopItemPrice.objects.create(supplier=self.supplier, unit_price_ttc=Decimal("0.70"), label="Ancien")
         ShopItemPrice.objects.create(
-            supplier=self.supplier, unit_price_ttc=Decimal("0.70"), label="Nouveau",
+            supplier=self.supplier,
+            unit_price_ttc=Decimal("0.70"),
+            label="Nouveau",
             valid_from=date(2026, 6, 1),
         )
         self.assertEqual(label_for_unit_price(self.supplier, Decimal("0.70"), date(2026, 5, 1)), "Ancien")
@@ -89,9 +91,7 @@ class LabelPlaceholderLinesTests(TestCase):
             vat_rate=FIVE_FIVE,
             is_placeholder=True,
         )
-        return ParsedInvoice(
-            supplier_code="SABBH", invoice_number="1", invoice_date=date(2026, 7, 14), lines=[line]
-        )
+        return ParsedInvoice(supplier_code="SABBH", invoice_number="1", invoice_date=date(2026, 7, 14), lines=[line])
 
     def test_a_known_price_gets_its_name(self):
         ShopItemPrice.objects.create(supplier=self.supplier, unit_price_ttc=Decimal("0.70"), label="Citron vert")
@@ -141,8 +141,13 @@ class ReceiptReviewViewTests(TestCase):
         )
         product = make_product(supplier=self.supplier, raw_name="Article divers (0.70 EUR/u)")
         make_invoice_line(
-            invoice=self.invoice, product=product, quantity=3, total_ht="1.99",
-            unit_cost_ht="0.6633", vat_rate=FIVE_FIVE, raw_name="Article divers (0.70 EUR/u)",
+            invoice=self.invoice,
+            product=product,
+            quantity=3,
+            total_ht="1.99",
+            unit_cost_ht="0.6633",
+            vat_rate=FIVE_FIVE,
+            raw_name="Article divers (0.70 EUR/u)",
         )
 
     def test_the_queue_lists_an_unreviewed_receipt(self):
@@ -314,9 +319,7 @@ class ReceiptReviewViewTests(TestCase):
             },
         )
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(
-            sorted(line.raw_name for line in self.invoice.lines.all()), ["Citron vert", "Menthe"]
-        )
+        self.assertEqual(sorted(line.raw_name for line in self.invoice.lines.all()), ["Citron vert", "Menthe"])
 
     def test_a_row_left_at_its_prefilled_vat_rate_does_not_block_the_save(self):
         """The VAT field carries an initial, so an otherwise-empty trailing
@@ -348,9 +351,7 @@ class ReceiptReviewViewTests(TestCase):
             {"action": "remember_price", "unit_price_ttc": "0.70", "label": "Citron vert", "valid_from": ""},
         )
         self.assertEqual(response.status_code, 302)
-        self.assertTrue(
-            ShopItemPrice.objects.filter(supplier=self.supplier, unit_price_ttc=Decimal("0.70")).exists()
-        )
+        self.assertTrue(ShopItemPrice.objects.filter(supplier=self.supplier, unit_price_ttc=Decimal("0.70")).exists())
         self.assertEqual([line.raw_name for line in self.invoice.lines.all()], ["Citron vert"])
 
     def test_a_price_already_known_is_refused_on_the_page(self):
@@ -440,9 +441,13 @@ class RememberPriceAcrossQueueTests(TestCase):
         # One product per name and shop, as the import leaves it.
         product = Product.objects.filter(supplier=supplier, raw_name=name).first()
         make_invoice_line(
-            invoice=invoice, product=product or make_product(supplier=supplier, raw_name=name), quantity=3,
-            total_ht=str((Decimal(unit_ht) * 3).quantize(Decimal("0.01"))), unit_cost_ht=unit_ht,
-            vat_rate=FIVE_FIVE, raw_name=name,
+            invoice=invoice,
+            product=product or make_product(supplier=supplier, raw_name=name),
+            quantity=3,
+            total_ht=str((Decimal(unit_ht) * 3).quantize(Decimal("0.01"))),
+            unit_cost_ht=unit_ht,
+            vat_rate=FIVE_FIVE,
+            raw_name=name,
         )
         return invoice
 
@@ -495,7 +500,7 @@ class RememberPriceAcrossQueueTests(TestCase):
         self.assertEqual(self._names(named), ["MENTHE FRAICHE"])
 
     def test_a_dated_price_leaves_older_tickets_alone(self):
-        """"À partir du" means the price did not name anything before it."""
+        """ "À partir du" means the price did not name anything before it."""
         before = self._receipt(date(2026, 6, 20))
         after = self._receipt(date(2026, 7, 20))
         response = self._remember(valid_from="2026-07-01")
@@ -547,7 +552,5 @@ class InvoiceReceiptPropertyTests(TestCase):
         self.assertFalse(invoice.receipt_verified)
 
     def test_a_reviewed_receipt_no_longer_needs_review(self):
-        invoice = make_invoice(
-            parse_checks=[{"label": "x", "passed": False, "detail": ""}], reviewed_at=timezone.now()
-        )
+        invoice = make_invoice(parse_checks=[{"label": "x", "passed": False, "detail": ""}], reviewed_at=timezone.now())
         self.assertFalse(invoice.needs_receipt_review)

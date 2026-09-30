@@ -3,11 +3,29 @@
 Django 5.2 / Python 3.11 / SQLite. Bar inventory and costing: invoices in,
 real per-unit costs out, recipe margins on top.
 
+## Language: English code, French screens
+
+**Every comment and all the code are in English; only the text the app
+DISPLAYS is in French** (the owner's rule, 30/09/2026). English: identifiers
+(variables, functions, classes, constants, tests, template variables, URL
+names, CSS classes and internal ids, `data-*` names, JS, batch labels and
+variables), comments and docstrings of every kind (Python, templates, HTML,
+JS, CSS, `rem` lines, config files) and these notes. French: what reaches a
+screen, a PDF, a message, a log line or an `echo` - and DEPLOY.md, written for
+the owner. A comment may quote the French it talks about, « like this ».
+French names that something outside the code depends on are kept on purpose
+(« Toolchain » lists them: the database, the HTTP interface, stored keys,
+archives, command lines); a Python name holding one is still English. Name new
+code in English from the start, and translate any French comment you touch.
+
 ## Running the tests
 
 ```bash
 .venv/Scripts/python.exe manage.py test --settings=config.settings_test
 ```
+
+or `uv run python manage.py test --settings=config.settings_test` (the same
+`.venv`, synced first).
 
 `config/settings_test.py` uses two in-memory databases (the test espace's
 `default` and the central `accounts`, `tests/runner.py`), a temporary
@@ -46,6 +64,73 @@ opaque scope - where the page keeps it inside a function (returnables.js),
 build it with `accounts.tenancy.storage_scope`. A class sharing one Chrome
 empties the storage in `setUp`: the next test reads what the last one left.
 
+## Toolchain
+
+Set up 30/09/2026 at the owner's request; README.md, « First-time setup » and
+« Development », has the commands.
+
+- **mise** (`mise.toml`) pins the tools: Python 3.11, uv, prek. Its shims
+  (`%LOCALAPPDATA%\mise\shims`) must be on the PATH for `uv` and `prek` to
+  answer in a terminal, in the git hooks and in deploy.cmd. A shim works only
+  in a folder whose mise.toml names the tool ("No version is set for shim"
+  elsewhere).
+- **uv** (`pyproject.toml`, `uv.lock`): every Python package, locked. The
+  `dev` group holds ruff, ty, django-stubs (pinned to Django's minor) and the
+  typeshed stubs; production installs without it (`uv sync --locked
+  --no-dev`, deploy.cmd). `[tool.uv] package = false`: the project is run from
+  its folder, never built. `uv.lock` was made from the old pip freeze and
+  reproduces every production version exactly (python-barcode, httpx and
+  httpcore went: nothing imported them). **`requirements.txt` is a
+  transitional export** of the lock (the `requirements-export` hook keeps it
+  in step) for the one deploy the previous deploy.cmd runs; delete the file
+  and its hook once a deploy has put uv in place (DEPLOY.md 10.6).
+  **`.python-version` (3.11) must stay**: without it `uv sync` threw a
+  pip-made `.venv` away and rebuilt it on the first Python it found (mise's)
+  - measured 30/09, and production's `.venv`, its downloaded OCR models with
+  it, would have gone at the next deploy (`tests/test_toolchain.py`).
+  VS Code's Ruff extension runs `.venv\Scripts\ruff.exe server`, and Windows
+  will not let `uv sync` delete that file (« Accès refusé »); it can be
+  renamed while it runs (`ruff.exe.held-by-vscode`), then synced, and the old
+  copy deleted once the editor has restarted.
+- **prek** (`prek.toml`, `prek install` wires both stages). pre-commit, on
+  the staged files: merge markers, files over 1 MB, private keys (the three
+  files naming PEM markers excepted), end-of-file and trailing whitespace
+  (never in Python: a string literal's whitespace is data), `uv lock`, the
+  requirements export, `ruff check --fix`, `ruff format`, `ty check` (shown,
+  never blocking). **pre-push is the CI**: `uv lock --check`, ruff check and
+  format check and ty over the whole repository, `manage.py check`,
+  `makemigrations --check`, and the fast suite with `--parallel 6` (about two
+  minutes). A deploy pulls the development folder without pushing: run
+  `prek run --hook-stage pre-push --all-files` before one. The browser tests
+  stay manual (« Running the tests »).
+- **ruff** (`[tool.ruff]`): line length 120, ruff's default rule set less
+  FURB157 (`Decimal("0")` stays: money is built from strings), RUF012
+  (Django's class-level lists) and SIM117; DTZ001 is off in tests. A finding
+  silenced on purpose says why on its line: `# noqa: BLE001 - <why>`.
+- **ty** (`[tool.ty.rules]`): the rules Django's run-time attributes and
+  unittest's narrowing make noisy are warnings (the comment there lists them
+  and why); every other rule blocks. A false positive is silenced on its line
+  with `# ty: ignore[<rule>]` and the reason.
+- **Language** (the rule: « Language: English code, French screens », at the
+  top): code and comments in English; what the app displays - and the
+  documents written for the owner, DEPLOY.md - in French. The English sweep of
+  30/09/2026 renamed ~860 identifiers (`espace` -> `tenant`, `consignes` ->
+  `returnables`, `reprise` -> `pickup`, `bon` -> `slip`, `motif` -> `pattern`,
+  `poste` -> `charge_item`...) and translated every comment. French names were
+  KEPT where something outside the current code depends on them: displayed
+  text; the database (model and field names such as `colisage`, choice values,
+  constraint names, stored JSON keys); the HTTP interface (URL paths, query
+  parameters such as `?mois=`, `?sans=`, `?tout=`, `?lot=`, form field names
+  and the values forms post, ids a URL fragment or a redirect targets such as
+  `#a-classer`, `#regles`, `#semaine-type`); the browser's storage keys and
+  the session key's value; the « Données » archive (section keys `factures`,
+  `fournisseurs`, `liens_ventes`...); files on disk (`etat.txt` and its keys,
+  `preuve.pdf`, the backup manifest's `espace`); command lines (`serve
+  --verifier`, `backup_data --chemin-dans`, `--sans-env`: the previous
+  version's deploy.cmd runs them); HT/TTC, SIREN, Factur-X, L'Addition.
+  A Python name HOLDING such a value is English (`TENANT_SESSION_KEY =
+  "_marginmate_espace"`).
+
 ## One database per bar - the only mode
 
 Every bar is an « espace »: its own SQLite file and folders under
@@ -73,7 +158,7 @@ POST: all but the public views (listed there) go to the login.
 **A session, a logout and the browser's storage (29/09/2026, security audit
 LOAD-1, LOAD-2, LOAD-3, LB-6; `accounts/tests/test_sessions.py`).**
 - A session belongs to the espace it was opened in: every login writes it
-  (`_marginmate_espace`, `accounts.middleware.pin_the_espace` on
+  (`_marginmate_espace`, `accounts.middleware.pin_the_tenant` on
   `user_logged_in`), and a request whose login now works in another espace -
   a membership edited in the admin - is logged out and sent to the login page
   (« Votre accès a changé : reconnectez-vous. »; htmx: 401 + HX-Redirect).
@@ -111,7 +196,7 @@ LOAD-1, LOAD-2, LOAD-3, LB-6; `accounts/tests/test_sessions.py`).**
   is still built as « espace-<data-tenant>: », so no page script changed. A
   session opened BEFORE the change (no `_marginmate_espace` in it) is pinned
   on its next request and flagged: its pages carry `data-tenant-legacy` (the
-  pk it already saw on every page) and load `static/js/espace_storage_legacy.js`
+  pk it already saw on every page) and load `static/js/tenant_storage_legacy.js`
   first in the body, which moves THAT pk's keys - never another espace's -
   under the scope once. A session opened since is never given the pk. Delete
   the script and the flag two weeks after the deployment (the session age).
@@ -149,7 +234,7 @@ DEPLOY.md, section 10, has the owner's steps (the one-off move included).
   `main` (nothing uncommitted travels; no GitHub push is needed - the public
   repository is pushed only after the owner's privacy audit), refuses while
   a job runs (`manage.py running_jobs`, exit 1), stops the server, backs up,
-  fast-forwards, `pip install`, `migrate_tenants`, `serve --verifier`,
+  fast-forwards, `uv sync --locked --no-dev`, `migrate_tenants`, `serve --verifier`,
   restarts; a failure before the merge restarts the server as it was, a
   failure after it restarts NOTHING and prints the rollback. A migration
   shipped therefore reaches production at the next deploy, backed up first.
@@ -158,9 +243,9 @@ DEPLOY.md, section 10, has the owner's steps (the one-off move included).
   1 it takes a MARK, `mkdir .git\marginmate-deploy` (atomic; never a
   `9>"file"` handle, which `start` would hand to the server's window for its
   whole life), writes `etat.txt` there from the stop on (`ancien=`,
-  `donnees=`, `sauvegarde=`, every `etape=`) and removes it in `:fin` only
-  when THIS run made it (`MM_LIBERER`) - not after a failure past the merge
-  (`:echec_apres_fusion`, `:serveur_muet`): the next run then refuses and
+  `donnees=`, `sauvegarde=`, every `etape=`) and removes it in `:finish` only
+  when THIS run made it (`MM_RELEASE`) - not after a failure past the merge
+  (`:failure_after_merge`, `:server_silent`): the next run then refuses and
   prints the way back from etat.txt, where it used to say « Rien de
   nouveau » and exit 0 with the site down. « Rien de nouveau » also checks
   8765 listens. Before the stop it refuses a task « MarginMate » whose
@@ -173,6 +258,26 @@ DEPLOY.md, section 10, has the owner's steps (the one-off move included).
   mid-copy go (listed in the manifest, `vanished`), and
   refresh_dev_data.cmd takes the newest backup with a manifest.json and a
   data\ folder.
+- **deploy.cmd installs with uv** (step 7, `call uv sync --locked --no-dev`;
+  `call` because a mise shim may be a batch file) and, before its mark,
+  refuses touching nothing when `call uv --version` fails - a shim on the
+  PATH answers « mise-shim: failed to execute mise », exit 1, when mise
+  itself is not there; with a mark already left, the way back is printed
+  instead. The first deploy of the uv version is run by the PREVIOUS
+  deploy.cmd (pip on `requirements.txt`, a transitional export of uv.lock
+  deleted after the second deploy; DEPLOY.md 10.6), so the way back
+  (`:offline`, `:rollback_instructions`) also says how to install a version
+  without uv.lock: `.venv\Scripts\python.exe -m pip install -r
+  requirements.txt` (uv never ran there). The scripts' labels and variables
+  are English; their echo text, `etat.txt` and its keys (`ancien=`,
+  `donnees=`, `sauvegarde=`, `etape=`, read back as `MM_NOTE_<key>`), the
+  mark folder, the task's name and the `manage.py` commands and options are
+  not (another version's deploy.cmd reads or runs them).
+  `accounts/deployment.py`'s answers (`DATA=`, `BACKUP=`, `PREVIOUS=`, read
+  into `MM_<NAME>`) and its `development` mode are read by scripts of the
+  same version only. A new uv (or Python) in mise.toml is installed by its
+  shim during step 7, after the merge, from the network: before deploying
+  one, the owner runs `mise install uv@<version>` once.
 - **Both scripts ask the settings through `accounts/deployment.py`** (never
   the .env read by hand): deploy.cmd refuses a folder whose settings say
   DEBUG or no HTTPS, refresh_dev_data.cmd one that says HTTPS, a data folder
@@ -191,7 +296,7 @@ DEPLOY.md, section 10, has the owner's steps (the one-off move included).
   exactly as to the site's data. A session may run runserver on it, never a
   gather.
 
-## Mise en ligne / production
+## Going online / production
 
 The site is served from the owner's PC (29/09/2026): a Cloudflare Tunnel
 (cloudflared, a Windows service the owner installs himself) forwards
@@ -477,7 +582,7 @@ guessed fixture tests a layout that doesn't exist. Metro's "②" footnote
 marker is a real example: substituting a plain "(2)" silently changes which
 store number the regex picks up.
 
-### La facture électronique: the figures are data, not a reading
+### The electronic invoice: the figures are data, not a reading
 
 Since **1 September 2026** every VAT-liable business in France must be able
 to RECEIVE its invoices electronically, and from **1 September 2027** a small
@@ -682,7 +787,7 @@ never came.
   the page's script both (`data-adjustment`) - left out, an invoice
   balancing to the cent read as failing its own check, and turned red at the
   first keystroke. Never on a ticket, where that figure is the cents each
-  line lost being divided by (1 + taux).
+  line lost being divided by (1 + rate).
 - **The correction page must not pretend it was read**: it says the lines
   are the invoice's own data, and for an XML with no page to frame it shows
   what the document states beside them. They stay editable - a person may
@@ -789,19 +894,21 @@ at the first keystroke.
 **What the screens must say**, each of them measured saying something else:
 « **Avoir** » where the stated total is negative (Achats, the document page,
 the correction page - the word existed only inside `source_text`, which is
-never shown for a PDF); a **MINIMUM profile's line was reconstituée depuis sa
-table de TVA** and is the invoice's total rather than an article, said where
+never shown for a PDF); a **MINIMUM profile's line was rebuilt from its VAT
+table** (« reconstituée depuis sa table de TVA ») and is the invoice's total
+rather than an article, said where
 the lead paragraph called every line the supplier's own declaration; the
 document page's pill is **`review_state`**, the same answer every list gives,
 and never `get_status_display` (« À vérifier » on a document an e-invoice can
 never be); « montants issus des données de la facture » is **conditional on
 `error_message`**, since where BT-112 disagrees the page shows the lines; the
-VAT table on an e-invoice is **not something to recopier**; « non lue » on a
+VAT table on an e-invoice is **not something to copy out** (« rien n'est à
+recopier »); « non lue » on a
 missing date becomes « absente de la facture »; and `error_message` is
 repeated on the correction page, which never said why the document was sent
 there.
 
-**Nothing in the application fetches from the plateforme agréée, and the
+**Nothing in the application fetches from the « plateforme agréée », and the
 application says so.** The Sources tab and the import card both carry the
 sentence: since 1 September 2026 the invoices arrive through an accredited
 platform, the owner's is held by their accountant, and MarginMate does not go
@@ -869,7 +976,14 @@ What it knows, all arithmetic:
 - a **repair** is tried only when no run adds up, towards a proven total, and
   kept only when exactly one amount changed makes it: an item priced like its
   namesakes (0,45 among loaves at 0,49), or an amount whose leading digit was
-  a VAT code ("120.30" for "T2 0.30"). Said under "Montants recalculés";
+  a VAT code ("120.30" for "T2 0.30"). Said under "Montants recalculés".
+  **Never down to 0,00**: no line read keeps an amount of 0, and where the
+  document's base and tax were read as lines they already make the total -
+  zeroing the purchase was then the one repair that added up ("240,00" filed
+  as "0,00" beside « Total net HT » and « Total TVA », every check passing).
+  A zero still COUNTS as a way to add up (`_repair` refuses it only once it
+  is the one found): dropped from the count, a coffee's cut leading digit
+  passed for the only repair beside a voucher line making the total too;
 - a **row printing its own tax** (Monoprix's invoice layout: unit HT, count,
   HT, rate, VAT, TTC) carries its rate and HT, and its TTC is worked out from
   the printed rate when unreadable ("0 63e");
@@ -939,11 +1053,24 @@ What it knows, all arithmetic:
   the line that named that code above it (`_take_linked_name`): an
   electronics till prints "1  5550001-ENCEINTE PORTABLE XL", then
   "5550001  120,00 €  A  100,00 €  120,00 €" three lines further down;
-- a **run that is the document's own base and tax** read as two lines is not
-  the purchase (`_is_vat_table`); a **discount printed again in HT** under
-  the one already taken is the same discount, and a row whose discount line
-  says what it was taken off ("sur 11,76 soit -1,76" under a row of 10,00)
-  is already net of it;
+- a **run that is the document's own base and tax** read as lines of their
+  own (a base and a tax per rate) is not the purchase (`_is_vat_table`) -
+  **and does not hide it**: with fewer rows than those lines (one row, one
+  row per rate) a shorter run makes what was paid too, and the first
+  segment's search goes on to it (`_fitting_run(refuse=)`), every line of it
+  reading as a row (`_looks_like_a_row`). The search used to stop at the
+  refusal: the row was then filed beside the total lines, or repaired to
+  0,00 beside them. Rows only, because past the refusal the totals are known
+  to be among the items: one rate's base and tax beside the other rate's row
+  make what was paid as well, every check passing; a line alone restating
+  the total too. And **last**, where no reading in HT holds (`_segment`'s
+  `rows_above_own_totals`): offered as the TTC reading beside rows in HT, a
+  recap printed at the top ("Total HT 200,00  Total TTC 240,00", two figures:
+  a row) took their place. Later segments keep their own rule (explained
+  rows only);
+- a **discount printed again in HT** under the one already taken is the
+  same discount, and a row whose discount line says what it was taken off
+  ("sur 11,76 soit -1,76" under a row of 10,00) is already net of it;
 - an **amount in brackets that is the one before it excluding tax**
   ("Abonnement 19.99 (16.66)") is that amount printed twice, not two; a
   **date spelled out** ("19 mai 2026") is the document's own, read before the
@@ -964,13 +1091,27 @@ What it knows, all arithmetic:
   off an article number ("2000123"), on 19 rows of Metro's invoices when the
   ticket reader reads them;
 - a **row printing its price and its amount both ways**, HT and TTC, with no
-  tax column ("18  4,50  5,40  81,00  97,20") is read by `_ht_ttc_row`:
+  tax column ("7  44,45  53,34  311,15  373,38") is read by `_ht_ttc_row`:
   nothing on it adds up, so what proves it is one French rate turning both
   prices into both amounts and a whole number of them making the amount -
-  in HT only, since a unit price is rounded before it is multiplied (24
-  bottles at 5,80 TTC print 139,26, not 139,20). Without it those eighteen
-  bottles came out as one at 81,00, and the unit cost is what every value
-  downstream is divided by;
+  in HT only, since a unit price is rounded before it is multiplied (10
+  bottles at 30,78 TTC print 307,85, not 307,80). Without it those seven
+  bottles came out as one at 311,15, and the unit cost is what every value
+  downstream is divided by (figures invented, as in the fixtures);
+- **such a row printing its rate ("… 20,00%") is never the VAT table's**
+  (`_priced_by_count`, in `_read_line`): its figures fit a VAT row twice
+  over - alone on an invoice, its HT and TTC are the document's base and
+  total, and six bottles at 20 % (eleven at 10 %) print a unit TTC equal to
+  their tax. The columns read it when there are positions; read as text
+  (« Relire le document », `reread_receipts`: every stored reading) the row
+  was taken for the table's and the totals printed under it filed as the
+  purchase - loudly, the sum failing, and reading it again gave the same. No
+  VAT table multiplies a price by a count. A row of ONE still reads as the
+  table's (`_ht_ttc_row` asks for two at least). Measured on every stored
+  reading of a scratch copy (30/09), as text, with positions and from a
+  digital document's text: no reading changed, and the only lines no longer
+  taken for VAT rows are a water bill's consumption rows (a count of m³ at a
+  four-decimal price) - which never were;
 - a **bucket of VAT covers the whole document**, so between two readings of
   one rate the larger base is the table's (`_better_bucket`): a water bill
   whose every row prints its own tax states its real table fifty lines
@@ -1125,7 +1266,7 @@ waiting to be checked** (`receipts.apply_known_prices`) - one Pita price left
 on. Every known price is applied, each as of its own ticket's date, and a
 checked ticket is never rewritten (except the one the price was typed on).
 
-### La lecture par colonnes (`parsers/layout.py`)
+### Reading by columns (`parsers/layout.py`)
 
 The generic reader reads a line for what its numbers do. An invoice prints a
 TABLE, and read as text its rows give the wrong name ("1 704411 Câble HDMI
@@ -1234,7 +1375,7 @@ and correcting the document by hand, which is what the message after unticking
 asks for, resolved the very same flagged product.
 
 Three readings, in this order: **the VAT table** when it accounts for the
-total to the cent (one line per rate); **the postes the document names**
+total to the cent (one line per rate); **the charge items the document names**
 (`invoices/charges.py`); **the total alone**, on one line named after the
 supplier. What was paid is never the sum of whatever was read as lines - a
 rent statement lists the previous balance, the direct debit, the tax and the
@@ -1246,18 +1387,18 @@ vérifier" (`charge_needs_a_look`): it must not pass for settled.
 `importing.refile_as_charge`** (`receipts.reread_receipt`, "Relire le
 document" for a ticket and for an invoice): read as a ticket, a rent
 statement's lines are the previous balance and the direct debit beside the
-rent, and a document relu that way went back to being worth what it was
+rent, and a document read again that way went back to being worth what it was
 before the charge reading settled it. A charge also **never enters the
 review queue** (`receipts.pending_receipts`): there is nothing to type on a
 rent, and forty-two of them behind the tickets is a queue nobody works
 through - a total that could not be read holds the document in "À vérifier"
 with what is wrong written on it instead.
 
-`refile_as_charge` makes the document's postes inside the savepoint of
+`refile_as_charge` makes the document's charge items inside the savepoint of
 `replace_invoice_lines`. A document a stock take was priced from cannot
 have its lines replaced (InvoiceLinesInUseError) and is left alone, and its
-postes go back with the refusal. Made before it, a poste named after the
-supplier stayed on no line (scratch copy, 19/09).
+charge items go back with the refusal. Made before it, a charge item named
+after the supplier stayed on no line (scratch copy, 19/09).
 
 **A charge keeps its own checks** ("Total de la charge", "Date du ticket":
 `importing.charge_state`). A charge fetched by a portal or the mailbox goes
@@ -1312,7 +1453,7 @@ added or renamed onto the stock item is that item (no such supplier on
 supplier of goods (`receipts.move_documents`; both through
 `credit_as_return`): the count negative, the amount as it was. Kept at 1, the
 goods guard refused the row on a document saved untouched, and classifying
-its poste booked stock at a negative unit cost - on 19/09, the three
+its charge item booked stock at a negative unit cost - on 19/09, the three
 deposits given back on two rent statements.
 
 **Every charge opens like a stock item.** The charges fold lives inside
@@ -1323,13 +1464,13 @@ stock item's price history draws, one point per document, against the
 document's own date). The rent is followed month after month like anything
 else bought.
 
-**The supplier's own row is one of them.** Only the postes opened at first,
-and a poste is listed only where a document names several - so the water,
-the phone, the alarm, the venue (one poste each, the charge itself under
-another name) had nothing at all to click: five suppliers out of six. The
-supplier's row opens on all its documents
-(`inventory.charge_supplier_documents` / `charge_supplier_history`), a poste's
-on that poste's (`charge_documents` / `charge_history`), and both go through
+**The supplier's own row is one of them.** Only the charge items opened at
+first, and a charge item is listed only where a document names several - so
+the water, the phone, the alarm, the venue (one charge item each, the charge
+itself under another name) had nothing at all to click: five suppliers out
+of six. The supplier's row opens on all its documents
+(`inventory.charge_supplier_documents` / `charge_supplier_history`), a charge
+item's on that charge item's (`charge_documents` / `charge_history`), and both go through
 `_charge_document_rows`, which is **one row per document**: a bill printing
 two rates is read as two lines, and 29 Total Energie bills showed up as 46.
 It prints the tax as an **amount**, never as a rate - on a document with two
@@ -1339,7 +1480,7 @@ Two things the row and the panel do not share, said on the page rather than
 left to be discovered: what a row **opens** is the whole history - except
 under « Du … au … », where it is those dates, see below; and **"Dernier" is
 the last document ever**, window or not. The column says which window it counts
-("Documents (12 mois)", "(période)" for an inventaire, "(ces dates)" for a
+("Documents (12 mois)", "(période)" for a stock take, "(ces dates)" for a
 free « Du … au … » - « période » is this page's word for two physical counts
 and says nothing about two dates someone typed) and a row with older documents says
 what its count is out of - « 12 sur 33 » (`documents_all`). Read as the
@@ -1354,33 +1495,34 @@ first: the first stock take's window has no start (a None in the filter was
 a 500), a curve adds up what one day charged, and a document filed with
 nothing read is listed on its supplier's row.
 
-**A poste is a label and the amount printed after it**, and a document's
-postes are the run of them adding up to an amount printed below them. That
-run is what proves the reading *and* settles the total: a statement puts two
-columns on one line (the account's history left, this month's postes right),
-so only each line's **last** amount is this month's; a subtotal printed
-among them is the run restated and is stepped over; a minus on its own in
-front of an amount is its sign; and the tax poste - the one that is a French
-rate of exactly one other - is folded into the poste it taxes rather than
-kept as one. Measured on the 31 rent statements filed, that separates the
-rent from the building and water provisions and corrects six totals the
-reader had taken from the left column (last month's échéance, printed twice,
-is bigger than this month's). **A document is worth what it charges**: where
-the debit also settles arrears, those were charged on the avis they come
-from, and counting them again would book them twice.
+**A charge item is a label and the amount printed after it**, and a
+document's charge items are the run of them adding up to an amount printed
+below them. That run is what proves the reading *and* settles the total: a
+statement puts two columns on one line (the account's history left, this
+month's charge items right), so only each line's **last** amount is this
+month's; a subtotal printed among them is the run restated and is stepped
+over; a minus on its own in front of an amount is its sign; and the tax
+charge item - the one that is a French rate of exactly one other - is folded
+into the charge item it taxes rather than kept as one. Measured on the 31
+rent statements filed, that separates the rent from the building and water
+provisions and corrects six totals the reader had taken from the left
+column (last month's instalment, printed twice, is bigger than this
+month's). **A document is worth what it charges**: where the debit also
+settles arrears, those were charged on the notice they come from, and
+counting them again would book them twice.
 
 A breakdown is a **block**, and its total is printed at the foot of it
 (`MAX_LINES_BETWEEN`): two rows of a consumption table pages apart that add
 up to something printed elsewhere are not one, and an electricity bill read
 that way turned its 298,05 € into the 67,94 € of its network charges. The
 document's **VAT table comes first** all the same (`charge_reading`): where
-it accounts for the total to the cent, that is the reading, and the postes
-are only asked when it does not.
+it accounts for the total to the cent, that is the reading, and the charge
+items are only asked when it does not.
 
 **One import for every document.** Tickets and PDF invoices went in through
 two cards, and the person importing had to know which; the Achats page has
 one now (files or a whole folder, of anything), and the file decides
-(`receipts.import_document`): a **facture électronique** is read from its
+(`receipts.import_document`): an **electronic invoice** is read from its
 own data first (see above), then a photo or a scan is read as a ticket, a
 digital document goes through its supplier's own reader when that supplier
 has one (`has_own_reader`) and the document says whose it is - otherwise the
@@ -1794,7 +1936,7 @@ What a move keeps, each a test that failed first:
 - **What the lines do not say** (`move_documents`): a document read as
   goods and moved into a supplier of charges is read again as a charge
   (`refile_as_charge`) - its previous balance, direct debit and rent had
-  become three postes, three times what it charges; a charge's state is its
+  become three charge items, three times what it charges; a charge's state is its
   total's (`charge_state`) - an unread total came out COMPLETE and left
   "À corriger"; and a classified line's product at the new supplier takes
   the same stock item (`link_product_to_stock_type`) - re-resolved, the
@@ -1842,8 +1984,8 @@ SQLite's case-blind comparison is ASCII only).
   Its creation is undone by deleting it, while nothing rests on it.
 - **Modified after a look** (`supplier_edit`): « Vérifier les changements »
   says what a rename takes along (a supplier of charges: the lines and the
-  poste named after it, `rename_supplier` - never to the name of another of
-  its postes; the code never changes, bank matching keeps the payee names it
+  charge item named after it, `rename_supplier` - never to the name of
+  another of its charge items; the code never changes, bank matching keeps the payee names it
   learned) and what a header does (printed
   on how many of its documents, on how many of others', refused by
   `check_header`) - nothing saved; the save applies only if the supplier is
@@ -1998,7 +2140,7 @@ refused - stock worth less than nothing is what the FIFO guard exists for
 (not on a charge whose supplier holds no stock item: "A credit on a charge",
 above).
 
-### Des frais répartis sur les lignes : la livraison
+### Charges spread over the lines: the delivery
 
 A supplier prints « LIVRAISON » once, for the whole order. It is not a
 product, and what it costs belongs on the goods it brought: a bottle that had
@@ -2102,7 +2244,7 @@ them (category « Livraison ») which accumulate units nobody ever consumes.
 **No stock take had been priced from one**, so they are safe to tick; each is
 one box on its own correction page.
 
-### Les suggestions du panneau « À classer » (`inventory/product_matching_rules.py`)
+### The suggestions of the « À classer » panel (`inventory/product_matching_rules.py`)
 
 Three sources, asked in this order per product and named on the card: a
 classified NEIGHBOUR (`ClassifiedNeighbours.find`: the same words once sizes,
@@ -2115,7 +2257,7 @@ silently wrong money. A rule or a raw name is never « haute » any more:
 measured strictly by leave-one-out, a rule names the right existing article
 about half the time and a raw name almost never. « Approuver les
 suggestions » still takes everything; « Approuver les sûres » takes the
-hautes only.
+« haute » ones only.
 
 - **« Haute » needs** the same words spelled the same (a plural allowed, an
   abbreviation never), an article tracked by volume or weight or - counted
@@ -2396,9 +2538,14 @@ supplier billing twice a year sent every gather ten months back.
 
 **Plou & Fils changes its layout**: a "Taux" column on product rows (2026),
 a VAT summary one column shorter, "Référence interne" instead of "N°
-document" (January 2025). `parsers/ploufils.py` finds the product table and
-its columns by header, and checks the lines against the printed "Montant
-total HT". A parser that reads nothing, or warns (`ParsedInvoice.warnings`),
+document" (January 2025). The one reader reads it (`parsers/ploufils.py` is
+gone, see « Those rules replaced two parsers »), through its header - the
+latest: "Désignation | Qté | Px U. HT | Px U. TTC | HT | TTC | Taux de TVA",
+the older ones without the rate or with a qualifier after "Px U. HT" - « Px »
+is « prix » (`layout._ROLE_PHRASES`), and the lone "HT" / "TTC" flavour
+columns the arithmetic names. Unknown, that header was no header, and a
+table was found only where two rows aligned: one row alone is no table
+without its header. A parser that reads nothing, or warns (`ParsedInvoice.warnings`),
 leaves the message on the invoice (`error_message`) and holds it in "À
 vérifier" - an empty invoice used to say "ce fournisseur n'a pas de parseur".
 
@@ -2522,7 +2669,7 @@ chosen by hand on one debit, one invoice across two debits.
     Before it, such a line could never name a supplier; the fallback exists
     so it can be TAUGHT: `_learn_payee` asks the same question, so a
     hand-made link that adds up learns the label key and next month's fee
-    line links on its own. A label also carries the bank's text and a motif,
+    line links on its own. A label also carries the bank's text and a free-text reason,
     so an exact word in it (a supplier « Assurance Exemple », a fee reading
     « ASSURANCE MOYENS DE PAIEMENT ») would have linked automatically on a
     coincidence. Measured on the real data (read-only): the fallback changes
@@ -2599,7 +2746,7 @@ chosen by hand on one debit, one invoice across two debits.
 - **The gap is said, never repaired.** « Rapprochée » no longer means « adds
   up », so the row says both figures and the difference (`views.Gap`):
   « Factures X € pour Y € débités — Z € de plus / de moins que la dépense ».
-  The line stays rapprochée - a person said so - and the figure is what tells
+  The line stays reconciled - a person said so - and the figure is what tells
   a reader next month that half the invoice is settled elsewhere. Hidden, a
   debit paying half an invoice reads exactly like one paying it whole. The
   document's own page lists every operation that paid it and says how many;
@@ -2654,8 +2801,8 @@ a « réglée à la main » the automatic pass never revisits.
 
 ### « Dépenses par catégorie » (`/banque/depenses/`, `bank/spending.py`)
 
-**Ce qui est sorti du compte**, sur une période, en catégories, avec un
-camembert. Not « Marges »: that page counts what was **invoiced**, by invoice
+**What left the account**, over a period, by category, with a pie chart.
+Not « Marges »: that page counts what was **invoiced**, by invoice
 date, and answers « ai-je gagné de l'argent ». This one counts what the bank
 **took**, by the date it took it, invoice or no invoice, and answers « où est
 parti l'argent ». Two bases, two figures, and **each page says which it is**
@@ -2754,9 +2901,9 @@ Three things the figures on screen owe a reader:
   operation count. Both figures are right; one under the other, on the one
   page whose argument is that it adds up, they read as a subtraction error.
 - **« Déduit par les factures » is not « what came back on the account ».**
-  `given_back` is the avoirs and consignes carried by the invoices linked to
+  `given_back` is the credit notes and deposits carried by the invoices linked to
   DEBITS. A supplier refunding money on the statement is a credit, which is
-  an entrée d'argent, and this page counts what went out - the stat says so
+  income (« Entrées d'argent »), and this page counts what went out - the stat says so
   rather than letting its old name (« Rendu sur la période ») promise a
   figure it does not hold. Counting a credit against a category would mean
   deciding which credits are refunds and which are takings, and nothing here
@@ -2770,7 +2917,7 @@ every line with no invoice, **named or not**, the unnamed first: listed only
 while unnamed, a category typed by mistake would have nowhere left to be
 corrected.
 
-**Classer ne règle rien.** `spending.set_category` leaves `settled_by_hand`
+**« Classer » settles nothing.** `spending.set_category` leaves `settled_by_hand`
 alone: what the money was for says nothing about whether its invoice is still
 to be found, and set there, naming a spending would quietly take its line out
 of the automatic pass for ever. `clean_category` trims, drops control
@@ -2787,10 +2934,10 @@ own header. Another entry in the topbar moves where the links wrap, which is
 measured width by width by `accounts/tests/test_topbar_browser.py` (the bar
 without its script, under 860 px) and `TopbarRoomInBrowserTests`.
 
-**Hors du camembert.** A category can be left out of THE PIE, and of nothing
+**Out of the pie.** A category can be left out of THE PIE, and of nothing
 else - the VAT paid over to the State, say: in the pie, it makes every other
 wedge read smaller than it is. It is a VIEW carried in the address like the
-period (`?sans=<nom>` repeated, no model field, no migration), with
+period (`?sans=<name>` repeated, no model field, no migration), with
 « Marges »' words to the letter (« sans : … », « remettre », « tout
 remettre ») and the page saying nothing is saved:
 
@@ -2825,9 +2972,9 @@ remettre ») and the page saying nothing is saved:
   is KEPT, and said. `IgnoreRuleForm` stores a rule's category through
   `clean_category` too. No query is added.
 - **The table is the selector**, the « Marges » way (`common.left_out_from`,
-  under « La page Marges »): « Dans le camembert », a box per row ticked by
+  under "The « Marges » page"): « Dans le camembert », a box per row ticked by
   default, and « Recalculer le camembert », a GET form. The boxes join it
-  through their `form` attribute (`#camembert-choix`, the form under the
+  through their `form` attribute (`#pie-choice`, the form under the
   table): wrapped round the table, the form would also hold datatable.js's
   search box, and Enter in a field submits its form. The box's cell carries
   `data-sort` and its state as text (UI conventions).
@@ -2851,7 +2998,7 @@ really sends, read off the page it drew.
 
 ### « Entrées d'argent » (`/banque/entrees/`, `bank/income.py`)
 
-**Ce qui est arrivé sur le compte**, beside what the till says it **took**
+**What came into the account**, beside what the till says it **took**
 on the same days: does the money that came in match what was sold? Neither
 « Dépenses » (what the bank took) nor « Marges » (what was invoiced) - each
 of the three says which it is and links to the other two.
@@ -2886,8 +3033,8 @@ unread takings would count its whole payments as a tip. What the till could
 not read is said at the top with the command that fills it
 (`laddition_backfill_payments`, `laddition_backfill_revenue`).
 
-**Each side says where it starts and stops, and the Écart is taken over the
-days both cover.** The till's payments can reach back long before the
+**Each side says where it starts and stops, and the gap (« Écart ») is taken
+over the days both cover.** The till's payments can reach back long before the
 statement's first line; compared over « tout » - where Banque's « Entrées »
 stat lands - most card takings read as never arrived, with no warning.
 `till_before_statement` and `bank_before_till` (card at the gross, cash,
@@ -3000,7 +3147,7 @@ imports (`transfer/legacy.py`).
   `SupplierChange` - going through `import_receipt` would have recorded a
   « premier document » for every supplier and lit « À voir » thirty times.
   A supplier renamed by an import goes through `rename_supplier` (a charge
-  supplier's postes follow), and the change it records is deleted in the same
+  supplier's charge items follow), and the change it records is deleted in the same
   transaction. An invoice replaced by an import keeps a line a stock take was
   priced from, updated in place; one whose replacement would remove such a
   line, or put another product or another name at its rank, stays as it is,
@@ -3148,7 +3295,7 @@ imports (`transfer/legacy.py`).
 - **« Personnel » is in no section**: employees, timesheets and signature
   requests are neither exported nor cleared, and the espace's `private/` is in
   no archive. Only the SQLite copy taken before a run holds those tables.
-- **« Consignes » is the tenth section** (`sections/consignes.py`, « Données »
+- **« Consignes » is the tenth section** (`sections/returnables.py`, « Données »
   group, order 100): it requires « fournisseurs » (a format's and a
   reprise's supplier, by code) and only recommends « factures » (the invoice
   check is read when a page is drawn, nothing of it is stored). Keys: a type
@@ -3171,7 +3318,7 @@ imports (`transfer/legacy.py`).
   a bon whose PDF was missing is skipped. The seeded types and format are
   counted and cleared like the rest - the safety archive brings them back.
   The supplier page and « Données » name the consignes rows holding a
-  supplier (`supplier_views.consignes_refusal`, one sentence for both).
+  supplier (`supplier_views.returnables_refusal`, one sentence for both).
 - **A portal from an archive is never trusted** (`sections/sources.py`): the
   next gather types the .env variables it names into the page it names. A
   portal naming a variable the application reads for itself is refused, by
@@ -3206,7 +3353,7 @@ imports (`transfer/legacy.py`).
 - **A product is kept in its article's unit** (`inventory.views.assign_product`
   mirrors it), and the associations section refuses one that is not: its
   conversion would no longer mean anything. 0 such products on 19/09.
-- **A poste of charge is a product, not a supplier**: the associations
+- **A charge item is a product, not a supplier**: the associations
   section refuses only a product flagged `is_expense` (assign_product's
   rule). A supplier turned to charges keeps the products a stock item
   claimed (`redo_as_expenses`). Refused at the supplier's level, they lost
@@ -3352,7 +3499,7 @@ traps the user in an inventory they can no longer fix.
 `product_counting_ratios` skips those lines (`total_volume__gt=0`); tested
 with isnull, the 0 ratio went through and `stock_units_per_item` turned
 eleven 1 L bottles counted on a shelf into 0 litres - 62 real count lines on
-210 products read as entirely missing in the écarts and stock pages. An
+210 products read as entirely missing in the « Écarts » and stock pages. An
 unmeasured product's items convert with `stock_equivalent`, exactly as its
 purchases were booked.
 
@@ -3375,7 +3522,7 @@ looks like a query at the call site:
 | `typical_item_size(stock_type)` | three queries per stock type |
 | `stock_units_per_item(product)` | one query per product |
 
-The écarts page called all three per pool — 1,766 queries, 2.4 s. The batched
+The « Écarts » page called all three per pool — 1,766 queries, 2.4 s. The batched
 forms (`_movement_totals`, `typical_item_sizes`, and `ratios` passed into
 `stock_units_per_item`) took it to 125 queries and 0.64 s. Same for
 `EntryResolver`, which resolves a whole formset's typed names in three
@@ -3444,7 +3591,7 @@ theft, and the order these come off matters more than the arithmetic:
    one, so every drop that leaves is unexplained. That was €8,165 of the
    remaining €10,500 across 54 pools. `PoolVariance.in_recipes` flags them
    and `VarianceReport.only_in_recipes()` sets them aside — `?recettes=1` on
-   the écarts page, which shows **both** totals side by side so the filter
+   the « Écarts » page, which shows **both** totals side by side so the filter
    can't hide what it costs. Actual candidate shrinkage: €2,335.
 
 The fix for (3) is writing recipes, not tuning the report — see the "À lier"
@@ -3495,7 +3642,7 @@ optimum would be a different program and no more defensible to a supplier.
 
 `?inventaire=<pk>` on the stock page scopes all of it to one stock-take
 window (`variance.stock_between`, sharing `counts_by_stock_type` and
-`movements_between` with the écarts page so the two can't disagree about what
+`movements_between` with the « Écarts » page so the two can't disagree about what
 a period contains). The closing count is the only thing chosen; the opening
 one is whichever came before it, exactly as in `compute_variance`.
 
@@ -3525,7 +3672,7 @@ Two things carried over rather than rediscovered:
   says "non compté" and is excluded from every total. Same rule, same reason
   as `VarianceReport.incomplete`.
 - **The per-item view is the actionable one, the pooled one is the
-  defensible one.** Both stay: the écarts page still values the gap at the
+  defensible one.** Both stay: the « Écarts » page still values the gap at the
   *cheapest* pool member (a floor you can put to someone), while the stock
   page names bottles by attributing the pool (a guess you can act on). They
   cross-link.
@@ -3610,7 +3757,7 @@ Re-measure on a scratch copy when it matters, and keep the number there:
   arithmetic decides rather than a guess: a discount that would make the line
   bigger than its own gross price (6,00 € less -1,50 € is 7,50 €, which
   cannot happen) is not taken, and is counted under `discounts_not_taken`.
-- **A (produit, jour) one of whose lines has no readable amount is left
+- **A (product, day) one of whose lines has no readable amount is left
   unread**, not filed at what the rest of that day took: it is short of an
   unknown figure, and the day filed anyway looks perfectly ordinary. It joins
   the « jours non lus » the margins page already has a banner for
@@ -3651,7 +3798,7 @@ match, and **creates no row** - money against a quantity nobody imported
 would be a figure with no stock behind it. A (product, day) printed by two
 overlapping exports replaces itself rather than adding up (no two of the 17
 stored exports disagreed about one). Run at scale on a scratch copy of the
-quantities, it filled every (produit, jour) on file and matched all of them,
+quantities, it filled every (product, day) on file and matched all of them,
 and its revenue reproduced the reader's to the cent - which is the check that
 the reading is right, and the reason it prints a total per year.
 
@@ -3733,19 +3880,19 @@ was relinked by the next import. An ignored till product sells no recipe
 whatever its name (`record_sales` skips it, and does not list it as
 unmatched).
 
-### Les trois marges (`margins/computation.py`)
+### The three margins (`margins/computation.py`)
 
 `margins_for(window: DateRange, left_out=()) -> MarginReport` - pure, no
 request, no template - answers three different questions and blends none of
 them:
 
-- **la marge réelle**: everything that came in against everything that was
+- **the real margin** (« Marge réelle »): everything that came in against everything that was
   **invoiced** over the window, goods and charges alike
   (`Supplier.expenses_only`). « Ai-je gagné de l'argent ce mois-ci. »
-- **la marge produits**: the same income against what the recipes sold
+- **the products margin** (« Marge produits »): the same income against what the recipes sold
   actually consumed, plus the articles flagged « compter dans la marge
   produits ». « Est-ce que je vends assez cher. »
-- **les marges par catégorie**, on both dimensions the till already stores -
+- **the margins by category** (« Marges par catégorie »), on both dimensions the till already stores -
   `PosProduct.category` (Bières, Cocktails, Planches…) and `.typology`
   (« food, drinks »). Two readings of one till, so they foot to the same
   revenue, units and cost; the measurement below checks they do.
@@ -3756,7 +3903,7 @@ the HT, and the products margin has **no** TTC at all - a recipe's cost only
 exists in HT, and the page says so rather than inventing one.
 
 **Coverage is the figure that keeps this honest.** Only a minority of the
-till products have a recipe: the planches, the dips, the coffee have revenue and
+till products have a recipe: the boards, the dips, the coffee have revenue and
 no cost, and counted as costed they print a **100 % margin**. So every unit
 is counted twice - sold, and costed - and `coverage`, `revenue_uncosted`,
 `revenue_coverage` and `top_uncosted` say what the gap is. A slice with no
@@ -3836,18 +3983,18 @@ Five traps a review found on it, each a test that failed first:
   does not print one either: the page read « Pas vendue directement ·
   Happy hour : 4,80 € », one page saying both. « Vendu par … » is nested the
   same way - there is no sale to take anything.
-- **A preparation is NOT offered on a bon de vente** (`sale_source_choices`,
+- **A preparation is NOT offered on a sale document** (« bon de vente », `sale_source_choices`,
   with `keep=` so a line written before the price was cleared still opens).
   Offered, a line naming it books its full cost against 0,00 € of revenue -
   `SaleDocumentLine.total_ttc` has nothing to fall back on and
   `margins.computation` counts the cost, which is exactly the asymmetry the
   article-sold-as-itself rule forbids: both sides out, or neither.
 - **The page says only what it has checked.** A blank price says « not
-  sold » and nothing about what uses the recipe, so the fiche asks
+  sold » and nothing about what uses the recipe, so the recipe's page asks
   `used_in` before calling it a preparation - a recipe being drafted has a
   blank price too, and « utilisée dans aucune recette » is the case worth
   saying, since nothing then counts what it costs. And where the till DOES
-  sell an unpriced recipe the fiche says so in a warning: the revenue comes
+  sell an unpriced recipe the recipe's page says so in a warning: the revenue comes
   from `PosProductDailyQuantity`, never from this field, so « Marges » goes
   on costing it and the one figure that would give it away is on another
   page.
@@ -3905,7 +4052,7 @@ it IS the spending and the flag says which); `hand_typed_units` (a
 window that only refunded has -8,75 € of margin on -7,50 € of revenue - which
 works out to **+116 %**. A loss printed as a gain is worse than no figure.
 
-**An article sold as itself on a bon de vente is income with no margin.**
+**An article sold as itself on a sale document is income with no margin.**
 It carries no VAT rate anywhere - a recipe has one, an article does not - so
 its money stays TTC, lands in `revenue_without_rate_ttc` and never reaches
 `revenue.ht`. Its purchase price is therefore left out of the cogs too:
@@ -3927,7 +4074,7 @@ articles cochés », on one page, with nothing saying so.
 the same rule the charges fold follows: twelve bills printed at 23,99 € must
 foot to 287,88 €, not 287,86 €.
 
-**La marge réelle « sans … » is the same margin with places taken out, never
+**The real margin « sans … » is the same margin with places taken out, never
 a second definition of it.** The one pass over the invoices also puts every
 invoiced euro in exactly one place (`_where_it_went`): a charge's document
 WHOLE on its supplier, a goods line on its article (drawn under the article's
@@ -4020,10 +4167,10 @@ month with the charges still running came out **negative**, and both category
 dimensions footed identically, which is the check that the two groupings read
 the same sales. Re-measure rather than trusting a figure written down here.
 
-### La page « Marges » (`/marges/`, `margins/views.py`)
+### The « Marges » page (`/marges/`, `margins/views.py`)
 
-The three answers in the owner's own order - la marge réelle, la marge
-produits, les marges par catégorie - each under the sentence saying what it
+The three answers in the owner's own order - the real margin, the products
+margin, the margins by category - each under the sentence saying what it
 counts, because a number nobody can explain is a number nobody will trust.
 The view does no arithmetic: `margins_for` answers and the page says what the
 figures are worth.
@@ -4056,7 +4203,7 @@ margin columns rather than a 100 % margin.
 **« Part chiffrée » means the MONEY, in both places it appears**, with the
 units said in the same cell (`SliceRow.units_note`). The column used to be
 the units while the headline was the money: on one category selling 100
-cafés at 2 € with no recipe beside 100 cocktails at 10 € with one, that is
+coffees at 2 € with no recipe beside 100 cocktails at 10 € with one, that is
 50 % against 83 % under two identical labels. The words answer the money
 too - read off the unit counts, a row whose units net to what is costed (one
 sold, one taken back at a different price) printed « tout est chiffré »
@@ -4068,7 +4215,7 @@ also counts the flagged articles' purchases and the sales made off the till,
 which belong to no till category - a positive margin on a row above a
 negative one on the headline, same money, same screen, nothing bridging them.
 
-**Zero facturé is not zero dépensé.** `invoice_count` is beside « Facturé »
+**Zero invoiced is not zero spent.** `invoice_count` is beside « Facturé »
 and a window with none says so in a warning: that is the state of the current
 month, every month, until the suppliers' bills are in, and the page announced
 a 100 % real margin for it.
@@ -4226,7 +4373,7 @@ For the variance engine this means a nested choice must be pooled too:
 **never capped**, because a pool missing a member reports that member's whole
 consumption as unexplained. Amounts are capped (`MAX_SUB_VARIATIONS`).
 
-### Les recettes qui utilisent un article (`recipes/usage.py`)
+### The recipes that use an article (`recipes/usage.py`)
 
 « Le sucre augmente, qu'est-ce que je dois reprendre ? » — the « Recettes »
 tab filters on one article, `?article=<pk>`, from a picker listing the
@@ -4353,13 +4500,13 @@ back and forth between them. The rules that came with merging them:
   supplier, number, date as it is written (12/07/2026, 07/2026, 2026) or
   amount, and the table is `data-table-sort-only` - two boxes filtering by
   two different rules is worse than one. Same on the sales list
-  (`recipes.menu._sales_matching`, `SALES_PAGE_SIZE`): 8 099 rows was 2,6 Mo
+  (`recipes.menu._sales_matching`, `SALES_PAGE_SIZE`): 8 099 rows was 2,6 MB
   on one page, and it only grows.
 - **The list shows the newest documents** (`workspace.PAGE_SIZE`, 250), and
-  "tout afficher" renders the rest. Every row is about 1,4 Ko of HTML and a
-  slice of a second of template: at 823 documents the page was 1,2 Mo, 15 000
+  "tout afficher" renders the rest. Every row is about 1,4 KB of HTML and a
+  slice of a second of template: at 823 documents the page was 1,2 MB, 15 000
   nodes and 626 ms of server time, and opening a row moved a table 47 000
-  pixels tall. Bounded, the same page is 393 Ko, 4 000 nodes and 200 ms. The
+  pixels tall. Bounded, the same page is 393 KB, 4 000 nodes and 200 ms. The
   row that holds an opened document's lines is made when it is first opened,
   not printed hidden under all of them. Two things to keep: the document just
   imported (`?surligner=`) is shown whatever its date, since it may be older
@@ -4376,7 +4523,7 @@ back and forth between them. The rules that came with merging them:
   `receipts.pending_receipts()`, and when charges were left out of one and
   not the other the tab read "102" over an empty page. `pending_receipts`
   is that Q and nothing else; the same went for the "Produits & charges" badge, which
-  counted the postes of charge the page does not list (110 over 97). When a
+  counted the charge items the page does not list (110 over 97). When a
   count is cheap to get from the list, take it from the list.
 - **Where invoices come from and who they are filed under are two tabs** of
   Achats (the owner, 19/09): « Sources » lists the sources of invoices
@@ -4440,15 +4587,15 @@ conventions, the topbar).
 invoices apart from the « Enseignes et fournisseurs », and the Produits page
 "is not a stock but just a list of every spending (charges) + products
 bought"). An `InvoiceType` is a **source** (« source de factures »: one
-mailbox search or one customer portal, always for one fournisseur); a
+mailbox search or one customer portal, always for one supplier); a
 `Supplier` is a **fournisseur** (« enseigne » only on ticket screens, where
 it is what the ticket prints); fetching is **Récupérer**. A `StockType` is an
 **article** - never « type de stock » - and a product no article claims yet
-is **à classer** (a poste of charge never is: « poste de charge »). The
+is **à classer** (a charge item never is: « poste de charge »). The
 inventory workspace is **Produits & charges**, and its
 all-time figures say what was bought (« Total acheté », « Acheté »), summed
 from `PURCHASE` movements only, so a loss written down later never makes them
-a lie. « Stock » stays where it is true: between two inventaires, what left
+a lie. « Stock » stays where it is true: between two stock takes, what left
 the shelf, what is missing, the losses, the ceiling of « Vendu ». Internal
 names did not follow (models, fields, url names, context keys, `data-persist`
 and localStorage keys, anchors), nor did texts already stored; these notes
@@ -4457,11 +4604,11 @@ still say "stock item" and "stock page" for the article and that workspace.
 ### « Du … au … »: one window, seven pages
 
 Seven pages are read through a period: **Produits & charges** (the articles
-bought between two dates), **Achats** (the documents), **Ventes** (les ventes,
-les factures de vente et « Par origine »), **Banque** (les opérations),
-**Marges** (les trois marges), **Dépenses par catégorie** (ce qui est sorti
-du compte) and **Entrées d'argent** (ce qui y est arrivé). The last three are
-the ones whose period has a **default** - les 12 derniers mois - and all say
+bought between two dates), **Achats** (the documents), **Ventes** (the sales,
+the sale invoices and « Par origine »), **Banque** (the operations),
+**Marges** (the three margins), **Dépenses par catégorie** (what left the
+account) and **Entrées d'argent** (what came into it). The last three are
+the ones whose period has a **default** - the last 12 months - and all say
 so on screen; `common.last_twelve_months()` is the one definition of that
 phrase, so they cannot name the same period and count two different spans.
 They read it once, through `common.date_range(request)` → `DateRange`, so
@@ -4742,11 +4889,11 @@ contract week, to the hour - a week identifies somebody as surely as a name.
   worst case and every month of two years inside the margins with nothing
   overlapping.
 
-### La signature électronique des fiches de temps (`staff/signing.py`)
+### The electronic signature of the timesheets (`staff/signing.py`)
 
 The employee signs his MONTH from his phone, through a link; the owner
 countersigns. Open source and costing nothing on purpose (pyHanko 0.37, MIT;
-pinned in requirements.txt with its dependencies), so it can be sold later.
+pinned in uv.lock with its dependencies), so it can be sold later.
 
 **What it is, in words:** a **simple electronic signature** (eIDAS art. 25,
 Code civil 1366-1367) - never « qualifiée », « avancée » or « équivalente à
@@ -4782,8 +4929,8 @@ Four modules, each pure of request objects:
   database 28/09), the link's token (only its SHA-256 is stored), the one-time code
   (HMAC, 15 minutes, 5 attempts, 3 an hour of EACH kind, remembered in the
   employee's session for that request only), the month read-only while a
-  request holds it, « Corriger ce mois » (`reopen_month`: annulée /
-  remplacée, files kept), and the events - an **append-only hash chain** per
+  request holds it, « Corriger ce mois » (`reopen_month`: cancelled /
+  superseded, files kept), and the events - an **append-only hash chain** per
   request, its head on the request row, so an event edited, removed or cut
   off the end no longer adds up (`verify_event_chain`) - unless whoever did
   it could rewrite the database and worked every hash out again (below).
@@ -4986,7 +5133,7 @@ Jeanne », « pour que DURAND Jeanne récupère… », « Signé par DURAND Jean
 the pills say « En attente de signature » / « Signée, à contresigner »
 (`signature_views.PANEL_STATUS`; the model's labels stay the record's words,
 in the proof file). A test walks every step for « salarié » outside the
-journal (`test_the_section_speaks_of_her_by_name_never_il`).
+journal (`test_the_section_speaks_of_her_by_name_never_as_he`).
 
 The employee's side is `/personnel/signer/<token>/` (`staff/public_views.py`,
 `sign.html`, `public_base.html`): **the only pages meant to stay reachable
@@ -5079,7 +5226,7 @@ a scratch run broke each one in memory and saw its test fail):
 - **After**: the public link answers as a link that never existed (404),
   and a month the deleted version held is editable again. Version numbers
   follow the highest version REMAINING: the month's only version deleted
-  and the month sent again is a version 1 again, with a new document n° -
+  and the month sent again is a version 1 again, with a new document number -
   the uuid is what the stamps and the tombstone name.
 
 ### « Consignes » (`returnables/`, `/consignes/`): the empties handed back
@@ -5103,7 +5250,7 @@ and the replacements seen); tests that need an empty app call
 Achats (the « Récupérer » card offers a format's bons), the gather
 (`tasks._gather_slips`), Achats' import (the guard below), the supplier page
 (`delete_refused`) and « Données » (its section, and the after-commit file
-check that walks every FileField) all read the consignes tables: an espace
+check that walks every FileField) all read the returnables tables: an espace
 with the code and not the migrations breaks THEM, not just /consignes/. The
 owner runs `manage.py migrate_tenants` after a backup; no agent does.
 
@@ -5139,7 +5286,7 @@ as ONE set where the stdlib ends it at the first `]` and reads `)(` as group
 brackets, so a 116-character motif had six nested `{100}` for `regex` and
 none for the stdlib (100^6, from any form). **Whatever a check measures, it
 measures on the tree that is compiled.** Its private names (`_regex_core`)
-are pinned by a test, and `regex` is pinned in requirements.txt. Every entry
+are pinned by a test, and `regex` is pinned in uv.lock. Every entry
 point goes through it: the forms, « Données »'s
 import, the reading, a stored motif at each use (a stricter rule, a
 hand-edited archive: the page says « motif invalide : … — corrigez-le »,
@@ -5186,14 +5333,14 @@ the delivery date.
 **What is compared, per (supplier, day)**: every reprise of that supplier
 that day is ONE side, counts summed (« 2 reprises ce jour-là,
 additionnées » - a forgotten type saved as a second reprise is no false
-écart), against every bon that counts of that supplier's formats delivered
+« écart »), against every bon that counts of that supplier's formats delivered
 that day. A line's type is NOT stored: the first type, in (position, pk)
 order and active or not, one of whose motifs is found in its designation -
 editing a motif reclassifies every line at once, and a type whose motif
 fails stops the search for that line rather than filing it under the next
-one. Status, first that applies: fournisseur non précisé, pas de format de
-bon, en attente du bon, à vérifier (a paired bon's reading failed or one of
-its checks, or a line could not be classified), écart, conforme. An unpaired
+one. Status, first that applies: « fournisseur non précisé », « pas de format de
+bon », « en attente du bon », « à vérifier » (a paired bon's reading failed or one of
+its checks, or a line could not be classified), « écart », « conforme ». An unpaired
 bon within 3 days of an unpaired reprise day is offered to the NEAREST one,
 with « Mettre la reprise au … ». A bon with no line is « aucun vide repris »
 only when its reading passed every check: one whose lines could not be read
@@ -5206,11 +5353,11 @@ days before to 45 days after the delivery (one query over the union of the
 windows, then their negative lines), a reference searched as a whole token
 (fewer than 4 letters or digits is not searched), bons and invoices joined
 where a reference is found and each connected group compared ONCE (one
-ticket's two BLs on two invoices, a monthly invoice refunding several bons),
+ticket's two delivery notes on two invoices, a monthly invoice refunding several bons),
 each negative line going to the longest bon designation it starts with (the
 bon prints the first 20 characters). Every state is its own sentence;
 negative lines no bon claims are « autres avoirs », never a gap - but never a
-✓ either: a bon with no line whose invoice refunds consignes is
+✓ either: a bon with no line whose invoice refunds deposits is
 `OTHERS_ONLY`, « à vérifier » (the bon corrected to kegs that has not
 arrived, a keg returned full), and the green « rien à rembourser ✓ » needs
 BOTH sides empty. A unit price is shown for a type only when every counted
@@ -5275,11 +5422,11 @@ at least):
   everything else at the top. A saved photo's « Retirer » and every small
   button of the app are 44 px, and « Retirer » asks twice (a `<details>`).
 - Under 600 px the topbar scrolls away with the page HERE only
-  (`html:has(.consignes-page)`): its three to five rows took a third of a
+  (`html:has(.returnables-page)`): its three to five rows took a third of a
   phone's screen above the count being typed - one row with « Menu » since
   30/09, still let go for the keypad's sake. `position: relative` since then,
   not static: the menu's veil needs a stacking context. Every page of the app has
-  `.consignes-page` on its root, and its fields are 1rem (iOS zooms the page
+  `.returnables-page` on its root, and its fields are 1rem (iOS zooms the page
   in on a smaller one).
 - A format's page: « Tester » is the form's FIRST submit button, hidden, so
   Enter tests and never saves; it reads a bon received, pasted text or a PDF
@@ -5327,13 +5474,13 @@ Nouveaux », and Achats never offers its period again (`workspace
 ._invoice_gather`). Achats' « Récupérer » card offers each mail format as a
 source of its own, ticked, only where the mailbox may be used.
 
-**Achats' guard** (`receipts.route_consignes`, in `import_document` after
+**Achats' guard** (`receipts.route_to_returnables`, in `import_document` after
 the duplicate check and the e-invoice branch, before `document_text`): a PDF
 dropped among the invoices whose text exactly ONE active format's start
 motif recognises is stored as a bon (« Déposé à la main », the text read
 once and handed to `store_slip(text=…)`) and the import says « Bon de
 consignes : rangé dans Consignes (bon n° X) — ce n'est pas une facture. »
-(or « déjà reçu dans Consignes ») through `importing.RoutedToConsignesError`,
+(or « déjà reçu dans Consignes ») through `importing.RoutedToReturnablesError`,
 a `DuplicateInvoiceError`: no Invoice. Several formats recognising it is
 refused the same way, naming them - filed as a purchase, it would be
 silently wrong money. Anything else (no format, a PDF over 5 MB or 5 pages,
@@ -5349,7 +5496,7 @@ source with a reader of its own (`parse_and_import`) and Metro, which never
 go through `import_document` - the seeded UBA invoice source does not match
 a bon's sender or subject (pinned by a test).
 
-**« Données »** (`transfer/sections/consignes.py`, the tenth section, after
+**« Données »** (`transfer/sections/returnables.py`, the tenth section, after
 « fournisseurs »): types and formats by their name as their forms compare
 it, a reprise by its random `reference`, a bon by its sha256; a bon's
 reading is copied, never compared nor read again at import; every motif
@@ -5363,7 +5510,7 @@ PDFs under `consignes/`, deleted on commit. The details are under
 
 Tests: `returnables/tests/` - the pure modules, the models and seeds, the
 views read off the rendered page (`staff/tests/page_forms.py`, the photos
-and PDFs added as SimpleUploadedFile), two espaces (`test_espaces.py`), and
+and PDFs added as SimpleUploadedFile), two espaces (`test_tenants.py`), and
 a 375 × 667 phone in Chrome (`test_phone_browser.py`, logged in with
 `tests.runner.log_in_the_browser`). Every value in them is invented: the
 owner's real bons carry his account, his driver and his deliveries.
@@ -5441,7 +5588,7 @@ for the pattern.
 to** (`html { scroll-padding-top: var(--topbar-room) }` in marginmate.css:
 6rem, 10rem under 860 px where the brand sits above the links, 11rem under
 440 px, 13rem under 310 px - those three for the bar WITHOUT topbar.js; with
-it the bar is one row under 860 px and its room 6rem, below). A fragment - Achats' `#a-voir`, the fiche's
+it the bar is one row under 860 px and its room 6rem, below). A fragment - Achats' `#a-voir`, the supplier page's
 `#historique`, the stock list's `#a-classer` - and the tab row htmx's boost
 brings to the top when an Achats tab is clicked lower down all landed under
 it: « 1 changement à voir » and the supplier's name hidden (UX review,
@@ -5458,7 +5605,7 @@ long espace name, the superuser's « Admin » too): two rows above 1000 px
 (82 px, under 6rem's 96), three between 861 and 960 or so (124 px, under
 8rem), then 112 px from 860 px down, 141 from 465, 170 from 334 and 199 from
 300 - every width inside the room already there, so no rem changed. On /consignes/ itself
-the bar scrolls away under 600 px (`html:has(.consignes-page)`, room 0). A
+the bar scrolls away under 600 px (`html:has(.returnables-page)`, room 0). A
 tenth link is measured again.
 
 **The badges are part of the measurement**, and that test's fixture carries
@@ -5477,7 +5624,7 @@ menu is too big, maybe do something that can be expanded »;
   section (`navigation.SECTION_LABELS`, checked against the lit link) and
   « Menu », with a red dot while any link carries a badge - a `:has()` on the
   badges themselves, so every writer keeps it right (base.html,
-  `_review_panel_refresh.html`'s out-of-band `#nav-count-produits`, ui.js's
+  `_review_panel_refresh.html`'s out-of-band `#nav-count-products`, ui.js's
   `to-link-count`, which builds its badge as nodes). Its room is 6rem.
 - The menu holds the links, the espace's name and « Se déconnecter », each
   44 px tall. It drops OVER the page under a veil (the bar's `::after`): a
@@ -5540,7 +5687,7 @@ written `vh` then `svh` (the screen with the address bar shown).
 **A touch screen is `(pointer: coarse)`, not a width** (the « touch » section
 at the end of marginmate.css, 30/09): a phone held sideways is wider than 860
 px, and a narrow desktop window needs none of it. There: fields at 16 px (iOS
-zooms the page in on a smaller one; .consignes-page keeps its own rule at
+zooms the page in on a smaller one; .returnables-page keeps its own rule at
 every width), controls 44 px tall in `<main>` - 36 in a table's row, a chip
 or a segmented choice, with 8 px between two row actions -, checkboxes 20 px,
 and a phone held sideways keeps no inner table scroll box. Scoped to

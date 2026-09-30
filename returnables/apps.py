@@ -12,7 +12,7 @@ class ReturnablesConfig(AppConfig):
     def ready(self):
         # pdfminer's decoders bounded for the whole process from the start
         # (reading.bound_pdf_decoding), not from the first import of the
-        # consignes code: a management command reading Achats' PDFs gets the
+        # returnables code: a management command reading Achats' PDFs gets the
         # same bound as the web process.
         from returnables import reading
 

@@ -5,22 +5,30 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('recipes', '0010_job_heartbeat'),
+        ("recipes", "0010_job_heartbeat"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='PosProductDailyQuantity',
+            name="PosProductDailyQuantity",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('sold_on', models.DateField()),
-                ('quantity', models.PositiveIntegerField()),
-                ('product', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='daily_quantities', to='recipes.posproduct')),
+                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
+                ("sold_on", models.DateField()),
+                ("quantity", models.PositiveIntegerField()),
+                (
+                    "product",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="daily_quantities",
+                        to="recipes.posproduct",
+                    ),
+                ),
             ],
             options={
-                'constraints': [models.UniqueConstraint(fields=('product', 'sold_on'), name='unique_pos_product_daily_quantity')],
+                "constraints": [
+                    models.UniqueConstraint(fields=("product", "sold_on"), name="unique_pos_product_daily_quantity")
+                ],
             },
         ),
     ]

@@ -50,7 +50,7 @@ class InvoiceTypeFormInBrowserTests(StaticLiveServerTestCase):
 
     def setUp(self):
         self.supplier = make_supplier(code="BOX_X", name="Box Exemple", parser_key="", expenses_only=True)
-        # Every page wants a login: the test espace's owner.
+        # Every page wants a login: the test tenant's owner.
         log_in_the_browser(self.driver, self.live_server_url)
 
     def open(self, url):
@@ -65,7 +65,9 @@ class InvoiceTypeFormInBrowserTests(StaticLiveServerTestCase):
         from selenium.webdriver.common.by import By
 
         # The visible button: the form's first, out of sight, is what Enter presses.
-        self.driver.find_element(By.CSS_SELECTOR, f'button[name=action][value="{action}"]:not(.visually-hidden)').click()
+        self.driver.find_element(
+            By.CSS_SELECTOR, f'button[name=action][value="{action}"]:not(.visually-hidden)'
+        ).click()
 
     def wait_for(self, condition):
         from selenium.webdriver.support.ui import WebDriverWait
@@ -83,13 +85,15 @@ class InvoiceTypeFormInBrowserTests(StaticLiveServerTestCase):
         self.field("name").send_keys(name)
         Select(self.field("supplier")).select_by_value(str(self.supplier.pk))
 
-    def test_tester_on_a_website_type_starts_the_test_with_the_browser_asked_for(self):
+    def test_the_test_button_on_a_website_type_starts_the_test_with_the_browser_asked_for(self):
         invoice_type = InvoiceType.objects.create(
             supplier=self.supplier, name="Box Exemple - Factures", source_kind=InvoiceType.SourceKind.WEBSITE
         )
         WebsiteInvoiceSource.objects.create(
-            invoice_type=invoice_type, login_url="https://box.exemple.fr/login",
-            username_env="BOX_LOGIN", password_env="BOX_PASSWORD",
+            invoice_type=invoice_type,
+            login_url="https://box.exemple.fr/login",
+            username_env="BOX_LOGIN",
+            password_env="BOX_PASSWORD",
         )
         self.open(reverse("invoices:invoice_type_update", args=[invoice_type.pk]))
         self.field("site-show_browser").click()
@@ -107,7 +111,9 @@ class InvoiceTypeFormInBrowserTests(StaticLiveServerTestCase):
         self.field("sender_pattern").send_keys("factures@grossiste")
         self.click("save")
         self.wait_for(lambda: InvoiceType.objects.filter(name="Grossiste - Factures").exists())
-        self.assertEqual(InvoiceType.objects.get(name="Grossiste - Factures").email_source.sender_pattern, "factures@grossiste")
+        self.assertEqual(
+            InvoiceType.objects.get(name="Grossiste - Factures").email_source.sender_pattern, "factures@grossiste"
+        )
 
     def test_a_website_type_is_saved_with_the_mailbox_fields_hidden_and_empty(self):
         self.open(reverse("invoices:invoice_type_create"))

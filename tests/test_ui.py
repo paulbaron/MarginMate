@@ -71,9 +71,7 @@ class SearchableSortableTableTests(TestCase):
         record_sales([("Vodka tonic", date(2026, 3, 15), 20)])
 
         take = make_stock_take(taken_at=timezone.make_aware(datetime(2026, 3, 31, 12, 0)))
-        make_stock_take_line(
-            stock_take=take, stock_type=stock_type, counted_quantity="4", unit=UnitChoices.LITRE
-        )
+        make_stock_take_line(stock_take=take, stock_type=stock_type, counted_quantity="4", unit=UnitChoices.LITRE)
         cls.take = take
 
     def assertEnhancedTable(self, url_name, **kwargs):
@@ -116,10 +114,11 @@ class SearchableSortableTableTests(TestCase):
         self.assertEnhancedTable("recipes:pos_product_list")
 
     def test_margins(self):
-        """Its two tables are lists like any other - « quelle catégorie
-        marge le mieux » is a sort, and a page of thirteen rows without one
-        is read line by line."""
+        """Its two tables are lists like any other - « which category
+        makes the best margin » is a sort, and a page of thirteen rows
+        without one is read line by line."""
         from datetime import timedelta
+
         from recipes.models import PosProduct, PosProductDailyQuantity
 
         product = PosProduct.objects.create(name="Mule", category="Cocktails", typology="Liquide (Alcool)")
@@ -161,9 +160,9 @@ class SearchableSortableTableTests(TestCase):
         self.assertContains(self.assertEnhancedTable("staff:home"), 'data-table-label="salariés"')
         self.assertContains(self.assertEnhancedTable("staff:employee", pk=person.pk), 'data-table-label="mois"')
 
-    def test_consignes(self):
-        """« Consignes »: the reprises and the bons received are lists, and
-        so are the formats of bon and a bon's lines; the reprise's form is a
+    def test_returnables(self):
+        """« Consignes »: the pickups and the slips received are lists, and
+        so are the slip formats and a slip's lines; the pickup's form is a
         form, and is not one."""
         from returnables.tests.support import make_pickup, make_slip
 
@@ -173,7 +172,9 @@ class SearchableSortableTableTests(TestCase):
         self.assertContains(response, 'data-table-label="reprises"')
         self.assertContains(response, 'data-table-label="bons reçus"')
         self.assertContains(self.assertEnhancedTable("returnables:format_list"), 'data-table-label="formats de bons"')
-        self.assertContains(self.assertEnhancedTable("returnables:slip_detail", pk=slip.pk), 'data-table-label="lignes du bon"')
+        self.assertContains(
+            self.assertEnhancedTable("returnables:slip_detail", pk=slip.pk), 'data-table-label="lignes du bon"'
+        )
 
     def test_stock_take_list(self):
         self.assertEnhancedTable("inventory:stock_take_list")
@@ -212,7 +213,7 @@ class SortKeyTests(TestCase):
         self.assertContains(response, 'data-sort="2026-03-05"')
         self.assertContains(response, "05/03/2026")
 
-    def test_the_vendu_column_carries_a_plain_numeric_sort_key(self):
+    def test_the_sold_column_carries_a_plain_numeric_sort_key(self):
         """Its displayed text can be "247.68" alone or "247.68 ?" with an
         estimate badge - sorting by the cell's own text (the datatable.js
         default) would fall back to a string compare for every row that
@@ -240,8 +241,8 @@ class SortKeyTests(TestCase):
         # the « ? » the estimate badge puts in the cell's own text.
         self.assertContains(response, 'data-sort="4.0000"')
 
-    def test_reprise_and_bon_dates_carry_an_iso_sort_key(self):
-        """« Consignes »: a reprise's day and a bon's delivery sort by their
+    def test_pickup_and_slip_dates_carry_an_iso_sort_key(self):
+        """« Consignes »: a pickup's day and a slip's delivery sort by their
         ISO date - and read as French dates."""
         from returnables.tests.support import make_pickup, make_slip
 
@@ -264,7 +265,7 @@ class ChildRowTests(TestCase):
         self.assertContains(response, "data-child-row")
 
     def test_the_variance_valuation_note_is_marked_as_a_child(self):
-        """"Valorisé en Rhum (…)" belongs to the pool row above it; sorted
+        """ "Valorisé en Rhum (…)" belongs to the pool row above it; sorted
         apart, it would sit under an unrelated group and read as its
         valuation."""
         supplier = make_supplier()
@@ -272,13 +273,9 @@ class ChildRowTests(TestCase):
         make_product(supplier=supplier, stock_type=stock_type, unit=UnitChoices.UNIT, stock_equivalent="0.7")
 
         opening = make_stock_take(taken_at=timezone.make_aware(datetime(2026, 3, 1, 12, 0)))
-        make_stock_take_line(
-            stock_take=opening, stock_type=stock_type, counted_quantity="20", unit=UnitChoices.LITRE
-        )
+        make_stock_take_line(stock_take=opening, stock_type=stock_type, counted_quantity="20", unit=UnitChoices.LITRE)
         closing = make_stock_take(taken_at=timezone.make_aware(datetime(2026, 3, 31, 12, 0)))
-        make_stock_take_line(
-            stock_take=closing, stock_type=stock_type, counted_quantity="15", unit=UnitChoices.LITRE
-        )
+        make_stock_take_line(stock_take=closing, stock_type=stock_type, counted_quantity="15", unit=UnitChoices.LITRE)
 
         response = self.client.get(reverse("inventory:stock_take_variance", kwargs={"pk": closing.pk}))
         self.assertEqual(response.status_code, 200)
@@ -295,7 +292,7 @@ class ChildRowTests(TestCase):
         make_priced_stock_type(name="Vodka", unit_cost_ht="12", quantity="10")
         html = self.client.get(reverse("inventory:stock_list")).content.decode()
 
-        thead = re.search(r"<thead>(.*?)</thead>", html, re.S).group(1)
+        thead = re.search(r"<thead>(.*?)</thead>", html, re.DOTALL).group(1)
         header_columns = thead.count("<th")
         self.assertGreater(header_columns, 0)
 
@@ -380,34 +377,29 @@ class TemplateHygieneTests(TestCase):
         import pathlib
 
         root = pathlib.Path(__file__).resolve().parent.parent
-        return [
-            path
-            for path in root.rglob("*.html")
-            if ".venv" not in path.parts and "staticfiles" not in path.parts
-        ]
+        return [path for path in root.rglob("*.html") if ".venv" not in path.parts and "staticfiles" not in path.parts]
 
     def test_no_multiline_hash_comments(self):
         import re
 
         offenders = []
         for path in self.template_files():
-            for match in re.finditer(r"\{#.*?#\}", path.read_text(encoding="utf-8"), re.S):
+            for match in re.finditer(r"\{#.*?#\}", path.read_text(encoding="utf-8"), re.DOTALL):
                 if "\n" in match.group(0):
                     offenders.append(f"{path.name}: {match.group(0)[:60]}…")
         self.assertEqual(
             offenders,
             [],
-            "Multi-line {# #} renders as visible text - use {% comment %} instead:\n"
-            + "\n".join(offenders),
+            "Multi-line {# #} renders as visible text - use {% comment %} instead:\n" + "\n".join(offenders),
         )
 
     def test_every_template_is_syntactically_valid(self):
         """A template that only renders on one rarely-visited page still
         fails at import time here rather than in front of someone."""
-        from django.template.loader import get_template
-        from django.template import TemplateSyntaxError
-
         import pathlib
+
+        from django.template import TemplateSyntaxError
+        from django.template.loader import get_template
 
         root = pathlib.Path(__file__).resolve().parent.parent
         for path in self.template_files():
@@ -417,7 +409,14 @@ class TemplateHygieneTests(TestCase):
                 *[
                     f"{app}/templates"
                     for app in (
-                        "accounts", "inventory", "invoices", "recipes", "bank", "margins", "transfer", "staff",
+                        "accounts",
+                        "inventory",
+                        "invoices",
+                        "recipes",
+                        "bank",
+                        "margins",
+                        "transfer",
+                        "staff",
                         "returnables",
                     )
                 ],
@@ -435,9 +434,9 @@ class TemplateHygieneTests(TestCase):
                     self.fail(f"{name}: {exc}")
 
 
-class ConsignesWritesNoMarkupTests(TestCase):
-    """« Consignes » prints what a stranger wrote: a type's name, a motif, a
-    bon's designations, a mail's subject, a photo's file name. Every
+class ReturnablesWritesNoMarkupTests(TestCase):
+    """« Consignes » prints what a stranger wrote: a type's name, a pattern, a
+    slip's designations, a mail's subject, a photo's file name. Every
     sentence its pure modules build is plain text, escaped by the templates -
     nothing in the app may turn text into markup, and its script builds
     nodes with textContent (the rule charts.js was caught breaking)."""
@@ -450,7 +449,9 @@ class ConsignesWritesNoMarkupTests(TestCase):
         offenders = []
         for path in root.rglob("*.html"):
             # What a comment says about |safe is not a use of it.
-            text = re.sub(r"\{% comment %\}.*?\{% endcomment %\}", "", path.read_text(encoding="utf-8"), flags=re.S)
+            text = re.sub(
+                r"\{% comment %\}.*?\{% endcomment %\}", "", path.read_text(encoding="utf-8"), flags=re.DOTALL
+            )
             for pattern in (r"\|\s*safe(seq)?\b", r"\{%\s*autoescape\s+off"):
                 if re.search(pattern, text):
                     offenders.append(f"{path.name}: {pattern}")
@@ -458,16 +459,23 @@ class ConsignesWritesNoMarkupTests(TestCase):
             if "tests" in path.parts:
                 continue
             text = path.read_text(encoding="utf-8")
-            for pattern in (r"\bmark_safe\s*\(", r"\bSafeString\s*\(", r"django\.utils\.safestring", r"\bformat_html\s*\("):
+            for pattern in (
+                r"\bmark_safe\s*\(",
+                r"\bSafeString\s*\(",
+                r"django\.utils\.safestring",
+                r"\bformat_html\s*\(",
+            ):
                 if re.search(pattern, text):
                     offenders.append(f"{path.name}: {pattern}")
         self.assertEqual(offenders, [])
 
-    def test_the_consignes_script_never_writes_markup(self):
+    def test_the_returnables_script_never_writes_markup(self):
         import pathlib
         import re
 
-        source = (pathlib.Path(__file__).resolve().parent.parent / "static/js/returnables.js").read_text(encoding="utf-8")
+        source = (pathlib.Path(__file__).resolve().parent.parent / "static/js/returnables.js").read_text(
+            encoding="utf-8"
+        )
         for pattern in (r"\.innerHTML\s*[+]?=", r"\.outerHTML\s*[+]?=", r"insertAdjacentHTML", r"document\.write"):
             with self.subTest(pattern=pattern):
                 self.assertIsNone(re.search(pattern, source))
@@ -488,7 +496,7 @@ class ConsignesWritesNoMarkupTests(TestCase):
 
     def test_the_gather_card_the_page_includes_has_no_inline_style(self):
         """/consignes/ draws Achats' gather card (invoices/_gather_status.html)
-        while a gather of bons runs: the CSP the page is written for covers
+        while a gather of slips runs: the CSP the page is written for covers
         what it includes too. Its spacing was four inline style= (29/09)."""
         import pathlib
         import re
@@ -499,24 +507,23 @@ class ConsignesWritesNoMarkupTests(TestCase):
         self.assertIsNone(re.search(r"<script(?![^>]*\ssrc=)", text))
 
 
-class ConsignesStylesheetTests(TestCase):
+class ReturnablesStylesheetTests(TestCase):
     def test_the_phone_rules_are_in_the_stylesheet(self):
         """The fast loop's guard of what returnables/tests/test_phone_browser.py
         measures in Chrome: every small button of these pages 44 px tall (a
         photo's « Retirer » was 30, « Effacer » a line of text), and a file
         name without spaces wrapped rather than widening the page (in a
-        bon's subtitle, in a message - which sits outside the page's root)."""
+        slip's subtitle, in a message - which sits outside the page's root)."""
         import pathlib
-        import re
 
         css = (pathlib.Path(__file__).resolve().parent.parent / "static/css/marginmate.css").read_text(encoding="utf-8")
-        block = css[css.index("/* ------------------------------------------------------------- consignes */"):]
+        block = css[css.index("/* ----------------------------------------------------------- returnables */") :]
         for selector, declaration in (
-            (r"\.consignes-page \.btn-small", r"min-height:\s*44px"),
+            (r"\.returnables-page \.btn-small", r"min-height:\s*44px"),
             (r"\.draft-notice \.link-button", r"min-height:\s*44px"),
             (r"\.photo-remove > summary", r"min-height:\s*44px"),
-            (r"\.consignes-page \.page-subtitle", r"overflow-wrap:\s*anywhere"),
-            (r"html:has\(\.consignes-page\) \.message", r"overflow-wrap:\s*anywhere"),
+            (r"\.returnables-page \.page-subtitle", r"overflow-wrap:\s*anywhere"),
+            (r"html:has\(\.returnables-page\) \.message", r"overflow-wrap:\s*anywhere"),
         ):
             with self.subTest(selector=selector):
                 self.assertRegex(block, selector + r"\s*\{[^}]*" + declaration)
@@ -528,6 +535,7 @@ class JobConsoleTests(TestCase):
 
     def render(self, **job_kwargs):
         from django.template.loader import render_to_string
+
         from invoices.models import ScrapeJob
 
         job = ScrapeJob.objects.create(**job_kwargs)
@@ -535,8 +543,13 @@ class JobConsoleTests(TestCase):
         job.save(update_fields=["log"])
         return render_to_string(
             "_job_console.html",
-            {"log": job.log, "running": job.is_active, "last_line": job.last_log_line,
-             "log_lines": job.log_lines, "console_id": "test-log"},
+            {
+                "log": job.log,
+                "running": job.is_active,
+                "last_line": job.last_log_line,
+                "log_lines": job.log_lines,
+                "console_id": "test-log",
+            },
         ), job
 
     def test_the_log_is_collapsed_behind_a_disclosure(self):
@@ -565,7 +578,7 @@ class JobConsoleTests(TestCase):
         self.assertNotIn("job-spinner", html)
 
     def test_the_elapsed_prefix_is_stripped_from_the_live_line(self):
-        """"[+  4.2s]" is useful in the log and noise on the one line shown
+        """ "[+  4.2s]" is useful in the log and noise on the one line shown
         as a live status, where the spinner already says "running"."""
         _html, job = self.render(status="RUNNING")
         self.assertEqual(job.last_log_line, "12 175 emails analysés")
@@ -613,8 +626,9 @@ class ChartMarkupTests(TestCase):
     to do that - the browser's own <title> tooltip is too slow to be useful."""
 
     def test_the_pie_carries_a_label_and_value_per_slice(self):
-        from recipes.views import _build_ingredient_pie_svg
         from decimal import Decimal
+
+        from recipes.views import _build_ingredient_pie_svg
 
         class FakeIngredient:
             source_name = "Vodka"
@@ -632,40 +646,37 @@ class ChartMarkupTests(TestCase):
 
     def test_a_single_ingredient_is_drawn_as_a_full_circle(self):
         """An arc from a point back to itself collapses to nothing."""
-        from recipes.views import _build_ingredient_pie_svg
         from decimal import Decimal
+
+        from recipes.views import _build_ingredient_pie_svg
 
         class FakeIngredient:
             source_name = "Vodka"
 
-        html = _build_ingredient_pie_svg(
-            [{"ingredient": FakeIngredient(), "name": "Vodka", "cost_ht": Decimal("3")}]
-        )
+        html = _build_ingredient_pie_svg([{"ingredient": FakeIngredient(), "name": "Vodka", "cost_ht": Decimal("3")}])
         self.assertIn("<circle", html)
         self.assertIn("100.0 %", html)
 
     def test_slice_names_are_escaped(self):
         """Rendered with |safe, and the names come from invoice text."""
-        from recipes.views import _build_ingredient_pie_svg
         from decimal import Decimal
 
-        class FakeIngredient:
-            source_name = '<img src=x onerror=alert(1)>'
+        from recipes.views import _build_ingredient_pie_svg
 
-        html = _build_ingredient_pie_svg(
-            [{"ingredient": FakeIngredient(), "cost_ht": Decimal("3")}]
-        )
+        class FakeIngredient:
+            source_name = "<img src=x onerror=alert(1)>"
+
+        html = _build_ingredient_pie_svg([{"ingredient": FakeIngredient(), "cost_ht": Decimal("3")}])
         self.assertNotIn("<img", html)
         self.assertIn("&lt;img", html)
 
     def test_the_price_chart_carries_a_point_per_reading(self):
-        from inventory.views import _build_price_history_svg
         from datetime import date
         from decimal import Decimal
 
-        html = _build_price_history_svg(
-            [(date(2026, 1, 1), Decimal("1.50")), (date(2026, 2, 1), Decimal("1.80"))]
-        )
+        from inventory.views import _build_price_history_svg
+
+        html = _build_price_history_svg([(date(2026, 1, 1), Decimal("1.50")), (date(2026, 2, 1), Decimal("1.80"))])
         self.assertIn('data-chart="line"', html)
         self.assertEqual(html.count("chart-point"), 2)
         self.assertIn('data-label="01/01/2026"', html)
@@ -684,8 +695,7 @@ class ChartMarkupTests(TestCase):
         defined = set(re.findall(r"(--[\w-]+)\s*:", css))
 
         used = {}
-        patterns = ("static/css/*.css", "static/js/*.js", "templates/**/*.html",
-                    "*/templates/**/*.html", "*/views.py")
+        patterns = ("static/css/*.css", "static/js/*.js", "templates/**/*.html", "*/templates/**/*.html", "*/views.py")
         for pattern in patterns:
             for path in glob.glob(str(root / pattern), recursive=True):
                 if ".venv" in path:
@@ -700,25 +710,23 @@ class ChartMarkupTests(TestCase):
         """They were drawn with var(--panel-border) after the stylesheet
         renamed it, which made them invisible."""
         import pathlib
-        from inventory.views import _build_price_history_svg
+        import re
         from datetime import date
         from decimal import Decimal
-        import re
 
-        html = _build_price_history_svg(
-            [(date(2026, 1, 1), Decimal("1.50")), (date(2026, 2, 1), Decimal("1.80"))]
-        )
-        css = (pathlib.Path(__file__).resolve().parent.parent / "static/css/marginmate.css").read_text(
-            encoding="utf-8"
-        )
+        from inventory.views import _build_price_history_svg
+
+        html = _build_price_history_svg([(date(2026, 1, 1), Decimal("1.50")), (date(2026, 2, 1), Decimal("1.80"))])
+        css = (pathlib.Path(__file__).resolve().parent.parent / "static/css/marginmate.css").read_text(encoding="utf-8")
         for name in set(re.findall(r"var\((--[\w-]+)\)", html)):
             with self.subTest(variable=name):
                 self.assertIn(name + ":", css, f"{name} is used by a chart but not defined in the CSS")
 
     def test_too_few_points_render_nothing(self):
-        from inventory.views import _build_price_history_svg
         from datetime import date
         from decimal import Decimal
+
+        from inventory.views import _build_price_history_svg
 
         self.assertEqual(_build_price_history_svg([(date(2026, 1, 1), Decimal("1.50"))]), "")
 
@@ -781,9 +789,7 @@ class FormRenderingTests(TestCase):
         the head stops the page being parsed at all until the CSS lands."""
         html = self.client.get(reverse("inventory:stock_list")).content.decode()
         head = html.split("</head>")[0]
-        inline_scripts = [
-            block for block in head.split("<script")[1:] if not block.lstrip().startswith("src=")
-        ]
+        inline_scripts = [block for block in head.split("<script")[1:] if not block.lstrip().startswith("src=")]
         self.assertEqual(inline_scripts, [], "inline <script> in <head> blocks parsing on the stylesheet")
 
     def test_the_head_waits_for_one_script_only_topbar_js(self):
@@ -899,8 +905,12 @@ class InvoiceDetailTests(TestCase):
         self.invoice = make_invoice(supplier=supplier, invoice_number="VE-1")
         product = make_product(supplier=supplier, raw_name="BIERE 30L")
         make_invoice_line(
-            invoice=self.invoice, product=product, quantity=5, total_ht="100.00",
-            vat_rate=Decimal("0.20"), taxes=Decimal("3.50"),
+            invoice=self.invoice,
+            product=product,
+            quantity=5,
+            total_ht="100.00",
+            vat_rate=Decimal("0.20"),
+            taxes=Decimal("3.50"),
         )
 
     def url(self):
@@ -939,7 +949,10 @@ class InvoiceDetailTests(TestCase):
 
         food = make_product(supplier=self.invoice.supplier, raw_name="COMTE")
         make_invoice_line(
-            invoice=self.invoice, product=food, quantity=1, total_ht="100.00",
+            invoice=self.invoice,
+            product=food,
+            quantity=1,
+            total_ht="100.00",
             vat_rate=Decimal("0.055"),
         )
         self.assertEqual(self.invoice.total_ttc, Decimal("120.00") + Decimal("105.50"))
@@ -956,14 +969,17 @@ class InvoiceDetailTests(TestCase):
 
 class StockTakeDetailTests(TestCase):
     def setUp(self):
-        from tests.factories import make_stock_take, make_stock_take_line, make_stock_type
         from inventory.models import UnitChoices
+        from tests.factories import make_stock_take, make_stock_take_line, make_stock_type
 
         self.take = make_stock_take()
         self.stock_type = make_stock_type(name="Vodka", unit=UnitChoices.LITRE)
         make_stock_take_line(
-            stock_take=self.take, stock_type=self.stock_type,
-            counted_quantity="4", unit=UnitChoices.LITRE, value_ht="40",
+            stock_take=self.take,
+            stock_type=self.stock_type,
+            counted_quantity="4",
+            unit=UnitChoices.LITRE,
+            value_ht="40",
         )
 
     def url(self):
@@ -975,13 +991,17 @@ class StockTakeDetailTests(TestCase):
         self.assertIn("Valeur comptée", html)
 
     def test_a_shortfall_is_counted_and_explained(self):
-        from tests.factories import make_stock_take_line, make_stock_type
         from inventory.models import UnitChoices
+        from tests.factories import make_stock_take_line, make_stock_type
 
         make_stock_take_line(
-            stock_take=self.take, stock_type=make_stock_type(name="Gin"),
-            counted_quantity="9", unit=UnitChoices.LITRE, value_ht="90",
-            has_shortfall=True, shortfall_quantity=Decimal("3"),
+            stock_take=self.take,
+            stock_type=make_stock_type(name="Gin"),
+            counted_quantity="9",
+            unit=UnitChoices.LITRE,
+            value_ht="90",
+            has_shortfall=True,
+            shortfall_quantity=Decimal("3"),
         )
         response = self.client.get(self.url())
         self.assertEqual(response.context["shortfall_count"], 1)
@@ -1013,9 +1033,23 @@ class LayoutClassTests(TestCase):
         # JavaScript or come from Django, and aren't all styled.
         # .table-scroll and .phone-cards (30/09): a table's box on a phone,
         # and the lists read as cards there - unstyled, both do nothing.
-        structural = {"actions", "page-header-actions", "stat-row", "stat", "form-grid",
-                      "form-field", "table-wrap", "table-scroll", "phone-cards", "bulk-bar",
-                      "job-console", "chart", "explainer", "lead", "breadcrumb"}
+        structural = {
+            "actions",
+            "page-header-actions",
+            "stat-row",
+            "stat",
+            "form-grid",
+            "form-field",
+            "table-wrap",
+            "table-scroll",
+            "phone-cards",
+            "bulk-bar",
+            "job-console",
+            "chart",
+            "explainer",
+            "lead",
+            "breadcrumb",
+        }
         missing = sorted(name for name in structural if name not in defined)
         self.assertEqual(missing, [], f"Structural classes with no CSS rule: {missing}")
 
@@ -1089,7 +1123,14 @@ TemplateTable = namedtuple("TemplateTable", "classes box searchable")
 #: article's purchases, .stock-table-wrap between two counts), the
 #: timesheet's grid (« Enregistrer » sticks under it) and a month's table
 #: (three columns that fit a phone, clipped rather than scrolled).
-TABLE_BOXES = ("table-wrap", "table-scroll", "sub-table-wrap", "stock-table-wrap", "timesheet-grid-wrap", "month-table-wrap")
+TABLE_BOXES = (
+    "table-wrap",
+    "table-scroll",
+    "sub-table-wrap",
+    "stock-table-wrap",
+    "timesheet-grid-wrap",
+    "month-table-wrap",
+)
 
 #: What an HTML parser opens and never closes.
 VOID_ELEMENTS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
@@ -1105,7 +1146,7 @@ def _source(relative: str) -> str:
 def _blank_comments(text: str) -> str:
     """Comments as spaces of their own length: what a rule says, never what a
     comment says about it - and every rule where the file has it."""
-    return re.sub(r"/\*.*?\*/", lambda comment: re.sub(r"[^\n]", " ", comment.group()), text, flags=re.S)
+    return re.sub(r"/\*.*?\*/", lambda comment: re.sub(r"[^\n]", " ", comment.group()), text, flags=re.DOTALL)
 
 
 def _split_selectors(group: str) -> list:
@@ -1132,7 +1173,7 @@ def _declarations(body: str) -> dict:
     return found
 
 
-def stylesheet_rules(css: str = None) -> list:
+def stylesheet_rules(css: str | None = None) -> list:
     """Every rule of `css` (marginmate.css by default), in the file's order,
     braces matched: a block of @media is read rule by rule. @keyframes are
     left out - their « from » and « to » are no selectors."""
@@ -1152,11 +1193,13 @@ def stylesheet_rules(css: str = None) -> list:
             prelude = " ".join(raw.split())
             where = position + len(raw) - len(raw.lstrip())
             if prelude.startswith("@media"):
-                walk(opening + 1, index - 1, prelude[len("@media"):].strip())
+                walk(opening + 1, index - 1, prelude[len("@media") :].strip())
             elif prelude.startswith("@container"):
                 walk(opening + 1, index - 1, prelude)
             elif not prelude.startswith("@"):
-                found.append(Rule(where, media, _split_selectors(prelude), _declarations(text[opening + 1:index - 1])))
+                found.append(
+                    Rule(where, media, _split_selectors(prelude), _declarations(text[opening + 1 : index - 1]))
+                )
             position = index
 
     walk(0, len(text), None)
@@ -1200,11 +1243,13 @@ def template_tables(source: str) -> list:
             classes = set((attributes.get("class") or "").split())
             if tag == "table":
                 boxes = [box for _, held in self.open for box in TABLE_BOXES if box in held]
-                self.tables.append(TemplateTable(
-                    ".".join(sorted(classes)) or "(sans classe)",
-                    boxes[-1] if boxes else None,
-                    "data-table" in attributes and "data-table-sort-only" not in attributes,
-                ))
+                self.tables.append(
+                    TemplateTable(
+                        ".".join(sorted(classes)) or "(sans classe)",
+                        boxes[-1] if boxes else None,
+                        "data-table" in attributes and "data-table-sort-only" not in attributes,
+                    )
+                )
             if tag not in VOID_ELEMENTS:
                 self.open.append((tag, classes))
 
@@ -1254,7 +1299,9 @@ class StylesheetTestCase(SimpleTestCase):
         phone = [rule.where for rule in self.naming(selector, media) if name in rule.declarations]
         self.assertTrue(base, f"no top-level « {selector} » setting {name}")
         self.assertTrue(phone, f"no « {selector} » setting {name} under @media {media}")
-        self.assertGreater(max(phone), max(base), f"« {selector} » {{ {name} }} under @media {media} comes before the rule it corrects")
+        self.assertGreater(
+            max(phone), max(base), f"« {selector} » {{ {name} }} under @media {media} comes before the rule it corrects"
+        )
 
 
 class EveryTableScrollsInItsOwnBoxTests(SimpleTestCase):
@@ -1277,7 +1324,8 @@ class EveryTableScrollsInItsOwnBoxTests(SimpleTestCase):
     def test_every_table_is_in_a_scroll_box(self):
         bare = [f"{name}: table.{table.classes}" for name, table in self.every_table() if table.box is None]
         self.assertEqual(
-            bare, [],
+            bare,
+            [],
             "A table straight in the page makes a phone as wide as its widest row: put it in a "
             ".table-scroll (or a .table-wrap):\n" + "\n".join(bare),
         )
@@ -1291,23 +1339,29 @@ class EveryTableScrollsInItsOwnBoxTests(SimpleTestCase):
         self.assertIsNotNone(anchor, "datatable.js no longer says which box its search box goes before")
         known = {name.strip().lstrip(".") for name in anchor.group(1).split(",")}
         searchable = [(name, table) for name, table in self.every_table() if table.searchable]
-        misplaced = [f"{name}: table.{table.classes} in .{table.box}" for name, table in searchable if table.box not in known]
+        misplaced = [
+            f"{name}: table.{table.classes} in .{table.box}" for name, table in searchable if table.box not in known
+        ]
         self.assertEqual(misplaced, [], "\n".join(misplaced))
         # Not a guard of nothing: tables with a search box sit in both boxes.
-        self.assertEqual({table.box for _, table in searchable} & {"table-wrap", "table-scroll"}, {"table-wrap", "table-scroll"})
+        self.assertEqual(
+            {table.box for _, table in searchable} & {"table-wrap", "table-scroll"}, {"table-wrap", "table-scroll"}
+        )
 
     def test_the_guard_sees_a_bare_table(self):
         """The parser itself: a table in a .card is bare; in a .table-scroll,
         or behind an {% if %}'s box, it is not; a box closed before it holds
         nothing; a comment's table is no table."""
-        boxes = lambda source: [(table.classes, table.box) for table in template_tables(source)]  # noqa: E731
+        boxes = lambda source: [(table.classes, table.box) for table in template_tables(source)]
         self.assertEqual(boxes('<div class="card"><table class="sub-table"></table></div>'), [("sub-table", None)])
         self.assertEqual(
             boxes('<div class="card"><div class="table-scroll"><table></table></div></div>'),
             [("(sans classe)", "table-scroll")],
         )
         self.assertEqual(
-            boxes('{% if a %}<div class="stock-table-wrap">{% endif %}<table class="x{% if a %} y{% endif %}"></table>'),
+            boxes(
+                '{% if a %}<div class="stock-table-wrap">{% endif %}<table class="x{% if a %} y{% endif %}"></table>'
+            ),
             [("x.y", "stock-table-wrap")],
         )
         self.assertEqual(boxes('<div class="table-scroll"></div><table></table>'), [("(sans classe)", None)])
@@ -1318,7 +1372,9 @@ class EveryTableScrollsInItsOwnBoxTests(SimpleTestCase):
         )
         searchable = [
             table.searchable
-            for table in template_tables('<table data-table></table><table data-table data-table-sort-only></table><table></table>')
+            for table in template_tables(
+                "<table data-table></table><table data-table data-table-sort-only></table><table></table>"
+            )
         ]
         self.assertEqual(searchable, [True, False, False])
 
@@ -1335,8 +1391,12 @@ class PhoneWidthStylesheetTests(StylesheetTestCase):
         for selector in (".receipt-review", ".receipt-review:has(.document-pdf)"):
             with self.subTest(selector=selector):
                 self.assertDeclares(selector, "(max-width: 900px)", {"grid-template-columns": "minmax(0, 1fr)"})
-        bare = [rule for rule in self.rules if any(".receipt-review" in selector for selector in rule.selectors)
-                and rule.declarations.get("grid-template-columns") == "1fr"]
+        bare = [
+            rule
+            for rule in self.rules
+            if any(".receipt-review" in selector for selector in rule.selectors)
+            and rule.declarations.get("grid-template-columns") == "1fr"
+        ]
         self.assertEqual(bare, [])
 
     def test_a_stacked_receipt_photo_is_part_of_the_page(self):
@@ -1345,7 +1405,9 @@ class PhoneWidthStylesheetTests(StylesheetTestCase):
         on the receipt scrolled the photo and not the lines (« there are
         scroll issues with some panels », 30/09). And a PDF's frame leaves
         the page reachable around it: 60 % of the screen, in svh."""
-        self.assertDeclares(".receipt-photo", "(max-width: 900px)", {"position": "static", "max-height": "none", "overflow": "visible"})
+        self.assertDeclares(
+            ".receipt-photo", "(max-width: 900px)", {"position": "static", "max-height": "none", "overflow": "visible"}
+        )
         for name in ("position", "max-height"):
             with self.subTest(declaration=name):
                 self.assertAfterItsBaseRule(".receipt-photo", "(max-width: 900px)", name)
@@ -1364,10 +1426,14 @@ class PhoneWidthStylesheetTests(StylesheetTestCase):
         self.assertAfterItsBaseRule(".btn", phone, "white-space")
         self.assertDeclares(":is(td, th) .btn", phone, {"white-space": "nowrap"})
         fields = [
-            rule for rule in self.rules
-            if rule.media == phone and rule.declarations.get("max-width") == "100%"
-            and any(":not(:is(td, th) *)" in selector and all(name in selector for name in ("input", "select", "textarea"))
-                    for selector in rule.selectors)
+            rule
+            for rule in self.rules
+            if rule.media == phone
+            and rule.declarations.get("max-width") == "100%"
+            and any(
+                ":not(:is(td, th) *)" in selector and all(name in selector for name in ("input", "select", "textarea"))
+                for selector in rule.selectors
+            )
         ]
         self.assertTrue(fields, "no rule keeping a field (outside a table's cell) to its line's width")
         self.assertDeclares(".period-picker select", phone, {"min-width": "0"})
@@ -1406,7 +1472,8 @@ class PhoneWidthStylesheetTests(StylesheetTestCase):
         self.assertGreater(len(section), 5)
         outside = [
             f"{', '.join(rule.selectors)} (@media {rule.media})"
-            for rule in section if rule.media not in ("(max-width: 860px)", "(max-width: 600px)")
+            for rule in section
+            if rule.media not in ("(max-width: 860px)", "(max-width: 600px)")
         ]
         self.assertEqual(outside, [], "\n".join(outside))
 
@@ -1417,13 +1484,14 @@ class PhoneWidthStylesheetTests(StylesheetTestCase):
         row gone, each row a grid."""
         cards = [rule for rule in self.rules if any("phone-cards" in selector for selector in rule.selectors)]
         self.assertGreater(len(cards), 10)
-        outside = [f"{', '.join(rule.selectors)} (@media {rule.media})" for rule in cards if rule.media != "(max-width: 860px)"]
+        outside = [
+            f"{', '.join(rule.selectors)} (@media {rule.media})" for rule in cards if rule.media != "(max-width: 860px)"
+        ]
         self.assertEqual(outside, [], "\n".join(outside))
         self.assertDeclares("table.phone-cards > thead", "(max-width: 860px)", {"display": "none"})
         self.assertDeclares("table.phone-cards > tbody > tr", "(max-width: 860px)", {"display": "grid"})
         labels = [
-            rule for rule in cards
-            if any(selector.endswith("td[data-label]::before") for selector in rule.selectors)
+            rule for rule in cards if any(selector.endswith("td[data-label]::before") for selector in rule.selectors)
         ]
         self.assertTrue(labels, "no rule drawing a card's labels")
         self.assertEqual(labels[-1].declarations.get("content"), "attr(data-label)")
@@ -1510,12 +1578,14 @@ class PhoneCardsLabelTests(TestCase):
                     self.assertEqual(cell["label"], header, f"row {number}, column {column}")
                 column += cell["span"]
 
-    def test_achats_documents(self):
+    def test_purchases_documents(self):
         from invoices.models import Invoice
 
         cellar = make_supplier(name="Cave Exemple")
         make_invoice(supplier=cellar, invoice_number="F-1")
-        make_invoice(supplier=cellar, invoice_number="", parse_checks=[{"label": "Total", "passed": True, "detail": ""}])
+        make_invoice(
+            supplier=cellar, invoice_number="", parse_checks=[{"label": "Total", "passed": True, "detail": ""}]
+        )
         make_invoice(supplier=cellar, invoice_number="F-3", status=Invoice.Status.NEEDS_REVIEW)
         table = self.cards(reverse("invoices:invoice_list"), "data-table-label", "documents")
         self.assertLabelled(table, 3)
@@ -1524,8 +1594,10 @@ class PhoneCardsLabelTests(TestCase):
         from invoices.models import Invoice
 
         make_invoice(
-            supplier=make_supplier(name="Cave Exemple"), invoice_number="F-9",
-            status=Invoice.Status.ERROR, error_message="Lecture impossible (inventé).",
+            supplier=make_supplier(name="Cave Exemple"),
+            invoice_number="F-9",
+            status=Invoice.Status.ERROR,
+            error_message="Lecture impossible (inventé).",
         )
         table = self.cards(reverse("invoices:receipt_queue"), "data-table-label", "documents à corriger")
         self.assertLabelled(table, 1)
@@ -1538,14 +1610,34 @@ class PhoneCardsLabelTests(TestCase):
         gone = make_invoice(supplier=shop)
         gone_pk = gone.pk
         gone.delete()
-        batch = ReceiptBatch.objects.create(status=ReceiptBatch.Status.SUCCESS, results=[
-            {"name": "IMG_20260312_101112.jpg", "status": "ok", "invoice_id": ticket.pk, "receipt": True, "shop": "Épicerie Exemple"},
-            {"name": "IMG_20260312_101113.jpg", "status": "ok", "invoice_id": gone_pk, "receipt": True, "shop": "Épicerie Exemple"},
-            {"name": "IMG_20260312_101114.jpg", "status": "duplicate", "message": "Déjà importé le 12/03/2026"},
-            {"name": "IMG_20260312_101115.jpg", "status": "unrecognised", "header": "EPICERIE INCONNUE EXEMPLE",
-             "read_date": "12/03/2026", "read_total": "4,20"},
-            {"name": "IMG_20260312_101116.jpg", "status": "pending"},
-        ])
+        batch = ReceiptBatch.objects.create(
+            status=ReceiptBatch.Status.SUCCESS,
+            results=[
+                {
+                    "name": "IMG_20260312_101112.jpg",
+                    "status": "ok",
+                    "invoice_id": ticket.pk,
+                    "receipt": True,
+                    "shop": "Épicerie Exemple",
+                },
+                {
+                    "name": "IMG_20260312_101113.jpg",
+                    "status": "ok",
+                    "invoice_id": gone_pk,
+                    "receipt": True,
+                    "shop": "Épicerie Exemple",
+                },
+                {"name": "IMG_20260312_101114.jpg", "status": "duplicate", "message": "Déjà importé le 12/03/2026"},
+                {
+                    "name": "IMG_20260312_101115.jpg",
+                    "status": "unrecognised",
+                    "header": "EPICERIE INCONNUE EXEMPLE",
+                    "read_date": "12/03/2026",
+                    "read_total": "4,20",
+                },
+                {"name": "IMG_20260312_101116.jpg", "status": "pending"},
+            ],
+        )
         table = self.cards(reverse("invoices:receipt_batch", args=[batch.pk]), "class", "phone-cards")
         self.assertLabelled(table, 5)
 
@@ -1571,23 +1663,42 @@ class ReviewPanelStylesheetTests(StylesheetTestCase):
     PANEL_ABOVE = "(max-width: 1279px)"
 
     def test_above_the_list_the_panel_is_no_scroll_box(self):
-        self.assertDeclares(".review-panel", self.PANEL_ABOVE, {
-            "position": "static", "max-height": "none", "overflow": "visible", "overscroll-behavior": "auto",
-        })
+        self.assertDeclares(
+            ".review-panel",
+            self.PANEL_ABOVE,
+            {
+                "position": "static",
+                "max-height": "none",
+                "overflow": "visible",
+                "overscroll-behavior": "auto",
+            },
+        )
 
     def test_beside_the_list_it_is_still_the_box_that_scrolls_on_its_own(self):
-        self.assertDeclares(".review-panel", None, {"position": "sticky", "overflow-y": "auto", "overscroll-behavior": "contain"})
+        self.assertDeclares(
+            ".review-panel", None, {"position": "sticky", "overflow-y": "auto", "overscroll-behavior": "contain"}
+        )
 
     def test_above_the_list_it_draws_its_first_product_until_unfolded(self):
         """Every card came before the first article - screens of them. The
         next product takes the first one's place as each is classified;
         « Voir les N autres produits » is a box and its label, no script."""
         self.assertDeclares(
-            ".review-panel:not(:has(.review-unfold-box:checked)) .review-card ~ .review-card", self.PANEL_ABOVE, {"display": "none"}
+            ".review-panel:not(:has(.review-unfold-box:checked)) .review-card ~ .review-card",
+            self.PANEL_ABOVE,
+            {"display": "none"},
         )
-        self.assertDeclares(".review-panel:has(.review-unfold-box) .review-unfold", self.PANEL_ABOVE, {"display": "flex"})
-        self.assertDeclares(".review-panel:has(.review-unfold-box:checked) .review-unfold-more", self.PANEL_ABOVE, {"display": "none"})
-        self.assertDeclares(".review-panel:not(:has(.review-unfold-box:checked)) .review-unfold-less", self.PANEL_ABOVE, {"display": "none"})
+        self.assertDeclares(
+            ".review-panel:has(.review-unfold-box) .review-unfold", self.PANEL_ABOVE, {"display": "flex"}
+        )
+        self.assertDeclares(
+            ".review-panel:has(.review-unfold-box:checked) .review-unfold-more", self.PANEL_ABOVE, {"display": "none"}
+        )
+        self.assertDeclares(
+            ".review-panel:not(:has(.review-unfold-box:checked)) .review-unfold-less",
+            self.PANEL_ABOVE,
+            {"display": "none"},
+        )
         self.assertDeclares(".review-panel-jump", self.PANEL_ABOVE, {"display": "inline-flex"})
         self.assertDeclares(".products-layout.panel-closed .review-panel-jump", self.PANEL_ABOVE, {"display": "none"})
 
@@ -1607,7 +1718,7 @@ class TopbarMenuTests(StylesheetTestCase):
     FOLDED = "(max-width: 860px)"
 
     def script(self) -> str:
-        return re.sub(r"/\*.*?\*/|//[^\n]*", "", _source("static/js/topbar.js"), flags=re.S)
+        return re.sub(r"/\*.*?\*/|//[^\n]*", "", _source("static/js/topbar.js"), flags=re.DOTALL)
 
     def test_nothing_is_folded_without_the_script(self):
         """JavaScript off, or the file missing: the bar is the old one, every
@@ -1618,7 +1729,8 @@ class TopbarMenuTests(StylesheetTestCase):
         self.assertGreater(len(folded), 5)
         offenders = [
             f"{selector} (@media {rule.media})"
-            for rule in folded for selector in rule.selectors
+            for rule in folded
+            for selector in rule.selectors
             if not selector.startswith("html.topbar-menu-ready")
         ]
         self.assertEqual(offenders, [], "\n".join(offenders))
@@ -1634,17 +1746,22 @@ class TopbarMenuTests(StylesheetTestCase):
     def test_folded_the_bar_leaves_a_one_row_room(self):
         self.assertDeclares("html.topbar-menu-ready", self.FOLDED, {"--topbar-room": "6rem"})
 
-    def test_on_consignes_the_bar_still_leaves_no_room(self):
+    def test_on_returnables_the_bar_still_leaves_no_room(self):
         """Under 600 px /consignes/'s bar scrolls away with the page: room 0,
         written after the fold's 6rem (same weight: the later wins), and the
         bar `relative`, not `static` - the stacking context the veil and the
         menu are drawn in."""
-        consignes = [rule for rule in self.naming("html:has(.consignes-page)", "(max-width: 600px)")
-                     if rule.declarations.get("--topbar-room") == "0rem"]
-        folded = [rule for rule in self.naming("html.topbar-menu-ready", self.FOLDED) if "--topbar-room" in rule.declarations]
-        self.assertTrue(consignes and folded)
-        self.assertGreater(consignes[-1].where, folded[-1].where)
-        self.assertDeclares("html:has(.consignes-page) .topbar", "(max-width: 600px)", {"position": "relative"})
+        returnables = [
+            rule
+            for rule in self.naming("html:has(.returnables-page)", "(max-width: 600px)")
+            if rule.declarations.get("--topbar-room") == "0rem"
+        ]
+        folded = [
+            rule for rule in self.naming("html.topbar-menu-ready", self.FOLDED) if "--topbar-room" in rule.declarations
+        ]
+        self.assertTrue(returnables and folded)
+        self.assertGreater(returnables[-1].where, folded[-1].where)
+        self.assertDeclares("html:has(.returnables-page) .topbar", "(max-width: 600px)", {"position": "relative"})
 
     def test_the_dot_reads_the_badges(self):
         """The dot on « Menu » is read off the badges themselves, so it is
@@ -1658,7 +1775,8 @@ class TopbarMenuTests(StylesheetTestCase):
         """Opened, the page is veiled by the bar's ::after: a tap on it only
         closes the menu, and a finger dragged on it scrolls nothing."""
         self.assertDeclares(
-            'html.topbar-menu-ready .topbar:has(.topbar-toggle[aria-expanded="true"])::after', self.FOLDED,
+            'html.topbar-menu-ready .topbar:has(.topbar-toggle[aria-expanded="true"])::after',
+            self.FOLDED,
             {"position": "fixed", "inset": "0", "touch-action": "none"},
         )
 
@@ -1682,13 +1800,18 @@ class TopbarMenuTests(StylesheetTestCase):
         header itself, or a finger on the menu could not scroll the menu."""
         source = self.script()
         self.assertRegex(source, r'function header\(\w+\)\s*\{\s*return [^;]*\.closest\("\.topbar"\)')
-        self.assertRegex(source, r'(\w+) = header\(\w+\);\s*if \(!\1\) return;\s*\1\.addEventListener\("click", onVeil\)')
-        self.assertRegex(source, r'(\w+) = header\(\w+\);\s*if \(!\1\) return;\s*\1\.removeEventListener\("click", onVeil\)')
+        self.assertRegex(
+            source, r'(\w+) = header\(\w+\);\s*if \(!\1\) return;\s*\1\.addEventListener\("click", onVeil\)'
+        )
+        self.assertRegex(
+            source, r'(\w+) = header\(\w+\);\s*if \(!\1\) return;\s*\1\.removeEventListener\("click", onVeil\)'
+        )
         self.assertRegex(source, r"function onVeil\(event\)\s*\{\s*if \(event\.target === event\.currentTarget\)")
         self.assertRegex(source, r'\.addEventListener\("touchmove", onVeilDrag, \{ passive: false \}\)')
         self.assertRegex(source, r'\.removeEventListener\("touchmove", onVeilDrag\)')
         self.assertRegex(
-            source, r"function onVeilDrag\(event\)\s*\{\s*if \(event\.target === event\.currentTarget\) event\.preventDefault\(\)"
+            source,
+            r"function onVeilDrag\(event\)\s*\{\s*if \(event\.target === event\.currentTarget\) event\.preventDefault\(\)",
         )
 
     def test_the_script_never_writes_markup(self):
@@ -1706,9 +1829,16 @@ class TopbarMenuTests(StylesheetTestCase):
         room left (`1 1 0`), the brand shrinks behind it with an ellipsis,
         and « Menu » keeps its size (review of 30/09). Measured at 150 and
         200 % in accounts/tests/test_topbar_browser.py."""
-        self.assertDeclares("html.topbar-menu-ready .brand", self.FOLDED, {
-            "flex": "0 1 auto", "min-width": "0", "overflow": "hidden", "text-overflow": "ellipsis",
-        })
+        self.assertDeclares(
+            "html.topbar-menu-ready .brand",
+            self.FOLDED,
+            {
+                "flex": "0 1 auto",
+                "min-width": "0",
+                "overflow": "hidden",
+                "text-overflow": "ellipsis",
+            },
+        )
         self.assertDeclares("html.topbar-menu-ready .topbar-section", self.FOLDED, {"flex": "1 1 0", "min-width": "0"})
         self.assertDeclares("html.topbar-menu-ready .topbar-toggle", self.FOLDED, {"flex": "none"})
 
@@ -1755,17 +1885,34 @@ class TouchStylesheetTests(StylesheetTestCase):
         recipe form's till chips too (`.pick-chip`, each one removes a till
         product): 22 px on a touch screen, a thumb aimed at one removed its
         neighbour (review of 30/09)."""
-        for selector in ("main .btn", "main .link-button", "main summary", "main .tabs a.tab", "main .review-panel-jump"):
+        for selector in (
+            "main .btn",
+            "main .link-button",
+            "main summary",
+            "main .tabs a.tab",
+            "main .review-panel-jump",
+        ):
             with self.subTest(selector=selector):
                 self.assertDeclares(selector, self.COARSE, {"min-height": "44px"})
-        for selector in ("main td .btn", "main th .btn", "main td .link-button", "main th .link-button",
-                         "main td summary", "main th summary", "main .chip", "main .segmented button", "main .pick-chip"):
+        for selector in (
+            "main td .btn",
+            "main th .btn",
+            "main td .link-button",
+            "main th .link-button",
+            "main td summary",
+            "main th summary",
+            "main .chip",
+            "main .segmented button",
+            "main .pick-chip",
+        ):
             with self.subTest(selector=selector):
                 self.assertDeclares(selector, self.COARSE, {"min-height": "36px"})
         mixed = [
-            selector for rule in self.rules if rule.media == self.COARSE
-            and rule.declarations.get("min-height") in ("44px", "36px")
-            for selector in rule.selectors if ":is(" in selector
+            selector
+            for rule in self.rules
+            if rule.media == self.COARSE and rule.declarations.get("min-height") in ("44px", "36px")
+            for selector in rule.selectors
+            if ":is(" in selector
         ]
         self.assertEqual(mixed, [])
 
@@ -1786,8 +1933,11 @@ class WhatACardHoldsTests(StylesheetTestCase):
     PHONE = "(max-width: 860px)"
 
     def card_rules(self) -> list:
-        return [rule for rule in self.rules if rule.media == self.PHONE
-                and any("phone-cards" in selector for selector in rule.selectors)]
+        return [
+            rule
+            for rule in self.rules
+            if rule.media == self.PHONE and any("phone-cards" in selector for selector in rule.selectors)
+        ]
 
     def test_a_bulk_box_is_lifted_out_only_by_the_row_that_holds_it(self):
         """A document's box is taken out of its card's grid (`position:
@@ -1800,16 +1950,24 @@ class WhatACardHoldsTests(StylesheetTestCase):
         lifted out by a selector going through the very row that holds it,
         and both rules are dropped together."""
         holding = {
-            selector for rule in self.card_rules() if rule.declarations.get("position") == "relative"
+            selector
+            for rule in self.card_rules()
+            if rule.declarations.get("position") == "relative"
             for selector in rule.selectors
         }
         lifted = [
-            selector for rule in self.card_rules() if rule.declarations.get("position") == "absolute"
+            selector
+            for rule in self.card_rules()
+            if rule.declarations.get("position") == "absolute"
             for selector in rule.selectors
         ]
-        self.assertTrue(any("td.select-col" in selector for selector in lifted), "no rule lifting a bulk box out of its card")
+        self.assertTrue(
+            any("td.select-col" in selector for selector in lifted), "no rule lifting a bulk box out of its card"
+        )
         loose = [selector for selector in lifted if selector.rsplit(" > ", 1)[0] not in holding]
-        self.assertEqual(loose, [], "lifted out of its card by a rule its row's `position: relative` may be dropped from")
+        self.assertEqual(
+            loose, [], "lifted out of its card by a rule its row's `position: relative` may be dropped from"
+        )
 
     def test_a_state_s_pill_and_a_till_s_name_wrap_inside_their_card(self):
         """`.status-pill` and `.till-chip` are nowrap (the wide table's), and
@@ -1852,9 +2010,17 @@ class FocusRingTests(StylesheetTestCase):
     tests/test_phone_width_browser.py to a sort button."""
 
     def test_what_all_unset_restyles_gets_the_ring_back(self):
-        (ring,) = [rule for rule in self.rules if rule.media is None
-                   and any(selector.startswith(":where(") and selector.endswith(":focus-visible") for selector in rule.selectors)]
-        unset = [selector for rule in self.rules if rule.declarations.get("all") == "unset" for selector in rule.selectors]
+        (ring,) = [
+            rule
+            for rule in self.rules
+            if rule.media is None
+            and any(
+                selector.startswith(":where(") and selector.endswith(":focus-visible") for selector in rule.selectors
+            )
+        ]
+        unset = [
+            selector for rule in self.rules if rule.declarations.get("all") == "unset" for selector in rule.selectors
+        ]
         self.assertEqual(sorted(unset), [".link-button", "th.sortable > button"])
         for selector in unset:
             with self.subTest(selector=selector):
@@ -1864,7 +2030,11 @@ class FocusRingTests(StylesheetTestCase):
 def template_sources():
     """Every template of the project: (its path from the root, its text)."""
     paths = sorted({*ROOT.glob("templates/**/*.html"), *ROOT.glob("*/templates/**/*.html")})
-    return [(path.relative_to(ROOT).as_posix(), path.read_text(encoding="utf-8")) for path in paths if ".venv" not in path.parts]
+    return [
+        (path.relative_to(ROOT).as_posix(), path.read_text(encoding="utf-8"))
+        for path in paths
+        if ".venv" not in path.parts
+    ]
 
 
 class SelectAllBoxes(HTMLParser):
@@ -1885,12 +2055,14 @@ class SelectAllBoxes(HTMLParser):
             tables = [index for index, (name, _, _) in enumerate(self.open) if name == "table"]
             nearest = tables[-1] if tables else None
             head = nearest is not None and any(name == "thead" for name, _, _ in self.open[nearest:])
-            self.boxes.append({
-                "form": attributes.get("form"),
-                "in_a_card_head": head and "phone-cards" in (self.open[nearest][1].get("class") or "").split(),
-                "inside": next((held.get("id") for name, held, _ in reversed(self.open) if name == "form"), None),
-                "label": next((words for name, _, words in reversed(self.open) if name == "label"), None),
-            })
+            self.boxes.append(
+                {
+                    "form": attributes.get("form"),
+                    "in_a_card_head": head and "phone-cards" in (self.open[nearest][1].get("class") or "").split(),
+                    "inside": next((held.get("id") for name, held, _ in reversed(self.open) if name == "form"), None),
+                    "label": next((words for name, _, words in reversed(self.open) if name == "label"), None),
+                }
+            )
         if tag not in VOID_ELEMENTS:
             self.open.append((tag, attributes, [] if tag == "label" else None))
 
@@ -1918,7 +2090,9 @@ class SelectAllOnAPhoneTests(TestCase):
     def test_no_card_list_hides_its_select_all_in_its_header(self):
         found = [
             f"{name}: « Tout sélectionner » for #{box['form']}"
-            for name, source in template_sources() for box in SelectAllBoxes(source).boxes if box["in_a_card_head"]
+            for name, source in template_sources()
+            for box in SelectAllBoxes(source).boxes
+            if box["in_a_card_head"]
         ]
         self.assertEqual(found, [], "\n".join(found))
         # Not a guard of nothing: the bulk bars' boxes were read.
@@ -1935,7 +2109,7 @@ class SelectAllOnAPhoneTests(TestCase):
         wide = before.replace(" phone-cards", "")
         self.assertEqual([box["in_a_card_head"] for box in SelectAllBoxes(wide).boxes], [False])
 
-    def test_achats_documents_draw_it_in_their_bulk_bar(self):
+    def test_purchases_documents_draw_it_in_their_bulk_bar(self):
         cellar = make_supplier(name="Cave Exemple")
         for number in ("F-1", "F-2"):
             make_invoice(supplier=cellar, invoice_number=number)
@@ -2000,7 +2174,7 @@ class PieTooltipInBrowserTests(StaticLiveServerTestCase):
             )
         from tests.runner import log_in_the_browser
 
-        # Every page wants a login: the test espace's owner.
+        # Every page wants a login: the test tenant's owner.
         log_in_the_browser(self.driver, self.live_server_url)
         self.driver.get(f"{self.live_server_url}{reverse('bank:spending_home')}?du=2026-06-01&au=2026-06-30")
 

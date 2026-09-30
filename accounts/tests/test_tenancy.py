@@ -1,6 +1,6 @@
-"""The binding: which espace a thread works for (accounts/tenancy.py).
+"""The binding: which tenant a thread works for (accounts/tenancy.py).
 
-For real - two espaces in two temporary files.
+For real - two tenants in two temporary files.
 """
 
 import sqlite3
@@ -26,7 +26,7 @@ from invoices.models import Supplier
 
 
 def names_on_disk(tenant, prefix="T-"):
-    """What the espace's own file holds, read without Django."""
+    """What the tenant's own file holds, read without Django."""
     with sqlite3.connect(paths.tenant_database(tenant)) as raw:
         rows = raw.execute("SELECT name FROM invoices_supplier WHERE code LIKE ? ORDER BY name", (f"{prefix}%",))
         return [name for (name,) in rows]
@@ -38,7 +38,7 @@ class BindingTests(TenancyTestCase):
         self.alpha = self.make_tenant("Bar Alpha")
         self.beta = self.make_tenant("Bar Beta")
 
-    def test_a_binding_reads_and_writes_the_espace_s_own_file(self):
+    def test_a_binding_reads_and_writes_the_tenant_s_own_file(self):
         with bound_tenant(self.alpha):
             Supplier.objects.create(code="T-ALPHA", name="Grossiste Alpha")
             self.assertEqual(current_tenant(), self.alpha)
@@ -47,7 +47,7 @@ class BindingTests(TenancyTestCase):
         self.assertEqual(names_on_disk(self.alpha), ["Grossiste Alpha"])
         self.assertEqual(names_on_disk(self.beta), [])
 
-    def test_two_threads_bound_to_two_espaces_at_once(self):
+    def test_two_threads_bound_to_two_tenants_at_once(self):
         """Both threads are bound AT THE SAME TIME (a barrier holds them),
         each writes and reads its own file, and the main thread's `default`
         and the shared settings dict never move."""
@@ -67,7 +67,7 @@ class BindingTests(TenancyTestCase):
                         current_tenant().pk,
                     )
                     barrier.wait()
-            except BaseException as exc:  # reported by the main thread
+            except BaseException as exc:  # noqa: BLE001 - reported by the main thread
                 errors.append(exc)
             finally:
                 connections.close_all()
@@ -108,7 +108,7 @@ class BindingTests(TenancyTestCase):
         for key in ("ENGINE", "TIME_ZONE", "CONN_MAX_AGE", "AUTOCOMMIT", "ATOMIC_REQUESTS", "OPTIONS", "TEST"):
             self.assertEqual(copy[key], base[key], key)
 
-    def test_binding_another_espace_inside_one_is_refused(self):
+    def test_binding_another_tenant_inside_one_is_refused(self):
         with bound_tenant(self.alpha):
             wrapper = connections["default"]
             with self.assertRaises(TenancyError):
@@ -117,7 +117,7 @@ class BindingTests(TenancyTestCase):
             self.assertIs(connections["default"], wrapper)
             self.assertEqual(current_tenant(), self.alpha)
 
-    def test_the_same_espace_nests_as_a_no_op(self):
+    def test_the_same_tenant_nests_as_a_no_op(self):
         with bound_tenant(self.alpha):
             wrapper = connections["default"]
             with bound_tenant(Tenant.objects.get(pk=self.alpha.pk)):
@@ -139,10 +139,10 @@ class BindingTests(TenancyTestCase):
             with bound_tenant(self.alpha):
                 inner = connections["default"]
                 Supplier.objects.count()
-                1 / 0
+                1 / 0  # noqa: B018 - raises on purpose, inside the binding
         self.assertIs(connections["default"], before)
         self.assertIsNone(current_tenant())
-        # The espace's connection was closed, not left to the garbage collector.
+        # The tenant's connection was closed, not left to the garbage collector.
         self.assertIsNone(inner.connection)
 
     def test_a_missing_database_is_refused_rather_than_created_empty(self):
@@ -152,20 +152,20 @@ class BindingTests(TenancyTestCase):
                 pass  # pragma: no cover
         self.assertFalse(paths.tenant_database(self.alpha).exists())
 
-    def test_a_binding_needs_a_real_espace(self):
+    def test_a_binding_needs_a_real_tenant(self):
         with self.assertRaises(TenancyError):
             with bound_tenant(None):
                 pass  # pragma: no cover
         self.assertIsNone(current_tenant())
 
-    def test_unbound_there_is_no_espace(self):
+    def test_unbound_there_is_no_tenant(self):
         self.assertIsNone(current_tenant())
         with self.assertRaises(NoTenantBound):
             require_tenant()
         with self.assertRaises(NoTenantBound):
             tenant_key()
 
-    def test_tenant_key_tells_espaces_apart(self):
+    def test_tenant_key_tells_tenants_apart(self):
         with bound_tenant(self.alpha):
             alpha = tenant_key()
         with bound_tenant(self.beta):
@@ -173,7 +173,7 @@ class BindingTests(TenancyTestCase):
         self.assertEqual(alpha, str(self.alpha.pk))
         self.assertNotEqual(alpha, beta)
 
-    def test_integrations_only_in_the_owner_s_espace(self):
+    def test_integrations_only_in_the_owner_s_tenant(self):
         owner = self.make_tenant("Bar du Propriétaire", owner=True)
         self.assertFalse(integrations_allowed())
         with bound_tenant(self.alpha):
@@ -198,7 +198,7 @@ class BoundThreadTests(TenancyTestCase):
         def guarded(*inner):
             try:
                 target(*inner)
-            except BaseException as exc:
+            except BaseException as exc:  # noqa: BLE001 - reported by the main thread
                 errors.append(exc)
 
         thread = threading.Thread(target=guarded, args=args)
@@ -206,7 +206,7 @@ class BoundThreadTests(TenancyTestCase):
         thread.join(60)
         self.assertEqual(errors, [])
 
-    def test_a_thread_started_with_bound_works_for_the_starting_espace(self):
+    def test_a_thread_started_with_bound_works_for_the_starting_tenant(self):
         seen, wrappers = [], []
 
         def job(code):
@@ -226,7 +226,7 @@ class BoundThreadTests(TenancyTestCase):
             self.run_in_thread(lambda: seen.append(current_tenant()))
         self.assertEqual(seen, [None])
 
-    def test_a_heartbeat_started_from_a_bound_thread_inherits_its_espace(self):
+    def test_a_heartbeat_started_from_a_bound_thread_inherits_its_tenant(self):
         seen = []
 
         def heartbeat():

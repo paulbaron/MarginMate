@@ -79,8 +79,10 @@ class SignatureBoxesTests(SimpleTestCase):
                 self.assertGreater(bottom, box.bottom)
                 self.assertLess(top, box.top)
                 inside = [
-                    word for word in words
-                    if box.left <= word["x0"] <= box.right and PAGE_HEIGHT - word["bottom"] >= box.bottom
+                    word
+                    for word in words
+                    if box.left <= word["x0"] <= box.right
+                    and PAGE_HEIGHT - word["bottom"] >= box.bottom
                     and PAGE_HEIGHT - word["top"] <= box.top
                 ]
                 self.assertTrue(inside, "the box prints its label")

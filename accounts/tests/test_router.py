@@ -56,19 +56,19 @@ class MultiModeRoutingTests(TenancyTestCase):
                 self.assertIs(rules.allow_migrate("default", app), True)
                 self.assertIs(rules.allow_migrate("accounts", app), False)
 
-    def test_an_espace_file_has_no_login_table_and_the_accounts_file_no_business_table(self):
+    def test_a_tenant_file_has_no_login_table_and_the_accounts_file_no_business_table(self):
         from django.db import connections
 
         from accounts.tenancy import bound_tenant
 
         tenant = self.make_tenant()
         with bound_tenant(tenant):
-            espace_tables = set(connections["default"].introspection.table_names())
+            tenant_tables = set(connections["default"].introspection.table_names())
         accounts_tables = set(connections["accounts"].introspection.table_names())
-        self.assertIn("invoices_supplier", espace_tables)
-        self.assertNotIn("auth_user", espace_tables)
-        self.assertNotIn("django_session", espace_tables)
-        self.assertNotIn("accounts_tenant", espace_tables)
+        self.assertIn("invoices_supplier", tenant_tables)
+        self.assertNotIn("auth_user", tenant_tables)
+        self.assertNotIn("django_session", tenant_tables)
+        self.assertNotIn("accounts_tenant", tenant_tables)
         self.assertIn("auth_user", accounts_tables)
         self.assertIn("accounts_signinglink", accounts_tables)
         self.assertNotIn("invoices_supplier", accounts_tables)

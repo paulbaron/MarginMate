@@ -1,4 +1,4 @@
-/* « Consignes » (returnables/templates/returnables/): the reprise form, on a
+/* « Consignes » (returnables/templates/returnables/): the pickup form, on a
  * phone, in a cellar, while the driver waits.
  *
  * Everything here is a convenience over a form that works without it: the
@@ -13,16 +13,16 @@
  *   of the same form and a fresh one takes its place - a camera input holds
  *   ONE photo, and every input named `photos` is posted - with a preview
  *   and « Retirer » for each photo (a multiple input's files are rebuilt
- *   without it), and no more than the reprise may take (its 11th is refused
+ *   without it), and no more than the pickup may take (its 11th is refused
  *   with a line of text; the server keeps the first ten all the same);
- * - the draft (new reprise only): what was typed, kept in the browser for 12
- *   hours under a key of the espace (<body data-tenant>, base.html - storage
+ * - the draft (new pickup only): what was typed, kept in the browser for 12
+ *   hours under a key of the tenant (<body data-tenant>, base.html - storage
  *   belongs to the origin, not to the login), offered back into a blank
  *   form - a phone discarding the tab while its camera is open reloads the
  *   page empty. Photos cannot be kept: the notice says how many to take
  *   again, and names a note restored (shown, its folded part opened).
  *   « Effacer » puts back the day and « Repris par » the page offered.
- *   Forgotten once the reprise is saved (`?enregistree=1`);
+ *   Forgotten once the pickup is saved (`?enregistree=1`);
  * - the stale tab: a tab opened yesterday and shown again today moves its
  *   date's `max` - and its value, when it was still « today » - to today.
  *
@@ -34,8 +34,8 @@
 
     var MAX_COUNT = 9999;
     var DRAFT_MAX_AGE_MS = 12 * 60 * 60 * 1000;
-    var ESPACE_SCOPE = document.body.getAttribute("data-tenant") ? "espace-" + document.body.getAttribute("data-tenant") + ":" : "";
-    var DRAFT_KEY = "marginmate:" + ESPACE_SCOPE + "consignes:brouillon";
+    var TENANT_SCOPE = document.body.getAttribute("data-tenant") ? "espace-" + document.body.getAttribute("data-tenant") + ":" : "";
+    var DRAFT_KEY = "marginmate:" + TENANT_SCOPE + "consignes:brouillon";
 
     // -------------------------------------------------------------- helpers
 
@@ -82,7 +82,7 @@
 
     // The keypad's key (« next », the last count's « done ») reaches the page
     // as an Enter on Android, and Enter in a field sends its form: the
-    // reprise was saved with the kegs typed and nothing else. It moves to the
+    // pickup was saved with the kegs typed and nothing else. It moves to the
     // next count instead; on the last one it closes the keypad. Cancelling
     // keydown cancels the keypress, and with it the implicit submission.
     document.addEventListener("keydown", function (event) {
@@ -308,7 +308,7 @@
             else dropDraft();
         }
 
-        // Saved: the draft is the reprise now. The flag leaves the address,
+        // Saved: the draft is the pickup now. The flag leaves the address,
         // so a reload does not forget a draft typed since.
         var query = new URLSearchParams(window.location.search);
         if (query.has(flag)) {
@@ -343,11 +343,11 @@
                 said.push((row ? row.getAttribute("data-type-name") : input.name) + " " + value);
             });
             // A note restored is said, and shown: it sits in the folded part,
-            // and would otherwise be saved with the next reprise unseen.
+            // and would otherwise be saved with the next pickup unseen.
             if (note && (draft.note || "").trim()) {
                 note.value = draft.note;
                 said.push("une note");
-                var details = form.querySelector(".reprise-details");
+                var details = form.querySelector(".pickup-details");
                 if (details) details.open = true;
             }
             if (dateInput && draft.date && draft.date >= (dateInput.min || "") && draft.date <= (dateInput.max || draft.date)) {
@@ -370,7 +370,7 @@
                 countInputs.forEach(function (input) { input.value = ""; });
                 if (note) note.value = "";
                 // What the draft moved goes back too: its day (yesterday
-                // evening's count) and « Repris par » - else today's reprise
+                // evening's count) and « Repris par » - else today's pickup
                 // was saved dated the day before.
                 if (dateInput && dateInput.getAttribute("data-today")) dateInput.value = dateInput.getAttribute("data-today");
                 if (supplier) {
@@ -390,7 +390,7 @@
 
     function init() {
         document.querySelectorAll(".stepper-btn[hidden]").forEach(function (button) { button.hidden = false; });
-        document.querySelectorAll("form[data-reprise-form]").forEach(function (form) {
+        document.querySelectorAll("form[data-pickup-form]").forEach(function (form) {
             var photoCount = setUpPhotos(form);
             var update = setUpSummary(form);
             var drafted = form.hasAttribute("data-draft");

@@ -24,10 +24,10 @@
 
     {% if has_lines %}
         {% comment %}
-        Les champs cachés : ce que la page regarde en plus des dates (le
-        classement de la liste, ce que le camembert laisse de côté). Un
-        formulaire GET n'envoie que ce qu'il contient : sans eux, « Afficher »
-        perdait le classement choisi, et remettrait la TVA dans le camembert.
+        The hidden fields: what the page looks at besides the dates (the
+        list's filter, what the pie leaves out). A
+        GET form sends only what it holds: without them, « Afficher »
+        lost the chosen filter, and would put the VAT back in the pie.
         {% endcomment %}
         <form method="get" class="date-range">
             {% for name, value in window_fields %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
@@ -88,12 +88,12 @@
             {% endif %}
             {% if report.deducted %}
                 {% comment %}
-                Ce n'est PAS « ce qui est revenu sur le compte » : ce sont les avoirs et
-                les consignes portés par les factures rattachées à des débits. Un
-                virement reçu d'un fournisseur est une entrée d'argent, et cette page
-                ne compte que ce qui est sorti. Nommée « Rendu sur la période », cette
-                statistique promettait l'autre chiffre. Lu sur report.deducted, pas
-                given_back : ce que le camembert laisse de côté ne bouge aucun chiffre.
+                This is NOT « what came back on the account »: it is the credit notes and
+                the returnable deposits carried by the invoices linked to debits. A
+                transfer received from a supplier is income, and this page
+                counts only what went out. Named « Rendu sur la période », this
+                stat promised the other figure. Read off report.deducted, not
+                given_back: what the pie leaves out moves no figure.
                 {% endcomment %}
                 <div class="stat">
                     <span class="stat-label">Déduit par les factures</span>
@@ -108,11 +108,11 @@
 
         {% if left_out_rows %}
             {% comment %}
-            Ce que le camembert laisse de côté, nommé au-dessus de lui : un
-            camembert qui a perdu sa plus grosse part sans le dire se lit comme
-            un camembert de tout. Chaque nom avec ce qu'il porte sur la période
-            - ou « rien sur cette période » : la sélection porte sur des noms,
-            et vaut pour une autre période - et de quoi le remettre.
+            What the pie leaves out, named above it: a
+            pie that lost its biggest slice without saying so reads as
+            a pie of everything. Each name with what it holds over the period
+            - or « rien sur cette période »: the selection is about names,
+            and holds for another period - and a way to put it back.
             {% endcomment %}
             <p class="small spend-left-out">
                 <strong>Camembert sans :</strong>
@@ -137,14 +137,14 @@
                     {% endif %}
                     <div class="table-wrap">
                         {% comment %}
-                        Le tableau est aussi le sélecteur : chaque catégorie a sa case,
-                        cochée par défaut, qui rejoint le formulaire « Recalculer le
-                        camembert » sous le tableau par son attribut form (la barre de
-                        recherche de la table vit dans ce bloc, et Entrée dans un champ
-                        d'un formulaire l'envoie). Chaque ligne envoie son nom sous
-                        « montre » et, cochée, sous « garder » : une case décochée
-                        n'envoie rien, donc « hors camembert » se lit comme montré et
-                        pas gardé (common.left_out_from).
+                        The table is also the selector: each category has its box,
+                        ticked by default, which joins the « Recalculer le
+                        camembert » form under the table through its form attribute (the table's
+                        search bar lives in this block, and Enter in a field
+                        of a form sends it). Each row sends its name under
+                        « montre » and, ticked, under « garder »: an unticked box
+                        sends nothing, so « hors camembert » reads as shown and
+                        not kept (common.left_out_from).
                         {% endcomment %}
                         <table data-table data-table-label="catégories" class="spend-table">
                             <thead>
@@ -154,10 +154,10 @@
                                     <th class="num">Montant</th>
                                     <th class="num">Part</th>
                                     {% comment %}
-                                    « Opérations concernées », pas « Opérations » : une dépense dont la facture
-                                    couvre deux catégories compte dans les deux, et la colonne ne fait donc pas
-                                    le pied. Les deux chiffres sont justes ; l'un sous l'autre, ils se lisaient
-                                    comme une soustraction fausse.
+                                    « Opérations concernées », not « Opérations »: a debit whose invoice
+                                    covers two categories counts in both, so the column does not add up
+                                    to its foot. Both figures are right; one under the other, they read
+                                    as a wrong subtraction.
                                     {% endcomment %}
                                     <th class="num">Opérations concernées</th>
                                 </tr>
@@ -166,21 +166,21 @@
                                 {% for category in report.categories %}
                                     <tr>
                                         {% comment %}
-                                        data-sort et le texte : une case est un <input>, invisible pour la
-                                        recherche et le tri de la table (static/js/datatable.js lit
-                                        textContent). 1/0 se trie, « hors camembert » se cherche.
+                                        data-sort and the text: a box is an <input>, invisible to the
+                                        table's search and sort (static/js/datatable.js reads
+                                        textContent). 1/0 sorts, « hors camembert » can be searched.
                                         {% endcomment %}
                                         <td class="spend-tick" data-sort="{% if category.left_out %}0{% else %}1{% endif %}">
-                                            <input type="hidden" name="montre" value="{{ category.name }}" form="camembert-choix">
-                                            <input type="checkbox" name="garder" value="{{ category.name }}" form="camembert-choix"{% if not category.left_out %} checked{% endif %} aria-label="Dans le camembert : {{ category.name }}">
+                                            <input type="hidden" name="montre" value="{{ category.name }}" form="pie-choice">
+                                            <input type="checkbox" name="garder" value="{{ category.name }}" form="pie-choice"{% if not category.left_out %} checked{% endif %} aria-label="Dans le camembert : {{ category.name }}">
                                             {% if category.left_out %}<span class="read-as">hors camembert</span>{% endif %}
                                         </td>
                                         <td>
                                             <strong>{{ category.name }}</strong>
                                             {% if category.by_rule %}
                                                 {% comment %}
-                                                Une règle peut changer le mois prochain : ce qu'elle a classé ne
-                                                doit pas se lire comme la décision de quelqu'un.
+                                                A rule can change next month: what it classified must not
+                                                read as somebody's decision.
                                                 {% endcomment %}
                                                 <span class="read-as">
                                                     dont {{ category.by_rule }} par règle
@@ -190,7 +190,7 @@
                                         </td>
                                         <td class="num" data-sort="{{ category.amount|stringformat:'s' }}">{{ category.amount|floatformat:2 }} €</td>
                                         {% comment %}
-                                        data-sort : « 12.3 % » se trie comme du texte, et 9 % passerait après 80 %.
+                                        data-sort: « 12.3 % » sorts as text, and 9 % would come after 80 %.
                                         {% endcomment %}
                                         <td class="num" data-sort="{{ category.share|default_if_none:0|stringformat:'s' }}">
                                             {% if category.share is not None %}{{ category.share|floatformat:1 }} %{% else %}—{% endif %}
@@ -211,7 +211,7 @@
                         </table>
                     </div>
                 </div>
-                <form method="get" id="camembert-choix" class="spend-actions" action="{{ page_path }}">
+                <form method="get" id="pie-choice" class="spend-actions" action="{{ page_path }}">
                     {% for name, value in selection_fields %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
                     <button class="btn btn-small" type="submit">Recalculer le camembert</button>
                     {% if left_out %}<a class="btn btn-small btn-secondary" href="{{ reset_url }}">Tout remettre</a>{% endif %}
@@ -225,9 +225,9 @@
                 </form>
                 <p class="muted">
                     {% comment %}
-                    Ce que le camembert ne dessine pas est dit plutôt que retiré en silence :
-                    une part négative ne se dessine pas, une catégorie laissée de côté non
-                    plus, et les trois montants refont ce qui est sorti du compte.
+                    What the pie does not draw is said rather than silently removed:
+                    a negative slice is not drawn, nor is a category left
+                    out, and the three amounts add back up to what left the account.
                     {% endcomment %}
                     {% if left_out_in_table %}Le camembert dessine {{ report.drawn_total|floatformat:2 }} € des {{ report.total|floatformat:2 }} € sortis du compte : les {{ report.left_out_total|floatformat:2 }} € des catégories laissées hors du camembert{% if report.given_back %} et les {{ report.given_back|floatformat:2 }} € déduits par les factures rattachées (avoirs, consignes), qui ne sont la part de rien,{% endif %} restent dans le tableau. {% elif report.given_back %}Le camembert dessine {{ report.drawn_total|floatformat:2 }} € : les {{ report.given_back|floatformat:2 }} € déduits par les factures rattachées (avoirs, consignes) ne sont la part de rien et restent dans le tableau. {% endif %}Une dépense réglée en plusieurs fois compte sur chaque opération pour ce que cette opération a payé : comptée en entier sur les deux, la facture serait achetée deux fois. Une même opération peut concerner plusieurs catégories, donc la colonne « Opérations concernées » ne fait pas son pied.
                 </p>
@@ -244,16 +244,16 @@
                 rapprochement automatique.
             </p>
             {% comment %}
-            Les trois façons dont une dépense sans facture porte un nom, chacune
-            avec ce qu'il y en a sur la période. Le filtre resserre CETTE LISTE et
-            rien d'autre : les chiffres au-dessus se lisent sur toute la période,
-            et une page dont l'argument est que ses catégories refont ce qui est
-            sorti du compte ne doit pas avoir l'air de changer l'argent quand on
-            resserre une liste de travail. C'est dit sous les puces.
+            The three ways a debit with no invoice gets a name, each
+            with how many there are over the period. The filter narrows THIS LIST and
+            nothing else: the figures above are read over the whole period,
+            and a page whose argument is that its categories add back up to what
+            left the account must not look as if it changed the money when a
+            work list is narrowed. It is said under the chips.
 
-            Des liens, pas un formulaire : la table a déjà sa propre recherche
-            (static/js/datatable.js), et deux boîtes filtrant les mêmes lignes
-            selon deux règles différentes valent moins qu'une seule.
+            Links, not a form: the table already has its own search
+            (static/js/datatable.js), and two boxes filtering the same rows
+            by two different rules are worth less than one.
             {% endcomment %}
             <div class="filter-chips" role="group" aria-label="Filtrer les dépenses sans facture">
                 {% for chip in kind_chips %}
@@ -269,7 +269,7 @@
                 </p>
             {% endif %}
             {% if not report.listed %}
-                {# Une table vide sous une puce qui annonce un nombre se lit comme une page cassée. #}
+                {# An empty table under a chip announcing a number reads as a broken page. #}
                 <div class="empty-state">
                     <p>{{ kind_empty }}</p>
                 </div>
@@ -295,10 +295,10 @@
                                     </td>
                                     <td class="num" data-sort="{{ line.amount|stringformat:'s' }}">{{ line.amount_due|floatformat:2 }} €</td>
                                     {% comment %}
-                                    data-sort : la valeur d'un <input> n'est pas du texte pour la recherche ni
-                                    pour le tri de la table (static/js/datatable.js lit textContent). Sans lui,
-                                    chercher « Loyer » ne trouvait pas la ligne qui porte déjà ce mot, et un clic
-                                    sur l'en-tête triait toutes les lignes sur la chaîne vide.
+                                    data-sort: the value of an <input> is text neither for the table's search nor
+                                    for its sort (static/js/datatable.js reads textContent). Without it,
+                                    searching « Loyer » did not find the line already carrying that word, and a click
+                                    on the header sorted every row on the empty string.
                                     {% endcomment %}
                                     <td data-sort="{{ spending.name }}">
                                         <form method="post" action="{% url 'bank:bank_line_action' line.pk %}" class="inline-form">
@@ -312,13 +312,13 @@
                                             <button class="btn btn-small" type="submit">Classer</button>
                                         </form>
                                         {% comment %}
-                                        Qui a nommé cette ligne, dans les mots des
-                                        puces au-dessus. Demandé au Spending
-                                        (spending.by_rule / by_hand), jamais relu sur
-                                        line.category : c'est spending.py qui tranche
-                                        entre ce qui est tapé et ce qu'une règle porte,
-                                        et une deuxième règle ici dirait « à la main »
-                                        d'une ligne que la page compte comme réglée.
+                                        Who named this line, in the words of the
+                                        chips above. Asked of the Spending
+                                        (spending.by_rule / by_hand), never read again off
+                                        line.category: spending.py is what decides
+                                        between what is typed and what a rule carries,
+                                        and a second rule here would say « à la main »
+                                        of a line the page counts as settled.
                                         {% endcomment %}
                                         {% if spending.by_rule %}
                                             <span class="read-as">
@@ -337,10 +337,10 @@
             </div>
             {% if report.not_listed %}
                 {% comment %}
-                Le compte est dit : une liste coupée en silence se lit « il n'y en a pas
-                plus », et c'est la liste de travail de la page. Les non classées et les
-                plus grosses d'abord, donc ce qui reste dehors est le travail qui vaut
-                le moins — les chiffres au-dessus, eux, comptent tout.
+                The count is said: a list cut in silence reads as « there are no
+                more », and this is the page's work list. The unclassified and the
+                biggest first, so what stays out is the work worth
+                least — the figures above count everything.
                 {% endcomment %}
                 <p class="muted">
                     {{ report.not_listed }} dépense{{ report.not_listed|pluralize }} sans facture de plus

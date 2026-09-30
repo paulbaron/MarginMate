@@ -19,8 +19,8 @@
     <div class="card" id="regles">
         <h2>Comment les propositions sont classées</h2>
         {% comment %}
-        La règle de chaque degré, dans l'ordre où le rapprochement les applique : un écran qui coche un
-        rattachement d'avance doit dire d'après quelle règle. Les seuils viennent de bank.matching, pas d'ici.
+        Each tier's rule, in the order the matching applies them: a screen that pre-ticks a
+        link has to say by which rule. The thresholds come from bank.matching, not from here.
         {% endcomment %}
         <ol class="tier-rules">
             {% for tier, label, rule in tier_rules %}
@@ -57,7 +57,7 @@
             </p>
         </div>
     {% else %}
-        <form id="propositions-form" method="post" action="{% url 'bank:link_proposals' %}" data-bulk-select>
+        <form id="proposals-form" method="post" action="{% url 'bank:link_proposals' %}" data-bulk-select>
             {% csrf_token %}
             <input type="hidden" name="next" value="{% url 'bank:proposals' %}">
             <div class="bulk-bar">
@@ -74,11 +74,11 @@
             </div>
 
             {% comment %}
-            Une ligne certaine n'est ici que parce que le rapprochement n'a pas été relancé depuis le dernier
-            import - ou parce qu'on l'a déliée à la main, et alors elle n'est pas cochée (la note sur la ligne).
-            Pas cochée non plus quand sa facture est à des mois, ou proposée à une opération servie avant elle :
-            la ligne le dit à chaque fois, et la note de chaque groupe énonce la règle avec son seuil
-            (bank.views.GROUP_NOTES, écrite depuis les constantes de bank.matching).
+            A sure line is here only because the matching has not been run again since the last
+            import - or because it was unlinked by hand, and then it is not ticked (the note on the line).
+            Not ticked either when its invoice is months away, or proposed to an operation served before it:
+            the line says so every time, and each group's note states the rule with its threshold
+            (bank.views.GROUP_NOTES, written from bank.matching's constants).
             {% endcomment %}
             {% include "bank/_proposal_group.html" with rows=sure title="Certaines" tier="sure" note=notes.sure %}
             {% include "bank/_proposal_group.html" with rows=near_sure title="Quasi-sûres" tier="near_sure" note=notes.near_sure %}

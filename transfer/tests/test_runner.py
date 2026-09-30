@@ -107,7 +107,9 @@ class PreviewTests(FakeSectionsMixin, TestCase):
 
         replaced = import_archive(self.reader, REPLACE)
         suppliers = replaced.section("fournisseurs")
-        self.assertEqual((suppliers.tallies["articles fictifs"].updated, suppliers.tallies["articles fictifs"].deleted), (1, 1))
+        self.assertEqual(
+            (suppliers.tallies["articles fictifs"].updated, suppliers.tallies["articles fictifs"].deleted), (1, 1)
+        )
         self.assertEqual(replaced.affected(), {"fournisseurs"})
         self.assertIn("Aucun document n'a été relu ; rien n'a été appris.", replaced.notes)
 
@@ -166,7 +168,9 @@ class AsPreviewedTests(FakeSectionsMixin, TestCase):
         """The view keeps the preview in the stage's state.json."""
         from transfer.report import RunReport
 
-        preview = RunReport.from_json(json.loads(json.dumps(import_archive(self.reader, MERGE, preview=True).to_json())))
+        preview = RunReport.from_json(
+            json.loads(json.dumps(import_archive(self.reader, MERGE, preview=True).to_json()))
+        )
         run_import(self.reader, {"fournisseurs": MERGE, "factures": MERGE}, preview=False, expected=preview)
 
     def test_a_clear_whose_database_moved_is_not_run(self):
@@ -230,12 +234,18 @@ class OrderTests(FakeSectionsMixin, TestCase):
         reader = export_archive(keys)
         self.addCleanup(reader.close)
         FakeSection.calls.clear()
-        import_archive(reader, {"fournisseurs": MERGE, "associations": REPLACE, "factures": MERGE, "inventaires": REPLACE})
+        import_archive(
+            reader, {"fournisseurs": MERGE, "associations": REPLACE, "factures": MERGE, "inventaires": REPLACE}
+        )
         self.assertEqual(
             FakeSection.calls,
             [
-                ("apply", "fournisseurs"), ("apply", "associations"), ("apply", "factures"), ("apply", "inventaires"),
-                ("prune", "inventaires"), ("prune", "associations"),
+                ("apply", "fournisseurs"),
+                ("apply", "associations"),
+                ("apply", "factures"),
+                ("apply", "inventaires"),
+                ("prune", "inventaires"),
+                ("prune", "associations"),
             ],
         )
 
@@ -324,8 +334,13 @@ class FileTests(FakeSectionsMixin, TestCase):
         digest = hashlib.sha256(data).hexdigest()
         member = "files/invoices/evasion.pdf"
         path = forge(
-            {"fournisseurs": {"records": [], "files": []},
-             "factures": {"records": [], "files": [{"member": member, "name": "../../config/evil.pdf", "size": len(data), "sha256": digest}]}},
+            {
+                "fournisseurs": {"records": [], "files": []},
+                "factures": {
+                    "records": [],
+                    "files": [{"member": member, "name": "../../config/evil.pdf", "size": len(data), "sha256": digest}],
+                },
+            },
             manifest={"files": [{"member": member, "size": len(data), "sha256": digest}]},
         )
         import zipfile
@@ -375,9 +390,9 @@ class SupportHelperTests(FakeSectionsMixin, TestCase):
         fake_row("recettes", "Recette A", unit="UNIT")
         fake_row("associations", "Article A", loss_percent="7.50")
         emptied = []
-        before, after = round_trip({"recettes"}, after_clear=lambda: emptied.append(
-            StockType.objects.filter(category="recettes").count()
-        ))
+        before, after = round_trip(
+            {"recettes"}, after_clear=lambda: emptied.append(StockType.objects.filter(category="recettes").count())
+        )
         self.assertEqual(emptied, [0])
         self.assertEqual(before, after)
         self.assertEqual(set(before), {"recettes", "associations", "fournisseurs"})

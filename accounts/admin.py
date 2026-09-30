@@ -1,19 +1,19 @@
 """The central rows in the admin (superusers only, accounts/admin_site.py):
-the espaces, who is in which, the invitations.
+the tenants, who is in which, the invitations.
 
 What is not done here, on purpose:
-- an espace is never ADDED here (its folder and database would not exist:
+- a tenant is never ADDED here (its folder and database would not exist:
   the signup and `manage.py adopt_database` make them) nor deleted (its
   files would stay behind with nothing naming them): it is closed
   (« actif » unticked), which the pages and the signing links obey;
 - « utilise les accès du serveur » is read-only: ticked, it hands the
   owner's Metro, mailbox, till and AI accounts to that bar. And « actif »
-  never reopens an espace using them while another one is open
+  never reopens a tenant using them while another one is open
   (`TenantAdminForm`): one Metro account, one pause - accounts.E005's rule,
   which the checks only say at the next start;
-- the superuser's OWN espace cannot be closed here: the admin needs an open
-  espace like every page, and it would shut the admin on him - the very
-  place an espace is reopened;
+- the superuser's OWN tenant cannot be closed here: the admin needs an open
+  tenant like every page, and it would shut the admin on him - the very
+  place a tenant is reopened;
 - an invitation is never added here - its code would never be shown
   (`manage.py create_invitation`); one can be deleted, which revokes it.
 """
@@ -55,7 +55,7 @@ class TenantAdmin(admin.ModelAdmin):
     def get_readonly_fields(self, request, obj=None):
         fields = tuple(super().get_readonly_fields(request, obj))
         if obj is not None and obj.pk == getattr(getattr(request, "tenant", None), "pk", None):
-            # His own espace: closed, the admin would answer « Aucun espace ».
+            # His own tenant: closed, the admin would answer « Aucun espace ».
             fields += ("is_active",)
         return fields
 

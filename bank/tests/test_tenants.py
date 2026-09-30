@@ -1,12 +1,12 @@
 """« Entrées d'argent » in multi mode: what the till could not read is said
-in every espace, and the commands that re-read its exports only in the
+in every tenant, and the commands that re-read its exports only in the
 owner's.
 
 Three places name one of those commands: the day with sales and no means of
 payment read, the day with no price read, and « Pas de solde » when no card
 payment is read at all. Another bar can neither run a server command nor has
 any export to re-read (its till is « à configurer »), so each says that
-instead. Data invented; two real espaces in temporary files
+instead. Data invented; two real tenants in temporary files
 (accounts/tests/support.py).
 """
 
@@ -61,7 +61,7 @@ class TillRemediesTests(TwoTenantsTestCase):
         # Said once per warning, and in the balance's reason.
         self.assertEqual(page.count("à configurer — disponible prochainement dans les réglages de votre espace"), 3)
 
-    def test_the_owner_s_espace_is_given_the_commands(self):
+    def test_the_owner_s_tenant_is_given_the_commands(self):
         self.unread_day(self.bar_a)
         page = self.page(self.user_a)
         self.assertIn("manage.py laddition_backfill_payments", page)

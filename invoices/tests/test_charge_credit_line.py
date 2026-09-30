@@ -51,7 +51,7 @@ from tests.factories import (
 D = Decimal
 
 # The rent statement of test_expense_suppliers with a deposit given back
-# among its postes, as test_charges_postes reads it: 817,00 charged.
+# among its charge items, as test_charge_items reads it: 817,00 charged.
 REFUNDED_STATEMENT = (
     STATEMENT.replace(
         "PRELV.SEPAau10/11/2025  -  830,00  PROVISIONEAUFROIDE  10,00",
@@ -91,9 +91,7 @@ class ChargeCreditLineTests(TestCase):
         return self.invoice.lines.get(vat_rate=D("0.055"))
 
     def assert_saved(self, response):
-        self.assertEqual(
-            response.status_code, 302, response.context and response.context["formset"].errors
-        )
+        self.assertEqual(response.status_code, 302, response.context and response.context["formset"].errors)
 
     def test_filed_as_the_reader_left_it(self):
         """What the owner opens: the credit as a charge, the total unread."""
@@ -153,9 +151,7 @@ class ChargeCreditLineTests(TestCase):
         )
         invoice = Invoice.objects.get(pk=self.invoice.pk)
         checks = {check["label"]: check["passed"] for check in invoice.parse_checks}
-        self.assertEqual(
-            (checks["Total de la charge"], checks["Somme des lignes = total imprimé"]), (True, True)
-        )
+        self.assertEqual((checks["Total de la charge"], checks["Somme des lignes = total imprimé"]), (True, True))
         self.assertEqual((invoice.status, invoice.error_message), (Invoice.Status.COMPLETE, ""))
         self.assertFalse(Invoice.objects.filter(DOCUMENT_TO_FIX, pk=invoice.pk).exists())
 
@@ -171,9 +167,10 @@ class ChargeCreditLineTests(TestCase):
 
     def test_a_credit_the_charge_reading_filed_saves_untouched(self):
         """The charge reading files a credit the same way: a rent statement's
-        deposit given back is a poste of -3,00 at a count of 1. Every row is
-        checked on a save, the ones nobody changed included, so two real rent
-        statements holding such a poste could not be validated at all."""
+        deposit given back is a charge item of -3,00 at a count of 1. Every
+        row is checked on a save, the ones nobody changed included, so two
+        real rent statements holding such a charge item could not be
+        validated at all."""
         rent = make_supplier(code="LOYER_X", name="Bailleur Exemple", parser_key="", expenses_only=True)
         invoice = import_parsed_invoice(
             rent,
@@ -240,8 +237,13 @@ class GoodsCreditLineTests(TestCase):
             parse_checks=[{"label": "x", "passed": True, "detail": ""}],
         )
         make_invoice_line(
-            invoice=invoice, product=make_product(supplier=shop, raw_name="CITRON VERT"), raw_name="CITRON VERT",
-            quantity=1, total_ht="3.20", vat_rate=D("0.055"), printed_ttc=D("3.38"),
+            invoice=invoice,
+            product=make_product(supplier=shop, raw_name="CITRON VERT"),
+            raw_name="CITRON VERT",
+            quantity=1,
+            total_ht="3.20",
+            vat_rate=D("0.055"),
+            printed_ttc=D("3.38"),
         )
         url = reverse("invoices:receipt_review", args=[invoice.pk])
         response = self.client.post(
@@ -318,8 +320,9 @@ class ChargeSwitchedBackToGoodsTests(TestCase):
     again over its documents. A credit typed as a charge takes it - a count
     of 1 at a negative amount - stayed so: the document could not be saved
     untouched any more (the guard refused a row nobody had changed), and
-    classifying its poste booked stock at -3,20 € the unit. It becomes a
-    return, as goods keep one: the count negative, the amount as typed."""
+    classifying its charge item booked stock at -3,20 € the unit. It
+    becomes a return, as goods keep one: the count negative, the amount as
+    typed."""
 
     def setUp(self):
         self.supplier = make_supplier(code="ELEC_Y", name="Électricité Autre", parser_key="", expenses_only=True)
@@ -371,12 +374,14 @@ class ChargeSwitchedBackToGoodsTests(TestCase):
         self.assertEqual((self.credit().quantity, self.credit().total_ht), (-1, CREDIT_HT))
         self.assertEqual(Invoice.objects.get(pk=self.invoice.pk).total_ttc, BILL_TTC)
 
-    def test_classifying_its_poste_books_a_return(self):
+    def test_classifying_its_charge_item_books_a_return(self):
         self.switch_back()
-        poste = self.credit().product
-        link_product_to_stock_type(poste, make_stock_type(name="Abonnement électrique"), poste.unit, D("1"))
+        charge_item = self.credit().product
+        link_product_to_stock_type(charge_item, make_stock_type(name="Abonnement électrique"), charge_item.unit, D("1"))
         self.assertEqual(
-            sorted(StockMovement.objects.filter(invoice_line__invoice=self.invoice).values_list("quantity", "unit_cost_ht")),
+            sorted(
+                StockMovement.objects.filter(invoice_line__invoice=self.invoice).values_list("quantity", "unit_cost_ht")
+            ),
             [(D("-1"), -CREDIT_HT), (D("1"), MONTH_HT)],
         )
         self.assertEqual(negative_costs(), [])
@@ -448,7 +453,9 @@ class CreditMovedToAGoodsSupplierTests(TestCase):
         product = self.credit().product
         link_product_to_stock_type(product, make_stock_type(name="Divers Zed"), product.unit, D("1"))
         self.assertEqual(
-            sorted(StockMovement.objects.filter(invoice_line__invoice=self.invoice).values_list("quantity", "unit_cost_ht")),
+            sorted(
+                StockMovement.objects.filter(invoice_line__invoice=self.invoice).values_list("quantity", "unit_cost_ht")
+            ),
             [(D("-1"), -CREDIT_HT), (D("1"), MONTH_HT)],
         )
         self.assertEqual(negative_costs(), [])

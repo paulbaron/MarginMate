@@ -8,11 +8,11 @@
     <link rel="stylesheet" href="{% asset 'css/marginmate.css' %}">
 </head>
 {% comment %}
-Les pages d'erreur (400, 403, 404, 500 et le refus CSRF, config/settings.py) : une phrase en français et
-un lien vers l'accueil - jamais l'adresse demandée, un réglage, un chemin, une trace ni la raison
-technique d'un refus (elles vont au journal, config/logs.py). La 500 est rendue sans la requête ni ses
-processeurs de contexte : rien ici n'en lit. N'hérite pas de base.html : ni navigation, ni compteurs,
-ni messages - une page d'erreur ne consomme pas ceux d'une page à venir.
+The error pages (400, 403, 404, 500 and the CSRF refusal, config/settings.py): one sentence in French
+and a link to the home page - never the address asked for, a setting, a path, a trace or the technical
+reason for a refusal (those go to the log, config/logs.py). The 500 is rendered without the request or
+its context processors: nothing here reads them. Does not extend base.html: no navigation, no counts,
+no messages - an error page does not use up those meant for a page to come.
 {% endcomment %}
 <body class="public-page account-page">
     <main class="public-container">

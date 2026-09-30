@@ -2,7 +2,7 @@
 found it.
 
 For its classes it takes the suite's binding away - tests/runner.py makes
-the test espace every thread's by default - and it must put it back when
+the test tenant every thread's by default - and it must put it back when
 the class is done, and when its setUpClass fails: left behind, every class
 that followed in that process would run unbound, and fail far from the one
 that caused it."""

@@ -22,6 +22,7 @@ from __future__ import annotations
 import copy
 from collections import defaultdict, deque
 from decimal import Decimal
+from typing import cast
 
 from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 from django.db.models import Count
@@ -42,8 +43,13 @@ from transfer.keys import fold
 from transfer.sections.base import Section
 
 RECIPE_FIELDS = (
-    "category", "yield_quantity", "yield_unit", "sale_quantity",
-    "selling_price_ttc", "happy_hour_price_ttc", "vat_rate",
+    "category",
+    "yield_quantity",
+    "yield_unit",
+    "sale_quantity",
+    "selling_price_ttc",
+    "happy_hour_price_ttc",
+    "vat_rate",
 )
 STAMP = "created_at"
 RECIPE_KEYS = ("name", *RECIPE_FIELDS, STAMP, "ingredients")
@@ -113,6 +119,7 @@ def validation_text(error: ValidationError, labels: dict[str, str] = LABELS) -> 
 
 
 # -- the file's sub-recipe graph (pure) --------------------------------------------
+
 
 def find_cycles(graph: dict[str, list[str]]) -> dict[str, list[str]]:
     """node → a loop through it (["a", "b", "a"]), for every node on one.
@@ -231,6 +238,7 @@ def dependency_order(graph: dict[str, list[str]], keys: list[str]) -> list[str]:
 
 # -- the section --------------------------------------------------------------------
 
+
 def _ingredients_by_recipe() -> dict[int, list[dict]]:
     """recipe pk → its ingredients as the archive writes them, by (group, id)."""
     found: dict[int, list[dict]] = defaultdict(list)
@@ -310,7 +318,9 @@ class RecipesSection(Section):
         graph = {
             key: [
                 fold(item["recipe"])
-                for item in (record.get("ingredients") if isinstance(record.get("ingredients"), list) else [])
+                for item in (
+                    cast("list", record.get("ingredients")) if isinstance(record.get("ingredients"), list) else []
+                )
                 if isinstance(item, dict) and isinstance(item.get("recipe"), str)
             ]
             for key, (_name, record) in planned.items()
@@ -417,7 +427,8 @@ class RecipesSection(Section):
                 sub_recipe = self.recipes.resolve(recipe)
                 if sub_recipe is None:
                     raise Skip(
-                        f"sous-recette « {recipe} » ignorée" if fold(recipe) in refused
+                        f"sous-recette « {recipe} » ignorée"
+                        if fold(recipe) in refused
                         else f"sous-recette inconnue « {recipe} »"
                     )
                 ingredient = RecipeIngredient(group=group, sub_recipe=sub_recipe, quantity=quantity)
@@ -450,9 +461,10 @@ class RecipesSection(Section):
     def _update(self, recipe: Recipe, record: dict, ingredients, stamp) -> None:
         current = self.current.get(recipe.pk, [])
         different = codec.differences(recipe, record, RECIPE_FIELDS)
-        new_list = ingredients is not None and [
-            _shape(i.group, i.stock_type_id, i.sub_recipe_id, i.quantity) for i in ingredients
-        ] != current
+        new_list = (
+            ingredients is not None
+            and [_shape(i.group, i.stock_type_id, i.sub_recipe_id, i.quantity) for i in ingredients] != current
+        )
         if new_list:
             different.append("ingredients")
         if not different:
@@ -505,13 +517,17 @@ class RecipesSection(Section):
         for recipe_id, n in (
             SaleDocumentLine.objects.filter(recipe_id__in=doomed).values_list("recipe_id").annotate(n=Count("id"))
         ):
-            reasons[recipe_id] = f"{plural(n, 'ligne de bon de vente la cite', 'lignes de bons de vente la citent')}{sales_kept}"
+            reasons[recipe_id] = (
+                f"{plural(n, 'ligne de bon de vente la cite', 'lignes de bons de vente la citent')}{sales_kept}"
+            )
         for recipe_id, n in (
             RecipeSale.objects.filter(recipe_id__in=doomed, source=MANUAL_SALE_SOURCE)
-            .values_list("recipe_id").annotate(n=Count("id"))
+            .values_list("recipe_id")
+            .annotate(n=Count("id"))
         ):
             reasons.setdefault(
-                recipe_id, f"{plural(n, 'vente saisie à la main', 'ventes saisies à la main')} s'y rapporte{'nt' if n > 1 else ''}{sales_kept}"
+                recipe_id,
+                f"{plural(n, 'vente saisie à la main', 'ventes saisies à la main')} s'y rapporte{'nt' if n > 1 else ''}{sales_kept}",
             )
         links_kept = "" if ctx.replacing("liens_ventes") else " (liens non remplacés)"
         for recipe_id, n in (
@@ -529,9 +545,7 @@ class RecipesSection(Section):
         while grew:
             grew = False
             for pk in sorted(doomed - set(reasons)):
-                keeping = sorted(
-                    (names[user] for user in users[pk] if user not in doomed or user in reasons), key=fold
-                )
+                keeping = sorted((names[user] for user in users[pk] if user not in doomed or user in reasons), key=fold)
                 if keeping:
                     others = f" et de {plural(len(keeping) - 1, 'autre', 'autres')}" if len(keeping) > 1 else ""
                     reasons[pk] = f"sous-recette de « {keeping[0]} »{others}, gardée"

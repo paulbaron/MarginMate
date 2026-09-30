@@ -4,15 +4,18 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('accounts', '0001_initial'),
+        ("accounts", "0001_initial"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='invitation',
-            name='refused_addresses',
-            field=models.PositiveSmallIntegerField(default=0, help_text="Au 3e essai d'une adresse qui a déjà un compte, l'invitation est annulée.", verbose_name='adresses déjà inscrites essayées'),
+            model_name="invitation",
+            name="refused_addresses",
+            field=models.PositiveSmallIntegerField(
+                default=0,
+                help_text="Au 3e essai d'une adresse qui a déjà un compte, l'invitation est annulée.",
+                verbose_name="adresses déjà inscrites essayées",
+            ),
         ),
     ]

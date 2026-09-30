@@ -39,8 +39,10 @@ from transfer.tests.support import (
     new_archive_path,
 )
 
-BACKUPS = {"database": "C:/sauvegardes/2026-09-19_143012_avant-effacement.sqlite3",
-           "archive": "C:/sauvegardes/2026-09-19_143012_avant-effacement.zip"}
+BACKUPS = {
+    "database": "C:/sauvegardes/2026-09-19_143012_avant-effacement.sqlite3",
+    "archive": "C:/sauvegardes/2026-09-19_143012_avant-effacement.zip",
+}
 
 
 def said(response) -> list[str]:
@@ -136,7 +138,7 @@ class SmokeTests(FakeSectionsMixin, TestCase):
             with self.subTest(url=name):
                 self.assertEqual(self.client.get(reverse(name)).status_code, 302)
 
-    def test_the_navigation_lights_donnees(self):
+    def test_the_navigation_lights_the_data_tab(self):
         response = self.client.get(reverse("transfer:data_home"))
         self.assertRegex(response.content.decode(), r'<a href="/donnees/" class="active">Données</a>')
 
@@ -159,12 +161,17 @@ class PickerTests(FakeSectionsMixin, TestCase):
         export = self.client.get(reverse("transfer:data_home"))
         self.assertEqual(
             forced_by(export, "associations"),
-            {"recettes": "Recettes", "liens_ventes": "Liens recettes ↔ ventes", "ventes": "Ventes", "inventaires": "Inventaires"},
+            {
+                "recettes": "Recettes",
+                "liens_ventes": "Liens recettes ↔ ventes",
+                "ventes": "Ventes",
+                "inventaires": "Inventaires",
+            },
         )
         clear = self.client.get(reverse("transfer:data_clear"))
         self.assertEqual(forced_by(clear, "associations"), {"fournisseurs": "Enseignes et fournisseurs"})
 
-    def test_cocher_pre_ticks_with_what_it_needs(self):
+    def test_the_tick_parameter_pre_ticks_with_what_it_needs(self):
         response = self.client.get(reverse("transfer:data_home") + "?cocher=associations&cocher=inconnu")
         self.assertEqual(ticked(response), {"associations", "fournisseurs"})
         self.assertIn('class="is-forced"', checkbox(response, "fournisseurs"))
@@ -180,7 +187,10 @@ class PickerTests(FakeSectionsMixin, TestCase):
 
     def test_the_hints_are_drawn(self):
         response = self.client.get(reverse("transfer:data_home"))
-        self.assertContains(response, "conseillé : Associations produits → articles — sinon les produits de ces factures arrivent « à classer »")
+        self.assertContains(
+            response,
+            "conseillé : Associations produits → articles — sinon les produits de ces factures arrivent « à classer »",
+        )
 
     def test_the_clear_tab_says_what_a_clear_costs_not_what_to_take_along(self):
         """« conseillé : Factures et tickets » under Associations read, on the
@@ -188,7 +198,9 @@ class PickerTests(FakeSectionsMixin, TestCase):
         response = self.client.get(reverse("transfer:data_clear"))
         self.assertNotContains(response, "conseillé")
         self.assertContains(response, "à savoir : la banque perd les paiements de ces factures")
-        self.assertContains(response, "à savoir : la banque perd les noms de payeurs appris pour les fournisseurs effacés")
+        self.assertContains(
+            response, "à savoir : la banque perd les noms de payeurs appris pour les fournisseurs effacés"
+        )
         self.assertNotContains(self.client.get(reverse("transfer:data_home")), "à savoir : la banque")
 
     def test_known_prices_are_called_what_the_app_calls_them(self):
@@ -219,8 +231,12 @@ class ExportTests(FakeSectionsMixin, TestCase):
         self.assertNotIn("Content-Disposition", response)
         self.assertEqual(
             said(response),
-            [("La partie « Recettes » a besoin de : Enseignes et fournisseurs, Associations produits → articles. "
-              "Elles sont maintenant cochées : exportez de nouveau.")],
+            [
+                (
+                    "La partie « Recettes » a besoin de : Enseignes et fournisseurs, Associations produits → articles. "
+                    "Elles sont maintenant cochées : exportez de nouveau."
+                )
+            ],
         )
         self.assertEqual(ticked(response), {"recettes", "associations", "fournisseurs"})
 
@@ -228,8 +244,12 @@ class ExportTests(FakeSectionsMixin, TestCase):
         response = self.client.post(self.url, {"sections": ["recettes", "ventes", "fournisseurs"]})
         self.assertEqual(
             said(response),
-            [("Les parties « Recettes » et « Ventes » ont besoin de : Associations produits → articles. "
-              "Elle est maintenant cochée : exportez de nouveau.")],
+            [
+                (
+                    "Les parties « Recettes » et « Ventes » ont besoin de : Associations produits → articles. "
+                    "Elle est maintenant cochée : exportez de nouveau."
+                )
+            ],
         )
 
     def test_an_empty_selection(self):
@@ -245,7 +265,9 @@ class ExportTests(FakeSectionsMixin, TestCase):
         response = self.client.post(self.url, {"sections": ["recettes", "associations", "fournisseurs"]})
         self.assertIsInstance(response, FileResponse)
         self.assertTrue(response.streaming)
-        self.assertRegex(response["Content-Disposition"], r'attachment; filename="marginmate-\d{4}-\d{2}-\d{2}-\d{4}\.zip"')
+        self.assertRegex(
+            response["Content-Disposition"], r'attachment; filename="marginmate-\d{4}-\d{2}-\d{2}-\d{4}\.zip"'
+        )
         temp = set(staging.exports_dir().iterdir()) - before
         self.assertEqual(len(temp), 1)
         path = new_archive_path("downloaded")
@@ -275,13 +297,13 @@ class ImportTests(FakeSectionsMixin, TestCase):
         self.url = reverse("transfer:data_import_stage", args=[self.stage.token])
         self.all = ["fournisseurs", "sources", "associations", "recettes"]
 
-    def post(self, action, sections=None, apercu=None, **strategies):
-        """A confirm names the preview its page shows, unless `apercu` says
+    def post(self, action, sections=None, preview=None, **strategies):
+        """A confirm names the preview its page shows, unless `preview` says
         otherwise."""
         data = {"action": action, "sections": sections if sections is not None else self.all}
         data.update({f"strategie-{key}": value for key, value in strategies.items()})
         if action == "importer":
-            data["apercu"] = shown_preview(self.client.get(self.url)) if apercu is None else apercu
+            data["apercu"] = shown_preview(self.client.get(self.url)) if preview is None else preview
         return self.client.post(self.url, data)
 
     def test_an_upload_is_staged_then_previewed(self):
@@ -291,11 +313,15 @@ class ImportTests(FakeSectionsMixin, TestCase):
             reverse("transfer:data_import"), {"archive": SimpleUploadedFile("a.zip", reader.path.read_bytes())}
         )
         token = response["Location"].rstrip("/").split("/")[-1]
-        self.assertRedirects(response, reverse("transfer:data_import_stage", args=[token]), fetch_redirect_response=False)
+        self.assertRedirects(
+            response, reverse("transfer:data_import_stage", args=[token]), fetch_redirect_response=False
+        )
         self.assertEqual(staging.get(token).sections, {"fournisseurs", "banque"})
 
     def test_a_refused_upload_is_said(self):
-        response = self.client.post(reverse("transfer:data_import"), {"archive": SimpleUploadedFile("a.zip", b"bonjour")})
+        response = self.client.post(
+            reverse("transfer:data_import"), {"archive": SimpleUploadedFile("a.zip", b"bonjour")}
+        )
         self.assertRedirects(response, reverse("transfer:data_import"), fetch_redirect_response=False)
         self.assertEqual(
             said(response),
@@ -310,8 +336,10 @@ class ImportTests(FakeSectionsMixin, TestCase):
 
         fake_legacy = mock.Mock(to_archive=to_archive)
         payload = {"version": 1, "products": []}
-        with mock.patch.dict("sys.modules", {"transfer.legacy": fake_legacy}), \
-                mock.patch("transfer.legacy", fake_legacy, create=True):
+        with (
+            mock.patch.dict("sys.modules", {"transfer.legacy": fake_legacy}),
+            mock.patch("transfer.legacy", fake_legacy, create=True),
+        ):
             response = self.client.post(
                 reverse("transfer:data_import"),
                 {"archive": SimpleUploadedFile("marginmate-associations.json", json.dumps(payload).encode())},
@@ -344,8 +372,12 @@ class ImportTests(FakeSectionsMixin, TestCase):
         self.assertIsNone(staging.get(self.stage.token))
         self.assertEqual(
             said(response),
-            [("Import terminé. Sauvegardes faites avant : 2026-09-19_143012_avant-effacement.sqlite3 et "
-              f"2026-09-19_143012_avant-effacement.zip (dans {views.BACKUPS_PLACE}).")],
+            [
+                (
+                    "Import terminé. Sauvegardes faites avant : 2026-09-19_143012_avant-effacement.sqlite3 et "
+                    f"2026-09-19_143012_avant-effacement.zip (dans {views.BACKUPS_PLACE})."
+                )
+            ],
         )
         report = self.client.get(reverse("transfer:data_import") + "?rapport=1")
         self.assertContains(report, "Import terminé")
@@ -380,7 +412,9 @@ class ImportTests(FakeSectionsMixin, TestCase):
             response = self.post("importer", recettes="remplacer")
         before.assert_not_called()
         self.assertEqual(said(response), [views.EXPIRED])
-        self.assertEqual(views.EXPIRED, "L'aperçu avait plus de 30 minutes : voici le nouvel aperçu, confirmez de nouveau.")
+        self.assertEqual(
+            views.EXPIRED, "L'aperçu avait plus de 30 minutes : voici le nouvel aperçu, confirmez de nouveau."
+        )
 
     def test_a_database_that_moved_since_the_preview_is_not_imported(self):
         """The preview can be half an hour old: the confirm proves it is the
@@ -393,7 +427,9 @@ class ImportTests(FakeSectionsMixin, TestCase):
             response = self.post("importer", recettes="remplacer")
         self.assertRedirects(response, self.url, fetch_redirect_response=False)
         self.assertEqual(said(response), [views.MOVED_IMPORT])
-        self.assertEqual(views.MOVED_IMPORT, "La base a changé depuis l'aperçu : rien n'a été importé. Voici le nouvel aperçu.")
+        self.assertEqual(
+            views.MOVED_IMPORT, "La base a changé depuis l'aperçu : rien n'a été importé. Voici le nouvel aperçu."
+        )
         self.assertTrue(StockType.objects.filter(name="Recette arrivée après l'aperçu").exists())
         self.assertEqual(StockType.objects.get(name="Recette A").loss_percent, 12)
         now = RunReport.from_json(staging.get(self.stage.token).state["preview"])
@@ -423,9 +459,16 @@ class ImportTests(FakeSectionsMixin, TestCase):
         # A form naming no preview was drawn before this version: say so,
         # rather than « la base a changé », which sent the owner looking for
         # a change nobody made (20/09, the owner's « Effacer » did nothing).
-        for posted, expected in ((tab_a, views.OTHER_TAB_IMPORT), ("0" * 64, views.OTHER_TAB_IMPORT), ("", views.OLD_PAGE_IMPORT)):
-            with self.subTest(posted=posted), mock.patch("transfer.views.safety.before", return_value=BACKUPS) as before:
-                response = self.post("importer", apercu=posted, recettes="remplacer")
+        for posted, expected in (
+            (tab_a, views.OTHER_TAB_IMPORT),
+            ("0" * 64, views.OTHER_TAB_IMPORT),
+            ("", views.OLD_PAGE_IMPORT),
+        ):
+            with (
+                self.subTest(posted=posted),
+                mock.patch("transfer.views.safety.before", return_value=BACKUPS) as before,
+            ):
+                response = self.post("importer", preview=posted, recettes="remplacer")
                 before.assert_not_called()
                 self.assertRedirects(response, self.url, fetch_redirect_response=False)
                 self.assertEqual(said(response), [expected])
@@ -435,7 +478,7 @@ class ImportTests(FakeSectionsMixin, TestCase):
                 self.assertEqual(shown_preview(self.client.get(self.url)), tab_b)
 
         with mock.patch("transfer.views.safety.before", return_value=BACKUPS) as before:
-            response = self.post("importer", apercu=tab_b, recettes="remplacer")
+            response = self.post("importer", preview=tab_b, recettes="remplacer")
         before.assert_called_once_with("import", {"recettes"})
         self.assertRedirects(response, reverse("transfer:data_import") + "?rapport=1", fetch_redirect_response=False)
         self.assertFalse(StockType.objects.filter(name="Recette arrivée entre deux aperçus").exists())
@@ -459,7 +502,11 @@ class ImportTests(FakeSectionsMixin, TestCase):
         stage = stage_of({"fournisseurs", "factures", "banque"})
         url = reverse("transfer:data_import_stage", args=[stage.token])
         FakeSection.touch["factures"] = "banque"
-        posted = {"sections": ["fournisseurs", "factures", "banque"], "strategie-factures": "remplacer", "strategie-banque": "fusionner"}
+        posted = {
+            "sections": ["fournisseurs", "factures", "banque"],
+            "strategie-factures": "remplacer",
+            "strategie-banque": "fusionner",
+        }
         self.client.post(url, {**posted, "action": "previsualiser"})
         with mock.patch("transfer.views.safety.before", return_value=BACKUPS) as before:
             self.client.post(url, {**posted, "action": "importer", "apercu": shown_preview(self.client.get(url))})
@@ -470,8 +517,12 @@ class ImportTests(FakeSectionsMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
             said(response),
-            [("La partie « Recettes » a besoin de : Enseignes et fournisseurs, Associations produits → articles. "
-              "Elles sont maintenant cochées : prévisualisez de nouveau.")],
+            [
+                (
+                    "La partie « Recettes » a besoin de : Enseignes et fournisseurs, Associations produits → articles. "
+                    "Elles sont maintenant cochées : prévisualisez de nouveau."
+                )
+            ],
         )
         self.assertEqual(ticked(response), {"recettes", "associations", "fournisseurs"})
         self.assertIsNone(staging.get(self.stage.token).state.get("preview"))
@@ -522,16 +573,26 @@ class ImportTests(FakeSectionsMixin, TestCase):
     def test_counts_that_are_not_numbers_are_left_out(self):
         """The manifest comes from outside: a count that is not a number took
         every GET of the stage down with a 500, its « Annuler » with it."""
-        for counts in ({"articles fictifs": "onze"}, {"articles fictifs": [1]}, {"articles fictifs": None},
-                       {"articles fictifs": True}, {"articles fictifs": {"n": 1}}, "onze", [1]):
+        for counts in (
+            {"articles fictifs": "onze"},
+            {"articles fictifs": [1]},
+            {"articles fictifs": None},
+            {"articles fictifs": True},
+            {"articles fictifs": {"n": 1}},
+            "onze",
+            [1],
+        ):
             with self.subTest(counts=counts):
+
                 def manifest(data, counts=counts):
                     data["sections"]["sources"]["counts"] = counts
                     data["sections"]["fournisseurs"]["counts"] = {"articles fictifs": 2, "autre": "deux"}
                     return data
 
-                path = forge({"fournisseurs": {"records": [], "files": []}, "sources": {"records": [], "files": []}},
-                             manifest=manifest)
+                path = forge(
+                    {"fournisseurs": {"records": [], "files": []}, "sources": {"records": [], "files": []}},
+                    manifest=manifest,
+                )
                 stage = staging.stage_upload(SimpleUploadedFile("archive.zip", path.read_bytes()))
                 response = self.client.get(reverse("transfer:data_import_stage", args=[stage.token]))
                 self.assertEqual(response.status_code, 200)
@@ -542,13 +603,15 @@ class ImportTests(FakeSectionsMixin, TestCase):
         from transfer.tests.test_archive import damaged
 
         response = self.client.post(
-            reverse("transfer:data_import"), {"archive": SimpleUploadedFile("a.zip", damaged("manifest.json").read_bytes())}
+            reverse("transfer:data_import"),
+            {"archive": SimpleUploadedFile("a.zip", damaged("manifest.json").read_bytes())},
         )
         self.assertRedirects(response, reverse("transfer:data_import"), fetch_redirect_response=False)
         self.assertEqual(said(response), ["Fichier altéré dans l'archive : manifest.json"])
 
         response = self.client.post(
-            reverse("transfer:data_import"), {"archive": SimpleUploadedFile("a.zip", damaged("sources.json").read_bytes())}
+            reverse("transfer:data_import"),
+            {"archive": SimpleUploadedFile("a.zip", damaged("sources.json").read_bytes())},
         )
         url = response["Location"]
         response = self.client.post(url, {"action": "previsualiser", "sections": ["sources"]})
@@ -567,7 +630,9 @@ class ImportTests(FakeSectionsMixin, TestCase):
             with self.subTest(moment=moment):
                 no_stages()
                 path = forge({"sources": {"records": [], "files": []}}, manifest={"created_at": moment})
-                response = self.client.post(reverse("transfer:data_import"), {"archive": SimpleUploadedFile("a.zip", path.read_bytes())})
+                response = self.client.post(
+                    reverse("transfer:data_import"), {"archive": SimpleUploadedFile("a.zip", path.read_bytes())}
+                )
                 url = response["Location"]
                 tab = self.client.get(reverse("transfer:data_import"))
                 self.assertEqual(tab.status_code, 200)
@@ -584,13 +649,20 @@ class ImportTests(FakeSectionsMixin, TestCase):
         (review, 19/09)."""
         sources = {"sources": {"records": [], "files": []}}
         path = escaped(forge(sources), "manifest.json", lambda manifest: {**manifest, "reason": "export \ud800"})
-        response = self.client.post(reverse("transfer:data_import"), {"archive": SimpleUploadedFile("a.zip", path.read_bytes())})
+        response = self.client.post(
+            reverse("transfer:data_import"), {"archive": SimpleUploadedFile("a.zip", path.read_bytes())}
+        )
         self.assertRedirects(response, reverse("transfer:data_import"), fetch_redirect_response=False)
         self.assertEqual(said(response), ["Archive refusée : manifest.json contient un caractère invalide."])
 
-        path = escaped(forge(sources), "sources.json", lambda payload: {
-            "records": [{"name": "Source \ud800", "unit": "L", "loss_percent": "10.00"}], "files": []})
-        response = self.client.post(reverse("transfer:data_import"), {"archive": SimpleUploadedFile("a.zip", path.read_bytes())})
+        path = escaped(
+            forge(sources),
+            "sources.json",
+            lambda payload: {"records": [{"name": "Source \ud800", "unit": "L", "loss_percent": "10.00"}], "files": []},
+        )
+        response = self.client.post(
+            reverse("transfer:data_import"), {"archive": SimpleUploadedFile("a.zip", path.read_bytes())}
+        )
         url = response["Location"]
         response = self.client.post(url, {"action": "previsualiser", "sections": ["sources"]})
         self.assertRedirects(response, url, fetch_redirect_response=False)
@@ -598,10 +670,13 @@ class ImportTests(FakeSectionsMixin, TestCase):
         self.assertEqual(self.client.get(url).status_code, 200)
         self.assertFalse(StockType.objects.filter(category="sources").exclude(name="Source A").exists())
 
-        old = ('{"version": 1, "products": [{"supplier": "Grossiste Exemple", "raw_name": "RHUM EXEMPLE \\ud800", '
-               '"stock_type_name": "Rhum essai"}]}')
+        old = (
+            '{"version": 1, "products": [{"supplier": "Grossiste Exemple", "raw_name": "RHUM EXEMPLE \\ud800", '
+            '"stock_type_name": "Rhum essai"}]}'
+        )
         response = self.client.post(
-            reverse("transfer:data_import"), {"archive": SimpleUploadedFile("marginmate-associations.json", old.encode("ascii"))}
+            reverse("transfer:data_import"),
+            {"archive": SimpleUploadedFile("marginmate-associations.json", old.encode("ascii"))},
         )
         self.assertRedirects(response, reverse("transfer:data_import"), fetch_redirect_response=False)
         self.assertEqual(said(response), ["Export d'associations refusé : il contient un caractère invalide."])
@@ -662,14 +737,14 @@ class ClearTests(FakeSectionsMixin, TestCase):
     def preview(self):
         return self.client.post(self.url, {**self.selection, "action": "previsualiser"})
 
-    def confirm(self, typed, apercu=None):
+    def confirm(self, typed, preview=None):
         """From the page: the confirm names the preview it shows, unless
-        `apercu` says otherwise."""
-        if apercu is None:
-            apercu = shown_preview(self.client.get(self.url))
+        `preview` says otherwise."""
+        if preview is None:
+            preview = shown_preview(self.client.get(self.url))
         with mock.patch("transfer.views.safety.before", return_value=BACKUPS) as before:
             response = self.client.post(
-                self.url, {**self.selection, "action": "effacer", "confirmation": typed, "apercu": apercu}
+                self.url, {**self.selection, "action": "effacer", "confirmation": typed, "apercu": preview}
             )
         return response, before
 
@@ -692,7 +767,9 @@ class ClearTests(FakeSectionsMixin, TestCase):
         self.assertEqual(StockType.objects.filter(category__in=["factures", "inventaires"]).count(), 0)
         report = self.client.get(self.url + "?rapport=1")
         self.assertContains(report, "Effacement terminé")
-        self.assertEqual(re.findall(r"<th[^>]*>([^<]*)</th>", report.content.decode()), ["Partie", "Supprimés", "Modifiés"])
+        self.assertEqual(
+            re.findall(r"<th[^>]*>([^<]*)</th>", report.content.decode()), ["Partie", "Supprimés", "Modifiés"]
+        )
 
     def test_a_database_that_moved_since_the_preview_is_not_cleared(self):
         self.preview()
@@ -703,10 +780,14 @@ class ClearTests(FakeSectionsMixin, TestCase):
         before.assert_called_once_with("effacement", {"factures", "inventaires"})
         self.assertRedirects(response, self.url, fetch_redirect_response=False)
         self.assertEqual(said(response), [views.MOVED_CLEAR])
-        self.assertEqual(views.MOVED_CLEAR, "La base a changé depuis l'aperçu : rien n'a été effacé. Voici le nouvel aperçu.")
+        self.assertEqual(
+            views.MOVED_CLEAR, "La base a changé depuis l'aperçu : rien n'a été effacé. Voici le nouvel aperçu."
+        )
         self.assertEqual(StockType.objects.filter(category="factures").count(), 2)
         page = self.client.get(self.url)
-        self.assertRegex(page.content.decode(), r"Factures et tickets › articles fictifs</td>\s*<td class=\"num\">2</td>")
+        self.assertRegex(
+            page.content.decode(), r"Factures et tickets › articles fictifs</td>\s*<td class=\"num\">2</td>"
+        )
 
         response, _before = self.confirm("EFFACER")
         self.assertRedirects(response, self.url + "?rapport=1", fetch_redirect_response=False)
@@ -728,14 +809,14 @@ class ClearTests(FakeSectionsMixin, TestCase):
         # what the owner met on 20/09, told « la base a changé ».
         for posted, expected in ((tab_a, views.OTHER_TAB_CLEAR), ("", views.OLD_PAGE_CLEAR)):
             with self.subTest(posted=posted):
-                response, before = self.confirm("EFFACER", apercu=posted)
+                response, before = self.confirm("EFFACER", preview=posted)
                 before.assert_not_called()
                 self.assertRedirects(response, self.url, fetch_redirect_response=False)
                 self.assertEqual(said(response), [expected])
                 self.assertEqual(StockType.objects.filter(category="factures").count(), 2)
                 self.assertEqual(shown_preview(self.client.get(self.url)), tab_b)
 
-        response, before = self.confirm("EFFACER", apercu=tab_b)
+        response, before = self.confirm("EFFACER", preview=tab_b)
         before.assert_called_once_with("effacement", {"factures", "inventaires"})
         self.assertRedirects(response, self.url + "?rapport=1", fetch_redirect_response=False)
         self.assertEqual(StockType.objects.filter(category="factures").count(), 0)
@@ -750,7 +831,7 @@ class ClearTests(FakeSectionsMixin, TestCase):
         self.assertEqual(said(response), [views.EXPIRED])
         self.assertEqual(StockType.objects.filter(category="factures").count(), 1)
 
-    def test_without_effacer_nothing_is_cleared(self):
+    def test_without_typing_the_confirmation_word_nothing_is_cleared(self):
         self.preview()
         for typed in ("", "EFFACE", "oui"):
             with self.subTest(typed=typed):
@@ -782,8 +863,12 @@ class ClearTests(FakeSectionsMixin, TestCase):
         # qui sera effacé ».
         self.assertEqual(
             said(response),
-            [("Effacer « Factures et tickets » efface aussi : Inventaires. Elle est maintenant cochée : "
-              "voyez de nouveau ce qui sera effacé.")],
+            [
+                (
+                    "Effacer « Factures et tickets » efface aussi : Inventaires. Elle est maintenant cochée : "
+                    "voyez de nouveau ce qui sera effacé."
+                )
+            ],
         )
         self.assertEqual(ticked(response), {"factures", "inventaires"})
         self.assertContains(response, "effacé avec Factures et tickets")
@@ -800,10 +885,13 @@ class ClearTests(FakeSectionsMixin, TestCase):
 
     def test_a_failed_backup_clears_nothing(self):
         self.preview()
-        apercu = shown_preview(self.client.get(self.url))
-        with mock.patch("transfer.views.safety.before", side_effect=safety.SafetyError("Sauvegarde impossible (x) : rien n'a été changé.")):
+        preview = shown_preview(self.client.get(self.url))
+        with mock.patch(
+            "transfer.views.safety.before",
+            side_effect=safety.SafetyError("Sauvegarde impossible (x) : rien n'a été changé."),
+        ):
             response = self.client.post(
-                self.url, {**self.selection, "action": "effacer", "confirmation": "EFFACER", "apercu": apercu}
+                self.url, {**self.selection, "action": "effacer", "confirmation": "EFFACER", "apercu": preview}
             )
         self.assertRedirects(response, self.url, fetch_redirect_response=False)
         self.assertEqual(said(response), ["Sauvegarde impossible (x) : rien n'a été changé."])
@@ -882,10 +970,14 @@ class CountsTextTests(SimpleTestCase):
 
     def test_others_are_plural_and_grouped(self):
         # A no-break space: « 1 234 » is never cut at the end of a line.
-        self.assertEqual(views._counts_text({"fournisseurs": 1234, "prix connus": 0}), "1\xa0234 fournisseurs · 0 prix connus")
+        self.assertEqual(
+            views._counts_text({"fournisseurs": 1234, "prix connus": 0}), "1\xa0234 fournisseurs · 0 prix connus"
+        )
 
     def test_what_is_not_a_count_is_left_out(self):
-        self.assertEqual(views._counts_text({"sources": "onze", "lignes": [1], "fichiers": True, "documents": 2}), "2 documents")
+        self.assertEqual(
+            views._counts_text({"sources": "onze", "lignes": [1], "fichiers": True, "documents": 2}), "2 documents"
+        )
         self.assertEqual(views._counts_text(None), "")
 
 
@@ -904,7 +996,9 @@ class ReportTextTests(SimpleTestCase):
 
     def test_one_backup_is_singular(self):
         one = self.render(safety={"database": "C:/sauvegardes/2026-09-19_155653_avant-import.sqlite3", "archive": ""})
-        self.assertIn("Sauvegarde faite avant : <code>C:/sauvegardes/2026-09-19_155653_avant-import.sqlite3</code>.", one)
+        self.assertIn(
+            "Sauvegarde faite avant : <code>C:/sauvegardes/2026-09-19_155653_avant-import.sqlite3</code>.", one
+        )
         two = self.render(safety=BACKUPS)
         self.assertIn("Sauvegardes faites avant : <code>", two)
         self.assertIn("_avant-effacement.zip</code>.", two)
@@ -912,7 +1006,9 @@ class ReportTextTests(SimpleTestCase):
     def test_a_clear_draws_what_it_deletes_first(self):
         html = self.render(mode="clear", preview=True)
         self.assertEqual(re.findall(r"<th[^>]*>([^<]*)</th>", html), ["Partie", "À supprimer", "À modifier"])
-        self.assertRegex(html, r"Factures et tickets › documents</td> <td class=\"num\">2</td> <td class=\"num\">0</td> </tr>")
+        self.assertRegex(
+            html, r"Factures et tickets › documents</td> <td class=\"num\">2</td> <td class=\"num\">0</td> </tr>"
+        )
         self.assertRegex(html, r'<td>Recalculé</td> <td colspan="2">')
         # An import keeps its four columns.
         self.assertEqual(
@@ -948,18 +1044,20 @@ class PickerInBrowserTests(FakeSectionsMixin, StaticLiveServerTestCase):
 
     def setUp(self):
         super().setUp()
-        # Every page wants a login: the test espace's owner.
+        # Every page wants a login: the test tenant's owner.
         log_in_the_browser(self.driver, self.live_server_url)
 
     def ticked(self) -> set[str]:
-        return set(self.driver.execute_script(
-            "return Array.from(document.querySelectorAll('input[name=sections]:checked')).map(b => b.value);"
-        ))
+        return set(
+            self.driver.execute_script(
+                "return Array.from(document.querySelectorAll('input[name=sections]:checked')).map(b => b.value);"
+            )
+        )
 
     def click(self, selector):
         self.driver.execute_script("document.querySelector(arguments[0]).click();", selector)
 
-    def test_tout_decocher_on_a_full_archive(self):
+    def test_untick_all_on_a_full_archive(self):
         """A full archive starts all ticked: importing the bank alone meant
         unticking eight boxes in dependency order, the first click on a
         forced one doing nothing."""
@@ -974,10 +1072,12 @@ class PickerInBrowserTests(FakeSectionsMixin, StaticLiveServerTestCase):
         self.assertEqual(self.ticked(), {"banque"})
         self.click('input[value="recettes"]')
         self.assertEqual(self.ticked(), {"banque", "recettes", "associations", "fournisseurs"})
-        forced = self.driver.execute_script("return document.querySelector('input[value=fournisseurs]').getAttribute('aria-disabled');")
+        forced = self.driver.execute_script(
+            "return document.querySelector('input[value=fournisseurs]').getAttribute('aria-disabled');"
+        )
         self.assertEqual(forced, "true")
 
-    def test_tout_decocher_after_tout_cocher_on_export(self):
+    def test_untick_all_after_tick_all_on_export(self):
         from transfer.registry import INFO
 
         self.driver.get(self.live_server_url + reverse("transfer:data_home"))
@@ -990,7 +1090,7 @@ class PickerInBrowserTests(FakeSectionsMixin, StaticLiveServerTestCase):
 class CsrfTests(FakeSectionsMixin, TestCase):
     def test_every_post_needs_its_token(self):
         stage = stage_of({"fournisseurs"})
-        # Logged in as the espace's owner (tests/runner.py): the token is
+        # Logged in as the tenant's owner (tests/runner.py): the token is
         # all that is missing.
         client = self.client_class(enforce_csrf_checks=True)
         for url in (

@@ -39,7 +39,7 @@ D = Decimal
 
 
 def pdf_bytes(test, lines):
-    path = os.path.join(paths.media_root(),f"source-{test.id()[-20:]}.pdf")
+    path = os.path.join(paths.media_root(), f"source-{test.id()[-20:]}.pdf")
     write_pdf(path, lines)
     test.addCleanup(lambda: os.path.exists(path) and os.remove(path))
     with open(path, "rb") as handle:
@@ -77,7 +77,9 @@ class UploadTests(TestCase):
         supplier = make_supplier(code="CUISIPRO", name="Cuisipro", parser_key="")
         response = self.post(supplier=supplier.pk)
         invoice = Invoice.objects.get(supplier=supplier)
-        self.assertRedirects(response, reverse("invoices:receipt_review", args=[invoice.pk]), fetch_redirect_response=False)
+        self.assertRedirects(
+            response, reverse("invoices:receipt_review", args=[invoice.pk]), fetch_redirect_response=False
+        )
         self.assertEqual(
             [(line.raw_name, line.quantity, line.total_ht, line.vat_rate) for line in invoice.lines.order_by("pk")],
             [
@@ -97,7 +99,9 @@ class UploadTests(TestCase):
         response = self.post(supplier="new", new_name="Cuisipro France", new_header="CUISIPRO FRANCE")
         supplier = Supplier.objects.get(name="Cuisipro France")
         invoice = Invoice.objects.get(supplier=supplier)
-        self.assertRedirects(response, reverse("invoices:receipt_review", args=[invoice.pk]), fetch_redirect_response=False)
+        self.assertRedirects(
+            response, reverse("invoices:receipt_review", args=[invoice.pk]), fetch_redirect_response=False
+        )
         self.assertEqual((supplier.parser_key, supplier.ticket_header), ("", "CUISIPRO FRANCE"))
         # Its phone number, printed on its next invoices, names it too.
         self.assertIn("tel:0123456789", supplier.ticket_identifiers)
@@ -125,8 +129,10 @@ class UploadTests(TestCase):
     def test_a_supplier_with_its_own_reader_keeps_it(self):
         metro = Supplier.objects.get(code="METRO")
         new = make_invoice(supplier=metro, invoice_number="F-78")
-        with mock.patch("invoices.importing.parse_and_import", return_value=new) as parser, \
-                mock.patch("invoices.receipts.recognise") as ocr:
+        with (
+            mock.patch("invoices.importing.parse_and_import", return_value=new) as parser,
+            mock.patch("invoices.receipts.recognise") as ocr,
+        ):
             response = self.post(supplier=metro.pk)
         parser.assert_called_once()
         ocr.assert_not_called()
@@ -142,14 +148,16 @@ class FiledFromABatchTests(TestCase):
     def setUp(self):
         self.metro = Supplier.objects.get(code="METRO")
         batch = stage_batch([SimpleUploadedFile("metro.pdf", pdf_bytes(self, INVOICE))])
-        self.addCleanup(shutil.rmtree, os.path.join(paths.imports_dir(), "receipt_batches",str(batch.pk)), True)
+        self.addCleanup(shutil.rmtree, os.path.join(paths.imports_dir(), "receipt_batches", str(batch.pk)), True)
         with mock.patch("invoices.receipt_batches.import_document", side_effect=UnrecognisedShopError("?")):
             self.batch = run_receipt_batch(batch.pk)
 
     def test_a_supplier_with_its_own_reader_reads_it(self):
         invoice = make_invoice(supplier=self.metro, invoice_number="F-79")
-        with mock.patch("invoices.importing.parse_and_import", return_value=invoice) as reader, \
-                mock.patch("invoices.receipts.import_receipt") as ticket_reader:
+        with (
+            mock.patch("invoices.importing.parse_and_import", return_value=invoice) as reader,
+            mock.patch("invoices.receipts.import_receipt") as ticket_reader,
+        ):
             entry = import_with_shop(self.batch, 0, self.metro)
         reader.assert_called_once()
         self.assertEqual(reader.call_args.args[1:], (self.metro,))
@@ -162,8 +170,10 @@ class FiledFromABatchTests(TestCase):
         with open(path, "wb") as handle:
             handle.write(b"%PDF-1.4 a scan: no text in it")
         receipt = make_invoice(supplier=self.metro, invoice_number="T-1", ocr_text="un ticket")
-        with mock.patch("invoices.importing.parse_and_import") as reader, \
-                mock.patch("invoices.receipts.import_receipt", return_value=receipt) as ticket_reader:
+        with (
+            mock.patch("invoices.importing.parse_and_import") as reader,
+            mock.patch("invoices.receipts.import_receipt", return_value=receipt) as ticket_reader,
+        ):
             entry = import_with_shop(self.batch, 0, self.metro)
         reader.assert_not_called()
         ticket_reader.assert_called_once()
@@ -173,13 +183,23 @@ class FiledFromABatchTests(TestCase):
 class ImportInvoicePdfTests(TestCase):
     def setUp(self):
         self.metro = Supplier.objects.get(code="METRO")
-        self.path = os.path.join(paths.media_root(),"metro-facture.pdf")
+        self.path = os.path.join(paths.media_root(), "metro-facture.pdf")
         write_pdf(self.path, INVOICE)
         self.addCleanup(lambda: os.path.exists(self.path) and os.remove(self.path))
         self.parsed = ParsedInvoice(
-            supplier_code="METRO", invoice_number="F-80", invoice_date=None,
-            lines=[ParsedLine(raw_name="EAU 1L", quantity=6, total_volume=D("6"), unit_cost_ht=D("0.50"),
-                              total_ht=D("3.00"), vat_rate=D("0.055"))],
+            supplier_code="METRO",
+            invoice_number="F-80",
+            invoice_date=None,
+            lines=[
+                ParsedLine(
+                    raw_name="EAU 1L",
+                    quantity=6,
+                    total_volume=D("6"),
+                    unit_cost_ht=D("0.50"),
+                    total_ht=D("3.00"),
+                    vat_rate=D("0.055"),
+                )
+            ],
         )
 
     def test_its_reader_reads_it_and_the_file_is_known_after(self):

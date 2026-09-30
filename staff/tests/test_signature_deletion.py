@@ -33,12 +33,14 @@ from django.core import signing as django_signing
 from django.db import transaction
 from django.utils import timezone
 
-from staff import private_files, signature_deletion as deletion, signature_requests as requests_
+from staff import private_files
+from staff import signature_deletion as deletion
+from staff import signature_requests as requests_
 from staff.models import SignatureEvent, SignatureRequest, Timesheet, TimesheetDay
 from staff.tests.page_forms import as_post, form_posting_to, page_forms_of
 from staff.tests.support import employee
 from staff.tests.test_signature_pages import OwnerCase
-from staff.tests.test_views import JUNE, JULY
+from staff.tests.test_views import JULY, JUNE
 from staff.timesheet import month_sheet, save_month
 
 AUGUST = date(2026, 8, 1)
@@ -67,7 +69,7 @@ def blocks(tag: str, html: str, *, css_class: str | None = None) -> list[str]:
     """Every `<tag>…</tag>` of `html` (not nested in one of its kind), those
     carrying `css_class` among their classes when it is given."""
     found = []
-    for attrs, inner in re.findall(rf"<{tag}\b([^>]*)>(.*?)</{tag}>", html, re.S):
+    for attrs, inner in re.findall(rf"<{tag}\b([^>]*)>(.*?)</{tag}>", html, re.DOTALL):
         classes = re.search(r'class="([^"]*)"', attrs)
         if css_class is None or (classes and css_class in classes.group(1).split()):
             found.append(inner)
@@ -78,7 +80,7 @@ def form_html(html: str, action: str) -> str:
     """The inside of the one `<form>` of the page sending to `action`."""
     found = [
         inner
-        for attrs, inner in re.findall(r"<form\b([^>]*)>(.*?)</form>", html, re.S)
+        for attrs, inner in re.findall(r"<form\b([^>]*)>(.*?)</form>", html, re.DOTALL)
         if (target := re.search(r'action="([^"]*)"', attrs)) and unescape(target.group(1)) == action
     ]
     assert len(found) == 1, f"{len(found)} forms sending to {action!r}"
@@ -124,9 +126,7 @@ class DeletionCase(OwnerCase):
         """Step 2's one button, pressed; files removed once committed."""
         form = self.step2_form(page, version, month)
         with self.captureOnCommitCallbacks(execute=True):
-            return self.client.post(
-                post_to or form.action, as_post(form.submission(values=values)), follow=True
-            )
+            return self.client.post(post_to or form.action, as_post(form.submission(values=values)), follow=True)
 
     def delete(self, version=1, month=JUNE, **step1):
         return self.confirm(self.step2_page(version, month, **step1), version, month)
@@ -160,11 +160,11 @@ class PanelTests(DeletionCase):
             for href, text in re.findall(r'<a [^>]*href="([^"]*/supprimer/)"[^>]*>(.*?)</a>', self.html(response))
         }
 
-    def test_every_version_in_every_state_offers_supprimer(self):
+    def test_every_version_in_every_state_offers_a_delete_button(self):
         """June: v1 finished then replaced, v2 cancelled, v3 expired, v4
         signed by her; July finished; August waiting - each version, current
         or earlier, has its own discreet « Supprimer… »."""
-        first, _token = self.complete()
+        _first, _token = self.complete()
         requests_.reopen_month(self.timesheet, "heures corrigées")
         second, _token = self.create()
         requests_.cancel_request(second, "envoyé par erreur")
@@ -182,8 +182,16 @@ class PanelTests(DeletionCase):
         }
         self.assertEqual(
             sorted(statuses.values()),
-            sorted([Status.SUPERSEDED, Status.CANCELLED, Status.EXPIRED, Status.EMPLOYEE_SIGNED, Status.COMPLETE,
-                    Status.PENDING]),
+            sorted(
+                [
+                    Status.SUPERSEDED,
+                    Status.CANCELLED,
+                    Status.EXPIRED,
+                    Status.EMPLOYEE_SIGNED,
+                    Status.COMPLETE,
+                    Status.PENDING,
+                ]
+            ),
         )
         for month, versions in ((JUNE, (1, 2, 3, 4)), (JULY, (1,)), (AUGUST, (1,))):
             with self.subTest(month=month):
@@ -270,8 +278,15 @@ class StepOneTests(DeletionCase):
 
     def test_a_wrong_phrase_is_refused(self):
         request, _token = self.complete()
-        for typed in ("", "supprimer", "supprimer mai 2026", "supprimer juin 2025", "supprimer juin 2026 !",
-                      "supprimerjuin 2026", "effacer juin 2026"):
+        for typed in (
+            "",
+            "supprimer",
+            "supprimer mai 2026",
+            "supprimer juin 2025",
+            "supprimer juin 2026 !",
+            "supprimerjuin 2026",
+            "effacer juin 2026",
+        ):
             with self.subTest(typed=typed):
                 answer = self.through_step1(phrase=typed)
                 self.assertEqual(answer.status_code, 200)
@@ -387,7 +402,7 @@ class HoursOptionTests(DeletionCase):
         self.assertEqual(form.count(hours_control), 1)
         self.assertGreater(form.index(hours_control), phrase, "the option comes before the phrase")
         (fieldset,) = [block for block in blocks("fieldset", form) if hours_control in block]
-        legend = re.search(r"<legend\b[^>]*>(.*?)</legend>", fieldset, re.S)
+        legend = re.search(r"<legend\b[^>]*>(.*?)</legend>", fieldset, re.DOTALL)
         self.assertIsNotNone(legend, "the option's fieldset has no legend")
         self.assertTrue(words_of(legend.group(1)).startswith("Option"), words_of(legend.group(1)))
         self.assertIn("D3171-16", words_of(fieldset))
@@ -403,9 +418,7 @@ class HoursOptionTests(DeletionCase):
         (facts,) = blocks("ul", html, css_class="deletion-facts")
         self.assertNotIn("heures enregistrées", words_of(facts))
         alerts = [words_of(block) for block in blocks("p", html, css_class="message-error")]
-        self.assertTrue(
-            any("les heures enregistrées du mois (30 jours)" in alert for alert in alerts), alerts
-        )
+        self.assertTrue(any("les heures enregistrées du mois (30 jours)" in alert for alert in alerts), alerts)
         self.assertTrue(any("relevé du temps de travail" in alert for alert in alerts), alerts)
 
     def test_a_version_sent_between_the_steps_takes_the_option_back(self):
@@ -450,8 +463,9 @@ class StepTwoTests(DeletionCase):
         self.assertIn("btn-destroy", button.attrs.get("class", ""))
         self.assertEqual(self.html(page).count("btn-destroy"), 1)
         # The page's own forms: the topbar's « Se déconnecter » aside.
-        self.assertEqual([form.action for form in page_forms_of(self.html(page)) if form.method == "post"],
-                         [self.step2_url()])
+        self.assertEqual(
+            [form.action for form in page_forms_of(self.html(page)) if form.method == "post"], [self.step2_url()]
+        )
         self.assertEqual(form.names, ["csrfmiddlewaretoken", deletion.TOKEN_FIELD])
         self.assertKept(request, events)
 
@@ -544,7 +558,7 @@ class StepTwoTests(DeletionCase):
         self.assertTrue(private_files.exists(request.uuid, private_files.DOCUMENT))
 
     def test_pressed_twice_deletes_once(self):
-        request, _token = self.complete()
+        _request, _token = self.complete()
         page = self.step2_page()
         self.confirm(page)
         again = self.confirm(page)
@@ -746,16 +760,16 @@ class ProtectionTests(DeletionCase):
             self.step2_page(version, hours=hours)
 
         request, _token = self.create()
-        both(1, hours=False)                  # waiting, the month's only version
+        both(1, hours=False)  # waiting, the month's only version
         requests_.cancel_request(request)
-        both(1, hours=True)                   # cancelled
+        both(1, hours=True)  # cancelled
         signed, _token = self.create()
         signed = self.employee_signs(signed)
-        both(2)                               # signed by her
+        both(2)  # signed by her
         requests_.countersign_request(signed, self._employer())
-        both(2)                               # finished
+        both(2)  # finished
         requests_.reopen_month(self.timesheet)
-        both(2)                               # replaced
+        both(2)  # replaced
         self.assertEqual(SignatureRequest.objects.count(), 2)
         self.assertEqual(private_files.read_deletion_records(), [])
 

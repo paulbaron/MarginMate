@@ -12,7 +12,7 @@ from django.contrib.messages import get_messages
 from django.test import TestCase
 from django.urls import reverse
 
-from inventory.models import Product, StockType, UnitChoices
+from inventory.models import StockType, UnitChoices
 from inventory.product_matching_rules import (
     apply_rules_to_pending_products,
     classified_fingerprint,
@@ -228,7 +228,9 @@ class SuggestionOrderTests(TestCase):
             raw_name="VODKA TESTBRAND 1L",
             ai_suggestion={"source": "kept", "confidence": "high", "classified_fingerprint": "old"},
         )
-        unstamped = make_product(supplier=self.supplier, raw_name="GIN TESTBRAND 70CL", ai_suggestion={"source": "kept"})
+        unstamped = make_product(
+            supplier=self.supplier, raw_name="GIN TESTBRAND 70CL", ai_suggestion={"source": "kept"}
+        )
         raw_case = make_product(supplier=self.supplier, raw_name="OBJET INCONNU")
         make_product(supplier=self.supplier, raw_name="LOYER", is_expense=True)
         self.assertEqual(apply_rules_to_pending_products(), Counter({"neighbour": 1, "rule": 1, "fallback": 1}))
@@ -289,7 +291,9 @@ class LineAgainstCopiedFactorTests(TestCase):
 
     def test_a_line_that_agrees_with_the_copy_makes_it_sure(self):
         oil = make_stock_type(name="Huile testolive", unit=UnitChoices.LITRE, category="Epicerie")
-        neighbour = make_product(supplier=self.supplier, raw_name="HUILE TESTOLIVE 5L", stock_type=oil, stock_equivalent="1")
+        neighbour = make_product(
+            supplier=self.supplier, raw_name="HUILE TESTOLIVE 5L", stock_type=oil, stock_equivalent="1"
+        )
         bought(neighbour, total_volume="5")
         pending = make_product(supplier=self.other, raw_name="HUILE TESTOLIVE 5L")
         bought(pending, quantity=2, total_volume="10")
@@ -341,7 +345,9 @@ class NoNumberPrintedTests(TestCase):
 
     def test_two_names_printing_no_number_are_not_one_pack(self):
         bags = make_stock_type(name="Sacs kraft", unit=UnitChoices.UNIT, category="Consommables")
-        neighbour = make_product(supplier=self.supplier, raw_name="SACS PAPIER KRAFT", stock_type=bags, stock_equivalent="50")
+        neighbour = make_product(
+            supplier=self.supplier, raw_name="SACS PAPIER KRAFT", stock_type=bags, stock_equivalent="50"
+        )
         bought(neighbour)
         for supplier in (self.supplier, self.other):
             with self.subTest(same_supplier=supplier is self.supplier):
@@ -354,12 +360,16 @@ class NoNumberPrintedTests(TestCase):
                 self.assertEqual(suggestion["stock_equivalent"], "50")
                 self.assertEqual(suggestion["confidence"], "medium")
                 self.assertEqual(suggestion["factor_rule"], "copy-no-number")
-                self.assertIn("aucun nombre imprimé : conversion du voisin reprise, à vérifier", suggestion["reasoning"])
+                self.assertIn(
+                    "aucun nombre imprimé : conversion du voisin reprise, à vérifier", suggestion["reasoning"]
+                )
                 self.assertNotIn("même conditionnement", suggestion["reasoning"])
 
     def test_the_copy_is_sure_when_the_line_reads_the_same(self):
         cola = make_stock_type(name="Cola testbrand VC", unit=UnitChoices.UNIT, category="Soft")
-        neighbour = make_product(supplier=self.supplier, raw_name="COLA TESTBRAND VC", stock_type=cola, stock_equivalent="1")
+        neighbour = make_product(
+            supplier=self.supplier, raw_name="COLA TESTBRAND VC", stock_type=cola, stock_equivalent="1"
+        )
         bought(neighbour, quantity=24, total_volume="7.92")
         pending = make_product(supplier=self.other, raw_name="COLA TESTBRAND VC")
         # 24 bottles of 33cl: the line's own arithmetic counts them one by one.
@@ -372,7 +382,9 @@ class NoNumberPrintedTests(TestCase):
 
     def test_a_number_on_one_side_only_is_another_pack(self):
         bags = make_stock_type(name="Sacs kraft", unit=UnitChoices.UNIT, category="Consommables")
-        neighbour = make_product(supplier=self.supplier, raw_name="SAC PAPIER KRAFT", stock_type=bags, stock_equivalent="1")
+        neighbour = make_product(
+            supplier=self.supplier, raw_name="SAC PAPIER KRAFT", stock_type=bags, stock_equivalent="1"
+        )
         bought(neighbour)
         pending = make_product(supplier=self.supplier, raw_name="50 SAC PAPIER KRAFT")
         bought(pending)
@@ -408,12 +420,14 @@ class ApproveSureSuggestionsTests(TestCase):
         self.url = reverse("inventory:approve_all_suggestions")
 
     def pending(self, name, stock_type, confidence, **kwargs):
-        product = make_product(supplier=self.supplier, raw_name=name, ai_suggestion=suggestion(stock_type, confidence, **kwargs))
+        product = make_product(
+            supplier=self.supplier, raw_name=name, ai_suggestion=suggestion(stock_type, confidence, **kwargs)
+        )
         bought(product)
         return product
 
     def message(self, response):
-        return str(list(get_messages(response.wsgi_request))[0])
+        return str(next(iter(get_messages(response.wsgi_request))))
 
     def test_only_the_sure_ones_are_linked_whatever_their_ids(self):
         sure_first = self.pending("RHUM A 70CL", self.rum, "high", stock_equivalent="0.7")
@@ -496,7 +510,7 @@ class StaleSuggestionTests(TestCase):
         self.assertEqual(self.stored["neighbour_product_id"], self.neighbour.pk)
 
     def message(self, response):
-        return str(list(get_messages(response.wsgi_request))[0])
+        return str(next(iter(get_messages(response.wsgi_request))))
 
     def test_a_neighbour_moved_to_another_article_takes_the_suggestion_with_it(self):
         ordinary = make_stock_type(name="Vodka ordinaire", unit=UnitChoices.LITRE, category="Spiritueux")
@@ -563,9 +577,13 @@ class PanelSaysWhereSuggestionsComeFromTests(TestCase):
 
     def test_each_card_names_its_source_and_the_sure_button_counts_the_highs(self):
         high = suggestion(self.rum, "high")
-        high["reasoning"] = "Même chose que « RHUM VOISIN 70CL » (Metro), déjà rangé dans « Rhum » ; même conditionnement."
+        high["reasoning"] = (
+            "Même chose que « RHUM VOISIN 70CL » (Metro), déjà rangé dans « Rhum » ; même conditionnement."
+        )
         make_product(supplier=self.supplier, raw_name="RHUM A 70CL", ai_suggestion=high)
-        make_product(supplier=self.supplier, raw_name="RHUM B 70CL", ai_suggestion=suggestion(self.rum, "medium", source="rule"))
+        make_product(
+            supplier=self.supplier, raw_name="RHUM B 70CL", ai_suggestion=suggestion(self.rum, "medium", source="rule")
+        )
         make_product(
             supplier=self.supplier, raw_name="OBJET C", ai_suggestion=suggestion(self.rum, "low", source="fallback")
         )
@@ -585,7 +603,9 @@ class PanelSaysWhereSuggestionsComeFromTests(TestCase):
         self.assertEqual(response.context["source_counts"], Counter({"neighbour": 1, "rule": 1, "fallback": 1}))
 
     def test_the_explainer_states_the_three_sources_in_order(self):
-        make_product(supplier=self.supplier, raw_name="RHUM B 70CL", ai_suggestion=suggestion(self.rum, "medium", source="rule"))
+        make_product(
+            supplier=self.supplier, raw_name="RHUM B 70CL", ai_suggestion=suggestion(self.rum, "medium", source="rule")
+        )
         page = self.panel().content.decode()
         self.assertIn("Trois sources, essayées dans cet ordre", page)
         self.assertLess(page.index("Déjà classé</strong>"), page.index("Règle</strong>"))
@@ -603,7 +623,9 @@ class PanelSaysWhereSuggestionsComeFromTests(TestCase):
         self.assertIn("reste moyenne aussi : le bon article neuf fois sur dix", prose)
         self.assertIn("Une proposition est refaite dès que vos classements changent", prose)
         self.assertIn("la plus faible", prose)
-        self.assertIn("« Approuver les sûres » ne prend que les hautes ; « Approuver les suggestions » prend tout", prose)
+        self.assertIn(
+            "« Approuver les sûres » ne prend que les hautes ; « Approuver les suggestions » prend tout", prose
+        )
         # Nothing sure: no button promising to approve it.
         self.assertNotIn("sûre", page.split("D'où viennent")[0])
         self.assertIn("Approuver la suggestion</button>", page)

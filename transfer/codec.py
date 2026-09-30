@@ -13,8 +13,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from datetime import date, datetime
-from datetime import timezone as dt_timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 
 from django.db import models
@@ -40,6 +39,7 @@ def _places(model_field: models.DecimalField) -> Decimal:
 
 # -- dump: model attribute → JSON value ---------------------------------------------
 
+
 def dump(obj, name: str):
     model_field = _field(type(obj), name)
     value = getattr(obj, model_field.attname)
@@ -54,7 +54,7 @@ def dump(obj, name: str):
     if isinstance(model_field, models.DateTimeField):
         if value.tzinfo is None or value.utcoffset() is None:
             raise FieldValueError(f"« {name} » : date sans fuseau horaire")
-        return value.astimezone(dt_timezone.utc).isoformat()
+        return value.astimezone(UTC).isoformat()
     if isinstance(model_field, models.DateField):
         return value.isoformat()
     return value
@@ -65,6 +65,7 @@ def record(obj, names: Sequence[str]) -> dict:
 
 
 # -- load: JSON value → Python, validated against the field -----------------------
+
 
 def _missing(model_field, name) -> None:
     """None where the field takes NULL; refused where it does not."""
@@ -91,9 +92,7 @@ def load(model, name: str, value):
         except InvalidOperation:
             raise FieldValueError(f"« {name} » : « {value} » a trop de chiffres") from None
         if quantized != number:
-            raise FieldValueError(
-                f"« {name} » : « {value} » a plus de {model_field.decimal_places} décimales"
-            )
+            raise FieldValueError(f"« {name} » : « {value} » a plus de {model_field.decimal_places} décimales")
         if abs(quantized) >= Decimal(10) ** (model_field.max_digits - model_field.decimal_places):
             raise FieldValueError(f"« {name} » : « {value} » a trop de chiffres")
         value = quantized
@@ -108,7 +107,7 @@ def load(model, name: str, value):
         if moment.tzinfo is None or moment.utcoffset() is None:
             raise FieldValueError(f"« {name} » : date sans fuseau horaire (« {value} »)")
         try:
-            utc = moment.astimezone(dt_timezone.utc)
+            utc = moment.astimezone(UTC)
             timezone.localtime(utc)
         except (OverflowError, ValueError, OSError):
             # A moment on the calendar's first or last day: it has no local
@@ -158,6 +157,7 @@ def load(model, name: str, value):
 
 
 # -- comparing and assigning ---------------------------------------------------------
+
 
 def _same(model_field, current, new) -> bool:
     if isinstance(model_field, models.JSONField):
@@ -210,7 +210,7 @@ def assign(obj, data: dict, names) -> list[str]:
 
 
 def is_blank(value) -> bool:
-    """"", [], {}, None - what « Fusionner » may fill (§6.1). 0 and False
+    """ "", [], {}, None - what « Fusionner » may fill (§6.1). 0 and False
     are values."""
     return value is None or (isinstance(value, (str, list, dict, tuple)) and not value)
 

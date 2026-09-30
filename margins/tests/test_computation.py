@@ -2,13 +2,13 @@
 
 Three margins, over one « du … au … » window:
 
-* **la marge réelle** - everything the bar took against everything it was
+* **the real margin** - everything the bar took against everything it was
   invoiced, whatever the invoice was for;
-* **la marge produits** - what it took against what the recipes it sold
+* **the products margin** - what it took against what the recipes it sold
   consumed, plus the articles flagged « compter dans la marge produits »
   (the paper towels: no recipe eats them, so what was bought of them is the
   only measure there is);
-* **les marges par catégorie**, on both of the till's own dimensions - its
+* **the margins by category**, on both of the till's own dimensions - its
   13 « TAG_Catégorie » and its 3 « TAG_Typologie » (« food, drinks »).
 
 Every figure below is asserted to the cent. The three the page can be
@@ -59,9 +59,7 @@ MARCH = DateRange(date(2026, 3, 1), date(2026, 3, 31))
 
 
 def till_product(name, recipe=None, category="", typology="", ignored=False) -> PosProduct:
-    return PosProduct.objects.create(
-        name=name, recipe=recipe, category=category, typology=typology, ignored=ignored
-    )
+    return PosProduct.objects.create(name=name, recipe=recipe, category=category, typology=typology, ignored=ignored)
 
 
 def rang_up(product, day, quantity, ttc="0", ht="0", read=True, without_rate="0"):
@@ -107,7 +105,7 @@ class OneRecipeOneInvoiceTests(TestCase):
     def setUp(self):
         syrup = priced_article("Sirop de bergamote", unit_cost="4.00")
         self.recipe = make_recipe(name="Limonade maison", selling_price_ttc="6.00", vat_rate="0.10")
-        make_ingredient(self.recipe, stock_type=syrup, quantity="0.25")  # 1,00 € HT la limonade
+        make_ingredient(self.recipe, stock_type=syrup, quantity="0.25")  # 1,00 € HT per lemonade
         self.pos = till_product(
             "Limonade maison", recipe=self.recipe, category="Sans alcool", typology="Liquide (Non alcool)"
         )
@@ -139,9 +137,7 @@ class OneRecipeOneInvoiceTests(TestCase):
     def test_products_margin_is_every_income_less_what_the_recipes_consumed(self):
         self.assertEqual(self.report.products_margin_ht_low, Decimal("89.09"))
         self.assertEqual(self.report.products_margin_ht_high, Decimal("89.09"))
-        self.assertEqual(
-            self.report.products_margin_percent_low.quantize(Decimal("0.01")), Decimal("81.67")
-        )
+        self.assertEqual(self.report.products_margin_percent_low.quantize(Decimal("0.01")), Decimal("81.67"))
 
     def test_everything_sold_is_costed(self):
         self.assertEqual(self.report.coverage, Decimal(1))
@@ -285,13 +281,13 @@ class CoverageTests(TestCase):
         self.assertEqual(self.report.cogs_low, Decimal("10.00"))
 
     def test_a_slice_with_no_costed_unit_has_no_margin_at_all(self):
-        planches = self.slice_named("Planches")
-        self.assertFalse(planches.is_costed)
-        self.assertIsNone(planches.margin_ht_low)
-        self.assertIsNone(planches.margin_ht_high)
-        self.assertIsNone(planches.margin_percent_low)
-        self.assertIsNone(planches.margin_percent_high)
-        self.assertEqual(planches.coverage, Decimal(0))
+        boards = self.slice_named("Planches")
+        self.assertFalse(boards.is_costed)
+        self.assertIsNone(boards.margin_ht_low)
+        self.assertIsNone(boards.margin_ht_high)
+        self.assertIsNone(boards.margin_percent_low)
+        self.assertIsNone(boards.margin_percent_high)
+        self.assertEqual(boards.coverage, Decimal(0))
 
     def test_a_fully_costed_slice_beside_it_keeps_its_margin(self):
         beers = self.slice_named("Bières")
@@ -610,7 +606,7 @@ class FlaggedArticleTests(TestCase):
         self.assertEqual(margins_for(MARCH).extra_products_ht, Decimal("30.00"))
 
     def test_a_purchase_counts_the_line_s_own_total_not_the_unit_cost_stored_beside_it(self):
-        """2 000 pailles charged 24,64 € store a unit cost of 0,0123 € - four
+        """2 000 straws charged 24,64 € store a unit cost of 0,0123 € - four
         decimals, which is all the column has - and 2 000 x 0,0123 is 24,60 €.
         The four cents are the whole reason CLAUDE.md says a purchase is the
         invoice line's own `total_ht`; on a year of consumables the same
@@ -619,12 +615,19 @@ class FlaggedArticleTests(TestCase):
         invoice = make_invoice(invoice_date=date(2026, 3, 3))
         product = make_product(supplier=invoice.supplier, stock_type=self.towels)
         line = make_invoice_line(
-            invoice=invoice, product=product, quantity=2000, total_ht="24.64",
+            invoice=invoice,
+            product=product,
+            quantity=2000,
+            total_ht="24.64",
             vat_rate=Decimal("0.20"),
         )
         movement = make_movement(
-            stock_type=self.towels, quantity="2000", unit_cost_ht=Decimal("24.64") / 2000,
-            invoice_line=line, kind=MovementKind.PURCHASE, occurred_on=date(2026, 3, 3),
+            stock_type=self.towels,
+            quantity="2000",
+            unit_cost_ht=Decimal("24.64") / 2000,
+            invoice_line=line,
+            kind=MovementKind.PURCHASE,
+            occurred_on=date(2026, 3, 3),
         )
         movement.refresh_from_db()
 
@@ -650,8 +653,11 @@ class FlaggedArticleTests(TestCase):
         stock already paid for, and counted again it is paid for twice."""
         self.bought(self.towels, date(2026, 3, 2), "30.00")
         make_movement(
-            stock_type=self.towels, quantity="-2", unit_cost_ht="5.00",
-            kind=MovementKind.LOSS, occurred_on=date(2026, 3, 3),
+            stock_type=self.towels,
+            quantity="-2",
+            unit_cost_ht="5.00",
+            kind=MovementKind.LOSS,
+            occurred_on=date(2026, 3, 3),
         )
 
         self.assertEqual(margins_for(MARCH).extra_products_ht, Decimal("30.00"))
@@ -667,14 +673,15 @@ class FlaggedArticleTests(TestCase):
             invoice=invoice, product=product, quantity=1, total_ht="21.00", vat_rate=Decimal("0.20")
         )
         make_movement(
-            stock_type=self.towels, quantity="1", unit_cost_ht="21.00", invoice_line=line,
+            stock_type=self.towels,
+            quantity="1",
+            unit_cost_ht="21.00",
+            invoice_line=line,
             kind=MovementKind.PURCHASE,
         )
 
         self.assertEqual(margins_for(MARCH).extra_products_ht, Decimal("21.00"))
-        self.assertEqual(
-            margins_for(DateRange(date(2026, 4, 1), date(2026, 4, 30))).extra_products_ht, Decimal("0")
-        )
+        self.assertEqual(margins_for(DateRange(date(2026, 4, 1), date(2026, 4, 30))).extra_products_ht, Decimal("0"))
 
     def test_a_purchase_that_printed_its_own_ttc_is_counted_at_what_it_printed(self):
         """33,33 € HT at 20 % works back out to 40,00 € where the ticket says
@@ -684,12 +691,20 @@ class FlaggedArticleTests(TestCase):
         invoice = make_invoice(invoice_date=date(2026, 3, 5))
         product = make_product(supplier=invoice.supplier, stock_type=self.towels)
         line = make_invoice_line(
-            invoice=invoice, product=product, quantity=1, total_ht="33.33",
-            vat_rate=Decimal("0.20"), printed_ttc=Decimal("39.99"),
+            invoice=invoice,
+            product=product,
+            quantity=1,
+            total_ht="33.33",
+            vat_rate=Decimal("0.20"),
+            printed_ttc=Decimal("39.99"),
         )
         make_movement(
-            stock_type=self.towels, quantity="1", unit_cost_ht="33.33", invoice_line=line,
-            kind=MovementKind.PURCHASE, occurred_on=date(2026, 3, 5),
+            stock_type=self.towels,
+            quantity="1",
+            unit_cost_ht="33.33",
+            invoice_line=line,
+            kind=MovementKind.PURCHASE,
+            occurred_on=date(2026, 3, 5),
         )
 
         (entry,) = margins_for(MARCH).extra_products
@@ -702,8 +717,11 @@ class FlaggedArticleTests(TestCase):
         anywhere. Its HT counts - something really was bought - and its TTC
         is left alone rather than worked out at a rate nobody stated."""
         make_movement(
-            stock_type=self.towels, quantity="3", unit_cost_ht="2.00",
-            kind=MovementKind.PURCHASE, occurred_on=date(2026, 3, 4),
+            stock_type=self.towels,
+            quantity="3",
+            unit_cost_ht="2.00",
+            kind=MovementKind.PURCHASE,
+            occurred_on=date(2026, 3, 4),
         )
 
         report = margins_for(MARCH)
@@ -829,12 +847,8 @@ class SaleDocumentTests(TestCase):
         « saisi à la main » is « from another source than the till » and
         nothing else. Counted whole, this figure would say the bar sells
         everything twice - once priced, once not."""
-        RecipeSale.objects.create(
-            recipe=self.recipe, sold_on=date(2026, 3, 21), source="laddition", quantity=40
-        )
-        RecipeSale.objects.create(
-            recipe=self.recipe, sold_on=date(2026, 3, 22), source="manual", quantity=3
-        )
+        RecipeSale.objects.create(recipe=self.recipe, sold_on=date(2026, 3, 21), source="laddition", quantity=40)
+        RecipeSale.objects.create(recipe=self.recipe, sold_on=date(2026, 3, 22), source="manual", quantity=3)
 
         self.assertEqual(margins_for(MARCH).hand_typed_units, 3)
 
@@ -846,9 +860,7 @@ class SaleDocumentTests(TestCase):
         """RecipeSale from another source than the till has no money attached
         anywhere. Costed here it would read as a loss; ignored silently it
         would be stock leaving with nothing said."""
-        RecipeSale.objects.create(
-            recipe=self.recipe, sold_on=date(2026, 3, 21), source="manual", quantity=7
-        )
+        RecipeSale.objects.create(recipe=self.recipe, sold_on=date(2026, 3, 21), source="manual", quantity=7)
 
         report = margins_for(MARCH)
 
@@ -949,19 +961,17 @@ class GroupingTests(TestCase):
         article = priced_article("Bière", unit_cost="2.00")
         beer = make_recipe(name="Pinte", selling_price_ttc="6.00", vat_rate="0.20")
         make_ingredient(beer, stock_type=article, quantity="0.5")  # 1,00 €
-        pinte = till_product("Pinte", recipe=beer, category="Bières", typology="Liquide (Alcool)")
+        pint = till_product("Pinte", recipe=beer, category="Bières", typology="Liquide (Alcool)")
         shot = till_product("Shot", recipe=beer, category="Shots", typology="Liquide (Alcool)")
         board = till_product("Planche", category="Planches", typology="Solide")
-        rang_up(pinte, date(2026, 3, 4), 10, ttc="60.00", ht="50.00")
+        rang_up(pint, date(2026, 3, 4), 10, ttc="60.00", ht="50.00")
         rang_up(shot, date(2026, 3, 4), 6, ttc="24.00", ht="20.00")
         rang_up(board, date(2026, 3, 4), 2, ttc="36.00", ht="32.73")
         self.report = margins_for(MARCH)
 
     def test_both_dimensions_foot_to_the_same_revenue(self):
         for slices in (self.report.by_category, self.report.by_typology):
-            self.assertEqual(
-                sum((slice_.revenue.ht for slice_ in slices), start=Decimal("0")), Decimal("102.73")
-            )
+            self.assertEqual(sum((slice_.revenue.ht for slice_ in slices), start=Decimal("0")), Decimal("102.73"))
             self.assertEqual(sum(slice_.units for slice_ in slices), 18)
 
     def test_the_typology_folds_the_categories_the_owner_asked_about(self):
@@ -1074,7 +1084,7 @@ class CostPerServingTests(TestCase):
         self.recipe = make_recipe(
             name="Sirop de verveine", selling_price_ttc="4.00", vat_rate="0.20", yield_quantity="10"
         )
-        make_ingredient(self.recipe, stock_type=sugar, quantity="10")  # 20,00 € la préparation
+        make_ingredient(self.recipe, stock_type=sugar, quantity="10")  # 20,00 € per preparation
 
     def test_a_recipe_that_yields_ten_costs_a_tenth_of_its_batch_per_sale(self):
         pos = till_product("Verre de sirop", recipe=self.recipe, category="Sans alcool")
@@ -1177,7 +1187,9 @@ class IngredientWithoutAPriceTests(TestCase):
     def test_a_sub_recipe_with_an_unpriced_ingredient_carries_up(self):
         """A recipe made of another recipe is only as costed as that one."""
         preparation = make_recipe(name="Préparation maison", selling_price_ttc="1", vat_rate="0.20")
-        make_ingredient(preparation, stock_type=priced_article("Eau plate en carafe", unit_cost="1.00"), quantity="1", group=1)
+        make_ingredient(
+            preparation, stock_type=priced_article("Eau plate en carafe", unit_cost="1.00"), quantity="1", group=1
+        )
         make_ingredient(preparation, stock_type=self.never_bought, quantity="1", group=2)
         make_ingredient(self.recipe, sub_recipe=preparation, quantity="1", group=3)
 
@@ -1229,8 +1241,12 @@ class FlaggedArticleAlsoInARecipeTests(TestCase):
         product = make_product(supplier=invoice.supplier, stock_type=self.syrup)
         line = make_invoice_line(invoice=invoice, product=product, quantity=1, total_ht="200.00")
         make_movement(
-            stock_type=self.syrup, quantity="100", unit_cost_ht="2.00", invoice_line=line,
-            kind=MovementKind.PURCHASE, occurred_on=date(2026, 3, 2),
+            stock_type=self.syrup,
+            quantity="100",
+            unit_cost_ht="2.00",
+            invoice_line=line,
+            kind=MovementKind.PURCHASE,
+            occurred_on=date(2026, 3, 2),
         )
 
         report = margins_for(MARCH)
@@ -1243,7 +1259,7 @@ class FlaggedArticleAlsoInARecipeTests(TestCase):
 class WhenAPurchaseCountsTests(TestCase):
     """The two margins must date one purchase on one day.
 
-    « La marge réelle » counts an invoice on its own date - what was
+    The real margin counts an invoice on its own date - what was
     invoiced, not what was delivered. A flagged article's purchase is part
     of the OTHER margin, and dating it by the delivery instead put one
     document in February on one figure and in March on the next, on the same
@@ -1258,8 +1274,12 @@ class WhenAPurchaseCountsTests(TestCase):
         product = make_product(supplier=invoice.supplier, stock_type=self.towels)
         line = make_invoice_line(invoice=invoice, product=product, quantity=1, total_ht=total_ht)
         return make_movement(
-            stock_type=self.towels, quantity="1", unit_cost_ht=total_ht, invoice_line=line,
-            kind=MovementKind.PURCHASE, occurred_on=occurred_on,
+            stock_type=self.towels,
+            quantity="1",
+            unit_cost_ht=total_ht,
+            invoice_line=line,
+            kind=MovementKind.PURCHASE,
+            occurred_on=occurred_on,
         )
 
     def test_invoiced_in_february_and_received_in_march_counts_in_february(self):
@@ -1277,8 +1297,11 @@ class WhenAPurchaseCountsTests(TestCase):
         """A correction typed by hand has no invoice to be dated by; its own
         day is all there is."""
         make_movement(
-            stock_type=self.towels, quantity="1", unit_cost_ht="12.00",
-            kind=MovementKind.PURCHASE, occurred_on=date(2026, 3, 9),
+            stock_type=self.towels,
+            quantity="1",
+            unit_cost_ht="12.00",
+            kind=MovementKind.PURCHASE,
+            occurred_on=date(2026, 3, 9),
         )
 
         self.assertEqual(margins_for(MARCH).extra_products_ht, Decimal("12.00"))

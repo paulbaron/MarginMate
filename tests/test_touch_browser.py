@@ -154,8 +154,11 @@ class TouchScreenInBrowserTests(StaticLiveServerTestCase):
         vodka = make_stock_type(name="Vodka Exemple", unit=UnitChoices.LITRE, category="Spiritueux")
         invoice = make_invoice(supplier=supplier, invoice_date=date(2026, 1, 10))
         classified = make_product(
-            supplier=supplier, raw_name="VODKA EXEMPLE 70CL", stock_type=vodka,
-            unit=UnitChoices.UNIT, stock_equivalent="0.7",
+            supplier=supplier,
+            raw_name="VODKA EXEMPLE 70CL",
+            stock_type=vodka,
+            unit=UnitChoices.UNIT,
+            stock_equivalent="0.7",
         )
         line = make_invoice_line(invoice=invoice, product=classified, quantity=10, total_ht="120")
         make_movement(stock_type=vodka, invoice_line=line, quantity=7, unit_cost_ht="12")
@@ -197,10 +200,12 @@ class TouchScreenInBrowserTests(StaticLiveServerTestCase):
         self.open(path)
         if path == reverse("inventory:stock_list"):
             self.script(OPEN_THE_ARTICLE)
-            self.wait_for(lambda: self.script(
-                "var input = document.querySelector(arguments[0]); return !!input && input.getClientRects().length > 0;",
-                CONVERSION,
-            ))
+            self.wait_for(
+                lambda: self.script(
+                    "var input = document.querySelector(arguments[0]); return !!input && input.getClientRects().length > 0;",
+                    CONVERSION,
+                )
+            )
 
     def script(self, source, *args):
         return self.driver.execute_script(source, *args)
@@ -344,7 +349,9 @@ class TouchScreenInBrowserTests(StaticLiveServerTestCase):
                 small = [control for control in self.script(CONTROLS, "main .btn-small") if not control["inCell"]]
                 with self.subTest(size=size, page=name):
                     tall = [
-                        f"{control['text']} : {control['height']:.1f} px" for control in small if control["height"] >= 36
+                        f"{control['text']} : {control['height']:.1f} px"
+                        for control in small
+                        if control["height"] >= 36
                     ]
                     self.assertEqual(tall, [])
                 found += len(small)
@@ -371,7 +378,9 @@ class TouchScreenInBrowserTests(StaticLiveServerTestCase):
                 self.assertEqual(self.short_controls()[0], [])
         self.visit(reverse("inventory:stock_list"))
         self.assertNotEqual(
-            self.script("return getComputedStyle(document.querySelector('#catalogue table.stock-table thead')).display;"),
+            self.script(
+                "return getComputedStyle(document.querySelector('#catalogue table.stock-table thead')).display;"
+            ),
             "none",
         )
         actions = self.script(

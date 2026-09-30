@@ -1,9 +1,9 @@
 """« Consignes » with one database per bar (multi mode, accounts/tenancy.py).
 
-Two real espaces in temporary files (accounts.tests.support.TwoTenantsTestCase):
-Bar Alpha is the owner's espace (the server's mailbox is his), Bar Beta is
-not. Both databases number their rows from 1, so A's reprise and B's are
-both pk 1, their bons and photos too - exactly what a page reading the wrong
+Two real tenants in temporary files (accounts.tests.support.TwoTenantsTestCase):
+Bar Alpha is the owner's tenant (the server's mailbox is his), Bar Beta is
+not. Both databases number their rows from 1, so A's pickup and B's are
+both pk 1, their slips and photos too - exactly what a page reading the wrong
 database, or a photo served from the wrong folder, would mix up without a
 word. Every name, number and count INVENTED; no mail server, no SMTP: the
 gather's thread is patched, and a client class reaching for either fails.
@@ -31,7 +31,7 @@ from tests.support import _Forbidden
 HOME = "/consignes/"
 
 
-class EspacesCase(TwoTenantsTestCase):
+class TenantsCase(TwoTenantsTestCase):
     owner_a = True
 
     def setUp(self):
@@ -47,7 +47,7 @@ class EspacesCase(TwoTenantsTestCase):
             self.addCleanup(patcher.stop)
 
     def fill(self, tenant, word, day):
-        """A supplier, a reprise with a photo, a bon - named after `word`."""
+        """A supplier, a pickup with a photo, a slip - named after `word`."""
         with bound_tenant(tenant):
             supplier = make_supplier(f"Grossiste {word}")
             pickup = make_pickup(date=day, supplier=supplier, counts={"Fûts": 4}, note=f"Vides {word}", photos=1)
@@ -59,7 +59,7 @@ class EspacesCase(TwoTenantsTestCase):
         return paths.tenant_dir(tenant) / "media"
 
 
-class EachBarSeesItsOwnTests(EspacesCase):
+class EachBarSeesItsOwnTests(TenantsCase):
     def setUp(self):
         super().setUp()
         self.alpha = self.fill(self.bar_a, "Alpha", date(2026, 2, 10))
@@ -75,8 +75,11 @@ class EachBarSeesItsOwnTests(EspacesCase):
         pk = self.alpha["pickup"].pk
         for user, mine, other in ((self.user_a, "Alpha", "Beta"), (self.user_b, "Beta", "Alpha")):
             self.client.force_login(user)
-            for url in (HOME, reverse("returnables:pickup_detail", args=[pk]),
-                        reverse("returnables:slip_detail", args=[self.alpha["slip"].pk])):
+            for url in (
+                HOME,
+                reverse("returnables:pickup_detail", args=[pk]),
+                reverse("returnables:slip_detail", args=[self.alpha["slip"].pk]),
+            ):
                 with self.subTest(bar=mine, url=url):
                     response = self.client.get(url)
                     self.assertEqual(response.status_code, 200)
@@ -97,9 +100,9 @@ class EachBarSeesItsOwnTests(EspacesCase):
         self.assertEqual(self.client.get(self.alpha["url"]).status_code, 404)
         self.assertEqual(self.client.get(self.beta["url"]).status_code, 200)
 
-    def test_the_files_are_in_each_espace_s_media(self):
+    def test_the_files_are_in_each_tenant_s_media(self):
         for tenant, mine, other in ((self.bar_a, self.alpha, self.beta), (self.bar_b, self.beta, self.alpha)):
-            with self.subTest(espace=tenant.name):
+            with self.subTest(tenant=tenant.name):
                 media = self.media_of(tenant)
                 self.assertTrue((media / mine["image"]).is_file())
                 self.assertFalse((media / other["image"]).exists())
@@ -108,9 +111,9 @@ class EachBarSeesItsOwnTests(EspacesCase):
                 self.assertTrue((media / slip.file.name).is_file())
 
 
-class PhotosThroughThePageTests(EspacesCase):
+class PhotosThroughThePageTests(TenantsCase):
     def test_a_photo_sent_lands_in_its_bar_s_media_and_a_deletion_leaves_the_other_s(self):
-        """Both bars send a reprise of the same day: the same file name in
+        """Both bars send a pickup of the same day: the same file name in
         both media folders. Deleting A's leaves B's."""
         names = {}
         for tenant, user in ((self.bar_a, self.user_a), (self.bar_b, self.user_b)):
@@ -130,17 +133,19 @@ class PhotosThroughThePageTests(EspacesCase):
         with bound_tenant(self.bar_a):
             pickup = Pickup.objects.get()
         html = self.client.get(reverse("returnables:pickup_detail", args=[pickup.pk])).content.decode()
-        self.client.post(reverse("returnables:pickup_delete", args=[pickup.pk]),
-                         as_post(form_posting_to(html, reverse("returnables:pickup_delete", args=[pickup.pk])).submission()))
+        self.client.post(
+            reverse("returnables:pickup_delete", args=[pickup.pk]),
+            as_post(form_posting_to(html, reverse("returnables:pickup_delete", args=[pickup.pk])).submission()),
+        )
         self.assertFalse((self.media_of(self.bar_a) / names[self.bar_a.pk]).exists())
         self.assertTrue((self.media_of(self.bar_b) / names[self.bar_b.pk]).is_file())
         with bound_tenant(self.bar_b):
             self.assertEqual(Pickup.objects.count(), 1)
 
 
-class GatherPerEspaceTests(EspacesCase):
+class GatherPerTenantTests(TenantsCase):
     """« Récupérer les bons » is the owner's mailbox: offered and bound to his
-    espace in A, refused in B - by the page (no form, the sentence) and by
+    tenant in A, refused in B - by the page (no form, the sentence) and by
     the gather itself (no job, no thread) when posted all the same."""
 
     def setUp(self):
@@ -154,7 +159,9 @@ class GatherPerEspaceTests(EspacesCase):
         self.client.force_login(self.user_b)
         page = self.client.get(HOME)
         self.assertContains(page, integrations.SLIPS)
-        self.assertEqual([form for form in forms_of(page.content.decode()) if form.action == reverse("invoices:gather")], [])
+        self.assertEqual(
+            [form for form in forms_of(page.content.decode()) if form.action == reverse("invoices:gather")], []
+        )
         with mock.patch("invoices.views.threading.Thread") as thread:
             response = self.client.post(
                 reverse("invoices:gather"),
@@ -169,7 +176,7 @@ class GatherPerEspaceTests(EspacesCase):
     def test_bar_a_s_gather_runs_in_a_thread_bound_to_bar_a(self):
         self.client.force_login(self.user_a)
         html = self.client.get(HOME).content.decode()
-        form = [form for form in forms_of(html) if form.action == reverse("invoices:gather")][0]
+        form = next(form for form in forms_of(html) if form.action == reverse("invoices:gather"))
         with mock.patch("invoices.views.threading.Thread") as thread:
             response = self.client.post(form.action, as_post(form.submission()))
         target = thread.call_args.kwargs["target"]

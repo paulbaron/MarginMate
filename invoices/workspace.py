@@ -42,7 +42,7 @@ OLD_IMPORT_TABS = {"tickets": "documents", "pdf": "documents"}
 
 #: Read from an EN 16931 document's own data (Invoice.einvoice_format): its
 #: figures are the invoice's, not a reading. It carries checks - about the
-#: SUPPLIER's arithmetic - and is a facture all the same, so every list that
+#: SUPPLIER's arithmetic - and is an invoice all the same, so every list that
 #: tells a ticket from an invoice by those checks has to ask this too.
 IS_EINVOICE = ~Q(einvoice_format="")
 IS_TICKET = (~Q(parse_checks=[]) | ~Q(ocr_text="")) & ~IS_EINVOICE
@@ -74,12 +74,7 @@ DOCUMENT_TO_FIX = (
     # photographs - so without this it was counted in no queue at all, which
     # is the silence the warning exists to break. Dated and finished, it is
     # done: a scan typed in by hand keeps the message the import left.
-    | (
-        ~IS_CHARGE
-        & ~IS_EINVOICE
-        & Q(parse_checks=[], status=Invoice.Status.NEEDS_REVIEW)
-        & ~Q(error_message="")
-    )
+    | (~IS_CHARGE & ~IS_EINVOICE & Q(parse_checks=[], status=Invoice.Status.NEEDS_REVIEW) & ~Q(error_message=""))
     | (IS_EINVOICE & (~Q(error_message="") | Q(invoice_date__isnull=True) | Q(status=Invoice.Status.ERROR)))
     | (~Q(supplier_doubt="") & ~TICKET_TO_CHECK)
 )
@@ -91,8 +86,8 @@ OWN_MODULE = Q(code="METRO", is_scrapable=True)
 
 def own_module_suppliers():
     """The suppliers fetched by a module of their own (OWN_MODULE) - none in
-    an espace that may not use the server's accounts (integrations.py): that
-    module signs in to the owner's Metro account, whatever the espace's
+    a tenant that may not use the server's accounts (integrations.py): that
+    module signs in to the owner's Metro account, whatever the tenant's
     METRO row says (an import can tick `is_scrapable` again)."""
     if not integrations_allowed():
         return Supplier.objects.none()
@@ -149,15 +144,35 @@ def render_purchases(request, tab, *, status=200, **card):
     context = {
         "tab": tab,
         "tabs": [
-            {"key": "documents", "label": "Documents", "url": reverse("invoices:invoice_list"),
-             "count": counts["total"], "attention": False},
-            {"key": "a-verifier", "label": "À vérifier", "url": reverse("invoices:receipt_queue"),
-             "count": waiting, "attention": bool(waiting)},
-            {"key": "sources", "label": "Sources", "url": reverse("invoices:invoice_type_list"),
-             "count": InvoiceType.objects.count(), "attention": False},
-            {"key": "fournisseurs", "label": "Enseignes et fournisseurs",
-             "url": suppliers_url + ("#a-voir" if to_see else ""),
-             "count": suppliers.count(), "attention": False, "to_see": to_see},
+            {
+                "key": "documents",
+                "label": "Documents",
+                "url": reverse("invoices:invoice_list"),
+                "count": counts["total"],
+                "attention": False,
+            },
+            {
+                "key": "a-verifier",
+                "label": "À vérifier",
+                "url": reverse("invoices:receipt_queue"),
+                "count": waiting,
+                "attention": bool(waiting),
+            },
+            {
+                "key": "sources",
+                "label": "Sources",
+                "url": reverse("invoices:invoice_type_list"),
+                "count": InvoiceType.objects.count(),
+                "attention": False,
+            },
+            {
+                "key": "fournisseurs",
+                "label": "Enseignes et fournisseurs",
+                "url": suppliers_url + ("#a-voir" if to_see else ""),
+                "count": suppliers.count(),
+                "attention": False,
+                "to_see": to_see,
+            },
         ],
         **_import_card(request, **card),
     }
@@ -190,8 +205,8 @@ RECENT_GATHERS = 20
 
 def _invoice_gather(jobs):
     """The first of `jobs` (newest first) that searched invoices - not a
-    gather of bons de consignes only (ScrapeJob.slips_only, the Consignes
-    page's): its period is the bons' own start (returnables.mail.
+    gather of returnables slips only (ScrapeJob.slips_only, the Consignes
+    page's): its period is the slips' own start (returnables.mail.
     fetch_start), and a failed one offered on Achats pushed the invoices'
     default start back to it - 90 days on a first run. At most the latest
     RECENT_GATHERS, looked through in Python (the progress is JSON)."""
@@ -214,7 +229,7 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
     from .receipts import invoice_supplier_choices
 
     # Every source a gather searches is one of the server's own accounts:
-    # in an espace that may not use them the panel says « à configurer »
+    # in a tenant that may not use them the panel says « à configurer »
     # (_import_card.html), and nothing about them is read.
     allowed = integrations_allowed()
     metro = own_module_suppliers().first()
@@ -229,7 +244,7 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
         gather_sources.append({"code": "METRO", "label": metro.name, "paused": metro_pause()})
     gather_sources += [{"code": f"type-{it.id}", "label": it.name} for it in email_types]
     if allowed:
-        # The drivers' bons de consignes, each format fetched by mail: they
+        # The drivers' returnables slips, each format fetched by mail: they
         # go to Consignes, never among the invoices (tasks._gather_slips).
         from returnables.models import SlipFormat
 
@@ -248,14 +263,16 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
     gathers = ScrapeJob.objects.filter(kind=ScrapeJob.Kind.GATHER).order_by("-started_at", "-pk")
     latest_job = gathers.first()
     # The period offered again is an invoice gather's only: a gather of
-    # bons de consignes alone (the Consignes page's) starts from the bons'
+    # returnables slips alone (the Consignes page's) starts from the slips'
     # own start, and never holds Achats' period.
     period_job = latest_job
     if latest_job is not None and latest_job.slips_only:
         period_job = _invoice_gather(gathers.defer("log", "test_matches"))
     gather_start, gather_end = default_gather_start(gathered), timezone.localdate()
-    if period_job is not None and period_job.range_start and (
-        period_job.is_active or (_missed(period_job) and not _missed_again(period_job))
+    if (
+        period_job is not None
+        and period_job.range_start
+        and (period_job.is_active or (_missed(period_job) and not _missed_again(period_job)))
     ):
         # A run not over, or that did not get everything: its period is
         # offered again. The default - since the newest invoice brought in -
@@ -353,8 +370,8 @@ def batch_deleted(batch, pk) -> bool:
 
 
 #: How many documents a list shows before it asks to be asked. Every row is
-#: about 1,4 Ko of HTML and a slice of a second of template, and the list
-#: grows with every import: at 823 documents the page was 1,2 Mo and took
+#: about 1,4 KB of HTML and a slice of a second of template, and the list
+#: grows with every import: at 823 documents the page was 1,2 MB and took
 #: half a second to render, so opening a row moved a table 47 000 pixels
 #: tall. "Tout afficher" renders the rest.
 PAGE_SIZE = 250
@@ -415,11 +432,7 @@ def _suppliers_named(term: str) -> list[int]:
     answer that part.
     """
     wanted = search_key(term)
-    return [
-        pk
-        for pk, name in Supplier.objects.values_list("pk", "name")
-        if wanted in search_key(name)
-    ]
+    return [pk for pk, name in Supplier.objects.values_list("pk", "name") if wanted in search_key(name)]
 
 
 def documents_matching(invoices, query: str):
@@ -527,11 +540,7 @@ def _list_url(request, *dropped: str) -> str:
     one of them: that pill is about the document an import just added, and
     narrowing the list is not about it.
     """
-    kept = {
-        key: value
-        for key, value in request.GET.items()
-        if value and key != "surligner" and key not in dropped
-    }
+    kept = {key: value for key, value in request.GET.items() if value and key != "surligner" and key not in dropped}
     return reverse("invoices:invoice_list") + (f"?{urlencode(kept)}" if kept else "")
 
 
@@ -687,7 +696,9 @@ def _documents(request, batch) -> dict:
 def _to_check() -> dict:
     from .receipts import pending_receipts
 
-    receipts = list(pending_receipts().select_related("supplier").prefetch_related("lines").order_by("invoice_date", "id"))
+    receipts = list(
+        pending_receipts().select_related("supplier").prefetch_related("lines").order_by("invoice_date", "id")
+    )
     return {
         "receipts": receipts,
         "verified_count": Invoice.objects.filter(reviewed_at__isnull=False).count(),
@@ -751,12 +762,7 @@ def _suppliers() -> dict:
     latest = dict(
         Invoice.objects.values_list("supplier_id").annotate(last=Max("invoice_date")).values_list("supplier_id", "last")
     )
-    to_see = dict(
-        _changes_to_see()
-        .values_list("supplier_id")
-        .annotate(n=Count("id"))
-        .values_list("supplier_id", "n")
-    )
+    to_see = dict(_changes_to_see().values_list("supplier_id").annotate(n=Count("id")).values_list("supplier_id", "n"))
     sources: dict[int, list] = {}
     for invoice_type in InvoiceType.objects.order_by("name"):
         sources.setdefault(invoice_type.supplier_id, []).append(invoice_type)

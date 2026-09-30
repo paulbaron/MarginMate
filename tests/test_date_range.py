@@ -1,7 +1,7 @@
 """The window « du … au … » every list is read through (common.date_range).
 
-Four pages read it - « Produits & charges », « Achats », « Ventes » and la
-Banque - so it is read once, here, and the four cannot disagree about what
+Four pages read it - « Produits & charges », « Achats », « Ventes » and
+« Banque » - so it is read once, here, and the four cannot disagree about what
 "between these two dates" means. The decisions it makes, each of which was a
 way to be silently wrong:
 

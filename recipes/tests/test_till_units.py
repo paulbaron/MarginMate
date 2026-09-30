@@ -24,7 +24,9 @@ class TillUnitsTests(TestCase):
     def test_an_import_counts_units_sold(self):
         sold_on = date(2026, 6, 1)
         export = ParsedExport(
-            products={"Pinte Exemple": {"quantity": 42, "category": "", "typology": "", "first": sold_on, "last": sold_on}},
+            products={
+                "Pinte Exemple": {"quantity": 42, "category": "", "typology": "", "first": sold_on, "last": sold_on}
+            },
             entries=[("Pinte Exemple", sold_on, 42)],
         )
         job = SalesImportJob.objects.create(status=SalesImportJob.Status.PENDING)

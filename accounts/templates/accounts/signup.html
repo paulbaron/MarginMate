@@ -1,8 +1,8 @@
 {% extends "accounts/page.html" %}
 {% comment %}
-L'inscription (accounts.pages.signup_view). Contexte : `form` (SignupForm), `refused` (trop d'échecs).
-Le code n'est vérifié qu'une fois tout le reste valide : la page ne dit jamais, pour rien, si un code
-existe.
+The signup page (accounts.pages.signup_view). Context: `form` (SignupForm), `refused` (too many failures).
+The code is checked only once everything else is valid: the page never says, for free, whether a code
+exists.
 {% endcomment %}
 {% block title %}Créer votre espace - MarginMate{% endblock %}
 {% block content %}

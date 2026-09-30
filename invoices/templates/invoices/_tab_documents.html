@@ -35,11 +35,11 @@ Every invoice and ticket. Reloads itself when an import ends
     </form>
     {% if not lot and active_filter != "sans-date" %}
         {% comment %}
-        La période « du … au … », la même que sur Produits & charges, Ventes
-        et la Banque. Elle garde le filtre, la recherche et le fournisseur
-        sous lesquels elle est saisie ; les deux dates sont facultatives, une
-        seule est déjà une période. Pas d'« obligatoire » : « depuis le 1er
-        février » est une question comme une autre.
+        The « du … au … » period, the same as on Produits & charges, Ventes
+        and the Banque. It keeps the filter, the search and the supplier it
+        is typed under; both dates are optional, and one alone is already a
+        period. No « obligatoire »: « depuis le 1er février » is a question
+        like any other.
         {% endcomment %}
         <form method="get" class="date-range" hx-boost="true" hx-target="#workspace"
               hx-select="#workspace" hx-swap="outerHTML">
@@ -89,9 +89,9 @@ Every invoice and ticket. Reloads itself when an import ends
 
     {% if date_window %}
         {% comment %}
-        La page dit en toutes lettres ce qu'elle montre : une liste vide sous
-        deux dates se lit « rien sur cette période », jamais « cette page est
-        cassée ».
+        The page says in so many words what it shows: an empty list under
+        two dates reads as « nothing in this period », never as « this page
+        is broken ».
         {% endcomment %}
         <p class="muted date-range-note">
             {% if date_window.start and date_window.end %}Du {{ date_window.start|date:"d/m/Y" }} au {{ date_window.end|date:"d/m/Y" }}{% elif date_window.start %}Depuis le {{ date_window.start|date:"d/m/Y" }}{% else %}Jusqu'au {{ date_window.end|date:"d/m/Y" }}{% endif %} :
@@ -103,7 +103,7 @@ Every invoice and ticket. Reloads itself when an import ends
         <div class="message">
             Factures et tickets <strong>sans date</strong> : hors de toute valorisation du stock et du rapprochement
             bancaire. Ouvrez chacun et donnez-lui la sienne.
-            {# Le formulaire de période n'est pas affiché ici : c'est la seule liste que deux dates ne peuvent pas trier. #}
+            {# The period form is not drawn here: this is the one list two dates cannot narrow. #}
             Cette liste ignore la période « du … au … » — un document sans date n'est dans aucune.
         </div>
     {% elif undated_count and not active_filter and not lot %}
@@ -114,10 +114,10 @@ Every invoice and ticket. Reloads itself when an import ends
         </div>
     {% elif active_filter == "non-rapprochees" %}
         {% comment %}
-        Ce que cette liste laisse dehors, dit plutôt que tu : avant le premier
-        relevé, « non rapprochée » n'est pas un fait sur le document mais sur
-        les relevés, et une liste qui écarte des centaines de documents sans le dire se lit
-        comme un bug.
+        What this list leaves out, said rather than kept quiet: before the
+        first statement, « non rapprochée » is not a fact about the document
+        but about the statements, and a list that drops hundreds of documents
+        without saying so reads as a bug.
         {% endcomment %}
         <p class="muted">
             Les documents qu'aucune opération bancaire ne règle, depuis le
@@ -188,10 +188,10 @@ Every invoice and ticket. Reloads itself when an import ends
                         {% if invoice.pk == highlight %}<span class="new-pill">importée</span>{% endif %}
                     </td>
                     {% comment %}
-                    « Facture électronique » plutôt que « Facture » : ses
-                    montants sont les données de la facture (Factur-X, UBL,
-                    CII) et non une lecture, et c'est la seule ligne de ce
-                    tableau qui le dise.
+                    « Facture électronique » rather than « Facture »: its
+                    amounts are the invoice's own data (Factur-X, UBL, CII)
+                    and not a reading, and this is the only line of this
+                    table that says so.
                     {% endcomment %}
                     <td class="muted" data-label="Type">{% if invoice.is_einvoice %}Facture électronique{% elif invoice.is_receipt %}Ticket{% else %}Facture{% endif %}</td>
                     <td data-label="N°">{{ invoice.invoice_number|default:"—" }}</td>
@@ -206,10 +206,10 @@ Every invoice and ticket. Reloads itself when an import ends
                         {% endcomment %}
                         <span class="status-pill status-{{ invoice.review_state.css }}">{{ invoice.review_state.label }}</span>
                         {% comment %}
-                        Ce que la banque en dit, à côté de ce que le document
-                        dit de sa propre lecture (workspace.bank_state) : rien
-                        du tout pour un document antérieur au premier relevé,
-                        sur lequel la banque n'a rien à dire.
+                        What the bank says about it, beside what the document
+                        says about its own reading (workspace.bank_state):
+                        nothing at all for a document older than the first
+                        statement, which the bank has nothing to say about.
                         {% endcomment %}
                         {% if invoice.bank_state %}
                             <span class="status-pill status-{{ invoice.bank_state.css }}">{{ invoice.bank_state.label }}</span>
@@ -234,7 +234,7 @@ Every invoice and ticket. Reloads itself when an import ends
     {% elif lot %}
         <div class="empty-state">Cet import n'a encore rien importé.</div>
     {% elif date_window %}
-        {# Avant le filtre : sous deux dates, ce qui manque est la période. #}
+        {# Before the filter: under two dates, what is missing is the period. #}
         <div class="empty-state">
             Aucun document sur cette période.
             <a href="{{ clear_window_url }}" hx-boost="true" hx-target="#workspace" hx-select="#workspace"

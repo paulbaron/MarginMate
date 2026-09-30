@@ -38,8 +38,8 @@ def _number(value):
 
 def convert(payload: dict) -> dict:
     """The legacy payload as an `associations.json` payload."""
-    codes: dict[str, str] = {}      # fold(supplier name) -> placeholder code
-    names: dict[str, str] = {}      # placeholder code -> supplier name
+    codes: dict[str, str] = {}  # fold(supplier name) -> placeholder code
+    names: dict[str, str] = {}  # placeholder code -> supplier name
     articles: dict[str, dict] = {}  # fold(article name) -> article record, first spelling wins
     products = []
     for entry in payload.get("products", []):

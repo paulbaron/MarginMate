@@ -113,18 +113,18 @@
         <div class="receipt-photo{% if source_is_pdf and not invoice.preview_image %} document-pdf{% endif %}">
             {% if source_is_pdf %}
                 {% comment %}
-                Le PDF avant la vignette pour une facture électronique : le
-                Factur-X est la facture elle-même, et sa vignette n'en serait
-                qu'une photo.
+                The PDF before the thumbnail for an electronic invoice: the
+                Factur-X is the invoice itself, and its thumbnail would only
+                be a photo of it.
                 {% endcomment %}
                 <iframe src="{{ invoice.source_file.url }}" title="Le document" class="document-frame"></iframe>
             {% elif invoice.preview_image %}
                 <img src="{{ invoice.preview_image.url }}" alt="Photo du ticket">
             {% elif is_einvoice %}
                 {% comment %}
-                Une facture reçue en XML n'a pas de page à regarder : ce
-                qu'elle déclare est montré à côté des lignes, sinon il n'y
-                aurait rien contre quoi les vérifier.
+                An invoice received as XML has no page to look at: what it
+                declares is shown beside the lines, or there would be nothing
+                to check them against.
                 {% endcomment %}
                 <div class="ocr-dump" aria-label="La facture électronique telle qu'elle est déclarée">{% for line in source_lines %}{{ line }}
 {% endfor %}</div>
@@ -143,10 +143,10 @@
             {% endcomment %}
             <h2>Contrôles</h2>
             {% comment %}
-            Pourquoi le document attend. Arrivé ici depuis « Documents à
-            corriger », la page ne le répétait nulle part : sur une facture
-            sans date, tous les contrôles sont verts et le seul indice était
-            un mot à côté d'un champ vide.
+            Why the document is waiting. Reached from « Documents à
+            corriger », the page repeated it nowhere: on an invoice with no
+            date every check is green, and the only clue was a word beside
+            an empty field.
             {% endcomment %}
             {% if invoice.error_message %}
                 <div class="message message-error">{{ invoice.error_message }}</div>
@@ -164,12 +164,12 @@
                     {% firstof "check-fail" as check_state %}{% firstof "✕" as check_mark %}
                 {% endif %}
                 {% comment %}
-                data-adjustment : ce que le document facture globalement et
-                qu'aucune ligne ne porte (droits, éco-participation, remise
-                sur l'ensemble). Le script l'ajoute à la somme comme le fait
-                le contrôle enregistré (receipts.lines_check) : oublié, une
-                facture juste au centime virait au rouge à la première
-                frappe. 0 sur un ticket, où l'écart est l'arrondi des lignes.
+                data-adjustment: what the document charges globally and no
+                line carries (duty, an eco-participation, a discount on the
+                whole). The script adds it to the sum as the stored check
+                does (receipts.lines_check): left out, an invoice right to
+                the cent turned red at the first keystroke. 0 on a ticket,
+                where the gap is the lines' rounding.
                 {% endcomment %}
                 <li class="check {{ check_state }}" id="live-lines-check" data-tolerance="{{ tolerance }}"
                     data-adjustment="{{ live_adjustment|stringformat:'.2f' }}">
@@ -211,12 +211,12 @@
                     ce ticket : pour corriger le nom d'un produit partout, ouvrez « Renommer … » sous sa ligne.
                 {% elif einvoice_no_lines %}
                     {% comment %}
-                    Le profil MINIMUM ne transporte aucune ligne : celle
-                    ci-dessous a été reconstituée depuis la table de TVA
-                    (importing.charge_reading). La présenter comme une
-                    donnée du fournisseur serait faux - et c'est ce que
-                    disait le paragraphe d'à côté, quatre lignes au-dessus
-                    d'un contrôle annonçant que la facture n'a pas de ligne.
+                    The MINIMUM profile carries no line: the one below was
+                    rebuilt from the VAT table (importing.charge_reading).
+                    Presenting it as the supplier's data would be false -
+                    and that is what the paragraph beside it said, four
+                    lines above a check announcing that the invoice has no
+                    line.
                     {% endcomment %}
                     Cette {% if einvoice_is_credit %}avoir{% else %}facture{% endif %} électronique
                     ({{ invoice.einvoice_format }}) <strong>ne détaille aucune ligne</strong> : son profil
@@ -225,10 +225,10 @@
                     facture. Ses montants, eux, sont les données de la facture.
                 {% elif is_einvoice %}
                     {% comment %}
-                    Rien n'a été lu ici : ces lignes sont celles que la
-                    facture déclare. Elles restent modifiables - on peut
-                    n'être pas d'accord avec son fournisseur - mais la page
-                    ne doit pas faire croire qu'un parseur les a devinées.
+                    Nothing was read here: these lines are the ones the
+                    invoice declares. They stay editable - a person may
+                    disagree with their supplier - but the page must not
+                    suggest that a parser guessed them.
                     {% endcomment %}
                     Ces lignes sont les <strong>données de {% if einvoice_is_credit %}l'avoir{% else %}la facture{% endif %}</strong>
                     ({{ invoice.einvoice_format }}) :
@@ -252,8 +252,8 @@
                         <label for="{{ header_form.invoice_date.id_for_label }}">{{ header_form.invoice_date.label }}</label>
                         {{ header_form.invoice_date }}
                         {% comment %}
-                        « non lue » sur une facture électronique : rien n'a
-                        été lu, le fournisseur n'a pas mis de BT-2.
+                        « non lue » on an electronic invoice: nothing was
+                        read, the supplier left BT-2 out.
                         {% endcomment %}
                         {% if not invoice.invoice_date %}<span class="muted">{% if is_einvoice %}absente de la facture{% else %}non lue{% endif %}</span>{% endif %}
                         <label for="{{ header_form.printed_total_ttc.id_for_label }}">{{ header_form.printed_total_ttc.label }}</label>
@@ -274,10 +274,10 @@
                     {% endcomment %}
                     <details class="explainer vat-table"{% if vat_form.initial_form_count or vat_form.total_error_count %} open{% endif %}>
                         {% comment %}
-                        « imprimée » et « Recopiez » n'ont aucun sens sur une
-                        facture électronique : sa table arrive exacte, et la
-                        recopier à la main est précisément ce que cette
-                        lecture supprime.
+                        « imprimée » and « Recopiez » make no sense on an
+                        electronic invoice: its table arrives exact, and
+                        copying it out by hand is precisely what this
+                        reading does away with.
                         {% endcomment %}
                         <summary>{% if is_einvoice %}TVA déclarée par la facture{% else %}TVA imprimée sur le document{% endif %} ({{ vat_form.initial_form_count }} taux)</summary>
                         <p class="muted">

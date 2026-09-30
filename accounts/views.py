@@ -1,10 +1,10 @@
-"""The logged-in file view: an espace's stored files.
+"""The logged-in file view: a tenant's stored files.
 
 There is no public /media/ route (the single mode's, served when DEBUG was
 on, was removed on 29/09/2026): every invoice's PDF and every receipt's
 photo goes through here, behind the login
 (LoginRequiredMiddleware - this view is NOT public) and from the BOUND
-espace's media folder only, so a name - guessed, or climbing out with
+tenant's media folder only, so a name - guessed, or climbing out with
 « ../ » - never reaches another bar's file.
 
 The invoice's correction page shows its PDF in a frame of this site, hence
@@ -46,7 +46,7 @@ def media(request, name):
         raise Http404
     content_type, encoding = mimetypes.guess_type(full.name)
     inline = content_type in INLINE_TYPES and encoding is None
-    response = FileResponse(open(full, "rb"), as_attachment=not inline, filename=full.name)
+    response = FileResponse(open(full, "rb"), as_attachment=not inline, filename=full.name)  # noqa: SIM115 - the FileResponse closes it
     response["X-Content-Type-Options"] = "nosniff"
     response["Cache-Control"] = "private, no-store"
     if not inline:

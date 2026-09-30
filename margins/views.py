@@ -1,4 +1,4 @@
-"""La page « Marges » - les trois margins, drawn over one « du … au … ».
+"""The « Marges » page - the three margins, drawn over one « du … au … ».
 
 The view does no arithmetic of its own: `computation.margins_for` answers,
 and everything here is about saying WHICH question each figure answers and
@@ -95,6 +95,7 @@ SAVE = "enregistrer"
 #: How many names a message lists before it says « et N autres ».
 NAMED_AT_MOST = 5
 
+
 def _dates(window: DateRange) -> str:
     """« du 01/02/2026 au 28/02/2026 » - either end alone is a window a person
     asks for, and « du 01/02/2026 au » reads as a page that lost half of its
@@ -128,7 +129,7 @@ class SliceRow:
 
     **The share is the MONEY**, like the headline « Part chiffrée », with the
     units said in the same cell. The two were the money and the units under
-    one label, 33 points apart on one screen: a category selling 100 cafés at
+    one label, 33 points apart on one screen: a category selling 100 coffees at
     2 € with no recipe beside 100 cocktails at 10 € with one is half its
     units and five sixths of its money.
     """
@@ -147,7 +148,7 @@ class SliceRow:
     def units_note(self) -> str:
         """The unit count, since the share beside it is the money. Dropped,
         it would be nowhere on the page - and four planches at 18 € are a
-        different problem from forty cafés at 2 €."""
+        different problem from forty coffees at 2 €."""
         if not self.slice.units:
             return ""
         return f"{self.slice.costed_units} unités sur {self.slice.units}"
@@ -212,7 +213,7 @@ def margins_home(request):
 
     # The three periods this page can be on, in the order they win. « Tout
     # l'historique » is a named period like Banque's month or Produits &
-    # charges' inventaire: it takes the window whole rather than being
+    # charges' stock take: it takes the window whole rather than being
     # crossed with the dates, which stay in the URL only to be offered back.
     window = DateRange() if showing_all else (asked or last_twelve_months())
     report = margins_for(window, request.GET.getlist(LEFT_OUT_PARAM))
@@ -246,7 +247,7 @@ def margins_home(request):
             # This very page, for a form that answers back to it (`next`).
             "here_url": here_url,
             # What fills the unread days is a command on the server, which
-            # reads the owner's till's exports: said only in that espace,
+            # reads the owner's till's exports: said only in that tenant,
             # « à configurer » elsewhere (recipes/integration.py).
             "till_allowed": till_allowed(),
             "till_to_configure": TILL_TO_CONFIGURE,
@@ -296,11 +297,7 @@ def margins_home(request):
             # asked too: a day that only refunded is stored at quantity 0
             # with a negative amount, and « Aucune vente enregistrée » sat
             # over a page showing -15,00 € of takings.
-            "no_sales": (
-                not report.units
-                and not report.revenue_till.ttc
-                and not report.revenue_documents.ttc
-            ),
+            "no_sales": (not report.units and not report.revenue_till.ttc and not report.revenue_documents.ttc),
             "categories": [SliceRow(slice_) for slice_ in report.by_category],
             "typologies": [SliceRow(slice_) for slice_ in report.by_typology],
             "categories_total": _total_row(report.by_category),
@@ -542,7 +539,7 @@ def _in(category: str) -> str:
 
 
 def _agreed(count: int, participle: str) -> str:
-    """« compté », « comptés » - aucun and 1 take the singular."""
+    """« compté », « comptés » - « aucun » and 1 take the singular."""
     return participle if count <= 1 else f"{participle}s"
 
 

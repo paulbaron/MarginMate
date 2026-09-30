@@ -121,10 +121,10 @@ class WordTests(SimpleTestCase):
         self.assertFalse(same_words(frozenset({"SAC"}), frozenset()))
 
     def test_same_words_can_be_asked_the_stricter_question(self):
-        timbale, timb = frozenset({"TIMBALE", "PAPIER"}), frozenset({"PAPIER", "TIMB"})
-        self.assertTrue(same_words(timbale, timb))
-        self.assertFalse(same_words(timbale, timb, exact_or_plural))
-        self.assertTrue(same_words(frozenset({"TIMBALES", "PAPIER"}), timbale, exact_or_plural))
+        spelled_out, abbreviated = frozenset({"TIMBALE", "PAPIER"}), frozenset({"PAPIER", "TIMB"})
+        self.assertTrue(same_words(spelled_out, abbreviated))
+        self.assertFalse(same_words(spelled_out, abbreviated, exact_or_plural))
+        self.assertTrue(same_words(frozenset({"TIMBALES", "PAPIER"}), spelled_out, exact_or_plural))
 
     def test_one_word_apart_says_which_side_has_it(self):
         self.assertEqual(
@@ -161,7 +161,7 @@ class NameShapeTests(SimpleTestCase):
         self.assertEqual(shape.sizes, (((Decimal("0.25"), "L"), 1),))
         self.assertEqual(dict(shape.numbers), {Decimal("50"): 1, Decimal("25"): 1})
 
-    def test_function_words_leave_but_sans_stays(self):
+    def test_function_words_leave_but_the_french_without_stays(self):
         self.assertEqual(
             NameShape.of("LIMONADE TESTBRAND SANS BULLES 40CL").words,
             frozenset({"LIMONADE", "TESTBRAND", "SANS", "BULLES"}),

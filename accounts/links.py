@@ -1,24 +1,24 @@
-"""Which espace an employee's public signing link belongs to.
+"""Which tenant an employee's public signing link belongs to.
 
-The link (/personnel/signer/<token>/…) carries no espace, and the employee
+The link (/personnel/signer/<token>/…) carries no tenant, and the employee
 is not logged in: the accounts database keeps
-``SigningLink(token_hash, tenant)`` so the public page can find the espace
-by the token's hash, bind it, and then read the request in that espace's
-own database. Scanning every espace's database instead would cost one query
+``SigningLink(token_hash, tenant)`` so the public page can find the tenant
+by the token's hash, bind it, and then read the request in that tenant's
+own database. Scanning every tenant's database instead would cost one query
 per bar on every hit and tell a stranger, by its timing, how many there are.
 
-    register(token_hash)       a link was issued or renewed (bound, in the espace that issued it)
+    register(token_hash)       a link was issued or renewed (bound, in the tenant that issued it)
     forget(*token_hashes)      its request was deleted or purged, or its link renewed (the old hash)
     resolve(token_hash)        the Tenant to bind, or None → « lien inconnu »
 
 A cancelled, superseded or expired request KEEPS its link in the index: its
 page says « annulée », « corrigé depuis » or « expiré » (410); forgotten, it
-would say « lien inconnu » (404), which is not what happened. The index holds exactly the hashes the espace's requests hold
+would say « lien inconnu » (404), which is not what happened. The index holds exactly the hashes the tenant's requests hold
 (`staff.signature_requests.index_links` rebuilds it; adoption writes it so).
 
-`register` may run inside the espace's own transaction: if that rolls back,
-the index names a hash the espace does not have, and the page says « lien
-inconnu » as it would anyway. `forget` should run once the espace's change
+`register` may run inside the tenant's own transaction: if that rolls back,
+the index names a hash the tenant does not have, and the page says « lien
+inconnu » as it would anyway. `forget` should run once the tenant's change
 is committed (``transaction.on_commit(lambda: links.forget(h))``): the other
 way round, a rollback would leave a live link that no longer opens.
 """
@@ -39,7 +39,7 @@ def register(token_hash: str) -> None:
 
 
 def forget(*token_hashes: str) -> int:
-    """Remove the bound espace's links with these hashes (blank ones are
+    """Remove the bound tenant's links with these hashes (blank ones are
     skipped); returns how many went."""
     hashes = [token_hash for token_hash in token_hashes if token_hash]
     if not hashes:
@@ -49,8 +49,8 @@ def forget(*token_hashes: str) -> int:
 
 
 def resolve(token_hash: str):
-    """The espace to bind for this hash: its active Tenant, or None
-    (unknown, or the espace was closed)."""
+    """The tenant to bind for this hash: its active Tenant, or None
+    (unknown, or the tenant was closed)."""
     if not token_hash:
         return None
     link = SigningLink.objects.select_related("tenant").filter(token_hash=token_hash, tenant__is_active=True).first()

@@ -4,15 +4,18 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('invoices', '0022_invoice_source_text'),
+        ("invoices", "0022_invoice_source_text"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='supplier',
-            name='expenses_only',
-            field=models.BooleanField(default=False, help_text='Abonnement, loyer, eau… : une ligne par taux de TVA, aucun produit à classer.', verbose_name='factures de charges'),
+            model_name="supplier",
+            name="expenses_only",
+            field=models.BooleanField(
+                default=False,
+                help_text="Abonnement, loyer, eau… : une ligne par taux de TVA, aucun produit à classer.",
+                verbose_name="factures de charges",
+            ),
         ),
     ]

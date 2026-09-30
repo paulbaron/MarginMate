@@ -45,8 +45,8 @@ class CreateTests(TestCase):
         self.assertEqual((supplier.code, supplier.parser_key, supplier.expenses_only), ("CAVE_EXEMPLE", "", False))
         created = SupplierChange.objects.get(supplier=supplier)
         self.assertEqual((created.kind, created.by_person), (SupplierChange.Kind.CREATED, True))
-        fiche = self.client.get(reverse("invoices:supplier_detail", args=[supplier.pk]))
-        self.assertContains(fiche, "En attente de son premier document")
+        supplier_page = self.client.get(reverse("invoices:supplier_detail", args=[supplier.pk]))
+        self.assertContains(supplier_page, "En attente de son premier document")
 
     def test_charges(self):
         self.create(name="Loyer Exemple", nature="charges")
@@ -76,14 +76,14 @@ class CreateTests(TestCase):
     def test_its_invoices_arriving_by_email_lead_to_a_type_for_it(self):
         response = self.create(arrivee="EMAIL")
         supplier = Supplier.objects.get(name="Cave Exemple")
-        fiche = reverse("invoices:supplier_detail", args=[supplier.pk])
+        supplier_page = reverse("invoices:supplier_detail", args=[supplier.pk])
         self.assertRedirects(
             response,
-            reverse("invoices:invoice_type_create") + f"?fournisseur={supplier.pk}&source=EMAIL&retour={fiche}",
+            reverse("invoices:invoice_type_create") + f"?fournisseur={supplier.pk}&source=EMAIL&retour={supplier_page}",
             fetch_redirect_response=False,
         )
 
-    def test_retour_goes_back_with_the_supplier_named(self):
+    def test_the_return_address_goes_back_with_the_supplier_named(self):
         back = reverse("invoices:invoice_type_create") + "?source=WEBSITE"
         response = self.client.post(
             CREATE + f"?retour={back.replace('?', '%3F').replace('=', '%3D')}",
@@ -92,9 +92,10 @@ class CreateTests(TestCase):
         supplier = Supplier.objects.get(name="Cave Exemple")
         self.assertRedirects(response, back + f"&fournisseur={supplier.pk}", fetch_redirect_response=False)
 
-    def test_an_outside_retour_is_ignored(self):
+    def test_an_outside_return_address_is_ignored(self):
         response = self.client.post(
-            CREATE + "?retour=https://exemple.invalid/", {"name": "Cave Exemple", "nature": "produits", "arrivee": "import"}
+            CREATE + "?retour=https://exemple.invalid/",
+            {"name": "Cave Exemple", "nature": "produits", "arrivee": "import"},
         )
         supplier = Supplier.objects.get(name="Cave Exemple")
         self.assertRedirects(response, reverse("invoices:supplier_detail", args=[supplier.pk]))
@@ -106,8 +107,8 @@ class CreateTests(TestCase):
         self.create()
         supplier = Supplier.objects.get(name="Cave Exemple")
         created = SupplierChange.objects.get(supplier=supplier, kind=SupplierChange.Kind.CREATED)
-        fiche = self.client.get(reverse("invoices:supplier_detail", args=[supplier.pk]))
-        self.assertContains(fiche, "Annuler la création…")
+        supplier_page = self.client.get(reverse("invoices:supplier_detail", args=[supplier.pk]))
+        self.assertContains(supplier_page, "Annuler la création…")
         undo = self.client.post(reverse("invoices:supplier_change_undo", args=[supplier.pk, created.pk]))
         self.assertRedirects(undo, reverse("invoices:supplier_delete", args=[supplier.pk]))
         make_invoice(supplier=supplier, ocr_text="CAVE EXEMPLE\nTOTAL 12,00")
@@ -118,15 +119,19 @@ class CreateTests(TestCase):
 
 
 class EditTests(TestCase):
-    """A supplier of charges: its poste and its lines carry its name."""
+    """A supplier of charges: its charge item and its lines carry its name."""
 
     def setUp(self):
         self.supplier = make_supplier(code="EAU_X", name="Eau Exemple", parser_key="", expenses_only=True)
-        self.poste = expense_product(self.supplier)
+        self.charge_item = expense_product(self.supplier)
         self.bills = []
         for day in (1, 2):
-            bill = make_invoice(supplier=self.supplier, ocr_text=f"EAU EXEMPLE SERVICES\nLe {day:02d}/05/2026\nTOTAL 80,00")
-            make_invoice_line(invoice=bill, product=self.poste, raw_name="Eau Exemple", total_ht=D("66.67"), vat_rate=D("0.20"))
+            bill = make_invoice(
+                supplier=self.supplier, ocr_text=f"EAU EXEMPLE SERVICES\nLe {day:02d}/05/2026\nTOTAL 80,00"
+            )
+            make_invoice_line(
+                invoice=bill, product=self.charge_item, raw_name="Eau Exemple", total_ht=D("66.67"), vat_rate=D("0.20")
+            )
             self.bills.append(bill)
         self.url = reverse("invoices:supplier_edit", args=[self.supplier.pk])
 
@@ -151,7 +156,7 @@ class EditTests(TestCase):
         self.assertFalse(SupplierChange.objects.exists())
         requeue.assert_not_called()
 
-    def test_a_rename_takes_its_charge_lines_and_poste_not_its_code(self):
+    def test_a_rename_takes_its_charge_lines_and_charge_item_not_its_code(self):
         self.save(self.verify(name="Eau Exemple Paris"))
         self.supplier.refresh_from_db()
         self.assertEqual((self.supplier.name, self.supplier.code), ("Eau Exemple Paris", "EAU_X"))
@@ -159,12 +164,12 @@ class EditTests(TestCase):
             set(InvoiceLine.objects.filter(invoice__supplier=self.supplier).values_list("raw_name", flat=True)),
             {"Eau Exemple Paris"},
         )
-        self.poste.refresh_from_db()
-        self.assertEqual(self.poste.raw_name, "Eau Exemple Paris")
+        self.charge_item.refresh_from_db()
+        self.assertEqual(self.charge_item.raw_name, "Eau Exemple Paris")
         renamed = SupplierChange.objects.get(supplier=self.supplier, kind=SupplierChange.Kind.RENAMED)
         self.assertEqual(renamed.data["before"], "Eau Exemple")
 
-    def test_a_rename_meeting_a_poste_of_that_name_is_refused(self):
+    def test_a_rename_meeting_a_charge_item_of_that_name_is_refused(self):
         Product.objects.create(supplier=self.supplier, raw_name="Eau Exemple Paris", is_expense=True)
         checked = self.verify(name="Eau Exemple Paris")
         self.assertContains(checked, "a déjà un poste « Eau Exemple Paris »")
@@ -186,8 +191,8 @@ class EditTests(TestCase):
         self.client.post(reverse("invoices:supplier_change_undo", args=[self.supplier.pk, renamed.pk]))
         self.supplier.refresh_from_db()
         self.assertEqual(self.supplier.name, "Eau Exemple")
-        self.poste.refresh_from_db()
-        self.assertEqual(self.poste.raw_name, "Eau Exemple")
+        self.charge_item.refresh_from_db()
+        self.assertEqual(self.charge_item.raw_name, "Eau Exemple")
         renamed.refresh_from_db()
         self.assertIsNotNone(renamed.undone_at)
 
@@ -222,7 +227,8 @@ class EditTests(TestCase):
         page = self.client.get(url)
         self.assertContains(page, "Enregistrer")
         response = self.client.post(
-            url, {"name": "Vide Exemple Deux", "header": "", "version": page.context["version"], "action": "enregistrer"}
+            url,
+            {"name": "Vide Exemple Deux", "header": "", "version": page.context["version"], "action": "enregistrer"},
         )
         self.assertRedirects(response, reverse("invoices:supplier_detail", args=[empty.pk]))
         empty.refresh_from_db()
@@ -256,7 +262,9 @@ class DeleteTests(TestCase):
         with_document = make_supplier(code="DOC_X", name="Doc Exemple", parser_key="")
         make_invoice(supplier=with_document, ocr_text="DOC EXEMPLE\nTOTAL 1,00")
         with_type = make_supplier(code="TYPE_X", name="Type Exemple", parser_key="")
-        InvoiceType.objects.create(supplier=with_type, name="Type Exemple - e-mail", source_kind=InvoiceType.SourceKind.EMAIL)
+        InvoiceType.objects.create(
+            supplier=with_type, name="Type Exemple - e-mail", source_kind=InvoiceType.SourceKind.EMAIL
+        )
         for supplier, reason in ((with_document, "1 document y est rangé"), (with_type, "1 source récupère pour lui")):
             url = reverse("invoices:supplier_delete", args=[supplier.pk])
             self.assertContains(self.client.get(url), reason)
@@ -270,12 +278,12 @@ class DeleteTests(TestCase):
             self.client.post(reverse("invoices:supplier_delete", args=[supplier.pk]), {"confirme": "1"})
             self.assertTrue(Supplier.objects.filter(pk=supplier.pk).exists())
 
-    def test_the_fiche_says_why_it_cannot_be_deleted(self):
+    def test_the_supplier_page_says_why_it_cannot_be_deleted(self):
         supplier = make_supplier(code="DOC_X", name="Doc Exemple", parser_key="")
         make_invoice(supplier=supplier, ocr_text="DOC EXEMPLE\nTOTAL 1,00")
-        fiche = self.client.get(reverse("invoices:supplier_detail", args=[supplier.pk]))
-        self.assertContains(fiche, "1 document y est rangé")
-        self.assertContains(fiche, reverse("invoices:supplier_edit", args=[supplier.pk]))
+        supplier_page = self.client.get(reverse("invoices:supplier_detail", args=[supplier.pk]))
+        self.assertContains(supplier_page, "1 document y est rangé")
+        self.assertContains(supplier_page, reverse("invoices:supplier_edit", args=[supplier.pk]))
 
 
 class ReviewFindingsTests(TestCase):
@@ -286,18 +294,19 @@ class ReviewFindingsTests(TestCase):
     verify = EditTests.verify
     save = EditTests.save
 
-    def test_it_is_not_renamed_to_one_of_its_own_postes(self):
-        """Its poste not named after it (a document naming its postes), the
-        clash went unseen - and the rename's undo renamed that poste too."""
-        Product.objects.filter(pk=self.poste.pk).update(raw_name="Assainissement")
+    def test_it_is_not_renamed_to_one_of_its_own_charge_items(self):
+        """Its charge item not named after it (a document naming its charge
+        items), the clash went unseen - and the rename's undo renamed that
+        charge item too."""
+        Product.objects.filter(pk=self.charge_item.pk).update(raw_name="Assainissement")
         checked = self.verify(name="Assainissement")
         self.assertContains(checked, "a déjà un poste « Assainissement »")
         self.assertNotContains(checked, "Enregistrer ces changements")
 
-    def test_a_postes_name_counts_whatever_its_case(self):
+    def test_a_charge_item_name_counts_whatever_its_case(self):
         Product.objects.create(supplier=self.supplier, raw_name="Assainissement", is_expense=True)
         self.assertContains(self.verify(name="ASSAINISSEMENT"), "a déjà un poste « ASSAINISSEMENT »")
-        # Its own poste, renamed with it, is no clash.
+        # Its own charge item, renamed with it, is no clash.
         self.save(self.verify(name="EAU EXEMPLE"))
         self.supplier.refresh_from_db()
         self.assertEqual(self.supplier.name, "EAU EXEMPLE")
@@ -307,12 +316,14 @@ class ReviewFindingsTests(TestCase):
         self.save(self.verify(name="Eau Exemple Paris"))
         renamed = SupplierChange.objects.get(supplier=self.supplier, kind=SupplierChange.Kind.RENAMED)
         self.client.post(reverse("invoices:supplier_change_undo", args=[self.supplier.pk, renamed.pk]))
-        back = SupplierChange.objects.filter(supplier=self.supplier, kind=SupplierChange.Kind.RENAMED).exclude(
-            pk=renamed.pk
-        ).get()
+        back = (
+            SupplierChange.objects.filter(supplier=self.supplier, kind=SupplierChange.Kind.RENAMED)
+            .exclude(pk=renamed.pk)
+            .get()
+        )
         self.assertEqual(back.data["undoes"], renamed.pk)
-        fiche = self.client.get(reverse("invoices:supplier_detail", args=[self.supplier.pk]))
-        self.assertNotContains(fiche, "Rétablir « Eau Exemple Paris »")
+        supplier_page = self.client.get(reverse("invoices:supplier_detail", args=[self.supplier.pk]))
+        self.assertNotContains(supplier_page, "Rétablir « Eau Exemple Paris »")
         response = self.client.post(reverse("invoices:supplier_change_undo", args=[self.supplier.pk, back.pk]))
         self.assertIn("il ne s'annule pas lui-même", " ".join(messages_of(response)))
         self.supplier.refresh_from_db()

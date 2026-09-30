@@ -55,7 +55,10 @@ class TextLayerTests(SimpleTestCase):
     def test_the_text_layer_is_read_line_by_line(self):
         pdf = write_pdf(self.path("facture.pdf"), INVOICE, logo=True)
         (page,) = ocr.text_layer_pages(pdf)
-        self.assertEqual([line.text.split("  ")[0] for line in page.lines][:2], ["CUISINE PRO EXEMPLE", "Facture n F-1042 du 07/11/2024"])
+        self.assertEqual(
+            [line.text.split("  ")[0] for line in page.lines][:2],
+            ["CUISINE PRO EXEMPLE", "Facture n F-1042 du 07/11/2024"],
+        )
         self.assertIn("Bac gastro 1/1", page.text)
         self.assertIn("25,00", page.lines[3].text)
         self.assertEqual(page.confidence, 1.0)

@@ -249,9 +249,11 @@ class RunTests(TestCase):
         return driver
 
     def scrape(self, login=None, apply_filter=None, start=date(2026, 1, 1), end=date(2026, 9, 18)):
-        with mock.patch.object(metro, "_build_driver", side_effect=self.build), mock.patch.object(
-            metro, "_login", side_effect=login or (lambda *args, **kwargs: None)
-        ), mock.patch.object(metro, "_apply_date_filter", side_effect=apply_filter or (lambda *args, **kwargs: None)):
+        with (
+            mock.patch.object(metro, "_build_driver", side_effect=self.build),
+            mock.patch.object(metro, "_login", side_effect=login or (lambda *args, **kwargs: None)),
+            mock.patch.object(metro, "_apply_date_filter", side_effect=apply_filter or (lambda *args, **kwargs: None)),
+        ):
             return metro.scrape_metro_invoices(self.dir, start, end, log=lambda message: None)
 
     def test_a_refused_sign_in_is_never_tried_again(self):
@@ -270,9 +272,11 @@ class RunTests(TestCase):
 
     def test_a_person_can_ask_for_one_sign_in_all_the_same(self):
         metro.record_block("#18.1")
-        with mock.patch.object(metro, "_build_driver", side_effect=self.build), mock.patch.object(
-            metro, "_login"
-        ), mock.patch.object(metro, "_apply_date_filter"):
+        with (
+            mock.patch.object(metro, "_build_driver", side_effect=self.build),
+            mock.patch.object(metro, "_login"),
+            mock.patch.object(metro, "_apply_date_filter"),
+        ):
             metro.scrape_metro_invoices(
                 self.dir, date(2026, 9, 1), date(2026, 9, 18), log=lambda message: None, ignore_pause=True
             )
@@ -325,20 +329,25 @@ class RunTests(TestCase):
         def second_window_fails(driver, wait, download_dir, log, start, end):
             windows.append(start)
             if len(windows) == 1:
-                with open(os.path.join(download_dir, "134_52_14645_20260122072041_invoice_cus_copy_main.pdf"), "wb") as handle:
+                with open(
+                    os.path.join(download_dir, "134_52_14645_20260122072041_invoice_cus_copy_main.pdf"), "wb"
+                ) as handle:
                     handle.write(b"%PDF-1.4")
             else:
                 raise StaleElementReferenceException("stale element reference")
 
         with self.assertRaises(metro.MetroError) as raised:
             self.scrape(apply_filter=second_window_fails)
-        self.assertEqual([os.path.basename(path) for path in raised.exception.files],
-                         ["134_52_14645_20260122072041_invoice_cus_copy_main.pdf"])
+        self.assertEqual(
+            [os.path.basename(path) for path in raised.exception.files],
+            ["134_52_14645_20260122072041_invoice_cus_copy_main.pdf"],
+        )
 
     def test_a_cancel_before_the_start_signs_in_to_nothing(self):
-        with mock.patch.object(metro, "_build_driver", side_effect=self.build), mock.patch.object(
-            metro, "_login"
-        ) as login:
+        with (
+            mock.patch.object(metro, "_build_driver", side_effect=self.build),
+            mock.patch.object(metro, "_login") as login,
+        ):
             metro.scrape_metro_invoices(
                 self.dir, date(2026, 9, 1), date(2026, 9, 18), log=lambda message: None, should_cancel=lambda: True
             )
@@ -392,9 +401,13 @@ class RunTests(TestCase):
             self.drivers.append(driver)
             return driver
 
-        with mock.patch.object(metro, "_build_driver", side_effect=build), mock.patch.object(metro, "_login"), \
-                mock.patch.object(metro, "_apply_date_filter"), mock.patch.object(metro, "CLICK_INTERVAL_SECONDS", 0), \
-                mock.patch.object(metro, "_wait_for_stable_results", return_value=2):
+        with (
+            mock.patch.object(metro, "_build_driver", side_effect=build),
+            mock.patch.object(metro, "_login"),
+            mock.patch.object(metro, "_apply_date_filter"),
+            mock.patch.object(metro, "CLICK_INTERVAL_SECONDS", 0),
+            mock.patch.object(metro, "_wait_for_stable_results", return_value=2),
+        ):
             files = metro.scrape_metro_invoices(self.dir, date(2026, 9, 1), date(2026, 9, 18), log=lambda message: None)
         self.assertEqual(len(self.drivers), 2)
         self.assertEqual(sorted(os.path.basename(path)[:12] for path in files), ["134_52_1_202", "134_52_2_202"])
@@ -415,9 +428,12 @@ class RunTests(TestCase):
             self.drivers.append(driver)
             return driver
 
-        with mock.patch.object(metro, "_build_driver", side_effect=build), mock.patch.object(metro, "_login"), \
-                mock.patch.object(metro, "_apply_date_filter", side_effect=lambda *a: searched.append(a[4])), \
-                mock.patch.object(metro, "_wait_for_stable_results", return_value=1):
+        with (
+            mock.patch.object(metro, "_build_driver", side_effect=build),
+            mock.patch.object(metro, "_login"),
+            mock.patch.object(metro, "_apply_date_filter", side_effect=lambda *a: searched.append(a[4])),
+            mock.patch.object(metro, "_wait_for_stable_results", return_value=1),
+        ):
             with self.assertRaises(metro.MetroError) as raised:
                 metro.scrape_metro_invoices(self.dir, date(2026, 1, 1), date(2026, 9, 18), log=lambda message: None)
         self.assertEqual(len(searched), 3, "the windows after the odd row were never searched")
@@ -455,9 +471,13 @@ class RunTests(TestCase):
             self.drivers.append(driver)
             return driver
 
-        with mock.patch.object(metro, "_build_driver", side_effect=build), mock.patch.object(metro, "_login"), \
-                mock.patch.object(metro, "_apply_date_filter"), mock.patch.object(metro, "CLICK_INTERVAL_SECONDS", 0.3), \
-                mock.patch.object(metro, "_wait_for_stable_results", return_value=2):
+        with (
+            mock.patch.object(metro, "_build_driver", side_effect=build),
+            mock.patch.object(metro, "_login"),
+            mock.patch.object(metro, "_apply_date_filter"),
+            mock.patch.object(metro, "CLICK_INTERVAL_SECONDS", 0.3),
+            mock.patch.object(metro, "_wait_for_stable_results", return_value=2),
+        ):
             metro.scrape_metro_invoices(self.dir, date(2026, 9, 1), date(2026, 9, 18), log=lambda message: None)
         self.assertEqual(clicks, {"r1": 1, "r2": 1})
 
@@ -467,11 +487,16 @@ class RunTests(TestCase):
         def count(driver, wait, download_dir, log, start, end):
             windows.append(start)
 
-        with mock.patch.object(metro, "_build_driver", side_effect=self.build), mock.patch.object(
-            metro, "_login"
-        ), mock.patch.object(metro, "_apply_date_filter", side_effect=count):
+        with (
+            mock.patch.object(metro, "_build_driver", side_effect=self.build),
+            mock.patch.object(metro, "_login"),
+            mock.patch.object(metro, "_apply_date_filter", side_effect=count),
+        ):
             metro.scrape_metro_invoices(
-                self.dir, date(2026, 1, 1), date(2026, 9, 18), log=lambda message: None,
+                self.dir,
+                date(2026, 1, 1),
+                date(2026, 9, 18),
+                log=lambda message: None,
                 should_cancel=lambda: len(windows) >= 1,
             )
         self.assertEqual(len(windows), 1)

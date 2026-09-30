@@ -52,7 +52,7 @@ def upload(name, content=b"%PDF-1.4 a receipt"):
 
 class PhotoPagesTests(SimpleTestCase):
     def _photo(self, orientation=None):
-        path = os.path.join(paths.media_root(),f"photo-{orientation or 'plain'}.jpg")
+        path = os.path.join(paths.media_root(), f"photo-{orientation or 'plain'}.jpg")
         exif = Image.Exif()
         if orientation:
             exif[0x0112] = orientation
@@ -115,8 +115,10 @@ class RunBatchTests(TestCase):
             UnrecognisedShopError("Enseigne non reconnue"),
             RuntimeError("fichier illisible"),
         ]
-        with mock.patch("invoices.receipt_batches.import_document", side_effect=outcomes) as importer, \
-                self.assertLogs("invoices.receipt_batches", "ERROR") as logged:
+        with (
+            mock.patch("invoices.receipt_batches.import_document", side_effect=outcomes) as importer,
+            self.assertLogs("invoices.receipt_batches", "ERROR") as logged,
+        ):
             batch = run_receipt_batch(batch.pk)
         self.assertEqual(importer.call_count, 4)
         self.assertEqual([entry["status"] for entry in batch.results], ["ok", "duplicate", "unrecognised", "error"])
@@ -156,9 +158,10 @@ class RunBatchTests(TestCase):
             return stored.fget(self)
 
         batch = stage_batch([upload("01.pdf"), upload("02.pdf"), upload("03.pdf")])
-        with mock.patch.object(Invoice, "total_ttc", property(poisoned)), mock.patch(
-            "invoices.receipt_batches.import_document", side_effect=[good, bad, good]
-        ) as importer:
+        with (
+            mock.patch.object(Invoice, "total_ttc", property(poisoned)),
+            mock.patch("invoices.receipt_batches.import_document", side_effect=[good, bad, good]) as importer,
+        ):
             batch = run_receipt_batch(batch.pk)
         self.assertEqual(importer.call_count, 3)
         self.assertEqual(batch.status, ReceiptBatch.Status.SUCCESS)
@@ -178,7 +181,7 @@ class RunBatchTests(TestCase):
 
     def test_the_staged_files_are_cleaned_up(self):
         batch = stage_batch([upload("a.pdf")])
-        folder = os.path.join(paths.imports_dir(), "receipt_batches",str(batch.pk))
+        folder = os.path.join(paths.imports_dir(), "receipt_batches", str(batch.pk))
         with mock.patch("invoices.receipt_batches.import_document", side_effect=DuplicateInvoiceError("x")):
             run_receipt_batch(batch.pk)
         self.assertFalse(os.path.exists(folder))
@@ -198,7 +201,7 @@ class SameFileTwiceTests(TestCase):
     receipt already in."""
 
     def _file(self):
-        path = os.path.join(paths.media_root(),"ticket-again.pdf")
+        path = os.path.join(paths.media_root(), "ticket-again.pdf")
         with open(path, "wb") as handle:
             handle.write(b"%PDF-1.4 the same receipt photo")
         return path
@@ -249,7 +252,7 @@ class SameFileTwiceTests(TestCase):
     def test_the_same_ticket_photographed_twice_is_refused_by_its_number(self):
         """A second photo is a different file, so it is read - and then
         refused by the ticket number, in the operator's language."""
-        first, second = self._file(), os.path.join(paths.media_root(),"ticket-second-photo.pdf")
+        first, second = self._file(), os.path.join(paths.media_root(), "ticket-second-photo.pdf")
         with open(second, "wb") as handle:
             handle.write(b"%PDF-1.4 another photo of the same receipt")
         with mock.patch("invoices.receipts.read_receipt", return_value=self._read()) as reader:
@@ -313,7 +316,7 @@ class DeadBatchTests(TestCase):
 
     def running_batch(self, silent_for):
         batch = stage_batch([upload("a.pdf"), upload("b.pdf")])
-        self.addCleanup(shutil.rmtree, os.path.join(paths.imports_dir(), "receipt_batches",str(batch.pk)), True)
+        self.addCleanup(shutil.rmtree, os.path.join(paths.imports_dir(), "receipt_batches", str(batch.pk)), True)
         ReceiptBatch.objects.filter(pk=batch.pk).update(
             status=ReceiptBatch.Status.RUNNING, last_heartbeat=timezone.now() - silent_for
         )
@@ -381,10 +384,11 @@ class DeadBatchTests(TestCase):
 
     def test_a_run_that_crashes_keeps_its_unread_files(self):
         batch = stage_batch([upload("a.pdf"), upload("b.pdf")])
-        folder = os.path.join(paths.imports_dir(), "receipt_batches",str(batch.pk))
+        folder = os.path.join(paths.imports_dir(), "receipt_batches", str(batch.pk))
         self.addCleanup(shutil.rmtree, folder, True)
-        with mock.patch("invoices.receipt_batches.import_document", side_effect=ValueError("x")), mock.patch(
-            "invoices.receipt_batches._discard", side_effect=RuntimeError("disque plein")
+        with (
+            mock.patch("invoices.receipt_batches.import_document", side_effect=ValueError("x")),
+            mock.patch("invoices.receipt_batches._discard", side_effect=RuntimeError("disque plein")),
         ):
             batch = run_receipt_batch(batch.pk)
         self.assertEqual((batch.status, batch.pending_count), (ReceiptBatch.Status.FAILED, 1))

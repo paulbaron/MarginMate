@@ -4,8 +4,8 @@ from django import forms
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
 from django.db.models import Q
-from django.utils import timezone
 from django.forms import BaseInlineFormSet, inlineformset_factory
+from django.utils import timezone
 
 from common import BlankRowTolerantModelForm
 from inventory.models import StockType
@@ -98,8 +98,15 @@ class RecipeForm(forms.ModelForm):
     class Meta:
         model = Recipe
         fields = [
-            "name", "happy_hour_name", "category", "yield_quantity", "yield_unit",
-            "sale_quantity", "selling_price_ttc", "happy_hour_price_ttc", "vat_rate",
+            "name",
+            "happy_hour_name",
+            "category",
+            "yield_quantity",
+            "yield_unit",
+            "sale_quantity",
+            "selling_price_ttc",
+            "happy_hour_price_ttc",
+            "vat_rate",
         ]
         labels = {
             "name": "Nom",
@@ -108,7 +115,6 @@ class RecipeForm(forms.ModelForm):
             "yield_quantity": "Quantité produite",
             "yield_unit": "Unité produite",
             "sale_quantity": "Quantité vendue (dans l'unité produite)",
-            "selling_price_ttc": "Prix de vente (TTC)",
             "selling_price_ttc": "Prix de vente (TTC)",
             "happy_hour_price_ttc": "Prix happy hour (TTC)",
             "vat_rate": "TVA (ex : 0.20 pour 20%)",
@@ -138,8 +144,8 @@ class RecipeForm(forms.ModelForm):
         forms are not.
         """
         cleaned = super().clean()
-        # A field that RAISED is dropped from cleaned_data, so « laissé
-        # vide » and « 12,50 » (a comma) looked identical here - and a typo
+        # A field that RAISED is dropped from cleaned_data, so « left
+        # blank » and « 12,50 » (a comma) looked identical here - and a typo
         # answered « cette recette n'est pas vendue telle quelle » on a
         # quantity box that was perfectly correct.
         if cleaned.get("selling_price_ttc") is not None or "selling_price_ttc" in self.errors:
@@ -364,7 +370,8 @@ class SaleDocumentLineForm(BlankRowTolerantModelForm):
         )
         if self.instance.pk:
             self.initial["source"] = (
-                f"recipe:{self.instance.recipe_id}" if self.instance.recipe_id
+                f"recipe:{self.instance.recipe_id}"
+                if self.instance.recipe_id
                 else f"stock:{self.instance.stock_type_id}"
             )
 
@@ -408,10 +415,7 @@ def sale_source_choices(keep: int | None = None) -> list:
         ("Recettes", [(f"recipe:{r.pk}", r.name) for r in sellable.order_by("name")]),
         (
             "Articles",
-            [
-                (f"stock:{st.pk}", f"{st.name} ({st.get_unit_display()})")
-                for st in StockType.objects.order_by("name")
-            ],
+            [(f"stock:{st.pk}", f"{st.name} ({st.get_unit_display()})") for st in StockType.objects.order_by("name")],
         ),
     ]
 

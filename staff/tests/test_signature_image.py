@@ -70,8 +70,12 @@ class CleanSignatureTests(SimpleTestCase):
     def test_what_is_not_a_png_is_refused(self):
         jpeg = io.BytesIO()
         Image.new("RGB", (60, 20), (0, 0, 0)).save(jpeg, format="JPEG")
-        for name, data in (("jpeg", jpeg.getvalue()), ("texte", b"bonjour"), ("vide", b""),
-                           ("png tronque", drawn_signature()[:60])):
+        for name, data in (
+            ("jpeg", jpeg.getvalue()),
+            ("texte", b"bonjour"),
+            ("vide", b""),
+            ("png tronque", drawn_signature()[:60]),
+        ):
             with self.subTest(name), self.assertRaises(signing.SignatureImageError):
                 signing.clean_signature_png(data)
 

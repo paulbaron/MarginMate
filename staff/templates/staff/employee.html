@@ -47,8 +47,8 @@
     </div>
 
     {% comment %}
-    Un mois et une année plutôt qu'un <input type="month"> : Firefox et Safari l'affichent en simple
-    champ texte, et le nom du mois vient ici des constantes de l'application, en français.
+    A month and a year rather than an <input type="month">: Firefox and Safari draw that as a plain
+    text field, and here the month's name comes from the application's constants, in French.
     {% endcomment %}
     <form method="get" action="{% url 'staff:open_month' employee.pk %}" class="inline-form month-picker">
         <label class="stacked-label">Ouvrir un autre mois
@@ -85,11 +85,11 @@
         </form>
     </section>
 
-    <section class="card" id="actif">
+    <section class="card" id="employee-active">
         {% comment %}
-        Jamais de suppression : une fiche signée est un document que l'employeur conserve
-        (Timesheet.employee est PROTECT). Le bouton dit l'état voulu, pas « basculer » : deux clics ne
-        se défont pas l'un l'autre.
+        Never a deletion: a signed timesheet is a document the employer keeps
+        (Timesheet.employee is PROTECT). The button says the state wanted, not "toggle": two clicks do
+        not undo each other.
         {% endcomment %}
         {% if employee.is_active %}
             <h2>Départ du salarié</h2>

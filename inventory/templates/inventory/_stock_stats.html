@@ -1,11 +1,11 @@
 <div class="stat-row stat-row-compact" id="stock-stats"{% if oob %} hx-swap-oob="true"{% endif %}>
     {% comment %}
-    « S'il y a des catégories » meant « si la base n'est pas neuve » until
+    « If there are categories » meant « if the database is not new » until
     two dates could empty them. A window over which nothing was bought but
     the rent was paid took the whole row away - « Total acheté », « Articles »
     and « Charges (TTC) » - while the fold below went on showing what those
     dates cost. A figure that disappears reads as a broken page; nil reads as
-    nil. The inventaire keeps the old guard: its stats are arithmetic on two
+    nil. The stock take keeps the old guard: its stats are arithmetic on two
     counts, and there is none to state when nothing was counted.
     {% endcomment %}
     {% if period %}

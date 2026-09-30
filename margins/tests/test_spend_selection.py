@@ -1,6 +1,6 @@
-"""La marge réelle, sans ce qu'on décoche - in arithmetic.
+"""The real margin, without what is unticked - in arithmetic.
 
-The owner asked to see the real margin « sans le Matériel », « sans les
+The owner asked to see the real margin « without the Matériel », « without the
 charges », **and the global one beside it**. So the report carries both, and
 the second is the first with some of the invoiced money set aside:
 
@@ -33,6 +33,8 @@ from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 
 from common import DateRange
+from invoices.importing import spread_charges
+from margins import computation
 from margins.computation import (
     CHARGES_KEY,
     NO_CATEGORY,
@@ -43,8 +45,6 @@ from margins.computation import (
     margins_for,
     supplier_key,
 )
-from invoices.importing import spread_charges
-from margins import computation
 from recipes.models import PosProduct, PosProductDailyQuantity
 from tests.factories import make_invoice, make_invoice_line, make_product, make_stock_type, make_supplier
 
@@ -59,9 +59,7 @@ def line(invoice, article, total_ht, vat_rate="0.20", **kwargs):
     """One invoice line on `article` - None is a product no article claims
     yet, which is what « à classer » means."""
     product = make_product(supplier=invoice.supplier, stock_type=article)
-    return make_invoice_line(
-        invoice=invoice, product=product, total_ht=total_ht, vat_rate=Decimal(vat_rate), **kwargs
-    )
+    return make_invoice_line(invoice=invoice, product=product, total_ht=total_ht, vat_rate=Decimal(vat_rate), **kwargs)
 
 
 def till_takes(day, ttc, ht):
@@ -76,7 +74,7 @@ class SpendFixture:
 
     ====  =======================  ==========================================
     A     goods, three articles     Perceuse 100 · Rhum 50 · Sirop 30 (5,5 %)
-    B     goods, duty 7,31 € on top Rhum 60 (droits) · Nappe 40 · à classer 20
+    B     goods, duty 7,31 € on top Rhum 60 (duty) · Nappe 40 · à classer 20
     C     a receipt, printed 18,35  Nappe 12,00 TTC · Sirop 6,33 TTC, HT +0,01
     D     goods, NO line            15,00 € of adjustment alone
     E     charge                    Bailleur 500
@@ -235,7 +233,7 @@ class EveryEuroLandsOnceTests(SpendFixture, TestCase):
         self.assertEqual(blank.name, NO_CATEGORY)
         self.assertEqual([part.name for part in blank.members], ["Sirop d'églantier"])
 
-    def test_an_invoice_with_no_line_stays_whole_on_its_supplier_or_on_a_classer(self):
+    def test_an_invoice_with_no_line_stays_whole_on_its_supplier_or_on_to_classify(self):
         report = self.report()
 
         self.assertEqual(self.member(report, supplier_key(self.insurer.pk)).money, money("74.99", "80.99"))
@@ -243,7 +241,7 @@ class EveryEuroLandsOnceTests(SpendFixture, TestCase):
         self.assertEqual(self.group(report, TO_CLASSIFY_KEY).money.ht, Decimal("36.22"))
         self.assertEqual(self.group(report, TO_CLASSIFY_KEY).members, [])
 
-    def test_the_charges_come_first_and_a_classer_last(self):
+    def test_the_charges_come_first_and_to_classify_last(self):
         names = [group.name for group in self.report().spend_groups]
 
         self.assertEqual(names, ["Charges", "Matériel", "Spiritueux", NO_CATEGORY, "Sans article (à classer)"])
@@ -273,7 +271,7 @@ class LeavingOutTests(SpendFixture, TestCase):
         self.assertEqual(report.kept_margin_ht, report.revenue.ht - report.spend.ht + Decimal(ht))
         self.assertEqual(report.kept_margin_ttc, report.revenue.ttc - report.spend.ttc + Decimal(ttc))
 
-    def test_sans_materiel_takes_exactly_its_lines_and_its_share_of_each_adjustment(self):
+    def test_without_equipment_takes_exactly_its_lines_and_its_share_of_each_adjustment(self):
         """The drill's 100 €, the tablecloth's 40 € + 10 € and - on top -
         2,44 € of B's duty and 0,01 € of C's HT rounding, plus the two
         centimes of C's printed total."""
@@ -290,7 +288,7 @@ class LeavingOutTests(SpendFixture, TestCase):
         self.assertEqual(report.spend, money("913.31", "1078.76"))
         self.assertEqual(report.real_margin_ht, Decimal("86.69"))
 
-    def test_sans_charges(self):
+    def test_without_charges(self):
         report = self.report(CHARGES_KEY)
 
         self.assertLeftOut(report, "574.99", "680.99")
@@ -303,7 +301,7 @@ class LeavingOutTests(SpendFixture, TestCase):
     def test_one_article(self):
         self.assertLeftOut(self.report(article_key(self.rum.pk)), "113.65", "136.39")
 
-    def test_a_classer(self):
+    def test_to_classify(self):
         self.assertLeftOut(self.report(TO_CLASSIFY_KEY), "36.22", "40.46")
 
     def test_the_blank_category(self):
@@ -343,7 +341,9 @@ class LeavingOutTests(SpendFixture, TestCase):
         second margin is the first."""
         report = self.report(category_key("Consignes"))
 
-        self.assertEqual([(exclusion.name, exclusion.money) for exclusion in report.exclusions], [("Consignes", Money())])
+        self.assertEqual(
+            [(exclusion.name, exclusion.money) for exclusion in report.exclusions], [("Consignes", Money())]
+        )
         self.assertEqual(report.kept_margin_ht, report.real_margin_ht)
         self.assertEqual(report.kept_margin_ttc, report.real_margin_ttc)
 

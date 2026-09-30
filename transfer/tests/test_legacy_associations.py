@@ -99,8 +99,13 @@ class ConversionTests(TestCase):
         )
         self.assertEqual(
             data["products"][2],
-            {"supplier": "~2", "raw_name": "CITRON VERT FILET", "article": "Citrons verts", "unit": "UNIT",
-             "stock_equivalent": "12.0000"},
+            {
+                "supplier": "~2",
+                "raw_name": "CITRON VERT FILET",
+                "article": "Citrons verts",
+                "unit": "UNIT",
+                "stock_equivalent": "12.0000",
+            },
         )
         # Nothing repaired on the way: a blank article and a 0 factor reach the section as they were.
         self.assertEqual(data["products"][4]["article"], "")
@@ -124,11 +129,12 @@ class ImportTests(TestCase):
         self.shop = make_supplier(code="EPI_TEST", name="Épicerie Test")
         self.meat = make_stock_type(name="Viande", unit=UnitChoices.KILOGRAM)
         self.vodka_bottle = make_product(self.metro, "VODKA X 70CL")  # « à classer »
-        self.bavette = make_product(self.shop, "BAVETTE", self.meat, unit=UnitChoices.KILOGRAM)
+        self.flank_steak = make_product(self.shop, "BAVETTE", self.meat, unit=UnitChoices.KILOGRAM)
         self.sugar = make_product(self.shop, "SUCRE 1KG")
         self.invoice = make_invoice(self.metro, invoice_number="MET-001", status=Invoice.Status.NEEDS_REVIEW)
-        self.line = make_invoice_line(self.invoice, self.vodka_bottle, quantity=Decimal("6"), total_volume="4.200",
-                                      total_ht="57.00")
+        self.line = make_invoice_line(
+            self.invoice, self.vodka_bottle, quantity=Decimal("6"), total_volume="4.200", total_ht="57.00"
+        )
 
     def run_old_file(self, strategy=MERGE, payload=OLD_FILE):
         with reader_of(payload) as reader:
@@ -145,8 +151,9 @@ class ImportTests(TestCase):
         self.assertEqual(self.invoice.status, Invoice.Status.COMPLETE)
         # A product missing here is created now (the old import left it out).
         lime = Product.objects.get(supplier=self.shop, raw_name="CITRON VERT FILET")
-        self.assertEqual((lime.stock_type.name, lime.unit, lime.stock_equivalent),
-                         ("Citrons verts", "UNIT", Decimal("12.0000")))
+        self.assertEqual(
+            (lime.stock_type.name, lime.unit, lime.stock_equivalent), ("Citrons verts", "UNIT", Decimal("12.0000"))
+        )
         self.assertEqual(mine.tallies["produits classés"].created, 1)
         self.assertEqual(mine.tallies["produits classés"].updated, 1)
         # loss_percent was never in the old file: the new articles take the default.
@@ -179,30 +186,34 @@ class ImportTests(TestCase):
         self.vodka_bottle.refresh_from_db()
         self.assertEqual((self.vodka_bottle.unit, self.vodka_bottle.stock_equivalent), ("L", Decimal("0.7000")))
 
-    def test_a_conflict_is_counted_and_never_overwritten_by_fusionner(self):
+    def test_a_conflict_is_counted_and_never_overwritten_by_merge(self):
         mine = self.run_old_file()
 
-        self.bavette.refresh_from_db()
-        self.assertEqual(self.bavette.stock_type, self.meat)
+        self.flank_steak.refresh_from_db()
+        self.assertEqual(self.flank_steak.stock_type, self.meat)
         self.assertEqual(
-            mine.conflicts, ["Produit « BAVETTE » (Épicerie Test) : différent dans l'archive (article) — gardé tel quel"]
+            mine.conflicts,
+            ["Produit « BAVETTE » (Épicerie Test) : différent dans l'archive (article) — gardé tel quel"],
         )
 
-    def test_remplacer_is_allowed(self):
+    def test_replace_is_allowed(self):
         self.run_old_file(REPLACE)
 
-        self.bavette.refresh_from_db()
-        self.assertEqual(self.bavette.stock_type.name, "Bœuf")
+        self.flank_steak.refresh_from_db()
+        self.assertEqual(self.flank_steak.stock_type.name, "Bœuf")
 
     def test_two_products_differing_by_an_accented_capital_are_both_created(self):
         """Two products of the old database (SQLite's case-blind comparison
         is ASCII only, so its matcher made them two): created here as two,
         never the second caught by the first's folded name and skipped « en
         double »."""
-        payload = {"version": 1, "products": [
-            entry("Épicerie Test", "SIROP D'ÉRABLE 1L", "Sirop", "L", "1.0000"),
-            entry("Épicerie Test", "SIROP D'éRABLE 1L", "Sirop", "L", "1.0000"),
-        ]}
+        payload = {
+            "version": 1,
+            "products": [
+                entry("Épicerie Test", "SIROP D'ÉRABLE 1L", "Sirop", "L", "1.0000"),
+                entry("Épicerie Test", "SIROP D'éRABLE 1L", "Sirop", "L", "1.0000"),
+            ],
+        }
 
         mine = self.run_old_file(payload=payload)
 

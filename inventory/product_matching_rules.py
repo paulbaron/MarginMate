@@ -55,6 +55,7 @@ import unicodedata
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import cast
 
 from rapidfuzz.distance import Levenshtein
 
@@ -90,8 +91,24 @@ _UNKNOWN_CATEGORY = "Inconnu"
 # vocabulary, so they're excluded from category guessing below regardless
 # of which category happens to contain them.
 _CATEGORY_STOPWORDS = {
-    "DE", "DU", "DES", "LA", "LE", "LES", "ET", "EN", "AU", "AUX", "A",
-    "AVEC", "SANS", "POUR", "SUR", "UN", "UNE", "SA",
+    "DE",
+    "DU",
+    "DES",
+    "LA",
+    "LE",
+    "LES",
+    "ET",
+    "EN",
+    "AU",
+    "AUX",
+    "A",
+    "AVEC",
+    "SANS",
+    "POUR",
+    "SUR",
+    "UN",
+    "UNE",
+    "SA",
 }
 
 
@@ -250,13 +267,13 @@ def _rule(
     return MatchRule(re.compile(pattern), stock_type_name, category, unit, force_unit_count, assume_volume_tracked)
 
 
-# --- Consigne (crate/keg/jug deposits - PLEIN=charge, VIDE=refund; see
+# --- Deposits (crates, kegs, jugs - PLEIN=charge, VIDE=refund; see
 # invoices/parsers/metro.py for how these end up with a negative
 # quantity/total on the refund line). Always exactly 1 - a crate is a
 # single returnable object regardless of what it holds or what number the
 # name happens to mention (a crate marked "24X33CL" describes the crate's
 # CONTENTS; the deposit is charged per crate, not per bottle inside it).
-_CONSIGNE_RULES = [
+_DEPOSIT_RULES = [
     _rule(r"CAISSE\s*COCA", "Casier Coca", "Consignes", force_unit_count=True),
     _rule(r"CAIS\.?\s*PERRIER", "Casier Perrier", "Consignes", force_unit_count=True),
     _rule(r"CAIS\.?\s*PERSON", "Casier verre", "Consignes", force_unit_count=True),
@@ -352,7 +369,7 @@ _BEER_RULES = [
     _rule(r"\bBITTER\b", "Bitter", "Spiritueux", UnitChoices.LITRE, assume_volume_tracked=True),
 ]
 
-# --- Food / épicerie -------------------------------------------------------
+# --- Food / grocery --------------------------------------------------------
 _FOOD_RULES = [
     _rule(r"\bCOMTE\b", "Comté", "Epicerie", UnitChoices.KILOGRAM),
     _rule(r"TOMME.*SAVOIE", "Tomme de Savoie", "Epicerie", UnitChoices.KILOGRAM),
@@ -398,7 +415,7 @@ _FOOD_RULES = [
 # - naming a whole bottle of spirit after a 0.02€ disposable is a much worse
 # mistake than the reverse, so spirits get first look.
 RULES: list[MatchRule] = [
-    *_CONSIGNE_RULES,
+    *_DEPOSIT_RULES,
     *_FLAVOURED_DRINK_RULES,
     *_BEER_RULES,
     *_SPIRIT_RULES,
@@ -577,7 +594,7 @@ class NameShape:
     numbers: tuple
 
     @classmethod
-    def of(cls, raw_name: str) -> "NameShape":
+    def of(cls, raw_name: str) -> NameShape:
         cleaned = strip_size_and_count_tokens(_LEADING_JUNK_RE.sub("", raw_name))
         words = frozenset(
             word
@@ -739,7 +756,7 @@ class ClassifiedNeighbours:
         return self._tells_apart[word]
 
     @classmethod
-    def from_database(cls) -> "ClassifiedNeighbours":
+    def from_database(cls) -> ClassifiedNeighbours:
         from .models import Product
 
         classified = Product.objects.filter(stock_type__isnull=False, is_expense=False).select_related(
@@ -852,7 +869,9 @@ def _reads_a_figure(guess, match: NeighbourMatch) -> bool:
     article (a count where the article is in litres) are not figures - they
     say nothing about the factor."""
     measured = guess.suggested_stock_unit != UnitChoices.UNIT
-    fits = measured == match.article_measured and (not measured or guess.suggested_stock_unit == match.neighbour.stock_type_unit)
+    fits = measured == match.article_measured and (
+        not measured or guess.suggested_stock_unit == match.neighbour.stock_type_unit
+    )
     return fits and guess.confidence != "low"
 
 
@@ -953,7 +972,9 @@ def _neighbour_suggestion(product, match: NeighbourMatch) -> dict:
         if not match.same_sizes and not article_measured:
             likeness += ", à une autre taille (vous rangez les tailles à part : sans doute un autre article)"
     else:
-        side, word = match.extra_word
+        # `same_words` is `extra_word is None`, a narrowing ty cannot see
+        # through the property.
+        side, word = cast("tuple[str, str]", match.extra_word)
         whose = "ce produit" if side == "product" else "le voisin"
         likeness = (
             f"Proche de « {neighbour.raw_name} » ({neighbour.supplier_name}), "

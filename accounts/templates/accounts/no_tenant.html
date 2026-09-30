@@ -1,7 +1,7 @@
 {% extends "accounts/page.html" %}
 {% comment %}
-Un compte connecté qui n'a aucun espace ouvert (accounts.middleware.TenantMiddleware, 403) : une
-phrase et de quoi se déconnecter - jamais une trace, jamais les données de quelqu'un.
+A logged-in account with no open tenant (accounts.middleware.TenantMiddleware, 403): one
+sentence and a way to log out - never a traceback, never anybody's data.
 {% endcomment %}
 {% block title %}Aucun espace - MarginMate{% endblock %}
 {% block content %}

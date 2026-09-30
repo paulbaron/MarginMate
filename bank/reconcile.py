@@ -175,9 +175,7 @@ def pass_order(line: BankTransaction) -> tuple:
 def reconcile() -> int:
     """Link every open line the matching is sure of; returns how many."""
     rules = active_rules()
-    lines = [
-        line for line in open_lines().filter(settled_by_hand=False) if ignoring_rule(line.label, rules) is None
-    ]
+    lines = [line for line in open_lines().filter(settled_by_hand=False) if ignoring_rule(line.label, rules) is None]
     if not lines:
         return 0
     start, end = search_window(lines)
@@ -267,7 +265,13 @@ def _learn_payee(line: BankTransaction, invoices) -> None:
 
 #: What became of one proposal a person ticked on « Propositions ».
 ACCEPTED, MISSING, INCOME, NOT_OPEN, RULED_OUT, PAID_MEANWHILE, CHANGED = (
-    "accepted", "missing", "income", "not_open", "ruled_out", "paid_meanwhile", "changed",
+    "accepted",
+    "missing",
+    "income",
+    "not_open",
+    "ruled_out",
+    "paid_meanwhile",
+    "changed",
 )
 
 

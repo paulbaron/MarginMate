@@ -61,7 +61,7 @@ def fake_mailbox(client, message_bytes: bytes) -> None:
     ]
 
 
-def bon_mail(content: bytes, sender="mphone@uba.paris") -> bytes:
+def slip_mail(content: bytes, sender="mphone@uba.paris") -> bytes:
     """A driver's mail as UBA sends it: one PDF attached as
     application/octet-stream. Tour, account, day and ticket invented."""
     from email.message import EmailMessage
@@ -77,9 +77,9 @@ def bon_mail(content: bytes, sender="mphone@uba.paris") -> bytes:
 
 
 @override_settings(INVOICE_EMAIL_ADDRESS="factures@example.test", INVOICE_EMAIL_APP_PASSWORD="x")
-class CompiledMotifsTests(SimpleTestCase):
-    """`compile=`: how the motifs become matchers. Left out, `re.compile`,
-    as for every invoice source and « Tester »; the consignes gather passes
+class CompiledPatternsTests(SimpleTestCase):
+    """`compile=`: how the patterns become matchers. Left out, `re.compile`,
+    as for every invoice source and « Tester »; the returnables gather passes
     returnables.patterns.mail_matcher (checked, case-insensitive, timed)."""
 
     def search(self, message_bytes, **kwargs):
@@ -87,17 +87,17 @@ class CompiledMotifsTests(SimpleTestCase):
             fake_mailbox(client, message_bytes)
             return find_matching_emails(date(2026, 2, 1), date(2026, 2, 28), log=lambda message: None, **kwargs)
 
-    def test_a_bons_octet_stream_attachment_comes_through(self):
+    def test_a_slip_octet_stream_attachment_comes_through(self):
         """UBA's driver attaches his ticket as application/octet-stream: the
         attachment is taken by its disposition and name, not its type."""
         from returnables import patterns
-        from returnables.tests.support import UBA_MOTIFS
+        from returnables.tests.support import UBA_PATTERNS
 
         matches = self.search(
-            bon_mail(b"%PDF-1.4 bon exemple"),
-            sender_pattern=UBA_MOTIFS["sender_pattern"],
-            subject_pattern=UBA_MOTIFS["subject_pattern"],
-            attachment_pattern=UBA_MOTIFS["attachment_pattern"],
+            slip_mail(b"%PDF-1.4 bon exemple"),
+            sender_pattern=UBA_PATTERNS["sender_pattern"],
+            subject_pattern=UBA_PATTERNS["subject_pattern"],
+            attachment_pattern=UBA_PATTERNS["attachment_pattern"],
             compile=patterns.mail_matcher,
         )
         self.assertEqual(len(matches), 1)
@@ -109,34 +109,43 @@ class CompiledMotifsTests(SimpleTestCase):
         )
 
     def test_left_out_it_is_re_as_before(self):
-        """Case-sensitive, as an invoice source's motifs always were."""
-        message = bon_mail(b"%PDF-1.4 bon exemple", sender="MPHONE@UBA.PARIS")
+        """Case-sensitive, as an invoice source's patterns always were."""
+        message = slip_mail(b"%PDF-1.4 bon exemple", sender="MPHONE@UBA.PARIS")
         self.assertEqual(self.search(message, sender_pattern=r"mphone@uba\.paris"), [])
         from returnables import patterns
 
-        self.assertEqual(len(self.search(message, sender_pattern=r"mphone@uba\.paris", compile=patterns.mail_matcher)), 1)
+        self.assertEqual(
+            len(self.search(message, sender_pattern=r"mphone@uba\.paris", compile=patterns.mail_matcher)), 1
+        )
 
-    def test_every_motif_goes_through_it(self):
+    def test_every_pattern_goes_through_it(self):
         compiled = []
 
-        def compile(motif):
-            compiled.append(motif)
-            return re.compile(motif)
+        def compile(pattern):
+            compiled.append(pattern)
+            return re.compile(pattern)
 
-        self.search(bon_mail(b"%PDF-1.4"), sender_pattern="uba", subject_pattern="Livraison", body_pattern="ticket",
-                    attachment_pattern=r"\.pdf$", compile=compile)
+        self.search(
+            slip_mail(b"%PDF-1.4"),
+            sender_pattern="uba",
+            subject_pattern="Livraison",
+            body_pattern="ticket",
+            attachment_pattern=r"\.pdf$",
+            compile=compile,
+        )
         self.assertEqual(compiled, ["uba", "Livraison", "ticket", r"\.pdf$"])
 
-    def test_a_motif_it_refuses_stops_the_search_before_signing_in(self):
-        from returnables.patterns import MotifError
+    def test_a_pattern_it_refuses_stops_the_search_before_signing_in(self):
+        from returnables.patterns import PatternError
 
-        def refuse(motif):
-            raise MotifError("Motif de mail : refusé.")
+        def refuse(pattern):
+            raise PatternError("Motif de mail : refusé.")
 
         with mock.patch("invoices.scrapers.generic_email.imaplib.IMAP4_SSL") as client:
-            with self.assertRaises(MotifError):
-                find_matching_emails(date(2026, 2, 1), date(2026, 2, 28), sender_pattern="x", compile=refuse,
-                                     log=lambda message: None)
+            with self.assertRaises(PatternError):
+                find_matching_emails(
+                    date(2026, 2, 1), date(2026, 2, 28), sender_pattern="x", compile=refuse, log=lambda message: None
+                )
         client.assert_not_called()
 
 
@@ -149,22 +158,29 @@ class AttachmentFileTests(SimpleTestCase):
         from invoices.scrapers.generic_email import EmailAttachment, EmailMatch, scrape_email_invoices
 
         matches = [
-            EmailMatch(message_id=str(number).encode(), sender="factures@exemple.fr", subject="Votre facture",
-                       email_date=date(2026, 5, number), attachments=[EmailAttachment(filename=name, content=content)])
+            EmailMatch(
+                message_id=str(number).encode(),
+                sender="factures@exemple.fr",
+                subject="Votre facture",
+                email_date=date(2026, 5, number),
+                attachments=[EmailAttachment(filename=name, content=content)],
+            )
             for number, (name, content) in enumerate(attachments, start=1)
         ]
         folder = self.enterContext(tempfile.TemporaryDirectory())
         with mock.patch("invoices.scrapers.generic_email.find_matching_emails", return_value=matches):
-            return folder, scrape_email_invoices(folder, date(2026, 5, 1), date(2026, 5, 31), sender_pattern=".", log=lambda m: None)
+            return folder, scrape_email_invoices(
+                folder, date(2026, 5, 1), date(2026, 5, 31), sender_pattern=".", log=lambda m: None
+            )
 
     def test_two_attachments_of_the_same_name_are_two_files(self):
         """The second "facture.pdf" wrote over the first: one invoice lost, silently."""
         _folder, files = self.download(("facture.pdf", b"%PDF-A"), ("facture.pdf", b"%PDF-B"))
-        contents = [open(path, "rb").read() for path, _day in files]
+        contents = [open(path, "rb").read() for path, _day in files]  # noqa: SIM115 - read at once, closed as it is dropped
         self.assertEqual(contents, [b"%PDF-A", b"%PDF-B"])
 
     def test_a_name_the_disk_refuses_is_written_under_a_safe_one(self):
-        folder, files = self.download(("Facture 01/2026.pdf", b"%PDF-A"), ('fac:ture?*.pdf', b"%PDF-B"))
+        folder, files = self.download(("Facture 01/2026.pdf", b"%PDF-A"), ("fac:ture?*.pdf", b"%PDF-B"))
         self.assertEqual(len(files), 2)
         for path, _day in files:
             self.assertEqual(os.path.dirname(path), folder)

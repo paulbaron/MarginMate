@@ -51,8 +51,13 @@ class NeutralSignupTests(TenancyTestCase):
     def post(self, code=None, email="inscrit0@example.invalid", ip="192.0.2.20"):
         return Client().post(
             SIGNUP,
-            {"code": code or self.code, "bar_name": "Le Zinc d'Essai", "email": email,
-             "password1": PASSWORD, "password2": PASSWORD},
+            {
+                "code": code or self.code,
+                "bar_name": "Le Zinc d'Essai",
+                "email": email,
+                "password1": PASSWORD,
+                "password2": PASSWORD,
+            },
             REMOTE_ADDR=ip,
         )
 
@@ -94,13 +99,14 @@ class NeutralSignupTests(TenancyTestCase):
         self.assertFalse(Tenant.objects.exists())
         self.assertFalse(get_user_model().objects.filter(username="nouvelle@example.invalid").exists())
 
-    def test_an_address_taken_while_the_espace_was_made_is_said_and_counted_the_same(self):
+    def test_an_address_taken_while_the_tenant_was_made_is_said_and_counted_the_same(self):
         real_copy = provisioning.copy_database
 
         def address_taken(*args, **kwargs):
             real_copy(*args, **kwargs)
-            get_user_model().objects.create_user(username="lente@example.invalid", email="lente@example.invalid",
-                                                 password="x")
+            get_user_model().objects.create_user(
+                username="lente@example.invalid", email="lente@example.invalid", password="x"
+            )
 
         with mock.patch.object(provisioning, "copy_database", address_taken):
             with self.assertRaises(signup.SignupRefused) as refused:

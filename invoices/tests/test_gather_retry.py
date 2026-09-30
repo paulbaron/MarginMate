@@ -37,7 +37,7 @@ class GatherButtonTests(TestCase):
         gather_job(ScrapeJob.Status.RUNNING, last_heartbeat=timezone.now())
         page = self.page()
         self.assertContains(page, 'data-job-control="gather-status" disabled')
-        self.assertContains(page, 'data-job-active')
+        self.assertContains(page, "data-job-active")
 
     def test_a_finished_gather_says_it_is_over(self):
         job = gather_job(ScrapeJob.Status.FAILED)
@@ -70,10 +70,18 @@ class GatherOutcomeTests(TestCase):
         return self.client.get(reverse("invoices:gather_status", args=[job.pk]))
 
     def test_a_source_in_error_is_said_beside_the_status(self):
-        job = gather_job(ScrapeJob.Status.SUCCESS, progress={
-            "METRO": {"label": "Metro", "found": 0, "imported": 0, "error": "Metro a bloqué la connexion (pare-feu)."},
-            "type-1": {"label": "Grossiste", "found": 2, "imported": 2},
-        })
+        job = gather_job(
+            ScrapeJob.Status.SUCCESS,
+            progress={
+                "METRO": {
+                    "label": "Metro",
+                    "found": 0,
+                    "imported": 0,
+                    "error": "Metro a bloqué la connexion (pare-feu).",
+                },
+                "type-1": {"label": "Grossiste", "found": 2, "imported": 2},
+            },
+        )
         card = self.card(job)
         self.assertContains(card, "1 source en échec")
         self.assertContains(card, '<span class="field-error">Metro a bloqué la connexion (pare-feu).</span>', html=True)
@@ -102,7 +110,9 @@ class GatherPeriodTests(TestCase):
 
     def test_a_gather_with_a_source_in_error_offers_its_period_again(self):
         gather_job(
-            ScrapeJob.Status.SUCCESS, range_start=date(2026, 1, 1), range_end=date(2026, 9, 18),
+            ScrapeJob.Status.SUCCESS,
+            range_start=date(2026, 1, 1),
+            range_end=date(2026, 9, 18),
             progress={"METRO": {"label": "Metro", "error": "Metro a bloqué la connexion."}},
         )
         self.assertEqual(self.start_date_shown()[0], date(2026, 1, 1))
@@ -112,8 +122,12 @@ class GatherPeriodTests(TestCase):
         01/01, rescanning the mailbox from there for good. Its line says it
         is in error; the others go on from what arrived since."""
         failing = {"type-5": {"label": "Portail", "found": 0, "imported": 0, "error": "Code SMS demandé."}}
-        gather_job(ScrapeJob.Status.SUCCESS, range_start=date(2026, 1, 1), range_end=date(2026, 9, 18), progress=failing)
-        gather_job(ScrapeJob.Status.SUCCESS, range_start=date(2026, 1, 1), range_end=date(2026, 9, 19), progress=failing)
+        gather_job(
+            ScrapeJob.Status.SUCCESS, range_start=date(2026, 1, 1), range_end=date(2026, 9, 18), progress=failing
+        )
+        gather_job(
+            ScrapeJob.Status.SUCCESS, range_start=date(2026, 1, 1), range_end=date(2026, 9, 19), progress=failing
+        )
         self.assertNotEqual(self.start_date_shown()[0], date(2026, 1, 1))
 
     def test_a_gather_that_went_well_offers_what_arrived_since(self):
@@ -168,17 +182,26 @@ class MetroPauseOnThePageTests(TestCase):
 
     def test_one_sign_in_asked_for_names_metro_and_passes_the_pause(self):
         with mock.patch("invoices.views.threading.Thread") as thread:
-            self.client.post(reverse("invoices:gather"), {
-                "start_date": "2026-09-01", "end_date": "2026-09-18", "sources": ["type-1"], "metro_now": "on",
-            })
+            self.client.post(
+                reverse("invoices:gather"),
+                {
+                    "start_date": "2026-09-01",
+                    "end_date": "2026-09-18",
+                    "sources": ["type-1"],
+                    "metro_now": "on",
+                },
+            )
         args = thread.call_args.kwargs["args"]
         self.assertIn("METRO", args[3])
         self.assertTrue(args[4])
 
     def test_a_note_is_not_a_failure(self):
-        job = gather_job(ScrapeJob.Status.SUCCESS, progress={
-            "METRO": {"label": "Metro", "found": 0, "imported": 0, "note": "Metro a déjà été consulté le 18/09."},
-        })
+        job = gather_job(
+            ScrapeJob.Status.SUCCESS,
+            progress={
+                "METRO": {"label": "Metro", "found": 0, "imported": 0, "note": "Metro a déjà été consulté le 18/09."},
+            },
+        )
         card = self.client.get(reverse("invoices:gather_status", args=[job.pk]))
         self.assertContains(card, "Metro a déjà été consulté le 18/09.")
         self.assertNotContains(card, "en échec")
@@ -189,7 +212,9 @@ class SalesImportButtonTests(TestCase):
 
     def test_the_button_follows_its_status_card(self):
         SalesImportJob.objects.create(
-            status=SalesImportJob.Status.RUNNING, range_start=date(2026, 1, 1), range_end=date(2026, 1, 31),
+            status=SalesImportJob.Status.RUNNING,
+            range_start=date(2026, 1, 1),
+            range_end=date(2026, 1, 31),
             last_heartbeat=timezone.now(),
         )
         page = self.client.get(reverse("recipes:sales_list"))

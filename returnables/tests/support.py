@@ -1,15 +1,16 @@
-"""What the consignes tests share: a factory per model, tiny files, and a way
+"""What the returnables tests share: a factory per model, tiny files, and a way
 to start from an empty app.
 
-Every name, number, date, amount and count here is INVENTED - the bons'
-designations, BL numbers and ticket numbers included: the repository is
-public, and the owner's real tickets (read for their STRUCTURE only) carry
-his account, his driver and his deliveries. The designations are made up so
-that the seeded motifs recognise them (« FÛT … », « … CO2 … »).
+Every name, number, date, amount and count here is INVENTED - the slips'
+designations, delivery-note numbers and ticket numbers included: the
+repository is public, and the owner's real tickets (read for their
+STRUCTURE only) carry his account, his driver and his deliveries. The
+designations are made up so that the seeded patterns recognise them
+(« FÛT … », « … CO2 … »).
 
 The seeds are there in every test database (migration 0002): three types
 and the UBA format. A test that needs the app empty calls `no_defaults()`;
-one that makes a second format with UBA's motifs and asks which format
+one that makes a second format with UBA's patterns and asks which format
 reads a document must call it too, or both formats recognise it.
 """
 
@@ -41,10 +42,10 @@ from returnables.models import (
 #: exactly what every database is given (test_models pins it apart, with
 #: literals, so a slip in the migration is caught rather than copied).
 SEEDS = importlib.import_module("returnables.migrations.0002_seed_defaults")
-SEEDED_TYPE_NAMES = tuple(name for name, _position, _motifs in SEEDS.TYPES)
+SEEDED_TYPE_NAMES = tuple(name for name, _position, _patterns in SEEDS.TYPES)
 SEEDED_FORMAT_NAME = SEEDS.FORMAT_NAME
-#: Every motif of the seeded UBA format, by field name.
-UBA_MOTIFS = dict(SEEDS.FORMAT)
+#: Every pattern of the seeded UBA format, by field name.
+UBA_PATTERNS = dict(SEEDS.FORMAT)
 
 #: An invented delivery day, in the past (a reading refuses a date after
 #: today + 7 days).
@@ -57,7 +58,7 @@ _DEFAULT = object()
 def no_defaults() -> None:
     """Delete what migration 0002 seeded - the UBA format, then the three
     types - so a test starts from an empty app. Raises ProtectedError when
-    the test already hung bons or counts on them: call it first."""
+    the test already hung slips or counts on them: call it first."""
     SlipFormat.objects.filter(name=SEEDED_FORMAT_NAME).delete()
     ReturnableType.objects.filter(name__in=SEEDED_TYPE_NAMES).delete()
 
@@ -88,7 +89,7 @@ def seeded_format() -> SlipFormat:
 
 
 def make_type(name=None, position=None, slip_patterns="", is_active=True) -> ReturnableType:
-    """A type of consigne. Unnamed, it gets a name of its own; unplaced, it
+    """A returnable type. Unnamed, it gets a name of its own; unplaced, it
     sorts after the seeds and after every type made before it."""
     number = next(_serial)
     return ReturnableType.objects.create(
@@ -100,16 +101,16 @@ def make_type(name=None, position=None, slip_patterns="", is_active=True) -> Ret
 
 
 def make_format(name=None, supplier=None, **fields) -> SlipFormat:
-    """A format of bon reading with the seeded UBA motifs unless `fields`
+    """A slip format reading with the seeded UBA patterns unless `fields`
     say otherwise (`section_start=""`, `line_pattern=…`), for UBA unless
     another `supplier` is given."""
-    values = {**UBA_MOTIFS, "is_active": True, **fields}
+    values = {**UBA_PATTERNS, "is_active": True, **fields}
     return SlipFormat.objects.create(
         name=name or f"Format exemple {next(_serial)}", supplier=supplier or uba(), **values
     )
 
 
-# -- Bons ---------------------------------------------------------------------------------------------------------
+# -- Slips --------------------------------------------------------------------------------------------------------
 
 #: One invented line per seeded type: (designation, quantity, unit price,
 #: amount), as a reading stores them.
@@ -123,13 +124,13 @@ def _money(value) -> str:
 
 
 def _refund(lines) -> Decimal:
-    """What a bon of `lines` prints as its « Deconsigne »: minus the sum."""
+    """What a slip of `lines` prints as its « Deconsigne »: minus the sum."""
     return -sum((amount or Decimal("0") for _designation, _quantity, _unit, amount in lines), Decimal("0")) + 0
 
 
 def slip_text(number="", delivery_date=DELIVERY_DAY, lines=(KEG_LINE,), references=(), printed_at=None, replaces=False):
-    """The text of an invented bon laid out as UBA's driver prints it (the
-    STRUCTURE of the real ones, every value made up): the seeded motifs read
+    """The text of an invented slip laid out as UBA's driver prints it (the
+    STRUCTURE of the real ones, every value made up): the seeded patterns read
     back `number`, `delivery_date`, `references`, `lines`, `replaces` and the
     total from it."""
     printed = printed_at or datetime.combine(delivery_date or DELIVERY_DAY, datetime.min.time()).replace(hour=8)
@@ -190,7 +191,7 @@ def make_slip(
     text=None,
     **fields,
 ) -> Slip:
-    """A bon as returnables.slips would store it: its PDF saved (a real tiny
+    """A slip as returnables.slips would store it: its PDF saved (a real tiny
     PDF printing `text`), its reading on the row and its `lines` as
     SlipLines (tuples of designation, quantity, unit price, amount). Every
     call gets its own number, reference and bytes - so its own sha256 -
@@ -227,7 +228,7 @@ def make_slip(
     return slip
 
 
-# -- Reprises and photos ----------------------------------------------------------------------------------------
+# -- Pickups and photos -----------------------------------------------------------------------------------------
 
 
 def tiny_jpeg(size=(4, 3), exif_orientation=None, taken_at=None) -> bytes:
@@ -262,7 +263,7 @@ def _type_of(key) -> ReturnableType:
 
 def make_photo(pickup, *, taken_at=None, size=(4, 3)) -> PickupPhoto:
     """A photo of `pickup` as the page stores one: a JPEG and its thumbnail,
-    named after the reprise's day."""
+    named after the pickup's day."""
     number = pickup.photos.count() + 1
     stem = f"reprise-{pickup.date:%Y%m%d}-{number}"
     photo = PickupPhoto(pickup=pickup, taken_at=taken_at, width=size[0], height=size[1])
@@ -273,7 +274,7 @@ def make_photo(pickup, *, taken_at=None, size=(4, 3)) -> PickupPhoto:
 
 
 def make_pickup(date=DELIVERY_DAY, supplier=_DEFAULT, counts=None, photos=0, note="", photo_taken_at=None) -> Pickup:
-    """A reprise of `date`, repris par `supplier` (UBA unless given; None
+    """A pickup of `date`, taken back by `supplier` (UBA unless given; None
     for « fournisseur non précisé »), with `counts` - {type or type name:
     quantity}, a zero left out as the page leaves it - and `photos` tiny
     photos. Without `counts` it is 15 of the first seeded type (« Fûts »):

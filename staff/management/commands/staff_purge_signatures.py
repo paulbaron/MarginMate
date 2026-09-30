@@ -18,11 +18,11 @@ Each request goes through the ONE function the owner's « Supprimer… » uses
 own transaction, its files removed once committed, and its line in the
 private folder's deletions.log.
 
-**Several espaces (multi mode).** The retention is every bar's: run on its
-own, the command purges EVERY espace, each bound in turn - its own
+**Several tenants (multi mode).** The retention is every bar's: run on its
+own, the command purges EVERY tenant, each bound in turn - its own
 database, its own private folder and deletions.log, its links forgotten -
-under a heading naming it (staff/management/espaces.py). Through
-`manage.py tenant <dossier> staff_purge_signatures` it purges that espace
+under a heading naming it (staff/management/tenants.py). Through
+`manage.py tenant <folder> staff_purge_signatures` it purges that tenant
 alone.
 """
 
@@ -31,7 +31,7 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 from staff import signature_deletion
-from staff.management.espaces import for_each_espace
+from staff.management.tenants import for_each_tenant
 from staff.models import SignatureRequest
 from staff.timesheet import month_label, next_month
 
@@ -57,7 +57,7 @@ class Command(BaseCommand):
     def handle(self, *args, dry_run=False, **options):
         years = int(getattr(settings, "STAFF_SIGNATURE_RETENTION_YEARS", 5))
         today = timezone.localdate()
-        for_each_espace(self, lambda: self._purge(years, today, dry_run))
+        for_each_tenant(self, lambda: self._purge(years, today, dry_run))
 
     def _purge(self, years: int, today, dry_run: bool) -> None:
         """One database - the one bound (or the only one)."""
@@ -76,17 +76,17 @@ class Command(BaseCommand):
         if dry_run:
             count = len(doomed)
             plural = "s" if count > 1 else ""
-            self.stdout.write(f"{count} demande{plural} de signature serai{'ent' if count > 1 else 't'} supprimée{plural}, "
-                              f"avec leur journal et leurs fichiers :")
+            self.stdout.write(
+                f"{count} demande{plural} de signature serai{'ent' if count > 1 else 't'} supprimée{plural}, "
+                f"avec leur journal et leurs fichiers :"
+            )
             self.stdout.write("\n".join(self._line(request) for request in doomed))
             self.stdout.write("Rien n'a été supprimé (--dry-run).")
             return
         deleted, outcomes = [], []
         for request in doomed:
             try:
-                outcomes.append(
-                    signature_deletion.delete_signature_request(request, how=signature_deletion.PURGE)
-                )
+                outcomes.append(signature_deletion.delete_signature_request(request, how=signature_deletion.PURGE))
             except signature_deletion.DeletionRefused as error:
                 self.stderr.write(f"{self._line(request).strip()} : {error}")
                 continue
@@ -97,8 +97,10 @@ class Command(BaseCommand):
         count = len(deleted)
         plural = "s" if count > 1 else ""
         files = sum(len(outcome.files) for outcome in outcomes)
-        self.stdout.write(f"{count} demande{plural} de signature supprimée{plural}, avec leur journal et {files} "
-                          f"fichier{'s' if files > 1 else ''} :")
+        self.stdout.write(
+            f"{count} demande{plural} de signature supprimée{plural}, avec leur journal et {files} "
+            f"fichier{'s' if files > 1 else ''} :"
+        )
         self.stdout.write("\n".join(self._line(request) for request in deleted))
         self.stdout.write("Une trace de chaque suppression est gardée dans deletions.log, dans le dossier privé.")
         for outcome in outcomes:

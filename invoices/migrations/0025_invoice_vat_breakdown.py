@@ -4,15 +4,14 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('invoices', '0024_forget_replaced_parsers'),
+        ("invoices", "0024_forget_replaced_parsers"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='invoice',
-            name='vat_breakdown',
+            model_name="invoice",
+            name="vat_breakdown",
             field=models.JSONField(blank=True, default=list),
         ),
     ]

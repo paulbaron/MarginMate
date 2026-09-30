@@ -22,7 +22,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
         ("bank", "0002_ignore_rules"),
         ("invoices", "0001_initial"),

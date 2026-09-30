@@ -1,8 +1,8 @@
 """What the bank's statements upload may weigh (security audit UPLOAD-1):
-25 Mo a file (`common.UPLOAD_MAX_FILE_BYTES`), refused by its name while
-the others are read, and 100 Mo for the whole selection
+25 MB a file (`common.UPLOAD_MAX_FILE_BYTES`), refused by its name while
+the others are read, and 100 MB for the whole selection
 (`common.UPLOAD_MAX_TOTAL_BYTES`), refused whole. A bank's CSV export is a
-few Ko a month. The caps are patched down: every file here is a few
+few KB a month. The caps are patched down: every file here is a few
 bytes."""
 
 from datetime import date
@@ -26,7 +26,9 @@ class StatementUploadLimitsTests(TestCase):
 
     def test_a_file_over_the_cap_is_refused_by_name_and_the_others_imported(self):
         small = statement(debit_row(date(2026, 7, 9), "METRO FRANCE", "120,00"))
-        big = statement(debit_row(date(2026, 7, 10), "BAILLEUR EXEMPLE", "900,00"), debit_row(date(2026, 7, 11), "EAU", "30,00"))
+        big = statement(
+            debit_row(date(2026, 7, 10), "BAILLEUR EXEMPLE", "900,00"), debit_row(date(2026, 7, 11), "EAU", "30,00")
+        )
         with mock.patch("common.UPLOAD_MAX_FILE_BYTES", len(small)):
             response = self.post(("Juillet.csv", small), ("Enorme.csv", big))
         self.assertContains(response, "« Enorme.csv » pèse")

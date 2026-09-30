@@ -10,31 +10,31 @@
                 {% if invoice.invoice_date %}Datée du {{ invoice.invoice_date|date:"d/m/Y" }}{% else %}Sans date{% endif %}
                 · Importée le {{ invoice.imported_at|date:"d/m/Y à H:i" }}
                 {% comment %}
-                Dit ici plutôt que deviné plus bas : sur cette page, « Total
-                HT » et chaque ligne sont ce que la facture déclare, pas ce
-                qu'une lecture en a tiré.
+                Said here rather than left to be guessed further down: on
+                this page, « Total HT » and every line are what the invoice
+                declares, not what a reading made of it.
                 {% endcomment %}
                 {% comment %}
-                La phrase suit ce que la page montre vraiment : là où les
-                totaux du fournisseur ne tiennent pas, le total affiché est
-                celui des lignes et non le BT-112, et « montants issus des
-                données de la facture » serait une promesse que la page
-                vient de rompre (le message rouge ci-dessous dit laquelle).
+                The sentence follows what the page really shows: where the
+                supplier's totals do not hold, the total shown is the lines'
+                and not BT-112, and « montants issus des données de la
+                facture » would be a promise the page has just broken (the
+                red message below says which).
                 {% endcomment %}
                 {% if invoice.is_einvoice %} · <strong>{% if einvoice_is_credit %}Avoir électronique{% else %}Facture électronique{% endif %} ({{ invoice.einvoice_format }})</strong>{% if invoice.error_message %} : montants déclarés par le fournisseur, qui ne s'accordent pas entre eux{% else %} : montants issus des données de la facture{% endif %}{% endif %}
             </p>
         </div>
         <div class="page-header-actions">
             {% comment %}
-            L'état que lisent toutes les listes (Invoice.review_state), pas
-            le libellé brut du champ : la ligne d'Achats disait « Produits à
-            classer » là où cette page disait « À vérifier », sur le même
-            document - et une facture électronique n'est jamais « à
-            vérifier », c'est tout l'objet de sa lecture.
+            The state every list reads (Invoice.review_state), not the
+            field's raw label: the Achats row said « Produits à classer »
+            where this page said « À vérifier », on the same document - and
+            an electronic invoice is never « à vérifier », that is the
+            whole point of its reading.
             {% endcomment %}
             <span class="status-pill status-{{ invoice.review_state.css }}">{{ invoice.review_state.label }}</span>
             {% if invoice.source_file %}
-                {# Le fichier reçu est la facture légale : un XML s'ouvre tel quel. #}
+                {# The file received is the legal invoice: an XML opens as it is. #}
                 <a class="btn btn-secondary" href="{{ invoice.source_file.url }}" target="_blank" rel="noopener">{% if invoice.is_einvoice %}Voir le fichier reçu{% else %}Voir le PDF{% endif %}</a>
             {% endif %}
             <a class="btn {% if not lines %}btn{% else %}btn-secondary{% endif %}"
@@ -70,13 +70,13 @@
         </div>
         {% with payments=invoice.payments.all %}
         {% if payments %}
-        {# Une facture peut être réglée par plusieurs opérations (payée en deux fois) : les dire toutes, ou la page en montre une et tait le reste. #}
+        {# An invoice may be settled by several operations (paid in two goes): name them all, or the page shows one and keeps quiet about the rest. #}
         {% comment %}
-        Un rattachement n'a plus à tomber juste : une facture peut être liée à un
-        débit qui n'en règle qu'une partie, et elle sort alors des factures non
-        réglées pour toujours. C'est ici qu'on vient savoir si un document est
-        soldé, donc le total des opérations est comparé à ce que la facture coûte
-        — « Payée » est gardé pour le cas où les deux s'accordent.
+        A link no longer has to add up: an invoice can be tied to a debit that
+        settles only part of it, and it then leaves the unpaid invoices for
+        good. This is where a person comes to find out whether a document is
+        settled, so the operations' total is compared with what the invoice
+        costs — « Payée » is kept for when the two agree.
         {% endcomment %}
         <div class="stat{% if paid_gap %} stat-warn{% endif %}">
             <span class="stat-label">{% if not paid_gap %}Payée{% elif paid_total < invoice.total_ttc %}Réglée en partie{% else %}Réglée au-delà{% endif %}</span>
@@ -113,8 +113,8 @@
         </div>
     {% elif invoice.reconciliation_adjustment and invoice.is_einvoice %}
         {% comment %}
-        Ici le fournisseur le déclare (BG-20/BG-21, « frais et remises sur la
-        facture » dans les contrôles) : rien n'est déduit d'un écart.
+        Here the supplier declares it (BG-20/BG-21, « frais et remises sur la
+        facture » in the checks): nothing is deduced from a gap.
         {% endcomment %}
         <div class="message">
             Cette facture électronique facture <strong>{{ invoice.reconciliation_adjustment|floatformat:2 }} €</strong> HT
@@ -134,9 +134,9 @@
 
     {% if einvoice_no_lines %}
         {% comment %}
-        Sans cette phrase, la ligne reconstituée depuis la table de TVA est
-        assise dans un tableau de lignes ordinaire, et le « À classer » plus
-        haut demande à quel article correspond le fournisseur lui-même.
+        Without this sentence, the line rebuilt from the VAT table sits in an
+        ordinary table of lines, and the « À classer » above asks which
+        article the supplier itself corresponds to.
         {% endcomment %}
         <div class="message">
             Cette {% if einvoice_is_credit %}avoir{% else %}facture{% endif %} électronique

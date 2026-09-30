@@ -67,7 +67,7 @@ class AmountCandidateTests(SimpleTestCase):
         self.assertEqual(amount_candidates("2,26"), [D("2.26")])
 
     def test_a_three_decimal_amount_offers_the_truncated_reading_too(self):
-        """"2.261" is "| 2,26 |" with the rules read as digits."""
+        """ "2.261" is "| 2,26 |" with the rules read as digits."""
         self.assertIn(D("2.26"), amount_candidates("2.261"))
         self.assertIn(D("2.261"), amount_candidates("2.261"))
 
@@ -81,7 +81,7 @@ class LineAmountsTests(SimpleTestCase):
         self.assertEqual(line_amounts("CB EMV  10,21€  Rendu 0.00"), [D("10.21"), D("0.00")])
 
     def test_money_is_cents_so_a_trailing_digit_is_not_a_decimal(self):
-        """"6.061" is a Franprix VAT table's column rule read as a digit."""
+        """ "6.061" is a Franprix VAT table's column rule read as a digit."""
         self.assertEqual(line_amounts("5.5%  5.74  0.32  6.061"), [D("5.74"), D("0.32"), D("6.06")])
 
     def test_a_count_or_a_rate_is_not_money(self):
@@ -164,7 +164,7 @@ class EndsItemsTests(SimpleTestCase):
         self.assertFalse(ends_items(D("1.00"), 0, D("0"), D("0"), D("1.00")))
 
     def test_the_running_sum_repeated_once_the_items_reach_the_total(self):
-        """"TOTAL HORS AVANTAGES 14,30" after a 14,30 item and a -3,58 promotion."""
+        """ "TOTAL HORS AVANTAGES 14,30" after a 14,30 item and a -3,58 promotion."""
         self.assertTrue(ends_items(D("14.30"), 1, D("14.30"), D("10.72"), D("10.72")))
 
     def test_a_subtotal_part_way_down_the_list_is_not_the_end(self):
@@ -205,8 +205,14 @@ class PrintedPromotionTests(SimpleTestCase):
         the change was printed twice: "un article manque" on a ticket that
         was complete. A promotion is printed before the amount paid comes
         round again; change is printed after it."""
-        copy = ["POIG COUL ULTR  T2 4.85", "SOUS-TOTAL  9.70", "TOTAL A PAYER  9.70", "ESPECES  10.00", "RENDU  0.30",
-                "20%  8.08  1.62  9.70"]
+        copy = [
+            "POIG COUL ULTR  T2 4.85",
+            "SOUS-TOTAL  9.70",
+            "TOTAL A PAYER  9.70",
+            "ESPECES  10.00",
+            "RENDU  0.30",
+            "20%  8.08  1.62  9.70",
+        ]
         self.assertIsNone(printed_promotion(copy + copy, 1, D("9.70")))
 
     def test_no_total_no_promotion(self):
@@ -392,13 +398,13 @@ class ReadDateTests(SimpleTestCase):
         self.assertEqual(read_date("28/01/2026 16:03").isoformat(), "2026-01-28")
 
     def test_a_time_glued_to_the_date_still_parses(self):
-        """"Heure:14-07-2026 14:49:26" comes back with the space closed.
+        """ "Heure:14-07-2026 14:49:26" comes back with the space closed.
         Guarding the year with "not followed by a digit" left every Sabbh
         receipt dateless."""
         self.assertEqual(read_date("Heure:14-07-202614:49:26").isoformat(), "2026-07-14")
 
     def test_a_two_digit_year_is_not_a_date(self):
-        """"21/04/26-16:17" is a real Monoprix header. Reading "26" as a year
+        """ "21/04/26-16:17" is a real Monoprix header. Reading "26" as a year
         would date the invoice to the year 26."""
         self.assertIsNone(read_date("21/04/26-16:17730738908"))
 

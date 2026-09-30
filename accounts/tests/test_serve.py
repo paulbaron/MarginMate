@@ -4,7 +4,7 @@ server's refusals, and Waitress's wiring behind the Cloudflare Tunnel.
 Nothing is served here. Waitress's `create_server` is replaced by a fake
 whose `run` returns, or built with `_start=False` and called directly as a
 WSGI application; every socket is on 127.0.0.1, on a port the system picks
-(never 8765 nor 8000, where the owner's servers may run); every espace is a
+(never 8765 nor 8000, where the owner's servers may run); every tenant is a
 temporary one; the child processes read no .env. Addresses from the
 documentation ranges (TEST-NET), names invented.
 """
@@ -219,7 +219,7 @@ class WaitressWiringTests(SimpleTestCase):
         for header in ("HTTP_X_FORWARDED_HOST", "HTTP_X_FORWARDED_PORT", "HTTP_FORWARDED"):
             self.assertNotIn(header, seen)
         self.assertEqual(seen["HTTP_HOST"], "testserver")
-        request = WSGIRequest(seen)
+        request = WSGIRequest(seen)  # ty: ignore[too-many-positional-arguments]  # a stubs-only __new__; Django's HttpRequest has none
         self.assertTrue(request.is_secure())
         # What the login limiter counts, and what a signature event records.
         self.assertEqual(limiter.client_ip(request), VISITOR)
@@ -231,7 +231,7 @@ class WaitressWiringTests(SimpleTestCase):
         self.assertEqual(seen["REMOTE_ADDR"], STRANGER)
         self.assertEqual(seen["wsgi.url_scheme"], "http")
         self.assertEqual([name for name in seen if "FORWARDED" in name], [])
-        request = WSGIRequest(seen)
+        request = WSGIRequest(seen)  # ty: ignore[too-many-positional-arguments]  # a stubs-only __new__; Django's HttpRequest has none
         self.assertFalse(request.is_secure())
         self.assertEqual(limiter.client_ip(request), STRANGER)
 
@@ -413,11 +413,11 @@ class SigningEventThroughTheTunnelTests(PublicCase):
 @override_settings(**ONLINE)
 class ServeTests(TenancyTestCase):
     """The refusals, in a real installation: the accounts database, the
-    template, an open espace - temporary ones."""
+    template, an open tenant - temporary ones."""
 
     def setUp(self):
         super().setUp()
-        self.espace = self.make_tenant("Bar Essai")
+        self.tenant = self.make_tenant("Bar Essai")
         self.static_root = Path(tempfile.mkdtemp(prefix="marginmate-tests-static-"))
         self.enterContext(override_settings(STATIC_ROOT=self.static_root))
 
@@ -429,10 +429,17 @@ class ServeTests(TenancyTestCase):
 
         def fake_create_server(application, **options):
             (sock,) = options["sockets"]
-            calls.append({"application": application, "options": options, "address": sock.getsockname(),
-                          "debug": settings.DEBUG, "socket": sock,
-                          "finders": settings.WHITENOISE_USE_FINDERS,
-                          "autorefresh": settings.WHITENOISE_AUTOREFRESH})
+            calls.append(
+                {
+                    "application": application,
+                    "options": options,
+                    "address": sock.getsockname(),
+                    "debug": settings.DEBUG,
+                    "socket": sock,
+                    "finders": settings.WHITENOISE_USE_FINDERS,
+                    "autorefresh": settings.WHITENOISE_AUTOREFRESH,
+                }
+            )
             return server
 
         out, err = io.StringIO(), io.StringIO()
@@ -484,7 +491,7 @@ class ServeTests(TenancyTestCase):
             out, _, _, _ = self.run_serve("--port", str(port))
         self.assertIn(f"En ligne sur http://127.0.0.1:{port}/ (8 fils) : c'est l'adresse du tunnel Cloudflare.", out)
 
-    def test_verifier_checks_and_stops_there(self):
+    def test_check_only_checks_and_stops_there(self):
         out, _, calls, _ = self.run_serve("--verifier")
         self.assertIn("Vérifications : tout est en ordre.", out)
         self.assertEqual(calls, [])
@@ -588,7 +595,7 @@ class ServeTests(TenancyTestCase):
 
     def test_the_tenant_command_refuses_it(self):
         with self.assertRaises(CommandError) as refusal:
-            call_command("tenant", self.espace.dir_name, "serve")
+            call_command("tenant", self.tenant.dir_name, "serve")
         self.assertIn("ne se lance pas pour un espace", str(refusal.exception))
 
     # -- DEBUG, the key, the hosts, HTTPS ------------------------------------------------------------------
@@ -656,15 +663,19 @@ class ServeTests(TenancyTestCase):
         app, name = migration.split(".", 1)
         con = sqlite3.connect(database)
         try:
-            return bool(con.execute("SELECT 1 FROM django_migrations WHERE app = ? AND name = ?", [app, name]).fetchall())
+            return bool(
+                con.execute("SELECT 1 FROM django_migrations WHERE app = ? AND name = ?", [app, name]).fetchall()
+            )
         finally:
             con.close()
 
-    def test_an_espace_behind_is_named_and_never_migrated(self):
-        database = paths.tenant_database(self.espace)
+    def test_a_tenant_behind_is_named_and_never_migrated(self):
+        database = paths.tenant_database(self.tenant)
         migration = self.forget_last_migration(database)
         said = self.refused()
-        self.assertIn(f"L'espace « Bar Essai » ({self.espace.dir_name}) : 1 migration(s) à appliquer ({migration})", said)
+        self.assertIn(
+            f"L'espace « Bar Essai » ({self.tenant.dir_name}) : 1 migration(s) à appliquer ({migration})", said
+        )
         self.assertIn("Sauvegardez d'abord", said)
         self.assertIn("manage.py migrate_tenants", said)
         # Never migrated by the server.
@@ -677,29 +688,33 @@ class ServeTests(TenancyTestCase):
 
     def test_the_accounts_database_behind_is_named(self):
         with connections["accounts"].cursor() as cursor:
-            cursor.execute("SELECT app, name, applied FROM django_migrations WHERE app = 'accounts' ORDER BY id DESC LIMIT 1")
+            cursor.execute(
+                "SELECT app, name, applied FROM django_migrations WHERE app = 'accounts' ORDER BY id DESC LIMIT 1"
+            )
             app, name, applied = cursor.fetchone()
             cursor.execute("DELETE FROM django_migrations WHERE app = %s AND name = %s", [app, name])
 
         def put_back():
             with connections["accounts"].cursor() as cursor:
-                cursor.execute("INSERT INTO django_migrations (app, name, applied) VALUES (%s, %s, %s)", [app, name, applied])
+                cursor.execute(
+                    "INSERT INTO django_migrations (app, name, applied) VALUES (%s, %s, %s)", [app, name, applied]
+                )
 
         self.addCleanup(put_back)
         self.assertIn(f"La base des comptes : 1 migration(s) à appliquer (accounts.{name})", self.refused())
 
-    def test_a_missing_espace_database_is_named_and_not_made(self):
-        database = paths.tenant_database(self.espace)
+    def test_a_missing_tenant_database_is_named_and_not_made(self):
+        database = paths.tenant_database(self.tenant)
         for leftover in database.parent.glob(database.name + "*"):
             leftover.unlink()
-        self.assertIn(f"L'espace « Bar Essai » ({self.espace.dir_name}) : sa base est introuvable", self.refused())
+        self.assertIn(f"L'espace « Bar Essai » ({self.tenant.dir_name}) : sa base est introuvable", self.refused())
         self.assertFalse(database.exists())
 
-    def test_a_closed_espace_is_not_looked_at(self):
-        database = paths.tenant_database(self.espace)
+    def test_a_closed_tenant_is_not_looked_at(self):
+        database = paths.tenant_database(self.tenant)
         for leftover in database.parent.glob(database.name + "*"):
             leftover.unlink()
-        type(self.espace).objects.filter(pk=self.espace.pk).update(is_active=False)
+        type(self.tenant).objects.filter(pk=self.tenant.pk).update(is_active=False)
         self.assertIn("tout est en ordre", self.run_serve("--verifier")[0])
 
     def test_a_missing_accounts_database_is_named_and_not_made(self):
@@ -741,12 +756,14 @@ class DeploymentFilesTests(SimpleTestCase):
         self.assertNotIn("127.0.0.1:8000", script)
         self.assertNotIn("127.0.0.1:8000", project_file("config/settings.py"))
         claude = project_file("CLAUDE.md")
-        production = claude.split("## Mise en ligne / production", 1)[1].split("\n## ", 1)[0]
+        production = claude.split("## Going online / production", 1)[1].split("\n## ", 1)[0]
         self.assertIn(f"to `http://{self.SERVE}`, where\n`manage.py serve` runs", production)
         self.assertNotIn("127.0.0.1:8000", production)
         # The previews keep runserver's port: never the tunnel's.
-        for launch in (Path(settings.BASE_DIR) / ".claude" / "launch.json",
-                       Path(settings.BASE_DIR).parent / ".claude" / "launch.json"):
+        for launch in (
+            Path(settings.BASE_DIR) / ".claude" / "launch.json",
+            Path(settings.BASE_DIR).parent / ".claude" / "launch.json",
+        ):
             if launch.is_file():
                 with self.subTest(launch=str(launch)):
                     for configuration in json.loads(launch.read_text(encoding="utf-8"))["configurations"]:
@@ -837,23 +854,32 @@ class DeploymentFilesTests(SimpleTestCase):
 
     def test_start_production_runs_serve_with_the_project_s_python(self):
         script = (Path(settings.BASE_DIR) / "start_production.cmd").read_bytes()
-        # cmd.exe reads it in the console's code page: plain ASCII only.
+        # cmd.exe reads it in the console's code page: plain ASCII only, and
+        # CRLF (with LF alone a goto can miss its label; .gitattributes).
         self.assertTrue(script.isascii())
+        self.assertEqual(script.count(b"\n"), script.count(b"\r\n"))
         text = script.decode("ascii")
         self.assertIn('cd /d "%~dp0"', text)
         self.assertIn('".venv\\Scripts\\python.exe" manage.py serve %*', text)
         # DEBUG is serve's to force off, never the script's to turn on.
         self.assertNotIn("DJANGO_DEBUG", text)
+        # Serving needs .venv alone: the scheduled task runs it, uv or not.
+        commands = [
+            line.strip() for line in text.splitlines() if line.strip() and not line.strip().lower().startswith("rem")
+        ]
+        self.assertEqual([line for line in commands if " uv " in f" {line} "], [])
 
     def test_the_server_s_packages_are_pinned_at_what_is_installed(self):
+        import tomllib
         from importlib.metadata import version
 
-        pins = (Path(settings.BASE_DIR) / "requirements.txt").read_text(encoding="utf-8").splitlines()
+        lock = tomllib.loads((Path(settings.BASE_DIR) / "uv.lock").read_text(encoding="utf-8"))
+        pins = {package["name"]: package["version"] for package in lock["package"]}
         for package in ("waitress", "whitenoise"):
             with self.subTest(package=package):
-                self.assertIn(f"{package}=={version(package)}", pins)
-        self.assertIn("waitress==3.0.2", pins)
-        self.assertIn("whitenoise==6.12.0", pins)
+                self.assertEqual(pins[package], version(package))
+        self.assertEqual(pins["waitress"], "3.0.2")
+        self.assertEqual(pins["whitenoise"], "6.12.0")
 
 
 #: Run in a child process from the project's folder, reading no .env:

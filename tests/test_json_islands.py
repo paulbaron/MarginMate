@@ -62,9 +62,7 @@ def live_handlers(page: str) -> list[tuple[str, dict]]:
 def island(page: str, element_id: str):
     """The JSON island `element_id` of `page`, parsed as the page's script
     parses it (JSON.parse of the element's text)."""
-    found = re.search(
-        rf'<script id="{re.escape(element_id)}" type="application/json">(.*?)</script>', page, re.DOTALL
-    )
+    found = re.search(rf'<script id="{re.escape(element_id)}" type="application/json">(.*?)</script>', page, re.DOTALL)
     assert found, f"no island {element_id!r} on the page"
     return json.loads(found.group(1))
 
@@ -84,9 +82,7 @@ class StockTakeFormTests(NoLiveMarkupMixin, TestCase):
     def setUp(self):
         self.supplier = make_supplier(name=f"Grossiste {PAYLOAD}")
         self.article = make_stock_type(name=f"Rhum{PAYLOAD}", unit=UnitChoices.LITRE)
-        self.product = make_product(
-            supplier=self.supplier, raw_name=f"SIROP {PAYLOAD} 1L", stock_type=self.article
-        )
+        self.product = make_product(supplier=self.supplier, raw_name=f"SIROP {PAYLOAD} 1L", stock_type=self.article)
 
     def test_a_new_inventory_carries_the_names_as_data_only(self):
         page = self.client.get(reverse("inventory:stock_take_create")).content.decode()

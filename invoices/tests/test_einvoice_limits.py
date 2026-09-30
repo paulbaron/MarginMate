@@ -112,7 +112,8 @@ class FiguresWiderThanTheirColumnTests(SimpleTestCase):
         business to say so - it fits, so it is read."""
         widest = CII_TWO_RATES.replace(
             "<ram:LineTotalAmount>169.00</ram:LineTotalAmount>",
-            "<ram:LineTotalAmount>9999999999.99</ram:LineTotalAmount>", 1
+            "<ram:LineTotalAmount>9999999999.99</ram:LineTotalAmount>",
+            1,
         )
         self.assertEqual(read(widest).lines[0].total_ht, D("9999999999.99"))
 
@@ -142,9 +143,12 @@ class ArithmeticThatIsNotAValueErrorTests(SimpleTestCase):
         """The contract, pinned once over all of them: never an
         ArithmeticError, never a traceback, never a hang."""
         for name, fixture in (
-            ("amount", CII_AMOUNT_TOO_WIDE), ("rate", CII_RATE_TOO_WIDE),
-            ("unit", CII_UNIT_PRICE_TOO_WIDE), ("quantity", CII_QUANTITY_TOO_WIDE),
-            ("adjustment", CII_ADJUSTMENT_TOO_WIDE), ("exponent", CII_EXPONENT_LINE),
+            ("amount", CII_AMOUNT_TOO_WIDE),
+            ("rate", CII_RATE_TOO_WIDE),
+            ("unit", CII_UNIT_PRICE_TOO_WIDE),
+            ("quantity", CII_QUANTITY_TOO_WIDE),
+            ("adjustment", CII_ADJUSTMENT_TOO_WIDE),
+            ("exponent", CII_EXPONENT_LINE),
             ("overflow", CII_EXPONENT_TOTAL),
         ):
             with self.subTest(fixture=name):
@@ -191,14 +195,19 @@ def _pdf_with_stream(path: str, raw: bytes, filters: bytes, parms: bytes = b"") 
     project's own PDF builder would never make, which is the point.
     """
     objects = [
-        b"<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles "
-        b"<< /Names [(factur-x.xml) 5 0 R] >> >> >>",
+        b"<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(factur-x.xml) 5 0 R] >> >> >>",
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] >>",
         b"<< /Length 0 >>\nstream\n\nendstream",
         b"<< /Type /Filespec /F (factur-x.xml) /UF (factur-x.xml) /EF << /F 6 0 R >> >>",
-        b"<< /Type /EmbeddedFile /Subtype /text#2Fxml /Filter " + filters + parms
-        + b" /Length " + str(len(raw)).encode() + b" >>\nstream\n" + raw + b"\nendstream",
+        b"<< /Type /EmbeddedFile /Subtype /text#2Fxml /Filter "
+        + filters
+        + parms
+        + b" /Length "
+        + str(len(raw)).encode()
+        + b" >>\nstream\n"
+        + raw
+        + b"\nendstream",
     ]
     out = bytearray(b"%PDF-1.7\n")
     offsets = []
@@ -209,8 +218,7 @@ def _pdf_with_stream(path: str, raw: bytes, filters: bytes, parms: bytes = b"") 
     out += f"xref\n0 {len(objects) + 1}\n".encode() + b"0000000000 65535 f \n"
     for offset in offsets:
         out += f"{offset:010d} 00000 n \n".encode()
-    out += (f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
-            f"startxref\n{start}\n%%EOF\n").encode()
+    out += (f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{start}\n%%EOF\n").encode()
     with open(path, "wb") as handle:
         handle.write(bytes(out))
     return path
@@ -272,16 +280,16 @@ class AttachmentBombTests(SimpleTestCase):
         then read as the ordinary document it looks like."""
         rows = b"".join(b"\x00" + b"\0" * 1024 for _ in range(4096))
         path = _pdf_with_stream(
-            self._in("predictor.pdf"), zlib.compress(rows, 9), b"/FlateDecode",
+            self._in("predictor.pdf"),
+            zlib.compress(rows, 9),
+            b"/FlateDecode",
             b" /DecodeParms << /Predictor 12 /Columns 1024 >>",
         )
         self.assertIsNone(einvoice.embedded_xml(path))
         self.assertLess(self._peak_megabytes(path), 4)
 
     def test_a_plain_deflated_invoice_is_still_read(self):
-        path = _pdf_with_stream(
-            self._in("good.pdf"), zlib.compress(CII_TWO_RATES.encode("utf-8"), 9), b"/FlateDecode"
-        )
+        path = _pdf_with_stream(self._in("good.pdf"), zlib.compress(CII_TWO_RATES.encode("utf-8"), 9), b"/FlateDecode")
         data = einvoice.embedded_xml(path)
         self.assertIsNotNone(data)
         self.assertEqual(einvoice.read(data).invoice_number, "FA-2026-0042")
@@ -322,10 +330,7 @@ class LineSignTests(SimpleTestCase):
         self.assertIn("169.00", failed.detail)
 
     def test_it_reaches_the_document_as_a_warning(self):
-        self.assertTrue(
-            [said for said in read(CII_NEGATIVE_QUANTITY).warnings
-             if einvoice.LINE_SIGN_CHECK in said]
-        )
+        self.assertTrue([said for said in read(CII_NEGATIVE_QUANTITY).warnings if einvoice.LINE_SIGN_CHECK in said])
 
     def test_the_totals_still_check_out(self):
         """The trap: the header agrees with the crooked line, so every check

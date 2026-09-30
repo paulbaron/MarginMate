@@ -74,8 +74,21 @@ class ParseMonthTests(SimpleTestCase):
 
     def test_anything_else_is_no_month_never_an_exception(self):
         for text in (
-            "2026-6", "2026-13", "2026-00", "26-06", "2026-06-01", "2026/06", "juin", "", " 2026-06",
-            None, 202606, "２０２６-06", "0001-01", "1899-12", "3000-01",
+            "2026-6",
+            "2026-13",
+            "2026-00",
+            "26-06",
+            "2026-06-01",
+            "2026/06",
+            "juin",
+            "",
+            " 2026-06",
+            None,
+            202606,
+            "２０２６-06",
+            "0001-01",
+            "1899-12",
+            "3000-01",
         ):
             with self.subTest(text=text):
                 self.assertIsNone(parse_month(text))
@@ -113,9 +126,7 @@ class SpanLabelTests(SimpleTestCase):
         self.assertEqual(span_label(date(2026, 6, 1), date(2026, 6, 3)), "du 1er au 3 juin 2026")
         self.assertEqual(span_label(date(2026, 8, 1), date(2026, 8, 1)), "le 1er août 2026")
         self.assertEqual(span_label(date(2026, 6, 29), date(2026, 7, 5)), "du 29 juin au 5 juillet 2026")
-        self.assertEqual(
-            span_label(date(2026, 12, 28), date(2027, 1, 3)), "du 28 décembre 2026 au 3 janvier 2027"
-        )
+        self.assertEqual(span_label(date(2026, 12, 28), date(2027, 1, 3)), "du 28 décembre 2026 au 3 janvier 2027")
 
     def test_the_wrong_way_round_reads_the_right_way(self):
         self.assertEqual(span_label(date(2026, 6, 18), date(2026, 6, 11)), "du 11 au 18 juin 2026")
@@ -126,9 +137,23 @@ class EasterTests(SimpleTestCase):
         """Pinned from the published calendars, including both ends of the
         range: 22 March (1818, 2285) and 25 April (1943, 2038)."""
         known = {
-            1818: (3, 22), 1900: (4, 15), 1943: (4, 25), 1975: (3, 30), 2000: (4, 23), 2008: (3, 23),
-            2011: (4, 24), 2019: (4, 21), 2024: (3, 31), 2025: (4, 20), 2026: (4, 5), 2027: (3, 28),
-            2028: (4, 16), 2029: (4, 1), 2030: (4, 21), 2038: (4, 25), 2285: (3, 22),
+            1818: (3, 22),
+            1900: (4, 15),
+            1943: (4, 25),
+            1975: (3, 30),
+            2000: (4, 23),
+            2008: (3, 23),
+            2011: (4, 24),
+            2019: (4, 21),
+            2024: (3, 31),
+            2025: (4, 20),
+            2026: (4, 5),
+            2027: (3, 28),
+            2028: (4, 16),
+            2029: (4, 1),
+            2030: (4, 21),
+            2038: (4, 25),
+            2285: (3, 22),
         }
         for year, (month, day) in known.items():
             with self.subTest(year=year):

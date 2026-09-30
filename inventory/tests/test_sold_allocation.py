@@ -122,9 +122,7 @@ class AllocateChoicesTests(SimpleTestCase):
 class OrderOptionsTests(SimpleTestCase):
     def test_options_come_back_priciest_first(self):
         cheap, dear = {1: Decimal("1")}, {2: Decimal("1")}
-        self.assertEqual(
-            order_options([cheap, dear], {1: Decimal("2"), 2: Decimal("5")}), [dear, cheap]
-        )
+        self.assertEqual(order_options([cheap, dear], {1: Decimal("2"), 2: Decimal("5")}), [dear, cheap])
 
     def test_an_option_is_valued_as_a_whole_not_by_its_dearest_item(self):
         """A double of the well brand can beat a single of the good stuff."""
@@ -172,14 +170,14 @@ class ClampedToWhatWasBoughtTests(TestCase):
         exactly the same, and the 22 pints come out 11 and 11.
         """
         blonde = self.bought("Bière blonde", "6", "0.50")
-        brune = self.bought("Bière brune", "6", "0.40")
-        self.sell(self.either("Pinte", blonde, brune, quantity="0.5"), 22)
+        brown = self.bought("Bière brune", "6", "0.40")
+        self.sell(self.either("Pinte", blonde, brown, quantity="0.5"), 22)
 
         sold = quantities_sold()
         self.assertEqual(sold[blonde.pk].headline, Decimal("5.5"))
-        self.assertEqual(sold[brune.pk].headline, Decimal("5.5"))
+        self.assertEqual(sold[brown.pk].headline, Decimal("5.5"))
         self.assertFalse(sold[blonde.pk].is_over)
-        self.assertFalse(sold[brune.pk].is_over)
+        self.assertFalse(sold[brown.pk].is_over)
 
     def test_it_moves_to_the_next_alternative_when_the_first_runs_out(self):
         """1L of vodka bought, 10L of gin, 40 measures of 5cl sold. The vodka
@@ -299,9 +297,7 @@ class LossAllowanceIsEditableTests(TestCase):
         self.assertEqual(self.vodka.loss_fraction, Decimal("0.1"))
 
     def test_the_edit_form_offers_it(self):
-        response = self.client.get(
-            reverse("inventory:stock_type_update", kwargs={"pk": self.vodka.pk})
-        )
+        response = self.client.get(reverse("inventory:stock_type_update", kwargs={"pk": self.vodka.pk}))
         self.assertContains(response, "loss_percent")
 
     def test_saving_a_new_value_sticks(self):

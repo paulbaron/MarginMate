@@ -90,7 +90,9 @@ class OneTicketTests(TestCase):
     def test_a_reading_never_bridges_a_different_number(self):
         """Readings join spellings, never sizes."""
         lemons = make_product(supplier=self.shop, raw_name="CITRON SHT 500G")
-        read_as_lemons, other_size = products_of(import_parsed_invoice(self.shop, ticket("CITRON SHT 5OOG", "CITRON SHT 250G")))
+        read_as_lemons, other_size = products_of(
+            import_parsed_invoice(self.shop, ticket("CITRON SHT 5OOG", "CITRON SHT 250G"))
+        )
         self.assertEqual(read_as_lemons, lemons)
         self.assertNotEqual(other_size, lemons)
 
@@ -150,9 +152,7 @@ class ReviewScreenTests(TestCase):
     def test_the_row_shows_the_product_and_what_was_read(self):
         response = self.client.get(self.url)
         form = response.context["formset"].forms[0]
-        self.assertEqual(
-            (form.initial["product_name"], form.initial["read_as"]), ("BAGUETTE BLAND", "AGUETTE BLANC")
-        )
+        self.assertEqual((form.initial["product_name"], form.initial["read_as"]), ("BAGUETTE BLAND", "AGUETTE BLANC"))
         self.assertContains(response, "lu sur le ticket : « AGUETTE BLANC »")
 
     def test_saving_keeps_the_reading(self):
@@ -214,7 +214,7 @@ class CorrectionTests(TestCase):
 
 class ParseOcrPagesTests(SimpleTestCase):
     def test_a_named_line_keeps_its_reading_and_a_placeholder_has_none(self):
-        """"Article divers" is a price, not a name: taken as a reading, it
+        """ "Article divers" is a price, not a name: taken as a reading, it
         would name the next 0,70 line without asking the price list, whose
         answer changes with the date."""
         named, placeholder = line("MENTHE", read_as=""), line("Article divers", read_as="")

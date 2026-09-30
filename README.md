@@ -33,12 +33,22 @@ without changing anything that exists today.
 
 ## First-time setup
 
-```bash
-cd MarginMate
-py -3.11 -m venv .venv
-.venv\Scripts\pip install -r requirements.txt
-copy .env.example .env
-```
+The tools are pinned in `mise.toml` (Python 3.11, uv, prek); the Python
+packages in `pyproject.toml`, every version locked in `uv.lock`.
+
+1. Install [mise](https://mise.jdx.dev) (`winget install jdx.mise`) and put
+   its shims on your PATH, so that `uv` and `prek` answer in any terminal and
+   in the git hooks (PowerShell, then open a new terminal):
+   ```powershell
+   [Environment]::SetEnvironmentVariable("Path", "$env:LOCALAPPDATA\mise\shims;" + [Environment]::GetEnvironmentVariable("Path", "User"), "User")
+   ```
+2. In the project's folder:
+   ```bash
+   mise install     # Python, uv and prek, at the versions of mise.toml
+   uv sync          # .venv with every package at its locked version, the dev tools included
+   prek install     # the git hooks of prek.toml
+   copy .env.example .env
+   ```
 
 Edit `.env`:
 - `DJANGO_SECRET_KEY` - required unless `DJANGO_DEBUG=True`: at least 50
@@ -88,6 +98,36 @@ and the `.env` lines. The site runs from a production copy of this repository
 (`C:\MarginMate\app`, its data in `C:\MarginMate\data`); changes are made here,
 committed, and put online with `deploy.cmd` (DEPLOY.md, section 10), which backs
 the data up first (`manage.py backup_data`).
+
+## Development
+
+- **Dependencies**: `uv add <package>` (or `uv add --dev <tool>`) writes
+  `pyproject.toml` and `uv.lock` together; `uv lock --upgrade-package <package>`
+  moves one version. Never `pip install` into `.venv`: `uv sync` puts it back
+  as the lock says. Production installs with `uv sync --locked --no-dev`
+  (`deploy.cmd`).
+- **The git hooks** (`prek.toml`, run by prek). Before a commit, on the files
+  committed: ruff (lint, with its safe fixes, and format), ty (type checks;
+  its warnings are shown, never blocking - `[tool.ty.rules]` in
+  `pyproject.toml` says why), `uv.lock` kept in step with `pyproject.toml`,
+  and a few file checks (merge markers, big files, private keys). Before a
+  push, the continuous integration: ruff and ty over the whole repository,
+  Django's system checks, no model change without its migration, and the
+  fast test suite. Run it by hand - a deploy pulls the development folder and
+  never pushes, so nothing runs it for you:
+  ```bash
+  prek run --hook-stage pre-push --all-files
+  ```
+- **By hand**: `uv run ruff check --fix`, `uv run ruff format`,
+  `uv run ty check`, and the tests:
+  ```bash
+  uv run python manage.py test --settings=config.settings_test --exclude-tag=browser --parallel 6
+  ```
+  The browser tests (tag `browser`) drive Chrome: CLAUDE.md, « Running the
+  tests », says how to run them.
+- **Language**: the code and its comments are in English; only what the app
+  displays (and the documents written for the owner, like DEPLOY.md) is in
+  French. CLAUDE.md, « Toolchain », lists the French names kept on purpose.
 
 ## Stock item matching
 

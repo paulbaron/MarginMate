@@ -61,8 +61,21 @@ class ParseHoursTests(SimpleTestCase):
 
     def test_garbage_is_refused_with_the_formats_that_work(self):
         for typed in (
-            "abc", "7h5", "7h75", "7,5,5", "1e1", "NaN", "Infinity", "+7", "7 heures", "٣", "７", "7:3",
-            "9" * 400, "h30", ":30",
+            "abc",
+            "7h5",
+            "7h75",
+            "7,5,5",
+            "1e1",
+            "NaN",
+            "Infinity",
+            "+7",
+            "7 heures",
+            "٣",
+            "７",
+            "7:3",
+            "9" * 400,
+            "h30",
+            ":30",
         ):
             with self.subTest(typed=typed), self.assertRaises(HoursError):
                 parse_hours(typed)
@@ -74,7 +87,14 @@ class ParseHoursTests(SimpleTestCase):
         without a word (review, 28/09): the spaces were taken out before
         the number was read. Any space counts, the typographer's too."""
         for typed in (
-            "1 5", "0 5", "2 4", "7 5", "1\t5", "1\N{NO-BREAK SPACE}2", "1\N{NARROW NO-BREAK SPACE}5", "7,5 0",
+            "1 5",
+            "0 5",
+            "2 4",
+            "7 5",
+            "1\t5",
+            "1\N{NO-BREAK SPACE}2",
+            "1\N{NARROW NO-BREAK SPACE}5",
+            "7,5 0",
             "7 h 3 0",
         ):
             with self.subTest(typed=typed), self.assertRaises(HoursError) as caught:

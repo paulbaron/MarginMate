@@ -2,7 +2,7 @@
 
 Three things found by looking for bugs away from the day's work:
 
-* A bottle counted in a stock take became 0 litres in the écarts and stock
+* A bottle counted in a stock take became 0 litres in the variance and stock
   pages when its product never had a volume printed on an invoice: an
   unmeasured line stores total_volume 0, not NULL, and "no measured volume"
   was tested with isnull. 62 real count lines were affected.
@@ -124,7 +124,9 @@ class MergeStockTypesTests(TestCase):
             stock_take=take, stock_type=self.target, unit=UnitChoices.LITRE, counted_quantity="1.2", value_ht="15"
         )
         source_row = StockTakeLineSource.objects.create(
-            stock_take_line=mine, invoice_line=self.product.invoice_lines.get(), quantity_used=D("0.5"),
+            stock_take_line=mine,
+            invoice_line=self.product.invoice_lines.get(),
+            quantity_used=D("0.5"),
             unit_cost_ht=D("12"),
         )
         self.merge()
@@ -153,7 +155,8 @@ class DeleteStockTypeTests(TestCase):
     def test_an_item_a_recipe_uses_is_kept_and_the_page_says_where(self):
         make_ingredient(make_recipe(name="Smash"), stock_type=self.syrup, quantity="0.02")
         make_stock_take_line(
-            stock_take=make_stock_take(taken_at=datetime(2026, 7, 1, 20, 0)), stock_type=self.syrup,
+            stock_take=make_stock_take(taken_at=datetime(2026, 7, 1, 20, 0)),
+            stock_type=self.syrup,
             unit=UnitChoices.LITRE,
         )
         response = self.client.post(reverse("inventory:stock_type_delete", args=[self.syrup.pk]))
@@ -183,7 +186,10 @@ class DeleteStockTypeTests(TestCase):
         """No product, but a broken bottle written down: deleting the item
         would delete the loss with it."""
         StockMovement.objects.create(
-            stock_type=self.syrup, kind="LOSS", quantity=D("-0.7"), unit_cost_ht=D("10"),
+            stock_type=self.syrup,
+            kind="LOSS",
+            quantity=D("-0.7"),
+            unit_cost_ht=D("10"),
             occurred_on=timezone.localdate(),
         )
         self.client.post(reverse("inventory:clear_empty_stock_types"))

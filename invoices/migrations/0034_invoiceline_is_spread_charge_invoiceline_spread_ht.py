@@ -4,20 +4,23 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('invoices', '0033_invoice_adjustment_vat_rate'),
+        ("invoices", "0033_invoice_adjustment_vat_rate"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='invoiceline',
-            name='is_spread_charge',
-            field=models.BooleanField(default=False, help_text="Cette ligne n'est pas un produit : son montant est réparti sur les autres lignes de la facture.", verbose_name='frais à répartir'),
+            model_name="invoiceline",
+            name="is_spread_charge",
+            field=models.BooleanField(
+                default=False,
+                help_text="Cette ligne n'est pas un produit : son montant est réparti sur les autres lignes de la facture.",
+                verbose_name="frais à répartir",
+            ),
         ),
         migrations.AddField(
-            model_name='invoiceline',
-            name='spread_ht',
+            model_name="invoiceline",
+            name="spread_ht",
             field=models.DecimalField(decimal_places=2, default=0, max_digits=12),
         ),
     ]

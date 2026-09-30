@@ -57,8 +57,9 @@ def file_sha256(field_file) -> str:
 
 # -- suppliers -----------------------------------------------------------------------
 
+
 class SupplierResolver:
-    """Supplier by `code`: an explicit binding made by the fournisseurs
+    """Supplier by `code`: an explicit binding made by the suppliers
     section wins, then the code, then the folded name (from the archive's
     `supplier_names`) - codes differ between two databases when a shop was
     created on each (LIDL here, LIDL_2 there)."""
@@ -91,7 +92,7 @@ class SupplierResolver:
 
     def refuse(self, file_code: str) -> None:
         """This file code resolves to nothing for the rest of the run: the
-        fournisseurs section skipped its record, and falling back to its
+        suppliers section skipped its record, and falling back to its
         name would file its documents under another supplier here - the one
         that name belongs to."""
         self._bound[file_code] = None
@@ -108,6 +109,7 @@ class SupplierResolver:
 
 
 # -- articles, products, recipes -----------------------------------------------------
+
 
 class ArticleResolver:
     def __init__(self):
@@ -403,8 +405,12 @@ class InvoiceIndex:
         self._objects[invoice.pk] = invoice
         if invoice.pk not in self._order:
             self._index(
-                invoice.pk, invoice.supplier_id, invoice.invoice_number, invoice.source_sha256,
-                invoice.imported_at, invoice.source_file.name if invoice.source_file else "",
+                invoice.pk,
+                invoice.supplier_id,
+                invoice.invoice_number,
+                invoice.source_sha256,
+                invoice.imported_at,
+                invoice.source_file.name if invoice.source_file else "",
             )
 
     def _rank(self, ids: Iterable[int], occurrence: int) -> int | None:
@@ -467,9 +473,11 @@ def line_ordinals(invoice_ids: Iterable[int]) -> dict[int, tuple[int, int]]:
 
     result: dict[int, tuple[int, int]] = {}
     counters: dict[int, int] = defaultdict(int)
-    for pk, invoice_id in InvoiceLine.objects.filter(invoice_id__in=list(invoice_ids)).order_by(
-        "invoice_id", "id"
-    ).values_list("id", "invoice_id"):
+    for pk, invoice_id in (
+        InvoiceLine.objects.filter(invoice_id__in=list(invoice_ids))
+        .order_by("invoice_id", "id")
+        .values_list("id", "invoice_id")
+    ):
         result[pk] = (invoice_id, counters[invoice_id])
         counters[invoice_id] += 1
     return result

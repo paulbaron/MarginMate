@@ -72,17 +72,17 @@ class IdentifiersTests(SimpleTestCase):
         self.assertEqual(document_identifiers("contact : jean.dupont@gmail.com"), set())
 
     def test_a_whole_document(self):
-        text = "\n".join([
-            "BRICO EXEMPLE",
-            "12 rue des Planches 75011 PARIS",
-            "Tel: 01 23 45 67 89",
-            "TOTAL 12,50",
-            f"SIRET {SIREN}10000 - TVA FR25{SIREN}",
-            "www.brico-exemple.fr",
-        ])
-        self.assertEqual(
-            document_identifiers(text), {f"siren:{SIREN}", "tel:0123456789", "web:brico-exemple.fr"}
+        text = "\n".join(
+            [
+                "BRICO EXEMPLE",
+                "12 rue des Planches 75011 PARIS",
+                "Tel: 01 23 45 67 89",
+                "TOTAL 12,50",
+                f"SIRET {SIREN}10000 - TVA FR25{SIREN}",
+                "www.brico-exemple.fr",
+            ]
         )
+        self.assertEqual(document_identifiers(text), {f"siren:{SIREN}", "tel:0123456789", "web:brico-exemple.fr"})
 
 
 class QuickLookTests(SimpleTestCase):

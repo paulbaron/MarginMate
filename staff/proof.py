@@ -134,8 +134,15 @@ class _Pages:
             self.y -= LINE
             self.canvas.text(pdf.LEFT + label_width, self.y, line, font=pdf.BOLD)
 
-    def paragraph(self, text: str, *, size: float = TEXT_SIZE, grey: float = pdf.BLACK, x: float = pdf.LEFT,
-                  font: str = pdf.REGULAR):
+    def paragraph(
+        self,
+        text: str,
+        *,
+        size: float = TEXT_SIZE,
+        grey: float = pdf.BLACK,
+        x: float = pdf.LEFT,
+        font: str = pdf.REGULAR,
+    ):
         leading = LINE if size >= TEXT_SIZE else SMALL_LINE
         lines = pdf.wrap(pdf.printable(text), pdf.RIGHT - x, font, size)
         self.need(leading * len(lines))
@@ -191,36 +198,54 @@ def _employer_drawing(request: SignatureRequest, events: list[SignatureEvent]) -
                 sealed, read = reason.drawing, True
     digest = sealed or recorded
     if not digest:
-        return "", []            # a request countersigned before 28/09 reads as it did, byte for byte
+        return "", []  # a request countersigned before 28/09 reads as it did, byte for byte
     notes = []
     if read and sealed != recorded:
         if not sealed:
-            notes.append((
-                "Anomalie : la contresignature ne scelle aucune signature dessinée, le journal en nomme une - le "
-                "journal a été altéré. L'empreinte ci-dessus est celle du journal.",
-                True,
-            ))
+            notes.append(
+                (
+                    (
+                        "Anomalie : la contresignature ne scelle aucune signature dessinée, le journal en nomme une - le "
+                        "journal a été altéré. L'empreinte ci-dessus est celle du journal."
+                    ),
+                    True,
+                )
+            )
         elif not recorded:
-            notes.append((
-                "Anomalie : le journal ne nomme pas la signature dessinée que la contresignature a scellée - le "
-                "journal a été altéré. L'empreinte ci-dessus est celle de la contresignature.",
-                True,
-            ))
+            notes.append(
+                (
+                    (
+                        "Anomalie : le journal ne nomme pas la signature dessinée que la contresignature a scellée - le "
+                        "journal a été altéré. L'empreinte ci-dessus est celle de la contresignature."
+                    ),
+                    True,
+                )
+            )
         else:
-            notes.append((
-                f"Anomalie : le journal a enregistré une autre empreinte ({recorded}) que celle que la "
-                "contresignature a scellée - le journal a été altéré. L'empreinte ci-dessus est celle de la "
-                "contresignature.",
-                True,
-            ))
+            notes.append(
+                (
+                    (
+                        f"Anomalie : le journal a enregistré une autre empreinte ({recorded}) que celle que la "
+                        "contresignature a scellée - le journal a été altéré. L'empreinte ci-dessus est celle de la "
+                        "contresignature."
+                    ),
+                    True,
+                )
+            )
     elif read:
-        notes.append(("Son empreinte est scellée dans la contresignature elle-même, couverte par son horodatage.", False))
+        notes.append(
+            ("Son empreinte est scellée dans la contresignature elle-même, couverte par son horodatage.", False)
+        )
     else:
-        notes.append((
-            "Telle que le journal l'a enregistrée, à l'événement de la contresignature : le document contresigné n'a "
-            "pas pu être relu.",
-            False,
-        ))
+        notes.append(
+            (
+                (
+                    "Telle que le journal l'a enregistrée, à l'événement de la contresignature : le document contresigné n'a "
+                    "pas pu être relu."
+                ),
+                False,
+            )
+        )
     try:
         private_files.read_checked(request.uuid, private_files.EMPLOYER_SIGNATURE_IMAGE, digest)
     except private_files.AlteredFileError:
@@ -248,8 +273,12 @@ def _signed_reservation(request: SignatureRequest) -> str | None:
 #: The row's fields a signed event also records, as a sentence names them.
 _RECORDED = (
     (SignatureEvent.Kind.EMPLOYEE_SIGNED, "signed_sha256", "employee_pdf_sha256", "empreinte du document signé"),
-    (SignatureEvent.Kind.EMPLOYEE_SIGNED, "signature_png_sha256", "signature_png_sha256",
-     "empreinte de la signature dessinée"),
+    (
+        SignatureEvent.Kind.EMPLOYEE_SIGNED,
+        "signature_png_sha256",
+        "signature_png_sha256",
+        "empreinte de la signature dessinée",
+    ),
     (SignatureEvent.Kind.EMPLOYEE_SIGNED, "statement_version", "statement_version", "version du texte certifié"),
     (SignatureEvent.Kind.EMPLOYEE_SIGNED, "identification", "identification", "méthode d'identification"),
     (SignatureEvent.Kind.EMPLOYEE_SIGNED, "reservation", "reservation", "réserves"),
@@ -267,7 +296,7 @@ def _row_against_journal(request: SignatureRequest, events: list[SignatureEvent]
         if event is None or key not in (event.detail or {}):
             continue
         recorded = event.detail[key]
-        if isinstance(recorded, bool):    # a request signed before the words were kept
+        if isinstance(recorded, bool):  # a request signed before the words were kept
             continue
         if str(recorded or "") != str(getattr(request, field) or ""):
             differing.append(words)
@@ -338,7 +367,8 @@ def proof_pdf(request: SignatureRequest, *, now=None) -> bytes:
     pages.paragraph(
         "Chaque fichier est conservé par l'application. Son empreinte, recalculée, doit être identique à celle "
         "indiquée ici : un seul octet changé en donne une autre.",
-        size=SMALL_SIZE, grey=pdf.GREY,
+        size=SMALL_SIZE,
+        grey=pdf.GREY,
     )
 
     signed_event = _last(events, SignatureEvent.Kind.EMPLOYEE_SIGNED) if request.employee_signed_at else None
@@ -385,7 +415,8 @@ def proof_pdf(request: SignatureRequest, *, now=None) -> bytes:
     pages.item(
         "Horodatage de sa signature",
         f"{_moment(request.employee_timestamp_at)} (heure de Paris), par {request.employee_timestamp_authority}"
-        if request.employee_timestamp_at else NOT_YET,
+        if request.employee_timestamp_at
+        else NOT_YET,
     )
     pages.item("Contresignature de l'employeur", _moment(request.employer_signed_at))
     if employer_drawing:
@@ -398,7 +429,8 @@ def proof_pdf(request: SignatureRequest, *, now=None) -> bytes:
     pages.item(
         "Horodatage de la contresignature",
         f"{_moment(request.employer_timestamp_at)} (heure de Paris), par {request.employer_timestamp_authority}"
-        if request.employer_timestamp_at else NOT_YET,
+        if request.employer_timestamp_at
+        else NOT_YET,
     )
     pages.item(
         "Autorité interne qui a émis les certificats",
@@ -407,8 +439,10 @@ def proof_pdf(request: SignatureRequest, *, now=None) -> bytes:
     # The authority recorded when each signature was made - not the one on
     # disk today, which is another once the keys folder was lost or moved.
     issued = []
-    for kind, whose in ((SignatureEvent.Kind.EMPLOYEE_SIGNED, "du salarié"),
-                        (SignatureEvent.Kind.COUNTERSIGNED, "de l'employeur")):
+    for kind, whose in (
+        (SignatureEvent.Kind.EMPLOYEE_SIGNED, "du salarié"),
+        (SignatureEvent.Kind.COUNTERSIGNED, "de l'employeur"),
+    ):
         event = _last(events, kind)
         fingerprint = str((event.detail or {}).get("authority_sha256") or "") if event is not None else ""
         if fingerprint:
@@ -427,7 +461,8 @@ def proof_pdf(request: SignatureRequest, *, now=None) -> bytes:
             f"L'autorité interne de cette installation n'est plus celle-ci (empreinte actuelle : {current}) : ses clés "
             "ont été perdues ou remplacées depuis. Les signatures de ce document restent vérifiables : chacune porte "
             "ses propres certificats.",
-            size=SMALL_SIZE, grey=pdf.GREY,
+            size=SMALL_SIZE,
+            grey=pdf.GREY,
         )
 
     pages.heading(f"Journal des événements ({len(events)})")

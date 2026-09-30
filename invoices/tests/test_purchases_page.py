@@ -69,8 +69,8 @@ class PurchasesPageTests(TestCase):
         """The page's script switches on `data-import-tab`: carried by the card
         itself, a click anywhere in it - choosing a folder - hid every panel."""
         html = self.client.get(self.url).content.decode()
-        card = html[html.index('id="ajouter"') - 200:html.index('id="import-documents"')]
-        opening = card[card.index("<section"):card.index(">", card.index("<section"))]
+        card = html[html.index('id="add-card"') - 200 : html.index('id="import-documents"')]
+        opening = card[card.index("<section") : card.index(">", card.index("<section"))]
         self.assertNotIn("data-import-tab", opening)
         self.assertIn('data-initial-tab=""', opening)
         self.assertEqual(html.count("data-import-tab="), 2)
@@ -129,7 +129,7 @@ class PurchasesPageTests(TestCase):
         make_invoice(supplier=charge, invoice_date=date(2026, 5, 5), parse_checks=FAILED)
         response = self.client.get(self.url)
         body = response.content.decode()
-        waiting = [tab["count"] for tab in response.context["tabs"] if tab["key"] == "a-verifier"][0]
+        waiting = next(tab["count"] for tab in response.context["tabs"] if tab["key"] == "a-verifier")
         self.assertEqual(body.count(">À vérifier<"), waiting)
         self.assertIn(">Charge<", body)
         # And no button offering to check what no queue holds.
@@ -138,7 +138,9 @@ class PurchasesPageTests(TestCase):
     def test_a_charge_whose_total_was_not_read_says_so_on_its_row(self):
         charge = Supplier.objects.create(code="BAILLEUR", name="Bailleur Exemple", expenses_only=True)
         make_invoice(
-            supplier=charge, invoice_date=date(2026, 5, 5), parse_checks=FAILED,
+            supplier=charge,
+            invoice_date=date(2026, 5, 5),
+            parse_checks=FAILED,
             status=Invoice.Status.NEEDS_REVIEW,
         )
         self.assertContains(self.client.get(self.url), ">Total à vérifier<")
@@ -147,8 +149,11 @@ class PurchasesPageTests(TestCase):
         """It is in no queue, so it would be nowhere at all."""
         charge = Supplier.objects.create(code="BAILLEUR", name="Bailleur Exemple", expenses_only=True)
         unread = make_invoice(
-            supplier=charge, invoice_date=date(2026, 5, 5), parse_checks=FAILED,
-            status=Invoice.Status.NEEDS_REVIEW, error_message="Le total de ce document n'a pas été lu",
+            supplier=charge,
+            invoice_date=date(2026, 5, 5),
+            parse_checks=FAILED,
+            status=Invoice.Status.NEEDS_REVIEW,
+            error_message="Le total de ce document n'a pas été lu",
         )
         response = self.client.get(reverse("invoices:receipt_queue"))
         self.assertIn(unread.pk, [invoice.pk for invoice in response.context["to_fix"]])
@@ -159,7 +164,9 @@ class PurchasesPageTests(TestCase):
         old = make_invoice(supplier=self.metro, invoice_number="ANCIENNE")
         Invoice.objects.filter(pk=old.pk).update(imported_at=timezone.now() - timedelta(days=30))
         self.assertEqual(set(self.rows(self.client.get(self.url, {"filtre": "factures"}))), {self.invoice.pk, old.pk})
-        self.assertEqual(set(self.rows(self.client.get(self.url, {"filtre": "tickets"}))), {self.ticket.pk, self.checked.pk})
+        self.assertEqual(
+            set(self.rows(self.client.get(self.url, {"filtre": "tickets"}))), {self.ticket.pk, self.checked.pk}
+        )
         recent = self.rows(self.client.get(self.url, {"filtre": "recents"}))
         self.assertNotIn(old.pk, recent)
         self.assertIn(self.invoice.pk, recent)
@@ -168,7 +175,7 @@ class PurchasesPageTests(TestCase):
         self.assertEqual(len(self.rows(self.client.get(self.url, {"filtre": "n'importe"}))), 4)
 
     def test_the_list_shows_the_newest_documents_and_says_so(self):
-        """823 rows was 1,2 Mo and half a second of template on every visit,
+        """823 rows was 1,2 MB and half a second of template on every visit,
         and opening one moved a table 47 000 pixels tall."""
         with mock.patch("invoices.workspace.PAGE_SIZE", 2):
             response = self.client.get(self.url)
@@ -198,8 +205,8 @@ class PurchasesPageTests(TestCase):
         """The Eau de Paris invoices sit at the 277th row and the Total
         Energies ones at the 575th: a box filtering what is rendered found
         nothing at all."""
-        eau = Supplier.objects.create(code="EAU", name="Eau De Paris")
-        old_one = make_invoice(supplier=eau, invoice_number="F-EAU", invoice_date=date(2019, 3, 4))
+        tap_water = Supplier.objects.create(code="EAU", name="Eau De Paris")
+        old_one = make_invoice(supplier=tap_water, invoice_number="F-EAU", invoice_date=date(2019, 3, 4))
         with mock.patch("invoices.workspace.PAGE_SIZE", 1):
             response = self.client.get(self.url, {"q": "eau de paris"})
         self.assertEqual(self.rows(response), [old_one.pk])
@@ -207,9 +214,11 @@ class PurchasesPageTests(TestCase):
         self.assertContains(response, "1 document pour")
 
     def test_the_search_takes_a_number_a_date_or_an_amount(self):
-        eau = Supplier.objects.create(code="EAU", name="Eau De Paris")
+        tap_water = Supplier.objects.create(code="EAU", name="Eau De Paris")
         wanted = make_invoice(
-            supplier=eau, invoice_number="2025106109524", invoice_date=date(2025, 7, 17),
+            supplier=tap_water,
+            invoice_number="2025106109524",
+            invoice_date=date(2025, 7, 17),
             printed_total_ttc=Decimal("260.63"),
         )
         for query in ("2025106109524", "17/07/2025", "07/2025", "260,63", "260.63"):
@@ -261,8 +270,10 @@ class PurchasesPageTests(TestCase):
 
     def test_a_pdf_that_fails_says_so_on_the_page(self):
         upload = SimpleUploadedFile("facture.pdf", b"%PDF-1.4", content_type="application/pdf")
-        with mock.patch("invoices.receipts.import_document", side_effect=ValueError("illisible")), \
-                self.assertLogs("invoices.views", "ERROR") as logged:
+        with (
+            mock.patch("invoices.receipts.import_document", side_effect=ValueError("illisible")),
+            self.assertLogs("invoices.views", "ERROR") as logged,
+        ):
             response = self.client.post(
                 reverse("invoices:invoice_upload"), {"supplier": self.metro.pk, "source_file": upload}, follow=True
             )
@@ -289,14 +300,18 @@ class PurchasesPageTests(TestCase):
 
     def test_a_row_opens_in_place(self):
         vodka = make_priced_stock_type(name="Vodka")
-        make_invoice_line(invoice=self.invoice, product=make_product(supplier=self.metro, stock_type=vodka),
-                          raw_name="VODKA 70CL", total_ht="12.00")
+        make_invoice_line(
+            invoice=self.invoice,
+            product=make_product(supplier=self.metro, stock_type=vodka),
+            raw_name="VODKA 70CL",
+            total_ht="12.00",
+        )
         make_invoice_line(invoice=self.invoice, product=make_product(supplier=self.metro), raw_name="RHUM X")
         response = self.client.get(reverse("invoices:invoice_preview", args=[self.invoice.pk]))
         self.assertNotContains(response, "<html")
         self.assertContains(response, "VODKA 70CL")
         self.assertContains(response, "Vodka")
-        self.assertContains(response, f'{reverse("inventory:stock_list")}#a-classer')
+        self.assertContains(response, f"{reverse('inventory:stock_list')}#a-classer")
         self.assertContains(response, reverse("invoices:invoice_edit_lines", args=[self.invoice.pk]))
         ticket = self.client.get(reverse("invoices:invoice_preview", args=[self.ticket.pk]))
         self.assertContains(ticket, "écart")
@@ -318,7 +333,9 @@ class PurchasesPageTests(TestCase):
         self.sabbh.ticket_header = "EPICERIE SABAH"
         self.sabbh.save()
         self.assertContains(self.client.get(reverse("invoices:supplier_list")), "EPICERIE SABAH")
-        self.assertContains(self.client.get(reverse("invoices:invoice_type_list")), reverse("invoices:invoice_type_create"))
+        self.assertContains(
+            self.client.get(reverse("invoices:invoice_type_list")), reverse("invoices:invoice_type_create")
+        )
 
 
 class CheckingAnImportTests(TestCase):
@@ -327,8 +344,7 @@ class CheckingAnImportTests(TestCase):
     def setUp(self):
         self.sabbh = Supplier.objects.get(code="SABBH")
         self.first, self.second, self.elsewhere = (
-            make_invoice(supplier=self.sabbh, invoice_date=date(2026, 5, day), parse_checks=FAILED)
-            for day in (3, 4, 1)
+            make_invoice(supplier=self.sabbh, invoice_date=date(2026, 5, day), parse_checks=FAILED) for day in (3, 4, 1)
         )
         for ticket in (self.first, self.second, self.elsewhere):
             make_invoice_line(invoice=ticket, product=make_product(supplier=self.sabbh), total_ht="1.00")

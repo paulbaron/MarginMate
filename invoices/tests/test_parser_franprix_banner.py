@@ -80,9 +80,7 @@ class SuffixedMultiplierTests(SimpleTestCase):
 
     def test_the_line_is_read_with_its_count(self):
         (line,) = self.invoice.lines
-        self.assertEqual(
-            (line.raw_name, line.quantity, line.printed_ttc), ("PAIN COMPLET", 2, Decimal("0.98"))
-        )
+        self.assertEqual((line.raw_name, line.quantity, line.printed_ttc), ("PAIN COMPLET", 2, Decimal("0.98")))
 
     def test_the_ticket_adds_up(self):
         self.assertEqual([check.label for check in self.invoice.checks if not check.passed], [])
@@ -109,7 +107,7 @@ LORIAN  R1 004211-01 516
 
 class TwoRatesTests(SimpleTestCase):
     """The total used to be taken from the one row that repeated an amount -
-    the bag's 0.20 - and the jambon's 11.20 became a "promotion", with the
+    the bag's 0.20 - and the ham's 11.20 became a "promotion", with the
     sum check passing on 0.20 of lines."""
 
     def setUp(self):

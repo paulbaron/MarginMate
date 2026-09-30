@@ -2,160 +2,274 @@
 
 import django.core.validators
 import django.db.models.deletion
-import returnables.models
 from django.db import migrations, models
+
+import returnables.models
 
 
 class Migration(migrations.Migration):
-
     initial = True
 
     dependencies = [
-        ('invoices', '0035_supplier_typed_identifiers'),
+        ("invoices", "0035_supplier_typed_identifiers"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='ReturnableType',
+            name="ReturnableType",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('name', models.CharField(max_length=60, unique=True, verbose_name='nom')),
-                ('position', models.PositiveSmallIntegerField(default=0, verbose_name='ordre')),
-                ('is_active', models.BooleanField(default=True, verbose_name='actif')),
-                ('slip_patterns', models.TextField(blank=True, help_text="Un motif par ligne : une ligne du bon dont la désignation contient l'un d'eux est de ce type.", verbose_name='motifs des bons')),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
+                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
+                ("name", models.CharField(max_length=60, unique=True, verbose_name="nom")),
+                ("position", models.PositiveSmallIntegerField(default=0, verbose_name="ordre")),
+                ("is_active", models.BooleanField(default=True, verbose_name="actif")),
+                (
+                    "slip_patterns",
+                    models.TextField(
+                        blank=True,
+                        help_text="Un motif par ligne : une ligne du bon dont la désignation contient l'un d'eux est de ce type.",
+                        verbose_name="motifs des bons",
+                    ),
+                ),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
             ],
             options={
-                'verbose_name': 'type de consigne',
-                'verbose_name_plural': 'types de consigne',
-                'ordering': ['position', 'id'],
+                "verbose_name": "type de consigne",
+                "verbose_name_plural": "types de consigne",
+                "ordering": ["position", "id"],
             },
         ),
         migrations.CreateModel(
-            name='Pickup',
+            name="Pickup",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('reference', models.CharField(default=returnables.models.new_reference, editable=False, max_length=16, unique=True, verbose_name='référence')),
-                ('date', models.DateField(verbose_name='date')),
-                ('note', models.TextField(blank=True, verbose_name='note')),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('supplier', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='pickups', to='invoices.supplier', verbose_name='repris par')),
+                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
+                (
+                    "reference",
+                    models.CharField(
+                        default=returnables.models.new_reference,
+                        editable=False,
+                        max_length=16,
+                        unique=True,
+                        verbose_name="référence",
+                    ),
+                ),
+                ("date", models.DateField(verbose_name="date")),
+                ("note", models.TextField(blank=True, verbose_name="note")),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                (
+                    "supplier",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.PROTECT,
+                        related_name="pickups",
+                        to="invoices.supplier",
+                        verbose_name="repris par",
+                    ),
+                ),
             ],
             options={
-                'verbose_name': 'reprise',
-                'verbose_name_plural': 'reprises',
-                'ordering': ['-date', '-id'],
+                "verbose_name": "reprise",
+                "verbose_name_plural": "reprises",
+                "ordering": ["-date", "-id"],
             },
         ),
         migrations.CreateModel(
-            name='PickupPhoto',
+            name="PickupPhoto",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('image', models.FileField(upload_to='consignes/photos/%Y/%m/', verbose_name='photo')),
-                ('thumb', models.FileField(upload_to='consignes/photos/%Y/%m/', verbose_name='vignette')),
-                ('taken_at', models.DateTimeField(blank=True, null=True, verbose_name='prise le')),
-                ('width', models.PositiveIntegerField(verbose_name='largeur')),
-                ('height', models.PositiveIntegerField(verbose_name='hauteur')),
-                ('created_at', models.DateTimeField(auto_now_add=True, verbose_name='envoyée le')),
-                ('pickup', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='photos', to='returnables.pickup')),
+                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
+                ("image", models.FileField(upload_to="consignes/photos/%Y/%m/", verbose_name="photo")),
+                ("thumb", models.FileField(upload_to="consignes/photos/%Y/%m/", verbose_name="vignette")),
+                ("taken_at", models.DateTimeField(blank=True, null=True, verbose_name="prise le")),
+                ("width", models.PositiveIntegerField(verbose_name="largeur")),
+                ("height", models.PositiveIntegerField(verbose_name="hauteur")),
+                ("created_at", models.DateTimeField(auto_now_add=True, verbose_name="envoyée le")),
+                (
+                    "pickup",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE, related_name="photos", to="returnables.pickup"
+                    ),
+                ),
             ],
             options={
-                'verbose_name': 'photo de reprise',
-                'verbose_name_plural': 'photos de reprise',
-                'ordering': ['created_at', 'id'],
+                "verbose_name": "photo de reprise",
+                "verbose_name_plural": "photos de reprise",
+                "ordering": ["created_at", "id"],
             },
         ),
         migrations.CreateModel(
-            name='SlipFormat',
+            name="SlipFormat",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('name', models.CharField(max_length=80, unique=True, verbose_name='nom')),
-                ('is_active', models.BooleanField(default=True, verbose_name='actif')),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('sender_pattern', models.CharField(blank=True, max_length=300, verbose_name="motif de l'expéditeur")),
-                ('subject_pattern', models.CharField(blank=True, max_length=300, verbose_name="motif de l'objet")),
-                ('attachment_pattern', models.CharField(default='(?i)\\.pdf$', max_length=200, verbose_name='motif de la pièce jointe')),
-                ('section_start', models.CharField(blank=True, max_length=300, verbose_name='début de la partie des consignes')),
-                ('section_end', models.CharField(blank=True, max_length=300, verbose_name='fin de la partie des consignes')),
-                ('line_pattern', models.CharField(max_length=500, verbose_name='motif de ligne')),
-                ('date_patterns', models.TextField(verbose_name='motifs de la date de livraison')),
-                ('printed_patterns', models.TextField(blank=True, verbose_name="motifs de la date d'impression")),
-                ('number_patterns', models.TextField(blank=True, verbose_name='motifs du numéro')),
-                ('reference_patterns', models.TextField(blank=True, verbose_name='motifs des références')),
-                ('replaces_pattern', models.CharField(blank=True, max_length=300, verbose_name='motif « annule et remplace »')),
-                ('total_patterns', models.TextField(blank=True, verbose_name='motifs du total')),
-                ('remarks_start', models.CharField(blank=True, max_length=300, verbose_name='début des remarques')),
-                ('remarks_end', models.CharField(blank=True, max_length=300, verbose_name='fin des remarques')),
-                ('supplier', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='slip_formats', to='invoices.supplier', verbose_name='fournisseur')),
+                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
+                ("name", models.CharField(max_length=80, unique=True, verbose_name="nom")),
+                ("is_active", models.BooleanField(default=True, verbose_name="actif")),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("sender_pattern", models.CharField(blank=True, max_length=300, verbose_name="motif de l'expéditeur")),
+                ("subject_pattern", models.CharField(blank=True, max_length=300, verbose_name="motif de l'objet")),
+                (
+                    "attachment_pattern",
+                    models.CharField(default="(?i)\\.pdf$", max_length=200, verbose_name="motif de la pièce jointe"),
+                ),
+                (
+                    "section_start",
+                    models.CharField(blank=True, max_length=300, verbose_name="début de la partie des consignes"),
+                ),
+                (
+                    "section_end",
+                    models.CharField(blank=True, max_length=300, verbose_name="fin de la partie des consignes"),
+                ),
+                ("line_pattern", models.CharField(max_length=500, verbose_name="motif de ligne")),
+                ("date_patterns", models.TextField(verbose_name="motifs de la date de livraison")),
+                ("printed_patterns", models.TextField(blank=True, verbose_name="motifs de la date d'impression")),
+                ("number_patterns", models.TextField(blank=True, verbose_name="motifs du numéro")),
+                ("reference_patterns", models.TextField(blank=True, verbose_name="motifs des références")),
+                (
+                    "replaces_pattern",
+                    models.CharField(blank=True, max_length=300, verbose_name="motif « annule et remplace »"),
+                ),
+                ("total_patterns", models.TextField(blank=True, verbose_name="motifs du total")),
+                ("remarks_start", models.CharField(blank=True, max_length=300, verbose_name="début des remarques")),
+                ("remarks_end", models.CharField(blank=True, max_length=300, verbose_name="fin des remarques")),
+                (
+                    "supplier",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.PROTECT,
+                        related_name="slip_formats",
+                        to="invoices.supplier",
+                        verbose_name="fournisseur",
+                    ),
+                ),
             ],
             options={
-                'verbose_name': 'format de bon',
-                'verbose_name_plural': 'formats de bons',
-                'ordering': ['name', 'id'],
+                "verbose_name": "format de bon",
+                "verbose_name_plural": "formats de bons",
+                "ordering": ["name", "id"],
             },
         ),
         migrations.CreateModel(
-            name='Slip',
+            name="Slip",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('origin', models.CharField(choices=[('MAIL', 'Reçu par mail'), ('UPLOAD', 'Déposé à la main')], max_length=10, verbose_name='provenance')),
-                ('file', models.FileField(upload_to='consignes/bons/%Y/%m/', verbose_name='fichier')),
-                ('sha256', models.CharField(max_length=64, unique=True, verbose_name='empreinte SHA-256')),
-                ('original_name', models.CharField(blank=True, max_length=200, verbose_name='nom du fichier reçu')),
-                ('mail_sender', models.CharField(blank=True, max_length=300, verbose_name='expéditeur du mail')),
-                ('mail_subject', models.CharField(blank=True, max_length=300, verbose_name='objet du mail')),
-                ('mail_date', models.DateField(blank=True, null=True, verbose_name='date du mail')),
-                ('received_at', models.DateTimeField(auto_now_add=True, verbose_name='reçu le')),
-                ('text', models.TextField(blank=True, verbose_name='texte lu')),
-                ('delivery_date', models.DateField(blank=True, null=True, verbose_name='date de livraison')),
-                ('printed_at', models.DateTimeField(blank=True, null=True, verbose_name='imprimé le')),
-                ('number', models.CharField(blank=True, max_length=40, verbose_name='numéro')),
-                ('references', models.JSONField(blank=True, default=list, verbose_name='références')),
-                ('replaces', models.BooleanField(default=False, verbose_name='annule et remplace')),
-                ('printed_total', models.DecimalField(blank=True, decimal_places=2, max_digits=12, null=True, verbose_name='total imprimé')),
-                ('remarks', models.TextField(blank=True, verbose_name='remarques du bon')),
-                ('checks', models.JSONField(blank=True, default=list, verbose_name='contrôles')),
-                ('read_error', models.CharField(blank=True, max_length=300, verbose_name='erreur de lecture')),
-                ('read_at', models.DateTimeField(blank=True, null=True, verbose_name='lu le')),
-                ('format', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='slips', to='returnables.slipformat', verbose_name='format')),
+                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
+                (
+                    "origin",
+                    models.CharField(
+                        choices=[("MAIL", "Reçu par mail"), ("UPLOAD", "Déposé à la main")],
+                        max_length=10,
+                        verbose_name="provenance",
+                    ),
+                ),
+                ("file", models.FileField(upload_to="consignes/bons/%Y/%m/", verbose_name="fichier")),
+                ("sha256", models.CharField(max_length=64, unique=True, verbose_name="empreinte SHA-256")),
+                ("original_name", models.CharField(blank=True, max_length=200, verbose_name="nom du fichier reçu")),
+                ("mail_sender", models.CharField(blank=True, max_length=300, verbose_name="expéditeur du mail")),
+                ("mail_subject", models.CharField(blank=True, max_length=300, verbose_name="objet du mail")),
+                ("mail_date", models.DateField(blank=True, null=True, verbose_name="date du mail")),
+                ("received_at", models.DateTimeField(auto_now_add=True, verbose_name="reçu le")),
+                ("text", models.TextField(blank=True, verbose_name="texte lu")),
+                ("delivery_date", models.DateField(blank=True, null=True, verbose_name="date de livraison")),
+                ("printed_at", models.DateTimeField(blank=True, null=True, verbose_name="imprimé le")),
+                ("number", models.CharField(blank=True, max_length=40, verbose_name="numéro")),
+                ("references", models.JSONField(blank=True, default=list, verbose_name="références")),
+                ("replaces", models.BooleanField(default=False, verbose_name="annule et remplace")),
+                (
+                    "printed_total",
+                    models.DecimalField(
+                        blank=True, decimal_places=2, max_digits=12, null=True, verbose_name="total imprimé"
+                    ),
+                ),
+                ("remarks", models.TextField(blank=True, verbose_name="remarques du bon")),
+                ("checks", models.JSONField(blank=True, default=list, verbose_name="contrôles")),
+                ("read_error", models.CharField(blank=True, max_length=300, verbose_name="erreur de lecture")),
+                ("read_at", models.DateTimeField(blank=True, null=True, verbose_name="lu le")),
+                (
+                    "format",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.PROTECT,
+                        related_name="slips",
+                        to="returnables.slipformat",
+                        verbose_name="format",
+                    ),
+                ),
             ],
             options={
-                'verbose_name': 'bon',
-                'verbose_name_plural': 'bons',
-                'ordering': ['-received_at', '-id'],
+                "verbose_name": "bon",
+                "verbose_name_plural": "bons",
+                "ordering": ["-received_at", "-id"],
             },
         ),
         migrations.CreateModel(
-            name='SlipLine',
+            name="SlipLine",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('position', models.PositiveSmallIntegerField(verbose_name='rang')),
-                ('designation', models.CharField(max_length=200, verbose_name='désignation')),
-                ('quantity', models.IntegerField(verbose_name='quantité')),
-                ('unit_amount', models.DecimalField(blank=True, decimal_places=4, max_digits=12, null=True, verbose_name='prix unitaire')),
-                ('amount', models.DecimalField(blank=True, decimal_places=2, max_digits=12, null=True, verbose_name='montant')),
-                ('slip', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='lines', to='returnables.slip')),
+                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
+                ("position", models.PositiveSmallIntegerField(verbose_name="rang")),
+                ("designation", models.CharField(max_length=200, verbose_name="désignation")),
+                ("quantity", models.IntegerField(verbose_name="quantité")),
+                (
+                    "unit_amount",
+                    models.DecimalField(
+                        blank=True, decimal_places=4, max_digits=12, null=True, verbose_name="prix unitaire"
+                    ),
+                ),
+                (
+                    "amount",
+                    models.DecimalField(blank=True, decimal_places=2, max_digits=12, null=True, verbose_name="montant"),
+                ),
+                (
+                    "slip",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE, related_name="lines", to="returnables.slip"
+                    ),
+                ),
             ],
             options={
-                'verbose_name': 'ligne de bon',
-                'verbose_name_plural': 'lignes de bons',
-                'ordering': ['position', 'id'],
+                "verbose_name": "ligne de bon",
+                "verbose_name_plural": "lignes de bons",
+                "ordering": ["position", "id"],
             },
         ),
         migrations.CreateModel(
-            name='PickupCount',
+            name="PickupCount",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('quantity', models.PositiveIntegerField(validators=[django.core.validators.MinValueValidator(1, message="Un nombre repris va de 1 à 9 999 : zéro, c'est ne pas l'enregistrer."), django.core.validators.MaxValueValidator(9999, message='Un nombre repris va de 1 à 9 999.')], verbose_name='nombre')),
-                ('pickup', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='counts', to='returnables.pickup')),
-                ('returnable_type', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='counts', to='returnables.returnabletype', verbose_name='type de consigne')),
+                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
+                (
+                    "quantity",
+                    models.PositiveIntegerField(
+                        validators=[
+                            django.core.validators.MinValueValidator(
+                                1, message="Un nombre repris va de 1 à 9 999 : zéro, c'est ne pas l'enregistrer."
+                            ),
+                            django.core.validators.MaxValueValidator(9999, message="Un nombre repris va de 1 à 9 999."),
+                        ],
+                        verbose_name="nombre",
+                    ),
+                ),
+                (
+                    "pickup",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE, related_name="counts", to="returnables.pickup"
+                    ),
+                ),
+                (
+                    "returnable_type",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.PROTECT,
+                        related_name="counts",
+                        to="returnables.returnabletype",
+                        verbose_name="type de consigne",
+                    ),
+                ),
             ],
             options={
-                'verbose_name': 'nombre repris',
-                'verbose_name_plural': 'nombres repris',
-                'ordering': ['returnable_type__position', 'returnable_type_id'],
-                'constraints': [models.UniqueConstraint(fields=('pickup', 'returnable_type'), name='unique_pickup_count_per_type'), models.CheckConstraint(condition=models.Q(('quantity__gte', 1), ('quantity__lte', 9999)), name='pickup_count_from_1_to_9999')],
+                "verbose_name": "nombre repris",
+                "verbose_name_plural": "nombres repris",
+                "ordering": ["returnable_type__position", "returnable_type_id"],
+                "constraints": [
+                    models.UniqueConstraint(fields=("pickup", "returnable_type"), name="unique_pickup_count_per_type"),
+                    models.CheckConstraint(
+                        condition=models.Q(("quantity__gte", 1), ("quantity__lte", 9999)),
+                        name="pickup_count_from_1_to_9999",
+                    ),
+                ],
             },
         ),
     ]

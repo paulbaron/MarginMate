@@ -29,10 +29,10 @@ def serving_requests(argv, environ) -> bool:
 
 def reap_interrupted_gathers(started) -> None:
     """Mark failed the gathers a server restart interrupted - those not
-    heard from since `started`, this process's start - in every espace,
+    heard from since `started`, this process's start - in every tenant,
     each bound in turn, and never in the unbound `default`: that is
-    nobody's database (an empty one in production), and before the espaces
-    it was the owner's file whoever the jobs belonged to. An espace whose
+    nobody's database (an empty one in production), and before the tenants
+    it was the owner's file whoever the jobs belonged to. A tenant whose
     database cannot be bound (its file missing) is stepped over: it has
     nothing to reap, and the others still do."""
     from django.core.exceptions import ImproperlyConfigured
@@ -42,12 +42,12 @@ def reap_interrupted_gathers(started) -> None:
     from accounts.tenancy import TenancyError, bound_tenant
 
     try:
-        espaces = list(Tenant.objects.filter(is_active=True))
+        tenants = list(Tenant.objects.filter(is_active=True))
     except DatabaseError:
         return  # the accounts database is not migrated yet
-    for espace in espaces:
+    for tenant in tenants:
         try:
-            with bound_tenant(espace):
+            with bound_tenant(tenant):
                 _reap_here(started)
         except (TenancyError, ImproperlyConfigured):
             continue
@@ -90,7 +90,7 @@ def _reap_after_delay(started, origin: int) -> None:
     try:
         _wait(REAP_DELAY_SECONDS)
         reap_interrupted_gathers(started)
-    except Exception:  # noqa: BLE001 - a dead job is still reaped where its page polls it
+    except Exception:
         logger.exception("Le nettoyage des récupérations interrompues au démarrage a échoué.")
     finally:
         if threading.get_ident() != origin:
@@ -100,8 +100,8 @@ def _reap_after_delay(started, origin: int) -> None:
 
 
 class InvoicesConfig(AppConfig):
-    default_auto_field = 'django.db.models.BigAutoField'
-    name = 'invoices'
+    default_auto_field = "django.db.models.BigAutoField"
+    name = "invoices"
 
     def ready(self):
         # Gather jobs run in a plain background thread (see tasks.py), which

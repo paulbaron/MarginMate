@@ -46,16 +46,28 @@ class DecimalQuantityTests(TestCase):
         self.shop = Supplier.objects.get(code="FRANPRIX")
         self.ticket = make_invoice(supplier=self.shop, parse_checks=CHECKED)
         self.line = make_invoice_line(
-            invoice=self.ticket, product=make_product(supplier=self.shop, raw_name="CP EXT 10MM 1M2"),
-            raw_name="CP EXT 10MM 1M2", total_ht="25.22", vat_rate=D("0.20"), printed_ttc=D("30.26"),
+            invoice=self.ticket,
+            product=make_product(supplier=self.shop, raw_name="CP EXT 10MM 1M2"),
+            raw_name="CP EXT 10MM 1M2",
+            total_ht="25.22",
+            vat_rate=D("0.20"),
+            printed_ttc=D("30.26"),
         )
         self.url = reverse("invoices:receipt_review", args=[self.ticket.pk])
 
     def test_a_fraction_is_stored(self):
         replace_invoice_lines(
             self.ticket,
-            [ParsedLine(raw_name="CP EXT 15MM 1M2", quantity=D("0.55"), total_volume=D("0"),
-                        unit_cost_ht=D("45.7636"), total_ht=D("25.17"), vat_rate=D("0.20"))],
+            [
+                ParsedLine(
+                    raw_name="CP EXT 15MM 1M2",
+                    quantity=D("0.55"),
+                    total_volume=D("0"),
+                    unit_cost_ht=D("45.7636"),
+                    total_ht=D("25.17"),
+                    vat_rate=D("0.20"),
+                )
+            ],
         )
         line = InvoiceLine.objects.get(invoice=self.ticket)
         self.assertEqual(line.quantity, D("0.55"))

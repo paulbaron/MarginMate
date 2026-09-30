@@ -42,10 +42,7 @@ def line(total_ht: str, label: str = "", spread_ht: str = "0") -> FakeLine:
 def ladder(*entries):
     """(line, quantity) pairs, newest purchase first. An entry may carry a
     fourth value: the line's share of the invoice's delivery."""
-    return [
-        (line(total_ht, label, *rest), Decimal(quantity))
-        for label, quantity, total_ht, *rest in entries
-    ]
+    return [(line(total_ht, label, *rest), Decimal(quantity)) for label, quantity, total_ht, *rest in entries]
 
 
 class FifoValueTests(SimpleTestCase):
@@ -102,7 +99,7 @@ class FifoValueTests(SimpleTestCase):
         self.assertEqual(result["value_ht"], Decimal("30"))
 
     def test_refund_lines_are_not_treated_as_stock_on_the_shelf(self):
-        """B2. A déconsigne refund (returning empty kegs) is an invoice line
+        """B2. A deposit refund (returning empty kegs) is an invoice line
         with a NEGATIVE quantity and total. It is not stock sitting on the
         shelf, so it must not enter the price ladder at all.
 

@@ -1,4 +1,4 @@
-"""Invented bons du livreur, for every consignes test (read-only for the
+"""Invented driver's slips, for every returnables test (read-only for the
 other test modules: copy with `uba_rules(**changes)`, never mutate).
 
 The LAYOUT is UBA's driver ticket as pdfplumber's extract_text() gives it
@@ -8,8 +8,8 @@ part and its 24-dash separator, labels CUT TO 20 CHARACTERS that may hold
 digits, « Û » (U+00DB), one or more « BL No: … du … » lines with an
 optional « Montant », « Deconsigne », the optional ANOMALIES block. Every
 VALUE is invented - names, addresses, phones, account, driver, ticket and
-BL numbers, dates, counts and amounts: the owner's real tickets were read
-for their structure only, and this repository is public.
+delivery-note numbers, dates, counts and amounts: the owner's real tickets
+were read for their structure only, and this repository is public.
 
 Dates are in the past (a reading refuses a date after today + 7 days).
 All texts are Latin-1, so `invoices/tests/pdf_files.write_pdf` prints them
@@ -53,7 +53,7 @@ FULL_NAMES = {
 
 UBA_FORMAT_NAME = "UBA \N{EM DASH} bon du livreur"
 
-UBA_MOTIFS = {
+UBA_PATTERNS = {
     "sender_pattern": r"mphone@uba\.paris",
     "subject_pattern": r"^\s*Livraison du\b",
     "attachment_pattern": r"(?i)\.pdf$",
@@ -63,7 +63,7 @@ UBA_MOTIFS = {
         r"^(?P<designation>.+?)\s+(?P<quantite>-?\d+)\s+x\s+(?P<prix>-?\d+(?:[.,]\d+)?)"
         r"\s+=\s+(?P<montant>-?\d+(?:[.,]\d+)?)\s*$"
     ),
-    "date_patterns": "\n".join(
+    "date_patterns": "\n".join(  # noqa: FLY002 - one pattern per line, as the field stores them
         [
             r"BL No:\s*\d+\s+du\s+(?P<date>\d{2}/\d{2}/\d{4})",
             r"^Le\s+(?P<date>\d{2}/\d{2}/\d{4})",
@@ -78,13 +78,13 @@ UBA_MOTIFS = {
     "remarks_end": r"^Merci de Votre Commande",
 }
 
-#: (name, position, motifs) of the three seeded types.
+#: (name, position, patterns) of the three seeded types.
 SEED_TYPES = (
     ("F\N{LATIN SMALL LETTER U WITH CIRCUMFLEX}ts", 1, rf"F[{U_HAT}U]TS?\b"),
     ("Caisses verre", 2, r"CAISSE|CASIER|JUS|SODA|\bEAUX?\b|\d+\s*CL\b"),
     ("Bouteilles CO2", 3, r"CO2|\bGAZ\b"),
 )
-KEGS, CRATES, BOTTLES = (name for name, _position, _motifs in SEED_TYPES)
+KEGS, CRATES, BOTTLES = (name for name, _position, _patterns in SEED_TYPES)
 
 #: The seeded type each designation above belongs to (None: unclassified).
 EXPECTED_TYPE = {
@@ -99,9 +99,9 @@ EXPECTED_TYPE = {
 
 
 def uba_rules(**changes) -> SimpleNamespace:
-    """A format carrying the seeded UBA motifs (and a name, active), as the
+    """A format carrying the seeded UBA patterns (and a name, active), as the
     pure modules take it - `changes` replacing any attribute."""
-    values = {"name": UBA_FORMAT_NAME, "is_active": True, **UBA_MOTIFS}
+    values = {"name": UBA_FORMAT_NAME, "is_active": True, **UBA_PATTERNS}
     values.update(changes)
     return SimpleNamespace(**values)
 
@@ -113,8 +113,10 @@ UBA_RULES = uba_rules()
 def seed_types() -> list:
     """The three seeded types as namespaces (pk 1, 2, 3), for classification."""
     return [
-        SimpleNamespace(pk=position, id=position, name=name, position=position, is_active=True, slip_patterns=motifs)
-        for name, position, motifs in SEED_TYPES
+        SimpleNamespace(
+            pk=position, id=position, name=name, position=position, is_active=True, slip_patterns=slip_patterns
+        )
+        for name, position, slip_patterns in SEED_TYPES
     ]
 
 
@@ -126,10 +128,21 @@ def row(designation: str, quantity, unit: str, amount: str) -> str:
     return f"{designation} {quantity} x {unit} = {amount}"
 
 
-def ticket(*, number: str, printed: str, bl_lines, rows=(), deconsigne: str, total_net: str,
-           replaces: bool = False, anomalies=(), section: bool = True, trailer=()) -> str:
+def ticket(
+    *,
+    number: str,
+    printed: str,
+    delivery_note_lines,
+    rows=(),
+    deposit_refund: str,
+    total_net: str,
+    replaces: bool = False,
+    anomalies=(),
+    section: bool = True,
+    trailer=(),
+) -> str:
     """One ticket's text, in the order extract_text() gives it. `printed` is
-    « dd/mm/yyyy hh:mm:ss »; `bl_lines` the lines under « FACTURE(S)/BL DU
+    « dd/mm/yyyy hh:mm:ss »; `delivery_note_lines` the lines under « FACTURE(S)/BL DU
     JOUR » before « Deconsigne »; `anomalies` the lines of an ANOMALIES
     block (none: no block); `section=False` leaves REPRISE VIDE out;
     `trailer` lines are printed after the last line."""
@@ -155,9 +168,9 @@ def ticket(*, number: str, printed: str, bl_lines, rows=(), deconsigne: str, tot
     ]
     if section:
         lines += ["REPRISE VIDE", SEPARATOR, *rows]
-    lines += ["FACTURE(S)/BL DU JOUR", SEPARATOR, *bl_lines]
+    lines += ["FACTURE(S)/BL DU JOUR", SEPARATOR, *delivery_note_lines]
     lines += [
-        f"Deconsigne : {deconsigne}",
+        f"Deconsigne : {deposit_refund}",
         f"Total Net : {total_net}",
         "ENCAISSEMENT",
         SEPARATOR,
@@ -169,9 +182,10 @@ def ticket(*, number: str, printed: str, bl_lines, rows=(), deconsigne: str, tot
     return "\n".join(lines)
 
 
-def _bon(name, text, *, number, delivery, printed, references, lines=(), unread=(), total, replaces=False,
-         remarks="") -> SimpleNamespace:
-    """A ticket and what the seeded UBA motifs read in it."""
+def _slip(
+    name, text, *, number, delivery, printed, references, lines=(), unread=(), total, replaces=False, remarks=""
+) -> SimpleNamespace:
+    """A ticket and what the seeded UBA patterns read in it."""
     return SimpleNamespace(
         name=name,
         text=text,
@@ -191,15 +205,15 @@ D = Decimal
 
 # -- The tickets: one per quirk -------------------------------------------------------------------------------------
 
-#: Two rows (kegs, a cut CO2 label), one BL with its Montant.
-NORMAL = _bon(
+#: Two rows (kegs, a cut CO2 label), one delivery note with its Montant.
+NORMAL = _slip(
     "normal",
     ticket(
         number="0000001001",
         printed="14/05/2025 08:15:02",
         rows=[row(KEG, 3, "30.00", "90.00"), row(CO2, 1, "85.00", "85.00")],
-        bl_lines=["BL No: 610001 du 14/05/2025", "Montant : 123.45"],
-        deconsigne="-175.00",
+        delivery_note_lines=["BL No: 610001 du 14/05/2025", "Montant : 123.45"],
+        deposit_refund="-175.00",
         total_net="-51.55",
     ),
     number="1001",
@@ -211,7 +225,7 @@ NORMAL = _bon(
 )
 
 #: NORMAL e-mailed again, printed the next morning: identical but « Le … ».
-RESEND = _bon(
+RESEND = _slip(
     "resend",
     NORMAL.text.replace("Le 14/05/2025 08:15:02", "Le 15/05/2025 07:40:10"),
     number="1001",
@@ -223,13 +237,13 @@ RESEND = _bon(
 )
 
 #: Nothing handed back: the REPRISE VIDE part has its separator only.
-EMPTY = _bon(
+EMPTY = _slip(
     "empty",
     ticket(
         number="0000001002",
         printed="16/05/2025 09:00:00",
-        bl_lines=["BL No: 610002 du 16/05/2025", "Montant : 250.00"],
-        deconsigne="0.00",
+        delivery_note_lines=["BL No: 610002 du 16/05/2025", "Montant : 250.00"],
+        deposit_refund="0.00",
         total_net="250.00",
     ),
     number="1002",
@@ -239,15 +253,15 @@ EMPTY = _bon(
     total=D("0.00"),
 )
 
-#: Two BL lines, then ONE Montant for both.
-TWO_BLS = _bon(
+#: Two delivery-note lines, then ONE Montant for both.
+TWO_DELIVERY_NOTES = _slip(
     "two BLs, one Montant",
     ticket(
         number="0000001003",
         printed="20/05/2025 10:12:45",
         rows=[row(KEG, 6, "30.00", "180.00")],
-        bl_lines=["BL No: 610003 du 20/05/2025", "BL No: 610004 du 20/05/2025", "Montant : 480.00"],
-        deconsigne="-180.00",
+        delivery_note_lines=["BL No: 610003 du 20/05/2025", "BL No: 610004 du 20/05/2025", "Montant : 480.00"],
+        deposit_refund="-180.00",
         total_net="300.00",
     ),
     number="1003",
@@ -258,15 +272,15 @@ TWO_BLS = _bon(
     total=D("-180.00"),
 )
 
-#: A BL with no Montant line at all.
-BL_WITHOUT_MONTANT = _bon(
+#: A delivery note with no Montant line at all.
+DELIVERY_NOTE_WITHOUT_AMOUNT = _slip(
     "BL without Montant",
     ticket(
         number="0000001004",
         printed="22/05/2025 08:30:00",
         rows=[row(KEG, 2, "30.00", "60.00")],
-        bl_lines=["BL No: 610005 du 22/05/2025"],
-        deconsigne="-60.00",
+        delivery_note_lines=["BL No: 610005 du 22/05/2025"],
+        deposit_refund="-60.00",
         total_net="-60.00",
     ),
     number="1004",
@@ -277,16 +291,16 @@ BL_WITHOUT_MONTANT = _bon(
     total=D("-60.00"),
 )
 
-#: A ticket later cancelled and replaced (by REPLACEMENT: same BL, a new
-#: number, one keg less).
-ORIGINAL = _bon(
+#: A ticket later cancelled and replaced (by REPLACEMENT: same delivery
+#: note, a new number, one keg less).
+ORIGINAL = _slip(
     "original",
     ticket(
         number="0000001005",
         printed="26/05/2025 07:55:00",
         rows=[row(KEG, 5, "30.00", "150.00")],
-        bl_lines=["BL No: 610006 du 26/05/2025", "Montant : 360.00"],
-        deconsigne="-150.00",
+        delivery_note_lines=["BL No: 610006 du 26/05/2025", "Montant : 360.00"],
+        deposit_refund="-150.00",
         total_net="210.00",
     ),
     number="1005",
@@ -297,15 +311,15 @@ ORIGINAL = _bon(
     total=D("-150.00"),
 )
 
-REPLACEMENT = _bon(
+REPLACEMENT = _slip(
     "replacement",
     ticket(
         number="0000001006",
         printed="26/05/2025 11:20:00",
         replaces=True,
         rows=[row(KEG, 4, "30.00", "120.00")],
-        bl_lines=["BL No: 610006 du 26/05/2025", "Montant : 360.00"],
-        deconsigne="-120.00",
+        delivery_note_lines=["BL No: 610006 du 26/05/2025", "Montant : 360.00"],
+        deposit_refund="-120.00",
         total_net="240.00",
     ),
     number="1006",
@@ -318,13 +332,13 @@ REPLACEMENT = _bon(
 )
 
 #: An empty part, later corrected to kegs (by REPLACEMENT_WITH_KEGS).
-ORIGINAL_EMPTY = _bon(
+ORIGINAL_EMPTY = _slip(
     "original, empty",
     ticket(
         number="0000001007",
         printed="28/05/2025 08:05:00",
-        bl_lines=["BL No: 610007 du 28/05/2025", "Montant : 95.00"],
-        deconsigne="0.00",
+        delivery_note_lines=["BL No: 610007 du 28/05/2025", "Montant : 95.00"],
+        deposit_refund="0.00",
         total_net="95.00",
     ),
     number="1007",
@@ -334,15 +348,15 @@ ORIGINAL_EMPTY = _bon(
     total=D("0.00"),
 )
 
-REPLACEMENT_WITH_KEGS = _bon(
+REPLACEMENT_WITH_KEGS = _slip(
     "replacement, with kegs",
     ticket(
         number="0000001008",
         printed="28/05/2025 16:30:00",
         replaces=True,
         rows=[row(KEG, 2, "30.00", "60.00")],
-        bl_lines=["BL No: 610007 du 28/05/2025", "Montant : 95.00"],
-        deconsigne="-60.00",
+        delivery_note_lines=["BL No: 610007 du 28/05/2025", "Montant : 95.00"],
+        deposit_refund="-60.00",
         total_net="35.00",
     ),
     number="1008",
@@ -356,14 +370,14 @@ REPLACEMENT_WITH_KEGS = _bon(
 
 #: The ANOMALIES block: a keg taken back FULL, between two lines of pluses.
 ANOMALY_LINES = ["REPRISE MARCHANDISE", "Quantite : 1 FUT", f"REPRISE 1 F{U_HAT}T DE BIERE TEST 20L"]
-ANOMALIES = _bon(
+ANOMALIES = _slip(
     "anomalies",
     ticket(
         number="0000001009",
         printed="02/06/2025 09:30:00",
         rows=[row(KEG, 1, "30.00", "30.00")],
-        bl_lines=["BL No: 610008 du 02/06/2025", "Montant : 140.00"],
-        deconsigne="-30.00",
+        delivery_note_lines=["BL No: 610008 du 02/06/2025", "Montant : 140.00"],
+        deposit_refund="-30.00",
         total_net="110.00",
         anomalies=ANOMALY_LINES,
     ),
@@ -378,7 +392,7 @@ ANOMALIES = _bon(
 
 #: Every seeded type, labels cut at 20 characters, and one line no type
 #: recognises (PALLET).
-MIXED = _bon(
+MIXED = _slip(
     "mixed",
     ticket(
         number="0000001010",
@@ -391,8 +405,8 @@ MIXED = _bon(
             row(CO2, 1, "85.00", "85.00"),
             row(PALLET, 1, "12.00", "12.00"),
         ],
-        bl_lines=["BL No: 610009 du 04/06/2025", "Montant : 410.00"],
-        deconsigne="-191.50",
+        delivery_note_lines=["BL No: 610009 du 04/06/2025", "Montant : 410.00"],
+        deposit_refund="-191.50",
         total_net="218.50",
     ),
     number="1010",
@@ -410,17 +424,17 @@ MIXED = _bon(
     total=D("-191.50"),
 )
 
-#: Two lines of the part the line motif cannot read: one with no figures,
+#: Two lines of the part the line pattern cannot read: one with no figures,
 #: one without its amount.
 UNREAD_LINES = ["CASIER DIVERS", f"{KEG} 1 x 30.00"]
-UNREAD = _bon(
+UNREAD = _slip(
     "unread line",
     ticket(
         number="0000001011",
         printed="06/06/2025 08:00:00",
         rows=[row(KEG, 2, "30.00", "60.00"), *UNREAD_LINES],
-        bl_lines=["BL No: 610010 du 06/06/2025", "Montant : 75.00"],
-        deconsigne="-60.00",
+        delivery_note_lines=["BL No: 610010 du 06/06/2025", "Montant : 75.00"],
+        deposit_refund="-60.00",
         total_net="15.00",
     ),
     number="1011",
@@ -433,14 +447,14 @@ UNREAD = _bon(
 )
 
 #: q × p ≠ m: 3 × 30.00 printed as 95.00 (the total agrees with the lines).
-WRONG_PRODUCT = _bon(
+WRONG_PRODUCT = _slip(
     "q × p ≠ m",
     ticket(
         number="0000001012",
         printed="10/06/2025 08:10:00",
         rows=[row(KEG, 3, "30.00", "95.00")],
-        bl_lines=["BL No: 610011 du 10/06/2025", "Montant : 100.00"],
-        deconsigne="-95.00",
+        delivery_note_lines=["BL No: 610011 du 10/06/2025", "Montant : 100.00"],
+        deposit_refund="-95.00",
         total_net="5.00",
     ),
     number="1012",
@@ -452,14 +466,14 @@ WRONG_PRODUCT = _bon(
 )
 
 #: Σ rows ≠ total: 90.00 of lines, a Deconsigne of -120.00.
-WRONG_TOTAL = _bon(
+WRONG_TOTAL = _slip(
     "Σ ≠ total",
     ticket(
         number="0000001013",
         printed="12/06/2025 08:20:00",
         rows=[row(KEG, 3, "30.00", "90.00")],
-        bl_lines=["BL No: 610012 du 12/06/2025", "Montant : 200.00"],
-        deconsigne="-120.00",
+        delivery_note_lines=["BL No: 610012 du 12/06/2025", "Montant : 200.00"],
+        deposit_refund="-120.00",
         total_net="80.00",
     ),
     number="1013",
@@ -471,14 +485,14 @@ WRONG_TOTAL = _bon(
 )
 
 #: No REPRISE VIDE part at all.
-NO_SECTION = _bon(
+NO_SECTION = _slip(
     "no section",
     ticket(
         number="0000001014",
         printed="16/06/2025 08:40:00",
         section=False,
-        bl_lines=["BL No: 610013 du 16/06/2025", "Montant : 55.00"],
-        deconsigne="0.00",
+        delivery_note_lines=["BL No: 610013 du 16/06/2025", "Montant : 55.00"],
+        deposit_refund="0.00",
         total_net="55.00",
     ),
     number="1014",
@@ -490,14 +504,14 @@ NO_SECTION = _bon(
 
 #: The REPRISE VIDE part printed twice (a duplicated copy after the end):
 #: only the first is read.
-DOUBLE_SECTION = _bon(
+DOUBLE_SECTION = _slip(
     "section twice",
     ticket(
         number="0000001015",
         printed="18/06/2025 08:50:00",
         rows=[row(KEG, 1, "30.00", "30.00")],
-        bl_lines=["BL No: 610014 du 18/06/2025", "Montant : 45.00"],
-        deconsigne="-30.00",
+        delivery_note_lines=["BL No: 610014 du 18/06/2025", "Montant : 45.00"],
+        deposit_refund="-30.00",
         total_net="15.00",
         trailer=["REPRISE VIDE", SEPARATOR, row(KEG, 1, "30.00", "30.00"), "FACTURE(S)/BL DU JOUR"],
     ),
@@ -509,8 +523,8 @@ DOUBLE_SECTION = _bon(
     total=D("-30.00"),
 )
 
-#: Not a bon: a mail's attachment of general conditions.
-JUNK = "\n".join(
+#: Not a slip: a mail's attachment of general conditions.
+JUNK = "\n".join(  # noqa: FLY002 - one line of the document per item
     [
         "Bonjour,",
         "Veuillez trouver nos conditions generales de vente.",
@@ -520,9 +534,20 @@ JUNK = "\n".join(
     ]
 )
 
-#: Every ticket above that the seeded motifs read without a failed check.
-CLEAN = (NORMAL, RESEND, EMPTY, TWO_BLS, BL_WITHOUT_MONTANT, ORIGINAL, REPLACEMENT, ORIGINAL_EMPTY,
-         REPLACEMENT_WITH_KEGS, ANOMALIES, MIXED)
+#: Every ticket above that the seeded patterns read without a failed check.
+CLEAN = (
+    NORMAL,
+    RESEND,
+    EMPTY,
+    TWO_DELIVERY_NOTES,
+    DELIVERY_NOTE_WITHOUT_AMOUNT,
+    ORIGINAL,
+    REPLACEMENT,
+    ORIGINAL_EMPTY,
+    REPLACEMENT_WITH_KEGS,
+    ANOMALIES,
+    MIXED,
+)
 #: Every ticket above.
 ALL = CLEAN + (UNREAD, WRONG_PRODUCT, WRONG_TOTAL, NO_SECTION, DOUBLE_SECTION)
 

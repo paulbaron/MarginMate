@@ -16,15 +16,15 @@ from unittest import mock
 
 from django.contrib.messages import get_messages
 from django.test import TestCase
-from django.utils import timezone
 from django.urls import reverse
+from django.utils import timezone
 
 from inventory.models import Product, StockMovement, StockTakeLineSource
 from inventory.views import review_panel_context
 from invoices.importing import import_parsed_invoice, redo_as_expenses, replace_invoice_lines
-from invoices.receipts import pending_receipts, reread_receipt
 from invoices.models import Invoice, Supplier
 from invoices.parsers.base import ParseCheck, ParsedInvoice, ParsedLine
+from invoices.receipts import pending_receipts, reread_receipt
 from invoices.tests.test_unknown_shops import staged_file
 from tests.factories import make_product, make_stock_take, make_stock_take_line, make_supplier
 
@@ -47,7 +47,7 @@ def parsed(lines=(), breakdown=(), total=None, number="F-1", when=date(2026, 5, 
     )
 
 
-# A rent statement, as invoices/tests/test_charges_postes.py describes it.
+# A rent statement, as invoices/tests/test_charge_items.py describes it.
 STATEMENT = """AVIS D'ECHEANCE du mois de décembre 2025
 Montant  Détaildel'avisd'échéance  Montant
 Soldeantérieurau21/10/2025  0,00  LOYERLOCAUXACTIVITEHT  600,00
@@ -60,8 +60,12 @@ Prélevéle10/12/2025  820,00"""
 
 def line(name, total_ht, rate="0.20"):
     return ParsedLine(
-        raw_name=name, quantity=1, total_volume=D("0"), unit_cost_ht=D(total_ht),
-        total_ht=D(total_ht), vat_rate=D(rate),
+        raw_name=name,
+        quantity=1,
+        total_volume=D("0"),
+        unit_cost_ht=D(total_ht),
+        total_ht=D(total_ht),
+        vat_rate=D(rate),
     )
 
 
@@ -79,17 +83,29 @@ class FetchedChargeTests(TestCase):
 
         water = make_supplier(code="EAU_X", name="Eau Exemple", parser_key="", expenses_only=True)
         reading = parsed(
-            lines=[line("PRODUCTION ET DISTRIBUTION", "150.00", "0.055"), line("COLLECTE ET TRAITEMENT", "160.15", "0.055")],
+            lines=[
+                line("PRODUCTION ET DISTRIBUTION", "150.00", "0.055"),
+                line("COLLECTE ET TRAITEMENT", "160.15", "0.055"),
+            ],
             breakdown=[(D("0.055"), D("142.34"), D("7.82")), (D("0.10"), D("160.94"), D("16.10"))],
-            total=D("327.20"), number="2026100000001", when=date(2026, 4, 10), text="EAU EXEMPLE\nTotal 327,20",
+            total=D("327.20"),
+            number="2026100000001",
+            when=date(2026, 4, 10),
+            text="EAU EXEMPLE\nTotal 327,20",
         )
         reading.checks = [
             ParseCheck(label="Taux par article", passed=False, detail="5.5 % supposé, à vérifier."),
-            ParseCheck(label="Somme HT des lignes = base HT du ticket", passed=False, detail="lignes 310.15 € HT / ticket 303.28 € HT"),
+            ParseCheck(
+                label="Somme HT des lignes = base HT du ticket",
+                passed=False,
+                detail="lignes 310.15 € HT / ticket 303.28 € HT",
+            ),
         ]
         read = ReceiptRead(parser=None, parsed=reading, preview=None, text=reading.source_text)
         with mock.patch("invoices.receipts.read_receipt", return_value=read):
-            invoice = import_receipt(staged_file(self, "eau.pdf"), supplier=water, chosen_because="Téléchargée par « Eau ».")
+            invoice = import_receipt(
+                staged_file(self, "eau.pdf"), supplier=water, chosen_because="Téléchargée par « Eau »."
+            )
         invoice.refresh_from_db()
         labels = {check["label"] for check in invoice.parse_checks}
         self.assertNotIn("Taux par article", labels)
@@ -100,14 +116,14 @@ class FetchedChargeTests(TestCase):
         self.assertEqual((invoice.total_ht, invoice.total_ttc), (D("303.28"), D("327.20")))
 
 
-class PosteByPosteTests(TestCase):
+class ChargeItemByChargeItemTests(TestCase):
     """A charge that says what it is made of keeps it: the rent is not the
     provisions, and the provisions are the ones that get regularised."""
 
     def setUp(self):
         self.supplier = make_supplier(code="BAILLEUR", name="Bailleur Exemple", parser_key="", expenses_only=True)
 
-    def test_each_poste_is_its_own_line_at_its_own_rate(self):
+    def test_each_charge_item_is_its_own_line_at_its_own_rate(self):
         invoice = import_parsed_invoice(self.supplier, parsed(total=D("830.00"), text=STATEMENT))
         self.assertEqual(
             [(line.raw_name, line.total_ht, line.vat_rate) for line in invoice.lines.all()],
@@ -119,13 +135,13 @@ class PosteByPosteTests(TestCase):
         )
 
     def test_the_statement_is_worth_what_it_charges(self):
-        """830,00 is last month's échéance, printed twice; 820,00 is what
-        this avis calls for."""
+        """830,00 is last month's amount due, printed twice; 820,00 is what
+        this notice calls for."""
         invoice = import_parsed_invoice(self.supplier, parsed(total=D("830.00"), text=STATEMENT))
         self.assertEqual((invoice.printed_total_ttc, invoice.total_ttc), (D("820.00"), D("820.00")))
         self.assertEqual(invoice.status, Invoice.Status.COMPLETE)
 
-    def test_no_poste_is_a_product_to_classify(self):
+    def test_no_charge_item_is_a_product_to_classify(self):
         import_parsed_invoice(self.supplier, parsed(total=D("830.00"), text=STATEMENT))
         products = Product.objects.filter(supplier=self.supplier)
         self.assertEqual(products.count(), 3)
@@ -133,7 +149,7 @@ class PosteByPosteTests(TestCase):
         self.assertEqual(review_panel_context()["review_total"], 0)
         self.assertFalse(StockMovement.objects.exists())
 
-    def test_every_month_files_on_the_same_postes(self):
+    def test_every_month_files_on_the_same_charge_items(self):
         for month in (1, 2):
             import_parsed_invoice(
                 self.supplier, parsed(total=D("830.00"), text=STATEMENT, number=f"A-{month}", when=date(2026, month, 1))
@@ -156,8 +172,11 @@ class PosteByPosteTests(TestCase):
         invoice.refresh_from_db()
         self.assertEqual(
             [(line.raw_name, line.total_ht) for line in invoice.lines.all()],
-            [("LOYERLOCAUXACTIVITEHT", D("600.00")), ("PROV.CHARGESIMMEUBLE", D("90.00")),
-             ("PROVISIONEAUFROIDE", D("10.00"))],
+            [
+                ("LOYERLOCAUXACTIVITEHT", D("600.00")),
+                ("PROV.CHARGESIMMEUBLE", D("90.00")),
+                ("PROVISIONEAUFROIDE", D("10.00")),
+            ],
         )
         self.assertEqual(invoice.printed_total_ttc, D("820.00"))
 
@@ -176,7 +195,10 @@ class ImportedAsOneLineTests(TestCase):
             ),
         )
         self.assertEqual(
-            [(line.raw_name, line.quantity, line.total_ht, line.vat_rate) for line in invoice.lines.order_by("vat_rate")],
+            [
+                (line.raw_name, line.quantity, line.total_ht, line.vat_rate)
+                for line in invoice.lines.order_by("vat_rate")
+            ],
             [("Free Exemple", 1, D("2.00"), D("0.055")), ("Free Exemple", 1, D("8.33"), D("0.20"))],
         )
         self.assertEqual(invoice.status, Invoice.Status.COMPLETE)
@@ -212,7 +234,9 @@ class ImportedAsOneLineTests(TestCase):
 
     def test_every_document_of_the_supplier_shares_the_one_product(self):
         for number in ("F-1", "F-2"):
-            import_parsed_invoice(self.supplier, parsed(lines=[line("Abonnement", "8.33")], number=number, total=D("9.99")))
+            import_parsed_invoice(
+                self.supplier, parsed(lines=[line("Abonnement", "8.33")], number=number, total=D("9.99"))
+            )
         self.assertEqual(Product.objects.filter(supplier=self.supplier).count(), 1)
 
     def test_a_vat_table_that_does_not_account_for_the_total_is_ignored(self):
@@ -313,16 +337,14 @@ class MarkingTheSupplierTests(TestCase):
         self.assertEqual(redo_as_expenses(self.supplier), 1)
         self.assertEqual(redo_as_expenses(self.supplier), 0)
 
-    def test_a_document_a_count_was_priced_from_is_left_alone_and_leaves_no_poste(self):
+    def test_a_document_a_count_was_priced_from_is_left_alone_and_leaves_no_charge_item(self):
         """Its lines cannot be replaced (InvoiceLinesInUseError), so it is
-        left as it is - and so is everything else: the poste its charge
+        left as it is - and so is everything else: the charge item its charge
         reading would have filed it on was created before the refusal, and
         stayed behind, named after the supplier, on no line (seen again on
         a scratch copy, 19/09)."""
         line = self.invoice.lines.get(raw_name="Abonnement mobile")
-        take_line = make_stock_take_line(
-            make_stock_take(), product=line.product, counted_quantity="1", value_ht="8.33"
-        )
+        take_line = make_stock_take_line(make_stock_take(), product=line.product, counted_quantity="1", value_ht="8.33")
         StockTakeLineSource.objects.create(
             stock_take_line=take_line, invoice_line=line, quantity_used=D("1"), unit_cost_ht=D("8.33")
         )
@@ -334,7 +356,7 @@ class MarkingTheSupplierTests(TestCase):
         self.assertFalse(Product.objects.filter(raw_name="Free Exemple").exists())
         self.assertEqual(Invoice.objects.get(pk=self.invoice.pk).lines.count(), 2)
         # Only redo_as_expenses' own last step touched the products: the
-        # unclassified ones this supplier sends are postes now.
+        # unclassified ones this supplier sends are charge items now.
         self.assertEqual(
             set(Product.objects.values_list("pk", "raw_name", "is_expense")),
             {(pk, name, True) for pk, name, _is_expense in products},
@@ -360,7 +382,7 @@ class ReadAgainTests(TestCase):
         self.supplier.refresh_from_db()
         self.invoice.refresh_from_db()
 
-    def test_reading_it_again_keeps_its_postes(self):
+    def test_reading_it_again_keeps_its_charge_items(self):
         """Read as a ticket, a rent statement's lines are the previous
         balance and the direct debit beside the rent: 'Relire' put those
         back in place of the charge."""
@@ -426,52 +448,61 @@ class ChargesOnTheProductsPageTests(TestCase):
             [("Free Exemple", 2, D("20.26"), date(2026, 4, 19))],
         )
 
-    def test_the_postes_are_shown_under_their_supplier(self):
-        bailleur = make_supplier(code="BAILLEUR", name="Bailleur Exemple", parser_key="", expenses_only=True)
-        import_parsed_invoice(bailleur, parsed(total=D("830.00"), text=STATEMENT, when=date(2026, 5, 1)))
+    def test_the_charge_items_are_shown_under_their_supplier(self):
+        landlord = make_supplier(code="BAILLEUR", name="Bailleur Exemple", parser_key="", expenses_only=True)
+        import_parsed_invoice(landlord, parsed(total=D("830.00"), text=STATEMENT, when=date(2026, 5, 1)))
         page = self.client.get(reverse("inventory:stock_list"))
-        (row,) = [row for row in page.context["charge_suppliers"] if row["supplier"] == bailleur]
+        (row,) = [row for row in page.context["charge_suppliers"] if row["supplier"] == landlord]
         self.assertEqual(
-            [(poste["name"], poste["total_ttc"]) for poste in row["postes"]],
-            [("LOYERLOCAUXACTIVITEHT", D("720.00")), ("PROV.CHARGESIMMEUBLE", D("90.00")),
-             ("PROVISIONEAUFROIDE", D("10.00"))],
+            [(charge_item["name"], charge_item["total_ttc"]) for charge_item in row["charge_items"]],
+            [
+                ("LOYERLOCAUXACTIVITEHT", D("720.00")),
+                ("PROV.CHARGESIMMEUBLE", D("90.00")),
+                ("PROVISIONEAUFROIDE", D("10.00")),
+            ],
         )
         self.assertContains(page, "PROV.CHARGESIMMEUBLE")
 
     def test_the_navigation_badge_counts_the_same_queue(self):
-        """Written twice, one of them counting the postes of charge, the
-        badge said 110 over a page of 97."""
+        """Written twice, one of them counting the charge items, the badge
+        said 110 over a page of 97."""
         page = self.client.get(reverse("inventory:stock_list"))
         self.assertEqual(page.context["review_count_nav"], page.context["review_total"])
         self.assertEqual(page.context["review_count_nav"], 0)
 
-    def test_a_poste_renamed_by_hand_is_still_a_charge(self):
-        """Corrected on the document's own page, a poste keeps a name of its
-        own - and a new product to classify is exactly what a charge must
-        never make."""
+    def test_a_charge_item_renamed_by_hand_is_still_a_charge(self):
+        """Corrected on the document's own page, a charge item keeps a name
+        of its own - and a new product to classify is exactly what a charge
+        must never make."""
         invoice = Invoice.objects.filter(supplier=self.supplier).first()
         replace_invoice_lines(
             invoice,
-            [ParsedLine(
-                raw_name="Loyer", quantity=1, total_volume=D("0"), unit_cost_ht=D("10.00"),
-                total_ht=D("10.00"), vat_rate=D("0"),
-            )],
+            [
+                ParsedLine(
+                    raw_name="Loyer",
+                    quantity=1,
+                    total_volume=D("0"),
+                    unit_cost_ht=D("10.00"),
+                    total_ht=D("10.00"),
+                    vat_rate=D("0"),
+                )
+            ],
         )
         renamed = Product.objects.get(supplier=self.supplier, raw_name="Loyer")
         self.assertTrue(renamed.is_expense)
         self.assertFalse(renamed.needs_review)
         self.assertEqual(review_panel_context()["review_total"], 0)
 
-    def test_a_supplier_filed_in_one_line_shows_no_poste(self):
-        """One poste is the charge itself under another name - and the
+    def test_a_supplier_filed_in_one_line_shows_no_charge_item(self):
+        """One charge item is the charge itself under another name - and the
         supplier's own row is what opens on it."""
         page = self.client.get(reverse("inventory:stock_list"))
-        self.assertEqual([row["postes"] for row in page.context["charge_suppliers"]], [[]])
+        self.assertEqual([row["charge_items"] for row in page.context["charge_suppliers"]], [[]])
 
     def test_every_supplier_opens_on_its_documents_and_its_curve(self):
-        """The water bill, the phone, the alarm: one poste each, so the
-        postes under them are nothing to click - and five suppliers out of
-        six had no way at all to reach their own documents."""
+        """The water bill, the phone, the alarm: one charge item each, so the
+        charge items under them are nothing to click - and five suppliers out
+        of six had no way at all to reach their own documents."""
         page = self.client.get(reverse("inventory:stock_list"))
         self.assertContains(page, reverse("inventory:charge_supplier_documents", args=[self.supplier.pk]))
         self.assertContains(page, reverse("inventory:charge_supplier_history", args=[self.supplier.pk]))
@@ -515,18 +546,18 @@ class ChargesOnTheProductsPageTests(TestCase):
         """A water bill arrives twice a year. Listed only when the window
         holds one, it would drop off the page between two of them, taking
         its whole history with it."""
-        eau = make_supplier(code="EAU_X", name="Eau Exemple", parser_key="", expenses_only=True)
+        tap_water = make_supplier(code="EAU_X", name="Eau Exemple", parser_key="", expenses_only=True)
         long_ago = timezone.localdate() - timedelta(days=600)
-        import_parsed_invoice(eau, parsed(total=D("260.63"), number="E-1", when=long_ago))
+        import_parsed_invoice(tap_water, parsed(total=D("260.63"), number="E-1", when=long_ago))
         page = self.client.get(reverse("inventory:stock_list"))
-        (row,) = [row for row in page.context["charge_suppliers"] if row["supplier"] == eau]
+        (row,) = [row for row in page.context["charge_suppliers"] if row["supplier"] == tap_water]
         self.assertEqual((row["documents"], row["total_ttc"], row["last"]), (0, D("0"), long_ago))
-        documents = self.client.get(reverse("inventory:charge_supplier_documents", args=[eau.pk]))
+        documents = self.client.get(reverse("inventory:charge_supplier_documents", args=[tap_water.pk]))
         self.assertEqual(len(documents.context["rows"]), 1)
 
     def test_the_documents_column_says_when_it_counts_the_window_only(self):
-        """« Free est dit avoir 12 documents alors qu'en réalité il y en a
-        plus » (20/09): twelve is a year of a monthly subscription, and the
+        """ "Free is said to have 12 documents when in reality there are
+        more" (20/09): twelve is a year of a monthly subscription, and the
         row opens on all 33. The window's count now says what it is out of,
         and the column names the window."""
         operator = make_supplier(code="OPERATEUR_X", name="Operateur Exemple", parser_key="", expenses_only=True)
@@ -540,7 +571,7 @@ class ChargesOnTheProductsPageTests(TestCase):
 
         self.assertEqual((row["documents"], row["documents_all"]), (2, 3))
         self.assertContains(page, "Documents (12 mois)")
-        self.assertContains(page, "2 <span class=\"muted\">sur 3</span>", html=False)
+        self.assertContains(page, '2 <span class="muted">sur 3</span>', html=False)
 
         # Everything inside the window: nothing to say twice.
         (free,) = [row for row in page.context["charge_suppliers"] if row["supplier"] == self.supplier]
@@ -555,18 +586,20 @@ class ChargesOnTheProductsPageTests(TestCase):
             self.client.get(reverse("inventory:charge_supplier_history", args=[ordinary.pk])).status_code, 404
         )
 
-    def test_a_poste_opens_on_its_documents_and_its_curve(self):
+    def test_a_charge_item_opens_on_its_documents_and_its_curve(self):
         """Like any stock item: what it cost month after month, each line
         linking to the document it came from."""
-        bailleur = make_supplier(code="BAILLEUR", name="Bailleur Exemple", parser_key="", expenses_only=True)
+        landlord = make_supplier(code="BAILLEUR", name="Bailleur Exemple", parser_key="", expenses_only=True)
         for month in (5, 6):
             import_parsed_invoice(
-                bailleur,
+                landlord,
                 parsed(total=D("830.00"), text=STATEMENT, number=f"A-{month}", when=date(2026, month, 1)),
             )
         page = self.client.get(reverse("inventory:stock_list"))
-        (row,) = [row for row in page.context["charge_suppliers"] if row["supplier"] == bailleur]
-        rent = next(poste for poste in row["postes"] if poste["name"] == "LOYERLOCAUXACTIVITEHT")
+        (row,) = [row for row in page.context["charge_suppliers"] if row["supplier"] == landlord]
+        rent = next(
+            charge_item for charge_item in row["charge_items"] if charge_item["name"] == "LOYERLOCAUXACTIVITEHT"
+        )
         self.assertContains(page, reverse("inventory:charge_documents", args=[rent["product"].pk]))
         self.assertContains(page, reverse("inventory:charge_history", args=[rent["product"].pk]))
 
@@ -583,54 +616,50 @@ class ChargesOnTheProductsPageTests(TestCase):
     def test_one_document_is_not_a_curve(self):
         once = make_supplier(code="ASSURANCE", name="Assurance Exemple", parser_key="", expenses_only=True)
         import_parsed_invoice(once, parsed(total=D("120.00"), number="A-1", when=date(2026, 5, 2)))
-        curve = self.client.get(
-            reverse("inventory:charge_history", args=[Product.objects.get(supplier=once).pk])
-        )
+        curve = self.client.get(reverse("inventory:charge_history", args=[Product.objects.get(supplier=once).pk]))
         self.assertFalse(curve.context["has_enough_data"])
         self.assertContains(curve, "Pas assez d'historique")
 
-    def test_only_a_poste_of_charge_opens_that_way(self):
+    def test_only_a_charge_item_opens_that_way(self):
         """A stock product has its own history page; this one answers for
         charges alone, so a wrong id is a 404 rather than a blank panel."""
         ordinary = make_product(supplier=make_supplier(code="EPICERIE"), raw_name="TOMATES")
-        self.assertEqual(
-            self.client.get(reverse("inventory:charge_documents", args=[ordinary.pk])).status_code, 404
-        )
+        self.assertEqual(self.client.get(reverse("inventory:charge_documents", args=[ordinary.pk])).status_code, 404)
 
-    def test_a_poste_cannot_be_classified_as_stock(self):
+    def test_a_charge_item_cannot_be_classified_as_stock(self):
         """A rent is not stock. The panel never offers one - it lists what
         needs review, and a charge never does - but the address took it, and
         classified, the rent became bottles with a stock movement behind."""
         from inventory.models import StockType
 
-        poste = Product.objects.get(supplier=self.supplier)
+        charge_item = Product.objects.get(supplier=self.supplier)
         article = StockType.objects.create(name="Absinthe")
         response = self.client.post(
-            reverse("inventory:assign_product", args=[poste.pk]),
+            reverse("inventory:assign_product", args=[charge_item.pk]),
             {"stock_type_name": article.name, "stock_equivalent": "1"},
             follow=True,
         )
-        poste.refresh_from_db()
-        self.assertIsNone(poste.stock_type)
+        charge_item.refresh_from_db()
+        self.assertIsNone(charge_item.stock_type)
         self.assertFalse(StockMovement.objects.exists())
-        self.assertIn("poste de charge", [str(message) for message in response.context["messages"]][0])
+        self.assertIn("poste de charge", next(str(message) for message in response.context["messages"]))
 
     def test_unticking_gives_its_products_back(self):
         """A box ticked by mistake has to be reversible. Unticked, the
-        supplier's postes stayed flagged as charges for ever: out of the
+        supplier's charge items stayed flagged as charges for ever: out of the
         review queue, out of every stock page, out of every stock movement,
         and no screen could put them back - correcting the document by hand
         resolved the very same flagged product."""
-        poste = Product.objects.get(supplier=self.supplier)
-        self.assertTrue(poste.is_expense)
+        charge_item = Product.objects.get(supplier=self.supplier)
+        self.assertTrue(charge_item.is_expense)
         response = self.client.post(
             reverse("invoices:supplier_expenses", args=[self.supplier.pk]), {"confirme": "1"}, follow=True
         )
-        poste.refresh_from_db()
+        charge_item.refresh_from_db()
         self.supplier.refresh_from_db()
         self.assertFalse(self.supplier.expenses_only)
-        self.assertFalse(poste.is_expense)
-        self.assertTrue(poste.needs_review)
+        self.assertFalse(charge_item.is_expense)
+        self.assertTrue(charge_item.needs_review)
         self.assertEqual(review_panel_context()["review_total"], 1)
         self.assertIn("repassent à classer", " ".join(messages_of(response)))
 
@@ -646,7 +675,7 @@ class ChargesOnTheProductsPageTests(TestCase):
         """The flag follows the supplier, so a document corrected by hand -
         which is what the message after unticking asks for - is enough on
         its own."""
-        poste = Product.objects.get(supplier=self.supplier)
+        charge_item = Product.objects.get(supplier=self.supplier)
         Supplier.objects.filter(pk=self.supplier.pk).update(expenses_only=False)
         invoice = Invoice.objects.filter(supplier=self.supplier).first()
         # The line keeps the name it was filed under, so it resolves back to
@@ -654,14 +683,20 @@ class ChargesOnTheProductsPageTests(TestCase):
         # to "correct them document by document" lead nowhere.
         replace_invoice_lines(
             invoice,
-            [ParsedLine(
-                raw_name=poste.raw_name, quantity=1, total_volume=D("0"), unit_cost_ht=D("10.00"),
-                total_ht=D("10.00"), vat_rate=D("0.20"),
-            )],
+            [
+                ParsedLine(
+                    raw_name=charge_item.raw_name,
+                    quantity=1,
+                    total_volume=D("0"),
+                    unit_cost_ht=D("10.00"),
+                    total_ht=D("10.00"),
+                    vat_rate=D("0.20"),
+                )
+            ],
         )
-        poste.refresh_from_db()
-        self.assertFalse(poste.is_expense)
-        self.assertTrue(poste.needs_review)
+        charge_item.refresh_from_db()
+        self.assertFalse(charge_item.is_expense)
+        self.assertTrue(charge_item.needs_review)
         self.assertEqual(review_panel_context()["review_total"], 1)
 
     def test_nothing_is_shown_when_no_supplier_is_a_charge(self):

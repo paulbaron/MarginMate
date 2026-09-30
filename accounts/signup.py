@@ -1,12 +1,12 @@
 """A signup: an invitation code, a bar's name, an address and a password
-become a login, an espace and the login's place in it - all of it or none.
+become a login, a tenant and the login's place in it - all of it or none.
 
 Three steps, in this order:
 
 1. The code and the address are checked, reading only: a code refused (or
-   an address that has a login) makes nothing at all - no espace copied and
+   an address that has a login) makes nothing at all - no tenant copied and
    thrown away for every wrong code.
-2. The espace's FILES are made (`provisioning.prepare_tenant`: its folder,
+2. The tenant's FILES are made (`provisioning.prepare_tenant`: its folder,
    its database copied from the template and migrated, the owner's
    integrations switched off) OUTSIDE any transaction on the accounts
    database. That takes seconds whenever the template is behind the code,
@@ -21,9 +21,9 @@ Three steps, in this order:
    unused, unexpired invitation passes, so two signups racing on one code
    cannot both have it), the login created (username = the address,
    lower-cased; never staff, never superuser), the Tenant row, and the
-   membership, as the espace's owner.
+   membership, as the tenant's owner.
 
-Anything failing after step 2 rolls the rows back and removes the espace's
+Anything failing after step 2 rolls the rows back and removes the tenant's
 folder: nothing half-made is left for a second try to trip on.
 
 The code is looked at only here, once everything else typed was valid (the
@@ -98,7 +98,8 @@ def _address_taken(invitation: Invitation, now) -> SignupRefused:
     if voided:
         logger.warning(
             "Invitation %s annulée : %s adresses qui ont déjà un compte essayées avec son code.",
-            invitation.pk, TAKEN_ADDRESSES_BEFORE_VOID,
+            invitation.pk,
+            TAKEN_ADDRESSES_BEFORE_VOID,
         )
     return SignupRefused("code", EMAIL_TAKEN)
 
@@ -116,7 +117,7 @@ def sign_up(*, code: str, bar_name: str, email: str, password: str, now=None):
     if users_for_email(email).exists():
         raise _address_taken(invitation, now)
 
-    # 2. The espace's files, outside the accounts database's transaction
+    # 2. The tenant's files, outside the accounts database's transaction
     # (the module's docstring). It cleans up after itself when it fails.
     tenant = provisioning.prepare_tenant(bar_name)
 

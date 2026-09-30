@@ -20,7 +20,7 @@ class EmptyBankPageTests(TestCase):
 
     def test_the_nav_links_to_the_page_and_lights_it_up(self):
         html = self.client.get(reverse("bank:bank_home")).content.decode()
-        nav = html[html.index("<nav"):html.index("</nav>")]
+        nav = html[html.index("<nav") : html.index("</nav>")]
         self.assertIn(f'<a href="{reverse("bank:bank_home")}" class="active">Banque</a>', nav)
 
 
@@ -105,9 +105,7 @@ class BankPageTests(Fixtures, TestCase):
 
 class UploadTests(TestCase):
     def upload(self, name, content):
-        return self.client.post(
-            reverse("bank:bank_home"), {"files": [SimpleUploadedFile(name, content)]}, follow=True
-        )
+        return self.client.post(reverse("bank:bank_home"), {"files": [SimpleUploadedFile(name, content)]}, follow=True)
 
     def test_statements_are_imported_then_matched(self):
         invoice = Fixtures().invoice("METRO", date(2026, 6, 29), "100.00")

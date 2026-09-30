@@ -17,9 +17,9 @@
             </p>
         </div>
         {% comment %}
-        data-leaves-grid : ce que timesheet.js demande avant de quitter une grille modifiée et pas encore
-        enregistrée - les liens, le PDF (qui imprime la fiche enregistrée, pas l'écran) et les trois
-        formulaires d'à côté, qui rechargent la page depuis la base.
+        data-leaves-grid: what timesheet.js asks before leaving a grid changed and not saved yet - the
+        links, the PDF (which prints the saved sheet, not the screen) and the three forms beside it,
+        which reload the page from the database.
         {% endcomment %}
         <div class="actions">
             {% if previous %}<a class="btn btn-secondary" href="{{ previous.url }}" data-leaves-grid="{{ leave_warning }}">← {{ previous.name }}</a>{% endif %}
@@ -30,8 +30,8 @@
 
     {% if signature.locked %}
         {% comment %}
-        Lecture seule : c'est timesheet._store qui refuse d'écrire un mois tenu par une demande, quelle que
-        soit la page qui poste ; celle-ci ne dessine simplement plus la grille ni ses raccourcis.
+        Read-only: it is timesheet._store that refuses to write a month a request holds, whatever page
+        posts; this one simply no longer draws the grid nor its shortcuts.
         {% endcomment %}
         <div class="message message-warning" data-locked>
             {{ signature.current.status }} (version {{ signature.current.version }}) : le mois ne se modifie plus.
@@ -63,9 +63,8 @@
     {% endif %}
 
     {% comment %}
-    data-live : les chiffres que timesheet.js refait pendant la saisie, à partir de la grille, avant tout
-    enregistrement. Ceux du serveur restent la référence : c'est eux que la page redessine une fois
-    enregistrée.
+    data-live: the figures timesheet.js works out again while typing, from the grid, before anything is
+    saved. The server's stay the reference: they are what the page draws again once it is saved.
     {% endcomment %}
     <p class="unsaved-note" data-unsaved hidden>Ces chiffres suivent la grille : ses modifications ne sont pas encore enregistrées.</p>
     <div class="stat-row" data-month-stats>
@@ -100,12 +99,11 @@
     {% else %}
     <div class="timesheet-layout">
         {% comment %}
-        La grille : UN formulaire, UN « Enregistrer ». Pas de formset : chaque champ porte la date du jour
-        (heures-2026-06-04, motif-…, note-…), si bien qu'aucun trou dans des indices de lignes ne peut
-        décaler les heures d'un jour sur son voisin. Pas de data-table non plus : c'est un éditeur, pas une
-        liste, et le trier le déferait.
+        The grid: ONE form, ONE « Enregistrer ». No formset: every field carries its day's date
+        (heures-2026-06-04, motif-…, note-…), so no gap in row indices can shift a day's hours onto its
+        neighbour. No data-table either: it is an editor, not a list, and sorting it would undo it.
         {% endcomment %}
-        <form method="post" action="{{ save_url }}" class="timesheet-form" id="fiche" data-timesheet-form{% if sheet.has_errors %} data-unsaved-on-load{% endif %}>
+        <form method="post" action="{{ save_url }}" class="timesheet-form" id="timesheet" data-timesheet-form{% if sheet.has_errors %} data-unsaved-on-load{% endif %}>
             {% csrf_token %}
             <p class="muted small timesheet-legend">
                 Un trait orange à gauche : le jour diffère de la semaine type. Heures : 7, 7,5, 7h30 ou 7:30.
@@ -241,8 +239,8 @@
                 <section class="card">
                     <h2>Revenir à la semaine type</h2>
                     {% comment %}
-                    La confirmation est un <details> plutôt qu'un confirm() : elle marche aussi sans JavaScript,
-                    et c'est tout le mois qui s'efface.
+                    The confirmation is a <details> rather than a confirm(): it works without JavaScript too,
+                    and it is the whole month that is erased.
                     {% endcomment %}
                     <details class="staff-disclosure">
                         <summary>Effacer les corrections du mois…</summary>

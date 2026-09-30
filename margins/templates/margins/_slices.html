@@ -1,21 +1,21 @@
 {% comment %}
-Un tableau de tranches - les catégories, les typologies. Les deux lisent le
-même argent, donc ils sont rendus par le même bloc : écrits deux fois, une
-colonne finirait par dire autre chose dans l'un que dans l'autre.
+A table of slices - the categories, the typologies. Both read the
+same money, so they are rendered by the same block: written twice, a
+column would end up saying one thing in one and another in the other.
 
-Trois colonnes portent un `data-sort` : leur texte ne se trie pas tout seul
-(un intervalle « 5.00 à 10.00 € », une part suivie de sa phrase), et sans lui
-le tri range « 9,00 » après « 10,00 ». Il est laissé vide quand le coût ou la
-marge est inconnu : à 0, le tri range « coût inconnu » parmi les moins chers,
-ce que la cellule dit justement le contraire.
+Three columns carry a `data-sort`: their text does not sort by itself
+(a range « 5.00 à 10.00 € », a share followed by its sentence), and without it
+the sort puts « 9,00 » after « 10,00 ». It is left empty when the cost or the
+margin is unknown: at 0, the sort ranks « coût inconnu » among the cheapest,
+which is exactly the opposite of what the cell says.
 
-La « part chiffrée » est celle de l'ARGENT, comme le chiffre en haut de page :
-les unités sont dans la même cellule. Deux parts sous un même mot, l'une en
-euros et l'autre en unités, se contredisaient de 33 points sur un même écran.
+The « part chiffrée » is the MONEY's, like the figure at the top of the page:
+the units are in the same cell. Two shares under one word, one in
+euros and the other in units, contradicted each other by 33 points on one screen.
 
-Contexte : `rows` (des SliceRow), `total` (un SliceRow, le pied du tableau),
-`label` (ce que le compteur du tableau nomme), `heading` (le titre de la
-première colonne).
+Context: `rows` (SliceRows), `total` (a SliceRow, the table's foot),
+`label` (what the table's counter names), `heading` (the title of the
+first column).
 {% endcomment %}
 <div class="table-wrap">
     <table data-table data-table-label="{{ label }}">

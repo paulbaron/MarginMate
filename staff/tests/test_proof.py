@@ -10,7 +10,8 @@ from datetime import date
 
 import pdfplumber
 
-from staff import private_files, proof, signature_requests as requests_, signing
+from staff import private_files, proof, signing
+from staff import signature_requests as requests_
 from staff.models import Establishment, SignatureEvent, SignatureRequest
 from staff.tests.signing_support import (
     SigningTestMixin,
@@ -23,7 +24,7 @@ from staff.timesheet import save_month
 from tests.support import NoNetworkTestCase
 
 JUNE = date(2026, 6, 1)
-NOW = dt.datetime(2026, 7, 2, 8, 0, tzinfo=dt.timezone.utc)
+NOW = dt.datetime(2026, 7, 2, 8, 0, tzinfo=dt.UTC)
 IP = "203.0.113.7"
 
 
@@ -69,8 +70,14 @@ class ProofTests(SigningTestMixin, NoNetworkTestCase):
         code = requests_.issue_code(self.request, SignatureRequest.Identification.CODE_HANDED_OVER, now=NOW)
         requests_.check_code(self.request, code, session, now=NOW, ip=IP, user_agent="Téléphone d'essai")
         requests_.sign_for_employee(
-            self.request, drawn_signature(), session=session, statement_accepted=True, reservation=reservation,
-            now=NOW + dt.timedelta(minutes=1), ip=IP, user_agent="Téléphone d'essai",
+            self.request,
+            drawn_signature(),
+            session=session,
+            statement_accepted=True,
+            reservation=reservation,
+            now=NOW + dt.timedelta(minutes=1),
+            ip=IP,
+            user_agent="Téléphone d'essai",
         )
         return requests_.countersign_request(
             self.request, employer_signature(), now=NOW + dt.timedelta(days=1), ip=IP, user_agent="Bureau"
@@ -94,13 +101,16 @@ class ProofTests(SigningTestMixin, NoNetworkTestCase):
         text, _pages = text_of(private_files.read(done.uuid, private_files.PROOF))
         body = flat(text)
         for digest in (
-            done.document_sha256, done.signature_png_sha256, done.employee_pdf_sha256, done.final_pdf_sha256,
+            done.document_sha256,
+            done.signature_png_sha256,
+            done.employee_pdf_sha256,
+            done.final_pdf_sha256,
             requests_.employer_drawing_sha256(done),
         ):
             self.assertIn(digest, body)
         self.assertIn("Je certifie que ce relevé correspond aux heures que j'ai effectuées en juin 2026.", body)
         self.assertIn("Il manque 2 h le samedi 13.", body)
-        self.assertIn("affiché à l'employeur", body)   # the code handed over, said honestly
+        self.assertIn("affiché à l'employeur", body)  # the code handed over, said honestly
         self.assertIn("http://horodatage.test", body)
         self.assertIn("Code vérifié", body)
         self.assertIn("Signé par le salarié", body)
@@ -108,7 +118,7 @@ class ProofTests(SigningTestMixin, NoNetworkTestCase):
         self.assertIn("203.0.113.7", body)
         self.assertIn("Journal intègre", body)
         self.assertIn(done.last_event_hash, body)
-        self.assertIn("02/07/2026 à 10:01", body)   # Paris time
+        self.assertIn("02/07/2026 à 10:01", body)  # Paris time
         for word in ("qualifiée", "avancée", "manuscrite"):
             self.assertNotIn(word, body)
 
@@ -117,8 +127,13 @@ class ProofTests(SigningTestMixin, NoNetworkTestCase):
         code = requests_.issue_code(self.request, SignatureRequest.Identification.CODE_HANDED_OVER, now=NOW)
         requests_.check_code(self.request, code, session, now=NOW, ip=IP, user_agent="Téléphone d'essai")
         return requests_.sign_for_employee(
-            self.request, drawn_signature(), session=session, statement_accepted=True,
-            now=NOW + dt.timedelta(minutes=1), ip=IP, user_agent="Téléphone d'essai",
+            self.request,
+            drawn_signature(),
+            session=session,
+            statement_accepted=True,
+            now=NOW + dt.timedelta(minutes=1),
+            ip=IP,
+            user_agent="Téléphone d'essai",
         )
 
     def test_the_employer_s_drawing_is_named_by_its_hash_and_said_sealed(self):
@@ -150,7 +165,10 @@ class ProofTests(SigningTestMixin, NoNetworkTestCase):
         done = countersign_without_a_drawing(self.request, now=NOW + dt.timedelta(days=1), ip=IP)
         body = flat(text_of(private_files.read(done.uuid, private_files.PROOF))[0])
         for digest in (
-            done.document_sha256, done.signature_png_sha256, done.employee_pdf_sha256, done.final_pdf_sha256,
+            done.document_sha256,
+            done.signature_png_sha256,
+            done.employee_pdf_sha256,
+            done.final_pdf_sha256,
         ):
             self.assertIn(digest, body)
         self.assertIn("Contresigné par l'employeur", body)
@@ -168,7 +186,8 @@ class ProofTests(SigningTestMixin, NoNetworkTestCase):
         self.employee_signs()
         done = countersign_without_a_drawing(self.request, now=NOW + dt.timedelta(days=1), ip=IP)
         planted = private_files.write(
-            done.uuid, private_files.EMPLOYER_SIGNATURE_IMAGE,
+            done.uuid,
+            private_files.EMPLOYER_SIGNATURE_IMAGE,
             signing.clean_signature_png(employer_signature(colour=(150, 20, 20, 255))),
         )
         done = rewrite_countersigned_detail(done, lambda detail: {**detail, requests_.EMPLOYER_DRAWING: planted})
@@ -263,8 +282,13 @@ class ProofTests(SigningTestMixin, NoNetworkTestCase):
 
     def test_a_long_log_runs_onto_more_pages_each_carrying_the_id(self):
         for index in range(80):
-            requests_.log_event(self.request, SignatureEvent.Kind.LINK_OPENED, ip=IP,
-                                user_agent=f"Navigateur d'essai {index}", at=NOW + dt.timedelta(seconds=index))
+            requests_.log_event(
+                self.request,
+                SignatureEvent.Kind.LINK_OPENED,
+                ip=IP,
+                user_agent=f"Navigateur d'essai {index}",
+                at=NOW + dt.timedelta(seconds=index),
+            )
         data = proof.proof_pdf(self.request)
         with pdfplumber.open(io.BytesIO(data)) as document:
             self.assertGreater(len(document.pages), 1)

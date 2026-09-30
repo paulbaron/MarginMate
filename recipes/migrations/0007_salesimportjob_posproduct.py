@@ -5,46 +5,67 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('recipes', '0006_recipe_happy_hour_name'),
+        ("recipes", "0006_recipe_happy_hour_name"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='SalesImportJob',
+            name="SalesImportJob",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('status', models.CharField(choices=[('PENDING', 'En attente'), ('RUNNING', 'En cours'), ('SUCCESS', 'Terminé'), ('FAILED', 'Échoué'), ('CANCELLED', 'Annulé')], default='PENDING', max_length=20)),
-                ('range_start', models.DateField(blank=True, null=True)),
-                ('range_end', models.DateField(blank=True, null=True)),
-                ('cancel_requested', models.BooleanField(default=False)),
-                ('log', models.TextField(blank=True)),
-                ('items_sold', models.IntegerField(default=0)),
-                ('recorded', models.IntegerField(default=0)),
-                ('unmatched', models.IntegerField(default=0)),
-                ('started_at', models.DateTimeField(auto_now_add=True)),
-                ('finished_at', models.DateTimeField(blank=True, null=True)),
+                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[
+                            ("PENDING", "En attente"),
+                            ("RUNNING", "En cours"),
+                            ("SUCCESS", "Terminé"),
+                            ("FAILED", "Échoué"),
+                            ("CANCELLED", "Annulé"),
+                        ],
+                        default="PENDING",
+                        max_length=20,
+                    ),
+                ),
+                ("range_start", models.DateField(blank=True, null=True)),
+                ("range_end", models.DateField(blank=True, null=True)),
+                ("cancel_requested", models.BooleanField(default=False)),
+                ("log", models.TextField(blank=True)),
+                ("items_sold", models.IntegerField(default=0)),
+                ("recorded", models.IntegerField(default=0)),
+                ("unmatched", models.IntegerField(default=0)),
+                ("started_at", models.DateTimeField(auto_now_add=True)),
+                ("finished_at", models.DateTimeField(blank=True, null=True)),
             ],
             options={
-                'ordering': ['-started_at'],
+                "ordering": ["-started_at"],
             },
         ),
         migrations.CreateModel(
-            name='PosProduct',
+            name="PosProduct",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('name', models.CharField(max_length=255, unique=True)),
-                ('ignored', models.BooleanField(default=False)),
-                ('category', models.CharField(blank=True, max_length=255)),
-                ('typology', models.CharField(blank=True, max_length=255)),
-                ('total_quantity', models.PositiveIntegerField(default=0)),
-                ('first_seen', models.DateField(blank=True, null=True)),
-                ('last_seen', models.DateField(blank=True, null=True)),
-                ('recipe', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='pos_products', to='recipes.recipe')),
+                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
+                ("name", models.CharField(max_length=255, unique=True)),
+                ("ignored", models.BooleanField(default=False)),
+                ("category", models.CharField(blank=True, max_length=255)),
+                ("typology", models.CharField(blank=True, max_length=255)),
+                ("total_quantity", models.PositiveIntegerField(default=0)),
+                ("first_seen", models.DateField(blank=True, null=True)),
+                ("last_seen", models.DateField(blank=True, null=True)),
+                (
+                    "recipe",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="pos_products",
+                        to="recipes.recipe",
+                    ),
+                ),
             ],
             options={
-                'ordering': ['-total_quantity', 'name'],
+                "ordering": ["-total_quantity", "name"],
             },
         ),
     ]

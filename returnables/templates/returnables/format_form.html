@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{% if fmt %}Format « {{ fmt.name }} »{% else %}Nouveau format de bon{% endif %} - MarginMate{% endblock %}
 {% block content %}
-<div class="consignes-page">
+<div class="returnables-page">
     <p class="breadcrumb"><a href="{% url 'returnables:format_list' %}">← Formats de bons</a></p>
     <div class="page-header">
         <div>
@@ -36,7 +36,7 @@
         invoices/invoice_type_form.html, the other way round).
         {% endcomment %}
         <button class="visually-hidden" type="submit" name="action" value="tester" formnovalidate tabindex="-1" aria-hidden="true"
-            hx-post="{{ request.path }}" hx-target="#resultat-test" hx-swap="innerHTML">Tester</button>
+            hx-post="{{ request.path }}" hx-target="#format-test-result" hx-swap="innerHTML">Tester</button>
 
         {% if not fmt %}{% include "returnables/_format_tester.html" %}{% endif %}
 
@@ -55,9 +55,9 @@
             {% endif %}
         {% endfor %}
 
-        <details class="explainer motif-help">
+        <details class="explainer pattern-help">
             <summary>Écrire un motif</summary>
-            <ul class="motif-cheatsheet">
+            <ul class="pattern-cheatsheet">
                 <li><code>\d+</code> un nombre</li>
                 <li><code>.+?</code> du texte</li>
                 <li><code>\s+</code> des espaces</li>
@@ -66,7 +66,7 @@
                 <li>majuscules et minuscules déjà confondues ; chaque motif est cherché ligne par ligne</li>
             </ul>
             <p>Exemple, sur une ligne inventée « {{ uba_line }} » :</p>
-            <p><code class="motif-example">{{ uba_motif }}</code></p>
+            <p><code class="pattern-example">{{ uba_pattern }}</code></p>
             <p>lit la désignation « FÛT EXEMPLE 30 L », la quantité 4, le prix 30.00 et le montant 120.00.</p>
         </details>
 

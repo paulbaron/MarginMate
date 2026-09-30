@@ -34,7 +34,7 @@ class TypingTests(TestCase):
     def setUp(self):
         self.shop = make_supplier(code="EPICERIE_X", name="Epicerie Exemple", parser_key="")
         self.other = make_supplier(code="GROSSISTE_X", name="Grossiste Exemple", parser_key="")
-        self.fiche = reverse("invoices:supplier_detail", args=[self.shop.pk])
+        self.supplier_page = reverse("invoices:supplier_detail", args=[self.shop.pk])
         self.url = reverse("invoices:supplier_identifiers", args=[self.shop.pk])
 
     def add(self, value, supplier=None, action="ajouter"):
@@ -55,9 +55,7 @@ class TypingTests(TestCase):
         self.add("01 23 45 67 89")
         self.add("brico-exemple.fr")
         self.reload()
-        self.assertEqual(
-            self.shop.ticket_identifiers, ["tel:0123456789", "web:brico-exemple.fr"]
-        )
+        self.assertEqual(self.shop.ticket_identifiers, ["tel:0123456789", "web:brico-exemple.fr"])
 
     def test_what_was_typed_is_recorded_as_typed(self):
         self.add(SIREN)
@@ -105,7 +103,7 @@ class HeldByAnotherTests(TestCase):
         self.squatter = make_supplier(
             code="SUPERETTE_X", name="Superette Exemple", parser_key="", ticket_identifiers=[f"siren:{SIREN}"]
         )
-        self.fiche = reverse("invoices:supplier_detail", args=[self.mine.pk])
+        self.supplier_page = reverse("invoices:supplier_detail", args=[self.mine.pk])
 
     def add(self, action="ajouter", value=SIREN):
         return self.client.post(
@@ -148,9 +146,7 @@ class HeldByAnotherTests(TestCase):
         operations = {change.operation for change in changes}
         self.assertEqual(len(operations), 1)
         self.assertIsNotNone(operations.pop())
-        self.assertEqual(
-            {change.supplier_id for change in changes}, {self.mine.pk, self.squatter.pk}
-        )
+        self.assertEqual({change.supplier_id for change in changes}, {self.mine.pk, self.squatter.pk})
         for change in changes:
             self.assertEqual(change.data["moved"]["identifier"], f"siren:{SIREN}")
 
@@ -158,16 +154,18 @@ class HeldByAnotherTests(TestCase):
         self.add(action="deplacer")
         for side in (self.mine, self.squatter):
             with self.subTest(side=side.name):
-                change = SupplierChange.objects.filter(
-                    supplier=side, kind=SupplierChange.Kind.IDENTIFIERS, undone_at__isnull=True
-                ).exclude(data__undoes__isnull=False).first()
+                change = (
+                    SupplierChange.objects.filter(
+                        supplier=side, kind=SupplierChange.Kind.IDENTIFIERS, undone_at__isnull=True
+                    )
+                    .exclude(data__undoes__isnull=False)
+                    .first()
+                )
                 self.assertIsNotNone(change)
                 self.assertIn("Rendre cet identifiant", self._undo_label(side, change))
         # Undoing from the side that lost it gives it back, both sides at once.
         change = SupplierChange.objects.get(supplier=self.squatter, data__moved__isnull=False, undone_at__isnull=True)
-        self.client.post(
-            reverse("invoices:supplier_change_undo", args=[self.squatter.pk, change.pk]), follow=True
-        )
+        self.client.post(reverse("invoices:supplier_change_undo", args=[self.squatter.pk, change.pk]), follow=True)
         self.reload()
         self.assertEqual(self.squatter.ticket_identifiers, [f"siren:{SIREN}"])
         self.assertEqual(self.mine.ticket_identifiers, [])
@@ -247,8 +245,11 @@ class FilingRulesTests(TestCase):
 
     def test_a_header_and_its_identifiers_are_listed_in_the_order_asked(self):
         shop = make_supplier(
-            code="EPICERIE_R", name="Epicerie Exemple", parser_key="",
-            ticket_header="EPICERIE EXEMPLE", ticket_identifiers=[f"siren:{SIREN}"],
+            code="EPICERIE_R",
+            name="Epicerie Exemple",
+            parser_key="",
+            ticket_header="EPICERIE EXEMPLE",
+            ticket_identifiers=[f"siren:{SIREN}"],
         )
         kinds = [rule["kind"] for rule in filing_rules(shop)]
         self.assertEqual(kinds, ["einvoice", "header", "guard", "identifier"])
@@ -278,7 +279,9 @@ class FilingRulesTests(TestCase):
         self.assertEqual([rule["kind"] for rule in rules], ["till"])
 
     def test_the_page_draws_them(self):
-        shop = make_supplier(code="EPICERIE_P", name="Epicerie Exemple", parser_key="", ticket_header="EPICERIE EXEMPLE")
+        shop = make_supplier(
+            code="EPICERIE_P", name="Epicerie Exemple", parser_key="", ticket_header="EPICERIE EXEMPLE"
+        )
         page = self.client.get(reverse("invoices:supplier_detail", args=[shop.pk]))
         self.assertContains(page, "Ce qui range un document ici")
         self.assertContains(page, "Son en-tête « EPICERIE EXEMPLE »")
@@ -376,9 +379,9 @@ class FilingReportTests(TestCase):
         self.other.ticket_identifiers = [f"siren:{SIREN}"]
         self.other.save()
         invoice = make_invoice(
-            supplier=self.shop, ocr_text=f"EPICERIE EXEMPLE\nSIREN {SIREN}", parse_checks=[
-                {"label": "Lecture automatique", "passed": True, "detail": ""}
-            ]
+            supplier=self.shop,
+            ocr_text=f"EPICERIE EXEMPLE\nSIREN {SIREN}",
+            parse_checks=[{"label": "Lecture automatique", "passed": True, "detail": ""}],
         )
         page = self.client.get(reverse("invoices:receipt_review", args=[invoice.pk]))
         self.assertContains(page, "qui reconnaît")

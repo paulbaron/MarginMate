@@ -188,16 +188,28 @@ class WhenLearnedTests(TestCase):
         is still recognised."""
         franprix = Supplier.objects.get(code="FRANPRIX")
         ticket = make_invoice(
-            supplier=franprix, ocr_text=TICKET, printed_total_ttc="6.00",
+            supplier=franprix,
+            ocr_text=TICKET,
+            printed_total_ttc="6.00",
             parse_checks=[{"label": "Somme des lignes = total imprimé", "passed": False, "detail": ""}],
         )
         line = make_invoice_line(invoice=ticket, raw_name="VIS INOX", total_ht="5.00", vat_rate="0.20")
-        response = self.client.post(reverse("invoices:receipt_review", args=[ticket.pk]), {
-            "form-TOTAL_FORMS": "1", "form-INITIAL_FORMS": "0", "form-MIN_NUM_FORMS": "0", "form-MAX_NUM_FORMS": "1000",
-            "invoice_date": "2026-01-08", "printed_total_ttc": "6.00",
-            "form-0-product_name": "VIS INOX", "form-0-quantity": "1", "form-0-total_ttc": "6.00",
-            "form-0-vat_rate": "20", "form-0-line_id": str(line.pk),
-        })
+        response = self.client.post(
+            reverse("invoices:receipt_review", args=[ticket.pk]),
+            {
+                "form-TOTAL_FORMS": "1",
+                "form-INITIAL_FORMS": "0",
+                "form-MIN_NUM_FORMS": "0",
+                "form-MAX_NUM_FORMS": "1000",
+                "invoice_date": "2026-01-08",
+                "printed_total_ttc": "6.00",
+                "form-0-product_name": "VIS INOX",
+                "form-0-quantity": "1",
+                "form-0-total_ttc": "6.00",
+                "form-0-vat_rate": "20",
+                "form-0-line_id": str(line.pk),
+            },
+        )
         self.assertEqual(response.status_code, 302)
         franprix.refresh_from_db()
         self.assertEqual(franprix.ticket_identifiers, LEARNED)
@@ -228,7 +240,9 @@ class LearnFromCheckedTicketsCommandTests(TestCase):
 
     def test_a_dry_run_says_what_would_be_learned(self):
         out = self.run_command("--dry-run")
-        self.assertIn("Brico Exemple apprendrait : n° SIREN 900 000 019, téléphone 01 23 45 67 89, site brico-exemple.fr", out)
+        self.assertIn(
+            "Brico Exemple apprendrait : n° SIREN 900 000 019, téléphone 01 23 45 67 89, site brico-exemple.fr", out
+        )
         self.assertEqual(self.shop.ticket_identifiers, [])
 
     def test_every_checked_ticket_teaches_its_shop(self):
@@ -244,13 +258,16 @@ class LearnFromCheckedTicketsCommandTests(TestCase):
 
         supplier = make_supplier(code="CUISIPRO", name="Cuisipro", parser_key="")
         path = os.path.join(paths.media_root(), "cuisipro-facture.pdf")
-        write_pdf(path, [
-            "CUISIPRO FRANCE SARL  Tel: 01 98 76 54 32",
-            "FACTURE N 7654321 du 07/11/2024",
-            "Client : AU COMPTOIR  SIRET 900 000 019 10000",
-            "Verre a shot (lot de 12)  8  3,50  28,00",
-            "TOTAL TTC  EURO  33,60",
-        ])
+        write_pdf(
+            path,
+            [
+                "CUISIPRO FRANCE SARL  Tel: 01 98 76 54 32",
+                "FACTURE N 7654321 du 07/11/2024",
+                "Client : AU COMPTOIR  SIRET 900 000 019 10000",
+                "Verre a shot (lot de 12)  8  3,50  28,00",
+                "TOTAL TTC  EURO  33,60",
+            ],
+        )
         self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
         invoice = make_invoice(supplier=supplier)
         invoice.source_file.name = "cuisipro-facture.pdf"

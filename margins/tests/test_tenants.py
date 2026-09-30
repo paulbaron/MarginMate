@@ -1,11 +1,11 @@
 """« Marges » in multi mode: the remedy for days whose money was never read
-is a command on the server, and only the owner's espace is handed it.
+is a command on the server, and only the owner's tenant is handed it.
 
-The unread days are counted and said in every espace - the margins below
+The unread days are counted and said in every tenant - the margins below
 them are too low wherever they happen. What changes is the way out: the
 command re-reads the till's exports on the server, which another bar can
 neither run nor has any export for (its till is « à configurer »). Data
-invented; two real espaces in temporary files (accounts/tests/support.py).
+invented; two real tenants in temporary files (accounts/tests/support.py).
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ class UnreadDaysRemedyTests(TwoTenantsTestCase):
         self.assertNotIn("manage.py", page)
         self.assertIn("à configurer — disponible prochainement dans les réglages de votre espace", page)
 
-    def test_the_owner_s_espace_is_given_the_command(self):
+    def test_the_owner_s_tenant_is_given_the_command(self):
         self.unread_day(self.bar_a)
         page = self.page(self.user_a)
         self.assertIn("pas encore de prix", page)

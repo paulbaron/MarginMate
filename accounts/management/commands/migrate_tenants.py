@@ -1,26 +1,26 @@
 """Migrate every database of the installation.
 
     python manage.py migrate_tenants
-    python manage.py migrate_tenants --tenant <dossier>
+    python manage.py migrate_tenants --tenant <folder>
 
-In order: the accounts database, the template a new espace is copied from
-(created when missing), then every espace's database - each one BOUND as
+In order: the accounts database, the template a new tenant is copied from
+(created when missing), then every tenant's database - each one BOUND as
 `default` while its migrate runs, because the data migrations write through
 `Model.objects` and would otherwise seed or rewrite another file. Run it at
-every deploy, before serving: an espace left on the old schema answers
+every deploy, before serving: a tenant left on the old schema answers
 « no such column » to its bar alone, and a template left behind makes every
-signup migrate its new espace itself - seconds on the signup page, where a
-current template makes that migrate a no-op. One espace failing does not
+signup migrate its new tenant itself - seconds on the signup page, where a
+current template makes that migrate a no-op. One tenant failing does not
 stop the others; the command says which and exits in error.
 
-A CLOSED espace (« actif » unticked) is looked at as serve looks at it
+A CLOSED tenant (« actif » unticked) is looked at as serve looks at it
 (serve.migration_problems asks the open ones only): no database is « fermé,
 sans base - ignoré », and one that does not migrate is a warning, never a
-failure. Closing an espace is exactly what serve and DEPLOY.md §11 tell the
-owner to do with a base that is gone - and deploy.cmd runs this command
+failure. Closing a tenant is exactly what serve and DEPLOY.md §11 tell the
+owner to do with a database that is gone - and deploy.cmd runs this command
 after the merge, where a failure leaves the site down.
 
-With --tenant, only that espace's database.
+With --tenant, only that tenant's database.
 """
 
 from django.core.exceptions import ImproperlyConfigured
@@ -76,7 +76,7 @@ class Command(BaseCommand):
                 continue
             try:
                 provisioning.migrate_tenant(tenant, verbosity=inner, stdout=self.stdout)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - one tenant failing must not stop the others
                 self._failed(tenant, label, str(exc), failures)
                 continue
             self.stdout.write(f"{label} : à jour.")
@@ -84,7 +84,7 @@ class Command(BaseCommand):
             raise CommandError(f"{len(failures)} espace(s) non migré(s) : " + ", ".join(failures))
 
     def _failed(self, tenant, label, reason, failures):
-        """An open espace's failure fails the command; a closed one's is a
+        """An open tenant's failure fails the command; a closed one's is a
         warning - it receives no request until it is opened again, and serve
         then asks for its migrations."""
         if tenant.is_active:

@@ -48,8 +48,9 @@ class HappyHourUnlinkTests(TestCase):
         self.assertEqual(self.recipe.happy_hour_name, "")
 
         class Export:
-            products = {"Pinte Blonde HH": {"category": "", "typology": "", "first": date(2026, 7, 1),
-                                            "last": date(2026, 7, 1)}}
+            products = {
+                "Pinte Blonde HH": {"category": "", "typology": "", "first": date(2026, 7, 1), "last": date(2026, 7, 1)}
+            }
             entries = [("Pinte Blonde HH", date(2026, 7, 1), 5)]
 
         sync_pos_products(Export())

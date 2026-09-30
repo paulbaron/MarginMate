@@ -6,7 +6,7 @@ TENANTS_ROOT and its parent), the accounts database's file in it, the
 destination. The .env copied is an invented one (`data_backup.env_file`
 patched: the developer's own is never read), git is never asked
 (`data_backup.git_commit` patched), and the clock says 01/10/2026 10:15:00
-in Paris. Two espaces, the template, the accounts database, media and
+in Paris. Two tenants, the template, the accounts database, media and
 private files - every name and figure invented, every file a few bytes.
 """
 
@@ -21,8 +21,7 @@ import sqlite3
 import subprocess
 import tempfile
 import warnings
-from datetime import datetime
-from datetime import timezone as dt_timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -38,7 +37,7 @@ from invoices.models import Supplier
 from tests.factories import make_supplier
 
 #: 10:15:00 in Paris (CEST, UTC+2).
-MOMENT = datetime(2026, 10, 1, 8, 15, 0, tzinfo=dt_timezone.utc)
+MOMENT = datetime(2026, 10, 1, 8, 15, 0, tzinfo=UTC)
 STAMP = "2026-10-01_101500"
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
 ENV_TEXT = "DJANGO_SECRET_KEY=cle-inventee-pour-ce-test-seulement\nMARGINMATE_HTTPS=1\n"
@@ -97,7 +96,9 @@ class BackupDataTests(TenancyTestCase):
         connection = sqlite3.connect(self.accounts)
         connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("CREATE TABLE comptes (email TEXT)")
-        connection.executemany("INSERT INTO comptes VALUES (?)", [("alpha@example.invalid",), ("beta@example.invalid",)])
+        connection.executemany(
+            "INSERT INTO comptes VALUES (?)", [("alpha@example.invalid",), ("beta@example.invalid",)]
+        )
         connection.commit()
         connection.close()
 
@@ -136,7 +137,9 @@ class BackupDataTests(TenancyTestCase):
 
     def copied_files(self, folder: Path) -> dict[str, bytes]:
         data = folder / "data"
-        return {path.relative_to(data).as_posix(): path.read_bytes() for path in sorted(data.rglob("*")) if path.is_file()}
+        return {
+            path.relative_to(data).as_posix(): path.read_bytes() for path in sorted(data.rglob("*")) if path.is_file()
+        }
 
     def database_paths(self) -> list[str]:
         return [
@@ -161,7 +164,7 @@ class BackupDataTests(TenancyTestCase):
             if relative not in self.database_paths():
                 with self.subTest(file=relative):
                     self.assertEqual(copied[relative], content)
-        # The empty folders an espace is made with are there too.
+        # The empty folders a tenant is made with are there too.
         self.assertTrue((folder / "data" / "tenants" / self.bar_b.dir_name / "downloads").is_dir())
 
         for relative in self.database_paths():
@@ -206,7 +209,9 @@ class BackupDataTests(TenancyTestCase):
                 self.assertEqual(entry["rows"], sum(entry["tables"].values()))
                 self.assertEqual(entry["bytes"], (folder / "data" / relative).stat().st_size)
         self.assertEqual(described["accounts.sqlite3"]["tables"], {"comptes": 2})
-        others = {relative: content for relative, content in self.copied_files(folder).items() if relative not in described}
+        others = {
+            relative: content for relative, content in self.copied_files(folder).items() if relative not in described
+        }
         self.assertEqual(manifest["files"], {"count": len(others), "bytes": sum(len(c) for c in others.values())})
 
     def test_what_the_wal_holds_is_in_the_copy_and_the_wal_is_not(self):
@@ -281,7 +286,7 @@ class BackupDataTests(TenancyTestCase):
         self.assertIsNone(manifest["code_commit"])
         self.assertIn("Code : commit inconnu", out)
 
-    def test_an_espace_without_its_database_is_said(self):
+    def test_a_tenant_without_its_database_is_said(self):
         for leftover in paths.tenant_database(self.bar_b).parent.glob("db.sqlite3*"):
             leftover.unlink()
         out, _ = self.backup()
@@ -289,9 +294,11 @@ class BackupDataTests(TenancyTestCase):
         self.assertEqual(len(manifest["missing"]), 1)
         self.assertIn("« Bar Beta »", manifest["missing"][0])
         self.assertIn("À savoir : l'espace « Bar Beta »", out)
-        self.assertNotIn(f"tenants/{self.bar_b.dir_name}/db.sqlite3", [entry["path"] for entry in manifest["databases"]])
+        self.assertNotIn(
+            f"tenants/{self.bar_b.dir_name}/db.sqlite3", [entry["path"] for entry in manifest["databases"]]
+        )
 
-    def test_a_folder_no_espace_names_is_backed_up_and_said(self):
+    def test_a_folder_no_tenant_names_is_backed_up_and_said(self):
         orphan = self.tenants_root / "ancien-espace"
         orphan.mkdir()
         connection = sqlite3.connect(orphan / "db.sqlite3")
@@ -368,7 +375,9 @@ class BackupDataTests(TenancyTestCase):
         self.assertIn("ancien-espace", said)
 
     def test_a_copy_failing_its_integrity_check_fails_the_backup(self):
-        with mock.patch.object(data_backup, "integrity", return_value=["*** in database main ***", "Page 7: never used"]):
+        with mock.patch.object(
+            data_backup, "integrity", return_value=["*** in database main ***", "Page 7: never used"]
+        ):
             said = self.refused()
         self.assertSetAside(said)
         self.assertIn("ne passe pas la vérification d'intégrité (*** in database main *** ; Page 7: never used)", said)

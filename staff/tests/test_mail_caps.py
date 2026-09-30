@@ -4,8 +4,8 @@ The sender is the platform's, shared by every bar, and a bar chooses both
 where a mail goes (its employee's address) and words that go in it (its
 establishment's name): one « Envoyer pour signature » and twenty « Nouveau
 lien » sent 21 mails. Now at most `REQUEST_MAILS_PER_HOUR` (3) link or copy
-mails for one request in an hour, and `ESPACE_MAILS_PER_DAY` (60) signature
-mails of any kind for the espace in 24 hours - counted from the requests'
+mails for one request in an hour, and `TENANT_MAILS_PER_DAY` (60) signature
+mails of any kind for the tenant in 24 hours - counted from the requests'
 own events, failed sends included. Over either nothing is sent: the owner's
 page shows the link « à transmettre vous-même », the employee's page says to
 ask the employer for the code.
@@ -23,7 +23,8 @@ from django.test import override_settings
 from django.utils import timezone
 
 from accounts import paths
-from staff import private_files, signature_mail, signature_requests as requests_
+from staff import private_files, signature_mail
+from staff import signature_requests as requests_
 from staff.models import SignatureEvent
 from staff.signature_views import FINAL_COPY_MISSING
 from staff.tests.page_forms import as_post
@@ -112,10 +113,10 @@ class RequestCapPageTests(OwnerCase):
 
 
 @override_settings(**MAIL)
-class EspaceCapTests(PublicCase):
-    def test_sixty_mails_a_day_for_the_whole_espace(self):
-        self.assertEqual((signature_mail.ESPACE_MAILS_PER_DAY, signature_mail.REQUEST_MAILS_PER_HOUR), (60, 3))
-        with mock.patch.object(signature_mail, "ESPACE_MAILS_PER_DAY", 2):
+class TenantCapTests(PublicCase):
+    def test_sixty_mails_a_day_for_the_whole_tenant(self):
+        self.assertEqual((signature_mail.TENANT_MAILS_PER_DAY, signature_mail.REQUEST_MAILS_PER_HOUR), (60, 3))
+        with mock.patch.object(signature_mail, "TENANT_MAILS_PER_DAY", 2):
             self.assertTrue(signature_mail.send_link(self.request, LINK_URL).sent)
             self.assertTrue(signature_mail.send_link(self.request, LINK_URL).sent)
             outcome = signature_mail.send_link(self.request, LINK_URL)
@@ -125,14 +126,14 @@ class EspaceCapTests(PublicCase):
         self.assertEqual(len(mail.outbox), 2)
 
     def test_a_day_later_they_go_again(self):
-        with mock.patch.object(signature_mail, "ESPACE_MAILS_PER_DAY", 2):
+        with mock.patch.object(signature_mail, "TENANT_MAILS_PER_DAY", 2):
             for _ in range(2):
                 signature_mail.send_link(self.request, LINK_URL)
             SignatureEvent.objects.update(at=timezone.now() - dt.timedelta(hours=25))
             self.assertTrue(signature_mail.send_link(self.request, LINK_URL).sent)
 
     def test_the_code_by_mail_is_refused_before_one_is_issued(self):
-        with mock.patch.object(signature_mail, "ESPACE_MAILS_PER_DAY", 1):
+        with mock.patch.object(signature_mail, "TENANT_MAILS_PER_DAY", 1):
             signature_mail.send_link(self.request, LINK_URL)
             with self.assertRaises(requests_.CodeError) as refused:
                 signature_mail.send_code(self.request)
@@ -142,7 +143,7 @@ class EspaceCapTests(PublicCase):
         self.assertEqual(len(mail.outbox), 1)
 
     def test_the_employee_s_page_says_to_ask_the_employer(self):
-        with mock.patch.object(signature_mail, "ESPACE_MAILS_PER_DAY", 0):
+        with mock.patch.object(signature_mail, "TENANT_MAILS_PER_DAY", 0):
             answer = self.post(self.form(self.get(), "staff:sign_send_code"))
         self.assertIn(signature_mail.CODE_CAP_REACHED, self.text(answer))
         self.assertEqual(mail.outbox, [])

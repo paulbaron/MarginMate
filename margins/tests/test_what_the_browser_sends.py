@@ -2,7 +2,7 @@
 
 Every other test of the two selectors writes its request by hand - the keys,
 the ids, which box is ticked. That tests the view, and not the page: a
-checkbox tied to the wrong form (`form="compter-…"`), a hidden `affiche` or
+checkbox tied to the wrong form (`form="count-articles-…"`), a hidden `affiche` or
 `montre` dropped from a row, the selection's hidden fields left out of
 « Recalculer », a CSRF token missing - the hand-written request goes on
 passing, and the owner's click does nothing, or the wrong thing. This
@@ -158,7 +158,7 @@ class ThePanelAsTheBrowserPostsItTests(PanelFixture, TestCase):
     off the page, posted with CSRF enforced."""
 
     def setUp(self):
-        # The suite's client, logged in as the espace's owner (tests/runner.py).
+        # The suite's client, logged in as the tenant's owner (tests/runner.py).
         self.browser = self.client_class(enforce_csrf_checks=True)
 
     def page(self, **params):
@@ -166,7 +166,7 @@ class ThePanelAsTheBrowserPostsItTests(PanelFixture, TestCase):
         self.assertEqual(response.status_code, 200)
         return response
 
-    def test_enregistrer_changes_the_boxes_clicked_in_that_category_and_nothing_else(self):
+    def test_save_changes_the_boxes_clicked_in_that_category_and_nothing_else(self):
         """Ticked from the page: the tablecloth in Matériel. Also unticked on
         the same screen, in ANOTHER category's rows: the paper towels - a
         browser sends one form, so that click is simply not in the post."""
@@ -231,7 +231,7 @@ class ThePanelAsTheBrowserPostsItTests(PanelFixture, TestCase):
 
         self.assertEqual(ticked(self.towels, self.cups), [False, True])
 
-    def test_tout_cocher_clicked_on_the_page(self):
+    def test_tick_all_clicked_on_the_page(self):
         parser = forms_of(self.page().content.decode())
         pairs = submission(form_with(parser, name="categorie", value="Consommables"), click=("action", "cocher"))
 
@@ -253,16 +253,16 @@ class ThePanelAsTheBrowserPostsItTests(PanelFixture, TestCase):
             submission(form_with(parser, name="categorie", value="Matériel"), click=("action", "decocher"))
 
 
-class RecalculerAsTheBrowserSendsItTests(SelectionFixture, TestCase):
+class RecalculateAsTheBrowserSendsItTests(SelectionFixture, TestCase):
     """« Ce qui a été facturé »: the GET form read off the page."""
 
-    def recalculer(self, html: str, *, untick=()):
+    def recalculate(self, html: str, *, untick=()):
         form = form_of_class(forms_of(html), "spend-selection")
         pairs = submission(form, flip=[("garder", key) for key in untick])
         return self.client.get(f"{form['attrs']['action']}?{urlencode(pairs)}")
 
     def test_unticking_an_article_on_the_page_leaves_it_out(self):
-        response = self.recalculer(self.html(), untick=[article_key(self.drill.pk)])
+        response = self.recalculate(self.html(), untick=[article_key(self.drill.pk)])
 
         self.assertEqual(response.status_code, 302)
         query = QueryDict(urlsplit(response["Location"]).query)
@@ -271,13 +271,13 @@ class RecalculerAsTheBrowserSendsItTests(SelectionFixture, TestCase):
         page = self.client.get(response["Location"]).content.decode()
         self.assertEqual(value_of(stat_of(page, "Marge réelle — sans : Perceuse sans fil")), "375.00 €")
 
-    def test_what_is_left_out_and_not_on_the_table_survives_recalculer(self):
+    def test_what_is_left_out_and_not_on_the_table_survives_recalculate(self):
         """Consignes were only bought in April: over March they have no row,
         so only the form's hidden fields can carry them through - and
         unticking something else must not put them back."""
         html = self.html(category_key("Consignes"), CHARGES_KEY)
 
-        response = self.recalculer(html, untick=[article_key(self.drill.pk)])
+        response = self.recalculate(html, untick=[article_key(self.drill.pk)])
 
         self.assertEqual(
             QueryDict(urlsplit(response["Location"]).query).getlist("sans"),
@@ -287,13 +287,13 @@ class RecalculerAsTheBrowserSendsItTests(SelectionFixture, TestCase):
     def test_ticking_back_on_the_page_puts_it_back(self):
         html = self.html(category_key("Matériel"))
 
-        response = self.recalculer(html, untick=[category_key("Matériel")])
+        response = self.recalculate(html, untick=[category_key("Matériel")])
 
         self.assertEqual(QueryDict(urlsplit(response["Location"]).query).getlist("sans"), [])
 
-    def test_recalculer_untouched_changes_nothing(self):
+    def test_recalculate_untouched_changes_nothing(self):
         keys = [category_key("Matériel"), article_key(self.rum.pk), category_key("")]
-        response = self.recalculer(self.html(*keys))
+        response = self.recalculate(self.html(*keys))
 
         # The same keys, in the same order: in the table's order, « sans :
         # Matériel, Rhum » came back « sans : Rhum, Matériel ».
@@ -338,7 +338,9 @@ class ReadingOrderTests(TestCase):
 
         self.assertEqual([holder.label for holder in report.countable], ["Bières", "Épicerie", "vins", NO_CATEGORY])
         grocery = next(holder for holder in report.countable if holder.name == "Épicerie")
-        self.assertEqual([article.name for article in grocery.articles], ["abricots secs", "éponges", "Zeste de citron"])
+        self.assertEqual(
+            [article.name for article in grocery.articles], ["abricots secs", "éponges", "Zeste de citron"]
+        )
 
 
 class DutyOverReturnsOnlyTests(TestCase):

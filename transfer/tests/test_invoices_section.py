@@ -19,8 +19,7 @@ Every name, amount and file below is invented.
 import hashlib
 import os
 import tracemalloc
-from datetime import date, datetime
-from datetime import timezone as dt_timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from unittest import mock
@@ -65,7 +64,6 @@ from transfer.tests.support import (
 )
 
 MERGE, REPLACE = Strategy.MERGE, Strategy.REPLACE
-UTC = dt_timezone.utc
 D = Decimal
 COMPLETE, NEEDS_REVIEW = Invoice.Status.COMPLETE, Invoice.Status.NEEDS_REVIEW
 TWIN = b"%PDF-1.4 ticket Monoprix essai 8,44 EUR - deux fois le meme fichier"
@@ -80,7 +78,7 @@ def store(name: str, data: bytes) -> str:
 
 def media_names() -> set[str]:
     """Every file under the folders an import writes to - « Consignes »'
-    photos and bons included, so MediaMixin removes them after a test too."""
+    photos and slips included, so MediaMixin removes them after a test too."""
     root = paths.media_root()
     return {
         path.relative_to(root).as_posix()
@@ -130,7 +128,7 @@ def payment(invoice, n=1) -> InvoicePayment:
 
 class MediaMixin:
     """Every file a test stores or imports is removed after it: the test
-    espace's media is one temp folder for the whole run (per worker)."""
+    tenant's media is one temp folder for the whole run (per worker)."""
 
     def setUp(self):
         super().setUp()
@@ -170,20 +168,43 @@ def build_invoices() -> dict:
         1,
     )
     lines = [
-        make_invoice_line(invoice, bottle, quantity=D("6"), total_ht="57.00", unit_cost_ht="9.5000", taxes=D("1.20"), vat_rate=D("0.2000")),
-        make_invoice_line(invoice, bottle, quantity=D("-1"), total_ht="-9.50", unit_cost_ht="9.5000", vat_rate=D("0.2000")),
         make_invoice_line(
-            invoice, weighed, quantity=D("0.350"), total_volume="0.350", total_ht="4.20", unit_cost_ht="12.0000",
+            invoice,
+            bottle,
+            quantity=D("6"),
+            total_ht="57.00",
+            unit_cost_ht="9.5000",
+            taxes=D("1.20"),
+            vat_rate=D("0.2000"),
+        ),
+        make_invoice_line(
+            invoice, bottle, quantity=D("-1"), total_ht="-9.50", unit_cost_ht="9.5000", vat_rate=D("0.2000")
+        ),
+        make_invoice_line(
+            invoice,
+            weighed,
+            quantity=D("0.350"),
+            total_volume="0.350",
+            total_ht="4.20",
+            unit_cost_ht="12.0000",
             vat_rate=D("0.0550"),
         ),
-        make_invoice_line(invoice, napkins, quantity=D("2"), total_ht="3.00", unit_cost_ht="1.5000", colisage=2, category="Hygiène"),
+        make_invoice_line(
+            invoice, napkins, quantity=D("2"), total_ht="3.00", unit_cost_ht="1.5000", colisage=2, category="Hygiène"
+        ),
         # A delivery shared over the lines above it: the flag AND the shares
         # have to ride in the archive, or a restored invoice comes back with
         # the delivery waiting in the review queue and every unit priced
         # below what it cost (transfer.sections.invoices.LINE_FIELDS).
         make_invoice_line(
-            invoice, delivery, raw_name="LIVRAISON ESSAI", quantity=D("1"), total_ht="6.47",
-            unit_cost_ht="6.4700", vat_rate=D("0.2000"), is_spread_charge=True,
+            invoice,
+            delivery,
+            raw_name="LIVRAISON ESSAI",
+            quantity=D("1"),
+            total_ht="6.47",
+            unit_cost_ht="6.4700",
+            vat_rate=D("0.2000"),
+            is_spread_charge=True,
         ),
     ]
     # The shares first, then the movements - replace_invoice_lines' own
@@ -198,7 +219,10 @@ def build_invoices() -> dict:
 
     bread = make_product(monoprix, "PAIN ESSAI")
     twins = []
-    for minute, name in ((2, "invoices/2026/09/Monoprix_essai.pdf"), (3, "invoices/2026/09/Monoprix_essai_Ab12Cd3.pdf")):
+    for minute, name in (
+        (2, "invoices/2026/09/Monoprix_essai.pdf"),
+        (3, "invoices/2026/09/Monoprix_essai_Ab12Cd3.pdf"),
+    ):
         twin = imported(
             unnumbered(monoprix, invoice_date=date(2025, 2, 26), source_file=store(name, TWIN), status=COMPLETE),
             minute,
@@ -229,8 +253,15 @@ def build_invoices() -> dict:
         4,
     )
     make_invoice_line(
-        receipt, bread, quantity=D("1"), total_ht="1.14", unit_cost_ht="1.1400", vat_rate=D("0.0550"),
-        printed_ttc=D("1.20"), read_as="PAIN ESSA1", discount_ttc=D("0.10"),
+        receipt,
+        bread,
+        quantity=D("1"),
+        total_ht="1.14",
+        unit_cost_ht="1.1400",
+        vat_rate=D("0.0550"),
+        printed_ttc=D("1.20"),
+        read_as="PAIN ESSA1",
+        discount_ttc=D("0.10"),
     )
 
     empty = imported(
@@ -244,12 +275,25 @@ def build_invoices() -> dict:
         5,
     )
 
-    poste = make_product(water, "Eau Essai", is_expense=True)
+    charge_item = make_product(water, "Eau Essai", is_expense=True)
     bill = imported(
-        make_invoice(water, invoice_number="E-2026-07", source_file=store("invoices/2026/09/eau_essai.pdf", b"%PDF-1.4 eau"), status=COMPLETE),
+        make_invoice(
+            water,
+            invoice_number="E-2026-07",
+            source_file=store("invoices/2026/09/eau_essai.pdf", b"%PDF-1.4 eau"),
+            status=COMPLETE,
+        ),
         6,
     )
-    make_invoice_line(bill, poste, quantity=D("1"), total_ht="42.10", unit_cost_ht="42.1000", vat_rate=D("0.0550"), raw_name="Eau Essai")
+    make_invoice_line(
+        bill,
+        charge_item,
+        quantity=D("1"),
+        total_ht="42.10",
+        unit_cost_ht="42.1000",
+        vat_rate=D("0.0550"),
+        raw_name="Eau Essai",
+    )
 
     stand_in = imported(
         make_invoice(
@@ -363,7 +407,11 @@ class RoundTripTests(MediaMixin, TestCase):
 
     def test_the_two_identical_tickets_come_back_as_two(self):
         after = self._check(MERGE)
-        twins = [document for document in after["factures"]["invoices"] if document["supplier"] == "MONOPRIX" and not document["key"]["sha256"]]
+        twins = [
+            document
+            for document in after["factures"]["invoices"]
+            if document["supplier"] == "MONOPRIX" and not document["key"]["sha256"]
+        ]
         self.assertEqual(sorted(document["key"]["occurrence"] for document in twins), [0, 1])
         self.assertEqual(len({document["key"]["file_sha256"] for document in twins}), 1)
 
@@ -475,10 +523,14 @@ class MergeAndReplaceTests(MediaMixin, TestCase):
         self.bottle = make_product(metro, "VODKA ESSAI 70CL", stock_type=vodka, stock_equivalent="0.7")
         for number in ("M-0001", "M-0002", "M-0003"):
             invoice = make_invoice(
-                metro, invoice_number=number, source_file=store(f"invoices/2026/09/{number}.pdf", f"%PDF {number}".encode()),
+                metro,
+                invoice_number=number,
+                source_file=store(f"invoices/2026/09/{number}.pdf", f"%PDF {number}".encode()),
                 status=COMPLETE,
             )
-            services.create_stock_movement_for_line(make_invoice_line(invoice, self.bottle, quantity=D("2"), total_ht="19.00"))
+            services.create_stock_movement_for_line(
+                make_invoice_line(invoice, self.bottle, quantity=D("2"), total_ht="19.00")
+            )
         self.reader = export_archive({"factures"}, closed=False)
         self.addCleanup(self.reader.close)
 
@@ -489,7 +541,10 @@ class MergeAndReplaceTests(MediaMixin, TestCase):
         default_storage.delete("invoices/2026/09/M-0002.pdf")
         default_storage.delete("invoices/2026/09/M-0003.pdf")
         self.paid = make_invoice(
-            metro, invoice_number="M-0099", source_file=store("invoices/2026/09/M-0099.pdf", b"%PDF M-0099"), status=COMPLETE
+            metro,
+            invoice_number="M-0099",
+            source_file=store("invoices/2026/09/M-0099.pdf", b"%PDF M-0099"),
+            status=COMPLETE,
         )
         make_invoice_line(self.paid, make_product(metro, "PRODUIT ESSAI SEUL"), total_ht="5.00")
         payment(self.paid)
@@ -499,7 +554,9 @@ class MergeAndReplaceTests(MediaMixin, TestCase):
         take_line = StockTakeLine.objects.create(
             stock_take=take, product=self.bottle, counted_quantity=D("3"), unit=UnitChoices.UNIT, value_ht=D("28.50")
         )
-        StockTakeLineSource.objects.create(stock_take_line=take_line, invoice_line=line, quantity_used=D("3"), unit_cost_ht=D("9.5"))
+        StockTakeLineSource.objects.create(
+            stock_take_line=take_line, invoice_line=line, quantity_used=D("3"), unit_cost_ht=D("9.5")
+        )
 
     def test_merge(self):
         run = import_archive(self.reader, MERGE)
@@ -532,9 +589,7 @@ class MergeAndReplaceTests(MediaMixin, TestCase):
         self.assertFalse(Product.objects.filter(raw_name="PRODUIT ESSAI SEUL").exists())
         documents = report.tallies["documents"]
         self.assertEqual((documents.created, documents.updated, documents.deleted), (1, 2, 1))
-        self.assertEqual(
-            report.kept, ["Facture Metro n° M-0098 : a servi à valoriser l'inventaire du 31/12/2025"]
-        )
+        self.assertEqual(report.kept, ["Facture Metro n° M-0098 : a servi à valoriser l'inventaire du 31/12/2025"])
         self.assertTrue(Invoice.objects.filter(pk=self.priced.pk).exists())
         bank = run.section("banque")
         self.assertEqual(bank.tallies["paiements"].deleted, 1)
@@ -584,7 +639,9 @@ class MatchedByFileTests(MediaMixin, TestCase):
         super().setUp()
         self.leroy = make_supplier(code="LEROY_ESSAI", name="Leroy Essai")
         self.invoice = make_invoice(
-            self.leroy, invoice_number="LM-4411", invoice_date=date(2026, 9, 2),
+            self.leroy,
+            invoice_number="LM-4411",
+            invoice_date=date(2026, 9, 2),
             source_file=store("invoices/2026/09/leroy_essai.pdf", b"%PDF-1.4 leroy essai"),
         )
         self.reader = export_archive({"factures"}, closed=False)
@@ -596,7 +653,8 @@ class MatchedByFileTests(MediaMixin, TestCase):
         self.assertEqual(Invoice.objects.count(), 1)
         self.assertIn("rapproché par son fichier : n° 20260902-9.68 ici, n° LM-4411 dans l'archive", report.notes)
         self.assertEqual(
-            report.conflicts, ["Facture Leroy Essai n° LM-4411 : différente dans l'archive (numéro) — gardée telle quelle"]
+            report.conflicts,
+            ["Facture Leroy Essai n° LM-4411 : différente dans l'archive (numéro) — gardée telle quelle"],
         )
         self.assertEqual(Invoice.objects.get().invoice_number, "20260902-9.68")
 
@@ -608,7 +666,10 @@ class MatchedByFileTests(MediaMixin, TestCase):
         other = make_invoice(self.leroy, invoice_number="LM-4411", invoice_date=date(2026, 9, 3))
         report = import_archive(self.reader, MERGE).section("factures")
         self.assertEqual(len(report.skipped), 1)
-        self.assertIn("deux documents différents répondent à cette facture (n° LM-4411 et fichier de Facture Leroy Essai n° 20260902-9.68)", report.skipped[0])
+        self.assertIn(
+            "deux documents différents répondent à cette facture (n° LM-4411 et fichier de Facture Leroy Essai n° 20260902-9.68)",
+            report.skipped[0],
+        )
         self.assertEqual(Invoice.objects.count(), 2)
         self.assertEqual(Invoice.objects.get(pk=other.pk).invoice_date, date(2026, 9, 3))
 
@@ -625,7 +686,9 @@ class FileTests(MediaMixin, TestCase):
     def test_merge_gives_back_a_lost_preview(self):
         monoprix = Supplier.objects.get(code="MONOPRIX")
         make_invoice(
-            monoprix, invoice_number="T-1", source_file=store("invoices/2026/09/t1_essai.jpg", b"JPEG ticket t1"),
+            monoprix,
+            invoice_number="T-1",
+            source_file=store("invoices/2026/09/t1_essai.jpg", b"JPEG ticket t1"),
             preview_image=store("receipts/2026/09/t1_apercu.jpg", b"JPEG apercu t1"),
         )
         reader = export_archive({"factures"}, closed=False)
@@ -637,7 +700,9 @@ class FileTests(MediaMixin, TestCase):
 
     def test_a_name_taken_by_another_file_gets_an_available_one_and_the_other_stays(self):
         metro = Supplier.objects.get(code="METRO")
-        make_invoice(metro, invoice_number="M-7", source_file=store("invoices/2026/09/clash_essai.pdf", b"%PDF contenu A"))
+        make_invoice(
+            metro, invoice_number="M-7", source_file=store("invoices/2026/09/clash_essai.pdf", b"%PDF contenu A")
+        )
         reader = export_archive({"factures"}, closed=False)
         self.addCleanup(reader.close)
         Invoice.objects.all().delete()
@@ -648,7 +713,9 @@ class FileTests(MediaMixin, TestCase):
         self.assertNotEqual(invoice.source_file.name, "invoices/2026/09/clash_essai.pdf")
         self.assertTrue(invoice.source_file.name.startswith("invoices/2026/09/clash_essai_"))
         self.assertEqual(sha(invoice.source_file.name), hashlib.sha256(b"%PDF contenu A").hexdigest())
-        self.assertEqual(sha("invoices/2026/09/clash_essai.pdf"), hashlib.sha256(b"%PDF contenu B, un autre document").hexdigest())
+        self.assertEqual(
+            sha("invoices/2026/09/clash_essai.pdf"), hashlib.sha256(b"%PDF contenu B, un autre document").hexdigest()
+        )
 
     def test_the_same_file_already_stored_is_reused(self):
         metro = Supplier.objects.get(code="METRO")
@@ -663,10 +730,14 @@ class FileTests(MediaMixin, TestCase):
 
     def test_replace_swaps_a_changed_file_and_removes_the_old_one_on_commit(self):
         metro = Supplier.objects.get(code="METRO")
-        invoice = make_invoice(metro, invoice_number="M-9", source_file=store("invoices/2026/09/m9_essai.pdf", b"%PDF version 1"))
+        invoice = make_invoice(
+            metro, invoice_number="M-9", source_file=store("invoices/2026/09/m9_essai.pdf", b"%PDF version 1")
+        )
         reader = export_archive({"factures"}, closed=False)
         self.addCleanup(reader.close)
-        Invoice.objects.filter(pk=invoice.pk).update(source_file=store("invoices/2026/09/m9_autre.pdf", b"%PDF version 2"))
+        Invoice.objects.filter(pk=invoice.pk).update(
+            source_file=store("invoices/2026/09/m9_autre.pdf", b"%PDF version 2")
+        )
         default_storage.delete("invoices/2026/09/m9_essai.pdf")
         store("invoices/2026/09/m9_essai.pdf", b"%PDF un fichier sans rapport")
 
@@ -719,11 +790,16 @@ class StockTakeTrailTests(MediaMixin, TestCase):
         self.bottle = make_product(metro, "VODKA ESSAI 70CL", stock_type=vodka, stock_equivalent="0.7")
         self.invoice = make_invoice(metro, invoice_number="M-TAKE", status=COMPLETE)
         self.lines = [
-            make_invoice_line(self.invoice, self.bottle, quantity=D("1"), total_ht=amount) for amount in ("10.00", "20.00")
+            make_invoice_line(self.invoice, self.bottle, quantity=D("1"), total_ht=amount)
+            for amount in ("10.00", "20.00")
         ]
         self.take = make_stock_take(datetime(2025, 12, 31, 22, 0, tzinfo=UTC))
         self.take_line = StockTakeLine.objects.create(
-            stock_take=self.take, product=self.bottle, counted_quantity=D("1"), unit=UnitChoices.UNIT, value_ht=D("20.00")
+            stock_take=self.take,
+            product=self.bottle,
+            counted_quantity=D("1"),
+            unit=UnitChoices.UNIT,
+            value_ht=D("20.00"),
         )
 
     def _priced_from(self, line):
@@ -844,19 +920,25 @@ class StockTakeTrailTests(MediaMixin, TestCase):
     # the report said both, and a full « Remplacer » restore left the invoice
     # short of the line the archive has (review, 19/09 copy).
 
-    def _whole(self, inventaires):
-        return {"fournisseurs": MERGE, "associations": MERGE, "factures": REPLACE, "inventaires": inventaires}
+    def _whole(self, stock_takes_mode):
+        return {"fournisseurs": MERGE, "associations": MERGE, "factures": REPLACE, "inventaires": stock_takes_mode}
 
     def _count_after_the_export(self, invoice_line):
         """A count taken after the export, priced from this line: the
         archive has no such count."""
         take = make_stock_take(datetime(2026, 9, 19, 10, 0, tzinfo=UTC))
         take_line = StockTakeLine.objects.create(
-            stock_take=take, product=invoice_line.product, counted_quantity=D("1"), unit=UnitChoices.UNIT,
+            stock_take=take,
+            product=invoice_line.product,
+            counted_quantity=D("1"),
+            unit=UnitChoices.UNIT,
             value_ht=invoice_line.total_ht,
         )
         StockTakeLineSource.objects.create(
-            stock_take_line=take_line, invoice_line=invoice_line, quantity_used=D("1"), unit_cost_ht=invoice_line.total_ht
+            stock_take_line=take_line,
+            invoice_line=invoice_line,
+            quantity_used=D("1"),
+            unit_cost_ht=invoice_line.total_ht,
         )
         return take
 
@@ -867,7 +949,9 @@ class StockTakeTrailTests(MediaMixin, TestCase):
         metro = Supplier.objects.get(code="METRO")
         tonic = make_product(metro, "TONIC ESSAI 20CL")
         self.gin = make_product(
-            metro, "GIN ESSAI 70CL", stock_type=StockType.objects.create(name="Gin essai", unit=UnitChoices.LITRE),
+            metro,
+            "GIN ESSAI 70CL",
+            stock_type=StockType.objects.create(name="Gin essai", unit=UnitChoices.LITRE),
             stock_equivalent="0.7",
         )
         invoice = make_invoice(metro, invoice_number="M-RANG", status=COMPLETE)
@@ -892,7 +976,11 @@ class StockTakeTrailTests(MediaMixin, TestCase):
         self.assertEqual(run.section("inventaires").tallies[stock_takes.TAKES].deleted, 1)
         self.assertFalse(type(take).objects.filter(pk=take.pk).exists())
         self.assertEqual(
-            list(Invoice.objects.get(invoice_number="M-RANG").lines.order_by("id").values_list("product__raw_name", "raw_name")),
+            list(
+                Invoice.objects.get(invoice_number="M-RANG")
+                .lines.order_by("id")
+                .values_list("product__raw_name", "raw_name")
+            ),
             [("TONIC ESSAI 20CL", "TONIC ESSAI 20CL"), ("GIN ESSAI 70CL", "GIN ESSAI 70CL")],
         )
         # The export, exactly: its lines, their purchases, its counts.
@@ -919,7 +1007,9 @@ class StockTakeTrailTests(MediaMixin, TestCase):
         count priced from C: the archive has neither."""
         metro = Supplier.objects.get(code="METRO")
         self.gin = make_product(
-            metro, "GIN ESSAI 70CL", stock_type=StockType.objects.create(name="Gin essai", unit=UnitChoices.LITRE),
+            metro,
+            "GIN ESSAI 70CL",
+            stock_type=StockType.objects.create(name="Gin essai", unit=UnitChoices.LITRE),
             stock_equivalent="0.7",
         )
         invoice = make_invoice(metro, invoice_number="M-AJOUT", status=COMPLETE)
@@ -958,12 +1048,19 @@ class StockTakeTrailTests(MediaMixin, TestCase):
             for take in payload["stock_takes"]:
                 for line in take["lines"]:
                     line["sources"] = [
-                        {"invoice": key, "line": 1, "raw_name": "GIN ESSAI 70CL", "quantity_used": "1", "unit_cost_ht": "16.0000"}
+                        {
+                            "invoice": key,
+                            "line": 1,
+                            "raw_name": "GIN ESSAI 70CL",
+                            "quantity_used": "1",
+                            "unit_cost_ht": "16.0000",
+                        }
                     ]
             return payload
 
         key = next(
-            record["key"] for record in reader.section("factures").payload()["invoices"]
+            record["key"]
+            for record in reader.section("factures").payload()["invoices"]
             if record["invoice_number"] == "M-AJOUT"
         )
         forged = ArchiveReader(forge(reader, inventaires=onto_the_added_line))
@@ -1012,7 +1109,9 @@ class ClassificationTests(MediaMixin, TestCase):
     def test_a_classified_product_here_books_its_movements(self):
         metro = Supplier.objects.get(code="METRO")
         bottle = make_product(metro, "VODKA ESSAI 70CL")
-        make_invoice_line(make_invoice(metro, invoice_number="M-1", status=NEEDS_REVIEW), bottle, quantity=D("6"), total_ht="57.00")
+        make_invoice_line(
+            make_invoice(metro, invoice_number="M-1", status=NEEDS_REVIEW), bottle, quantity=D("6"), total_ht="57.00"
+        )
         reader = export_archive({"factures"}, closed=False)
         self.addCleanup(reader.close)
         Invoice.objects.all().delete()
@@ -1026,14 +1125,14 @@ class ClassificationTests(MediaMixin, TestCase):
 
     def test_replace_gives_an_unclassified_product_the_archives_nature(self):
         water = make_supplier(code="EAU_ESSAI", name="Eau Essai", expenses_only=True)
-        poste = make_product(water, "Eau Essai", is_expense=True)
-        make_invoice_line(make_invoice(water, invoice_number="E-1"), poste)
+        charge_item = make_product(water, "Eau Essai", is_expense=True)
+        make_invoice_line(make_invoice(water, invoice_number="E-1"), charge_item)
         reader = export_archive({"factures"}, closed=False)
         self.addCleanup(reader.close)
-        Product.objects.filter(pk=poste.pk).update(is_expense=False)
+        Product.objects.filter(pk=charge_item.pk).update(is_expense=False)
         Invoice.objects.update(invoice_date=date(2026, 2, 2))
         import_archive(reader, REPLACE)
-        self.assertTrue(Product.objects.get(pk=poste.pk).is_expense)
+        self.assertTrue(Product.objects.get(pk=charge_item.pk).is_expense)
 
 
 class RefusalTests(MediaMixin, TestCase):
@@ -1074,9 +1173,7 @@ class RefusalTests(MediaMixin, TestCase):
             record["lines"][2]["product"] = ["METRO", "PRODUIT FANTOME"]
 
         report = self._import(self._edit("M-0001", edit))
-        self.assertIn(
-            "Facture Metro n° M-0001 : ligne n°3 : produit inconnu « PRODUIT FANTOME »", report.skipped
-        )
+        self.assertIn("Facture Metro n° M-0001 : ligne n°3 : produit inconnu « PRODUIT FANTOME »", report.skipped)
         self.assertFalse(Invoice.objects.filter(invoice_number="M-0001").exists())
         self.assertFalse(InvoiceLine.objects.filter(raw_name="JAMBON ESSAI AU POIDS").exists())
 
@@ -1096,7 +1193,9 @@ class RefusalTests(MediaMixin, TestCase):
             record["source_file"]["name"] = "../../config/essai.pdf"
 
         report = self._import(self._edit("E-2026-07", edit))
-        self.assertIn("Facture Eau Essai n° E-2026-07 : nom de fichier refusé (« ../../config/essai.pdf »)", report.skipped)
+        self.assertIn(
+            "Facture Eau Essai n° E-2026-07 : nom de fichier refusé (« ../../config/essai.pdf »)", report.skipped
+        )
         self.assertFalse(Invoice.objects.filter(invoice_number="E-2026-07").exists())
 
     def test_a_file_the_archive_does_not_declare_skips_the_document(self):
@@ -1122,7 +1221,9 @@ class RefusalTests(MediaMixin, TestCase):
             {"label": "Somme des lignes = total", "passed": True},
         ):
             with self.subTest(checks=checks):
-                report = self._import(self._edit("M-0001", lambda record, checks=checks: record.update(parse_checks=checks)))
+                report = self._import(
+                    self._edit("M-0001", lambda record, checks=checks: record.update(parse_checks=checks))
+                )
                 self.assertIn("Facture Metro n° M-0001 : contrôles illisibles", report.skipped)
                 self.assertFalse(Invoice.objects.filter(invoice_number="M-0001").exists())
 
@@ -1138,7 +1239,9 @@ class RefusalTests(MediaMixin, TestCase):
             "0.2;100.00;20.00",
         ):
             with self.subTest(table=table):
-                report = self._import(self._edit("M-0001", lambda record, table=table: record.update(vat_breakdown=table)))
+                report = self._import(
+                    self._edit("M-0001", lambda record, table=table: record.update(vat_breakdown=table))
+                )
                 self.assertIn("Facture Metro n° M-0001 : table de TVA illisible", report.skipped)
                 self.assertFalse(Invoice.objects.filter(invoice_number="M-0001").exists())
 
@@ -1306,9 +1409,10 @@ class TwinProductsTests(MediaMixin, TestCase):
 
     def state(self) -> list:
         return sorted(
-            (product.raw_name, [str(quantity.normalize()) for quantity in product.invoice_lines.values_list(
-                "quantity", flat=True
-            )])
+            (
+                product.raw_name,
+                [str(quantity.normalize()) for quantity in product.invoice_lines.values_list("quantity", flat=True)],
+            )
             for product in Product.objects.filter(supplier=self.brewery)
         )
 

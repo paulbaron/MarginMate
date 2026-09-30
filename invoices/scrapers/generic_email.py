@@ -178,7 +178,7 @@ def find_matching_emails(
     log=print,
     on_progress=None,
     should_cancel=None,
-    compile=re.compile,  # noqa: A002 - the name says what it replaces
+    compile=re.compile,
 ) -> list[EmailMatch]:
     """Searches the shared invoice mailbox for emails matching every given
     pattern (blank subject/body pattern = match anything), fetching each
@@ -196,21 +196,20 @@ def find_matching_emails(
     invoice types. Cancelling mid-scan simply stops early and returns
     whatever was already found - nothing already matched is discarded.
 
-    The mailbox is the owner's: from an espace that may not use the
+    The mailbox is the owner's: from a tenant that may not use the
     server's accounts, refused before the settings are read or anything
     signs in (invoices/integrations.py) - scrape_email_invoices goes through
     here too.
 
-    `compile` turns each motif (sender, subject, body, attachment) into
+    `compile` turns each pattern (sender, subject, body, attachment) into
     something with `.search(text)`; `re.compile` - an invoice source's
-    motifs, and « Tester », exactly as before. The consignes gather passes
-    returnables.patterns.mail_matcher: a format's motifs are checked before
+    patterns, and « Tester », exactly as before. The returnables gather passes
+    returnables.patterns.mail_matcher: a format's patterns are checked before
     anything compiles them, matched case-insensitively and with a timeout -
     a header anybody on the internet can write must not hang the gather. A
-    motif it refuses raises here, before anything signs in.
+    pattern it refuses raises here, before anything signs in.
     """
     from accounts.tenancy import integrations_allowed
-
     from invoices import integrations
 
     if not integrations_allowed():
@@ -313,7 +312,11 @@ def find_matching_emails(
                 attachments = _extract_attachments(msg, attachment_regex)
                 matches.append(
                     EmailMatch(
-                        message_id=mail_id, sender=sender, subject=subject, email_date=email_date, attachments=attachments
+                        message_id=mail_id,
+                        sender=sender,
+                        subject=subject,
+                        email_date=email_date,
+                        attachments=attachments,
                     )
                 )
                 log(f"Matched: {subject!r} from {sender!r} ({len(attachments)} attachment(s))")

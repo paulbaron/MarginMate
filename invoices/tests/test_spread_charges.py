@@ -1,4 +1,4 @@
-"""Frais à répartir: a delivery charge shared over the goods it delivered.
+"""« Frais à répartir »: a delivery charge shared over the goods it delivered.
 
 A supplier prints « LIVRAISON » once, for the whole order. It is not a
 product, and what it costs belongs on the bottles it brought - that is the
@@ -8,7 +8,7 @@ check and the bank match are the document's own figures) and moves what it
 costs onto the other lines, pro rata of what they were priced at.
 
 The rule that must never break: the shares add back up to the charge, to the
-centime, so the lines' costs still come to the invoice's own total. Nothing
+cent, so the lines' costs still come to the invoice's own total. Nothing
 is created; it only moves.
 
 Structurally faithful, data invented.
@@ -53,16 +53,16 @@ class SpreadChargesTests(SimpleTestCase):
 
     def test_the_shares_add_up_to_the_charge_to_the_centime(self):
         # Three equal lines sharing 1,00 EUR: 0,34 + 0,33 + 0,33, never
-        # 0,33 x 3 with a centime lost out of every cost on the invoice.
+        # 0,33 x 3 with a cent lost out of every cost on the invoice.
         lines = [parsed("10.00"), parsed("10.00"), parsed("10.00"), parsed("1.00", charge=True)]
         spread_charges(lines)
         shares = [line.spread_ht for line in lines[:3]]
         self.assertEqual(sum(shares), D("1.00"))
         self.assertEqual(sorted(shares, reverse=True), [D("0.34"), D("0.33"), D("0.33")])
 
-    def test_the_leftover_centimes_go_to_the_largest_remainders(self):
+    def test_the_leftover_cents_go_to_the_largest_remainders(self):
         # Exact shares 0,8181... / 0,0909... / 0,0909...: the big line's
-        # remainder is the largest, so it takes the centime.
+        # remainder is the largest, so it takes the cent.
         lines = [parsed("90.00"), parsed("10.00"), parsed("10.00"), parsed("1.00", charge=True)]
         spread_charges(lines)
         self.assertEqual([line.spread_ht for line in lines[:3]], [D("0.82"), D("0.09"), D("0.09")])
@@ -208,7 +208,10 @@ class SpreadChargeOnTheCorrectionPageTests(TestCase):
         self.supplier = Supplier.objects.get(code="METRO")
         self.gin = make_stock_type("Gin", unit=UnitChoices.LITRE)
         self.product = make_product(
-            supplier=self.supplier, raw_name="GIN EXEMPLE 70CL", stock_type=self.gin, unit=UnitChoices.LITRE,
+            supplier=self.supplier,
+            raw_name="GIN EXEMPLE 70CL",
+            stock_type=self.gin,
+            unit=UnitChoices.LITRE,
             stock_equivalent="0.7",
         )
         self.invoice = Invoice.objects.create(
@@ -219,7 +222,11 @@ class SpreadChargeOnTheCorrectionPageTests(TestCase):
         )
         create_stock_movement_for_line(self.goods)
         self.delivery = make_invoice_line(
-            invoice=self.invoice, raw_name="LIVRAISON", quantity=1, total_ht="10.00", vat_rate=D("0.20"),
+            invoice=self.invoice,
+            raw_name="LIVRAISON",
+            quantity=1,
+            total_ht="10.00",
+            vat_rate=D("0.20"),
             product=make_product(supplier=self.supplier, raw_name="LIVRAISON"),
         )
         self.url = reverse("invoices:invoice_edit_lines", args=[self.invoice.pk])
@@ -241,7 +248,7 @@ class SpreadChargeOnTheCorrectionPageTests(TestCase):
     def test_the_invoice_totals_do_not_move(self):
         # The whole reason the charge stays a line: its 20 % VAT must not be
         # taxed at the goods' rate, and the bank matches on total_ttc to the
-        # centime.
+        # cent.
         before = (self.invoice.total_ht, self.invoice.total_ttc)
         self.tick()
         invoice = Invoice.objects.get(pk=self.invoice.pk)
@@ -326,12 +333,20 @@ class MovedToAnotherSupplierTests(TestCase):
         old = Supplier.objects.get(code="METRO")
         invoice = Invoice.objects.create(supplier=old, invoice_number="134-052-000002")
         goods = make_invoice_line(
-            invoice=invoice, product=make_product(supplier=old, raw_name="GIN EXEMPLE 70CL"),
-            quantity=1, total_ht="100.00", vat_rate=D("0.20"),
+            invoice=invoice,
+            product=make_product(supplier=old, raw_name="GIN EXEMPLE 70CL"),
+            quantity=1,
+            total_ht="100.00",
+            vat_rate=D("0.20"),
         )
         make_invoice_line(
-            invoice=invoice, product=make_product(supplier=old, raw_name="LIVRAISON", is_expense=True),
-            raw_name="LIVRAISON", quantity=1, total_ht="10.00", vat_rate=D("0.20"), is_spread_charge=True,
+            invoice=invoice,
+            product=make_product(supplier=old, raw_name="LIVRAISON", is_expense=True),
+            raw_name="LIVRAISON",
+            quantity=1,
+            total_ht="10.00",
+            vat_rate=D("0.20"),
+            is_spread_charge=True,
         )
         goods.spread_ht = D("10.00")
         goods.save(update_fields=["spread_ht"])

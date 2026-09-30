@@ -18,7 +18,7 @@ reason rather than guessing:
 * a product and its article agree on the unit, here and in the archive - a
   factor of 0,7 means "litres per bottle" only against an article in
   litres;
-* a charge's poste (a product flagged `is_expense` here) is never
+* a charge item (a product flagged `is_expense` here) is never
   classified - a rent would become bottles, with a stock movement behind it.
   assign_product's own rule, on the product and not its supplier: a supplier
   turned to charges keeps the products a stock item claimed
@@ -217,7 +217,7 @@ class AssociationsSection(Section):
         self._named_articles: set[str] = set()
         #: fold(name) -> the unit the file gives that article, for the products' checks.
         self._file_units: dict[str, str] = {}
-        #: Articles whose unit this run changed (Remplacer): their conversions no longer mean anything.
+        #: Articles whose unit this run changed (« Remplacer »): their conversions no longer mean anything.
         self._unit_changed: set[int] = set()
         #: Products a record of the file set, left as it said, or created.
         self._applied: set[int] = set()
@@ -279,7 +279,9 @@ class AssociationsSection(Section):
                     self._unit_changed.add(existing.pk)
                     self._say_unit_change(ctx, report, existing, old_unit)
                 continue
-            fills = [field for field in different if field in ARTICLE_FILLABLE and codec.is_blank(getattr(existing, field))]
+            fills = [
+                field for field in different if field in ARTICLE_FILLABLE and codec.is_blank(getattr(existing, field))
+            ]
             if fills:
                 codec.assign(existing, record, fills)
                 existing.save(update_fields=fills)
@@ -399,8 +401,9 @@ class AssociationsSection(Section):
             different = []
             if product.stock_type_id != article.pk:
                 different.append("article")
-            different += codec.differences(product, {"unit": unit, "stock_equivalent": record["stock_equivalent"]},
-                                           ("unit", "stock_equivalent"))
+            different += codec.differences(
+                product, {"unit": unit, "stock_equivalent": record["stock_equivalent"]}, ("unit", "stock_equivalent")
+            )
             if ean and product.ean and ean != product.ean:
                 different.append("ean")
             if not different:
@@ -432,7 +435,7 @@ class AssociationsSection(Section):
     def _bought_in_this_run(ctx) -> set[tuple[str, str]]:
         """(file code, raw name) of the products the archive's invoices use,
         when they are imported in the same run: those get their lines a
-        moment later (factures applies after this section), and the 668
+        moment later (the invoices apply after this section), and the 668
         products of a whole-database import were said to wait for invoices
         that came with them."""
         if not ctx.importing("factures"):
@@ -441,7 +444,9 @@ class AssociationsSection(Section):
         return {
             (item["supplier"], item["raw_name"])
             for item in (products if isinstance(products, list) else [])
-            if isinstance(item, dict) and isinstance(item.get("supplier"), str) and isinstance(item.get("raw_name"), str)
+            if isinstance(item, dict)
+            and isinstance(item.get("supplier"), str)
+            and isinstance(item.get("raw_name"), str)
         }
 
     def _check_product(self, record, supplier, product, articles):
@@ -569,7 +574,7 @@ class AssociationsSection(Section):
     def clear(self, ctx, report) -> None:
         """unlink_product on every classified product, in bulk (proven equal
         by a test), then the products nothing names and the articles. Runs
-        after recettes, liens, ventes and inventaires are cleared: nothing
+        after the recipes, links, sales and stock takes are cleared: nothing
         holds an article any more.
 
         Each product counted once: « produits classés » modified are those
@@ -618,8 +623,7 @@ def _holders(article) -> str:
     )
     if takes:
         parts.append(
-            ("inventaire du " if len(takes) == 1 else "inventaires du ")
-            + ", ".join(f"{day:%d/%m/%Y}" for day in takes)
+            ("inventaire du " if len(takes) == 1 else "inventaires du ") + ", ".join(f"{day:%d/%m/%Y}" for day in takes)
         )
     documents = SaleDocumentLine.objects.filter(stock_type=article).values("document_id").distinct().count()
     if documents:

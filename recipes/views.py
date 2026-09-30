@@ -16,10 +16,10 @@ from common import PIE_COLORS, is_id
 from .forms import (
     MANUAL_SALE_SOURCE,
     ManualSaleForm,
-    SaleDocumentForm,
-    SaleDocumentLineFormSet,
     RecipeForm,
     RecipeIngredientFormSet,
+    SaleDocumentForm,
+    SaleDocumentLineFormSet,
     ingredient_unit_map,
 )
 from .integration import refusal, till_allowed
@@ -38,7 +38,6 @@ from .tasks import import_laddition_sales_task
 
 def _existing_categories():
     return Recipe.objects.exclude(category="").values_list("category", flat=True).distinct().order_by("category")
-
 
 
 def _build_ingredient_pie_svg(breakdown: list[dict]) -> str:
@@ -77,9 +76,7 @@ def _build_ingredient_pie_svg(breakdown: list[dict]) -> str:
         if len(non_zero) == 1:
             # A single 100% slice can't be drawn as an arc - the start and end
             # points coincide and the path collapses to nothing.
-            slices.append(
-                f'<circle class="chart-slice" cx="{cx}" cy="{cy}" r="{radius}" fill="{color}" {common} />'
-            )
+            slices.append(f'<circle class="chart-slice" cx="{cx}" cy="{cy}" r="{radius}" fill="{color}" {common} />')
         else:
             end_angle = start_angle + fraction * 2 * math.pi
             x1, y1 = cx + radius * math.cos(start_angle), cy + radius * math.sin(start_angle)
@@ -100,7 +97,7 @@ def _build_ingredient_pie_svg(breakdown: list[dict]) -> str:
     return (
         f'<div class="chart chart-pie" data-chart="pie" style="max-width:260px;">'
         f'<svg viewBox="0 0 {size} {size}" role="img" aria-label="Répartition du coût">'
-        f'{"".join(slices)}</svg>'
+        f"{''.join(slices)}</svg>"
         f'<div class="chart-tooltip" data-chart-tooltip></div>'
         f'<div class="chart-legend">{"".join(legend)}</div>'
         f"</div>"
@@ -108,8 +105,8 @@ def _build_ingredient_pie_svg(breakdown: list[dict]) -> str:
 
 
 def recipe_list(request):
-    """"Recettes & ventes", on the recipes."""
-    return render_menu(request, "recettes")
+    """ "Recettes & ventes", on the recipes."""
+    return render_menu(request, "recipes")
 
 
 # Beyond this many variations the picker stops listing them individually and
@@ -163,8 +160,7 @@ def _render_recipe_detail(request, recipe, ingredients):
                     "position": position,
                     "selected": normalised[position],
                     "options": [
-                        {"index": index, "name": ingredient.source_name}
-                        for index, ingredient in enumerate(group)
+                        {"index": index, "name": ingredient.source_name} for index, ingredient in enumerate(group)
                     ],
                 }
                 for position, group in enumerate(groups)
@@ -189,8 +185,7 @@ def _to_int(text: str) -> int:
 def _normalised_selection(selection: list[int], groups) -> list[int]:
     selection = list(selection) + [0] * (len(groups) - len(selection))
     return [
-        selection[position] if 0 <= selection[position] < len(group) else 0
-        for position, group in enumerate(groups)
+        selection[position] if 0 <= selection[position] < len(group) else 0 for position, group in enumerate(groups)
     ]
 
 
@@ -257,9 +252,7 @@ def recipe_create(request):
     """A new recipe. `?caisse=<id>` writes it for that till product: named
     after it and linked to it on save. `?name=` prefills the name alone."""
     posted = request.GET.get("caisse", "")
-    for_product = (
-        PosProduct.objects.filter(pk=posted, recipe__isnull=True).first() if is_id(posted) else None
-    )
+    for_product = PosProduct.objects.filter(pk=posted, recipe__isnull=True).first() if is_id(posted) else None
     name = (request.GET.get("name") or (for_product.name if for_product else "")).strip()
     return _recipe_form_view(request, Recipe(name=name), for_product=for_product)
 
@@ -284,9 +277,10 @@ def recipe_delete(request, pk):
 
 # --- Till (L'Addition) -----------------------------------------------------
 
+
 def pos_product_list(request):
-    """"Recettes & ventes", on the till products still to link."""
-    return render_menu(request, "a-lier")
+    """ "Recettes & ventes", on the till products still to link."""
+    return render_menu(request, "to-link")
 
 
 def pos_product_assign(request, pk):
@@ -353,7 +347,7 @@ def pos_product_assign(request, pk):
 
 def sales_import(request):
     """The till import now sits on the sales tab."""
-    return render_menu(request, "ventes")
+    return render_menu(request, "sales")
 
 
 def trigger_sales_import(request):
@@ -385,12 +379,10 @@ def trigger_sales_import(request):
         return redirect(sales_list_url(request))
 
     job = SalesImportJob.objects.create(range_start=start, range_end=end)
-    # bound(): the thread works for this request's espace - its job row, its
+    # bound(): the thread works for this request's tenant - its job row, its
     # sales, its download folder - and closes its connections when it ends.
     # A new thread starts bound to nothing, and job pk N is another bar's too.
-    threading.Thread(
-        target=bound(import_laddition_sales_task), args=(job.id, start, end), daemon=True
-    ).start()
+    threading.Thread(target=bound(import_laddition_sales_task), args=(job.id, start, end), daemon=True).start()
     return redirect(sales_list_url(request))
 
 
@@ -422,7 +414,7 @@ def _parse_date(value):
 
 
 def sales_list(request):
-    """"Recettes & ventes", on the sales: the till import, a sale typed by
+    """ "Recettes & ventes", on the sales: the till import, a sale typed by
     hand, the sale documents and every recorded sale.
 
     Manual entries are for what the till never saw - a tab settled off the
@@ -436,8 +428,8 @@ def sales_list(request):
             sale = form.save()
             messages.success(request, f"{sale.quantity} × {sale.recipe.name} le {sale.sold_on:%d/%m/%Y}.")
             return redirect(sales_list_url(request))
-        return render_menu(request, "ventes", form=form)
-    return render_menu(request, "ventes")
+        return render_menu(request, "sales", form=form)
+    return render_menu(request, "sales")
 
 
 def sales_delete(request, pk):

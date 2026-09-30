@@ -81,7 +81,7 @@ class RecordSalesTests(TestCase):
         self.assertEqual((result.created, result.updated, result.unmatched), (0, 0, []))
 
     def test_zero_sales_are_recordable(self):
-        """"We sold none today" is real information, not a missing row."""
+        """ "We sold none today" is real information, not a missing row."""
         record_sales([("Mule", date(2026, 3, 5), 0)])
         self.assertEqual(RecipeSale.objects.get().quantity, 0)
 
@@ -107,10 +107,7 @@ class PluggableSourceTests(TestCase):
             "2026-03-05,Spritz,7",
             "2026-03-06,Mule,9",
         ]
-        entries = [
-            (item, date.fromisoformat(day), int(qty))
-            for day, item, qty in (row.split(",") for row in rows[1:])
-        ]
+        entries = [(item, date.fromisoformat(day), int(qty)) for day, item, qty in (row.split(",") for row in rows[1:])]
         result = record_sales(entries, source="csv")
         self.assertEqual(result.created, 3)
         self.assertEqual(sales_between(None, date(2026, 3, 6))[self.mule.pk], 21)
@@ -120,9 +117,7 @@ class PluggableSourceTests(TestCase):
             "period": "2026-03-05",
             "items": [{"name": "Mule", "sold": 12}, {"name": "Spritz", "sold": 7}],
         }
-        entries = [
-            (item["name"], date.fromisoformat(payload["period"]), item["sold"]) for item in payload["items"]
-        ]
+        entries = [(item["name"], date.fromisoformat(payload["period"]), item["sold"]) for item in payload["items"]]
         result = record_sales(entries, source="api:demo")
         self.assertEqual(result.recorded, 2)
 
@@ -141,8 +136,8 @@ class SalesWindowTests(TestCase):
         record_sales(
             [
                 ("Mule", date(2026, 2, 28), 1),  # before the opening count
-                ("Mule", date(2026, 3, 1), 2),   # ON the opening count day
-                ("Mule", date(2026, 3, 5), 4),   # inside
+                ("Mule", date(2026, 3, 1), 2),  # ON the opening count day
+                ("Mule", date(2026, 3, 5), 4),  # inside
                 ("Mule", date(2026, 3, 10), 8),  # ON the closing count day
                 ("Mule", date(2026, 3, 11), 16),  # after
             ]
@@ -189,16 +184,12 @@ class HappyHourNameTests(TestCase):
     def test_both_names_on_one_day_are_added_together(self):
         """They must be SUMMED, not written then overwritten - aggregating by
         raw name would silently lose every happy-hour sale."""
-        record_sales(
-            [("Alcool + Soda", date(2026, 3, 5), 20), ("Alcool + soda HH", date(2026, 3, 5), 3)]
-        )
+        record_sales([("Alcool + Soda", date(2026, 3, 5), 20), ("Alcool + soda HH", date(2026, 3, 5), 3)])
         self.assertEqual(RecipeSale.objects.count(), 1)
         self.assertEqual(RecipeSale.objects.get().quantity, 23)
 
     def test_the_order_they_arrive_in_does_not_matter(self):
-        record_sales(
-            [("Alcool + soda HH", date(2026, 3, 5), 3), ("Alcool + Soda", date(2026, 3, 5), 20)]
-        )
+        record_sales([("Alcool + soda HH", date(2026, 3, 5), 3), ("Alcool + Soda", date(2026, 3, 5), 20)])
         self.assertEqual(RecipeSale.objects.get().quantity, 23)
 
     def test_matching_is_case_insensitive(self):
@@ -206,9 +197,7 @@ class HappyHourNameTests(TestCase):
         self.assertEqual(RecipeSale.objects.get().recipe, self.soda)
 
     def test_different_days_stay_separate(self):
-        record_sales(
-            [("Alcool + Soda", date(2026, 3, 5), 20), ("Alcool + soda HH", date(2026, 3, 6), 3)]
-        )
+        record_sales([("Alcool + Soda", date(2026, 3, 5), 20), ("Alcool + soda HH", date(2026, 3, 6), 3)])
         self.assertEqual(
             sorted(RecipeSale.objects.values_list("sold_on", "quantity")),
             [(date(2026, 3, 5), 20), (date(2026, 3, 6), 3)],
@@ -219,9 +208,7 @@ class HappyHourNameTests(TestCase):
         self.assertEqual(result.unmatched, ["Mule HH"])
 
     def test_the_folded_sales_reach_the_variance_engine(self):
-        record_sales(
-            [("Alcool + Soda", date(2026, 3, 5), 20), ("Alcool + soda HH", date(2026, 3, 5), 3)]
-        )
+        record_sales([("Alcool + Soda", date(2026, 3, 5), 20), ("Alcool + soda HH", date(2026, 3, 5), 3)])
         self.assertEqual(sales_between(date(2026, 3, 1), date(2026, 3, 10)), {self.soda.pk: 23})
 
 
@@ -371,7 +358,7 @@ class SalesPageTests(TestCase):
         self.assertFalse(RecipeSale.objects.filter(pk=sale.pk).exists())
 
     def test_an_old_sale_is_found_by_searching_and_by_showing_everything(self):
-        """8 099 rows was 2,6 Mo on one page. The list is capped now, and
+        """8 099 rows was 2,6 MB on one page. The list is capped now, and
         what made capping a lie - a search box that only ever saw the
         rendered table - is a search the database answers."""
         from datetime import timedelta
@@ -387,9 +374,7 @@ class SalesPageTests(TestCase):
         self.assertContains(page, "tout afficher")
         # Found by date, by recipe, and by asking for the whole list.
         self.assertContains(self.client.get(reverse("recipes:sales_list"), {"vente": "01/01/2020"}), "01/01/2020")
-        self.assertContains(
-            self.client.get(reverse("recipes:sales_list"), {"vente": self.mule.name}), self.mule.name
-        )
+        self.assertContains(self.client.get(reverse("recipes:sales_list"), {"vente": self.mule.name}), self.mule.name)
         self.assertContains(self.client.get(reverse("recipes:sales_list"), {"ventes": "toutes"}), "01/01/2020")
 
     def test_the_sales_search_says_how_many_it_found(self):

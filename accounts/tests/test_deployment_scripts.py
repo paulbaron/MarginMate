@@ -18,6 +18,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import io
+import itertools
 import json
 import os
 import re
@@ -42,7 +43,15 @@ BASE = Path(settings.BASE_DIR)
 #: What both scripts run to ask the settings (the helper's docstring).
 SNIPPET = "import sys; from accounts import deployment; sys.exit(deployment.main())"
 #: Windows PowerShell, as both scripts name it.
-POWERSHELL = Path(os.environ.get("SystemRoot", "C:\\Windows")) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+POWERSHELL = (
+    Path(os.environ.get("SystemRoot", "C:\\Windows")) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+)
+#: The keys deploy.cmd writes into etat.txt, by the variable each is read
+#: back into. They stay French: the deploy.cmd of one version reads what
+#: another wrote, and the owner is shown the file.
+STATE_KEYS = {"PREVIOUS": "ancien", "DATA": "donnees", "BACKUP": "sauvegarde", "STEP": "etape"}
+#: How the way back installs a version from before uv (no uv.lock).
+PIP_FOR_A_VERSION_BEFORE_UV = "echo   .venv\\Scripts\\python.exe -m pip install -r requirements.txt"
 
 
 class Script:
@@ -118,7 +127,7 @@ class Script:
                 for target in re.findall(r"(?:goto|call)\s+:(\w+)", line, flags=re.IGNORECASE):
                     pending.append(target.lower())
             last = section[-1].lower() if section else ""
-            if not (last.startswith("goto ") or last.startswith("exit")):
+            if not last.startswith(("goto ", "exit")):
                 following = self._next_label(name)
                 if following:
                     pending.append(following)
@@ -167,6 +176,45 @@ class CmdHygieneMixin:
         missing = self.script.targets() - set(self.script.labels) - {"eof"}
         self.assertEqual(missing, set())
 
+    def test_no_label_is_defined_twice(self):
+        """cmd.exe goes to the first one it meets after the current line,
+        wrapping round the end of the file: a second definition of a label
+        is a goto that lands on either, depending on where it is taken."""
+        names = [
+            line[1:].split()[0].lower()
+            for line in self.script.lines
+            if line.startswith(":") and not line.startswith("::")
+        ]
+        self.assertEqual(sorted(name for name in set(names) if names.count(name) > 1), [])
+
+    def test_every_variable_is_set_before_it_is_read(self):
+        """A misspelt %MM_...% expands to nothing, silently: a rollback line
+        printed without its folder, a mark never removed. Every variable a
+        line reads (%MM_X%, %MM_X:...%, « defined MM_X ») is set by a line
+        above it - in the file's order, which is the order the main path
+        runs in; the branches and subroutines below only read. An answer of
+        the helper (for /f ... set "MM_%%a=%%b") is set to empty first: one
+        the helper did not give must read as empty, never as a value the
+        console that started the script happened to hold. MM_NOTE_<key> are
+        etat.txt's keys, read by the for /f that makes them."""
+        first_set = {}
+        notes_from = None
+        for index, line in self.script.commands():
+            for name in re.findall(r'set "(MM_\w+)=', line):
+                first_set.setdefault(name.upper(), index)
+            if 'set "MM_NOTE_%%a=%%b"' in line and notes_from is None:
+                notes_from = index
+        for index, line in self.script.commands():
+            read = re.findall(r"%(MM_\w+?)[%:]", line) + re.findall(r"\bdefined (MM_\w+)", line, flags=re.IGNORECASE)
+            for name in read:
+                with self.subTest(variable=name, line=line):
+                    if name.upper().startswith("MM_NOTE_"):
+                        self.assertIsNotNone(notes_from)
+                        self.assertLess(notes_from, index)
+                    else:
+                        self.assertIn(name.upper(), first_set)
+                        self.assertLessEqual(first_set[name.upper()], index)
+
     def test_no_delayed_expansion_and_no_bang(self):
         """With delayed expansion on, a « ! » in a path or a sentence
         vanishes; nothing here needs it (every variable set and read in one
@@ -186,7 +234,7 @@ class CmdHygieneMixin:
     def test_errorlevel_is_never_read_after_a_pipe(self):
         """After « a | b », ERRORLEVEL is b's: a failure of a is lost."""
         commands = self.script.commands()
-        for (index, line), (_, following) in zip(commands, commands[1:]):
+        for (_, line), (_, following) in itertools.pairwise(commands):
             if following.lower().startswith("if errorlevel") or "%ERRORLEVEL%" in following:
                 self.assertNotIn("|", unquoted(line), line)
 
@@ -215,9 +263,9 @@ class CmdHygieneMixin:
     def test_the_window_stays_open_at_the_end(self):
         """Run from Explorer, the window closes with the script: every end
         goes through a pause first."""
-        fin = self.script.section("fin")
-        self.assertIn("pause", fin)
-        self.assertTrue(fin[-1].startswith("exit /b"))
+        end = self.script.section("finish")
+        self.assertIn("pause", end)
+        self.assertTrue(end[-1].startswith("exit /b"))
 
 
 class DeployScriptTests(CmdHygieneMixin, SimpleTestCase):
@@ -231,17 +279,17 @@ class DeployScriptTests(CmdHygieneMixin, SimpleTestCase):
         to the original, rewritten, file)."""
         commands = self.script.commands()
         self.assertEqual(commands[0][1], "setlocal EnableExtensions DisableDelayedExpansion")
-        self.assertEqual(commands[1][1], 'if /i "%~1"=="--depuis-la-copie" goto :depuis_la_copie')
-        copy = self.script.line_of('copy /y "%~f0" "%MM_COPIE%"')
-        handover = self.script.line_of('"%MM_COPIE%" --depuis-la-copie "%~dp0"')
+        self.assertEqual(commands[1][1], 'if /i "%~1"=="--from-the-copy" goto :from_the_copy')
+        copy = self.script.line_of('copy /y "%~f0" "%MM_COPY%"')
+        handover = self.script.line_of('"%MM_COPY%" --from-the-copy "%~dp0"')
         self.assertLess(copy, handover)
         self.assertFalse(self.script.lines[handover].lower().startswith("call"))
-        self.assertIn('set "MM_COPIE=%TEMP%\\', self.script.text)
+        self.assertIn('set "MM_COPY=%TEMP%\\', self.script.text)
         # From the copy, the folder is the one handed over: never %~dp0.
-        start = self.script.labels["depuis_la_copie"]
+        start = self.script.labels["from_the_copy"]
         self.assertEqual(self.script.after(start), 'set "MM_APP=%~2"')
         into = self.script.line_of('cd /d "%MM_APP%"')
-        self.assertEqual(self.script.after(into), "if errorlevel 1 goto :dossier_introuvable")
+        self.assertEqual(self.script.after(into), "if errorlevel 1 goto :folder_not_found")
         self.assertLess(into, self.script.line_of('"%MM_PYTHON%"'))
         self.assertLess(self.script.line_of('set "MM_CODE=1"', start), into)
         self.assertNotIn("%~dp0", " ".join(line for _, line in self.script.commands(start)))
@@ -255,11 +303,130 @@ class DeployScriptTests(CmdHygieneMixin, SimpleTestCase):
         MARGINMATE_HTTPS: there, deploy.cmd would stop, back up and migrate
         the development copy. Asked before anything else is done."""
         check = self.script.line_of(f'"%MM_PYTHON%" -c "{SNIPPET}" production')
-        self.assertEqual(self.script.after(check), "if errorlevel 1 goto :pas_la_production")
+        self.assertEqual(self.script.after(check), "if errorlevel 1 goto :not_production")
         self.assertLess(check, self.script.line_of("git fetch origin"))
-        refusal = self.script.reachable("pas_la_production")
+        refusal = self.script.reachable("not_production")
         for danger in ("schtasks", "Stop-Process", "git ", "manage.py", "robocopy"):
             self.assertFalse([line for line in self.script.executed(refusal) if danger in line], danger)
+
+    # -- uv ---------------------------------------------------------------------------------------------------------
+
+    def test_it_refuses_when_uv_does_not_answer(self):
+        """Step 7 installs with uv: on a PC where uv does not answer, the
+        run would stop the server, back up, merge, and fail there with the
+        site down. Asked first, by RUNNING it - a mise shim on the PATH is
+        there even when mise is not (« mise-shim: failed to execute mise »,
+        exit 1) - and through call, as git: a shim may be a batch file,
+        which would not hand control back without it."""
+        check = self.script.line_of("uv --version")
+        self.assertEqual(self.script.lines[check], "call uv --version >nul")
+        self.assertEqual(self.script.after(check), "if errorlevel 1 goto :no_uv")
+        self.assertNotIn("where uv", self.script.text)
+        # With the other refusals at the top, after the folder's checks...
+        self.assertLess(self.script.line_of("if errorlevel 1 goto :no_git"), check)
+        # ... before the mark, and before anything is asked or done.
+        self.assertLess(check, self.script.line_of(self.LOCK))
+        self.assertLess(self.script.line_of('set "MM_RELEASE=0"'), check)
+        for step in (
+            f'"%MM_PYTHON%" -c "{SNIPPET}" production',
+            "git rev-parse",
+            "git fetch",
+            "manage.py",
+            "schtasks",
+            "Stop-Process",
+        ):
+            self.assertLess(check, self.script.line_of(step), step)
+        refused = self.script.reachable("no_uv")
+        self.assertNotIn('set "MM_RELEASE=1"', refused)
+        for danger in ("schtasks", "Stop-Process", "git ", "manage.py", "robocopy", "move ", "mkdir", "uv sync"):
+            self.assertFalse([line for line in self.script.executed(refused) if danger in line], danger)
+        said = " ".join(self.script.section("no_uv"))
+        for words in (
+            "REFUS : uv ne repond pas",
+            "DEPLOY.md",
+            "section 10.6",
+            "mise install",
+            "uv --version",
+            "NOUVELLE invite de commandes",
+            "Rien n'a ete fait",
+        ):
+            self.assertIn(words, said)
+        # The section it points at.
+        self.assertIn("\n### 10.6 Passage à uv (une seule fois)\n", (BASE / "DEPLOY.md").read_text(encoding="utf-8"))
+
+    def test_uv_silent_with_a_mark_left_says_the_way_back_first(self):
+        """The first deployment of the uv version is run by the PREVIOUS
+        deploy.cmd. Failing past its merge, it leaves its mark, and the next
+        double-click runs THIS one (the merge brought it) - maybe before uv
+        is set up, which the owner is told to do before the SECOND
+        deployment. The site is down: the way back comes first."""
+        self.assertEqual(self.script.section("no_uv")[0], 'if exist "%MM_LOCK%\\" goto :already_running')
+
+    def test_step_7_installs_what_uv_lock_says(self):
+        """--locked: uv.lock exactly, refused when it disagrees with
+        pyproject.toml; --no-dev: none of the development tools. After the
+        merge and before the migrations, and a failure there is a failure
+        past the merge. uv is only ever run through call."""
+        sync = self.script.line_of("call uv sync")
+        self.assertEqual(self.script.lines[sync], "call uv sync --locked --no-dev")
+        self.assertEqual(self.script.after(sync), "if errorlevel 1 goto :failure_after_merge")
+        self.assertLess(self.script.line_of("call git merge --ff-only origin/main"), sync)
+        self.assertLess(sync, self.script.line_of('"%MM_PYTHON%" manage.py migrate_tenants'))
+        commands = [line for _, line in self.script.commands()]
+        self.assertIn('set "MM_STEP=l\'installation des dependances (uv sync --locked --no-dev)"', commands)
+        self.assertIn("echo Dependances (uv sync --locked --no-dev)...", commands)
+        self.assertEqual(
+            [line for line in commands if re.match(r"(call\s+)?uv\b", line, flags=re.IGNORECASE)],
+            ["call uv --version >nul", "call uv sync --locked --no-dev"],
+        )
+
+    def test_no_pip_is_run_and_pip_is_said_for_a_version_before_uv_only(self):
+        """uv sync takes pip out of .venv, and nothing here runs it. The way
+        back names it for a version from before uv - no uv.lock, uv never
+        ran there, pip is still in .venv: « :offline » may follow a failure
+        of the PREVIOUS deploy.cmd, and so may « :rollback_instructions »,
+        printed for the mark that deploy.cmd left. Everywhere else the way
+        back installs with uv."""
+        self.assertEqual(
+            [line for line in self.script.executed([line for _, line in self.script.commands()]) if "pip" in line], []
+        )
+        said = {}
+        for label in self.script.labels:
+            lines = [line for line in self.script.section(label) if "pip" in line]
+            if lines:
+                said[label] = lines
+        self.assertEqual(
+            said, {"offline": [PIP_FOR_A_VERSION_BEFORE_UV], "rollback_instructions": [PIP_FOR_A_VERSION_BEFORE_UV]}
+        )
+        for label in said:
+            with self.subTest(label=label):
+                section = self.script.section(label)
+                pip = section.index(PIP_FOR_A_VERSION_BEFORE_UV)
+                self.assertLess(section.index("echo   uv sync --locked --no-dev"), pip)
+                self.assertIn("uv.lock", " ".join(section[pip - 2 : pip]))
+
+    def test_the_wait_is_for_free_or_listening_only(self):
+        """:wait_for_port compares its second argument with « listening »:
+        anything else, a typo included, would silently wait for the port to
+        be FREE."""
+        waits = [line for _, line in self.script.commands() if ":wait_for_port" in line and line.startswith("call")]
+        self.assertTrue(waits)
+        for line in waits:
+            with self.subTest(line=line):
+                self.assertRegex(line, r"^call :wait_for_port %MM_PORT% (free|listening) [0-9]+$")
+        self.assertIn("('%2' -eq 'listening')", " ".join(self.script.section("wait_for_port")))
+
+    def test_etat_txt_keeps_the_keys_every_version_reads(self):
+        """A mark left by one version's deploy.cmd is read by the next
+        one's: etat.txt's keys are an interface between versions and never
+        follow a rename of the variables."""
+        written = set()
+        for _, line in self.script.commands():
+            if line.startswith(('>"%MM_STATE%"', '>>"%MM_STATE%"')):
+                match = re.fullmatch(r'>>?"%MM_STATE%" echo (\w+)=%MM_(\w+)%', line)
+                self.assertIsNotNone(match, line)
+                written.add((match.group(1), match.group(2)))
+        self.assertEqual(written, {(key, variable) for variable, key in STATE_KEYS.items()})
 
     def test_the_steps_in_their_order(self):
         steps = [
@@ -270,43 +437,44 @@ class DeployScriptTests(CmdHygieneMixin, SimpleTestCase):
             "call git --no-pager log --oneline HEAD..origin/main",
             'choice /C ON /N /M "Deployer ces changements ? (O/N) "',
             '"%MM_PYTHON%" manage.py running_jobs',
-            'schtasks /end /tn "%MM_TACHE%" >nul 2>&1',
+            'schtasks /end /tn "%MM_TASK%" >nul 2>&1',
             "Stop-Process",
-            "call :attendre %MM_PORT% libre",
-            '"%MM_PYTHON%" manage.py backup_data --chemin-dans "%MM_CHEMIN_SAUVEGARDE%"',
+            "call :wait_for_port %MM_PORT% free",
+            '"%MM_PYTHON%" manage.py backup_data --chemin-dans "%MM_BACKUP_PATH_FILE%"',
             "call git merge --ff-only origin/main",
-            '"%MM_PYTHON%" -m pip install -q --disable-pip-version-check -r requirements.txt',
+            "call uv sync --locked --no-dev",
             '"%MM_PYTHON%" manage.py migrate_tenants',
             '"%MM_PYTHON%" manage.py serve --verifier',
-            "call :demarrer_serveur",
-            "call :attendre %MM_PORT% ecoute 120",
-            "Deploye : %MM_ANCIEN_COURT%..%MM_NOUVEAU_COURT%",
+            "call :start_server",
+            "call :wait_for_port %MM_PORT% listening 120",
+            "Deploye : %MM_PREVIOUS_SHORT%..%MM_NEW_SHORT%",
         ]
         where = [self.script.line_of(step) for step in steps]
         self.assertEqual(where, sorted(where), list(zip(steps, where)))
         # The success path ends there, before any failure branch.
-        self.assertLess(where[-1], min(self.script.labels[name] for name in ("echec_sauvegarde", "echec_apres_fusion")))
+        self.assertLess(where[-1], min(self.script.labels[name] for name in ("backup_failure", "failure_after_merge")))
 
     def test_each_step_s_failure_goes_where_it_should(self):
         expected = {
-            "call git fetch origin": "if errorlevel 1 goto :fetch_impossible",
-            '"%MM_PYTHON%" manage.py running_jobs': "if errorlevel 1 goto :travail_en_cours",
-            "call :attendre %MM_PORT% libre 30": "if errorlevel 1 goto :arret_impossible",
-            '"%MM_PYTHON%" manage.py backup_data': "if errorlevel 1 goto :echec_sauvegarde",
-            "call :attendre %MM_PORT% libre 0": "if errorlevel 1 goto :serveur_revenu",
-            "call git merge --ff-only origin/main": "if errorlevel 1 goto :echec_fusion",
-            '-m pip install': "if errorlevel 1 goto :echec_apres_fusion",
-            '"%MM_PYTHON%" manage.py migrate_tenants': "if errorlevel 1 goto :echec_apres_fusion",
-            '"%MM_PYTHON%" manage.py serve --verifier': "if errorlevel 1 goto :echec_apres_fusion",
-            "call :attendre %MM_PORT% ecoute 120": "if errorlevel 1 goto :serveur_muet",
+            "call uv --version >nul": "if errorlevel 1 goto :no_uv",
+            "call git fetch origin": "if errorlevel 1 goto :fetch_failed",
+            '"%MM_PYTHON%" manage.py running_jobs': "if errorlevel 1 goto :jobs_running",
+            "call :wait_for_port %MM_PORT% free 30": "if errorlevel 1 goto :cannot_stop",
+            '"%MM_PYTHON%" manage.py backup_data': "if errorlevel 1 goto :backup_failure",
+            "call :wait_for_port %MM_PORT% free 0": "if errorlevel 1 goto :server_came_back",
+            "call git merge --ff-only origin/main": "if errorlevel 1 goto :merge_failure",
+            "call uv sync --locked --no-dev": "if errorlevel 1 goto :failure_after_merge",
+            '"%MM_PYTHON%" manage.py migrate_tenants': "if errorlevel 1 goto :failure_after_merge",
+            '"%MM_PYTHON%" manage.py serve --verifier': "if errorlevel 1 goto :failure_after_merge",
+            "call :wait_for_port %MM_PORT% listening 120": "if errorlevel 1 goto :server_silent",
         }
         for step, then in expected.items():
             with self.subTest(step=step):
                 self.assertEqual(self.script.after(self.script.line_of(step)), then)
 
     def test_nothing_new_says_so_and_changes_nothing(self):
-        self.assertIn('if "%MM_NOUVEAUX%"=="0" goto :rien_de_nouveau', self.script.text)
-        branch = self.script.reachable("rien_de_nouveau")
+        self.assertIn('if "%MM_NEW_COMMITS%"=="0" goto :nothing_new', self.script.text)
+        branch = self.script.reachable("nothing_new")
         self.assertTrue(any("Rien de nouveau" in line for line in branch))
         self.assertIn('set "MM_CODE=0"', branch)
         for danger in ("schtasks", "Stop-Process", "merge", "manage.py"):
@@ -316,9 +484,9 @@ class DeployScriptTests(CmdHygieneMixin, SimpleTestCase):
         """« choice » answers 1 for O, 2 for N, 0 on Ctrl+C and 255 on an
         error: only 1 goes on."""
         ask = self.script.line_of('choice /C ON /N /M "Deployer ces changements ? (O/N) "')
-        self.assertEqual(self.script.after(ask), 'if not "%ERRORLEVEL%"=="1" goto :annule')
+        self.assertEqual(self.script.after(ask), 'if not "%ERRORLEVEL%"=="1" goto :cancelled')
         self.assertLess(ask, self.script.line_of("manage.py running_jobs"))
-        cancelled = self.script.reachable("annule")
+        cancelled = self.script.reachable("cancelled")
         for danger in ("schtasks", "Stop-Process", "merge", "manage.py"):
             self.assertFalse([line for line in self.script.executed(cancelled) if danger in line], danger)
 
@@ -326,7 +494,7 @@ class DeployScriptTests(CmdHygieneMixin, SimpleTestCase):
         jobs = self.script.line_of("manage.py running_jobs")
         self.assertLess(jobs, self.script.line_of("schtasks /end"))
         self.assertLess(jobs, self.script.line_of("Stop-Process"))
-        refusal = self.script.reachable("travail_en_cours")
+        refusal = self.script.reachable("jobs_running")
         self.assertTrue(any("attendez" in line for line in refusal))
         for danger in ("schtasks", "Stop-Process", "merge", "backup_data"):
             self.assertFalse([line for line in self.script.executed(refusal) if danger in line], danger)
@@ -340,51 +508,55 @@ class DeployScriptTests(CmdHygieneMixin, SimpleTestCase):
         stop = self.script.lines[self.script.line_of("Stop-Process")]
         self.assertIn("Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort %MM_PORT% -State Listen", stop)
         self.assertIn("Stop-Process -Id $_.OwningProcess -Force", stop)
-        self.assertIn('set "MM_TACHE=MarginMate"', self.script.text)
+        self.assertIn('set "MM_TASK=MarginMate"', self.script.text)
         # Whether it listened before, for a failure that restarts it « as it was ».
-        was = self.script.line_of("call :attendre %MM_PORT% ecoute 0")
-        self.assertEqual(self.script.after(was), 'if not errorlevel 1 set "MM_ETAIT_LANCE=1"')
+        was = self.script.line_of("call :wait_for_port %MM_PORT% listening 0")
+        self.assertEqual(self.script.after(was), 'if not errorlevel 1 set "MM_WAS_RUNNING=1"')
         self.assertLess(was, self.script.line_of("schtasks /end"))
         # The wait: PowerShell's state, not netstat's words (translated).
-        wait = self.script.section("attendre")
-        self.assertTrue(any("Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort %1 -State Listen" in line for line in wait))
+        wait = self.script.section("wait_for_port")
+        self.assertTrue(
+            any("Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort %1 -State Listen" in line for line in wait)
+        )
         self.assertNotIn("netstat", self.script.text.lower())
 
     def test_the_previous_commit_is_recorded_before_the_merge(self):
-        recorded = self.script.line_of("for /f \"delims=\" %%h in ('git rev-parse HEAD') do set \"MM_ANCIEN=%%h\"")
+        recorded = self.script.line_of('for /f "delims=" %%h in (\'git rev-parse HEAD\') do set "MM_PREVIOUS=%%h"')
         self.assertLess(recorded, self.script.line_of("git merge --ff-only"))
         self.assertLess(self.script.line_of("backup_data"), self.script.line_of("git merge --ff-only"))
         self.assertNotIn("git pull", self.script.text)
         self.assertNotIn("reset --hard origin", self.script.text)
 
     def test_a_failed_backup_restarts_the_server_as_it_was(self):
-        branch = self.script.section("echec_sauvegarde")
-        self.assertIn("call :relancer_si_lance", branch)
-        self.assertFalse([line for line in self.script.executed(self.script.reachable("echec_sauvegarde")) if "merge" in line])
-        restart = self.script.section("relancer_si_lance")
-        self.assertEqual(restart[0], 'if "%MM_ETAIT_LANCE%"=="1" goto :relancer')
+        branch = self.script.section("backup_failure")
+        self.assertIn("call :restart_if_running", branch)
+        self.assertFalse(
+            [line for line in self.script.executed(self.script.reachable("backup_failure")) if "merge" in line]
+        )
+        restart = self.script.section("restart_if_running")
+        self.assertEqual(restart[0], 'if "%MM_WAS_RUNNING%"=="1" goto :restart')
 
     def test_a_failed_merge_goes_back_to_the_old_code(self):
-        branch = self.script.section("echec_fusion")
-        reset = branch.index("call git reset --hard %MM_ANCIEN%")
-        self.assertEqual(branch[reset + 1], "if errorlevel 1 goto :echec_apres_fusion")
-        self.assertIn("call :relancer_si_lance", branch[reset:])
+        branch = self.script.section("merge_failure")
+        reset = branch.index("call git reset --hard %MM_PREVIOUS%")
+        self.assertEqual(branch[reset + 1], "if errorlevel 1 goto :failure_after_merge")
+        self.assertIn("call :restart_if_running", branch[reset:])
 
     def test_nothing_restarts_the_server_after_a_failed_step(self):
         """Past the merge, a failure leaves the site OFF: restarted, the new
         code would run on half-migrated data, or the old code on migrated
         data. The branch says how to go back instead."""
-        for label in ("echec_apres_fusion", "serveur_muet"):
+        for label in ("failure_after_merge", "server_silent"):
             with self.subTest(label=label):
                 branch = self.script.executed(self.script.reachable(label))
-                for restart in ("call :demarrer_serveur", "call :relancer", "schtasks /run", 'start "', "start_production"):
+                for restart in ("call :start_server", "call :restart", "schtasks /run", 'start "', "start_production"):
                     self.assertFalse([line for line in branch if restart in line], restart)
-        said = " ".join(self.script.reachable("echec_apres_fusion"))
+        said = " ".join(self.script.reachable("failure_after_merge"))
         for command in (
-            "git reset --hard %MM_ANCIEN%",
-            ".venv\\Scripts\\python.exe -m pip install -r requirements.txt",
-            'move "%MM_DONNEES%" "%MM_DONNEES%.echec"',
-            'robocopy "%MM_SAUVEGARDE%\\data" "%MM_DONNEES%" /E',
+            "git reset --hard %MM_PREVIOUS%",
+            "uv sync --locked --no-dev",
+            'move "%MM_DATA%" "%MM_DATA%.echec"',
+            'robocopy "%MM_BACKUP%\\data" "%MM_DATA%" /E',
             "schtasks /run /tn MarginMate",
         ):
             self.assertIn(command, said)
@@ -393,14 +565,16 @@ class DeployScriptTests(CmdHygieneMixin, SimpleTestCase):
     def test_the_server_is_checked_still_stopped_before_the_merge(self):
         """A server started again meanwhile (a task restarting itself) would
         run the old code while the new one migrates its data."""
-        self.assertLess(self.script.line_of("backup_data"), self.script.line_of("call :attendre %MM_PORT% libre 0"))
-        self.assertLess(self.script.line_of("call :attendre %MM_PORT% libre 0"), self.script.line_of("merge --ff-only"))
+        self.assertLess(self.script.line_of("backup_data"), self.script.line_of("call :wait_for_port %MM_PORT% free 0"))
+        self.assertLess(
+            self.script.line_of("call :wait_for_port %MM_PORT% free 0"), self.script.line_of("merge --ff-only")
+        )
 
     def test_the_restart_uses_the_task_when_there_is_one(self):
-        start = self.script.section("demarrer_serveur")
-        self.assertEqual(start[0], 'schtasks /query /tn "%MM_TACHE%" >nul 2>&1')
-        self.assertIn('schtasks /run /tn "%MM_TACHE%" >nul', start)
-        window = self.script.section("demarrer_dans_une_fenetre")
+        start = self.script.section("start_server")
+        self.assertEqual(start[0], 'schtasks /query /tn "%MM_TASK%" >nul 2>&1')
+        self.assertIn('schtasks /run /tn "%MM_TASK%" >nul', start)
+        window = self.script.section("start_in_a_window")
         self.assertIn('start "MarginMate" cmd /k start_production.cmd', window)
 
     def test_the_production_clone_must_be_clean_and_on_main(self):
@@ -408,14 +582,14 @@ class DeployScriptTests(CmdHygieneMixin, SimpleTestCase):
         « git reset --hard » on the way back, or stop the merge half way."""
         clean = self.script.line_of("call git diff --quiet HEAD --")
         following = [line for _, line in self.script.commands(clean + 1)[:2]]
-        self.assertEqual(following, ["if errorlevel 2 goto :git_illisible", "if errorlevel 1 goto :code_modifie"])
+        self.assertEqual(following, ["if errorlevel 2 goto :git_unreadable", "if errorlevel 1 goto :code_modified"])
         self.assertLess(clean, self.script.line_of("git fetch origin"))
         branch = self.script.line_of("git rev-parse --abbrev-ref HEAD")
         following = [line for _, line in self.script.commands(branch + 1)[:3]]
-        self.assertEqual(following[0], "if errorlevel 1 goto :git_illisible")
-        self.assertEqual(following[2], 'if /i not "%MM_BRANCHE%"=="main" goto :pas_sur_main')
+        self.assertEqual(following[0], "if errorlevel 1 goto :git_unreadable")
+        self.assertEqual(following[2], 'if /i not "%MM_BRANCH%"=="main" goto :not_on_main')
         ancestor = self.script.line_of("call git merge-base --is-ancestor HEAD origin/main")
-        self.assertEqual(self.script.after(ancestor), "if errorlevel 1 goto :historiques_divergents")
+        self.assertEqual(self.script.after(ancestor), "if errorlevel 1 goto :diverged_histories")
         self.assertLess(ancestor, self.script.line_of("choice /C ON"))
 
     def test_a_git_error_is_said_as_such(self):
@@ -425,20 +599,23 @@ class DeployScriptTests(CmdHygieneMixin, SimpleTestCase):
         for /f came out empty (« pas sur la branche main, elle est sur "" »),
         and git diff's 128 read as « des fichiers ont ete modifies »."""
         branch = self.script.lines[self.script.line_of("git rev-parse --abbrev-ref HEAD")]
-        self.assertEqual(branch, 'call git rev-parse --abbrev-ref HEAD > "%MM_INFOS%.branche"')
+        self.assertEqual(branch, 'call git rev-parse --abbrev-ref HEAD > "%MM_ANSWERS%.branch"')
         self.assertNotIn("('git rev-parse --abbrev-ref HEAD')", self.script.text)
-        read = self.script.after(self.script.line_of("if errorlevel 1 goto :git_illisible"))
-        self.assertEqual(read, 'for /f "usebackq delims=" %%b in ("%MM_INFOS%.branche") do set "MM_BRANCHE=%%b"')
-        said = " ".join(self.script.reachable("git_illisible"))
+        read = self.script.after(self.script.line_of("if errorlevel 1 goto :git_unreadable"))
+        self.assertEqual(read, 'for /f "usebackq delims=" %%b in ("%MM_ANSWERS%.branch") do set "MM_BRANCH=%%b"')
+        said = " ".join(self.script.reachable("git_unreadable"))
         self.assertIn("REFUS : git ne lit pas ce dossier (message ci-dessus)", said)
         self.assertIn("dubious ownership", said)
         self.assertIn("git config --global --add safe.directory", said)
         self.assertIn("Rien n'a ete fait", said)
         for danger in ("schtasks", "Stop-Process", "merge", "manage.py", "reset"):
             self.assertFalse(
-                [line for line in self.script.executed(self.script.reachable("git_illisible")) if danger in line], danger
+                [line for line in self.script.executed(self.script.reachable("git_unreadable")) if danger in line],
+                danger,
             )
-        self.assertTrue(any(".branche" in line and line.startswith(("del ", "if defined")) for line in self.script.section("fin")))
+        self.assertTrue(
+            any(".branch" in line and line.startswith(("del ", "if defined")) for line in self.script.section("finish"))
+        )
 
     def test_git_never_opens_a_pager(self):
         for _, line in self.script.commands():
@@ -447,41 +624,45 @@ class DeployScriptTests(CmdHygieneMixin, SimpleTestCase):
 
     # -- One deployment at a time, and one left half way -----------------------------------------------------------
 
-    LOCK = 'mkdir "%MM_VERROU%" 2>nul || goto :deja_en_cours'
+    LOCK = 'mkdir "%MM_LOCK%" 2>nul || goto :already_running'
 
     def test_one_deploy_at_a_time(self):
         """Two windows (a double-click that seemed to do nothing, a relaunch
-        while pip -q looked hung): the second's failed merge ran « git reset
+        while the quiet pip of the time looked hung): the second's failed merge ran « git reset
         --hard » under the first, which then restarted the OLD code on
         migrated data and printed « Deploye ». A folder made with mkdir -
         which fails when it exists - is taken before step 1, by one window
         only."""
-        self.assertIn('set "MM_VERROU=%MM_APP%.git\\marginmate-deploy"', self.script.text)
+        self.assertIn('set "MM_LOCK=%MM_APP%.git\\marginmate-deploy"', self.script.text)
         lock = self.script.line_of(self.LOCK)
-        self.assertEqual(self.script.after(lock), 'set "MM_LIBERER=1"')
+        self.assertEqual(self.script.after(lock), 'set "MM_RELEASE=1"')
         # After the checks that it is a clone (mkdir would make a missing .git)...
-        self.assertLess(self.script.line_of('if not exist ".git\\" goto :pas_un_clone'), lock)
-        self.assertLess(self.script.line_of("if errorlevel 1 goto :pas_de_git"), lock)
+        self.assertLess(self.script.line_of('if not exist ".git\\" goto :not_a_clone'), lock)
+        self.assertLess(self.script.line_of("if errorlevel 1 goto :no_git"), lock)
         # ... and before anything is asked or done.
         self.assertLess(lock, self.script.line_of(f'"%MM_PYTHON%" -c "{SNIPPET}" production'))
         for step in ("git fetch origin", "manage.py running_jobs", "schtasks /end", "git merge --ff-only"):
             self.assertLess(lock, self.script.line_of(step), step)
         # Never a handle held open (9>"file"): « start » would hand it to the
         # server's window, which would hold it for its whole life.
-        self.assertIsNone(re.search(r'\d>\s*"[^"]*verrou', self.script.text, flags=re.IGNORECASE))
-        self.assertEqual(self.script.text.count('set "MM_LIBERER=1"'), 1)
-        # Set to 0 before anything can go to :fin.
-        self.assertLess(self.script.line_of('set "MM_LIBERER=0"'), self.script.line_of("goto :pas_de_venv"))
+        self.assertIsNone(re.search(r'\d>\s*"[^"]*(?:lock|marginmate-deploy)', self.script.text, flags=re.IGNORECASE))
+        self.assertEqual(self.script.text.count('set "MM_RELEASE=1"'), 1)
+        # Set to 0 before anything can go to :finish.
+        self.assertLess(self.script.line_of('set "MM_RELEASE=0"'), self.script.line_of("goto :no_venv"))
 
     def test_the_mark_goes_only_with_the_run_that_made_it(self):
-        """:fin removes the folder when THIS window made it: a refused
+        """:finish removes the folder when THIS window made it: a refused
         second window must never remove the first one's."""
-        fin = self.script.section("fin")
-        self.assertEqual(fin[0], 'if "%MM_LIBERER%"=="1" rmdir /s /q "%MM_VERROU%" 2>nul')
-        removals = [line for _, line in self.script.commands() if re.search(r"(^|\s)(rd|rmdir)\s", line) and not line.startswith("echo")]
-        self.assertEqual(removals, [fin[0]])
-        refused = self.script.reachable("deja_en_cours")
-        self.assertNotIn('set "MM_LIBERER=1"', refused)
+        end = self.script.section("finish")
+        self.assertEqual(end[0], 'if "%MM_RELEASE%"=="1" rmdir /s /q "%MM_LOCK%" 2>nul')
+        removals = [
+            line
+            for _, line in self.script.commands()
+            if re.search(r"(^|\s)(rd|rmdir)\s", line) and not line.startswith("echo")
+        ]
+        self.assertEqual(removals, [end[0]])
+        refused = self.script.reachable("already_running")
+        self.assertNotIn('set "MM_RELEASE=1"', refused)
         for danger in ("schtasks", "Stop-Process", "git merge", "git reset", "manage.py", "robocopy", "move "):
             self.assertFalse([line for line in self.script.executed(refused) if danger in line], danger)
 
@@ -489,81 +670,95 @@ class DeployScriptTests(CmdHygieneMixin, SimpleTestCase):
         """Server off, HEAD already the new commit: the next double-click
         must not say « Rien de nouveau … Le serveur n'a pas ete touche » and
         exit 0 while the site is down."""
-        for label in ("echec_apres_fusion", "serveur_muet"):
+        for label in ("failure_after_merge", "server_silent"):
             with self.subTest(label=label):
-                self.assertEqual(self.script.section(label)[0], 'set "MM_LIBERER=0"')
+                self.assertEqual(self.script.section(label)[0], 'set "MM_RELEASE=0"')
         # Every other ending lets it go: success and the failures before the
         # merge, after their restart (a merge undone by git reset included;
         # a reset that fails is a failure past the merge).
-        for label in ("echec_sauvegarde", "travail_coupe", "serveur_revenu", "arret_impossible", "tache_ailleurs"):
+        for label in ("backup_failure", "job_cut_off", "server_came_back", "cannot_stop", "task_elsewhere"):
             with self.subTest(label=label):
-                self.assertNotIn('set "MM_LIBERER=0"', self.script.reachable(label))
-        self.assertNotIn('set "MM_LIBERER=0"', self.script.section("echec_fusion"))
-        success = self.script.line_of("Deploye : %MM_ANCIEN_COURT%..%MM_NOUVEAU_COURT%")
-        self.assertNotIn('set "MM_LIBERER=0"', [line for _, line in self.script.commands(self.script.line_of("merge --ff-only"), success)])
+                self.assertNotIn('set "MM_RELEASE=0"', self.script.reachable(label))
+        self.assertNotIn('set "MM_RELEASE=0"', self.script.section("merge_failure"))
+        success = self.script.line_of("Deploye : %MM_PREVIOUS_SHORT%..%MM_NEW_SHORT%")
+        self.assertNotIn(
+            'set "MM_RELEASE=0"',
+            [line for _, line in self.script.commands(self.script.line_of("merge --ff-only"), success)],
+        )
 
     def test_where_it_stands_is_written_down(self):
         """etat.txt, in the mark's folder: the commit to go back to and the
         data folder just before the stop, the backup once made, and every
         step as it starts - what a closed window leaves for the next one."""
-        self.assertIn('set "MM_ETAT=%MM_APP%.git\\marginmate-deploy\\etat.txt"', self.script.text)
-        first = self.script.line_of('>"%MM_ETAT%" echo ancien=%MM_ANCIEN%')
+        self.assertIn('set "MM_STATE=%MM_APP%.git\\marginmate-deploy\\etat.txt"', self.script.text)
+        first = self.script.line_of('>"%MM_STATE%" echo ancien=%MM_PREVIOUS%')
         self.assertLess(self.script.line_of("for /f \"delims=\" %%h in ('git rev-parse HEAD')"), first)
         self.assertLess(self.script.line_of("manage.py running_jobs"), first)
         self.assertLess(self.script.line_of("Get-ScheduledTask"), first)
         self.assertLess(first, self.script.line_of("schtasks /end"))
-        self.assertLess(first, self.script.line_of('>>"%MM_ETAT%" echo donnees=%MM_DONNEES%'))
-        saved = self.script.line_of('>>"%MM_ETAT%" echo sauvegarde=%MM_SAUVEGARDE%')
-        self.assertLess(self.script.line_of('set "MM_SAUVEGARDE=%%s"'), saved)
+        self.assertLess(first, self.script.line_of('>>"%MM_STATE%" echo donnees=%MM_DATA%'))
+        saved = self.script.line_of('>>"%MM_STATE%" echo sauvegarde=%MM_BACKUP%')
+        self.assertLess(self.script.line_of('set "MM_BACKUP=%%s"'), saved)
         self.assertLess(saved, self.script.line_of("call git merge --ff-only origin/main"))
         # Each step, as it starts.
         steps = [
             index
             for index, line in self.script.commands()
-            if line.startswith('set "MM_ETAPE=') and "MM_NOTE_" not in line
+            if line.startswith('set "MM_STEP=') and "MM_NOTE_" not in line
         ]
-        self.assertEqual(self.script.lines[steps[0]], 'set "MM_ETAPE=la preparation"')
+        self.assertEqual(self.script.lines[steps[0]], 'set "MM_STEP=la preparation"')
         for index in steps[1:]:
             with self.subTest(step=self.script.lines[index]):
-                self.assertEqual(self.script.after(index), '>>"%MM_ETAT%" echo etape=%MM_ETAPE%')
-        for step in ("backup_data", "git merge --ff-only", "pip install", "migrate_tenants", "serve --verifier", "relance"):
+                self.assertEqual(self.script.after(index), '>>"%MM_STATE%" echo etape=%MM_STEP%')
+        for step in (
+            "backup_data",
+            "git merge --ff-only",
+            "uv sync --locked --no-dev",
+            "migrate_tenants",
+            "serve --verifier",
+            "relance",
+        ):
             with self.subTest(step=step):
                 self.assertTrue(any(step in self.script.lines[index] for index in steps), step)
         # Written with the redirection first: « echo ancien=…3>>file » would
         # take a commit's last digit for a handle.
         for _, line in self.script.commands():
-            if "%MM_ETAT%" in line and ">" in unquoted(line):
-                self.assertTrue(line.startswith(('>"%MM_ETAT%" echo ', '>>"%MM_ETAT%" echo ')), line)
+            if "%MM_STATE%" in line and ">" in unquoted(line):
+                self.assertTrue(line.startswith(('>"%MM_STATE%" echo ', '>>"%MM_STATE%" echo ')), line)
 
     def test_a_mark_left_behind_is_refused_with_the_way_back(self):
-        self.assertEqual(self.script.section("deja_en_cours")[0], 'if not exist "%MM_VERROU%\\" goto :marque_impossible')
-        refused = self.script.reachable("deja_en_cours")
+        self.assertEqual(self.script.section("already_running")[0], 'if not exist "%MM_LOCK%\\" goto :mark_failed')
+        refused = self.script.reachable("already_running")
         said = " ".join(refused)
         self.assertIn("REFUS", said)
-        self.assertIn('type "%MM_ETAT%"', refused)
-        self.assertIn('for /f "usebackq tokens=1,* delims==" %%a in ("%MM_ETAT%") do set "MM_NOTE_%%a=%%b"', refused)
-        for name in ("ANCIEN", "DONNEES", "SAUVEGARDE", "ETAPE"):
-            self.assertIn(f'set "MM_{name}=%MM_NOTE_{name}%"', refused)
-        self.assertIn("goto :instructions_retour", refused)
+        self.assertIn('type "%MM_STATE%"', refused)
+        self.assertIn('for /f "usebackq tokens=1,* delims==" %%a in ("%MM_STATE%") do set "MM_NOTE_%%a=%%b"', refused)
+        # Each variable from its etat.txt key: the keys stay French, the
+        # variables are this version's own.
+        for variable, key in STATE_KEYS.items():
+            self.assertIn(f'set "MM_{variable}=%MM_NOTE_{key.upper()}%"', refused)
+        self.assertIn("goto :rollback_instructions", refused)
         self.assertIn("autre fenetre deploy.cmd", said)
         # Nothing noted: it was stopped before the server was.
-        self.assertIn('if not exist "%MM_ETAT%" goto :deja_en_cours_sans_etat', refused)
-        self.assertIn('rmdir /s /q "%MM_VERROU%"', " ".join(self.script.section("deja_en_cours_sans_etat")))
+        self.assertIn('if not exist "%MM_STATE%" goto :already_running_without_state', refused)
+        self.assertIn('rmdir /s /q "%MM_LOCK%"', " ".join(self.script.section("already_running_without_state")))
         # The way back says to take the mark away, then to deploy again.
-        back = " ".join(self.script.reachable("instructions_retour"))
-        self.assertIn('rmdir /s /q "%MM_VERROU%"', back)
+        back = " ".join(self.script.reachable("rollback_instructions"))
+        self.assertIn('rmdir /s /q "%MM_LOCK%"', back)
         self.assertIn("Une fois revenu a la version d'avant (git reset ci-dessus), relancez deploy.cmd", back)
         self.assertNotIn("Pour reessayer la mise en ligne", back)
         # Without a backup noted, no restore is offered from an empty path.
-        self.assertIn("if not defined MM_SAUVEGARDE goto :retour_sans_sauvegarde", self.script.section("instructions_retour"))
+        self.assertIn(
+            "if not defined MM_BACKUP goto :rollback_without_backup", self.script.section("rollback_instructions")
+        )
 
     def test_nothing_new_with_the_site_down_says_so(self):
         """HEAD already origin/main and nothing listening on 8765: after a
         failure past the merge whose mark was removed by hand, or a server
         that never came back. Never « Le serveur n'a pas ete touche » and 0."""
-        branch = self.script.section("rien_de_nouveau")
-        self.assertEqual(branch[:2], ["call :attendre %MM_PORT% ecoute 0", "if errorlevel 1 goto :hors_ligne"])
-        offline = self.script.reachable("hors_ligne")
+        branch = self.script.section("nothing_new")
+        self.assertEqual(branch[:2], ["call :wait_for_port %MM_PORT% listening 0", "if errorlevel 1 goto :offline"])
+        offline = self.script.reachable("offline")
         said = " ".join(offline)
         self.assertIn("ATTENTION : rien n'ecoute sur 127.0.0.1:%MM_PORT%, le site est hors ligne", said)
         self.assertIn("schtasks /run /tn MarginMate", said)
@@ -580,9 +775,9 @@ class DeployScriptTests(CmdHygieneMixin, SimpleTestCase):
         folder's start_production.cmd: the restart served the wrong code,
         and « Deploye » was printed if anything listened on 8765."""
         check = self.script.line_of("Get-ScheduledTask")
-        self.assertEqual(self.script.after(check), "if errorlevel 1 goto :tache_ailleurs")
+        self.assertEqual(self.script.after(check), "if errorlevel 1 goto :task_elsewhere")
         self.assertLess(self.script.line_of("manage.py running_jobs"), check)
-        for later in ("call :attendre %MM_PORT% ecoute 0", "schtasks /end", "Stop-Process", "backup_data"):
+        for later in ("call :wait_for_port %MM_PORT% listening 0", "schtasks /end", "Stop-Process", "backup_data"):
             self.assertLess(check, self.script.line_of(later), later)
         line = self.script.lines[check]
         self.assertTrue(line.startswith('"%MM_POWERSHELL%" -NoProfile -NonInteractive -Command "'))
@@ -591,9 +786,9 @@ class DeployScriptTests(CmdHygieneMixin, SimpleTestCase):
         self.assertNotIn('"', command)
         self.assertIn("[IO.Path]::GetFullPath('%MM_APP%start_production.cmd')", command)
         self.assertIn("[char]34", command)
-        refused = self.script.reachable("tache_ailleurs")
+        refused = self.script.reachable("task_elsewhere")
         said = " ".join(refused)
-        self.assertIn("REFUS : la tache %MM_TACHE% ne lance pas %MM_APP%start_production.cmd", said)
+        self.assertIn("REFUS : la tache %MM_TASK% ne lance pas %MM_APP%start_production.cmd", said)
         self.assertIn("DEPLOY.md section 7", said)
         for danger in ("schtasks", "Stop-Process", "merge", "manage.py", "etat"):
             self.assertFalse([line for line in self.script.executed(refused) if danger.lower() in line.lower()], danger)
@@ -601,14 +796,14 @@ class DeployScriptTests(CmdHygieneMixin, SimpleTestCase):
     def test_a_job_started_under_the_stop_restarts_the_old_server(self):
         """A job started in the seconds between running_jobs and
         Stop-Process was killed without a word, and the deploy went on."""
-        stopped = self.script.line_of("call :attendre %MM_PORT% libre 30")
+        stopped = self.script.line_of("call :wait_for_port %MM_PORT% free 30")
         again = [index for index, line in self.script.commands() if line == '"%MM_PYTHON%" manage.py running_jobs']
         self.assertEqual(len(again), 2)
         self.assertLess(stopped, again[1])
         self.assertLess(again[1], self.script.line_of('"%MM_PYTHON%" manage.py backup_data'))
-        self.assertEqual(self.script.after(again[1]), "if errorlevel 1 goto :travail_coupe")
-        branch = self.script.reachable("travail_coupe")
-        self.assertIn("call :relancer_si_lance", branch)
+        self.assertEqual(self.script.after(again[1]), "if errorlevel 1 goto :job_cut_off")
+        branch = self.script.reachable("job_cut_off")
+        self.assertIn("call :restart_if_running", branch)
         said = " ".join(branch)
         self.assertIn("ATTENTION", said)
         self.assertIn("vient d'etre coupe", said)
@@ -625,21 +820,21 @@ class RefreshDevDataScriptTests(CmdHygieneMixin, SimpleTestCase):
         self.assertEqual(commands[1][1], 'cd /d "%~dp0"')
 
     def test_it_refuses_production_before_anything_moves(self):
-        check = self.script.line_of(f'"%MM_PYTHON%" -c "{SNIPPET}" developpement "%MM_SOURCE%"')
-        self.assertEqual(self.script.after(check), "if errorlevel 1 goto :refus")
-        self.assertLess(check, self.script.line_of('move "%MM_DONNEES%" "%MM_ANCIEN%"'))
+        check = self.script.line_of(f'"%MM_PYTHON%" -c "{SNIPPET}" development "%MM_SOURCE%"')
+        self.assertEqual(self.script.after(check), "if errorlevel 1 goto :refused")
+        self.assertLess(check, self.script.line_of('move "%MM_DATA%" "%MM_PREVIOUS%"'))
         self.assertLess(check, self.script.line_of("robocopy"))
         for danger in ("move", "robocopy"):
-            self.assertFalse([line for line in self.script.reachable("refus") if line.startswith(danger)], danger)
+            self.assertFalse([line for line in self.script.reachable("refused") if line.startswith(danger)], danger)
 
     def test_it_refuses_while_the_development_server_runs(self):
         """runserver (and the preview) holds the databases open: moved under
         it, the folder half goes, or it writes into the copy being made."""
-        check = self.script.line_of("call :port_libre 8000")
-        self.assertEqual(self.script.after(check), "if errorlevel 1 goto :serveur_dev_lance")
-        self.assertLess(check, self.script.line_of('move "%MM_DONNEES%"'))
+        check = self.script.line_of("call :port_free 8000")
+        self.assertEqual(self.script.after(check), "if errorlevel 1 goto :dev_server_running")
+        self.assertLess(check, self.script.line_of('move "%MM_DATA%"'))
         self.assertNotIn(str(serve.DEFAULT_PORT), self.script.text)
-        section = self.script.section("port_libre")
+        section = self.script.section("port_free")
         self.assertTrue(any("Get-NetTCPConnection -LocalPort %1 -State Listen" in line for line in section))
 
     def test_it_takes_the_newest_whole_backup(self):
@@ -649,15 +844,13 @@ class RefreshDevDataScriptTests(CmdHygieneMixin, SimpleTestCase):
         a closed window or a power cut keeps its plain name and has no
         manifest.json (written last), and taken, it made every refresh
         refuse until somebody found and deleted it."""
-        self.assertIn('set "MM_SAUVEGARDES=C:\\MarginMate\\backups"', self.script.text)
+        self.assertIn('set "MM_BACKUPS=C:\\MarginMate\\backups"', self.script.text)
         self.assertIn('set "MM_SOURCE=%~1"', self.script.text)
-        pick = self.script.lines[self.script.line_of('dir /b /ad /o-n "%MM_SAUVEGARDES%"')]
+        pick = self.script.lines[self.script.line_of('dir /b /ad /o-n "%MM_BACKUPS%"')]
+        self.assertIn('findstr /r /x "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9]"', pick)
         self.assertIn(
-            'findstr /r /x "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9]"', pick
-        )
-        self.assertIn(
-            'do if not defined MM_SOURCE if exist "%MM_SAUVEGARDES%\\%%b\\manifest.json" '
-            'if exist "%MM_SAUVEGARDES%\\%%b\\data\\" set "MM_SOURCE=%MM_SAUVEGARDES%\\%%b"',
+            'do if not defined MM_SOURCE if exist "%MM_BACKUPS%\\%%b\\manifest.json" '
+            'if exist "%MM_BACKUPS%\\%%b\\data\\" set "MM_SOURCE=%MM_BACKUPS%\\%%b"',
             pick,
         )
         stamp = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{6}$")
@@ -674,21 +867,21 @@ class RefreshDevDataScriptTests(CmdHygieneMixin, SimpleTestCase):
                 for switch in ("/mir", "/purge", "/mov"):
                     self.assertNotIn(switch, lowered)
                 if lowered.startswith("del "):
-                    self.assertIn("%MM_INFOS%", line)
+                    self.assertIn("%MM_ANSWERS%", line)
                 if lowered.startswith(("copy", "robocopy", "move")):
                     self.assertNotIn(".env", lowered)
-        move = self.script.line_of('move "%MM_DONNEES%" "%MM_ANCIEN%"')
-        self.assertEqual(self.script.after(move), "if errorlevel 1 goto :renommage_impossible")
+        move = self.script.line_of('move "%MM_DATA%" "%MM_PREVIOUS%"')
+        self.assertEqual(self.script.after(move), "if errorlevel 1 goto :rename_failed")
 
     def test_robocopy_s_exit_codes(self):
         """robocopy says 1 when it copied files: only 8 and above fail."""
-        copy = self.script.line_of('robocopy "%MM_SAUVEGARDE%\\data" "%MM_DONNEES%" /E')
-        self.assertEqual(self.script.after(copy), "if errorlevel 8 goto :copie_echouee")
+        copy = self.script.line_of('robocopy "%MM_BACKUP%\\data" "%MM_DATA%" /E')
+        self.assertEqual(self.script.after(copy), "if errorlevel 8 goto :copy_failed")
 
     def test_it_asks_first_and_reminds_what_the_copy_holds(self):
         ask = self.script.line_of("choice /C ON /N /M")
-        self.assertEqual(self.script.after(ask), 'if not "%ERRORLEVEL%"=="1" goto :annule')
-        self.assertLess(ask, self.script.line_of('move "%MM_DONNEES%"'))
+        self.assertEqual(self.script.after(ask), 'if not "%ERRORLEVEL%"=="1" goto :cancelled')
+        self.assertLess(ask, self.script.line_of('move "%MM_DATA%"'))
         text = self.script.text
         self.assertIn("VRAIES donnees", text)
         self.assertIn("jamais dans git", text)
@@ -704,7 +897,7 @@ class OneLineOfTheScriptsRunAloneTests(SimpleTestCase):
 
     def setUp(self):
         super().setUp()
-        self.folder = Path(tempfile.mkdtemp(prefix="marginmate-tests-une-ligne-cmd-"))
+        self.folder = Path(tempfile.mkdtemp(prefix="marginmate-tests-one-line-cmd-"))
         self.addCleanup(shutil.rmtree, self.folder, True)
 
     # -- refresh_dev_data.cmd's choice of a backup ------------------------------------------------------------------
@@ -720,14 +913,16 @@ class OneLineOfTheScriptsRunAloneTests(SimpleTestCase):
             (folder / "data").write_text("pas un dossier", encoding="ascii")
 
     def picked(self) -> str:
-        line = Script("refresh_dev_data.cmd").lines[Script("refresh_dev_data.cmd").line_of('dir /b /ad /o-n "%MM_SAUVEGARDES%"')]
-        batch = self.folder / "choisir.cmd"
+        line = Script("refresh_dev_data.cmd").lines[
+            Script("refresh_dev_data.cmd").line_of('dir /b /ad /o-n "%MM_BACKUPS%"')
+        ]
+        batch = self.folder / "pick.cmd"
         batch.write_bytes(
             "\r\n".join(
                 [
                     "@echo off",
                     "setlocal EnableExtensions DisableDelayedExpansion",
-                    f'set "MM_SAUVEGARDES={self.folder / "backups"}"',
+                    f'set "MM_BACKUPS={self.folder / "backups"}"',
                     'set "MM_SOURCE="',
                     line,
                     "echo SOURCE=%MM_SOURCE%",
@@ -766,15 +961,19 @@ class OneLineOfTheScriptsRunAloneTests(SimpleTestCase):
         task) - a function comes before a cmdlet in PowerShell's lookup, and
         the scheduler is never asked. Its exit code."""
         if executes:
-            actions = ", ".join("[pscustomobject]@{ Execute = '" + execute.replace("'", "''") + "' }" for execute in executes)
+            actions = ", ".join(
+                "[pscustomobject]@{ Execute = '" + execute.replace("'", "''") + "' }" for execute in executes
+            )
             answer = f"[pscustomobject]@{{ TaskName = $TaskName; Actions = @({actions}) }}"
         else:
             answer = "$null"
         stand_in = (
             "function Get-ScheduledTask { [CmdletBinding()] param([string]$TaskName) "
-            f"if ($TaskName -ne 'MarginMate') {{ throw 'autre tache' }}; {answer} }}; "
+            f"if ($TaskName -ne 'MarginMate') {{ throw 'another task' }}; {answer} }}; "
         )
-        command = task_check_command(Script("deploy.cmd")).replace("%MM_TACHE%", "MarginMate").replace("%MM_APP%", self.APP)
+        command = (
+            task_check_command(Script("deploy.cmd")).replace("%MM_TASK%", "MarginMate").replace("%MM_APP%", self.APP)
+        )
         encoded = base64.b64encode((stand_in + command).encode("utf-16-le")).decode("ascii")
         result = subprocess.run(
             [str(POWERSHELL), "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
@@ -782,18 +981,30 @@ class OneLineOfTheScriptsRunAloneTests(SimpleTestCase):
             capture_output=True,
             timeout=120,
             check=False,
-            env={**os.environ, "MM_ESSAI_RACINE": "C:\\MarginMate"},
+            env={**os.environ, "MM_TEST_ROOT": "C:\\MarginMate"},
         )
         return result.returncode
 
     # -- deploy.cmd's branches that only speak ------------------------------------------------------------------------
 
     #: Nothing a harness may run: every such line of the sections taken must be an echo.
-    DANGERS = ("schtasks", "Stop-Process", "git ", "manage.py", "robocopy", "move ", "rmdir", "rd ", "del ", "mkdir", "start ")
+    DANGERS = (
+        "schtasks",
+        "Stop-Process",
+        "git ",
+        "manage.py",
+        "robocopy",
+        "move ",
+        "rmdir",
+        "rd ",
+        "del ",
+        "mkdir",
+        "start ",
+    )
 
     def spoken(self, labels, **variables) -> str:
         """deploy.cmd's `labels` sections, in the file's order, run in a
-        batch of their own after `variables` are set; :fin is a bare exit
+        batch of their own after `variables` are set; :finish is a bare exit
         (no pause, no removal). What they print."""
         script = Script("deploy.cmd")
         body = []
@@ -804,7 +1015,7 @@ class OneLineOfTheScriptsRunAloneTests(SimpleTestCase):
             if not line.lower().startswith("echo") and not line.startswith(":"):
                 for danger in self.DANGERS:
                     self.assertNotIn(danger, line, "a harness never runs this")
-        batch = self.folder / "branche.cmd"
+        batch = self.folder / "branch.cmd"
         batch.write_bytes(
             "\r\n".join(
                 [
@@ -813,7 +1024,7 @@ class OneLineOfTheScriptsRunAloneTests(SimpleTestCase):
                     *(f'set "{name}={value}"' for name, value in variables.items()),
                     f"goto :{labels[0]}",
                     *body,
-                    ":fin",
+                    ":finish",
                     "exit /b 0",
                     "",
                 ]
@@ -826,12 +1037,12 @@ class OneLineOfTheScriptsRunAloneTests(SimpleTestCase):
         return result.stdout.decode("ascii", "replace")
 
     LEFT_HALF_WAY = (
-        "deja_en_cours",
-        "deja_en_cours_sans_etat",
-        "marque_impossible",
-        "instructions_retour",
-        "retour_sans_sauvegarde",
-        "retour_relance",
+        "already_running",
+        "already_running_without_state",
+        "mark_failed",
+        "rollback_instructions",
+        "rollback_without_backup",
+        "rollback_restart",
     )
 
     def test_a_mark_that_could_not_be_made_is_not_another_run(self):
@@ -839,12 +1050,15 @@ class OneLineOfTheScriptsRunAloneTests(SimpleTestCase):
         « une autre mise en ligne »."""
         mark = self.folder / "app" / ".git" / "marginmate-deploy"
         said = self.spoken(
-            self.LEFT_HALF_WAY, MM_APP=f"{self.folder / 'app'}\\", MM_VERROU=str(mark), MM_ETAT=str(mark / "etat.txt")
+            self.LEFT_HALF_WAY, MM_APP=f"{self.folder / 'app'}\\", MM_LOCK=str(mark), MM_STATE=str(mark / "etat.txt")
         )
         self.assertIn("REFUS : impossible de creer le dossier", said)
         self.assertNotIn("autre mise en ligne", said)
 
     def test_a_mark_left_half_way_prints_the_way_back_from_what_it_noted(self):
+        """etat.txt as the PREVIOUS deploy.cmd writes it - its step 7 was
+        pip: the mark this version reads first is that one's, after the
+        merge that brought this version failed half way."""
         mark = self.folder / "app" / ".git" / "marginmate-deploy"
         mark.mkdir(parents=True)
         commit = "0123456789abcdef0123456789abcdef01234567"
@@ -859,13 +1073,16 @@ class OneLineOfTheScriptsRunAloneTests(SimpleTestCase):
         said = self.spoken(
             self.LEFT_HALF_WAY,
             MM_APP=f"{self.folder / 'app'}\\",
-            MM_VERROU=str(mark),
-            MM_ETAT=str(mark / "etat.txt"),
-            MM_ANCIEN="",
-            MM_SAUVEGARDE="",
+            MM_LOCK=str(mark),
+            MM_STATE=str(mark / "etat.txt"),
+            MM_PREVIOUS="",
+            MM_BACKUP="",
         )
         self.assertIn("REFUS", said)
-        self.assertIn(f"git reset --hard {commit}", said)
+        self.assertIn(f"git reset --hard {commit}\r\n  uv sync --locked --no-dev\r\n", said)
+        # The version before may date from before uv: said how to install it.
+        self.assertIn("pas de fichier uv.lock", said)
+        self.assertIn(PIP_FOR_A_VERSION_BEFORE_UV.removeprefix("echo "), said)
         self.assertIn("pendant\r\nl'installation des dependances (pip install -r requirements.txt), apres", said)
         self.assertIn('move "C:\\MarginMate\\data" "C:\\MarginMate\\data.echec"', said)
         self.assertIn('robocopy "C:\\MarginMate\\backups\\2026-10-01_101500\\data" "C:\\MarginMate\\data" /E', said)
@@ -876,9 +1093,11 @@ class OneLineOfTheScriptsRunAloneTests(SimpleTestCase):
     def test_a_mark_left_before_the_backup_offers_no_restore(self):
         mark = self.folder / "app" / ".git" / "marginmate-deploy"
         mark.mkdir(parents=True)
-        (mark / "etat.txt").write_bytes(b"ancien=abc123\r\ndonnees=C:\\MarginMate\\data\r\netape=l'arret du serveur\r\n")
+        (mark / "etat.txt").write_bytes(
+            b"ancien=abc123\r\ndonnees=C:\\MarginMate\\data\r\netape=l'arret du serveur\r\n"
+        )
         said = self.spoken(
-            self.LEFT_HALF_WAY, MM_APP=f"{self.folder / 'app'}\\", MM_VERROU=str(mark), MM_ETAT=str(mark / "etat.txt")
+            self.LEFT_HALF_WAY, MM_APP=f"{self.folder / 'app'}\\", MM_LOCK=str(mark), MM_STATE=str(mark / "etat.txt")
         )
         self.assertIn("git reset --hard abc123", said)
         self.assertIn("Aucune sauvegarde n'a ete notee", said)
@@ -888,7 +1107,7 @@ class OneLineOfTheScriptsRunAloneTests(SimpleTestCase):
         mark = self.folder / "app" / ".git" / "marginmate-deploy"
         mark.mkdir(parents=True)
         said = self.spoken(
-            self.LEFT_HALF_WAY, MM_APP=f"{self.folder / 'app'}\\", MM_VERROU=str(mark), MM_ETAT=str(mark / "etat.txt")
+            self.LEFT_HALF_WAY, MM_APP=f"{self.folder / 'app'}\\", MM_LOCK=str(mark), MM_STATE=str(mark / "etat.txt")
         )
         self.assertIn("Elle n'a rien note", said)
         self.assertIn(f'rmdir /s /q "{mark}"', said)
@@ -896,22 +1115,22 @@ class OneLineOfTheScriptsRunAloneTests(SimpleTestCase):
 
     def test_the_mark_is_taken_by_one_run_only(self):
         """deploy.cmd's own line, run twice on a temporary .git: the first
-        takes the mark, the second goes to :deja_en_cours."""
+        takes the mark, the second goes to :already_running."""
         line = Script("deploy.cmd").lines[Script("deploy.cmd").line_of(DeployScriptTests.LOCK)]
         mark = self.folder / "app" / ".git" / "marginmate-deploy"
         mark.parent.mkdir(parents=True)
-        batch = self.folder / "marque.cmd"
+        batch = self.folder / "mark.cmd"
         batch.write_bytes(
             "\r\n".join(
                 [
                     "@echo off",
                     "setlocal EnableExtensions DisableDelayedExpansion",
-                    f'set "MM_VERROU={mark}"',
+                    f'set "MM_LOCK={mark}"',
                     line,
-                    "echo PRISE",
+                    "echo TAKEN",
                     "exit /b 0",
-                    ":deja_en_cours",
-                    "echo REFUSEE",
+                    ":already_running",
+                    "echo REFUSED",
                     "exit /b 0",
                     "",
                 ]
@@ -925,33 +1144,59 @@ class OneLineOfTheScriptsRunAloneTests(SimpleTestCase):
             .strip()
             for _ in range(2)
         ]
-        self.assertEqual(answers, ["PRISE", "REFUSEE"])
+        self.assertEqual(answers, ["TAKEN", "REFUSED"])
         self.assertTrue(mark.is_dir())
 
+    def test_uv_silent_says_how_to_make_it_answer(self):
+        mark = self.folder / "app" / ".git" / "marginmate-deploy"
+        said = self.spoken(("no_uv",), MM_APP="C:\\MarginMate\\app\\", MM_LOCK=str(mark))
+        self.assertIn("REFUS : uv ne repond pas.", said)
+        self.assertIn('  cd /d "C:\\MarginMate\\app\\"\r\n  mise install\r\n  uv --version\r\n', said)
+        self.assertIn("(DEPLOY.md,\r\nsection 10.6)", said)
+        self.assertIn("Rien n'a ete fait.", said)
+
+    def test_uv_silent_with_a_mark_left_prints_the_way_back(self):
+        mark = self.folder / "app" / ".git" / "marginmate-deploy"
+        mark.mkdir(parents=True)
+        (mark / "etat.txt").write_bytes(
+            b"ancien=abc123\r\ndonnees=C:\\MarginMate\\data\r\netape=la relance du serveur\r\n"
+        )
+        said = self.spoken(
+            ("no_uv", *self.LEFT_HALF_WAY),
+            MM_APP=f"{self.folder / 'app'}\\",
+            MM_LOCK=str(mark),
+            MM_STATE=str(mark / "etat.txt"),
+        )
+        self.assertIn("REFUS : une autre mise en ligne a laisse sa marque", said)
+        self.assertIn("git reset --hard abc123", said)
+        self.assertNotIn("uv ne repond pas", said)
+
     def test_the_other_branches_that_only_speak(self):
-        said = self.spoken(("hors_ligne",), MM_APP="C:\\MarginMate\\app\\", MM_PORT="8765", MM_ANCIEN_COURT="abc1234")
+        said = self.spoken(("offline",), MM_APP="C:\\MarginMate\\app\\", MM_PORT="8765", MM_PREVIOUS_SHORT="abc1234")
         self.assertIn("ATTENTION : rien n'ecoute sur 127.0.0.1:8765, le site est hors ligne.", said)
-        said = self.spoken(("git_illisible",), MM_APP="C:\\MarginMate\\app\\")
+        self.assertIn("  git reset --hard VERSION-D-AVANT\r\n  uv sync --locked --no-dev\r\n", said)
+        self.assertIn(PIP_FOR_A_VERSION_BEFORE_UV.removeprefix("echo "), said)
+        said = self.spoken(("git_unreadable",), MM_APP="C:\\MarginMate\\app\\")
         self.assertIn('git config --global --add safe.directory "C:/MarginMate/app"', said)
-        said = self.spoken(("tache_ailleurs",), MM_APP="C:\\MarginMate\\app\\", MM_TACHE="MarginMate")
+        said = self.spoken(("task_elsewhere",), MM_APP="C:\\MarginMate\\app\\", MM_TASK="MarginMate")
         self.assertIn("REFUS : la tache MarginMate ne lance pas C:\\MarginMate\\app\\start_production.cmd", said)
 
     @skipUnless(POWERSHELL.is_file(), "Windows PowerShell")
     def test_the_task_s_action_must_be_this_folder_s_start_production(self):
         quote = '"'
         cases = {
-            "pas de tache : rien a verifier": ((), 0),
-            "le chemin entre guillemets": ((f"{quote}{self.APP}start_production.cmd{quote}",), 0),
-            "une autre casse": (("c:\\marginmate\\APP\\Start_Production.cmd",), 0),
-            "une variable d'environnement": (("%MM_ESSAI_RACINE%\\app\\start_production.cmd",), 0),
-            "un detour par ..": (("C:\\MarginMate\\app\\logs\\..\\start_production.cmd",), 0),
-            "la bonne en deuxieme action": (("C:\\Windows\\notepad.exe", f"{self.APP}start_production.cmd"), 0),
-            "le dossier de developpement": (
+            "no task: nothing to check": ((), 0),
+            "the path between double quotes": ((f"{quote}{self.APP}start_production.cmd{quote}",), 0),
+            "another case": (("c:\\marginmate\\APP\\Start_Production.cmd",), 0),
+            "an environment variable": (("%MM_TEST_ROOT%\\app\\start_production.cmd",), 0),
+            "a detour through ..": (("C:\\MarginMate\\app\\logs\\..\\start_production.cmd",), 0),
+            "the right one as the second action": (("C:\\Windows\\notepad.exe", f"{self.APP}start_production.cmd"), 0),
+            "the development folder": (
                 ("C:\\Users\\vous\\Desktop\\Bar application gestion\\AdminMate\\start_production.cmd",),
                 1,
             ),
-            "un dossier voisin": (("C:\\MarginMate\\app-ancien\\start_production.cmd",), 1),
-            "une action vide": (("",), 1),
+            "a neighbouring folder": (("C:\\MarginMate\\app-ancien\\start_production.cmd",), 1),
+            "an empty action": (("",), 1),
         }
         for case, (executes, expected) in cases.items():
             with self.subTest(case=case):
@@ -963,7 +1208,7 @@ class DeploymentHelperTests(SimpleTestCase):
 
     def setUp(self):
         super().setUp()
-        self.folder = Path(tempfile.mkdtemp(prefix="marginmate-tests-deploiement-"))
+        self.folder = Path(tempfile.mkdtemp(prefix="marginmate-tests-deployment-"))
         self.addCleanup(shutil.rmtree, self.folder, True)
         self.data = self.folder / "data-dev"
 
@@ -1008,7 +1253,7 @@ class DeploymentHelperTests(SimpleTestCase):
     def test_production_answers_its_data_folder(self):
         code, answers, said = self.ask("production", DEBUG=False, HTTPS=True)
         self.assertEqual((code, said), (0, ""))
-        self.assertEqual(answers, {"DONNEES": str(self.data)})
+        self.assertEqual(answers, {"DATA": str(self.data)})
 
     def test_production_with_its_data_in_the_code_is_refused(self):
         code, _, said = self.ask("production", DEBUG=False, HTTPS=True, TENANTS_ROOT=BASE / "tenants")
@@ -1024,10 +1269,10 @@ class DeploymentHelperTests(SimpleTestCase):
         self.assertIn(f"la base des comptes ({elsewhere}) n'est pas dans le dossier des données", said)
         self.assertIn(f"MARGINMATE_ACCOUNTS_DB doit être {self.data / 'accounts.sqlite3'}", said)
 
-    # -- developpement --------------------------------------------------------------------------------------------
+    # -- development ----------------------------------------------------------------------------------------------
 
     def test_development_is_refused_in_production(self):
-        code, answers, said = self.ask("developpement", str(self.backup()), DEBUG=False, HTTPS=True)
+        code, answers, said = self.ask("development", str(self.backup()), DEBUG=False, HTTPS=True)
         self.assertEqual((code, answers), (deployment.REFUSED, {}))
         self.assertIn("MARGINMATE_HTTPS=1 : c'est la copie de production", said)
 
@@ -1038,7 +1283,7 @@ class DeploymentHelperTests(SimpleTestCase):
         backup = self.backup()
         for root in (BASE / "tenants", BASE.parent / "tenants"):
             with self.subTest(root=str(root)):
-                code, answers, said = self.ask("developpement", str(backup), DEBUG=True, HTTPS=False, TENANTS_ROOT=root)
+                code, answers, said = self.ask("development", str(backup), DEBUG=True, HTTPS=False, TENANTS_ROOT=root)
                 self.assertEqual((code, answers), (deployment.REFUSED, {}))
                 self.assertIn("dossier du code", said)
 
@@ -1050,12 +1295,12 @@ class DeploymentHelperTests(SimpleTestCase):
         }
         for said_part, backup in cases.items():
             with self.subTest(said=said_part):
-                code, answers, said = self.ask("developpement", str(backup), DEBUG=True, HTTPS=False)
+                code, answers, said = self.ask("development", str(backup), DEBUG=True, HTTPS=False)
                 self.assertEqual((code, answers), (deployment.REFUSED, {}))
                 self.assertIn(said_part, said)
         broken = self.backup(name="2026-10-03_101500")
         (broken / "manifest.json").write_text("{pas du json", encoding="utf-8")
-        code, _, said = self.ask("developpement", str(broken), DEBUG=True, HTTPS=False)
+        code, _, said = self.ask("development", str(broken), DEBUG=True, HTTPS=False)
         self.assertEqual(code, deployment.REFUSED)
         self.assertIn("ne se lit pas", said)
 
@@ -1064,7 +1309,7 @@ class DeploymentHelperTests(SimpleTestCase):
         before the split): the refresh would move the site's data aside."""
         self.data.mkdir()
         backup = self.backup(source=str(self.data))
-        code, answers, said = self.ask("developpement", str(backup), DEBUG=True, HTTPS=False)
+        code, answers, said = self.ask("development", str(backup), DEBUG=True, HTTPS=False)
         self.assertEqual((code, answers), (deployment.REFUSED, {}))
         self.assertIn("ce sont les données du site", said)
         self.assertTrue(self.data.is_dir())
@@ -1078,19 +1323,19 @@ class DeploymentHelperTests(SimpleTestCase):
         production = self.folder / "production" / "data"
         backup = self.backup(source=str(production))
         code, answers, said = self.ask(
-            "developpement", str(backup), DEBUG=True, HTTPS=False, accounts=production / "accounts.sqlite3"
+            "development", str(backup), DEBUG=True, HTTPS=False, accounts=production / "accounts.sqlite3"
         )
         self.assertEqual((code, answers), (deployment.REFUSED, {}))
         self.assertIn(f"la base des comptes ({production / 'accounts.sqlite3'}) n'est pas dans le dossier des", said)
         self.assertIn(f"MARGINMATE_ACCOUNTS_DB doit être {self.data / 'accounts.sqlite3'}", said)
         # Anywhere else outside data-dev too.
         code, _, said = self.ask(
-            "developpement", str(backup), DEBUG=True, HTTPS=False, accounts=self.folder / "comptes.sqlite3"
+            "development", str(backup), DEBUG=True, HTTPS=False, accounts=self.folder / "comptes.sqlite3"
         )
         self.assertEqual(code, deployment.REFUSED)
         # Inside it, under another name, it is data-dev's own.
         code, _, said = self.ask(
-            "developpement", str(backup), DEBUG=True, HTTPS=False, accounts=self.data / "comptes" / "base.sqlite3"
+            "development", str(backup), DEBUG=True, HTTPS=False, accounts=self.data / "comptes" / "base.sqlite3"
         )
         self.assertEqual((code, said), (0, ""))
 
@@ -1098,27 +1343,27 @@ class DeploymentHelperTests(SimpleTestCase):
         backup = self.data / "sauvegarde"
         (backup / "data").mkdir(parents=True)
         (backup / "manifest.json").write_text(json.dumps({"source": "C:\\MarginMate\\data"}), encoding="utf-8")
-        code, _, said = self.ask("developpement", str(backup), DEBUG=True, HTTPS=False)
+        code, _, said = self.ask("development", str(backup), DEBUG=True, HTTPS=False)
         self.assertEqual(code, deployment.REFUSED)
         self.assertIn("l'un dans l'autre", said)
 
     def test_development_answers_where_everything_goes(self):
         backup = self.backup()
-        code, answers, said = self.ask("developpement", str(backup), DEBUG=True, HTTPS=False)
+        code, answers, said = self.ask("development", str(backup), DEBUG=True, HTTPS=False)
         self.assertEqual((code, said), (0, ""))
         # No data folder yet: nothing to move aside.
-        self.assertEqual(answers, {"DONNEES": str(self.data), "SAUVEGARDE": str(backup)})
+        self.assertEqual(answers, {"DATA": str(self.data), "BACKUP": str(backup)})
 
         self.data.mkdir()
         moment = datetime(2026, 10, 2, 9, 30, 5)
         with self.settings_as(DEBUG=True, HTTPS=False):
             answers = deployment.development(settings, str(backup), now=moment)
-        self.assertEqual(answers["ANCIEN"], str(self.folder / "data-dev.ancien-2026-10-02_093005"))
+        self.assertEqual(answers["PREVIOUS"], str(self.folder / "data-dev.ancien-2026-10-02_093005"))
         # Never the name of a folder already there.
         (self.folder / "data-dev.ancien-2026-10-02_093005").mkdir()
         with self.settings_as(DEBUG=True, HTTPS=False):
             answers = deployment.development(settings, str(backup), now=moment)
-        self.assertEqual(answers["ANCIEN"], str(self.folder / "data-dev.ancien-2026-10-02_093005-2"))
+        self.assertEqual(answers["PREVIOUS"], str(self.folder / "data-dev.ancien-2026-10-02_093005-2"))
 
     def test_settings_that_do_not_load_and_a_wrong_usage(self):
         out, err = io.StringIO(), io.StringIO()
@@ -1126,7 +1371,7 @@ class DeploymentHelperTests(SimpleTestCase):
             self.assertEqual(deployment.main(["production"], stdout=out, stderr=err), 1)
         self.assertIn("ne se chargent pas : clé secrète trop courte", err.getvalue())
         self.assertEqual(out.getvalue(), "")
-        for argv in ([], ["n-importe-quoi"], ["developpement"]):
+        for argv in ([], ["n-importe-quoi"], ["development"]):
             with self.subTest(argv=argv):
                 self.assertEqual(deployment.main(argv, stdout=io.StringIO(), stderr=io.StringIO()), 1)
 
@@ -1140,7 +1385,7 @@ class TheScriptsOneLinerTests(SimpleTestCase):
     """The exact -c the scripts run, taken from them, run as they run it."""
 
     def run_the_scripts_python(self, *args, **environment):
-        folder = Path(tempfile.mkdtemp(prefix="marginmate-tests-une-ligne-"))
+        folder = Path(tempfile.mkdtemp(prefix="marginmate-tests-one-line-"))
         env = child_environment(
             DJANGO_SETTINGS_MODULE="config.settings",
             DJANGO_SECRET_KEY="essai-" + "k7Qz" * 16,
@@ -1171,7 +1416,7 @@ class TheScriptsOneLinerTests(SimpleTestCase):
     def test_production_in_a_child(self):
         result, folder = self.run_the_scripts_python("production", DJANGO_DEBUG="False", MARGINMATE_HTTPS="1")
         self.assertEqual(result.returncode, 0, result.stderr[-2000:])
-        self.assertEqual(result.stdout.splitlines(), [f"DONNEES={folder / 'data'}"])
+        self.assertEqual(result.stdout.splitlines(), [f"DATA={folder / 'data'}"])
         result, _ = self.run_the_scripts_python("production", DJANGO_DEBUG="True", MARGINMATE_HTTPS="1")
         self.assertEqual(result.returncode, deployment.REFUSED)
         self.assertEqual(result.stdout, "")
@@ -1179,7 +1424,7 @@ class TheScriptsOneLinerTests(SimpleTestCase):
 
     def test_development_in_a_child_refuses_production(self):
         result, _ = self.run_the_scripts_python(
-            "developpement", "C:\\MarginMate\\backups\\2026-10-01_101500", DJANGO_DEBUG="False", MARGINMATE_HTTPS="1"
+            "development", "C:\\MarginMate\\backups\\2026-10-01_101500", DJANGO_DEBUG="False", MARGINMATE_HTTPS="1"
         )
         self.assertEqual(result.returncode, deployment.REFUSED)
         self.assertIn("c'est la copie de production", result.stderr)
@@ -1187,6 +1432,10 @@ class TheScriptsOneLinerTests(SimpleTestCase):
 
 def section(markdown: str, title: str) -> str:
     return markdown.split(title, 1)[1].split("\n## ", 1)[0]
+
+
+def code_blocks(markdown: str) -> list[str]:
+    return markdown.split("```")[1::2]
 
 
 class DeployDocumentTests(SimpleTestCase):
@@ -1248,11 +1497,74 @@ class DeployDocumentTests(SimpleTestCase):
                 self.assertIn(said, words)
         # Its steps in the order deploy.cmd runs them.
         described = tenth.split("Ce que fait `deploy.cmd`", 1)[1].split("\n### ", 1)[0]
-        steps = [described.index(step) for step in (
-            "manage.py running_jobs", "Arrête le serveur", "manage.py backup_data", "git merge --ff-only origin/main",
-            "pip install", "manage.py migrate_tenants", "manage.py serve --verifier", "Relance le serveur",
-        )]
+        steps = [
+            described.index(step)
+            for step in (
+                "manage.py running_jobs",
+                "Arrête le serveur",
+                "manage.py backup_data",
+                "git merge --ff-only origin/main",
+                "uv sync --locked --no-dev",
+                "manage.py migrate_tenants",
+                "manage.py serve --verifier",
+                "Relance le serveur",
+            )
+        ]
         self.assertEqual(steps, sorted(steps))
+
+    def test_production_installs_with_uv(self):
+        """Wherever DEPLOY.md installs the dependencies - the production
+        copy made, the way back - it is what deploy.cmd runs. pip is named
+        once: for going back to a version from before uv (no uv.lock), after
+        uv has taken pip out of .venv."""
+        tenth = section(self.deploy, "## 10. Développer et mettre en ligne une modification")
+        setup = tenth.split("### 10.1 ", 1)[1].split("\n### ", 1)[0]
+        back = tenth.split("### 10.4 ", 1)[1].split("\n### ", 1)[0]
+        made = [" ".join(block.split()) for block in code_blocks(setup) if "git clone" in block]
+        self.assertEqual(len(made), 1)
+        self.assertTrue(made[0].endswith("cd /d C:\\MarginMate\\app mise install uv sync --locked --no-dev"), made[0])
+        reset = [" ".join(block.split()) for block in code_blocks(back) if "git reset" in block]
+        self.assertEqual(
+            reset, ["cd /d C:\\MarginMate\\app git reset --hard <version d'avant> uv sync --locked --no-dev"]
+        )
+        self.assertEqual(self.deploy.count("pip install"), 1)
+        before_uv = " ".join(back.split("pip install", 1)[0].split()[-40:])
+        self.assertIn("n'a pas de fichier `uv.lock`", before_uv)
+        self.assertIn("-m ensurepip", before_uv)
+
+    def test_the_switch_to_uv_is_told_once(self):
+        """10.6, what deploy.cmd's refusal points at: the first deployment
+        of the uv version is run by the PREVIOUS deploy.cmd (pip,
+        requirements.txt) and asks nothing; uv must answer in
+        C:\\MarginMate\\app before the second, from which deploy.cmd runs uv
+        and refuses, before touching anything, when it does not."""
+        switch = section(self.deploy, "\n### 10.6 Passage à uv (une seule fois)\n")
+        words = " ".join(switch.split())
+        for said in (
+            "winget install jdx.mise",
+            "**La première mise en ligne**",
+            "`deploy.cmd` d'avant",
+            "`requirements.txt`",
+            "**nouvelle** invite de commandes",
+            "cd /d C:\\MarginMate\\app mise install uv --version",
+            "« trust »",
+            "**À partir de la deuxième mise en ligne**",
+            "`uv sync --locked --no-dev`",
+            "« REFUS : uv ne repond pas »",
+            "`requirements.txt` disparaît du code après cette deuxième mise en ligne",
+        ):
+            with self.subTest(said=said):
+                self.assertIn(said, words)
+        self.assertLess(words.index("**La première mise en ligne**"), words.index("uv --version"))
+        self.assertLess(words.index("uv --version"), words.index("**À partir de la deuxième mise en ligne**"))
+        # The same PATH line as README.md's first-time setup.
+        readme = (BASE / "README.md").read_text(encoding="utf-8")
+        (path_line,) = [line.strip() for line in readme.splitlines() if "mise\\shims" in line]
+        self.assertIn(path_line, switch)
+        # What the refusal says is what the owner is told to look for.
+        self.assertTrue(
+            any(line.startswith("echo REFUS : uv ne repond pas.") for line in Script("deploy.cmd").section("no_uv"))
+        )
 
     def test_the_task_and_the_backups_are_production_s(self):
         seventh = section(self.deploy, "## 7. Démarrer le serveur à l'ouverture de la session")
@@ -1307,7 +1619,9 @@ class DeployDocumentTests(SimpleTestCase):
         """accounts/tests/test_production_settings.py runs the settings with
         that block's lines: a data folder named there would be the owner's."""
         for name in deploy_md_lines():
-            self.assertFalse(name.startswith(("MARGINMATE_TENANTS_ROOT", "MARGINMATE_ACCOUNTS_DB", "MARGINMATE_LOG_DIR")))
+            self.assertFalse(
+                name.startswith(("MARGINMATE_TENANTS_ROOT", "MARGINMATE_ACCOUNTS_DB", "MARGINMATE_LOG_DIR"))
+            )
 
 
 class ClaudeNotesTests(SimpleTestCase):

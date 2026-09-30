@@ -4,14 +4,14 @@ Always a copy of the SQLite database - 10 MB, under a second, and a
 « Fusionner » writes too (it adds products and rebuilds movements). Before a
 « Remplacer » or an « Effacer », also an importable archive of the sections
 that change (`sections_at_risk`), so the page itself can undo it. Both go
-to the espace's backups folder (`accounts.paths.backups_dir`:
-`<espace>/backups/`), and the order is fixed: database, archive, then the transaction - a backup that
+to the tenant's backups folder (`accounts.paths.backups_dir`:
+`<tenant>/backups/`), and the order is fixed: database, archive, then the transaction - a backup that
 fails changes nothing.
 
-**One folder per espace.** With one folder for the whole server, every
+**One folder per tenant.** With one folder for the whole server, every
 bar's Importer tab listed every bar's safety copies, and bar B could stage
 and import bar A's archive - A's invoices, bank and prices. Everything here
-reads the folder at call time, bound to the espace asking.
+reads the folder at call time, bound to the tenant asking.
 
 Backups are never deleted by the app: deleting data is the owner's act.
 """
@@ -22,6 +22,7 @@ import logging
 import re
 import shutil
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -44,7 +45,7 @@ REASONS = {"import": "sauvegarde avant import", "effacement": "sauvegarde avant 
 MARGIN = 1.2
 #: What the page says of an error it cannot show. The text of an
 #: OSError carries its file's absolute path - the server's layout, the
-#: espaces' folder names - and a hosted bar can do nothing with it; the
+#: tenants' folder names - and a hosted bar can do nothing with it; the
 #: detail goes to the server's log.
 SERVER_ERROR = "erreur sur le serveur, à signaler à l'administrateur"
 
@@ -70,7 +71,7 @@ def error_text(exc: BaseException, *, logged: bool = False) -> str:
 
 def backup_path() -> Path:
     """Where backups go (accounts.paths.backups_dir, read at call time): the
-    bound espace's own backups/. The page never shows it - the server's
+    bound tenant's own backups/. The page never shows it - the server's
     layout is nobody's business."""
     return paths.backups_dir()
 
@@ -113,7 +114,7 @@ def backup_database(label: str, stamp: str | None = None) -> Path:
     Django's own connection, not a second one on the file: it sees what this
     process committed, WAL included, and the backup API copies a consistent
     database even while another connection writes. In multi mode that
-    connection is the bound espace's: the copy is of its file, into its
+    connection is the bound tenant's: the copy is of its file, into its
     folder."""
     if connection.in_atomic_block:
         raise RuntimeError("a database backup inside a transaction would copy uncommitted rows")
@@ -150,7 +151,7 @@ def safety_export(keys: set[str], label: str, stamp: str | None = None, reason: 
 
 def database_size() -> int:
     """The size of the database this thread works on: its own connection
-    names the file (the bound espace's in multi mode, where
+    names the file (the bound tenant's in multi mode, where
     settings.DATABASES names the empty in-memory default). 0 for a database
     that is no file."""
     name = str(connection.settings_dict["NAME"])
@@ -181,7 +182,7 @@ def estimated_megabytes(keys) -> int:
     return max(1, round(estimated_bytes(keys) / 1_000_000)) if keys else 0
 
 
-def sections_at_risk(report, *, strategies=None, cleared=()) -> set[str]:
+def sections_at_risk(report, *, strategies=None, cleared: Iterable[str] = ()) -> set[str]:
     """What the safety archive must hold (§6.5), from the preview a confirm
     is held to (runner.NotAsPreviewed: equal outcomes, so the same sections).
 
@@ -215,9 +216,9 @@ def before(kind: Literal["import", "effacement"], affected: set[str]) -> dict[st
     """database backup always; section export of `affected` (§6.5) if any.
     Returns {"database": path, "archive": path or ""} for the report and the message.
 
-    The disk checked is the backups folder's: in multi mode every espace
-    shares the server's volume, and nothing yet caps what one espace keeps
-    (the backups are never deleted by the app) - a quota per espace is a
+    The disk checked is the backups folder's: in multi mode every tenant
+    shares the server's volume, and nothing yet caps what one tenant keeps
+    (the backups are never deleted by the app) - a quota per tenant is a
     later step, noted with the tenancy."""
     label = LABELS[kind]
     stamp = _stamp()
@@ -256,7 +257,7 @@ class Backup:
 
 def list_backups() -> list[Backup]:
     """newest first; only names matching the stamp pattern - whatever else
-    sits in the folder is someone else's. The bound espace's folder only:
+    sits in the folder is someone else's. The bound tenant's folder only:
     another bar's safety copies are never listed, so never offered, staged
     or imported here (find_backup reads this listing)."""
     folder = backup_path()

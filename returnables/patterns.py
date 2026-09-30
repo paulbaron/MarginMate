@@ -1,10 +1,10 @@
-"""« Motifs »: the regexes somebody types to read a seller's bon - checked
+"""« Motifs »: the regexes somebody types to read a seller's slip - checked
 before they are ever compiled, and run with a time limit.
 
 **Why the check comes first (29/09).** The PyPI `regex` module is what
-runs a motif, because it takes a `timeout`. But `regex.compile` itself has
+runs a pattern, because it takes a `timeout`. But `regex.compile` itself has
 no timeout and EXPANDS counted repetitions: compiling `(?:x{65535}){65535}`
-allocated about 50 GB and froze the owner's 16 GB PC twice. So a motif is
+allocated about 50 GB and froze the owner's 16 GB PC twice. So a pattern is
 compiled only after the standard library's pure-Python parser has shown its
 shape (`re._parser.parse` builds a tree and expands nothing), and that tree
 passed three rules:
@@ -21,7 +21,7 @@ passed three rules:
 
 **And the repetitions are measured again on `regex`'s own tree** (review,
 29/09): a check that reads the standard parser's tree is only as good as the
-two parsers' agreement, and a POSIX class walked around it with a motif whose
+two parsers' agreement, and a POSIX class walked around it with a pattern whose
 groups nested six deep for `regex` (100^6) while the standard tree saw
 siblings. `regex` parses exactly as `regex.compile` would (_check_regex_tree)
 and parsing expands nothing, so every rule holds on the tree that is actually
@@ -30,21 +30,21 @@ compiled; approximate matching and calls to a group found there are refused.
 Only then `regex.compile`, inside `except Exception` (a RecursionError or an
 OverflowError is not a regex.error). Tests of these refusals patch
 `regex.compile` with a sentinel that fails if it is called: never compile a
-refused motif for real to "see what happens".
+refused pattern for real to "see what happens".
 
 **Matching** goes through `search` / `find_all` with a `Budget` (a deadline):
-each call gets `timeout=min(MOTIF_TIMEOUT, what is left)` and
+each call gets `timeout=min(PATTERN_TIMEOUT, what is left)` and
 `concurrent=True` (the GIL is released while it runs), and a timeout or a
-spent budget is a MotifError « … est trop lent », never a hang. `regex`'s
+spent budget is a PatternError « … est trop lent », never a hang. `regex`'s
 finditer is lazy, so find_all builds its list inside the try.
 
-**Numbers and dates** read from a bon are bounded to the columns they go
+**Numbers and dates** read from a slip are bounded to the columns they go
 into (`read_amount`, `read_quantity`, `read_date`, `read_time`): a figure
 wider than the column is not read - saved, it would raise on every later
 read of the row (SQLite quantizes decimals on the way out).
 
-Pure: no model, no request. `reading.py` reads a bon with these; the forms
-and « Données » check a motif with `compile_field` / `compile_motif`.
+Pure: no model, no request. `reading.py` reads a slip with these; the forms
+and « Données » check a pattern with `compile_field` / `compile_pattern`.
 """
 
 from __future__ import annotations
@@ -56,8 +56,8 @@ import time as clock
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
-from re import _constants as sre_constants
-from re import _parser as sre_parser
+from re import _constants as sre_constants  # ty: ignore[unresolved-import]  # the motif guard reads it on purpose
+from re import _parser as sre_parser  # ty: ignore[unresolved-import]  # the motif guard reads it on purpose
 
 import regex
 from django.utils import timezone
@@ -66,37 +66,37 @@ from regex import _regex_core
 logger = logging.getLogger(__name__)
 
 #: Seconds one match may run.
-MOTIF_TIMEOUT = 0.25
+PATTERN_TIMEOUT = 0.25
 #: A reading (read_slip_text, « Tester »), a page's classification, and
 #: « Relire » over a whole format: the time each may spend matching.
 READING_SECONDS = 2.0
 PAGE_SECONDS = 1.0
 REREAD_SECONDS = 30.0
 
-#: A motif's own length, unless its field says otherwise.
-MAX_MOTIF_LENGTH = 300
+#: A pattern's own length, unless its field says otherwise.
+MAX_PATTERN_LENGTH = 300
 #: A repetition's count ({n}, {n,m}, {n,}) - its min and its bounded max.
 MAX_REPEAT = 100
 #: What the counts of repetitions nested in one another may multiply to.
 MAX_REPEAT_PRODUCT = 1_000
 #: Groups inside groups.
 MAX_GROUP_DEPTH = 20
-#: A « one per line » field of a format, and a type's motifs.
-MAX_MOTIFS = 10
-MAX_TYPE_MOTIFS = 50
+#: A « one per line » field of a format, and a type's patterns.
+MAX_PATTERNS = 10
+MAX_TYPE_PATTERNS = 50
 #: A mail header is matched on this many characters at most.
 MAIL_TEXT_LIMIT = 500
 
-#: How every motif is compiled: case never matters, ^ and $ are a line's ends.
+#: How every pattern is compiled: case never matters, ^ and $ are a line's ends.
 FLAGS = regex.IGNORECASE | regex.MULTILINE
 
-#: A quantity read from a bon (SlipLine.quantity).
+#: A quantity read from a slip (SlipLine.quantity).
 MAX_QUANTITY = 99_999
 #: The oldest date a reading accepts, and how far past today.
 OLDEST_DATE = date(2000, 1, 1)
 FUTURE_DAYS = 7
 
-#: The address a sender motif must NOT match (it would match everybody).
+#: The address a sender pattern must NOT match (it would match everybody).
 SENDER_PROBE = "quelquun@example.invalid"
 
 _REPEATS = (sre_constants.MAX_REPEAT, sre_constants.MIN_REPEAT, sre_constants.POSSESSIVE_REPEAT)
@@ -106,8 +106,8 @@ _UNBOUNDED = sre_constants.MAXREPEAT
 _COUNT_TAIL = re.compile(r"[0-9]+(?:,[0-9]*)?\}|,[0-9]+\}")
 
 
-class MotifError(ValueError):
-    """A motif refused, or too slow: `message` is the French sentence, the
+class PatternError(ValueError):
+    """A pattern refused, or too slow: `message` is the French sentence, the
     field's name first (« Motif de ligne : parenthèse non fermée
     (position 14) »)."""
 
@@ -166,10 +166,10 @@ def _translate(message: str, position) -> str:
         if message.startswith(start):
             reason = french
             if start == "bad escape":
-                reason += " " + message[len(start):].strip()
+                reason += " " + message[len(start) :].strip()
             break
     if isinstance(position, int) and position >= 0:
-        # 1-based: « position 14 » is the fourteenth character of the motif.
+        # 1-based: « position 14 » is the fourteenth character of the pattern.
         reason += f" (position {position + 1})"
     return reason
 
@@ -177,7 +177,7 @@ def _translate(message: str, position) -> str:
 # -- The check ------------------------------------------------------------------------------------------------------
 
 
-def _scan_problem(motif: str) -> tuple[str, int] | None:
+def _scan_problem(pattern: str) -> tuple[str, int] | None:
     """What the character scan refuses, with its index, or None:
 
     - `"brace"`: a `{` that is not a plain count. Escapes (`\\{`) and the
@@ -192,35 +192,35 @@ def _scan_problem(motif: str) -> tuple[str, int] | None:
 
     A `(?#…)` comment is skipped the way both parsers skip it (to the first
     unescaped `)`): a `[` inside one opened a « set » here that swallowed
-    the rest of the motif, braces included."""
-    index, length = 0, len(motif)
+    the rest of the pattern, braces included."""
+    index, length = 0, len(pattern)
     while index < length:
-        char = motif[index]
+        char = pattern[index]
         if char == "\\":
             index += 2
             continue
-        if motif.startswith("(?#", index):
+        if pattern.startswith("(?#", index):
             index += 3
-            while index < length and motif[index] != ")":
-                index += 2 if motif[index] == "\\" else 1
+            while index < length and pattern[index] != ")":
+                index += 2 if pattern[index] == "\\" else 1
             index += 1
             continue
         if char == "[":
             inside = index + 1
-            if inside < length and motif[inside] == "^":
+            if inside < length and pattern[inside] == "^":
                 inside += 1
-            if inside < length and motif[inside] == "]":
+            if inside < length and pattern[inside] == "]":
                 inside += 1
-            while inside < length and motif[inside] != "]":
-                if motif[inside] == "\\":
+            while inside < length and pattern[inside] != "]":
+                if pattern[inside] == "\\":
                     inside += 2
                     continue
-                if motif[inside] == "[":
+                if pattern[inside] == "[":
                     return "set", inside
                 inside += 1
             index = inside + 1
             continue
-        if char == "{" and not _COUNT_TAIL.match(motif, index + 1):
+        if char == "{" and not _COUNT_TAIL.match(pattern, index + 1):
             return "brace", index
         index += 1
     return None
@@ -243,16 +243,16 @@ _RX_REPEAT = _regex_core.GreedyRepeat
 #: Approximate matching and calls to a group (recursion) are refused.
 _RX_REFUSED = (_regex_core.Fuzzy, _regex_core.CallGroup, _regex_core.CallRef)
 _RX_NODE = _regex_core.RegexBase
-#: More nodes than a 500-character motif can make: a cycle, or worse.
+#: More nodes than a 500-character pattern can make: a cycle, or worse.
 MAX_TREE_NODES = 20_000
 
 
-def _regex_tree(motif: str):
-    """`regex`'s parse of `motif`, as `regex.compile(motif, FLAGS)` would
+def _regex_tree(pattern: str):
+    """`regex`'s parse of `pattern`, as `regex.compile(pattern, FLAGS)` would
     parse it (regex/_main.py _compile), and nothing more."""
     flags = FLAGS | regex.VERSION0
     for _attempt in range(3):
-        source = _regex_core.Source(motif)
+        source = _regex_core.Source(pattern)
         info = _regex_core.Info(flags, source.char_type, {})
         source.ignore_space = bool(info.flags & regex.VERBOSE)
         try:
@@ -276,13 +276,13 @@ def _rx_children(node):
                     yield item
 
 
-def _check_regex_tree(motif: str) -> None:
+def _check_regex_tree(pattern: str) -> None:
     """Steps 5's rules on `regex`'s own tree - _Refused when broken."""
     try:
-        parsed = _regex_tree(motif)
+        parsed = _regex_tree(pattern)
     except _Refused:
         raise
-    except Exception:  # regex.error, RecursionError on a deep motif, ...
+    except Exception:  # noqa: BLE001 - regex.error, RecursionError on a deep pattern, ...: a refusal, never a 500
         raise _Refused("motif invalide") from None
     stack = [(parsed, 1)]
     visited = 0
@@ -311,7 +311,7 @@ def _items(node):
 
 def _walk(parsed):
     """Every node of the parse tree, with the product of the repetition
-    counts above it and its depth in groups - iteratively: a deep motif
+    counts above it and its depth in groups - iteratively: a deep pattern
     must not be a RecursionError here."""
     stack = [(parsed, 1, 0)]
     while stack:
@@ -345,16 +345,16 @@ def _groups_sentence(names) -> str:
 
 
 @functools.lru_cache(maxsize=256)
-def _checked(motif: str, required_groups: tuple, max_length: int):
-    """Steps 2 to 7 of the check, cached: only a motif that passed is kept
+def _checked(pattern: str, required_groups: tuple, max_length: int):
+    """Steps 2 to 7 of the check, cached: only a pattern that passed is kept
     (lru_cache does not keep an exception). It holds compiled patterns and
-    no espace's data, so it needs no tenant key."""
-    # 2. The standard parser shows the motif's shape and expands nothing.
+    no tenant's data, so it needs no tenant key."""
+    # 2. The standard parser shows the pattern's shape and expands nothing.
     try:
-        parsed = sre_parser.parse(motif, re.IGNORECASE | re.MULTILINE)
+        parsed = sre_parser.parse(pattern, re.IGNORECASE | re.MULTILINE)
     except re.error as error:
         raise _Refused(_translate(error.msg, error.pos)) from None
-    except Exception:
+    except Exception:  # noqa: BLE001 - whatever the parser raises is a refusal in French, never a 500
         raise _Refused("motif invalide") from None
 
     # 3. VERBOSE in any form: the global (?x), or a scoped (?x:…).
@@ -367,7 +367,7 @@ def _checked(motif: str, required_groups: tuple, max_length: int):
 
     # 4. Every `{` is a plain count (this also refuses regex's fuzzy {e<=1}),
     # and no `[` inside a set (where the two parsers read sets differently).
-    problem = _scan_problem(motif)
+    problem = _scan_problem(pattern)
     if problem is not None and problem[0] == "brace":
         raise _Refused(f"accolade : écrivez \\{{ pour une accolade littérale (position {problem[1] + 1})")
     if problem is not None:
@@ -390,139 +390,143 @@ def _checked(motif: str, required_groups: tuple, max_length: int):
     # 5b. The same rules on the tree `regex` itself builds - the one it
     # compiles (see _check_regex_tree): a disagreement between the two
     # parsers can no longer hide a repetition.
-    _check_regex_tree(motif)
+    _check_regex_tree(pattern)
 
     # 6. Only now, compiled - anything it raises is a refusal, not a 500.
     try:
-        pattern = regex.compile(motif, FLAGS)
-    except Exception as error:
+        compiled = regex.compile(pattern, FLAGS)
+    except Exception as error:  # noqa: BLE001 - anything compile raises is a refusal, not a 500
         raise _Refused(_translate(getattr(error, "msg", ""), None)) from None
 
-    # 7. A motif that finds something on an empty line finds it everywhere.
+    # 7. A pattern that finds something on an empty line finds it everywhere.
     try:
-        empty = pattern.search("", timeout=MOTIF_TIMEOUT, concurrent=True)
+        empty = compiled.search("", timeout=PATTERN_TIMEOUT, concurrent=True)
     except TimeoutError:
         raise _Refused("le motif est trop lent") from None
     if empty is not None:
         raise _Refused("le motif accepte une ligne vide : il trouverait quelque chose sur n'importe quelle ligne")
-    if any(name not in pattern.groupindex for name in required_groups):
+    if any(name not in compiled.groupindex for name in required_groups):
         raise _Refused(f"le motif doit contenir {_groups_sentence(required_groups)}")
-    return pattern
+    return compiled
 
 
-def compile_motif(text, *, field_label: str, required_groups=(), max_length: int = MAX_MOTIF_LENGTH):
-    """The motif `text` (stripped), checked then compiled with
-    IGNORECASE | MULTILINE - or MotifError, a French sentence starting with
-    `field_label`. A blank motif is refused here: whether a field may be
+def compile_pattern(text, *, field_label: str, required_groups=(), max_length: int = MAX_PATTERN_LENGTH):
+    """The pattern `text` (stripped), checked then compiled with
+    IGNORECASE | MULTILINE - or PatternError, a French sentence starting with
+    `field_label`. A blank pattern is refused here: whether a field may be
     blank is its caller's to decide, before calling (`compile_field` does)."""
-    motif = (text or "").strip()
-    if not motif:
-        raise MotifError(f"{field_label} : le motif est vide.")
-    if len(motif) > max_length:
-        raise MotifError(f"{field_label} : {max_length} caractères au plus ({len(motif)} ici).")
+    pattern = (text or "").strip()
+    if not pattern:
+        raise PatternError(f"{field_label} : le motif est vide.")
+    if len(pattern) > max_length:
+        raise PatternError(f"{field_label} : {max_length} caractères au plus ({len(pattern)} ici).")
     try:
-        return _checked(motif, tuple(required_groups), max_length)
+        return _checked(pattern, tuple(required_groups), max_length)
     except _Refused as refused:
-        raise MotifError(f"{field_label} : {refused.reason}.") from None
+        raise PatternError(f"{field_label} : {refused.reason}.") from None
 
 
-def check_lines(text, *, field_label: str, required_groups=(), max_length: int = MAX_MOTIF_LENGTH,
-                max_lines: int = MAX_MOTIFS) -> list:
-    """A « one per line » field: every non-blank line is a motif, checked
-    like `compile_motif`; returns the compiled list, in order ([] when
+def check_lines(
+    text, *, field_label: str, required_groups=(), max_length: int = MAX_PATTERN_LENGTH, max_lines: int = MAX_PATTERNS
+) -> list:
+    """A « one per line » field: every non-blank line is a pattern, checked
+    like `compile_pattern`; returns the compiled list, in order ([] when
     blank). A refusal names its line when there are several."""
     lines = [(number, line.strip()) for number, line in enumerate((text or "").splitlines(), start=1)]
-    motifs = [(number, line) for number, line in lines if line]
-    if len(motifs) > max_lines:
-        raise MotifError(f"{field_label} : {max_lines} motifs au plus, un par ligne ({len(motifs)} ici).")
-    several = len(motifs) > 1
+    pattern_lines = [(number, line) for number, line in lines if line]
+    if len(pattern_lines) > max_lines:
+        raise PatternError(f"{field_label} : {max_lines} motifs au plus, un par ligne ({len(pattern_lines)} ici).")
+    several = len(pattern_lines) > 1
     return [
-        compile_motif(
+        compile_pattern(
             line,
             field_label=f"{field_label} (ligne {number})" if several else field_label,
             required_groups=required_groups,
             max_length=max_length,
         )
-        for number, line in motifs
+        for number, line in pattern_lines
     ]
 
 
-def check_sender_motif(text) -> None:
-    """A format's sender motif (when set) must designate an address or a
+def check_sender_pattern(text) -> None:
+    """A format's sender pattern (when set) must designate an address or a
     domain: it holds a literal « @ » and does not match anybody's address."""
-    pattern = compile_motif(text, field_label=FIELD_BY_ATTR["sender_pattern"].label)
+    pattern = compile_pattern(text, field_label=FIELD_BY_ATTR["sender_pattern"].label)
     message = "Le motif d'expéditeur doit désigner une adresse ou un domaine."
     if "@" not in text:
-        raise MotifError(message)
+        raise PatternError(message)
     try:
-        matched = pattern.search(SENDER_PROBE, timeout=MOTIF_TIMEOUT, concurrent=True)
+        matched = pattern.search(SENDER_PROBE, timeout=PATTERN_TIMEOUT, concurrent=True)
     except TimeoutError:
-        raise MotifError(f"{FIELD_BY_ATTR['sender_pattern'].label} : le motif est trop lent.") from None
+        raise PatternError(f"{FIELD_BY_ATTR['sender_pattern'].label} : le motif est trop lent.") from None
     if matched is not None:
-        raise MotifError(message)
+        raise PatternError(message)
 
 
-# -- The motifs of a format and of a type ---------------------------------------------------------------------------
+# -- The patterns of a format and of a type -------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
-class MotifField:
-    """One motif field of a format (or a type's `slip_patterns`): what its
-    motifs must contain and how long they may be. `several`: one motif per
+class PatternField:
+    """One pattern field of a format (or a type's `slip_patterns`): what its
+    patterns must contain and how long they may be. `several`: one pattern per
     line, at most `max_lines`. `required`: the form refuses it blank (not
     enforced by compile_field, which returns [] for a blank field)."""
 
     attr: str
     label: str
     groups: tuple = ()
-    max_length: int = MAX_MOTIF_LENGTH
+    max_length: int = MAX_PATTERN_LENGTH
     several: bool = False
-    max_lines: int = MAX_MOTIFS
+    max_lines: int = MAX_PATTERNS
     required: bool = False
 
 
 FORMAT_FIELDS = (
-    MotifField("sender_pattern", "Motif d'expéditeur"),
-    MotifField("subject_pattern", "Motif d'objet"),
-    MotifField("attachment_pattern", "Motif de pièce jointe", max_length=200),
-    MotifField("section_start", "Début de la partie"),
-    MotifField("section_end", "Fin de la partie"),
-    MotifField("line_pattern", "Motif de ligne", groups=("designation", "quantite"), max_length=500, required=True),
-    MotifField("date_patterns", "Motif de date", groups=("date",), several=True, required=True),
-    MotifField("printed_patterns", "Motif d'impression", groups=("date",), several=True),
-    MotifField("number_patterns", "Motif de numéro", groups=("numero",), several=True),
-    MotifField("reference_patterns", "Motif de référence", groups=("reference",), several=True),
-    MotifField("replaces_pattern", "Motif « annule et remplace »"),
-    MotifField("total_patterns", "Motif de total", groups=("total",), several=True),
-    MotifField("remarks_start", "Début des remarques"),
-    MotifField("remarks_end", "Fin des remarques"),
+    PatternField("sender_pattern", "Motif d'expéditeur"),
+    PatternField("subject_pattern", "Motif d'objet"),
+    PatternField("attachment_pattern", "Motif de pièce jointe", max_length=200),
+    PatternField("section_start", "Début de la partie"),
+    PatternField("section_end", "Fin de la partie"),
+    PatternField("line_pattern", "Motif de ligne", groups=("designation", "quantite"), max_length=500, required=True),
+    PatternField("date_patterns", "Motif de date", groups=("date",), several=True, required=True),
+    PatternField("printed_patterns", "Motif d'impression", groups=("date",), several=True),
+    PatternField("number_patterns", "Motif de numéro", groups=("numero",), several=True),
+    PatternField("reference_patterns", "Motif de référence", groups=("reference",), several=True),
+    PatternField("replaces_pattern", "Motif « annule et remplace »"),
+    PatternField("total_patterns", "Motif de total", groups=("total",), several=True),
+    PatternField("remarks_start", "Début des remarques"),
+    PatternField("remarks_end", "Fin des remarques"),
 )
 FIELD_BY_ATTR = {field.attr: field for field in FORMAT_FIELDS}
-#: The fields a reading uses (not the mail ones: a bad sender motif must not
-#: stop a bon from being read).
+#: The fields a reading uses (not the mail ones: a bad sender pattern must not
+#: stop a slip from being read).
 READING_FIELDS = tuple(
     field for field in FORMAT_FIELDS if field.attr not in ("sender_pattern", "subject_pattern", "attachment_pattern")
 )
-TYPE_FIELD = MotifField("slip_patterns", "Motifs des bons", several=True, max_lines=MAX_TYPE_MOTIFS)
+TYPE_FIELD = PatternField("slip_patterns", "Motifs des bons", several=True, max_lines=MAX_TYPE_PATTERNS)
 
 
-def compile_field(field: MotifField, value) -> list:
-    """The compiled motifs of one field's value: [] when blank, a list of
-    one for a single-motif field, MotifError at the first refusal."""
+def compile_field(field: PatternField, value) -> list:
+    """The compiled patterns of one field's value: [] when blank, a list of
+    one for a single-pattern field, PatternError at the first refusal."""
     if not (value or "").strip():
         return []
     if field.several:
         return check_lines(
-            value, field_label=field.label, required_groups=field.groups,
-            max_length=field.max_length, max_lines=field.max_lines,
+            value,
+            field_label=field.label,
+            required_groups=field.groups,
+            max_length=field.max_length,
+            max_lines=field.max_lines,
         )
-    return [compile_motif(value, field_label=field.label, required_groups=field.groups, max_length=field.max_length)]
+    return [compile_pattern(value, field_label=field.label, required_groups=field.groups, max_length=field.max_length)]
 
 
 def compile_format(fmt, fields=READING_FIELDS) -> dict:
-    """{attr: [compiled motifs]} for `fmt` - any object carrying the
+    """{attr: [compiled patterns]} for `fmt` - any object carrying the
     attributes (a SlipFormat, a form's cleaned data as a namespace, a
-    test's SimpleNamespace); a missing attribute is blank. MotifError at
+    test's SimpleNamespace); a missing attribute is blank. PatternError at
     the first field refused."""
     return {field.attr: compile_field(field, getattr(fmt, field.attr, "") or "") for field in fields}
 
@@ -546,25 +550,25 @@ class Budget:
         return self.remaining() <= 0
 
 
-def shown_motif(pattern) -> str:
+def shown_pattern(pattern) -> str:
     text = getattr(pattern, "pattern", str(pattern))
     return text if len(text) <= 60 else text[:59] + "…"
 
 
-def _too_slow(pattern) -> MotifError:
-    return MotifError(f"Le motif « {shown_motif(pattern)} » est trop lent : simplifiez-le.")
+def _too_slow(pattern) -> PatternError:
+    return PatternError(f"Le motif « {shown_pattern(pattern)} » est trop lent : simplifiez-le.")
 
 
 def _timeout(pattern, budget: Budget) -> float:
     remaining = budget.remaining()
     if remaining <= 0:
         raise _too_slow(pattern)
-    return min(MOTIF_TIMEOUT, remaining)
+    return min(PATTERN_TIMEOUT, remaining)
 
 
 def search(pattern, text: str, budget: Budget):
     """pattern.search(text) within the budget: the match or None, or
-    MotifError « … est trop lent »."""
+    PatternError « … est trop lent »."""
     timeout = _timeout(pattern, budget)
     try:
         return pattern.search(text, timeout=timeout, concurrent=True)
@@ -589,9 +593,9 @@ def find_all(pattern, text: str, budget: Budget, limit: int = 50) -> list:
 
 
 def captured(match, name: str) -> str | None:
-    """A group's value, stripped - None when the motif has no such group,
+    """A group's value, stripped - None when the pattern has no such group,
     when the group took no part in the match, or when it is blank: a blank
-    capture is « not read », and the next line or motif is tried."""
+    capture is « not read », and the next line or pattern is tried."""
     if match is None or name not in match.re.groupindex:
         return None
     value = match.group(name)
@@ -614,9 +618,9 @@ class MailMatcher:
 
     def search(self, text):
         try:
-            return self._pattern.search((text or "")[:MAIL_TEXT_LIMIT], timeout=MOTIF_TIMEOUT, concurrent=True)
+            return self._pattern.search((text or "")[:MAIL_TEXT_LIMIT], timeout=PATTERN_TIMEOUT, concurrent=True)
         except TimeoutError:
-            message = f"motif trop lent sur un mail : ignoré ({shown_motif(self._pattern)})"
+            message = f"motif trop lent sur un mail : ignoré ({shown_pattern(self._pattern)})"
             logger.warning(message)
             if self._log is not None:
                 self._log(message)
@@ -624,10 +628,10 @@ class MailMatcher:
 
 
 def mail_matcher(text, *, log=None) -> MailMatcher:
-    """The `compile` a format's mail motifs are handed to
-    find_matching_emails with: the motif checked like any other (MotifError
+    """The `compile` a format's mail patterns are handed to
+    find_matching_emails with: the pattern checked like any other (PatternError
     otherwise), case-insensitive, timed."""
-    return MailMatcher(compile_motif(text, field_label="Motif de mail"), log)
+    return MailMatcher(compile_pattern(text, field_label="Motif de mail"), log)
 
 
 # -- Numbers, dates, times ------------------------------------------------------------------------------------------
@@ -641,7 +645,7 @@ def _grouped(text: str, separator: str) -> bool:
 
 
 def _read_number(text) -> Decimal | None:
-    """A number as a bon prints it, unbounded: spaces, no-break spaces and
+    """A number as a slip prints it, unbounded: spaces, no-break spaces and
     « ' » dropped; a leading « - » or « − » or a trailing « - » is the sign;
     with both « . » and « , » the rightmost is the decimal separator and the
     others separate thousands; one of them once is the decimal separator

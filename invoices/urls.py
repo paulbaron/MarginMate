@@ -23,7 +23,11 @@ urlpatterns = [
         supplier_views.supplier_change_undo,
         name="supplier_change_undo",
     ),
-    path("fournisseurs/<int:pk>/historique/<int:change_pk>/vu/", supplier_views.supplier_change_seen, name="supplier_change_seen"),
+    path(
+        "fournisseurs/<int:pk>/historique/<int:change_pk>/vu/",
+        supplier_views.supplier_change_seen,
+        name="supplier_change_seen",
+    ),
     path("fournisseurs/<int:pk>/charges/", views.supplier_expenses, name="supplier_expenses"),
     path("types/new/", views.invoice_type_form, name="invoice_type_create"),
     path("types/<int:pk>/edit/", views.invoice_type_form, name="invoice_type_update"),

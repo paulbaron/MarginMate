@@ -1,4 +1,4 @@
-"""The topbar of an espace's pages (templates/base.html): the bar's name and
+"""The topbar of a tenant's pages (templates/base.html): the bar's name and
 « Se déconnecter », OUTSIDE the first <nav> (tests/test_navigation.py reads
 its links) and inside #topbar-menu, what « Menu » opens under 860 px (30/09).
 How much room it takes is measured in a browser
@@ -16,7 +16,7 @@ LOGOUT = reverse("accounts:logout")
 
 def after_the_nav(response) -> str:
     html = response.content.decode()
-    return html[html.index("</nav>"):html.index("</header>")]
+    return html[html.index("</nav>") : html.index("</header>")]
 
 
 def element_by_id(html: str, element_id: str) -> str:
@@ -26,21 +26,21 @@ def element_by_id(html: str, element_id: str) -> str:
     assert opening is not None, element_id
     name = opening.group(1)
     depth = 0
-    for tag in re.finditer(r"<(/?)" + name + r"\b[^>]*>", html[opening.start():]):
+    for tag in re.finditer(r"<(/?)" + name + r"\b[^>]*>", html[opening.start() :]):
         depth += -1 if tag.group(1) else 1
         if depth == 0:
-            return html[opening.start():opening.start() + tag.end()]
+            return html[opening.start() : opening.start() + tag.end()]
     raise AssertionError(f"#{element_id} is never closed")
 
 
-class EspaceTopbarTests(TwoTenantsTestCase):
+class TenantTopbarTests(TwoTenantsTestCase):
     def test_the_bar_s_name_and_the_logout_follow_the_links(self):
         for user, mine, other in ((self.user_a, "Bar Alpha", "Bar Beta"), (self.user_b, "Bar Beta", "Bar Alpha")):
             with self.subTest(bar=mine):
                 self.client.force_login(user)
                 response = self.client.get(reverse("invoices:supplier_list"))
                 bar = after_the_nav(response)
-                self.assertIn(f'<span class="topbar-espace" title="{mine}">{mine}</span>', bar)
+                self.assertIn(f'<span class="topbar-tenant" title="{mine}">{mine}</span>', bar)
                 self.assertIn(f'<form method="post" action="{LOGOUT}" class="topbar-logout">', bar)
                 self.assertIn('name="csrfmiddlewaretoken"', bar)
                 self.assertIn("Se déconnecter", bar)
@@ -57,9 +57,9 @@ class EspaceTopbarTests(TwoTenantsTestCase):
         self.client.force_login(self.user_a)
         response = self.client.get(reverse("invoices:supplier_list"))
         header = response.content.decode()
-        header = header[header.index('<header class="topbar">'):header.index("</header>")]
+        header = header[header.index('<header class="topbar">') : header.index("</header>")]
         menu = element_by_id(header, "topbar-menu")
-        self.assertIn('<span class="topbar-espace" title="Bar Alpha">Bar Alpha</span>', menu)
+        self.assertIn('<span class="topbar-tenant" title="Bar Alpha">Bar Alpha</span>', menu)
         self.assertIn(f'<form method="post" action="{LOGOUT}" class="topbar-logout">', menu)
         self.assertIn("Se déconnecter", menu)
         # The links are in it too, first; the brand and the button are not.
@@ -68,7 +68,7 @@ class EspaceTopbarTests(TwoTenantsTestCase):
         self.assertNotIn("data-topbar-toggle", menu)
         # Nothing of the account is left outside it.
         outside = header.replace(menu, "")
-        self.assertNotIn("topbar-espace", outside)
+        self.assertNotIn("topbar-tenant", outside)
         self.assertNotIn("topbar-logout", outside)
 
     def test_the_name_is_text_whatever_it_holds(self):

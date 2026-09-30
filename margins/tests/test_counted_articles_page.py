@@ -108,13 +108,13 @@ def article_box(html: str, article) -> str:
 
 def state_cell_of(html: str, name: str) -> str:
     """The « Cochés » cell of one category, as it reads."""
-    found = re.search(r'<td class="flag-state">(.*?)</td>', category_body(html, name), flags=re.S)
+    found = re.search(r'<td class="flag-state">(.*?)</td>', category_body(html, name), flags=re.DOTALL)
     return text_of(found.group(1)) if found else ""
 
 
 def state_of(html: str, name: str) -> str:
     """The state of one category in words, alone."""
-    found = re.search(r'<span class="flag-state-words">(.*?)</span>', category_body(html, name), flags=re.S)
+    found = re.search(r'<span class="flag-state-words">(.*?)</span>', category_body(html, name), flags=re.DOTALL)
     return text_of(found.group(1)) if found else ""
 
 
@@ -129,7 +129,7 @@ def query_of(url: str) -> QueryDict:
 
 def next_of(html: str) -> str:
     """The `next` the panel's forms post - as the browser reads it."""
-    found = re.search(r'<form id="compter-\d+"[^>]*>.*?name="next" value="([^"]*)"', html, flags=re.S)
+    found = re.search(r'<form id="count-articles-\d+"[^>]*>.*?name="next" value="([^"]*)"', html, flags=re.DOTALL)
     return unescape(found.group(1))
 
 
@@ -164,7 +164,7 @@ class PanelFixture:
         bought(cls.rum, date(2026, 3, 9), "200.00")  # one at 200,00 €
 
         punch = make_recipe(name="Punch du comptoir", selling_price_ttc="12.00", vat_rate="0.20")
-        make_ingredient(punch, stock_type=cls.rum, quantity="0.005")  # 1,00 € HT le verre
+        make_ingredient(punch, stock_type=cls.rum, quantity="0.005")  # 1,00 € HT per glass
         pos = PosProduct.objects.create(name="Punch du comptoir", recipe=punch, category="Cocktails")
         PosProductDailyQuantity.objects.create(
             product=pos,
@@ -244,24 +244,24 @@ class ThePanelTests(PanelFixture, TestCase):
         self.assertIn("Tout décocher", body)
 
     def test_a_button_that_would_change_nothing_is_drawn_disabled(self):
-        materiel = category_body(self.html(), "Matériel")
+        equipment = category_body(self.html(), "Matériel")
 
-        self.assertRegex(materiel, r'<button[^>]*value="decocher"[^>]*disabled')
-        self.assertNotRegex(materiel, r'<button[^>]*value="cocher"[^>]*disabled')
+        self.assertRegex(equipment, r'<button[^>]*value="decocher"[^>]*disabled')
+        self.assertNotRegex(equipment, r'<button[^>]*value="cocher"[^>]*disabled')
 
     def test_it_says_beside_the_buttons_that_a_newcomer_arrives_unticked(self):
         self.assertIn("arrivera décoché", text_of(panel_of(self.html())))
 
     def test_each_article_has_its_box_and_what_ticking_it_would_add(self):
         html = self.html()
-        materiel = category_body(html, "Matériel")
+        equipment = category_body(html, "Matériel")
 
         self.assertIn(" checked", article_box(html, self.towels))
         self.assertNotIn(" checked", article_box(html, self.cups))
-        self.assertIn("Perceuse sans fil", text_of(materiel))
-        self.assertIn("100.00 €", text_of(materiel))
+        self.assertIn("Perceuse sans fil", text_of(equipment))
+        self.assertIn("100.00 €", text_of(equipment))
         # Never bought over the period: nothing to add, and said so.
-        self.assertIn("rien acheté", text_of(materiel))
+        self.assertIn("rien acheté", text_of(equipment))
 
     def test_it_says_where_it_asks_that_this_is_the_article_s_own_box(self):
         text = text_of(panel_of(self.html()))
@@ -279,14 +279,14 @@ class ThePanelTests(PanelFixture, TestCase):
 
 
 class TickingTheWholeCategoryTests(PanelFixture, TestCase):
-    def test_tout_cocher_ticks_every_article_of_that_category_and_nothing_else(self):
+    def test_tick_all_ticks_every_article_of_that_category_and_nothing_else(self):
         response = self.post({"categorie": "Matériel", "action": "cocher", "next": reverse(PAGE)})
 
         self.assertEqual(response.status_code, 302)
         self.assertEqual(ticked(self.drill, self.cloth, self.stool), [True, True, True])
         self.assertEqual(ticked(self.towels, self.cups, self.bench, self.syrup), [True, False, False, False])
 
-    def test_tout_decocher_unticks_every_article_of_that_category_and_nothing_else(self):
+    def test_untick_all_unticks_every_article_of_that_category_and_nothing_else(self):
         StockType.objects.update(count_in_products_margin=True)
 
         self.post({"categorie": "Consommables", "action": "decocher"})
@@ -340,8 +340,10 @@ class TickingTheWholeCategoryTests(PanelFixture, TestCase):
             said(response),
             [
                 "1 article de Spiritueux compté dans la marge produits.",
-                "Compté deux fois désormais : Rhum ambré sert dans une recette, qui compte déjà ce qu'elle "
-                "en consomme. Décochez-le, ou retirez-le de la recette.",
+                (
+                    "Compté deux fois désormais : Rhum ambré sert dans une recette, qui compte déjà ce qu'elle "
+                    "en consomme. Décochez-le, ou retirez-le de la recette."
+                ),
             ],
         )
 
@@ -499,7 +501,7 @@ class TheArticleBoxesTests(PanelFixture, TestCase):
         drawn ticked, on that box's own form, and none for a box drawn
         unticked."""
         body = category_body(self.html(), "Consommables")
-        form = re.search(r'<form id="(compter-\d+)"', body).group(1)
+        form = re.search(r'<form id="(count-articles-\d+)"', body).group(1)
 
         self.assertRegex(body, rf'<input type="hidden" form="{form}" name="etait" value="{self.towels.pk}">')
         self.assertNotIn(f'name="etait" value="{self.cups.pk}"', body)
@@ -525,8 +527,10 @@ class WhatCannotBeUnderstoodTests(PanelFixture, TestCase):
         self.assertEqual(
             said(response),
             [
-                "Aucun article n'est dans la catégorie « Catégorie inventée » : rien n'a été modifié. "
-                "Ses articles ont peut-être changé de catégorie depuis que la page a été affichée."
+                (
+                    "Aucun article n'est dans la catégorie « Catégorie inventée » : rien n'a été modifié. "
+                    "Ses articles ont peut-être changé de catégorie depuis que la page a été affichée."
+                )
             ],
         )
         self.assertEqual(StockType.objects.filter(count_in_products_margin=True).count(), 1)
@@ -553,7 +557,7 @@ class WhatCannotBeUnderstoodTests(PanelFixture, TestCase):
 
 
 class ItAnswersWhereItWasAskedTests(PanelFixture, TestCase):
-    def test_the_redirect_keeps_the_period_the_selection_and_depuis_le_debut(self):
+    def test_the_redirect_keeps_the_period_the_selection_and_all_time(self):
         html = self.html(tout="1", sans=[category_key("Matériel"), CHARGES_KEY])
         back = next_of(html)
 
@@ -641,18 +645,18 @@ class CountedTwiceTests(PanelFixture, TestCase):
         html = self.html()
         body = category_body(html, "Spiritueux")
 
-        row = next(row for row in re.findall(r"<tr[^>]*>.*?</tr>", body, flags=re.S) if "Rhum ambré" in row)
+        row = next(row for row in re.findall(r"<tr[^>]*>.*?</tr>", body, flags=re.DOTALL) if "Rhum ambré" in row)
         self.assertIn(" checked", article_box(row, self.rum))
         self.assertIn("compté deux fois", text_of(row))
         # Drawn unfolded: folded, the mark would be out of sight.
-        self.assertIn("<details class=\"spend-unfold\" open>", body)
+        self.assertIn('<details class="spend-unfold" open>', body)
         # And the warning above the figures still names it.
         self.assertIn("Compté deux fois", text_of(html))
 
     def test_an_unticked_one_says_ticking_it_would_count_it_twice(self):
         row = next(
             row
-            for row in re.findall(r"<tr[^>]*>.*?</tr>", category_body(self.html(), "Spiritueux"), flags=re.S)
+            for row in re.findall(r"<tr[^>]*>.*?</tr>", category_body(self.html(), "Spiritueux"), flags=re.DOTALL)
             if "Rhum ambré" in row
         )
 
@@ -672,8 +676,12 @@ class QueryCountTests(PanelFixture, TestCase):
             product = make_product(supplier=supplier, stock_type=article)
             line = make_invoice_line(invoice=invoice, product=product, quantity=1, total_ht="4.00")
             make_movement(
-                stock_type=article, quantity="1", unit_cost_ht="4.00", invoice_line=line,
-                kind=MovementKind.PURCHASE, occurred_on=date(2026, 3, 20),
+                stock_type=article,
+                quantity="1",
+                unit_cost_ht="4.00",
+                invoice_line=line,
+                kind=MovementKind.PURCHASE,
+                occurred_on=date(2026, 3, 20),
             )
             if index % 3 == 0:
                 StockType.objects.filter(pk=article.pk).update(count_in_products_margin=True)

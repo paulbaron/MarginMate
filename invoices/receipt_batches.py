@@ -12,13 +12,13 @@ Every file ends in exactly one state, shown to the operator:
 
     ok            imported (still to be checked on the review screen)
     duplicate     this exact file, or this ticket, is already in - or it is
-                  a driver's bon de consignes, put in Consignes instead
-                  ("consignes": RoutedToConsignesError, drawn « Rangé dans
+                  a driver's returnables slip, put in Consignes instead
+                  ("consignes": RoutedToReturnablesError, drawn « Rangé dans
                   Consignes »)
     unrecognised  no known shop's header on it - reported, never guessed;
                   the file is kept ("kept") until the operator names the
                   shop (`import_with_shop`), then it becomes ok/duplicate
-    error         unreadable file, or something unexpected - or a bon that
+    error         unreadable file, or something unexpected - or a slip that
                   could not be put in Consignes (several formats recognise
                   it): in neither place, never drawn as filed
     ignored      not a PDF, an XML or a photo (a folder's Thumbs.db)
@@ -42,12 +42,12 @@ of its own, counts as dead after ReceiptBatch.STALE_AFTER of silence, and
 can be resumed - its staged files stay until every one has been read.
 
 One database per bar (accounts/tenancy.py): a batch's pk restarts at 1 in
-every espace. So the files are staged in the espace's own folder
-(accounts.paths.imports_dir: `<espace>/imports/`, outside what is ever
+every tenant. So the files are staged in the tenant's own folder
+(accounts.paths.imports_dir: `<tenant>/imports/`, outside what is ever
 served), both
-threads - the batch's and its heartbeat - run bound to the espace that
+threads - the batch's and its heartbeat - run bound to the tenant that
 started them (accounts.tenancy.bound), and what is kept in memory is keyed
-by the espace too (_BY_HAND). Two bars' batch 7 used to share one folder:
+by the tenant too (_BY_HAND). Two bars' batch 7 used to share one folder:
 one imported the other's photos, then deleted them.
 """
 
@@ -66,7 +66,7 @@ from accounts.tenancy import bound, tenant_key
 from common import error_for_page
 
 from .einvoice import EInvoiceError
-from .importing import DuplicateInvoiceError, RoutedToConsignesError
+from .importing import DuplicateInvoiceError, RoutedToReturnablesError
 from .models import ReceiptBatch
 from .ocr import DocumentTooBig
 from .receipts import (
@@ -95,14 +95,15 @@ MISSING_FILE = "Fichier temporaire introuvable : réimportez ce ticket."
 READING_REFUSALS = (EInvoiceError, DocumentTooBig)
 
 # Held for a read and write of a batch's `results`, never across an import.
-# One for the process, every espace included, on purpose: it makes writers
+# One for the process, every tenant included, on purpose: it makes writers
 # take turns and keeps no data, so sharing it mixes nothing between bars. Its
-# one cost: a write waiting on one espace's busy database (SQLite's timeout)
-# makes the other espaces' batches wait with it.
+# one cost: a write waiting on one tenant's busy database (SQLite's timeout)
+# makes the other tenants' batches wait with it.
 RESULTS_LOCK = threading.Lock()
-# (espace, batch, index) of the files being imported by hand: a new shop's
+# (tenant, batch, index) of the files being imported by hand: a new shop's
 # re-read leaves them to that import. In memory, so a request that dies leaves
-# nothing stuck. The espace (accounts.tenancy.tenant_key) because pks restart at 1 in every espace's database: keyed by the batch
+# nothing stuck. The tenant (accounts.tenancy.tenant_key) because pks restart
+# at 1 in every tenant's database: keyed by the batch
 # alone, one bar's hand import held back another bar's file.
 _BY_HAND: set[tuple[str, int, int]] = set()
 
@@ -125,7 +126,7 @@ def _trace(what: str) -> str:
 
 
 def _staging_folder(batch: ReceiptBatch) -> str:
-    """The batch's folder, in the espace's own imports folder (read now)."""
+    """The batch's folder, in the tenant's own imports folder (read now)."""
     return os.path.join(str(paths.imports_dir()), STAGING_DIR, str(batch.pk))
 
 
@@ -151,8 +152,7 @@ def stage_batch(uploads, ignored_names=(), refused=()) -> ReceiptBatch:
         extension = os.path.splitext(upload.name)[1].lower()
         stored = f"{STAGING_DIR}/{batch.pk}/{index:04d}{extension}"
         with open(_staged(stored), "wb") as handle:
-            for chunk in upload.chunks():
-                handle.write(chunk)
+            handle.writelines(upload.chunks())
         results.append({"name": upload.name, "stored": stored, "status": "pending"})
     results += [{"name": name, "status": "error", "message": message} for name, message in refused]
     results += [
@@ -165,7 +165,7 @@ def stage_batch(uploads, ignored_names=(), refused=()) -> ReceiptBatch:
 
 
 def start_batch(batch: ReceiptBatch) -> None:
-    # bound(): the thread works in the espace of the request that started it
+    # bound(): the thread works in the tenant of the request that started it
     # (a new thread starts with nothing bound), and closes its connection at
     # its end.
     threading.Thread(target=bound(_run_in_thread), args=(batch.pk,), daemon=True).start()
@@ -246,7 +246,7 @@ class _Heartbeat(threading.Thread):
     through a beat - the batch is put back to running: it is.
 
     Its loop is wrapped here, in the batch's thread - bound to the batch's
-    espace - since its own thread starts with nothing bound: unbound, the
+    tenant - since its own thread starts with nothing bound: unbound, the
     beats went to whichever batch had this pk, and put another bar's FAILED
     one back to running (accounts.tenancy.bound, which also closes the
     thread's connection at its end)."""
@@ -268,9 +268,7 @@ class _Heartbeat(threading.Thread):
         try:
             batch = ReceiptBatch.objects.filter(pk=self.batch_id)
             batch.update(last_heartbeat=timezone.now())
-            batch.filter(status=ReceiptBatch.Status.FAILED).update(
-                status=ReceiptBatch.Status.RUNNING, finished_at=None
-            )
+            batch.filter(status=ReceiptBatch.Status.FAILED).update(status=ReceiptBatch.Status.RUNNING, finished_at=None)
         except DatabaseError:
             pass  # a busy database: the next beat will do
 
@@ -352,7 +350,7 @@ def _read_file(batch: ReceiptBatch, entry: dict) -> str | None:
         _record_import(entry, invoice)
     except DuplicateInvoiceError as exc:
         _not_imported(entry, exc)
-        if _unfiled_bon(exc):
+        if _unfiled_slip(exc):
             batch.append_log(f"{entry['name']} : {exc}")
     except UnrecognisedShopError as exc:
         # Kept: the operator can still say which shop it is, from what it
@@ -371,25 +369,25 @@ def _read_file(batch: ReceiptBatch, entry: dict) -> str | None:
     return path
 
 
-def _unfiled_bon(exc: DuplicateInvoiceError) -> bool:
-    """A driver's bon that Achats' guard would not import, and that is not in
-    Consignes either (receipts.route_consignes): several formats recognise
+def _unfiled_slip(exc: DuplicateInvoiceError) -> bool:
+    """A driver's slip that Achats' guard would not import, and that is not in
+    Consignes either (receipts.route_to_returnables): several formats recognise
     it, or storing it failed. Its sentence says where to drop it."""
-    return isinstance(exc, RoutedToConsignesError) and exc.slip is None
+    return isinstance(exc, RoutedToReturnablesError) and exc.slip is None
 
 
 def _not_imported(entry: dict, exc: DuplicateInvoiceError) -> None:
     """Say on a file's entry why it made no new invoice: already in
-    (« Déjà importé »), a bon put in Consignes (« Rangé dans Consignes »), or
-    a bon that is in neither place - an error: drawn « Rangé dans
+    (« Déjà importé »), a slip put in Consignes (« Rangé dans Consignes »), or
+    a slip that is in neither place - an error: drawn « Rangé dans
     Consignes » and counted among the « Déjà connus », it read as filed while
-    its reprise waited for it."""
-    if _unfiled_bon(exc):
+    its pickup waited for it."""
+    if _unfiled_slip(exc):
         entry.pop("consignes", None)
         entry.update(status="error", message=str(exc))
         return
     entry.update(status="duplicate", message=str(exc))
-    if isinstance(exc, RoutedToConsignesError):
+    if isinstance(exc, RoutedToReturnablesError):
         entry["consignes"] = True
 
 
@@ -429,13 +427,13 @@ def _clean_up(batch: ReceiptBatch) -> None:
 def import_with_shop(batch: ReceiptBatch, index: int, supplier) -> dict:
     """Import file `index` of a batch - one no shop was recognised on - as a
     ticket of `supplier`, and return its updated entry: "ok", or "duplicate"
-    when the ticket turns out to be in already - or to be a driver's bon,
+    when the ticket turns out to be in already - or to be a driver's slip,
     put in Consignes ("consignes"). The batch may still be running: its
     thread leaves this entry alone.
 
     Raises ShopChoiceError, leaving the entry as it was, when the file isn't
     one waiting for its shop, and when the import itself fails or finds a
-    bon it could not put in Consignes - the file is kept, to try again.
+    slip it could not put in Consignes - the file is kept, to try again.
     """
     if not OCR_LOCK.acquire(timeout=SHOP_CHOICE_WAIT_SECONDS):
         raise ShopChoiceError("Un autre ticket est en cours d'import : réessayez dans un instant.")
@@ -473,14 +471,16 @@ def _import_with_shop(batch: ReceiptBatch, index: int, path: str, supplier) -> d
         invoice = import_document(path, display_filename=entry["name"], supplier=supplier)
     except DuplicateInvoiceError as exc:
         batch.append_log(f"{entry['name']} (ticket {supplier.name}) : {exc}")
-        if _unfiled_bon(exc):
+        if _unfiled_slip(exc):
             # Nothing was stored: the file stays, named again once the
             # formats are set right on the Consignes page.
             raise ShopChoiceError(str(exc)) from exc
         _not_imported(entry, exc)
     except Exception as exc:  # noqa: BLE001 - said on the page; the file stays for another try
         problem = error_for_page(
-            exc, said=READING_REFUSALS, log=logger,
+            exc,
+            said=READING_REFUSALS,
+            log=logger,
             what=f"Import de tickets {batch.pk}, fichier {entry['name']!r}, enseigne choisie",
         )
         batch.append_log(f"{entry['name']} : échec de l'import comme ticket {supplier.name}. {problem}")

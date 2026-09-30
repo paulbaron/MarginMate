@@ -24,8 +24,7 @@ class _Forbidden:
 
     def __call__(self, *args, **kwargs):
         raise AssertionError(
-            f"Test tried to open a real {self._what} connection. "
-            f"Mock it explicitly in the test instead."
+            f"Test tried to open a real {self._what} connection. Mock it explicitly in the test instead."
         )
 
 

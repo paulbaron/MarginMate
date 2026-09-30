@@ -11,8 +11,7 @@ Every name, amount and label below is invented.
 
 import hashlib
 import itertools
-from datetime import date, datetime, timedelta
-from datetime import timezone as dt_timezone
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from unittest import mock
 
@@ -49,7 +48,6 @@ from transfer.tests.support import (
 MERGE, REPLACE = Strategy.MERGE, Strategy.REPLACE
 CARD, DEBIT, TRANSFER = BankTransaction.Kind.CARD, BankTransaction.Kind.DEBIT, BankTransaction.Kind.TRANSFER
 MANUAL, AUTO = InvoicePayment.Method.MANUAL, InvoicePayment.Method.AUTO
-UTC = dt_timezone.utc
 
 _counter = itertools.count(1)
 
@@ -73,7 +71,9 @@ def make_line(day, counterparty, amount, *, kind=CARD, settled=False, no_invoice
         no_invoice=no_invoice,
         settled_by_hand=settled,
     )
-    BankTransaction.objects.filter(pk=line.pk).update(imported_at=datetime(2026, 8, 1, 9, 0, n % 60, 250000, tzinfo=UTC))
+    BankTransaction.objects.filter(pk=line.pk).update(
+        imported_at=datetime(2026, 8, 1, 9, 0, n % 60, 250000, tzinfo=UTC)
+    )
     line.refresh_from_db()
     return line
 
@@ -86,9 +86,7 @@ def pay(line, invoice, method=MANUAL) -> InvoicePayment:
 
 
 def make_rule(pattern, description="", is_active=True, category="") -> IgnoreRule:
-    rule = IgnoreRule.objects.create(
-        pattern=pattern, description=description, is_active=is_active, category=category
-    )
+    rule = IgnoreRule.objects.create(pattern=pattern, description=description, is_active=is_active, category=category)
     IgnoreRule.objects.filter(pk=rule.pk).update(created_at=datetime(2026, 7, 20, 8, 30, tzinfo=UTC))
     rule.refresh_from_db()
     return rule
@@ -103,9 +101,7 @@ def wipe_bank() -> None:
 
 def links() -> set[tuple[str, str, str]]:
     """(line fingerprint, invoice number, method) for every payment."""
-    return set(
-        InvoicePayment.objects.values_list("transaction__fingerprint", "invoice__invoice_number", "method")
-    )
+    return set(InvoicePayment.objects.values_list("transaction__fingerprint", "invoice__invoice_number", "method"))
 
 
 def bank_report(run):
@@ -209,7 +205,13 @@ class ExportTests(BankData, TestCase):
             manual["payments"],
             [
                 {
-                    "invoice": {"supplier": "EPICERIE", "number": "T-101", "sha256": "", "file_sha256": "", "occurrence": 0},
+                    "invoice": {
+                        "supplier": "EPICERIE",
+                        "number": "T-101",
+                        "sha256": "",
+                        "file_sha256": "",
+                        "occurrence": 0,
+                    },
                     "method": "MANUAL",
                     "created_at": "2026-08-03T18:45:12+00:00",
                 }
@@ -220,8 +222,20 @@ class ExportTests(BankData, TestCase):
         self.assertEqual(
             payload["rules"],
             [
-                {"pattern": "URSSAF", "description": "Cotisations", "is_active": True, "category": "Cotisations sociales", "created_at": "2026-07-20T08:30:00+00:00"},
-                {"pattern": "PRET LOCAL", "description": "Prêt du local", "is_active": False, "category": "", "created_at": "2026-07-20T08:30:00+00:00"},
+                {
+                    "pattern": "URSSAF",
+                    "description": "Cotisations",
+                    "is_active": True,
+                    "category": "Cotisations sociales",
+                    "created_at": "2026-07-20T08:30:00+00:00",
+                },
+                {
+                    "pattern": "PRET LOCAL",
+                    "description": "Prêt du local",
+                    "is_active": False,
+                    "category": "",
+                    "created_at": "2026-07-20T08:30:00+00:00",
+                },
             ],
         )
 
@@ -246,7 +260,9 @@ class ExportTests(BankData, TestCase):
 
     def test_the_suppliers_it_names_come_with_their_names(self):
         payload = self.export().section("banque").payload()
-        self.assertEqual(payload["supplier_names"], {"EPICERIE": "Épicerie des Lilas", "QUINCAILLE": "Quincaillerie du Nord"})
+        self.assertEqual(
+            payload["supplier_names"], {"EPICERIE": "Épicerie des Lilas", "QUINCAILLE": "Quincaillerie du Nord"}
+        )
 
 
 class RoundTripTests(BankData, TestCase):
@@ -268,7 +284,9 @@ class RoundTripTests(BankData, TestCase):
         self.assertFalse(unlinked.payments.exists())
         self.assertTrue(BankTransaction.objects.get(fingerprint=self.no_invoice.fingerprint).no_invoice)
         # Restored after the insert, not the moment of the import.
-        self.assertEqual(BankTransaction.objects.get(fingerprint=self.manual.fingerprint).imported_at, self.manual.imported_at)
+        self.assertEqual(
+            BankTransaction.objects.get(fingerprint=self.manual.fingerprint).imported_at, self.manual.imported_at
+        )
         self.assertEqual(
             set(InvoicePayment.objects.values_list("created_at", flat=True)),
             {datetime(2026, 8, 3, 18, 45, 12, tzinfo=UTC)},
@@ -291,7 +309,9 @@ class RoundTripTests(BankData, TestCase):
         second = make_line(date(2026, 7, 20), "BOULANGERIE", "-1.20")
         round_trip({"banque"}, MERGE)
         self.assertEqual(
-            list(BankTransaction.objects.filter(operation_date=date(2026, 7, 20)).values_list("fingerprint", flat=True)),
+            list(
+                BankTransaction.objects.filter(operation_date=date(2026, 7, 20)).values_list("fingerprint", flat=True)
+            ),
             [second.fingerprint, first.fingerprint],
         )
 
@@ -303,7 +323,9 @@ class IdempotenceTests(BankData, TestCase):
         for entity, number in expected.items():
             with self.subTest(entity=entity):
                 counted = report.tallies[entity]
-                self.assertEqual((counted.created, counted.updated, counted.deleted, counted.unchanged), (0, 0, 0, number))
+                self.assertEqual(
+                    (counted.created, counted.updated, counted.deleted, counted.unchanged), (0, 0, 0, number)
+                )
         self.assertEqual((report.conflicts, report.skipped, report.kept), ([], [], []))
         self.assertNotIn(RECONCILE_NOTE, report.notes)
         self.assertFalse(run.affected())
@@ -363,7 +385,9 @@ class MergeAndReplaceTests(BankData, TestCase):
     def test_merge_adds_what_is_missing_and_keeps_what_differs(self):
         run = import_archive(self.reader, MERGE)
         operations = tally(run, OPERATIONS)
-        self.assertEqual((operations.created, operations.updated, operations.deleted, operations.unchanged), (1, 0, 0, 4))
+        self.assertEqual(
+            (operations.created, operations.updated, operations.deleted, operations.unchanged), (1, 0, 0, 4)
+        )
         payments = tally(run, PAYMENTS)
         self.assertEqual((payments.created, payments.updated, payments.deleted, payments.unchanged), (1, 0, 0, 2))
         rules = tally(run, RULES)
@@ -394,7 +418,9 @@ class MergeAndReplaceTests(BankData, TestCase):
         self.assertTrue(IgnoreRule.objects.filter(pattern="LOYER").exists())
         self.assertTrue(CounterpartyAlias.objects.filter(name="EPI LILAS").exists())
         # Only in the archive: created, with its import moment.
-        self.assertEqual(BankTransaction.objects.get(fingerprint=self.income.fingerprint).imported_at, self.income.imported_at)
+        self.assertEqual(
+            BankTransaction.objects.get(fingerprint=self.income.fingerprint).imported_at, self.income.imported_at
+        )
         self.assertEqual(InvoicePayment.objects.get(invoice=self.invoice_b).method, AUTO)
         self.assertTrue(IgnoreRule.objects.filter(pattern="PRET LOCAL", is_active=False).exists())
         self.assertTrue(CounterpartyAlias.objects.filter(name="QNORD", supplier=self.hardware).exists())
@@ -405,7 +431,9 @@ class MergeAndReplaceTests(BankData, TestCase):
     def test_replace_makes_the_bank_exactly_the_archive(self):
         run = import_archive(self.reader, REPLACE)
         operations = tally(run, OPERATIONS)
-        self.assertEqual((operations.created, operations.updated, operations.deleted, operations.unchanged), (1, 1, 1, 4))
+        self.assertEqual(
+            (operations.created, operations.updated, operations.deleted, operations.unchanged), (1, 1, 1, 4)
+        )
         payments = tally(run, PAYMENTS)
         self.assertEqual((payments.created, payments.updated, payments.deleted, payments.unchanged), (1, 1, 1, 2))
         rules = tally(run, RULES)
@@ -622,7 +650,7 @@ class LinkTests(BankData, TestCase):
             ],
         )
 
-    def test_a_merge_never_undoes_a_pas_de_facture_taken_here(self):
+    def test_a_merge_never_undoes_a_no_invoice_decision_taken_here(self):
         reader = self.export()
         reconcile.mark_no_invoice(self.manual)
         run = import_archive(reader, MERGE)
@@ -703,7 +731,9 @@ class LinkTests(BankData, TestCase):
         run = import_archive(reader, MERGE)
         self.assertEqual(bank_report(run).skipped, [])
         self.assertEqual(InvoicePayment.objects.count(), 4)
-        self.assertEqual(self.manual.fingerprint, InvoicePayment.objects.get(invoice=self.invoice_a).transaction.fingerprint)
+        self.assertEqual(
+            self.manual.fingerprint, InvoicePayment.objects.get(invoice=self.invoice_a).transaction.fingerprint
+        )
         self.assertTrue(CounterpartyAlias.objects.filter(supplier=self.hardware, name="QNORD").exists())
 
     def test_two_invoices_answering_one_key_skip_the_link(self):
@@ -737,8 +767,12 @@ class LinkTests(BankData, TestCase):
         self.invoice_a.invoice_number = "20260701-12.30"
         self.invoice_a.save(update_fields=["invoice_number"])
         run = import_archive(reader, MERGE)
-        self.assertEqual(InvoicePayment.objects.get(invoice=self.invoice_a).transaction.fingerprint, self.manual.fingerprint)
-        self.assertIn("rapproché par son fichier : n° 20260701-12.30 ici, n° T-101 dans l'archive", bank_report(run).notes)
+        self.assertEqual(
+            InvoicePayment.objects.get(invoice=self.invoice_a).transaction.fingerprint, self.manual.fingerprint
+        )
+        self.assertIn(
+            "rapproché par son fichier : n° 20260701-12.30 ici, n° T-101 dans l'archive", bank_report(run).notes
+        )
 
 
 class InvoicesGoneTests(BankData, TestCase):
@@ -912,7 +946,8 @@ class CheckTests(BankData, TestCase):
         wipe_bank()
         run = import_archive(reader, MERGE)
         self.assertEqual(
-            bank_report(run).skipped, [f"Opération {self.income.fingerprint[:12]}… : « operation_date » : valeur manquante"]
+            bank_report(run).skipped,
+            [f"Opération {self.income.fingerprint[:12]}… : « operation_date » : valeur manquante"],
         )
 
     def test_a_line_without_fingerprint_is_skipped(self):
@@ -966,7 +1001,9 @@ class CheckTests(BankData, TestCase):
         reader = self.forged(change)
         wipe_bank()
         run = import_archive(reader, MERGE)
-        self.assertEqual(bank_report(run).skipped, [f"Opération {self.income.fingerprint[:12]}… : en double dans l'archive"])
+        self.assertEqual(
+            bank_report(run).skipped, [f"Opération {self.income.fingerprint[:12]}… : en double dans l'archive"]
+        )
         self.assertEqual(BankTransaction.objects.count(), 6)
 
     def test_an_unknown_field_is_said_once(self):

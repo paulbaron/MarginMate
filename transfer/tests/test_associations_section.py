@@ -65,12 +65,14 @@ def section():
 def build_fixture(test):
     """Two suppliers, four articles, classified products on real lines (one
     measured in litres, one counted with a factor, one refund), one product
-    still « à classer », and a charge's poste."""
+    still « à classer », and a charge item."""
     test.metro = make_supplier(code="METRO", name="Metro", parser_key="METRO")
     test.shop = make_supplier(code="EPI_TEST", name="Épicerie Test")
     test.charges = make_supplier(code="LOYER_TEST", name="Loyer Test", expenses_only=True)
     test.vodka = make_stock_type(name="Vodka", unit=UnitChoices.LITRE, category="Spiritueux")
-    test.limes = make_stock_type(name="Citrons verts", unit=UnitChoices.UNIT, category="Épicerie", loss_percent=Decimal("0"))
+    test.limes = make_stock_type(
+        name="Citrons verts", unit=UnitChoices.UNIT, category="Épicerie", loss_percent=Decimal("0")
+    )
     test.syrup = make_stock_type(name="Sirop de sucre", unit=UnitChoices.LITRE)  # no product yet
     test.beef = make_stock_type(name="Bœuf", unit=UnitChoices.KILOGRAM, category="")
     test.bottle = make_product(test.metro, "VODKA X 70CL", test.vodka, unit=UnitChoices.LITRE, ean="3000000000017")
@@ -81,8 +83,12 @@ def build_fixture(test):
     test.metro_invoice = make_invoice(test.metro, invoice_number="MET-001", status=Invoice.Status.COMPLETE)
     test.shop_invoice = make_invoice(test.shop, invoice_number="EPI-001", status=Invoice.Status.NEEDS_REVIEW)
     test.lines = [
-        make_invoice_line(test.metro_invoice, test.bottle, quantity=Decimal("6"), total_volume="4.200", total_ht="57.00"),
-        make_invoice_line(test.metro_invoice, test.bottle, quantity=Decimal("-1"), total_volume="-0.700", total_ht="-9.50"),
+        make_invoice_line(
+            test.metro_invoice, test.bottle, quantity=Decimal("6"), total_volume="4.200", total_ht="57.00"
+        ),
+        make_invoice_line(
+            test.metro_invoice, test.bottle, quantity=Decimal("-1"), total_volume="-0.700", total_ht="-9.50"
+        ),
         make_invoice_line(test.shop_invoice, test.net, quantity=Decimal("2"), total_ht="6.00"),
         make_invoice_line(test.shop_invoice, test.meat, quantity=Decimal("0.350"), total_ht="7.35", unit_cost_ht="21"),
         make_invoice_line(test.shop_invoice, test.pending, quantity=Decimal("1"), total_ht="3.00"),
@@ -176,9 +182,7 @@ class RoundTripTests(TestCase):
         archive leaves each article's flag exactly as this database has it."""
         StockType.objects.filter(pk=self.syrup.pk).update(count_in_products_margin=True)
 
-        result = import_payload(
-            payload(articles=[{"name": self.syrup.name, "unit": self.syrup.unit}]), REPLACE
-        )
+        result = import_payload(payload(articles=[{"name": self.syrup.name, "unit": self.syrup.unit}]), REPLACE)
 
         self.syrup.refresh_from_db()
         self.assertTrue(self.syrup.count_in_products_margin)
@@ -320,7 +324,7 @@ class TwinProductsTests(TestCase):
 class ChargesSupplierTests(TestCase):
     """A stock item's product stays one when its supplier turns to charges
     (importing.redo_as_expenses: « it is stock after all »), and
-    assign_product refuses only a product that is itself a poste
+    assign_product refuses only a product that is itself a charge item
     (`is_expense`). The section refused every product of such a supplier, so
     a round trip lost its classification and its purchases - its invoices
     went back to « À vérifier » - and its own export never merged as
@@ -335,16 +339,18 @@ class ChargesSupplierTests(TestCase):
         create_stock_movement_for_line(line)
         # A count priced from that line: what keeps the document as it was
         # when its supplier turns to charges.
-        count = make_stock_take_line(make_stock_take(), self.bottle, counted_quantity="1.5", unit=UnitChoices.LITRE,
-                                     value_ht="40.00")
-        StockTakeLineSource.objects.create(stock_take_line=count, invoice_line=line, quantity_used=Decimal("1.5"),
-                                           unit_cost_ht=Decimal("26.6667"))
+        count = make_stock_take_line(
+            make_stock_take(), self.bottle, counted_quantity="1.5", unit=UnitChoices.LITRE, value_ht="40.00"
+        )
+        StockTakeLineSource.objects.create(
+            stock_take_line=count, invoice_line=line, quantity_used=Decimal("1.5"), unit_cost_ht=Decimal("26.6667")
+        )
         with transaction.atomic():
             self.cellar.expenses_only = True
             self.cellar.save(update_fields=["expenses_only"])
             redo_as_expenses(self.cellar)
         self.bottle.refresh_from_db()
-        # What redo_as_expenses leaves: still classified, not a poste, its purchase booked.
+        # What redo_as_expenses leaves: still classified, not a charge item, its purchase booked.
         self.assertEqual((self.bottle.stock_type, self.bottle.is_expense), (champagne, False))
         self.assertTrue(StockMovement.objects.filter(invoice_line=line).exists())
 
@@ -380,27 +386,28 @@ class MergeAndReplaceTests(TestCase):
         self.reader = export_archive({KEY}, closed=False)
         self.addCleanup(self.reader.close)
         # Then this database moves on from the archive:
-        self.vodka.loss_percent = Decimal("5")          # changed here
-        self.vodka.category = ""                        # a blank the archive can fill
+        self.vodka.loss_percent = Decimal("5")  # changed here
+        self.vodka.category = ""  # a blank the archive can fill
         self.vodka.save()
-        self.bottle.stock_equivalent = Decimal("1.5")   # classification changed here
+        self.bottle.stock_equivalent = Decimal("1.5")  # classification changed here
         self.bottle.save()
         self.gin = make_stock_type(name="Gin", unit=UnitChoices.LITRE)  # only here
         self.gin_bottle = make_product(self.metro, "GIN Y 70CL", self.gin, unit=UnitChoices.LITRE)
-        gin_line = make_invoice_line(self.metro_invoice, self.gin_bottle, quantity=Decimal("1"), total_volume="0.700",
-                                     total_ht="15.00")
+        gin_line = make_invoice_line(
+            self.metro_invoice, self.gin_bottle, quantity=Decimal("1"), total_volume="0.700", total_ht="15.00"
+        )
         create_stock_movement_for_line(gin_line)
-        self.syrup.delete()                             # only in the archive
+        self.syrup.delete()  # only in the archive
 
     def test_merge_keeps_what_differs_and_adds_what_is_missing(self):
         mine = import_archive(self.reader, {KEY: MERGE}).section(KEY)
 
         self.vodka.refresh_from_db()
         self.bottle.refresh_from_db()
-        self.assertEqual(self.vodka.loss_percent, Decimal("5.00"))       # kept
-        self.assertEqual(self.vodka.category, "Spiritueux")              # a blank filled
+        self.assertEqual(self.vodka.loss_percent, Decimal("5.00"))  # kept
+        self.assertEqual(self.vodka.category, "Spiritueux")  # a blank filled
         self.assertEqual(self.bottle.stock_equivalent, Decimal("1.5000"))  # kept
-        self.assertTrue(StockType.objects.filter(name="Gin").exists())   # untouched
+        self.assertTrue(StockType.objects.filter(name="Gin").exists())  # untouched
         self.assertEqual(Product.objects.get(pk=self.gin_bottle.pk).stock_type, self.gin)
         self.assertTrue(StockType.objects.filter(name="Sirop de sucre").exists())  # created
         self.assertEqual(
@@ -443,9 +450,15 @@ class MergeAndReplaceTests(TestCase):
 
     def test_an_article_held_by_a_recipe_is_kept_on_replace_and_said(self):
         # "Rhum ambré" existed at export: take it out of the file.
-        with ArchiveReader(forge(self.reader, associations=lambda data: {
-            **data, "articles": [a for a in data["articles"] if a["name"] != "Rhum ambré"],
-        })) as edited:
+        with ArchiveReader(
+            forge(
+                self.reader,
+                associations=lambda data: {
+                    **data,
+                    "articles": [a for a in data["articles"] if a["name"] != "Rhum ambré"],
+                },
+            )
+        ) as edited:
             mine = import_archive(edited, {KEY: REPLACE}).section(KEY)
 
         self.assertTrue(StockType.objects.filter(pk=self.rum.pk).exists())
@@ -472,8 +485,15 @@ class ClassificationTests(TestCase):
         data = payload(
             supplier_names={"EPI_TEST": "Épicerie Test"},
             articles=[{"name": "Divers", "unit": "UNIT", "category": "Épicerie"}],
-            products=[{"supplier": "EPI_TEST", "raw_name": "ARTICLE INCONNU", "article": "Divers", "unit": "UNIT",
-                       "stock_equivalent": "1.0000"}],
+            products=[
+                {
+                    "supplier": "EPI_TEST",
+                    "raw_name": "ARTICLE INCONNU",
+                    "article": "Divers",
+                    "unit": "UNIT",
+                    "stock_equivalent": "1.0000",
+                }
+            ],
         )
         self.pending.ai_suggestion = {"stock_type_name": "Autre chose"}
         self.pending.save()
@@ -492,8 +512,17 @@ class ClassificationTests(TestCase):
         data = payload(
             supplier_names={"METRO": "Metro"},
             articles=[{"name": "Vodka", "unit": "L", "category": "Spiritueux", "loss_percent": "10.00"}],
-            products=[{"supplier": "METRO", "raw_name": "VODKA Z 1L", "ean": "3000000000024", "article": "Vodka",
-                       "unit": "L", "stock_equivalent": "1.0000", "created_at": "2025-03-04T10:15:30.125000+00:00"}],
+            products=[
+                {
+                    "supplier": "METRO",
+                    "raw_name": "VODKA Z 1L",
+                    "ean": "3000000000024",
+                    "article": "Vodka",
+                    "unit": "L",
+                    "stock_equivalent": "1.0000",
+                    "created_at": "2025-03-04T10:15:30.125000+00:00",
+                }
+            ],
         )
 
         mine = import_payload(data)
@@ -502,8 +531,7 @@ class ClassificationTests(TestCase):
         self.assertEqual((product.stock_type, product.ean, product.is_expense), (self.vodka, "3000000000024", False))
         self.assertEqual(product.created_at.isoformat(), "2025-03-04T10:15:30.125000+00:00")
         self.assertEqual(mine.tallies["produits classés"].created, 1)
-        self.assertIn("1 produit créé sans facture : ses achats compteront dès que ses factures arriveront",
-                      mine.notes)
+        self.assertIn("1 produit créé sans facture : ses achats compteront dès que ses factures arriveront", mine.notes)
 
     def test_a_created_product_books_its_movements_when_a_later_invoice_arrives(self):
         """The app's own importer finds the product by its exact name and
@@ -513,16 +541,35 @@ class ClassificationTests(TestCase):
         data = payload(
             supplier_names={"METRO": "Metro"},
             articles=[{"name": "Vodka", "unit": "L"}],
-            products=[{"supplier": "METRO", "raw_name": "VODKA Z 1L", "article": "Vodka", "unit": "L",
-                       "stock_equivalent": "1.0000"}],
+            products=[
+                {
+                    "supplier": "METRO",
+                    "raw_name": "VODKA Z 1L",
+                    "article": "Vodka",
+                    "unit": "L",
+                    "stock_equivalent": "1.0000",
+                }
+            ],
         )
         import_payload(data)
 
-        invoice = import_parsed_invoice(self.metro, ParsedInvoice(
-            supplier_code="METRO", invoice_number="MET-002", invoice_date=None,
-            lines=[ParsedLine(raw_name="VODKA Z 1L", quantity=6, total_volume=Decimal("6.000"),
-                              unit_cost_ht=Decimal("12.0000"), total_ht=Decimal("72.00"))],
-        ))
+        invoice = import_parsed_invoice(
+            self.metro,
+            ParsedInvoice(
+                supplier_code="METRO",
+                invoice_number="MET-002",
+                invoice_date=None,
+                lines=[
+                    ParsedLine(
+                        raw_name="VODKA Z 1L",
+                        quantity=6,
+                        total_volume=Decimal("6.000"),
+                        unit_cost_ht=Decimal("12.0000"),
+                        total_ht=Decimal("72.00"),
+                    )
+                ],
+            ),
+        )
 
         line = invoice.lines.get()
         self.assertEqual(line.product.raw_name, "VODKA Z 1L")
@@ -553,13 +600,21 @@ class ClassificationTests(TestCase):
         # Only the one whose invoices are not in the archive waits for them:
         # said of both, the note read false for the one bought in this run.
         self.assertEqual(mine.tallies["produits classés"].created, 2)
-        self.assertIn("1 produit créé sans facture : ses achats compteront dès que ses factures arriveront",
-                      mine.notes)
+        self.assertIn("1 produit créé sans facture : ses achats compteront dès que ses factures arriveront", mine.notes)
 
     def test_replace_unlinks_a_product_the_file_lacks_and_its_movements_go(self):
-        with export_archive({KEY}, closed=False) as reader, ArchiveReader(forge(reader, associations=lambda data: {
-            **data, "products": [p for p in data["products"] if p["raw_name"] != "CITRON VERT FILET"],
-        })) as edited:
+        with (
+            export_archive({KEY}, closed=False) as reader,
+            ArchiveReader(
+                forge(
+                    reader,
+                    associations=lambda data: {
+                        **data,
+                        "products": [p for p in data["products"] if p["raw_name"] != "CITRON VERT FILET"],
+                    },
+                )
+            ) as edited,
+        ):
             mine = import_archive(edited, {KEY: REPLACE}).section(KEY)
 
         self.net.refresh_from_db()
@@ -574,9 +629,18 @@ class ClassificationTests(TestCase):
 
     def test_an_unlinked_products_invoice_waits_again(self):
         self.assertEqual(self.metro_invoice.status, Invoice.Status.COMPLETE)
-        with export_archive({KEY}, closed=False) as reader, ArchiveReader(forge(reader, associations=lambda data: {
-            **data, "products": [p for p in data["products"] if p["raw_name"] != "VODKA X 70CL"],
-        })) as edited:
+        with (
+            export_archive({KEY}, closed=False) as reader,
+            ArchiveReader(
+                forge(
+                    reader,
+                    associations=lambda data: {
+                        **data,
+                        "products": [p for p in data["products"] if p["raw_name"] != "VODKA X 70CL"],
+                    },
+                )
+            ) as edited,
+        ):
             import_archive(edited, {KEY: REPLACE})
 
         self.metro_invoice.refresh_from_db()
@@ -586,9 +650,18 @@ class ClassificationTests(TestCase):
         """A product nothing was ever bought as, and that the file no longer
         classifies, was only there because an import created it."""
         lonely = make_product(self.metro, "VODKA Z 1L", self.vodka, unit=UnitChoices.LITRE)
-        with export_archive({KEY}, closed=False) as reader, ArchiveReader(forge(reader, associations=lambda data: {
-            **data, "products": [p for p in data["products"] if p["raw_name"] != "VODKA Z 1L"],
-        })) as edited:
+        with (
+            export_archive({KEY}, closed=False) as reader,
+            ArchiveReader(
+                forge(
+                    reader,
+                    associations=lambda data: {
+                        **data,
+                        "products": [p for p in data["products"] if p["raw_name"] != "VODKA Z 1L"],
+                    },
+                )
+            ) as edited,
+        ):
             mine = import_archive(edited, {KEY: REPLACE}).section(KEY)
 
         self.assertFalse(Product.objects.filter(pk=lonely.pk).exists())
@@ -598,20 +671,32 @@ class ClassificationTests(TestCase):
 
     def test_replace_changing_an_articles_unit_says_to_check_its_recipes(self):
         make_ingredient(make_recipe(name="Caïpirinha"), stock_type=self.limes, quantity="1")
-        with export_archive({KEY}, closed=False) as reader, ArchiveReader(forge(reader, associations=lambda data: {
-            **data,
-            "articles": [dict(a, unit="KG") if a["name"] == "Citrons verts" else a for a in data["articles"]],
-            "products": [dict(p, unit="KG", stock_equivalent="0.0700") if p["raw_name"] == "CITRON VERT FILET" else p
-                         for p in data["products"]],
-        })) as edited:
+        with (
+            export_archive({KEY}, closed=False) as reader,
+            ArchiveReader(
+                forge(
+                    reader,
+                    associations=lambda data: {
+                        **data,
+                        "articles": [
+                            dict(a, unit="KG") if a["name"] == "Citrons verts" else a for a in data["articles"]
+                        ],
+                        "products": [
+                            dict(p, unit="KG", stock_equivalent="0.0700") if p["raw_name"] == "CITRON VERT FILET" else p
+                            for p in data["products"]
+                        ],
+                    },
+                )
+            ) as edited,
+        ):
             mine = import_archive(edited, {KEY: REPLACE}).section(KEY)
 
         self.limes.refresh_from_db()
         self.net.refresh_from_db()
-        self.assertEqual((self.limes.unit, self.net.unit, self.net.stock_equivalent),
-                         ("KG", "KG", Decimal("0.0700")))
-        self.assertIn("« Citrons verts » change d'unité (unités → kilos) : vérifiez les recettes qui l'utilisent",
-                      mine.notes)
+        self.assertEqual((self.limes.unit, self.net.unit, self.net.stock_equivalent), ("KG", "KG", Decimal("0.0700")))
+        self.assertIn(
+            "« Citrons verts » change d'unité (unités → kilos) : vérifiez les recettes qui l'utilisent", mine.notes
+        )
 
 
 class RecordChecksTests(TestCase):
@@ -621,8 +706,13 @@ class RecordChecksTests(TestCase):
         build_fixture(self)
 
     def product(self, **changes):
-        record = {"supplier": "EPI_TEST", "raw_name": "ARTICLE INCONNU", "article": "Citrons verts", "unit": "UNIT",
-                  "stock_equivalent": "12.0000"}
+        record = {
+            "supplier": "EPI_TEST",
+            "raw_name": "ARTICLE INCONNU",
+            "article": "Citrons verts",
+            "unit": "UNIT",
+            "stock_equivalent": "12.0000",
+        }
         record.update(changes)
         return {key: value for key, value in record.items() if value is not None}
 
@@ -665,8 +755,9 @@ class RecordChecksTests(TestCase):
         self.assertEqual(self.pending.stock_equivalent, Decimal("12.0000"))
 
     def test_a_missing_factor_is_skipped(self):
-        self.assert_skipped("Produit « ARTICLE INCONNU » (Épicerie Test) : sans conversion",
-                            self.product(stock_equivalent=None))
+        self.assert_skipped(
+            "Produit « ARTICLE INCONNU » (Épicerie Test) : sans conversion", self.product(stock_equivalent=None)
+        )
 
     def test_a_unit_other_than_the_files_article_is_skipped(self):
         self.assert_skipped(
@@ -684,14 +775,16 @@ class RecordChecksTests(TestCase):
             articles=[{"name": "Citrons verts", "unit": "KG"}],
         )
 
-    def test_a_charges_poste_is_never_classified(self):
-        self.assert_skipped("Produit « Loyer Test » (Loyer Test) : poste de charge : jamais classé",
-                            self.product(supplier="LOYER_TEST", raw_name="Loyer Test"))
+    def test_a_charge_item_is_never_classified(self):
+        self.assert_skipped(
+            "Produit « Loyer Test » (Loyer Test) : poste de charge : jamais classé",
+            self.product(supplier="LOYER_TEST", raw_name="Loyer Test"),
+        )
 
     def test_a_product_of_a_charges_supplier_missing_here_is_created_as_the_archive_classifies_it(self):
         """What the archive classifies is stock there - a stock item's product
         its supplier kept when it turned to charges - and it is created as
-        redo_as_expenses leaves such a product: classified, not a poste."""
+        redo_as_expenses leaves such a product: classified, not a charge item."""
         mine, _ = self.run_products(self.product(supplier="LOYER_TEST", raw_name="CAGETTE CITRONS VERTS"))
 
         self.assertEqual(mine.skipped, [])
@@ -702,25 +795,32 @@ class RecordChecksTests(TestCase):
     def test_an_expense_product_of_an_ordinary_supplier_is_never_classified(self):
         self.pending.is_expense = True
         self.pending.save()
-        self.assert_skipped("Produit « ARTICLE INCONNU » (Épicerie Test) : poste de charge : jamais classé",
-                            self.product())
+        self.assert_skipped(
+            "Produit « ARTICLE INCONNU » (Épicerie Test) : poste de charge : jamais classé", self.product()
+        )
 
     def test_an_unknown_supplier_is_skipped(self):
-        self.assert_skipped("Produit « X » : fournisseur inconnu « NOWHERE »", self.product(supplier="NOWHERE", raw_name="X"))
+        self.assert_skipped(
+            "Produit « X » : fournisseur inconnu « NOWHERE »", self.product(supplier="NOWHERE", raw_name="X")
+        )
 
     def test_a_supplier_known_by_name_only_is_found(self):
         """Codes differ between two databases; the name in supplier_names
         finds it."""
-        mine = import_payload(payload(
-            [self.product(supplier="EPICERIE_2")], supplier_names={"EPICERIE_2": "ÉPICERIE  test"},
-        ))
+        mine = import_payload(
+            payload(
+                [self.product(supplier="EPICERIE_2")],
+                supplier_names={"EPICERIE_2": "ÉPICERIE  test"},
+            )
+        )
         self.assertEqual(mine.skipped, [])
         self.pending.refresh_from_db()
         self.assertEqual(self.pending.stock_type, self.limes)
 
     def test_an_unknown_article_is_skipped(self):
-        self.assert_skipped("Produit « ARTICLE INCONNU » (Épicerie Test) : article inconnu « Mangue »",
-                            self.product(article="Mangue"))
+        self.assert_skipped(
+            "Produit « ARTICLE INCONNU » (Épicerie Test) : article inconnu « Mangue »", self.product(article="Mangue")
+        )
 
     def test_a_blank_article_is_skipped(self):
         self.assert_skipped("Produit « ARTICLE INCONNU » (Épicerie Test) : sans article", self.product(article=" "))
@@ -737,8 +837,9 @@ class RecordChecksTests(TestCase):
     def test_a_product_twice_in_the_file_counts_once(self):
         for raw_name in ("ARTICLE INCONNU", "MANGUE FRAÎCHE"):  # one here, one the import creates
             with self.subTest(raw_name=raw_name):
-                mine, _ = self.run_products(self.product(raw_name=raw_name),
-                                            self.product(raw_name=raw_name, stock_equivalent="6"))
+                mine, _ = self.run_products(
+                    self.product(raw_name=raw_name), self.product(raw_name=raw_name, stock_equivalent="6")
+                )
                 self.assertEqual(
                     mine.skipped,
                     [f"Produit « {raw_name} » (Épicerie Test) : en double dans l'archive, seul le premier compte"],
@@ -746,9 +847,10 @@ class RecordChecksTests(TestCase):
                 self.assertEqual(Product.objects.get(raw_name=raw_name).stock_equivalent, Decimal("12.0000"))
 
     def test_an_unknown_field_is_noted_once(self):
-        mine, _ = self.run_products(self.product(couleur="vert"), self.product(raw_name="BAVETTE", couleur="rouge",
-                                                                                 article="Bœuf", unit="KG",
-                                                                                 stock_equivalent="1"))
+        mine, _ = self.run_products(
+            self.product(couleur="vert"),
+            self.product(raw_name="BAVETTE", couleur="rouge", article="Bœuf", unit="KG", stock_equivalent="1"),
+        )
         self.assertEqual(mine.notes.count("champ inconnu ignoré : produits.couleur"), 1)
 
     def test_a_list_that_is_not_a_list_refuses_the_archive(self):
@@ -764,11 +866,19 @@ class PreviewTests(TestCase):
         build_fixture(self)
 
     def test_the_preview_changes_nothing_and_says_what_the_run_does(self):
-        with export_archive({KEY}, closed=False) as reader, ArchiveReader(forge(reader, associations=lambda data: {
-            **data,
-            "articles": [*data["articles"], {"name": "Mangue", "unit": "KG"}],
-            "products": [p for p in data["products"] if p["raw_name"] != "BAVETTE"],
-        })) as edited:
+        with (
+            export_archive({KEY}, closed=False) as reader,
+            ArchiveReader(
+                forge(
+                    reader,
+                    associations=lambda data: {
+                        **data,
+                        "articles": [*data["articles"], {"name": "Mangue", "unit": "KG"}],
+                        "products": [p for p in data["products"] if p["raw_name"] != "BAVETTE"],
+                    },
+                )
+            ) as edited,
+        ):
             fingerprint, media = db_fingerprint(), media_listing()
             preview = import_archive(edited, {KEY: REPLACE}, preview=True)
             self.assertEqual(db_fingerprint(), fingerprint)
@@ -786,8 +896,9 @@ class ClearTests(TestCase):
     @staticmethod
     def state():
         return {
-            "products": sorted(Product.objects.values_list("pk", "stock_type_id", "unit", "stock_equivalent",
-                                                           "ai_suggestion")),
+            "products": sorted(
+                Product.objects.values_list("pk", "stock_type_id", "unit", "stock_equivalent", "ai_suggestion")
+            ),
             "movements": sorted(StockMovement.objects.values_list("invoice_line_id", "quantity", "unit_cost_ht")),
             "statuses": sorted(Invoice.objects.values_list("pk", "status")),
         }
@@ -872,8 +983,14 @@ class CountAndExportTests(TestCase):
         self.assertTrue(product.pop("created_at").endswith("+00:00"))
         self.assertEqual(
             product,
-            {"supplier": "EPI_TEST", "raw_name": "BAVETTE", "ean": "", "article": "Bœuf", "unit": "KG",
-             "stock_equivalent": "1.0000"},
+            {
+                "supplier": "EPI_TEST",
+                "raw_name": "BAVETTE",
+                "ean": "",
+                "article": "Bœuf",
+                "unit": "KG",
+                "stock_equivalent": "1.0000",
+            },
         )
         limes = next(article for article in data["articles"] if article["name"] == "Citrons verts")
         created_at = limes.pop("created_at")

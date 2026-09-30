@@ -13,7 +13,8 @@ from unittest import mock
 
 from django.core.management import call_command
 
-from staff import private_files, signature_deletion, signature_requests as requests_
+from staff import private_files, signature_deletion
+from staff import signature_requests as requests_
 from staff.models import Establishment, SignatureEvent, SignatureRequest, Timesheet
 from staff.tests.signing_support import SigningTestMixin
 from staff.tests.support import employee
@@ -33,7 +34,7 @@ class PurgeTests(SigningTestMixin, NoNetworkTestCase):
         self.requests = {}
         for month in (MAY_2021, JUNE_2021, JUNE_2026):
             save_month(self.person, month, [])
-            moment = dt.datetime(month.year, month.month, 20, 10, tzinfo=dt.timezone.utc)
+            moment = dt.datetime(month.year, month.month, 20, 10, tzinfo=dt.UTC)
             self.requests[month], _token = requests_.create_request(self.person, month, now=moment)
 
     def purge(self, today, *arguments):
@@ -85,8 +86,9 @@ class PurgeTests(SigningTestMixin, NoNetworkTestCase):
         errors = io.StringIO()
         with (
             mock.patch("staff.private_files.append_deletion_record", side_effect=OSError("disque plein (test)")),
-            mock.patch("staff.management.commands.staff_purge_signatures.timezone.localdate",
-                       return_value=date(2026, 6, 15)),
+            mock.patch(
+                "staff.management.commands.staff_purge_signatures.timezone.localdate", return_value=date(2026, 6, 15)
+            ),
             self.captureOnCommitCallbacks(execute=True),
         ):
             output = io.StringIO()

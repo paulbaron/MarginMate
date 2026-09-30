@@ -171,10 +171,14 @@ class UblInvoiceTests(SimpleTestCase):
         self.assertEqual(ubl.printed_total_ttc, cii.printed_total_ttc)
         self.assertEqual(ubl.vat_breakdown, cii.vat_breakdown)
         self.assertEqual(
-            [(line.raw_name, line.quantity, line.unit_cost_ht, line.total_ht, line.vat_rate, line.ean)
-             for line in ubl.lines],
-            [(line.raw_name, line.quantity, line.unit_cost_ht, line.total_ht, line.vat_rate, line.ean)
-             for line in cii.lines],
+            [
+                (line.raw_name, line.quantity, line.unit_cost_ht, line.total_ht, line.vat_rate, line.ean)
+                for line in ubl.lines
+            ],
+            [
+                (line.raw_name, line.quantity, line.unit_cost_ht, line.total_ht, line.vat_rate, line.ean)
+                for line in cii.lines
+            ],
         )
 
     def test_the_syntax_is_told_by_the_root_element_not_the_file_name(self):
@@ -206,7 +210,7 @@ class CreditNoteTests(SimpleTestCase):
     def test_a_cii_credit_note_comes_out_negative(self):
         parsed = read(CII_CREDIT_NOTE)
         self.assertTrue(parsed.einvoice.is_credit_note)
-        line, = parsed.lines
+        (line,) = parsed.lines
         self.assertEqual(line.quantity, -1)
         self.assertEqual(line.total_ht, D("-84.50"))
         # The unit price stays positive: it is what one keg costs, and a
@@ -304,7 +308,7 @@ class DocumentAllowancesAndChargesTests(SimpleTestCase):
     def test_a_document_level_charge_becomes_the_adjustment(self):
         parsed = read(CII_DOCUMENT_CHARGE)
         self.assertEqual(parsed.reconciliation_adjustment, D("12.00"))
-        line, = parsed.lines
+        (line,) = parsed.lines
         self.assertEqual(line.total_ht, D("100.00"))
         self.assertEqual(parsed.printed_total_ttc, D("134.40"))
         self.assertTrue(all(item.passed for item in parsed.checks), parsed.checks)
@@ -318,9 +322,7 @@ class DocumentAllowancesAndChargesTests(SimpleTestCase):
     def test_what_the_charge_was_for_is_kept(self):
         """« Droits de circulation » is what the row says on the review
         screen; an adjustment with no reason is a figure nobody can check."""
-        self.assertEqual(
-            read(CII_DOCUMENT_CHARGE).einvoice.adjustment_reasons, ["Droits de circulation"]
-        )
+        self.assertEqual(read(CII_DOCUMENT_CHARGE).einvoice.adjustment_reasons, ["Droits de circulation"])
 
     def test_ubl_states_the_same_charge_in_its_own_elements(self):
         """cbc:ChargeIndicator on a cac:AllowanceCharge of the root, where
@@ -361,9 +363,7 @@ class RatesTests(SimpleTestCase):
         parsed = read(CII_ZERO_AND_EXEMPT)
         self.assertEqual([line.vat_rate for line in parsed.lines], [D("0"), D("0")])
         self.assertEqual(parsed.printed_total_ttc, D("50.00"))
-        self.assertEqual(
-            parsed.vat_breakdown, [(D("0"), D("20.00"), D("0.00")), (D("0"), D("30.00"), D("0.00"))]
-        )
+        self.assertEqual(parsed.vat_breakdown, [(D("0"), D("20.00"), D("0.00")), (D("0"), D("30.00"), D("0.00"))])
         self.assertTrue(all(item.passed for item in parsed.checks), parsed.checks)
 
 
@@ -374,7 +374,7 @@ class PrecisionTests(SimpleTestCase):
         rounded half away from zero, the rule the rest of this codebase
         converts money with."""
         parsed = read(CII_MORE_DECIMALS)
-        line, = parsed.lines
+        (line,) = parsed.lines
         self.assertEqual(str(line.total_ht), "12.35")
         self.assertEqual(str(line.unit_cost_ht), "4.1150")
 
@@ -509,6 +509,4 @@ class RefusalTests(SimpleTestCase):
         """An XML naming an external DTD must not be fetched - there is no
         resolver here at all, since the DOCTYPE carrying it is refused
         first. Pinned because a parser swapped in later could bring one."""
-        self.assertRefused(
-            b'<?xml version="1.0"?><!DOCTYPE r SYSTEM "http://exemple.invalid/r.dtd"><r/>', "doctype"
-        )
+        self.assertRefused(b'<?xml version="1.0"?><!DOCTYPE r SYSTEM "http://exemple.invalid/r.dtd"><r/>', "doctype")

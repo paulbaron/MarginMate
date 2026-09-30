@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 {% comment %}
-« Supprimer… », étape 1 (signature_views.signature_delete, règles dans staff/signature_deletion.py). Contexte :
-`page` (DeletionPage). Ce qui sera détruit, pourquoi c'est dangereux, puis deux vérifications : la case
-« Je comprends… » ET la phrase à taper. Cette page ne supprime rien : son envoi mène à l'étape 2 avec un jeton
-signé (dix minutes, cette version, rien de changé entre-temps). L'option des heures n'existe que sur la
-dernière version du mois : les autres versions sont tirées des mêmes heures. Elle vient APRÈS les deux
-vérifications, dans un cadre rouge qui dit que c'est une option : sous « Deux vérifications », dessinée comme
-« Je comprends… », cocher « les deux » effaçait aussi les heures du mois.
+« Supprimer… », step 1 (signature_views.signature_delete, rules in staff/signature_deletion.py). Context:
+`page` (DeletionPage). What will be destroyed, why it is dangerous, then two checks: the « Je comprends… »
+box AND the phrase to type. This page deletes nothing: sending it leads to step 2 with a signed token (ten
+minutes, this version, nothing changed meanwhile). The hours option exists only on the month's last
+version: the other versions are drawn from the same hours. It comes AFTER the two checks, in a red frame
+saying it is an option: under « Deux vérifications », drawn like « Je comprends… », ticking « both » also
+erased the month's hours.
 {% endcomment %}
 {% block title %}Supprimer la version {{ page.version }} {{ page.of_month }} — {{ page.who }} - MarginMate{% endblock %}
 {% block content %}

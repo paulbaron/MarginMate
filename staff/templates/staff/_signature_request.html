@@ -1,8 +1,8 @@
 {% comment %}
-Une version du mois envoyée pour signature. Contexte : `block` (signature_views.RequestBlock),
-`current` (vrai pour la demande qui tient le mois : ses actions ne sont proposées que là), `signature`.
-Le lien et le code ne s'affichent qu'une fois, dans la réponse qui les a créés : ils ne sont conservés
-nulle part (leur empreinte seule l'est).
+One version of the month sent for signature. Context: `block` (signature_views.RequestBlock),
+`current` (true for the request holding the month: its actions are offered there only), `signature`.
+The link and the code are shown only once, in the answer that made them: they are stored nowhere
+(only their hash is).
 {% endcomment %}
 <div class="signature-request{% if current %} is-current{% endif %}" id="signature-v{{ block.version }}">
     <p class="signature-request-head">
@@ -86,10 +86,10 @@ nulle part (leur empreinte seule l'est).
 
     {% if current and block.employee_signed %}
         {% comment %}
-        « Contresigner… » ouvre le cadre : l'employeur y dessine sa signature, que la contresignature exige.
-        signature_pad.js (le même que sur la page du salarié) met, à l'envoi, l'image (PNG) dans le champ caché ;
-        un envoi refusé redessine la page ici (#contresigner), le cadre ouvert, la phrase à côté et le dessin
-        repeint quand c'en était un.
+        « Contresigner… » opens the frame: the employer draws his signature in it, which the countersignature
+        requires. signature_pad.js (the same as on the employee's page) puts the picture (PNG) in the hidden
+        field as the form is sent; a refused post redraws the page here (#contresigner), the frame open, the
+        sentence beside it and the drawing painted back when it was one.
         {% endcomment %}
         <details class="signature-countersign" id="contresigner"{% if block.countersign_error %} open{% endif %}>
             <summary class="btn">Contresigner…</summary>
@@ -201,9 +201,9 @@ nulle part (leur empreinte seule l'est).
     {% endif %}
 
     {% comment %}
-    « Supprimer… » : chaque version, quel que soit son état. Un simple lien vers la première des deux étapes
-    (signature_views.signature_delete) - elle dit ce qui partirait et pourquoi c'est dangereux ; rien ne se
-    supprime depuis cette section.
+    « Supprimer… »: every version, whatever its state. A plain link to the first of the two steps
+    (signature_views.signature_delete) - it says what would go and why it is dangerous; nothing is deleted
+    from this section.
     {% endcomment %}
     <p class="signature-delete"><a href="{{ block.delete_url }}">Supprimer…</a></p>
 </div>

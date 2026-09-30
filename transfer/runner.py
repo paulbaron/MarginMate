@@ -58,7 +58,7 @@ class NotAsPreviewed(Exception):
 
 
 def busy_reason() -> str:
-    """"" when free. An import or a clear holds SQLite's write lock (the
+    """ "" when free. An import or a clear holds SQLite's write lock (the
     IMMEDIATE mode) for tens of seconds - a job's heartbeat would time out -
     and an export taken while a gather writes is not consistent across
     sections. Stale jobs are reaped first, as every job page does, so one

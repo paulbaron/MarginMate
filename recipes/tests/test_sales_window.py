@@ -65,10 +65,10 @@ class SalesListWindowTests(TestCase):
         self.mule = make_recipe(name="Mule")
         self.days = [
             date(2026, 1, 31),  # the day before: out
-            date(2026, 2, 1),   # the opening day: in
+            date(2026, 2, 1),  # the opening day: in
             date(2026, 2, 14),  # in
             date(2026, 2, 28),  # the closing day: in, this is the whole point
-            date(2026, 3, 1),   # the day after: out
+            date(2026, 3, 1),  # the day after: out
         ]
         for day in self.days:
             sale(self.mule, day)
@@ -87,13 +87,9 @@ class SalesListWindowTests(TestCase):
 
     def test_one_end_alone_is_a_window(self):
         since = self.shown(du="2026-02-28")
-        self.assertEqual(
-            sorted(row.sold_on for row in since.context["sales"]), [date(2026, 2, 28), date(2026, 3, 1)]
-        )
+        self.assertEqual(sorted(row.sold_on for row in since.context["sales"]), [date(2026, 2, 28), date(2026, 3, 1)])
         until = self.shown(au="2026-02-01")
-        self.assertEqual(
-            sorted(row.sold_on for row in until.context["sales"]), [date(2026, 1, 31), date(2026, 2, 1)]
-        )
+        self.assertEqual(sorted(row.sold_on for row in until.context["sales"]), [date(2026, 1, 31), date(2026, 2, 1)])
 
     def test_no_window_is_every_sale(self):
         self.assertEqual(len(self.shown().context["sales"]), len(self.days))
@@ -146,7 +142,7 @@ class SalesCountAndShowAllTests(TestCase):
         self.assertEqual(response.context["sales_hidden"], 1)
         self.assertEqual(response.context["sales_found"], 3)
 
-    def test_tout_afficher_carries_the_window(self):
+    def test_show_all_carries_the_window(self):
         page = self.page(**WINDOW).content.decode()
         link = re.search(r'href="([^"]*)"[^>]*>\s*tout afficher', page)
         self.assertIsNotNone(link, "the « tout afficher » link is drawn under a window")
@@ -382,9 +378,7 @@ class ActionsKeepTheWindowTests(TestCase):
     def test_an_import_comes_back_to_the_window_whether_it_starts_or_not(self):
         url = reverse("recipes:trigger_sales_import")
         with patch("recipes.views.threading.Thread"):
-            started = self.client.post(
-                f"{url}?{WINDOW_QUERY}", {"start_date": "2026-02-01", "end_date": "2026-02-05"}
-            )
+            started = self.client.post(f"{url}?{WINDOW_QUERY}", {"start_date": "2026-02-01", "end_date": "2026-02-05"})
         self.assertKeepsTheWindow(started)
         refused = self.client.post(f"{url}?{WINDOW_QUERY}", {"start_date": "", "end_date": ""})
         self.assertKeepsTheWindow(refused)
@@ -413,7 +407,9 @@ class ActionsKeepTheWindowTests(TestCase):
 
     def test_the_manual_sale_form_posts_back_to_the_window(self):
         page = self.client.get(reverse("recipes:sales_list"), WINDOW).content.decode()
-        action = re.search(rf'action="({re.escape(reverse("recipes:sales_list"))}[^"]*)" class="inline-form manual-sale"', page)
+        action = re.search(
+            rf'action="({re.escape(reverse("recipes:sales_list"))}[^"]*)" class="inline-form manual-sale"', page
+        )
         self.assertIsNotNone(action)
         self.assertIn("du=2026-02-01", action.group(1))
 
@@ -452,11 +448,11 @@ class ActionsKeepTheWindowTests(TestCase):
 class SalesTabLinkTests(TestCase):
     """The tab a reader is already on keeps their window."""
 
-    def test_the_ventes_tab_carries_the_window(self):
+    def test_the_sales_tab_carries_the_window(self):
         response = self.client.get(reverse("recipes:sales_list"), WINDOW)
-        ventes = next(entry for entry in response.context["tabs"] if entry["key"] == "ventes")
-        self.assertIn("du=2026-02-01", ventes["url"])
-        self.assertIn("au=2026-02-28", ventes["url"])
+        sales = next(entry for entry in response.context["tabs"] if entry["key"] == "sales")
+        self.assertIn("du=2026-02-01", sales["url"])
+        self.assertIn("au=2026-02-28", sales["url"])
 
     def test_the_other_tabs_are_left_alone(self):
         response = self.client.get(reverse("recipes:recipe_list"), WINDOW)

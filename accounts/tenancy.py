@@ -1,6 +1,6 @@
-"""Which espace this thread works for - THE one implementation.
+"""Which tenant this thread works for - THE one implementation.
 
-One database per espace (« multi mode », the only one: the old « single »
+One database per tenant (« multi mode », the only one: the old « single »
 mode - one database, no login - was removed on 29/09/2026, because a server
 started without its switch served every page to anyone). Nothing is bound
 by default, and the unbound `default` is an EMPTY in-memory database
@@ -41,12 +41,12 @@ from django.utils.crypto import salted_hmac
 
 
 class TenancyError(RuntimeError):
-    """A binding that must not happen (another espace already bound, an
+    """A binding that must not happen (another tenant already bound, an
     open transaction, a missing database file)."""
 
 
 class NoTenantBound(TenancyError):
-    """This thread works for no espace: the business code that asked has no
+    """This thread works for no tenant: the business code that asked has no
     data to read and no folder to write into."""
 
 
@@ -54,7 +54,7 @@ _current: ContextVar = ContextVar("marginmate_current_tenant", default=None)
 
 
 def current_tenant():
-    """The espace this thread works for: a Tenant, or None when unbound."""
+    """The tenant this thread works for: a Tenant, or None when unbound."""
     return _current.get()
 
 
@@ -70,9 +70,9 @@ def require_tenant():
 
 
 def tenant_key() -> str:
-    """A short stable string that tells espaces apart, for the
+    """A short stable string that tells tenants apart, for the
     process-global caches, sets and locks keyed by primary keys (pks restart
-    at 1 in every espace's database): the tenant's id. Raises NoTenantBound
+    at 1 in every tenant's database): the tenant's id. Raises NoTenantBound
     when unbound."""
     return str(require_tenant().pk)
 
@@ -81,14 +81,14 @@ def storage_scope(tenant) -> str:
     """What every key the pages' scripts write into the browser's storage
     carries for `tenant` (base.html's ``<body data-tenant>``): 16 hex
     characters of an HMAC of its id keyed by the SECRET_KEY - the same on
-    every page of the espace, another for every other espace.
+    every page of the tenant, another for every other tenant.
 
     Not the id itself: a sequential id on every page told any bar how many
-    espaces were opened before its own (security audit LB-6). Not dir_name
+    tenants were opened before its own (security audit LB-6). Not dir_name
     either: that is the name of a folder on the server. Changing the
     SECRET_KEY changes every scope - a count typed and never saved is then
     no longer offered back (it only ever lived in that browser), and the
-    espace's preferences start again; a logout forgets its drafts anyway
+    tenant's preferences start again; a logout forgets its drafts anyway
     (static/js/ui.js, accounts.pages.LogoutPage)."""
     digest = salted_hmac("marginmate.accounts.tenancy.storage_scope", str(tenant.pk), algorithm="sha256")
     return digest.hexdigest()[:16]
@@ -97,7 +97,7 @@ def storage_scope(tenant) -> str:
 def integrations_allowed() -> bool:
     """Whether the server's own accounts (Metro, the invoice mailbox,
     L'Addition, the LLM parser, the portals' .env credentials) may be used
-    for this thread's espace: only the owner's espace
+    for this thread's tenant: only the owner's tenant
     (`Tenant.uses_server_integrations`), never unbound."""
     tenant = current_tenant()
     return bool(tenant is not None and tenant.uses_server_integrations)
@@ -147,10 +147,10 @@ def _bound_database(path):
 def bound_tenant(tenant):
     """Run the block for `tenant`.
 
-    This thread's `default` is the espace's own database for the block (see
+    This thread's `default` is the tenant's own database for the block (see
     the module's docstring), and `current_tenant()` is `tenant`. Refused
-    while a transaction is open on `default`. Nestable for the SAME espace
-    (a no-op); binding another espace while one is bound raises. Always
+    while a transaction is open on `default`. Nestable for the SAME tenant
+    (a no-op); binding another tenant while one is bound raises. Always
     restored on the way out, exception or not.
     """
     if tenant is None:
@@ -174,7 +174,7 @@ def bound_tenant(tenant):
     if Path(database).stat().st_size == 0:
         # What SQLite takes for a NEW database - a restore or a copy that
         # died, a full disk: the same « no such table », in a view. Never an
-        # espace's (provisioning copies the template, never 0 bytes).
+        # tenant's (provisioning copies the template, never 0 bytes).
         raise TenancyError(f"The database of espace {tenant.pk} ({tenant.dir_name}) is an empty file.")
     with _bound_database(database):
         token = _current.set(tenant)
@@ -188,7 +188,7 @@ def bound(fn):
     """Capture the CURRENT binding and return a callable that runs `fn`
     bound to it, for ``threading.Thread(target=bound(fn), args=...)``.
 
-    Run in another thread, it binds the captured espace, runs `fn`, and
+    Run in another thread, it binds the captured tenant, runs `fn`, and
     closes that thread's connections at the end. Run in the thread that made
     it (a test calling a patched Thread's target), it nests into the binding
     already there and closes nothing.

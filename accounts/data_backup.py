@@ -1,17 +1,17 @@
 """A dated copy of the whole data folder: `manage.py backup_data`.
 
-    .venv\\Scripts\\python.exe manage.py backup_data                  <backups>\\<AAAA-MM-JJ_HHMMSS>\\
+    .venv\\Scripts\\python.exe manage.py backup_data                  <backups>\\<YYYY-MM-DD_HHMMSS>\\
     .venv\\Scripts\\python.exe manage.py backup_data --dest E:\\Sauvegardes
     .venv\\Scripts\\python.exe manage.py backup_data --sans-env
 
 The DATA FOLDER is the one holding TENANTS_ROOT - C:\\MarginMate\\data for the
-owner: tenants\\ (every espace, the _template), accounts.sqlite3, logs\\. The
+owner: tenants\\ (every tenant, the _template), accounts.sqlite3, logs\\. The
 backups go beside it by default (`default_destination`: C:\\MarginMate\\backups),
 worked out from the settings, never written down anywhere. deploy.cmd makes
 one before every deployment (DEPLOY.md, section 10), and refresh_dev_data.cmd
 copies the newest one into the development folder's data.
 
-    <AAAA-MM-JJ_HHMMSS>\\
+    <YYYY-MM-DD_HHMMSS>\\
         data\\          the data folder, mirrored
         .env           unless --sans-env: the secret key, the passphrase, the passwords
         manifest.json  what was copied (every database's tables and rows), from which code
@@ -32,11 +32,11 @@ moment the transaction started). The source is opened ``mode=rw``, never
 empty file), and never ``ro`` (accounts.provisioning.copy_database says why).
 
 The databases are the accounts database and every ``db.sqlite3`` one level
-under TENANTS_ROOT: the _template, every espace, and an espace's folder the
+under TENANTS_ROOT: the _template, every tenant, and a tenant's folder the
 accounts database no longer names (backed up all the same, and said). Every
 other file - media, private (the signing keys), downloads, backups, staging,
 imports, the log - is copied as a file; an SQLite file among them (« Données »'s
-own safety copies in an espace's backups\\) is one nobody writes.
+own safety copies in a tenant's backups\\) is one nobody writes.
 
 **Refused before anything is written**, each in French: a data folder that
 is missing, IS the code's folder or holds it (TENANTS_ROOT left at its
@@ -74,10 +74,10 @@ import re
 import shutil
 import sqlite3
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import timezone as dt_timezone
+from datetime import UTC
 from pathlib import Path
-from typing import Callable
 
 from django.conf import settings
 from django.db import DatabaseError
@@ -106,7 +106,7 @@ GIT_TIMEOUT_SECONDS = 10
 
 ACCOUNTS_ROLE = "comptes"
 TEMPLATE_ROLE = "modele"
-ESPACE_ROLE = "espace"
+TENANT_ROLE = "espace"
 ORPHAN_ROLE = "dossier sans espace"
 
 
@@ -125,7 +125,7 @@ class Database:
     relative: str
     role: str
     label: str
-    espace: str | None = None
+    tenant_name: str | None = None
     tables: dict[str, int] = field(default_factory=dict)
 
 
@@ -133,7 +133,7 @@ class Database:
 
 
 def data_folder() -> Path:
-    """The folder holding TENANTS_ROOT: every espace, the accounts database,
+    """The folder holding TENANTS_ROOT: every tenant, the accounts database,
     the log (C:\\MarginMate\\data for the owner)."""
     return paths.tenants_root().parent
 
@@ -267,7 +267,9 @@ def copy_database(source: Path, target: Path) -> dict[str, int]:
         shown = " ; ".join(answer[:3]) + (" ; …" if len(answer) > 3 else "")
         raise BackupError(f"la copie ne passe pas la vérification d'intégrité ({shown}).")
     if copied != expected:
-        differing = sorted(set(copied) ^ set(expected) | {name for name in copied if copied.get(name) != expected.get(name)})
+        differing = sorted(
+            set(copied) ^ set(expected) | {name for name in copied if copied.get(name) != expected.get(name)}
+        )
         shown = ", ".join(
             f"{name} : {expected.get(name, 'absente')} dans la base, {copied.get(name, 'absente')} dans la copie"
             for name in differing[:3]
@@ -276,8 +278,8 @@ def copy_database(source: Path, target: Path) -> dict[str, int]:
     return copied
 
 
-def _espace_names() -> dict[str, str]:
-    """Every espace's folder name and name, from the accounts database."""
+def _tenant_names() -> dict[str, str]:
+    """Every tenant's folder name and name, from the accounts database."""
     from .models import Tenant
 
     try:
@@ -288,9 +290,9 @@ def _espace_names() -> dict[str, str]:
 
 def find_databases(data: Path, accounts: Path) -> tuple[list[Database], list[str]]:
     """The databases to copy through the API, and what is missing (an
-    espace the accounts database names whose database is not there)."""
+    tenant the accounts database names whose database is not there)."""
     root = paths.tenants_root()
-    names = _espace_names()
+    names = _tenant_names()
     databases = [Database(accounts, _relative(accounts, data), ACCOUNTS_ROLE, "la base des comptes")]
     found = set()
     if root.is_dir():
@@ -303,10 +305,12 @@ def find_databases(data: Path, accounts: Path) -> tuple[list[Database], list[str
                 databases.append(Database(database, relative, TEMPLATE_ROLE, "le modèle des nouveaux espaces"))
             elif folder.name in names:
                 name = names[folder.name]
-                databases.append(Database(database, relative, ESPACE_ROLE, f"l'espace « {name} »", espace=name))
+                databases.append(Database(database, relative, TENANT_ROLE, f"l'espace « {name} »", tenant_name=name))
             else:
                 databases.append(
-                    Database(database, relative, ORPHAN_ROLE, f"le dossier « {folder.name} » (aucun espace ne le nomme)")
+                    Database(
+                        database, relative, ORPHAN_ROLE, f"le dossier « {folder.name} » (aucun espace ne le nomme)"
+                    )
                 )
             found.add(folder.name)
     missing = [
@@ -451,7 +455,7 @@ def make_backup(dest=None, *, with_env: bool = True, say: Callable[[str], None] 
                 vanished.append(_relative(path, data))
                 continue
             copied_bytes += target.stat().st_size
-        # The data folder's empty folders too (an espace's downloads/...).
+        # The data folder's empty folders too (a tenant's downloads/...).
         for source_folder, subfolders, _names in os.walk(data):
             for name in subfolders:
                 (target_data / _relative(Path(source_folder) / name, data)).mkdir(parents=True, exist_ok=True)
@@ -473,7 +477,7 @@ def make_backup(dest=None, *, with_env: bool = True, say: Callable[[str], None] 
         manifest = {
             "format": FORMAT,
             "version": VERSION,
-            "created_at": moment.astimezone(dt_timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "created_at": moment.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
             "folder": stamp,
             "source": str(data),
             "code_commit": commit,
@@ -482,7 +486,7 @@ def make_backup(dest=None, *, with_env: bool = True, say: Callable[[str], None] 
                 {
                     "path": database.relative,
                     "role": database.role,
-                    "espace": database.espace,
+                    "espace": database.tenant_name,
                     "tables": database.tables,
                     "rows": sum(database.tables.values()),
                     "bytes": (target_data / database.relative).stat().st_size,

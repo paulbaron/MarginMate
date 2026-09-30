@@ -48,8 +48,11 @@ class FirstPurchaseDateTests(TestCase):
 
     def product_bought_on(self, name, *iso_dates):
         product = make_product(
-            supplier=self.supplier, raw_name=name, stock_type=self.vodka,
-            unit=UnitChoices.UNIT, stock_equivalent="0.7",
+            supplier=self.supplier,
+            raw_name=name,
+            stock_type=self.vodka,
+            unit=UnitChoices.UNIT,
+            stock_equivalent="0.7",
         )
         for iso in iso_dates:
             invoice = make_invoice(supplier=self.supplier)
@@ -84,8 +87,11 @@ class EntryAvailabilityTests(TestCase):
 
     def bought(self, name, iso, stock_type=None):
         product = make_product(
-            supplier=self.supplier, raw_name=name, stock_type=stock_type or self.vodka,
-            unit=UnitChoices.UNIT, stock_equivalent="0.7",
+            supplier=self.supplier,
+            raw_name=name,
+            stock_type=stock_type or self.vodka,
+            unit=UnitChoices.UNIT,
+            stock_equivalent="0.7",
         )
         invoice = make_invoice(supplier=self.supplier, invoice_date=date.fromisoformat(iso))
         make_invoice_line(invoice=invoice, product=product, quantity=6, total_ht="60")
@@ -121,8 +127,11 @@ class TooNewToCountTests(TestCase):
         self.supplier = make_supplier(name="Metro")
         self.vodka = make_stock_type(name="Vodka", unit=UnitChoices.LITRE)
         self.product = make_product(
-            supplier=self.supplier, raw_name="NOUVELLE VODKA", stock_type=self.vodka,
-            unit=UnitChoices.UNIT, stock_equivalent="0.7",
+            supplier=self.supplier,
+            raw_name="NOUVELLE VODKA",
+            stock_type=self.vodka,
+            unit=UnitChoices.UNIT,
+            stock_equivalent="0.7",
         )
         invoice = make_invoice(supplier=self.supplier, invoice_date=date(2026, 6, 1))
         make_invoice_line(invoice=invoice, product=self.product, quantity=6, total_ht="60")
@@ -178,9 +187,7 @@ class TooNewToCountTests(TestCase):
         saved."""
         take = make_stock_take(taken_at=datetime(2026, 3, 31, 12, 0))
         data = self.payload(product_display_name(self.product), "2026-07-01 12:00:00")
-        response = self.client.post(
-            reverse("inventory:stock_take_update", kwargs={"pk": take.pk}), data
-        )
+        response = self.client.post(reverse("inventory:stock_take_update", kwargs={"pk": take.pk}), data)
         self.assertEqual(response.status_code, 302)
         self.assertEqual(take.lines.count(), 1)
 
@@ -189,17 +196,18 @@ class TooNewToCountTests(TestCase):
         removable - validating a row on its way out would trap the user."""
         take = make_stock_take(taken_at=datetime(2026, 3, 31, 12, 0))
         line = make_stock_take_line(
-            stock_take=take, product=self.product, counted_quantity="2",
-            unit=UnitChoices.UNIT, value_ht="20",
+            stock_take=take,
+            product=self.product,
+            counted_quantity="2",
+            unit=UnitChoices.UNIT,
+            value_ht="20",
         )
         data = self.payload(product_display_name(self.product), "2026-03-31 12:00:00")
         data["lines-INITIAL_FORMS"] = "1"
         data["lines-0-id"] = str(line.pk)
         data["lines-0-DELETE"] = "on"
 
-        response = self.client.post(
-            reverse("inventory:stock_take_update", kwargs={"pk": take.pk}), data
-        )
+        response = self.client.post(reverse("inventory:stock_take_update", kwargs={"pk": take.pk}), data)
         self.assertEqual(response.status_code, 302)
         self.assertEqual(take.lines.count(), 0)
 
@@ -209,8 +217,11 @@ class LiveLineValueTests(TestCase):
         self.supplier = make_supplier(name="Metro")
         self.vodka = make_stock_type(name="Vodka", unit=UnitChoices.LITRE)
         self.product = make_product(
-            supplier=self.supplier, raw_name="SOBIESKI 70CL", stock_type=self.vodka,
-            unit=UnitChoices.UNIT, stock_equivalent="0.7",
+            supplier=self.supplier,
+            raw_name="SOBIESKI 70CL",
+            stock_type=self.vodka,
+            unit=UnitChoices.UNIT,
+            stock_equivalent="0.7",
         )
         # 10 bottles at 12 € in January, 10 more at 20 € in May.
         for iso, total in (("2026-01-10", "120"), ("2026-05-10", "200")):
@@ -287,8 +298,11 @@ class LiveLineValueTests(TestCase):
         is right on open with nothing re-priced."""
         take = make_stock_take(taken_at=datetime(2026, 6, 30, 12, 0))
         line = make_stock_take_line(
-            stock_take=take, product=self.product, counted_quantity="3",
-            unit=UnitChoices.UNIT, value_ht="60.00",
+            stock_take=take,
+            product=self.product,
+            counted_quantity="3",
+            unit=UnitChoices.UNIT,
+            value_ht="60.00",
         )
         response = self.client.get(reverse("inventory:stock_take_update", kwargs={"pk": take.pk}))
         self.assertEqual(island(response.content.decode(), "saved-values"), {str(line.pk): "60.00"})
@@ -302,8 +316,11 @@ class ResolverQueryCountTests(TestCase):
         self.vodka = make_stock_type(name="Vodka", unit=UnitChoices.LITRE)
         self.products = [
             make_product(
-                supplier=self.supplier, raw_name=f"ARTICLE {index:03d}", stock_type=self.vodka,
-                unit=UnitChoices.UNIT, stock_equivalent="0.7",
+                supplier=self.supplier,
+                raw_name=f"ARTICLE {index:03d}",
+                stock_type=self.vodka,
+                unit=UnitChoices.UNIT,
+                stock_equivalent="0.7",
             )
             for index in range(40)
         ]

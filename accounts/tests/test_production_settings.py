@@ -118,6 +118,7 @@ print("REPORT" + json.dumps({
 }))
 """
 
+
 def deploy_md_lines() -> dict:
     """The .env lines DEPLOY.md gives (its section 5's block), the domain
     replaced by an invented one."""
@@ -143,9 +144,29 @@ ONLINE = {**deploy_md_lines(), "MARGINMATE_SIGNING_PASSPHRASE": "phrase-de-passe
 #: must neither read nor show on a debug page.
 SYSTEM_VARIABLES = frozenset(
     {
-        "PATH", "PATHEXT", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "TEMP", "TMP", "HOME", "USERPROFILE",
-        "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)",
-        "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "OS", "LANG", "LC_ALL", "VIRTUAL_ENV",
+        "PATH",
+        "PATHEXT",
+        "SYSTEMROOT",
+        "SYSTEMDRIVE",
+        "WINDIR",
+        "COMSPEC",
+        "TEMP",
+        "TMP",
+        "HOME",
+        "USERPROFILE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "PROGRAMDATA",
+        "PROGRAMFILES",
+        "PROGRAMFILES(X86)",
+        "NUMBER_OF_PROCESSORS",
+        "PROCESSOR_ARCHITECTURE",
+        "OS",
+        "LANG",
+        "LC_ALL",
+        "VIRTUAL_ENV",
     }
 )
 
@@ -194,7 +215,7 @@ class ChildTestCase(SimpleTestCase):
         result = self.run_child(PROBE, **environment)
         line = next((line for line in result.stdout.splitlines() if line.startswith("REPORT")), None)
         self.assertIsNotNone(line, result.stderr[-3000:])
-        return json.loads(line[len("REPORT"):])
+        return json.loads(line[len("REPORT") :])
 
     def refused(self, **environment) -> str:
         result = self.run_child(PROBE, **environment)
@@ -272,17 +293,22 @@ class HttpsTests(ChildTestCase):
         self.assertEqual(report["SECURE_CROSS_ORIGIN_OPENER_POLICY"], "same-origin")
 
     def test_hsts_is_raised_by_the_environment(self):
-        self.assertEqual(self.probe(MARGINMATE_HTTPS="1", MARGINMATE_HSTS_SECONDS="31536000")["SECURE_HSTS_SECONDS"], 31536000)
+        self.assertEqual(
+            self.probe(MARGINMATE_HTTPS="1", MARGINMATE_HSTS_SECONDS="31536000")["SECURE_HSTS_SECONDS"], 31536000
+        )
         said = self.refused(MARGINMATE_HTTPS="1", MARGINMATE_HSTS_SECONDS="une heure")
         self.assertIn("MARGINMATE_HSTS_SECONDS", said)
 
     def test_the_middleware(self):
         middleware = self.probe()["MIDDLEWARE"]
-        self.assertEqual(middleware[:3], [
-            "django.middleware.security.SecurityMiddleware",
-            "whitenoise.middleware.WhiteNoiseMiddleware",
-            "config.security.ContentSecurityPolicyMiddleware",
-        ])
+        self.assertEqual(
+            middleware[:3],
+            [
+                "django.middleware.security.SecurityMiddleware",
+                "whitenoise.middleware.WhiteNoiseMiddleware",
+                "config.security.ContentSecurityPolicyMiddleware",
+            ],
+        )
         self.assertLess(
             middleware.index("config.security.ContentSecurityPolicyMiddleware"),
             middleware.index("django.middleware.clickjacking.XFrameOptionsMiddleware"),
@@ -318,7 +344,7 @@ class DeploymentChecksTests(ChildTestCase):
         self.assertIn("accounts.E010", report["deploy"])
         report = self.probe(**{**ONLINE, "MARGINMATE_SIGNING_PASSPHRASE": None})
         self.assertIn("staff.W001", report["deploy"])
-        # The espaces left at their default, beside manage.py.
+        # The tenants left at their default, beside manage.py.
         report = self.probe(**{**ONLINE, "MARGINMATE_TENANTS_ROOT": None, "MARGINMATE_LOG_DIR": None})
         self.assertIn("accounts.E011", report["deploy"])
         # The deployment checks are not everyday's: a developer's check
@@ -335,7 +361,7 @@ class LogsTests(ChildTestCase):
         result = self.run_child(LOGGED, token, command)
         line = next((line for line in result.stdout.splitlines() if line.startswith("REPORT")), None)
         self.assertIsNotNone(line, result.stderr[-3000:])
-        return result, json.loads(line[len("REPORT"):])
+        return result, json.loads(line[len("REPORT") :])
 
     def test_any_other_process_logs_to_its_console_only(self):
         """PROD-5: every process opened the same marginmate.log, and on
@@ -407,7 +433,12 @@ class SecretKeyRulesTests(SimpleTestCase):
         example = (Path(settings.BASE_DIR) / ".env.example").read_text(encoding="utf-8")
         self.assertIn("\nDJANGO_SECRET_KEY=\n", example)
         self.assertIn("\nDJANGO_DEBUG=False\n", example)
-        for name in ("MARGINMATE_HTTPS=", "DJANGO_CSRF_TRUSTED_ORIGINS=", "MARGINMATE_LOG_DIR=", "MARGINMATE_HSTS_SECONDS="):
+        for name in (
+            "MARGINMATE_HTTPS=",
+            "DJANGO_CSRF_TRUSTED_ORIGINS=",
+            "MARGINMATE_LOG_DIR=",
+            "MARGINMATE_HSTS_SECONDS=",
+        ):
             self.assertIn(f"\n{name}\n", example)
 
 
@@ -458,8 +489,9 @@ class ServerChecksTests(TestCase):
 
     def test_the_cookies_to_serve(self):
         for session, csrf in ((False, False), (True, False), (False, True)):
-            with self.subTest(session=session, csrf=csrf), override_settings(
-                SESSION_COOKIE_SECURE=session, CSRF_COOKIE_SECURE=csrf
+            with (
+                self.subTest(session=session, csrf=csrf),
+                override_settings(SESSION_COOKIE_SECURE=session, CSRF_COOKIE_SECURE=csrf),
             ):
                 self.assertEqual(self.ids(checks.https_cookies_online()), ["accounts.E009"])
         with override_settings(SESSION_COOKIE_SECURE=True, CSRF_COOKIE_SECURE=True):
@@ -481,7 +513,10 @@ class ServerChecksTests(TestCase):
         self.assertEqual(issue.id, "accounts.E011")
         self.assertIn("MARGINMATE_TENANTS_ROOT", issue.msg)
         self.assertNotIn("MARGINMATE_ACCOUNTS_DB", issue.msg)
-        databases = {**settings.DATABASES, "accounts": {**settings.DATABASES["accounts"], "NAME": base / "accounts.sqlite3"}}
+        databases = {
+            **settings.DATABASES,
+            "accounts": {**settings.DATABASES["accounts"], "NAME": base / "accounts.sqlite3"},
+        }
         with warnings.catch_warnings():
             # Overriding DATABASES warns: only this check reads it here.
             warnings.simplefilter("ignore")

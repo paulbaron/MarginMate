@@ -4,15 +4,14 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('invoices', '0034_invoiceline_is_spread_charge_invoiceline_spread_ht'),
+        ("invoices", "0034_invoiceline_is_spread_charge_invoiceline_spread_ht"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='supplier',
-            name='typed_identifiers',
-            field=models.JSONField(blank=True, default=list, verbose_name='identifiants saisis à la main'),
+            model_name="supplier",
+            name="typed_identifiers",
+            field=models.JSONField(blank=True, default=list, verbose_name="identifiants saisis à la main"),
         ),
     ]

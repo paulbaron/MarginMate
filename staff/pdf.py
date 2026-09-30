@@ -63,7 +63,7 @@ from .timesheet import PUBLIC_HOLIDAY, REST, MonthDay, MonthSheet, MonthWeek
 
 # -- The page ---------------------------------------------------------------------------------------------------
 
-PAGE_WIDTH, PAGE_HEIGHT = 595.28, 841.89   # A4 portrait, in points
+PAGE_WIDTH, PAGE_HEIGHT = 595.28, 841.89  # A4 portrait, in points
 MARGIN_X = 42.0
 MARGIN_TOP = 36.0
 MARGIN_BOTTOM = 34.0
@@ -109,10 +109,10 @@ SIGNATURE_HEIGHT = 92.0
 SIGNATURE_GAP = 16.0
 
 BLACK = 0.0
-GREY = 0.42         # secondary text: « Semaine type », a worked holiday, the signature instructions
-RULE_GREY = 0.8     # the thin rule under each day
-BAND_GREY = 0.92    # the week totals' band, the summary's title band
-BOX_GREY = 0.35     # the summary and signature boxes
+GREY = 0.42  # secondary text: « Semaine type », a worked holiday, the signature instructions
+RULE_GREY = 0.8  # the thin rule under each day
+BAND_GREY = 0.92  # the week totals' band, the summary's title band
+BOX_GREY = 0.35  # the summary and signature boxes
 
 REGULAR = "Helvetica"
 BOLD = "Helvetica-Bold"
@@ -196,8 +196,22 @@ def unprintable_characters(text) -> list[str]:
 #: Letters no decomposition brings back to one cp1252 has.
 _NEAREST_LETTERS = str.maketrans(
     {
-        "Ł": "L", "ł": "l", "Đ": "D", "đ": "d", "Ħ": "H", "ħ": "h", "ı": "i", "Ŧ": "T", "ŧ": "t",
-        "Ŋ": "N", "ŋ": "n", "Ə": "E", "ə": "e", "Ɖ": "D", "ɖ": "d", "ĸ": "k",
+        "Ł": "L",
+        "ł": "l",
+        "Đ": "D",
+        "đ": "d",
+        "Ħ": "H",
+        "ħ": "h",
+        "ı": "i",
+        "Ŧ": "T",
+        "ŧ": "t",
+        "Ŋ": "N",
+        "ŋ": "n",
+        "Ə": "E",
+        "ə": "e",
+        "Ɖ": "D",
+        "ɖ": "d",
+        "ĸ": "k",
     }
 )
 
@@ -306,7 +320,7 @@ def _pdf_string(text: str) -> str:
     data = text.encode("cp1252", errors="replace")
     escaped = []
     for byte in data:
-        if byte in (0x28, 0x29, 0x5C):   # ( ) \
+        if byte in (0x28, 0x29, 0x5C):  # ( ) \
             escaped.append("\\" + chr(byte))
         elif 0x20 <= byte < 0x7F:
             escaped.append(chr(byte))
@@ -725,8 +739,7 @@ def write_document(contents: list[bytes], title: str) -> bytes:
     for offset in offsets:
         output += f"{offset:010d} 00000 n \n".encode("ascii")
     output += (
-        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R /Info {len(objects)} 0 R >>\n"
-        f"startxref\n{xref}\n%%EOF\n"
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R /Info {len(objects)} 0 R >>\nstartxref\n{xref}\n%%EOF\n"
     ).encode("ascii")
     return bytes(output)
 

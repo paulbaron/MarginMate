@@ -133,9 +133,7 @@ class ManyVariationsViewTests(TestCase):
     def test_the_picker_positions_index_into_all_groups_not_just_the_choices(self):
         """A fixed ingredient in the middle must not shift the ?v= indices."""
         recipe = build([["1", "2"], ["7"], ["10", "20"]], selling_price_ttc="120.00")
-        response = self.client.get(
-            reverse("recipes:recipe_detail", kwargs={"pk": recipe.pk}), {"v": "1.0.1"}
-        )
+        response = self.client.get(reverse("recipes:recipe_detail", kwargs={"pk": recipe.pk}), {"v": "1.0.1"})
         self.assertEqual([p["position"] for p in response.context["group_pickers"]], [0, 2])
         self.assertEqual(response.context["variation"]["cost_ht"], Decimal("2") + 7 + 20)
 

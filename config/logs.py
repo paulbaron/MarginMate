@@ -60,6 +60,7 @@ def is_the_server(argv) -> bool:
     argument. `serve --verifier` too: it logs nothing while it checks."""
     return list(argv[1:2]) == [SERVER_COMMAND]
 
+
 #: The signing link's token, after /personnel/signer/ - or its encoded form
 #: in a query string. A token is URL-safe base64: never a « % ».
 SIGNING_LINK = re.compile(r'((?:/|%2[fF])personnel(?:/|%2[fF])signer(?:/|%2[fF]))([^/%\s?#&"\'<>]+)')

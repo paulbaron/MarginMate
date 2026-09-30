@@ -130,7 +130,7 @@ class SourceTests(SimpleTestCase):
             with self.subTest(bank_type=bank_type):
                 self.assertEqual(income.source_of(unsaved(date(2026, 6, 2), "10", "DEPOT", bank_type)), expected)
 
-    def test_what_banque_calls_each_one(self):
+    def test_what_the_bank_page_calls_each_one(self):
         self.assertEqual(payout(date(2026, 6, 2), "10.00").name, "Versement carte")
         cash = income.entry_for(unsaved(date(2026, 6, 2), "100", "VERSEMENT", "VERSEMENT ESPECES"))
         self.assertEqual(cash.name, "Dépôt d'espèces")
@@ -224,9 +224,7 @@ class BalanceTests(SimpleTestCase):
         ]
         balance = income.running_balance(card, payouts)
         # The 4th's 400 is sold before the 5th and not paid yet: the level.
-        self.assertEqual(
-            [balance.pending[one.line.pk] for one in payouts], [euros("0"), euros("0"), euros("400")]
-        )
+        self.assertEqual([balance.pending[one.line.pk] for one in payouts], [euros("0"), euros("0"), euros("400")])
 
     def test_a_missing_payout_is_a_step_that_never_comes_back_down(self):
         card = days_from(date(2026, 6, 1), *([50] * 10))
@@ -252,9 +250,7 @@ class ExactRunTests(SimpleTestCase):
     def test_one_day_and_two_consecutive_days(self):
         card = days_from(date(2026, 6, 1), 45, 60, 75)
         self.assertEqual(runs_of(card, [payout(date(2026, 6, 3), "60.00")]), [(date(2026, 6, 2), date(2026, 6, 2))])
-        self.assertEqual(
-            runs_of(card, [payout(date(2026, 6, 4), "135.00")]), [(date(2026, 6, 2), date(2026, 6, 3))]
-        )
+        self.assertEqual(runs_of(card, [payout(date(2026, 6, 4), "135.00")]), [(date(2026, 6, 2), date(2026, 6, 3))])
 
     def test_the_run_ending_latest_wins(self):
         card = days_from(date(2026, 6, 1), 50, 50)
@@ -293,7 +289,9 @@ class ExactRunTests(SimpleTestCase):
         card = {payday - timedelta(days=9): euros("40"), payday - timedelta(days=1): euros("60")}
         self.assertEqual(runs_of(card, [payout(payday, "100.00")]), [None])
         card[payday - timedelta(days=8)] = card.pop(payday - timedelta(days=9))
-        self.assertEqual(runs_of(card, [payout(payday, "100.00")]), [(payday - timedelta(days=8), payday - timedelta(days=1))])
+        self.assertEqual(
+            runs_of(card, [payout(payday, "100.00")]), [(payday - timedelta(days=8), payday - timedelta(days=1))]
+        )
 
     def test_the_payout_day_itself_is_never_in_its_run(self):
         card = days_from(date(2026, 6, 1), 70)
@@ -309,7 +307,9 @@ class Fixtures:
         self.product = PosProduct.objects.create(name="Pinte Exemple")
         self.other_product = PosProduct.objects.create(name="Planche Exemple")
 
-    def credit(self, day, amount, label="VIR SEPA RECU /FRM CLIENT EXEMPLE", bank_type="VIREMENT", category="", **kwargs):
+    def credit(
+        self, day, amount, label="VIR SEPA RECU /FRM CLIENT EXEMPLE", bank_type="VIREMENT", category="", **kwargs
+    ):
         self.counter += 1
         return BankTransaction.objects.create(
             operation_date=day,
@@ -380,7 +380,10 @@ class SourcesTests(Fixtures, TestCase):
 
     def test_each_source(self):
         report = income.income_for(JUNE)
-        self.assertEqual((report.card_net, report.card_gross, report.card_commission), (euros("297.40"), euros("300.00"), euros("2.60")))
+        self.assertEqual(
+            (report.card_net, report.card_gross, report.card_commission),
+            (euros("297.40"), euros("300.00"), euros("2.60")),
+        )
         self.assertEqual(report.card_commission_rate, euros("0.87"))
         self.assertEqual((report.cash_total, report.cash_count), (euros("300.00"), 1))
         self.assertEqual((report.cheque_total, report.cheque_count), (euros("150.00"), 1))
@@ -390,10 +393,16 @@ class SourcesTests(Fixtures, TestCase):
         report = income.income_for(JUNE)
         self.assertEqual(
             [(one.name, one.amount, one.count) for one in report.other_categories],
-            [(NO_CATEGORY, euros("50.00"), 2), ("Privatisation", euros("900.00"), 1), ("Remboursement", euros("60.00"), 1)],
+            [
+                (NO_CATEGORY, euros("50.00"), 2),
+                ("Privatisation", euros("900.00"), 1),
+                ("Remboursement", euros("60.00"), 1),
+            ],
         )
         # The list: the work first, then the biggest.
-        self.assertEqual([one.net for one in report.others], [euros("40.00"), euros("10.00"), euros("900.00"), euros("60.00")])
+        self.assertEqual(
+            [one.net for one in report.others], [euros("40.00"), euros("10.00"), euros("900.00"), euros("60.00")]
+        )
         self.assertEqual(report.unnamed_others, 2)
 
     def test_the_categories_offered_are_the_ones_typed_on_credits(self):
@@ -451,7 +460,10 @@ class TillSideTests(Fixtures, TestCase):
         rows = {row.label: row for row in income.income_for(JUNE).rows}
         self.assertEqual(list(rows), ["Carte", "Espèces", "Avoir", "Bon cadeau", "Illisible", "Autres entrées"])
         card = rows["Carte"]
-        self.assertEqual((card.till, card.bank, card.net, card.commission), (euros("200"), euros("195"), euros("193.80"), euros("1.20")))
+        self.assertEqual(
+            (card.till, card.bank, card.net, card.commission),
+            (euros("200"), euros("195"), euros("193.80"), euros("1.20")),
+        )
         self.assertEqual(card.difference, euros("-5.00"))
         self.assertEqual(rows["Espèces"].difference, euros("-5.00"))
         # The till alone knows an « Avoir » - paid days before, by another way.
@@ -522,7 +534,9 @@ class MonthTests(Fixtures, TestCase):
         self.payout(date(2026, 6, 1), "120.00", "119.20")
         self.credit(date(2026, 6, 2), "20.00", "VERSEMENT ESPECES", "VERSEMENT ESPECES")
         may, june = income.income_for(DateRange()).months
-        self.assertEqual((may.takings, may.card_sold, may.cash_sold, may.payouts_gross), (euros("140"), euros("120"), euros("20"), 0))
+        self.assertEqual(
+            (may.takings, may.card_sold, may.cash_sold, may.payouts_gross), (euros("140"), euros("120"), euros("20"), 0)
+        )
         self.assertEqual(
             (june.payouts_gross, june.commission, june.net, june.cash_deposited, june.card_sold),
             (euros("120"), euros("0.80"), euros("119.20"), euros("20"), 0),
@@ -593,7 +607,7 @@ class TillBeforeTheStatementTests(TillBeforeTheStatement, TestCase):
         )
         self.assertEqual(report.covered_since, date(2026, 6, 1))
 
-    def test_the_till_before_the_statement_is_counted_apart_and_left_out_of_the_ecart(self):
+    def test_the_till_before_the_statement_is_counted_apart_and_left_out_of_the_gap(self):
         report = income.income_for(DateRange())
         self.assertEqual(
             report.till_before_statement,
@@ -641,7 +655,9 @@ class TillBeforeTheStatementTests(TillBeforeTheStatement, TestCase):
 
         BankTransaction.objects.all().delete()
         report = income.income_for(DateRange())
-        self.assertEqual((report.first_statement_day, report.till_before_statement, report.covered_since), (None, {}, None))
+        self.assertEqual(
+            (report.first_statement_day, report.till_before_statement, report.covered_since), (None, {}, None)
+        )
 
 
 class StatementBeforeTheTill(Fixtures):
@@ -660,7 +676,7 @@ class StatementBeforeTheTill(Fixtures):
 
 
 class TheStatementBeforeTheTillTests(StatementBeforeTheTill, TestCase):
-    def test_what_arrived_before_the_till_is_counted_apart_and_left_out_of_the_ecart(self):
+    def test_what_arrived_before_the_till_is_counted_apart_and_left_out_of_the_gap(self):
         report = income.income_for(DateRange())
         # « Autres entrées » is compared with nothing: not in it.
         self.assertEqual(report.bank_before_till, {income.CARD: euros("80.00"), income.CASH: euros("30.00")})
@@ -668,7 +684,9 @@ class TheStatementBeforeTheTillTests(StatementBeforeTheTill, TestCase):
         self.assertEqual((report.bank_before_from, report.bank_before_to), (date(2026, 6, 5), date(2026, 6, 6)))
         self.assertEqual(report.covered_since, date(2026, 6, 10))
         card = {row.label: row for row in report.rows}["Carte"]
-        self.assertEqual((card.bank, card.bank_uncovered, card.till), (euros("180.00"), euros("80.00"), euros("100.00")))
+        self.assertEqual(
+            (card.bank, card.bank_uncovered, card.till), (euros("180.00"), euros("80.00"), euros("100.00"))
+        )
         self.assertEqual(card.difference, euros("0.00"))
         self.assertEqual(report.till_before_statement, {})
 

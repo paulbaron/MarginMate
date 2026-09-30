@@ -37,8 +37,8 @@ from staff.tests.page_forms import as_post, form_posting_to, forms_of
 from staff.tests.support import employee
 from staff.timesheet import apply_range, month_days, save_month
 
-JUNE = date(2026, 6, 1)   # Monday 1 to Tuesday 30, no public holiday
-MAY = date(2026, 5, 1)    # holidays on the 1st, 8th, 14th and 25th
+JUNE = date(2026, 6, 1)  # Monday 1 to Tuesday 30, no public holiday
+MAY = date(2026, 5, 1)  # holidays on the 1st, 8th, 14th and 25th
 JULY = date(2026, 7, 1)
 MARCH = date(2026, 3, 1)  # 31 days from a Sunday: six week totals
 
@@ -63,7 +63,7 @@ class PageTestCase(TestCase):
         patcher = mock.patch("staff.views.this_month", return_value=JUNE)
         patcher.start()
         self.addCleanup(patcher.stop)
-        # The suite's client (tests/runner.py): logged in as the espace's
+        # The suite's client (tests/runner.py): logged in as the tenant's
         # owner, CSRF enforced as a browser's is.
         self.client = self.client_class(enforce_csrf_checks=True)
 
@@ -207,7 +207,7 @@ class HomePageTests(PageTestCase):
         # The header's form was not the one posted: untouched, still there.
         self.header_form(answer)
 
-    def test_a_day_off_is_an_empty_field_that_says_repos(self):
+    def test_a_day_off_is_an_empty_field_with_a_rest_placeholder(self):
         response = self.get(self.url)
         field = self.add_form(response).control("monday_hours")
         self.assertEqual(field.value, "")
@@ -320,8 +320,10 @@ class EmployeePageTests(PageTestCase):
         self.assertEqual(
             self.messages_of(answer),
             [
-                "Semaine type enregistrée : Lu 7 · Ma 7,5 · Me 6 · Je–Ve 7,5 · 35,5 h / semaine. Le mois déjà "
-                "enregistré garde ses heures et sa semaine type ; les autres suivent la nouvelle semaine type."
+                (
+                    "Semaine type enregistrée : Lu 7 · Ma 7,5 · Me 6 · Je–Ve 7,5 · 35,5 h / semaine. Le mois déjà "
+                    "enregistré garde ses heures et sa semaine type ; les autres suivent la nouvelle semaine type."
+                )
             ],
         )
         # The saved month did not move - its days, and the week it is read
@@ -330,7 +332,7 @@ class EmployeePageTests(PageTestCase):
         self.assertEqual(stored(self.person), june_before)
         june_page = self.get(month_url(self.person))
         june = june_page.context["sheet"]
-        self.assertEqual(june.days[0].hours, Decimal("0"))   # Monday 1, saved as rest
+        self.assertEqual(june.days[0].hours, Decimal("0"))  # Monday 1, saved as rest
         self.assertFalse(any(day.differs for day in june.days))
         text = self.text(june_page)
         self.assertIn("Semaine type : 36 h.", text)
@@ -352,9 +354,11 @@ class EmployeePageTests(PageTestCase):
         self.assertEqual(
             self.messages_of(answer),
             [
-                "Fiche de juin 2026 remise à la semaine type d'aujourd'hui (35,5 h au lieu de 36 h), notes effacées : "
-                # Its five Mondays now worked, its four Saturdays now off.
-                "9 jours modifiés (lundi 1, samedi 6, lundi 8, samedi 13, lundi 15, samedi 20 et 3 autres)."
+                (
+                    "Fiche de juin 2026 remise à la semaine type d'aujourd'hui (35,5 h au lieu de 36 h), notes effacées : "
+                    # Its five Mondays now worked, its four Saturdays now off.
+                    "9 jours modifiés (lundi 1, samedi 6, lundi 8, samedi 13, lundi 15, samedi 20 et 3 autres)."
+                )
             ],
         )
         self.assertEqual(answer.context["sheet"].weekly_hours, Decimal("35.5"))
@@ -365,7 +369,7 @@ class EmployeePageTests(PageTestCase):
         self.person.save()
         response = self.get(self.url)
         form = self.edit_form(response)
-        self.assertEqual(form.control("monday_hours").value, "")      # a day off: empty, « repos »
+        self.assertEqual(form.control("monday_hours").value, "")  # a day off: empty, « repos »
         self.assertEqual(form.control("tuesday_hours").value, "7,5")
         self.assertEqual(form.control("wednesday_hours").value, "6,5")
         self.assertIn("<output data-week-total>36,5</output>", response.content.decode())
@@ -409,9 +413,7 @@ class EmployeePageTests(PageTestCase):
 
     def test_a_refused_edit_is_drawn_back_and_the_page_still_shows_the_employee_as_saved(self):
         form = self.edit_form(self.get(self.url))
-        answer = self.client.post(
-            self.url, as_post(form.submission(values={"last_name": "", "monday_hours": "7h20"}))
-        )
+        answer = self.client.post(self.url, as_post(form.submission(values={"last_name": "", "monday_hours": "7h20"})))
         self.assertEqual(answer.status_code, 200)
         text = self.text(answer)
         self.assertIn("Le nom est obligatoire", text)
@@ -433,8 +435,10 @@ class EmployeePageTests(PageTestCase):
         self.assertEqual(
             self.messages_of(answer),
             [
-                "DUPONT Jeanne n'est plus parmi les salariés actifs. Ses fiches de temps sont conservées et restent "
-                "consultables ici."
+                (
+                    "DUPONT Jeanne n'est plus parmi les salariés actifs. Ses fiches de temps sont conservées et restent "
+                    "consultables ici."
+                )
             ],
         )
         self.assertTrue(Timesheet.objects.filter(employee=self.person).exists())
@@ -466,7 +470,7 @@ class EmployeePageTests(PageTestCase):
         token = form.control("csrfmiddlewaretoken").value
         answer = self.client.post(url, {"csrfmiddlewaretoken": token, "actif": "peut-être"}, follow=True)
         self.assertEqual(self.messages_of(answer), ["Action inconnue : rien n'a été modifié."])
-        self.assertEqual(self.client.post(url, {"actif": "0"}).status_code, 403)   # no token: refused before the view
+        self.assertEqual(self.client.post(url, {"actif": "0"}).status_code, 403)  # no token: refused before the view
         self.person.refresh_from_db()
         self.assertTrue(self.person.is_active)
 
@@ -481,8 +485,13 @@ class EmployeePageTests(PageTestCase):
 
     def test_a_month_picked_that_is_no_month_goes_back_saying_so(self):
         url = reverse("staff:open_month", args=[self.person.pk])
-        for query in ({"mois": "2", "annee": "1800"}, {"mois": "13", "annee": "2026"}, {"mois": "", "annee": ""},
-                      {"mois": "²", "annee": "2026"}, {"mois": "1", "annee": "99999999999999999999999"}):
+        for query in (
+            {"mois": "2", "annee": "1800"},
+            {"mois": "13", "annee": "2026"},
+            {"mois": "", "annee": ""},
+            {"mois": "²", "annee": "2026"},
+            {"mois": "1", "annee": "99999999999999999999999"},
+        ):
             with self.subTest(query=query):
                 response = self.client.get(url, query, follow=True)
                 self.assertLandedOn(response, self.url)
@@ -517,16 +526,19 @@ class MonthPageTests(PageTestCase):
         self.assertIn("semaine type : repos", text)
         # A total after each Sunday, and a partial one closing the month,
         # each beside what the typical week plans for the same days.
-        self.assertEqual(text.count("<th scope=\"row\">Total semaine</th>"), 4)
-        self.assertEqual(text.count("<th scope=\"row\">Total (semaine incomplète)</th>"), 1)
+        self.assertEqual(text.count('<th scope="row">Total semaine</th>'), 4)
+        self.assertEqual(text.count('<th scope="row">Total (semaine incomplète)</th>'), 1)
         self.assertEqual(text.count('<td colspan="2" class="muted">semaine type : 36 h</td>'), 4)
         self.assertRegex(
-            text, r'<td class="num" data-live="week">7,5 h</td>\s*<td colspan="2" class="muted">semaine type : 7,5 h</td>'
+            text,
+            r'<td class="num" data-live="week">7,5 h</td>\s*<td colspan="2" class="muted">semaine type : 7,5 h</td>',
         )
         self.assertIn("151,5 h", text)
         # « ← mai », « juillet → », the PDF - each asking before it leaves a
         # grid changed and not saved (timesheet.js reads data-leaves-grid).
-        self.assertRegex(text, f'href="{month_url(self.person, MAY)}" data-leaves-grid="Des modifications[^"]*">← mai</a>')
+        self.assertRegex(
+            text, f'href="{month_url(self.person, MAY)}" data-leaves-grid="Des modifications[^"]*">← mai</a>'
+        )
         self.assertRegex(
             text, f'href="{month_url(self.person, JULY)}" data-leaves-grid="Des modifications[^"]*">juillet →</a>'
         )
@@ -593,8 +605,10 @@ class MonthPageTests(PageTestCase):
         self.assertEqual(
             self.messages_of(answer),
             [
-                "Fiche de juin 2026 enregistrée : 3 jours modifiés par rapport à la semaine type "
-                "(mardi 2, mercredi 3 et jeudi 4)."
+                (
+                    "Fiche de juin 2026 enregistrée : 3 jours modifiés par rapport à la semaine type "
+                    "(mardi 2, mercredi 3 et jeudi 4)."
+                )
             ],
         )
         # Drawn back: the absence has no hours, the summary counts it, the
@@ -606,7 +620,7 @@ class MonthPageTests(PageTestCase):
         self.assertEqual(sheet.weeks[0].total, Decimal("29"))
         text = self.text(answer)
         self.assertIn("Congés payés : <strong>1 jour</strong>", text)
-        self.assertEqual(text.count('class="day-row is-changed'), 2)   # a note alone is no change
+        self.assertEqual(text.count('class="day-row is-changed'), 2)  # a note alone is no change
 
         # A second save says what changed since the first.
         form = self.grid(answer)
@@ -758,9 +772,11 @@ class MonthShortcutTests(PageTestCase):
         self.assertEqual(
             self.messages_of(answer),
             [
-                "Congés payés du 11 au 18 juin 2026 : 6 jours modifiés (jeudi 11, vendredi 12, samedi 13, "
-                "mardi 16, mercredi 17 et jeudi 18). Jours de repos laissés tels quels : dimanche 14 et lundi 15. "
-                "La fiche de juin 2026 est maintenant enregistrée."
+                (
+                    "Congés payés du 11 au 18 juin 2026 : 6 jours modifiés (jeudi 11, vendredi 12, samedi 13, "
+                    "mardi 16, mercredi 17 et jeudi 18). Jours de repos laissés tels quels : dimanche 14 et lundi 15. "
+                    "La fiche de juin 2026 est maintenant enregistrée."
+                )
             ],
         )
         self.assertIn("Congés payés : <strong>6 jours</strong>", self.text(answer))
@@ -770,8 +786,10 @@ class MonthShortcutTests(PageTestCase):
         self.assertEqual(
             self.messages_of(answer),
             [
-                "Congés payés du 14 au 15 juin 2026 : aucun jour modifié. Jours de repos laissés tels quels : "
-                "dimanche 14 et lundi 15."
+                (
+                    "Congés payés du 14 au 15 juin 2026 : aucun jour modifié. Jours de repos laissés tels quels : "
+                    "dimanche 14 et lundi 15."
+                )
             ],
         )
         self.assertFalse(Timesheet.objects.exists())
@@ -785,18 +803,24 @@ class MonthShortcutTests(PageTestCase):
         answer = self.send(
             self.range_form(),
             values={
-                "debut": "2026-06-15", "fin": "2026-06-17", "motif": "travail", "heures": "7h30", "note": "inventaire"
+                "debut": "2026-06-15",
+                "fin": "2026-06-17",
+                "motif": "travail",
+                "heures": "7h30",
+                "note": "inventaire",
             },
         )
         days = stored(self.person)
-        self.assertEqual(days[15], ("repos", Decimal("0.00"), ""))   # a Monday, a day off
+        self.assertEqual(days[15], ("repos", Decimal("0.00"), ""))  # a Monday, a day off
         self.assertEqual(days[16], ("travail", Decimal("7.50"), "inventaire"))
         self.assertEqual(days[17], ("travail", Decimal("7.50"), "inventaire"))
         self.assertEqual(
             self.messages_of(answer),
             [
-                "Travail, 7,5 h par jour, du 15 au 17 juin 2026 : 2 jours modifiés (mardi 16 et mercredi 17). "
-                "Jour de repos laissé tel quel : lundi 15. La fiche de juin 2026 est maintenant enregistrée."
+                (
+                    "Travail, 7,5 h par jour, du 15 au 17 juin 2026 : 2 jours modifiés (mardi 16 et mercredi 17). "
+                    "Jour de repos laissé tel quel : lundi 15. La fiche de juin 2026 est maintenant enregistrée."
+                )
             ],
         )
 
@@ -832,8 +856,10 @@ class MonthShortcutTests(PageTestCase):
             ({"debut": "2026-06-04", "fin": "2026-06-31"}, "« Du … au … » : choisissez le premier et le dernier jour."),
             ({"debut": "20260604", "fin": "2026-06-04"}, "« Du … au … » : choisissez le premier et le dernier jour."),
             ({"debut": "2026-06-04", "fin": "2026-06-04", "motif": "vacances"}, "« Du … au … » : motif inconnu."),
-            ({"debut": "2026-06-04", "fin": "2026-06-04", "motif": "travail", "heures": "-2"},
-             "« Du … au … » : les heures ne peuvent pas être négatives."),
+            (
+                {"debut": "2026-06-04", "fin": "2026-06-04", "motif": "travail", "heures": "-2"},
+                "« Du … au … » : les heures ne peuvent pas être négatives.",
+            ),
             ({"debut": "2026-07-04", "fin": "2026-07-05"}, "Du 04/07/2026 au 05/07/2026 : aucun jour en juin 2026."),
             ({"debut": "2026-06-04", "fin": "2026-06-04", "note": "x" * 300}, "La note dépasse 255 caractères."),
         ]
@@ -870,11 +896,14 @@ class MonthShortcutTests(PageTestCase):
         _form, response = self.holidays_form()
         text = self.text(response)
         for label in (
-            "1er mai — Fête du Travail", "8 mai — Victoire 1945", "14 mai — Ascension", "25 mai — Lundi de Pentecôte"
+            "1er mai — Fête du Travail",
+            "8 mai — Victoire 1945",
+            "14 mai — Ascension",
+            "25 mai — Lundi de Pentecôte",
         ):
             self.assertIn(label, text)
-        self.assertIn("14 mai — Ascension <span class=\"muted\">— Travail, 7,5 h</span>", text)
-        self.assertIn("25 mai — Lundi de Pentecôte <span class=\"muted\">— Repos</span>", text)
+        self.assertIn('14 mai — Ascension <span class="muted">— Travail, 7,5 h</span>', text)
+        self.assertIn('25 mai — Lundi de Pentecôte <span class="muted">— Repos</span>', text)
         self.assertIn("Férié : Ascension", text)
         self.assertIn("Mettre les fériés du mois en Férié chômé", text)
         self.assertIn("celui qui tombe un jour de repos le reste", " ".join(text.split()))
@@ -892,9 +921,11 @@ class MonthShortcutTests(PageTestCase):
         self.assertEqual(
             self.messages_of(answer),
             [
-                "En Férié chômé, 0 h : 1er mai (Fête du Travail), 8 mai (Victoire 1945) et 14 mai (Ascension) — "
-                "3 jours modifiés. Jour de repos laissé tel quel : 25 mai (Lundi de Pentecôte). La fiche de mai "
-                "2026 est maintenant enregistrée."
+                (
+                    "En Férié chômé, 0 h : 1er mai (Fête du Travail), 8 mai (Victoire 1945) et 14 mai (Ascension) — "
+                    "3 jours modifiés. Jour de repos laissé tel quel : 25 mai (Lundi de Pentecôte). La fiche de mai "
+                    "2026 est maintenant enregistrée."
+                )
             ],
         )
         self.assertIn("Férié chômé : <strong>3 jours</strong>", self.text(answer))
@@ -903,8 +934,10 @@ class MonthShortcutTests(PageTestCase):
         self.assertEqual(
             self.messages_of(answer),
             [
-                "Déjà en Férié chômé : 1er mai (Fête du Travail), 8 mai (Victoire 1945) et 14 mai (Ascension). "
-                "Jour de repos laissé tel quel : 25 mai (Lundi de Pentecôte). Rien n'a changé."
+                (
+                    "Déjà en Férié chômé : 1er mai (Fête du Travail), 8 mai (Victoire 1945) et 14 mai (Ascension). "
+                    "Jour de repos laissé tel quel : 25 mai (Lundi de Pentecôte). Rien n'a changé."
+                )
             ],
         )
 
@@ -939,7 +972,7 @@ class MonthShortcutTests(PageTestCase):
         form = form_posting_to(content, reset_url)
         # The button sits inside a closed <details>: a first click opens it,
         # a second one resets - a confirmation that needs no JavaScript.
-        details = content[content.index('<details class="staff-disclosure">'):]
+        details = content[content.index('<details class="staff-disclosure">') :]
         self.assertLess(details.index(reset_url), details.index("</details>"))
         self.assertEqual(form.buttons()[0].attrs["class"], "btn btn-danger")
         answer = self.send(form)
@@ -951,8 +984,10 @@ class MonthShortcutTests(PageTestCase):
         self.assertEqual(
             self.messages_of(answer),
             [
-                "Fiche de juin 2026 remise à la semaine type, notes effacées : 3 jours modifiés "
-                "(mardi 2, mercredi 3 et jeudi 4)."
+                (
+                    "Fiche de juin 2026 remise à la semaine type, notes effacées : 3 jours modifiés "
+                    "(mardi 2, mercredi 3 et jeudi 4)."
+                )
             ],
         )
         answer = self.send(form)
@@ -1024,7 +1059,7 @@ class MonthPdfTests(PageTestCase):
         response = self.download()
         self.assertEqual(
             response["Content-Disposition"],
-            "attachment; filename=\"Fiche de temps DUPONT Jeanne juin 2026.pdf\"; "
+            'attachment; filename="Fiche de temps DUPONT Jeanne juin 2026.pdf"; '
             "filename*=UTF-8''Fiche%20de%20temps%20DUPONT%20Jeanne%20juin%202026.pdf",
         )
         lines = self.lines(response)
@@ -1163,8 +1198,16 @@ class NotFoundTests(PageTestCase):
     def test_an_unknown_employee(self):
         for pk in ("999", "99999999999999999999999", "0"):
             with self.subTest(pk=pk):
-                for suffix in ("", "actif/", "mois/", "2026-06/", "2026-06/periode/", "2026-06/feries/",
-                               "2026-06/semaine-type/", "2026-06/pdf/"):
+                for suffix in (
+                    "",
+                    "actif/",
+                    "mois/",
+                    "2026-06/",
+                    "2026-06/periode/",
+                    "2026-06/feries/",
+                    "2026-06/semaine-type/",
+                    "2026-06/pdf/",
+                ):
                     self.get(f"/personnel/{pk}/{suffix}", status=404)
 
     def test_an_unknown_employee_is_a_404_on_post_too(self):
@@ -1193,17 +1236,17 @@ class TemplateTests(TestCase):
             names,
             [
                 "_employee_fields.html",
-                "_month_table.html",          # a month to read: the employee's page, a month under signature
-                "_signature.html",            # the month's « Signature » section
-                "_signature_request.html",    # one version sent for signature
+                "_month_table.html",  # a month to read: the employee's page, a month under signature
+                "_signature.html",  # the month's « Signature » section
+                "_signature_request.html",  # one version sent for signature
                 "employee.html",
                 "home.html",
                 "month.html",
-                "public_base.html",           # the employee's pages: NOT base.html, no navigation
+                "public_base.html",  # the employee's pages: NOT base.html, no navigation
                 "sign.html",
                 "sign_error.html",
-                "signature_delete.html",      # « Supprimer… » a version, step 1: what goes, why, two checks
-                "signature_delete_confirm.html",   # step 2: « Dernière vérification », one red button
+                "signature_delete.html",  # « Supprimer… » a version, step 1: what goes, why, two checks
+                "signature_delete_confirm.html",  # step 2: « Dernière vérification », one red button
             ],
         )
         for name in names:

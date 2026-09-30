@@ -32,7 +32,7 @@ DEFAULT_DAYS = 30
 
 def new_code() -> str:
     raw = "".join(secrets.choice(ALPHABET) for _ in range(LENGTH))
-    return "-".join(raw[start:start + GROUP] for start in range(0, LENGTH, GROUP))
+    return "-".join(raw[start : start + GROUP] for start in range(0, LENGTH, GROUP))
 
 
 def normalize(code) -> str:

@@ -1,4 +1,4 @@
-"""An espace's folders (accounts/paths.py), the default storage
+"""A tenant's folders (accounts/paths.py), the default storage
 (accounts/storage.py) and the logged-in file view (accounts/views.py)."""
 
 import os
@@ -15,7 +15,7 @@ from accounts.tenancy import NoTenantBound, bound_tenant
 from accounts.tests.support import TwoTenantsTestCase
 from tests.factories import make_invoice
 
-#: Every folder an espace keeps its files in.
+#: Every folder a tenant keeps its files in.
 FOLDERS = (
     paths.media_root,
     paths.private_dir,
@@ -27,13 +27,13 @@ FOLDERS = (
 
 
 class MultiModePathsTests(TwoTenantsTestCase):
-    def test_a_new_espace_has_every_folder(self):
+    def test_a_new_tenant_has_every_folder(self):
         folder = paths.tenant_dir(self.bar_a)
         self.assertTrue((folder / "db.sqlite3").is_file())
         for name in paths.FOLDERS:
             self.assertTrue((folder / name).is_dir(), name)
 
-    def test_each_folder_is_the_bound_espace_s_own(self):
+    def test_each_folder_is_the_bound_tenant_s_own(self):
         for function in FOLDERS:
             with self.subTest(function=function.__name__):
                 with bound_tenant(self.bar_a):
@@ -62,7 +62,7 @@ class MultiModePathsTests(TwoTenantsTestCase):
 
 
 class MultiModeStorageTests(TwoTenantsTestCase):
-    def test_a_stored_file_lands_in_the_bound_espace_s_media(self):
+    def test_a_stored_file_lands_in_the_bound_tenant_s_media(self):
         with bound_tenant(self.bar_a):
             invoice = make_invoice()
             invoice.source_file.save("facture-alpha.pdf", ContentFile(b"%PDF-alpha"))

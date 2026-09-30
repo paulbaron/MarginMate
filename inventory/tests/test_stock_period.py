@@ -53,8 +53,11 @@ class StockBetweenTests(TestCase):
 
     def count(self, take, stock_type, quantity):
         make_stock_take_line(
-            stock_take=take, product=None, stock_type=stock_type,
-            counted_quantity=quantity, unit=stock_type.unit,
+            stock_take=take,
+            product=None,
+            stock_type=stock_type,
+            counted_quantity=quantity,
+            unit=stock_type.unit,
         )
 
     def test_what_left_the_shelf_is_opening_plus_purchases_minus_closing(self):
@@ -75,7 +78,9 @@ class StockBetweenTests(TestCase):
         self.count(self.opening, self.vodka, "12")
         self.count(self.closing, self.vodka, "9")
         make_movement(
-            stock_type=self.vodka, quantity="-2", kind=MovementKind.LOSS,
+            stock_type=self.vodka,
+            quantity="-2",
+            kind=MovementKind.LOSS,
             occurred_on=date(2026, 3, 10),
         )
 
@@ -145,11 +150,16 @@ class SalesAreCappedByWhatLeftTheShelfTests(TestCase):
         stock_type = make_stock_type(name=name, unit=UnitChoices.LITRE)
         for take, quantity in ((self.opening, opening), (self.closing, closing)):
             make_stock_take_line(
-                stock_take=take, product=None, stock_type=stock_type,
-                counted_quantity=quantity, unit=UnitChoices.LITRE,
+                stock_take=take,
+                product=None,
+                stock_type=stock_type,
+                counted_quantity=quantity,
+                unit=UnitChoices.LITRE,
             )
         make_movement(
-            stock_type=stock_type, quantity=purchases, unit_cost_ht=unit_cost_ht,
+            stock_type=stock_type,
+            quantity=purchases,
+            unit_cost_ht=unit_cost_ht,
             occurred_on=date(2026, 3, 10),
         )
         return stock_type
@@ -223,8 +233,11 @@ class StockPagePeriodTests(TestCase):
         self.closing = make_stock_take(taken_at=at(31))
         for take, quantity in ((self.opening, "12"), (self.closing, "2")):
             make_stock_take_line(
-                stock_take=take, product=None, stock_type=self.vodka,
-                counted_quantity=quantity, unit=UnitChoices.LITRE,
+                stock_take=take,
+                product=None,
+                stock_type=self.vodka,
+                counted_quantity=quantity,
+                unit=UnitChoices.LITRE,
             )
         make_movement(stock_type=self.vodka, quantity="12", unit_cost_ht="20", occurred_on=date(2026, 2, 1))
         self.recipe = make_recipe(name="Mule")
@@ -321,7 +334,7 @@ class StockPagePeriodTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(response.context["period"])
 
-    def test_the_ecarts_page_links_to_the_per_item_view(self):
+    def test_the_variance_page_links_to_the_per_item_view(self):
         html = self.client.get(
             reverse("inventory:stock_take_variance", kwargs={"pk": self.closing.pk})
         ).content.decode()

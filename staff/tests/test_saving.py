@@ -20,8 +20,8 @@ from staff.timesheet import (
     save_month,
 )
 
-JUNE = date(2026, 6, 1)   # Monday 1 to Tuesday 30, no public holiday
-MAY = date(2026, 5, 1)    # 1st and 8th (Fridays), Ascension Thursday 14th, Whit Monday 25th
+JUNE = date(2026, 6, 1)  # Monday 1 to Tuesday 30, no public holiday
+MAY = date(2026, 5, 1)  # 1st and 8th (Fridays), Ascension Thursday 14th, Whit Monday 25th
 
 
 def stored(person, month):
@@ -275,9 +275,15 @@ class ApplyRangeTests(TestCase):
         outcome = apply_range(self.person, JUNE, date(2026, 6, 13), date(2026, 6, 16), "conges")
         self.assertEqual(outcome.left_alone, (date(2026, 6, 14), date(2026, 6, 15)))
         days = stored(self.person, JUNE)
-        self.assertEqual([days[day][:2] for day in (13, 14, 15, 16)], [
-            ("conges", Decimal("0")), ("travail", Decimal("4")), ("repos", Decimal("0")), ("conges", Decimal("0")),
-        ])
+        self.assertEqual(
+            [days[day][:2] for day in (13, 14, 15, 16)],
+            [
+                ("conges", Decimal("0")),
+                ("travail", Decimal("4")),
+                ("repos", Decimal("0")),
+                ("conges", Decimal("0")),
+            ],
+        )
 
     def test_a_range_of_days_off_only_writes_nothing(self):
         outcome = apply_range(self.person, JUNE, date(2026, 6, 14), date(2026, 6, 15), "conges")
@@ -296,7 +302,7 @@ class ApplyRangeTests(TestCase):
     def test_a_range_over_the_month_s_edge_is_cut_to_the_month(self):
         outcome = apply_range(self.person, JUNE, date(2026, 5, 28), date(2026, 6, 3), "maladie")
         self.assertEqual(outcome.touched, (date(2026, 6, 1), date(2026, 6, 2), date(2026, 6, 3)))
-        self.assertEqual(outcome.changed, (date(2026, 6, 2), date(2026, 6, 3)))   # Monday 1 is a day off
+        self.assertEqual(outcome.changed, (date(2026, 6, 2), date(2026, 6, 3)))  # Monday 1 is a day off
         outcome = apply_range(self.person, JUNE, date(2026, 6, 29), date(2026, 7, 5), "conges")
         self.assertEqual(outcome.touched, (date(2026, 6, 29), date(2026, 6, 30)))
         self.assertEqual(Timesheet.objects.count(), 1)
@@ -351,9 +357,9 @@ class ApplyRangeTests(TestCase):
         self.save_notes()
         apply_range(self.person, JUNE, date(2026, 6, 2), date(2026, 6, 3), "travail", hours=Decimal("5"))
         days = stored(self.person, JUNE)
-        self.assertEqual(days[2][2], "arrivé en retard")   # still « Travail »: kept
+        self.assertEqual(days[2][2], "arrivé en retard")  # still « Travail »: kept
         apply_range(self.person, JUNE, date(2026, 6, 2), date(2026, 6, 3), "conges")
-        self.assertEqual(stored(self.person, JUNE)[2][2], "")   # now on leave: gone
+        self.assertEqual(stored(self.person, JUNE)[2][2], "")  # now on leave: gone
         apply_range(self.person, JUNE, date(2026, 6, 2), date(2026, 6, 3), "conges", note="  congés  d'été ")
         self.assertEqual({stored(self.person, JUNE)[day][2] for day in (2, 3)}, {"congés d'été"})
 
@@ -438,7 +444,7 @@ class ResetToTypicalWeekTests(TestCase):
         self.assertEqual(days[2], ("travail", Decimal("7.5"), ""))
         self.assertEqual(days[7], ("repos", Decimal("0"), ""))
         self.assertEqual(days[16], ("travail", Decimal("7.5"), ""))
-        self.assertEqual(days[6], ("travail", Decimal("6"), ""))   # today's typical week, not June's old one
+        self.assertEqual(days[6], ("travail", Decimal("6"), ""))  # today's typical week, not June's old one
         self.assertTrue(month_sheet(self.person, JUNE).saved)
 
     def test_an_unsaved_month_already_is_the_typical_week(self):

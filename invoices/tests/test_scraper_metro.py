@@ -11,6 +11,7 @@ it "134-052-014645" while the parser stores "052-014645".
 import os
 import shutil
 import tempfile
+from itertools import pairwise
 
 from django.test import SimpleTestCase
 
@@ -123,8 +124,15 @@ class DownloadWindowTests(SimpleTestCase):
     def run_window(self, rows, known=(), run=None, driver=None):
         driver = driver or FakeDriver(rows, self.clock)
         started = metro._download_window(
-            driver, self.dir, len(rows), set(known), self.log.append, lambda: None,
-            sleep=self.clock.sleep, clock=self.clock, run=run,
+            driver,
+            self.dir,
+            len(rows),
+            set(known),
+            self.log.append,
+            lambda: None,
+            sleep=self.clock.sleep,
+            clock=self.clock,
+            run=run,
         )
         return driver, started
 
@@ -155,7 +163,9 @@ class DownloadWindowTests(SimpleTestCase):
         with the bug gone, a file lands in a second, and one at a time is
         what a person does (Metro's firewall blocks what hammers it)."""
         slow, fast = "134_53_40586", "134_52_45126"
-        driver, _started = self.run_window([Row(slow, self.lands(slow, after=10)), Row(fast, self.lands(fast, after=0.5))])
+        driver, _started = self.run_window(
+            [Row(slow, self.lands(slow, after=10)), Row(fast, self.lands(fast, after=0.5))]
+        )
         self.assertGreaterEqual(driver.clicks[1][1], 10, "the second download was started with the first outstanding")
         self.assertEqual(self.timeouts(), [])
 
@@ -163,7 +173,7 @@ class DownloadWindowTests(SimpleTestCase):
         keys = [f"134_52_{number}" for number in range(1, 4)]
         driver, _started = self.run_window([Row(key, self.lands(key, after=0.1)) for key in keys])
         times = [clicked_at for _id, clicked_at in driver.clicks]
-        self.assertTrue(all(b - a >= metro.CLICK_INTERVAL_SECONDS for a, b in zip(times, times[1:])))
+        self.assertTrue(all(b - a >= metro.CLICK_INTERVAL_SECONDS for a, b in pairwise(times)))
 
     def test_a_download_that_never_arrives_is_reported_and_the_rest_go_on(self):
         rows = [
@@ -171,7 +181,7 @@ class DownloadWindowTests(SimpleTestCase):
             Row("134_52_2"),
             Row("134_52_3", self.lands("134_52_3", after=0.5)),
         ]
-        driver, started = self.run_window(rows)
+        _driver, started = self.run_window(rows)
         self.assertEqual(started, 3)
         self.assertEqual(len(self.timeouts()), 1)
         self.assertIn("2/3", self.timeouts()[0])
@@ -245,8 +255,14 @@ class DownloadWindowTests(SimpleTestCase):
     def test_fewer_rows_read_than_announced_is_said(self):
         with self.assertRaises(metro.MetroError):
             metro._download_window(
-                FakeDriver([Row("134_52_1", self.lands("134_52_1", after=0.3))], self.clock), self.dir, 3, set(),
-                self.log.append, lambda: None, sleep=self.clock.sleep, clock=self.clock,
+                FakeDriver([Row("134_52_1", self.lands("134_52_1", after=0.3))], self.clock),
+                self.dir,
+                3,
+                set(),
+                self.log.append,
+                lambda: None,
+                sleep=self.clock.sleep,
+                clock=self.clock,
             )
 
     def test_a_file_left_by_an_earlier_run_is_not_this_download(self):

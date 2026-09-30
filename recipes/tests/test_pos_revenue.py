@@ -101,9 +101,7 @@ def _sheet_xml(rows) -> str:
 
 #: The same workbook with the ticket sheet beside the lines - what the real
 #: export holds (recipes/tests/test_pos_payments.py).
-WORKBOOK_WITH_TICKETS = WORKBOOK.replace(
-    "</sheets>", '<sheet name="SalesDocument" sheetId="2" r:id="rId2"/></sheets>'
-)
+WORKBOOK_WITH_TICKETS = WORKBOOK.replace("</sheets>", '<sheet name="SalesDocument" sheetId="2" r:id="rId2"/></sheets>')
 RELS_WITH_TICKETS = RELS.replace(
     "</Relationships>",
     '<Relationship Id="rId2" Target="worksheets/sheet2.xml" '
@@ -148,10 +146,12 @@ class MoneyColumnsTests(SimpleTestCase):
     def test_a_day_mixing_two_rates_is_worked_out_per_rate(self):
         """A day of food at 10 % and drink at 20 % read at one rate is wrong
         by cents a line and by nothing anyone can see."""
-        result = self.parse([
-            line("2026-06-01", "Pinte Exemple", "7.50", "20%"),
-            line("2026-06-01", "Soda Exemple", "3.50", "10%"),
-        ])
+        result = self.parse(
+            [
+                line("2026-06-01", "Pinte Exemple", "7.50", "20%"),
+                line("2026-06-01", "Soda Exemple", "3.50", "10%"),
+            ]
+        )
         self.assertEqual(result.revenue_ttc, Decimal("11.00"))
         self.assertEqual(result.revenue_ht, Decimal("9.43"))  # 6.25 + 3.18
         self.assertEqual(self.money(result, "Soda Exemple", date(2026, 6, 1)).revenue_ht, Decimal("3.18"))
@@ -176,10 +176,12 @@ class MoneyColumnsTests(SimpleTestCase):
         """Its stock left the shelf and no money came in - which is exactly
         what a margin wants. What it would have cost sits in `Offerts TTC`
         and is not revenue."""
-        result = self.parse([
-            line("2026-06-01", "Pinte Exemple", "7.50", "20%"),
-            line("2026-06-01", "Pinte Exemple", "0", "20%", offered="OUI", offered_ttc="7.50"),
-        ])
+        result = self.parse(
+            [
+                line("2026-06-01", "Pinte Exemple", "7.50", "20%"),
+                line("2026-06-01", "Pinte Exemple", "0", "20%", offered="OUI", offered_ttc="7.50"),
+            ]
+        )
         money = self.money(result, "Pinte Exemple", date(2026, 6, 1))
         self.assertEqual(money.revenue_ttc, Decimal("7.50"))
         self.assertEqual(result.entries, [("Pinte Exemple", date(2026, 6, 1), 2)])
@@ -243,10 +245,12 @@ class MoneyColumnsTests(SimpleTestCase):
     def test_the_total_row_carries_no_money(self):
         """The export's own last row has a « - » where its day, its name and
         its amounts should be."""
-        result = self.parse([
-            line("2026-06-01", "Pinte Exemple", "7.50", "20%"),
-            ["-", "-", "", "", "", "-", "", "-"],
-        ])
+        result = self.parse(
+            [
+                line("2026-06-01", "Pinte Exemple", "7.50", "20%"),
+                ["-", "-", "", "", "", "-", "", "-"],
+            ]
+        )
         self.assertEqual(result.revenue_ttc, Decimal("7.50"))
         self.assertEqual(result.skipped, 1)
 
@@ -271,11 +275,13 @@ class SeveralFilesTests(SimpleTestCase):
         self.assertEqual(result.repeated_days, 0)
 
     def test_one_file_read_whole(self):
-        path = write_workbook([
-            HEADER,
-            line("2026-06-01", "Pinte Exemple", "7.50", "20%"),
-            line("2026-06-01", "Soda Exemple", "3.50", "10%"),
-        ])
+        path = write_workbook(
+            [
+                HEADER,
+                line("2026-06-01", "Pinte Exemple", "7.50", "20%"),
+                line("2026-06-01", "Soda Exemple", "3.50", "10%"),
+            ]
+        )
         result = parse_sales_export(path)
         self.assertEqual(result.revenue_ttc, Decimal("11.00"))
         self.assertEqual(result.revenue_ht, Decimal("9.43"))
@@ -309,29 +315,44 @@ class SyncRevenueTests(TestCase):
         self.assertEqual(day.revenue_ttc, Decimal("15.00"))
 
     def test_an_overlapping_import_replaces_the_shared_day_and_adds_the_new_one(self):
-        sync_pos_products(self.export([
-            line("2026-06-01", "Pinte Exemple", "7.50", "20%"),
-            line("2026-06-02", "Pinte Exemple", "7.50", "20%"),
-        ]))
-        sync_pos_products(self.export([
-            line("2026-06-02", "Pinte Exemple", "7.50", "20%"),
-            line("2026-06-03", "Pinte Exemple", "7.50", "20%"),
-        ]))
+        sync_pos_products(
+            self.export(
+                [
+                    line("2026-06-01", "Pinte Exemple", "7.50", "20%"),
+                    line("2026-06-02", "Pinte Exemple", "7.50", "20%"),
+                ]
+            )
+        )
+        sync_pos_products(
+            self.export(
+                [
+                    line("2026-06-02", "Pinte Exemple", "7.50", "20%"),
+                    line("2026-06-03", "Pinte Exemple", "7.50", "20%"),
+                ]
+            )
+        )
         product = PosProduct.objects.get()
         self.assertEqual(product.total_quantity, 3)
-        self.assertEqual(
-            sum(row.revenue_ttc for row in PosProductDailyQuantity.objects.all()), Decimal("22.50")
-        )
+        self.assertEqual(sum(row.revenue_ttc for row in PosProductDailyQuantity.objects.all()), Decimal("22.50"))
 
     def test_a_day_whose_money_was_never_read_says_so(self):
         """Not « this day took 0 € » - the margin page has to be able to tell
         the two apart, or a backfill that has not run yet reads as a bar that
         sold nothing."""
-        sync_pos_products(ParsedExport(
-            products={"Pinte Exemple": {"quantity": 2, "category": "", "typology": "",
-                                        "first": date(2026, 6, 1), "last": date(2026, 6, 1)}},
-            entries=[("Pinte Exemple", date(2026, 6, 1), 2)],
-        ))
+        sync_pos_products(
+            ParsedExport(
+                products={
+                    "Pinte Exemple": {
+                        "quantity": 2,
+                        "category": "",
+                        "typology": "",
+                        "first": date(2026, 6, 1),
+                        "last": date(2026, 6, 1),
+                    }
+                },
+                entries=[("Pinte Exemple", date(2026, 6, 1), 2)],
+            )
+        )
         day = PosProductDailyQuantity.objects.get()
         self.assertFalse(day.revenue_read)
         self.assertEqual(day.revenue_ttc, Decimal("0"))
@@ -367,10 +388,12 @@ class ImportLogTests(TestCase):
         return job.log
 
     def test_the_log_says_what_came_in(self):
-        log = self.run_import([
-            line("2026-06-01", "Pinte Exemple", "7.50", "20%"),
-            line("2026-06-01", "Soda Exemple", "3.50", "10%"),
-        ])
+        log = self.run_import(
+            [
+                line("2026-06-01", "Pinte Exemple", "7.50", "20%"),
+                line("2026-06-01", "Soda Exemple", "3.50", "10%"),
+            ]
+        )
         self.assertIn("Recettes lues : 11,00 € TTC, 9,43 € HT.", log)
 
     def test_a_file_with_no_price_column_says_so_rather_than_reading_zero(self):
@@ -395,25 +418,29 @@ class BackfillCommandTests(TestCase):
     def setUp(self):
         self.folder = tempfile.mkdtemp()
         write_workbook(
-            [HEADER,
-             line("2026-06-01", "Pinte Exemple", "7.50", "20%"),
-             line("2026-06-01", "Soda Exemple", "3.50", "10%"),
-             line("2026-06-02", "Pinte Exemple", "7.50", "20%")],
-            folder=self.folder, name="export-01.xlsx",
+            [
+                HEADER,
+                line("2026-06-01", "Pinte Exemple", "7.50", "20%"),
+                line("2026-06-01", "Soda Exemple", "3.50", "10%"),
+                line("2026-06-02", "Pinte Exemple", "7.50", "20%"),
+            ],
+            folder=self.folder,
+            name="export-01.xlsx",
         )
         # A second download whose window overlaps the first one's last day.
         write_workbook(
-            [HEADER,
-             line("2026-06-02", "Pinte Exemple", "7.50", "20%"),
-             line("2026-06-03", "Pinte Exemple", "7.50", "20%")],
-            folder=self.folder, name="export-02.xlsx",
+            [
+                HEADER,
+                line("2026-06-02", "Pinte Exemple", "7.50", "20%"),
+                line("2026-06-03", "Pinte Exemple", "7.50", "20%"),
+            ],
+            folder=self.folder,
+            name="export-02.xlsx",
         )
-        self.pinte = PosProduct.objects.create(name="Pinte Exemple", total_quantity=3)
+        self.pint = PosProduct.objects.create(name="Pinte Exemple", total_quantity=3)
         self.soda = PosProduct.objects.create(name="Soda Exemple", total_quantity=1)
         for day in (1, 2, 3):
-            PosProductDailyQuantity.objects.create(
-                product=self.pinte, sold_on=date(2026, 6, day), quantity=1
-            )
+            PosProductDailyQuantity.objects.create(product=self.pint, sold_on=date(2026, 6, day), quantity=1)
         PosProductDailyQuantity.objects.create(product=self.soda, sold_on=date(2026, 6, 1), quantity=1)
 
     def run_command(self, *args):
@@ -425,9 +452,7 @@ class BackfillCommandTests(TestCase):
         output = self.run_command("--dry-run")
         self.assertIn("rien n'est enregistré", output)
         self.assertEqual(PosProductDailyQuantity.objects.filter(revenue_read=True).count(), 0)
-        self.assertEqual(
-            sum(row.revenue_ttc for row in PosProductDailyQuantity.objects.all()), Decimal("0")
-        )
+        self.assertEqual(sum(row.revenue_ttc for row in PosProductDailyQuantity.objects.all()), Decimal("0"))
 
     def test_the_dry_run_says_what_it_would_do(self):
         output = self.run_command("--dry-run")
@@ -439,19 +464,15 @@ class BackfillCommandTests(TestCase):
 
     def test_a_day_read_from_two_files_is_not_counted_twice(self):
         self.run_command()
-        second = PosProductDailyQuantity.objects.get(product=self.pinte, sold_on=date(2026, 6, 2))
+        second = PosProductDailyQuantity.objects.get(product=self.pint, sold_on=date(2026, 6, 2))
         self.assertEqual(second.revenue_ttc, Decimal("7.50"))
-        self.assertEqual(
-            sum(row.revenue_ttc for row in PosProductDailyQuantity.objects.all()), Decimal("26.00")
-        )
+        self.assertEqual(sum(row.revenue_ttc for row in PosProductDailyQuantity.objects.all()), Decimal("26.00"))
 
     def test_running_it_twice_changes_nothing_the_second_time(self):
         self.run_command()
         before = sorted(PosProductDailyQuantity.objects.values_list("pk", "revenue_ttc", "revenue_ht"))
         self.run_command()
-        self.assertEqual(
-            sorted(PosProductDailyQuantity.objects.values_list("pk", "revenue_ttc", "revenue_ht")), before
-        )
+        self.assertEqual(sorted(PosProductDailyQuantity.objects.values_list("pk", "revenue_ttc", "revenue_ht")), before)
 
     def test_a_day_with_no_row_here_is_reported_never_created(self):
         """The command fills what the import already recorded; inventing a
@@ -473,7 +494,8 @@ class BackfillCommandTests(TestCase):
     def test_a_till_product_unknown_here_is_reported(self):
         write_workbook(
             [HEADER, line("2026-06-04", "Produit Inconnu", "4.00", "10%")],
-            folder=self.folder, name="export-03.xlsx",
+            folder=self.folder,
+            name="export-03.xlsx",
         )
         output = self.run_command()
         self.assertEqual(PosProduct.objects.filter(name="Produit Inconnu").count(), 0)
@@ -482,9 +504,7 @@ class BackfillCommandTests(TestCase):
     def test_the_revenue_per_year_is_the_sum_of_the_days(self):
         output = self.run_command()
         self.assertIn("2026", output)
-        self.assertEqual(
-            sum(row.revenue_ttc for row in PosProductDailyQuantity.objects.all()), Decimal("26.00")
-        )
+        self.assertEqual(sum(row.revenue_ttc for row in PosProductDailyQuantity.objects.all()), Decimal("26.00"))
 
     def test_the_revenue_per_year_is_printed_in_euros_both_ways(self):
         """The per-year figures are what the run is checked against by hand:
@@ -504,7 +524,8 @@ class BackfillCommandTests(TestCase):
         averaged or summed, nothing would ever say a figure had two readings."""
         write_workbook(
             [HEADER, line("2026-06-02", "Pinte Exemple", "9.00", "20%")],
-            folder=self.folder, name="export-03.xlsx",
+            folder=self.folder,
+            name="export-03.xlsx",
         )
 
         output = self.run_command()
@@ -513,7 +534,7 @@ class BackfillCommandTests(TestCase):
         self.assertIn("Pinte Exemple", output)
         self.assertIn("7,50 €", output)
         self.assertIn("9,00 €", output)
-        second = PosProductDailyQuantity.objects.get(product=self.pinte, sold_on=date(2026, 6, 2))
+        second = PosProductDailyQuantity.objects.get(product=self.pint, sold_on=date(2026, 6, 2))
         self.assertEqual(second.revenue_ttc, Decimal("9.00"))
 
     def test_a_workbook_that_is_not_an_export_is_named_and_the_others_still_fill(self):
@@ -524,7 +545,8 @@ class BackfillCommandTests(TestCase):
         export the day one is renamed."""
         write_workbook(
             [HEADER, line("2026-06-01", "Pinte Exemple", "7.50", "20%")],
-            folder=self.folder, name="export-autre.xlsx",
+            folder=self.folder,
+            name="export-autre.xlsx",
         )
         path = Path(self.folder) / "export-autre.xlsx"
         with zipfile.ZipFile(path, "w") as archive:
@@ -540,11 +562,9 @@ class BackfillCommandTests(TestCase):
         output = self.run_command()
 
         self.assertIn("export-autre.xlsx : illisible", output)
-        self.assertEqual(
-            sum(row.revenue_ttc for row in PosProductDailyQuantity.objects.all()), Decimal("26.00")
-        )
+        self.assertEqual(sum(row.revenue_ttc for row in PosProductDailyQuantity.objects.all()), Decimal("26.00"))
 
-    def test_without_a_folder_it_reads_the_espace_s_downloads_folder(self):
+    def test_without_a_folder_it_reads_the_tenant_s_downloads_folder(self):
         out = StringIO()
         root = tempfile.mkdtemp(prefix="marginmate-tests-tenants-")
         self.addCleanup(shutil.rmtree, root, True)
@@ -586,9 +606,7 @@ class ADiscountThatWouldGrowTheLineTests(SimpleTestCase):
     def test_a_refund_line_may_be_discounted_the_other_way_round(self):
         """Its amount is negative, so the discount that shrinks it is
         negative too: the rule is about SIZE, never about sign."""
-        result = self.parse([
-            line("2026-06-01", "Pinte Exemple", "-6.00", "-20%", quantity=-1, discount="-1.50")
-        ])
+        result = self.parse([line("2026-06-01", "Pinte Exemple", "-6.00", "-20%", quantity=-1, discount="-1.50")])
 
         self.assertEqual(result.revenue_ttc, Decimal("-4.50"))
         self.assertEqual(result.discounted_lines, 1)
@@ -605,7 +623,7 @@ class ADayWithALineNobodyCanReadTests(SimpleTestCase):
 
     Kept as read, the day is filed at what the OTHER lines took - a figure
     that looks perfectly ordinary and is too small by however much the
-    unreadable line was. So the whole (produit, jour) goes unread instead:
+    unreadable line was. So the whole (product, day) goes unread instead:
     its units and its cost still count, its revenue does not, and the page
     already has a banner for exactly that. Never seen on the lines
     stored, which is why it would fire unnoticed.
@@ -615,38 +633,46 @@ class ADayWithALineNobodyCanReadTests(SimpleTestCase):
         return parse_rows([HEADER, *rows])
 
     def test_the_day_is_not_claimed_as_read(self):
-        result = self.parse([
-            line("2026-06-01", "Pinte Exemple", "6.00", "20%"),
-            line("2026-06-01", "Pinte Exemple", "sept euros", "20%"),
-        ])
+        result = self.parse(
+            [
+                line("2026-06-01", "Pinte Exemple", "6.00", "20%"),
+                line("2026-06-01", "Pinte Exemple", "sept euros", "20%"),
+            ]
+        )
 
         self.assertNotIn(("Pinte Exemple", date(2026, 6, 1)), result.money)
         self.assertEqual(result.lines_without_amount, 1)
         self.assertEqual(result.days_without_amount, 1)
 
     def test_the_other_days_of_the_same_product_are_read(self):
-        result = self.parse([
-            line("2026-06-01", "Pinte Exemple", "sept euros", "20%"),
-            line("2026-06-02", "Pinte Exemple", "6.00", "20%"),
-        ])
+        result = self.parse(
+            [
+                line("2026-06-01", "Pinte Exemple", "sept euros", "20%"),
+                line("2026-06-02", "Pinte Exemple", "6.00", "20%"),
+            ]
+        )
 
         self.assertEqual(result.money[("Pinte Exemple", date(2026, 6, 2))].revenue_ttc, Decimal("6.00"))
         self.assertEqual(result.revenue_ttc, Decimal("6.00"))
 
     def test_the_units_are_still_counted(self):
         """The stock left the shelf whatever the price column said."""
-        result = self.parse([
-            line("2026-06-01", "Pinte Exemple", "6.00", "20%"),
-            line("2026-06-01", "Pinte Exemple", "sept euros", "20%"),
-        ])
+        result = self.parse(
+            [
+                line("2026-06-01", "Pinte Exemple", "6.00", "20%"),
+                line("2026-06-01", "Pinte Exemple", "sept euros", "20%"),
+            ]
+        )
 
         self.assertEqual(result.entries, [("Pinte Exemple", date(2026, 6, 1), 2)])
 
     def test_the_import_log_names_it(self):
-        result = self.parse([
-            line("2026-06-01", "Pinte Exemple", "6.00", "20%"),
-            line("2026-06-01", "Pinte Exemple", "sept euros", "20%"),
-        ])
+        result = self.parse(
+            [
+                line("2026-06-01", "Pinte Exemple", "6.00", "20%"),
+                line("2026-06-01", "Pinte Exemple", "sept euros", "20%"),
+            ]
+        )
 
         said = " ".join(money_log(result))
 
@@ -693,7 +719,7 @@ class AFileThatIsNotAWorkbookTests(SimpleTestCase):
 
 class ARefundAloneOnADayTests(TestCase):
     """A refund rung up on a day the product did not otherwise sell nets to
-    -1 for that (produit, jour).
+    -1 for that (product, day).
 
     The seven refunds in the whole stored history all fall on days the
     product also sold, so the day nets positive and nothing has ever been
@@ -711,11 +737,13 @@ class ARefundAloneOnADayTests(TestCase):
     """
 
     def setUp(self):
-        self.export = parse_rows([
-            HEADER,
-            line("2026-06-01", "Pinte Exemple", "6.00", "20%"),
-            line("2026-06-02", "Pinte Exemple", "-6.00", "-20%", quantity=-1),
-        ])
+        self.export = parse_rows(
+            [
+                HEADER,
+                line("2026-06-01", "Pinte Exemple", "6.00", "20%"),
+                line("2026-06-02", "Pinte Exemple", "-6.00", "-20%", quantity=-1),
+            ]
+        )
 
     def test_the_import_goes_through_and_keeps_both_days(self):
         sync_pos_products(self.export)
@@ -736,9 +764,7 @@ class ARefundAloneOnADayTests(TestCase):
         sync_pos_products(self.export)
 
         self.assertEqual(PosProductDailyQuantity.objects.count(), 2)
-        self.assertEqual(
-            sum(row.revenue_ttc for row in PosProductDailyQuantity.objects.all()), Decimal("0.00")
-        )
+        self.assertEqual(sum(row.revenue_ttc for row in PosProductDailyQuantity.objects.all()), Decimal("0.00"))
 
     def test_the_till_products_total_nets_out_too(self):
         sync_pos_products(self.export)

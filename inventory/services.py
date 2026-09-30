@@ -176,7 +176,7 @@ def _fifo_value(lines_with_amounts, counted_quantity: Decimal) -> dict:
         if remaining <= 0:
             break
         # Only positive lines are stock that could still be on the shelf. A
-        # NEGATIVE line_qty is a return/refund (a déconsigne of empty kegs,
+        # NEGATIVE line_qty is a return/refund (a deposit refund on empty kegs,
         # a Metro pallet given back) - not inventory, and poison in this
         # loop: min() would pick the negative, so `remaining` would GROW
         # instead of shrinking, and its negative unit cost would then price
@@ -228,9 +228,7 @@ def _purchase_ladder(queryset, as_of: date | None):
     return queryset.order_by(F("invoice__invoice_date").desc(nulls_last=True), "-id")
 
 
-def value_counted_quantity(
-    product: Product, counted_quantity: Decimal, unit: str, as_of: date | None = None
-) -> dict:
+def value_counted_quantity(product: Product, counted_quantity: Decimal, unit: str, as_of: date | None = None) -> dict:
     """FIFO valuation (see _fifo_value) for a count of one specific
     product. `unit` says what counted_quantity is expressed in - UNIT for
     a bottle/pack count, matched against invoice_line.quantity (not
@@ -284,10 +282,10 @@ def value_counted_stock_type_quantity(
 
 
 def expense_product(supplier, name: str = "") -> Product:
-    """The product a supplier of charges files a poste on, named after that
-    poste - after the supplier itself when its document says no more than
-    what it charges. It is no article: no stock type, no queue, no stock
-    page - see invoices.Supplier.expenses_only."""
+    """The product a supplier of charges files a charge item on, named after
+    that charge item - after the supplier itself when its document says no
+    more than what it charges. It is no article: no stock type, no queue, no
+    stock page - see invoices.Supplier.expenses_only."""
     product, created = Product.objects.get_or_create(
         supplier=supplier, raw_name=name or supplier.name, defaults={"is_expense": True}
     )
@@ -457,7 +455,7 @@ _IN_BATCH = 500
 def _batches(ids):
     ids = sorted(set(ids))
     for start in range(0, len(ids), _IN_BATCH):
-        yield ids[start:start + _IN_BATCH]
+        yield ids[start : start + _IN_BATCH]
 
 
 def rebuild_purchase_movements(*, line_ids=(), product_ids=()) -> tuple[int, int]:
@@ -483,9 +481,7 @@ def rebuild_purchase_movements(*, line_ids=(), product_ids=()) -> tuple[int, int
 
     deleted = created = 0
     for batch in _batches(wanted):
-        _count, per_model = StockMovement.objects.filter(
-            invoice_line_id__in=batch, kind=MovementKind.PURCHASE
-        ).delete()
+        _count, per_model = StockMovement.objects.filter(invoice_line_id__in=batch, kind=MovementKind.PURCHASE).delete()
         deleted += per_model.get(StockMovement._meta.label, 0)
         held = set(StockMovement.objects.filter(invoice_line_id__in=batch).values_list("invoice_line_id", flat=True))
         movements = []
@@ -533,7 +529,7 @@ def refresh_invoice_statuses(product_ids) -> int:
     changed = 0
     for batch in _batches(invoice_ids):
         # Invoice.needs_review_count's rule: a line waits for a stock item,
-        # never a charge's poste.
+        # never a charge item.
         waiting = set(
             InvoiceLine.objects.filter(
                 invoice_id__in=batch, product__stock_type__isnull=True, product__is_expense=False

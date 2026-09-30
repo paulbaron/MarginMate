@@ -135,11 +135,9 @@ class FuzzyMatchRejectsDifferentProductsTests(TestCase):
         self.assert_distinct("MP BAC GASTRO INOX GN 1/6 H150", "MP BAC GASTRO INOX GN 1/6 H100")
 
     def test_a_different_recipe_with_identical_numbers_still_needs_the_score(self):
-        """"ZERO" is a word, not a number, so the numeric guard can't help
+        """ "ZERO" is a word, not a number, so the numeric guard can't help
         here - this one is on the similarity score alone."""
-        self.assert_distinct(
-            "Consigne COCA COLA ZERO 33 CL X 24 VC", "Consigne COCA COLA 33 CL X 24 VC"
-        )
+        self.assert_distinct("Consigne COCA COLA ZERO 33 CL X 24 VC", "Consigne COCA COLA 33 CL X 24 VC")
 
 
 class FuzzyMatchScoringTests(TestCase):

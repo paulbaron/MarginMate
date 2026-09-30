@@ -49,7 +49,7 @@ class SafeNextTests(SimpleTestCase):
     def test_nothing_sent_is_the_default(self):
         self.assertEqual(safe_next(self.request(), "/defaut/"), "/defaut/")
 
-    def test_retour_keeps_its_rule(self):
+    def test_the_return_address_keeps_its_rule(self):
         self.assertEqual(local_return(self.request(retour="/consignes/")), "/consignes/")
         for target in NOT_A_PATH:
             with self.subTest(target=target):

@@ -59,37 +59,51 @@ A  CONSERVER"""
 
 # Two items, each with the eco-participation it includes printed under it -
 # and their sum again under the total (document 901).
-TWO_ECOPARTS = HEAD + """OUTILLAGE
+TWO_ECO_FEES = (
+    HEAD
+    + """OUTILLAGE
 CAISSE  A  OUTILS  PLASTIQUE  20"  EXEMPLE
 H  3000001000013  19.90
 Dt  Ecopart.  unit.  EcoMob  0.60
 MALLETTE  RANGEMENT  NOIR  40X30X6  EXEMPLE
 H  3000001000020  10.90
 Dt  Ecopart.  unit.  EcoMob  0.15
-""" + foot("30.80", "5.13", "25.67", "Dt  Ecopart.  recycl  EcoMob  0.75\n")
+"""
+    + foot("30.80", "5.13", "25.67", "Dt  Ecopart.  recycl  EcoMob  0.75\n")
+)
 
 # One item and an included cent: with it, the lines are one cent off what
 # was paid - within the tolerance a total is found with (document 904).
-ONE_CENT = HEAD + """ELECTRICITE-PLOMBERIE
+ONE_CENT = (
+    HEAD
+    + """ELECTRICITE-PLOMBERIE
 C  BOITE  60  JOINTS  ASSORTIS  +  GRAISSE
 H  3000001000037  4.99
 Dt  Ecopart.  unit.  PMCB  0.01
-""" + foot("4.99", "0.83", "4.16", "Dt  Ecopart.  recycl  PMCB  0.01\n")
+"""
+    + foot("4.99", "0.83", "4.16", "Dt  Ecopart.  recycl  PMCB  0.01\n")
+)
 
 # A name ending on the article's size, then the item's code and price on
 # the next line (document 902).
-SIZED_NAME = HEAD + """SOL  ET  CARRELAGE  MURAL
+SIZED_NAME = (
+    HEAD
+    + """SOL  ET  CARRELAGE  MURAL
 TAPIS  ABSORBANT  GRIS  60X40
 H  3000001000068  8.45
 Dt  Ecopart.  unit.  EcoMob  0.30
 QUINCAILLERIE
 BOITE  CLIP  2,5L  TRANSPARENT
 H  3000001000075  3  X  4.99  14.97
-""" + foot("23.42", "3.90", "19.52", "Dt  Ecopart.  recycl  EcoMob  0.30\n")
+"""
+    + foot("23.42", "3.90", "19.52", "Dt  Ecopart.  recycl  EcoMob  0.30\n")
+)
 
 # Two sales on one ticket, each ending on its sub-total; an item's store
 # reference is no EAN (document 899).
-TWO_SALES = HEAD.replace("Vente\n", "Vente\nBVI  NO  :  100001\n") + """MENUISERIE
+TWO_SALES = (
+    HEAD.replace("Vente\n", "Vente\nBVI  NO  :  100001\n")
+    + """MENUISERIE
 PLAN  DE  TRAVAIL  CHENE  200X60X2.8CM
 PLAN  DE  TRAVAIL  CHENE  200X60X2.8CM  6
 H  10000001  49.90
@@ -106,10 +120,14 @@ CONFORT  &  ENERGIE  RENOUVELABLE
 LOT  DE  2  BRIQUETS  EXEMPLE
 H  3000001000051  2.39
 SOUS  TOTAL  3.88
-""" + foot("56.78", "9.46", "47.32", "Dt  Ecopart.  recycl  EcoMob  0.25\n")
+"""
+    + foot("56.78", "9.46", "47.32", "Dt  Ecopart.  recycl  EcoMob  0.25\n")
+)
 
 # The same till, three sales on one ticket and no charge included anywhere.
-THREE_SALES = HEAD + """QUINCAILLERIE
+THREE_SALES = (
+    HEAD
+    + """QUINCAILLERIE
 CROCHET  ADHESIF  BLANC  X4
 H  3000001000013  3.50
 CHEVILLE  UNIVERSELLE  6MM  X50
@@ -131,12 +149,16 @@ H  3000001000051  5.00
 LAMES  DE  CUTTER  18MM  X10
 H  3000001000068  3.30
 SOUS  TOTAL  8.30
-""" + foot("20.50", "3.42", "17.08")
+"""
+    + foot("20.50", "3.42", "17.08")
+)
 
 # Two packs of two, then a pack of four at their price, in the second sale:
 # the sum of the items since the last sub-total, but printed with its own
 # article code - an item.
-PACK_AFTER_TWO = HEAD + """OUTILLAGE
+PACK_AFTER_TWO = (
+    HEAD
+    + """OUTILLAGE
 CUTTER  18MM  EXEMPLE
 H  3000001000013  6.50
 LAMES  DE  CUTTER  X10
@@ -152,11 +174,15 @@ H  3000001000037  1.20
 CROCHET  ADHESIF  X4
 H  3000001000044  2.40
 SOUS  TOTAL  4.80
-""" + foot("14.70", "2.45", "12.25")
+"""
+    + foot("14.70", "2.45", "12.25")
+)
 
 # The same packs in the ticket's only sale: the pack of four is the sum of
 # every item read before it.
-ONE_SALE_PACK = HEAD + """QUINCAILLERIE
+ONE_SALE_PACK = (
+    HEAD
+    + """QUINCAILLERIE
 CROCHET  ADHESIF  X2
 H  3000001000037  1.20
 CROCHET  ADHESIF  X2
@@ -164,12 +190,16 @@ H  3000001000037  1.20
 CROCHET  ADHESIF  X4
 H  3000001000044  2.40
 SOUS  TOTAL  4.80
-""" + foot("4.80", "0.80", "4.00")
+"""
+    + foot("4.80", "0.80", "4.00")
+)
 
 # A cut of a worktop on the store's own reference (no EAN), in the second
 # sale, at what the two items above it make: the sum of the items since the
 # last sub-total, but printed under its own name - an item.
-CUT_AFTER_TWO = HEAD + """OUTILLAGE
+CUT_AFTER_TWO = (
+    HEAD
+    + """OUTILLAGE
 SCIE  EGOINE  EXEMPLE
 H  3000001000013  5.00
 METRE  RUBAN  EXEMPLE
@@ -185,11 +215,15 @@ H  3000001000044  3.00
 DECOUPE  DROITE  DE  PLAN
 H  10000002  5.00
 SOUS  TOTAL  10.00
-""" + foot("19.00", "3.17", "15.83")
+"""
+    + foot("19.00", "3.17", "15.83")
+)
 
 # Each sale's sub-total with its label on one line and its amount alone on
 # the next: under a name, like an item's amount - but printing nothing else.
-SUBTOTAL_UNDER_ITS_LABEL = HEAD + """OUTILLAGE
+SUBTOTAL_UNDER_ITS_LABEL = (
+    HEAD
+    + """OUTILLAGE
 SCIE  EGOINE  EXEMPLE
 H  3000001000013  5.00
 METRE  RUBAN  EXEMPLE
@@ -205,7 +239,9 @@ CHEVILLES  NYLON
 H  3000001000044  3.00
 SOUS  TOTAL
 5.00
-""" + foot("14.00", "2.33", "11.67")
+"""
+    + foot("14.00", "2.33", "11.67")
+)
 
 # Name, count, unit price and amount on one line, at what the two items
 # above it make: no sub-total prints a count and its price.
@@ -244,7 +280,7 @@ def set_aside(parsed):
 
 class IncludedChargeTests(SimpleTestCase):
     def test_a_charge_the_item_above_includes_is_never_an_item(self):
-        parsed = READER.parse_text(TWO_ECOPARTS)
+        parsed = READER.parse_text(TWO_ECO_FEES)
         self.assertEqual(
             lines_of(parsed),
             [
@@ -259,7 +295,7 @@ class IncludedChargeTests(SimpleTestCase):
         self.assertEqual(lines_of(parsed), [("C BOITE 60 JOINTS ASSORTIS + GRAISSE", 1, D("4.99"))])
         self.assertEqual(failed(parsed), [])
 
-    def test_dont_spelled_out_or_after_a_dash_is_the_same_line(self):
+    def test_an_included_charge_spelled_out_or_after_a_dash_is_the_same_line(self):
         # "- Dont DDS 0.20" under a bottle of acid, at another DIY till.
         text = ONE_CENT.replace("Dt  Ecopart.  unit.  PMCB  0.01", "- Dont PMC  0.01")
         self.assertEqual(lines_of(READER.parse_text(text)), [("C BOITE 60 JOINTS ASSORTIS + GRAISSE", 1, D("4.99"))])

@@ -40,7 +40,6 @@ from common import (
     safe_next,
     selection_too_big,
 )
-
 from invoices.models import Invoice
 from invoices.workspace import documents_matching
 from recipes.integration import TILL_TO_CONFIGURE, till_allowed
@@ -61,8 +60,18 @@ VIEWS = {
     "entrees": "Entrées",
 }
 MONTH_NAMES = (
-    "janvier", "février", "mars", "avril", "mai", "juin",
-    "juillet", "août", "septembre", "octobre", "novembre", "décembre",
+    "janvier",
+    "février",
+    "mars",
+    "avril",
+    "mai",
+    "juin",
+    "juillet",
+    "août",
+    "septembre",
+    "octobre",
+    "novembre",
+    "décembre",
 )
 MAX_CHOICES = 15
 # Sort key for an invoice with no date: after every dated one of equal amount.
@@ -570,9 +579,7 @@ def bank_line_action(request, pk):
             if name:
                 messages.success(request, f"Entrée classée en « {name} ».")
             else:
-                messages.success(
-                    request, f"Catégorie retirée : cette entrée compte comme « {spending.NO_CATEGORY} »."
-                )
+                messages.success(request, f"Catégorie retirée : cette entrée compte comme « {spending.NO_CATEGORY} ».")
             return redirect(back)
         moved = _moved_out_of_view(request, line)
         if name:
@@ -764,7 +771,9 @@ def link_proposals(request):
             skipped[outcome.status].append(outcome)
     for status, group in skipped.items():
         listed = ", ".join(_line_words(outcome) for outcome in group)
-        messages.warning(request, f"{len(group)} ligne{_s(group)} non rattachée{_s(group)} — {SKIPPED[status]} : {listed}.")
+        messages.warning(
+            request, f"{len(group)} ligne{_s(group)} non rattachée{_s(group)} — {SKIPPED[status]} : {listed}."
+        )
     if no_option:
         messages.warning(
             request,
@@ -772,7 +781,10 @@ def link_proposals(request):
             "choisissez laquelle, puis recommencez.",
         )
     if unreadable:
-        messages.warning(request, f"{unreadable} proposition{'s' if unreadable > 1 else ''} illisible{'s' if unreadable > 1 else ''} ignorée{'s' if unreadable > 1 else ''}.")
+        messages.warning(
+            request,
+            f"{unreadable} proposition{'s' if unreadable > 1 else ''} illisible{'s' if unreadable > 1 else ''} ignorée{'s' if unreadable > 1 else ''}.",
+        )
     return redirect(back)
 
 
@@ -805,8 +817,7 @@ def rule_list(request):
             found = _rule_matches(regex, debits)
             messages.success(
                 request,
-                f"Règle ajoutée : {found.count} dépense(s), {found.total:.2f} €, "
-                "ne comptent plus comme sans facture.",
+                f"Règle ajoutée : {found.count} dépense(s), {found.total:.2f} €, ne comptent plus comme sans facture.",
             )
             return redirect("bank:rule_list")
 
@@ -876,7 +887,7 @@ def _import_statements(request):
         messages.error(request, "Choisissez au moins un relevé bancaire (fichier CSV).")
         return redirect(back)
     # What an upload may weigh (security audit UPLOAD-1): the selection as a
-    # whole, then each file by its name - a bank's CSV is a few Ko a month.
+    # whole, then each file by its name - a bank's CSV is a few KB a month.
     too_heavy = selection_too_big(uploads)
     if too_heavy:
         messages.error(request, f"{too_heavy} Aucun relevé n'a été importé.")
@@ -1059,10 +1070,10 @@ def _covered_url(report, window: DateRange) -> str:
 
 
 def _balance_reason(reason: str) -> str:
-    """Why « Ventes carte pas encore versées » has no balance, as this espace
+    """Why « Ventes carte pas encore versées » has no balance, as this tenant
     can act on it. NO_CARD_DAYS names the command that re-reads the till's
     exports - a command on the server, reading the till the server imports:
-    the owner's (recipes/integration.py). Another espace is told « à
+    the owner's (recipes/integration.py). Another tenant is told « à
     configurer » rather than handed a command it cannot run."""
     if reason == income.NO_CARD_DAYS and not till_allowed():
         return income.NO_CARD_DAYS_TO_CONFIGURE
@@ -1172,7 +1183,7 @@ def _build_spending_pie_svg(report) -> str:
     return (
         '<div class="chart chart-pie" data-chart="pie" style="max-width:260px;">'
         f'<svg viewBox="0 0 {size} {size}" role="img" aria-label="{escape(label)}">'
-        f'{"".join(wedges)}</svg>'
+        f"{''.join(wedges)}</svg>"
         '<div class="chart-tooltip" data-chart-tooltip></div>'
         f'<div class="chart-legend">{"".join(legend)}</div>'
         "</div>"
@@ -1227,8 +1238,7 @@ def _build_balance_svg(points, label: str = "Ventes carte pas encore versées") 
         if all(abs(y - other) >= 12 for other, _value in kept):
             kept.append((y, value))
     ticks = "".join(
-        f'<text x="4" y="{y:.1f}" font-size="11" fill="var(--muted)">{value:.2f} €</text>'
-        for y, value in sorted(kept)
+        f'<text x="4" y="{y:.1f}" font-size="11" fill="var(--muted)">{value:.2f} €</text>' for y, value in sorted(kept)
     )
     dots = "".join(
         f'<circle class="chart-point" cx="{x:.1f}" cy="{y:.1f}" r="3" fill="var(--amber)" '
@@ -1364,11 +1374,7 @@ def _fill(rows, with_choices: bool = True) -> None:
             Link(
                 payment,
                 reconcile.rounded_total(payment.invoice),
-                [
-                    other.transaction
-                    for other in payment.invoice.payments.all()
-                    if other.transaction_id != row.line.pk
-                ],
+                [other.transaction for other in payment.invoice.payments.all() if other.transaction_id != row.line.pk],
             )
             for payment in row.payments
         ]

@@ -13,7 +13,7 @@ Two halves:
   folder, forge a hand-edited archive for the refusal tests.
 
 Archives written here are made from the tests' own invented rows, in the
-test espace's own folders (accounts.paths, under the test settings'
+test tenant's own folders (accounts.paths, under the test settings'
 temporary TENANTS_ROOT) - never from real data.
 """
 
@@ -24,6 +24,7 @@ import json
 import os
 import secrets
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import ClassVar
 
@@ -51,7 +52,7 @@ class FakeSection(Section):
       commit when it is cleared);
     * `fail_on` - (method, key) pairs that raise;
     * `touch` - key → another key whose report its apply/clear writes into,
-      as factures writes the bank's payments;
+      as the invoices section writes the bank's payments;
     * `probe` - key → a callable run at the start of its apply (a test's
       assertion about what exists by then).
     """
@@ -61,7 +62,7 @@ class FakeSection(Section):
     files: ClassVar[dict[str, list[str]]] = {}
     fail_on: ClassVar[set[tuple[str, str]]] = set()
     touch: ClassVar[dict[str, str]] = {}
-    probe: ClassVar[dict[str, object]] = {}
+    probe: ClassVar[dict[str, Callable[[], object]]] = {}
 
     def _log(self, method: str) -> None:
         FakeSection.calls.append((method, self.key))
@@ -80,10 +81,7 @@ class FakeSection(Section):
     def export(self, out) -> None:
         self._log("export")
         refs = [out.add_file(name) for name in FakeSection.files.get(self.key, [])]
-        records = [
-            {"name": row.name, **codec.record(row, (*FIELDS, "created_at"))}
-            for row in self._rows()
-        ]
+        records = [{"name": row.name, **codec.record(row, (*FIELDS, "created_at"))} for row in self._rows()]
         out.write({"records": records, "files": refs}, {"articles fictifs": len(records)})
 
     def load(self, src) -> None:
@@ -152,9 +150,7 @@ class FakeSection(Section):
             ctx.report(other).deleted("paiements")
 
 
-FAKES: dict[str, type[Section]] = {
-    key: type(f"Fake_{key}", (FakeSection,), {"key": key}) for key in INFO
-}
+FAKES: dict[str, type[Section]] = {key: type(f"Fake_{key}", (FakeSection,), {"key": key}) for key in INFO}
 
 
 def reset_fakes() -> None:
@@ -186,6 +182,7 @@ class FakeSectionsMixin:
 
 
 # -- the helpers of §10.2 ---------------------------------------------------------------
+
 
 def archive_dir() -> Path:
     path = paths.staging_dir() / "test-archives"
@@ -253,7 +250,7 @@ def db_fingerprint() -> str:
 
 
 def media_listing() -> dict[str, str]:
-    """name → sha256 of every file in the espace's media folder."""
+    """name → sha256 of every file in the tenant's media folder."""
     root = paths.media_root()
     listing = {}
     for folder, _dirs, files in os.walk(root):

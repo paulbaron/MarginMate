@@ -95,6 +95,7 @@ CHARGES_KEPT = (
 
 # -- helpers every lane-A section shares ------------------------------------------------
 
+
 def said(names, labels=LABELS) -> str:
     """At most three differing fields, in French, for a conflict line."""
     shown = [labels.get(name, name) for name in names]
@@ -174,6 +175,7 @@ def _check_lists(record: dict) -> None:
 
 # -- item prices --------------------------------------------------------------------------
 
+
 def _price_key(price) -> tuple[Decimal, date | None]:
     return (Decimal(price.unit_price_ttc).quantize(Decimal("0.01")), price.valid_from)
 
@@ -235,6 +237,7 @@ def _create_price(supplier, values: dict, report) -> None:
 
 
 # -- the section ------------------------------------------------------------------------
+
 
 @registry.register
 class SuppliersSection(Section):
@@ -351,7 +354,9 @@ class SuppliersSection(Section):
                 if found is not None:
                     claimed[found.pk] = code
                     ctx.suppliers.bind(code, found)
-                    report.note(f"« {found.name} » : code {found.code} ici, {code} dans l'archive — rapprochés par le nom")
+                    report.note(
+                        f"« {found.name} » : code {found.code} ici, {code} dans l'archive — rapprochés par le nom"
+                    )
                     supplier = found
             result.append((record, supplier))
         return result
@@ -388,7 +393,9 @@ class SuppliersSection(Section):
         # create_shop keeps): two records of one name are one supplier too many.
         taken = supplier_named(record["name"])
         if taken is not None:
-            report.skip(f"Fournisseur « {record['name']} » (code {record['code']}) : nom déjà porté ici par {taken.name}")
+            report.skip(
+                f"Fournisseur « {record['name']} » (code {record['code']}) : nom déjà porté ici par {taken.name}"
+            )
             block(ctx, record["code"])
             return None
         supplier = Supplier(code=record["code"])
@@ -474,7 +481,7 @@ class SuppliersSection(Section):
 
         if "name" in different:
             try:
-                # rename_supplier, so a supplier of charges' postes and their
+                # rename_supplier, so a charge supplier's charge items and their
                 # lines follow its name. It records the rename in the
                 # supplier's history; an import records nothing there (§6.6).
                 with supplier_changes.collect() as recorded:
@@ -485,8 +492,17 @@ class SuppliersSection(Section):
             except ValueError as exc:
                 report.note(f"Fournisseur « {supplier.name} » : nom « {record['name']} » non repris — {exc}")
 
-        plain = [name for name in ("ticket_header", "ticket_identifiers", "refused_identifiers", "typed_identifiers", "is_scrapable")
-                 if name in different]
+        plain = [
+            name
+            for name in (
+                "ticket_header",
+                "ticket_identifiers",
+                "refused_identifiers",
+                "typed_identifiers",
+                "is_scrapable",
+            )
+            if name in different
+        ]
         if "parser_key" in different:
             value = codec.load(type(supplier), "parser_key", record["parser_key"])
             # Field by field, what a replace does not take is said « À
@@ -503,7 +519,7 @@ class SuppliersSection(Section):
                 plain.append("parser_key")
         if "expenses_only" in different:
             # Flipping the flag alone leaves its documents filed the other
-            # way - lines on postes, or goods on a charge - until each is
+            # way - lines on charge items, or goods on a charge - until each is
             # read again, which is what « changer… » on its page does.
             documents_stay = not ctx.replacing("factures") and Invoice.objects.filter(supplier=supplier).exists()
             if documents_stay:
@@ -572,7 +588,9 @@ class SuppliersSection(Section):
         # undo data points at rows being cleared.
         history, _ = SupplierChange.objects.all().delete()
         if history:
-            report.note(f"{plural(history, 'changement')} de l'historique des fournisseurs effacé{'s' if history > 1 else ''}")
+            report.note(
+                f"{plural(history, 'changement')} de l'historique des fournisseurs effacé{'s' if history > 1 else ''}"
+            )
         kept = []
         for supplier in Supplier.objects.order_by("name"):
             if not code_bound(supplier):
@@ -583,8 +601,13 @@ class SuppliersSection(Section):
             # What it learned goes; what a reader or a till is keyed on -
             # its name, its parser, whether it is fetched - and Metro's
             # firewall state stay as they are.
-            reset = {"ticket_header": "", "ticket_identifiers": [], "refused_identifiers": [],
-                     "typed_identifiers": [], "expenses_only": False}
+            reset = {
+                "ticket_header": "",
+                "ticket_identifiers": [],
+                "refused_identifiers": [],
+                "typed_identifiers": [],
+                "expenses_only": False,
+            }
             fields = [name for name, value in reset.items() if getattr(supplier, name) != value]
             for name in fields:
                 setattr(supplier, name, reset[name])
@@ -604,14 +627,14 @@ class SuppliersSection(Section):
 
 def _holders(supplier, ctx=None) -> str:
     """What still names a supplier - its documents, its sources, its
-    classified products, the formats of bons and reprises of « Consignes »
+    classified products, the slip formats and pickups of « Consignes »
     - or "". With `ctx` (an import), which section left them there by not
     being replaced. Without the last, a supplier only « Consignes » held
     (PROTECT) was kept under « un de ses produits sert encore », which was
     false."""
     from inventory.models import Product
     from invoices.models import Invoice, InvoiceType
-    from invoices.supplier_views import consignes_refusal
+    from invoices.supplier_views import returnables_refusal
 
     def unless(key, label):
         return "" if ctx is None or ctx.replacing(key) else f" ({label} non remplacées)"
@@ -619,9 +642,8 @@ def _holders(supplier, ctx=None) -> str:
     documents = Invoice.objects.filter(supplier=supplier).count()
     if documents:
         many = documents > 1
-        return (
-            f"{plural(documents, 'document')} y {'sont' if many else 'est'} rangé{'s' if many else ''}"
-            + unless("factures", "Factures")
+        return f"{plural(documents, 'document')} y {'sont' if many else 'est'} rangé{'s' if many else ''}" + unless(
+            "factures", "Factures"
         )
     sources = InvoiceType.objects.filter(supplier=supplier).count()
     if sources:
@@ -630,9 +652,9 @@ def _holders(supplier, ctx=None) -> str:
     products = Product.objects.filter(supplier=supplier, stock_type__isnull=False).count()
     if products:
         return plural(products, "produit classé", "produits classés") + unless("associations", "Associations")
-    consignes = consignes_refusal(supplier)
-    if consignes:
-        return consignes + unless("consignes", "Consignes")
+    returnables_reason = returnables_refusal(supplier)
+    if returnables_reason:
+        return returnables_reason + unless("consignes", "Consignes")
     return ""
 
 

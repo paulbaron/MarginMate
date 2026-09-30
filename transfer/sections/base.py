@@ -55,11 +55,14 @@ class FileRefused(ValueError):
 @dataclass
 class Dirty:
     """What the sections changed that derived data depends on; rebuilt once, at the end (rebuild.py)."""
-    lines: set[int] = field(default_factory=set)            # invoice lines whose PURCHASE movement must be rebuilt
-    products: set[int] = field(default_factory=set)         # classification changed: all their lines' movements + invoice statuses
+
+    lines: set[int] = field(default_factory=set)  # invoice lines whose PURCHASE movement must be rebuilt
+    products: set[int] = field(
+        default_factory=set
+    )  # classification changed: all their lines' movements + invoice statuses
     status_products: set[int] = field(default_factory=set)  # invoice statuses only
-    recipes: set[int] = field(default_factory=set)          # "laddition" RecipeSale rows to resync
-    pos_products: set[int] = field(default_factory=set)     # total_quantity / first_seen / last_seen to recount
+    recipes: set[int] = field(default_factory=set)  # "laddition" RecipeSale rows to resync
+    pos_products: set[int] = field(default_factory=set)  # total_quantity / first_seen / last_seen to recount
 
 
 class Section(ABC):
@@ -118,7 +121,7 @@ class Section(ABC):
 
 
 def _report_for(reports: dict[str, SectionReport], key: str) -> SectionReport:
-    """A section may write into another's report (factures deleting the
+    """A section may write into another's report (the invoices deleting the
     bank's payments), including one of a section not in this run: it is
     created on first use, so what it says is not lost."""
     if key not in reports:
@@ -135,9 +138,10 @@ def _delete_if_unreferenced(name: str) -> None:
 
     for model in apps.get_models():
         for model_field in model._meta.get_fields():
-            if isinstance(model_field, models.FileField) and model._default_manager.filter(
-                **{model_field.name: name}
-            ).exists():
+            if (
+                isinstance(model_field, models.FileField)
+                and model._default_manager.filter(**{model_field.name: name}).exists()
+            ):
                 return
     try:
         default_storage.delete(name)
@@ -148,11 +152,11 @@ def _delete_if_unreferenced(name: str) -> None:
 @dataclass
 class ImportContext:
     preview: bool
-    strategies: dict[str, Strategy]          # ticked sections of this run (closure applied)
+    strategies: dict[str, Strategy]  # ticked sections of this run (closure applied)
     archive_sections: frozenset[str]
     reader: ArchiveReader
     dirty: Dirty
-    reports: dict[str, SectionReport]        # one per section; a section may write into another's (§6.5)
+    reports: dict[str, SectionReport]  # one per section; a section may write into another's (§6.5)
     suppliers: SupplierResolver
     invoices: InvoiceIndex
     # Files this run stored, removed by the runner if the run fails.
@@ -165,9 +169,9 @@ class ImportContext:
 
     @property
     def own_backup(self) -> bool:
-        """Whether this archive is one THIS ESPACE wrote itself: a file in
+        """Whether this archive is one THIS TENANT wrote itself: a file in
         its own backups folder (accounts.paths.backups_dir:
-        `<espace>/backups/`), where only
+        `<tenant>/backups/`), where only
         `safety.before`, bound to it, writes. An uploaded one is staged
         elsewhere, and a manifest can claim any reason, so the folder is
         what says it. What it buys: a restore puts a portal back as it was,
@@ -209,7 +213,7 @@ class ImportContext:
         section, not only the ones that thought to ask: the invoices' own
         resolver folded an unclassified twin (« … FÛT » / « … Fût ») onto
         the product created just before it. Supplier keys are resolved again
-        each time, since a supplier the fournisseurs section creates in this
+        each time, since a supplier the suppliers section creates in this
         run only resolves after it; the section files are parsed once."""
         from transfer.keys import ProductResolver, archive_product_keys
 
@@ -305,7 +309,7 @@ class ImportContext:
 @dataclass
 class ClearContext:
     preview: bool
-    clearing: frozenset[str]                 # closed under dependents
+    clearing: frozenset[str]  # closed under dependents
     dirty: Dirty
     reports: dict[str, SectionReport]
 

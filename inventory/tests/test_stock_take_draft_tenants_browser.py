@@ -1,21 +1,21 @@
-"""A stock take's draft kept in the browser, two espaces on one device - in
+"""A stock take's draft kept in the browser, two tenants on one device - in
 a real (headless) Chrome.
 
 The inventory form mirrors every row into the browser's storage as it is
 typed (stock_take_form.html, "the draft net"), under a key built from the
 stock take's pk - « new » for one not saved yet. Storage belongs to the
-origin, not to the login: before the espace was part of the key, the person
+origin, not to the login: before the tenant was part of the key, the person
 opening a new stock take for bar B on a device bar A had counted on was
 offered A's rows, and B's page, finding nothing to offer, wiped A's draft
 the moment it loaded.
 
-The key carries the espace's opaque scope (<body data-tenant>,
+The key carries the tenant's opaque scope (<body data-tenant>,
 accounts.tenancy.storage_scope), not its id (security audit LB-6): a
 session opened before that change finds its count moved from the id's key
-to the scope's (static/js/espace_storage_legacy.js), and nothing else is
+to the scope's (static/js/tenant_storage_legacy.js), and nothing else is
 ever moved.
 
-For real (accounts/tests/support.py): two espaces in temporary files, each
+For real (accounts/tests/support.py): two tenants in temporary files, each
 login handed to Chrome as its session cookie.
 
 Tagged "browser": `--exclude-tag=browser` for the fast loop. Skipped where
@@ -32,7 +32,7 @@ from django.contrib.staticfiles.testing import StaticLiveServerTestCase
 from django.test import tag
 from django.urls import reverse
 
-from accounts.middleware import ESPACE_SESSION_KEY
+from accounts.middleware import TENANT_SESSION_KEY
 from accounts.tenancy import storage_scope
 from accounts.tests.support import TwoTenantsTestCase
 from invoices.scrapers import website
@@ -46,7 +46,7 @@ def new_draft_key(scope) -> str:
 
 
 @tag("browser")
-class DraftPerEspaceInBrowserTests(TwoTenantsTestCase, StaticLiveServerTestCase):
+class DraftPerTenantInBrowserTests(TwoTenantsTestCase, StaticLiveServerTestCase):
     @classmethod
     def setUpClass(cls):
         try:
@@ -138,9 +138,9 @@ class DraftPerEspaceInBrowserTests(TwoTenantsTestCase, StaticLiveServerTestCase)
         )
 
     def as_before_the_scope(self):
-        """The session as one opened before 29/09: no espace written in it."""
+        """The session as one opened before 29/09: no tenant written in it."""
         session = self.client.session
-        del session[ESPACE_SESSION_KEY]
+        del session[TENANT_SESSION_KEY]
         session.save()
 
     def test_a_session_from_before_finds_its_count_under_the_scope(self):
@@ -167,7 +167,9 @@ class DraftPerEspaceInBrowserTests(TwoTenantsTestCase, StaticLiveServerTestCase)
         self.script("document.getElementById('draft-restore').click();")
         self.assertIn(
             "Vodka Alpha",
-            self.script("return Array.from(document.querySelectorAll(\"input[name$='-entry_search']\")).map(function (i) { return i.value; })"),
+            self.script(
+                "return Array.from(document.querySelectorAll(\"input[name$='-entry_search']\")).map(function (i) { return i.value; })"
+            ),
         )
         # Moved, not copied; bar B's left where it was, untouched.
         self.assertEqual(

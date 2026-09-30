@@ -1,49 +1,50 @@
-"""Does the seller's invoice refund what the bon says was taken back?
+"""Does the seller's invoice refund what the slip says was taken back?
 
-Read at page time, never stored: nothing about a bon is written on an
+Read at page time, never stored: nothing about a slip is written on an
 invoice, and no field is added to Invoice or InvoiceLine (a restore that
 recreates invoices under new pks, and « Effacer factures », would break a
 stored link). It is not an InvoiceParser either: it reads what is already
 filed.
 
-`check_many(slips)` answers for many bons in TWO queries whatever their
+`check_many(slips)` answers for many slips in TWO queries whatever their
 number (when handed a Board's `index` with the lines loaded): the candidate
-invoices - the bons' suppliers', dated within [delivery − 7, delivery + 45]
+invoices - the slips' suppliers', dated within [delivery − 7, delivery + 45]
 days, one query over the union of those windows - then their NEGATIVE lines
 (`total_ht < 0`). Everything else is done in Python:
 
-- A reference (a BL number) is searched as a whole token in the invoice's
-  `source_text`: `(?<![0-9A-Za-z])REF(?![0-9A-Za-z])`, so « 610001 » is not
-  found inside « 6100012 ». One with fewer than 4 letters or digits is not
-  searched at all (« référence trop courte pour être cherchée »): « 12 » is
-  on every invoice.
-- Bons and invoices are joined wherever a bon's reference is on an invoice;
-  each connected group is compared ONCE: all its bons' lines against all its
-  invoices' negative lines. One ticket can list two BLs whose refund sits on
-  one of the two invoices, and one monthly invoice can refund several bons -
-  compared bon by bon, every one of those would read as a gap.
-- Only the bons that COUNT take part (comparison.effective_slips): a ticket
+- A reference (a delivery-note number) is searched as a whole token in the
+  invoice's `source_text`: `(?<![0-9A-Za-z])REF(?![0-9A-Za-z])`, so « 610001 »
+  is not found inside « 6100012 ». One with fewer than 4 letters or digits is
+  not searched at all (« référence trop courte pour être cherchée »): « 12 »
+  is on every invoice.
+- Slips and invoices are joined wherever a slip's reference is on an invoice;
+  each connected group is compared ONCE: all its slips' lines against all its
+  invoices' negative lines. One ticket can list two delivery notes whose
+  refund sits on one of the two invoices, and one monthly invoice can refund
+  several slips - compared slip by slip, every one of those would read as a
+  gap.
+- Only the slips that COUNT take part (comparison.effective_slips): a ticket
   and its replacement are not added up.
 - Lines are grouped by their folded designation (`search_key`, spaces
-  collapsed). Each negative invoice line goes to the LONGEST bon designation
+  collapsed). Each negative invoice line goes to the LONGEST slip designation
   its own name starts with - the ticket prints the first 20 characters of
   the invoice's designation - and never to two; a key shorter than 3
-  characters never pairs. A negative line no bon line claims (a full keg
+  characters never pairs. A negative line no slip line claims (a full keg
   returned, a discount) is listed as « autres avoirs de la facture », never
   counted as a difference.
 - Counts are compared as |Σ quantity| on each side, amounts as |Σ| to the
-  cent: deposits carry no VAT, so HT is what the bon prints.
+  cent: deposits carry no VAT, so HT is what the slip prints.
 
 Every state is said, never folded into a gap: « pas de référence lue »,
 « date de livraison non lue », « référence trop courte pour être
-cherchée », « facture pas encore reçue » (the bon arrives the day of the
+cherchée », « facture pas encore reçue » (the slip arrives the day of the
 delivery, the invoice later), « facture sans texte lisible » (invoices in
 the window but none with text to search), « BL n° X sur plusieurs factures
 (…) : à vérifier » (no ✓ and no gap: a duplicate import, a credit note
 repeating it), « remboursé sur la facture n° … ✓ », « écart avec la facture
-n° … : … » with both figures. A bon with no line gets its ✓ (« rien repris
+n° … : … » with both figures. A slip with no line gets its ✓ (« rien repris
 sur le bon, rien remboursé ») only when the invoice refunds nothing either:
-refunding other consignes is « rien repris sur le bon, mais la facture n° …
+refunding other returnables is « rien repris sur le bon, mais la facture n° …
 rembourse d'autres consignes (non comparées) : à vérifier » (OTHERS_ONLY,
 amber) - the empty part corrected to kegs by a replacement not received yet,
 a keg returned full.
@@ -67,7 +68,7 @@ from invoices.models import Invoice, InvoiceLine
 from returnables.comparison import CENT, SlipIndex, euros, shifted
 from returnables.reading import line_amount
 
-#: The window an invoice of the bon's supplier is looked for in.
+#: The window an invoice of the slip's supplier is looked for in.
 WINDOW_BEFORE = timedelta(days=7)
 WINDOW_AFTER = timedelta(days=45)
 #: A reference with fewer letters and digits is not searched.
@@ -152,7 +153,7 @@ def _invoices_label(refs) -> str:
 
 @dataclass
 class CheckRow:
-    """One designation: on the bon(s), then refunded on the invoice(s)."""
+    """One designation: on the slip(s), then refunded on the invoice(s)."""
 
     designation: str
     key: str
@@ -181,7 +182,7 @@ class CheckRow:
 
 @dataclass
 class OtherCredit:
-    """A negative invoice line no bon line claims - listed, never a gap."""
+    """A negative invoice line no slip line claims - listed, never a gap."""
 
     raw_name: str
     quantity: Decimal
@@ -190,13 +191,15 @@ class OtherCredit:
 
     @property
     def sentence(self) -> str:
-        return f"{self.raw_name} : {plain_number(self.quantity)} ({euros(self.total_ht)}) — facture {self.invoice.label}"
+        return (
+            f"{self.raw_name} : {plain_number(self.quantity)} ({euros(self.total_ht)}) — facture {self.invoice.label}"
+        )
 
 
 @dataclass
 class InvoiceCheck:
-    """What the invoice check says of one bon. `label` is the sentence;
-    `ok` True (✓), False (écart) or None (no verdict: said why)."""
+    """What the invoice check says of one slip. `label` is the sentence;
+    `ok` True (✓), False (a gap) or None (no verdict: said why)."""
 
     state: str
     label: str
@@ -264,7 +267,7 @@ def _merged(spans) -> list:
 
 
 class _Groups:
-    """Union-find over bons ("s", pk) and invoices ("i", pk)."""
+    """Union-find over slips ("s", pk) and invoices ("i", pk)."""
 
     def __init__(self):
         self.parent = {}
@@ -283,7 +286,7 @@ class _Groups:
 
 
 def _compare(slips, invoices, negative_lines, hits) -> InvoiceCheck:
-    """One connected group: its bons' lines against its invoices' negative
+    """One connected group: its slips' lines against its invoices' negative
     lines."""
     invoice_refs = sorted((invoice.ref for invoice in invoices), key=lambda ref: (ref.invoice_date or date.min, ref.pk))
     slip_pks = {info.pk for info in slips}
@@ -291,7 +294,9 @@ def _compare(slips, invoices, negative_lines, hits) -> InvoiceCheck:
         if pk in slip_pks and len(found) > 1:
             names = ", ".join(invoice.ref.label for invoice in sorted(found, key=lambda one: (one.date, one.pk)))
             return InvoiceCheck(
-                SEVERAL, f"BL n° {reference} sur plusieurs factures ({names}) : à vérifier", invoices=invoice_refs,
+                SEVERAL,
+                f"BL n° {reference} sur plusieurs factures ({names}) : à vérifier",
+                invoices=invoice_refs,
                 slips=slips,
             )
 
@@ -335,17 +340,24 @@ def _compare(slips, invoices, negative_lines, hits) -> InvoiceCheck:
         )
     where = _invoices_label(invoice_refs)
     if not rows and others:
-        # Nothing on the bon, yet the invoice refunds consignes (spec §1: an
+        # Nothing on the slip, yet the invoice refunds returnables (spec §1: an
         # empty part corrected to kegs by a replacement not received yet, a
         # keg returned full): « rien remboursé » would be false, and other
         # credits are never a gap - no verdict, said.
         return InvoiceCheck(
             OTHERS_ONLY,
             f"rien repris sur le bon, mais {where} rembourse d'autres consignes (non comparées) : à vérifier",
-            invoices=invoice_refs, rows=rows, others=others, slips=slips,
+            invoices=invoice_refs,
+            rows=rows,
+            others=others,
+            slips=slips,
         )
     if all(row.agrees for row in rows):
-        label = f"remboursé sur {where} \N{CHECK MARK}" if rows else f"rien repris sur le bon, rien remboursé sur {where} \N{CHECK MARK}"
+        label = (
+            f"remboursé sur {where} \N{CHECK MARK}"
+            if rows
+            else f"rien repris sur le bon, rien remboursé sur {where} \N{CHECK MARK}"
+        )
         return InvoiceCheck(SAME, label, invoices=invoice_refs, rows=rows, others=others, slips=slips)
     differing = " ; ".join(row.sentence for row in rows if not row.agrees)
     return InvoiceCheck(
@@ -354,9 +366,9 @@ def _compare(slips, invoices, negative_lines, hits) -> InvoiceCheck:
 
 
 def check_many(slips, *, index: SlipIndex | None = None) -> dict:
-    """{bon pk: InvoiceCheck} for `slips` (Slip rows or comparison.SlipInfo).
+    """{slip pk: InvoiceCheck} for `slips` (Slip rows or comparison.SlipInfo).
     Hand it a Board's `index` (its lines loaded) and it costs the two
-    invoice queries only; alone, it also reads the bons of their formats
+    invoice queries only; alone, it also reads the slips of their formats
     (one values() query) and the lines it needs (one) - a fixed number
     either way."""
     slips = list(slips)
@@ -386,8 +398,11 @@ def check_many(slips, *, index: SlipIndex | None = None) -> dict:
             results[info.pk] = InvoiceCheck(NO_DATE, NO_DATE_LABEL)
             continue
         wanted = [reference for reference in info.references if searchable(reference)]
-        notes = [f"référence « {reference} » trop courte pour être cherchée" for reference in info.references
-                 if not searchable(reference)]
+        notes = [
+            f"référence « {reference} » trop courte pour être cherchée"
+            for reference in info.references
+            if not searchable(reference)
+        ]
         if not wanted:
             results[info.pk] = InvoiceCheck(TOO_SHORT, TOO_SHORT_LABEL, notes=notes)
             continue
@@ -413,7 +428,7 @@ def check_many(slips, *, index: SlipIndex | None = None) -> dict:
     ):
         by_supplier[row["supplier_id"]].append(_Invoice(row))
 
-    # The other bons that count and may share those invoices.
+    # The other slips that count and may share those invoices.
     for info in index.effective():
         invoices = by_supplier.get(info.supplier_id)
         if info.pk in nodes or not invoices or info.delivery_date is None:
@@ -447,7 +462,7 @@ def check_many(slips, *, index: SlipIndex | None = None) -> dict:
             members[groups.find(("i", invoice.pk))]["invoices"][invoice.pk] = invoice
     wanted_roots = {groups.find(("s", pk)) for pk in asked if pk in linked}
 
-    # 3. Their negative lines (one query), and the bons' lines.
+    # 3. Their negative lines (one query), and the slips' lines.
     invoice_ids = [pk for root in wanted_roots for pk in members[root]["invoices"]]
     negative = defaultdict(list)
     if invoice_ids:

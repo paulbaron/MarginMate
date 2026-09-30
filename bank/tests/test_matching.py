@@ -43,7 +43,10 @@ def invoice(pk, supplier, day, total):
 
 def card(day, merchant, amount):
     return Payment(
-        kind="CARD", operation_date=day + timedelta(days=2), card_date=day, counterparty=merchant,
+        kind="CARD",
+        operation_date=day + timedelta(days=2),
+        card_date=day,
+        counterparty=merchant,
         amount_due=Decimal(amount),
     )
 
@@ -72,7 +75,7 @@ class NamingTests(SimpleTestCase):
         self.assertFalse(names_supplier("MONOPRIX PARIS", NAMING[FRANPRIX]))
 
     def test_generic_words_name_nobody(self):
-        """"SCEA", "FILS" and "PARIS" are in half the payees on a statement."""
+        """ "SCEA", "FILS" and "PARIS" are in half the payees on a statement."""
         self.assertEqual(supplier_words("Autre (analyse IA)", "OTHER"), frozenset())
         self.assertEqual(supplier_words("SCEA Plou & Fils"), frozenset({"PLOU"}))
 
@@ -115,7 +118,11 @@ class LaterPaymentTests(SimpleTestCase):
         self.assertEqual((found.confident, found.options), (True, [(delivery,)]))
 
     def test_never_an_invoice_dated_after_it(self):
-        found = match(debit(date(2026, 7, 9), "METRO FRANCE", "1234.50"), [invoice(1, METRO, date(2026, 7, 10), "1234.50")], NAMING)
+        found = match(
+            debit(date(2026, 7, 9), "METRO FRANCE", "1234.50"),
+            [invoice(1, METRO, date(2026, 7, 10), "1234.50")],
+            NAMING,
+        )
         self.assertIsNone(found)
 
     def test_one_debit_for_two_deliveries_and_a_returned_deposit(self):
@@ -129,7 +136,10 @@ class LaterPaymentTests(SimpleTestCase):
         self.assertEqual((found.confident, found.options), (True, [paid]))
 
     def test_two_ways_to_add_up_to_it_are_not_decided_between(self):
-        pool = [invoice(pk, UBA, date(2026, 7, pk), total) for pk, total in ((1, "100.00"), (2, "50.00"), (3, "60.00"), (4, "90.00"))]
+        pool = [
+            invoice(pk, UBA, date(2026, 7, pk), total)
+            for pk, total in ((1, "100.00"), (2, "50.00"), (3, "60.00"), (4, "90.00"))
+        ]
         found = match(debit(date(2026, 7, 27), "U.B.A.", "150.00"), pool, NAMING)
         self.assertEqual((found.confident, len(found.options)), (False, 2))
 
@@ -149,12 +159,18 @@ class LaterPaymentTests(SimpleTestCase):
         self.assertIsNone(found)
 
     def test_an_empty_invoice_is_never_part_of_a_sum(self):
-        pool = [invoice(1, UBA, date(2026, 7, 1), "60.00"), invoice(2, UBA, date(2026, 7, 2), "40.00"), invoice(3, UBA, date(2026, 7, 3), "0")]
+        pool = [
+            invoice(1, UBA, date(2026, 7, 1), "60.00"),
+            invoice(2, UBA, date(2026, 7, 2), "40.00"),
+            invoice(3, UBA, date(2026, 7, 3), "0"),
+        ]
         found = match(debit(date(2026, 7, 20), "U.B.A.", "100.00"), pool, NAMING)
         self.assertEqual((found.confident, found.options), (True, [tuple(pool[:2])]))
 
     def test_money_coming_in_is_not_a_payment(self):
-        found = match(debit(date(2026, 7, 9), "METRO FRANCE", "-120.00"), [invoice(1, METRO, date(2026, 7, 1), "120.00")], NAMING)
+        found = match(
+            debit(date(2026, 7, 9), "METRO FRANCE", "-120.00"), [invoice(1, METRO, date(2026, 7, 1), "120.00")], NAMING
+        )
         self.assertIsNone(found)
 
 
@@ -169,7 +185,9 @@ class UndatedReceiptTests(SimpleTestCase):
 
     def test_a_cent_of_rounding_is_allowed(self):
         """Rebuilt from its HT lines, a receipt printed 7,76 totals 7,75."""
-        self.assertIsNotNone(match(card(JULY_15, "MONOPRIX PARIS", "7.76"), [invoice(1, MONOPRIX, None, "7.75")], NAMING))
+        self.assertIsNotNone(
+            match(card(JULY_15, "MONOPRIX PARIS", "7.76"), [invoice(1, MONOPRIX, None, "7.75")], NAMING)
+        )
 
     def test_another_shop_or_another_amount_is_not(self):
         for candidate in (invoice(1, FRANPRIX, None, "7.76"), invoice(2, MONOPRIX, None, "7.90")):
@@ -193,7 +211,9 @@ FEE_KEY = "FRAIS TENUE DE COMPTE N DU"
 def other(day, label, amount):
     """A line of kind OTHER with no counterparty at all: the bank's own fee,
     whose label alone says who was paid."""
-    return Payment(kind="OTHER", operation_date=day, card_date=None, counterparty="", amount_due=Decimal(amount), label=label)
+    return Payment(
+        kind="OTHER", operation_date=day, card_date=None, counterparty="", amount_due=Decimal(amount), label=label
+    )
 
 
 class TierTests(SimpleTestCase):
@@ -256,14 +276,21 @@ class TierTests(SimpleTestCase):
         # At the cap it is not far; a day past it is.
         at_cap = invoice(1, METRO, days_before(paid, RECURRING_DAYS_BEFORE.days), "31.40")
         found = match(debit(paid, "METRO FRANCE", "31.40"), [at_cap], NAMING)
-        self.assertEqual((found.far_back, found.tier_reason), (False, f"Facture datée {RECURRING_DAYS_BEFORE.days} jours avant le paiement."))
+        self.assertEqual(
+            (found.far_back, found.tier_reason),
+            (False, f"Facture datée {RECURRING_DAYS_BEFORE.days} jours avant le paiement."),
+        )
         past_cap = invoice(1, METRO, days_before(paid, RECURRING_DAYS_BEFORE.days + 1), "31.40")
         self.assertTrue(match(debit(paid, "METRO FRANCE", "31.40"), [past_cap], NAMING).far_back)
         # A card payment's window is days wide: never far. The day itself is
         # said as such, not as « 0 jours ».
         found = match(card(JULY_15, "FRANPRIX", "13.06"), [invoice(1, FRANPRIX, JULY_15, "13.06")], NAMING)
-        self.assertEqual((found.days_back, found.far_back, found.tier_reason), (0, False, "Facture du jour du paiement."))
-        found = match(card(JULY_15, "FRANPRIX", "13.06"), [invoice(1, FRANPRIX, days_before(JULY_15, 2), "13.06")], NAMING)
+        self.assertEqual(
+            (found.days_back, found.far_back, found.tier_reason), (0, False, "Facture du jour du paiement.")
+        )
+        found = match(
+            card(JULY_15, "FRANPRIX", "13.06"), [invoice(1, FRANPRIX, days_before(JULY_15, 2), "13.06")], NAMING
+        )
         self.assertEqual((found.days_back, found.tier_reason), (2, "Facture à 2 jours du paiement."))
         # A sum of invoices is dated by its most recent one.
         pair = [invoice(1, UBA, days_before(paid, 40), "120.00"), invoice(2, UBA, days_before(paid, 12), "80.50")]
@@ -285,12 +312,18 @@ class TierTests(SimpleTestCase):
         )
         for nearest, second, tier in cases:
             with self.subTest(nearest=nearest, second=second):
-                invoices = [invoice(1, METRO, days_before(paid, nearest), "23.70"), invoice(2, METRO, days_before(paid, second), "23.70")]
+                invoices = [
+                    invoice(1, METRO, days_before(paid, nearest), "23.70"),
+                    invoice(2, METRO, days_before(paid, second), "23.70"),
+                ]
                 self.assertEqual(match(debit(paid, "METRO FRANCE", "23.70"), invoices, NAMING).tier, tier)
 
     def test_two_deliveries_a_week_apart_are_a_question(self):
         paid = date(2026, 7, 6)
-        invoices = [invoice(1, METRO, days_before(paid, 5), "120.00"), invoice(2, METRO, days_before(paid, 12), "120.00")]
+        invoices = [
+            invoice(1, METRO, days_before(paid, 5), "120.00"),
+            invoice(2, METRO, days_before(paid, 12), "120.00"),
+        ]
         found = match(debit(paid, "METRO FRANCE", "120.00"), invoices, NAMING)
         self.assertEqual(found.tier, TO_CONFIRM)
         self.assertIn(f"moins de {RECURRING_MARGIN.days} jours", found.tier_reason)
@@ -364,8 +397,16 @@ class TierTests(SimpleTestCase):
         self.assertEqual(found.options, [(invoice(1, UBA, days_before(paid, past_cap), "256.39"),)])
         # At the cap it still is; and a card payment's window is days wide,
         # so the cap says nothing there.
-        self.assertEqual(match(debit(paid, "U.B.A.", "256.43"), [invoice(1, UBA, days_before(paid, at_cap), "256.39")], NAMING).tier, NEAR_SURE)
-        self.assertEqual(match(card(JULY_15, "FRANPRIX", "13.06"), [invoice(1, FRANPRIX, days_before(JULY_15, 2), "13.05")], NAMING).tier, NEAR_SURE)
+        self.assertEqual(
+            match(debit(paid, "U.B.A.", "256.43"), [invoice(1, UBA, days_before(paid, at_cap), "256.39")], NAMING).tier,
+            NEAR_SURE,
+        )
+        self.assertEqual(
+            match(
+                card(JULY_15, "FRANPRIX", "13.06"), [invoice(1, FRANPRIX, days_before(JULY_15, 2), "13.05")], NAMING
+            ).tier,
+            NEAR_SURE,
+        )
         # The cap's premise is « not paid on the spot », so a fee line (kind
         # OTHER, named by its alias) past it is a question too - the rule the
         # page states says so in as many words.
@@ -373,7 +414,10 @@ class TierTests(SimpleTestCase):
         found = match(other(paid, FEE_LABEL, "7.30"), [invoice(1, 9, days_before(paid, past_cap), "7.28")], {9: taught})
         self.assertEqual((found.confident, found.tier), (False, TO_CONFIRM))
         self.assertIn(f"au-delà de {at_cap}", found.tier_reason)
-        self.assertEqual(match(other(paid, FEE_LABEL, "7.30"), [invoice(1, 9, days_before(paid, at_cap), "7.28")], {9: taught}).tier, NEAR_SURE)
+        self.assertEqual(
+            match(other(paid, FEE_LABEL, "7.30"), [invoice(1, 9, days_before(paid, at_cap), "7.28")], {9: taught}).tier,
+            NEAR_SURE,
+        )
 
     def test_a_second_invoice_far_off_does_not_spoil_it_but_a_second_within_cents_does(self):
         paid = date(2026, 6, 15)
@@ -393,7 +437,11 @@ class TierTests(SimpleTestCase):
         self.assertEqual(found.options, [(other,)])
 
     def test_a_gap_exactly_at_the_threshold_is_still_near_sure(self):
-        found = match(card(JULY_15, "FRANPRIX", "13.06"), [invoice(1, FRANPRIX, JULY_15, str(Decimal("13.06") - NEAR_SURE_GAP))], NAMING)
+        found = match(
+            card(JULY_15, "FRANPRIX", "13.06"),
+            [invoice(1, FRANPRIX, JULY_15, str(Decimal("13.06") - NEAR_SURE_GAP))],
+            NAMING,
+        )
         self.assertEqual(found.tier, NEAR_SURE)
 
     def test_two_invoices_adding_up_to_a_cent_off_are_never_near_sure(self):
@@ -404,9 +452,14 @@ class TierTests(SimpleTestCase):
         self.assertTrue(found is None or found.tier == TO_CONFIRM)
 
     def test_the_other_suggestions_are_questions(self):
-        unnamed = match(card(JULY_15, "PAYTERM *EPICERIE 12", "13.06"), [invoice(1, MONOPRIX, JULY_15, "13.06")], NAMING)
+        unnamed = match(
+            card(JULY_15, "PAYTERM *EPICERIE 12", "13.06"), [invoice(1, MONOPRIX, JULY_15, "13.06")], NAMING
+        )
         undated = match(card(JULY_15, "MONOPRIX", "7.76"), [invoice(1, MONOPRIX, None, "7.76")], NAMING)
-        pool = [invoice(pk, UBA, date(2026, 7, pk), total) for pk, total in ((1, "100.00"), (2, "50.00"), (3, "60.00"), (4, "90.00"))]
+        pool = [
+            invoice(pk, UBA, date(2026, 7, pk), total)
+            for pk, total in ((1, "100.00"), (2, "50.00"), (3, "60.00"), (4, "90.00"))
+        ]
         two_sums = match(debit(date(2026, 7, 27), "U.B.A.", "150.00"), pool, NAMING)
         for found in (unnamed, undated, two_sums):
             with self.subTest(reason=found.reason):
@@ -416,11 +469,13 @@ class TierTests(SimpleTestCase):
     def test_nothing_due_is_nothing(self):
         for due in ("0", "-23.70"):
             with self.subTest(due=due):
-                self.assertIsNone(match(debit(JULY_15, "METRO FRANCE", due), [invoice(1, METRO, date(2026, 7, 1), due)], NAMING))
+                self.assertIsNone(
+                    match(debit(JULY_15, "METRO FRANCE", due), [invoice(1, METRO, date(2026, 7, 1), due)], NAMING)
+                )
 
     def test_every_tier_has_a_rule_the_page_can_state(self):
         self.assertEqual([tier for tier, _label, _rule in TIER_RULES], [SURE, NEAR_SURE, TO_CONFIRM])
-        rules = dict((tier, rule) for tier, _label, rule in TIER_RULES)
+        rules = {tier: rule for tier, _label, rule in TIER_RULES}
         self.assertIn(f"{RECURRING_DAYS_BEFORE.days} jours", rules[NEAR_SURE])
         self.assertIn(f"{RECURRING_MARGIN.days} jours", rules[NEAR_SURE])
         self.assertIn(f"{NEAR_SURE_GAP:.2f} €", rules[NEAR_SURE])
@@ -463,13 +518,17 @@ class BlankCounterpartyTests(SimpleTestCase):
 
     def test_the_fallback_names_nobody_on_its_own(self):
         banking = Naming(supplier_words("Banque Exemple", "BANQUE"))
-        found = match(other(date(2026, 6, 5), FEE_LABEL, "7.30"), [invoice(1, 9, date(2026, 6, 5), "7.30")], {9: banking})
+        found = match(
+            other(date(2026, 6, 5), FEE_LABEL, "7.30"), [invoice(1, 9, date(2026, 6, 5), "7.30")], {9: banking}
+        )
         self.assertIsNone(found)
         self.assertFalse(names_supplier(payee_of("", ""), banking))
 
     def test_an_alias_learnt_from_the_label_names_the_supplier(self):
         banking = Naming(supplier_words("Banque Exemple", "BANQUE"), aliases=frozenset({FEE_KEY}))
-        found = match(other(date(2026, 6, 5), FEE_LABEL, "7.30"), [invoice(1, 9, date(2026, 6, 5), "7.30")], {9: banking})
+        found = match(
+            other(date(2026, 6, 5), FEE_LABEL, "7.30"), [invoice(1, 9, date(2026, 6, 5), "7.30")], {9: banking}
+        )
         self.assertEqual((found.confident, found.tier), (True, SURE))
 
     def test_an_exact_word_of_the_supplier_s_own_name_in_the_label_names_nobody_until_taught(self):
@@ -477,7 +536,7 @@ class BlankCounterpartyTests(SimpleTestCase):
         printing the insurer's name. As a COUNTERPARTY that word names the
         insurer; in a LABEL it does not, until a person links one such line:
         the pass never linked a line the bank printed no payee on, and an
-        exact word in a label that also carries the bank's text and a motif
+        exact word in a label that also carries the bank's text and a reference
         would have linked automatically on a coincidence (a supplier named
         « Assurance Exemple », a fee line reading « ASSURANCE MOYENS DE
         PAIEMENT »). Failing first: (True, SURE) from the label alone."""
@@ -500,17 +559,23 @@ class BlankCounterpartyTests(SimpleTestCase):
     def test_a_label_word_one_letter_off_a_supplier_s_name_names_nobody(self):
         """« COMPTE » is one letter from « COMPTA ». For a counterparty the
         bank printed on purpose that is a spelling; for a label, which also
-        carries a motif, a month and the bank's own words, it is a coincidence
+        carries a reference, a month and the bank's own words, it is a coincidence
         that would link AUTOMATICALLY. Failing first: it was a SURE link."""
-        compta = Naming(supplier_words("Compta Exemple", "COMPTA"))
-        self.assertTrue(names_supplier("COMPTE SAS", compta))
-        self.assertFalse(names_supplier(payee_of("", FEE_LABEL), compta, alias_only=True))
-        found = match(other(date(2026, 6, 5), FEE_LABEL, "7.30"), [invoice(1, 9, date(2026, 6, 5), "7.30")], {9: compta})
+        accountant = Naming(supplier_words("Compta Exemple", "COMPTA"))
+        self.assertTrue(names_supplier("COMPTE SAS", accountant))
+        self.assertFalse(names_supplier(payee_of("", FEE_LABEL), accountant, alias_only=True))
+        found = match(
+            other(date(2026, 6, 5), FEE_LABEL, "7.30"), [invoice(1, 9, date(2026, 6, 5), "7.30")], {9: accountant}
+        )
         self.assertIsNone(found)
         # The alias path is untouched: once a person links it, next month
         # links on its own.
-        taught = Naming(compta.words, aliases=frozenset({FEE_KEY}))
-        found = match(other(date(2026, 7, 5), "FRAIS TENUE DE COMPTE N° 000456 DU 05/07/26", "7.30"), [invoice(1, 9, date(2026, 7, 5), "7.30")], {9: taught})
+        taught = Naming(accountant.words, aliases=frozenset({FEE_KEY}))
+        found = match(
+            other(date(2026, 7, 5), "FRAIS TENUE DE COMPTE N° 000456 DU 05/07/26", "7.30"),
+            [invoice(1, 9, date(2026, 7, 5), "7.30")],
+            {9: taught},
+        )
         self.assertEqual((found.confident, found.tier), (True, SURE))
 
     def test_the_bank_s_own_words_name_nobody_by_themselves(self):

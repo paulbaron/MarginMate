@@ -1,5 +1,5 @@
 """The signatures' files live in a private folder of their own - the
-espace's `private/` (accounts.paths.private_dir), beside its media/ and
+tenant's `private/` (accounts.paths.private_dir), beside its media/ and
 never inside a folder the site serves."""
 
 import hashlib
@@ -41,13 +41,13 @@ class PrivateFolderTests(SimpleTestCase):
     def test_media_is_no_served_folder_any_more(self):
         """Only the old single mode served media (a public /media/ route
         while DEBUG was on, gone since 29/09/2026): a MEDIA_ROOT around the
-        espaces refuses nothing - nothing serves it."""
+        tenants refuses nothing - nothing serves it."""
         with override_settings(MEDIA_ROOT=str(self.root), TENANTS_ROOT=self.root / "espaces"):
             folder = private_files.private_dir()
         self.assertTrue(folder.is_dir())
         self.assertTrue(folder.is_relative_to(self.root.resolve()))
 
-    def test_created_on_demand_beside_the_espace_s_media(self):
+    def test_created_on_demand_beside_the_tenant_s_media(self):
         with override_settings(TENANTS_ROOT=self.root):
             folder = paths.tenant_dir(require_tenant()) / paths.PRIVATE
             self.assertFalse(folder.exists())

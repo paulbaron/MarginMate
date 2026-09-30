@@ -1,11 +1,11 @@
 {% comment %}
-Un mois en lecture seule, tel qu'un instantané le décrit (staff.signature_requests.month_snapshot) :
-la page du salarié le dessine depuis l'instantané figé avec la demande - des modifications faites
-ensuite ne peuvent pas changer ce qu'il lit - et la page d'un mois en cours de signature depuis le
-même constructeur. Contexte : `month`. La colonne « Motif / note » est la cellule telle que le PDF
-l'imprime (pdf.note_cells : coupée par « … », « ? » pour ce que le PDF ne sait pas écrire) : ce qu'il
-lit est ce qu'il signe. Un jour férié travaillé ou pris autrement le dit en gris d'abord, un jour de
-repos reste vide. Un instantané de version 1 (avant note_cells) montre sa note telle qu'enregistrée.
+A read-only month, as a snapshot describes it (staff.signature_requests.month_snapshot): the
+employee's page draws it from the snapshot frozen with the request - edits made afterwards cannot
+change what he reads - and the page of a month being signed draws it from the same builder.
+Context: `month`. The « Motif / note » column is the cell as the PDF prints it (pdf.note_cells: cut
+with « … », « ? » for what the PDF cannot write): what he reads is what he signs. A public holiday
+worked or taken as another absence says so in grey first; a day off stays blank. A version 1
+snapshot (before note_cells) shows its note as it was stored.
 {% endcomment %}
 <div class="month-table-wrap">
     <table class="month-table">

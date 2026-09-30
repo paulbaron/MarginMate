@@ -83,9 +83,13 @@ class StageUploadTests(FakeSectionsMixin, TestCase):
             Path(dest).write_bytes(forge_path.read_bytes())
 
         fake_legacy = mock.Mock(to_archive=to_archive)
-        with mock.patch.dict("sys.modules", {"transfer.legacy": fake_legacy}), \
-                mock.patch("transfer.legacy", fake_legacy, create=True):
-            stage = staging.stage_upload(SimpleUploadedFile("marginmate-associations.json", ("﻿  " + json.dumps(payload)).encode()))
+        with (
+            mock.patch.dict("sys.modules", {"transfer.legacy": fake_legacy}),
+            mock.patch("transfer.legacy", fake_legacy, create=True),
+        ):
+            stage = staging.stage_upload(
+                SimpleUploadedFile("marginmate-associations.json", ("﻿  " + json.dumps(payload)).encode())
+            )
         self.assertEqual(calls, [payload])
         self.assertTrue(stage.legacy)
         self.assertEqual(stage.sections, {"associations"})
@@ -94,8 +98,10 @@ class StageUploadTests(FakeSectionsMixin, TestCase):
         """A lone surrogate escape ("\\ud800") is valid JSON; turned into an
         archive, its UTF-8 write failed with a 500 (review, 19/09). Refused
         before the conversion, and nothing is left staged."""
-        raw = ('{"version": 1, "products": [{"supplier": "Grossiste Exemple", "raw_name": "RHUM EXEMPLE \\ud800", '
-               '"stock_type_name": "Rhum essai"}]}')
+        raw = (
+            '{"version": 1, "products": [{"supplier": "Grossiste Exemple", "raw_name": "RHUM EXEMPLE \\ud800", '
+            '"stock_type_name": "Rhum essai"}]}'
+        )
         before = set(staging.staging_dir().iterdir())
         with self.assertRaises(ArchiveError) as caught:
             staging.stage_upload(SimpleUploadedFile("marginmate-associations.json", raw.encode("ascii")))
@@ -109,8 +115,10 @@ class StageUploadTests(FakeSectionsMixin, TestCase):
         self.assertRegex(str(caught.exception), r"^Archive trop grosse \(0,0 Go, 4 Go au plus\)\.$")
 
     def test_not_enough_room(self):
-        with mock.patch("transfer.staging.shutil.disk_usage", return_value=mock.Mock(free=1)), \
-                self.assertRaises(ArchiveError) as caught:
+        with (
+            mock.patch("transfer.staging.shutil.disk_usage", return_value=mock.Mock(free=1)),
+            self.assertRaises(ArchiveError) as caught,
+        ):
             staging.stage_upload(upload_of(self.archive_path))
         self.assertEqual(str(caught.exception), "Pas assez de place sur le disque pour préparer l'import.")
 
@@ -122,7 +130,11 @@ class StageUploadTests(FakeSectionsMixin, TestCase):
 
     def test_state_is_saved(self):
         stage = staging.stage_upload(upload_of(self.archive_path))
-        stage.state = {"sections": {"fournisseurs": "fusionner"}, "preview": None, "preview_at": "2026-09-19T12:00:00+00:00"}
+        stage.state = {
+            "sections": {"fournisseurs": "fusionner"},
+            "preview": None,
+            "preview_at": "2026-09-19T12:00:00+00:00",
+        }
         staging.save(stage)
         self.assertEqual(staging.get(stage.token).state["sections"], {"fournisseurs": "fusionner"})
 

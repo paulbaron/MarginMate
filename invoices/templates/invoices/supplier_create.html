@@ -7,7 +7,7 @@
     {% endcomment %}
     <div class="page-header">
         <div>
-            <p class="breadcrumb"><a href="{{ back }}">{% if retour %}← Retour{% else %}← Achats · Enseignes et fournisseurs{% endif %}</a></p>
+            <p class="breadcrumb"><a href="{{ back }}">{% if return_to %}← Retour{% else %}← Achats · Enseignes et fournisseurs{% endif %}</a></p>
             <h1>Nouveau fournisseur</h1>
             <p class="page-subtitle">
                 Avant d'avoir reçu le moindre document de lui. Ce que ses documents impriment (n° SIREN, téléphone,
@@ -18,7 +18,7 @@
 
     <form method="post" class="card supplier-form">
         {% csrf_token %}
-        {% if retour %}<input type="hidden" name="retour" value="{{ retour }}">{% endif %}
+        {% if return_to %}<input type="hidden" name="retour" value="{{ return_to }}">{% endif %}
         {% for error in form.non_field_errors %}<p class="field-error">{{ error }}</p>{% endfor %}
 
         <p class="form-field">

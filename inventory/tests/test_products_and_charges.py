@@ -6,7 +6,7 @@ workspace is « Produits & charges », a StockType is an « article » wherever
 it is read, and the all-time figures say what was BOUGHT (« Total acheté »,
 « Acheté »), counted from the purchases alone: a loss written down later
 must not make « acheté » a lie. What really is stock - the window between
-two inventaires, what left the shelf, what is missing, the losses - keeps
+two stock takes, what left the shelf, what is missing, the losses - keeps
 the word and its own arithmetic.
 
 Data invented.
@@ -51,14 +51,19 @@ class WhatWasBoughtTests(TestCase):
         # Two litres broken, written down afterwards: they left the shelf,
         # they were bought all the same.
         make_movement(
-            stock_type=self.vodka, kind=MovementKind.LOSS, quantity="-2", unit_cost_ht="20",
+            stock_type=self.vodka,
+            kind=MovementKind.LOSS,
+            quantity="-2",
+            unit_cost_ht="20",
             occurred_on=date(2026, 3, 1),
         )
         self.url = reverse("inventory:stock_list")
 
     def row(self, response):
         return next(
-            row for category in response.context["categories"] for row in category["rows"]
+            row
+            for category in response.context["categories"]
+            for row in category["rows"]
             if row["stock_type"] == self.vodka
         )
 
@@ -74,7 +79,7 @@ class WhatWasBoughtTests(TestCase):
         self.assertEqual((row["quantity"], row["value_ht"], row["value_ttc"]), (D("12"), D("240"), D("288")))
         self.assertEqual(response.context["categories"][0]["total_value_ht"], D("240"))
 
-    def test_the_list_says_acheté_not_quantité(self):
+    def test_the_list_says_bought_not_quantity(self):
         response = self.client.get(self.url)
         self.assertContains(response, ">Acheté</th>")
         self.assertContains(response, ">Total HT</th>")
@@ -94,7 +99,7 @@ class WhatWasBoughtTests(TestCase):
         self.assertEqual(row["sold"].available, D("10"))
         self.assertEqual(self.vodka.current_quantity, D("10"))
 
-    def test_vendu_over_the_shelf_says_the_losses_came_off(self):
+    def test_sold_over_the_shelf_says_the_losses_came_off(self):
         """Eleven litres sold of twelve bought, two of them broken: « Vendu »
         stands under « Acheté » and the row is red all the same, since the
         ceiling is the shelf. Its tooltip and the headline said « plus qu'il
@@ -131,8 +136,10 @@ class WhatWasBoughtTests(TestCase):
         water = make_supplier(code="EAU_X", name="Eau Exemple", parser_key="", expenses_only=True)
         bill = make_invoice(supplier=water, invoice_date=timezone.localdate() - timedelta(days=30))
         make_invoice_line(
-            invoice=bill, product=make_product(supplier=water, raw_name="EAU EXEMPLE", is_expense=True),
-            total_ht="50", vat_rate=D("0.055"),
+            invoice=bill,
+            product=make_product(supplier=water, raw_name="EAU EXEMPLE", is_expense=True),
+            total_ht="50",
+            vat_rate=D("0.055"),
         )
         response = self.client.get(self.url)
         self.assertContains(response, "Charges (TTC)")
@@ -143,7 +150,7 @@ class WhatWasBoughtTests(TestCase):
     def test_no_charge_no_charges_figure(self):
         self.assertNotContains(self.client.get(self.url), "Charges (TTC)")
 
-    def test_between_two_inventaires_the_page_keeps_its_stock_words(self):
+    def test_between_two_stock_takes_the_page_keeps_its_stock_words(self):
         take = make_stock_take(taken_at=timezone.make_aware(datetime(2026, 3, 31, 12, 0)))
         make_stock_take_line(
             stock_take=take, product=None, stock_type=self.vodka, counted_quantity="4", unit=UnitChoices.LITRE
@@ -158,12 +165,14 @@ class WhatWasBoughtTests(TestCase):
 class ArticleWordingTests(TestCase):
     """A StockType is an « article » wherever it is read."""
 
-    def test_no_page_calls_it_a_type_de_stock(self):
+    def test_no_page_calls_it_a_stock_type(self):
         supplier = make_supplier(code="GROSSISTE_X", name="Grossiste Exemple")
         gin = make_stock_type(name="Gin", unit=UnitChoices.LITRE)
         make_product(supplier=supplier, raw_name="RHUM A CLASSER")  # the side panel is drawn
         take = make_stock_take()
-        make_stock_take_line(stock_take=take, product=None, stock_type=gin, counted_quantity="2", unit=UnitChoices.LITRE)
+        make_stock_take_line(
+            stock_take=take, product=None, stock_type=gin, counted_quantity="2", unit=UnitChoices.LITRE
+        )
         pages = [
             reverse("inventory:stock_list"),
             reverse("inventory:stock_type_create"),
@@ -178,7 +187,9 @@ class ArticleWordingTests(TestCase):
             with self.subTest(url=url):
                 # What is read, not the scripts: the inventory form's knows
                 # the old suffix to rename a draft typed before 19/09.
-                html = re.sub(r"<script.*?</script>", "", self.client.get(url).content.decode(), flags=re.S).lower()
+                html = re.sub(
+                    r"<script.*?</script>", "", self.client.get(url).content.decode(), flags=re.DOTALL
+                ).lower()
                 for old in ("type de stock", "types de stock", "type(s) de stock", "article de stock", "types vides"):
                     self.assertNotIn(old, html)
 
@@ -192,37 +203,51 @@ class ArticleWordingTests(TestCase):
         crate = extract_quantity("SODA EXEMPLE 24X33CL", colisage=1, qty=24, total_volume=D("7.92"))
         self.assertEqual(crate.note, "vendu à l'unité (0.33L par unité achetée ≤ 33cl)")
 
-    def test_the_écarts_count_units_bought(self):
+    def test_the_gaps_count_units_bought(self):
         """« Valorisé en Rhum (…, 0.700 L par article) »: Rhum is the
         article, 0,7 L one bottle of it."""
         rum = make_stock_type(name="Rhum", unit=UnitChoices.LITRE)
         make_movement(stock_type=rum, quantity="100", unit_cost_ht="15")
         make_product(
-            supplier=make_supplier(code="GROSSISTE_X", name="Grossiste Exemple"), raw_name="RHUM EXEMPLE 70CL",
-            stock_type=rum, unit=UnitChoices.UNIT, stock_equivalent="0.7",
+            supplier=make_supplier(code="GROSSISTE_X", name="Grossiste Exemple"),
+            raw_name="RHUM EXEMPLE 70CL",
+            stock_type=rum,
+            unit=UnitChoices.UNIT,
+            stock_equivalent="0.7",
         )
         opening = make_stock_take(taken_at=timezone.make_aware(datetime(2026, 3, 1, 12, 0)))
-        make_stock_take_line(stock_take=opening, product=None, stock_type=rum, counted_quantity="20", unit=UnitChoices.LITRE)
+        make_stock_take_line(
+            stock_take=opening, product=None, stock_type=rum, counted_quantity="20", unit=UnitChoices.LITRE
+        )
         closing = make_stock_take(taken_at=timezone.make_aware(datetime(2026, 3, 31, 12, 0)))
-        make_stock_take_line(stock_take=closing, product=None, stock_type=rum, counted_quantity="15", unit=UnitChoices.LITRE)
+        make_stock_take_line(
+            stock_take=closing, product=None, stock_type=rum, counted_quantity="15", unit=UnitChoices.LITRE
+        )
         response = self.client.get(reverse("inventory:stock_take_variance", args=[closing.pk]))
         self.assertContains(response, "Valorisé en Rhum")
         self.assertContains(response, "0.700 L par unité achetée")
         self.assertNotContains(response, "L par article")
 
-    def test_an_inventaire_counts_lines(self):
+    def test_a_stock_take_counts_lines(self):
         """Its lines are products mostly, an article now and then: « Articles
         comptés » named both with the word for one of them, where the list
-        of inventaires said « Produits comptés » for the same figure."""
+        of stock takes said « Produits comptés » for the same figure."""
         supplier = make_supplier(code="GROSSISTE_X", name="Grossiste Exemple")
         gin = make_stock_type(name="Gin", unit=UnitChoices.LITRE)
         take = make_stock_take()
         make_stock_take_line(
-            stock_take=take, product=None, stock_type=gin, counted_quantity="9", unit=UnitChoices.LITRE,
-            value_ht="90", has_shortfall=True, shortfall_quantity=D("3"),
+            stock_take=take,
+            product=None,
+            stock_type=gin,
+            counted_quantity="9",
+            unit=UnitChoices.LITRE,
+            value_ht="90",
+            has_shortfall=True,
+            shortfall_quantity=D("3"),
         )
         make_stock_take_line(
-            stock_take=take, product=make_product(supplier=supplier, raw_name="GIN EXEMPLE 70CL", stock_type=gin),
+            stock_take=take,
+            product=make_product(supplier=supplier, raw_name="GIN EXEMPLE 70CL", stock_type=gin),
             counted_quantity="2",
         )
         detail = self.client.get(reverse("inventory:stock_take_detail", args=[take.pk]))
@@ -239,11 +264,13 @@ class ArticleWordingTests(TestCase):
         self.assertContains(response, "<title>Produits & charges - MarginMate</title>")
         self.assertContains(response, "<h1>Produits &amp; charges</h1>")
 
-    def test_export_and_import_lead_to_the_données_page(self):
+    def test_export_and_import_lead_to_the_data_page(self):
         """The two associations buttons became « Données »'s: the export tab
         with the associations ticked, and the import tab."""
         response = self.client.get(reverse("inventory:stock_list"))
-        self.assertContains(response, '<a class="btn btn-secondary" href="/donnees/?cocher=associations">⬇️ Exporter…</a>')
+        self.assertContains(
+            response, '<a class="btn btn-secondary" href="/donnees/?cocher=associations">⬇️ Exporter…</a>'
+        )
         self.assertContains(response, '<a class="btn btn-secondary" href="/donnees/importer/">⬆️ Importer…</a>')
         self.assertNotContains(response, "Exporter les associations")
 

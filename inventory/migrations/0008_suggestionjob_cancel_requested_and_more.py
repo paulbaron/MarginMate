@@ -4,20 +4,29 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('inventory', '0007_suggestionjob'),
+        ("inventory", "0007_suggestionjob"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='suggestionjob',
-            name='cancel_requested',
+            model_name="suggestionjob",
+            name="cancel_requested",
             field=models.BooleanField(default=False),
         ),
         migrations.AlterField(
-            model_name='suggestionjob',
-            name='status',
-            field=models.CharField(choices=[('PENDING', 'En attente'), ('RUNNING', 'En cours'), ('SUCCESS', 'Terminé'), ('FAILED', 'Échoué'), ('CANCELLED', 'Annulé')], default='PENDING', max_length=20),
+            model_name="suggestionjob",
+            name="status",
+            field=models.CharField(
+                choices=[
+                    ("PENDING", "En attente"),
+                    ("RUNNING", "En cours"),
+                    ("SUCCESS", "Terminé"),
+                    ("FAILED", "Échoué"),
+                    ("CANCELLED", "Annulé"),
+                ],
+                default="PENDING",
+                max_length=20,
+            ),
         ),
     ]

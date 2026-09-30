@@ -48,7 +48,7 @@ def parsed(lines=(), warnings=()):
 class ImportWarningTests(TestCase):
     def setUp(self):
         self.supplier = make_supplier(code="GROSSISTE", name="Grossiste Exemple", parser_key="GROSSISTE")
-        self.path = os.path.join(paths.media_root(),"grossiste-exemple.pdf")
+        self.path = os.path.join(paths.media_root(), "grossiste-exemple.pdf")
         with open(self.path, "wb") as handle:
             handle.write(b"%PDF-1.4 exemple")
 
@@ -67,8 +67,12 @@ class ImportWarningTests(TestCase):
         stock_type = make_stock_type()
         make_product(supplier=self.supplier, raw_name="VIN EXEMPLE", stock_type=stock_type)
         line = ParsedLine(
-            raw_name="VIN EXEMPLE", quantity=6, total_volume=Decimal("0"), unit_cost_ht=Decimal("5"),
-            total_ht=Decimal("30"), vat_rate=Decimal("0.20"),
+            raw_name="VIN EXEMPLE",
+            quantity=6,
+            total_volume=Decimal("0"),
+            unit_cost_ht=Decimal("5"),
+            total_ht=Decimal("30"),
+            vat_rate=Decimal("0.20"),
         )
         invoice = self.import_with(parsed([line], warnings=["Les lignes lues font 30 € HT, la facture imprime 60 €."]))
         self.assertIn("la facture imprime 60", invoice.error_message)
@@ -175,15 +179,19 @@ class InvoiceVatTableTests(TestCase):
 
     def setUp(self):
         self.supplier = make_supplier(code="GROSSISTE", name="Grossiste Exemple", parser_key="GROSSISTE")
-        self.path = os.path.join(paths.media_root(),"grossiste-table.pdf")
+        self.path = os.path.join(paths.media_root(), "grossiste-table.pdf")
         with open(self.path, "wb") as handle:
             handle.write(b"%PDF-1.4 exemple")
         make_product(supplier=self.supplier, raw_name="VIN EXEMPLE", stock_type=make_stock_type())
 
     def reading(self, base, tax, total):
         line = ParsedLine(
-            raw_name="VIN EXEMPLE", quantity=6, total_volume=Decimal("0"),
-            unit_cost_ht=Decimal("5"), total_ht=Decimal(base), vat_rate=Decimal("0.20"),
+            raw_name="VIN EXEMPLE",
+            quantity=6,
+            total_volume=Decimal("0"),
+            unit_cost_ht=Decimal("5"),
+            total_ht=Decimal(base),
+            vat_rate=Decimal("0.20"),
         )
         result = parsed([line])
         result.printed_total_ttc = Decimal(total)

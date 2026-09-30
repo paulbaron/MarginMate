@@ -29,8 +29,15 @@ class LocalReturnTests(SimpleTestCase):
         self.assertEqual(self.returned("get", retour="/consignes/"), "/consignes/")
 
     def test_anything_else_is_nothing(self):
-        for target in ("", "https://example.invalid/", "//example.invalid/x", "consignes/", "/\\example.invalid",
-                       "javascript:alert(1)", "http://testserver/consignes/"):
+        for target in (
+            "",
+            "https://example.invalid/",
+            "//example.invalid/x",
+            "consignes/",
+            "/\\example.invalid",
+            "javascript:alert(1)",
+            "http://testserver/consignes/",
+        ):
             with self.subTest(target=target):
                 self.assertEqual(self.returned(retour=target), "")
         self.assertEqual(self.returned(), "")
@@ -39,28 +46,33 @@ class LocalReturnTests(SimpleTestCase):
 class GatherReturnTests(TestCase):
     def post(self, **data):
         with mock.patch("invoices.views.threading.Thread") as thread:
-            response = self.client.post(reverse("invoices:gather"), {
-                "start_date": "2026-06-01", "end_date": "2026-09-20", **data,
-            })
+            response = self.client.post(
+                reverse("invoices:gather"),
+                {
+                    "start_date": "2026-06-01",
+                    "end_date": "2026-09-20",
+                    **data,
+                },
+            )
         return response, thread
 
-    def achats(self):
+    def purchases_url(self):
         return f"{reverse('invoices:invoice_list')}?ajouter=recuperer"
 
-    def test_a_gather_asked_from_consignes_comes_back_there(self):
+    def test_a_gather_asked_from_returnables_comes_back_there(self):
         response, thread = self.post(sources=["bons-1"], retour="/consignes/")
         self.assertEqual(response["Location"], "/consignes/")
         thread.return_value.start.assert_called_once()
         self.assertEqual(thread.call_args.kwargs["args"][3], {"bons-1"})
 
-    def test_a_foreign_return_goes_to_achats(self):
+    def test_a_foreign_return_goes_to_purchases(self):
         response, thread = self.post(sources=["bons-1"], retour="https://example.invalid/consignes/")
-        self.assertEqual(response["Location"], self.achats())
+        self.assertEqual(response["Location"], self.purchases_url())
         thread.return_value.start.assert_called_once()
 
-    def test_without_one_it_is_achats_as_before(self):
+    def test_without_one_it_is_purchases_as_before(self):
         response, _thread = self.post(sources=["type-1"])
-        self.assertEqual(response["Location"], self.achats())
+        self.assertEqual(response["Location"], self.purchases_url())
 
     def test_one_already_running_is_said_where_it_was_asked(self):
         ScrapeJob.objects.create(status=ScrapeJob.Status.RUNNING, last_heartbeat=timezone.now())
@@ -68,7 +80,7 @@ class GatherReturnTests(TestCase):
         self.assertEqual(response["Location"], "/consignes/")
         thread.assert_not_called()
         self.assertEqual(ScrapeJob.objects.count(), 1)
-        page = self.client.get(self.achats())
+        page = self.client.get(self.purchases_url())
         self.assertContains(page, "Une récupération est déjà en cours")
 
     def test_nothing_ticked_is_refused_there_too(self):
@@ -77,7 +89,7 @@ class GatherReturnTests(TestCase):
         thread.assert_not_called()
         self.assertFalse(ScrapeJob.objects.exists())
 
-    def test_a_get_starts_nothing_and_goes_to_achats(self):
+    def test_a_get_starts_nothing_and_goes_to_purchases(self):
         response = self.client.get(reverse("invoices:gather") + "?retour=/consignes/")
         self.assertRedirects(response, reverse("invoices:invoice_list"), fetch_redirect_response=False)
         self.assertFalse(ScrapeJob.objects.exists())

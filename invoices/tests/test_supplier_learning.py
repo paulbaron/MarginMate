@@ -31,12 +31,16 @@ class OperatorWithManyBoxBills(TestCase):
     def setUp(self):
         self.today = timezone.localdate()
         self.operator = make_supplier(
-            code="OPERATEUR_X", name="Operateur Exemple", parser_key="", expenses_only=True, ticket_header=BOX_HEADER,
+            code="OPERATEUR_X",
+            name="Operateur Exemple",
+            parser_key="",
+            expenses_only=True,
+            ticket_header=BOX_HEADER,
         )
         # The customer's own phone, printed on the mobile bills, is on a
         # wholesaler's invoices too: it names nobody.
-        grossiste = make_supplier(code="GROSSISTE_X", name="Grossiste Exemple", parser_key="")
-        make_invoice(supplier=grossiste, source_text="GROSSISTE EXEMPLE\nClient : 06 12 34 56 78\nTOTAL 12,00")
+        wholesaler = make_supplier(code="GROSSISTE_X", name="Grossiste Exemple", parser_key="")
+        make_invoice(supplier=wholesaler, source_text="GROSSISTE EXEMPLE\nClient : 06 12 34 56 78\nTOTAL 12,00")
 
     def bills(self, text_of, count, start=10):
         return [
@@ -83,7 +87,9 @@ class KnownFiguresTests(TestCase):
         self.shop.ticket_identifiers = ["web:quincaillerie-exemple.fr"]
         self.shop.save()
         for n in range(5):
-            make_invoice(supplier=self.shop, ocr_text=f"QUINCAILLERIE\nwww.quincaillerie-exemple.fr\nTicket {n}\nTOTAL 3,00")
+            make_invoice(
+                supplier=self.shop, ocr_text=f"QUINCAILLERIE\nwww.quincaillerie-exemple.fr\nTicket {n}\nTOTAL 3,00"
+            )
         for n in range(30):
             make_invoice(supplier=self.shop, ocr_text=f"QUINCAILLERIE\nTicket {n + 10}\nTOTAL 4,00")
         learn_identifiers(self.shop, "QUINCAILLERIE\nTicket 99\nTOTAL 5,00")

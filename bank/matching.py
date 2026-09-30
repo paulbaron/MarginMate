@@ -117,36 +117,42 @@ TIER_RULES = (
     (
         SURE,
         "Certaine",
-        "Montant exact au centime, fournisseur nommé par la banque, facture datée dans la fenêtre du rapprochement "
-        f"(quelques jours autour d'un paiement par carte, jusqu'à {LATER_PAYMENT_WINDOW.days} jours avant pour "
-        f"{NOT_BY_CARD}), et une seule façon d'y arriver (une facture, ou une seule somme de factures) : le "
-        "rapprochement la rattache de lui-même. Elle n'apparaît ici que dans deux cas : le rapprochement n'a pas "
-        "été relancé depuis le dernier import (cochée d'avance), ou la ligne a été déliée à la main (pas cochée : "
-        f"le rapprochement automatique n'y revient plus). Pas cochée d'avance non plus quand, pour {NOT_BY_CARD}, "
-        f"la facture est datée au-delà de {RECURRING_DAYS_BEFORE.days} jours avant le paiement : le rapprochement la "
-        "rattacherait, mais à cette distance c'est peut-être la facture d'un autre mois au même montant, celle du "
-        "mois n'étant pas importée - la ligne dit la distance, à vous de voir.",
+        (
+            "Montant exact au centime, fournisseur nommé par la banque, facture datée dans la fenêtre du rapprochement "
+            f"(quelques jours autour d'un paiement par carte, jusqu'à {LATER_PAYMENT_WINDOW.days} jours avant pour "
+            f"{NOT_BY_CARD}), et une seule façon d'y arriver (une facture, ou une seule somme de factures) : le "
+            "rapprochement la rattache de lui-même. Elle n'apparaît ici que dans deux cas : le rapprochement n'a pas "
+            "été relancé depuis le dernier import (cochée d'avance), ou la ligne a été déliée à la main (pas cochée : "
+            f"le rapprochement automatique n'y revient plus). Pas cochée d'avance non plus quand, pour {NOT_BY_CARD}, "
+            f"la facture est datée au-delà de {RECURRING_DAYS_BEFORE.days} jours avant le paiement : le rapprochement la "
+            "rattacherait, mais à cette distance c'est peut-être la facture d'un autre mois au même montant, celle du "
+            "mois n'étant pas importée - la ligne dit la distance, à vous de voir."
+        ),
     ),
     (
         NEAR_SURE,
         "Quasi-sûre",
-        "Une seule meilleure option, avec une marge nette, chez un seul fournisseur nommé. Soit plusieurs "
-        f"factures de ce fournisseur ont exactement ce montant, la plus proche est datée dans les "
-        f"{RECURRING_DAYS_BEFORE.days} jours avant le paiement et chacune des autres en est éloignée d'au moins "
-        f"{RECURRING_MARGIN.days} jours de plus (une facture mensuelle : la bonne est celle du mois). Soit une "
-        f"seule facture est à {NEAR_SURE_GAP:.2f} € au plus du montant, aucune autre aussi près (un total lu à "
-        f"un centime près) - et, pour {NOT_BY_CARD}, datée elle aussi dans les "
-        f"{RECURRING_DAYS_BEFORE.days} jours : à quelques centimes près et un mois plus loin, c'est la facture "
-        "du mois précédent. Cochée d'avance ; à décocher si le doute existe.",
+        (
+            "Une seule meilleure option, avec une marge nette, chez un seul fournisseur nommé. Soit plusieurs "
+            f"factures de ce fournisseur ont exactement ce montant, la plus proche est datée dans les "
+            f"{RECURRING_DAYS_BEFORE.days} jours avant le paiement et chacune des autres en est éloignée d'au moins "
+            f"{RECURRING_MARGIN.days} jours de plus (une facture mensuelle : la bonne est celle du mois). Soit une "
+            f"seule facture est à {NEAR_SURE_GAP:.2f} € au plus du montant, aucune autre aussi près (un total lu à "
+            f"un centime près) - et, pour {NOT_BY_CARD}, datée elle aussi dans les "
+            f"{RECURRING_DAYS_BEFORE.days} jours : à quelques centimes près et un mois plus loin, c'est la facture "
+            "du mois précédent. Cochée d'avance ; à décocher si le doute existe."
+        ),
     ),
     (
         TO_CONFIRM,
         "À confirmer",
-        "Tout le reste : le même montant chez un bénéficiaire que la banque ne nomme pas, deux fournisseurs "
-        "nommés par le même bénéficiaire, un écart de plus de quelques centimes, plusieurs factures ou "
-        "plusieurs sommes aussi proches les unes que les autres, la seule facture proche datée d'au-delà des "
-        f"{RECURRING_DAYS_BEFORE.days} jours, un ticket dont la date n'a pas été lue. Rien n'est coché "
-        "d'avance.",
+        (
+            "Tout le reste : le même montant chez un bénéficiaire que la banque ne nomme pas, deux fournisseurs "
+            "nommés par le même bénéficiaire, un écart de plus de quelques centimes, plusieurs factures ou "
+            "plusieurs sommes aussi proches les unes que les autres, la seule facture proche datée d'au-delà des "
+            f"{RECURRING_DAYS_BEFORE.days} jours, un ticket dont la date n'a pas été lue. Rien n'est coché "
+            "d'avance."
+        ),
     ),
 )
 
@@ -157,12 +163,59 @@ TIER_RULES = (
 # « FRAIS » is not named by every such line.
 GENERIC_WORDS = frozenset(
     {
-        "SAS", "SASU", "SARL", "EURL", "SCEA", "EARL", "GAEC", "SNC", "SCI", "SOC", "STE", "SOCIETE",
-        "CIE", "ETS", "ETABLISSEMENTS", "THE", "AND", "LES", "DES", "AUX", "SUR", "PERE", "FILS",
-        "FRERES", "FILLE", "MAISON", "DOMAINE", "CHATEAU", "CAVE", "CAVES", "VIGNERONS", "CHAMPAGNE",
-        "FRANCE", "PARIS", "AUTRE", "ANALYSE", "OTHER",
-        "FACTURE", "FACTURES", "CARTE", "CARTES", "FRAIS", "COMMISSION", "COMMISSIONS", "COTISATION",
-        "COTISATIONS", "PRELEVEMENT", "PRLV", "VIREMENT", "VIR", "SEPA", "PAIEMENT", "NUMERO",
+        "SAS",
+        "SASU",
+        "SARL",
+        "EURL",
+        "SCEA",
+        "EARL",
+        "GAEC",
+        "SNC",
+        "SCI",
+        "SOC",
+        "STE",
+        "SOCIETE",
+        "CIE",
+        "ETS",
+        "ETABLISSEMENTS",
+        "THE",
+        "AND",
+        "LES",
+        "DES",
+        "AUX",
+        "SUR",
+        "PERE",
+        "FILS",
+        "FRERES",
+        "FILLE",
+        "MAISON",
+        "DOMAINE",
+        "CHATEAU",
+        "CAVE",
+        "CAVES",
+        "VIGNERONS",
+        "CHAMPAGNE",
+        "FRANCE",
+        "PARIS",
+        "AUTRE",
+        "ANALYSE",
+        "OTHER",
+        "FACTURE",
+        "FACTURES",
+        "CARTE",
+        "CARTES",
+        "FRAIS",
+        "COMMISSION",
+        "COMMISSIONS",
+        "COTISATION",
+        "COTISATIONS",
+        "PRELEVEMENT",
+        "PRLV",
+        "VIREMENT",
+        "VIR",
+        "SEPA",
+        "PAIEMENT",
+        "NUMERO",
     }
 )
 
@@ -287,7 +340,7 @@ def payee_of(counterparty: str, label: str) -> str:
     (`reconcile._learn_payee`), and what lets `alias_key` of it be the same
     key month after month. The fallback names nobody on its own: an alias
     has to exist - never a word of the supplier's name, exact or a letter
-    off, which on a label carrying a motif, a date and the bank's own words
+    off, which on a label carrying a reference, a date and the bank's own words
     is a coincidence the pass would act on (`names_supplier`).
     """
     if counterparty:
@@ -312,7 +365,7 @@ def names_supplier(payee: str, naming: Naming, *, alias_only: bool = False) -> b
 
     `alias_only` is for a label standing in for a blank payee
     (`Payment.payee_from_label`): the alias, and nothing else. A label
-    carries a motif, a date and the bank's own words beside whoever was
+    carries a reference, a date and the bank's own words beside whoever was
     paid, and the pass acts on whatever is named here - so a word of a
     supplier's name in it, exact or a letter off, would link AUTOMATICALLY
     on a coincidence (a supplier « Assurance Exemple », a fee line reading
@@ -405,7 +458,9 @@ def _match(payment: Payment, candidates, naming: dict[int, Naming]) -> Match | N
             "Plusieurs sommes de factures donnent exactement ce montant : rien ne les départage.",
         )
 
-    close = [candidate for candidate in named if candidate.total > 0 and abs(candidate.total - due) <= due * SUGGESTION_GAP]
+    close = [
+        candidate for candidate in named if candidate.total > 0 and abs(candidate.total - due) <= due * SUGGESTION_GAP
+    ]
     if close:
         close.sort(key=lambda candidate: (abs(candidate.total - due), _days_apart(candidate, payment)))
         tier, why = _close_tier(close, payment)
@@ -589,5 +644,7 @@ def _combinations_paying(due: Decimal, named) -> list[tuple[InvoiceCandidate, ..
         for size in range(2, min(MAX_INVOICES_PER_PAYMENT, len(pool)) + 1):
             for combination in itertools.combinations(pool, size):
                 if sum((candidate.total for candidate in combination), Decimal("0")) == due:
-                    found.append(tuple(sorted(combination, key=lambda candidate: (candidate.invoice_date, candidate.pk))))
+                    found.append(
+                        tuple(sorted(combination, key=lambda candidate: (candidate.invoice_date, candidate.pk)))
+                    )
     return found

@@ -4,25 +4,24 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('recipes', '0013_posproductdailyquantity_revenue_ht_and_more'),
+        ("recipes", "0013_posproductdailyquantity_revenue_ht_and_more"),
     ]
 
     operations = [
         migrations.AlterField(
-            model_name='posproduct',
-            name='total_quantity',
+            model_name="posproduct",
+            name="total_quantity",
             field=models.IntegerField(default=0),
         ),
         migrations.AlterField(
-            model_name='posproductdailyquantity',
-            name='quantity',
+            model_name="posproductdailyquantity",
+            name="quantity",
             field=models.IntegerField(),
         ),
         migrations.AlterField(
-            model_name='recipesale',
-            name='quantity',
+            model_name="recipesale",
+            name="quantity",
             field=models.IntegerField(),
         ),
     ]

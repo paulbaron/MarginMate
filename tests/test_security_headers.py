@@ -181,7 +181,9 @@ def _directive(name: str) -> str:
 
 
 #: A <script> that runs inline: no src, not a JSON island.
-INLINE_SCRIPT = re.compile(r"<script\b(?![^>]*\bsrc=)(?![^>]*\btype=[\"']application/(?:ld\+)?json)[^>]*>", re.IGNORECASE)
+INLINE_SCRIPT = re.compile(
+    r"<script\b(?![^>]*\bsrc=)(?![^>]*\btype=[\"']application/(?:ld\+)?json)[^>]*>", re.IGNORECASE
+)
 #: onclick=, onsubmit=… on an element.
 EVENT_HANDLER = re.compile(r"\son[a-z]+\s*=\s*[\"']", re.IGNORECASE)
 #: What htmx turns into code with Function(): a trigger's [filter], hx-on,
@@ -221,7 +223,7 @@ class PolicyFollowsTheTemplatesTests(SimpleTestCase):
         self.assertIsNone(INLINE_SCRIPT.search(island))
         self.assertIsNotNone(INLINE_SCRIPT.search("<script>var a = 1;</script>"))
         self.assertIsNone(INLINE_SCRIPT.search('<script src="/static/js/ui.js" defer></script>'))
-        self.assertIsNotNone(EVENT_HANDLER.search('<form onsubmit="return confirm(\'Supprimer ?\');">'))
+        self.assertIsNotNone(EVENT_HANDLER.search("<form onsubmit=\"return confirm('Supprimer ?');\">"))
         self.assertIsNone(EVENT_HANDLER.search('<div data-once="1">'))
         # The Tickets' status (invoices/_receipt_batch_status.html).
         self.assertIsNotNone(HTMX_EVAL.search('<div hx-get="/x" hx-trigger="every 1s [!shopChoiceInUse()]">'))
@@ -349,7 +351,9 @@ class PolicyInBrowserTests(StaticLiveServerTestCase):
 
     def refused(self) -> list[str]:
         return [
-            entry["message"] for entry in self.driver.get_log("browser") if "Content Security Policy" in entry["message"]
+            entry["message"]
+            for entry in self.driver.get_log("browser")
+            if "Content Security Policy" in entry["message"]
         ]
 
     def test_the_pages_load_with_nothing_refused(self):

@@ -13,24 +13,23 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('recipes', '0016_recipe_price_optional'),
+        ("recipes", "0016_recipe_price_optional"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='PosDailyPayment',
+            name="PosDailyPayment",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('sold_on', models.DateField()),
-                ('method', models.CharField(blank=True, max_length=40)),
-                ('amount', models.DecimalField(decimal_places=2, max_digits=12)),
-                ('payments', models.IntegerField(default=0)),
+                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
+                ("sold_on", models.DateField()),
+                ("method", models.CharField(blank=True, max_length=40)),
+                ("amount", models.DecimalField(decimal_places=2, max_digits=12)),
+                ("payments", models.IntegerField(default=0)),
             ],
             options={
-                'ordering': ['sold_on', 'method'],
-                'constraints': [models.UniqueConstraint(fields=('sold_on', 'method'), name='unique_pos_daily_payment')],
+                "ordering": ["sold_on", "method"],
+                "constraints": [models.UniqueConstraint(fields=("sold_on", "method"), name="unique_pos_daily_payment")],
             },
         ),
     ]

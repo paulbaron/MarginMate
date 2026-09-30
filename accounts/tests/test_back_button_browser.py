@@ -1,6 +1,6 @@
 """Back, on a device two bars share - in a real (headless) Chrome.
 
-The server answers each login with its own espace only; what a browser
+The server answers each login with its own tenant only; what a browser
 KEEPS is another matter, and a device may well be shared (the signing pages
 already say no-store for « a shared phone »):
 

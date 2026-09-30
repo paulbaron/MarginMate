@@ -1,4 +1,4 @@
-"""Combien d'une recette part à chaque vente.
+"""How much of a recipe goes out with each sale.
 
 `yield_quantity`/`yield_unit` say how much one full preparation PRODUCES - a
 terrine of 1,6 kg. They never said how much ONE SALE takes out of it, and two
@@ -60,9 +60,7 @@ class Fixtures:
     def terrine(self, sale_quantity="0.15"):
         """A 1,6 kg terrine of one article costing 20,00 € the kilo: the
         batch costs 20,00 €, a 150 g plate costs 1,875 €."""
-        pork = make_priced_stock_type(
-            name="Porc", unit=UnitChoices.KILOGRAM, unit_cost_ht="20", quantity="10"
-        )
+        pork = make_priced_stock_type(name="Porc", unit=UnitChoices.KILOGRAM, unit_cost_ht="20", quantity="10")
         recipe = make_recipe(
             name="Terrine",
             yield_quantity="1.6",
@@ -81,9 +79,7 @@ class TheRatioTests(Fixtures, TestCase):
 
     def test_a_preparation_makes_that_many_servings(self):
         recipe, _ = self.terrine()
-        self.assertEqual(
-            recipe.servings_per_batch.quantize(CENT), (Decimal("1.6") / Decimal("0.15")).quantize(CENT)
-        )
+        self.assertEqual(recipe.servings_per_batch.quantize(CENT), (Decimal("1.6") / Decimal("0.15")).quantize(CENT))
 
     def test_a_recipe_sold_whole_sells_one_for_one(self):
         """The default, and what every recipe already filed means."""
@@ -177,20 +173,16 @@ class ASubRecipeIsBoughtByTheUnitTests(Fixtures, TestCase):
         portion, cocktail_portion = self.syrup_and_cocktail("0.05")
         with variation_scope():
             self.assertEqual(whole.unit_cost_ht(), portion.unit_cost_ht())
-            self.assertEqual(
-                cocktail_whole.summary()["cost_range"], cocktail_portion.summary()["cost_range"]
-            )
+            self.assertEqual(cocktail_whole.summary()["cost_range"], cocktail_portion.summary()["cost_range"])
 
     def test_the_parent_consumes_the_same_whatever_the_portion_sold(self):
         _, cocktail_whole = self.syrup_and_cocktail("1")
         _, cocktail_portion = self.syrup_and_cocktail("0.05")
-        self.assertEqual(
-            sorted(usage_of(cocktail_whole).values()), sorted(usage_of(cocktail_portion).values())
-        )
+        self.assertEqual(sorted(usage_of(cocktail_whole).values()), sorted(usage_of(cocktail_portion).values()))
 
 
 class WhatOneSaleConsumesTests(Fixtures, TestCase):
-    """The écarts engine counts what a sale took off the shelf. Read per
+    """The variance engine counts what a sale took off the shelf. Read per
     batch, a terrine sold in plates would report ten times its consumption
     as missing stock."""
 

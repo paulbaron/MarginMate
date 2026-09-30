@@ -3,8 +3,8 @@
     python manage.py learn_shop_identifiers --dry-run
     python manage.py learn_shop_identifiers
 
-With one database per bar: `python manage.py tenant <dossier>
-learn_shop_identifiers --dry-run`, one espace at a time.
+With one database per bar: `python manage.py tenant <folder>
+learn_shop_identifiers --dry-run`, one tenant at a time.
 
 A ticket checked on the review page teaches its shop its SIREN, phone and web
 site (receipts.learn_identifiers), and so does a digital invoice as it is
@@ -84,9 +84,9 @@ class Command(BaseCommand):
         read = 0
         waiting = Invoice.objects.filter(ocr_text="", source_text="").exclude(source_file="")
         for invoice in waiting.only("pk", "source_file").iterator():
-            # Through the storage, which is the espace's own media folder
-            # (accounts/storage.py): run for an espace (`manage.py tenant
-            # <dossier> learn_shop_identifiers`), a folder read any other way
+            # Through the storage, which is the tenant's own media folder
+            # (accounts/storage.py): run for a tenant (`manage.py tenant
+            # <folder> learn_shop_identifiers`), a folder read any other way
             # holds none of its files, and every document read as « gone ».
             try:
                 path = invoice.source_file.path

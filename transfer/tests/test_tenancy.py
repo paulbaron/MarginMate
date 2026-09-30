@@ -1,13 +1,13 @@
-"""« Données » in multi mode: an espace's backups, staged archives, exports
+"""« Données » in multi mode: a tenant's backups, staged archives, exports
 and files are its own (accounts.paths), and nothing on the page names a
 folder of the server.
 
-Two espaces in temporary files (accounts.tests.support.TwoTenantsTestCase).
+Two tenants in temporary files (accounts.tests.support.TwoTenantsTestCase).
 With one backups folder and one staging folder for the whole server, bar B
 listed bar A's safety copies on its Importer tab and could stage and import
 them - A's invoices, bank and prices - and resume or cancel the archive A
 had just sent. Each test below failed before the folders became the
-espace's own.
+tenant's own.
 """
 
 import json
@@ -61,7 +61,7 @@ def own_backup(path) -> bool:
     return ImportContext.own_backup.fget(SimpleNamespace(reader=SimpleNamespace(path=path)))
 
 
-class EspaceTestCase(TwoTenantsTestCase):
+class TenantTestCase(TwoTenantsTestCase):
     def a_supplier(self, tenant, code, name):
         with bound_tenant(tenant):
             return Supplier.objects.create(code=code, name=name)
@@ -85,8 +85,8 @@ class EspaceTestCase(TwoTenantsTestCase):
         return self.client.get(url)
 
 
-class BackupsTests(EspaceTestCase):
-    def test_each_espace_backs_up_into_its_own_folder(self):
+class BackupsTests(TenantTestCase):
+    def test_each_tenant_backs_up_into_its_own_folder(self):
         self.a_supplier(self.bar_a, "ALPHA_ESSAI", "Grossiste Alpha")
         backups = self.backups_of(self.bar_a)
         folder = paths.tenant_dir(self.bar_a) / paths.BACKUPS
@@ -123,7 +123,7 @@ class BackupsTests(EspaceTestCase):
         self.assertContains(page, f'name="nom" value="{zipped}"')
         self.assertContains(page, copied)
 
-    def test_an_archive_is_its_own_backup_in_its_own_espace_only(self):
+    def test_an_archive_is_its_own_backup_in_its_own_tenant_only(self):
         """What restores a portal ACTIVE (sources.py): A's backup, copied or
         referenced from B, is an archive from elsewhere there."""
         archive_path = self.backups_of(self.bar_a)["archive"]
@@ -137,14 +137,14 @@ class BackupsTests(EspaceTestCase):
             with ArchiveReader(Path(archive_path)) as reader:
                 self.assertEqual(reader.reason, "sauvegarde avant effacement")  # a manifest says what anybody writes
 
-    def test_the_size_is_the_bound_espace_s_database(self):
+    def test_the_size_is_the_bound_tenant_s_database(self):
         with bound_tenant(self.bar_a):
             size = safety.database_size()
         self.assertEqual(size, paths.tenant_database(self.bar_a).stat().st_size)
         self.assertGreater(size, 0)
 
 
-class StagingTests(EspaceTestCase):
+class StagingTests(TenantTestCase):
     def test_b_never_sees_resumes_nor_cancels_a_s_archive(self):
         self.a_supplier(self.bar_a, "ALPHA_ESSAI", "Grossiste Alpha")
         stage = self.upload_of(self.bar_a)
@@ -170,7 +170,7 @@ class StagingTests(EspaceTestCase):
         page = self.page(self.user_a, reverse("transfer:data_import"))
         self.assertContains(page, url)
 
-    def test_the_sweep_stays_in_its_espace(self):
+    def test_the_sweep_stays_in_its_tenant(self):
         with bound_tenant(self.bar_a):
             old = staging.staging_dir() / ("O" * 22)
             old.mkdir()
@@ -182,30 +182,30 @@ class StagingTests(EspaceTestCase):
             self.assertEqual(staging.sweep(), 1)
         self.assertFalse(old.exists())
 
-    def test_an_export_waits_in_the_espace_s_own_folder(self):
+    def test_an_export_waits_in_the_tenant_s_own_folder(self):
         with bound_tenant(self.bar_a):
             self.assertEqual(staging.exports_dir().parent, paths.tenant_dir(self.bar_a) / paths.STAGING)
 
 
-class FilesTests(EspaceTestCase):
+class FilesTests(TenantTestCase):
     NAME = "invoices/2026/09/meme-nom-essai.pdf"
 
-    def test_a_stored_name_is_checked_against_the_espace_s_media(self):
+    def test_a_stored_name_is_checked_against_the_tenant_s_media(self):
         """Every file of an archive was refused « hors du dossier des
         fichiers »: the containment was checked against MEDIA_ROOT."""
         with bound_tenant(self.bar_a):
             self.assertIsNone(archive.storage_name_problem(self.NAME))
             self.assertIsNotNone(archive.storage_name_problem("invoices/../../db.sqlite3"))
 
-    def test_the_orphan_scan_walks_the_espace_s_own_media(self):
+    def test_the_orphan_scan_walks_the_tenant_s_own_media(self):
         with bound_tenant(self.bar_a):
             default_storage.save("invoices/2026/09/orpheline-alpha.pdf", ContentFile(b"%PDF-1.4 alpha"))
             self.assertEqual(invoices_section._orphan_files(set()), 1)
         with bound_tenant(self.bar_b):
             self.assertEqual(invoices_section._orphan_files(set()), 0)
 
-    def test_the_size_cache_is_per_espace(self):
-        """Two espaces restored from one archive name the same files: the
+    def test_the_size_cache_is_per_tenant(self):
+        """Two tenants restored from one archive name the same files: the
         size kept a minute for A was B's « Mo de fichiers » too."""
         names = frozenset({self.NAME})
         with bound_tenant(self.bar_a):
@@ -219,7 +219,7 @@ class FilesTests(EspaceTestCase):
 
 
 def no_folder_named(test, response, *tenants):
-    """Nothing of the server's layout: no espace's folder name, no root."""
+    """Nothing of the server's layout: no tenant's folder name, no root."""
     content = response.content.decode()
     for tenant in tenants:
         test.assertNotIn(tenant.dir_name, content)
@@ -227,10 +227,12 @@ def no_folder_named(test, response, *tenants):
     test.assertNotIn(test.tenants_root.as_posix(), content)
 
 
-class ThroughThePagesTests(EspaceTestCase):
+class ThroughThePagesTests(TenantTestCase):
     def test_an_archive_a_hands_over_lands_in_b_s_own_files(self):
         with bound_tenant(self.bar_a):
-            name = default_storage.save("invoices/2026/09/facture-alpha-essai.pdf", ContentFile(b"%PDF-1.4 alpha essai"))
+            name = default_storage.save(
+                "invoices/2026/09/facture-alpha-essai.pdf", ContentFile(b"%PDF-1.4 alpha essai")
+            )
             make_invoice(Supplier.objects.get(code="METRO"), invoice_number="ALPHA-ESSAI-0001", source_file=name)
         keys = sorted(registry.closure({"factures"}, "export"))
         self.client.force_login(self.user_a)
@@ -287,9 +289,11 @@ class ThroughThePagesTests(EspaceTestCase):
         with bound_tenant(self.bar_a):
             where = str(paths.backups_dir() / "2026-09-19_143012_avant-import.sqlite3")
             refused = OSError(28, "No space left on device", where)
-            with mock.patch("transfer.safety.backup_database", side_effect=refused), \
-                    self.assertLogs("transfer.safety", "ERROR") as logged, \
-                    self.assertRaises(safety.SafetyError) as caught:
+            with (
+                mock.patch("transfer.safety.backup_database", side_effect=refused),
+                self.assertLogs("transfer.safety", "ERROR") as logged,
+                self.assertRaises(safety.SafetyError) as caught,
+            ):
                 safety.before("import", set())
         # The detail is the administrator's, in the server's log.
         self.assertIs(logged.records[0].exc_info[1], refused)
@@ -303,17 +307,17 @@ class ThroughThePagesTests(EspaceTestCase):
         """Move the login to `tenant` and keep its session. Since 29/09 a
         move logs the session out (security audit LOAD-1,
         accounts/tests/test_sessions.py); the session's own keys carrying
-        the espace are the second line, tested here with the session's
-        espace written by hand."""
-        from accounts.middleware import ESPACE_SESSION_KEY
+        the tenant are the second line, tested here with the session's
+        tenant written by hand."""
+        from accounts.middleware import TENANT_SESSION_KEY
 
         Membership.objects.filter(pk=membership.pk).update(tenant=tenant)
         session = self.client.session
-        session[ESPACE_SESSION_KEY] = tenant.pk
+        session[TENANT_SESSION_KEY] = tenant.pk
         session.save()
 
-    def test_a_pending_clear_and_its_report_stay_with_their_espace(self):
-        """A person who works for two espaces carries nothing of one into the
+    def test_a_pending_clear_and_its_report_stay_with_their_tenant(self):
+        """A person who works for two tenants carries nothing of one into the
         other: the session is the platform's, one per login."""
         url = reverse("transfer:data_clear")
         self.client.force_login(self.user_a)
@@ -342,8 +346,8 @@ class ThroughThePagesTests(EspaceTestCase):
         no_folder_named(self, report, self.bar_a)
 
 
-class HostedBarWordingTests(EspaceTestCase):
-    """Bar Alpha is the owner's espace, Bar Beta a hosted bar: Beta can
+class HostedBarWordingTests(TenantTestCase):
+    """Bar Alpha is the owner's tenant, Bar Beta a hosted bar: Beta can
     neither edit the server's .env nor run a command on it, so « Données »
     never tells it to - it says « à configurer » as every other page does
     (invoices/integrations.py, recipes/integration.py)."""
@@ -370,9 +374,11 @@ class HostedBarWordingTests(EspaceTestCase):
 
     def till_payment(self, tenant):
         with bound_tenant(tenant):
-            PosDailyPayment.objects.create(sold_on=date(2026, 3, 14), method=PosDailyPayment.CARD, amount="12.50", payments=1)
+            PosDailyPayment.objects.create(
+                sold_on=date(2026, 3, 14), method=PosDailyPayment.CARD, amount="12.50", payments=1
+            )
 
-    def test_clearing_the_sales_names_the_payments_backfill_in_the_owner_s_espace_only(self):
+    def test_clearing_the_sales_names_the_payments_backfill_in_the_owner_s_tenant_only(self):
         self.till_payment(self.bar_a)
         self.till_payment(self.bar_b)
         with bound_tenant(self.bar_b):

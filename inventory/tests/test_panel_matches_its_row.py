@@ -1,4 +1,4 @@
-"""Le panneau d'une ligne dit la même chose que la ligne qu'il explique.
+"""A row's panel says the same thing as the row it explains.
 
 « Du … au … » now narrows what a row of « Produits & charges » opens, so the
 panel and the row hold exactly the same purchases and the same documents.
@@ -11,7 +11,7 @@ pins down, each from a review that reproduced it:
   cent before adding it up (`charge_suppliers`); the panel added them raw,
   so twelve bills printed « 35,99 € » each over a foot reading 431,86 €
   while the row said 431,88 €. And an article's row worked its « Total TTC »
-  out of HT while the panel printed `InvoiceLine.total_ttc` - a facturette
+  out of HT while the panel printed `InvoiceLine.total_ttc` - a receipt
   printing 39,99 € came out at 40,00 € on the row and 39,99 € in the panel
   just below it. One formula on both sides, or the page holds two answers to
   one question;
@@ -63,25 +63,21 @@ class AChargePanelFootsWhatItsOwnLinesPrintTests(PurchaseWindowTestCase):
 
     def setUp(self):
         super().setUp()
-        self.fournisseur = make_supplier(
+        self.subscription_supplier = make_supplier(
             code="ABO_X", name="Abonnement Exemple", parser_key="", expenses_only=True
         )
-        self.abonnement = make_product(
-            supplier=self.fournisseur, raw_name="ABONNEMENT", is_expense=True
-        )
+        self.subscription = make_product(supplier=self.subscription_supplier, raw_name="ABONNEMENT", is_expense=True)
         for month in range(1, 13):
             bill = make_invoice(
-                supplier=self.fournisseur,
+                supplier=self.subscription_supplier,
                 invoice_date=date(2026, month, 5),
                 invoice_number=f"ABO-2026-{month:02d}",
             )
-            make_invoice_line(
-                invoice=bill, product=self.abonnement, total_ht="29.99", vat_rate=D("0.20")
-            )
+            make_invoice_line(invoice=bill, product=self.subscription, total_ht="29.99", vat_rate=D("0.20"))
         self.year = {"du": "2026-01-01", "au": "2026-12-31"}
 
     def supplier_url(self):
-        return reverse("inventory:charge_supplier_documents", args=[self.fournisseur.pk])
+        return reverse("inventory:charge_supplier_documents", args=[self.subscription_supplier.pk])
 
     def test_the_foot_is_the_sum_of_the_lines_the_panel_prints(self):
         panel = self.client.get(self.supplier_url(), self.year)
@@ -98,13 +94,11 @@ class AChargePanelFootsWhatItsOwnLinesPrintTests(PurchaseWindowTestCase):
         """Three lines of 33,33 € HT at 20 % on one bill: the row counts
         three times 40,00 €, and the panel's own row has to say 120,00 €."""
         bill = make_invoice(
-            supplier=self.fournisseur, invoice_date=date(2026, 6, 20), invoice_number="ABO-TROIS"
+            supplier=self.subscription_supplier, invoice_date=date(2026, 6, 20), invoice_number="ABO-TROIS"
         )
-        for poste in ("POSTE A", "POSTE B", "POSTE C"):
-            product = make_product(supplier=self.fournisseur, raw_name=poste, is_expense=True)
-            make_invoice_line(
-                invoice=bill, product=product, raw_name=poste, total_ht="33.33", vat_rate=D("0.20")
-            )
+        for charge_item in ("POSTE A", "POSTE B", "POSTE C"):
+            product = make_product(supplier=self.subscription_supplier, raw_name=charge_item, is_expense=True)
+            make_invoice_line(invoice=bill, product=product, raw_name=charge_item, total_ht="33.33", vat_rate=D("0.20"))
         (row,) = self.page(du="2026-06-01", au="2026-06-30").context["charge_suppliers"]
         panel = self.client.get(self.supplier_url(), {"du": "2026-06-01", "au": "2026-06-30"})
         (document,) = [entry for entry in panel.context["rows"] if entry["invoice"].pk == bill.pk]
@@ -113,7 +107,7 @@ class AChargePanelFootsWhatItsOwnLinesPrintTests(PurchaseWindowTestCase):
 
 
 class AnArticleRowCountsWhatItsPurchasePrintedTests(PurchaseWindowTestCase):
-    """A facturette prints 39,99 € where 33,33 € HT at 20 % works out to
+    """A receipt prints 39,99 € where 33,33 € HT at 20 % works out to
     39,996 €, and 39,99 € is what left the bank (CLAUDE.md, « a receipt line
     keeps its printed TTC »). The panel reads `InvoiceLine.total_ttc`, which
     prefers that printed amount; the row's scan worked its own out of HT. One
@@ -126,17 +120,17 @@ class AnArticleRowCountsWhatItsPurchasePrintedTests(PurchaseWindowTestCase):
         product = self.product_for(self.vodka)
         invoice = make_invoice(supplier=self.supplier, invoice_date=date(2026, 2, 10))
         self.line = make_invoice_line(
-            invoice=invoice, product=product, quantity=1,
-            total_ht="33.33", vat_rate=D("0.20"), printed_ttc=D("39.99"),
+            invoice=invoice,
+            product=product,
+            quantity=1,
+            total_ht="33.33",
+            vat_rate=D("0.20"),
+            printed_ttc=D("39.99"),
         )
-        make_movement(
-            stock_type=self.vodka, quantity="1", unit_cost_ht="33.33", invoice_line=self.line
-        )
+        make_movement(stock_type=self.vodka, quantity="1", unit_cost_ht="33.33", invoice_line=self.line)
 
     def panel(self, **parameters):
-        return self.client.get(
-            reverse("inventory:stock_type_movements", args=[self.vodka.pk]), parameters
-        )
+        return self.client.get(reverse("inventory:stock_type_movements", args=[self.vodka.pk]), parameters)
 
     def test_the_row_prints_the_amount_the_panel_prints(self):
         row = self.rows(self.page(**FEBRUARY))["Vodka"]
@@ -157,8 +151,8 @@ class AnArticleRowCountsWhatItsPurchasePrintedTests(PurchaseWindowTestCase):
     def test_a_line_that_printed_nothing_is_still_worked_out_from_ht(self):
         """A supplier's invoice prints HT, and nothing changes for it - the
         printed amount is preferred where there is one, not invented."""
-        rhum = make_stock_type(name="Rhum", unit=UnitChoices.LITRE, category="Spiritueux")
-        self.buy(rhum, date(2026, 2, 12), quantity="1", total_ht="100")
+        rum = make_stock_type(name="Rhum", unit=UnitChoices.LITRE, category="Spiritueux")
+        self.buy(rum, date(2026, 2, 12), quantity="1", total_ht="100")
         row = self.rows(self.page(**FEBRUARY))["Rhum"]
         self.assertEqual(row["value_ttc"], D("120"))
 
@@ -167,10 +161,10 @@ class AnArticleRowCountsTheHtItsLinesPrintTests(PurchaseWindowTestCase):
     """The same disagreement, one column to the left.
 
     `unit_cost_ht` is the line's amount DIVIDED by the quantity, stored to
-    four decimals: 2 000 touillettes charged 28,84 € are priced 0,01442,
+    four decimals: 2 000 stirrers charged 28,84 € are priced 0,01442,
     kept 0,0144, and multiplied back they make 28,80 €. So the row read
     28,80 € over a panel listing 7,21 € and 21,63 €, and the page's own
-    « Total acheté (HT) » came out a few centimes under what the invoices
+    « Total acheté (HT) » came out a few cents under what the invoices
     charge (a handful of articles, measured on a copy of the real database,
     20/09; the amounts here are invented).
 
@@ -181,28 +175,31 @@ class AnArticleRowCountsTheHtItsLinesPrintTests(PurchaseWindowTestCase):
 
     def setUp(self):
         super().setUp()
-        self.touillettes = make_stock_type(name="Touillettes", unit=UnitChoices.UNIT, category="Consommables")
-        product = self.product_for(self.touillettes)
+        self.stirrers = make_stock_type(name="Touillettes", unit=UnitChoices.UNIT, category="Consommables")
+        product = self.product_for(self.stirrers)
         for day, count, amount in (
             (date(2026, 2, 5), 500, "7.21"),
             (date(2026, 2, 16), 1500, "21.63"),
         ):
             invoice = make_invoice(supplier=self.supplier, invoice_date=day)
             line = make_invoice_line(
-                invoice=invoice, product=product, quantity=count,
-                total_ht=amount, vat_rate=D("0.20"),
+                invoice=invoice,
+                product=product,
+                quantity=count,
+                total_ht=amount,
+                vat_rate=D("0.20"),
             )
             # What the import books: the amount divided by the count, and
             # the field keeps four decimals of it.
             make_movement(
-                stock_type=self.touillettes, quantity=str(count),
-                unit_cost_ht=(D(amount) / count).quantize(D("0.0001")), invoice_line=line,
+                stock_type=self.stirrers,
+                quantity=str(count),
+                unit_cost_ht=(D(amount) / count).quantize(D("0.0001")),
+                invoice_line=line,
             )
 
     def panel_lines(self, **parameters):
-        answer = self.client.get(
-            reverse("inventory:stock_type_movements", args=[self.touillettes.pk]), parameters
-        )
+        answer = self.client.get(reverse("inventory:stock_type_movements", args=[self.stirrers.pk]), parameters)
         return [entry["line"] for entry in answer.context["movements"] if entry["line"]]
 
     def test_the_row_prints_what_its_lines_charge(self):
@@ -221,10 +218,13 @@ class AnArticleRowCountsTheHtItsLinesPrintTests(PurchaseWindowTestCase):
 
     def test_a_movement_with_no_line_keeps_the_ledgers_own_arithmetic(self):
         """A correction typed by hand has no document to quote."""
-        sirop = make_stock_type(name="Sirop", unit=UnitChoices.LITRE, category="Softs")
+        syrup = make_stock_type(name="Sirop", unit=UnitChoices.LITRE, category="Softs")
         make_movement(
-            stock_type=sirop, quantity="2", unit_cost_ht="3.5000",
-            occurred_on=date(2026, 2, 10), note="Correction manuelle",
+            stock_type=syrup,
+            quantity="2",
+            unit_cost_ht="3.5000",
+            occurred_on=date(2026, 2, 10),
+            note="Correction manuelle",
         )
         self.assertEqual(self.rows(self.page(**FEBRUARY))["Sirop"]["value_ht"], D("7.0000"))
 
@@ -233,12 +233,12 @@ class AnArticleRowCountsTheHtItsLinesPrintTests(PurchaseWindowTestCase):
         StockType.current_unit_cost_ht computes it, and must go on saying
         what the ledger holds rather than what the document charged."""
         self.assertEqual(
-            self.touillettes.current_unit_cost_ht,
+            self.stirrers.current_unit_cost_ht,
             (D("500") * D("0.0144") + D("1500") * D("0.0144")) / D("2000"),
         )
 
 
-class WhatIsNotAnAchatSaysSoTests(ArticlePanelTestCase):
+class WhatIsNotAPurchaseSaysSoTests(ArticlePanelTestCase):
     """The row's « Acheté » counts purchases alone. The panel lists every
     movement of the window - a broken bottle, a ledger correction - and the
     window is what makes that visible: forty rows of history hid one loss,
@@ -248,8 +248,12 @@ class WhatIsNotAnAchatSaysSoTests(ArticlePanelTestCase):
     def setUp(self):
         super().setUp()
         make_movement(
-            stock_type=self.vodka, quantity="-2", unit_cost_ht="20", kind=MovementKind.LOSS,
-            occurred_on=date(2026, 2, 15), note="Bouteille cassée",
+            stock_type=self.vodka,
+            quantity="-2",
+            unit_cost_ht="20",
+            kind=MovementKind.LOSS,
+            occurred_on=date(2026, 2, 15),
+            note="Bouteille cassée",
         )
 
     def test_the_header_does_not_call_a_loss_a_purchase(self):
@@ -259,7 +263,7 @@ class WhatIsNotAnAchatSaysSoTests(ArticlePanelTestCase):
     def test_the_line_says_which_kind_it_is(self):
         self.assertContains(self.panel(**FEBRUARY), "Perte connue")
 
-    def test_a_window_of_purchases_alone_is_still_headed_achats(self):
+    def test_a_window_of_purchases_alone_is_still_headed_purchases(self):
         """« et autres mouvements » over a page of deliveries would be a
         second lie, the other way round."""
         panel = self.panel(du="2026-02-01", au="2026-02-14")
@@ -283,8 +287,11 @@ class ThePanelIsOrderedByTheDateItPrintsTests(ArticlePanelTestCase):
         self.buy(self.vodka, date(2026, 2, 3), quantity="1", total_ht="10")
         self.buy(self.vodka, date(2026, 2, 25), quantity="1", total_ht="10")
         make_movement(
-            stock_type=self.vodka, quantity="-1", unit_cost_ht="10",
-            occurred_on=date(2026, 2, 14), note="Correction",
+            stock_type=self.vodka,
+            quantity="-1",
+            unit_cost_ht="10",
+            occurred_on=date(2026, 2, 14),
+            note="Correction",
         )
         late = self.buy(self.vodka, date(2026, 1, 20), quantity="1", total_ht="10")
         late.occurred_on = date(2026, 2, 27)
@@ -317,7 +324,7 @@ class TheWayBackToTheDatesTests(ArticlePanelTestCase):
     def test_the_whole_history_offers_the_dates_back(self):
         whole = self.client.get(self.panel(**FEBRUARY).context["all_url"])
         self.assertContains(whole, "revenir du 01/02/2026 au 28/02/2026")
-        self.assertContains(whole, 'hx-get="%s?du=2026-02-01&amp;au=2026-02-28"' % self.panel_url())
+        self.assertContains(whole, f'hx-get="{self.panel_url()}?du=2026-02-01&amp;au=2026-02-28"')
 
     def test_the_way_back_gives_the_window_back(self):
         whole = self.client.get(self.panel(**FEBRUARY).context["all_url"])
@@ -357,20 +364,18 @@ class AChargesWayBackTests(PurchaseWindowTestCase):
 
     def setUp(self):
         super().setUp()
-        self.bailleur = make_supplier(
-            code="BAILLEUR_X", name="Bailleur Exemple", parser_key="", expenses_only=True
-        )
-        self.loyer = make_product(supplier=self.bailleur, raw_name="LOYER", is_expense=True)
+        self.landlord = make_supplier(code="BAILLEUR_X", name="Bailleur Exemple", parser_key="", expenses_only=True)
+        self.rent = make_product(supplier=self.landlord, raw_name="LOYER", is_expense=True)
         for month in (1, 2, 3):
             bill = make_invoice(
-                supplier=self.bailleur,
+                supplier=self.landlord,
                 invoice_date=date(2026, month, 5),
                 invoice_number=f"LOYER-2026-{month:02d}",
             )
-            make_invoice_line(invoice=bill, product=self.loyer, total_ht="500", vat_rate=D("0.20"))
+            make_invoice_line(invoice=bill, product=self.rent, total_ht="500", vat_rate=D("0.20"))
 
     def supplier_url(self):
-        return reverse("inventory:charge_supplier_documents", args=[self.bailleur.pk])
+        return reverse("inventory:charge_supplier_documents", args=[self.landlord.pk])
 
     def test_the_foots_link_carries_the_window(self):
         panel = self.client.get(self.supplier_url(), FEBRUARY)
@@ -401,9 +406,7 @@ class TheDocumentsColumnNamesTheWindowItCountsTests(PurchaseWindowTestCase):
 
     def setUp(self):
         super().setUp()
-        supplier = make_supplier(
-            code="EAU_X", name="Eau Exemple", parser_key="", expenses_only=True
-        )
+        supplier = make_supplier(code="EAU_X", name="Eau Exemple", parser_key="", expenses_only=True)
         product = make_product(supplier=supplier, raw_name="EAU", is_expense=True)
         bill = make_invoice(supplier=supplier, invoice_date=date(2026, 2, 5))
         make_invoice_line(invoice=bill, product=product, total_ht="40", vat_rate=D("0.055"))

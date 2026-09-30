@@ -73,9 +73,9 @@ def local_return(request) -> str:
 MEGABYTE = 1024 * 1024
 #: One file sent through any of the app's forms - a ticket's photo or scan, a
 #: supplier's PDF, a bank statement, a hand-typed invoice's receipt. A phone
-#: photo weighs 2 to 8 Mo, a scanned ticket 0.3 Mo (the owner's folder of 42:
-#: 0.74 Mo at most), a supplier's PDF a few hundred Ko: 25 Mo is three times
-#: the heaviest of them and still refuses what is no document at all (a 64 Mo
+#: photo weighs 2 to 8 MB, a scanned ticket 0.3 MB (the owner's folder of 42:
+#: 0.74 MB at most), a supplier's PDF a few hundred KB: 25 MB is three times
+#: the heaviest of them and still refuses what is no document at all (a 64 MB
 #: file named .jpg was staged whole, audit UPLOAD-1). « Données » archives
 #: have their own, larger cap (transfer/archive.py MAX_ARCHIVE_BYTES).
 UPLOAD_MAX_FILE_BYTES = 25 * MEGABYTE
@@ -127,7 +127,7 @@ def selection_too_big(uploads, limit: int | None = None) -> str:
 
 #: Said of an error that is none of the app's own refusals. Its own words - a
 #: library's, in English, with a file's path on the server: PIL's « cannot
-#: identify image file '<TENANTS_ROOT>\\<espace>\\imports\\…' » was drawn on
+#: identify image file '<TENANTS_ROOT>\\<tenant>\\imports\\…' » was drawn on
 #: the batch page of whichever bar sent a broken photo - go to the server's
 #: log, never to a page.
 SERVER_ERROR = "Erreur inattendue sur le serveur : elle est notée pour l'administrateur."
@@ -231,8 +231,22 @@ def plain_number(value) -> str:
 #: on the dark panel, and ordered so neighbours differ in hue rather than in
 #: shade alone.
 PIE_COLORS = [
-    "#d99b3f", "#6fbf73", "#e0685f", "#5b9bd9", "#c77dd9", "#d9c73f", "#3fd9c7", "#9fa2ae",
-    "#e89a6a", "#8fd94f", "#d95f9b", "#4fb8d9", "#9b7de0", "#bfae6a", "#5fd99b", "#c9c9d6",
+    "#d99b3f",
+    "#6fbf73",
+    "#e0685f",
+    "#5b9bd9",
+    "#c77dd9",
+    "#d9c73f",
+    "#3fd9c7",
+    "#9fa2ae",
+    "#e89a6a",
+    "#8fd94f",
+    "#d95f9b",
+    "#4fb8d9",
+    "#9b7de0",
+    "#bfae6a",
+    "#5fd99b",
+    "#c9c9d6",
 ]
 
 #: The two query parameters every page reads its window from - « du » and
@@ -293,9 +307,7 @@ class DateRange:
             return not self
         if self.start is not None and day < self.start:
             return False
-        if self.end is not None and day > self.end:
-            return False
-        return True
+        return not (self.end is not None and day > self.end)
 
     @property
     def start_value(self) -> str:
@@ -310,11 +322,7 @@ class DateRange:
     def parameters(self) -> dict:
         """The window as query parameters, to hang on a link that must keep
         it - a filter chip, a tab. Empty when there is no window."""
-        return {
-            key: value
-            for key, value in ((RANGE_START, self.start_value), (RANGE_END, self.end_value))
-            if value
-        }
+        return {key: value for key, value in ((RANGE_START, self.start_value), (RANGE_END, self.end_value)) if value}
 
 
 def read_date(value) -> date | None:
@@ -517,11 +525,7 @@ class JobLogMixin(models.Model):
     @classmethod
     def reap_stale(cls) -> int:
         """Mark abandoned runs as failed, so they stop blocking new ones."""
-        stale = [
-            job
-            for job in cls.objects.filter(status__in=[cls.Status.PENDING, cls.Status.RUNNING])
-            if job.is_stale
-        ]
+        stale = [job for job in cls.objects.filter(status__in=[cls.Status.PENDING, cls.Status.RUNNING]) if job.is_stale]
         for job in stale:
             job.status = cls.Status.FAILED
             job.finished_at = timezone.now()

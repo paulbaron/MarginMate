@@ -1,14 +1,13 @@
 """« Recettes » (§7.4), with the checks of §10.2 every section owes.
 
-The sections it requires - fournisseurs, associations - are the core's fakes
+The sections it requires - suppliers, associations - are the core's fakes
 here. They hold nothing of these tests (the articles the recipes use are
 plain rows, which no fake exports or clears), so this lane's tests stand on
 their own whatever the other lanes' state; the full round trip with every
 real section is the integration's (test_full_round_trip.py).
 """
 
-from datetime import datetime
-from datetime import timezone as dt_timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from django.test import SimpleTestCase, TestCase
@@ -87,7 +86,7 @@ class LaneSectionsMixin:
 
 def stamp(day: int) -> datetime:
     """A creation date that is not "now": the round trip must bring it back."""
-    return datetime(2025, 3, day, 9, 30, 15, 123456, tzinfo=dt_timezone.utc)
+    return datetime(2025, 3, day, 9, 30, 15, 123456, tzinfo=UTC)
 
 
 def tally(run, key: str, what: str) -> tuple[int, int, int, int]:
@@ -147,7 +146,12 @@ def build_recipes():
 def ingredients_of(name: str) -> list[tuple]:
     recipe = Recipe.objects.get(name=name)
     return [
-        (ingredient.group, ingredient.source_name, "recette" if ingredient.sub_recipe_id else "article", ingredient.quantity)
+        (
+            ingredient.group,
+            ingredient.source_name,
+            "recette" if ingredient.sub_recipe_id else "article",
+            ingredient.quantity,
+        )
         for ingredient in recipe.ingredients.order_by("group", "id")
     ]
 
@@ -233,6 +237,7 @@ class RecipesRoundTripTests(LaneSectionsMixin, TestCase):
     def test_the_same_variation_after_a_round_trip(self):
         """?v= indices count through a group in id order: re-created in
         another order, « v=1 » would quietly price another drink."""
+
         def variation(selection):
             soda = Recipe.objects.get(name="Alcool + Soda")
             response = self.client.get(reverse("recipes:recipe_detail", args=[soda.pk]) + f"?v={selection}")
@@ -320,7 +325,9 @@ class RecipesMergeAndReplaceTests(LaneSectionsMixin, TestCase):
         self.assertEqual(tally(run, "recettes", "recettes"), (1, 0, 0, 2))
         self.assertEqual(
             report.conflicts,
-            ["Recette « Alcool + Soda » : différente dans l'archive (prix de vente, ingrédients) — gardée telle quelle"],
+            [
+                "Recette « Alcool + Soda » : différente dans l'archive (prix de vente, ingrédients) — gardée telle quelle"
+            ],
         )
         self.assertEqual(Recipe.objects.get(name="Alcool + Soda").selling_price_ttc, Decimal("8.50"))
         self.assertTrue(Recipe.objects.filter(name="Spritz").exists())

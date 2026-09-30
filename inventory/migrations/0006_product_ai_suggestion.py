@@ -4,15 +4,14 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('inventory', '0005_remove_product_unit_label_product_unit_and_more'),
+        ("inventory", "0005_remove_product_unit_label_product_unit_and_more"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='product',
-            name='ai_suggestion',
+            model_name="product",
+            name="ai_suggestion",
             field=models.JSONField(blank=True, default=None, null=True),
         ),
     ]

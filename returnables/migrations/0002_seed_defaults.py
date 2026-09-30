@@ -1,5 +1,5 @@
-"""The usual types of consigne, and UBA's bon, seeded in every database - the
-test one, the _template every new espace is copied from, and each espace.
+"""The usual returnable types, and UBA's slip, seeded in every database - the
+test one, the _template every new tenant is copied from, and each tenant.
 
 The data is written here, not imported from the app: a migration must
 replay the same way whatever the code has become since (the precedent is
@@ -8,17 +8,17 @@ format somebody already made under that name is left as it is. UBA is
 looked up by its code, as invoices/0002 seeds it; a database without it
 gets the types only.
 
-The motifs were checked against every real bon of the owner's (read-only,
-29/09: every consignes part found, every line read and classified, every
-quantity × prix = montant, every total, the replacements and the re-sends
+The patterns were checked against every real slip of the owner's (read-only,
+29/09: every returnables part found, every line read and classified, every
+quantity × price = amount, every total, the replacements and the re-sends
 recognised). returnables/tests/test_models.py pins what is written.
-Reversing does nothing: seeded rows may since carry counts and bons, and
+Reversing does nothing: seeded rows may since carry counts and slips, and
 the tables go with 0001 anyway.
 """
 
 from django.db import migrations
 
-#: (name, position, motifs) - shown exactly as written here.
+#: (name, position, patterns) - shown exactly as written here.
 TYPES = [
     ("Fûts", 1, r"F[ÛU]TS?\b"),
     ("Caisses verre", 2, r"CAISSE|CASIER|JUS|SODA|\bEAUX?\b|\d+\s*CL\b"),
@@ -28,8 +28,8 @@ TYPES = [
 FORMAT_NAME = "UBA \N{EM DASH} bon du livreur"
 SUPPLIER_CODE = "UBA"
 
-#: Every motif of UBA's bon (the driver's ticket, e-mailed after each
-#: delivery). Multi-line values are several motifs, tried in order.
+#: Every pattern of UBA's slip (the driver's ticket, e-mailed after each
+#: delivery). Multi-line values are several patterns, tried in order.
 FORMAT = {
     "sender_pattern": r"mphone@uba\.paris",
     "subject_pattern": r"^\s*Livraison du\b",
@@ -40,7 +40,7 @@ FORMAT = {
         r"^(?P<designation>.+?)\s+(?P<quantite>-?\d+)\s+x\s+(?P<prix>-?\d+(?:[.,]\d+)?)"
         r"\s+=\s+(?P<montant>-?\d+(?:[.,]\d+)?)\s*$"
     ),
-    "date_patterns": "\n".join(
+    "date_patterns": "\n".join(  # noqa: FLY002 - one pattern per line, as the field stores them
         [
             r"BL No:\s*\d+\s+du\s+(?P<date>\d{2}/\d{2}/\d{4})",
             r"^Le\s+(?P<date>\d{2}/\d{2}/\d{4})",
@@ -61,9 +61,9 @@ def seed(apps, schema_editor):
     SlipFormat = apps.get_model("returnables", "SlipFormat")
     Supplier = apps.get_model("invoices", "Supplier")
 
-    for name, position, motifs in TYPES:
+    for name, position, slip_patterns in TYPES:
         ReturnableType.objects.get_or_create(
-            name=name, defaults={"position": position, "is_active": True, "slip_patterns": motifs}
+            name=name, defaults={"position": position, "is_active": True, "slip_patterns": slip_patterns}
         )
 
     uba = Supplier.objects.filter(code=SUPPLIER_CODE).first()

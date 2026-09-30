@@ -93,62 +93,76 @@ class ArchiveProductKeysTests(TestCase):
             return archive_product_keys(reader, SupplierResolver())
 
     def test_each_section_naming_products_counts(self):
-        found = self.keys_of({
-            "associations": {
-                "supplier_names": {"BRASSERIE_TEST": "Brasserie Test"},
-                "articles": [],
-                "products": [{"supplier": "BRASSERIE_TEST", "raw_name": KEG, "article": "Bière", "unit": "L"}],
-            },
-            "factures": {
-                # Another database's code for the same shop: found by its name.
-                "supplier_names": {"EPICERIE_2": "ÉPICERIE  test"},
-                "products": [{"supplier": "EPICERIE_2", "raw_name": "CITRON VERT", "is_expense": False}],
-                "invoices": [{"supplier": "EPICERIE_2", "lines": [{"product": ["EPICERIE_2", "SIROP DE SUCRE"]}]}],
-            },
-            "inventaires": {
-                "supplier_names": {},
-                "stock_takes": [{"taken_at": "2026-01-31T22:00:00+00:00", "lines": [
-                    {"product": ["BRASSERIE_TEST", TWIN], "article": None},
-                    {"product": None, "article": "Bière"},
-                ]}],
-                "movements": [],
-            },
-        })
+        found = self.keys_of(
+            {
+                "associations": {
+                    "supplier_names": {"BRASSERIE_TEST": "Brasserie Test"},
+                    "articles": [],
+                    "products": [{"supplier": "BRASSERIE_TEST", "raw_name": KEG, "article": "Bière", "unit": "L"}],
+                },
+                "factures": {
+                    # Another database's code for the same shop: found by its name.
+                    "supplier_names": {"EPICERIE_2": "ÉPICERIE  test"},
+                    "products": [{"supplier": "EPICERIE_2", "raw_name": "CITRON VERT", "is_expense": False}],
+                    "invoices": [{"supplier": "EPICERIE_2", "lines": [{"product": ["EPICERIE_2", "SIROP DE SUCRE"]}]}],
+                },
+                "inventaires": {
+                    "supplier_names": {},
+                    "stock_takes": [
+                        {
+                            "taken_at": "2026-01-31T22:00:00+00:00",
+                            "lines": [
+                                {"product": ["BRASSERIE_TEST", TWIN], "article": None},
+                                {"product": None, "article": "Bière"},
+                            ],
+                        }
+                    ],
+                    "movements": [],
+                },
+            }
+        )
 
-        self.assertEqual(found, {
-            (self.brewery.pk, KEG),
-            (self.shop.pk, "CITRON VERT"),
-            (self.shop.pk, "SIROP DE SUCRE"),
-            (self.brewery.pk, TWIN),
-        })
+        self.assertEqual(
+            found,
+            {
+                (self.brewery.pk, KEG),
+                (self.shop.pk, "CITRON VERT"),
+                (self.shop.pk, "SIROP DE SUCRE"),
+                (self.brewery.pk, TWIN),
+            },
+        )
 
     def test_what_cannot_be_read_names_nothing(self):
         """A key of a supplier unknown here, or a record not shaped like
         one, is left out rather than refusing the archive: the section that
         reads it says why when it is imported."""
-        found = self.keys_of({
-            "associations": {
-                "articles": [],
-                "products": [
-                    {"supplier": "NOWHERE", "raw_name": "X"},
-                    {"supplier": "BRASSERIE_TEST", "raw_name": ""},
-                    {"supplier": "BRASSERIE_TEST"},
-                    "illisible",
-                    {"supplier": ["BRASSERIE_TEST"], "raw_name": KEG},
-                ],
-            },
-            "factures": {"products": {"x": 1}, "invoices": [{"lines": "?"}, {"lines": [{"product": ["A"]}]}, 3]},
-            "inventaires": {"stock_takes": [{"lines": [{"product": "BRASSERIE_TEST"}]}], "movements": []},
-        })
+        found = self.keys_of(
+            {
+                "associations": {
+                    "articles": [],
+                    "products": [
+                        {"supplier": "NOWHERE", "raw_name": "X"},
+                        {"supplier": "BRASSERIE_TEST", "raw_name": ""},
+                        {"supplier": "BRASSERIE_TEST"},
+                        "illisible",
+                        {"supplier": ["BRASSERIE_TEST"], "raw_name": KEG},
+                    ],
+                },
+                "factures": {"products": {"x": 1}, "invoices": [{"lines": "?"}, {"lines": [{"product": ["A"]}]}, 3]},
+                "inventaires": {"stock_takes": [{"lines": [{"product": "BRASSERIE_TEST"}]}], "movements": []},
+            }
+        )
 
         self.assertEqual(found, set())
 
     def test_an_unreadable_section_names_nothing(self):
         """A section this run does not import may not even be JSON: it must
         not refuse the sections that are."""
-        found = self.keys_of({
-            "associations": {"articles": [], "products": [{"supplier": "BRASSERIE_TEST", "raw_name": KEG}]},
-            "factures": b"{pas du json",
-        })
+        found = self.keys_of(
+            {
+                "associations": {"articles": [], "products": [{"supplier": "BRASSERIE_TEST", "raw_name": KEG}]},
+                "factures": b"{pas du json",
+            }
+        )
 
         self.assertEqual(found, {(self.brewery.pk, KEG)})

@@ -1,4 +1,4 @@
-"""The consignes tables: what migration 0002 seeds in every database, what
+"""The returnables tables: what migration 0002 seeds in every database, what
 the database refuses on its own, what a deletion keeps (PROTECT) and what
 it takes along - the files, only once the deletion commits.
 
@@ -81,7 +81,7 @@ class SeedTests(TestCase):
             ],
         )
 
-    def test_uba_s_bon_is_seeded_with_every_motif(self):
+    def test_uba_s_slip_format_is_seeded_with_every_pattern(self):
         fmt = SlipFormat.objects.get()
         self.assertEqual(fmt.name, "UBA \N{EM DASH} bon du livreur")
         self.assertEqual((fmt.supplier.code, fmt.is_active), ("UBA", True))
@@ -109,28 +109,26 @@ class SeedTests(TestCase):
                 "remarks_end": r"^Merci de Votre Commande",
             },
         )
-        # Every motif field of the model is seeded: none left to its default.
-        motif_fields = {
+        # Every pattern field of the model is seeded: none left to its default.
+        pattern_fields = {
             field.name
             for field in SlipFormat._meta.get_fields()
             if field.name.endswith(("_pattern", "_patterns", "_start", "_end"))
         }
-        self.assertEqual(motif_fields, set(SEED_MIGRATION.FORMAT))
+        self.assertEqual(pattern_fields, set(SEED_MIGRATION.FORMAT))
 
-    def test_the_seeded_type_motifs_classify_the_invented_lines_of_the_tests(self):
+    def test_the_seeded_type_patterns_classify_the_invented_lines_of_the_tests(self):
         """What C and D's tests lean on: each invented line is recognised by
-        its own type and by no other (plain `re`, small motifs - the guarded
+        its own type and by no other (plain `re`, small patterns - the guarded
         compiler is returnables/patterns.py's)."""
-        motifs = {kind.name: re.compile(kind.slip_patterns, re.IGNORECASE) for kind in ReturnableType.objects.all()}
+        regexes = {kind.name: re.compile(kind.slip_patterns, re.IGNORECASE) for kind in ReturnableType.objects.all()}
         for line, expected in ((KEG_LINE, "Fûts"), (CRATE_LINE, "Caisses verre"), (CO2_LINE, "Bouteilles CO2")):
             with self.subTest(line=line[0]):
-                self.assertEqual([name for name, motif in motifs.items() if motif.search(line[0])], [expected])
+                self.assertEqual([name for name, compiled in regexes.items() if compiled.search(line[0])], [expected])
 
     def test_the_migration_depends_on_the_seeded_suppliers_and_reverses_to_nothing(self):
         migration = SEED_MIGRATION.Migration
-        self.assertEqual(
-            migration.dependencies, [("returnables", "0001_initial"), ("invoices", "0002_seed_suppliers")]
-        )
+        self.assertEqual(migration.dependencies, [("returnables", "0001_initial"), ("invoices", "0002_seed_suppliers")])
         (operation,) = migration.operations
         self.assertIs(operation.code, SEED_MIGRATION.seed)
         self.assertIs(operation.reverse_code, SEED_MIGRATION.migrations.RunPython.noop)
@@ -168,7 +166,7 @@ class ReferenceTests(TestCase):
         for reference in references:
             self.assertRegex(reference, r"\A[0-9a-f]{16}\Z")
 
-    def test_every_reprise_gets_one_and_keeps_it(self):
+    def test_every_pickup_gets_one_and_keeps_it(self):
         pickup = make_pickup()
         self.assertRegex(pickup.reference, r"\A[0-9a-f]{16}\Z")
         before = pickup.reference
@@ -191,7 +189,7 @@ class CountTests(TestCase):
         self.pickup = make_pickup(counts={})
         self.keg = ReturnableType.objects.get(position=1)
 
-    def test_one_count_per_type_and_reprise(self):
+    def test_one_count_per_type_and_pickup(self):
         PickupCount.objects.create(pickup=self.pickup, returnable_type=self.keg, quantity=3)
         with transaction.atomic(), self.assertRaises(IntegrityError):
             PickupCount.objects.create(pickup=self.pickup, returnable_type=self.keg, quantity=4)
@@ -226,8 +224,8 @@ class OrderTests(TestCase):
 
 
 class ProtectTests(TestCase):
-    """A type counts were made with, a format bons were read by, a supplier
-    a format or a reprise names: kept, the page says « désactivez-le »."""
+    """A type counts were made with, a format slips were read by, a supplier
+    a format or a pickup names: kept, the page says « désactivez-le »."""
 
     def test_a_type_with_counts_is_kept(self):
         kind = make_type("Tonnelets")
@@ -238,7 +236,7 @@ class ProtectTests(TestCase):
         unused.delete()
         self.assertFalse(ReturnableType.objects.filter(name="Palettes").exists())
 
-    def test_a_format_with_bons_is_kept(self):
+    def test_a_format_with_slips_is_kept(self):
         fmt = make_format()
         make_slip(fmt)
         with self.assertRaises(ProtectedError):
@@ -249,7 +247,7 @@ class ProtectTests(TestCase):
         self.assertFalse(SlipFormat.objects.filter(pk=unused_pk).exists())
         self.assertTrue(SlipFormat.objects.filter(pk=fmt.pk).exists())
 
-    def test_a_supplier_held_by_a_format_or_a_reprise_is_kept(self):
+    def test_a_supplier_held_by_a_format_or_a_pickup_is_kept(self):
         by_format = make_supplier()
         make_format(supplier=by_format)
         by_pickup = make_supplier()
@@ -258,11 +256,11 @@ class ProtectTests(TestCase):
             with self.subTest(supplier=supplier.name), self.assertRaises(ProtectedError):
                 supplier.delete()
 
-    def test_a_reprise_needs_no_supplier(self):
+    def test_a_pickup_needs_no_supplier(self):
         pickup = make_pickup(supplier=None)
         self.assertIsNone(Pickup.objects.get(pk=pickup.pk).supplier)
 
-    def test_a_reprise_takes_its_counts_and_photos_a_bon_its_lines(self):
+    def test_a_pickup_takes_its_counts_and_photos_a_slip_its_lines(self):
         pickup = make_pickup(counts={"Fûts": 3, "Bouteilles CO2": 1}, photos=2)
         slip = make_slip(lines=[KEG_LINE, CO2_LINE])
         with self.captureOnCommitCallbacks(execute=True):
@@ -275,12 +273,9 @@ class ProtectTests(TestCase):
 
 
 class FileFieldTests(TestCase):
-    def test_every_file_is_on_the_espace_storage_under_consignes_at_most_100_characters(self):
+    def test_every_file_is_on_the_tenant_storage_under_the_returnables_folder_at_most_100_characters(self):
         fields = [
-            field
-            for model in app_models()
-            for field in model._meta.get_fields()
-            if isinstance(field, models.FileField)
+            field for model in app_models() for field in model._meta.get_fields() if isinstance(field, models.FileField)
         ]
         self.assertEqual(
             sorted(f"{field.model.__name__}.{field.name}" for field in fields),
@@ -293,7 +288,7 @@ class FileFieldTests(TestCase):
                 self.assertNotIn("storage", field.deconstruct()[3])
                 self.assertTrue(field.upload_to.startswith("consignes/"), field.upload_to)
 
-    def test_files_land_in_the_espace_s_media_and_are_served_behind_the_login(self):
+    def test_files_land_in_the_tenant_s_media_and_are_served_behind_the_login(self):
         photo = make_photo(make_pickup())
         slip = make_slip()
         for field in (photo.image, photo.thumb, slip.file):
@@ -302,7 +297,7 @@ class FileFieldTests(TestCase):
                 self.assertTrue((Path(paths.media_root()) / field.name).is_file())
                 self.assertEqual(field.url, reverse("accounts:media", args=[field.name]))
 
-    def test_the_longest_name_a_bon_gets_fits_twice_over(self):
+    def test_the_longest_name_a_slip_gets_fits_twice_over(self):
         """bon-<20 characters>.pdf, and the same again: the storage adds its
         random suffix and the name still fits the column."""
         names = []
@@ -320,7 +315,7 @@ class FileFieldTests(TestCase):
 class DeletionTests(TestCase):
     """Rows now, files once the deletion commits (invoices/deletion.py)."""
 
-    def test_a_reprise_s_photos_and_thumbnails_go_after_the_commit_only(self):
+    def test_a_pickup_s_photos_and_thumbnails_go_after_the_commit_only(self):
         pickup = make_pickup(photos=2)
         pickup_pk = pickup.pk  # delete() sets it to None
         names = [name for _storage, name in files_of(pickup)]
@@ -364,7 +359,7 @@ class DeletionTests(TestCase):
         self.assertFalse(any(stored(name) for name in gone))
         self.assertTrue(stored(kept.image.name) and stored(kept.thumb.name))
 
-    def test_a_bon_goes_with_its_pdf_and_its_lines(self):
+    def test_a_slip_goes_with_its_pdf_and_its_lines(self):
         slip = make_slip(lines=[KEG_LINE, CRATE_LINE])
         slip_pk, name = slip.pk, slip.file.name
         other = make_slip()
@@ -499,7 +494,7 @@ class AdminTests(TestCase):
                 self.assertTrue(admin.site.is_registered(model))
 
     def superuser(self):
-        """The test espace's owner, made a superuser: in multi mode the admin
+        """The test tenant's owner, made a superuser: in multi mode the admin
         is theirs alone (accounts/admin_site.py)."""
         owner = the_owner()
         type(owner).objects.filter(pk=owner.pk).update(is_staff=True, is_superuser=True)
@@ -532,9 +527,7 @@ class AdminTests(TestCase):
         pickup = make_pickup(photos=1)
         names = [name for _storage, name in files_of(pickup)]
         with self.captureOnCommitCallbacks(execute=True):
-            response = self.client.post(
-                reverse("admin:returnables_pickup_delete", args=[pickup.pk]), {"post": "yes"}
-            )
+            response = self.client.post(reverse("admin:returnables_pickup_delete", args=[pickup.pk]), {"post": "yes"})
         self.assertEqual(response.status_code, 302)
         self.assertFalse(Pickup.objects.filter(pk=pickup.pk).exists())
         self.assertFalse(any(stored(name) for name in names))
@@ -543,7 +536,7 @@ class AdminTests(TestCase):
 class FactoryTests(TestCase):
     """The factories other packages' tests are built on."""
 
-    def test_a_bon_carries_a_real_pdf_its_reading_and_its_lines(self):
+    def test_a_slip_carries_a_real_pdf_its_reading_and_its_lines(self):
         slip = make_slip(lines=[KEG_LINE, CO2_LINE], number="4321", references=["900123"])
         self.assertTrue(slip.file.read(8).startswith(b"%PDF-"))
         slip.file.close()
@@ -559,7 +552,7 @@ class FactoryTests(TestCase):
         self.assertIn(f"{KEG_LINE[0]} 3 x 30.00 = 90.00", slip.text)
         self.assertNotEqual(make_slip().sha256, make_slip().sha256)
 
-    def test_an_empty_bon_prints_a_zero_refund(self):
+    def test_an_empty_slip_prints_a_zero_refund(self):
         slip = make_slip(lines=[])
         self.assertIn("Deconsigne : 0.00", slip.text)
         self.assertEqual(str(slip.printed_total), "0")
@@ -581,7 +574,7 @@ class FactoryTests(TestCase):
         with Image.open(BytesIO(tiny_jpeg())) as image:
             self.assertEqual(dict(image.getexif()), {})
 
-    def test_a_reprise_with_counts_and_photos(self):
+    def test_a_pickup_with_counts_and_photos(self):
         pickup = make_pickup(counts={"Fûts": 15, "Bouteilles CO2": 1}, photos=2)
         self.assertEqual(pickup.supplier, uba())
         self.assertEqual(
@@ -607,11 +600,11 @@ class ModuleTests(SimpleTestCase):
         self.assertIs(Pickup._meta.get_field("reference").default, returnables_models.new_reference)
 
 
-class EspaceTests(TwoTenantsTestCase):
-    """Real espaces (accounts.provisioning): each is copied from the
+class TenantTests(TwoTenantsTestCase):
+    """Real tenants (accounts.provisioning): each is copied from the
     migrated _template, and keeps its files in its own media."""
 
-    def test_every_new_espace_is_given_the_seeds(self):
+    def test_every_new_tenant_is_given_the_seeds(self):
         for bar in (self.bar_a, self.bar_b):
             with self.subTest(bar=bar.name), bound_tenant(bar):
                 self.assertEqual(
@@ -620,13 +613,13 @@ class EspaceTests(TwoTenantsTestCase):
                 )
                 self.assertEqual(list(SlipFormat.objects.values_list("supplier__code", flat=True)), ["UBA"])
 
-    def test_a_deletion_in_one_espace_leaves_the_other_s_file_of_the_same_name(self):
+    def test_a_deletion_in_one_tenant_leaves_the_other_s_file_of_the_same_name(self):
         photos = {}
         for bar, size in ((self.bar_a, (4, 3)), (self.bar_b, (5, 3))):
             with bound_tenant(bar):
                 photos[bar.pk] = make_photo(make_pickup(), size=size)
         name = photos[self.bar_a.pk].image.name
-        # Same day, same number, each espace its own folder: the same name.
+        # Same day, same number, each tenant its own folder: the same name.
         self.assertEqual(photos[self.bar_b.pk].image.name, name)
         on_disk = {bar.pk: paths.tenant_dir(bar) / "media" / name for bar in (self.bar_a, self.bar_b)}
         kept = on_disk[self.bar_b.pk].read_bytes()

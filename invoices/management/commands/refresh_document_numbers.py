@@ -46,9 +46,7 @@ class Command(BaseCommand):
         taken: list[str] = []
         with transaction.atomic():
             documents = (
-                Invoice.objects.exclude(supplier__parser_key=LLM_PARSER_KEY)
-                .select_related("supplier")
-                .order_by("pk")
+                Invoice.objects.exclude(supplier__parser_key=LLM_PARSER_KEY).select_related("supplier").order_by("pk")
             )
             for invoice in documents:
                 text = invoice.document_text
@@ -57,7 +55,11 @@ class Command(BaseCommand):
                 printed = _ticket_number(text, invoice.invoice_date)
                 if not printed or stands_in(printed) or printed == invoice.invoice_number:
                     continue
-                if Invoice.objects.filter(supplier=invoice.supplier, invoice_number=printed).exclude(pk=invoice.pk).exists():
+                if (
+                    Invoice.objects.filter(supplier=invoice.supplier, invoice_number=printed)
+                    .exclude(pk=invoice.pk)
+                    .exists()
+                ):
                     taken.append(f"{invoice.supplier.name} n° {printed} (document {invoice.pk})")
                     continue
                 invoice.invoice_number = printed

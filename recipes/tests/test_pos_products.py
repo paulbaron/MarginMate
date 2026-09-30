@@ -13,9 +13,9 @@ from django.test import TestCase
 from django.urls import reverse
 
 from recipes.models import PosProduct, RecipeSale
+from recipes.pos.laddition_xlsx import ParsedExport
 from recipes.sales import record_sales
 from recipes.tasks import sync_pos_products
-from recipes.pos.laddition_xlsx import ParsedExport
 from tests.factories import make_recipe
 
 
@@ -134,9 +134,7 @@ class PosProductAssignTests(TestCase):
         self.post("link", recipe=self.recipe.pk)
 
         self.assertEqual(RecipeSale.objects.filter(recipe=self.recipe).count(), 2)
-        self.assertEqual(
-            sum(RecipeSale.objects.filter(recipe=self.recipe).values_list("quantity", flat=True)), 8
-        )
+        self.assertEqual(sum(RecipeSale.objects.filter(recipe=self.recipe).values_list("quantity", flat=True)), 8)
 
     def test_marking_it_as_a_happy_hour_variant(self):
         """Sets the name on the RECIPE, so both till names fold into one."""
@@ -146,9 +144,7 @@ class PosProductAssignTests(TestCase):
         self.assertEqual(self.recipe.happy_hour_name, "Alcool + soda HH")
         self.assertEqual(self.product.recipe, self.recipe)
 
-        record_sales(
-            [("Alcool + Soda", date(2026, 6, 1), 20), ("Alcool + soda HH", date(2026, 6, 1), 3)]
-        )
+        record_sales([("Alcool + Soda", date(2026, 6, 1), 20), ("Alcool + soda HH", date(2026, 6, 1), 3)])
         self.assertEqual(RecipeSale.objects.get().quantity, 23)
 
     def test_a_happy_hour_name_already_taken_is_refused(self):
@@ -214,9 +210,7 @@ class PosProductAssignTests(TestCase):
         self.assertIsNone(self.product.recipe)
 
     def test_a_get_does_not_change_anything(self):
-        response = self.client.get(
-            reverse("recipes:pos_product_assign", kwargs={"pk": self.product.pk})
-        )
+        response = self.client.get(reverse("recipes:pos_product_assign", kwargs={"pk": self.product.pk}))
         self.assertEqual(response.status_code, 302)
         self.product.refresh_from_db()
         self.assertIsNone(self.product.recipe)
@@ -244,8 +238,11 @@ class SyncPosProductsTests(TestCase):
             self.export(
                 {
                     "Pinte Blonde": {
-                        "quantity": 512, "category": "Bières", "typology": "Liquide (Alcool)",
-                        "first": date(2026, 6, 1), "last": date(2026, 6, 30),
+                        "quantity": 512,
+                        "category": "Bières",
+                        "typology": "Liquide (Alcool)",
+                        "first": date(2026, 6, 1),
+                        "last": date(2026, 6, 30),
                     }
                 },
                 entries=[("Pinte Blonde", date(2026, 6, 15), 512)],
@@ -262,14 +259,20 @@ class SyncPosProductsTests(TestCase):
         which IdempotentReSyncTests covers instead."""
         first = {
             "Pinte Blonde": {
-                "quantity": 100, "category": "Bières", "typology": "",
-                "first": date(2026, 6, 1), "last": date(2026, 6, 30),
+                "quantity": 100,
+                "category": "Bières",
+                "typology": "",
+                "first": date(2026, 6, 1),
+                "last": date(2026, 6, 30),
             }
         }
         later = {
             "Pinte Blonde": {
-                "quantity": 50, "category": "", "typology": "Liquide (Alcool)",
-                "first": date(2026, 7, 1), "last": date(2026, 7, 31),
+                "quantity": 50,
+                "category": "",
+                "typology": "Liquide (Alcool)",
+                "first": date(2026, 7, 1),
+                "last": date(2026, 7, 31),
             }
         }
         sync_pos_products(self.export(first, entries=[("Pinte Blonde", date(2026, 6, 15), 100)]))
@@ -288,8 +291,11 @@ class SyncPosProductsTests(TestCase):
             self.export(
                 {
                     "Pinte Blonde": {
-                        "quantity": 10, "category": "", "typology": "",
-                        "first": date(2026, 6, 1), "last": date(2026, 6, 30),
+                        "quantity": 10,
+                        "category": "",
+                        "typology": "",
+                        "first": date(2026, 6, 1),
+                        "last": date(2026, 6, 30),
                     }
                 },
                 entries=[("Pinte Blonde", date(2026, 6, 1), 10)],
@@ -333,7 +339,7 @@ class AutoLinkCoincidingNamesTests(TestCase):
     def test_an_ignored_product_is_not_reopened_by_a_coincidence(self):
         """Ignoring is a deliberate decision too - a later import finding a
         name-match must not silently undo it."""
-        recipe = make_recipe(name="Café")
+        make_recipe(name="Café")
         PosProduct.objects.create(name="Café", ignored=True)
         sync_pos_products(self.export("Café", 5, date(2026, 6, 1)))
         product = PosProduct.objects.get(name="Café")
@@ -346,7 +352,7 @@ class AutoLinkCoincidingNamesTests(TestCase):
         self.assertIsNone(product.recipe)
         self.assertTrue(product.needs_review)
 
-    def test_produits_caisse_and_dernieres_ventes_now_agree(self):
+    def test_till_products_and_latest_sales_now_agree(self):
         """The concrete symptom: summed across every till name for one
         recipe, the two pages have to land on the same number."""
         from django.db.models import Sum
@@ -359,18 +365,30 @@ class AutoLinkCoincidingNamesTests(TestCase):
         recipe.save(update_fields=["happy_hour_name"])
         export = ParsedExport(
             products={
-                "Alcool + Soda": {"quantity": 30, "category": "", "typology": "", "first": date(2026, 6, 1), "last": date(2026, 6, 1)},
-                "Alcool + soda HH": {"quantity": 12, "category": "", "typology": "", "first": date(2026, 6, 1), "last": date(2026, 6, 1)},
+                "Alcool + Soda": {
+                    "quantity": 30,
+                    "category": "",
+                    "typology": "",
+                    "first": date(2026, 6, 1),
+                    "last": date(2026, 6, 1),
+                },
+                "Alcool + soda HH": {
+                    "quantity": 12,
+                    "category": "",
+                    "typology": "",
+                    "first": date(2026, 6, 1),
+                    "last": date(2026, 6, 1),
+                },
             },
             entries=[("Alcool + Soda", date(2026, 6, 1), 30), ("Alcool + soda HH", date(2026, 6, 1), 12)],
         )
         sync_pos_products(export)
         record_sales(export.entries, source="laddition")
 
-        dernieres_ventes = RecipeSale.objects.filter(recipe=recipe).aggregate(Sum("quantity"))["quantity__sum"]
-        produits_caisse = PosProduct.objects.filter(recipe=recipe).aggregate(Sum("total_quantity"))["total_quantity__sum"]
-        self.assertEqual(dernieres_ventes, 42)
-        self.assertEqual(produits_caisse, 42)
+        recipe_sales_total = RecipeSale.objects.filter(recipe=recipe).aggregate(Sum("quantity"))["quantity__sum"]
+        till_products = PosProduct.objects.filter(recipe=recipe).aggregate(Sum("total_quantity"))["total_quantity__sum"]
+        self.assertEqual(recipe_sales_total, 42)
+        self.assertEqual(till_products, 42)
 
 
 class IdempotentReSyncTests(TestCase):
@@ -383,9 +401,7 @@ class IdempotentReSyncTests(TestCase):
     def export(self, entries):
         products: dict = {}
         for name, day, quantity in entries:
-            info = products.setdefault(
-                name, {"quantity": 0, "category": "", "typology": "", "first": day, "last": day}
-            )
+            info = products.setdefault(name, {"quantity": 0, "category": "", "typology": "", "first": day, "last": day})
             info["quantity"] += quantity
             info["first"] = min(info["first"], day)
             info["last"] = max(info["last"], day)
@@ -398,15 +414,25 @@ class IdempotentReSyncTests(TestCase):
         self.assertEqual(PosProduct.objects.get().total_quantity, 25)
 
     def test_an_overlapping_window_corrects_the_shared_days_rather_than_adding(self):
-        sync_pos_products(self.export([
-            ("Pinte Blonde", date(2026, 6, 1), 10), ("Pinte Blonde", date(2026, 6, 2), 15),
-        ]))
+        sync_pos_products(
+            self.export(
+                [
+                    ("Pinte Blonde", date(2026, 6, 1), 10),
+                    ("Pinte Blonde", date(2026, 6, 2), 15),
+                ]
+            )
+        )
         # Re-covers June 2nd (unchanged) and adds June 3rd - a wider,
         # overlapping backfill window, exactly what the backfill button
         # sends when it reaches back to the earliest gap.
-        sync_pos_products(self.export([
-            ("Pinte Blonde", date(2026, 6, 2), 15), ("Pinte Blonde", date(2026, 6, 3), 7),
-        ]))
+        sync_pos_products(
+            self.export(
+                [
+                    ("Pinte Blonde", date(2026, 6, 2), 15),
+                    ("Pinte Blonde", date(2026, 6, 3), 7),
+                ]
+            )
+        )
         self.assertEqual(PosProduct.objects.get().total_quantity, 32)  # 10 + 15 + 7, not 47
 
     def test_re_importing_five_times_still_reads_the_true_total(self):
@@ -430,7 +456,7 @@ class RecipeCreatePrefillTests(TestCase):
 
 
 class HappyHourModifierTests(TestCase):
-    """"Happy hour" is a modifier on linking, not a separate action - it links
+    """ "Happy hour" is a modifier on linking, not a separate action - it links
     to the same recipe AND records the till's name for it."""
 
     def setUp(self):
@@ -440,9 +466,7 @@ class HappyHourModifierTests(TestCase):
     def post(self, **extra):
         data = {"action": "link", "recipe": self.recipe.pk}
         data.update(extra)
-        return self.client.post(
-            reverse("recipes:pos_product_assign", kwargs={"pk": self.product.pk}), data
-        )
+        return self.client.post(reverse("recipes:pos_product_assign", kwargs={"pk": self.product.pk}), data)
 
     def test_linking_without_the_checkbox_leaves_the_happy_hour_name_alone(self):
         self.post()
@@ -468,7 +492,7 @@ class HappyHourModifierTests(TestCase):
         self.assertEqual(self.recipe.happy_hour_name, "Pinte Blonde HH")
 
     def test_a_clashing_happy_hour_name_is_refused_with_a_message(self):
-        make_recipe(name="Pinte Blonde HH")   # already answers to that name
+        make_recipe(name="Pinte Blonde HH")  # already answers to that name
         self.post(as_happy_hour="1")
         response = self.client.get(reverse("recipes:pos_product_list"))
         self.recipe.refresh_from_db()
@@ -493,9 +517,7 @@ class BulkIgnoreTests(TestCase):
         self.assertTrue(any("3 produits ignorés" in str(m) for m in response.context["messages"]))
 
     def test_one_product_reads_as_singular(self):
-        response = self.client.post(
-            reverse("recipes:pos_products_bulk"), {"selected": ["Café"]}, follow=True
-        )
+        response = self.client.post(reverse("recipes:pos_products_bulk"), {"selected": ["Café"]}, follow=True)
         self.assertTrue(any("1 produit ignoré" in str(m) for m in response.context["messages"]))
 
     def test_an_empty_selection_says_so_rather_than_silently_doing_nothing(self):

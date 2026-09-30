@@ -57,6 +57,7 @@ import statistics
 import unicodedata
 from dataclasses import dataclass, field
 from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal, InvalidOperation
+from itertools import pairwise
 
 from .receipt_base import CENTS, GROUPING_RE, HALF_CENT, KNOWN_VAT_RATES, MONEY_RE, UNITS
 
@@ -93,34 +94,106 @@ OTHER = "autre"
 # folded (no accents, no case, punctuation as spaces). Longest phrases first,
 # so "prix unitaire" is one role and not "prix" then "unitaire".
 _ROLE_PHRASES = [
-    ("prix unitaire net", UNIT_PRICE), ("prix unitaire", UNIT_PRICE), ("prix unit", UNIT_PRICE),
-    ("unit price", UNIT_PRICE), ("prix u", UNIT_PRICE), ("p u", UNIT_PRICE), ("pu", UNIT_PRICE),
-    ("tarif", UNIT_PRICE), ("unit cost", UNIT_PRICE),
+    ("prix unitaire net", UNIT_PRICE),
+    ("prix unitaire", UNIT_PRICE),
+    ("prix unit", UNIT_PRICE),
+    ("unit price", UNIT_PRICE),
+    ("prix u", UNIT_PRICE),
+    ("p u", UNIT_PRICE),
+    ("pu", UNIT_PRICE),
+    ("tarif", UNIT_PRICE),
+    ("unit cost", UNIT_PRICE),
+    # "Px U. HT", "Px unit.": « prix » as an invoice shortens it. Unknown,
+    # a header naming its prices so named no price at all, and headed no
+    # table - a table of one row, which alignment alone cannot find, was
+    # then read as text.
+    ("px unit", UNIT_PRICE),
+    ("px u", UNIT_PRICE),
     # Not "pu ht" / "pu ttc" as phrases: "HT" and "TTC" are flavours, and
     # a phrase swallowing one lost the qualifier the review screen prints.
-    ("sous total", AMOUNT), ("subtotal", AMOUNT), ("montant", AMOUNT), ("total", AMOUNT),
-    ("amount", AMOUNT), ("mt", AMOUNT), ("valeur", AMOUNT), ("value", AMOUNT),
-    ("prix", PRICE), ("price", PRICE),
-    ("quantite", QUANTITY), ("quantity", QUANTITY), ("qte", QUANTITY), ("qty", QUANTITY),
-    ("quant", QUANTITY), ("nombre", QUANTITY), ("nb", QUANTITY), ("colis", QUANTITY),
-    ("designation", DESCRIPTION), ("description", DESCRIPTION), ("libelle", DESCRIPTION),
-    ("articles", DESCRIPTION), ("article", DESCRIPTION), ("produits", DESCRIPTION), ("produit", DESCRIPTION),
-    ("items", DESCRIPTION), ("item", DESCRIPTION), ("denomination", DESCRIPTION), ("intitule", DESCRIPTION),
-    ("prestation", DESCRIPTION), ("detail", DESCRIPTION), ("details", DESCRIPTION), ("nom", DESCRIPTION),
-    ("code barre", EAN), ("codebarre", EAN), ("ean", EAN), ("ean13", EAN), ("gencod", EAN),
-    ("barcode", EAN), ("gtin", EAN),
+    ("sous total", AMOUNT),
+    ("subtotal", AMOUNT),
+    ("montant", AMOUNT),
+    ("total", AMOUNT),
+    ("amount", AMOUNT),
+    ("mt", AMOUNT),
+    ("valeur", AMOUNT),
+    ("value", AMOUNT),
+    ("prix", PRICE),
+    ("px", PRICE),
+    ("price", PRICE),
+    ("quantite", QUANTITY),
+    ("quantity", QUANTITY),
+    ("qte", QUANTITY),
+    ("qty", QUANTITY),
+    ("quant", QUANTITY),
+    ("nombre", QUANTITY),
+    ("nb", QUANTITY),
+    ("colis", QUANTITY),
+    ("designation", DESCRIPTION),
+    ("description", DESCRIPTION),
+    ("libelle", DESCRIPTION),
+    ("articles", DESCRIPTION),
+    ("article", DESCRIPTION),
+    ("produits", DESCRIPTION),
+    ("produit", DESCRIPTION),
+    ("items", DESCRIPTION),
+    ("item", DESCRIPTION),
+    ("denomination", DESCRIPTION),
+    ("intitule", DESCRIPTION),
+    ("prestation", DESCRIPTION),
+    ("detail", DESCRIPTION),
+    ("details", DESCRIPTION),
+    ("nom", DESCRIPTION),
+    ("code barre", EAN),
+    ("codebarre", EAN),
+    ("ean", EAN),
+    ("ean13", EAN),
+    ("gencod", EAN),
+    ("barcode", EAN),
+    ("gtin", EAN),
     ("code tva", CODE),
-    ("reference", REFERENCE), ("ref", REFERENCE), ("refce", REFERENCE), ("code", REFERENCE),
-    ("sku", REFERENCE), ("numero", REFERENCE), ("num", REFERENCE), ("no", REFERENCE), ("n", REFERENCE),
+    ("reference", REFERENCE),
+    ("ref", REFERENCE),
+    ("refce", REFERENCE),
+    ("code", REFERENCE),
+    ("sku", REFERENCE),
+    ("numero", REFERENCE),
+    ("num", REFERENCE),
+    ("no", REFERENCE),
+    ("n", REFERENCE),
     ("art", REFERENCE),
-    ("taux", RATE), ("tva", RATE), ("vat", RATE), ("tax", RATE), ("taxe", RATE), ("tx", RATE),
-    ("remise", DISCOUNT), ("discount", DISCOUNT), ("rabais", DISCOUNT), ("reduction", DISCOUNT),
-    ("ristourne", DISCOUNT), ("promo", DISCOUNT),
+    ("taux", RATE),
+    ("tva", RATE),
+    ("vat", RATE),
+    ("tax", RATE),
+    ("taxe", RATE),
+    ("tx", RATE),
+    ("remise", DISCOUNT),
+    ("discount", DISCOUNT),
+    ("rabais", DISCOUNT),
+    ("reduction", DISCOUNT),
+    ("ristourne", DISCOUNT),
+    ("promo", DISCOUNT),
     # Columns an invoice has and this reader has no use for.
-    ("statut", OTHER), ("status", OTHER), ("image", OTHER), ("photo", OTHER), ("date", OTHER),
-    ("dispo", OTHER), ("disponibilite", OTHER), ("conditionnement", OTHER), ("cond", OTHER),
-    ("colisage", OTHER), ("poids", OTHER), ("volume", OTHER), ("unite", OTHER), ("unit", OTHER),
-    ("u", OTHER), ("un", OTHER), ("livre", OTHER), ("commande", OTHER),
+    ("statut", OTHER),
+    ("status", OTHER),
+    ("image", OTHER),
+    ("photo", OTHER),
+    ("date", OTHER),
+    ("dispo", OTHER),
+    ("disponibilite", OTHER),
+    ("conditionnement", OTHER),
+    ("cond", OTHER),
+    ("colisage", OTHER),
+    ("poids", OTHER),
+    ("volume", OTHER),
+    ("unite", OTHER),
+    ("unit", OTHER),
+    ("u", OTHER),
+    ("un", OTHER),
+    ("livre", OTHER),
+    ("commande", OTHER),
 ]
 _ROLE_PHRASES.sort(key=lambda entry: -len(entry[0].split()))
 _ROLE_BY_PHRASE = dict(_ROLE_PHRASES)
@@ -133,19 +206,100 @@ _NAME_WORDS = {"designation", "description", "libelle", "intitule", "denominatio
 # net", "Taux de TVA". "unitaire" alone turns a "Prix" into a unit price.
 _FLAVOURS = {"ht": "HT", "h t": "HT", "hors taxe": "HT", "hors taxes": "HT", "ttc": "TTC", "t t c": "TTC"}
 _MODIFIERS = {
-    "ht", "ttc", "h", "t", "c", "hors", "taxe", "taxes", "net", "nets", "brut", "bruts", "de", "du", "des",
-    "en", "le", "la", "les", "d", "l", "eur", "euro", "euros", "unitaire", "unitaires", "par", "a",
-    "excl", "incl", "of", "per", "the", "and", "et", "ou", "or", "s", "es", "ligne", "line",
+    "ht",
+    "ttc",
+    "h",
+    "t",
+    "c",
+    "hors",
+    "taxe",
+    "taxes",
+    "net",
+    "nets",
+    "brut",
+    "bruts",
+    "de",
+    "du",
+    "des",
+    "en",
+    "le",
+    "la",
+    "les",
+    "d",
+    "l",
+    "eur",
+    "euro",
+    "euros",
+    "unitaire",
+    "unitaires",
+    "par",
+    "a",
+    "excl",
+    "incl",
+    "of",
+    "per",
+    "the",
+    "and",
+    "et",
+    "ou",
+    "or",
+    "s",
+    "es",
+    "ligne",
+    "line",
 }
 # What the totals under a table are called: a cell made of these words, one
 # of them a marker ("total", "à payer"...), beside an amount, ends the table.
 # Not "TVA" alone: an item row may print its rate as "TVA 20 %".
 _TOTAL_WORDS = {
-    "total", "totaux", "sous", "sous-total", "subtotal", "net", "a", "payer", "montant", "tva", "vat",
-    "ht", "ttc", "taxe", "taxes", "tax", "base", "brut", "remise", "general", "generale", "du", "de",
-    "la", "le", "amount", "due", "balance", "reste", "regler", "facture", "commande", "hors", "solde",
+    "total",
+    "totaux",
+    "sous",
+    "sous-total",
+    "subtotal",
+    "net",
+    "a",
+    "payer",
+    "montant",
+    "tva",
+    "vat",
+    "ht",
+    "ttc",
+    "taxe",
+    "taxes",
+    "tax",
+    "base",
+    "brut",
+    "remise",
+    "general",
+    "generale",
+    "du",
+    "de",
+    "la",
+    "le",
+    "amount",
+    "due",
+    "balance",
+    "reste",
+    "regler",
+    "facture",
+    "commande",
+    "hors",
+    "solde",
 }
-_TOTAL_MARKERS = {"total", "totaux", "sous", "sous-total", "subtotal", "payer", "due", "balance", "reste", "net", "solde"}
+_TOTAL_MARKERS = {
+    "total",
+    "totaux",
+    "sous",
+    "sous-total",
+    "subtotal",
+    "payer",
+    "due",
+    "balance",
+    "reste",
+    "net",
+    "solde",
+}
 # Glyphs of an icon font (private use), and control characters: never text.
 _UNPRINTABLE_RE = re.compile(r"[-\x00-\x1f\x7f-\x9f]")
 
@@ -286,14 +440,21 @@ class Table:
         """French, for the review screen: the columns recognised and how. A
         column no item row fills (a footer's figures aligned with nothing)
         is left out; a role two columns share is counted, not repeated."""
-        labels = [column.label for column in sorted(self.columns, key=lambda column: column.x0) if column.role != OTHER and column.used]
+        labels = [
+            column.label
+            for column in sorted(self.columns, key=lambda column: column.x0)
+            if column.role != OTHER and column.used
+        ]
         named = []
         for label in labels:
             if label not in named:
                 named.append(label)
-        parts = ["colonnes : " + ", ".join(
-            f"{label} ({labels.count(label)} colonnes)" if labels.count(label) > 1 else label for label in named
-        )]
+        parts = [
+            "colonnes : "
+            + ", ".join(
+                f"{label} ({labels.count(label)} colonnes)" if labels.count(label) > 1 else label for label in named
+            )
+        ]
         if self.header_rows:
             parts.append(f"en-tête sur {len(self.header_rows)} ligne{'s' if len(self.header_rows) > 1 else ''}")
         else:
@@ -303,7 +464,9 @@ class Table:
         if wrapped:
             parts.append(f"{wrapped} désignation{'s' if wrapped > 1 else ''} sur deux lignes")
         if self.before:
-            parts.append(f"{len(self.before)} ligne{'s' if len(self.before) > 1 else ''} avant le tableau écartée{'s' if len(self.before) > 1 else ''}")
+            parts.append(
+                f"{len(self.before)} ligne{'s' if len(self.before) > 1 else ''} avant le tableau écartée{'s' if len(self.before) > 1 else ''}"
+            )
         return " ; ".join(parts)
 
 
@@ -334,7 +497,7 @@ def cell_value(text: str) -> _Value:
     side = _SIDE_CODE_RE.search(plain)
     if side:
         code = side.group().strip()
-        plain = (plain[: side.start()] + plain[side.end():]).strip()
+        plain = (plain[: side.start()] + plain[side.end() :]).strip()
     number = _NUMBER_RE.match(plain)
     if number:
         units = GROUPING_RE.sub("", number.group("units"))
@@ -423,7 +586,9 @@ def _roles_and_unknown(words: list[str]) -> tuple[list[tuple[str, str]], int]:
         # "Prix unitaire net HT" then "Prix unitaire net TTC", glued into one
         # cell: the same role again, once a flavour has been given, is a
         # second column.
-        repeated_after_flavour = bool(segments) and role in segments[-1] and bool(flavours[-1]) and role in (UNIT_PRICE, AMOUNT, PRICE)
+        repeated_after_flavour = (
+            bool(segments) and role in segments[-1] and bool(flavours[-1]) and role in (UNIT_PRICE, AMOUNT, PRICE)
+        )
         if segments and _combines(segments[-1][-1], role) and not repeated_after_flavour:
             segments[-1].append(role)
         else:
@@ -439,8 +604,16 @@ def _combines(previous: str, role: str) -> bool:
     if previous == role:
         return True
     pair = {previous, role}
-    return pair in ({AMOUNT, RATE}, {PRICE, AMOUNT}, {RATE, CODE}, {REFERENCE, DESCRIPTION}, {PRICE, UNIT_PRICE},
-                   {AMOUNT, UNIT_PRICE}, {QUANTITY, OTHER}, {REFERENCE, EAN})
+    return pair in (
+        {AMOUNT, RATE},
+        {PRICE, AMOUNT},
+        {RATE, CODE},
+        {REFERENCE, DESCRIPTION},
+        {PRICE, UNIT_PRICE},
+        {AMOUNT, UNIT_PRICE},
+        {QUANTITY, OTHER},
+        {REFERENCE, EAN},
+    )
 
 
 def _settle(roles: list[str]) -> str:
@@ -576,7 +749,7 @@ def _is_header_row(row: Row) -> bool:
 
 def _median_gap(rows: list[Row]) -> float | None:
     ys = [row.y for row in rows if row.y is not None]
-    gaps = [b - a for a, b in zip(ys, ys[1:]) if b - a > 0]
+    gaps = [b - a for a, b in pairwise(ys) if b - a > 0]
     return statistics.median(gaps) if gaps else None
 
 
@@ -597,7 +770,11 @@ def _header_block(rows: list[Row], gap: float | None) -> list[int] | None:
         block = [index]
         while len(block) < MAX_HEADER_LINES and block[0] > 0:
             above = block[0] - 1
-            if _header_cells(rows[above]) is not None and _close(rows, above, block[0], gap) and not _is_body_row(rows[above]):
+            if (
+                _header_cells(rows[above]) is not None
+                and _close(rows, above, block[0], gap)
+                and not _is_body_row(rows[above])
+            ):
                 block.insert(0, above)
             else:
                 break
@@ -659,12 +836,14 @@ def _table_under_header(rows: list[Row], block: list[int], gap: float | None) ->
         words = []
         for _position, cell, _roles in members:
             words += _header_words(cell.text)
-        header_columns.append({
-            "x0": min(cell.x0 for _p, cell, _r in members),
-            "x1": max(cell.x1 for _p, cell, _r in members),
-            "segments": _roles_of(words) or [(OTHER, "")],
-            "text": " ".join(cell.text.strip() for _p, cell, _r in members),
-        })
+        header_columns.append(
+            {
+                "x0": min(cell.x0 for _p, cell, _r in members),
+                "x1": max(cell.x1 for _p, cell, _r in members),
+                "segments": _roles_of(words) or [(OTHER, "")],
+                "text": " ".join(cell.text.strip() for _p, cell, _r in members),
+            }
+        )
     header_columns.sort(key=lambda column: column["x0"])
     descriptions = [column for column in header_columns if column["segments"][0][0] == DESCRIPTION]
     if not descriptions:
@@ -726,7 +905,9 @@ def _table_under_header(rows: list[Row], block: list[int], gap: float | None) ->
     for i, column in enumerate(columns):
         if column.role == OTHER and not column.header:
             column.role = _role_from_values(column_cells[i], i == 0)
-    description_column = Column(x0=description["x0"], x1=description["x1"], role=DESCRIPTION, header=description["text"])
+    description_column = Column(
+        x0=description["x0"], x1=description["x1"], role=DESCRIPTION, header=description["text"]
+    )
     text_columns = [
         Column(x0=header["x0"], x1=header["x1"], role=header["segments"][0][0], header=header["text"])
         for header in header_columns
@@ -738,7 +919,7 @@ def _table_under_header(rows: list[Row], block: list[int], gap: float | None) ->
         return None
     table.header_rows = list(block)
     table.inside.update(block)
-    table.before = set(range(0, block[0]))
+    table.before = set(range(block[0]))
     table.body_end = end
     table.columns.append(description_column)
     for column in text_columns:
@@ -767,7 +948,7 @@ def _body_end(rows: list[Row], start: int) -> int:
 
 
 def _is_total_label(text: str) -> bool:
-    """"Total HT", "Sous-total", "Net à payer", "TOTAL GENERAL TTC" - and not
+    """ "Total HT", "Sous-total", "Net à payer", "TOTAL GENERAL TTC" - and not
     "Frais de port", which is a row."""
     words = [word for word in _fold(text).split() if not re.fullmatch(r"[\d%]+", word)]
     return (
@@ -791,7 +972,7 @@ def name_cell_text(text: str, coded: bool = False) -> str:
     A size ("18,50X20") and a percentage ("20% MG") stay in the name."""
     cleaned = clean_text(text)
     amount = MONEY_RE.search(cleaned)
-    if amount is not None and not _LETTERS_RE.search(_CURRENCY_RE.sub(" ", cleaned[amount.end():])):
+    if amount is not None and not _LETTERS_RE.search(_CURRENCY_RE.sub(" ", cleaned[amount.end() :])):
         cleaned = cleaned[: amount.start()].rstrip(" :-")
     if coded:
         words = cleaned.split()
@@ -847,7 +1028,9 @@ def _assemble(rows, body, columns, column_cells, description, text_columns, gap)
     # The text columns a name never runs into: the code, the EAN, a status.
     # Never the header WORD of a numeric role: the name under "Désignation"
     # may well reach under "Qté", and the figures bound it, not the word.
-    excluding = [column for column in text_columns if column.role in (REFERENCE, EAN, CODE, OTHER, DISCOUNT, LINE_NUMBER)]
+    excluding = [
+        column for column in text_columns if column.role in (REFERENCE, EAN, CODE, OTHER, DISCOUNT, LINE_NUMBER)
+    ]
 
     def figures_from() -> float:
         """Where the figures start, right of the description: the columns of
@@ -917,7 +1100,9 @@ def _assemble(rows, body, columns, column_cells, description, text_columns, gap)
         columns[unit_at].role, columns[unit_at].confirmed = UNIT_PRICE, True
         columns[amount_at].role, columns[amount_at].confirmed = AMOUNT, True
     else:
-        amount_at = next((i for i in reversed(range(len(columns))) if columns[i].role == AMOUNT and i in money_columns), None)
+        amount_at = next(
+            (i for i in reversed(range(len(columns))) if columns[i].role == AMOUNT and i in money_columns), None
+        )
         if amount_at is None and len(money_columns) == 1:
             # The one column of money on the rows is their amount, whatever
             # the header calls it: "MONTANT TVA" on a DIY store's ticket is
@@ -969,7 +1154,10 @@ def _assemble(rows, body, columns, column_cells, description, text_columns, gap)
     # column, and the page is no table: its figures do not align.
     def prints_money(index: int) -> bool:
         return any(
-            index in cells and cells[index][1].kind == "money" and cells[index][1].value is not None and cells[index][1].value > 0
+            index in cells
+            and cells[index][1].kind == "money"
+            and cells[index][1].value is not None
+            and cells[index][1].value > 0
             for cells in column_cells
         )
 
@@ -1009,7 +1197,11 @@ def _assemble(rows, body, columns, column_cells, description, text_columns, gap)
     unit_columns = [i for i, column in enumerate(columns) if column.role == UNIT_PRICE]
     vat_at = next((i for i, column in enumerate(columns) if column.role == VAT_AMOUNT), None)
     ttc_at = next(
-        (i for i, column in enumerate(columns) if column.role == AMOUNT and column.flavour == "TTC" and i != amount_at and column.confirmed),
+        (
+            i
+            for i, column in enumerate(columns)
+            if column.role == AMOUNT and column.flavour == "TTC" and i != amount_at and column.confirmed
+        ),
         None,
     )
     for index, item in items.items():
@@ -1060,8 +1252,10 @@ def _best_triple(columns, column_cells, named) -> tuple[int, int, int] | None:
     or rates is never the quantity."""
     money = [i for i, cells in enumerate(column_cells) if any(v.kind == "money" for _c, v in cells.values())]
     counts = [
-        i for i, column in enumerate(columns)
-        if column.role in (QUANTITY, PRICE, OTHER) and column_cells[i]
+        i
+        for i, column in enumerate(columns)
+        if column.role in (QUANTITY, PRICE, OTHER)
+        and column_cells[i]
         and all(v.kind in ("integer", "money") for _c, v in column_cells[i].values())
     ]
     best = None
@@ -1074,7 +1268,11 @@ def _best_triple(columns, column_cells, named) -> tuple[int, int, int] | None:
                     continue
                 hits = 0
                 for index in named:
-                    quantity_cell, unit_cell, amount_cell = column_cells[q].get(index), column_cells[u].get(index), column_cells[a].get(index)
+                    quantity_cell, unit_cell, amount_cell = (
+                        column_cells[q].get(index),
+                        column_cells[u].get(index),
+                        column_cells[a].get(index),
+                    )
                     if quantity_cell is None or unit_cell is None or amount_cell is None:
                         continue
                     if unit_cell[1].kind != "money" or unit_cell[1].value <= 0:
@@ -1083,11 +1281,20 @@ def _best_triple(columns, column_cells, named) -> tuple[int, int, int] | None:
                     quantity = _as_quantity(quantity_cell[1])
                     if amount is None or amount <= 0 or quantity is None or quantity <= 0:
                         continue
-                    if abs(Decimal(quantity) * unit_cell[1].value - amount) <= max(ROW_TOLERANCE, Decimal(quantity) * HALF_CENT):
+                    if abs(Decimal(quantity) * unit_cell[1].value - amount) <= max(
+                        ROW_TOLERANCE, Decimal(quantity) * HALF_CENT
+                    ):
                         hits += 1
                 if not hits:
                     continue
-                score = (hits, columns[a].role == AMOUNT, columns[q].role == QUANTITY, columns[u].role == UNIT_PRICE, a, -q)
+                score = (
+                    hits,
+                    columns[a].role == AMOUNT,
+                    columns[q].role == QUANTITY,
+                    columns[u].role == UNIT_PRICE,
+                    a,
+                    -q,
+                )
                 if best is None or score > best[0]:
                     best = (score, q, u, a)
     if best is None:
@@ -1149,7 +1356,7 @@ def _item_pitch(rows, items) -> float | None:
     description sits closer under its row than the next row does. None with
     fewer than two items, or no heights."""
     ys = [rows[index].y for index in sorted(items) if rows[index].y is not None]
-    gaps = [below - above for above, below in zip(ys, ys[1:]) if below > above]
+    gaps = [below - above for above, below in pairwise(ys) if below > above]
     return max(gaps) if gaps else None
 
 
@@ -1181,9 +1388,13 @@ def _is_continuation(rows, index, description, text_columns, bound, gap, previou
     row = rows[index]
     if not row.cells or not row.exact or not _close(rows, previous, index, gap):
         return False
-    if pitch is not None and rows[previous].y is not None and row.y is not None:
-        if row.y - rows[previous].y > ROW_PITCH_SLACK * pitch:
-            return False
+    if (
+        pitch is not None
+        and rows[previous].y is not None
+        and row.y is not None
+        and row.y - rows[previous].y > ROW_PITCH_SLACK * pitch
+    ):
+        return False
     if _is_sentence(row.text):
         return False
     for cell in row.cells:
@@ -1257,7 +1468,11 @@ def _confirm_tax_columns(columns, column_cells, items, amount_at) -> None:
     amount plus that tax is the amount TTC. Nothing is relabelled that the
     arithmetic does not confirm."""
     for i, column in enumerate(columns):
-        if i == amount_at or column.confirmed or column.role in (QUANTITY, UNIT_PRICE, LINE_NUMBER, REFERENCE, EAN, CODE, DISCOUNT):
+        if (
+            i == amount_at
+            or column.confirmed
+            or column.role in (QUANTITY, UNIT_PRICE, LINE_NUMBER, REFERENCE, EAN, CODE, DISCOUNT)
+        ):
             continue
         # A column the header calls "TVA" holds the rate or the tax: its
         # cells say which. Rates printed with their sign are rates; a
@@ -1304,7 +1519,11 @@ def _settle_taxes(item: ItemRow, cells, unit_columns, vat_at, ttc_at=None) -> No
         item.ht, item.ttc = amount, amount
         return
     rates = [rate] if rate is not None else list(KNOWN_VAT_RATES)
-    printed_ttc = cells[ttc_at][1].value if ttc_at is not None and cells.get(ttc_at) is not None and cells[ttc_at][1].kind == "money" else None
+    printed_ttc = (
+        cells[ttc_at][1].value
+        if ttc_at is not None and cells.get(ttc_at) is not None and cells[ttc_at][1].kind == "money"
+        else None
+    )
     if vat_at is not None and cells.get(vat_at) is not None and cells[vat_at][1].kind == "money":
         vat = cells[vat_at][1].value
         for candidate in rates:
@@ -1351,7 +1570,11 @@ def _column_in_ht(items: dict[int, ItemRow]) -> None:
     HT. A row at 0 % proves nothing either way, and a column with a row
     proven TTC is left as it is."""
     proven_ht = [item for item in items.values() if item.ht is not None and item.rate and item.ht == item.amount]
-    proven_ttc = [item for item in items.values() if item.ttc is not None and item.rate and item.ttc == item.amount and item.ht != item.amount]
+    proven_ttc = [
+        item
+        for item in items.values()
+        if item.ttc is not None and item.rate and item.ttc == item.amount and item.ht != item.amount
+    ]
     if not proven_ht or proven_ttc:
         return
     rates = {item.rate for item in items.values() if item.rate is not None}
@@ -1413,13 +1636,20 @@ def _table_without_header(rows: list[Row]) -> Table | None:
                 for index in column_cells[a]:
                     quantity_cell, unit_cell = column_cells[q].get(index), column_cells[u].get(index)
                     amount_cell = column_cells[a][index]
-                    if quantity_cell is None or unit_cell is None or unit_cell[1].kind != "money" or amount_cell[1].kind != "money":
+                    if (
+                        quantity_cell is None
+                        or unit_cell is None
+                        or unit_cell[1].kind != "money"
+                        or amount_cell[1].kind != "money"
+                    ):
                         continue
                     quantity = _as_quantity(quantity_cell[1])
                     amount = _amount_of(amount_cell)
                     if quantity is None or quantity <= 0 or amount is None or amount <= 0:
                         continue
-                    if abs(Decimal(quantity) * unit_cell[1].value - amount) <= max(ROW_TOLERANCE, Decimal(quantity) * HALF_CENT):
+                    if abs(Decimal(quantity) * unit_cell[1].value - amount) <= max(
+                        ROW_TOLERANCE, Decimal(quantity) * HALF_CENT
+                    ):
                         hits.append(index)
                 if len(hits) >= MIN_ALIGNED_ROWS:
                     score = (len(hits), a, -q)
@@ -1442,8 +1672,11 @@ def _table_without_header(rows: list[Row]) -> Table | None:
     if rate_at is None:
         # A bare "20,00" beside the amounts: a rate when every row prints one.
         for i, column in enumerate(columns):
-            if i > a and column.role == OTHER and column_cells[i] and all(
-                _as_rate(v) is not None and _as_rate(v) != 0 for _c, v in column_cells[i].values()
+            if (
+                i > a
+                and column.role == OTHER
+                and column_cells[i]
+                and all(_as_rate(v) is not None and _as_rate(v) != 0 for _c, v in column_cells[i].values())
             ):
                 columns[i].role, rate_at = RATE, i
                 break
@@ -1493,7 +1726,8 @@ def _settle_headerless_taxes(item: ItemRow, cells, columns, amount_at) -> None:
     that is their sum prove the amount HT."""
     amount = item.amount
     money_right = [
-        cells[i][1].value for i in range(amount_at + 1, len(columns))
+        cells[i][1].value
+        for i in range(amount_at + 1, len(columns))
         if cells.get(i) is not None and cells[i][1].kind == "money" and columns[i].role != RATE
     ]
     rates = [item.rate] if item.rate else list(KNOWN_VAT_RATES)

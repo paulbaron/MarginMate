@@ -1,0 +1,59 @@
+# The git hooks, run by prek (pinned in mise.toml). `prek install` wires both
+# stages below; README.md, "Development", has the whole setup.
+#
+# pre-commit: quick checks of the files being committed.
+# pre-push:   the continuous integration - the whole repository linted and
+#             type-checked, Django's checks, and the fast test suite.
+# Run the CI by hand (before a deploy, which pulls without pushing):
+#   prek run --hook-stage pre-push --all-files
+#:schema https://www.schemastore.org/prek.json
+
+default_install_hook_types = ["pre-commit", "pre-push"]
+default_stages = ["pre-commit"]
+minimum_prek_version = "0.5.4"
+# The vendored htmx is kept byte for byte as published.
+exclude = '^static/js/htmx\.min\.js$'
+
+[[repos]]
+repo = "builtin"
+hooks = [
+    { id = "check-merge-conflict" },
+    # Real invoices, photos and databases never go into this public repository.
+    { id = "check-added-large-files", args = ["--maxkb=1024"] },
+    { id = "check-case-conflict" },
+    { id = "check-illegal-windows-names" },
+    { id = "check-toml" },
+    { id = "check-json" },
+    # These three only name the PEM markers (signing code and its tests).
+    { id = "detect-private-key", exclude = '^(staff/signing\.py|staff/tests/test_signing\.py|accounts/tests/test_backup_data\.py)$' },
+    { id = "end-of-file-fixer" },
+    # Python's own whitespace is ruff format's; a string literal's is data.
+    { id = "trailing-whitespace", exclude_types = ["python"] },
+]
+
+[[repos]]
+repo = "local"
+hooks = [
+    # --- pre-commit -------------------------------------------------------
+    { id = "uv-lock", name = "uv lock", entry = "uv lock", language = "system", files = '^(pyproject\.toml|uv\.lock)$', pass_filenames = false },
+    # Transitional: the deploy.cmd of the versions before uv installs from
+    # requirements.txt. Deleted once one deploy has put uv in place
+    # (DEPLOY.md, section 10).
+    { id = "requirements-export", name = "requirements.txt from uv.lock", entry = "uv export --frozen --no-dev --no-hashes --no-emit-project --no-annotate --quiet --output-file requirements.txt", language = "system", files = '^(pyproject\.toml|uv\.lock|requirements\.txt)$', pass_filenames = false },
+    { id = "ruff-check", name = "ruff check", entry = "uv run --locked ruff check --fix --force-exclude", language = "system", types = ["python"] },
+    { id = "ruff-format", name = "ruff format", entry = "uv run --locked ruff format --force-exclude", language = "system", types = ["python"] },
+    # Warnings are shown, never blocking (pyproject.toml, [tool.ty.rules]);
+    # ty's own exit code counts them unless told not to.
+    { id = "ty", name = "ty check", entry = "uv run --locked ty check --exit-zero-on-warning --output-format concise", language = "system", types = ["python"], verbose = true },
+
+    # --- pre-push: the CI -------------------------------------------------
+    { id = "ci-lock", name = "CI: uv.lock matches pyproject.toml", entry = "uv lock --check", language = "system", pass_filenames = false, always_run = true, stages = ["pre-push"] },
+    { id = "ci-ruff-check", name = "CI: ruff check", entry = "uv run --locked ruff check .", language = "system", pass_filenames = false, always_run = true, stages = ["pre-push"] },
+    { id = "ci-ruff-format", name = "CI: ruff format", entry = "uv run --locked ruff format --check .", language = "system", pass_filenames = false, always_run = true, stages = ["pre-push"] },
+    { id = "ci-ty", name = "CI: ty check", entry = "uv run --locked ty check --exit-zero-on-warning --output-format concise", language = "system", pass_filenames = false, always_run = true, stages = ["pre-push"] },
+    { id = "ci-django-check", name = "CI: Django system checks", entry = "uv run --locked python manage.py check --settings=config.settings_test", language = "system", pass_filenames = false, always_run = true, stages = ["pre-push"] },
+    { id = "ci-migrations", name = "CI: no model change without its migration", entry = "uv run --locked python manage.py makemigrations --check --dry-run --settings=config.settings_test", language = "system", pass_filenames = false, always_run = true, stages = ["pre-push"] },
+    # The browser tests (tag "browser") drive Chrome and reach the network:
+    # run them by hand, module by module (CLAUDE.md, "Running the tests").
+    { id = "ci-tests", name = "CI: the fast test suite", entry = "uv run --locked python manage.py test --settings=config.settings_test --exclude-tag=browser --parallel 6 --noinput", language = "system", pass_filenames = false, always_run = true, stages = ["pre-push"] },
+]

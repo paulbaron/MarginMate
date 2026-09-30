@@ -21,9 +21,9 @@ photo, oldest first, and the documents that cannot be used as they are.
         <div class="stat-label">Documents à corriger</div>
         <div class="stat-value">{{ to_fix|length }}</div>
         {% comment %}
-        Depuis la facture électronique cette liste tient aussi des
-        documents dont les totaux du fournisseur ne s'accordent pas. Le
-        sous-titre ne les nommait pas, et ils arrivaient sans pastille.
+        Since electronic invoicing this list also holds documents whose
+        supplier's totals do not agree. The subtitle did not name them,
+        and they arrived with no pill.
         {% endcomment %}
         <div class="stat-note">sans date, import en échec, ou totaux du fournisseur</div>
     </div>
@@ -67,10 +67,10 @@ photo, oldest first, and the documents that cannot be used as they are.
                         </td>
                         <td class="num" data-label="Total HT">{{ invoice.total_ht|floatformat:2 }} €</td>
                         {% comment %}
-                        « Corriger » sur une facture électronique dont
-                        l'arithmétique du fournisseur ne tient pas : personne
-                        ici ne corrige cela, le fournisseur doit la
-                        réémettre. « Ouvrir » dit ce que le bouton fait.
+                        « Corriger » on an electronic invoice whose
+                        supplier's arithmetic does not hold: nobody here
+                        corrects that, the supplier has to issue it again.
+                        « Ouvrir » says what the button does.
                         {% endcomment %}
                         <td class="num phone-card-end"><a class="btn btn-small" href="{% url 'invoices:invoice_edit_lines' invoice.pk %}">{% if invoice.is_einvoice %}Ouvrir{% else %}Corriger{% endif %}</a></td>
                     </tr>

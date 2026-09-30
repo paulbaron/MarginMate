@@ -9,9 +9,11 @@ def fix_unit_cost(apps, schema_editor):
     corrected logic in inventory/services.py.
     """
     StockMovement = apps.get_model("inventory", "StockMovement")
-    for movement in StockMovement.objects.select_related("invoice_line", "stock_type").filter(
-        invoice_line__isnull=False, invoice_line__total_volume__gt=0
-    ).exclude(stock_type__unit="UNIT"):
+    for movement in (
+        StockMovement.objects.select_related("invoice_line", "stock_type")
+        .filter(invoice_line__isnull=False, invoice_line__total_volume__gt=0)
+        .exclude(stock_type__unit="UNIT")
+    ):
         line = movement.invoice_line
         correct_unit_cost = line.total_ht / line.total_volume
         if movement.unit_cost_ht != correct_unit_cost:

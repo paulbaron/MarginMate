@@ -1,4 +1,4 @@
-"""« Produits & charges » entre deux dates.
+"""« Produits & charges » between two dates.
 
 The owner, 20/09: on this page I want to see only the products bought
 between two dates. So the page takes a « Du … au … » (common.date_range,
@@ -81,23 +81,24 @@ class PurchaseWindowTestCase(TestCase):
         product = self.product_for(stock_type)
         invoice = make_invoice(supplier=self.supplier, invoice_date=on)
         line = make_invoice_line(
-            invoice=invoice, product=product, quantity=int(quantity),
-            total_ht=total_ht, vat_rate=D(vat_rate),
+            invoice=invoice,
+            product=product,
+            quantity=int(quantity),
+            total_ht=total_ht,
+            vat_rate=D(vat_rate),
         )
         return make_movement(
-            stock_type=stock_type, quantity=quantity,
-            unit_cost_ht=D(total_ht) / D(quantity), invoice_line=line,
+            stock_type=stock_type,
+            quantity=quantity,
+            unit_cost_ht=D(total_ht) / D(quantity),
+            invoice_line=line,
         )
 
     def page(self, **parameters):
         return self.client.get(self.url, parameters)
 
     def rows(self, response):
-        return {
-            row["stock_type"].name: row
-            for category in response.context["categories"]
-            for row in category["rows"]
-        }
+        return {row["stock_type"].name: row for category in response.context["categories"] for row in category["rows"]}
 
 
 class WhatTheWindowCountsTests(PurchaseWindowTestCase):
@@ -242,9 +243,7 @@ class WhichDateAMovementCountsOnTests(PurchaseWindowTestCase):
         vodka = make_stock_type(name="Vodka", unit=UnitChoices.LITRE, category="Spiritueux")
         invoice = make_invoice(supplier=self.supplier)
         Invoice.objects.filter(pk=invoice.pk).update(invoice_date=None)
-        line = make_invoice_line(
-            invoice=invoice, product=self.product_for(vodka), quantity=3, total_ht="60"
-        )
+        line = make_invoice_line(invoice=invoice, product=self.product_for(vodka), quantity=3, total_ht="60")
         movement = make_movement(stock_type=vodka, quantity="3", unit_cost_ht="20", invoice_line=line)
         StockMovement.objects.filter(pk=movement.pk).update(
             created_at=timezone.make_aware(datetime(2026, 5, 20, 12, 0))
@@ -317,10 +316,10 @@ class SoldOverTheSameWindowTests(PurchaseWindowTestCase):
         make_ingredient(recipe, stock_type=self.vodka, quantity="1")
         record_sales(
             [
-                ("Vodka sec", date(2026, 1, 31), 7),   # the day before « du » : out
-                ("Vodka sec", date(2026, 2, 1), 3),    # « du » itself : in
-                ("Vodka sec", date(2026, 2, 28), 2),   # « au » itself : in
-                ("Vodka sec", date(2026, 3, 1), 4),    # the day after : out
+                ("Vodka sec", date(2026, 1, 31), 7),  # the day before « du » : out
+                ("Vodka sec", date(2026, 2, 1), 3),  # « du » itself : in
+                ("Vodka sec", date(2026, 2, 28), 2),  # « au » itself : in
+                ("Vodka sec", date(2026, 3, 1), 4),  # the day after : out
             ]
         )
 
@@ -340,12 +339,18 @@ class SoldOverTheSameWindowTests(PurchaseWindowTestCase):
         say nothing is ever missing."""
         self.buy(self.vodka, date(2026, 1, 5), quantity="100", total_ht="2000")
         make_movement(
-            stock_type=self.vodka, kind=MovementKind.LOSS, quantity="-10",
-            unit_cost_ht="20", occurred_on=date(2026, 2, 20),
+            stock_type=self.vodka,
+            kind=MovementKind.LOSS,
+            quantity="-10",
+            unit_cost_ht="20",
+            occurred_on=date(2026, 2, 20),
         )
         make_movement(
-            stock_type=self.vodka, kind=MovementKind.LOSS, quantity="-7",
-            unit_cost_ht="20", occurred_on=date(2026, 1, 20),
+            stock_type=self.vodka,
+            kind=MovementKind.LOSS,
+            quantity="-7",
+            unit_cost_ht="20",
+            occurred_on=date(2026, 1, 20),
         )
         # 40 bought in February less the 10 lost in it - not the 123 the
         # whole ledger holds.
@@ -376,11 +381,11 @@ class ChargesFollowTheWindowTests(PurchaseWindowTestCase):
         super().setUp()
         self.vodka = make_stock_type(name="Vodka", unit=UnitChoices.LITRE, category="Spiritueux")
         self.buy(self.vodka, date(2026, 2, 10), quantity="12", total_ht="240")
-        self.bailleur = make_supplier(code="BAILLEUR_X", name="Bailleur Exemple", parser_key="", expenses_only=True)
-        self.loyer = make_product(supplier=self.bailleur, raw_name="LOYER", is_expense=True)
+        self.landlord = make_supplier(code="BAILLEUR_X", name="Bailleur Exemple", parser_key="", expenses_only=True)
+        self.rent = make_product(supplier=self.landlord, raw_name="LOYER", is_expense=True)
         for day, amount in ((date(2026, 2, 5), "500"), (date(2026, 1, 5), "500"), (date(2026, 3, 5), "500")):
-            bill = make_invoice(supplier=self.bailleur, invoice_date=day)
-            make_invoice_line(invoice=bill, product=self.loyer, total_ht=amount, vat_rate=D("0.20"))
+            bill = make_invoice(supplier=self.landlord, invoice_date=day)
+            make_invoice_line(invoice=bill, product=self.rent, total_ht=amount, vat_rate=D("0.20"))
 
     def test_only_the_charges_of_the_window_are_totalled(self):
         response = self.page(**FEBRUARY)
@@ -404,11 +409,13 @@ class ChargesFollowTheWindowTests(PurchaseWindowTestCase):
         day either side is out. The bills above sit a month away from the
         window, where an off-by-one changes nothing."""
         for day, amount in (
-            (date(2026, 1, 31), "10"), (date(2026, 2, 1), "20"),
-            (date(2026, 2, 28), "30"), (date(2026, 3, 1), "40"),
+            (date(2026, 1, 31), "10"),
+            (date(2026, 2, 1), "20"),
+            (date(2026, 2, 28), "30"),
+            (date(2026, 3, 1), "40"),
         ):
-            edge = make_invoice(supplier=self.bailleur, invoice_date=day)
-            make_invoice_line(invoice=edge, product=self.loyer, total_ht=amount, vat_rate=D("0"))
+            edge = make_invoice(supplier=self.landlord, invoice_date=day)
+            make_invoice_line(invoice=edge, product=self.rent, total_ht=amount, vat_rate=D("0"))
         (row,) = self.page(**FEBRUARY).context["charge_suppliers"]
         # The February rent of the setUp (600 TTC) plus the two edge days.
         self.assertEqual(row["documents"], 3)
@@ -424,13 +431,11 @@ class ChargesFollowTheWindowTests(PurchaseWindowTestCase):
         monthly subscription says little. Dated from today rather than from
         a fixed month, since that default moves with the calendar."""
         today = timezone.localdate()
-        operator = make_supplier(
-            code="OPERATEUR_X", name="Opérateur Exemple", parser_key="", expenses_only=True
-        )
-        abonnement = make_product(supplier=operator, raw_name="ABONNEMENT", is_expense=True)
+        operator = make_supplier(code="OPERATEUR_X", name="Opérateur Exemple", parser_key="", expenses_only=True)
+        subscription = make_product(supplier=operator, raw_name="ABONNEMENT", is_expense=True)
         for day, amount in ((today - timedelta(days=30), "100"), (today - timedelta(days=400), "999")):
             bill = make_invoice(supplier=operator, invoice_date=day)
-            make_invoice_line(invoice=bill, product=abonnement, total_ht=amount, vat_rate=D("0.20"))
+            make_invoice_line(invoice=bill, product=subscription, total_ht=amount, vat_rate=D("0.20"))
         response = self.page()
         (row,) = [row for row in response.context["charge_suppliers"] if row["supplier"] == operator]
         self.assertEqual(row["total_ttc"], D("120.00"))
@@ -441,8 +446,8 @@ class ChargesFollowTheWindowTests(PurchaseWindowTestCase):
 class AWindowWithNoPurchasesStillHasFiguresTests(PurchaseWindowTestCase):
     """Two dates over which nothing was bought but the rent was paid.
 
-    The headline row was drawn « si des catégories », which until the window
-    shipped meant « sur une base neuve » - and a window with no purchase in
+    The headline row was drawn « if categories », which until the window
+    shipped meant « on a new database » - and a window with no purchase in
     it empties the categories, so the whole row went: « Total acheté »,
     « Articles » and « Charges (TTC) » all disappeared while the fold below
     went on showing the 600 € those dates cost. A figure that vanishes reads
@@ -453,12 +458,10 @@ class AWindowWithNoPurchasesStillHasFiguresTests(PurchaseWindowTestCase):
         super().setUp()
         self.vodka = make_stock_type(name="Vodka", unit=UnitChoices.LITRE, category="Spiritueux")
         self.buy(self.vodka, date(2026, 1, 10), quantity="6", total_ht="120")
-        self.bailleur = make_supplier(
-            code="BAILLEUR_X", name="Bailleur Exemple", parser_key="", expenses_only=True
-        )
-        self.loyer = make_product(supplier=self.bailleur, raw_name="LOYER", is_expense=True)
-        bill = make_invoice(supplier=self.bailleur, invoice_date=date(2026, 2, 5))
-        make_invoice_line(invoice=bill, product=self.loyer, total_ht="500", vat_rate=D("0.20"))
+        self.landlord = make_supplier(code="BAILLEUR_X", name="Bailleur Exemple", parser_key="", expenses_only=True)
+        self.rent = make_product(supplier=self.landlord, raw_name="LOYER", is_expense=True)
+        bill = make_invoice(supplier=self.landlord, invoice_date=date(2026, 2, 5))
+        make_invoice_line(invoice=bill, product=self.rent, total_ht="500", vat_rate=D("0.20"))
 
     def test_the_charge_paid_over_those_dates_is_still_in_the_headline(self):
         response = self.page(**FEBRUARY)
@@ -512,9 +515,7 @@ class WhatARowOpensIsTheWindowToTests(PurchaseWindowTestCase):
         """Said and true: the row says 12 and the panel behind it holds the
         one delivery those 12 litres came from."""
         self.assertEqual(self.rows(self.page(**FEBRUARY))["Vodka"]["quantity"], D("12"))
-        panel = self.client.get(
-            reverse("inventory:stock_type_movements", args=[self.vodka.pk]), FEBRUARY
-        )
+        panel = self.client.get(reverse("inventory:stock_type_movements", args=[self.vodka.pk]), FEBRUARY)
         self.assertContains(panel, "10/02/2026")
         self.assertNotContains(panel, "10/01/2026")
 
@@ -522,8 +523,8 @@ class WhatARowOpensIsTheWindowToTests(PurchaseWindowTestCase):
         self.assertNotContains(self.page(), "ses achats sont ceux de ces dates")
 
 
-class AnInventaireBeatsTheDatesTests(PurchaseWindowTestCase):
-    """An inventaire is two physical counts with its own arithmetic -
+class AStockTakeBeatsTheDatesTests(PurchaseWindowTestCase):
+    """A stock take is two physical counts with its own arithmetic -
     opening, closing, what is missing - which two free dates cannot
     produce. So it wins, and the page says the dates are not in force."""
 
@@ -533,14 +534,17 @@ class AnInventaireBeatsTheDatesTests(PurchaseWindowTestCase):
         self.buy(self.vodka, date(2026, 1, 10), quantity="12", total_ht="240")
         self.take = make_stock_take(taken_at=timezone.make_aware(datetime(2026, 3, 31, 12, 0)))
         make_stock_take_line(
-            stock_take=self.take, product=None, stock_type=self.vodka,
-            counted_quantity="4", unit=UnitChoices.LITRE,
+            stock_take=self.take,
+            product=None,
+            stock_type=self.vodka,
+            counted_quantity="4",
+            unit=UnitChoices.LITRE,
         )
 
-    def test_the_period_is_the_inventaire_and_the_january_purchase_is_back(self):
+    def test_the_period_is_the_stock_take_and_the_january_purchase_is_back(self):
         response = self.page(inventaire=self.take.pk, **FEBRUARY)
         self.assertIsNotNone(response.context["period"])
-        # The dates would have hidden this article; the inventaire does not.
+        # The dates would have hidden this article; the stock take does not.
         self.assertEqual(self.rows(response)["Vodka"]["period"].purchases, D("12"))
         self.assertEqual(response.context["column_count"], 10)
 
@@ -550,9 +554,9 @@ class AnInventaireBeatsTheDatesTests(PurchaseWindowTestCase):
         self.assertContains(response, 'name="au" value="2026-02-28" disabled')
         self.assertContains(response, "Les dates viennent de l'inventaire choisi")
 
-    def test_depuis_le_debut_gives_the_dates_back(self):
+    def test_all_time_gives_the_dates_back(self):
         """The select carries the window as hidden fields, so the click that
-        leaves the inventaire is not the click that loses the dates."""
+        leaves the stock take is not the click that loses the dates."""
         response = self.page(inventaire=self.take.pk, **FEBRUARY)
         self.assertContains(response, '<input type="hidden" name="du" value="2026-02-01">', html=False)
         self.assertContains(response, '<input type="hidden" name="au" value="2026-02-28">', html=False)
@@ -606,7 +610,7 @@ class TheWindowTravelsOnTheReloadTests(PurchaseWindowTestCase):
         )
         self.assertContains(response, "du=2026-02-01&amp;au=2026-02-28")
 
-    def test_it_carries_the_inventaire_and_the_dates_together(self):
+    def test_it_carries_the_stock_take_and_the_dates_together(self):
         take = make_stock_take(taken_at=timezone.make_aware(datetime(2026, 3, 31, 12, 0)))
         response = self.page(inventaire=take.pk, **FEBRUARY)
         self.assertEqual(
@@ -615,9 +619,7 @@ class TheWindowTravelsOnTheReloadTests(PurchaseWindowTestCase):
         )
 
     def test_with_nothing_asked_it_stays_the_bare_url(self):
-        self.assertEqual(
-            self.page().context["catalogue_url"], reverse("inventory:stock_catalogue")
-        )
+        self.assertEqual(self.page().context["catalogue_url"], reverse("inventory:stock_catalogue"))
 
     def test_the_reloaded_list_is_the_windowed_one(self):
         response = self.client.get(reverse("inventory:stock_catalogue"), FEBRUARY)

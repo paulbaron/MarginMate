@@ -13,8 +13,8 @@ till day it read (recipes/payments.py) - which --dry-run reads and reports
 without writing. Ranges longer than two years are handled; --file skips the
 download and reads one already downloaded.
 
-In multi mode it runs for one espace (`manage.py tenant <dossier>
-laddition_import …`) and downloads into that espace's own folder. Downloading
+In multi mode it runs for one tenant (`manage.py tenant <folder>
+laddition_import …`) and downloads into that tenant's own folder. Downloading
 uses the server's L'Addition account, the owner's: refused elsewhere, like
 the page's import (recipes/integration.py), and refused while the page's own
 import runs - the two would sign in to one account at once and each take the
@@ -27,12 +27,12 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
 from accounts import paths
-from recipes.integration import refusal, require_espace, till_allowed
+from recipes.integration import refusal, require_tenant_for_command, till_allowed
 from recipes.models import SalesImportJob
 from recipes.payments import record_payments
 from recipes.pos.laddition_download import LadditionDownloadError, download_sales_lines
-from recipes.pos.laddition_xlsx import LadditionExportError, parse_sales_exports
 from recipes.pos.laddition_session import LadditionAuthError
+from recipes.pos.laddition_xlsx import LadditionExportError, parse_sales_exports
 from recipes.sales import record_sales
 from recipes.tasks import payments_log, sync_pos_products
 
@@ -51,21 +51,26 @@ class Command(BaseCommand):
         parser.add_argument("--from", dest="start", help="First day, YYYY-MM-DD.")
         parser.add_argument("--to", dest="end", help="Last day, YYYY-MM-DD (inclusive).")
         parser.add_argument(
-            "--file", action="append", default=[], dest="files",
+            "--file",
+            action="append",
+            default=[],
+            dest="files",
             help="Read an already-downloaded export instead of fetching one. Repeatable.",
         )
         parser.add_argument(
-            "--download-dir", default=None,
+            "--download-dir",
+            default=None,
             help="Where to download (default: the espace's downloads folder).",
         )
         parser.add_argument("--no-headless", action="store_true", help="Show the browser.")
         parser.add_argument(
-            "--dry-run", action="store_true",
+            "--dry-run",
+            action="store_true",
             help="Read and report, but write nothing - use it to check the names line up first.",
         )
 
     def handle(self, *args, **options):
-        require_espace("laddition_import")
+        require_tenant_for_command("laddition_import")
         files = options["files"]
         if not files:
             if not options["start"] or not options["end"]:
@@ -105,7 +110,9 @@ class Command(BaseCommand):
             f"Read {len(export.entries)} product/day totals "
             f"({export.total_quantity} items sold"
             + (f", {export.offered} of them offered" if export.offered else "")
-            + f") covering {covered[0]} to {covered[1]}." if covered else "Read nothing."
+            + f") covering {covered[0]} to {covered[1]}."
+            if covered
+            else "Read nothing."
         )
         if export.skipped:
             self.stdout.write(f"Ignored {export.skipped} row(s) with no usable date/name/quantity.")
@@ -139,8 +146,7 @@ class Command(BaseCommand):
         result = record_sales(export.entries, source="laddition")
         self.stdout.write(
             self.style.SUCCESS(
-                f"Recorded {result.recorded} recipe/day totals "
-                f"({result.created} new, {result.updated} updated)."
+                f"Recorded {result.recorded} recipe/day totals ({result.created} new, {result.updated} updated)."
             )
         )
         self._report_unmatched(sorted(set(result.unmatched)))
@@ -169,5 +175,5 @@ class Command(BaseCommand):
             self.stdout.write(f"  - {name}")
         self.stdout.write(
             "\nCreate a recipe with exactly that name, or - for a happy-hour variant - "
-            "put the name in the base recipe's \"Nom en happy hour sur la caisse\" field."
+            'put the name in the base recipe\'s "Nom en happy hour sur la caisse" field.'
         )

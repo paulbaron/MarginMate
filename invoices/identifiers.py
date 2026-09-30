@@ -24,9 +24,7 @@ VAT_RE = re.compile(r"(?<![A-Za-z0-9])FR ?([0-9A-Z]{2}) ?(\d{3}) ?(\d{3}) ?(\d{3
 DIGIT_RUN_RE = re.compile(r"(?<![\d,.])\d(?:[  ]?\d){8,}(?!\d|[.,]\d)")
 # "01 23 45 67 89", "01.23.45.67.89", "0123456789", "+33 1 23 45 67 89":
 # the same separator between every pair - "01.23 45.67 89.00" is prices.
-PHONE_RE = re.compile(
-    r"(?<!\d)(?<!\d[.,])(?:\+33 ?(?:\(0\) ?)?|0)[1-9]([ .-]?)\d{2}(?:\1\d{2}){3}(?!\d|[.,]\d)"
-)
+PHONE_RE = re.compile(r"(?<!\d)(?<!\d[.,])(?:\+33 ?(?:\(0\) ?)?|0)[1-9]([ .-]?)\d{2}(?:\1\d{2}){3}(?!\d|[.,]\d)")
 # A web address: after "www." or a scheme, any domain; bare, the usual
 # endings only. Never the part of an e-mail address after "@" - a customer's
 # address is printed on invoices too, and a mail provider is everybody's.
@@ -61,7 +59,7 @@ def vat_key(siren: str) -> str:
     return f"{(12 + 3 * (int(siren) % 97)) % 97:02d}"
 
 
-# Every stored document (2,2 Mo of text for 880) is read for its figures by
+# Every stored document (2,2 MB of text for 880) is read for its figures by
 # a supplier's page and by learning: read again each time, it was most of
 # their half a second. A text read once is kept, by its content.
 READINGS_KEPT = 4096
@@ -85,7 +83,7 @@ def _line_identifiers(line: str) -> set[str]:
     for match in VAT_RE.finditer(line):
         key, siren = match.group(1), "".join(match.group(2, 3, 4))
         # A numeric key is checked; the letter keys of recent numbers can't be.
-        if (key == vat_key(siren) if key.isdigit() else is_siren(siren)):
+        if key == vat_key(siren) if key.isdigit() else is_siren(siren):
             found.add(f"siren:{siren}")
     labelled = SIREN_LABEL_RE.search(line) is not None
     for match in DIGIT_RUN_RE.finditer(line):
@@ -129,8 +127,7 @@ class TypedIdentifierError(ValueError):
 
 #: Said where nothing at all could be read out of what was typed.
 TYPE_ONE = (
-    "Tapez un n° SIREN (neuf chiffres), un n° SIRET, un n° de TVA, "
-    "un numéro de téléphone ou un site (exemple.fr)."
+    "Tapez un n° SIREN (neuf chiffres), un n° SIRET, un n° de TVA, un numéro de téléphone ou un site (exemple.fr)."
 )
 
 
@@ -190,5 +187,5 @@ def describe(identifier: str) -> str:
     if kind == "siren":
         return f"n° SIREN {value[:3]} {value[3:6]} {value[6:]}"
     if kind == "tel":
-        return "téléphone " + " ".join(value[index:index + 2] for index in range(0, len(value), 2))
+        return "téléphone " + " ".join(value[index : index + 2] for index in range(0, len(value), 2))
     return f"site {value}"

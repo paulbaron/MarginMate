@@ -124,9 +124,7 @@ class ValuationDateTests(TestCase):
             self.product,
             [("2026-01-10", 6, "60.00"), ("2026-02-10", 6, "180.00")],  # 10/btl then 30/btl
         )
-        result = value_counted_quantity(
-            self.product, Decimal("4"), UnitChoices.UNIT, as_of=date(2026, 1, 31)
-        )
+        result = value_counted_quantity(self.product, Decimal("4"), UnitChoices.UNIT, as_of=date(2026, 1, 31))
         self.assertEqual(result["value_ht"], Decimal("40"))  # 4 x 10.00, January's price
 
     def test_without_a_date_every_purchase_counts(self):
@@ -136,9 +134,7 @@ class ValuationDateTests(TestCase):
 
     def test_a_purchase_on_the_count_date_itself_is_included(self):
         make_purchase_history(self.product, [("2026-01-31", 6, "60.00")])
-        result = value_counted_quantity(
-            self.product, Decimal("4"), UnitChoices.UNIT, as_of=date(2026, 1, 31)
-        )
+        result = value_counted_quantity(self.product, Decimal("4"), UnitChoices.UNIT, as_of=date(2026, 1, 31))
         self.assertFalse(result["has_shortfall"])
 
     def test_stock_type_counting_respects_the_date_too(self):
@@ -170,9 +166,7 @@ class ValuationDateTests(TestCase):
         count. They just sort last, so they're only reached as a fallback."""
         undated = make_invoice(supplier=self.product.supplier, invoice_date=None)
         make_invoice_line(invoice=undated, product=self.product, quantity=6, total_ht="60.00")
-        result = value_counted_quantity(
-            self.product, Decimal("4"), UnitChoices.UNIT, as_of=date(2026, 1, 31)
-        )
+        result = value_counted_quantity(self.product, Decimal("4"), UnitChoices.UNIT, as_of=date(2026, 1, 31))
         self.assertEqual(result["value_ht"], Decimal("40"))
         self.assertFalse(result["has_shortfall"])
 
@@ -183,7 +177,7 @@ class ValueCountedStockTypeTests(TestCase):
         supplier = make_supplier()
         sobieski = make_product(supplier=supplier, stock_type=vodka, raw_name="SOBIESKI", stock_equivalent="0.7")
         wyborowa = make_product(supplier=supplier, stock_type=vodka, raw_name="WYBOROWA", stock_equivalent="0.7")
-        make_purchase_history(sobieski, [("2026-01-10", 10, "70.00")])   # 7 L at 10/L
+        make_purchase_history(sobieski, [("2026-01-10", 10, "70.00")])  # 7 L at 10/L
         make_purchase_history(wyborowa, [("2026-02-10", 10, "140.00")])  # 7 L at 20/L
 
         result = value_counted_stock_type_quantity(vodka, Decimal("10"))
@@ -191,7 +185,7 @@ class ValueCountedStockTypeTests(TestCase):
         self.assertEqual(result["value_ht"], Decimal("170"))
 
     def test_a_refund_line_does_not_corrupt_the_ladder(self):
-        """B2 end-to-end: a déconsigne line really does reach this ladder."""
+        """B2 end-to-end: a deposit-refund line really does reach this ladder."""
         kegs = make_stock_type(name="Fûts", unit=UnitChoices.UNIT)
         product = make_product(stock_type=kegs, raw_name="FÛT 30L", unit=UnitChoices.UNIT)
         purchase = make_invoice(supplier=product.supplier, invoice_date=date(2026, 1, 10))

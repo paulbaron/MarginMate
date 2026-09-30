@@ -51,15 +51,19 @@ PARSED = ParsedInvoice(
     invoice_date=date(2026, 2, 12),
     lines=[
         ParsedLine(
-            raw_name="EAU DE SOURCE 1L", quantity=6, total_volume=D("6"), unit_cost_ht=D("0.50"),
-            total_ht=D("3.00"), vat_rate=D("0.055"),
+            raw_name="EAU DE SOURCE 1L",
+            quantity=6,
+            total_volume=D("6"),
+            unit_cost_ht=D("0.50"),
+            total_ht=D("3.00"),
+            vat_rate=D("0.055"),
         )
     ],
 )
 
 
 def pdf_upload(test, name, lines):
-    path = os.path.join(paths.media_root(),f"{name}")
+    path = os.path.join(paths.media_root(), f"{name}")
     write_pdf(path, lines)
     test.addCleanup(lambda: os.path.exists(path) and os.remove(path))
     with open(path, "rb") as handle:
@@ -90,34 +94,40 @@ class WhichReaderTests(TestCase):
         self.assertEqual(document_supplier("\n".join(METRO_INVOICE)), self.metro)
 
     def test_and_goes_through_its_supplier_own_reader(self):
-        path = os.path.join(paths.media_root(),"facture.pdf")
+        path = os.path.join(paths.media_root(), "facture.pdf")
         write_pdf(path, METRO_INVOICE)
         self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
-        with mock.patch("invoices.parsers.metro.MetroParser.parse", return_value=PARSED) as reader, \
-                mock.patch("invoices.receipts.recognise") as ocr:
+        with (
+            mock.patch("invoices.parsers.metro.MetroParser.parse", return_value=PARSED) as reader,
+            mock.patch("invoices.receipts.recognise") as ocr,
+        ):
             invoice = import_document(path, display_filename="facture.pdf")
         reader.assert_called_once()
         ocr.assert_not_called()
-        self.assertEqual((invoice.supplier, invoice.invoice_number, invoice.lines.count()), (self.metro, "134-52-14645", 1))
+        self.assertEqual(
+            (invoice.supplier, invoice.invoice_number, invoice.lines.count()), (self.metro, "134-52-14645", 1)
+        )
         self.assertFalse(invoice.is_receipt)
         self.assertIn("EAU DE SOURCE", invoice.source_text)
 
     def test_a_file_already_imported_is_refused_before_it_is_read(self):
         """A folder scanned again is mostly documents already in: the file's
         own digest answers, and nothing is opened."""
-        path = os.path.join(paths.media_root(),"facture.pdf")
+        path = os.path.join(paths.media_root(), "facture.pdf")
         write_pdf(path, METRO_INVOICE)
         self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
         with mock.patch("invoices.parsers.metro.MetroParser.parse", return_value=PARSED):
             import_document(path, display_filename="facture.pdf")
-        with mock.patch("invoices.receipts.document_text") as read, \
-                self.assertRaisesMessage(DuplicateInvoiceError, "Fichier déjà importé"):
+        with (
+            mock.patch("invoices.receipts.document_text") as read,
+            self.assertRaisesMessage(DuplicateInvoiceError, "Fichier déjà importé"),
+        ):
             import_document(path, display_filename="facture.pdf")
         read.assert_not_called()
 
     def test_a_photo_is_read_as_a_ticket(self):
         make_supplier(code="EPICERIE", name="Épicerie du coin", ticket_header="EPICERIE DU COIN")
-        path = os.path.join(paths.media_root(),"ticket.jpg")
+        path = os.path.join(paths.media_root(), "ticket.jpg")
         with open(path, "wb") as handle:
             handle.write(b"\xff\xd8\xff a photo")
         self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
@@ -131,16 +141,19 @@ class WhichReaderTests(TestCase):
         """Nisbets has no parser of its own: its PDF is read by the ticket
         reader, from its text - never by OCR."""
         shop = make_supplier(code="CUISIPRO", name="Cuisipro", parser_key="", ticket_header="CUISIPRO FRANCE")
-        path = os.path.join(paths.media_root(),"cuisipro.pdf")
-        write_pdf(path, [
-            "CUISIPRO FRANCE SARL",
-            "FACTURE N 7654321 du 07/11/2024",
-            "PRODUIT  DESCRIPTION  QTE  PRIX UNITAIRE  VALEUR",
-            "WEBF -AB123  Verre a shot (lot de 12)  8  3,50  28,00",
-            "TOTAL HT  EURO  28,00",
-            "TVA  5,60",
-            "TOTAL TTC  EURO  33,60",
-        ])
+        path = os.path.join(paths.media_root(), "cuisipro.pdf")
+        write_pdf(
+            path,
+            [
+                "CUISIPRO FRANCE SARL",
+                "FACTURE N 7654321 du 07/11/2024",
+                "PRODUIT  DESCRIPTION  QTE  PRIX UNITAIRE  VALEUR",
+                "WEBF -AB123  Verre a shot (lot de 12)  8  3,50  28,00",
+                "TOTAL HT  EURO  28,00",
+                "TVA  5,60",
+                "TOTAL TTC  EURO  33,60",
+            ],
+        )
         self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
         with mock.patch("invoices.receipts.ocr_prepared_image", side_effect=AssertionError("no OCR on a text layer")):
             invoice = import_document(path, display_filename="cuisipro.pdf")
@@ -154,7 +167,7 @@ class WhatTheDocumentSaysTests(TestCase):
 
     def test_an_invoice_gathered_keeps_its_text(self):
         metro = Supplier.objects.get(code="METRO")
-        path = os.path.join(paths.media_root(),"gathered.pdf")
+        path = os.path.join(paths.media_root(), "gathered.pdf")
         write_pdf(path, METRO_INVOICE)
         self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
         with mock.patch("invoices.parsers.metro.MetroParser.parse", return_value=PARSED):
@@ -164,7 +177,7 @@ class WhatTheDocumentSaysTests(TestCase):
 
     def test_a_photo_filed_by_hand_keeps_none(self):
         """A photo has its reading (`ocr_text`); nothing else is kept."""
-        path = os.path.join(paths.media_root(),"photo.jpg")
+        path = os.path.join(paths.media_root(), "photo.jpg")
         with open(path, "wb") as handle:
             handle.write(b"\xff\xd8\xff a photo")
         self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
@@ -186,11 +199,13 @@ class OneBatchTests(TestCase):
         make_supplier(code="EPICERIE", name="Épicerie du coin", ticket_header="EPICERIE DU COIN")
         photo = SimpleUploadedFile("ticket.jpg", b"\xff\xd8\xff a photo")
         self.batch = stage_batch([photo, pdf_upload(self, "facture.pdf", METRO_INVOICE)])
-        self.addCleanup(shutil.rmtree, os.path.join(paths.imports_dir(), "receipt_batches",str(self.batch.pk)), True)
+        self.addCleanup(shutil.rmtree, os.path.join(paths.imports_dir(), "receipt_batches", str(self.batch.pk)), True)
 
     def test_each_file_takes_its_own_reader(self):
-        with mock.patch("invoices.receipts.recognise", return_value=recognised(UNKNOWN_SHOP)), \
-                mock.patch("invoices.parsers.metro.MetroParser.parse", return_value=PARSED):
+        with (
+            mock.patch("invoices.receipts.recognise", return_value=recognised(UNKNOWN_SHOP)),
+            mock.patch("invoices.parsers.metro.MetroParser.parse", return_value=PARSED),
+        ):
             batch = run_receipt_batch(self.batch.pk)
         self.assertEqual([entry["status"] for entry in batch.results], ["ok", "ok"])
         self.assertEqual([entry["shop"] for entry in batch.results], ["Épicerie du coin", "Metro"])
@@ -198,8 +213,10 @@ class OneBatchTests(TestCase):
         self.assertEqual(batch.imported_count, 2)
 
     def test_the_import_links_each_to_where_it_is_checked(self):
-        with mock.patch("invoices.receipts.recognise", return_value=recognised(UNKNOWN_SHOP)), \
-                mock.patch("invoices.parsers.metro.MetroParser.parse", return_value=PARSED):
+        with (
+            mock.patch("invoices.receipts.recognise", return_value=recognised(UNKNOWN_SHOP)),
+            mock.patch("invoices.parsers.metro.MetroParser.parse", return_value=PARSED),
+        ):
             batch = run_receipt_batch(self.batch.pk)
         page = self.client.get(reverse("invoices:receipt_batch", args=[batch.pk]))
         ticket, invoice = (Invoice.objects.get(pk=entry["invoice_id"]) for entry in batch.results)
@@ -213,7 +230,10 @@ class OneBatchTests(TestCase):
         """Shop, date, total and state were copied into the import's log the
         second each file was read, and the page showed those for ever: a
         ticket corrected afterwards still read its first total."""
-        with mock.patch("invoices.receipts.recognise", return_value=recognised(UNKNOWN_SHOP)),                 mock.patch("invoices.parsers.metro.MetroParser.parse", return_value=PARSED):
+        with (
+            mock.patch("invoices.receipts.recognise", return_value=recognised(UNKNOWN_SHOP)),
+            mock.patch("invoices.parsers.metro.MetroParser.parse", return_value=PARSED),
+        ):
             batch = run_receipt_batch(self.batch.pk)
         ticket = Invoice.objects.get(pk=batch.results[0]["invoice_id"])
         Invoice.objects.filter(pk=ticket.pk).update(invoice_date=date(2019, 3, 4))
@@ -223,13 +243,21 @@ class OneBatchTests(TestCase):
         self.assertContains(page, f"{ticket.total_ttc:.2f} €")
 
     def test_a_pdf_of_nobody_known_waits_for_its_supplier(self):
-        batch = stage_batch([pdf_upload(self, "inconnu.pdf", [
-            "PAPETERIE INVENTEE",
-            "FACTURE N 4242 du 03/03/2026",
-            "Ramette A4  2  4,00  8,00",
-            "TOTAL TTC  8,00",
-        ])])
-        self.addCleanup(shutil.rmtree, os.path.join(paths.imports_dir(), "receipt_batches",str(batch.pk)), True)
+        batch = stage_batch(
+            [
+                pdf_upload(
+                    self,
+                    "inconnu.pdf",
+                    [
+                        "PAPETERIE INVENTEE",
+                        "FACTURE N 4242 du 03/03/2026",
+                        "Ramette A4  2  4,00  8,00",
+                        "TOTAL TTC  8,00",
+                    ],
+                )
+            ]
+        )
+        self.addCleanup(shutil.rmtree, os.path.join(paths.imports_dir(), "receipt_batches", str(batch.pk)), True)
         batch = run_receipt_batch(batch.pk)
         entry = batch.results[0]
         self.assertEqual((entry["status"], entry["kept"]), ("unrecognised", True))

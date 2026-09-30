@@ -93,9 +93,7 @@ class EntryResolver:
     def _load(self):
         if self._products is not None:
             return
-        products = list(
-            Product.objects.select_related("supplier", "stock_type").filter(stock_type__isnull=False)
-        )
+        products = list(Product.objects.select_related("supplier", "stock_type").filter(stock_type__isnull=False))
         self._products = {product_display_name(product): product for product in products}
         self._stock_types = {stock_type_entry_name(st): st for st in StockType.objects.all()}
         self._first_purchases = first_purchase_dates([product.id for product in products])

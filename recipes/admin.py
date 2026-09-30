@@ -11,7 +11,16 @@ class RecipeIngredientInline(admin.TabularInline):
 
 @admin.register(Recipe)
 class RecipeAdmin(admin.ModelAdmin):
-    list_display = ["name", "happy_hour_name", "category", "yield_quantity", "yield_unit", "sale_quantity", "selling_price_ttc", "cost_ht"]
+    list_display = [
+        "name",
+        "happy_hour_name",
+        "category",
+        "yield_quantity",
+        "yield_unit",
+        "sale_quantity",
+        "selling_price_ttc",
+        "cost_ht",
+    ]
     search_fields = ["name", "category"]
     inlines = [RecipeIngredientInline]
 

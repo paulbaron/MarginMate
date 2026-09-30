@@ -100,9 +100,7 @@ class SetHeaderTests(TestCase):
 
     def test_a_shop_with_a_till_of_its_own_is_recognised_by_it(self):
         """Franprix's tickets are known by their layout: no header to give."""
-        ticket = make_invoice(
-            supplier=Supplier.objects.get(code="FRANPRIX"), ocr_text=TICKET, parse_checks=CHECKED
-        )
+        ticket = make_invoice(supplier=Supplier.objects.get(code="FRANPRIX"), ocr_text=TICKET, parse_checks=CHECKED)
         page = self.client.get(reverse("invoices:receipt_review", args=[ticket.pk]))
         self.assertNotContains(page, 'name="action" value="shop_header"')
 

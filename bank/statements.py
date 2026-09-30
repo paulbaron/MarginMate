@@ -50,7 +50,9 @@ class Statement:
 
 
 def parse_statement(content: bytes) -> Statement:
-    rows = [row for row in csv.reader(io.StringIO(_decode(content)), delimiter=";") if any(cell.strip() for cell in row)]
+    rows = [
+        row for row in csv.reader(io.StringIO(_decode(content)), delimiter=";") if any(cell.strip() for cell in row)
+    ]
     account = ""
     lines: list[StatementLine] = []
     for row in rows:
@@ -116,7 +118,7 @@ def _decode(content: bytes) -> str:
 
 
 def _date(text: str) -> date:
-    return datetime.strptime(text.strip(), "%d/%m/%Y").date()
+    return datetime.strptime(text.strip(), "%d/%m/%Y").date()  # noqa: DTZ007 - the statement's printed day, read into .date()
 
 
 def _fingerprint(account: str, lines: list[StatementLine]) -> None:

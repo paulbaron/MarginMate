@@ -5,25 +5,31 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('recipes', '0004_alter_recipe_happy_hour_price_ttc_and_more'),
+        ("recipes", "0004_alter_recipe_happy_hour_price_ttc_and_more"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='RecipeSale',
+            name="RecipeSale",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('sold_on', models.DateField()),
-                ('quantity', models.PositiveIntegerField()),
-                ('source', models.CharField(default='manual', max_length=50)),
-                ('recorded_at', models.DateTimeField(auto_now_add=True)),
-                ('recipe', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='sales', to='recipes.recipe')),
+                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
+                ("sold_on", models.DateField()),
+                ("quantity", models.PositiveIntegerField()),
+                ("source", models.CharField(default="manual", max_length=50)),
+                ("recorded_at", models.DateTimeField(auto_now_add=True)),
+                (
+                    "recipe",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE, related_name="sales", to="recipes.recipe"
+                    ),
+                ),
             ],
             options={
-                'ordering': ['-sold_on', 'recipe__name'],
-                'constraints': [models.UniqueConstraint(fields=('recipe', 'sold_on'), name='unique_recipe_sale_per_day')],
+                "ordering": ["-sold_on", "recipe__name"],
+                "constraints": [
+                    models.UniqueConstraint(fields=("recipe", "sold_on"), name="unique_recipe_sale_per_day")
+                ],
             },
         ),
     ]

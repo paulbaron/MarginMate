@@ -33,9 +33,7 @@ class ProductsMarginFlagTests(TestCase):
     def test_the_form_offers_it_in_french(self):
         form = StockTypeForm()
         self.assertIn("count_in_products_margin", form.fields)
-        self.assertEqual(
-            form.fields["count_in_products_margin"].label, "Compter dans la marge produits"
-        )
+        self.assertEqual(form.fields["count_in_products_margin"].label, "Compter dans la marge produits")
 
     def test_the_form_says_what_ticking_it_does_and_what_it_must_not_be_used_for(self):
         """A flag whose meaning lives only in the code is a flag ticked by

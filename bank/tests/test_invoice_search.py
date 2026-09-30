@@ -40,9 +40,7 @@ class SearchPage(Fixtures):
         self.near = self.invoice(WHOLESALER, date(2026, 7, 2), "100.00", invoice_number="F-PROCHE")
 
     def search(self, query, **extra):
-        return self.client.get(
-            reverse("bank:invoice_search", args=[self.line.pk]), {"recherche": query, **extra}
-        )
+        return self.client.get(reverse("bank:invoice_search", args=[self.line.pk]), {"recherche": query, **extra})
 
 
 class FragmentTests(SearchPage, TestCase):
@@ -72,9 +70,7 @@ class FragmentTests(SearchPage, TestCase):
             reverse("bank:bank_line_action", args=[self.line.pk]),
             {"action": "link", "invoice": [self.far.pk]},
         )
-        self.assertEqual(
-            set(self.line.payments.values_list("invoice__invoice_number", flat=True)), {"F-LOINTAINE"}
-        )
+        self.assertEqual(set(self.line.payments.values_list("invoice__invoice_number", flat=True)), {"F-LOINTAINE"})
 
     def test_an_empty_search_finds_nothing_and_says_nothing(self):
         body = self.search("").content.decode()
@@ -85,31 +81,29 @@ class FragmentTests(SearchPage, TestCase):
         self.assertContains(self.search("ZZZZ-INTROUVABLE"), "Aucun document")
 
     def test_an_invoice_already_on_this_line_is_marked_rather_than_offered(self):
-        InvoicePayment.objects.create(
-            transaction=self.line, invoice=self.far, method=InvoicePayment.Method.MANUAL
-        )
+        InvoicePayment.objects.create(transaction=self.line, invoice=self.far, method=InvoicePayment.Method.MANUAL)
         self.assertContains(self.search("F-LOINTAINE"), "déjà rattachée à cette opération")
 
     def test_it_says_which_other_line_already_pays_what_it_found(self):
         other = BankTransaction.objects.create(
-            operation_date=date(2026, 3, 2), amount=Decimal("-500.00"),
-            label="PRLV AUTRE", fingerprint="fp-autre",
+            operation_date=date(2026, 3, 2),
+            amount=Decimal("-500.00"),
+            label="PRLV AUTRE",
+            fingerprint="fp-autre",
         )
-        InvoicePayment.objects.create(
-            transaction=other, invoice=self.far, method=InvoicePayment.Method.MANUAL
-        )
+        InvoicePayment.objects.create(transaction=other, invoice=self.far, method=InvoicePayment.Method.MANUAL)
         self.assertContains(self.search("F-LOINTAINE"), "Déjà réglée par l'opération")
 
     def test_an_income_line_is_refused(self):
         """No form is drawn on an income row, so a search on one is stale or
         crafted - and an entry of money settles no invoice."""
         income = BankTransaction.objects.create(
-            operation_date=date(2026, 7, 9), amount=Decimal("900.00"),
-            label="VIR RECETTE", fingerprint="fp-recette",
+            operation_date=date(2026, 7, 9),
+            amount=Decimal("900.00"),
+            label="VIR RECETTE",
+            fingerprint="fp-recette",
         )
-        answer = self.client.get(
-            reverse("bank:invoice_search", args=[income.pk]), {"recherche": "F-LOINTAINE"}
-        )
+        answer = self.client.get(reverse("bank:invoice_search", args=[income.pk]), {"recherche": "F-LOINTAINE"})
         self.assertNotContains(answer, "F-LOINTAINE")
 
     def test_an_unknown_line_is_not_found(self):
@@ -120,7 +114,7 @@ class SearchBoxTests(SearchPage, TestCase):
     def test_the_box_asks_the_fragment_for_its_results(self):
         page = self.client.get(reverse("bank:bank_home")).content.decode()
         self.assertIn(reverse("bank:invoice_search", args=[self.line.pk]), page)
-        self.assertIn(f'id="resultats-{self.line.pk}"', page)
+        self.assertIn(f'id="results-{self.line.pk}"', page)
 
     def test_it_searches_as_the_reader_types(self):
         """Without this the box needs a click to answer, which is the page
@@ -132,7 +126,5 @@ class SearchBoxTests(SearchPage, TestCase):
     def test_the_plain_form_underneath_still_works(self):
         """No JavaScript: the GET on the page is what answers, exactly as
         before. It is kept for that and for nothing else."""
-        page = self.client.get(
-            reverse("bank:bank_home"), {"ligne": self.line.pk, "recherche": "F-LOINTAINE"}
-        )
+        page = self.client.get(reverse("bank:bank_home"), {"ligne": self.line.pk, "recherche": "F-LOINTAINE"})
         self.assertContains(page, "F-LOINTAINE")

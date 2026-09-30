@@ -77,9 +77,7 @@ class WithoutInvoiceTests(Fixtures, TestCase):
 
     def test_one_month_at_a_time(self):
         stats = self.stats(mois="2026-08")
-        self.assertEqual(
-            (stats["todo_count"], stats["todo_total"], stats["spending_count"]), (1, Decimal("750.00"), 1)
-        )
+        self.assertEqual((stats["todo_count"], stats["todo_total"], stats["spending_count"]), (1, Decimal("750.00"), 1))
         self.assertEqual(self.stats(mois="n'importe")["spending_count"], 4)
 
     def test_a_rule_takes_its_payments_out_of_the_missing_ones(self):
@@ -220,9 +218,7 @@ class RuleCategoryTests(Fixtures, TestCase):
     def test_the_pattern_is_never_touched_by_a_category(self):
         """Editing what a rule DECIDES ON in passing would silently change
         which lines it catches."""
-        self.client.post(
-            self.action, {"action": "category", "categorie": "Charges sociales", "pattern": "TOUT"}
-        )
+        self.client.post(self.action, {"action": "category", "categorie": "Charges sociales", "pattern": "TOUT"})
         self.rule.refresh_from_db()
         self.assertEqual(self.rule.pattern, "URSSAF")
 

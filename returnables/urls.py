@@ -13,18 +13,18 @@ app_name = "returnables"
 
 urlpatterns = [
     path("", views.home, name="home"),
-    # A reprise: its page (edit, photos, comparison), and three POST-only actions.
+    # A pickup: its page (edit, photos, comparison), and three POST-only actions.
     path("reprises/<int:pk>/", views.pickup_detail, name="pickup_detail"),
     path("reprises/<int:pk>/supprimer/", views.pickup_delete, name="pickup_delete"),
     path("reprises/<int:pk>/date/", views.pickup_date, name="pickup_date"),
     path("photos/<int:pk>/supprimer/", views.photo_delete, name="photo_delete"),
-    # The bons: dropped by hand, read, read again, deleted.
+    # The slips: dropped by hand, read, read again, deleted.
     path("bons/deposer/", views.slip_upload, name="slip_upload"),
     path("bons/<int:pk>/", views.slip_detail, name="slip_detail"),
     path("bons/<int:pk>/supprimer/", views.slip_delete, name="slip_delete"),
     path("bons/<int:pk>/relire/", views.slip_reread, name="slip_reread"),
     path("lignes/<int:pk>/classer/", views.line_classify, name="line_classify"),
-    # The formats of bon (`?depuis=<pk>` duplicates one) and the types of consigne.
+    # The slip formats (`?depuis=<pk>` duplicates one) and the returnable types.
     path("formats/", views.format_list, name="format_list"),
     path("formats/nouveau/", views.format_create, name="format_create"),
     path("formats/<int:pk>/", views.format_edit, name="format_edit"),

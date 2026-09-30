@@ -19,9 +19,7 @@ from invoices.parsers.receipt_base import ReceiptParser
 
 # The LLM fallback works from whole-document text rather than a layout, and
 # has no deterministic output to assert on - it's exempt by design.
-LAYOUT_PARSERS = {
-    key: parser for key, parser in PARSER_REGISTRY.items() if not isinstance(parser, LLMFallbackParser)
-}
+LAYOUT_PARSERS = {key: parser for key, parser in PARSER_REGISTRY.items() if not isinstance(parser, LLMFallbackParser)}
 
 # The two ways raw material is allowed to reach a parser. `InvoiceParser.parse`
 # reads a digital PDF with pdfplumber; `ReceiptParser.parse` recognises a
@@ -61,7 +59,7 @@ class ParserContractTests(SimpleTestCase):
         """A batch of photos is routed by what each ticket says at the top
         (see receipts.detect_parser). A receipt parser with no header
         patterns is unreachable: its shop's photos would all be reported as
-        an unknown enseigne, and it would look like OCR had failed."""
+        an unknown shop, and it would look like OCR had failed."""
         for key, parser in LAYOUT_PARSERS.items():
             if not isinstance(parser, ReceiptParser):
                 continue

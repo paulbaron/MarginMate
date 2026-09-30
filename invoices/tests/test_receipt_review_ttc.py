@@ -52,10 +52,15 @@ class TtcToHtTests(SimpleTestCase):
         """The page fills each amount from the other; the one typed last
         says which is the reading."""
         form = bound_form("12.00", "20", total_ht="9.99", amount_source="ht")
-        self.assertEqual(form.amounts(), {
-            "total_ht": Decimal("9.99"), "printed_ttc": Decimal("11.99"),
-            "discount_ttc": Decimal("0"), "discount": Decimal("0"),
-        })
+        self.assertEqual(
+            form.amounts(),
+            {
+                "total_ht": Decimal("9.99"),
+                "printed_ttc": Decimal("11.99"),
+                "discount_ttc": Decimal("0"),
+                "discount": Decimal("0"),
+            },
+        )
 
     def test_an_amount_given_only_one_way_is_that_way(self):
         form = bound_form("", "20", total_ht="10.00")
@@ -63,15 +68,25 @@ class TtcToHtTests(SimpleTestCase):
 
     def test_a_promotion_comes_off_the_printed_amount(self):
         form = bound_form("0.49", "5.5", discount_ttc="0.17")
-        self.assertEqual(form.amounts(), {
-            "total_ht": Decimal("0.30"), "printed_ttc": Decimal("0.49"),
-            "discount_ttc": Decimal("0.17"), "discount": Decimal("0.16"),
-        })
+        self.assertEqual(
+            form.amounts(),
+            {
+                "total_ht": Decimal("0.30"),
+                "printed_ttc": Decimal("0.49"),
+                "discount_ttc": Decimal("0.17"),
+                "discount": Decimal("0.16"),
+            },
+        )
 
     def test_a_promotion_above_the_price_is_refused(self):
         form = LineCorrectionForm(
-            data={"product_name": "PAIN", "quantity": "1", "total_ttc": "0.49", "discount_ttc": "0.50",
-                  "vat_rate": "5.5"},
+            data={
+                "product_name": "PAIN",
+                "quantity": "1",
+                "total_ttc": "0.49",
+                "discount_ttc": "0.50",
+                "vat_rate": "5.5",
+            },
             document=DOCUMENT_RECEIPT,
         )
         self.assertIn("discount_ttc", form.errors)

@@ -130,7 +130,9 @@ class SectionReport:
             items = getattr(self, name)
             total = len(items) + self.overflow.get(name, 0)
             if total:
-                shown.append({"title": title, "items": items[:SHOWN], "more": total - min(len(items), SHOWN), "total": total})
+                shown.append(
+                    {"title": title, "items": items[:SHOWN], "more": total - min(len(items), SHOWN), "total": total}
+                )
         return shown
 
     def to_json(self) -> dict:
@@ -169,11 +171,11 @@ class SectionReport:
 
 @dataclass
 class RunReport:
-    mode: str                                  # "import" | "clear"
+    mode: str  # "import" | "clear"
     preview: bool
     sections: list[SectionReport]
-    rebuilt: dict[str, int]                    # "mouvements de stock", "statuts de factures", "ventes par recette", "produits caisse"
-    safety: dict[str, str] | None = None       # {"database": path, "archive": path or ""}
+    rebuilt: dict[str, int]  # "mouvements de stock", "statuts de factures", "ventes par recette", "produits caisse"
+    safety: dict[str, str] | None = None  # {"database": path, "archive": path or ""}
     duration_s: float = 0.0
     notes: list[str] = field(default_factory=list)  # about the run as a whole
 

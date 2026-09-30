@@ -16,7 +16,11 @@ from tests.factories import make_invoice, make_invoice_line, make_supplier
 D = Decimal
 TICKET_CHECKS = [
     {"label": "Taux par article", "passed": False, "detail": "5.5 % supposé, à vérifier."},
-    {"label": "Somme HT des lignes = base HT du ticket", "passed": False, "detail": "lignes 310.15 € / ticket 303.28 €"},
+    {
+        "label": "Somme HT des lignes = base HT du ticket",
+        "passed": False,
+        "detail": "lignes 310.15 € / ticket 303.28 €",
+    },
 ]
 
 
@@ -26,11 +30,19 @@ class RefreshChargeChecksTests(TestCase):
 
     def bill(self, **fields):
         invoice = make_invoice(
-            supplier=self.water, ocr_text="EAU EXEMPLE\nTotal 327,20", printed_total_ttc=D("327.20"),
-            parse_checks=TICKET_CHECKS, status=Invoice.Status.NEEDS_REVIEW, **fields,
+            supplier=self.water,
+            ocr_text="EAU EXEMPLE\nTotal 327,20",
+            printed_total_ttc=D("327.20"),
+            parse_checks=TICKET_CHECKS,
+            status=Invoice.Status.NEEDS_REVIEW,
+            **fields,
         )
-        make_invoice_line(invoice=invoice, raw_name="Eau Exemple", total_ht=D("142.34"), vat_rate=D("0.055"), printed_ttc=D("150.16"))
-        make_invoice_line(invoice=invoice, raw_name="Eau Exemple", total_ht=D("160.94"), vat_rate=D("0.10"), printed_ttc=D("177.04"))
+        make_invoice_line(
+            invoice=invoice, raw_name="Eau Exemple", total_ht=D("142.34"), vat_rate=D("0.055"), printed_ttc=D("150.16")
+        )
+        make_invoice_line(
+            invoice=invoice, raw_name="Eau Exemple", total_ht=D("160.94"), vat_rate=D("0.10"), printed_ttc=D("177.04")
+        )
         return invoice
 
     def test_a_charge_gets_its_own_checks_and_is_settled(self):

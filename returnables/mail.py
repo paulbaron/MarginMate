@@ -1,4 +1,4 @@
-"""« Récupérer » for the bons: what the gather asks of the consignes app.
+"""« Récupérer » for the slips: what the gather asks of the returnables app.
 
 The mailbox is searched by the gather itself (invoices/tasks._gather_slips,
 beside the invoice sources, contained like them): the IMAP connector, the
@@ -8,7 +8,7 @@ format's search starts (`fetch_start`) and what becomes of what it found
 this one, lazily, inside the task.
 
 Everything found goes through the one writer, returnables.slips.store_slip
-(« Reçu par mail »): never an invoice import - a bon read as a purchase files
+(« Reçu par mail »): never an invoice import - a slip read as a purchase files
 its empties as positive purchase lines.
 """
 
@@ -23,23 +23,23 @@ from returnables.reading import clean_text
 
 logger = logging.getLogger(__name__)
 
-#: The days before the newest bon already brought in that are searched
-#: again: a bon mailed just before it may not have been in the mailbox yet.
+#: The days before the newest slip already brought in that are searched
+#: again: a slip mailed just before it may not have been in the mailbox yet.
 OVERLAP_DAYS = 3
-#: How far back the first search goes, when no bon came by mail yet.
+#: How far back the first search goes, when no slip came by mail yet.
 DEFAULT_LOOKBACK_DAYS = 90
 #: Never further back than this, whatever the posted start: a period asked
-#: on Achats years back would scan every mail since for its bons.
+#: on Achats years back would scan every mail since for its slips.
 MAX_LOOKBACK_DAYS = 400
 
 
 def fetch_start(fmt, posted_start: date | None, today: date) -> date:
-    """Where the search for `fmt`'s bons starts: the posted start, or a few
-    days before the newest bon this format brought in BY MAIL (its mail's
+    """Where the search for `fmt`'s slips starts: the posted start, or a few
+    days before the newest slip this format brought in BY MAIL (its mail's
     date, today at the latest) when that is earlier - else, with none,
     DEFAULT_LOOKBACK_DAYS back. Never earlier than MAX_LOOKBACK_DAYS back.
 
-    Only mailed bons move it: a bon dropped on the page by hand - an old one
+    Only mailed slips move it: a slip dropped on the page by hand - an old one
     as well as today's - says nothing about which mails were read, and one
     recent upload would have moved the start past mails never fetched. A
     mail date in the future (a sender's clock) is left out for the same
@@ -53,9 +53,7 @@ def fetch_start(fmt, posted_start: date | None, today: date) -> date:
     # comparison.shifted: a mail date a damaged archive brought in
     # (0001-01-01) is cut at the calendar's start, never an OverflowError -
     # the home page asks for this start at every drawing.
-    own = (
-        comparison.shifted(newest, -OVERLAP_DAYS) if newest else today - timedelta(days=DEFAULT_LOOKBACK_DAYS)
-    )
+    own = comparison.shifted(newest, -OVERLAP_DAYS) if newest else today - timedelta(days=DEFAULT_LOOKBACK_DAYS)
     start = min(posted_start, own) if posted_start else own
     return max(start, today - timedelta(days=MAX_LOOKBACK_DAYS))
 
@@ -68,12 +66,12 @@ def _in_mail_order(matches) -> list:
 
 
 def _note(log) -> str:
-    """The latest reprise's comparison, in words - "" when there is none,
+    """The latest pickup's comparison, in words - "" when there is none,
     or when it cannot be worked out (said in the log: a note is never an
-    error, and never stops the bons just stored)."""
+    error, and never stops the slips just stored)."""
     try:
         return comparison.latest_note()
-    except Exception as exc:  # noqa: BLE001 - a sentence for the progress line, never a failure
+    except Exception as exc:
         logger.exception("Consignes : comparaison de la dernière reprise impossible")
         log(f"Bons de consignes : la dernière reprise n'a pas pu être comparée ({exc.__class__.__name__}).")
         return ""
@@ -81,16 +79,16 @@ def _note(log) -> str:
 
 def store_matches(fmt, matches, log, *, progress=None) -> tuple[int, int, str]:
     """Store every attachment of `matches` (the search's EmailMatch list) as
-    a bon of `fmt`, « Reçu par mail », with its mail's sender, subject and
-    date. Returns (found, imported, note): the bons found (a document that
-    is no bon of this format, or too heavy, is not one), the new ones, and
-    the latest reprise's comparison in words.
+    a slip of `fmt`, « Reçu par mail », with its mail's sender, subject and
+    date. Returns (found, imported, note): the slips found (a document that
+    is no slip of this format, or too heavy, is not one), the new ones, and
+    the latest pickup's comparison in words.
 
-    Each outcome is a log line « <nom> : <message> »: a bon already there
-    (the same bytes, or a re-send of the same bon) is no failure, and
+    Each outcome is a log line « <nom> : <message> »: a slip already there
+    (the same bytes, or a re-send of the same slip) is no failure, and
     neither is a mail's other attachment - read with this format, no
-    consignes part and no line (« pas un bon … — ignoré »). An attachment
-    over 5 MB is not read. `progress(found, imported)` after each new bon.
+    returnables part and no line (« pas un bon … — ignoré »). An attachment
+    over 5 MB is not read. `progress(found, imported)` after each new slip.
     Anything unexpected raises (the gather says it on the format's line):
     the mails are taken oldest first, so what was stored before it is what
     the next run starts after."""

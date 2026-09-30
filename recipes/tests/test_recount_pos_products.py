@@ -44,18 +44,26 @@ def totals():
 
 class RecountEqualsTheTillImportTests(TestCase):
     def import_two_overlapping_windows(self):
-        sync_pos_products(till_export([
-            ("Pinte Blonde", date(2026, 6, 1), 10),
-            ("Pinte Blonde", date(2026, 6, 2), 15),
-            ("Mojito", date(2026, 6, 2), 3),
-        ]))
+        sync_pos_products(
+            till_export(
+                [
+                    ("Pinte Blonde", date(2026, 6, 1), 10),
+                    ("Pinte Blonde", date(2026, 6, 2), 15),
+                    ("Mojito", date(2026, 6, 2), 3),
+                ]
+            )
+        )
         # A backfill reaching back over June 2nd: the shared day is replaced,
         # not added to, and the dates widen.
-        sync_pos_products(till_export([
-            ("Pinte Blonde", date(2026, 6, 2), 15),
-            ("Pinte Blonde", date(2026, 6, 3), 7),
-            ("Café", date(2026, 7, 1), 1),
-        ]))
+        sync_pos_products(
+            till_export(
+                [
+                    ("Pinte Blonde", date(2026, 6, 2), 15),
+                    ("Pinte Blonde", date(2026, 6, 3), 7),
+                    ("Café", date(2026, 7, 1), 1),
+                ]
+            )
+        )
 
     def test_the_totals_and_days_are_those_the_till_import_wrote(self):
         self.import_two_overlapping_windows()
@@ -87,8 +95,11 @@ class RecountEqualsTheTillImportTests(TestCase):
         """A till product the links created before any sale came in, or
         whose days an import removed."""
         product = PosProduct.objects.create(
-            name="Pinte IPA", recipe=make_recipe(name="Pinte IPA"), total_quantity=40,
-            first_seen=date(2026, 5, 1), last_seen=date(2026, 5, 31),
+            name="Pinte IPA",
+            recipe=make_recipe(name="Pinte IPA"),
+            total_quantity=40,
+            first_seen=date(2026, 5, 1),
+            last_seen=date(2026, 5, 31),
         )
         self.assertEqual(recount_pos_products([product.pk]), 1)
         product.refresh_from_db()

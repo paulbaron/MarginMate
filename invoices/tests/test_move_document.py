@@ -35,7 +35,9 @@ def messages_of(response):
 
 class MoveAnInvoiceTests(TestCase):
     def setUp(self):
-        self.wrong = make_supplier(code="UBA_X", name="UBA Exemple", parser_key="", ticket_identifiers=["tel:0612345678"])
+        self.wrong = make_supplier(
+            code="UBA_X", name="UBA Exemple", parser_key="", ticket_identifiers=["tel:0612345678"]
+        )
         self.right = make_supplier(code="FREE_X", name="Free Exemple", parser_key="")
         self.invoice = make_invoice(
             supplier=self.wrong, invoice_number="", invoice_date=date(2026, 5, 18), source_text=INVOICE_TEXT
@@ -64,7 +66,8 @@ class MoveAnInvoiceTests(TestCase):
 
     def test_a_ticket_still_says_ticket(self):
         ticket = make_invoice(
-            supplier=self.wrong, ocr_text=INVOICE_TEXT,
+            supplier=self.wrong,
+            ocr_text=INVOICE_TEXT,
             parse_checks=[{"label": "Somme des lignes = total imprimé", "passed": True, "detail": ""}],
         )
         page = self.client.get(reverse("invoices:receipt_review", args=[ticket.pk]))
@@ -85,7 +88,9 @@ class NotFooledAgainTests(TestCase):
     company nobody knows."""
 
     def setUp(self):
-        self.wrong = make_supplier(code="UBA_X", name="UBA Exemple", parser_key="", ticket_identifiers=["tel:0612345678"])
+        self.wrong = make_supplier(
+            code="UBA_X", name="UBA Exemple", parser_key="", ticket_identifiers=["tel:0612345678"]
+        )
 
     def test_a_document_naming_an_unknown_company_is_not_filed_by_a_phone(self):
         from invoices.receipts import detect_parser

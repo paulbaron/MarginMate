@@ -25,12 +25,14 @@ class SuppliersTabTests(TestCase):
     until 19/09)."""
 
     def test_rows_lead_to_the_suppliers_page(self):
-        shop = make_supplier(code="EPICERIE_X", name="Epicerie Exemple", parser_key="", ticket_header="EPICERIE EXEMPLE")
+        shop = make_supplier(
+            code="EPICERIE_X", name="Epicerie Exemple", parser_key="", ticket_header="EPICERIE EXEMPLE"
+        )
         make_invoice(supplier=shop, ocr_text="EPICERIE EXEMPLE\nTOTAL 3,00")
         page = self.client.get(reverse("invoices:supplier_list"))
-        fiche = reverse("invoices:supplier_detail", args=[shop.pk])
-        self.assertContains(page, f'data-row-href="{fiche}"')
-        self.assertContains(page, f'<a href="{fiche}">Epicerie Exemple</a>', html=True)
+        supplier_page = reverse("invoices:supplier_detail", args=[shop.pk])
+        self.assertContains(page, f'data-row-href="{supplier_page}"')
+        self.assertContains(page, f'<a href="{supplier_page}">Epicerie Exemple</a>', html=True)
 
     def test_a_supplier_with_nothing_yet_is_not_called_a_known_till(self):
         make_supplier(code="NOUVEAU_X", name="Nouveau Exemple", parser_key="")
@@ -55,7 +57,7 @@ class SuppliersTabTests(TestCase):
         self.assertContains(page, "Fournisseur : Operateur")
 
 
-class FichePageTests(Subscriptions):
+class SupplierPageTests(Subscriptions):
     """The fixtures' operator: three box bills, two mobile bills printing
     the mobile company's number - and nothing learned."""
 
@@ -63,7 +65,7 @@ class FichePageTests(Subscriptions):
         super().setUp()
         self.operator.ticket_identifiers = []
         self.operator.save()
-        self.fiche = reverse("invoices:supplier_detail", args=[self.operator.pk])
+        self.supplier_page = reverse("invoices:supplier_detail", args=[self.operator.pk])
 
     def post(self, action, identifier):
         return self.client.post(
@@ -73,7 +75,7 @@ class FichePageTests(Subscriptions):
         )
 
     def test_the_page_offers_what_to_keep_never_the_customers_phone(self):
-        page = self.client.get(self.fiche)
+        page = self.client.get(self.supplier_page)
         self.assertNotContains(page, "Séparer")
         report = page.context["report"]
         retainable = {row["identifier"] for row in report["printed"] if row["can_keep"]}
@@ -103,7 +105,9 @@ class FichePageTests(Subscriptions):
 
         self.post("retirer", f"siren:{SIREN}")
         self.operator.refresh_from_db()
-        self.assertEqual((self.operator.ticket_identifiers, self.operator.refused_identifiers), ([], [f"siren:{SIREN}"]))
+        self.assertEqual(
+            (self.operator.ticket_identifiers, self.operator.refused_identifiers), ([], [f"siren:{SIREN}"])
+        )
 
         self.post("ne_plus_ecarter", f"siren:{SIREN}")
         self.operator.refresh_from_db()
@@ -146,13 +150,13 @@ class FichePageTests(Subscriptions):
 
         _recheck(self.operator)
         change = SupplierChange.objects.get(supplier=self.operator)
-        page = self.client.get(self.fiche)
+        page = self.client.get(self.supplier_page)
         self.assertContains(page, "À voir")
         # Why it asks, and how to answer it: a figure lost nobody asked to lose.
         self.assertContains(page, "Un identifiant lui a été retiré sans que personne ne l&#x27;ait demandé.")
         response = self.client.post(reverse("invoices:supplier_change_seen", args=[self.operator.pk, change.pk]))
         self.assertEqual(messages_of(response), ["Vu : identifiants de Operateur Exemple."])
-        page = self.client.get(self.fiche)
+        page = self.client.get(self.supplier_page)
         self.assertNotContains(page, "À voir")
         self.assertNotContains(page, "sans que personne")
 

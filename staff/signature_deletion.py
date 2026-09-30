@@ -57,7 +57,7 @@ The request's public link then reaches nothing, and answers as a link that
 never existed (`signature_requests.resolve_link`: 404) - its hash also
 leaves the accounts database's index once the deletion is
 committed (`accounts.links.forget`; left there by a failure, it would still
-answer 404). The tombstone goes to the BOUND espace's private folder: each
+answer 404). The tombstone goes to the BOUND tenant's private folder: each
 bar keeps its own deletions.log. A month the deleted version held is
 editable again.
 """
@@ -168,10 +168,10 @@ def is_last_version(request: SignatureRequest) -> bool:
 class Preview:
     """What step 1 lists as going."""
 
-    files: tuple[str, ...]      # the names in the request's folder
+    files: tuple[str, ...]  # the names in the request's folder
     events: int
-    last_version: bool          # the hours may be offered
-    days: int                   # the month's saved days
+    last_version: bool  # the hours may be offered
+    days: int  # the month's saved days
 
 
 def preview(request: SignatureRequest) -> Preview:
@@ -195,7 +195,7 @@ class Confirmation:
     """What step 1 signed, read back at step 2."""
 
     with_hours: bool
-    expected: dict      # BOUND_FIELDS as step 1 saw them
+    expected: dict  # BOUND_FIELDS as step 1 saw them
 
 
 def confirmation_token(request: SignatureRequest, *, with_hours: bool) -> str:

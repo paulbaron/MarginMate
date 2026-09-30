@@ -1,9 +1,9 @@
-"""La page « Marges » : ce qu'elle promet, en chiffres.
+"""The « Marges » page: what it promises, in figures.
 
 The owner asked three questions and the page answers them in his own order -
-**la marge réelle** (tout ce qui a été facturé, charges comprises), **la
-marge produits** (ce que les recettes vendues ont consommé, plus les articles
-cochés) et **les marges par catégorie**. These tests assert the FIGURES it
+**the real margin** (everything invoiced, charges included), **the products
+margin** (what the recipes sold consumed, plus the ticked articles) and
+**the margins by category**. These tests assert the FIGURES it
 prints rather than that it returns 200: a margin page that renders
 beautifully and prints the wrong number is exactly the failure this codebase
 keeps having.
@@ -27,7 +27,7 @@ Data invented throughout - no real product name, amount or till export.
 from __future__ import annotations
 
 import re
-from datetime import date, timedelta
+from datetime import timedelta
 from decimal import Decimal
 
 from django.db import connection
@@ -102,7 +102,7 @@ def bought(article, day, total_ht, vat_rate="0.20"):
 
 
 def rows_of(html: str) -> list[str]:
-    return re.findall(r"<tr[^>]*>.*?</tr>", html, flags=re.S)
+    return re.findall(r"<tr[^>]*>.*?</tr>", html, flags=re.DOTALL)
 
 
 def row_of(html: str, name: str) -> str:
@@ -122,7 +122,7 @@ def cells_of(row: str) -> list[str]:
     """A row's cells as they read on screen. The whole row is asserted at
     once where it matters: « the margin is somewhere in this row » passes just
     as happily when the cost and the margin have swapped columns."""
-    return [text_of(cell) for cell in re.findall(r"<td[^>]*>(.*?)</td>", row, flags=re.S)]
+    return [text_of(cell) for cell in re.findall(r"<td[^>]*>(.*?)</td>", row, flags=re.DOTALL)]
 
 
 def _element(html: str, start: int) -> str:
@@ -153,7 +153,7 @@ def value_of(stat: str) -> str:
     """The big figure of a stat block, without its note - the note carries
     the TTC and the percentage, so a value read from the whole block would
     pass whichever of the three sat where."""
-    found = re.search(r'<div class="stat-value[^"]*">(.*?)</div>', stat, flags=re.S)
+    found = re.search(r'<div class="stat-value[^"]*">(.*?)</div>', stat, flags=re.DOTALL)
     return text_of(found.group(1)) if found else ""
 
 
@@ -161,10 +161,10 @@ class OneSellingDayTests(TestCase):
     """The whole page over one honest day: a drink with a recipe, a planche
     with none, a delivery, a charge and the paper towels.
 
-    Encaissé 145,45 € HT (160,00 TTC) · facturé 122,00 € HT (92,00 de
-    marchandises, 30,00 de charges) · coût des recettes 20,00 € · essuie-tout
-    12,00 €. Marge réelle 23,45 € (16,1 %), marge produits 113,45 € (78,0 %),
-    20 unités chiffrées sur 25 et 75 % du chiffre d'affaires.
+    Taken 145,45 € HT (160,00 TTC) · invoiced 122,00 € HT (92,00 of goods,
+    30,00 of charges) · cost of the recipes 20,00 € · paper towels
+    12,00 €. Real margin 23,45 € (16,1 %), products margin 113,45 € (78,0 %),
+    20 units costed out of 25 and 75 % of the revenue.
     """
 
     @classmethod
@@ -174,7 +174,7 @@ class OneSellingDayTests(TestCase):
 
         syrup = priced_article("Sirop de bergamote", unit_cost="4.00")
         cls.recipe = make_recipe(name="Limonade maison", selling_price_ttc="6.00", vat_rate="0.10")
-        make_ingredient(cls.recipe, stock_type=syrup, quantity="0.25")  # 1,00 € HT le verre
+        make_ingredient(cls.recipe, stock_type=syrup, quantity="0.25")  # 1,00 € HT per glass
         cls.lemonade = till_product(
             "Limonade maison", recipe=cls.recipe, category="Sans alcool", typology="Liquide (Non alcool)"
         )
@@ -198,7 +198,7 @@ class OneSellingDayTests(TestCase):
     def html(self) -> str:
         return self.page().content.decode()
 
-    # -- la marge réelle --------------------------------------------------
+    # -- the real margin --------------------------------------------------
 
     def test_the_real_margin_is_the_first_answer_on_the_page(self):
         html = self.html()
@@ -226,7 +226,7 @@ class OneSellingDayTests(TestCase):
     def test_it_says_in_a_sentence_what_the_real_margin_counts(self):
         self.assertContains(self.page(), "charges comprises")
 
-    # -- la marge produits ------------------------------------------------
+    # -- the products margin ----------------------------------------------
 
     def test_the_products_margin_is_the_income_less_the_recipes_and_the_flagged_articles(self):
         stat = stat_of(self.html(), "Marge produits (HT)")
@@ -252,11 +252,11 @@ class OneSellingDayTests(TestCase):
     def test_the_products_margin_has_no_ttc_because_a_recipe_cost_has_none(self):
         self.assertContains(self.page(), "Le coût d'une recette n'existe qu'en HT")
 
-    # -- la couverture ----------------------------------------------------
+    # -- the coverage -----------------------------------------------------
 
     def test_the_page_says_how_much_of_the_money_is_costed(self):
         """In money first - four planches at 18 € weigh far more than four
-        cafés - and in units beside it."""
+        coffees - and in units beside it."""
         stat = stat_of(self.html(), "Part chiffrée")
         self.assertEqual(value_of(stat), "75 %")
         self.assertIn("20 unités sur 25 (80 %)", text_of(stat))
@@ -284,16 +284,21 @@ class OneSellingDayTests(TestCase):
 
         self.assertEqual(listed, ["Planche du comptoir", "Café"])
 
-    def test_it_links_to_a_lier_to_do_something_about_them(self):
+    def test_it_links_to_the_products_to_link_to_do_something_about_them(self):
         self.assertContains(self.page(), reverse("recipes:pos_product_list"))
 
-    # -- les marges par catégorie -----------------------------------------
+    # -- the margins by category ------------------------------------------
 
     def test_each_category_prints_its_income_its_cost_and_its_margin(self):
         self.assertEqual(
             cells_of(row_of(self.html(), "Sans alcool")),
             [
-                "Sans alcool", "109.09 €", "20", "20.00 €", "89.09 €", "81.7 %",
+                "Sans alcool",
+                "109.09 €",
+                "20",
+                "20.00 €",
+                "89.09 €",
+                "81.7 %",
                 "100 % — tout est chiffré (20 unités sur 20)",
             ],
         )
@@ -306,7 +311,12 @@ class OneSellingDayTests(TestCase):
         self.assertEqual(
             cells_of(row),
             [
-                "Planches", "36.36 €", "5", "—", "—", "—",
+                "Planches",
+                "36.36 €",
+                "5",
+                "—",
+                "—",
+                "—",
                 "0 % — aucune recette : pas de marge calculable (0 unités sur 5)",
             ],
         )
@@ -331,7 +341,7 @@ class OneSellingDayTests(TestCase):
     def test_the_page_says_what_it_is_for(self):
         self.assertContains(self.page(), "page-subtitle")
 
-    def test_the_page_says_it_counts_what_was_invoiced_and_points_at_depenses(self):
+    def test_the_page_says_it_counts_what_was_invoiced_and_points_at_spending(self):
         """Two bases, two figures, and each page has to say which it is and
         link to the other. « Dépenses » does; this one said « ce qui est
         sorti » in its first sentence - the words the OTHER page uses for the
@@ -343,7 +353,7 @@ class OneSellingDayTests(TestCase):
         self.assertContains(page, reverse("bank:spending_home"))
         self.assertContains(page, "sorti du compte")
 
-    def test_the_link_to_depenses_carries_the_period_being_read(self):
+    def test_the_link_to_spending_carries_the_period_being_read(self):
         """The two pages are compared over the same dates or they are not
         compared at all."""
         page = self.client.get(reverse("margins:margins_home"), {"du": "2026-06-01", "au": "2026-06-30"})
@@ -465,9 +475,7 @@ class WhatTheFiguresDoNotSayTests(TestCase):
         """It is in no period - and counted in one it does not belong to, it
         would take that month's margin down for a bill from another year."""
         supplier = make_supplier(name="Fournisseur sans date")
-        invoice = Invoice.objects.create(
-            supplier=supplier, invoice_number="SD-1", invoice_date=None
-        )
+        invoice = Invoice.objects.create(supplier=supplier, invoice_number="SD-1", invoice_date=None)
         make_invoice_line(invoice=invoice, total_ht="40.00", vat_rate=Decimal("0.20"))
 
         html = self.html()
@@ -481,9 +489,7 @@ class WhatTheFiguresDoNotSayTests(TestCase):
     def test_a_sale_typed_by_hand_is_named_as_being_in_neither_figure(self):
         """It has no price anywhere: in the revenue it would be free, in the
         cost alone it would be a loss. So it is in neither, and said."""
-        RecipeSale.objects.create(
-            recipe=self.recipe, sold_on=self.day, source="manual", quantity=7
-        )
+        RecipeSale.objects.create(recipe=self.recipe, sold_on=self.day, source="manual", quantity=7)
 
         html = self.html()
 
@@ -524,7 +530,7 @@ class WindowTests(TestCase):
         self.assertIn("50.00", stat_of(html, "Encaissé (HT)"))
         self.assertNotIn("550.00", html)
 
-    def test_depuis_le_debut_is_one_click_away(self):
+    def test_all_time_is_one_click_away(self):
         self.assertIn("tout=1", self.html())
 
     def test_and_it_shows_everything_ever_sold(self):
@@ -554,11 +560,11 @@ class WindowTests(TestCase):
         self.assertIn(f'name="du" value="{self.recent.isoformat()}"', html)
         self.assertIn(f'name="au" value="{self.today.isoformat()}"', html)
 
-    def test_effacer_goes_back_to_the_default_period(self):
+    def test_clear_goes_back_to_the_default_period(self):
         html = self.html(du=self.recent.isoformat())
         self.assertIn("Effacer", html)
 
-    def test_effacer_is_the_page_without_any_period_at_all(self):
+    def test_clear_is_the_page_without_any_period_at_all(self):
         """« Effacer » that kept the dates it is offering to clear is a
         button that does nothing, and one carrying `tout=1` would clear the
         dates into all of the history - the opposite of what it says."""
@@ -566,7 +572,7 @@ class WindowTests(TestCase):
 
         self.assertEqual(response.context["clear_url"], reverse(PAGE))
 
-    def test_under_depuis_le_debut_the_dates_are_drawn_disabled(self):
+    def test_under_all_time_the_dates_are_drawn_disabled(self):
         """A named period wins over the dates (Banque's `?mois=` precedent),
         so the inputs must not stay live under figures they no longer
         command: typed into and left, they say the page is showing a window
@@ -580,7 +586,7 @@ class WindowTests(TestCase):
         self.assertEqual(form.count("disabled"), 3)
         self.assertIn(f"Revenir du {self.recent.strftime('%d/%m/%Y')}", form)
 
-    def test_depuis_le_debut_keeps_the_dates_to_offer_them_back(self):
+    def test_all_time_keeps_the_dates_to_offer_them_back(self):
         """The door swings both ways, as the stock page's panels do: dropped,
         the period a person typed is gone for good."""
         html = self.html(du=self.recent.isoformat(), au=self.today.isoformat())
@@ -594,9 +600,7 @@ class WindowTests(TestCase):
         and to no period. A list opened on another period than the figures it
         was reached from is how two screens come to disagree with nothing on
         either of them saying why."""
-        response = self.client.get(
-            reverse(PAGE), {"du": self.recent.isoformat(), "au": self.today.isoformat()}
-        )
+        response = self.client.get(reverse(PAGE), {"du": self.recent.isoformat(), "au": self.today.isoformat()})
         html = response.content.decode()
 
         for key in ("documents_url", "purchases_url", "sales_url"):
@@ -659,12 +663,12 @@ class EmptyDatabaseTests(TestCase):
         self.assertEqual(response.status_code, 200)
 
 
-class PartChiffreeMeansOneThingTests(TestCase):
+class CostedShareMeansOneThingTests(TestCase):
     """« Part chiffrée » appears twice on this page and has to mean the same
     thing both times.
 
     The headline is the share of the MONEY; the column beside each category
-    was the share of the UNITS. On a category selling 100 cafés at 2 € with
+    was the share of the UNITS. On a category selling 100 coffees at 2 € with
     no recipe and 100 cocktails at 10 € with one, that is 50 % against 83 % -
     two figures 33 points apart, under two identical labels, on one screen.
     """
@@ -695,7 +699,7 @@ class PartChiffreeMeansOneThingTests(TestCase):
     def test_and_the_units_are_said_in_the_same_cell(self):
         """Dropped for the money share, the unit count would be nowhere on
         the page: a category selling four planches at 18 € is a different
-        problem from one selling forty cafés at 2 €."""
+        problem from one selling forty coffees at 2 €."""
         self.assertIn("100 unités sur 200", cells_of(row_of(self.html(), "Boissons"))[6])
 
 
@@ -730,8 +734,8 @@ class WhatIsSaidBesideAMarginTests(TestCase):
         the row printed « tout est chiffré » under a banner saying the margin
         was overstated."""
         rang_up(self.beer, self.day, 10, ttc="60.00", ht="50.00")
-        planche = till_product("Planche du bar", category="Bières")
-        rang_up(planche, self.day - timedelta(days=1), 0, ttc="12.00", ht="10.00")
+        platter = till_product("Planche du bar", category="Bières")
+        rang_up(platter, self.day - timedelta(days=1), 0, ttc="12.00", ht="10.00")
 
         cell = self.cell()
 
@@ -765,8 +769,8 @@ class TheTablesFootTests(TestCase):
         make_ingredient(recipe, stock_type=article, quantity="0.5")  # 1,00 € HT
         beer = till_product("Pinte maison", recipe=recipe, category="Bières", typology="Liquide (Alcool)")
         rang_up(beer, cls.day, 100, ttc="600.00", ht="500.00")
-        planche = till_product("Planche du bar", category="Planches", typology="Solide")
-        rang_up(planche, cls.day, 10, ttc="120.00", ht="100.00")
+        platter = till_product("Planche du bar", category="Planches", typology="Solide")
+        rang_up(platter, cls.day, 10, ttc="120.00", ht="100.00")
 
         towels = make_stock_type(name="Essuie-tout", count_in_products_margin=True)
         bought(towels, cls.day, "30.00")
@@ -777,7 +781,7 @@ class TheTablesFootTests(TestCase):
         return response.content.decode()
 
     def test_each_table_foots_itself(self):
-        totals = [cells_of(row) for row in rows_of(self.html()) if row.startswith("<tr class=\"total\"")]
+        totals = [cells_of(row) for row in rows_of(self.html()) if row.startswith('<tr class="total"')]
 
         self.assertEqual(len(totals), 2)
         for cells in totals:

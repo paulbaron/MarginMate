@@ -26,8 +26,10 @@ from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
-from staff import private_files, signature_requests as requests_, signing
+from staff import private_files, signing
+from staff import signature_requests as requests_
 from staff.models import Establishment, SignatureEvent, SignatureRequest, Timesheet
+from staff.pdf import render_month_pdf
 from staff.signature_views import DRAWING
 from staff.tests.page_forms import as_post, form_posting_to, forms_of
 from staff.tests.signing_support import (
@@ -42,12 +44,11 @@ from staff.tests.signing_support import (
 )
 from staff.tests.support import employee
 from staff.tests.test_views import JUNE, MAY, PageTestCase, month_url, stored
-from staff.pdf import render_month_pdf
 from staff.timesheet import MONTH_LOCKED, PostedDay, month_sheet, save_month
 from tests.support import NoNetworkTestCase
 
 JULY = date(2026, 7, 1)
-MAIL = {"EMAIL_HOST": "smtp.example.invalid"}   # « configured »: locmem sends nothing anywhere
+MAIL = {"EMAIL_HOST": "smtp.example.invalid"}  # « configured »: locmem sends nothing anywhere
 FAILING_MAIL = {**MAIL, "EMAIL_BACKEND": "staff.tests.test_signature_mail.FailingBackend"}
 ADDRESS = "jeanne.dupont@example.invalid"
 
@@ -104,8 +105,13 @@ class OwnerCase(SigningTestMixin, NoNetworkTestCase, PageTestCase):
         code = requests_.issue_code(request, SignatureRequest.Identification.CODE_HANDED_OVER)
         requests_.check_code(request, code, session)
         return requests_.sign_for_employee(
-            request, drawn_signature(), session=session, statement_accepted=True, reservation=reservation,
-            ip="203.0.113.7", user_agent="Mozilla/5.0 (Linux; Android 14) Essai/1.0",
+            request,
+            drawn_signature(),
+            session=session,
+            statement_accepted=True,
+            reservation=reservation,
+            ip="203.0.113.7",
+            user_agent="Mozilla/5.0 (Linux; Android 14) Essai/1.0",
         )
 
     def complete(self):
@@ -215,7 +221,8 @@ class SendTests(OwnerCase):
         self.assertNotIn(self.route("staff:signature_send", month=JULY), self.post_actions(response))
         token = forms_of(self.html(response))[0].control("csrfmiddlewaretoken").value
         answer = self.client.post(
-            self.route("staff:signature_send", month=JULY), {"csrfmiddlewaretoken": token, "transmettre": "1"},
+            self.route("staff:signature_send", month=JULY),
+            {"csrfmiddlewaretoken": token, "transmettre": "1"},
             follow=True,
         )
         self.assertLandedOn(answer, month_url(self.person, JULY) + "#signature")
@@ -229,7 +236,7 @@ class SendTests(OwnerCase):
         self.assertNotIn(self.route("staff:signature_send"), self.post_actions(response))
 
     @override_settings(**MAIL)
-    def test_sent_by_email_and_the_link_shown_once_with_copier(self):
+    def test_sent_by_email_and_the_link_shown_once_with_a_copy_button(self):
         self.person.email = ADDRESS
         self.person.save()
         response = self.page()
@@ -254,8 +261,10 @@ class SendTests(OwnerCase):
         self.assertEqual(
             self.messages_of(answer),
             [
-                f"Mois de juin 2026 envoyé pour signature (version 1, document n° {request.uuid}) : il ne se "
-                "modifie plus tant que la demande est en cours."
+                (
+                    f"Mois de juin 2026 envoyé pour signature (version 1, document n° {request.uuid}) : il ne se "
+                    "modifie plus tant que la demande est en cours."
+                )
             ],
         )
         self.assertIn(f"E-mail envoyé à {ADDRESS}.", self.text(answer))
@@ -281,8 +290,10 @@ class SendTests(OwnerCase):
         self.assertEqual(
             self.messages_of(answer),
             [
-                "Cochez « Je transmettrai le lien moi-même » pour envoyer ce mois : aucun serveur d'e-mail n'est "
-                "configuré, le lien ne peut pas partir par e-mail."
+                (
+                    "Cochez « Je transmettrai le lien moi-même » pour envoyer ce mois : aucun serveur d'e-mail n'est "
+                    "configuré, le lien ne peut pas partir par e-mail."
+                )
             ],
         )
         self.assertFalse(SignatureRequest.objects.exists())
@@ -302,8 +313,10 @@ class SendTests(OwnerCase):
         self.assertEqual(
             self.messages_of(answer),
             [
-                "Cochez « Je transmettrai le lien moi-même » pour envoyer ce mois : DUPONT Jeanne n'a pas "
-                "d'adresse e-mail, le lien ne peut pas partir par e-mail."
+                (
+                    "Cochez « Je transmettrai le lien moi-même » pour envoyer ce mois : DUPONT Jeanne n'a pas "
+                    "d'adresse e-mail, le lien ne peut pas partir par e-mail."
+                )
             ],
         )
         self.assertEqual(self.ticked(self.page()).status_code, 200)
@@ -344,8 +357,10 @@ class SendTests(OwnerCase):
         self.assertEqual(
             self.messages_of(answer),
             [
-                "Le mois de juin 2026 a déjà une demande de signature en cours : « Corriger ce mois » l'annule "
-                "avant d'en envoyer une nouvelle version."
+                (
+                    "Le mois de juin 2026 a déjà une demande de signature en cours : « Corriger ce mois » l'annule "
+                    "avant d'en envoyer une nouvelle version."
+                )
             ],
         )
         self.assertEqual(SignatureRequest.objects.count(), 1)
@@ -359,7 +374,7 @@ class LinkAndCodeTests(OwnerCase):
         request, old = self.create()
         answer = self.client.post(*self.submitted(self.form(self.page(), "staff:signature_link", 1)))
         self.assertEqual(answer.status_code, 200)
-        link, new = LINK.search(self.html(answer)).groups()
+        _link, new = LINK.search(self.html(answer)).groups()
         self.assertNotEqual(new, old)
         with self.assertRaises(requests_.LinkError):
             requests_.resolve_link(old)
@@ -444,13 +459,11 @@ class LinkAndCodeTests(OwnerCase):
 
 
 #: The pad of « Contresigner » as signature_pad.js finds it.
-PAD = re.compile(
-    r'<form method="post" action="(?P<action>[^"]+)"[^>]*\bdata-signature-form\b.*?</form>', re.S
-)
+PAD = re.compile(r'<form method="post" action="(?P<action>[^"]+)"[^>]*\bdata-signature-form\b.*?</form>', re.DOTALL)
 
 
 class CountersignTests(OwnerCase):
-    def test_contresigner_once_the_employee_signed(self):
+    def test_countersign_once_the_employee_signed(self):
         request, _token = self.create()
         self.assertNotIn(self.route("staff:signature_countersign", 1), self.post_actions(self.page()))
         self.employee_signs(request, reservation="Le 12, j'ai fini à 23 h.")
@@ -492,7 +505,7 @@ class CountersignTests(OwnerCase):
         request.refresh_from_db()
         (message,) = mail.outbox
         self.assertEqual(message.to, [ADDRESS])
-        (name, content, mimetype), = message.attachments
+        ((name, content, mimetype),) = message.attachments
         self.assertEqual((name, mimetype), ("Relevé d'heures DUPONT Jeanne juin 2026 signé.pdf", "application/pdf"))
         self.assertEqual(hashlib.sha256(content).hexdigest(), request.final_pdf_sha256)
         self.assertEqual(self.kinds(request)[-2:], [Kind.COUNTERSIGNED, Kind.COPY_SENT])
@@ -514,13 +527,18 @@ class CountersignTests(OwnerCase):
 
     def pad(self, response) -> str:
         """The countersignature's form, as HTML."""
-        found = [match for match in PAD.finditer(self.html(response))
-                 if match.group("action").split("#")[0] == self.route("staff:signature_countersign", 1)]
+        found = [
+            match
+            for match in PAD.finditer(self.html(response))
+            if match.group("action").split("#")[0] == self.route("staff:signature_countersign", 1)
+        ]
         self.assertEqual(len(found), 1, "one pad posting to « Contresigner »")
         return found[0].group(0)
 
     def pad_error(self, response) -> str:
-        found = re.search(r'<p class="field-error"[^>]*data-countersign-error[^>]*>(.*?)</p>', self.pad(response), re.S)
+        found = re.search(
+            r'<p class="field-error"[^>]*data-countersign-error[^>]*>(.*?)</p>', self.pad(response), re.DOTALL
+        )
         return " ".join(unescape(found.group(1)).split()) if found else ""
 
     def refused_as_it_stands(self, request):
@@ -532,7 +550,7 @@ class CountersignTests(OwnerCase):
             self.assertFalse(private_files.exists(request.uuid, name))
         self.assertNotIn(Kind.COUNTERSIGNED, self.kinds(request))
 
-    def test_contresigner_opens_a_drawing_pad(self):
+    def test_countersign_opens_a_drawing_pad(self):
         """The owner draws his signature (28/09: « I cannot draw my signature
         as the employer »): the pad of the employee's page, its two buttons,
         the hidden field the drawing is posted in - and its script loaded
@@ -587,9 +605,7 @@ class CountersignTests(OwnerCase):
             ("data:image/png;base64," + "A" * (signing.MAX_SIGNATURE_BYTES * 2), "trop lourde"),
         ):
             with self.subTest(posted=posted[:40]):
-                answer = self.client.post(
-                    form.action.split("#")[0], as_post(form.submission(values={DRAWING: posted}))
-                )
+                answer = self.client.post(form.action.split("#")[0], as_post(form.submission(values={DRAWING: posted})))
                 self.assertEqual(answer.status_code, 200)
                 if words == signing.EMPLOYER_DRAWING_EMPTY:
                     # A dot on the pad (review, 28/09): the owner's own sentence,
@@ -630,7 +646,7 @@ class CountersignTests(OwnerCase):
         request.refresh_from_db()
         self.assertEqual(request.status, Status.COMPLETE)
 
-    def test_a_stale_contresigner_says_why_and_signs_nothing(self):
+    def test_a_stale_countersign_says_why_and_signs_nothing(self):
         request, _token = self.create()
         token = forms_of(self.html(self.page()))[0].control("csrfmiddlewaretoken").value
         answer = self.client.post(
@@ -655,7 +671,7 @@ class CountersignTests(OwnerCase):
 
 
 class CancelAndCorrectTests(OwnerCase):
-    def test_annuler_la_demande(self):
+    def test_cancelling_the_request(self):
         request, token = self.create()
         answer = self.send(self.form(self.page(), "staff:signature_cancel", 1), values={"motif": "envoyé par erreur"})
         self.assertLandedOn(answer, self.url + "#signature")
@@ -681,15 +697,17 @@ class CancelAndCorrectTests(OwnerCase):
         self.assertNotIn(self.route("staff:signature_cancel", 1), actions)
         self.assertIn(self.route("staff:month_reopen"), actions)
 
-    def test_corriger_ce_mois_supersedes_a_finished_request_and_keeps_its_files(self):
+    def test_correct_this_month_supersedes_a_finished_request_and_keeps_its_files(self):
         request, _token = self.complete()
         answer = self.send(self.form(self.page(), "staff:month_reopen"), values={"motif": "heures du 12 corrigées"})
         self.assertLandedOn(answer, self.url + "#signature")
         self.assertEqual(
             self.messages_of(answer),
             [
-                "Mois rouvert : la version 1, signée et contresignée, est remplacée et conservée. Corrigez le mois, "
-                "puis envoyez la nouvelle version."
+                (
+                    "Mois rouvert : la version 1, signée et contresignée, est remplacée et conservée. Corrigez le mois, "
+                    "puis envoyez la nouvelle version."
+                )
             ],
         )
         request.refresh_from_db()
@@ -718,20 +736,22 @@ class CancelAndCorrectTests(OwnerCase):
         self.assertIn("Remplacée par une nouvelle version", text)
         self.assertIn(("1", "signe"), {(version, slug) for _url, version, slug in FILE_LINK.findall(self.html(page))})
 
-    def test_corriger_ce_mois_cancels_a_waiting_request(self):
+    def test_correct_this_month_cancels_a_waiting_request(self):
         request, _token = self.create()
         answer = self.send(self.form(self.page(), "staff:month_reopen"))
         self.assertEqual(
             self.messages_of(answer),
             [
-                "Mois rouvert : la version 1 est annulée, son lien ne fonctionne plus. Corrigez le mois, puis "
-                "envoyez la nouvelle version."
+                (
+                    "Mois rouvert : la version 1 est annulée, son lien ne fonctionne plus. Corrigez le mois, puis "
+                    "envoyez la nouvelle version."
+                )
             ],
         )
         request.refresh_from_db()
         self.assertEqual((request.status, request.cancelled_reason), (Status.CANCELLED, "mois corrigé par l'employeur"))
 
-    def test_corriger_a_month_nobody_holds_says_so(self):
+    def test_reopening_a_month_nobody_holds_says_so(self):
         self.create()
         form = self.form(self.page(), "staff:month_reopen")
         self.send(form)
@@ -749,7 +769,7 @@ class VerifyAndDownloadTests(OwnerCase):
         self.assertEqual(answer.status_code, 200)
         return answer
 
-    def test_verifier_says_intact_who_signed_and_when(self):
+    def test_verify_says_intact_who_signed_and_when(self):
         request, _token = self.complete()
         text = " ".join(self.text(self.verify()).split())
         self.assertIn("Document intact : signé par DUPONT Jeanne, horodaté le", text)
@@ -758,11 +778,11 @@ class VerifyAndDownloadTests(OwnerCase):
         self.assertIn(signing.authority_fingerprint(), text)
         self.assertEqual(self.kinds(request)[-1], Kind.VERIFIED)
 
-    def test_verifier_before_any_signature(self):
+    def test_verify_before_any_signature(self):
         self.create()
         self.assertIn("Aucune signature : c'est le document tel qu'il a été figé", self.text(self.verify()))
 
-    def test_verifier_notices_a_file_changed_on_disk(self):
+    def test_verify_notices_a_file_changed_on_disk(self):
         request, _token = self.complete()
         path = private_files.request_dir(request.uuid) / private_files.FINAL
         path.write_bytes(path.read_bytes().replace(b"DUPONT", b"DUPOND", 1))
@@ -793,9 +813,7 @@ class VerifyAndDownloadTests(OwnerCase):
                 self.assertTrue(response["Content-Disposition"].startswith("attachment; filename="))
                 self.assertIn("no-store", response["Cache-Control"])
                 self.assertEqual(response.content, private_files.read(request.uuid, name))
-        downloaded = [
-            event.detail["file"] for event in request.events.filter(kind=Kind.DOWNLOADED).order_by("id")
-        ]
+        downloaded = [event.detail["file"] for event in request.events.filter(kind=Kind.DOWNLOADED).order_by("id")]
         self.assertEqual(sorted(downloaded), sorted(name for name, _type in expected.values()))
         # The proof file is written again as it is downloaded: its own
         # download is in it, and its hash on the row is the one served.
@@ -811,13 +829,13 @@ class VerifyAndDownloadTests(OwnerCase):
         response = self.client.get(self.route("staff:signature_file", 1, "signe"))
         self.assertEqual(
             response["Content-Disposition"],
-            "attachment; filename=\"Releve d'heures DUPONT Jeanne juin 2026 v1 - signe et contresigne.pdf\"; "
+            'attachment; filename="Releve d\'heures DUPONT Jeanne juin 2026 v1 - signe et contresigne.pdf"; '
             "filename*=UTF-8''Relev%C3%A9%20d%27heures%20DUPONT%20Jeanne%20juin%202026%20v1%20-%20sign%C3%A9%20et"
             "%20contresign%C3%A9.pdf",
         )
         response = self.client.get(self.route("staff:signature_file", 1, "signe-salarie"))
         self.assertIn(
-            "filename=\"Releve d'heures DUPONT Jeanne juin 2026 v1 - signe, avant contreseing.pdf\"",
+            'filename="Releve d\'heures DUPONT Jeanne juin 2026 v1 - signe, avant contreseing.pdf"',
             response["Content-Disposition"],
         )
 
@@ -877,11 +895,11 @@ class VerifyAndDownloadTests(OwnerCase):
         other = employee(last_name="Martin", first_name="Paul")
         save_month(other, JUNE, [])
         for url in (
-            self.route("staff:signature_file", 2, "document"),          # no version 2
-            self.route("staff:signature_file", 1, "cles"),              # no such file
-            self.route("staff:signature_file", 1, "signe"),             # not signed yet
-            self.route("staff:signature_file", 1, "document", person=other),   # not his request
-            self.route("staff:signature_file", 1, "document", month=JULY),     # not this month's
+            self.route("staff:signature_file", 2, "document"),  # no version 2
+            self.route("staff:signature_file", 1, "cles"),  # no such file
+            self.route("staff:signature_file", 1, "signe"),  # not signed yet
+            self.route("staff:signature_file", 1, "document", person=other),  # not his request
+            self.route("staff:signature_file", 1, "document", month=JULY),  # not this month's
             self.route("staff:signature_file", 99999999999999999999999, "document"),
         ):
             with self.subTest(url=url):
@@ -933,11 +951,13 @@ class SectionTests(OwnerCase):
         start = html.index('id="signature"')
         section = html[start : html.index("</section>", start)]
         if not journal:
-            section = re.sub(r'<details class="staff-disclosure signature-journal">.*?</details>', " ", section, flags=re.S)
+            section = re.sub(
+                r'<details class="staff-disclosure signature-journal">.*?</details>', " ", section, flags=re.DOTALL
+            )
         return " ".join(unescape(re.sub(r"<[^>]+>", " ", section)).split())
 
     @override_settings(**MAIL)
-    def test_the_section_speaks_of_her_by_name_never_il(self):
+    def test_the_section_speaks_of_her_by_name_never_as_he(self):
         """Beside « DUPONT Jeanne » the section said « Il demandera son
         code », « Le salarié ne reçoit pas l'e-mail ? », « pour qu'il
         récupère », « Signée par le salarié » (review, 28/09): each sentence

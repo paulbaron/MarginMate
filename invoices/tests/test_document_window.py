@@ -1,4 +1,4 @@
-"""« Achats », onglet Documents : la période « du … au … ».
+"""« Achats », the Documents tab: the « du … au … » period.
 
 The owner asked to see the purchases between two dates. The window itself is
 `common.date_range` and is tested there; what is tested here is everything
@@ -72,9 +72,7 @@ class DocumentWindowTests(TestCase):
         """« au 28 » means the 28th: half-open, this quietly drops a day -
         and the stock pages' own helpers ARE half-open."""
         response = self.get(FEBRUARY)
-        self.assertEqual(
-            sorted(self.rows(response)), sorted([self.opening.pk, self.inside.pk, self.closing.pk])
-        )
+        self.assertEqual(sorted(self.rows(response)), sorted([self.opening.pk, self.inside.pk, self.closing.pk]))
         self.assertNotIn(self.before.pk, self.rows(response))
         self.assertNotIn(self.after.pk, self.rows(response))
 
@@ -99,7 +97,9 @@ class DocumentWindowTests(TestCase):
                 self.assertFalse(response.context["date_window"])
 
     def test_backwards_dates_are_swapped_rather_than_answered_with_nothing(self):
-        self.assertEqual(sorted(self.rows(self.get("du=2026-02-28&au=2026-02-01"))), sorted(self.rows(self.get(FEBRUARY))))
+        self.assertEqual(
+            sorted(self.rows(self.get("du=2026-02-28&au=2026-02-01"))), sorted(self.rows(self.get(FEBRUARY)))
+        )
 
     # ------------------------------------------------------------------ chips
 
@@ -160,7 +160,7 @@ class DocumentWindowTests(TestCase):
         self.assertEqual(whole.context["listed_count"], len(outside) + 33)
         self.assertEqual(whole.context["hidden_count"], len(outside) + 33 - 250)
 
-    def test_every_chip_carries_the_window_except_sans_date(self):
+    def test_every_chip_carries_the_window_except_the_undated_one(self):
         """A chip that drops it means the window silently vanishes on the
         next click - the most likely bug on this page."""
         self.undated()
@@ -174,7 +174,7 @@ class DocumentWindowTests(TestCase):
                     self.assertIn("du=2026-02-01", chip["url"])
                     self.assertIn("au=2026-02-28", chip["url"])
 
-    def test_an_undated_document_is_in_no_window_and_waits_under_sans_date(self):
+    def test_an_undated_document_is_in_no_window_and_waits_under_the_undated_chip(self):
         nowhere = self.undated()
         self.assertNotIn(nowhere.pk, self.rows(self.get(FEBRUARY)))
         # Its chip counts every undated document, window or not: narrowed by
@@ -197,9 +197,9 @@ class DocumentWindowTests(TestCase):
     # ------------------------------------------------- what composes with it
 
     def test_a_window_and_a_search_are_both(self):
-        eau = Supplier.objects.create(code="EAU", name="Eau De Paris")
-        wanted = make_invoice(supplier=eau, invoice_date=date(2026, 2, 12))
-        make_invoice(supplier=eau, invoice_date=date(2026, 6, 12))
+        tap_water = Supplier.objects.create(code="EAU", name="Eau De Paris")
+        wanted = make_invoice(supplier=tap_water, invoice_date=date(2026, 2, 12))
+        make_invoice(supplier=tap_water, invoice_date=date(2026, 6, 12))
         response = self.get(f"{FEBRUARY}&q=eau+de+paris")
         self.assertEqual(self.rows(response), [wanted.pk])
         self.assertEqual(response.context["found_count"], 1)
@@ -208,22 +208,22 @@ class DocumentWindowTests(TestCase):
         self.assertContains(response, 'name="q" value="eau de paris"', count=2)
 
     def test_a_window_and_one_supplier_are_both(self):
-        eau = Supplier.objects.create(code="EAU", name="Eau De Paris")
-        wanted = make_invoice(supplier=eau, invoice_date=date(2026, 2, 12))
-        make_invoice(supplier=eau, invoice_date=date(2026, 6, 12))
-        response = self.get(f"{FEBRUARY}&fournisseur={eau.pk}")
+        tap_water = Supplier.objects.create(code="EAU", name="Eau De Paris")
+        wanted = make_invoice(supplier=tap_water, invoice_date=date(2026, 2, 12))
+        make_invoice(supplier=tap_water, invoice_date=date(2026, 6, 12))
+        response = self.get(f"{FEBRUARY}&fournisseur={tap_water.pk}")
         self.assertEqual(self.rows(response), [wanted.pk])
         # « 875 de plus dans cette liste » over one document is the same lie
         # as a chip over an empty page.
         self.assertEqual(response.context["listed_count"], 1)
         self.assertEqual(response.context["hidden_count"], 0)
         # The window keeps the supplier it was typed under, both forms.
-        self.assertContains(response, f'name="fournisseur" value="{eau.pk}"', count=2)
+        self.assertContains(response, f'name="fournisseur" value="{tap_water.pk}"', count=2)
         # Its ✕ drops the supplier and keeps the dates.
         self.assertIn("du=2026-02-01", response.context["clear_supplier_url"])
         self.assertNotIn("fournisseur", response.context["clear_supplier_url"])
 
-    def test_each_effacer_clears_its_own(self):
+    def test_each_clear_link_clears_its_own(self):
         """One that cleared the lot silently undid the other: the dates went
         with the search, and the search with the dates."""
         response = self.get(f"{FEBRUARY}&q=metro&filtre=factures")
@@ -243,21 +243,19 @@ class DocumentWindowTests(TestCase):
         """The other way round is tested above (the ✕ keeps the dates).
         « Effacer les dates » on a supplier's documents must leave the reader
         on that supplier, or the page silently widens to every supplier."""
-        eau = Supplier.objects.create(code="EAU", name="Eau De Paris")
-        make_invoice(supplier=eau, invoice_date=date(2026, 2, 12))
-        window = self.get(f"{FEBRUARY}&fournisseur={eau.pk}").context["clear_window_url"]
+        tap_water = Supplier.objects.create(code="EAU", name="Eau De Paris")
+        make_invoice(supplier=tap_water, invoice_date=date(2026, 2, 12))
+        window = self.get(f"{FEBRUARY}&fournisseur={tap_water.pk}").context["clear_window_url"]
         self.assertNotIn("du=", window)
         self.assertNotIn("au=", window)
-        self.assertIn(f"fournisseur={eau.pk}", window)
+        self.assertIn(f"fournisseur={tap_water.pk}", window)
 
     def test_deleting_from_the_list_comes_back_to_the_window(self):
         """The bulk bar's `next` is where the page returns after a deletion.
         Without the window the reader lands on three years of documents and
         goes on ticking boxes there."""
         response = self.get(FEBRUARY)
-        self.assertContains(
-            response, 'name="next" value="/invoices/?du=2026-02-01&amp;au=2026-02-28"'
-        )
+        self.assertContains(response, 'name="next" value="/invoices/?du=2026-02-01&amp;au=2026-02-28"')
 
     def test_the_form_keeps_the_filter_the_search_and_the_supplier(self):
         """A window that threw away the tab the reader was on would be typed
@@ -269,7 +267,7 @@ class DocumentWindowTests(TestCase):
         # Neither end is required: « depuis le 1er février » is a window.
         self.assertNotContains(response, 'type="date" name="du" required')
 
-    def test_tout_afficher_and_the_reload_keep_the_window(self):
+    def test_show_all_and_the_reload_keep_the_window(self):
         """« tout afficher » is built from request.get_full_path, and the
         list re-fetches itself with it when an import ends."""
         response = self.get(FEBRUARY)
@@ -352,6 +350,4 @@ class WindowedReviewDatesTests(TestCase):
     def test_a_filter_on_another_date_still_obeys_the_window(self):
         response = self.client.get(f"{self.url}?{FEBRUARY}&filtre=verifies")
         self.assertEqual([invoice.pk for invoice in response.context["invoices"]], [self.checked.pk])
-        self.assertEqual(
-            next(chip for chip in response.context["chips"] if chip["key"] == "verifies")["count"], 1
-        )
+        self.assertEqual(next(chip for chip in response.context["chips"] if chip["key"] == "verifies")["count"], 1)

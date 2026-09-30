@@ -4,25 +4,26 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('recipes', '0001_initial'),
+        ("recipes", "0001_initial"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='recipe',
-            name='category',
+            model_name="recipe",
+            name="category",
             field=models.CharField(blank=True, max_length=255),
         ),
         migrations.AddField(
-            model_name='recipe',
-            name='happy_hour_price_ttc',
-            field=models.DecimalField(blank=True, decimal_places=2, help_text='Optionnel - prix TTC en happy hour.', max_digits=8, null=True),
+            model_name="recipe",
+            name="happy_hour_price_ttc",
+            field=models.DecimalField(
+                blank=True, decimal_places=2, help_text="Optionnel - prix TTC en happy hour.", max_digits=8, null=True
+            ),
         ),
         migrations.AddField(
-            model_name='recipeingredient',
-            name='group',
+            model_name="recipeingredient",
+            name="group",
             field=models.PositiveIntegerField(default=0),
         ),
     ]

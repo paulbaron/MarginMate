@@ -24,9 +24,16 @@ def messages_of(response):
 
 def email_type(**fields):
     data = {
-        "name": "Traiteur Exemple - Factures", "supplier": "new", "new_name": "Traiteur Exemple",
-        "source_kind": "EMAIL", "parser_key": "", "is_active": "on", "action": "save",
-        "sender_pattern": r"factures@traiteur\.exemple", "subject_pattern": "", "body_pattern": "",
+        "name": "Traiteur Exemple - Factures",
+        "supplier": "new",
+        "new_name": "Traiteur Exemple",
+        "source_kind": "EMAIL",
+        "parser_key": "",
+        "is_active": "on",
+        "action": "save",
+        "sender_pattern": r"factures@traiteur\.exemple",
+        "subject_pattern": "",
+        "body_pattern": "",
         "attachment_pattern": r"\.pdf$",
     }
     data.update(fields)
@@ -56,25 +63,23 @@ class NewSupplierTests(TestCase):
         self.assertContains(response, "existe déjà")
         self.assertFalse(InvoiceType.objects.filter(name="Traiteur Exemple - Factures").exists())
 
-    def test_tester_creates_nothing(self):
+    def test_the_test_button_creates_nothing(self):
         with mock.patch("invoices.views.threading.Thread"):
             response = self.client.post(CREATE, email_type(action="test"))
         self.assertEqual(response.status_code, 200)
         self.assertFalse(Supplier.objects.filter(name="Traiteur Exemple").exists())
 
-    def test_the_fiche_fills_it_in_and_is_where_it_goes_back(self):
+    def test_the_supplier_page_fills_it_in_and_is_where_it_goes_back(self):
         supplier = make_supplier(code="TRAITEUR_X", name="Traiteur Exemple", parser_key="")
-        fiche = reverse("invoices:supplier_detail", args=[supplier.pk])
-        page = self.client.get(CREATE + f"?fournisseur={supplier.pk}&source=WEBSITE&retour={fiche}")
+        supplier_page = reverse("invoices:supplier_detail", args=[supplier.pk])
+        page = self.client.get(CREATE + f"?fournisseur={supplier.pk}&source=WEBSITE&retour={supplier_page}")
         self.assertEqual(page.context["supplier_selected"], str(supplier.pk))
         self.assertTrue(page.context["is_website"])
-        self.assertContains(page, f'name="retour" value="{fiche}"')
-        response = self.client.post(
-            CREATE, email_type(supplier=str(supplier.pk), new_name="", retour=fiche)
-        )
-        self.assertRedirects(response, fiche)
+        self.assertContains(page, f'name="retour" value="{supplier_page}"')
+        response = self.client.post(CREATE, email_type(supplier=str(supplier.pk), new_name="", retour=supplier_page))
+        self.assertRedirects(response, supplier_page)
 
-    def test_an_outside_retour_is_ignored(self):
+    def test_an_outside_return_address_is_ignored(self):
         supplier = make_supplier(code="TRAITEUR_X", name="Traiteur Exemple", parser_key="")
         response = self.client.post(CREATE, email_type(supplier=str(supplier.pk), retour="https://exemple.invalid/"))
         self.assertRedirects(response, reverse("invoices:invoice_type_list"), fetch_redirect_response=False)
@@ -109,8 +114,8 @@ class MovedTypeTests(TestCase):
         left = SupplierChange.objects.get(supplier=self.box, kind=SupplierChange.Kind.TYPES)
         came = SupplierChange.objects.get(supplier=self.mobile, kind=SupplierChange.Kind.TYPES)
         self.assertEqual(left.operation, came.operation)
-        fiche = self.client.get(reverse("invoices:supplier_detail", args=[self.box.pk]))
-        self.assertContains(fiche, "Rendre cette source à Box Exemple")
+        supplier_page = self.client.get(reverse("invoices:supplier_detail", args=[self.box.pk]))
+        self.assertContains(supplier_page, "Rendre cette source à Box Exemple")
         self.client.post(reverse("invoices:supplier_change_undo", args=[self.box.pk, left.pk]))
         self.invoice_type.refresh_from_db()
         self.assertEqual(self.invoice_type.supplier, self.box)
@@ -122,7 +127,9 @@ class MovedTypeTests(TestCase):
         other = make_supplier(code="AUTRE_X", name="Autre Exemple", parser_key="", expenses_only=True)
         InvoiceType.objects.filter(pk=self.invoice_type.pk).update(supplier=other)
         response = self.client.post(reverse("invoices:supplier_change_undo", args=[self.box.pk, left.pk]))
-        self.assertIn("n'est plus chez Mobile Exemple (elle récupère pour Autre Exemple)", " ".join(messages_of(response)))
+        self.assertIn(
+            "n'est plus chez Mobile Exemple (elle récupère pour Autre Exemple)", " ".join(messages_of(response))
+        )
         self.invoice_type.refresh_from_db()
         self.assertEqual(self.invoice_type.supplier, other)
 
@@ -143,7 +150,9 @@ class MovedTypeTests(TestCase):
         InvoiceType.objects.filter(pk=self.invoice_type.pk).update(supplier=self.mobile)
         response = self.client.post(
             self.url,
-            email_type(name="Mobile - Espace abonné", supplier=str(self.box.pk), new_name="", supplier_was=str(self.box.pk)),
+            email_type(
+                name="Mobile - Espace abonné", supplier=str(self.box.pk), new_name="", supplier_was=str(self.box.pk)
+            ),
         )
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "depuis l&#x27;ouverture de cette page")
@@ -155,7 +164,8 @@ class MovedTypeTests(TestCase):
         left = SupplierChange.objects.get(supplier=self.box, kind=SupplierChange.Kind.TYPES)
         self.client.post(reverse("invoices:supplier_change_undo", args=[self.box.pk, left.pk]))
         given = next(
-            row for row in SupplierChange.objects.filter(supplier=self.box, kind=SupplierChange.Kind.TYPES)
+            row
+            for row in SupplierChange.objects.filter(supplier=self.box, kind=SupplierChange.Kind.TYPES)
             if (row.data or {}).get("undoes")
         )
         response = self.client.post(reverse("invoices:supplier_change_undo", args=[self.box.pk, given.pk]))
@@ -169,30 +179,40 @@ class TamperedTypeFormTests(TestCase):
         response = self.client.post(CREATE, email_type(supplier="²"))
         self.assertContains(response, "Fournisseur inconnu")
         site = {
-            "source_kind": "WEBSITE", "site-login_url": "https://portail.exemple.invalid/login",
-            "site-username_env": "X_LOGIN", "site-password_env": "X_PASSWORD",
+            "source_kind": "WEBSITE",
+            "site-login_url": "https://portail.exemple.invalid/login",
+            "site-username_env": "X_LOGIN",
+            "site-password_env": "X_PASSWORD",
         }
         with mock.patch("invoices.views.threading.Thread"):
             response = self.client.post(CREATE, {**email_type(supplier="²", action="test"), **site})
         self.assertEqual(response.status_code, 200)
 
+
 class RedrawnTypePageTests(TestCase):
     setUp = MovedTypeTests.setUp
 
-    def test_a_page_redrawn_by_tester_keeps_what_it_was_drawn_with(self):
+    def test_a_page_redrawn_by_the_test_button_keeps_what_it_was_drawn_with(self):
         """Redrawn after « Tester », it took the type's supplier from the
         database again, and the next save moved the type back unrefused."""
         InvoiceType.objects.filter(pk=self.invoice_type.pk).update(supplier=self.mobile)
         with mock.patch("invoices.views.threading.Thread"):
             redrawn = self.client.post(
                 self.url,
-                email_type(name="Mobile - Espace abonné", supplier=str(self.box.pk), new_name="",
-                           supplier_was=str(self.box.pk), action="test"),
+                email_type(
+                    name="Mobile - Espace abonné",
+                    supplier=str(self.box.pk),
+                    new_name="",
+                    supplier_was=str(self.box.pk),
+                    action="test",
+                ),
             )
         self.assertContains(redrawn, f'name="supplier_was" value="{self.box.pk}"')
         response = self.client.post(
             self.url,
-            email_type(name="Mobile - Espace abonné", supplier=str(self.box.pk), new_name="", supplier_was=str(self.box.pk)),
+            email_type(
+                name="Mobile - Espace abonné", supplier=str(self.box.pk), new_name="", supplier_was=str(self.box.pk)
+            ),
         )
         self.assertContains(response, "depuis l&#x27;ouverture de cette page")
         # Refused, the page now carries where the type is: saving again is a choice.

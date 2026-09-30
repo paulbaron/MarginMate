@@ -54,8 +54,18 @@ def by_a_person() -> bool:
     return bool(current and current.by_person)
 
 
-def record(supplier, kind, summary: str, *, data=None, other_supplier=None, needs_review=False, operation=None,
-           invoice=None, by_person=None):
+def record(
+    supplier,
+    kind,
+    summary: str,
+    *,
+    data=None,
+    other_supplier=None,
+    needs_review=False,
+    operation=None,
+    invoice=None,
+    by_person=None,
+):
     """One change of `supplier`, under the current cause."""
     from .models import SupplierChange
 

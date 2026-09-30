@@ -157,9 +157,7 @@ class Product(models.Model):
     supplier = models.ForeignKey("invoices.Supplier", on_delete=models.PROTECT, related_name="products")
     raw_name = models.CharField(max_length=255)
     ean = models.CharField(max_length=32, blank=True)
-    stock_type = models.ForeignKey(
-        StockType, null=True, blank=True, on_delete=models.SET_NULL, related_name="products"
-    )
+    stock_type = models.ForeignKey(StockType, null=True, blank=True, on_delete=models.SET_NULL, related_name="products")
     # Set when reviewing/assigning the product. `unit` says what
     # invoice_line's quantity actually counts for this product: UNIT means
     # "quantity" is a count of discrete items (bottles, packs, ...); L/KG
@@ -181,7 +179,7 @@ class Product(models.Model):
     # applied automatically. None until "Appliquer les règles" has matched
     # this product; cleared once the product is actually assigned.
     ai_suggestion = models.JSONField(null=True, blank=True, default=None)
-    # A charge, not an article: a poste a supplier of charges files its
+    # A charge, not an article: a charge item a supplier of charges files its
     # documents on - the supplier itself, or the rent and the provisions it
     # names (invoices.Supplier.expenses_only, invoices/charges.py). It has no
     # stock type and never will, so it waits in no queue and reaches no
@@ -332,7 +330,9 @@ class StockTakeLine(models.Model):
                 name="stocktakeline_exactly_one_source",
             ),
             models.UniqueConstraint(
-                fields=["stock_take", "product"], name="unique_product_per_stock_take", condition=models.Q(product__isnull=False)
+                fields=["stock_take", "product"],
+                name="unique_product_per_stock_take",
+                condition=models.Q(product__isnull=False),
             ),
             models.UniqueConstraint(
                 fields=["stock_take", "stock_type"],

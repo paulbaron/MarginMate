@@ -1,8 +1,8 @@
-"""« Personnel » with several espaces (multi mode, accounts/tenancy.py): each
+"""« Personnel » with several tenants (multi mode, accounts/tenancy.py): each
 bar signs with an authority of its own, in a private folder of its own, and
-an employee's public link binds the espace that issued it - never another.
+an employee's public link binds the tenant that issued it - never another.
 
-Two real espaces in temporary files (accounts.tests.support.TwoTenantsTestCase),
+Two real tenants in temporary files (accounts.tests.support.TwoTenantsTestCase),
 each with its establishment, one employee and a June sent for signature.
 Both databases number their rows from 1: A's employee and B's are both
 pk 1, their requests too - exactly what a shared folder (keys/employees/1)
@@ -39,9 +39,11 @@ from staff import (
     public_views,
     signature_deletion,
     signature_mail,
-    signature_requests as requests_,
     signature_views,
     signing,
+)
+from staff import (
+    signature_requests as requests_,
 )
 from staff.models import Establishment, SignatureEvent, SignatureRequest
 from staff.tests.page_forms import as_post, form_posting_to
@@ -52,7 +54,7 @@ from tests.support import _Forbidden
 
 JUNE = date(2026, 6, 1)
 MAY_2021 = date(2021, 5, 1)
-IP = "203.0.113.7"            # TEST-NET-3: an address that belongs to nobody
+IP = "203.0.113.7"  # TEST-NET-3: an address that belongs to nobody
 PHONE = "Mozilla/5.0 (Linux; Android 14) Essai/1.0"
 LINK = "https://bar.example.invalid/personnel/signer/jeton-d-essai/"
 MAIL = override_settings(EMAIL_HOST="smtp.example.invalid", DEFAULT_FROM_EMAIL="plateforme@example.invalid")
@@ -61,11 +63,23 @@ Status = SignatureRequest.Status
 Kind = SignatureEvent.Kind
 HANDED_OVER = SignatureRequest.Identification.CODE_HANDED_OVER
 
-#: What each espace holds - and what must never show in the other's.
-ALPHA = {"establishment": "BAR ALPHA", "last_name": "Dupont", "first_name": "Jeanne", "shown": "DUPONT Jeanne",
-         "note": "inventaire alpha", "email": "jeanne.dupont@example.invalid"}
-BETA = {"establishment": "BAR BETA", "last_name": "Martin", "first_name": "Paul", "shown": "MARTIN Paul",
-        "note": "livraison beta", "email": "paul.martin@example.invalid"}
+#: What each tenant holds - and what must never show in the other's.
+ALPHA = {
+    "establishment": "BAR ALPHA",
+    "last_name": "Dupont",
+    "first_name": "Jeanne",
+    "shown": "DUPONT Jeanne",
+    "note": "inventaire alpha",
+    "email": "jeanne.dupont@example.invalid",
+}
+BETA = {
+    "establishment": "BAR BETA",
+    "last_name": "Martin",
+    "first_name": "Paul",
+    "shown": "MARTIN Paul",
+    "note": "livraison beta",
+    "email": "paul.martin@example.invalid",
+}
 
 
 def _text(response) -> str:
@@ -73,21 +87,23 @@ def _text(response) -> str:
     return " ".join(unescape(re.sub(r"<[^>]+>", " ", response.content.decode())).split())
 
 
-class EspacesCase(TwoTenantsTestCase):
+class TenantsCase(TwoTenantsTestCase):
     """Bar Alpha and Bar Beta, each with its employee's June sent for
     signature (`self.alpha` / `self.beta`: the person, the request, the
     link's token). No network: the timestamps are offline, and anything
     reaching for a mail server or a timestamp server fails loudly
     (tests.support.NoNetworkTestCase's guards - that class is a TestCase,
-    and binding an espace inside a TestCase's transaction is refused)."""
+    and binding a tenant inside a TestCase's transaction is refused)."""
 
     def setUp(self):
         super().setUp()
         for target, label in (
             ("smtplib.SMTP", "SMTP"),
             ("smtplib.SMTP_SSL", "SMTP"),
-            ("pyhanko.sign.timestamps.requests_client.RequestsHTTPTimeStamper.async_request_tsa_response",
-             "timestamp server (RFC 3161)"),
+            (
+                "pyhanko.sign.timestamps.requests_client.RequestsHTTPTimeStamper.async_request_tsa_response",
+                "timestamp server (RFC 3161)",
+            ),
         ):
             patcher = mock.patch(target, new=_Forbidden(label))
             patcher.start()
@@ -105,7 +121,9 @@ class EspacesCase(TwoTenantsTestCase):
             person = employee(last_name=facts["last_name"], first_name=facts["first_name"])
             person.email = facts["email"]
             person.save()
-            save_month(person, month, [PostedDay(date(month.year, month.month, 2), hours=Decimal("9"), note=facts["note"])])
+            save_month(
+                person, month, [PostedDay(date(month.year, month.month, 2), hours=Decimal("9"), note=facts["note"])]
+            )
             request, token = requests_.create_request(person, month, now=now)
         return {"person": person, "request": request, "token": token}
 
@@ -119,7 +137,7 @@ class EspacesCase(TwoTenantsTestCase):
         return paths.tenant_dir(tenant) / paths.PRIVATE
 
     def indexed(self, token):
-        """The espace the accounts database files this token's link under, or None."""
+        """The tenant the accounts database files this token's link under, or None."""
         link = SigningLink.objects.filter(token_hash=requests_.hash_token(token)).first()
         return link.tenant if link else None
 
@@ -127,15 +145,15 @@ class EspacesCase(TwoTenantsTestCase):
 # -- The private folder ---------------------------------------------------------------------------------------
 
 
-class PrivateFolderPerEspaceTests(EspacesCase):
+class PrivateFolderPerTenantTests(TenantsCase):
     def test_both_databases_number_from_one(self):
         """What every test below relies on: the same pks on both sides."""
         self.assertEqual(self.alpha["person"].pk, self.beta["person"].pk)
         self.assertEqual(self.alpha["request"].pk, self.beta["request"].pk)
 
-    def test_each_espace_keeps_its_signature_files_in_its_own_folder(self):
+    def test_each_tenant_keeps_its_signature_files_in_its_own_folder(self):
         for tenant, mine, other in ((self.bar_a, self.alpha, self.beta), (self.bar_b, self.beta, self.alpha)):
-            with self.subTest(espace=tenant.name), bound_tenant(tenant):
+            with self.subTest(tenant=tenant.name), bound_tenant(tenant):
                 self.assertEqual(private_files.private_dir(), self.private(tenant).resolve())
                 folder = self.private(tenant) / "signatures"
                 self.assertTrue((folder / str(mine["request"].uuid) / "document.pdf").is_file())
@@ -147,7 +165,7 @@ class PrivateFolderPerEspaceTests(EspacesCase):
             with self.subTest(call=call.__name__), self.assertRaises(NoTenantBound):
                 call()
 
-    def test_each_espace_keeps_its_own_deletions_log(self):
+    def test_each_tenant_keeps_its_own_deletions_log(self):
         with bound_tenant(self.bar_a):
             signature_deletion.delete_signature_request(self.alpha["request"], how=signature_deletion.PAGE, ip=IP)
             (record,) = private_files.read_deletion_records()
@@ -158,10 +176,10 @@ class PrivateFolderPerEspaceTests(EspacesCase):
             self.assertEqual(private_files.read_deletion_records(), [])
 
 
-# -- Each espace its own signing authority --------------------------------------------------------------------
+# -- Each tenant its own signing authority --------------------------------------------------------------------
 
 
-class AuthorityPerEspaceTests(EspacesCase):
+class AuthorityPerTenantTests(TenantsCase):
     def setUp(self):
         super().setUp()
         self.signed_by_the_employee(self.bar_a, self.alpha["request"])
@@ -179,7 +197,7 @@ class AuthorityPerEspaceTests(EspacesCase):
             subject.get_attributes_for_oid(NameOID.ORGANIZATION_NAME)[0].value,
         )
 
-    def test_each_espace_signs_under_its_own_authority(self):
+    def test_each_tenant_signs_under_its_own_authority(self):
         self.assertEqual(
             self.names(self.certificate(self.bar_a, "authority")), ("Autorité interne de BAR ALPHA", "BAR ALPHA")
         )
@@ -193,19 +211,19 @@ class AuthorityPerEspaceTests(EspacesCase):
             beta = signing.authority_fingerprint()
         self.assertTrue(alpha and beta)
         self.assertNotEqual(alpha, beta)
-        # Each signature recorded the authority of its own espace.
+        # Each signature recorded the authority of its own tenant.
         self.assertEqual(recorded, alpha)
 
-    def test_employee_one_of_each_espace_has_his_own_certificate_and_nothing_is_archived(self):
+    def test_employee_one_of_each_tenant_has_his_own_certificate_and_nothing_is_archived(self):
         """Shared, employees/1 of A would have been archived and reissued the
         moment B's employee 1 signed, under B's name."""
         self.assertEqual(self.names(self.certificate(self.bar_a, "employees/1")), (ALPHA["shown"], "BAR ALPHA"))
         self.assertEqual(self.names(self.certificate(self.bar_b, "employees/1")), (BETA["shown"], "BAR BETA"))
         for tenant in (self.bar_a, self.bar_b):
-            with self.subTest(espace=tenant.name):
+            with self.subTest(tenant=tenant.name):
                 self.assertFalse((self.private(tenant) / "keys" / "archive").exists())
 
-    def test_verify_trusts_only_the_espace_s_own_authority(self):
+    def test_verify_trusts_only_the_tenant_s_own_authority(self):
         with bound_tenant(self.bar_b):
             data = private_files.read(self.beta["request"].uuid, private_files.EMPLOYEE_SIGNED)
             at_home = signing.verify(data)
@@ -218,7 +236,7 @@ class AuthorityPerEspaceTests(EspacesCase):
         self.assertFalse(elsewhere.ok)
         self.assertIn("ne se rattache à aucune autorité connue", elsewhere.verdict)
 
-    def test_the_employer_countersigns_under_his_own_espace(self):
+    def test_the_employer_countersigns_under_his_own_tenant(self):
         with bound_tenant(self.bar_b):
             done = requests_.countersign_request(self.beta["request"], employer_signature())
             final = private_files.read(done.uuid, private_files.FINAL)
@@ -230,8 +248,8 @@ class AuthorityPerEspaceTests(EspacesCase):
 # -- The link's index -----------------------------------------------------------------------------------------
 
 
-class LinkIndexTests(EspacesCase):
-    def test_issuing_a_link_files_it_under_its_espace(self):
+class LinkIndexTests(TenantsCase):
+    def test_issuing_a_link_files_it_under_its_tenant(self):
         self.assertEqual(self.indexed(self.alpha["token"]), self.bar_a)
         self.assertEqual(self.indexed(self.beta["token"]), self.bar_b)
         self.assertEqual(SigningLink.objects.count(), 2)
@@ -280,10 +298,10 @@ class LinkIndexTests(EspacesCase):
             )
         self.assertEqual(self.indexed(self.alpha["token"]), self.bar_a)
 
-    def test_the_index_is_rebuilt_from_the_espace_s_own_requests(self):
-        """After a database copy was put back (or an espace adopted): the
+    def test_the_index_is_rebuilt_from_the_tenant_s_own_requests(self):
+        """After a database copy was put back (or a tenant adopted): the
         requests it holds are indexed, the hashes it no longer holds go - and
-        nothing of the other espace is touched."""
+        nothing of the other tenant is touched."""
         SigningLink.objects.filter(tenant=self.bar_a).delete()
         SigningLink.objects.create(token_hash=requests_.hash_token("jeton-perime-essai"), tenant=self.bar_a)
         with bound_tenant(self.bar_a):
@@ -297,7 +315,7 @@ class LinkIndexTests(EspacesCase):
         """The operator's procedure (CLAUDE.md, « Données »): the copy's
         requests are not the ones the index knows. A version deleted since
         the copy is back in the database, its link forgotten: « lien
-        inconnu » (404) until `tenant <dossier> staff_index_links` - which
+        inconnu » (404) until `tenant <folder> staff_index_links` - which
         reads the requests in the copy's schema, so after `migrate_tenants`."""
         database = paths.tenant_database(self.bar_a)
         copy = paths.tenant_dir(self.bar_a) / paths.BACKUPS / "copie-essai.sqlite3"
@@ -320,7 +338,7 @@ class LinkIndexTests(EspacesCase):
         self.assertEqual(Client().get(link).status_code, 200)
         self.assertEqual(self.indexed(self.beta["token"]), self.bar_b)
 
-    def test_the_index_command_runs_for_one_espace_or_every_one(self):
+    def test_the_index_command_runs_for_one_tenant_or_every_one(self):
         SigningLink.objects.all().delete()
         output = io.StringIO()
         call_command("tenant", self.bar_a.dir_name, "staff_index_links", stdout=output)
@@ -336,7 +354,7 @@ class LinkIndexTests(EspacesCase):
 # -- The employee's public pages ------------------------------------------------------------------------------
 
 
-class PublicPagesTests(EspacesCase):
+class PublicPagesTests(TenantsCase):
     def setUp(self):
         super().setUp()
         self.client = Client(enforce_csrf_checks=True, REMOTE_ADDR=IP, HTTP_USER_AGENT=PHONE)
@@ -348,7 +366,7 @@ class PublicPagesTests(EspacesCase):
         form = form_posting_to(page.content.decode(), self.url(facts, name))
         return self.client.post(form.action, as_post(form.submission(values=values)), follow=follow)
 
-    def test_each_link_opens_its_own_espace_s_month(self):
+    def test_each_link_opens_its_own_tenant_s_month(self):
         for facts, mine, other in ((self.alpha, ALPHA, BETA), (self.beta, BETA, ALPHA)):
             with self.subTest(employee=mine["shown"]):
                 response = self.client.get(self.url(facts))
@@ -359,7 +377,7 @@ class PublicPagesTests(EspacesCase):
                 for word in (other["shown"], other["establishment"], other["note"]):
                     self.assertNotIn(word, text)
 
-    def test_opening_a_link_is_logged_in_its_own_espace_only(self):
+    def test_opening_a_link_is_logged_in_its_own_tenant_only(self):
         self.client.get(self.url(self.alpha))
         with bound_tenant(self.bar_a):
             self.assertEqual(SignatureEvent.objects.filter(kind=Kind.LINK_OPENED).count(), 1)
@@ -377,19 +395,23 @@ class PublicPagesTests(EspacesCase):
                 self.assertEqual(response.status_code, 404)
                 self.assertIn(requests_.UNKNOWN_LINK, _text(response))
 
-    def test_the_frozen_pdf_is_the_espace_s_own(self):
+    def test_the_frozen_pdf_is_the_tenant_s_own(self):
         response = self.client.get(self.url(self.beta, "staff:sign_document"))
         self.assertEqual(response.status_code, 200)
         with bound_tenant(self.bar_b):
             self.assertEqual(response.content, private_files.read(self.beta["request"].uuid, private_files.DOCUMENT))
 
-    def test_the_employee_signs_from_his_phone_in_his_own_espace(self):
+    def test_the_employee_signs_from_his_phone_in_his_own_tenant(self):
         with bound_tenant(self.bar_b):
             code = requests_.issue_code(self.beta["request"], HANDED_OVER)
-        answer = self.post_form(self.client.get(self.url(self.beta)), self.beta, "staff:sign_check_code", {"code": code})
+        answer = self.post_form(
+            self.client.get(self.url(self.beta)), self.beta, "staff:sign_check_code", {"code": code}
+        )
         self.assertIn(public_views.CODE_VERIFIED, _text(answer))
         signed = self.post_form(
-            answer, self.beta, "staff:sign_submit",
+            answer,
+            self.beta,
+            "staff:sign_submit",
             {"signature": data_url(drawn_signature()), "certification": True},
         )
         self.assertEqual(signed.status_code, 200)
@@ -403,23 +425,25 @@ class PublicPagesTests(EspacesCase):
         self.assertTrue((self.private(self.bar_b) / "signatures" / uuid / "signed_employee.pdf").is_file())
         self.assertFalse((self.private(self.bar_a) / "signatures" / uuid).exists())
 
-    def test_a_code_typed_on_one_espace_s_link_identifies_nobody_in_the_other(self):
+    def test_a_code_typed_on_one_tenant_s_link_identifies_nobody_in_the_other(self):
         with bound_tenant(self.bar_a):
             code = requests_.issue_code(self.alpha["request"], HANDED_OVER)
-        answer = self.post_form(self.client.get(self.url(self.alpha)), self.alpha, "staff:sign_check_code", {"code": code})
+        answer = self.post_form(
+            self.client.get(self.url(self.alpha)), self.alpha, "staff:sign_check_code", {"code": code}
+        )
         self.assertIn(public_views.CODE_VERIFIED, _text(answer))
         # B's request 1 shares A's pk, not its uuid: B's page still asks for a code.
         self.assertNotIn(public_views.CODE_VERIFIED, _text(self.client.get(self.url(self.beta))))
 
-    def test_logged_in_in_the_same_espace_the_link_opens(self):
+    def test_logged_in_in_the_same_tenant_the_link_opens(self):
         self.client.force_login(self.user_a)
         response = self.client.get(self.url(self.alpha))
         self.assertEqual(response.status_code, 200)
         self.assertIn(ALPHA["shown"], _text(response))
 
-    def test_logged_in_in_another_espace_the_link_opens_and_signs_in_its_own(self):
+    def test_logged_in_in_another_tenant_the_link_opens_and_signs_in_its_own(self):
         """TenantMiddleware binds nothing of the visitor's on a public view:
-        the page binds the LINK's espace, whoever is logged in on this
+        the page binds the LINK's tenant, whoever is logged in on this
         browser. Beta's manager lends his phone to Alpha's employee: Alpha's
         month opens, is signed and logged in Alpha, nothing of Beta is shown
         or touched - and Beta's login is still there afterwards."""
@@ -437,7 +461,9 @@ class PublicPagesTests(EspacesCase):
         answer = self.post_form(page, self.alpha, "staff:sign_check_code", {"code": code})
         self.assertIn(public_views.CODE_VERIFIED, _text(answer))
         signed = self.post_form(
-            answer, self.alpha, "staff:sign_submit",
+            answer,
+            self.alpha,
+            "staff:sign_submit",
             {"signature": data_url(drawn_signature()), "certification": True},
         )
         self.assertEqual(signed.status_code, 200)
@@ -464,7 +490,7 @@ class PublicPagesTests(EspacesCase):
         self.client.get(self.url(self.alpha))
         self.assertIsNone(current_tenant())
 
-    def test_the_view_binds_the_link_s_espace_and_releases_it(self):
+    def test_the_view_binds_the_link_s_tenant_and_releases_it(self):
         seen = []
         view = public_views._for_the_link(lambda request, token: seen.append(current_tenant()) or "vu")
         request = RequestFactory().get("/")
@@ -474,9 +500,9 @@ class PublicPagesTests(EspacesCase):
         self.assertIsNone(current_tenant())
 
 
-class OwnerPagesTests(EspacesCase):
+class OwnerPagesTests(TenantsCase):
     """The owner's « Signature » section, through the real middleware: his
-    request is bound to his espace, and what it issues is filed there."""
+    request is bound to his tenant, and what it issues is filed there."""
 
     JULY = date(2026, 7, 1)
     LINK = re.compile(r'id="signature-link"[^>]*value="https?://[^"]+/personnel/signer/([A-Za-z0-9_-]+)/"')
@@ -487,12 +513,14 @@ class OwnerPagesTests(EspacesCase):
         self.client.force_login(user)
         page = self.client.get(reverse("staff:month", args=[facts["person"].pk, self.JULY]))
         self.assertEqual(page.status_code, 200)
-        form = form_posting_to(page.content.decode(), reverse("staff:signature_send", args=[facts["person"].pk, self.JULY]))
+        form = form_posting_to(
+            page.content.decode(), reverse("staff:signature_send", args=[facts["person"].pk, self.JULY])
+        )
         answer = self.client.post(form.action, as_post(form.submission(values={signature_views.HAND_OVER: True})))
         self.assertEqual(answer.status_code, 200)
         return self.LINK.search(answer.content.decode()).group(1)
 
-    def test_the_link_the_owner_s_page_issues_opens_his_espace(self):
+    def test_the_link_the_owner_s_page_issues_opens_his_tenant(self):
         token = self.send_july(self.bar_b, self.beta, self.user_b)
         self.assertEqual(self.indexed(token), self.bar_b)
         response = Client().get(reverse("staff:sign", args=[token]))
@@ -518,19 +546,26 @@ class PublicViewsArePublicTests(SimpleTestCase):
     def test_the_employee_s_pages_are_public(self):
         """Deny by default (LoginRequiredMiddleware, multi mode) - but for
         these seven, reached from a phone with no account."""
-        for view in (public_views.sign, public_views.send_code, public_views.check_code, public_views.submit,
-                     public_views.document, public_views.copy, public_views.unknown):
+        for view in (
+            public_views.sign,
+            public_views.send_code,
+            public_views.check_code,
+            public_views.submit,
+            public_views.document,
+            public_views.copy,
+            public_views.unknown,
+        ):
             with self.subTest(view=view.__name__):
                 self.assertIs(getattr(view, "login_required", True), False)
 
 
-# -- The purge, in every espace -------------------------------------------------------------------------------
+# -- The purge, in every tenant -------------------------------------------------------------------------------
 
 
-class PurgeInEveryEspaceTests(EspacesCase):
+class PurgeInEveryTenantTests(TenantsCase):
     def setUp(self):
         super().setUp()
-        moment = dt.datetime(2021, 5, 20, 10, tzinfo=dt.timezone.utc)
+        moment = dt.datetime(2021, 5, 20, 10, tzinfo=dt.UTC)
         self.old_alpha = self.fill(self.bar_a, {**ALPHA, "last_name": "Durand", "first_name": "Luc"}, MAY_2021, moment)
         self.old_beta = self.fill(self.bar_b, {**BETA, "last_name": "Petit", "first_name": "Anne"}, MAY_2021, moment)
 
@@ -544,7 +579,7 @@ class PurgeInEveryEspaceTests(EspacesCase):
         with bound_tenant(tenant):
             return set(SignatureRequest.objects.values_list("uuid", flat=True))
 
-    def test_unbound_it_purges_every_espace_each_in_its_own_folder(self):
+    def test_unbound_it_purges_every_tenant_each_in_its_own_folder(self):
         text, _errors = self.purge()
         self.assertIn("Bar Alpha", text)
         self.assertIn("Bar Beta", text)
@@ -554,7 +589,7 @@ class PurgeInEveryEspaceTests(EspacesCase):
             (self.bar_a, self.old_alpha, "DURAND Luc"),
             (self.bar_b, self.old_beta, "PETIT Anne"),
         ):
-            with self.subTest(espace=tenant.name):
+            with self.subTest(tenant=tenant.name):
                 with bound_tenant(tenant):
                     (record,) = private_files.read_deletion_records()
                     self.assertEqual((record["employee"], record["how"]), (name, "purge"))
@@ -562,12 +597,12 @@ class PurgeInEveryEspaceTests(EspacesCase):
                 self.assertIsNone(self.indexed(old["token"]))
         self.assertEqual(self.indexed(self.alpha["token"]), self.bar_a)
 
-    def test_through_the_tenant_command_it_purges_that_espace_only(self):
+    def test_through_the_tenant_command_it_purges_that_tenant_only(self):
         self.purge(command=("tenant", self.bar_a.dir_name, "staff_purge_signatures"))
         self.assertEqual(self.remaining(self.bar_a), {self.alpha["request"].uuid})
         self.assertEqual(self.remaining(self.bar_b), {self.beta["request"].uuid, self.old_beta["request"].uuid})
 
-    def test_a_dry_run_names_every_espace_and_deletes_nothing(self):
+    def test_a_dry_run_names_every_tenant_and_deletes_nothing(self):
         text, _errors = self.purge("--dry-run")
         self.assertIn("DURAND Luc", text)
         self.assertIn("PETIT Anne", text)
@@ -575,7 +610,7 @@ class PurgeInEveryEspaceTests(EspacesCase):
         self.assertEqual(len(self.remaining(self.bar_a)), 2)
         self.assertEqual(len(self.remaining(self.bar_b)), 2)
 
-    def test_an_espace_whose_database_is_gone_is_said_and_the_others_are_purged(self):
+    def test_a_tenant_whose_database_is_gone_is_said_and_the_others_are_purged(self):
         database = paths.tenant_database(self.bar_a)
         database.rename(database.with_suffix(".absent"))
         with self.assertRaises(CommandError) as caught:
@@ -588,13 +623,13 @@ class PurgeInEveryEspaceTests(EspacesCase):
 
 
 @MAIL
-class MailNamesTheRightBarTests(EspacesCase):
-    def test_every_mail_names_the_espace_s_own_establishment(self):
+class MailNamesTheRightBarTests(TenantsCase):
+    def test_every_mail_names_the_tenant_s_own_establishment(self):
         for tenant, facts, mine, other in (
             (self.bar_a, self.alpha, "BAR ALPHA", "BAR BETA"),
             (self.bar_b, self.beta, "BAR BETA", "BAR ALPHA"),
         ):
-            with self.subTest(espace=tenant.name), bound_tenant(tenant):
+            with self.subTest(tenant=tenant.name), bound_tenant(tenant):
                 mail.outbox = []
                 self.assertTrue(signature_mail.send_link(facts["request"], LINK).sent)
                 self.assertTrue(signature_mail.send_code(facts["request"]).sent)
@@ -606,13 +641,13 @@ class MailNamesTheRightBarTests(EspacesCase):
                 self.assertIn(mine, mail.outbox[0].body)
 
 
-# -- What an espace that is not the owner's is told -----------------------------------------------------------
+# -- What a tenant that is not the owner's is told ------------------------------------------------------------
 
 
-class NotTheOwnersEspaceTests(EspacesCase):
+class NotTheOwnersTenantTests(TenantsCase):
     owner_a = True
 
-    def test_the_passphrase_warning_is_for_the_owner_s_espace_only(self):
+    def test_the_passphrase_warning_is_for_the_owner_s_tenant_only(self):
         """The passphrase is the platform's: another bar can do nothing about
         it and is never shown a server setting's name (the system check
         staff.W001 warns the operator)."""
@@ -621,7 +656,7 @@ class NotTheOwnersEspaceTests(EspacesCase):
         with bound_tenant(self.bar_b):
             self.assertEqual(signing.key_warning(), "")
 
-    def test_the_retention_note_names_the_purge_command_in_the_owner_s_espace_only(self):
+    def test_the_retention_note_names_the_purge_command_in_the_owner_s_tenant_only(self):
         """A hosted bar runs no command on the server: its « Signature »
         section says the deletion after the retention years is « à
         configurer », as every other page says what it cannot do yet."""
@@ -634,10 +669,10 @@ class NotTheOwnersEspaceTests(EspacesCase):
         self.assertNotIn("manage.py", text)
         self.assertIn(f"leur effacement ensuite est {TO_CONFIGURE}", text)
 
-    def test_no_espace_is_told_the_app_must_not_go_online_before_a_login_exists(self):
+    def test_no_tenant_is_told_the_app_must_not_go_online_before_a_login_exists(self):
         """The old single mode's sentence (no login there): every owner's
         page is behind the login it said did not exist yet - the owner's
-        espace and a hosted bar alike."""
+        tenant and a hosted bar alike."""
         for user, facts in ((self.user_a, self.alpha), (self.user_b, self.beta)):
             with self.subTest(user=user.username):
                 self.client.force_login(user)

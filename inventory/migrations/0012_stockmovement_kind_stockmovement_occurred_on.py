@@ -4,20 +4,23 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('inventory', '0011_stocktakeline_unit_stocktakelinesource'),
+        ("inventory", "0011_stocktakeline_unit_stocktakelinesource"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='stockmovement',
-            name='kind',
-            field=models.CharField(choices=[('PURCHASE', 'Achat'), ('LOSS', 'Perte connue'), ('CORRECTION', 'Correction')], default='PURCHASE', max_length=12),
+            model_name="stockmovement",
+            name="kind",
+            field=models.CharField(
+                choices=[("PURCHASE", "Achat"), ("LOSS", "Perte connue"), ("CORRECTION", "Correction")],
+                default="PURCHASE",
+                max_length=12,
+            ),
         ),
         migrations.AddField(
-            model_name='stockmovement',
-            name='occurred_on',
+            model_name="stockmovement",
+            name="occurred_on",
             field=models.DateField(blank=True, null=True),
         ),
     ]

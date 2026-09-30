@@ -1,8 +1,8 @@
-"""returnables/reading.py: a bon's PDF text, and what a format's motifs read
+"""returnables/reading.py: a slip's PDF text, and what a format's patterns read
 in it - every quirk of spec §1 on the invented tickets of texts.py.
 
 Timeouts are SIMULATED (a stand-in pattern whose search raises
-TimeoutError); a motif the guard must refuse is read with regex.compile
+TimeoutError); a pattern the guard must refuse is read with regex.compile
 replaced by a sentinel. PDFs are a few hundred bytes, written by
 invoices/tests/pdf_files.write_pdf into a temporary folder.
 """
@@ -58,7 +58,7 @@ class TheInventedTicketsTests(SimpleTestCase):
     with write_pdf, and its labels have the ticket's shape."""
 
     def test_every_ticket_is_latin_1_for_write_pdf(self):
-        for text in [bon.text for bon in texts.ALL] + [texts.JUNK]:
+        for text in [slip.text for slip in texts.ALL] + [texts.JUNK]:
             text.encode("latin-1")
 
     def test_the_labels_are_at_most_twenty_characters_and_start_their_full_name(self):
@@ -68,44 +68,53 @@ class TheInventedTicketsTests(SimpleTestCase):
                 self.assertEqual(full[:20], label)
                 self.assertIn(label, texts.EXPECTED_TYPE)
 
-    def test_each_label_s_expected_type_is_what_the_seeded_motifs_say(self):
-        compiled = [(name, patterns.compile_field(patterns.TYPE_FIELD, motifs)) for name, _position, motifs in texts.SEED_TYPES]
+    def test_each_label_s_expected_type_is_what_the_seeded_patterns_say(self):
+        compiled = [
+            (name, patterns.compile_field(patterns.TYPE_FIELD, slip_patterns))
+            for name, _position, slip_patterns in texts.SEED_TYPES
+        ]
         for label, expected in texts.EXPECTED_TYPE.items():
             with self.subTest(label=label):
-                found = next((name for name, motifs in compiled if any(motif.search(label) for motif in motifs)), None)
+                found = next(
+                    (name for name, type_regexes in compiled if any(pattern.search(label) for pattern in type_regexes)),
+                    None,
+                )
                 self.assertEqual(found, expected)
 
-    def test_the_seeded_motifs_are_the_specs(self):
+    def test_the_seeded_patterns_are_the_specs(self):
         self.assertEqual(texts.UBA_RULES.name, "UBA \N{EM DASH} bon du livreur")
-        self.assertEqual(texts.SEED_TYPES[0], ("F\N{LATIN SMALL LETTER U WITH CIRCUMFLEX}ts", 1, "F[\N{LATIN CAPITAL LETTER U WITH CIRCUMFLEX}U]TS?\\b"))
+        self.assertEqual(
+            texts.SEED_TYPES[0],
+            ("F\N{LATIN SMALL LETTER U WITH CIRCUMFLEX}ts", 1, "F[\N{LATIN CAPITAL LETTER U WITH CIRCUMFLEX}U]TS?\\b"),
+        )
         self.assertEqual([item.pk for item in texts.seed_types()], [1, 2, 3])
         self.assertEqual(texts.uba_rules(section_start="").section_start, "")
         self.assertEqual(texts.UBA_RULES.section_start, r"^REPRISE VIDE\s*$")
 
 
 class EveryTicketIsReadTests(SimpleTestCase):
-    """Each invented ticket, read with the seeded UBA motifs, gives exactly
+    """Each invented ticket, read with the seeded UBA patterns, gives exactly
     what texts.py says it holds."""
 
     def test_every_ticket(self):
-        for bon in texts.ALL:
-            with self.subTest(bon=bon.name):
-                result = read(bon.text)
+        for slip in texts.ALL:
+            with self.subTest(slip=slip.name):
+                result = read(slip.text)
                 self.assertIsNone(result.error)
-                self.assertEqual([line.as_tuple() for line in result.lines], bon.lines)
-                self.assertEqual(result.unread, bon.unread)
-                self.assertEqual(result.number, bon.number)
-                self.assertEqual(result.delivery_date, bon.delivery_date)
-                self.assertEqual(result.printed_at, aware_datetime(*bon.printed))
-                self.assertEqual(result.references, bon.references)
-                self.assertEqual(result.printed_total, bon.printed_total)
-                self.assertEqual(result.replaces, bon.replaces)
-                self.assertEqual(result.remarks, bon.remarks)
+                self.assertEqual([line.as_tuple() for line in result.lines], slip.lines)
+                self.assertEqual(result.unread, slip.unread)
+                self.assertEqual(result.number, slip.number)
+                self.assertEqual(result.delivery_date, slip.delivery_date)
+                self.assertEqual(result.printed_at, aware_datetime(*slip.printed))
+                self.assertEqual(result.references, slip.references)
+                self.assertEqual(result.printed_total, slip.printed_total)
+                self.assertEqual(result.replaces, slip.replaces)
+                self.assertEqual(result.remarks, slip.remarks)
 
     def test_the_clean_tickets_pass_every_check(self):
-        for bon in texts.CLEAN:
-            with self.subTest(bon=bon.name):
-                result = read(bon.text)
+        for slip in texts.CLEAN:
+            with self.subTest(slip=slip.name):
+                result = read(slip.text)
                 self.assertTrue(result.all_passed, [(item.label, item.detail) for item in result.failed_checks])
                 self.assertIs(result.section_found, True)
 
@@ -126,11 +135,12 @@ class EveryTicketIsReadTests(SimpleTestCase):
         result = read(texts.NORMAL.text)
         self.assertEqual(check(result, "Date de livraison lue").detail, "14/05/2025")
         self.assertEqual(check(result, "Numéro lu").detail, "1001")
-        self.assertEqual(check(result, "Total des lignes = total imprimé").detail,
-                         "lignes : 175,00 · total imprimé : -175,00")
+        self.assertEqual(
+            check(result, "Total des lignes = total imprimé").detail, "lignes : 175,00 · total imprimé : -175,00"
+        )
 
     def test_amounts_are_decimals_to_their_column(self):
-        (keg, co2) = read(texts.NORMAL.text).lines
+        (keg, _co2) = read(texts.NORMAL.text).lines
         self.assertIsInstance(keg.amount, Decimal)
         self.assertEqual(keg.amount.as_tuple().exponent, -2)
         self.assertEqual(keg.unit_amount.as_tuple().exponent, -4)
@@ -157,22 +167,22 @@ class QuirksTests(SimpleTestCase):
         self.assertNotIn("quantité × prix = montant", labels(result))
         self.assertTrue(check(result, "Total des lignes = total imprimé").passed)
 
-    def test_two_bls_are_two_references_and_the_bl_date_is_the_delivery(self):
-        result = read(texts.TWO_BLS.text)
+    def test_two_delivery_notes_are_two_references_and_the_delivery_note_date_is_the_delivery(self):
+        result = read(texts.TWO_DELIVERY_NOTES.text)
         self.assertEqual(result.references, ["610003", "610004"])
         self.assertEqual(result.delivery_date, date(2025, 5, 20))
 
-    def test_a_bl_without_montant_reads_the_same(self):
-        self.assertEqual(read(texts.BL_WITHOUT_MONTANT.text).references, ["610005"])
+    def test_a_delivery_note_without_an_amount_reads_the_same(self):
+        self.assertEqual(read(texts.DELIVERY_NOTE_WITHOUT_AMOUNT.text).references, ["610005"])
 
-    def test_a_resend_keeps_the_bl_date_and_its_own_print_time(self):
+    def test_a_resend_keeps_the_delivery_note_date_and_its_own_print_time(self):
         original, resend = read(texts.NORMAL.text), read(texts.RESEND.text)
         self.assertEqual(resend.delivery_date, original.delivery_date)
         self.assertEqual(resend.number, original.number)
         self.assertNotEqual(resend.printed_at, original.printed_at)
         self.assertEqual(resend.printed_at.date(), date(2025, 5, 15))
 
-    def test_annule_et_remplace_is_read(self):
+    def test_the_cancels_and_replaces_mark_is_read(self):
         self.assertTrue(read(texts.REPLACEMENT.text).replaces)
         self.assertFalse(read(texts.ORIGINAL.text).replaces)
         self.assertEqual(read(texts.REPLACEMENT.text).references, read(texts.ORIGINAL.text).references)
@@ -204,7 +214,9 @@ class QuirksTests(SimpleTestCase):
         result = read(texts.NO_SECTION.text)
         self.assertIs(result.section_found, False)
         self.assertEqual(result.lines, [])
-        self.assertEqual(check(result, "Partie des consignes trouvée").detail, "aucune ligne ne correspond au motif de début")
+        self.assertEqual(
+            check(result, "Partie des consignes trouvée").detail, "aucune ligne ne correspond au motif de début"
+        )
         self.assertFalse(check(result, "Fin de la partie trouvée").passed)
         self.assertEqual(result.delivery_date, date(2025, 6, 16))
 
@@ -259,14 +271,18 @@ class LineRulesTests(SimpleTestCase):
 
     def test_signed_and_zero_quantities_are_read_as_printed(self):
         result = read(self.part(f"{texts.KEG} -1 x 30.00 = -30.00", f"{texts.KEG} 0 x 30.00 = 0.00"))
-        self.assertEqual([line.as_tuple() for line in result.lines],
-                         [(texts.KEG, -1, Decimal("30.00"), Decimal("-30.00")), (texts.KEG, 0, Decimal("30.00"), Decimal("0.00"))])
+        self.assertEqual(
+            [line.as_tuple() for line in result.lines],
+            [(texts.KEG, -1, Decimal("30.00"), Decimal("-30.00")), (texts.KEG, 0, Decimal("30.00"), Decimal("0.00"))],
+        )
 
     def test_optional_groups_left_out_are_none(self):
         rules = texts.uba_rules(line_pattern=r"^(?P<designation>\D+?)\s+(?P<quantite>\d+)(?:\s+x\s+(?P<prix>[\d.]+))?$")
         result = read(self.part("FUT BLONDE 3", "CAISSE 2 x 7.50"), rules)
-        self.assertEqual([line.as_tuple() for line in result.lines],
-                         [("FUT BLONDE", 3, None, None), ("CAISSE", 2, Decimal("7.50"), None)])
+        self.assertEqual(
+            [line.as_tuple() for line in result.lines],
+            [("FUT BLONDE", 3, None, None), ("CAISSE", 2, Decimal("7.50"), None)],
+        )
         self.assertNotIn("quantité × prix = montant", labels(result))
 
     def test_a_line_longer_than_500_characters_is_never_matched(self):
@@ -282,7 +298,11 @@ class LineRulesTests(SimpleTestCase):
     def test_texts_are_cut_to_their_column_and_cleaned(self):
         rules = texts.uba_rules(number_patterns=r"N\s*:\s*(?P<numero>.+)")
         long_label = "A" * 250
-        text = self.part(f"{long_label} 1 x 2.00 = 2.00", "BOUT\N{CHARACTER TABULATION}EILLE   X 1 x 2.00 = 2.00") + "\nN : " + "7" * 60
+        text = (
+            self.part(f"{long_label} 1 x 2.00 = 2.00", "BOUT\N{CHARACTER TABULATION}EILLE   X 1 x 2.00 = 2.00")
+            + "\nN : "
+            + "7" * 60
+        )
         result = read(text, rules)
         self.assertEqual(result.lines[0].designation, "A" * 200)
         self.assertEqual(result.lines[1].designation, "BOUT EILLE X")
@@ -290,9 +310,11 @@ class LineRulesTests(SimpleTestCase):
 
 
 class SectionRulesTests(SimpleTestCase):
-    def test_without_a_start_motif_the_whole_text_is_the_part(self):
+    def test_without_a_start_pattern_the_whole_text_is_the_part(self):
         rules = texts.uba_rules(section_start="", section_end="")
-        text = "\n".join([texts.SEPARATOR, texts.row(texts.KEG, 2, "30.00", "60.00"), "", texts.row(texts.CO2, 1, "85.00", "85.00")])
+        text = "\n".join(
+            [texts.SEPARATOR, texts.row(texts.KEG, 2, "30.00", "60.00"), "", texts.row(texts.CO2, 1, "85.00", "85.00")]
+        )
         result = read(text, rules)
         self.assertIsNone(result.section_found)
         self.assertEqual(len(result.lines), 2)
@@ -319,25 +341,29 @@ class SectionRulesTests(SimpleTestCase):
         result = read("\n".join(["REPRISE VIDE", *rows, "FACTURE(S)/BL DU JOUR"]))
         self.assertEqual(result.error, reading.SECTION_TOO_LONG)
         self.assertEqual(result.lines, [])
-        self.assertEqual([item.as_dict() for item in result.checks],
-                         [{"label": "Lecture impossible", "passed": False, "detail": reading.SECTION_TOO_LONG}])
+        self.assertEqual(
+            [item.as_dict() for item in result.checks],
+            [{"label": "Lecture impossible", "passed": False, "detail": reading.SECTION_TOO_LONG}],
+        )
         ok = read("\n".join(["REPRISE VIDE", *rows[:300], "FACTURE(S)/BL DU JOUR"]))
         self.assertEqual(len(ok.lines), 300)
 
 
 class HeaderRulesTests(SimpleTestCase):
-    def test_header_motifs_never_cross_a_line(self):
+    def test_header_patterns_never_cross_a_line(self):
         rules = texts.uba_rules(number_patterns=r"Ticket No\s*:\s*(?P<numero>\d+)")
         self.assertEqual(read("Ticket No :\n1234", rules).number, "")
 
-    def test_motif_order_first_then_line_order(self):
-        # The print date first: « Le … » wins although the BL line is read too.
-        dates = "\n".join(reversed(texts.UBA_MOTIFS["date_patterns"].split("\n")))
+    def test_pattern_order_first_then_line_order(self):
+        # The print date first: « Le … » wins although the delivery-note line is read too.
+        dates = "\n".join(reversed(texts.UBA_PATTERNS["date_patterns"].split("\n")))
         self.assertEqual(read(texts.RESEND.text, texts.uba_rules(date_patterns=dates)).delivery_date, date(2025, 5, 15))
         self.assertEqual(read(texts.RESEND.text).delivery_date, date(2025, 5, 14))
 
-    def test_a_blank_or_unreadable_capture_tries_the_next_line_then_the_next_motif(self):
-        rules = texts.uba_rules(number_patterns=r"Ticket No\s*:(?P<numero>\s*\d*)", date_patterns="D (?P<date>\\S+)\nE (?P<date>\\S+)")
+    def test_a_blank_or_unreadable_capture_tries_the_next_line_then_the_next_pattern(self):
+        rules = texts.uba_rules(
+            number_patterns=r"Ticket No\s*:(?P<numero>\s*\d*)", date_patterns="D (?P<date>\\S+)\nE (?P<date>\\S+)"
+        )
         text = "Ticket No :\nTicket No : 42\nD 31/02/2025\nD 2025\nE 03/03/2025"
         result = read(text, rules)
         self.assertEqual(result.number, "42")
@@ -350,8 +376,10 @@ class HeaderRulesTests(SimpleTestCase):
 
     def test_references_every_match_distinct_bounded(self):
         rules = texts.uba_rules(reference_patterns=r"REF (?P<reference>[^;]+)")
-        text = "\n".join(["REF AB ; REF 12  34 ; REF 1234", "REF 1234", "REF " + "X" * 50]
-                         + [f"REF R{number:03d}" for number in range(30)])
+        text = "\n".join(
+            ["REF AB ; REF 12  34 ; REF 1234", "REF 1234", "REF " + "X" * 50]
+            + [f"REF R{number:03d}" for number in range(30)]
+        )
         result = read(text, rules)
         self.assertEqual(result.references[:3], ["12 34", "1234", "X" * 40])
         self.assertEqual(len(result.references), 20)
@@ -362,17 +390,19 @@ class HeaderRulesTests(SimpleTestCase):
         self.assertEqual(read("Deconsigne : 1.234,50-", rules).printed_total, Decimal("-1234.50"))
         self.assertIsNone(read("Deconsigne : 99999999999", rules).printed_total)
 
-    def test_remarks_run_to_the_end_without_an_end_motif(self):
+    def test_remarks_run_to_the_end_without_an_end_pattern(self):
         result = read(texts.ANOMALIES.text, texts.uba_rules(remarks_end=""))
-        self.assertEqual(result.remarks.split("\n"), texts.ANOMALY_LINES + ["Merci de Votre Commande", "Signature Client"])
+        self.assertEqual(
+            result.remarks.split("\n"), texts.ANOMALY_LINES + ["Merci de Votre Commande", "Signature Client"]
+        )
         self.assertEqual(read(texts.ANOMALIES.text, texts.uba_rules(remarks_start="")).remarks, "")
 
-    def test_without_number_motifs_there_is_no_number_check(self):
+    def test_without_number_patterns_there_is_no_number_check(self):
         result = read(texts.NORMAL.text, texts.uba_rules(number_patterns=""))
         self.assertNotIn("Numéro lu", labels(result))
         self.assertEqual(result.number, "")
 
-    def test_without_date_motifs_the_date_check_says_so(self):
+    def test_without_date_patterns_the_date_check_says_so(self):
         found = check(read(texts.NORMAL.text, texts.uba_rules(date_patterns="")), "Date de livraison lue")
         self.assertEqual((found.passed, found.detail), (False, "le format n'a pas de motif de date"))
 
@@ -388,17 +418,20 @@ class ReadingNeverRaisesTests(SimpleTestCase):
         self.assertEqual(result.checks[0].detail, result.error)
         self.assertFalse(result.all_passed)
 
-    def test_a_stored_motif_that_no_longer_compiles(self):
-        self.assertFailedWith(read(texts.NORMAL.text, texts.uba_rules(line_pattern="^(?P<designation>.+")),
-                              "Motif de ligne : parenthèse non fermée")
+    def test_a_stored_pattern_that_no_longer_compiles(self):
+        self.assertFailedWith(
+            read(texts.NORMAL.text, texts.uba_rules(line_pattern="^(?P<designation>.+")),
+            "Motif de ligne : parenthèse non fermée",
+        )
         self.assertFailedWith(read(texts.NORMAL.text, texts.uba_rules(date_patterns="BL(")), "Motif de date")
 
-    def test_a_blank_line_motif(self):
-        self.assertFailedWith(read(texts.NORMAL.text, texts.uba_rules(line_pattern="")),
-                              "Motif de ligne : le motif est vide.")
+    def test_a_blank_line_pattern(self):
+        self.assertFailedWith(
+            read(texts.NORMAL.text, texts.uba_rules(line_pattern="")), "Motif de ligne : le motif est vide."
+        )
         self.assertFailedWith(read(texts.NORMAL.text, SimpleNamespace()), "Motif de ligne : le motif est vide.")
 
-    def test_a_stored_motif_the_guard_refuses_is_never_compiled(self):
+    def test_a_stored_pattern_the_guard_refuses_is_never_compiled(self):
         never = NeverCompile()
         patterns._checked.cache_clear()
         self.addCleanup(patterns._checked.cache_clear)
@@ -407,13 +440,13 @@ class ReadingNeverRaisesTests(SimpleTestCase):
         self.assertEqual(never.calls, [])
         self.assertFailedWith(result, "répétition trop grande")
 
-    def test_a_slow_motif_simulated(self):
+    def test_a_slow_pattern_simulated(self):
         real = patterns.compile_format
 
         def slow_lines(fmt, *args, **kwargs):
-            motifs = real(fmt, *args, **kwargs)
-            motifs["line_pattern"] = [SlowPattern()]
-            return motifs
+            regexes = real(fmt, *args, **kwargs)
+            regexes["line_pattern"] = [SlowPattern()]
+            return regexes
 
         with mock.patch.object(patterns, "compile_format", side_effect=slow_lines):
             result = read(texts.NORMAL.text)
@@ -436,8 +469,10 @@ class DetectFormatTests(SimpleTestCase):
 
     def test_the_one_format_whose_start_is_found(self):
         self.assertIs(detect_format(texts.NORMAL.text, [texts.UBA_RULES]), texts.UBA_RULES)
-        self.assertIs(detect_format(texts.EMPTY.text, [texts.uba_rules(section_start="^NULLE PART"), texts.UBA_RULES]),
-                      texts.UBA_RULES)
+        self.assertIs(
+            detect_format(texts.EMPTY.text, [texts.uba_rules(section_start="^NULLE PART"), texts.UBA_RULES]),
+            texts.UBA_RULES,
+        )
 
     def test_none_recognises_it(self):
         for text in (texts.JUNK, texts.NO_SECTION.text, "", None):
@@ -458,11 +493,11 @@ class DetectFormatTests(SimpleTestCase):
             "choisissez-le dans la liste.",
         )
 
-    def test_a_broken_start_motif_recognises_nothing(self):
+    def test_a_broken_start_pattern_recognises_nothing(self):
         broken = texts.uba_rules(name="Cassé", section_start="^REPRISE (VIDE")
         self.assertIs(detect_format(texts.NORMAL.text, [broken, texts.UBA_RULES]), texts.UBA_RULES)
 
-    def test_a_slow_start_motif_stops_the_detection_naming_its_format(self):
+    def test_a_slow_start_pattern_stops_the_detection_naming_its_format(self):
         with mock.patch.object(patterns, "compile_field", return_value=[SlowPattern()]):
             with self.assertRaises(SlipError) as caught:
                 detect_format(texts.NORMAL.text, [texts.UBA_RULES])
@@ -485,9 +520,13 @@ class TraceTests(SimpleTestCase):
         traced = trace(texts.NORMAL.text, texts.UBA_RULES)
         self.assertEqual(self.tags_of(traced, "REPRISE VIDE"), [("début", "")])
         self.assertEqual(self.tags_of(traced, "FACTURE(S)/BL DU JOUR"), [("fin", "")])
-        self.assertEqual(self.tags_of(traced, texts.row(texts.KEG, 3, "30.00", "90.00")),
-                         [("ligne lue", f"{texts.KEG} · quantité 3 · prix 30,00 · montant 90,00")])
-        self.assertEqual(self.tags_of(traced, "BL No: 610001 du 14/05/2025"), [("date", "14/05/2025"), ("réf.", "610001")])
+        self.assertEqual(
+            self.tags_of(traced, texts.row(texts.KEG, 3, "30.00", "90.00")),
+            [("ligne lue", f"{texts.KEG} · quantité 3 · prix 30,00 · montant 90,00")],
+        )
+        self.assertEqual(
+            self.tags_of(traced, "BL No: 610001 du 14/05/2025"), [("date", "14/05/2025"), ("réf.", "610001")]
+        )
         self.assertEqual(self.tags_of(traced, "Ticket No : 0000001001"), [("n°", "1001")])
         self.assertEqual(self.tags_of(traced, "Le 14/05/2025 08:15:02"), [("impression", "14/05/2025 08:15")])
         self.assertEqual(self.tags_of(traced, "Deconsigne : -175.00"), [("total", "-175,00")])
@@ -498,8 +537,9 @@ class TraceTests(SimpleTestCase):
         self.assertEqual(read_line.read.as_tuple(), texts.NORMAL.lines[0])
 
     def test_replaces_remarks_and_unread_lines(self):
-        self.assertEqual(self.tags_of(trace(texts.REPLACEMENT.text, texts.UBA_RULES), "***ANNULE ET REMPLACE***"),
-                         [("remplace", "")])
+        self.assertEqual(
+            self.tags_of(trace(texts.REPLACEMENT.text, texts.UBA_RULES), "***ANNULE ET REMPLACE***"), [("remplace", "")]
+        )
         anomalies = trace(texts.ANOMALIES.text, texts.UBA_RULES)
         self.assertEqual(sum(1 for line in anomalies if any(tag.label == "remarque" for tag in line.tags)), 3)
         unread = trace(texts.UNREAD.text, texts.UBA_RULES)
@@ -507,11 +547,11 @@ class TraceTests(SimpleTestCase):
 
     def test_a_long_line_is_shown_cut(self):
         long_row = f"{texts.KEG} 1 x 30.00 = " + "1" * 500
-        traced = trace("\n".join(["REPRISE VIDE", long_row]), texts.UBA_RULES)
+        traced = trace(f"REPRISE VIDE\n{long_row}", texts.UBA_RULES)
         self.assertEqual(traced.lines[1].text, long_row[:120] + "…")
         self.assertEqual(traced.lines[1].tags[0].label, "non lue")
 
-    def test_a_motif_that_does_not_compile_draws_the_text_untagged(self):
+    def test_a_pattern_that_does_not_compile_draws_the_text_untagged(self):
         traced = trace(texts.NORMAL.text, texts.uba_rules(line_pattern="("))
         self.assertTrue(traced.reading.error)
         self.assertEqual(len(traced), len(texts.NORMAL.text.split("\n")))
@@ -529,13 +569,15 @@ class PdfTextTests(SimpleTestCase):
         with open(path, "rb") as handle:
             return handle.read()
 
-    def test_a_bon_printed_to_pdf_reads_back_as_the_ticket(self):
-        for bon in (texts.NORMAL, texts.MIXED, texts.ANOMALIES, texts.REPLACEMENT):
-            with self.subTest(bon=bon.name):
-                text = pdf_text(self.pdf(texts.pdf_lines(bon.text)))
+    def test_a_slip_printed_to_pdf_reads_back_as_the_ticket(self):
+        for slip in (texts.NORMAL, texts.MIXED, texts.ANOMALIES, texts.REPLACEMENT):
+            with self.subTest(slip=slip.name):
+                text = pdf_text(self.pdf(texts.pdf_lines(slip.text)))
                 result = read_slip_text(text, texts.UBA_RULES)
-                self.assertEqual([line.as_tuple() for line in result.lines], bon.lines)
-                self.assertEqual((result.number, result.references, result.replaces), (bon.number, bon.references, bon.replaces))
+                self.assertEqual([line.as_tuple() for line in result.lines], slip.lines)
+                self.assertEqual(
+                    (result.number, result.references, result.replaces), (slip.number, slip.references, slip.replaces)
+                )
                 self.assertTrue(result.all_passed, result.failed_checks)
         self.assertIn(f"F{U_HAT}T", pdf_text(self.pdf(texts.pdf_lines(texts.NORMAL.text))))
 
@@ -579,7 +621,7 @@ class PdfTextTests(SimpleTestCase):
 
     def test_the_pages_are_counted_before_pdfplumber_opens_the_file(self):
         """`len(pdf.pages)` is pdfplumber making every page of the file - and
-        closing the document makes the rest - so a bon of 5 MB carrying some
+        closing the document makes the rest - so a slip of 5 MB carrying some
         33 000 light pages cost about 30 s and 100 MB to refuse, in Achats'
         guard and the Consignes upload alike. Now pdfminer's own walk of the
         page tree stops one page past the cap, and pdfplumber never opens
@@ -696,26 +738,30 @@ def pdf_with_streams(streams) -> bytes:
 class InflateBoundTests(SimpleTestCase):
     """The 5 MB cap is on the COMPRESSED bytes: deflate reaches about
     1000:1, and two Flate filters chained far more, so a spoofed mail's
-    4.9 MB bon inflated to gigabytes inside pdfminer before any page or
+    4.9 MB slip inflated to gigabytes inside pdfminer before any page or
     character cap applied. Every pdfminer decode of a compressing filter
     (Flate, its retry of a damaged stream, LZW, RunLength) is bounded
-    process-wide - Achats' own pdfplumber pass included - and one bon's
+    process-wide - Achats' own pdfplumber pass included - and one slip's
     streams share one budget. MACHINE SAFETY: the bounds are patched DOWN;
     nothing here inflates past a few hundred KB."""
 
     def test_a_stream_inflating_past_its_bound_is_too_long_and_never_inflated_whole(self):
-        bomb = pdf_with_streams([(["FlateDecode", "FlateDecode"], zlib.compress(zlib.compress(DRAWN + b" " * 200_000)))])
+        bomb = pdf_with_streams(
+            [(["FlateDecode", "FlateDecode"], zlib.compress(zlib.compress(DRAWN + b" " * 200_000)))]
+        )
         self.assertLess(len(bomb), 2_000)
         with mock.patch.object(reading, "MAX_INFLATE_STAGE", 4_096):
             with self.assertRaises(SlipError) as caught:
                 pdf_text(bomb)
         self.assertEqual(caught.exception.message, reading.TOO_LONG)
-        # Within its bound, the same file reads: a real bon is never refused.
+        # Within its bound, the same file reads: a real slip is never refused.
         self.assertEqual(pdf_text(bomb), "REPRISE VIDE")
 
-    def test_the_bound_holds_for_every_pdfminer_reader_not_only_the_bons(self):
+    def test_the_bound_holds_for_every_pdfminer_reader_not_only_the_slips(self):
         """Achats' text layer opens PDFs through pdfplumber too."""
-        bomb = pdf_with_streams([(["FlateDecode", "FlateDecode"], zlib.compress(zlib.compress(DRAWN + b" " * 200_000)))])
+        bomb = pdf_with_streams(
+            [(["FlateDecode", "FlateDecode"], zlib.compress(zlib.compress(DRAWN + b" " * 200_000)))]
+        )
         with mock.patch.object(reading, "MAX_INFLATE_STAGE", 4_096):
             with self.assertRaises(Exception) as caught, pdfplumber.open(io.BytesIO(bomb)) as pdf:
                 pdf.pages[0].extract_text()
@@ -750,19 +796,25 @@ class InflateBoundTests(SimpleTestCase):
                 for byte in zlib.compress(b"x" * 1_000):
                     retry.decompress(bytes([byte]))
 
-    def test_the_streams_of_one_bon_share_one_budget(self):
-        two = pdf_with_streams([
-            (["FlateDecode"], zlib.compress(DRAWN + b" " * 3_000)),
-            (["FlateDecode"], zlib.compress(DRAWN_LOWER + b" " * 3_000)),
-        ])
-        with mock.patch.object(reading, "MAX_INFLATE_STAGE", 4_096), \
-                mock.patch.object(reading, "MAX_INFLATE_TOTAL", 6_000):
+    def test_the_streams_of_one_slip_share_one_budget(self):
+        two = pdf_with_streams(
+            [
+                (["FlateDecode"], zlib.compress(DRAWN + b" " * 3_000)),
+                (["FlateDecode"], zlib.compress(DRAWN_LOWER + b" " * 3_000)),
+            ]
+        )
+        with (
+            mock.patch.object(reading, "MAX_INFLATE_STAGE", 4_096),
+            mock.patch.object(reading, "MAX_INFLATE_TOTAL", 6_000),
+        ):
             with self.assertRaises(SlipError) as caught:
                 pdf_text(two)
             self.assertEqual(caught.exception.message, reading.TOO_LONG)
-        with mock.patch.object(reading, "MAX_INFLATE_STAGE", 4_096), \
-                mock.patch.object(reading, "MAX_INFLATE_TOTAL", 7_000):
-            # One budget per bon: the second reading starts afresh.
+        with (
+            mock.patch.object(reading, "MAX_INFLATE_STAGE", 4_096),
+            mock.patch.object(reading, "MAX_INFLATE_TOTAL", 7_000),
+        ):
+            # One budget per slip: the second reading starts afresh.
             for _ in range(2):
                 self.assertEqual(pdf_text(two), "REPRISE VIDE\nFACTURE")
 

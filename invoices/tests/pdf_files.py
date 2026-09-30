@@ -102,21 +102,15 @@ def write_pdf_with_attachments(
         if entries:
             ordered = sorted(name for name, _ in entries)
             limits = f"/Limits [({_escape(ordered[0])}) ({_escape(ordered[-1])})] "
-            names_array = " ".join(
-                f"({_escape(name)}) {number} 0 R" for name, number in sorted(entries)
-            )
-        tree = (
-            "<< /Kids [ << /Kids [ << " + limits + "/Names [" + names_array + "] >> ] >> ] >>"
-        )
+            names_array = " ".join(f"({_escape(name)}) {number} 0 R" for name, number in sorted(entries))
+        tree = "<< /Kids [ << /Kids [ << " + limits + "/Names [" + names_array + "] >> ] >> ] >>"
     else:
         tree = "<< /Names [" + names_array + "] >>"
     associated = " ".join(f"{number} 0 R" for _name, number in entries)
 
     named = "" if via_af_only else f"/Names << /EmbeddedFiles {tree} >> "
     objects = [
-        (
-            "<< /Type /Catalog /Pages 2 0 R " + named + f"/AF [{associated}] >>"
-        ).encode("latin-1"),
+        ("<< /Type /Catalog /Pages 2 0 R " + named + f"/AF [{associated}] >>").encode("latin-1"),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
         (
             f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] /Contents 4 0 R "

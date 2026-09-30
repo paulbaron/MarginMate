@@ -20,30 +20,29 @@
         {% if recipe.category %}{{ recipe.category }} · {% endif %}
         Produit : {{ recipe.yield_quantity|floatformat:2 }} {{ recipe.get_yield_unit_display }}
         {% comment %}
-        Ce qu'une vente prélève, dit seulement quand ce n'est pas la
-        préparation entière : sur une recette vendue 1 pour 1, « vendu par 1 »
-        est du bruit sur presque toutes les recettes.
+        What a sale takes, said only when it is not the whole
+        preparation: on a recipe sold 1 for 1, which is almost every recipe,
+        « vendu par 1 » is noise.
         {% endcomment %}
         {% if recipe.is_sold_directly and recipe.servings_per_batch != 1 %}
             · Vendu par {{ recipe.sale_quantity|quantity }} {{ recipe.get_yield_unit_display }}
             ({{ recipe.servings_per_batch|floatformat:"-2" }} par préparation)
         {% endif %}
         {% comment %}
-        Un prix vide dit « pas vendue directement » et c'est la seule chose qui
-        le dise (Recipe.is_sold_directly) : jamais le fait d'être utilisée dans
-        une autre recette - quinze des seize sous-recettes sont vendues aussi -
-        ni un 0, qui est un prix que quelqu'un a saisi.
+        A blank price says « pas vendue directement » and it is the only thing
+        that says it (Recipe.is_sold_directly): never being used in another
+        recipe - fifteen of the sixteen sub-recipes are sold too - nor a 0,
+        which is a price somebody typed.
         {% endcomment %}
         {% if recipe.is_sold_directly %}
             · Prix de vente : {{ recipe.selling_price_ttc|floatformat:2 }} € TTC
             ({{ recipe.selling_price_ht|floatformat:2 }} € HT, TVA {{ recipe.vat_percent|floatformat:0 }} %)
         {% else %}
             {% comment %}
-            Un prix vide dit « pas vendue » et rien d'autre : il ne dit pas
-            qu'une autre recette l'utilise. L'affirmer serait l'inférence
-            interdite prise à l'envers, et une préparation que personne
-            n'utilise est justement le cas qui mérite d'être dit - rien ne
-            compte alors ce qu'elle coûte.
+            A blank price says « pas vendue » and nothing else: it does not say
+            that another recipe uses it. Asserting that would be the forbidden
+            inference run backwards, and a preparation nobody uses is exactly
+            the case worth saying - nothing then counts what it costs.
             {% endcomment %}
             · <strong>Pas vendue directement</strong>
             {% if recipe.used_in.exists %}
@@ -52,7 +51,7 @@
                 : et utilisée dans aucune recette — rien ne compte ce qu'elle coûte.
             {% endif %}
         {% endif %}
-        {# Un prix en happy hour sur ce qui n'est pas vendu : la page dirait les deux. #}
+        {# A happy-hour price on what is not sold: the page would say both. #}
         {% if recipe.is_sold_directly and recipe.happy_hour_price_ttc %}
             · Happy hour : {{ recipe.happy_hour_price_ttc|floatformat:2 }} € TTC
             ({{ recipe.happy_hour_price_ht|floatformat:2 }} € HT)
@@ -64,10 +63,10 @@
     </p>
 
     {% comment %}
-    Un prix effacé par erreur sur une recette que la caisse vend vraiment
-    retire la marge de cette fiche et de l'onglet Recettes sans que rien ne
-    le signale - et « Marges » continue de la chiffrer, puisque le chiffre
-    d'affaires vient de la caisse et jamais de ce champ.
+    A price cleared by mistake on a recipe the till really sells takes the
+    margin off this page and off the Recettes tab with nothing flagging it -
+    and « Marges » goes on costing it, since the revenue comes from the till
+    and never from this field.
     {% endcomment %}
     {% if not recipe.is_sold_directly and till_products %}
         <div class="message message-error">
@@ -194,9 +193,9 @@
             Coût total (HT) pour {{ recipe.yield_quantity|floatformat:2 }} {{ recipe.get_yield_unit_display }} :
             <strong style="color:var(--text);">{{ variation.cost_ht|floatformat:2 }} €</strong>
             {% comment %}
-            Le coût d'UNE VENTE, qui est ce que « Marges » compte et ce que la
-            vente prélève du stock - le coût du lot au-dessus n'est celui d'une
-            vente que si la vente est la préparation entière.
+            The cost of ONE SALE, which is what « Marges » counts and what the
+            sale takes out of stock - the batch cost above is a sale's only
+            when the sale is the whole preparation.
             {% endcomment %}
             {% if recipe.servings_per_batch != 1 %}
                 <br>soit, pour une vente de {{ recipe.sale_quantity|quantity }} {{ recipe.get_yield_unit_display }} :
@@ -205,10 +204,9 @@
         </p>
 
         {% comment %}
-        Sans prix il n'y a pas de marge, pas de pourcentage et pas de facteur :
-        la page ne les montre pas du tout plutôt que d'aligner des « — », et dit
-        à la place ce qu'il y a à savoir - ce que la préparation coûte est
-        au-dessus.
+        Without a price there is no margin, no percentage and no factor: the
+        page does not show them at all rather than lining up « — », and says
+        instead what there is to know - what the preparation costs is above.
         {% endcomment %}
         {% if recipe.is_sold_directly %}
         <div style="display:flex; gap:2rem; flex-wrap:wrap; margin-top:0.75rem;">

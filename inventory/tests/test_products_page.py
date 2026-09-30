@@ -97,7 +97,7 @@ class ProductsPageTests(TestCase):
         self.assertNotContains(response, reverse("inventory:assign_product", args=[self.pending.pk]))
         self.assertEqual(json.loads(response["HX-Trigger"]), {"catalogue-changed": {"stock_type": self.rum.pk}})
         # The navigation's count follows.
-        self.assertContains(response, 'id="nav-count-produits" hx-swap-oob="true"')
+        self.assertContains(response, 'id="nav-count-products" hx-swap-oob="true"')
         self.assertEqual(StockMovement.objects.filter(stock_type=self.rum).count(), 1)
         self.assertIsNotNone(other)
 
@@ -174,7 +174,7 @@ class ProductsPageTests(TestCase):
     def test_the_list_keeps_the_period_it_was_showing(self):
         take = make_stock_take()
         response = self.client.get(self.url, {"inventaire": take.pk})
-        self.assertContains(response, f'{reverse("inventory:stock_catalogue")}?inventaire={take.pk}')
+        self.assertContains(response, f"{reverse('inventory:stock_catalogue')}?inventaire={take.pk}")
 
     def test_a_long_queue_shows_the_first_ones_and_says_how_many_more(self):
         for number in range(REVIEW_PANEL_SIZE + 2):

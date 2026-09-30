@@ -363,8 +363,8 @@ document.addEventListener("change", function (event) {
 // typed under the same pk (« new » included) - and B's page, finding nothing
 // to offer, would wipe A's draft as it loaded. Empty on a page no espace is
 // bound to. stock_take_detail.html drops the same key.
-var ESPACE_SCOPE = document.body.getAttribute("data-tenant") ? "espace-" + document.body.getAttribute("data-tenant") + ":" : "";
-var DRAFT_KEY = "marginmate:" + ESPACE_SCOPE + "stock-take-draft:{{ stock_take.pk|default_if_none:'new' }}";
+var TENANT_SCOPE = document.body.getAttribute("data-tenant") ? "espace-" + document.body.getAttribute("data-tenant") + ":" : "";
+var DRAFT_KEY = "marginmate:" + TENANT_SCOPE + "stock-take-draft:{{ stock_take.pk|default_if_none:'new' }}";
 var DRAFT_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 7;
 
 function collectRows() {

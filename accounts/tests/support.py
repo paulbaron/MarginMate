@@ -1,13 +1,13 @@
-"""Tests of the espaces themselves: real espaces in temporary files.
+"""Tests of the tenants themselves: real tenants in temporary files.
 
-The suite runs on ONE test espace, whose database is the test
+The suite runs on ONE test tenant, whose database is the test
 runner's `default` and which every thread works for by default
-(tests/runner.py). A test of the espaces needs what production starts from
+(tests/runner.py). A test of the tenants needs what production starts from
 instead:
 
 * NOTHING bound by default: the suite's default binding is taken away for
   the class, so an unbound thread, request or command works for nobody, as
-  in production - and the test espace's rows (its Tenant, its owner's login)
+  in production - and the test tenant's rows (its Tenant, its owner's login)
   are deleted at the start of each test, so the accounts database holds
   only what the test makes;
 * an anonymous client (Django's own): log in with `force_login`;
@@ -16,8 +16,8 @@ instead:
   `make_tenant` is the real `accounts.provisioning.create_tenant` and takes
   a few hundredths of a second;
 * a TransactionTestCase with ``serialized_rollback = True`` (CLAUDE.md):
-  binding an espace inside an open transaction on `default` is refused - its
-  queries would leave it. The runner's snapshot puts the test espace back
+  binding a tenant inside an open transaction on `default` is refused - its
+  queries would leave it. The runner's snapshot puts the test tenant back
   for the classes that follow.
 
 The central rows are in the runner's own `accounts` test database, as the
@@ -39,9 +39,9 @@ Usage::
             self.assertNotIn("Grossiste Beta", page)
 
 `self.client` requests run through the real middleware: logged in, a
-request is bound to the user's espace; `bound_tenant(...)` in the test body
-reads or writes an espace directly. Never leave a binding open across a
-`self.client` call - the middleware refuses to bind another espace inside
+request is bound to the user's tenant; `bound_tenant(...)` in the test body
+reads or writes a tenant directly. Never leave a binding open across a
+`self.client` call - the middleware refuses to bind another tenant inside
 it.
 """
 
@@ -72,7 +72,7 @@ def _masters_dir() -> Path:
 
 
 def template_master() -> Path:
-    """The espaces' template database, migrated once per process: the
+    """The tenants' template database, migrated once per process: the
     business apps' tables only, as `migrate_tenants` makes it."""
     root = _masters_dir() / "root"
     with override_settings(TENANTS_ROOT=root):
@@ -83,7 +83,7 @@ def template_master() -> Path:
 
 
 class TenancyTestCase(TransactionTestCase):
-    """Real espaces: a TENANTS_ROOT with its template, and `make_tenant` /
+    """Real tenants: a TENANTS_ROOT with its template, and `make_tenant` /
     `make_member` to fill them. Nothing bound unless the test binds it."""
 
     serialized_rollback = True
@@ -92,7 +92,7 @@ class TenancyTestCase(TransactionTestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls._espaces_tmp = Path(tempfile.mkdtemp(prefix="marginmate-tests-espaces-"))
+        cls._tenants_tmp = Path(tempfile.mkdtemp(prefix="marginmate-tests-espaces-"))
         cls._suite_binding = tenancy._current
         tenancy._current = ContextVar("marginmate_current_tenant", default=None)
         try:
@@ -100,33 +100,33 @@ class TenancyTestCase(TransactionTestCase):
             super().setUpClass()
         except BaseException:
             tenancy._current = cls._suite_binding
-            shutil.rmtree(cls._espaces_tmp, ignore_errors=True)
+            shutil.rmtree(cls._tenants_tmp, ignore_errors=True)
             raise
-        cls.addClassCleanup(cls._remove_espaces)
+        cls.addClassCleanup(cls._remove_tenants)
 
     @classmethod
-    def _remove_espaces(cls):
+    def _remove_tenants(cls):
         """The class cleanup - unittest runs it right after tearDownClass, and
         when setUpClass failed after registering it: the suite's binding
         comes back, and the class's folders go."""
         tenancy._current = cls._suite_binding
-        shutil.rmtree(cls._espaces_tmp, ignore_errors=True)
+        shutil.rmtree(cls._tenants_tmp, ignore_errors=True)
 
     def setUp(self):
         super().setUp()
         from tests.runner import TEST_EMAIL, TEST_TENANT_PK
 
-        # The accounts database as production starts it: no test espace.
+        # The accounts database as production starts it: no test tenant.
         Tenant.objects.filter(pk=TEST_TENANT_PK).delete()
         get_user_model().objects.filter(username=TEST_EMAIL).delete()
-        self.tenants_root = Path(tempfile.mkdtemp(dir=self._espaces_tmp)) / "tenants"
+        self.tenants_root = Path(tempfile.mkdtemp(dir=self._tenants_tmp)) / "tenants"
         self.enterContext(override_settings(TENANTS_ROOT=self.tenants_root))
         template = paths.template_database()
         template.parent.mkdir(parents=True)
         provisioning.copy_database(template_master(), template)
 
     def make_tenant(self, name="Bar Essai", *, owner=False) -> Tenant:
-        """A real espace (accounts.provisioning.create_tenant). `owner`: the
+        """A real tenant (accounts.provisioning.create_tenant). `owner`: the
         one whose .env integrations work."""
         return provisioning.create_tenant(name, uses_server_integrations=owner)
 
@@ -140,7 +140,7 @@ class TenancyTestCase(TransactionTestCase):
 
 
 class TwoTenantsTestCase(TenancyTestCase):
-    """Two espaces with one login each: `bar_a`/`user_a` (the owner's espace
+    """Two tenants with one login each: `bar_a`/`user_a` (the owner's tenant
     when `owner_a` is set) and `bar_b`/`user_b`."""
 
     owner_a = False

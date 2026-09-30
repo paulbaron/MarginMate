@@ -68,7 +68,7 @@ class MetroParserTests(SimpleTestCase):
         )
 
     def test_social_security_levy_is_added_to_total(self):
-        """"Plus : COTIS. SECURITE SOCIALE" is billed on its own line right
+        """ "Plus : COTIS. SECURITE SOCIALE" is billed on its own line right
         after the product and is a real, mandatory part of what was paid."""
         line = line_named(parse(), "WHISKY EXEMPLE 40D 70CL")
         self.assertEqual(line.taxes, Decimal("10.42"))
@@ -90,7 +90,7 @@ class MetroParserTests(SimpleTestCase):
         line = line_named(parse(), "GIN EXEMPLE 37.5D 70CL")
         self.assertEqual(line.discount, Decimal("1.80"))
         self.assertEqual(line.taxes, Decimal("3.75"))
-        # montant - remise + taxe, the formula the original parser used.
+        # amount - discount + taxes, the formula the original parser used.
         self.assertEqual(line.total_ht, Decimal("133.20") - Decimal("1.80") + Decimal("3.75"))
 
     def test_unit_cost_is_derived_from_the_corrected_total(self):
@@ -107,7 +107,7 @@ class MetroParserTests(SimpleTestCase):
         self.assertEqual(line.quantity, 6)  # colisage 6 x qty 1
         self.assertEqual(line.total_volume, Decimal("6") * Decimal("0.700"))
 
-    def test_consigne_charge_line_is_kept(self):
+    def test_deposit_charge_line_is_kept(self):
         """A crate deposit charge is prefixed with a literal "+ " and has no
         EAN of its own - it still has to be imported so the deposit can be
         matched to a stock item like any other product."""
@@ -202,12 +202,12 @@ S 4,200 87,67 D = 20,00% 17,53 105,20
 
 TOTALS_PAGE = PdfPage(text=HEADER + TOTALS_BODY)
 
-JUS_ROW = "M 03000000123450 1900123 JUS EXEMPLE VP 1L 2,965 6 2 35,58 B\n"
+JUICE_ROW = "M 03000000123450 1900123 JUS EXEMPLE VP 1L 2,965 6 2 35,58 B\n"
 
 
 class MetroOwnBrandColumnTests(SimpleTestCase):
     """Metro's leftmost "MM" column prints a literal "M " before the EAN on
-    its own-brand rows. LINE_REGEX tolerated only a leading "+ " (consigne)
+    its own-brand rows. LINE_REGEX tolerated only a leading "+ " (a deposit)
     and is applied anchored, so those rows matched nothing, fell through
     every branch and vanished with no error and no warning.
 
@@ -285,7 +285,7 @@ class MetroPrintedTotalsTests(SimpleTestCase):
     def test_a_dropped_row_is_said_out_loud(self):
         """The regression that matters: if a row ever stops matching again,
         the invoice must say so instead of quietly filing a smaller number."""
-        parsed = parse([PdfPage(text=HEADER + TOTALS_BODY.replace(JUS_ROW, ""))])
+        parsed = parse([PdfPage(text=HEADER + TOTALS_BODY.replace(JUICE_ROW, ""))])
         self.assertTrue(parsed.warnings)
         said = " ".join(parsed.warnings).replace("\xa0", " ")
         self.assertIn("155,71", said)
@@ -298,16 +298,16 @@ class MetroPrintedTotalsTests(SimpleTestCase):
         self.assertTrue(parsed.warnings)
 
     def test_a_credit_note_keeps_its_sign(self):
-        """An avoir prints its totals with a TRAILING minus ("65,50-") and
-        the parser stores it negative: read unsigned, every credit note
+        """A credit note prints its totals with a TRAILING minus ("65,50-")
+        and the parser stores it negative: read unsigned, every credit note
         filed would disagree with its own total by twice its value."""
-        avoir = """\
+        credit_note = """\
 + 0290123 CAISSE EXEMPLE 24X33CL PLEIN 65,500 1 1- 65,50- A
 Nombre de colis :0 Poids total :0,000 KG Consigne :1- Total H.T. : 65,50-
 65,50- A = 0,00% 0,00 65,50-
 ⑬ Total à payer 65,50-
 """
-        parsed = parse([PdfPage(text=HEADER + avoir)])
+        parsed = parse([PdfPage(text=HEADER + credit_note)])
         self.assertEqual(parsed.printed_total_ttc, Decimal("-65.50"))
         self.assertEqual(parsed.warnings, [])
 

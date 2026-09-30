@@ -290,7 +290,7 @@ def _to_money(value) -> Decimal | None:
 
 
 def _to_rate(value) -> Decimal | None:
-    """"20%" -> 0.20. None when the cell says nothing that can be trusted.
+    """ "20%" -> 0.20. None when the cell says nothing that can be trusted.
 
     The minus sign belongs to the amount, not to the rate: a refund line
     prints "-20%" beside its negative price (7 lines on the stored
@@ -347,9 +347,7 @@ def parse_rows(rows) -> ParsedExport:
 
     missing = [c for c in (DAY_COLUMN, NAME_COLUMN, QUANTITY_COLUMN) if c not in header]
     if missing:
-        raise LadditionExportError(
-            f"{SALES_SHEET} is missing the {', '.join(missing)} column(s) - found: {header}"
-        )
+        raise LadditionExportError(f"{SALES_SHEET} is missing the {', '.join(missing)} column(s) - found: {header}")
     day_at = header.index(DAY_COLUMN)
     name_at = header.index(NAME_COLUMN)
     quantity_at = header.index(QUANTITY_COLUMN)
@@ -522,9 +520,7 @@ def parse_payment_rows(rows) -> ParsedExport:
         raise LadditionExportError(f"The {PAYMENTS_SHEET} sheet is empty.") from None
     missing = [c for c in (DAY_COLUMN, TICKET_TOTAL_COLUMN, PAYMENTS_COLUMN) if c not in header]
     if missing:
-        raise LadditionExportError(
-            f"{PAYMENTS_SHEET} is missing the {', '.join(missing)} column(s) - found: {header}"
-        )
+        raise LadditionExportError(f"{PAYMENTS_SHEET} is missing the {', '.join(missing)} column(s) - found: {header}")
     day_at = header.index(DAY_COLUMN)
     total_at = header.index(TICKET_TOTAL_COLUMN)
     payments_at = header.index(PAYMENTS_COLUMN)
@@ -637,8 +633,12 @@ def _take_payments(result: ParsedExport, part: ParsedExport) -> None:
 #: like `skipped` - a file read twice counts its tickets twice, which is what
 #: makes a duplicate file visible.
 _PAYMENT_COUNTERS = (
-    "tickets", "ticket_rows_skipped", "unread_payment_tickets", "unpaid_tickets",
-    "duplicate_tickets", "tickets_not_adding_up",
+    "tickets",
+    "ticket_rows_skipped",
+    "unread_payment_tickets",
+    "unpaid_tickets",
+    "duplicate_tickets",
+    "tickets_not_adding_up",
 )
 
 
@@ -657,9 +657,7 @@ def parse_payments_export(path: str) -> ParsedExport:
             raise PaymentsSheetMissing(f"no {PAYMENTS_SHEET} sheet")
         return parse_payment_rows(read_sheet(path, PAYMENTS_SHEET))
     except _unreadable() as exc:
-        raise LadditionExportError(
-            f"{exc} - is this the 'Lignes de ventes' export?"
-        ) from exc
+        raise LadditionExportError(f"{exc} - is this the 'Lignes de ventes' export?") from exc
 
 
 def parse_sales_export(path: str) -> ParsedExport:
@@ -685,9 +683,7 @@ def parse_sales_export(path: str) -> ParsedExport:
     try:
         result = parse_rows(read_sheet(path, SALES_SHEET))
     except _unreadable() as exc:
-        raise LadditionExportError(
-            f"{exc} - is this the 'Lignes de ventes' export?"
-        ) from exc
+        raise LadditionExportError(f"{exc} - is this the 'Lignes de ventes' export?") from exc
     _add_payments(result, path)
     return result
 

@@ -2,7 +2,7 @@
 
     python manage.py laddition_backfill_revenue --dry-run
     python manage.py laddition_backfill_revenue
-    python manage.py laddition_backfill_revenue --folder /un/dossier
+    python manage.py laddition_backfill_revenue --folder /some/folder
 
 The quantities have been recorded per (till product, day) since the first
 import; the amounts have not, because the reader ignored the export's money
@@ -26,14 +26,14 @@ Three things it will not do:
 fill, how many it cannot match, and the revenue per year - before anything
 is written.
 
-**The folder is the espace's own** (`accounts.paths.downloads_dir`: the
-espace's downloads/, run as `manage.py tenant <dossier>
+**The folder is the tenant's own** (`accounts.paths.downloads_dir`: the
+tenant's downloads/, run as `manage.py tenant <folder>
 laddition_backfill_revenue`). Every
 export in it is written onto whatever database is bound, so a folder shared
 by two bars would put one bar's till money on the other's days - a « Pinte »
 sold by both on the same day takes the other's revenue, silently. It uses no
-account and contacts nothing, so it is not limited to the owner's espace:
-another espace's folder simply holds its own exports, or none.
+account and contacts nothing, so it is not limited to the owner's tenant:
+another tenant's folder simply holds its own exports, or none.
 """
 
 from collections import defaultdict
@@ -45,7 +45,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from accounts import paths
-from recipes.integration import require_espace
+from recipes.integration import require_tenant_for_command
 from recipes.models import PosProduct, PosProductDailyQuantity
 from recipes.pos.laddition_xlsx import LadditionExportError, parse_sales_export
 
@@ -82,7 +82,7 @@ class Command(BaseCommand):
         parser.add_argument("--dry-run", action="store_true", help="Montrer sans rien enregistrer.")
 
     def handle(self, *args, folder=None, dry_run=False, **options):
-        require_espace("laddition_backfill_revenue")
+        require_tenant_for_command("laddition_backfill_revenue")
         directory = Path(folder) if folder else paths.downloads_dir()
         if not directory.is_dir():
             raise CommandError(f"Dossier introuvable : {directory}")
@@ -161,9 +161,7 @@ class Command(BaseCommand):
                 "lignes n'a pas de montant, et leur recette serait trop basse d'un montant inconnu."
             )
         if export.discounted_lines:
-            said.append(
-                f"{export.discounted_lines} ligne(s) avec remise, {euros(export.discount_ttc)} déduits."
-            )
+            said.append(f"{export.discounted_lines} ligne(s) avec remise, {euros(export.discount_ttc)} déduits.")
         if export.discounts_not_taken:
             said.append(
                 f"{export.discounts_not_taken} ligne(s) dont la remise n'a pas été déduite : "
@@ -212,10 +210,14 @@ class Command(BaseCommand):
         products = {name: pk for pk, name in PosProduct.objects.values_list("pk", "name")}
         rows = {
             (product_id, sold_on): (pk, revenue_ttc, revenue_ht, without, read)
-            for pk, product_id, sold_on, revenue_ttc, revenue_ht, without, read in
-            PosProductDailyQuantity.objects.values_list(
-                "pk", "product_id", "sold_on", "revenue_ttc", "revenue_ht",
-                "revenue_without_rate_ttc", "revenue_read",
+            for pk, product_id, sold_on, revenue_ttc, revenue_ht, without, read in PosProductDailyQuantity.objects.values_list(
+                "pk",
+                "product_id",
+                "sold_on",
+                "revenue_ttc",
+                "revenue_ht",
+                "revenue_without_rate_ttc",
+                "revenue_read",
             )
         }
         fill: list[tuple[int, object]] = []
@@ -234,7 +236,9 @@ class Command(BaseCommand):
                 continue
             _pk, revenue_ttc, revenue_ht, without, read = found
             if read and (revenue_ttc, revenue_ht, without) == (
-                day_money.revenue_ttc, day_money.revenue_ht, day_money.without_rate_ttc
+                day_money.revenue_ttc,
+                day_money.revenue_ht,
+                day_money.without_rate_ttc,
             ):
                 unchanged += 1
                 continue
@@ -257,17 +261,12 @@ class Command(BaseCommand):
             )
         )
         for name, (days, amount) in sorted(unknown_products.items())[:SHOWN]:
-            self.stdout.write(
-                f"  - « {name} » : produit inconnu ici ({days} jour(s), {euros(amount)} TTC)"
-            )
+            self.stdout.write(f"  - « {name} » : produit inconnu ici ({days} jour(s), {euros(amount)} TTC)")
         for name, day, amount in missing_days[:SHOWN]:
-            self.stdout.write(
-                f"  - « {name} » le {_day(day)} : aucune ligne enregistrée ({euros(amount)} TTC)"
-            )
+            self.stdout.write(f"  - « {name} » le {_day(day)} : aucune ligne enregistrée ({euros(amount)} TTC)")
         if total > SHOWN:
             self.stdout.write(
-                "  … relancez l'import L'Addition sur ces dates pour enregistrer les quantités, "
-                "puis cette commande."
+                "  … relancez l'import L'Addition sur ces dates pour enregistrer les quantités, puis cette commande."
             )
 
     # -- writing -----------------------------------------------------------------------
@@ -275,7 +274,7 @@ class Command(BaseCommand):
         written = 0
         with transaction.atomic():
             for start in range(0, len(fill), BATCH):
-                batch = fill[start:start + BATCH]
+                batch = fill[start : start + BATCH]
                 PosProductDailyQuantity.objects.bulk_update(
                     [
                         PosProductDailyQuantity(

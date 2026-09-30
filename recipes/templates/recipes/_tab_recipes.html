@@ -6,11 +6,10 @@
 
 {% if article_choices %}
     {% comment %}
-    « Le sucre augmente, qu'est-ce que je dois reprendre ? » : les recettes qui
-    utilisent un article, sous-recettes comprises. Une liste déroulante plutôt
-    que des pastilles - il y a autant d'entrées que d'articles utilisés, et une
-    rangée de pastilles de cette longueur ne se lit pas. L'URL est construite
-    dans la vue, pas recollée ici.
+    « Le sucre augmente, qu'est-ce que je dois reprendre ? » - the recipes that
+    use one article, sub-recipes included. A dropdown rather than chips - there
+    are as many entries as articles in use, and a row of chips that long cannot
+    be read. The URL is built in the view, not pasted together here.
     {% endcomment %}
     <form method="get" class="filter-row" hx-boost="true" hx-target="#workspace"
           hx-select="#workspace" hx-swap="outerHTML">
@@ -31,19 +30,18 @@
 {% endif %}
 
 {% comment %}
-La page dit en toutes lettres ce qu'elle montre. « OU » est un choix, pas une
-certitude : une recette qui ne fait que POUVOIR utiliser l'article le dit, sinon
-une décision d'achat serait prise sur quelque chose qui ne sera peut-être jamais
-servi.
+The page says in so many words what it shows. « OU » is a choice, not a
+certainty: a recipe that only MAY use the article says so, or a purchasing
+decision would be taken on something that may never be served.
 {% endcomment %}
 {% if chosen_article %}
     <p class="muted">
         {% if article_maybe_count == article_count %}
             {% comment %}
-            « chacune en alternative OU » nommait le choix au mauvais endroit : un cocktail
-            dont l'unique ingrédient est un sirop « sucre OU miel » n'offre lui-même aucune
-            alternative — le choix est dans le sirop, et c'est la colonne « Utilisé » qui dit
-            où. « quelque part » est vrai dans les deux formes.
+            « chacune en alternative OU » named the choice in the wrong place: a cocktail
+            whose only ingredient is a « sucre OU miel » syrup offers no alternative of
+            its own - the choice is inside the syrup, and the « Utilisé » column is what
+            says where. « quelque part » is true in both shapes.
             {% endcomment %}
             {{ article_count }} recette{{ article_count|pluralize }} peu{{ article_count|pluralize:"t,vent" }} utiliser
             « {{ chosen_article.name }} », chacune par un choix « OU » quelque part : rien ne dit laquelle sera servie.
@@ -93,9 +91,9 @@ servi.
                 </td>
                 {% if chosen_article %}
                     {% comment %}
-                    Par quel chemin la recette atteint l'article - « Via » nomme
-                    la sous-recette que la recette liste elle-même, celle qu'on
-                    ouvre ensuite ; ce qu'il y a en dessous est sur sa fiche.
+                    Which way the recipe reaches the article - « Via » names
+                    the sub-recipe the recipe itself lists, the one opened
+                    next; what lies below it is on that one's own page.
                     {% endcomment %}
                     <td class="muted" data-label="Utilisé">
                         {% for use in recipe.article_uses %}{% if use.via %}Via « {{ use.via }} »{% else %}Directement{% endif %}{% if not use.certain %} — peut-être (« OU »){% endif %}{% if not forloop.last %} · {% endif %}{% endfor %}
@@ -112,7 +110,7 @@ servi.
                 <td class="num" data-label="Vendus" data-sort="{{ recipe.units_sold }}">{% if recipe.units_sold %}{{ recipe.units_sold }}{% else %}<span class="muted">0</span>{% endif %}</td>
                 <td class="num" data-label="Produit" data-sort="{{ recipe.yield_quantity }}">
                     {{ recipe.yield_quantity|floatformat:2 }} {{ recipe.get_yield_unit_display }}
-                    {# Dit seulement quand une vente n'est pas la préparation entière. #}
+                    {# Said only when a sale is not the whole preparation. #}
                     {% if recipe.is_sold_directly and recipe.servings_per_batch != 1 %}
                         <span class="read-as">vendu par {{ recipe.sale_quantity|quantity }}</span>
                     {% endif %}
@@ -128,7 +126,7 @@ servi.
                     {% if recipe.is_sold_directly %}
                         {{ recipe.selling_price_ttc|floatformat:2 }} €
                     {% else %}
-                        {# Un prix vide dit « pas vendue directement » : la colonne le dit en toutes lettres. #}
+                        {# A blank price says « pas vendue directement »: the column spells it out. #}
                         <span class="read-as">Pas vendue directement</span>
                     {% endif %}
                 </td>

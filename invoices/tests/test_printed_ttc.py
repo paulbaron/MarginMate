@@ -89,7 +89,9 @@ class ParsersKeepThePrintedAmountTests(SimpleTestCase):
     def test_franprix(self):
         for text, expected in ((franprix.TWENTY_PERCENT, [D("3.60"), D("3.60")]), (franprix.MULTIPLIER, [D("3.30")])):
             with self.subTest(expected=expected):
-                self.assertEqual([line.printed_ttc for line in parse(ticket_parser_for("FRANPRIX"), text).lines], expected)
+                self.assertEqual(
+                    [line.printed_ttc for line in parse(ticket_parser_for("FRANPRIX"), text).lines], expected
+                )
 
     def test_a_discounted_line_keeps_its_printed_amount_and_its_share(self):
         """The ticket prints the loaf at 0,55 and the promotion elsewhere:
@@ -102,8 +104,13 @@ class ParsersKeepThePrintedAmountTests(SimpleTestCase):
 
     def test_the_printed_unit_price_comes_from_the_printed_amount(self):
         line = ParsedLine(
-            raw_name="Article divers", quantity=10, total_volume=D("0"), unit_cost_ht=D("0.664"),
-            total_ht=D("6.64"), vat_rate=FIVE_FIVE, printed_ttc=D("7.00"),
+            raw_name="Article divers",
+            quantity=10,
+            total_volume=D("0"),
+            unit_cost_ht=D("0.664"),
+            total_ht=D("6.64"),
+            vat_rate=FIVE_FIVE,
+            printed_ttc=D("7.00"),
         )
         self.assertEqual(printed_unit_price(line), D("0.70"))
         line.printed_ttc = None
@@ -123,8 +130,11 @@ class TotalsTests(TestCase):
         )
         for total_ht, printed_ttc in lines:
             make_invoice_line(
-                invoice=invoice, product=make_product(supplier=self.shop), total_ht=total_ht,
-                vat_rate=FIVE_FIVE, printed_ttc=None if printed_ttc is None else D(printed_ttc),
+                invoice=invoice,
+                product=make_product(supplier=self.shop),
+                total_ht=total_ht,
+                vat_rate=FIVE_FIVE,
+                printed_ttc=None if printed_ttc is None else D(printed_ttc),
             )
         return invoice
 
@@ -184,13 +194,19 @@ class ReviewScreenTests(TestCase):
     def setUp(self):
         self.shop = Supplier.objects.get(code="SABBH")
         self.invoice = make_invoice(
-            supplier=self.shop, invoice_date=date(2026, 9, 11),
+            supplier=self.shop,
+            invoice_date=date(2026, 9, 11),
             parse_checks=[{"label": "Somme des lignes = total imprimé", "passed": True, "detail": ""}],
         )
         make_invoice_line(
-            invoice=self.invoice, product=make_product(supplier=self.shop, raw_name="Pain Pita"),
-            raw_name="Pain Pita", quantity=10, total_ht="6.64", unit_cost_ht="0.664",
-            vat_rate=FIVE_FIVE, printed_ttc=D("7.00"),
+            invoice=self.invoice,
+            product=make_product(supplier=self.shop, raw_name="Pain Pita"),
+            raw_name="Pain Pita",
+            quantity=10,
+            total_ht="6.64",
+            unit_cost_ht="0.664",
+            vat_rate=FIVE_FIVE,
+            printed_ttc=D("7.00"),
         )
         self.url = reverse("invoices:receipt_review", args=[self.invoice.pk])
 
@@ -226,13 +242,14 @@ class WorkedOutAmountsOnReviewTests(TestCase):
 
     def setUp(self):
         self.shop = Supplier.objects.get(code="FRANPRIX")
-        self.invoice = make_invoice(
-            supplier=self.shop, parse_checks=[{"label": "x", "passed": True, "detail": ""}]
-        )
+        self.invoice = make_invoice(supplier=self.shop, parse_checks=[{"label": "x", "passed": True, "detail": ""}])
         for _ in range(3):
             make_invoice_line(
-                invoice=self.invoice, product=make_product(supplier=self.shop, raw_name=f"PAIN {_}"),
-                raw_name=f"PAIN {_}", total_ht="0.33", vat_rate=FIVE_FIVE,
+                invoice=self.invoice,
+                product=make_product(supplier=self.shop, raw_name=f"PAIN {_}"),
+                raw_name=f"PAIN {_}",
+                total_ht="0.33",
+                vat_rate=FIVE_FIVE,
             )
         self.url = reverse("invoices:receipt_review", args=[self.invoice.pk])
 
@@ -267,9 +284,7 @@ class WorkedOutAmountsOnReviewTests(TestCase):
             }
         )
         self.client.post(self.url, data)
-        self.assertEqual(
-            {line.raw_name: line.printed_ttc for line in self.invoice.lines.all()}["CITRON"], D("0.35")
-        )
+        self.assertEqual({line.raw_name: line.printed_ttc for line in self.invoice.lines.all()}["CITRON"], D("0.35"))
 
 
 class RestorePrintedTtcTests(TestCase):
@@ -279,14 +294,21 @@ class RestorePrintedTtcTests(TestCase):
     def setUp(self):
         self.shop = Supplier.objects.get(code="SABBH")
         self.invoice = make_invoice(
-            supplier=self.shop, invoice_number="6800009", ocr_text=SEVEN_EUROS,
+            supplier=self.shop,
+            invoice_number="6800009",
+            ocr_text=SEVEN_EUROS,
             parse_checks=[{"label": "x", "passed": True, "detail": ""}],
         )
 
     def line(self, total_ht="6.64", quantity=10, name="Pain Pita", **kwargs):
         return make_invoice_line(
-            invoice=self.invoice, product=make_product(supplier=self.shop), raw_name=name,
-            quantity=quantity, total_ht=total_ht, vat_rate=FIVE_FIVE, **kwargs,
+            invoice=self.invoice,
+            product=make_product(supplier=self.shop),
+            raw_name=name,
+            quantity=quantity,
+            total_ht=total_ht,
+            vat_rate=FIVE_FIVE,
+            **kwargs,
         )
 
     def test_a_line_gets_the_amount_read_on_its_ticket(self):
@@ -327,10 +349,10 @@ class RestorePrintedTtcTests(TestCase):
 
     def test_the_command_changes_nothing_on_a_dry_run(self):
         line = self.line()
-        call_command("restore_printed_ttc", "--dry-run", stdout=open(os.devnull, "w"))
+        call_command("restore_printed_ttc", "--dry-run", stdout=open(os.devnull, "w"))  # noqa: SIM115 - the command's output, dropped with it
         line.refresh_from_db()
         self.assertIsNone(line.printed_ttc)
-        call_command("restore_printed_ttc", stdout=open(os.devnull, "w"))
+        call_command("restore_printed_ttc", stdout=open(os.devnull, "w"))  # noqa: SIM115 - the command's output, dropped with it
         line.refresh_from_db()
         self.assertEqual(line.printed_ttc, D("7.00"))
 

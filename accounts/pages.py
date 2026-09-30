@@ -2,7 +2,7 @@
 (/deconnexion/, a POST) and « Créer votre espace » (/inscription/).
 
 All three are public (``@login_not_required``) and render outside any
-espace: they extend accounts/page.html, not base.html - no navigation, no
+tenant: they extend accounts/page.html, not base.html - no navigation, no
 badges, nothing counted in anybody's database.
 
 - The login asks for the e-mail address and the password (Django's
@@ -11,8 +11,8 @@ badges, nothing counted in anybody's database.
   lands on the home page.
 - The signup takes an invitation code, the bar's name, the address and the
   password twice, and does the rest all or nothing (accounts/signup.py: the
-  espace's files first, then the rows in one short transaction); then the
-  new owner is logged in and lands in his empty espace. The login page
+  tenant's files first, then the rows in one short transaction); then the
+  new owner is logged in and lands in his empty tenant. The login page
   always offers it.
 - Both count their attempts before checking anything (accounts/limiter.py)
   and, past the limit, say « réessayez plus tard » without checking
@@ -21,7 +21,7 @@ badges, nothing counted in anybody's database.
   that succeeds - the signup's too - leaves the browser the « appareil
   connu » cookie for that address (`limiter.remember_device`): the
   address's ceiling, which a stranger can fill, never holds it back.
-- The logout keeps what the browser remembers but the espace's drafts,
+- The logout keeps what the browser remembers but the tenant's drafts,
   which static/js/ui.js forgets as « Se déconnecter » is sent.
 
 The app is en-us and writes its French itself, but Django's own messages -
@@ -96,7 +96,7 @@ class LoginPage(LoginView):
 
 
 class LogoutPage(LogoutView):
-    """Django's logout (a POST), public: a login with no espace left - the
+    """Django's logout (a POST), public: a login with no tenant left - the
     « aucun espace » page - must still be able to leave. The « appareil
     connu » cookie stays (accounts/limiter.py).
 
@@ -107,7 +107,7 @@ class LogoutPage(LogoutView):
     browser: the gather's sources left unticked came back ticked - Metro, a
     portal asking for a code at every run - with the folds and the tables'
     sort, and nothing on screen said so (review of 29/09, LOGOUT-PREFS). The
-    browser now forgets the espace's DRAFTS alone: static/js/ui.js does it
+    browser now forgets the tenant's DRAFTS alone: static/js/ui.js does it
     as a `form.topbar-logout` is sent (its `DRAFTS`) - base.html's, and the
     « indisponible » page's. A count never saved is still lost on an
     explicit logout: the price of a shared device."""

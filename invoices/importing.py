@@ -24,14 +24,14 @@ class DuplicateInvoiceError(Exception):
     """Raised when the (supplier, invoice_number) pair was already imported."""
 
 
-class RoutedToConsignesError(DuplicateInvoiceError):
-    """Not an invoice: a driver's bon de consignes dropped among the
+class RoutedToReturnablesError(DuplicateInvoiceError):
+    """Not an invoice: a driver's returnables slip dropped among the
     purchases (receipts.import_document's guard). It went to Consignes
     (returnables.slips.store_slip) and no Invoice was made - read as a
     purchase, its empties taken back became POSITIVE purchase lines, silently
     wrong money. A DuplicateInvoiceError, so that every caller already saying
     « not imported, and why » (the upload, a folder's import, the gather)
-    says this sentence instead of failing. `slip`: the bon, when stored or
+    says this sentence instead of failing. `slip`: the slip, when stored or
     already there."""
 
     def __init__(self, message: str, slip=None):
@@ -46,9 +46,11 @@ def import_parsed_invoice(
     source_file_path: str | None = None,
     display_filename: str | None = None,
 ) -> Invoice:
-    if parsed.invoice_number:
-        if Invoice.objects.filter(supplier=supplier, invoice_number=parsed.invoice_number).exists():
-            raise DuplicateInvoiceError(f"Déjà dans MarginMate : {supplier} n° {parsed.invoice_number}.")
+    if (
+        parsed.invoice_number
+        and Invoice.objects.filter(supplier=supplier, invoice_number=parsed.invoice_number).exists()
+    ):
+        raise DuplicateInvoiceError(f"Déjà dans MarginMate : {supplier} n° {parsed.invoice_number}.")
     if supplier.expenses_only:
         parsed.printed_total_ttc = charge_reading(parsed)[0]
 
@@ -69,8 +71,8 @@ def import_parsed_invoice(
     invoice.save()
 
     # A supplier of charges has no products: its document is filed as the
-    # postes it names, or as one line per VAT rate, on products that carry
-    # its charges and reach no stock page.
+    # charge items it names, or as one line per VAT rate, on products that
+    # carry its charges and reach no stock page.
     lines = expense_lines(supplier, parsed) if supplier.expenses_only else parsed.lines
     needs_review = False
     if supplier.expenses_only:
@@ -151,11 +153,7 @@ def charge_checks(invoice: Invoice, printed_total) -> list[dict]:
     without one)."""
     from .receipts import date_check
 
-    total = (
-        f"{printed_total} € : le total imprimé sur le document."
-        if printed_total is not None
-        else UNREAD_CHARGE
-    )
+    total = f"{printed_total} € : le total imprimé sur le document." if printed_total is not None else UNREAD_CHARGE
     checks = [{"label": "Total de la charge", "passed": printed_total is not None, "detail": total}]
     dated = date_check(invoice.invoice_date)
     if dated is not None:
@@ -178,9 +176,9 @@ def charge_reading(parsed: ParsedInvoice, name: str = "") -> tuple[Decimal | Non
     - **its VAT table**, when it accounts for the total to the cent: one
       line per rate. The strongest, and a rate that does not add up is a
       rate nobody should book;
-    - **the postes it names** (invoices.charges): one line each, which is
-      how a rent is kept apart from the building provision beside it. They
-      settle the total too - a rent statement prints last month's échéance
+    - **the charge items it names** (invoices.charges): one line each, which
+      is how a rent is kept apart from the building provision beside it. They
+      settle the total too - a rent statement prints last month's instalment
       and the direct debit that paid it, and the largest amount printed
       twice is that, not what is being charged now;
     - **its total alone**, on one line named after the supplier.
@@ -196,10 +194,11 @@ def charge_reading(parsed: ParsedInvoice, name: str = "") -> tuple[Decimal | Non
     accounted = sum((base + tax for _rate, base, tax in breakdown), start=Decimal("0"))
     if breakdown and (total is None or abs(accounted - total) <= Decimal("0.01")):
         return total, [_expense_line(name, base, rate, base + tax) for rate, base, tax in breakdown]
-    settled, postes = read_charge(parsed.source_text, total)
-    if postes:
+    settled, charge_items = read_charge(parsed.source_text, total)
+    if charge_items:
         return settled, [
-            _expense_line(poste.name, poste.total_ht, poste.rate, poste.amount) for poste in postes
+            _expense_line(charge_item.name, charge_item.total_ht, charge_item.rate, charge_item.amount)
+            for charge_item in charge_items
         ]
     if total is None:
         # Not what was paid, and it must not pass for it (charge_needs_a_look).
@@ -209,9 +208,7 @@ def charge_reading(parsed: ParsedInvoice, name: str = "") -> tuple[Decimal | Non
 
 
 def _lines_total(parsed: ParsedInvoice) -> Decimal:
-    gross = sum(
-        ((line.total_ht * (Decimal("1") + line.vat_rate)) for line in parsed.lines), start=Decimal("0")
-    )
+    gross = sum(((line.total_ht * (Decimal("1") + line.vat_rate)) for line in parsed.lines), start=Decimal("0"))
     return gross.quantize(Decimal("0.01"))
 
 
@@ -241,8 +238,8 @@ def refile_as_charge(invoice: Invoice, parsed: ParsedInvoice) -> bool:
 
     Every one of them has to come through here: read as a ticket, a rent
     statement's lines are the previous balance and the direct debit beside
-    the rent, and a document relu that way went back to being worth what it
-    was before the charge reading settled it.
+    the rent, and a document read again that way went back to being worth
+    what it was before the charge reading settled it.
     """
     total, lines = charge_reading(parsed, invoice.supplier.name)
     if not lines:
@@ -252,8 +249,8 @@ def refile_as_charge(invoice: Invoice, parsed: ParsedInvoice) -> bool:
     if not (_already_charges(invoice.supplier, stored, lines) and total == invoice.printed_total_ttc):
         try:
             with transaction.atomic():
-                # The postes first, for replace_invoice_lines to find them by
-                # name - and in its savepoint: a replacement refused
+                # The charge items first, for replace_invoice_lines to find
+                # them by name - and in its savepoint: a replacement refused
                 # (InvoiceLinesInUseError) takes them back. Made before it,
                 # one was left named after the supplier, on no line.
                 for line in lines:
@@ -272,15 +269,15 @@ def refile_as_charge(invoice: Invoice, parsed: ParsedInvoice) -> bool:
 
 
 def redo_as_expenses(supplier: Supplier) -> int:
-    """File the documents already in as charges: their postes, or the one
-    line their total makes, and the products their old lines named go with
+    """File the documents already in as charges: their charge items, or the
+    one line their total makes, and the products their old lines named go with
     them (remove_orphan_products). Returns how many documents changed - one
     whose lines a stock take was priced from is left alone, since it was
     stock after all.
 
     Each document is **read again from its own text** where it kept some,
     rather than from the lines it is filed as: a rent statement filed at
-    last month's échéance says so nowhere in those lines, and a correction
+    last month's instalment says so nowhere in those lines, and a correction
     typed on one of them is lost - which is the price of changing what a
     supplier is.
 
@@ -293,7 +290,7 @@ def redo_as_expenses(supplier: Supplier) -> int:
         done += refile_as_charge(invoice, _as_parsed(invoice, list(invoice.lines.all())))
     # Whatever the documents needed, what this supplier sends is a charge:
     # unticked and ticked again, not one line changes, so nothing else
-    # would put the flag back on its postes. Not a product a stock item
+    # would put the flag back on its charge items. Not a product a stock item
     # claimed - it is stock after all, which is the same reason a document
     # a stock take was priced from is left alone above.
     Product.objects.filter(supplier=supplier, is_expense=False, stock_type__isnull=True).update(is_expense=True)
@@ -328,7 +325,7 @@ def credit_as_return(line) -> None:
 @transaction.atomic
 def stop_expenses(supplier: Supplier) -> int:
     """A supplier that no longer sends charges sells goods again, so its
-    postes are products like any others - waiting to be classified.
+    charge items are products like any others - waiting to be classified.
 
     The documents already filed keep their lines (see views.supplier_expenses:
     they are a person's to correct), but their products must not stay
@@ -338,9 +335,9 @@ def stop_expenses(supplier: Supplier) -> int:
 
     A credit filed the way a charge takes one (charge_credits) becomes a
     return (credit_as_return). Left at a count of 1, the goods guard refused
-    the row on a document saved untouched, and classifying its poste booked
-    stock at a negative unit cost. A movement already booked from one (a
-    stock item the supplier kept) is booked again.
+    the row on a document saved untouched, and classifying its charge item
+    booked stock at a negative unit cost. A movement already booked from one
+    (a stock item the supplier kept) is booked again.
     Returns how many products went back.
     """
     for line in charge_credits(supplier):
@@ -362,9 +359,7 @@ def _as_parsed(invoice: Invoice, stored) -> ParsedInvoice:
     for line in stored:
         by_rate[line.vat_rate] = by_rate.get(line.vat_rate, Decimal("0")) + line.total_ht
     breakdown = [
-        (rate, total, (total * rate).quantize(Decimal("0.01")))
-        for rate, total in sorted(by_rate.items())
-        if total
+        (rate, total, (total * rate).quantize(Decimal("0.01"))) for rate, total in sorted(by_rate.items()) if total
     ]
     return ParsedInvoice(
         vat_breakdown=breakdown,
@@ -374,8 +369,12 @@ def _as_parsed(invoice: Invoice, stored) -> ParsedInvoice:
         invoice_date=invoice.invoice_date,
         lines=[
             ParsedLine(
-                raw_name=line.raw_name, quantity=line.quantity, total_volume=line.total_volume,
-                unit_cost_ht=line.unit_cost_ht, total_ht=line.total_ht, vat_rate=line.vat_rate,
+                raw_name=line.raw_name,
+                quantity=line.quantity,
+                total_volume=line.total_volume,
+                unit_cost_ht=line.unit_cost_ht,
+                total_ht=line.total_ht,
+                vat_rate=line.vat_rate,
             )
             for line in stored
         ],
@@ -446,7 +445,7 @@ def spread_charges(lines) -> Decimal:
 
     The cents left over go to the **largest remainders**, as a ticket's
     promotion is spread (`parsers.generic_receipt._spread`): three lines
-    sharing 1,00 € get 0,34 0,33 0,33, never 0,33 x 3 with a centime lost.
+    sharing 1,00 € get 0,34 0,33 0,33, never 0,33 x 3 with a cent lost.
     Lost, the shares would not add up to the charge and a euro of delivery a
     year would vanish out of every cost with nothing saying so.
     """
@@ -464,7 +463,9 @@ def spread_charges(lines) -> Decimal:
     left = int((charge - sum(shares, start=Decimal("0"))) / CENTS)
     # Furthest from its exact share first, whichever way the rounding went -
     # a credit on the delivery is negative and rounds the other way.
-    by_remainder = sorted(range(len(targets)), key=lambda position: (-abs(exact[position] - shares[position]), position))
+    by_remainder = sorted(
+        range(len(targets)), key=lambda position: (-abs(exact[position] - shares[position]), position)
+    )
     step = CENTS if left > 0 else -CENTS
     for position in by_remainder[: abs(left)]:
         shares[position] += step
@@ -482,7 +483,7 @@ def flag_products(supplier: Supplier, parsed_lines, resolved) -> None:
     line are that, and the rule has to be **both ways** for each of them, or
     a flag set once can never come off again.
 
-    * Every product of a supplier whose documents are charges. A poste
+    * Every product of a supplier whose documents are charges. A charge item
       renamed by hand must not land in the queue of products to classify -
       and the flag has to come off when that supplier goes back to selling
       goods, or a box ticked by mistake leaves its products out of the
@@ -721,7 +722,9 @@ def replace_invoice_lines(invoice: Invoice, parsed_lines) -> Invoice:
         .distinct()
     )
     if removed and take_ids:
-        used = set(StockTakeLineSource.objects.filter(invoice_line__in=removed).values_list("invoice_line_id", flat=True))
+        used = set(
+            StockTakeLineSource.objects.filter(invoice_line__in=removed).values_list("invoice_line_id", flat=True)
+        )
         raise InvoiceLinesInUseError(
             [line for line in removed if line.pk in used],
             list(StockTake.objects.filter(id__in=take_ids).order_by("taken_at")),

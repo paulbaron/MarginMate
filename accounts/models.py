@@ -1,11 +1,11 @@
-"""Logins, espaces and what links them - the CENTRAL rows.
+"""Logins, tenants and what links them - the CENTRAL rows.
 
-One bar is one « espace » (`Tenant`), and one espace is one SQLite database
+One bar is one « espace » (`Tenant`), and one tenant is one SQLite database
 of its own (`TENANTS_ROOT/<dir_name>/db.sqlite3`, accounts/paths.py) with
-its files beside it. What has to be found BEFORE an espace is chosen lives
+its files beside it. What has to be found BEFORE a tenant is chosen lives
 here instead, in the accounts database (settings.DATABASES["accounts"],
-accounts/router.py): who may log in, which espace a login
-belongs to, the invitation codes a signup needs, and which espace an
+accounts/router.py): who may log in, which tenant a login
+belongs to, the invitation codes a signup needs, and which tenant an
 employee's public signing link belongs to (he is not logged in).
 
 No business model points at any of these, and none of these at a business
@@ -37,7 +37,7 @@ def hash_secret(value: str) -> str:
 
 
 class Tenant(models.Model):
-    """One espace: one bar's database and files. In the pages, « votre
+    """One tenant: one bar's database and files. In the pages, « votre
     bar » / « espace » - never « workspace », which already names a
     navigation section in this codebase."""
 
@@ -49,7 +49,7 @@ class Tenant(models.Model):
         validators=[RegexValidator(DIR_NAME_PATTERN)],
         help_text="Nom du dossier de l'espace sous TENANTS_ROOT : tiré au hasard, jamais le nom du bar.",
     )
-    # The owner's espace only: Metro, the invoice mailbox, L'Addition, the
+    # The owner's tenant only: Metro, the invoice mailbox, L'Addition, the
     # LLM parser and the portals' .env credentials are the owner's accounts
     # (accounts.tenancy.integrations_allowed). Never set by a signup.
     uses_server_integrations = models.BooleanField(
@@ -70,7 +70,7 @@ class Tenant(models.Model):
 
 
 class Membership(models.Model):
-    """A login's place in an espace. One per user today (the middleware
+    """A login's place in a tenant. One per user today (the middleware
     takes the first); several later, without moving any data."""
 
     class Role(models.TextChoices):
@@ -136,17 +136,17 @@ class Invitation(models.Model):
 
 
 class SigningLink(models.Model):
-    """Which espace an employee's public signing link belongs to.
+    """Which tenant an employee's public signing link belongs to.
 
-    The link (/personnel/signer/<token>/…) carries no espace and the
-    employee is not logged in, so the page finds the espace here by the
+    The link (/personnel/signer/<token>/…) carries no tenant and the
+    employee is not logged in, so the page finds the tenant here by the
     token's hash (accounts/links.py), binds it, and then reads the request
-    in that espace's own database. Written when a link is issued or renewed
+    in that tenant's own database. Written when a link is issued or renewed
     (the old hash removed), removed only when its request is DELETED or
     PURGED: a cancelled, superseded or expired request keeps its link,
     whose page says so (410) - removed, it would say « lien inconnu »
     (404), which is not what happened. The index holds exactly
-    the hashes the espaces' requests hold (adoption included)."""
+    the hashes the tenants' requests hold (adoption included)."""
 
     token_hash = models.CharField(max_length=64, unique=True)
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="signing_links")

@@ -1,11 +1,11 @@
 {% comment %}
 « Récupérer les bons »: no route of this app's - the post goes to Achats'
-gather (invoices:gather, every rule of it kept: the espace's right to the
-mailbox, one gather at a time, a thread bound to the espace) with one
+gather (invoices:gather, every rule of it kept: the tenant's right to the
+mailbox, one gather at a time, a thread bound to the tenant) with one
 source per active format that has a sender, from the earliest date one of
 them needs, and `retour` to come back here. No end date: the gather ends on
 the day it runs (tasks: localdate) - a tab opened yesterday posted
-yesterday, and missed the bon mailed today. Disabled while a gather runs
+yesterday, and missed the slip mailed today. Disabled while a gather runs
 (ui.js follows the card, data-job-control).
 {% endcomment %}
 <form method="post" action="{% url 'invoices:gather' %}" class="inline-form gather-form">

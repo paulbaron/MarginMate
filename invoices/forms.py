@@ -362,7 +362,7 @@ class LineCorrectionForm(SpreadChargeRowMixin, BlankRowTolerantForm):
 
     @property
     def unit_price_hint(self) -> str:
-        """"soit 0.39 € TTC l'unité" under a row of several: an amount for
+        """ "soit 0.39 € TTC l'unité" under a row of several: an amount for
         the whole line reads like a price each, and a wrong count only shows
         once divided. The page's script works it out the same way as typed."""
         quantity = self._shown("quantity")
@@ -596,7 +596,9 @@ class InvoiceTypeForm(forms.ModelForm):
         supplier = self.cleaned_data["supplier"]
         if supplier != NEW_SHOP:
             return supplier, False
-        return create_shop(self.cleaned_data["new_name"], expenses_only=bool(self.cleaned_data.get("new_expenses"))), True
+        return create_shop(
+            self.cleaned_data["new_name"], expenses_only=bool(self.cleaned_data.get("new_expenses"))
+        ), True
 
 
 class WebsiteInvoiceSourceForm(forms.ModelForm):
@@ -663,7 +665,7 @@ class EmailInvoiceSourceForm(forms.ModelForm):
         }
 
 
-from .ocr import IMAGE_EXTENSIONS  # noqa: E402 - kept next to the only thing using it
+from .ocr import IMAGE_EXTENSIONS
 
 #: What the one import takes. `.xml` is there since electronic invoicing:
 #: an EN 16931 invoice reaches the bar as a Factur-X PDF or as the XML on
@@ -674,12 +676,12 @@ RECEIPT_EXTENSIONS = (".pdf", ".xml") + IMAGE_EXTENSIONS
 
 #: What one folder of tickets may weigh, the files it stages together - an
 #: ignored or refused file is never written, so it does not count (security
-#: audit UPLOAD-1; each file also has common.UPLOAD_MAX_FILE_BYTES, 25 Mo). The
-#: owner's real folder is 42 scans for 12.8 Mo (0.3 Mo each); a phone photo
-#: is 3 to 5 Mo. 500 Mo is 100 to 160 phone photos - months of tickets in
+#: audit UPLOAD-1; each file also has common.UPLOAD_MAX_FILE_BYTES, 25 MB). The
+#: owner's real folder is 42 scans for 12.8 MB (0.3 MB each); a phone photo
+#: is 3 to 5 MB. 500 MB is 100 to 160 phone photos - months of tickets in
 #: one go - or 1 600 scans like his, within the 2 000 files a request may
 #: carry (DATA_UPLOAD_MAX_NUMBER_FILES), and bounds what one request stages
-#: on the server's disk. Online, Cloudflare's own limit per request (100 Mo
+#: on the server's disk. Online, Cloudflare's own limit per request (100 MB
 #: on its free plan) is lower still: a bigger folder goes in several times.
 RECEIPT_BATCH_MAX_BYTES = 500 * MEGABYTE
 
@@ -727,13 +729,13 @@ class ReceiptBatchUploadForm(forms.Form):
         A folder carries whatever else is in it - Thumbs.db, desktop.ini, a
         note - and refusing the whole selection over one of those is how a
         folder upload stops being usable. They are listed as ignored on the
-        batch page instead. A file over 25 Mo (common.UPLOAD_MAX_FILE_BYTES)
+        batch page instead. A file over 25 MB (common.UPLOAD_MAX_FILE_BYTES)
         is set aside the same way, as that file's error (`refused`: its name
         and the sentence), never written to the server. Refused whole: a
         selection with nothing usable, and one whose files to be staged weigh
         over RECEIPT_BATCH_MAX_BYTES - those only: the total bounds what is
         written to the server's disk, and an ignored or refused file never
-        is (a 200 Mo video beside the photos refused the whole folder).
+        is (a 200 MB video beside the photos refused the whole folder).
         """
         uploads = [upload for upload in self.cleaned_data["files"] if upload]
         self.refused = []
@@ -764,9 +766,7 @@ class ReceiptShopForm(forms.Form):
     of the suppliers, or a new shop - named, and with the text its tickets
     print at the top, so the next ones are recognised."""
 
-    supplier = forms.CharField(
-        label="Enseigne", error_messages={"required": "Choisissez l'enseigne du ticket."}
-    )
+    supplier = forms.CharField(label="Enseigne", error_messages={"required": "Choisissez l'enseigne du ticket."})
     new_name = forms.CharField(label="Nom de la nouvelle enseigne", required=False, max_length=255)
     new_header = forms.CharField(label="Texte en tête de ses tickets", required=False, max_length=100)
     # A new supplier made from a charge's page is one of charges too, unless
@@ -841,7 +841,9 @@ class SupplierCreateForm(forms.Form):
         max_length=100,
         help_text="Le texte imprimé en haut de ses documents, tel quel ; vous pourrez aussi le choisir sur son premier document.",
     )
-    arrivee = forms.ChoiceField(label="Ses factures arrivent", choices=ARRIVALS, initial="import", widget=forms.RadioSelect)
+    arrivee = forms.ChoiceField(
+        label="Ses factures arrivent", choices=ARRIVALS, initial="import", widget=forms.RadioSelect
+    )
 
     def clean_name(self):
         from .receipts import supplier_named
@@ -882,8 +884,8 @@ class InvoiceUploadForm(ReceiptShopForm):
     def clean_supplier(self):
         value = self.cleaned_data["supplier"].strip()
         if is_id(value) and Supplier.objects.filter(pk=value, parser_key=LLM_PARSER_KEY).exists():
-            # The AI reading runs on the owner's key: not offered in an
-            # espace that may not use the server's accounts, and refused
+            # The AI reading runs on the owner's key: not offered in a
+            # tenant that may not use the server's accounts, and refused
             # here when posted all the same (invoices/integrations.py).
             if not integrations_allowed():
                 raise forms.ValidationError(integrations.AI_READING)
@@ -953,7 +955,12 @@ class VatRowForm(forms.Form):
     """
 
     rate = forms.DecimalField(
-        label="Taux", required=False, max_digits=5, decimal_places=2, min_value=0, max_value=100,
+        label="Taux",
+        required=False,
+        max_digits=5,
+        decimal_places=2,
+        min_value=0,
+        max_value=100,
         widget=forms.NumberInput(attrs={"step": "0.1", "placeholder": "%", "aria-label": "Taux de TVA"}),
         error_messages={
             "invalid": "Saisissez un nombre.",
@@ -968,11 +975,19 @@ class VatRowForm(forms.Form):
     # No min: a credit's base and tax are negative. step="any": with "0.01"
     # the browser refuses a four-decimal base before it is even posted.
     base = forms.DecimalField(
-        label="Base HT", required=False, max_digits=14, decimal_places=4, error_messages=_VAT_AMOUNT_ERRORS,
+        label="Base HT",
+        required=False,
+        max_digits=14,
+        decimal_places=4,
+        error_messages=_VAT_AMOUNT_ERRORS,
         widget=forms.NumberInput(attrs={"step": "any", "placeholder": "Base HT", "aria-label": "Base HT"}),
     )
     vat = forms.DecimalField(
-        label="TVA", required=False, max_digits=14, decimal_places=4, error_messages=_VAT_AMOUNT_ERRORS,
+        label="TVA",
+        required=False,
+        max_digits=14,
+        decimal_places=4,
+        error_messages=_VAT_AMOUNT_ERRORS,
         widget=forms.NumberInput(attrs={"step": "any", "placeholder": "TVA", "aria-label": "Montant de TVA"}),
     )
 

@@ -4,15 +4,14 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('invoices', '0014_backfill_receipt_hashes'),
+        ("invoices", "0014_backfill_receipt_hashes"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='invoiceline',
-            name='read_as',
+            model_name="invoiceline",
+            name="read_as",
             field=models.CharField(blank=True, max_length=255),
         ),
     ]

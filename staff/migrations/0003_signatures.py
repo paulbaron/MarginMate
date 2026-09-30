@@ -4,89 +4,181 @@ e-mail, the signature requests and their hash-chained events
 (staff/models.py, staff/signature_requests.py). Only new tables and a blank
 column: nothing existing changes meaning. WRITTEN and left to be applied."""
 
+import uuid
+
 import django.db.models.deletion
 import django.utils.timezone
-import uuid
 from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('staff', '0002_timesheet_typical_week'),
+        ("staff", "0002_timesheet_typical_week"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='employee',
-            name='email',
-            field=models.EmailField(blank=True, max_length=254, verbose_name='e-mail'),
+            model_name="employee",
+            name="email",
+            field=models.EmailField(blank=True, max_length=254, verbose_name="e-mail"),
         ),
         migrations.CreateModel(
-            name='SignatureRequest',
+            name="SignatureRequest",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('uuid', models.UUIDField(default=uuid.uuid4, editable=False, unique=True, verbose_name='identifiant du document')),
-                ('version', models.PositiveIntegerField(verbose_name='version')),
-                ('status', models.CharField(choices=[('en_attente', 'En attente de la signature du salarié'), ('signee_salarie', 'Signée par le salarié, à contresigner'), ('terminee', 'Signée et contresignée'), ('annulee', 'Annulée'), ('remplacee', 'Remplacée par une nouvelle version'), ('expiree', 'Expirée sans signature')], default='en_attente', max_length=16, verbose_name='état')),
-                ('created_at', models.DateTimeField(default=django.utils.timezone.now, verbose_name='créée le')),
-                ('expires_at', models.DateTimeField(verbose_name="lien valable jusqu'au")),
-                ('token_hash', models.CharField(max_length=64, unique=True)),
-                ('month_snapshot', models.JSONField(default=dict)),
-                ('document_sha256', models.CharField(max_length=64, verbose_name='empreinte du document figé')),
-                ('employee_signed_at', models.DateTimeField(blank=True, null=True)),
-                ('employee_pdf_sha256', models.CharField(blank=True, max_length=64)),
-                ('signature_png_sha256', models.CharField(blank=True, max_length=64)),
-                ('employee_timestamp_at', models.DateTimeField(blank=True, null=True)),
-                ('employee_timestamp_authority', models.CharField(blank=True, max_length=255)),
-                ('employer_signed_at', models.DateTimeField(blank=True, null=True)),
-                ('final_pdf_sha256', models.CharField(blank=True, max_length=64)),
-                ('employer_timestamp_at', models.DateTimeField(blank=True, null=True)),
-                ('employer_timestamp_authority', models.CharField(blank=True, max_length=255)),
-                ('proof_sha256', models.CharField(blank=True, max_length=64, verbose_name='empreinte du dossier de preuve')),
-                ('identification', models.CharField(blank=True, choices=[('code_email', "code à usage unique envoyé par e-mail à l'adresse du salarié"), ('code_remis', "code à usage unique affiché à l'employeur, qui l'a transmis au salarié par un autre canal que le lien")], max_length=16)),
-                ('reservation', models.TextField(blank=True, verbose_name='réserves')),
-                ('statement_version', models.CharField(blank=True, max_length=16)),
-                ('cancelled_reason', models.TextField(blank=True)),
-                ('code_hash', models.CharField(blank=True, max_length=64)),
-                ('code_sent_at', models.DateTimeField(blank=True, null=True)),
-                ('code_attempts', models.PositiveSmallIntegerField(default=0)),
-                ('code_method', models.CharField(blank=True, choices=[('code_email', "code à usage unique envoyé par e-mail à l'adresse du salarié"), ('code_remis', "code à usage unique affiché à l'employeur, qui l'a transmis au salarié par un autre canal que le lien")], max_length=16)),
-                ('code_verified_at', models.DateTimeField(blank=True, null=True)),
-                ('last_event_hash', models.CharField(blank=True, max_length=64)),
-                ('timesheet', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='signature_requests', to='staff.timesheet')),
+                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
+                (
+                    "uuid",
+                    models.UUIDField(
+                        default=uuid.uuid4, editable=False, unique=True, verbose_name="identifiant du document"
+                    ),
+                ),
+                ("version", models.PositiveIntegerField(verbose_name="version")),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[
+                            ("en_attente", "En attente de la signature du salarié"),
+                            ("signee_salarie", "Signée par le salarié, à contresigner"),
+                            ("terminee", "Signée et contresignée"),
+                            ("annulee", "Annulée"),
+                            ("remplacee", "Remplacée par une nouvelle version"),
+                            ("expiree", "Expirée sans signature"),
+                        ],
+                        default="en_attente",
+                        max_length=16,
+                        verbose_name="état",
+                    ),
+                ),
+                ("created_at", models.DateTimeField(default=django.utils.timezone.now, verbose_name="créée le")),
+                ("expires_at", models.DateTimeField(verbose_name="lien valable jusqu'au")),
+                ("token_hash", models.CharField(max_length=64, unique=True)),
+                ("month_snapshot", models.JSONField(default=dict)),
+                ("document_sha256", models.CharField(max_length=64, verbose_name="empreinte du document figé")),
+                ("employee_signed_at", models.DateTimeField(blank=True, null=True)),
+                ("employee_pdf_sha256", models.CharField(blank=True, max_length=64)),
+                ("signature_png_sha256", models.CharField(blank=True, max_length=64)),
+                ("employee_timestamp_at", models.DateTimeField(blank=True, null=True)),
+                ("employee_timestamp_authority", models.CharField(blank=True, max_length=255)),
+                ("employer_signed_at", models.DateTimeField(blank=True, null=True)),
+                ("final_pdf_sha256", models.CharField(blank=True, max_length=64)),
+                ("employer_timestamp_at", models.DateTimeField(blank=True, null=True)),
+                ("employer_timestamp_authority", models.CharField(blank=True, max_length=255)),
+                (
+                    "proof_sha256",
+                    models.CharField(blank=True, max_length=64, verbose_name="empreinte du dossier de preuve"),
+                ),
+                (
+                    "identification",
+                    models.CharField(
+                        blank=True,
+                        choices=[
+                            ("code_email", "code à usage unique envoyé par e-mail à l'adresse du salarié"),
+                            (
+                                "code_remis",
+                                "code à usage unique affiché à l'employeur, qui l'a transmis au salarié par un autre canal que le lien",
+                            ),
+                        ],
+                        max_length=16,
+                    ),
+                ),
+                ("reservation", models.TextField(blank=True, verbose_name="réserves")),
+                ("statement_version", models.CharField(blank=True, max_length=16)),
+                ("cancelled_reason", models.TextField(blank=True)),
+                ("code_hash", models.CharField(blank=True, max_length=64)),
+                ("code_sent_at", models.DateTimeField(blank=True, null=True)),
+                ("code_attempts", models.PositiveSmallIntegerField(default=0)),
+                (
+                    "code_method",
+                    models.CharField(
+                        blank=True,
+                        choices=[
+                            ("code_email", "code à usage unique envoyé par e-mail à l'adresse du salarié"),
+                            (
+                                "code_remis",
+                                "code à usage unique affiché à l'employeur, qui l'a transmis au salarié par un autre canal que le lien",
+                            ),
+                        ],
+                        max_length=16,
+                    ),
+                ),
+                ("code_verified_at", models.DateTimeField(blank=True, null=True)),
+                ("last_event_hash", models.CharField(blank=True, max_length=64)),
+                (
+                    "timesheet",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.PROTECT,
+                        related_name="signature_requests",
+                        to="staff.timesheet",
+                    ),
+                ),
             ],
             options={
-                'verbose_name': 'demande de signature',
-                'verbose_name_plural': 'demandes de signature',
-                'ordering': ['-created_at', '-id'],
+                "verbose_name": "demande de signature",
+                "verbose_name_plural": "demandes de signature",
+                "ordering": ["-created_at", "-id"],
             },
         ),
         migrations.CreateModel(
-            name='SignatureEvent',
+            name="SignatureEvent",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('at', models.DateTimeField(default=django.utils.timezone.now)),
-                ('kind', models.CharField(choices=[('created', 'Demande créée, document figé'), ('link_sent', 'Lien envoyé par e-mail au salarié'), ('link_renewed', 'Nouveau lien créé (le précédent ne fonctionne plus)'), ('link_opened', 'Lien ouvert'), ('code_sent', 'Code à usage unique envoyé par e-mail'), ('code_given', "Code à usage unique affiché à l'employeur, à transmettre au salarié"), ('code_failed', 'Code erroné saisi'), ('code_verified', 'Code vérifié : identification faite'), ('employee_signed', 'Signé par le salarié'), ('timestamp_failed', "Horodatage impossible : signature refusée, rien n'a été enregistré"), ('countersigned', "Contresigné par l'employeur"), ('copy_sent', 'Copie signée envoyée par e-mail au salarié'), ('mail_failed', "Échec de l'envoi d'un e-mail"), ('cancelled', 'Demande annulée'), ('superseded', 'Remplacée par une nouvelle version du mois'), ('expired', 'Lien expiré sans signature'), ('downloaded', 'Document téléchargé'), ('verified', 'Signatures vérifiées')], max_length=24)),
-                ('ip', models.GenericIPAddressField(blank=True, null=True)),
-                ('user_agent', models.CharField(blank=True, max_length=255)),
-                ('detail', models.JSONField(blank=True, default=dict)),
-                ('previous_hash', models.CharField(max_length=64)),
-                ('hash', models.CharField(max_length=64, unique=True)),
-                ('request', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='events', to='staff.signaturerequest')),
+                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
+                ("at", models.DateTimeField(default=django.utils.timezone.now)),
+                (
+                    "kind",
+                    models.CharField(
+                        choices=[
+                            ("created", "Demande créée, document figé"),
+                            ("link_sent", "Lien envoyé par e-mail au salarié"),
+                            ("link_renewed", "Nouveau lien créé (le précédent ne fonctionne plus)"),
+                            ("link_opened", "Lien ouvert"),
+                            ("code_sent", "Code à usage unique envoyé par e-mail"),
+                            ("code_given", "Code à usage unique affiché à l'employeur, à transmettre au salarié"),
+                            ("code_failed", "Code erroné saisi"),
+                            ("code_verified", "Code vérifié : identification faite"),
+                            ("employee_signed", "Signé par le salarié"),
+                            ("timestamp_failed", "Horodatage impossible : signature refusée, rien n'a été enregistré"),
+                            ("countersigned", "Contresigné par l'employeur"),
+                            ("copy_sent", "Copie signée envoyée par e-mail au salarié"),
+                            ("mail_failed", "Échec de l'envoi d'un e-mail"),
+                            ("cancelled", "Demande annulée"),
+                            ("superseded", "Remplacée par une nouvelle version du mois"),
+                            ("expired", "Lien expiré sans signature"),
+                            ("downloaded", "Document téléchargé"),
+                            ("verified", "Signatures vérifiées"),
+                        ],
+                        max_length=24,
+                    ),
+                ),
+                ("ip", models.GenericIPAddressField(blank=True, null=True)),
+                ("user_agent", models.CharField(blank=True, max_length=255)),
+                ("detail", models.JSONField(blank=True, default=dict)),
+                ("previous_hash", models.CharField(max_length=64)),
+                ("hash", models.CharField(max_length=64, unique=True)),
+                (
+                    "request",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE, related_name="events", to="staff.signaturerequest"
+                    ),
+                ),
             ],
             options={
-                'verbose_name': 'événement de signature',
-                'verbose_name_plural': 'événements de signature',
-                'ordering': ['id'],
+                "verbose_name": "événement de signature",
+                "verbose_name_plural": "événements de signature",
+                "ordering": ["id"],
             },
         ),
         migrations.AddConstraint(
-            model_name='signaturerequest',
-            constraint=models.UniqueConstraint(fields=('timesheet', 'version'), name='unique_signature_request_version'),
+            model_name="signaturerequest",
+            constraint=models.UniqueConstraint(
+                fields=("timesheet", "version"), name="unique_signature_request_version"
+            ),
         ),
         migrations.AddConstraint(
-            model_name='signaturerequest',
-            constraint=models.UniqueConstraint(condition=models.Q(('status__in', ['en_attente', 'signee_salarie', 'terminee'])), fields=('timesheet',), name='one_open_signature_request_per_month'),
+            model_name="signaturerequest",
+            constraint=models.UniqueConstraint(
+                condition=models.Q(("status__in", ["en_attente", "signee_salarie", "terminee"])),
+                fields=("timesheet",),
+                name="one_open_signature_request_per_month",
+            ),
         ),
     ]

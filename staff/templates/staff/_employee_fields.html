@@ -1,12 +1,12 @@
 {% comment %}
-Le nom, l'e-mail et la semaine type d'un salarié : « Ajouter un salarié » sur la liste, et la page du
-salarié. Contexte : `form` (staff.forms.EmployeeForm). L'e-mail est facultatif : c'est là que partent le
-lien de signature et le code (staff/signature_mail.py).
+An employee's name, e-mail and typical week: « Ajouter un salarié » on the list, and the employee's
+own page. Context: `form` (staff.forms.EmployeeForm). The e-mail is optional: it is where the signing
+link and the code go (staff/signature_mail.py).
 
-Les sept jours sont des champs texte, pas des nombres : « 7,5 » et « 7h30 » s'y écrivent (un
-<input type="number"> refuse la virgule selon la langue du navigateur). Un jour vide est un jour de
-repos, et le champ le dit. Le total sous les sept champs est celui du formulaire tel qu'il est
-affiché ; timesheet.js le tient à jour pendant la saisie.
+The seven days are text fields, not numbers: « 7,5 » and « 7h30 » can be typed in them (an
+<input type="number"> refuses the comma depending on the browser's language). An empty day is a day
+off, and the field says so. The total under the seven fields is the form's as it is drawn;
+timesheet.js keeps it up to date while typing.
 {% endcomment %}
 {% if form.non_field_errors %}
     <div class="message message-error">

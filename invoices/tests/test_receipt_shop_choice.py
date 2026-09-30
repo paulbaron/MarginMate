@@ -114,7 +114,8 @@ class ImportAsChosenShopTests(TestCase):
 
     def test_a_reader_that_fails_still_files_the_ticket_to_type_in(self):
         with mock.patch(
-            "invoices.parsers.generic_receipt.GenericReceiptParser.parse_pages", side_effect=RuntimeError("colonne introuvable")
+            "invoices.parsers.generic_receipt.GenericReceiptParser.parse_pages",
+            side_effect=RuntimeError("colonne introuvable"),
         ):
             invoice = self._import(supplier=self.sabbh)
         self.assertEqual(invoice.lines.count(), 0)
@@ -148,7 +149,7 @@ class ChooseShopInBatchTests(TestCase):
             parse_checks=[{"label": "Enseigne choisie à la main", "passed": True, "detail": ""}],
         )
         batch = stage_batch([upload("124_Sabbah.pdf"), upload("deja.pdf")])
-        self.folder = os.path.join(paths.imports_dir(), "receipt_batches",str(batch.pk))
+        self.folder = os.path.join(paths.imports_dir(), "receipt_batches", str(batch.pk))
         self.addCleanup(shutil.rmtree, self.folder, True)
         outcomes = [UnrecognisedShopError("Enseigne non reconnue sur ce ticket."), DuplicateInvoiceError("Déjà là.")]
         with mock.patch("invoices.receipt_batches.import_document", side_effect=outcomes):
@@ -170,7 +171,7 @@ class ChooseShopInBatchTests(TestCase):
         response = self.client.get(self.page)
         html = response.content.decode()
         start = html.index(f'action="{self.url}"')
-        self.assertIn('name="new_expenses"', html[start:html.index("</form>", start)])
+        self.assertIn('name="new_expenses"', html[start : html.index("</form>", start)])
 
     def test_the_file_is_kept_until_its_shop_is_chosen(self):
         self.assertEqual(self.batch.results[0]["status"], "unrecognised")
@@ -181,12 +182,12 @@ class ChooseShopInBatchTests(TestCase):
         """A generic ValueError is a broken file, not an unknown shop:
         choosing a shop would not make it readable."""
         batch = stage_batch([upload("casse.pdf")])
-        self.addCleanup(shutil.rmtree, os.path.join(paths.imports_dir(), "receipt_batches",str(batch.pk)), True)
+        self.addCleanup(shutil.rmtree, os.path.join(paths.imports_dir(), "receipt_batches", str(batch.pk)), True)
         with mock.patch("invoices.receipt_batches.import_document", side_effect=ValueError("image tronquée")):
             batch = run_receipt_batch(batch.pk)
         self.assertEqual(batch.results[0]["status"], "error")
         self.assertEqual(batch.awaiting_shop_count, 0)
-        self.assertFalse(os.path.exists(os.path.join(paths.imports_dir(), "receipt_batches",str(batch.pk))))
+        self.assertFalse(os.path.exists(os.path.join(paths.imports_dir(), "receipt_batches", str(batch.pk))))
 
     def test_the_batch_page_offers_the_shops(self):
         response = self.client.get(self.page)
@@ -199,25 +200,31 @@ class ChooseShopInBatchTests(TestCase):
         # page's PDF import offers it, for invoices).
         html = response.content.decode()
         start = html.index(f'action="{self.url}"')
-        self.assertNotIn("analyse IA", html[start:html.index("</form>", start)])
+        self.assertNotIn("analyse IA", html[start : html.index("</form>", start)])
         self.assertContains(response, "dont l'enseigne n'a pas été reconnue")
 
     def test_choosing_the_shop_imports_the_file_and_opens_it_for_review(self):
         response, importer = self.choose()
         # Checked within its import: saved, the next ticket of the import
         # comes up, then the import itself.
-        self.assertRedirects(response, reverse("invoices:receipt_review", args=[self.receipt.pk]) + f"?lot={self.batch.pk}")
+        self.assertRedirects(
+            response, reverse("invoices:receipt_review", args=[self.receipt.pk]) + f"?lot={self.batch.pk}"
+        )
         importer.assert_called_once()
         self.assertEqual(importer.call_args.args, (self.file,))
         self.assertEqual(importer.call_args.kwargs, {"display_filename": "124_Sabbah.pdf", "supplier": self.sabbh})
         entry = self.batch.results[0]
-        self.assertEqual((entry["status"], entry["invoice_id"], entry["shop"]), ("ok", self.receipt.pk, "Sabbh Oriental"))
+        self.assertEqual(
+            (entry["status"], entry["invoice_id"], entry["shop"]), ("ok", self.receipt.pk, "Sabbh Oriental")
+        )
         self.assertEqual((self.batch.imported_count, self.batch.awaiting_shop_count), (1, 0))
         self.assertFalse(os.path.exists(self.folder))
         self.assertIn("Sabbh Oriental", self.batch.log)
 
     def test_a_ticket_already_in_is_said_so(self):
-        response, _ = self.choose(side_effect=DuplicateInvoiceError("Déjà dans MarginMate : Sabbh Oriental n° 6800001."))
+        response, _ = self.choose(
+            side_effect=DuplicateInvoiceError("Déjà dans MarginMate : Sabbh Oriental n° 6800001.")
+        )
         self.assertRedirects(response, self.page)
         self.assertEqual(self.batch.results[0]["status"], "duplicate")
         self.assertIn("Déjà dans MarginMate : Sabbh Oriental n° 6800001.", messages_of(response))
@@ -231,10 +238,12 @@ class ChooseShopInBatchTests(TestCase):
         self.assertTrue(os.path.exists(self.file))
         # Said by kind, on the page and in the batch's log; the exception's
         # own words in the server's log only (security audit LB-3).
-        self.assertTrue(any(
-            "n'a pas pu être importé comme ticket" in message and SERVER_ERROR in message
-            for message in messages_of(response)
-        ))
+        self.assertTrue(
+            any(
+                "n'a pas pu être importé comme ticket" in message and SERVER_ERROR in message
+                for message in messages_of(response)
+            )
+        )
         self.assertIn(SERVER_ERROR, self.batch.log)
         self.assertFalse(any("photo illisible" in message for message in messages_of(response)))
         self.assertNotIn("photo illisible", self.batch.log)
@@ -253,7 +262,9 @@ class ChooseShopInBatchTests(TestCase):
         self.assertContains(page, f'id="shop-choice-{self.batch.pk}-0" hx-preserve')
         response, importer = self.choose()
         importer.assert_called_once()
-        self.assertRedirects(response, reverse("invoices:receipt_review", args=[self.receipt.pk]) + f"?lot={self.batch.pk}")
+        self.assertRedirects(
+            response, reverse("invoices:receipt_review", args=[self.receipt.pk]) + f"?lot={self.batch.pk}"
+        )
         self.assertEqual(self.batch.results[0]["status"], "ok")
 
     def test_a_file_from_before_files_were_kept_asks_for_a_new_upload(self):
@@ -319,7 +330,7 @@ class ChoiceDuringTheRunTests(TestCase):
         self.sabbh = Supplier.objects.get(code="SABBH")
         self.receipt = make_invoice(supplier=self.sabbh, invoice_date=date(2024, 8, 13))
         batch = stage_batch([upload("sans-entete.pdf"), upload("a.pdf"), upload("b.pdf")])
-        self.addCleanup(shutil.rmtree, os.path.join(paths.imports_dir(), "receipt_batches",str(batch.pk)), True)
+        self.addCleanup(shutil.rmtree, os.path.join(paths.imports_dir(), "receipt_batches", str(batch.pk)), True)
         # A first run left the first file waiting for its shop, and was
         # stopped before the other two.
         batch.results[0].update(status="unrecognised", kept=True, message="Enseigne non reconnue.")
@@ -331,11 +342,13 @@ class ChoiceDuringTheRunTests(TestCase):
         """import_receipt: records what it is asked to read, does
         `while_reading` (another request's work) during the first file of the
         run, and imports each file as its own ticket."""
+
         def fake(path, display_filename, supplier=None):
             self.read.append((display_filename, supplier))
             if while_reading and supplier is None and len(self.read) == 1:
                 while_reading()
             return make_invoice(supplier=supplier or self.sabbh, invoice_number=f"{display_filename}-{len(self.read)}")
+
         return fake
 
     def run_batch(self, while_reading=None):
@@ -367,8 +380,10 @@ class ChoiceDuringTheRunTests(TestCase):
             requeued.append(requeue_unrecognised(self.batch))
             return self.receipt
 
-        with mock.patch("invoices.receipt_batches.import_document", side_effect=fake), \
-                mock.patch("invoices.receipt_batches.threading.Thread") as thread:
+        with (
+            mock.patch("invoices.receipt_batches.import_document", side_effect=fake),
+            mock.patch("invoices.receipt_batches.threading.Thread") as thread,
+        ):
             entry = import_with_shop(self.batch, 0, self.sabbh)
         self.assertEqual((requeued, entry["status"]), ([0], "ok"))
         thread.assert_not_called()
@@ -412,8 +427,12 @@ class TypedLinesMatchingTests(TestCase):
             supplier=Supplier.objects.get(code=code), parse_checks=[{"label": "x", "passed": True, "detail": ""}]
         )
         line = ParsedLine(
-            raw_name="C0CA 33CL", quantity=1, total_volume=Decimal("0"), unit_cost_ht=Decimal("1"),
-            total_ht=Decimal("1"), vat_rate=Decimal("0.055"),
+            raw_name="C0CA 33CL",
+            quantity=1,
+            total_volume=Decimal("0"),
+            unit_cost_ht=Decimal("1"),
+            total_ht=Decimal("1"),
+            vat_rate=Decimal("0.055"),
         )
         from inventory.matching import resolve_products
 

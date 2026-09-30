@@ -1,6 +1,6 @@
-"""A request runs bound to the logged-in user's espace, rendering included
+"""A request runs bound to the logged-in user's tenant, rendering included
 (accounts/middleware.py), and the navigation's badges count nothing when
-no espace is bound."""
+no tenant is bound."""
 
 import tempfile
 from pathlib import Path
@@ -21,7 +21,6 @@ from inventory.context_processors import review_count
 from invoices.context_processors import receipt_review_count
 from recipes.models import PosProduct
 from tests.factories import make_product, make_supplier
-
 
 #: A made-up value per path converter (« <int:pk> », « <staff_month:month> »).
 SAMPLES = {
@@ -120,7 +119,7 @@ class RealPagesTests(TwoTenantsTestCase):
                 checked += 1
         self.assertGreater(checked, 100)
 
-    def test_each_user_sees_his_espace_only(self):
+    def test_each_user_sees_his_tenant_only(self):
         for user, mine, other in (
             (self.user_a, "Grossiste Alpha", "Grossiste Beta"),
             (self.user_b, "Grossiste Beta", "Grossiste Alpha"),
@@ -131,7 +130,7 @@ class RealPagesTests(TwoTenantsTestCase):
                 self.assertContains(response, mine)
                 self.assertNotContains(response, other)
 
-    def test_the_badges_count_the_user_s_espace(self):
+    def test_the_badges_count_the_user_s_tenant(self):
         """StockListView answers a TemplateResponse: rendered after the view
         returned - inside the binding, or the badges would count nothing
         (or somebody else's queue)."""
@@ -139,12 +138,12 @@ class RealPagesTests(TwoTenantsTestCase):
         response = self.client.get(reverse("inventory:stock_list"))
         self.assertEqual(response.context["review_count_nav"], 2)
         self.assertEqual(response.context["pos_pending_count_nav"], 0)
-        self.assertEqual(response.context["nav_section"], "produits")
+        self.assertEqual(response.context["nav_section"], "products")
         self.client.force_login(self.user_b)
         response = self.client.get(reverse("inventory:stock_list"))
         self.assertEqual(response.context["review_count_nav"], 3)
         self.assertEqual(response.context["pos_pending_count_nav"], 1)
-        self.assertContains(response, '<span id="nav-count-produits"> <span class="badge">3</span></span>', html=False)
+        self.assertContains(response, '<span id="nav-count-products"> <span class="badge">3</span></span>', html=False)
 
     def test_the_binding_ends_with_the_request(self):
         before = connections["default"]
@@ -153,7 +152,7 @@ class RealPagesTests(TwoTenantsTestCase):
         self.assertIsNone(current_tenant())
         self.assertIs(connections["default"], before)
 
-    def test_a_user_with_no_espace_gets_a_plain_page(self):
+    def test_a_user_with_no_tenant_gets_a_plain_page(self):
         closed = self.make_tenant("Bar Fermé")
         lost = self.make_member(closed, "ferme@example.invalid")
         closed.is_active = False
@@ -168,7 +167,7 @@ class RealPagesTests(TwoTenantsTestCase):
                 self.assertContains(response, "Aucun espace", status_code=403)
                 self.assertNotContains(response, "Grossiste", status_code=403)
 
-    def test_a_public_page_still_answers_a_user_with_no_espace(self):
+    def test_a_public_page_still_answers_a_user_with_no_tenant(self):
         nobody = self.make_member(self.bar_b, "sans-espace@example.invalid")
         nobody.memberships.all().delete()
         self.client.force_login(nobody)
@@ -183,7 +182,7 @@ class RealPagesTests(TwoTenantsTestCase):
 
     def test_a_logged_in_request_costs_three_queries_on_the_accounts_database(self):
         """Every request, whatever the page: the session, the user, and the
-        membership WITH its espace in one query (tenant_of's
+        membership WITH its tenant in one query (tenant_of's
         select_related). A binding replaces `default`, never `accounts`, so
         the count holds around a client request. Twice: nothing is cached
         across requests, and nothing more is asked the second time."""
@@ -192,12 +191,12 @@ class RealPagesTests(TwoTenantsTestCase):
             with self.subTest(visit=visit):
                 with self.assertNumQueries(3, using="accounts"), CaptureQueriesContext(connections["accounts"]) as seen:
                     self.assertEqual(self.client.get(reverse("inventory:stock_list")).status_code, 200)
-                espace = [
+                tenant_queries = [
                     query["sql"]
                     for query in seen.captured_queries
                     if "accounts_membership" in query["sql"] or "accounts_tenant" in query["sql"]
                 ]
-                self.assertEqual(len(espace), 1, espace)
+                self.assertEqual(len(tenant_queries), 1, tenant_queries)
 
 
 class NeverKeptByTheBrowserTests(TwoTenantsTestCase):
@@ -262,7 +261,9 @@ class MiddlewareDirectTests(TwoTenantsTestCase):
             from invoices.models import Supplier
 
             yield current_tenant().name.encode()
-            yield b"|" + ",".join(Supplier.objects.filter(code__startswith="T-").values_list("name", flat=True)).encode()
+            yield (
+                b"|" + ",".join(Supplier.objects.filter(code__startswith="T-").values_list("name", flat=True)).encode()
+            )
 
         response = TenantMiddleware(lambda request: StreamingHttpResponse(chunks()))(self.request(self.user_b))
         self.assertIsNone(current_tenant())
@@ -271,9 +272,9 @@ class MiddlewareDirectTests(TwoTenantsTestCase):
         self.assertIsNone(current_tenant())
 
     def test_an_open_file_is_streamed_as_it_is(self):
-        folder = Path(tempfile.mkdtemp(dir=self._espaces_tmp))
+        folder = Path(tempfile.mkdtemp(dir=self._tenants_tmp))
         (folder / "export.zip").write_bytes(b"PK-essai")
-        handle = open(folder / "export.zip", "rb")
+        handle = open(folder / "export.zip", "rb")  # noqa: SIM115 - the FileResponse streams it, closed by addCleanup
         self.addCleanup(handle.close)
         response = TenantMiddleware(lambda request: FileResponse(handle))(self.request(self.user_a))
         self.assertIsNotNone(response.file_to_stream)
@@ -281,10 +282,10 @@ class MiddlewareDirectTests(TwoTenantsTestCase):
 
     def test_a_public_view_runs_unbound_for_a_logged_in_user_too(self):
         """@login_not_required means « not this login's business »: the
-        employee's signing pages bind the LINK's espace themselves - whoever
+        employee's signing pages bind the LINK's tenant themselves - whoever
         is logged in on that browser - and the login, the logout and the
         signup need none. Bound to the visitor's own, the link of another
-        espace could not be opened in the same request."""
+        tenant could not be opened in the same request."""
         for url in (
             reverse("accounts:login"),
             reverse("accounts:signup"),
@@ -295,9 +296,9 @@ class MiddlewareDirectTests(TwoTenantsTestCase):
                 seen = []
                 request = RequestFactory().get(url)
                 request.user = self.user_a
-                TenantMiddleware(lambda r: seen.append((current_tenant(), r.tenant)) or HttpResponse())(request)
+                TenantMiddleware(lambda r: seen.append((current_tenant(), r.tenant)) or HttpResponse())(request)  # noqa: B023 - called at once, before the loop moves on
                 self.assertEqual(seen, [(None, None)])
-        # A page that is not public is still the login's espace.
+        # A page that is not public is still the login's tenant.
         seen = []
         request = RequestFactory().get(reverse("invoices:supplier_list"))
         request.user = self.user_a
@@ -315,7 +316,7 @@ class MiddlewareDirectTests(TwoTenantsTestCase):
 
 
 class UnboundContextProcessorsTests(TwoTenantsTestCase):
-    def test_nothing_is_counted_when_no_espace_is_bound(self):
+    def test_nothing_is_counted_when_no_tenant_is_bound(self):
         request = RequestFactory().get("/")
         for processor in (review_count, receipt_review_count, navigation):
             with self.subTest(processor=processor.__name__):

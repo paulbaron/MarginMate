@@ -4,7 +4,7 @@ Credentials come from the environment (LADDITION_EMAIL / LADDITION_PASSWORD
 in .env) and are typed by the browser at run time - the same arrangement the
 Metro invoice scraper uses. They are never stored in the database, never
 logged, and never committed. They are the owner's own till, so in multi mode
-only the owner's espace may open a session (recipes/integration.py): the
+only the owner's tenant may open a session (recipes/integration.py): the
 refusal comes before a browser starts or a password is read.
 
 This module deliberately stops at "you are logged in and looking at the page
@@ -57,7 +57,7 @@ class LadditionAuthError(RuntimeError):
 
 
 class LadditionNotAllowed(LadditionAuthError):
-    """This espace may not use the server's L'Addition account
+    """This tenant may not use the server's L'Addition account
     (recipes/integration.py). Carries a French sentence and no variable
     name."""
 
@@ -152,9 +152,7 @@ def log_in(driver, log=print) -> None:
         if "auth.laddition.com" not in driver.current_url:
             log("Already signed in to L'Addition.")
             return
-        raise LadditionAuthError(
-            f"The L'Addition login form never appeared (still at {driver.current_url})."
-        ) from None
+        raise LadditionAuthError(f"The L'Addition login form never appeared (still at {driver.current_url}).") from None
 
     driver.find_element(*IDENTIFIER_FIELD).send_keys(settings.LADDITION_EMAIL)
     driver.find_element(*PASSWORD_FIELD).send_keys(settings.LADDITION_PASSWORD)
@@ -191,8 +189,7 @@ def normalise_path(path: str) -> str:
     network problem and sends you looking in entirely the wrong place.
     """
     path = (path or "").strip().replace("\\", "/")
-    if path.startswith(REPORTING_ROOT):
-        path = path[len(REPORTING_ROOT):]
+    path = path.removeprefix(REPORTING_ROOT)
     # A drive letter or a leading protocol means MSYS (or a copy-paste) got
     # to it; keep only the part from the version segment onwards.
     match = re.search(r"/v\d+/.*$", path)
@@ -219,9 +216,7 @@ def open_report(driver, path: str, log=print) -> None:
         log_in(driver, log=log)
         navigate(driver, url, log=log)
 
-    WebDriverWait(driver, PAGE_WAIT_SECONDS).until(
-        lambda d: d.current_url.startswith(REPORTING_ROOT)
-    )
+    WebDriverWait(driver, PAGE_WAIT_SECONDS).until(lambda d: d.current_url.startswith(REPORTING_ROOT))
     # The app renders after the shell loads, so "the URL is right" isn't the
     # same as "the report is on screen". Wait for the shell's own navigation
     # to appear - NOT for a lot of body text, because the report itself is
@@ -265,7 +260,7 @@ def laddition_session(download_dir: str, path: str = "/v2/shift-details", log=pr
         with laddition_session(dir) as driver:
             ...  # driver is on /v2/shift-details, signed in
 
-    Refused (LadditionNotAllowed) in an espace that may not use the
+    Refused (LadditionNotAllowed) in a tenant that may not use the
     server's account, before the browser starts.
     """
     _refuse_unless_allowed()

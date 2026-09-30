@@ -21,7 +21,7 @@ from django.test import SimpleTestCase
 
 from invoices.ocr import OcrCell, OcrLine, OcrPage
 from invoices.parsers.base import PdfPage
-from invoices.parsers.generic_receipt import GenericReceiptParser, TicketShop
+from invoices.parsers.generic_receipt import GenericReceiptParser, TicketShop, read_line
 from invoices.parsers.layout import Cell, Row, text_of
 
 D = Decimal
@@ -79,8 +79,26 @@ ICE_INVOICE = [
     row(254.8, ("Taux de", 455, 485), ("Montant", 497, 530), ("Montant", 542, 575)),
     row(260.8, ("Référence", 12, 50), ("Désignation", 77, 122), ("QuantitéPU HT", 323, 384)),
     row(266.1, ("TVA", 455, 473), ("TVA", 497, 515), ("HT", 542, 555)),
-    row(279.5, ("AR0142", 12, 53), ("Sac de glace pilée 10 kg", 77, 178), ("2", 323, 329), ("12.40", 357, 384), ("5.5%", 455, 480), ("1.36", 497, 518), ("24.80", 542, 569)),
-    row(293.0, ("Livraison", 12, 58), ("Frais de port", 77, 160), ("1", 323, 329), ("6.00", 357, 378), ("20%", 455, 477), ("1.20", 497, 518), ("6.00", 542, 563)),
+    row(
+        279.5,
+        ("AR0142", 12, 53),
+        ("Sac de glace pilée 10 kg", 77, 178),
+        ("2", 323, 329),
+        ("12.40", 357, 384),
+        ("5.5%", 455, 480),
+        ("1.36", 497, 518),
+        ("24.80", 542, 569),
+    ),
+    row(
+        293.0,
+        ("Livraison", 12, 58),
+        ("Frais de port", 77, 160),
+        ("1", 323, 329),
+        ("6.00", 357, 378),
+        ("20%", 455, 477),
+        ("1.20", 497, 518),
+        ("6.00", 542, 563),
+    ),
     row(326.0, ("Total TVA 20%", 6, 82), ("1.20", 104, 125), ("Total HT", 405, 449), ("30.80", 500, 527)),
     row(339.5, ("Net HT", 405, 442), ("30.80", 500, 527)),
     row(353.0, ("Total TVA 5.5%", 6, 85), ("1.36", 104, 125)),
@@ -102,9 +120,37 @@ COMPUTER_SHOP = [
     row(91.0, ("3 RUE DES CIRCUITS", 24, 108), ("Adresse de facturation", 292, 363)),
     row(101.7, ("75000", 24, 53), ("PARIS", 61, 89)),
     row(133.4, ("Tél :", 23, 43), ("01.00.00.00.00", 48, 118)),
-    row(217.4, ("N°", 26, 34), ("Article", 152, 174), ("Qté", 338, 350), ("PU TTC", 359, 385), ("Remise", 393, 419), ("PU TTC", 429, 454), ("Total TTC", 468, 501), ("Statut", 517, 537)),
-    row(230.8, ("1", 27, 31), ("704411", 37, 63), ("Câble HDMI 2 m tressé", 71, 261), ("1", 342, 346), ("7,99", 365, 380), ("7,99", 434, 449), ("7,99", 477, 492)),
-    row(241.6, ("2", 27, 31), ("118830", 37, 63), ("Adaptateur USB-C vers Jack", 71, 228), ("3", 342, 346), ("8,30", 363, 383), ("8,30", 432, 452), ("24,90", 475, 494)),
+    row(
+        217.4,
+        ("N°", 26, 34),
+        ("Article", 152, 174),
+        ("Qté", 338, 350),
+        ("PU TTC", 359, 385),
+        ("Remise", 393, 419),
+        ("PU TTC", 429, 454),
+        ("Total TTC", 468, 501),
+        ("Statut", 517, 537),
+    ),
+    row(
+        230.8,
+        ("1", 27, 31),
+        ("704411", 37, 63),
+        ("Câble HDMI 2 m tressé", 71, 261),
+        ("1", 342, 346),
+        ("7,99", 365, 380),
+        ("7,99", 434, 449),
+        ("7,99", 477, 492),
+    ),
+    row(
+        241.6,
+        ("2", 27, 31),
+        ("118830", 37, 63),
+        ("Adaptateur USB-C vers Jack", 71, 228),
+        ("3", 342, 346),
+        ("8,30", 363, 383),
+        ("8,30", 432, 452),
+        ("24,90", 475, 494),
+    ),
     row(262.5, ("Retrait en boutique sous 2 heures", 106, 291)),
     row(267.0, ("Expédition sous 24 heures", 352, 487)),
     row(272.7, ("dans tout le centre-ville et OFFERT au", 106, 301)),
@@ -138,10 +184,31 @@ WEB_SHOP = [
     row(207.7, ("1 rue de la Soif", 24, 156), ("1 rue de la Soif", 215, 347), ("3 rue des Exemples", 467, 572)),
     row(234.7, ("75000 Paris", 24, 73), ("75000 Paris", 215, 264), ("69000 Lyon", 513, 572)),
     row(248.2, ("France", 24, 53), ("France", 215, 244), ("France", 554, 572)),
-    row(331.5, ("Description", 24, 74), ("Quantity", 276, 314), ("Unit price", 354, 396), ("VAT rate", 441, 478), ("Amount", 538, 572)),
-    row(355.5, ("Piège à phéromones PRO-TRAP grand", 24, 200), ("1", 310, 314), ("€24.50", 365, 396), ("0%", 463, 478), ("€24.50", 542, 572)),
+    row(
+        331.5,
+        ("Description", 24, 74),
+        ("Quantity", 276, 314),
+        ("Unit price", 354, 396),
+        ("VAT rate", 441, 478),
+        ("Amount", 538, 572),
+    ),
+    row(
+        355.5,
+        ("Piège à phéromones PRO-TRAP grand", 24, 200),
+        ("1", 310, 314),
+        ("€24.50", 365, 396),
+        ("0%", 463, 478),
+        ("€24.50", 542, 572),
+    ),
     row(366.7, ("modèle  boîte de 5 recharges", 24, 152)),
-    row(390.7, ("Gel appât fourmis ANT-STOP tube", 24, 218), ("2", 310, 314), ("€7.65", 365, 396), ("0%", 463, 478), ("€15.30", 542, 572)),
+    row(
+        390.7,
+        ("Gel appât fourmis ANT-STOP tube", 24, 218),
+        ("2", 310, 314),
+        ("€7.65", 365, 396),
+        ("0%", 463, 478),
+        ("€15.30", 542, 572),
+    ),
     row(402.0, ("de 25 g", 24, 174)),
     row(450.0, ("Subtotal", 326, 362), ("€39.80", 542, 572)),
     row(474.0, ("VAT 0%", 326, 366), ("€0.00", 547, 572)),
@@ -189,20 +256,55 @@ GROCERY_WEB_SHOP = [
     row(249.2, ("75000 PARIS", 62, 113), ("75000 PARIS", 355, 406)),
     row(258.6, ("France", 62, 89), ("France", 355, 381)),
     row(314.3, ("Votre commande :", 57, 149)),
-    row(338.5, ("Image", 72, 100), ("Référence", 121, 167), ("Désignation", 229, 283), ("Prix", 354, 372), ("Prix", 401, 419), ("Qté", 437, 453), ("TVA", 467, 484), ("Montant", 498, 536)),
+    row(
+        338.5,
+        ("Image", 72, 100),
+        ("Référence", 121, 167),
+        ("Désignation", 229, 283),
+        ("Prix", 354, 372),
+        ("Prix", 401, 419),
+        ("Qté", 437, 453),
+        ("TVA", 467, 484),
+        ("Montant", 498, 536),
+    ),
     row(347.8, ("Unitaire", 345, 381), ("Unitaire", 392, 428), ("Total", 506, 528)),
     row(357.2, ("HT", 357, 369), ("TTC", 402, 418), ("TTC", 508, 525)),
-    row(372.5, ("Livraison : REMISE EN POINT RELAIS", 119, 273), ("8,00 €", 354, 384), ("8,00 €", 400, 431), ("1", 449, 454), ("0 %", 477, 492), ("8,00 €", 505, 536)),
-    row(390.5, ("PureeAman", 119, 164), ("Purée d'amande 2 kg", 175, 260), ("26,00 €", 354, 384), ("27,43 €", 400, 431), ("3", 449, 454), ("5.5 %", 470, 492), ("82,29 €", 505, 536)),
+    row(
+        372.5,
+        ("Livraison : REMISE EN POINT RELAIS", 119, 273),
+        ("8,00 €", 354, 384),
+        ("8,00 €", 400, 431),
+        ("1", 449, 454),
+        ("0 %", 477, 492),
+        ("8,00 €", 505, 536),
+    ),
+    row(
+        390.5,
+        ("PureeAman", 119, 164),
+        ("Purée d'amande 2 kg", 175, 260),
+        ("26,00 €", 354, 384),
+        ("27,43 €", 400, 431),
+        ("3", 449, 454),
+        ("5.5 %", 470, 492),
+        ("82,29 €", 505, 536),
+    ),
     row(399.9, ("Bio", 119, 126)),
     row(418.6, ("Votre Marque", 175, 229)),
     row(443.8, ("Frais d'expédition", 385, 455), ("8,00 €", 506, 537)),
     row(459.1, ("Total HT", 426, 458), ("86,00 €", 506, 537)),
     row(474.5, ("TVA 5.5 %", 417, 458), ("4,29 €", 511, 537)),
     row(489.8, ("TOTAL TTC", 410, 458), ("90,29 €", 497, 537)),
-    row(768.9, ("EPICERIE EXEMPLE | 12 Centre Commercial des Exemples 78000 EXEMPLEVILLE", 64, 442), ("| RCS : 00000000000000 |", 446, 531)),
+    row(
+        768.9,
+        ("EPICERIE EXEMPLE | 12 Centre Commercial des Exemples 78000 EXEMPLEVILLE", 64, 442),
+        ("| RCS : 00000000000000 |", 446, 531),
+    ),
     row(776.5, ("TVA : FR00000000000", 262, 334)),
-    row(784.1, ("Tél : 0100000000 | https://www.epicerie-exemple.example", 157, 345), ("| Capital social : 2 500,00 €", 349, 438)),
+    row(
+        784.1,
+        ("Tél : 0100000000 | https://www.epicerie-exemple.example", 157, 345),
+        ("| Capital social : 2 500,00 €", 349, 438),
+    ),
     row(791.7, ("Les articles peuvent être retournés sous quinze jours dans leur emballage d'origine.", 144, 451)),
 ]
 
@@ -216,13 +318,19 @@ PHOTO_DIY_TICKET = [
     photo_row(478.4, ("75000 - PARIS", 1078, 1321)),
     photo_row(669.7, ("CODE", 694, 777), ("NOM DU PRODUIT", 942, 1201), ("MONTANT TVA", 1494, 1710)),
     photo_row(767.6, ("** PEINTURE / MENAGE **", 960, 1453)),
-    photo_row(814.5, ("20000003", 694, 845), ("SAC CABAS REUTILISABLE", 941, 1469), ("0,30", 1548, 1635), ("1", 1657, 1701)),
+    photo_row(
+        814.5, ("20000003", 694, 845), ("SAC CABAS REUTILISABLE", 941, 1469), ("0,30", 1548, 1635), ("1", 1657, 1701)
+    ),
     photo_row(861.3, ("EAN : 3000000001011", 939, 1184)),
     photo_row(909.1, ("** QUINCAILLERIE **", 956, 1451)),
-    photo_row(956.8, ("20000005", 689, 842), ("CHAINE 200KG D4 X4", 937, 1309), ("14,40", 1548, 1635), ("1", 1657, 1701)),
+    photo_row(
+        956.8, ("20000005", 689, 842), ("CHAINE 200KG D4 X4", 937, 1309), ("14,40", 1548, 1635), ("1", 1657, 1701)
+    ),
     photo_row(1004.6, ("EAN : 2000000002026", 937, 1288)),
     photo_row(1050.6, ("** PLOMBERIE **", 1059, 1342)),
-    photo_row(1102.2, ("20000006", 685, 837), ("ROBINET LAITON 1/2", 935, 1303), ("8,70", 1548, 1633), ("1", 1657, 1701)),
+    photo_row(
+        1102.2, ("20000006", 685, 837), ("ROBINET LAITON 1/2", 935, 1303), ("8,70", 1548, 1633), ("1", 1657, 1701)
+    ),
     photo_row(1148.7, ("EAN : 2600000003032", 932, 1286)),
     photo_row(1509.6, ("TOTAL", 689, 800), ("23,40 €", 1539, 1689)),
     photo_row(1609.5, ("CB", 689, 742), ("23,40 €", 1541, 1686)),
@@ -238,18 +346,52 @@ PHOTO_DIY_TICKET = [
 PHOTO_DISCOUNT_TICKET = [
     photo_row(321.1, ("Ticket de caisse 300000001", 644, 1110)),
     photo_row(361.9, ("12/02/2026 / 16H40 Caisse 2", 681, 1066)),
-    photo_row(584.8, ("Désignation", 33, 221), ("Qté", 870, 933), ("Garantie", 960, 1089), ("PU HT", 1168, 1268), ("TVA", 1272, 1340), ("PU TTC", 1380, 1495), ("TOTAL", 1558, 1664)),
+    photo_row(
+        584.8,
+        ("Désignation", 33, 221),
+        ("Qté", 870, 933),
+        ("Garantie", 960, 1089),
+        ("PU HT", 1168, 1268),
+        ("TVA", 1272, 1340),
+        ("PU TTC", 1380, 1495),
+        ("TOTAL", 1558, 1664),
+    ),
     photo_row(634.3, ("2200001-PETIT ELECTROMENAGER", 64, 667)),
-    photo_row(670.7, ("BOUILLOIRE INOX SANS FIL", 65, 741), ("1", 889, 915), ("27,01 €", 1159, 1270), ("C", 1293, 1324), ("28,50 €", 1388, 1498), ("28,50 €", 1559, 1669)),
+    photo_row(
+        670.7,
+        ("BOUILLOIRE INOX SANS FIL", 65, 741),
+        ("1", 889, 915),
+        ("27,01 €", 1159, 1270),
+        ("C", 1293, 1324),
+        ("28,50 €", 1388, 1498),
+        ("28,50 €", 1559, 1669),
+    ),
     photo_row(705.2, ("COLORIS GRIS (1)", 65, 631)),
-    photo_row(734.2, ("Remise immédiate", 98, 309), ("-12,32 €", 1169, 1270), ("C", 1296, 1321), ("13,00 €", 1409, 1499), ("-13,00 €", 1571, 1670)),
+    photo_row(
+        734.2,
+        ("Remise immédiate", 98, 309),
+        ("-12,32 €", 1169, 1270),
+        ("C", 1296, 1321),
+        ("13,00 €", 1409, 1499),
+        ("-13,00 €", 1571, 1670),
+    ),
     photo_row(1540.9, ("SOUS TOTAL", 1297, 1486), ("15,50 €", 1543, 1652)),
     photo_row(1655.3, ("TOTAL NET TTC", 63, 303), ("15,50 €", 1543, 1649)),
     photo_row(1711.8, ("DONT TOTAL REMISES", 65, 339), ("13,00 €", 1558, 1647)),
     photo_row(1756.9, ("(1) Garantie légale : deux ans à compter de la livraison du produit.", 72, 740)),
-    photo_row(1893.4, ("Code", 74, 155), ("Taux", 182, 259), ("Mt HT", 332, 420), ("Mt TVA", 479, 579), ("Mt TTC", 639, 739), ("Réglé ce jour", 1007, 1198)),
+    photo_row(
+        1893.4,
+        ("Code", 74, 155),
+        ("Taux", 182, 259),
+        ("Mt HT", 332, 420),
+        ("Mt TVA", 479, 579),
+        ("Mt TTC", 639, 739),
+        ("Réglé ce jour", 1007, 1198),
+    ),
     photo_row(1916.5, ("Carte Bancaire", 1301, 1498), ("15,50 €", 1548, 1652)),
-    photo_row(1951.5, ("C", 95, 125), ("5,50 %", 163, 259), ("14,69 €", 321, 421), ("0,81 €", 495, 583), ("15,50 €", 641, 740)),
+    photo_row(
+        1951.5, ("C", 95, 125), ("5,50 %", 163, 259), ("14,69 €", 321, 421), ("0,81 €", 495, 583), ("15,50 €", 641, 740)
+    ),
     photo_row(2011.1, ("Total", 72, 149), ("14,69 €", 322, 422), ("0,81 €", 496, 583), ("15,50 €", 641, 740)),
 ]
 
@@ -274,15 +416,23 @@ class SameTextSameReadingTests(SimpleTestCase):
         without = READER.parse_pages([text_only(rows)])
         stored = READER.parse_text(text)
         self.assertEqual(lines_of(without), lines_of(stored))
-        self.assertEqual([(c.label, c.passed, c.detail) for c in without.checks], [(c.label, c.passed, c.detail) for c in stored.checks])
+        self.assertEqual(
+            [(c.label, c.passed, c.detail) for c in without.checks],
+            [(c.label, c.passed, c.detail) for c in stored.checks],
+        )
         self.assertIsNone(table_check(without), "a page without positions has no table to recognise")
         return without
 
     def test_every_layout_read_without_its_positions_is_the_stored_reading(self):
         for name, rows in (
-            ("ice", ICE_INVOICE), ("computer", COMPUTER_SHOP), ("web", WEB_SHOP),
-            ("linen", LINEN_INVOICE), ("grocery", GROCERY_WEB_SHOP), ("till", TILL_TICKET),
-            ("photo diy", PHOTO_DIY_TICKET), ("photo discount", PHOTO_DISCOUNT_TICKET),
+            ("ice", ICE_INVOICE),
+            ("computer", COMPUTER_SHOP),
+            ("web", WEB_SHOP),
+            ("linen", LINEN_INVOICE),
+            ("grocery", GROCERY_WEB_SHOP),
+            ("till", TILL_TICKET),
+            ("photo diy", PHOTO_DIY_TICKET),
+            ("photo discount", PHOTO_DISCOUNT_TICKET),
         ):
             with self.subTest(layout=name):
                 self.assertReadsAsText(rows)
@@ -307,7 +457,9 @@ class NoTableTests(SimpleTestCase):
         with_positions = READER.parse_pages([positioned(TILL_TICKET)])
         without = READER.parse_pages([text_only(TILL_TICKET)])
         self.assertEqual(lines_of(with_positions), lines_of(without))
-        self.assertEqual([(c.label, c.passed) for c in with_positions.checks], [(c.label, c.passed) for c in without.checks])
+        self.assertEqual(
+            [(c.label, c.passed) for c in with_positions.checks], [(c.label, c.passed) for c in without.checks]
+        )
         self.assertIsNone(table_check(with_positions))
         self.assertEqual([line.raw_name for line in with_positions.lines], ["BAGUETTE TRADITION", "CITRON X4"])
 
@@ -358,9 +510,12 @@ class IceInvoiceTests(SimpleTestCase):
     def test_parse_ocr_pages_carries_the_positions_to_the_reader(self):
         """What `receipts.read_receipt` hands the parser: OCR pages, whose
         cells become the rows. The same reading, the same check."""
-        page = OcrPage(lines=[
-            OcrLine(cells=[OcrCell(cell.text, cell.x0, cell.x1, 0.99) for cell in r.cells], y=r.y) for r in ICE_INVOICE
-        ])
+        page = OcrPage(
+            lines=[
+                OcrLine(cells=[OcrCell(cell.text, cell.x0, cell.x1, 0.99) for cell in r.cells], y=r.y)
+                for r in ICE_INVOICE
+            ]
+        )
         parsed = READER.parse_ocr_pages([page])
         self.assertEqual(lines_of(parsed), lines_of(self.parsed))
         self.assertIsNotNone(table_check(parsed))
@@ -468,7 +623,7 @@ class GroceryWebShopTests(SimpleTestCase):
         self.assertEqual(self.parsed.lines[1].raw_name, "Purée d'amande 2 kg")
 
     def test_the_qualifiers_on_the_third_header_line_name_the_columns(self):
-        """"HT | TTC | TTC" alone under "Prix / Prix / Montant" names no column
+        """ "HT | TTC | TTC" alone under "Prix / Prix / Montant" names no column
         and is the header's third line all the same: it is what tells the two
         unit prices apart on the review screen."""
         detail = table_check(self.parsed).detail
@@ -501,7 +656,7 @@ class PhotographedTableTests(SimpleTestCase):
         self.assertNotIn("sur deux lignes", check.detail)
 
     def test_a_count_in_the_name_is_the_texts_when_the_table_has_no_quantity_column(self):
-        """"CHAINE 200KG D4 X4" is four; the table prints no quantity, so the
+        """ "CHAINE 200KG D4 X4" is four; the table prints no quantity, so the
         count stays what the text reading makes of the name, as before - and
         so does the name it cut the count out of ("CHAINE 200KG D"), which is
         what the tickets already checked hold. The check says so."""
@@ -522,7 +677,10 @@ class PhotographedTableTests(SimpleTestCase):
         photograph, and the family line above it is not the name either."""
         parsed = READER.parse_pages([positioned(PHOTO_DISCOUNT_TICKET)])
         self.assertEqual(
-            [(line.raw_name, line.quantity, line.printed_ttc, line.discount_ttc, line.total_ht, line.vat_rate) for line in parsed.lines],
+            [
+                (line.raw_name, line.quantity, line.printed_ttc, line.discount_ttc, line.total_ht, line.vat_rate)
+                for line in parsed.lines
+            ],
             [("BOUILLOIRE INOX SANS FIL", 1, D("28.50"), D("13.00"), D("14.69"), D("0.055"))],
         )
         self.assertEqual(parsed.printed_total_ttc, D("15.50"))
@@ -545,17 +703,25 @@ class PhotographedTableTests(SimpleTestCase):
 
 class CalculationInTheDescriptionTests(SimpleTestCase):
     def test_a_description_that_is_a_calculation_leaves_the_row_to_the_text_reading(self):
-        """"12,50 €/m2 x 0,200 m2" in the description column is no name: the
+        """ "12,50 €/m2 x 0,200 m2" in the description column is no name: the
         text reading names the row after the line above, as it always did."""
         rows = [
             photo_row(669.7, ("CODE", 694, 777), ("NOM DU PRODUIT", 942, 1201), ("MONTANT TVA", 1494, 1710)),
             photo_row(1043.4, ("** PANNEAU, VERRE **", 1052, 1432)),
             photo_row(1092.6, ("20000007 PANNEAU MDF 10MM", 712, 1205)),
             photo_row(1139.4, ("12.50 €/m2 x 0,200m2", 763, 1150), ("2,50", 1598, 1687), ("1", 1670, 1760)),
-            photo_row(1288.5, ("20000008", 713, 879), ("DECOUPE SUR MESURE", 888, 1300), ("3,00", 1598, 1689), ("1", 1716, 1754)),
+            photo_row(
+                1288.5,
+                ("20000008", 713, 879),
+                ("DECOUPE SUR MESURE", 888, 1300),
+                ("3,00", 1598, 1689),
+                ("1", 1716, 1754),
+            ),
             photo_row(1455.3, ("TOTAL", 729, 844), ("5,50 €", 1615, 1754)),
             photo_row(1609.5, ("CB", 689, 742), ("5,50 €", 1541, 1686)),
-            photo_row(1707.4, ("TVA", 823, 893), ("TAUX", 934, 1022), ("VAL TVA", 1131, 1272), ("MONTANT HT", 1349, 1543)),
+            photo_row(
+                1707.4, ("TVA", 823, 893), ("TAUX", 934, 1022), ("VAL TVA", 1131, 1272), ("MONTANT HT", 1349, 1543)
+            ),
             photo_row(1806.0, ("1", 844, 868), ("20,00", 912, 1015), ("0,92", 1168, 1252), ("4,58", 1441, 1539)),
         ]
         parsed = READER.parse_pages([positioned(rows)])
@@ -612,7 +778,9 @@ class HandWrittenPdfTests(SimpleTestCase):
         rightmost figure is not the amount by default: the name is whole."""
         from invoices.tests.test_generic_tables import WEB_INVOICE
 
-        no_count = WEB_INVOICE.replace("(lot de 12)  8  3,50  28,00", "(lot de 12)  28,00").replace("inox 20cm  2  4,25  8,50", "inox 20cm  8,50")
+        no_count = WEB_INVOICE.replace("(lot de 12)  8  3,50  28,00", "(lot de 12)  28,00").replace(
+            "inox 20cm  2  4,25  8,50", "inox 20cm  8,50"
+        )
         page = self.read(no_count)
         parsed = READER.parse_ocr_pages([page])
         self.assertIsNone(table_check(parsed))
@@ -622,9 +790,37 @@ class HandWrittenPdfTests(SimpleTestCase):
 # A till's invoice layout: unit price HT, count, HT, the rate as a bare
 # "5,50", the tax, then the row's TTC as printed.
 TAXED_ROWS_INVOICE = [
-    row(1079, ("Description", 175, 423), ("Prix unitaire H.T", 466, 570), ("Qté", 615, 634), ("Prix H.T", 681, 783), ("TVA", 811, 884), ("Montant", 916, 1003), ("Remise TTC", 1057, 1146), ("Prix TTC", 1271, 1371)),
-    row(1150, ("RUBAN DE MASQUAGE", 175, 423), ("3,33 €", 466, 570), ("1", 615, 634), ("3,33 €", 681, 783), ("20,00", 811, 884), ("0,67 €", 916, 1003), ("4,00 €", 1271, 1371)),
-    row(1175, ("PITA LIBANAISE", 175, 423), ("6,64 €", 466, 570), ("1", 615, 634), ("6,64 €", 681, 783), ("5,50", 811, 884), ("0,37 €", 916, 1003), ("7,01 €", 1271, 1371)),
+    row(
+        1079,
+        ("Description", 175, 423),
+        ("Prix unitaire H.T", 466, 570),
+        ("Qté", 615, 634),
+        ("Prix H.T", 681, 783),
+        ("TVA", 811, 884),
+        ("Montant", 916, 1003),
+        ("Remise TTC", 1057, 1146),
+        ("Prix TTC", 1271, 1371),
+    ),
+    row(
+        1150,
+        ("RUBAN DE MASQUAGE", 175, 423),
+        ("3,33 €", 466, 570),
+        ("1", 615, 634),
+        ("3,33 €", 681, 783),
+        ("20,00", 811, 884),
+        ("0,67 €", 916, 1003),
+        ("4,00 €", 1271, 1371),
+    ),
+    row(
+        1175,
+        ("PITA LIBANAISE", 175, 423),
+        ("6,64 €", 466, 570),
+        ("1", 615, 634),
+        ("6,64 €", 681, 783),
+        ("5,50", 811, 884),
+        ("0,37 €", 916, 1003),
+        ("7,01 €", 1271, 1371),
+    ),
     row(1300, ("Total HT", 700, 783), ("9,97 €", 916, 1003)),
     row(1325, ("Total TVA", 700, 783), ("1,04 €", 916, 1003)),
     row(1350, ("Total TTC", 700, 783), ("11,01 €", 1271, 1371)),
@@ -637,14 +833,17 @@ TAXED_ROWS_INVOICE = [
 
 class PrintedTtcTests(SimpleTestCase):
     def test_a_row_in_ht_keeps_the_ttc_it_prints(self):
-        """"A receipt line keeps its printed TTC": read through its columns the
+        """ "A receipt line keeps its printed TTC": read through its columns the
         row lost it (`printed_ttc` None), and every screen showing the line
         in TTC worked it back out of the HT. On this layout the text reading
         kept it (`_taxed_row`); the two readings have to agree."""
         parsed = READER.parse_pages([positioned(TAXED_ROWS_INVOICE)])
         self.assertEqual(
             [(line.raw_name, line.total_ht, line.vat_rate, line.printed_ttc) for line in parsed.lines],
-            [("RUBAN DE MASQUAGE", D("3.33"), D("0.20"), D("4.00")), ("PITA LIBANAISE", D("6.64"), D("0.055"), D("7.01"))],
+            [
+                ("RUBAN DE MASQUAGE", D("3.33"), D("0.20"), D("4.00")),
+                ("PITA LIBANAISE", D("6.64"), D("0.055"), D("7.01")),
+            ],
         )
         self.assertEqual(parsed.printed_total_ttc, D("11.01"))
         self.assertEqual(failed(parsed), {})
@@ -682,7 +881,10 @@ class HeadingWithAnAmountTests(SimpleTestCase):
         self.assertEqual(with_positions.lines[0].category, "DROGUERIE / OUTILLAGE")
         detail = table_check(with_positions).detail
         self.assertIn("1 ligne du tableau dont la désignation n'est pas un nom, lue en texte", detail)
-        self.assertIn("1 ligne lue en texte dans le tableau, complétée du montant imprimé sur la ligne au-dessus : « MANCHE TELESCOPIQUE »", detail)
+        self.assertIn(
+            "1 ligne lue en texte dans le tableau, complétée du montant imprimé sur la ligne au-dessus : « MANCHE TELESCOPIQUE »",
+            detail,
+        )
         without = READER.parse_pages([text_only(PHOTO_HEADING_TICKET)])
         self.assertEqual(lines_of(without), expected)
 
@@ -702,8 +904,26 @@ class HeadingWithAnAmountTests(SimpleTestCase):
 # (its two unit prices are one rate apart); the eco-participation under it
 # prints a unit price that multiplies into nothing.
 HT_COLUMN_INVOICE = [
-    row(100, ("EAN", 48, 101), ("Référence", 114, 142), ("Quantité", 174, 178), ("Libellé", 183, 393), ("Prix Unitaire Net HT", 428, 456), ("Prix Unitaire Net TTC", 488, 516), ("Montant Net HT", 548, 576)),
-    row(113, ("3000000001011", 48, 101), ("I 9000001", 114, 142), ("3", 174, 178), ("Enceinte exemple", 183, 393), ("120,00", 428, 456), ("144,00", 488, 516), ("360,00", 548, 576)),
+    row(
+        100,
+        ("EAN", 48, 101),
+        ("Référence", 114, 142),
+        ("Quantité", 174, 178),
+        ("Libellé", 183, 393),
+        ("Prix Unitaire Net HT", 428, 456),
+        ("Prix Unitaire Net TTC", 488, 516),
+        ("Montant Net HT", 548, 576),
+    ),
+    row(
+        113,
+        ("3000000001011", 48, 101),
+        ("I 9000001", 114, 142),
+        ("3", 174, 178),
+        ("Enceinte exemple", 183, 393),
+        ("120,00", 428, 456),
+        ("144,00", 488, 516),
+        ("360,00", 548, 576),
+    ),
     row(126, ("Eco-Participation DEEE", 183, 393), ("0,40", 428, 456), ("0,48", 488, 516), ("1,50", 548, 576)),
     row(160, ("Total HT", 405, 449), ("361,50", 548, 576)),
     row(173, ("TVA 20%", 405, 449), ("72,30", 548, 576)),
@@ -716,7 +936,10 @@ class HtColumnReaderTests(SimpleTestCase):
         parsed = READER.parse_pages([positioned(HT_COLUMN_INVOICE)])
         self.assertEqual(
             lines_of(parsed),
-            [("Enceinte exemple", 3, D("360.00"), D("0.20"), None), ("Eco-Participation DEEE", 1, D("1.50"), D("0.20"), None)],
+            [
+                ("Enceinte exemple", 3, D("360.00"), D("0.20"), None),
+                ("Eco-Participation DEEE", 1, D("1.50"), D("0.20"), None),
+            ],
         )
         self.assertEqual(parsed.printed_total_ttc, D("433.80"))
         self.assertEqual(failed(parsed), {})
@@ -737,16 +960,253 @@ class OneRowTableTests(SimpleTestCase):
         self.assertEqual(failed(parsed), {})
 
 
+# A wine grower's invoice with ONE row. Its prices are headed "Px U. HT" and
+# "Px U. TTC", its amounts "HT" and "TTC", its rate last; under the row, the
+# goods counted and weighed, then the base, the tax and the total, each on a
+# line of its own - "Total net HT" and "Total TVA" add up to what was paid,
+# exactly as the single row does.
+ONE_ROW_WINE_HEAD = [
+    row(14.5, ("DOMAINE EXEMPLE", 14, 132), ("FACTURE", 512, 583)),
+    row(27.4, ("1 Chemin des Vignes", 14, 131)),
+    row(37.9, ("00000, Exempleville, France", 14, 107), ("Date: 12/02/2025", 514, 583)),
+    row(51.4, ("contact@domaine-exemple.fr", 14, 107), ("N° document: FA-202502-0001", 459, 583)),
+    row(61.9, ("01 23 45 67 89", 14, 74), ("Date de livraison: 03/02/2025", 466, 583)),
+    row(72.4, ("ACCISE: FR00000000000", 14, 120)),
+    row(169.4, ("Adresse de livraison:", 14, 95), ("Adresse de facturation:", 334, 424)),
+    row(180.7, ("Société LE COMPTOIR", 14, 105), ("Société LE COMPTOIR", 334, 425)),
+    row(204.7, ("1 RUE DES LILAS", 14, 124), ("1 RUE DES LILAS", 334, 444)),
+    row(216.7, ("75000 PARIS France (FR)", 14, 152), ("75000 PARIS France (FR)", 334, 471)),
+    row(253.7, ("TVA: FR00123456789", 334, 415)),
+    row(
+        297.1,
+        ("Désignation", 19, 62),
+        ("Qté", 239, 252),
+        ("Px U. HT", 277, 308),
+        ("Px U. TTC", 339, 374),
+        ("HT", 413, 423),
+        ("TTC", 466, 480),
+        ("Taux de TVA", 519, 564),
+    ),
+]
+
+
+def wine_footer(y, count, parcels, litres, kilos, ht, vat, ttc):
+    return [
+        row(
+            y,
+            (f"Nombre de produits: {count}", 14, 93),
+            (f"Nombre de colis: {parcels}", 102, 164),
+            (f"Volume total: {litres}L", 173, 238),
+            (f"Poids total: {kilos} kg", 247, 319),
+        ),
+        row(
+            y + 25.5,
+            ("Libellé", 19, 43),
+            ("Hors taxe", 101, 135),
+            ("TVA", 163, 178),
+            ("TTC", 210, 225),
+            ("Montant total HT", 426, 521),
+            (f"{ht}€", 536, 579),
+        ),
+        row(y + 42.0, ("Taux 20.00%", 19, 62), (f"{ht}€", 117, 144), (f"{vat}€", 165, 188), (f"{ttc}€", 211, 239)),
+        row(y + 46.0, ("Total net HT", 426, 495), (f"{ht}€", 536, 579)),
+        row(y + 66.4, ("Règlement", 14, 60), ("Total TVA", 426, 480), (f"{vat}€", 542, 579)),
+        row(y + 80.6, ("Virement - A 30 jours", 14, 98)),
+        row(y + 88.0, ("Montant total TTC", 426, 528), (f"{ttc}€", 536, 579)),
+        row(y + 109.1, ("RIB", 14, 30), ("Net à payer", 426, 499), (f"{ttc}€", 536, 579)),
+        row(y + 144.4, ("IBAN: FR76 0000 0000 0000 0000 0000 000", 14, 192)),
+    ]
+
+
+ONE_ROW_WINE_INVOICE = (
+    ONE_ROW_WINE_HEAD
+    + [
+        row(
+            313.6,
+            ("CUVÉE EXEMPLE - - AOP EXEMPLE", 19, 149),
+            ("12", 249, 258),
+            ("7,25€", 300, 318),
+            ("8,70€", 368, 386),
+            ("87,00€", 414, 441),
+            ("104,40€", 469, 496),
+            ("20,00%", 553, 578),
+        ),
+    ]
+    + wine_footer(338.3, 12, 2, "9", "18,100", "87,00", "17,40", "104,40")
+)
+
+# The same invoice with two rows, as the grower's other invoices print it.
+TWO_ROW_WINE_INVOICE = (
+    ONE_ROW_WINE_HEAD
+    + [
+        row(
+            313.6,
+            ("CUVÉE EXEMPLE - - AOP EXEMPLE", 19, 149),
+            ("12", 249, 258),
+            ("7,25€", 300, 318),
+            ("8,70€", 368, 386),
+            ("87,00€", 414, 441),
+            ("104,40€", 469, 496),
+            ("20,00%", 553, 578),
+        ),
+        row(
+            326.6,
+            ("ROSÉ EXEMPLE - - IGP EXEMPLE", 19, 149),
+            ("6", 251, 256),
+            ("6,75€", 300, 318),
+            ("8,10€", 368, 386),
+            ("40,50€", 414, 441),
+            ("48,60€", 469, 496),
+            ("20,00%", 553, 578),
+        ),
+    ]
+    + wine_footer(351.3, 18, 3, "13.5", "27,150", "127,50", "25,50", "153,00")
+)
+
+
+class OneRowWineInvoiceTests(SimpleTestCase):
+    def test_the_single_row_is_the_purchase_and_the_totals_under_it_are_not(self):
+        """The header shortens « prix » to "Px": unknown, it was no header,
+        one row is no table without one, and the lines under it were filed
+        as the purchase - at 191,40 € for 104,40 € paid. With the header
+        found, the row made what was paid alone, and "Total net HT" and
+        "Total TVA" made it too: the longest run adding up, rightly refused
+        as the document's own base and tax, after which nothing else was
+        tried."""
+        parsed = READER.parse_pages([positioned(ONE_ROW_WINE_INVOICE)])
+        self.assertEqual(lines_of(parsed), [("CUVÉE EXEMPLE - - AOP EXEMPLE", 12, D("87.00"), D("0.20"), D("104.40"))])
+        self.assertEqual(parsed.lines[0].unit_cost_ht, D("7.25"))
+        self.assertEqual((parsed.printed_total_ttc, parsed.invoice_number), (D("104.40"), "FA-202502-0001"))
+        self.assertEqual(failed(parsed), {})
+        check = table_check(parsed)
+        self.assertIn("en-tête sur 1 ligne", check.detail)
+        self.assertIn("1 ligne d'article", check.detail)
+        set_aside = next(check.detail for check in parsed.checks if check.label == "Lignes écartées")
+        self.assertIn("Total net HT 87.00 €", set_aside)
+        self.assertIn("Règlement Total TVA 17.40 €", set_aside)
+
+    def test_two_rows_under_the_same_header_read_as_before(self):
+        """Found by their alignment before the header was known: the same
+        lines, now under their header."""
+        parsed = READER.parse_pages([positioned(TWO_ROW_WINE_INVOICE)])
+        self.assertEqual(
+            lines_of(parsed),
+            [
+                ("CUVÉE EXEMPLE - - AOP EXEMPLE", 12, D("87.00"), D("0.20"), D("104.40")),
+                ("ROSÉ EXEMPLE - - IGP EXEMPLE", 6, D("40.50"), D("0.20"), D("48.60")),
+            ],
+        )
+        self.assertEqual(failed(parsed), {})
+        self.assertIn("en-tête sur 1 ligne", table_check(parsed).detail)
+
+
+class RowPricedBothWaysReadAsTextTests(SimpleTestCase):
+    """The same invoices read from their stored text - « Relire le
+    document », `manage.py reread_receipts` -, with no positions. A row
+    printing a count, its unit price and its amount both HT and TTC, and its
+    rate has figures a VAT table row fits twice over: alone on the invoice,
+    its HT and TTC are the document's base and total, and six bottles at
+    20 % (eleven at 10 %) print a unit TTC equal to their tax (6 x 40,20 x
+    0,20 = 48,24 = 40,20 x 1,2). Read as the table's, the row was no item, and
+    the totals printed under it were filed as the purchase - loudly, the sum
+    failing, but a document re-read to fix it came out the same."""
+
+    def assertReadsAsWithPositions(self, rows):
+        with_positions = READER.parse_pages([positioned(rows)])
+        as_text = READER.parse_text(text_of(rows))
+        self.assertTrue(with_positions.lines)
+        self.assertEqual(lines_of(as_text), lines_of(with_positions))
+        self.assertEqual(
+            [line.unit_cost_ht for line in as_text.lines], [line.unit_cost_ht for line in with_positions.lines]
+        )
+        self.assertEqual(as_text.printed_total_ttc, with_positions.printed_total_ttc)
+        self.assertEqual(failed(as_text), {})
+
+    def test_the_single_row_read_as_text_is_the_row_it_is_with_positions(self):
+        self.assertReadsAsWithPositions(ONE_ROW_WINE_INVOICE)
+
+    def test_two_rows_read_as_text_are_the_rows_they_are_with_positions(self):
+        self.assertReadsAsWithPositions(TWO_ROW_WINE_INVOICE)
+
+    def assertIsTheRow(self, reading, name, count, unit, ht, ttc, rate):
+        self.assertFalse(reading.vat_row)
+        self.assertEqual(
+            (reading.name, reading.count, reading.count_printed, reading.unit, reading.ht, reading.total, reading.rate),
+            (name, count, True, unit, ht, ttc, rate),
+        )
+
+    def test_a_row_making_what_was_paid_is_no_vat_row(self):
+        """Read with the document's total, the row's own HT "confirmed" it
+        as the table's base and tax."""
+        reading = read_line(
+            0, "CUVÉE EXEMPLE - - AOP EXEMPLE  15  36,95€  44,34€  554,25€  665,10€  20,00%", D("665.10")
+        )
+        self.assertIsTheRow(
+            reading, "CUVÉE EXEMPLE - - AOP EXEMPLE", 15, D("36.95"), D("554.25"), D("665.10"), D("0.20")
+        )
+
+    def test_a_count_whose_unit_ttc_is_its_tax_is_no_vat_row(self):
+        """(1 + rate) / rate of them: the row's HT x rate is printed on the
+        row, as its unit TTC, whatever the document's total."""
+        for line, expected in (
+            (
+                "ROSÉ EXEMPLE - - IGP EXEMPLE  6  40,20€  48,24€  241,20€  289,44€  20,00%",
+                ("ROSÉ EXEMPLE - - IGP EXEMPLE", 6, D("40.20"), D("241.20"), D("289.44"), D("0.20")),
+            ),
+            (
+                "PLATEAU EXEMPLE  11  43,70€  48,07€  480,70€  528,77€  10,00%",
+                ("PLATEAU EXEMPLE", 11, D("43.70"), D("480.70"), D("528.77"), D("0.10")),
+            ),
+        ):
+            for total in (None, D("665.10")):
+                with self.subTest(line=line, total=total):
+                    self.assertIsTheRow(read_line(0, line, total), *expected)
+
+    def test_the_vat_table_rows_stay_vat_rows(self):
+        """Nothing on them multiplies a price by a count."""
+        for line, total in (
+            ("Taux 20.00%  329,40€  65,88€  395,28€", D("395.28")),
+            ("TVA 20%  351,45  70,29  421,74", D("421.74")),
+        ):
+            for hint in (total, None):
+                with self.subTest(line=line, total=hint):
+                    self.assertTrue(read_line(0, line, hint).vat_row)
+
+
 class TableCheckTruthTests(SimpleTestCase):
     """« Tableau reconnu » says what the reader DID with the table, and fails
     when the reading and the columns disagree."""
 
     def test_a_body_row_the_columns_missed_and_the_text_read_fails_the_check(self):
         rows = [
-            row(100, ("Référence", 12, 50), ("Désignation", 77, 122), ("Qté", 323, 340), ("PU HT", 357, 384), ("TVA", 455, 473), ("Montant HT", 542, 585)),
-            row(113, ("AR01", 12, 40), ("Sac de glace 10 kg", 77, 170), ("2", 323, 329), ("12.40", 357, 384), ("5.5%", 455, 480), ("24.80", 542, 569)),
+            row(
+                100,
+                ("Référence", 12, 50),
+                ("Désignation", 77, 122),
+                ("Qté", 323, 340),
+                ("PU HT", 357, 384),
+                ("TVA", 455, 473),
+                ("Montant HT", 542, 585),
+            ),
+            row(
+                113,
+                ("AR01", 12, 40),
+                ("Sac de glace 10 kg", 77, 170),
+                ("2", 323, 329),
+                ("12.40", 357, 384),
+                ("5.5%", 455, 480),
+                ("24.80", 542, 569),
+            ),
             row(126, ("Consigne bac", 77, 140), ("3.00", 420, 445)),
-            row(139, ("AR02", 12, 40), ("Livraison", 77, 130), ("1", 323, 329), ("6.00", 357, 384), ("20%", 455, 477), ("6.00", 542, 563)),
+            row(
+                139,
+                ("AR02", 12, 40),
+                ("Livraison", 77, 130),
+                ("1", 323, 329),
+                ("6.00", 357, 384),
+                ("20%", 455, 477),
+                ("6.00", 542, 563),
+            ),
             row(160, ("Total HT", 405, 449), ("33.80", 542, 569)),
             row(173, ("TVA 5.5%", 300, 349), ("24.80", 405, 449), ("1.36", 542, 569)),
             row(186, ("TVA 20%", 300, 349), ("9.00", 405, 449), ("1.80", 542, 569)),
@@ -761,8 +1221,22 @@ class TableCheckTruthTests(SimpleTestCase):
 
     def test_a_table_row_the_arithmetic_left_out_fails_the_check(self):
         rows = [
-            row(100, ("Référence", 12, 50), ("Désignation", 77, 122), ("Qté", 323, 340), ("PU", 357, 384), ("Total", 542, 585)),
-            row(113, ("AR01", 12, 40), ("Sac de glace 10 kg", 77, 170), ("2", 323, 329), ("12.40", 357, 384), ("24.80", 542, 569)),
+            row(
+                100,
+                ("Référence", 12, 50),
+                ("Désignation", 77, 122),
+                ("Qté", 323, 340),
+                ("PU", 357, 384),
+                ("Total", 542, 585),
+            ),
+            row(
+                113,
+                ("AR01", 12, 40),
+                ("Sac de glace 10 kg", 77, 170),
+                ("2", 323, 329),
+                ("12.40", 357, 384),
+                ("24.80", 542, 569),
+            ),
             row(126, ("AR02", 12, 40), ("Livraison", 77, 130), ("1", 323, 329), ("6.00", 357, 384), ("6.00", 542, 563)),
             row(160, ("Total TTC", 405, 459), ("24.80", 542, 569)),
             row(173, ("CB", 405, 430), ("24.80", 542, 569)),
@@ -781,13 +1255,37 @@ class TableCheckTruthTests(SimpleTestCase):
         self.assertIn("la quantité, le prix unitaire, le montant et le taux viennent de leurs colonnes", detail)
 
     def test_a_header_line_printed_again_in_the_body_is_the_tables(self):
-        """"Prix Unitaire Brut HT" with a figure the recogniser ran into it,
+        """ "Prix Unitaire Brut HT" with a figure the recogniser ran into it,
         between two rows: never an article carrying a total."""
         rows = [
-            row(100, ("Référence", 12, 50), ("Désignation", 77, 122), ("Qté", 323, 340), ("PU HT", 357, 384), ("TVA", 455, 473), ("Montant HT", 542, 585)),
-            row(113, ("AR01", 12, 40), ("Sac de glace 10 kg", 77, 170), ("2", 323, 329), ("12.40", 357, 384), ("5.5%", 455, 480), ("24.80", 542, 569)),
+            row(
+                100,
+                ("Référence", 12, 50),
+                ("Désignation", 77, 122),
+                ("Qté", 323, 340),
+                ("PU HT", 357, 384),
+                ("TVA", 455, 473),
+                ("Montant HT", 542, 585),
+            ),
+            row(
+                113,
+                ("AR01", 12, 40),
+                ("Sac de glace 10 kg", 77, 170),
+                ("2", 323, 329),
+                ("12.40", 357, 384),
+                ("5.5%", 455, 480),
+                ("24.80", 542, 569),
+            ),
             row(126, ("Prix Unitaire Brut HT", 77, 200), ("30,80", 542, 569)),
-            row(139, ("AR02", 12, 40), ("Livraison", 77, 130), ("1", 323, 329), ("6.00", 357, 384), ("20%", 455, 477), ("6.00", 542, 563)),
+            row(
+                139,
+                ("AR02", 12, 40),
+                ("Livraison", 77, 130),
+                ("1", 323, 329),
+                ("6.00", 357, 384),
+                ("20%", 455, 477),
+                ("6.00", 542, 563),
+            ),
             row(160, ("Total HT", 405, 449), ("30.80", 542, 569)),
             row(173, ("TVA 5.5%", 300, 349), ("24.80", 405, 449), ("1.36", 542, 569)),
             row(186, ("TVA 20%", 300, 349), ("6.00", 405, 449), ("1.20", 542, 569)),
@@ -810,7 +1308,9 @@ class TwoPageTests(SimpleTestCase):
         self.assertEqual(len(view.tables), 2)
         self.assertEqual(sorted(view.items), [14, 15, 37, 38])
         self.assertEqual(sorted(view.headed), [14, 15, 37, 38])
-        self.assertEqual([view.items[index].name for index in sorted(view.items)], ["Sac de glace pilée 10 kg", "Frais de port"] * 2)
+        self.assertEqual(
+            [view.items[index].name for index in sorted(view.items)], ["Sac de glace pilée 10 kg", "Frais de port"] * 2
+        )
         self.assertTrue({11, 12, 13, 34, 35, 36} <= view.skip)
 
 

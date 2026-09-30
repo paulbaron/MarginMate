@@ -182,9 +182,7 @@ def _file_bytes(path: str) -> bytes | None:
     except OSError:
         return None
     if len(data) > MAX_XML_BYTES:
-        raise EInvoiceError(
-            "Ce fichier XML est trop volumineux pour être lu comme une facture électronique."
-        )
+        raise EInvoiceError("Ce fichier XML est trop volumineux pour être lu comme une facture électronique.")
     return data
 
 
@@ -230,7 +228,7 @@ def embedded_xml(path: str) -> bytes | None:
                     # Factur-X producer emits, and decoding it to find out
                     # costs more than the whole document is worth.
                     continue
-                except Exception:  # noqa: BLE001 - a damaged stream is not an invoice
+                except Exception:  # noqa: BLE001, S112 - a damaged stream is not an invoice
                     continue
                 if data is not None and looks_like_an_invoice(data):
                     return data
@@ -264,12 +262,12 @@ def _attachments(document):
     try:
         names = resolve1(catalog.get("Names")) or {}
         specs.extend(_name_tree(resolve1(names.get("EmbeddedFiles")), resolve1))
-    except Exception:  # noqa: BLE001 - a malformed tree is no attachment
+    except Exception:  # noqa: BLE001, S110 - a malformed tree is no attachment
         pass
     try:
         for spec in resolve1(catalog.get("AF")) or []:
             specs.append(("", resolve1(spec)))
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, S110 - a malformed /AF is no attachment
         pass
     for name, spec in specs:
         if not isinstance(spec, dict):
@@ -279,7 +277,7 @@ def _attachments(document):
             # /F is the usual key; /UF is the Unicode one some producers
             # fill in instead.
             stream = resolve1(embedded.get("F")) or resolve1(embedded.get("UF"))
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S112 - a malformed file entry is no attachment
             continue
         if stream is None or id(stream) in seen:
             continue
@@ -404,9 +402,7 @@ def _root_tag(data: bytes) -> str:
     if not isinstance(data, (bytes, bytearray)):
         raise EInvoiceError("Ce document n'est pas un fichier XML.")
     if len(data) > MAX_XML_BYTES:
-        raise EInvoiceError(
-            "Ce fichier XML est trop volumineux pour être lu comme une facture électronique."
-        )
+        raise EInvoiceError("Ce fichier XML est trop volumineux pour être lu comme une facture électronique.")
     _refuse_a_doctype(data)
     # A pull parser hands back the root element as soon as its start tag has
     # been seen, so a 4 MB attachment is not parsed to answer "is this an
@@ -455,8 +451,7 @@ def _refuse_a_doctype(data: bytes) -> None:
         )
     if b"<!DOCTYPE" in bytes(data) or b"<!ENTITY" in bytes(data):
         raise EInvoiceError(
-            "Cette facture électronique déclare un DOCTYPE ou une entité XML : "
-            "elle est refusée sans être lue."
+            "Cette facture électronique déclare un DOCTYPE ou une entité XML : elle est refusée sans être lue."
         )
 
 
@@ -491,10 +486,7 @@ def read(data: bytes, supplier_code: str = "") -> ParsedInvoice:
     tag = _root_tag(data)
     syntax = _syntax(tag)
     if syntax is None:
-        raise EInvoiceError(
-            "Ce fichier XML n'est pas une facture électronique au format EN 16931 "
-            "(ni CII ni UBL)."
-        )
+        raise EInvoiceError("Ce fichier XML n'est pas une facture électronique au format EN 16931 (ni CII ni UBL).")
     _refuse_a_doctype(data)
     try:
         root = ElementTree.fromstring(bytes(data))
@@ -595,8 +587,7 @@ class _Cii:
         self.seller = _kid(self.agreement, "SellerTradeParty")
 
     def profile(self) -> str:
-        return _text(self.root, "ExchangedDocumentContext",
-                     "GuidelineSpecifiedDocumentContextParameter", "ID")
+        return _text(self.root, "ExchangedDocumentContext", "GuidelineSpecifiedDocumentContextParameter", "ID")
 
     def number(self) -> str:
         return _text(self.header, "ID")
@@ -642,8 +633,7 @@ class _Cii:
                 quantity=_amount(item, "SpecifiedLineTradeDelivery", "BilledQuantity"),
                 net_price=_amount(price, "ChargeAmount"),
                 price_basis=_amount(price, "BasisQuantity"),
-                total=_amount(settlement, "SpecifiedTradeSettlementLineMonetarySummation",
-                              "LineTotalAmount"),
+                total=_amount(settlement, "SpecifiedTradeSettlementLineMonetarySummation", "LineTotalAmount"),
                 rate=_amount(_kid(settlement, "ApplicableTradeTax"), "RateApplicablePercent"),
             )
 
@@ -713,9 +703,9 @@ class _Ubl:
         totals = _kids(root, "TaxTotal")
         wanted = (_text(root, "DocumentCurrencyCode") or ONLY_CURRENCY).upper()
         matching = [
-            total for total in totals
-            if any((amount.get("currencyID") or wanted).upper() == wanted
-                   for amount in _kids(total, "TaxAmount"))
+            total
+            for total in totals
+            if any((amount.get("currencyID") or wanted).upper() == wanted for amount in _kids(total, "TaxAmount"))
         ]
         self.tax_total = (matching or totals or [None])[0]
 
@@ -735,10 +725,7 @@ class _Ubl:
         return _text(self.root, "DocumentCurrencyCode")
 
     def seller_name(self) -> str:
-        return (
-            _text(self.seller, "PartyLegalEntity", "RegistrationName")
-            or _text(self.seller, "PartyName", "Name")
-        )
+        return _text(self.seller, "PartyLegalEntity", "RegistrationName") or _text(self.seller, "PartyName", "Name")
 
     def seller_siren(self) -> str:
         return _text(self.seller, "PartyLegalEntity", "CompanyID")
@@ -839,7 +826,7 @@ def _coded_date(raw: str, code: str) -> date | None:
     digits = "".join(character for character in raw if character.isdigit())
     if code in ("", "102", "203", "204") and len(digits) >= 8:
         try:
-            return datetime.strptime(digits[:8], "%Y%m%d").date()
+            return datetime.strptime(digits[:8], "%Y%m%d").date()  # noqa: DTZ007 - a printed date, read into .date()
         except ValueError:
             return None
     return None
@@ -882,8 +869,7 @@ class _Adjustment:
 
 
 class _Totals:
-    def __init__(self, lines, charges, allowances, taxable, tax, grand, payable,
-                 rounding=None, prepaid=None):
+    def __init__(self, lines, charges, allowances, taxable, tax, grand, payable, rounding=None, prepaid=None):
         self.lines = lines
         self.charges = charges
         self.allowances = allowances
@@ -939,8 +925,7 @@ def _assemble(document, syntax: str, supplier_code: str) -> ParsedInvoice:
     )
 
     breakdown = [
-        (_rate(percent), _money(base * sign, what="une base de TVA"),
-         _money(tax * sign, what="un montant de TVA"))
+        (_rate(percent), _money(base * sign, what="une base de TVA"), _money(tax * sign, what="un montant de TVA"))
         for percent, base, tax in document.vat_rows()
         if base is not None and tax is not None
     ]
@@ -959,8 +944,7 @@ def _assemble(document, syntax: str, supplier_code: str) -> ParsedInvoice:
         reconciliation_adjustment=_money(adjustment * sign, MAX_ADJUSTMENT, "les frais ou remises"),
         warnings=[f"{item.label} : {item.detail}" for item in checks if not item.passed],
         printed_total_ttc=(
-            _money(totals.grand * sign, what="le total de la facture")
-            if totals.grand is not None else None
+            _money(totals.grand * sign, what="le total de la facture") if totals.grand is not None else None
         ),
         vat_breakdown=breakdown,
         einvoice=facts,
@@ -1004,7 +988,7 @@ def _short(text: str) -> str:
     OperationalError the owner can do nothing with.
     """
     text = (text or "").strip()
-    return text if len(text) <= MAX_NAME else text[:MAX_NAME - 1].rstrip() + "…"
+    return text if len(text) <= MAX_NAME else text[: MAX_NAME - 1].rstrip() + "…"
 
 
 def _fits(value: Decimal, limit: Decimal, what: str) -> Decimal:
@@ -1088,7 +1072,7 @@ def _checks(document, totals: _Totals, raw_lines, adjustment: Decimal, sign, fac
     if totals.taxable is not None and totals.tax is not None and totals.grand is not None:
         # BT-112 = BT-109 + BT-110 + BT-114. The rounding is rare in France
         # and it is stated data: ignored, an invoice that balances to the
-        # centime is reported as its supplier's arithmetic failing, and parked
+        # cent is reported as its supplier's arithmetic failing, and parked
         # in « Documents à corriger » where nobody can do anything about it.
         rounding = totals.rounding or ZERO
         expected = totals.taxable + totals.tax + rounding
@@ -1129,14 +1113,13 @@ def _checks(document, totals: _Totals, raw_lines, adjustment: Decimal, sign, fac
     # stated it takes 500 units out of the ledger while 100 € is charged,
     # and the header totals agree with it, so every other check passes.
     crooked = [
-        raw for raw in raw_lines
-        if raw.total is not None and raw.quantity is not None
-        and raw.quantity < ZERO < raw.total
+        raw
+        for raw in raw_lines
+        if raw.total is not None and raw.quantity is not None and raw.quantity < ZERO < raw.total
     ]
     if crooked:
         said = ", ".join(
-            f"{raw.name or 'ligne sans nom'} ({raw.quantity} × pour {raw.total:+.2f} €)"
-            for raw in crooked[:3]
+            f"{raw.name or 'ligne sans nom'} ({raw.quantity} × pour {raw.total:+.2f} €)" for raw in crooked[:3]
         )
         checks.append(
             ParseCheck(
@@ -1164,17 +1147,14 @@ def _checks(document, totals: _Totals, raw_lines, adjustment: Decimal, sign, fac
             )
         )
 
-    rows = [(percent, base, tax) for percent, base, tax in document.vat_rows()
-            if base is not None and tax is not None]
+    rows = [(percent, base, tax) for percent, base, tax in document.vat_rows() if base is not None and tax is not None]
     if rows and totals.taxable is not None and totals.tax is not None:
         bases = sum((base for _percent, base, _tax in rows), start=ZERO)
         taxes = sum((tax for _percent, _base, tax in rows), start=ZERO)
         checks.append(
             ParseCheck(
                 label=VAT_CHECK,
-                passed=(
-                    abs(bases - totals.taxable) <= TOLERANCE and abs(taxes - totals.tax) <= TOLERANCE
-                ),
+                passed=(abs(bases - totals.taxable) <= TOLERANCE and abs(taxes - totals.tax) <= TOLERANCE),
                 detail=(
                     f"table {bases:.2f} € HT / {taxes:.2f} € de TVA "
                     f"- facture {totals.taxable:.2f} € HT / {totals.tax:.2f} € de TVA"
@@ -1220,7 +1200,7 @@ def _seller_registration(value: str) -> str:
     label = {9: "SIREN", 14: "SIRET"}.get(len(digits), "")
     if not label:
         return f"Identifiant légal du fournisseur : {value}"
-    grouped = " ".join(digits[index:index + 3] for index in range(0, len(digits), 3))
+    grouped = " ".join(digits[index : index + 3] for index in range(0, len(digits), 3))
     return f"{label} {grouped}"
 
 

@@ -1,9 +1,9 @@
 {% extends "staff/public_base.html" %}
 {% load assets %}
 {% comment %}
-La page du salarié (staff/public_views.py) : son mois tel qu'il a été figé (l'instantané de la demande),
-« Voir le PDF », son code, sa signature - puis, une fois signé, son exemplaire. Tout vient de LA demande
-que le lien atteint : aucune autre donnée de l'application n'est ici. Écrite pour un téléphone.
+The employee's page (staff/public_views.py): his month as it was frozen (the request's snapshot),
+« Voir le PDF », his code, his signature - then, once signed, his copy. Everything comes from THE request
+the link reaches: no other data of the application is here. Written for a phone.
 {% endcomment %}
 {% block title %}{{ title }}{% endblock %}
 {% block content %}
@@ -63,7 +63,7 @@ que le lien atteint : aucune autre donnée de l'application n'est ici. Écrite p
         <section class="public-section" id="code" aria-labelledby="code-title">
             <h2 id="code-title">1. Votre code</h2>
             {% comment %}
-            Ce qu'une action sur le code vient de dire, ici : la réponse arrive à #code, sous le mois.
+            What an action on the code has just said, here: the answer lands at #code, under the month.
             {% endcomment %}
             {% for level, text in notices %}
                 <p class="message message-{{ level }}" role="status">{{ text }}</p>
@@ -72,9 +72,9 @@ que le lien atteint : aucune autre donnée de l'application n'est ici. Écrite p
                 <p class="message message-success" data-identified>{{ code_verified }}</p>
             {% elif code_waiting %}
                 {% comment %}
-                Un code peut encore être tapé : le taper vient d'abord. En redemander un par e-mail annule celui qui
-                est en route - le bouton le dit, en second ; le code que l'employeur a remis, lui, ne se remplace pas
-                depuis cette page (signature_requests.HANDED_OVER_CODE_WAITING).
+                A code can still be typed: typing it comes first. Asking for another by e-mail voids the one on
+                its way - the button says so, second; the code the employer handed over is not replaced from
+                this page (signature_requests.HANDED_OVER_CODE_WAITING).
                 {% endcomment %}
                 <form method="post" action="{{ urls.check_code }}" class="public-form">
                     {% csrf_token %}
@@ -120,12 +120,12 @@ que le lien atteint : aucune autre donnée de l'application n'est ici. Écrite p
             {% if error %}<p class="message message-error" role="alert">{{ error }}</p>{% endif %}
             {% if identified %}
                 {% comment %}
-                signature_pad.js dessine dans le cadre et met, à l'envoi, l'image (PNG) dans le champ caché -
-                rien des tracés eux-mêmes. Une page redessinée après un refus porte le dessin dans ce champ : le
-                script le repeint.
+                signature_pad.js draws in the frame and puts the picture (PNG) in the hidden field as the form is
+                sent - nothing of the strokes themselves. A page drawn again after a refusal carries the drawing in
+                that field: the script paints it back.
                 {% endcomment %}
                 {% comment %}
-                #signer : une signature refusée redessine la page à son formulaire, où l'erreur est écrite.
+                #signer: a refused signature draws the page again at its form, where the error is written.
                 {% endcomment %}
                 <form method="post" action="{{ urls.submit }}#signer" class="public-form sign-form" data-signature-form>
                     {% csrf_token %}

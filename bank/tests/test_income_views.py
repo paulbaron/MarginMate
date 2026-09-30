@@ -53,7 +53,7 @@ def said(response) -> str:
 def forms_posting_to(html: str, action: str) -> list[dict]:
     """The hidden fields of every form posting to `action`, unescaped the
     way a browser posts an attribute back."""
-    found = re.findall(rf'<form[^>]*action="{re.escape(action)}"(.*?)</form>', html, re.S)
+    found = re.findall(rf'<form[^>]*action="{re.escape(action)}"(.*?)</form>', html, re.DOTALL)
     return [{name: unescape(value) for name, value in HIDDEN.findall(form)} for form in found]
 
 
@@ -77,7 +77,9 @@ class Page(Fixtures):
         self.second = self.payout(date(2026, 6, 5), "60.00", "59.58")
         self.cash = self.credit(date(2026, 6, 10), "40.00", "VERSEMENT ESPECES", "VERSEMENT ESPECES")
         self.cheque = self.credit(date(2026, 6, 11), "150.00", "REMISE CHEQUES", "REMISE CHEQUES")
-        self.party = self.credit(date(2026, 6, 20), "900.00", counterparty="ASSOCIATION EXEMPLE", category="Privatisation")
+        self.party = self.credit(
+            date(2026, 6, 20), "900.00", counterparty="ASSOCIATION EXEMPLE", category="Privatisation"
+        )
         self.unnamed = self.credit(date(2026, 6, 22), "35.00", counterparty="PAYEUR INVENTE")
         self.credit(date(2026, 5, 20), "11.00")
         self.credit(date(2026, 7, 20), "13.00")
@@ -154,7 +156,7 @@ class IncomePageTests(Page, TestCase):
         self.assertTrue(response.context["is_default"])
         self.assertContains(response, "Les douze derniers mois")
 
-    def test_everything_under_tout(self):
+    def test_everything_under_all_history(self):
         response = self.page(tout="1", **JUNE_PARAMS)
         self.assertFalse(response.context["window"])
         self.assertEqual(response.context["report"].received_count, 8)
@@ -170,7 +172,7 @@ class IncomePageTests(Page, TestCase):
         it again, word for word, one line further down."""
         self.assertEqual(said(self.page(**JUNE_PARAMS)).count("passent d'un côté ou de l'autre"), 1)
 
-    def test_the_ecart_is_said_to_be_taken_over_the_days_both_sides_cover(self):
+    def test_the_gap_is_said_to_be_taken_over_the_days_both_sides_cover(self):
         self.assertIn("L'écart est pris sur les jours que les deux côtés couvrent", said(self.page(**JUNE_PARAMS)))
 
     def test_what_answers_the_question_comes_before_the_long_list_of_payouts(self):
@@ -181,7 +183,13 @@ class IncomePageTests(Page, TestCase):
         html = self.page(**JUNE_PARAMS).content.decode()
         order = [
             html.index(marker)
-            for marker in (f"<h2>{COMPARISON}</h2>", 'id="solde"', "<h2>Mois par mois</h2>", 'id="autres-entrees"', 'id="versements"')
+            for marker in (
+                f"<h2>{COMPARISON}</h2>",
+                'id="card-balance"',
+                "<h2>Mois par mois</h2>",
+                'id="autres-entrees"',
+                'id="versements"',
+            )
         ]
         self.assertEqual(order, sorted(order))
 
@@ -232,7 +240,7 @@ class TheWindowTravelsTests(Page, TestCase):
         self.assertEqual(query_of(response.context["bank_url"])["vue"], "entrees")
         self.assertContains(response, response.context["spending_url"].replace("&", "&amp;"))
 
-    def test_under_tout_the_other_pages_are_opened_on_everything_too(self):
+    def test_under_all_history_the_other_pages_are_opened_on_everything_too(self):
         """Bare, they would open on THEIR default - a year - while this page
         says « tout l'historique »."""
         response = self.page(tout="1")
@@ -290,20 +298,20 @@ class NamingACreditTests(Page, TestCase):
         self.assertIn('<td data-sort="Sans catégorie">', html)
 
 
-class BanqueTests(Page, TestCase):
-    def banque(self, **parameters):
+class BankHomeTests(Page, TestCase):
+    def bank(self, **parameters):
         response = self.client.get(reverse("bank:bank_home"), parameters)
         self.assertEqual(response.status_code, 200)
         assertNoUnrenderedTemplateSyntax(self, response, f"Banque {parameters}")
         return response
 
-    def test_the_entrees_stat_counts_the_windows_credits(self):
-        stats = self.banque(**JUNE_PARAMS).context["stats"]
+    def test_the_income_stat_counts_the_windows_credits(self):
+        stats = self.bank(**JUNE_PARAMS).context["stats"]
         self.assertEqual((stats["income_count"], stats["income_total"]), (6, euros("1383.18")))
         self.assertEqual(stats["counts"]["entrees"], 6)
 
-    def test_it_opens_entrees_dargent_over_the_same_dates(self):
-        response = self.banque(vue="entrees", **JUNE_PARAMS)
+    def test_it_opens_income_over_the_same_dates(self):
+        response = self.bank(vue="entrees", **JUNE_PARAMS)
         url = response.context["income_url"]
         self.assertEqual(urlsplit(url).path, reverse("bank:income_home"))
         self.assertEqual((query_of(url)["du"], query_of(url)["au"]), ("2026-06-01", "2026-06-30"))
@@ -311,17 +319,17 @@ class BanqueTests(Page, TestCase):
         self.assertContains(response, f'href="{url.replace("&", "&amp;")}">face aux ventes</a>')
 
     def test_a_chosen_month_becomes_its_first_and_last_day(self):
-        query = query_of(self.banque(mois="2026-06").context["income_url"])
+        query = query_of(self.bank(mois="2026-06").context["income_url"])
         self.assertEqual((query["du"], query["au"]), ("2026-06-01", "2026-06-30"))
         self.credit(date(2024, 2, 10), "5.00")
-        query = query_of(self.banque(mois="2024-02").context["income_url"])
+        query = query_of(self.bank(mois="2024-02").context["income_url"])
         self.assertEqual((query["du"], query["au"]), ("2024-02-01", "2024-02-29"))
 
     def test_every_month_is_everything(self):
-        query = query_of(self.banque().context["income_url"])
+        query = query_of(self.bank().context["income_url"])
         self.assertEqual((query.get("du"), query["tout"]), (None, "1"))
 
-    def test_it_opens_depenses_over_its_period_too(self):
+    def test_it_opens_spending_over_its_period_too(self):
         """« Dépenses par catégorie », beside « Entrées d'argent » in the
         header, was a bare link: Dépenses then opened on its own default, a
         year, whatever month Banque was showing."""
@@ -331,7 +339,7 @@ class BanqueTests(Page, TestCase):
             ({}, {"tout": "1"}),
         ):
             with self.subTest(parameters=parameters):
-                response = self.banque(**parameters)
+                response = self.bank(**parameters)
                 url = response.context["spending_url"]
                 self.assertEqual(urlsplit(url).path, reverse("bank:spending_home"))
                 self.assertEqual(dict(query_of(url).items()), expected)
@@ -340,7 +348,7 @@ class BanqueTests(Page, TestCase):
     def test_each_credit_says_what_it_is(self):
         # Unescaped, as a reader sees it: a name is a variable, and its
         # apostrophe is written « &#x27; ».
-        html = unescape(" ".join(self.banque(vue="entrees", **JUNE_PARAMS).content.decode().split()))
+        html = unescape(" ".join(self.bank(vue="entrees", **JUNE_PARAMS).content.decode().split()))
         self.assertIn("Versement carte : 200.00 € encaissés, 1.40 € de commission", html)
         self.assertIn("Dépôt d'espèces", html)
         self.assertIn("Remise de chèques", html)
@@ -354,14 +362,14 @@ class BanqueTests(Page, TestCase):
         from django.test.utils import CaptureQueriesContext
 
         with CaptureQueriesContext(connection) as few:
-            self.banque(vue="entrees", **JUNE_PARAMS)
+            self.bank(vue="entrees", **JUNE_PARAMS)
         for offset in range(5):
             self.payout(date(2026, 6, 25), "10.00", "9.90")
         with self.assertNumQueries(len(few.captured_queries)):
-            self.banque(vue="entrees", **JUNE_PARAMS)
+            self.bank(vue="entrees", **JUNE_PARAMS)
 
 
-class DepensesLinksHereTests(Page, TestCase):
+class SpendingLinksHereTests(Page, TestCase):
     def test_the_link_exists_now_and_carries_the_period(self):
         response = self.client.get(reverse("bank:spending_home"), JUNE_PARAMS)
         url = response.context["income_url"]
@@ -369,7 +377,7 @@ class DepensesLinksHereTests(Page, TestCase):
         self.assertEqual(query_of(url)["du"], "2026-06-01")
         self.assertContains(response, f'href="{url.replace("&", "&amp;")}">Entrées d\'argent</a>')
 
-    def test_under_tout_it_opens_everything(self):
+    def test_under_all_history_it_opens_everything(self):
         response = self.client.get(reverse("bank:spending_home"), {"tout": "1"})
         self.assertEqual(query_of(response.context["income_url"])["tout"], "1")
         self.assertEqual(query_of(response.context["margins_url"])["tout"], "1")
@@ -395,7 +403,7 @@ class WhereTheStatementStartsTests(CoveragePage, TillBeforeTheStatement, TestCas
         self.assertIn("moyens de paiement de la caisse lus du 10/01/2026 au 10/06/2026", text)
         self.assertIn("relevé importé du 01/06/2026 au 15/06/2026", text)
 
-    def test_under_tout_the_page_says_what_the_statement_cannot_see(self):
+    def test_under_all_history_the_page_says_what_the_statement_cannot_see(self):
         response = self.page(tout="1")
         text = said(response)
         self.assertIn(
@@ -410,14 +418,18 @@ class WhereTheStatementStartsTests(CoveragePage, TillBeforeTheStatement, TestCas
         self.assertEqual(dict(query_of(covered).items()), {"du": "2026-06-01"})
         self.assertContains(response, f'href="{covered}">Comparer sur les jours couverts des deux côtés</a>')
 
-    def test_banque_opens_it_on_that_warning(self):
-        banque = self.client.get(reverse("bank:bank_home"))
-        self.assertIn("que le relevé ne couvre pas", said(self.client.get(banque.context["income_url"])))
+    def test_the_bank_page_opens_it_on_that_warning(self):
+        bank = self.client.get(reverse("bank:bank_home"))
+        self.assertIn("que le relevé ne couvre pas", said(self.client.get(bank.context["income_url"])))
 
     def test_a_window_straddling_the_start(self):
         response = self.page(du="2026-04-01", au="2026-06-30")
-        self.assertIn("Du 10/04/2026 au 10/05/2026, la caisse a encaissé 240.00 € (dont 200.00 € par carte)", said(response))
-        self.assertEqual(dict(query_of(response.context["covered_url"]).items()), {"du": "2026-06-01", "au": "2026-06-30"})
+        self.assertIn(
+            "Du 10/04/2026 au 10/05/2026, la caisse a encaissé 240.00 € (dont 200.00 € par carte)", said(response)
+        )
+        self.assertEqual(
+            dict(query_of(response.context["covered_url"]).items()), {"du": "2026-06-01", "au": "2026-06-30"}
+        )
         card = {row.label: row for row in response.context["report"].rows}["Carte"]
         self.assertEqual(card.difference, euros("0.00"))
 
@@ -504,7 +516,7 @@ class BalanceChartTests(SimpleTestCase):
         self.assertEqual(html.count('class="chart-point"'), 2)
 
     def test_the_label_is_escaped(self):
-        html = _build_balance_svg(self.POINTS, label='<img src=x onerror=alert(1)>')
+        html = _build_balance_svg(self.POINTS, label="<img src=x onerror=alert(1)>")
         self.assertNotIn("<img", html)
         self.assertIn("&lt;img", html)
 

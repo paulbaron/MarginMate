@@ -85,7 +85,7 @@ class WebsiteRecipe:
     show_browser: bool = False
 
     @classmethod
-    def from_source(cls, source, name: str = "") -> "WebsiteRecipe":
+    def from_source(cls, source, name: str = "") -> WebsiteRecipe:
         return cls(
             name=name or str(source.invoice_type),
             login_url=source.login_url,
@@ -111,12 +111,11 @@ def credentials(recipe: WebsiteRecipe, env_file=None, environ=None) -> tuple[str
     restarting the server, then from the environment.
 
     The .env and the environment are the server's, the owner's: a portal
-    typed in another bar's espace could name any of them and send it to a
-    page of its own. So such an espace is refused before anything is read,
+    typed in another bar's tenant could name any of them and send it to a
+    page of its own. So such a tenant is refused before anything is read,
     and the refusal names no variable - « X est absente du fichier .env »
     would say which ones exist (invoices/integrations.py)."""
     from accounts.tenancy import integrations_allowed
-
     from invoices import integrations
 
     if not integrations_allowed():
@@ -142,18 +141,47 @@ def credentials(recipe: WebsiteRecipe, env_file=None, environ=None) -> tuple[str
 
 
 MONTHS = {
-    "janvier": 1, "janv": 1, "jan": 1, "january": 1,
-    "fevrier": 2, "fevr": 2, "fev": 2, "february": 2, "feb": 2,
-    "mars": 3, "march": 3, "mar": 3,
-    "avril": 4, "avr": 4, "april": 4, "apr": 4,
-    "mai": 5, "may": 5,
-    "juin": 6, "june": 6, "jun": 6,
-    "juillet": 7, "juil": 7, "july": 7, "jul": 7,
-    "aout": 8, "august": 8, "aug": 8,
-    "septembre": 9, "sept": 9, "sep": 9, "september": 9,
-    "octobre": 10, "oct": 10, "october": 10,
-    "novembre": 11, "nov": 11, "november": 11,
-    "decembre": 12, "dec": 12, "december": 12,
+    "janvier": 1,
+    "janv": 1,
+    "jan": 1,
+    "january": 1,
+    "fevrier": 2,
+    "fevr": 2,
+    "fev": 2,
+    "february": 2,
+    "feb": 2,
+    "mars": 3,
+    "march": 3,
+    "mar": 3,
+    "avril": 4,
+    "avr": 4,
+    "april": 4,
+    "apr": 4,
+    "mai": 5,
+    "may": 5,
+    "juin": 6,
+    "june": 6,
+    "jun": 6,
+    "juillet": 7,
+    "juil": 7,
+    "july": 7,
+    "jul": 7,
+    "aout": 8,
+    "august": 8,
+    "aug": 8,
+    "septembre": 9,
+    "sept": 9,
+    "sep": 9,
+    "september": 9,
+    "octobre": 10,
+    "oct": 10,
+    "october": 10,
+    "novembre": 11,
+    "nov": 11,
+    "november": 11,
+    "decembre": 12,
+    "dec": 12,
+    "december": 12,
 }
 _MONTH_NAMES = "|".join(sorted(MONTHS, key=len, reverse=True))
 DAY_MONTH_YEAR_RE = re.compile(r"(?<!\d)(\d{1,2})[/.-](\d{1,2})[/.-](\d{4}|\d{2})(?!\d)")
@@ -232,16 +260,16 @@ def in_window(row: str, start: date, end: date) -> bool | None:
 # ----------------------------------------------------------------- links
 
 
-PDF_HREF_RE = re.compile(r"\.pdf(?:$|[?#&])|[/?&=_.-](?:pdf|download|telecharg\w*)(?:$|[/?&=#._-])", re.I)
-DOWNLOAD_WORDS_RE = re.compile(r"t[ée]l[ée]charg|\bpdf\b|download", re.I)
+PDF_HREF_RE = re.compile(r"\.pdf(?:$|[?#&])|[/?&=_.-](?:pdf|download|telecharg\w*)(?:$|[/?&=#._-])", re.IGNORECASE)
+DOWNLOAD_WORDS_RE = re.compile(r"t[ée]l[ée]charg|\bpdf\b|download", re.IGNORECASE)
 # A link opening one invoice (Free Mobile's « Voir ma facture »): one invoice,
 # singular - "Voir mes factures" is the way to the list.
 OPEN_WORDS_RE = re.compile(
     r"\b(?:voir|afficher|consulter|ouvrir)\s+(?:ma|la|votre|cette)\s+(?:facture|quittance|avis d.[ée]ch[ée]ance)(?![a-z])",
-    re.I,
+    re.IGNORECASE,
 )
-INVOICES_LINK_RE = re.compile(r"factur", re.I)
-AMOUNT_RE = re.compile(r"\d[\d\s.]*[,.]\d{2}\s*(?:€|eur)|€\s*\d", re.I)
+INVOICES_LINK_RE = re.compile(r"factur", re.IGNORECASE)
+AMOUNT_RE = re.compile(r"\d[\d\s.]*[,.]\d{2}\s*(?:€|eur)|€\s*\d", re.IGNORECASE)
 
 
 @dataclass
@@ -376,7 +404,7 @@ def _strength(candidate: Candidate) -> int:
 # ---------------------------------------------------------- page reading
 
 REFUSED_RE = re.compile(
-    r"requested url was rejected|access denied|acc[eè]s refus[ée]|request blocked|you have been blocked", re.I
+    r"requested url was rejected|access denied|acc[eè]s refus[ée]|request blocked|you have been blocked", re.IGNORECASE
 )
 VERIFY_RE = re.compile(
     r"code (?:de )?(?:v[ée]rification|s[ée]curit[ée]|confirmation)|code re[çc]u|code envoy[ée]"
@@ -389,11 +417,14 @@ VERIFY_RE = re.compile(
     r"|(?:non|pas) (?:pas )?(?:[àa] )?un robot|(?:faites glisser|glissez) (?:le curseur|vers la droite)"
     r"|slide to (?:verify|continue)"
     r"|verify (?:that )?you are (?:a )?human",
-    re.I,
+    re.IGNORECASE,
 )
-NEXT_RE = re.compile(r"^(?:suivant(?:e)?|page suivante|voir plus|afficher plus|charger plus|plus de factures|next|›|»|>)$", re.I)
+NEXT_RE = re.compile(
+    r"^(?:suivant(?:e)?|page suivante|voir plus|afficher plus|charger plus|plus de factures|next|›|»|>)$", re.IGNORECASE
+)
 REFUSE_COOKIES_RE = re.compile(
-    r"tout refuser|je refuse|refuser|interdire|continuer sans accepter|rejeter|refuse all|reject all|decline", re.I
+    r"tout refuser|je refuse|refuser|interdire|continuer sans accepter|rejeter|refuse all|reject all|decline",
+    re.IGNORECASE,
 )
 
 # Every visible link or button, marked so it can be clicked by index, with
@@ -574,8 +605,13 @@ def _browser_gone(exc: Exception) -> bool:
     return any(
         sign in text
         for sign in (
-            "chrome not reachable", "session deleted", "disconnected: not connected", "no such session",
-            "target window already closed", "web view not found", "invalid session id",
+            "chrome not reachable",
+            "session deleted",
+            "disconnected: not connected",
+            "no such session",
+            "target window already closed",
+            "web view not found",
+            "invalid session id",
         )
     )
 
@@ -610,7 +646,7 @@ def build_chrome(download_dir: str, headless: bool):
     driver.execute_cdp_cmd("Page.setDownloadBehavior", {"behavior": "allow", "downloadPath": folder})
     try:
         driver.execute_cdp_cmd("Browser.setDownloadBehavior", {"behavior": "allow", "downloadPath": folder})
-    except Exception:  # noqa: BLE001 - an older Chrome: the page's setting is there
+    except Exception:  # noqa: BLE001, S110 - an older Chrome: the page's setting is there
         pass
     return driver
 
@@ -714,10 +750,12 @@ class _Visit:
             return not _browser_gone(exc)
 
     def password_visible(self) -> bool:
-        return bool(self.driver.execute_script(
-            "return Array.from(document.querySelectorAll('input[type=password]'))"
-            ".some(el => el.offsetWidth || el.offsetHeight);"
-        ))
+        return bool(
+            self.driver.execute_script(
+                "return Array.from(document.querySelectorAll('input[type=password]'))"
+                ".some(el => el.offsetWidth || el.offsetHeight);"
+            )
+        )
 
     def diagnose(self, context: str) -> None:
         """A screenshot and the page's HTML, kept beside the downloads, and
@@ -725,7 +763,7 @@ class _Visit:
         try:
             folder = os.path.join(self.download_dir, DEBUG_DIR)
             os.makedirs(folder, exist_ok=True)
-            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")  # noqa: DTZ005 - a file name, in local time
             picture = os.path.join(folder, f"{stamp}.png")
             page = os.path.join(folder, f"{stamp}.html")
             self.driver.save_screenshot(picture)
@@ -738,7 +776,7 @@ class _Visit:
     def quit(self) -> None:
         try:
             self.driver.quit()
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110 - a browser already gone
             pass
 
     # ------------------------------------------------------------- sign in
@@ -782,7 +820,8 @@ class _Visit:
 
         loaded = time.monotonic()
         found = self.wait(
-            lambda: form_or_check(loaded), PAGE_WAIT_SECONDS,
+            lambda: form_or_check(loaded),
+            PAGE_WAIT_SECONDS,
             f"{recipe.name} : aucun formulaire de connexion trouvé sur {recipe.login_url}.",
         )
         if found == "check":
@@ -866,7 +905,7 @@ class _Visit:
                 return
             try:
                 gone = not self.password_visible()
-            except Exception:  # noqa: BLE001 - between two pages
+            except Exception:  # noqa: BLE001, S112 - between two pages
                 continue
             if gone:
                 # The form gone is not yet signed in: a page may draw its
@@ -1085,7 +1124,7 @@ class _Visit:
                 try:
                     self.driver.switch_to.window(handle)
                     self.driver.close()
-                except Exception:  # noqa: BLE001
+                except Exception:  # noqa: BLE001, S110 - a tab already closed
                     pass
             self.driver.switch_to.window(main)
 
@@ -1107,7 +1146,8 @@ class _Visit:
 
     def _fresh(self):
         return {
-            name for name, state in self._snapshot().items()
+            name
+            for name, state in self._snapshot().items()
             if self.baseline.get(name) != state and name not in self.taken
         }
 
@@ -1137,7 +1177,13 @@ class _Visit:
         paths = []
         for name in names:
             stem = name[:-4] if name.lower().endswith(".pdf") else name
-            kept = f"{datetime.now():%Y%m%d%H%M%S%f}_{stem}.pdf"
+            moment = f"{datetime.now():%Y%m%d%H%M%S%f}"  # noqa: DTZ005 - a file name, in local time
+            kept = f"{moment}_{stem}.pdf"
+            # Windows' clock can give two takes the same microseconds.
+            copy = 1
+            while os.path.exists(os.path.join(self.download_dir, kept)):
+                copy += 1
+                kept = f"{moment}-{copy}_{stem}.pdf"
             path = os.path.join(self.download_dir, name)
             try:
                 os.replace(path, os.path.join(self.download_dir, kept))
@@ -1165,13 +1211,13 @@ class _Visit:
                         fetched = None
                     if fetched:
                         return fetched
-                except Exception:  # noqa: BLE001 - a tab closing itself
+                except Exception:  # noqa: BLE001, S112 - a tab closing itself
                     continue
             return None
         finally:
             try:
                 self.driver.switch_to.window(main)
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001, S110 - no main window left to go back to
                 pass
 
     def _save_from_page(self) -> str | None:
@@ -1184,7 +1230,7 @@ class _Visit:
         content = base64.b64decode(encoded)
         if not content.startswith(b"%PDF-"):
             return None
-        name = f"{datetime.now():%Y%m%d%H%M%S%f}_facture.pdf"
+        name = f"{datetime.now():%Y%m%d%H%M%S%f}_facture.pdf"  # noqa: DTZ005 - a file name, in local time
         with open(os.path.join(self.download_dir, name), "wb") as handle:
             handle.write(content)
         return name
@@ -1214,7 +1260,7 @@ class _Visit:
         if response.status_code != 200 or not response.content.startswith(b"%PDF-"):
             return None
         name = re.sub(r"[^A-Za-z0-9._-]+", "_", url.rstrip("/").rsplit("/", 1)[-1].split("?")[0]) or "facture"
-        name = f"{datetime.now():%Y%m%d%H%M%S%f}_{name}"
+        name = f"{datetime.now():%Y%m%d%H%M%S%f}_{name}"  # noqa: DTZ005 - a file name, in local time
         if not name.lower().endswith(".pdf"):
             name += ".pdf"
         with open(os.path.join(self.download_dir, name), "wb") as handle:
@@ -1222,12 +1268,14 @@ class _Visit:
         return name
 
 
-def _visit(recipe, download_dir, start, end, known_numbers, log, should_cancel, driver_factory, headless, env_file, fetch):
+def _visit(
+    recipe, download_dir, start, end, known_numbers, log, should_cancel, driver_factory, headless, env_file, fetch
+):
     os.makedirs(download_dir, exist_ok=True)
     login, password = credentials(recipe, env_file=env_file)
     try:
         visit = _Visit(recipe, download_dir, log, should_cancel, driver_factory, headless)
-    except Exception as exc:  # noqa: BLE001 - raised raw, it stopped the whole gather, not this site
+    except Exception as exc:
         raise WebsiteError(
             f"{recipe.name} : le navigateur n'a pas pu démarrer ({exc.__class__.__name__} - {str(exc).strip()[:200]})."
         ) from exc
@@ -1239,7 +1287,7 @@ def _visit(recipe, download_dir, start, end, known_numbers, log, should_cancel, 
         except WebsiteError:
             visit.diagnose(f"{recipe.name} : échec")
             raise
-        except Exception as exc:  # noqa: BLE001 - said in words, with the page to show for it
+        except Exception as exc:
             visit.diagnose(f"{recipe.name} : erreur inattendue")
             raise WebsiteError(f"{recipe.name} : {exc.__class__.__name__} - {str(exc).strip()[:300]}") from exc
     finally:
@@ -1295,7 +1343,10 @@ def fetch_website_invoices(
                     log(f"{recipe.name} : rien n'est arrivé pour « {what} ».")
                 else:
                     files.extend(landed)
-                    log(f"{recipe.name} : téléchargée « {what} »" + (f" (+{len(landed) - 1} arrivée(s) en retard)." if len(landed) > 1 else "."))
+                    log(
+                        f"{recipe.name} : téléchargée « {what} »"
+                        + (f" (+{len(landed) - 1} arrivée(s) en retard)." if len(landed) > 1 else ".")
+                    )
                     if on_progress:
                         on_progress(len(files), None)
                 time.sleep(CLICK_INTERVAL_SECONDS)
@@ -1325,7 +1376,9 @@ def fetch_website_invoices(
             )
         return files
 
-    return _visit(recipe, download_dir, start, end, known_numbers, log, should_cancel, driver_factory, headless, env_file, fetch)
+    return _visit(
+        recipe, download_dir, start, end, known_numbers, log, should_cancel, driver_factory, headless, env_file, fetch
+    )
 
 
 def list_website_invoices(
@@ -1374,4 +1427,6 @@ def list_website_invoices(
         visit.diagnose(f"{recipe.name} : page lue")
         return rows
 
-    return _visit(recipe, download_dir, start, end, known_numbers, log, lambda: False, driver_factory, headless, env_file, fetch)
+    return _visit(
+        recipe, download_dir, start, end, known_numbers, log, lambda: False, driver_factory, headless, env_file, fetch
+    )

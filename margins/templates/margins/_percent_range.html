@@ -1,5 +1,5 @@
 {% comment %}
-Le même intervalle en pourcentage. Jamais imprimé sans la part chiffrée à
-côté : 90 % sur un tiers des unités chiffrées n'est pas une marge de 90 %.
+The same range as a percentage. Never printed without the costed share
+beside it: 90 % on a third of the units costed is not a 90 % margin.
 {% endcomment %}
 {% if low is None or high is None %}—{% elif low == high %}{{ high|floatformat:1 }} %{% else %}{{ low|floatformat:1 }} à {{ high|floatformat:1 }} %{% endif %}

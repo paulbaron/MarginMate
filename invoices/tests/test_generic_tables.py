@@ -122,7 +122,9 @@ class PiecesTests(SimpleTestCase):
         reading = read_line(0, "3100200  PLANCHE PIN 18MM 1M2  2600000003032  0,35  21,45  0,00  21,45  7,51  20,00")
         self.assertEqual((reading.count, reading.unit, reading.total), (D("0.35"), D("21.45"), D("7.51")))
         detail = read_line(1, "Qté : 0,350 * 25,74  9,01")
-        self.assertEqual((detail.name, detail.count, detail.unit, detail.total), (None, D("0.350"), D("25.74"), D("9.01")))
+        self.assertEqual(
+            (detail.name, detail.count, detail.unit, detail.total), (None, D("0.350"), D("25.74"), D("9.01"))
+        )
 
     def test_a_rounded_unit_price_still_explains_its_amount(self):
         reading = read_line(0, "2149483  DECOUPE  2000000002026  2  4,17  0,00  4,17  8,33  20,00")
@@ -244,12 +246,18 @@ class UnratedTaxTests(SimpleTestCase):
 
     def test_two_items_the_second_a_fifth_of_the_first_prove_no_rate(self):
         parsed = READER.parse_text("EPICERIE\nPAIN  10,00\nBEURRE  2,00\nTOTAL  12,00\nCB  12,00")
-        self.assertEqual([(line.printed_ttc, line.vat_rate) for line in parsed.lines], [
-            (D("10.00"), D("0.055")), (D("2.00"), D("0.055")),
-        ])
+        self.assertEqual(
+            [(line.printed_ttc, line.vat_rate) for line in parsed.lines],
+            [
+                (D("10.00"), D("0.055")),
+                (D("2.00"), D("0.055")),
+            ],
+        )
         self.assertIn("Taux par article", [check.label for check in parsed.checks if not check.passed])
         self.assertNotIn("Taux déduit", [check.label for check in parsed.checks])
 
     def test_a_ticket_in_ttc_printing_its_ht_and_tax_stays_in_ttc(self):
-        parsed = READER.parse_text("EPICERIE\nVIN  7,00\nSAVON  5,00\nTOTAL HT  10,00\nTVA  2,00\nTOTAL  12,00\nCB  12,00")
+        parsed = READER.parse_text(
+            "EPICERIE\nVIN  7,00\nSAVON  5,00\nTOTAL HT  10,00\nTVA  2,00\nTOTAL  12,00\nCB  12,00"
+        )
         self.assertEqual([line.printed_ttc for line in parsed.lines], [D("7.00"), D("5.00")])

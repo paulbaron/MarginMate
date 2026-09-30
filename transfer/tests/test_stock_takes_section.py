@@ -10,8 +10,7 @@ its trail or revaluing it in silence.
 Fixtures are invented (the repository is public).
 """
 
-from datetime import date, datetime
-from datetime import timezone as dt_timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from django.test import TestCase
@@ -53,8 +52,8 @@ from transfer.tests.support import (
 
 MERGE, REPLACE = Strategy.MERGE, Strategy.REPLACE
 KEY = "inventaires"
-END_2025 = datetime(2025, 12, 31, 22, 0, tzinfo=dt_timezone.utc)  # 23:00 in Paris
-END_2024 = datetime(2024, 12, 31, 22, 0, tzinfo=dt_timezone.utc)
+END_2025 = datetime(2025, 12, 31, 22, 0, tzinfo=UTC)  # 23:00 in Paris
+END_2024 = datetime(2024, 12, 31, 22, 0, tzinfo=UTC)
 
 
 def section():
@@ -76,29 +75,60 @@ def build_fixture(test):
         make_invoice_line(test.older, test.gin, quantity=Decimal("2"), total_volume="1.400", total_ht="24.00"),
         make_invoice_line(test.older, test.bottle, quantity=Decimal("6"), total_volume="4.200", total_ht="57.00"),
     ]
-    test.newer_line = make_invoice_line(test.newer, test.bottle, quantity=Decimal("2"), total_volume="1.400",
-                                        total_ht="19.00")
+    test.newer_line = make_invoice_line(
+        test.newer, test.bottle, quantity=Decimal("2"), total_volume="1.400", total_ht="19.00"
+    )
     test.take = make_stock_take(END_2025, note="Inventaire 2025 (import CSV)")
     test.bottle_line = make_stock_take_line(test.take, test.bottle, counted_quantity="3", value_ht="28.50")
-    StockTakeLineSource.objects.create(stock_take_line=test.bottle_line, invoice_line=test.newer_line,
-                                       quantity_used=Decimal("2"), unit_cost_ht=Decimal("9.5000"))
-    StockTakeLineSource.objects.create(stock_take_line=test.bottle_line, invoice_line=test.older_lines[1],
-                                       quantity_used=Decimal("1"), unit_cost_ht=Decimal("9.5000"))
-    test.limes_line = make_stock_take_line(test.take, stock_type=test.limes, counted_quantity="10.5",
-                                           unit=UnitChoices.UNIT, value_ht="3.15", has_shortfall=True,
-                                           shortfall_quantity=Decimal("10.5"))
+    StockTakeLineSource.objects.create(
+        stock_take_line=test.bottle_line,
+        invoice_line=test.newer_line,
+        quantity_used=Decimal("2"),
+        unit_cost_ht=Decimal("9.5000"),
+    )
+    StockTakeLineSource.objects.create(
+        stock_take_line=test.bottle_line,
+        invoice_line=test.older_lines[1],
+        quantity_used=Decimal("1"),
+        unit_cost_ht=Decimal("9.5000"),
+    )
+    test.limes_line = make_stock_take_line(
+        test.take,
+        stock_type=test.limes,
+        counted_quantity="10.5",
+        unit=UnitChoices.UNIT,
+        value_ht="3.15",
+        has_shortfall=True,
+        shortfall_quantity=Decimal("10.5"),
+    )
     # The 2024 count was priced from an invoice of its own.
     test.oldest = make_invoice(test.metro, invoice_number="MET-000", invoice_date=date(2024, 11, 5))
-    test.oldest_line = make_invoice_line(test.oldest, test.gin, quantity=Decimal("1"), total_volume="0.700",
-                                         total_ht="12.00")
+    test.oldest_line = make_invoice_line(
+        test.oldest, test.gin, quantity=Decimal("1"), total_volume="0.700", total_ht="12.00"
+    )
     test.first_take = make_stock_take(END_2024, note="Inventaire 2024")
     make_stock_take_line(test.first_take, test.gin, counted_quantity="1", value_ht="12.00")
-    StockTakeLineSource.objects.create(stock_take_line=test.first_take.lines.get(), invoice_line=test.oldest_line,
-                                       quantity_used=Decimal("1"), unit_cost_ht=Decimal("12.0000"))
-    test.loss = make_movement(stock_type=test.vodka, quantity="-0.5", unit_cost_ht="13.5714", kind=MovementKind.LOSS,
-                              note="Casse", occurred_on=date(2026, 1, 10))
-    test.correction = make_movement(stock_type=test.limes, quantity="4", unit_cost_ht="0.30",
-                                    kind=MovementKind.CORRECTION, note="Comptage d'ouverture")
+    StockTakeLineSource.objects.create(
+        stock_take_line=test.first_take.lines.get(),
+        invoice_line=test.oldest_line,
+        quantity_used=Decimal("1"),
+        unit_cost_ht=Decimal("12.0000"),
+    )
+    test.loss = make_movement(
+        stock_type=test.vodka,
+        quantity="-0.5",
+        unit_cost_ht="13.5714",
+        kind=MovementKind.LOSS,
+        note="Casse",
+        occurred_on=date(2026, 1, 10),
+    )
+    test.correction = make_movement(
+        stock_type=test.limes,
+        quantity="4",
+        unit_cost_ht="0.30",
+        kind=MovementKind.CORRECTION,
+        note="Comptage d'ouverture",
+    )
 
 
 def own_round_trip(test, strategy, *, between=None):
@@ -144,6 +174,7 @@ class RoundTripTests(TestCase):
     def test_a_frozen_value_is_copied_never_priced_again(self):
         """Even when the invoice line it was priced from now says another
         price here."""
+
         def reprice():
             self.newer_line.total_ht = Decimal("99.00")
             self.newer_line.save()
@@ -155,8 +186,10 @@ class RoundTripTests(TestCase):
         self.assertEqual(line.value_ht, Decimal("28.50"))
         self.assertEqual(
             sorted(line.sources.values_list("invoice_line_id", "quantity_used", "unit_cost_ht")),
-            [(self.older_lines[1].pk, Decimal("1.0000"), Decimal("9.5000")),
-             (self.newer_line.pk, Decimal("2.0000"), Decimal("9.5000"))],
+            [
+                (self.older_lines[1].pk, Decimal("1.0000"), Decimal("9.5000")),
+                (self.newer_line.pk, Decimal("2.0000"), Decimal("9.5000")),
+            ],
         )
 
     def test_an_article_line_and_a_product_line_both_come_back(self):
@@ -164,30 +197,45 @@ class RoundTripTests(TestCase):
 
         take = StockTake.objects.get(taken_at=END_2025)
         self.assertEqual(
-            {(line.product_id, line.stock_type_id, line.counted_quantity, line.has_shortfall, line.shortfall_quantity)
-             for line in take.lines.all()},
-            {(self.bottle.pk, None, Decimal("3.0000"), False, Decimal("0.0000")),
-             (None, self.limes.pk, Decimal("10.5000"), True, Decimal("10.5000"))},
+            {
+                (
+                    line.product_id,
+                    line.stock_type_id,
+                    line.counted_quantity,
+                    line.has_shortfall,
+                    line.shortfall_quantity,
+                )
+                for line in take.lines.all()
+            },
+            {
+                (self.bottle.pk, None, Decimal("3.0000"), False, Decimal("0.0000")),
+                (None, self.limes.pk, Decimal("10.5000"), True, Decimal("10.5000")),
+            },
         )
 
     def test_the_counts_keep_their_creation_date_and_the_losses_theirs(self):
-        StockTake.objects.filter(pk=self.take.pk).update(created_at=datetime(2026, 1, 3, 8, 15, tzinfo=dt_timezone.utc))
-        before = (sorted(StockTake.objects.values_list("taken_at", "created_at")),
-                  sorted(StockMovement.objects.filter(kind=MovementKind.LOSS).values_list("created_at", flat=True)))
+        StockTake.objects.filter(pk=self.take.pk).update(created_at=datetime(2026, 1, 3, 8, 15, tzinfo=UTC))
+        before = (
+            sorted(StockTake.objects.values_list("taken_at", "created_at")),
+            sorted(StockMovement.objects.filter(kind=MovementKind.LOSS).values_list("created_at", flat=True)),
+        )
 
         own_round_trip(self, MERGE)
 
         self.assertEqual(
-            (sorted(StockTake.objects.values_list("taken_at", "created_at")),
-             sorted(StockMovement.objects.filter(kind=MovementKind.LOSS).values_list("created_at", flat=True))),
+            (
+                sorted(StockTake.objects.values_list("taken_at", "created_at")),
+                sorted(StockMovement.objects.filter(kind=MovementKind.LOSS).values_list("created_at", flat=True)),
+            ),
             before,
         )
 
     def test_the_same_loss_dated_and_undated_round_trips(self):
         """Two losses alike but for their date: one undated compares None
         with a date, and neither the snapshot nor the key may trip on it."""
-        make_movement(stock_type=self.vodka, quantity="-0.5", unit_cost_ht="13.5714", kind=MovementKind.LOSS,
-                      note="Casse")
+        make_movement(
+            stock_type=self.vodka, quantity="-0.5", unit_cost_ht="13.5714", kind=MovementKind.LOSS, note="Casse"
+        )
 
         before, after, report = own_round_trip(self, MERGE)
 
@@ -260,7 +308,7 @@ class MergeAndReplaceTests(TestCase):
         self.bottle_line.value_ht = Decimal("30.00")
         self.bottle_line.save()
         self.first_take.delete()  # only in the archive now
-        self.extra = make_stock_take(datetime(2026, 6, 30, 20, 0, tzinfo=dt_timezone.utc), note="Mi-année")  # only here
+        self.extra = make_stock_take(datetime(2026, 6, 30, 20, 0, tzinfo=UTC), note="Mi-année")  # only here
         make_stock_take_line(self.extra, stock_type=self.limes, counted_quantity="2", value_ht="0.60")
         self.loss.delete()  # only in the archive
         self.spill = make_movement(stock_type=self.vodka, quantity="-0.2", kind=MovementKind.LOSS, note="Renversé")
@@ -273,7 +321,9 @@ class MergeAndReplaceTests(TestCase):
         self.assertEqual((self.take.note, self.bottle_line.value_ht), ("Inventaire 2025 (corrigé)", Decimal("30.00")))
         self.assertTrue(StockTake.objects.filter(pk=self.extra.pk).exists())
         self.assertTrue(StockTake.objects.filter(taken_at=END_2024).exists())
-        self.assertEqual(mine.conflicts, ["Inventaire du 31/12/2025 : différent dans l'archive (note, lignes) — gardé tel quel"])
+        self.assertEqual(
+            mine.conflicts, ["Inventaire du 31/12/2025 : différent dans l'archive (note, lignes) — gardé tel quel"]
+        )
         self.assertEqual(mine.tallies["inventaires"].created, 1)
         self.assertEqual(mine.tallies["pertes et corrections"].created, 1)
         self.assertTrue(StockMovement.objects.filter(pk=self.spill.pk).exists())
@@ -284,15 +334,18 @@ class MergeAndReplaceTests(TestCase):
 
         self.take.refresh_from_db()
         self.bottle_line.refresh_from_db()
-        self.assertEqual((self.take.note, self.bottle_line.value_ht), ("Inventaire 2025 (import CSV)", Decimal("28.50")))
+        self.assertEqual(
+            (self.take.note, self.bottle_line.value_ht), ("Inventaire 2025 (import CSV)", Decimal("28.50"))
+        )
         self.assertFalse(StockTake.objects.filter(pk=self.extra.pk).exists())
         self.assertTrue(StockTake.objects.filter(taken_at=END_2024).exists())
         self.assertFalse(StockMovement.objects.filter(pk=self.spill.pk).exists())
         self.assertEqual(StockMovement.objects.filter(kind=MovementKind.LOSS, note="Casse").count(), 1)
         self.assertEqual(mine.conflicts, [])
         tallies = mine.tallies
-        self.assertEqual((tallies["inventaires"].created, tallies["inventaires"].updated, tallies["inventaires"].deleted),
-                         (1, 1, 1))
+        self.assertEqual(
+            (tallies["inventaires"].created, tallies["inventaires"].updated, tallies["inventaires"].deleted), (1, 1, 1)
+        )
         self.assertEqual(tallies["lignes comptées"].updated, 1)
         self.assertEqual(tallies["lignes comptées"].unchanged, 1)
         self.assertEqual((tallies["pertes et corrections"].created, tallies["pertes et corrections"].deleted), (1, 1))
@@ -356,13 +409,13 @@ class RefusalTests(TestCase):
         """A hand-edited archive is refused in French, never a 500: a
         moment on the calendar's first or last day has no local time, and
         saying « Inventaire du … » of it used to raise."""
+
         def off_the_calendar(data):
             data["stock_takes"][1]["taken_at"] = "9999-12-31T23:30:00+00:00"
             return data
 
         self.refused(
-            "Inventaire sans date lisible : « taken_at » : date hors calendrier "
-            "(« 9999-12-31T23:30:00+00:00 »)",
+            "Inventaire sans date lisible : « taken_at » : date hors calendrier (« 9999-12-31T23:30:00+00:00 »)",
             off_the_calendar,
         )
 
@@ -459,34 +512,54 @@ class TwinProductsTests(TestCase):
 
     def setUp(self):
         self.brewery = make_supplier(code="BRASSERIE_TEST", name="Brasserie Test")
-        self.keg = make_product(self.brewery, KEG, make_stock_type(name="Bière pression", unit=UnitChoices.LITRE),
-                                unit=UnitChoices.LITRE)
+        self.keg = make_product(
+            self.brewery, KEG, make_stock_type(name="Bière pression", unit=UnitChoices.LITRE), unit=UnitChoices.LITRE
+        )
 
     def run_archive(self, counted, *, classified=(KEG,)):
         """An archive whose associations classify `classified` and whose one
         count counts `counted`."""
         names = {"BRASSERIE_TEST": "Brasserie Test"}
-        with ArchiveReader(forge({
-            "associations": {
-                "supplier_names": names,
-                "articles": [{"name": "Bière pression", "unit": "L"}],
-                "products": [
-                    {"supplier": "BRASSERIE_TEST", "raw_name": raw_name, "article": "Bière pression", "unit": "L",
-                     "stock_equivalent": "1.0000"}
-                    for raw_name in classified
-                ],
-            },
-            KEY: {
-                "supplier_names": names,
-                "stock_takes": [{
-                    "taken_at": "2025-12-31T22:00:00+00:00",
-                    "note": "",
-                    "lines": [{"product": ["BRASSERIE_TEST", counted], "article": None, "counted_quantity": "1.0000",
-                               "unit": "L", "value_ht": "80.00", "sources": []}],
-                }],
-                "movements": [],
-            },
-        })) as reader:
+        with ArchiveReader(
+            forge(
+                {
+                    "associations": {
+                        "supplier_names": names,
+                        "articles": [{"name": "Bière pression", "unit": "L"}],
+                        "products": [
+                            {
+                                "supplier": "BRASSERIE_TEST",
+                                "raw_name": raw_name,
+                                "article": "Bière pression",
+                                "unit": "L",
+                                "stock_equivalent": "1.0000",
+                            }
+                            for raw_name in classified
+                        ],
+                    },
+                    KEY: {
+                        "supplier_names": names,
+                        "stock_takes": [
+                            {
+                                "taken_at": "2025-12-31T22:00:00+00:00",
+                                "note": "",
+                                "lines": [
+                                    {
+                                        "product": ["BRASSERIE_TEST", counted],
+                                        "article": None,
+                                        "counted_quantity": "1.0000",
+                                        "unit": "L",
+                                        "value_ht": "80.00",
+                                        "sources": [],
+                                    }
+                                ],
+                            }
+                        ],
+                        "movements": [],
+                    },
+                }
+            )
+        ) as reader:
             return import_archive(reader, {"associations": MERGE, KEY: MERGE}).section(KEY)
 
     def test_a_count_of_the_twin_this_database_lacks_is_refused_not_put_on_the_other(self):
@@ -542,17 +615,19 @@ class PruneOrderTests(TestCase):
         build_fixture(self)
 
     def test_a_pruned_count_releases_its_invoice_for_the_invoices_prune(self):
-        """inventaires is pruned before factures (reverse order), in the
+        """Stock takes are pruned before the invoices (reverse order), in the
         same transaction: the invoice a removed count was priced from can
         go in the same run."""
         with registry.swap({KEY: StockTakesSection, "factures": _InvoicesStandIn}):
             reader = export_archive({KEY, "factures"}, closed=False)
             self.addCleanup(reader.close)
-            with ArchiveReader(forge(
-                reader,
-                inventaires=lambda data: {**data, "stock_takes": data["stock_takes"][1:]},  # the 2024 count goes
-                factures={"keep": ["MET-001", "MET-002"]},  # and MET-000, which priced it, with it
-            )) as edited_reader:
+            with ArchiveReader(
+                forge(
+                    reader,
+                    inventaires=lambda data: {**data, "stock_takes": data["stock_takes"][1:]},  # the 2024 count goes
+                    factures={"keep": ["MET-001", "MET-002"]},  # and MET-000, which priced it, with it
+                )
+            ) as edited_reader:
                 report = import_archive(edited_reader, {KEY: REPLACE, "factures": REPLACE})
 
         self.assertFalse(StockTake.objects.filter(taken_at=END_2024).exists())
@@ -564,13 +639,16 @@ class PruneOrderTests(TestCase):
             self.skipTest("la partie « factures » n'est pas encore installée")
         reader = export_archive({KEY, "factures"}, closed=False)
         self.addCleanup(reader.close)
-        with ArchiveReader(forge(
-            reader,
-            inventaires=lambda data: {**data, "stock_takes": data["stock_takes"][1:]},
-            factures=lambda data: {**data, "invoices": [
-                invoice for invoice in data["invoices"] if invoice["invoice_number"] != "MET-000"
-            ]},
-        )) as edited_reader:
+        with ArchiveReader(
+            forge(
+                reader,
+                inventaires=lambda data: {**data, "stock_takes": data["stock_takes"][1:]},
+                factures=lambda data: {
+                    **data,
+                    "invoices": [invoice for invoice in data["invoices"] if invoice["invoice_number"] != "MET-000"],
+                },
+            )
+        ) as edited_reader:
             import_archive(edited_reader, {KEY: REPLACE, "factures": REPLACE})
 
         self.assertFalse(StockTake.objects.filter(taken_at=END_2024).exists())
@@ -589,14 +667,16 @@ class NamedTakesTests(TestCase):
     def setUp(self):
         build_fixture(self)
         self.twin = make_stock_take(END_2025, note="Recompté")
-        make_stock_take_line(self.twin, stock_type=self.vodka, counted_quantity="1", unit=UnitChoices.LITRE, value_ht="9")
+        make_stock_take_line(
+            self.twin, stock_type=self.vodka, counted_quantity="1", unit=UnitChoices.LITRE, value_ht="9"
+        )
 
     def test_it_names_exactly_the_counts_a_replace_keeps(self):
         from transfer.sections.stock_takes import named_takes
 
         reader = export_archive({KEY}, closed=False)
         self.addCleanup(reader.close)
-        make_stock_take(datetime(2026, 9, 19, 10, 0, tzinfo=dt_timezone.utc), note="Après l'export")
+        make_stock_take(datetime(2026, 9, 19, 10, 0, tzinfo=UTC), note="Après l'export")
 
         def change(data):
             first, second, twin = data["stock_takes"]
@@ -622,9 +702,13 @@ class PreviewAndClearTests(TestCase):
         build_fixture(self)
 
     def test_the_preview_changes_nothing_and_says_what_the_run_does(self):
-        with export_archive({KEY}, closed=False) as reader, edited(
-            reader, lambda data: {**data, "stock_takes": data["stock_takes"][1:], "movements": data["movements"][:1]}
-        ) as changed:
+        with (
+            export_archive({KEY}, closed=False) as reader,
+            edited(
+                reader,
+                lambda data: {**data, "stock_takes": data["stock_takes"][1:], "movements": data["movements"][:1]},
+            ) as changed,
+        ):
             fingerprint, media = db_fingerprint(), media_listing()
             preview = import_archive(changed, {KEY: REPLACE}, preview=True)
             self.assertEqual((db_fingerprint(), media_listing()), (fingerprint, media))
@@ -642,8 +726,14 @@ class PreviewAndClearTests(TestCase):
         self.assertFalse(StockTakeLineSource.objects.exists())
         self.assertTrue(StockMovement.objects.filter(pk=purchase.pk).exists())
         tallies = report.section(KEY).tallies
-        self.assertEqual((tallies["inventaires"].deleted, tallies["lignes comptées"].deleted,
-                          tallies["pertes et corrections"].deleted), (2, 3, 2))
+        self.assertEqual(
+            (
+                tallies["inventaires"].deleted,
+                tallies["lignes comptées"].deleted,
+                tallies["pertes et corrections"].deleted,
+            ),
+            (2, 3, 2),
+        )
 
     def test_after_a_clear_the_invoices_can_go(self):
         run_clear({KEY}, preview=False, closed=False)
@@ -658,26 +748,33 @@ class CountAndExportTests(TestCase):
         build_fixture(self)
 
     def test_count(self):
-        self.assertEqual(StockTakesSection().count(), {"inventaires": 2, "lignes comptées": 3, "pertes et corrections": 2})
+        self.assertEqual(
+            StockTakesSection().count(), {"inventaires": 2, "lignes comptées": 3, "pertes et corrections": 2}
+        )
 
     def test_the_export_names_invoices_and_lines_by_key_only(self):
         with export_archive({KEY}, closed=False) as reader:
             data = reader.section(KEY).payload()
 
         self.assertEqual(data["supplier_names"], {"METRO": "Metro"})
-        self.assertEqual([take["taken_at"] for take in data["stock_takes"]],
-                         ["2024-12-31T22:00:00+00:00", "2025-12-31T22:00:00+00:00"])
+        self.assertEqual(
+            [take["taken_at"] for take in data["stock_takes"]],
+            ["2024-12-31T22:00:00+00:00", "2025-12-31T22:00:00+00:00"],
+        )
         bottle = data["stock_takes"][1]["lines"][0]
         self.assertEqual(bottle["product"], ["METRO", "VODKA X 70CL"])
         self.assertIsNone(bottle["article"])
         self.assertEqual((bottle["value_ht"], bottle["counted_quantity"]), ("28.50", "3.0000"))
         self.assertEqual(
-            [(source["invoice"]["number"], source["line"], source["raw_name"], source["quantity_used"])
-             for source in bottle["sources"]],
+            [
+                (source["invoice"]["number"], source["line"], source["raw_name"], source["quantity_used"])
+                for source in bottle["sources"]
+            ],
             [("MET-002", 0, "VODKA X 70CL", "2.0000"), ("MET-001", 1, "VODKA X 70CL", "1.0000")],
         )
-        self.assertEqual(set(bottle["sources"][0]["invoice"]),
-                         {"supplier", "number", "sha256", "file_sha256", "occurrence"})
+        self.assertEqual(
+            set(bottle["sources"][0]["invoice"]), {"supplier", "number", "sha256", "file_sha256", "occurrence"}
+        )
         self.assertEqual(data["movements"][0]["article"], "Vodka")
         text = str(data)
         for pk in (self.older_lines[1].pk, self.newer_line.pk):

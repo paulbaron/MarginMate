@@ -70,8 +70,8 @@
             {% csrf_token %}
             {% include "transfer/_picker.html" %}
             <p class="muted">L'archive contient vos documents, votre banque et vos prix : gardez-la pour vous.</p>
-            {% if picker.factures_mb is not None %}
-                <p class="muted" data-shown-with="factures"{% if "factures" not in picker.checked %} hidden{% endif %}>≈ {{ picker.factures_mb }} Mo avec les fichiers</p>
+            {% if picker.invoices_mb is not None %}
+                <p class="muted" data-shown-with="factures"{% if "factures" not in picker.checked %} hidden{% endif %}>≈ {{ picker.invoices_mb }} Mo avec les fichiers</p>
             {% endif %}
             <div class="form-actions">
                 <button type="button" class="btn btn-secondary" data-tick-all data-js-only hidden>Tout cocher</button>

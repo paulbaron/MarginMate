@@ -1,14 +1,14 @@
-"""Where an espace keeps its files.
+"""Where a tenant keeps its files.
 
-Always the bound espace's own subfolder, created on demand; unbound, it
+Always the bound tenant's own subfolder, created on demand; unbound, it
 raises (accounts.tenancy.NoTenantBound) - a folder shared by every bar is
 how one bar would list, import or delete another's files. TENANTS_ROOT is
 read AT CALL TIME, so a test's override_settings redirects every folder.
 
     TENANTS_ROOT/
-        _template/db.sqlite3        the migrated, empty database a new espace starts from
+        _template/db.sqlite3        the migrated, empty database a new tenant starts from
         <dir_name>/
-            db.sqlite3              the espace's data
+            db.sqlite3              the tenant's data
             media/                  invoices' PDFs, receipts' photos (served by accounts.views.media)
             private/                signing keys, signed PDFs, deletions.log (never served)
             downloads/              what the scrapers and the till export download
@@ -41,7 +41,7 @@ DOWNLOADS = "downloads"
 BACKUPS = "backups"
 STAGING = "staging"
 IMPORTS = "imports"
-#: Every folder a new espace is created with.
+#: Every folder a new tenant is created with.
 FOLDERS = (MEDIA, PRIVATE, DOWNLOADS, BACKUPS, STAGING, IMPORTS)
 
 
@@ -53,7 +53,7 @@ def tenants_root() -> Path:
 
 
 def tenant_dir(tenant) -> Path:
-    """The espace's folder. Its name is checked again here: it becomes a
+    """The tenant's folder. Its name is checked again here: it becomes a
     path, and a name like « ../x » must never reach the filesystem."""
     name = getattr(tenant, "dir_name", "") or ""
     if not re.match(DIR_NAME_PATTERN, name):
@@ -103,5 +103,5 @@ def staging_dir() -> Path:
 
 def imports_dir() -> Path:
     """Uploads waiting for their import (the Tickets' folder scan,
-    ``receipt_batches/<pk>/``): the espace's imports/, outside its media."""
+    ``receipt_batches/<pk>/``): the tenant's imports/, outside its media."""
     return _folder(IMPORTS)

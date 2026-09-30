@@ -13,12 +13,12 @@ round trip the page makes (a tab, « Relancer le rapprochement », an import).
 import re
 from datetime import date
 from decimal import Decimal
+from html import unescape
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 from django.utils.html import escape
-from html import unescape
 
 from bank import reconcile
 from bank.models import BankTransaction, IgnoreRule
@@ -33,7 +33,7 @@ JULY = {"du": "2026-07-01", "au": "2026-07-31"}
 
 def transfer_in(day, payer, amount):
     """Money coming in - the « Entrées » tab's rows. card_row and debit_row
-    only ever spend, and a window that counted the entrées with the dépenses
+    only ever spend, and a window that counted the credits with the debits
     would be wrong in the direction nobody checks."""
     return f"{day:%d/%m/%Y};VIREMENT;VIR RECU;VIR INST RECU /FRM {payer} /REFDO REF;{day:%d/%m/%Y};{amount}"
 
@@ -42,7 +42,7 @@ def _form_fields(response, action):
     """The hidden fields of the first form on the page posting to `action`,
     as the browser would send them - so a test posts what the PAGE says, not
     what the test wishes it said."""
-    form = re.search(rf'<form[^>]*action="{re.escape(action)}"(.*?)</form>', response.content.decode(), re.S)
+    form = re.search(rf'<form[^>]*action="{re.escape(action)}"(.*?)</form>', response.content.decode(), re.DOTALL)
     assert form is not None, f"no form posting to {action} on the page"
     # Unescaped, the way a browser posts an attribute back: the page
     # writes « &amp; » between the parameters and sends « & ».
@@ -99,16 +99,19 @@ class WindowTests(Fixtures, TestCase):
         self.assertEqual(counts["rapprochees"], 1)
         self.assertEqual(counts["sans-facture"], 0)
         self.assertEqual(counts["entrees"], 1)
-        # The bénéficiaires tab counts groups, not lines: the two payments
+        # The « par bénéficiaire » tab counts groups, not lines: the two payments
         # still missing an invoice, each from a payee of its own.
         self.assertEqual(counts["par-beneficiaire"], 2)
 
     def test_the_payee_groups_follow_the_window(self):
         groups = self.page(vue="par-beneficiaire", **JULY).context["groups"]
-        self.assertEqual([(group.name, group.total) for group in groups], [
-            ("DERNIER JOUR", Decimal("30.00")),
-            ("PREMIER JOUR", Decimal("20.00")),
-        ])
+        self.assertEqual(
+            [(group.name, group.total) for group in groups],
+            [
+                ("DERNIER JOUR", Decimal("30.00")),
+                ("PREMIER JOUR", Decimal("20.00")),
+            ],
+        )
 
     def test_every_tab_link_carries_the_window(self):
         response = self.page(**JULY)
@@ -140,7 +143,7 @@ class WindowTests(Fixtures, TestCase):
         self.assertNotContains(response, "Aucun relevé importé")
         assertNoUnrenderedTemplateSyntax(self, response, "banque, période vide")
 
-    def test_effacer_goes_back_to_the_whole_list_on_the_same_tab(self):
+    def test_clear_goes_back_to_the_whole_list_on_the_same_tab(self):
         response = self.page(vue="rapprochees", **JULY)
         self.assertEqual(response.context["clear_window_url"], "/banque/?vue=rapprochees")
         self.assertContains(response, ">Effacer</a>")
@@ -197,7 +200,7 @@ class WindowRoundTripTests(Fixtures, TestCase):
         self.assertContains(page, f'name="next" value="{escape(path)}"')
         return path
 
-    def test_the_window_survives_relancer_le_rapprochement(self):
+    def test_the_window_survives_rerunning_the_reconciliation(self):
         path = self.windowed_page()
         response = self.client.post(reverse("bank:bank_reconcile"), {"next": path})
         self.assertEqual(response["Location"], path)
@@ -210,9 +213,7 @@ class WindowRoundTripTests(Fixtures, TestCase):
             {
                 "next": path,
                 "files": [
-                    SimpleUploadedFile(
-                        "releve.csv", statement(debit_row(date(2026, 7, 20), "NOUVELLE LIGNE", "60,00"))
-                    )
+                    SimpleUploadedFile("releve.csv", statement(debit_row(date(2026, 7, 20), "NOUVELLE LIGNE", "60,00")))
                 ],
             },
         )

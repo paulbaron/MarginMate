@@ -5,15 +5,15 @@ phone, reads his month, identifies himself with a one-time code and signs.
 
 What protects it, and what each view keeps to:
 
-* **Public, and bound to the link's espace** (`_for_the_link`): every view
+* **Public, and bound to the link's tenant** (`_for_the_link`): every view
   is `@login_not_required` (everything else is denied to a visitor with no
-  account), and the espace is found by the link's hash in the accounts
+  account), and the tenant is found by the link's hash in the accounts
   database (`accounts.links.resolve`) - unknown there is the « lien
   inconnu » page - then bound for the whole view, which reads and writes
-  that espace's database only. Whoever is logged in on the
+  that tenant's database only. Whoever is logged in on the
   browser changes nothing: TenantMiddleware binds nothing of a visitor's on
   a public view, so a manager of another bar lending his phone, or an owner
-  of two bars, opens and signs the link in the link's own espace.
+  of two bars, opens and signs the link in the link's own tenant.
 * **The link's secret** (`signature_requests.resolve_link`): only its SHA-256
   is stored. Unknown is a plain French page answering 404; expired,
   cancelled or superseded, 410 - never a traceback, never a word about any
@@ -69,7 +69,8 @@ from django.views.decorators.clickjacking import xframe_options_sameorigin
 from accounts import links
 from accounts.tenancy import bound_tenant
 
-from . import pdf, private_files, signature_mail, signature_requests as workflow, signing
+from . import pdf, private_files, signature_mail, signing
+from . import signature_requests as workflow
 from .models import SignatureRequest
 from .signature_views import client
 
@@ -156,9 +157,9 @@ def _error(request, message: str, status: int) -> HttpResponse:
 
 def _for_the_link(view):
     """A public view of a link: `@login_not_required`, and run bound to the
-    espace the link's hash is indexed under (`accounts.links.resolve`). A
+    tenant the link's hash is indexed under (`accounts.links.resolve`). A
     hash indexed
-    nowhere - or under an espace since closed - is « lien inconnu ».
+    nowhere - or under a tenant since closed - is « lien inconnu ».
     Nothing else is bound here, whoever is logged in on the browser
     (TenantMiddleware binds nothing on a public view). The binding ends with
     the view: the page is rendered to a string inside it, never lazily
@@ -314,7 +315,9 @@ def send_code(request, token):
         return back
     if outcome.sent:
         _notify(
-            request, sign_request, "success",
+            request,
+            sign_request,
+            "success",
             f"Code envoyé à {mask_address(sign_request.timesheet.employee.email)} : il vaut 15 minutes. "
             f"{CODE_REPLACES} S'il n'arrive pas, regardez aussi dans les courriers indésirables.",
         )
@@ -386,8 +389,12 @@ def submit(request, token):
         return refuse(RESERVATION_UNTICKED)
     try:
         workflow.sign_for_employee(
-            sign_request, png, session=request.session, statement_accepted=posted["statement"],
-            reservation=reservation, **client(request),
+            sign_request,
+            png,
+            session=request.session,
+            statement_accepted=posted["statement"],
+            reservation=reservation,
+            **client(request),
         )
     except signing.TimestampUnavailable as error:
         return refuse(str(error), 503)
@@ -400,7 +407,7 @@ def submit(request, token):
         logger.exception("Signature du salarié : erreur imprévue (demande %s)", sign_request.uuid)
         sign_request.refresh_from_db()
         if sign_request.status != Status.PENDING:
-            return back    # it did sign, and what failed came after
+            return back  # it did sign, and what failed came after
         return refuse(workflow.NOT_SIGNED, 500)
     return back
 

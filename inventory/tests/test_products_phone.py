@@ -174,25 +174,34 @@ class ArticleCardsTestCase(TestCase):
         self.url = reverse("inventory:stock_list")
         self.supplier = make_supplier(code="GROSSISTE_TEL", name="Grossiste Exemple")
         self.vodka = make_stock_type(name="Vodka Exemple", unit=UnitChoices.LITRE, category="Spiritueux")
-        self.farine = make_stock_type(name="Farine Exemple", unit=UnitChoices.KILOGRAM, category="Épicerie")
+        self.flour = make_stock_type(name="Farine Exemple", unit=UnitChoices.KILOGRAM, category="Épicerie")
         # Never bought, never counted: the rows of dashes between two counts.
-        self.sirop = make_stock_type(name="Sirop Exemple", unit=UnitChoices.LITRE, category="Spiritueux")
+        self.syrup = make_stock_type(name="Sirop Exemple", unit=UnitChoices.LITRE, category="Spiritueux")
         self.products = {}
         for stock_type, name, equivalent in (
             (self.vodka, "VODKA EXEMPLE 70CL", "0.7"),
-            (self.farine, "FARINE EXEMPLE 5KG", "5"),
+            (self.flour, "FARINE EXEMPLE 5KG", "5"),
         ):
             self.products[stock_type.pk] = make_product(
-                supplier=self.supplier, raw_name=name, stock_type=stock_type, stock_equivalent=equivalent,
+                supplier=self.supplier,
+                raw_name=name,
+                stock_type=stock_type,
+                stock_equivalent=equivalent,
             )
             self.buy(stock_type, date(2026, 1, 10))
 
     def buy(self, stock_type, on, occurred_on=None):
         invoice = make_invoice(supplier=self.supplier, invoice_date=on)
         line = make_invoice_line(
-            invoice=invoice, product=self.products[stock_type.pk], quantity=6, total_ht="72", vat_rate=D("0.20"),
+            invoice=invoice,
+            product=self.products[stock_type.pk],
+            quantity=6,
+            total_ht="72",
+            vat_rate=D("0.20"),
         )
-        make_movement(stock_type=stock_type, invoice_line=line, quantity="6", unit_cost_ht="12", occurred_on=occurred_on)
+        make_movement(
+            stock_type=stock_type, invoice_line=line, quantity="6", unit_cost_ht="12", occurred_on=occurred_on
+        )
 
     def stock_tables(self, response) -> list:
         tables = tree(response).find_all("table", cls="stock-table")
@@ -238,14 +247,17 @@ class TheListAsCardsTests(ArticleCardsTestCase):
             (opening, self.vodka, "4"),
             (closing, self.vodka, "3"),
             # Absent from the opening count.
-            (closing, self.farine, "2"),
+            (closing, self.flour, "2"),
         ):
             make_stock_take_line(
-                stock_take=take, product=None, stock_type=stock_type,
-                counted_quantity=counted, unit=stock_type.unit,
+                stock_take=take,
+                product=None,
+                stock_type=stock_type,
+                counted_quantity=counted,
+                unit=stock_type.unit,
             )
         self.buy(self.vodka, date(2026, 3, 10), occurred_on=date(2026, 3, 10))
-        self.buy(self.farine, date(2026, 3, 12), occurred_on=date(2026, 3, 12))
+        self.buy(self.flour, date(2026, 3, 12), occurred_on=date(2026, 3, 12))
 
         response = self.client.get(self.url, {"inventaire": closing.pk})
         drawn = {}
@@ -254,33 +266,35 @@ class TheListAsCardsTests(ArticleCardsTestCase):
             self.assertIn("stock-table-period", table.classes)
             for row in self.assertEveryRowSaysItsColumns(table, PERIOD_COLUMNS):
                 drawn[row.attrs["data-stock-type-id"]] = row
-        self.assertEqual(set(drawn), {str(self.vodka.pk), str(self.farine.pk), str(self.sirop.pk)})
+        self.assertEqual(set(drawn), {str(self.vodka.pk), str(self.flour.pk), str(self.syrup.pk)})
         # The three branches were all drawn - and checked above.
         self.assertNotIn("non compté", drawn[str(self.vodka.pk)].text())
-        self.assertIn("non compté", drawn[str(self.farine.pk)].text())
-        self.assertEqual({cell.text() for cell in cells_of(drawn[str(self.sirop.pk)])[1:5]}, {"—"})
+        self.assertIn("non compté", drawn[str(self.flour.pk)].text())
+        self.assertEqual({cell.text() for cell in cells_of(drawn[str(self.syrup.pk)])[1:5]}, {"—"})
 
 
 # -- the charges ----------------------------------------------------------------------------------
 
 
 class ChargeCardsTests(TestCase):
-    """A water bill (one poste: the supplier's row is the charge) and a
-    landlord whose statement names two postes (rows of their own under
-    his)."""
+    """A water bill (one charge item: the supplier's row is the charge) and
+    a landlord whose statement names two charge items (rows of their own
+    under his)."""
 
     def setUp(self):
         self.url = reverse("inventory:stock_list")
         self.water = make_supplier(code="EAU_TEL", name="Eau Exemple", parser_key="", expenses_only=True)
-        eau = make_product(supplier=self.water, raw_name="EAU", is_expense=True)
+        tap_water = make_product(supplier=self.water, raw_name="EAU", is_expense=True)
         bill = make_invoice(supplier=self.water, invoice_date=date(2026, 2, 5), invoice_number="EAU-2026-02")
-        make_invoice_line(invoice=bill, product=eau, total_ht="40", vat_rate=D("0.055"))
+        make_invoice_line(invoice=bill, product=tap_water, total_ht="40", vat_rate=D("0.055"))
 
         self.landlord = make_supplier(code="BAIL_TEL", name="Bailleur Exemple", parser_key="", expenses_only=True)
         statement = make_invoice(supplier=self.landlord, invoice_date=date(2026, 2, 3), invoice_number="BAIL-2026-02")
-        for poste, amount in (("LOYER EXEMPLE", "500"), ("PROVISION EXEMPLE", "80")):
-            product = make_product(supplier=self.landlord, raw_name=poste, is_expense=True)
-            make_invoice_line(invoice=statement, product=product, raw_name=poste, total_ht=amount, vat_rate=D("0.20"))
+        for charge_item, amount in (("LOYER EXEMPLE", "500"), ("PROVISION EXEMPLE", "80")):
+            product = make_product(supplier=self.landlord, raw_name=charge_item, is_expense=True)
+            make_invoice_line(
+                invoice=statement, product=product, raw_name=charge_item, total_ht=amount, vat_rate=D("0.20")
+            )
 
     def charges_table(self, response) -> Node:
         (table,) = tree(response).find_all("table", cls="charges-table")
@@ -305,7 +319,9 @@ class ChargeCardsTests(TestCase):
                 table = self.charges_table(response)
                 header = header_texts(table)
                 self.assertEqual(header[1:-1], [heading, "Total TTC", "Dernier"])
-                suppliers = [row for row in rows_of(table) if "stock-row" in row.classes and "charge-row" not in row.classes]
+                suppliers = [
+                    row for row in rows_of(table) if "stock-row" in row.classes and "charge-row" not in row.classes
+                ]
                 self.assertEqual(len(suppliers), 2)
                 for row in suppliers:
                     labels = labels_of(row)
@@ -314,15 +330,17 @@ class ChargeCardsTests(TestCase):
                     # 📈 at the end of the title's line.
                     self.assertIn("phone-card-end", cells_of(row)[-1].classes)
 
-    def test_a_postes_row_is_labelled_too(self):
-        """A poste has no « Dernier » of its own: that cell stays truly
+    def test_a_charge_item_row_is_labelled_too(self):
+        """A charge item has no « Dernier » of its own: that cell stays truly
         empty, which the card does not draw (td:empty), and the two figures
         it has carry the supplier row's labels."""
         table = self.charges_table(self.client.get(self.url))
         header = header_texts(table)
-        postes = [row for row in rows_of(table) if "charge-row" in row.classes]
-        self.assertEqual(sorted(cells_of(row)[0].text() for row in postes), ["▸LOYER EXEMPLE", "▸PROVISION EXEMPLE"])
-        for row in postes:
+        charge_items = [row for row in rows_of(table) if "charge-row" in row.classes]
+        self.assertEqual(
+            sorted(cells_of(row)[0].text() for row in charge_items), ["▸LOYER EXEMPLE", "▸PROVISION EXEMPLE"]
+        )
+        for row in charge_items:
             cells = cells_of(row)
             self.assertEqual(labels_of(row)[1:3], header[1:3])
             self.assertIsNone(cells[3].attrs.get("data-label"))
@@ -340,7 +358,7 @@ class WhatARowOpensTests(ArticleCardsTestCase):
         « Retirer » were off the phone. As cards, each labelled - the
         price's label naming the article's unit as its header does - and
         the conversion asks a phone for its number pad."""
-        response = self.client.get(reverse("inventory:stock_type_movements", args=[self.farine.pk]))
+        response = self.client.get(reverse("inventory:stock_type_movements", args=[self.flour.pk]))
         (table,) = tree(response).find_all("table", cls="movements-table")
         self.assertIn("phone-cards", table.classes)
         header = header_texts(table)
@@ -361,10 +379,10 @@ class WhatARowOpensTests(ArticleCardsTestCase):
 
     def test_a_charges_documents_are_labelled(self):
         water = make_supplier(code="EAU_TEL2", name="Eau Exemple", parser_key="", expenses_only=True)
-        eau = make_product(supplier=water, raw_name="EAU", is_expense=True)
+        tap_water = make_product(supplier=water, raw_name="EAU", is_expense=True)
         for month in (1, 2):
             bill = make_invoice(supplier=water, invoice_date=date(2026, month, 5), invoice_number=f"EAU-2026-0{month}")
-            make_invoice_line(invoice=bill, product=eau, total_ht="40", vat_rate=D("0.055"))
+            make_invoice_line(invoice=bill, product=tap_water, total_ht="40", vat_rate=D("0.055"))
 
         response = self.client.get(reverse("inventory:charge_supplier_documents", args=[water.pk]))
         (table,) = tree(response).find_all("table", cls="charge-documents")

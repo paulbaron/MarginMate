@@ -4,15 +4,25 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('invoices', '0029_invoice_supplier_doubt'),
+        ("invoices", "0029_invoice_supplier_doubt"),
     ]
 
     operations = [
         migrations.AlterField(
-            model_name='supplierchange',
-            name='kind',
-            field=models.CharField(choices=[('CREATED', 'Création'), ('RENAMED', 'Nom'), ('HEADER', 'En-tête'), ('IDENTIFIERS', 'Identifiants'), ('CHARGES', 'Nature'), ('TYPES', 'Types de factures'), ('FIRST_DOCUMENT', 'Premier document')], max_length=20),
+            model_name="supplierchange",
+            name="kind",
+            field=models.CharField(
+                choices=[
+                    ("CREATED", "Création"),
+                    ("RENAMED", "Nom"),
+                    ("HEADER", "En-tête"),
+                    ("IDENTIFIERS", "Identifiants"),
+                    ("CHARGES", "Nature"),
+                    ("TYPES", "Types de factures"),
+                    ("FIRST_DOCUMENT", "Premier document"),
+                ],
+                max_length=20,
+            ),
         ),
     ]

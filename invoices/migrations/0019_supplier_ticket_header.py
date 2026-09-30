@@ -4,15 +4,19 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('invoices', '0018_invoiceline_discount_ttc'),
+        ("invoices", "0018_invoiceline_discount_ttc"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='supplier',
-            name='ticket_header',
-            field=models.CharField(blank=True, help_text='Imprimé en haut de ses tickets (nom, rue…) : un ticket qui le porte est rangé chez ce fournisseur.', max_length=100, verbose_name="texte d'en-tête des tickets"),
+            model_name="supplier",
+            name="ticket_header",
+            field=models.CharField(
+                blank=True,
+                help_text="Imprimé en haut de ses tickets (nom, rue…) : un ticket qui le porte est rangé chez ce fournisseur.",
+                max_length=100,
+                verbose_name="texte d'en-tête des tickets",
+            ),
         ),
     ]

@@ -1,5 +1,5 @@
 {% comment %}
-What « Tester » reads (views._test): a PDF (read, NOTHING stored), a bon of
+What « Tester » reads (views._test): a PDF (read, NOTHING stored), a slip of
 this format already received, or text pasted in. Whatever was tested is
 written back into the text box and the other two are emptied - so a PDF is
 read once, and the next test needs no new upload. htmx swaps this part out
@@ -13,8 +13,8 @@ of band (`oob`) beside the result.
     </div>
     {% if test_slips %}
         <div class="form-field form-field-select">
-            <label for="tester-sur">Tester sur un bon reçu</label>
-            <select id="tester-sur" name="tester_sur">
+            <label for="tester-slip">Tester sur un bon reçu</label>
+            <select id="tester-slip" name="tester_sur">
                 <option value="">— le texte ci-dessous —</option>
                 {% for slip_pk, label, name in test_slips %}
                     <option value="{{ slip_pk }}">{{ label }}{% if name %} ({{ name }}){% endif %}</option>
@@ -23,8 +23,8 @@ of band (`oob`) beside the result.
         </div>
     {% endif %}
     <div class="form-field form-field-textarea">
-        <label for="tester-texte">Texte d'un bon</label>
-        <textarea id="tester-texte" name="texte_essai" rows="6" class="motif-input tester-text" autocapitalize="off" autocorrect="off" spellcheck="false">
+        <label for="tester-pasted-text">Texte d'un bon</label>
+        <textarea id="tester-pasted-text" name="texte_essai" rows="6" class="pattern-input tester-text" autocapitalize="off" autocorrect="off" spellcheck="false">
 {{ tested_text }}</textarea>
         <p class="help">
             Collé, ou recopié du dernier PDF testé. Le texte qu'un lecteur de PDF copie n'est pas toujours celui que

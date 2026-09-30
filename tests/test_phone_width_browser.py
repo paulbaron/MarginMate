@@ -197,7 +197,7 @@ return dropped;
 
 
 class PhoneBrowserTestCase(StaticLiveServerTestCase):
-    """One headless Chrome for the class, logged in as the test espace's
+    """One headless Chrome for the class, logged in as the test tenant's
     owner, a phone or a laptop at will."""
 
     # Its flush then fires no post_migrate (tests/test_transaction_cases.py).
@@ -233,7 +233,8 @@ class PhoneBrowserTestCase(StaticLiveServerTestCase):
     def as_a_phone(self, width, height=HEIGHT):
         """A phone `width` px wide: its meta viewport honoured, a finger."""
         self.driver.execute_cdp_cmd(
-            "Emulation.setDeviceMetricsOverride", {"width": width, "height": height, "deviceScaleFactor": 2, "mobile": True}
+            "Emulation.setDeviceMetricsOverride",
+            {"width": width, "height": height, "deviceScaleFactor": 2, "mobile": True},
         )
         self.driver.execute_cdp_cmd("Emulation.setTouchEmulationEnabled", {"enabled": True, "maxTouchPoints": 5})
 
@@ -241,7 +242,8 @@ class PhoneBrowserTestCase(StaticLiveServerTestCase):
         """A laptop's window: a mouse, no meta viewport."""
         self.driver.execute_cdp_cmd("Emulation.setTouchEmulationEnabled", {"enabled": False})
         self.driver.execute_cdp_cmd(
-            "Emulation.setDeviceMetricsOverride", {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": False}
+            "Emulation.setDeviceMetricsOverride",
+            {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": False},
         )
 
     def open(self, path):
@@ -260,7 +262,7 @@ class PhoneBrowserTestCase(StaticLiveServerTestCase):
         return self.driver.find_element("css selector", css)
 
     def too_wide(self, width) -> str:
-        """"" when the page fits `width`; else how wide it is and why."""
+        """ "" when the page fits `width`; else how wide it is and why."""
         page = self.script("return document.documentElement.scrollWidth;")
         if page <= width:
             return ""
@@ -306,17 +308,23 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
         # A ticket to check, from a shop printing its name as one word, whose
         # price list is open (a price is known) and its label long.
         self.shop = make_supplier(
-            code="EPICERIE_X", name=ONE_WORD, parser_key="",
+            code="EPICERIE_X",
+            name=ONE_WORD,
+            parser_key="",
             ticket_identifiers=["siren:900000019", "web:epicerie-du-quartier-exemple.fr"],
         )
         self.ticket = make_invoice(supplier=self.shop, invoice_number="T-000042", parse_checks=CHECKED)
         for number, name in enumerate(("CITRONS VERTS EXEMPLE FILET 1KG", "MENTHE FRAICHE EXEMPLE BOTTE")):
             make_invoice_line(
-                invoice=self.ticket, product=make_product(supplier=self.shop, raw_name=name),
-                quantity=number + 2, total_ht=f"{12 + number}.34", vat_rate=Decimal("0.055"),
+                invoice=self.ticket,
+                product=make_product(supplier=self.shop, raw_name=name),
+                quantity=number + 2,
+                total_ht=f"{12 + number}.34",
+                vat_rate=Decimal("0.055"),
             )
         ShopItemPrice.objects.create(
-            supplier=self.shop, unit_price_ttc=Decimal("0.70"),
+            supplier=self.shop,
+            unit_price_ttc=Decimal("0.70"),
             label="Citron vert en filet de cinq pièces, calibre moyen, origine exemple",
         )
         # A recipe whose ingredient is costed to four decimals.
@@ -325,15 +333,19 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
         make_ingredient(self.recipe, stock_type=liqueur, quantity="0.0400", group=0)
         # Produits & charges: an article bought, a product waiting with no
         # space in its name, two counts - the second noted at length - and
-        # sales past what left the shelf between them, so the écarts page
+        # sales past what left the shelf between them, so the « Écarts » page
         # draws its « Incohérences ».
-        grossiste = make_supplier(name="Grossiste Exemple des Boissons")
+        wholesaler = make_supplier(name="Grossiste Exemple des Boissons")
         rum = make_stock_type(name="Rhum ambré exemple de la maison", unit=UnitChoices.LITRE, category="Spiritueux")
-        bottle = make_product(supplier=grossiste, raw_name="RHUM AMBRE EXEMPLE 70CL", stock_type=rum, stock_equivalent="0.7")
-        invoice = make_invoice(supplier=grossiste, invoice_number="FA-2026-000123", invoice_date=date(2026, 6, 3))
+        bottle = make_product(
+            supplier=wholesaler, raw_name="RHUM AMBRE EXEMPLE 70CL", stock_type=rum, stock_equivalent="0.7"
+        )
+        invoice = make_invoice(supplier=wholesaler, invoice_number="FA-2026-000123", invoice_date=date(2026, 6, 3))
         line = make_invoice_line(invoice=invoice, product=bottle, quantity=12, total_ht="1234.56")
-        make_movement(stock_type=rum, invoice_line=line, quantity="8.4", unit_cost_ht="146.9714", occurred_on=date(2026, 6, 3))
-        make_product(supplier=grossiste, raw_name="REMBOURSEMENTDEPOTGARANTIEEXEMPLEFUT30L")
+        make_movement(
+            stock_type=rum, invoice_line=line, quantity="8.4", unit_cost_ht="146.9714", occurred_on=date(2026, 6, 3)
+        )
+        make_product(supplier=wholesaler, raw_name="REMBOURSEMENTDEPOTGARANTIEEXEMPLEFUT30L")
         punch = make_recipe(name="Punch exemple de la maison", selling_price_ttc="7.00")
         make_ingredient(punch, stock_type=rum, quantity="0.04", group=0)
         opening = make_stock_take(taken_at=timezone.make_aware(datetime(2026, 6, 1, 23, 0)))
@@ -348,7 +360,7 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
         514 px and the supplier's page 517 (the name in their breadcrumb,
         « + Nouvelle source pour » it), a recipe 505 (its ingredients),
         Produits & charges 743 either way (the period's select), the
-        recipes 459 (the article picker), the écarts 439 (« Incohérences »)
+        recipes 459 (the article picker), « Écarts » 439 (« Incohérences »)
         - and Achats 341 at 320 (its two file fields)."""
         stock = reverse("inventory:stock_list")
         pages = {
@@ -377,26 +389,39 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
         prices' table and its long label, the supplier's identifiers, the
         recipe's ingredients, the period's select holding the note, the
         product waiting in « À classer » with no space in its name, and the
-        « Incohérences » - not the écarts' other table - are on the page (on
-        the code of 29/09 too: it is the data that is checked here)."""
+        « Incohérences » - not the other table of « Écarts » - are on the
+        page (on the code of 29/09 too: it is the data that is checked here)."""
         self.as_a_phone(375)
         ticket = reverse("invoices:receipt_review", args=[self.ticket.pk])
         supplier = reverse("invoices:supplier_detail", args=[self.shop.pk])
         stock = reverse("inventory:stock_list")
         for path, css, words in (
             (ticket, "main", ONE_WORD),
-            (ticket, "details.known-prices[open] table[data-table-label='prix']", "Citron vert en filet de cinq pièces"),
+            (
+                ticket,
+                "details.known-prices[open] table[data-table-label='prix']",
+                "Citron vert en filet de cinq pièces",
+            ),
             (supplier, "table[data-table-label='identifiants']", "900 000 019"),
             (supplier, "main a.btn[href*='fournisseur=']", ONE_WORD),
-            (reverse("recipes:recipe_detail", args=[self.recipe.pk]), ".card table.sub-table", "Liqueur de fleur de sureau"),
+            (
+                reverse("recipes:recipe_detail", args=[self.recipe.pk]),
+                ".card table.sub-table",
+                "Liqueur de fleur de sureau",
+            ),
             (stock, "#period-select", LONG_NOTE),
             (stock, "#a-classer .review-card", "REMBOURSEMENTDEPOTGARANTIEEXEMPLEFUT30L"),
-            (reverse("inventory:stock_take_variance", args=[self.take.pk]), ".card .table-scroll > table.sub-table, .card > table.sub-table", "Exigé par les ventes"),
+            (
+                reverse("inventory:stock_take_variance", args=[self.take.pk]),
+                ".card .table-scroll > table.sub-table, .card > table.sub-table",
+                "Exigé par les ventes",
+            ),
         ):
             with self.subTest(page=path, css=css):
                 self.open(path)
                 texts = self.script(
-                    "return Array.from(document.querySelectorAll(arguments[0])).map(function (e) { return e.textContent; });", css
+                    "return Array.from(document.querySelectorAll(arguments[0])).map(function (e) { return e.textContent; });",
+                    css,
                 )
                 self.assertTrue(any(words in text for text in texts), f"{css}: no « {words} » in {texts!r:.300}")
 
@@ -409,7 +434,9 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
         written elsewhere could not quietly put the box back."""
         self.as_a_phone(375)
         self.open(reverse("invoices:receipt_review", args=[self.ticket.pk]))
-        self.assertEqual(self.photo_box(), {"position": "static", "overflowY": "visible", "maxHeight": "none", "columns": 1})
+        self.assertEqual(
+            self.photo_box(), {"position": "static", "overflowY": "visible", "maxHeight": "none", "columns": 1}
+        )
 
     def test_on_a_laptop_the_pages_are_as_they_were(self):
         """With a mouse at 1280 px nothing of the phone's rules applies - the
@@ -442,7 +469,9 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
         self.assertEqual(self.too_wide(1280), "")
 
         self.open(stock)
-        self.assertEqual(self.script("return getComputedStyle(document.getElementById('period-select')).minWidth;"), "256px")
+        self.assertEqual(
+            self.script("return getComputedStyle(document.getElementById('period-select')).minWidth;"), "256px"
+        )
         self.assertEqual(self.too_wide(1280), "")
 
         self.open(recipe)
@@ -484,24 +513,37 @@ class ListsAreCardsOnAPhoneInBrowserTests(PhoneBrowserTestCase):
                 supplier=cellar, invoice_number=number, invoice_date=date(2026, 3, day), parse_checks=CHECKED
             )
             make_invoice_line(
-                invoice=document, product=make_product(supplier=cellar, raw_name=f"VIN ROUGE EXEMPLE CUVEE {number}"),
-                quantity=6, total_ht="42.00",
+                invoice=document,
+                product=make_product(supplier=cellar, raw_name=f"VIN ROUGE EXEMPLE CUVEE {number}"),
+                quantity=6,
+                total_ht="42.00",
             )
             self.documents.append(document)
         make_invoice(
-            supplier=cellar, invoice_number="F-9", invoice_date=date(2026, 3, 13),
-            status=Invoice.Status.ERROR, error_message="Lecture impossible : le fichier est illisible (inventé).",
+            supplier=cellar,
+            invoice_number="F-9",
+            invoice_date=date(2026, 3, 13),
+            status=Invoice.Status.ERROR,
+            error_message="Lecture impossible : le fichier est illisible (inventé).",
         )
-        self.batch = ReceiptBatch.objects.create(status=ReceiptBatch.Status.SUCCESS, results=[
-            {"name": "PXL_20260312_101112345_EXEMPLE_DE_NOM_DE_PHOTO.jpg", "status": "ok",
-             "invoice_id": self.documents[0].pk, "receipt": True, "shop": "Cave Exemple des Vignerons"},
-            {"name": "IMG_20260312_101113.jpg", "status": "duplicate", "message": "Déjà importé le 12/03/2026"},
-        ])
+        self.batch = ReceiptBatch.objects.create(
+            status=ReceiptBatch.Status.SUCCESS,
+            results=[
+                {
+                    "name": "PXL_20260312_101112345_EXEMPLE_DE_NOM_DE_PHOTO.jpg",
+                    "status": "ok",
+                    "invoice_id": self.documents[0].pk,
+                    "receipt": True,
+                    "shop": "Cave Exemple des Vignerons",
+                },
+                {"name": "IMG_20260312_101113.jpg", "status": "duplicate", "message": "Déjà importé le 12/03/2026"},
+            ],
+        )
         wine = make_priced_stock_type(name="Vin rouge exemple", unit_cost_ht="7", quantity="10")
         for name in ("Verre de rouge exemple", "Kir au sureau exemple"):
             make_ingredient(make_recipe(name=name, selling_price_ttc="5.00"), stock_type=wine, quantity="0.12", group=0)
 
-    def test_achats_documents_are_cards_that_fit(self):
+    def test_purchases_documents_are_cards_that_fit(self):
         self.as_a_phone(375)
         self.open(reverse("invoices:invoice_list"))
         self.assertEqual(
@@ -545,7 +587,8 @@ class ListsAreCardsOnAPhoneInBrowserTests(PhoneBrowserTestCase):
         self.as_a_phone(375)
         self.open(reverse("invoices:invoice_list"))
         boxes = [
-            box for box in self.driver.find_elements("css selector", "input[data-bulk-all][form='invoice-bulk-form']")
+            box
+            for box in self.driver.find_elements("css selector", "input[data-bulk-all][form='invoice-bulk-form']")
             if box.is_displayed()
         ]
         self.assertEqual(len(boxes), 1, "no « Tout sélectionner » drawn on a phone")
@@ -560,9 +603,15 @@ class ListsAreCardsOnAPhoneInBrowserTests(PhoneBrowserTestCase):
         )
         # The three documents and the unreadable one.
         self.assertGreaterEqual(found["drawn"], 4, found)
-        self.assertEqual(found, {
-            "drawn": found["drawn"], "ticked": found["drawn"], "count": f"{found['drawn']} sélectionnés", "enabled": True,
-        })
+        self.assertEqual(
+            found,
+            {
+                "drawn": found["drawn"],
+                "ticked": found["drawn"],
+                "count": f"{found['drawn']} sélectionnés",
+                "enabled": True,
+            },
+        )
 
     def test_without_has_a_document_s_box_stays_in_its_card(self):
         """A card's bulk box is lifted out of its grid against its row, made
@@ -618,34 +667,69 @@ class ListsAreCardsOnAPhoneInBrowserTests(PhoneBrowserTestCase):
 
         cellar = self.documents[0].supplier
         doubted = make_invoice(
-            supplier=cellar, invoice_number="F-4", invoice_date=date(2026, 3, 14),
+            supplier=cellar,
+            invoice_number="F-4",
+            invoice_date=date(2026, 3, 14),
             supplier_doubt="Imprime le n° SIREN d'un autre fournisseur (inventé).",
         )
-        make_invoice(supplier=cellar, invoice_number="F-5", invoice_date=date(2026, 3, 15), status=Invoice.Status.NEEDS_REVIEW)
+        make_invoice(
+            supplier=cellar, invoice_number="F-5", invoice_date=date(2026, 3, 15), status=Invoice.Status.NEEDS_REVIEW
+        )
         gone = make_invoice(supplier=cellar, invoice_number="F-8")
         gone_pk = gone.pk
         gone.delete()
-        batch = ReceiptBatch.objects.create(status=ReceiptBatch.Status.SUCCESS, results=[
-            {"name": "IMG_20260314_090000.jpg", "status": "ok", "invoice_id": doubted.pk, "receipt": True,
-             "shop": "Cave Exemple des Vignerons"},
-            {"name": "IMG_20260314_090001.jpg", "status": "ok", "invoice_id": gone_pk, "receipt": True,
-             "shop": "Cave Exemple des Vignerons"},
-            {"name": "IMG_20260314_090002.jpg", "status": "unrecognised", "header": "EPICERIE INCONNUE EXEMPLE",
-             "read_date": "14/03/2026", "read_total": "4,20"},
-        ])
+        batch = ReceiptBatch.objects.create(
+            status=ReceiptBatch.Status.SUCCESS,
+            results=[
+                {
+                    "name": "IMG_20260314_090000.jpg",
+                    "status": "ok",
+                    "invoice_id": doubted.pk,
+                    "receipt": True,
+                    "shop": "Cave Exemple des Vignerons",
+                },
+                {
+                    "name": "IMG_20260314_090001.jpg",
+                    "status": "ok",
+                    "invoice_id": gone_pk,
+                    "receipt": True,
+                    "shop": "Cave Exemple des Vignerons",
+                },
+                {
+                    "name": "IMG_20260314_090002.jpg",
+                    "status": "unrecognised",
+                    "header": "EPICERIE INCONNUE EXEMPLE",
+                    "read_date": "14/03/2026",
+                    "read_total": "4,20",
+                },
+            ],
+        )
         kir = Recipe.objects.get(name="Kir au sureau exemple")
-        for name in ("KIR AU SUREAU EXEMPLE DE LA MAISON HAPPY HOUR GRAND VERRE", "SPRITZAPEROLEXEMPLEHAPPYHOURGRANDVERRE"):
+        for name in (
+            "KIR AU SUREAU EXEMPLE DE LA MAISON HAPPY HOUR GRAND VERRE",
+            "SPRITZAPEROLEXEMPLEHAPPYHOURGRANDVERRE",
+        ):
             PosProduct.objects.create(name=name, total_quantity=3, recipe=kir)
 
         lists = (
-            (reverse("invoices:invoice_list"), ".documents-table", ".documents-table .status-pill",
-             {"Fournisseur à confirmer", "Produits à classer"}),
-            (reverse("invoices:receipt_batch", args=[batch.pk]), "#receipt-batch-status table.phone-cards",
-             "#receipt-batch-status table.phone-cards .status-pill",
-             {"Fournisseur à confirmer", "Supprimé depuis l'import", "Enseigne inconnue"}),
-            (reverse("recipes:recipe_list"), "table[data-table-label='recettes']",
-             "table[data-table-label='recettes'] .till-chip",
-             {"KIR AU SUREAU EXEMPLE DE LA MAISON HAPPY HOUR GRAND VERRE", "SPRITZAPEROLEXEMPLEHAPPYHOURGRANDVERRE"}),
+            (
+                reverse("invoices:invoice_list"),
+                ".documents-table",
+                ".documents-table .status-pill",
+                {"Fournisseur à confirmer", "Produits à classer"},
+            ),
+            (
+                reverse("invoices:receipt_batch", args=[batch.pk]),
+                "#receipt-batch-status table.phone-cards",
+                "#receipt-batch-status table.phone-cards .status-pill",
+                {"Fournisseur à confirmer", "Supprimé depuis l'import", "Enseigne inconnue"},
+            ),
+            (
+                reverse("recipes:recipe_list"),
+                "table[data-table-label='recettes']",
+                "table[data-table-label='recettes'] .till-chip",
+                {"KIR AU SUREAU EXEMPLE DE LA MAISON HAPPY HOUR GRAND VERRE", "SPRITZAPEROLEXEMPLEHAPPYHOURGRANDVERRE"},
+            ),
         )
         for width in WIDTHS:
             self.as_a_phone(width)
@@ -667,10 +751,15 @@ class ListsAreCardsOnAPhoneInBrowserTests(PhoneBrowserTestCase):
         (review of 30/09). Every word of it stays on one line, and the page
         still fits the phone."""
         cellar = self.documents[0].supplier
-        document = make_invoice(supplier=cellar, invoice_number="F-6", invoice_date=date(2026, 3, 16), parse_checks=CHECKED)
+        document = make_invoice(
+            supplier=cellar, invoice_number="F-6", invoice_date=date(2026, 3, 16), parse_checks=CHECKED
+        )
         for name in ("CHAMPAGNE BRUT RESERVE EXEMPLE 75CL", "PASTIS EXEMPLE 45D 1L"):
             make_invoice_line(
-                invoice=document, product=make_product(supplier=cellar, raw_name=name), quantity=6, total_ht="123.45",
+                invoice=document,
+                product=make_product(supplier=cellar, raw_name=name),
+                quantity=6,
+                total_ht="123.45",
             )
         for width in (320, 375):
             with self.subTest(width=width):
@@ -689,7 +778,11 @@ class ListsAreCardsOnAPhoneInBrowserTests(PhoneBrowserTestCase):
         self.open(reverse("invoices:invoice_list"))
         pk = self.documents[0].pk
         self.element(f"tr[data-document='{pk}'] td[data-label='Type']").click()
-        self.wait_for(lambda: self.script("return !!document.querySelector('#preview-' + arguments[0] + ' .document-preview');", pk))
+        self.wait_for(
+            lambda: self.script(
+                "return !!document.querySelector('#preview-' + arguments[0] + ' .document-preview');", pk
+            )
+        )
         found = self.script(
             "var preview = document.getElementById('preview-' + arguments[0]), cell = preview.cells[0],"
             "    table = preview.closest('table'), box = table.parentElement;"
@@ -745,7 +838,9 @@ class ListsAreCardsOnAPhoneInBrowserTests(PhoneBrowserTestCase):
         self.assertEqual(self.cards(table), {"table": "block", "head": "none", "row": "grid", "fits": True})
         self.assertEqual(self.label_drawn(f"{table} td[data-label='Coût (HT)']"), '"Coût (HT)"')
         self.element(".table-toolbar input[type=search]").send_keys("sureau")
-        self.wait_for(lambda: self.script("return document.querySelector('.table-count').textContent;") == "1 / 2 recettes")
+        self.wait_for(
+            lambda: self.script("return document.querySelector('.table-count').textContent;") == "1 / 2 recettes"
+        )
         self.assertEqual(self.too_wide(375), "")
 
     def test_on_a_laptop_a_sort_button_shows_its_focus(self):

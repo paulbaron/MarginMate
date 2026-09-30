@@ -24,8 +24,8 @@ from django.test import TestCase
 from django.urls import reverse
 
 from bank.models import BankTransaction, InvoicePayment
-from invoices.workspace import bank_state, unreconciled_q
 from invoices.models import Invoice
+from invoices.workspace import bank_state, unreconciled_q
 from tests.factories import make_invoice, make_invoice_line, make_product, make_supplier
 
 FIRST_STATEMENT = date(2025, 10, 6)
@@ -107,10 +107,11 @@ class UnreconciledRuleTests(Fixtures, TestCase):
 
     def test_a_credit_note_is_counted_like_any_other(self):
         """Credit notes do get linked to a bank line, so a refund is a
-        person's to reconcile; hiding avoirs would decide that for them."""
+        person's to reconcile; hiding credit notes would decide that for
+        them."""
         self.statement()
-        avoir = self.invoice(date(2026, 2, 3), total_ht="-50.00")
-        self.assertIn(avoir.pk, self.unreconciled())
+        credit_note = self.invoice(date(2026, 2, 3), total_ht="-50.00")
+        self.assertIn(credit_note.pk, self.unreconciled())
 
 
 class BankStateTests(Fixtures, TestCase):

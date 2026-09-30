@@ -58,7 +58,9 @@ from django.utils import timezone
 from accounts.tenancy import integrations_allowed
 from invoices.integrations import TO_CONFIGURE
 
-from . import pdf, private_files, signature_deletion as deletion, signature_mail, signature_requests as workflow, signing
+from . import pdf, private_files, signature_mail, signing
+from . import signature_deletion as deletion
+from . import signature_requests as workflow
 from .models import Employee, Establishment, SignatureEvent, SignatureRequest, Timesheet
 from .timesheet import month_label, month_sheet, month_title
 
@@ -69,8 +71,7 @@ Status = SignatureRequest.Status
 #: The box the owner ticks when the link cannot go by e-mail.
 HAND_OVER = "transmettre"
 SEND_WITHOUT_MAIL = (
-    "Cochez « Je transmettrai le lien moi-même » pour envoyer ce mois : {why}, le lien ne peut pas partir par "
-    "e-mail."
+    "Cochez « Je transmettrai le lien moi-même » pour envoyer ce mois : {why}, le lien ne peut pas partir par e-mail."
 )
 NO_MAIL_SERVER = "aucun serveur d'e-mail n'est configuré"
 #: What timesheet.js asks before « Envoyer » leaves a grid changed and not saved.
@@ -89,7 +90,7 @@ RETENTION_NOTE = (
     "effacer ensuite est à faire : manage.py staff_purge_signatures (--dry-run d'abord), rien ne le lance "
     "automatiquement."
 )
-#: RETENTION_NOTE in an espace that runs no command on the server (a hosted
+#: RETENTION_NOTE in a tenant that runs no command on the server (a hosted
 #: bar, accounts.tenancy.integrations_allowed): the words every other page
 #: uses for what it cannot do yet (invoices/integrations.py).
 RETENTION_NOTE_TO_CONFIGURE = (
@@ -118,11 +119,11 @@ PANEL_STATUS = {
 class OwnerFile:
     """One of a request's files as the owner downloads it."""
 
-    slug: str            # in the address: …/signature/1/fichier/<slug>/
-    name: str            # its name in the private folder (staff.private_files)
-    digest: str          # the request's field holding its SHA-256 - or workflow.EMPLOYER_DRAWING
-    label: str           # the link's words: {who}
-    filename: str        # the file's name: {who} {month} v{version}
+    slug: str  # in the address: …/signature/1/fichier/<slug>/
+    name: str  # its name in the private folder (staff.private_files)
+    digest: str  # the request's field holding its SHA-256 - or workflow.EMPLOYER_DRAWING
+    label: str  # the link's words: {who}
+    filename: str  # the file's name: {who} {month} v{version}
     content_type: str
 
     def sha256(self, request: SignatureRequest, events=None) -> str:
@@ -135,19 +136,54 @@ class OwnerFile:
 
 
 OWNER_FILES = (
-    OwnerFile("document", private_files.DOCUMENT, "document_sha256", "Document figé (PDF)",
-              "Relevé d'heures {who} {month} v{version} - figé avant signature.pdf", "application/pdf"),
-    OwnerFile("signe-salarie", private_files.EMPLOYEE_SIGNED, "employee_pdf_sha256", "Signé par {who} (PDF)",
-              "Relevé d'heures {who} {month} v{version} - signé, avant contreseing.pdf", "application/pdf"),
-    OwnerFile("signe", private_files.FINAL, "final_pdf_sha256", "Signé et contresigné (PDF)",
-              "Relevé d'heures {who} {month} v{version} - signé et contresigné.pdf", "application/pdf"),
-    OwnerFile("preuve", private_files.PROOF, "proof_sha256", "Dossier de preuve (PDF)",
-              "Dossier de preuve {who} {month} v{version}.pdf", "application/pdf"),
-    OwnerFile("dessin", private_files.SIGNATURE_IMAGE, "signature_png_sha256", "Signature dessinée de {who} (PNG)",
-              "Signature dessinée {who} {month} v{version}.png", "image/png"),
-    OwnerFile("dessin-employeur", private_files.EMPLOYER_SIGNATURE_IMAGE, workflow.EMPLOYER_DRAWING,
-              "Signature dessinée de l'employeur (PNG)",
-              "Signature dessinée de l'employeur - relevé {who} {month} v{version}.png", "image/png"),
+    OwnerFile(
+        "document",
+        private_files.DOCUMENT,
+        "document_sha256",
+        "Document figé (PDF)",
+        "Relevé d'heures {who} {month} v{version} - figé avant signature.pdf",
+        "application/pdf",
+    ),
+    OwnerFile(
+        "signe-salarie",
+        private_files.EMPLOYEE_SIGNED,
+        "employee_pdf_sha256",
+        "Signé par {who} (PDF)",
+        "Relevé d'heures {who} {month} v{version} - signé, avant contreseing.pdf",
+        "application/pdf",
+    ),
+    OwnerFile(
+        "signe",
+        private_files.FINAL,
+        "final_pdf_sha256",
+        "Signé et contresigné (PDF)",
+        "Relevé d'heures {who} {month} v{version} - signé et contresigné.pdf",
+        "application/pdf",
+    ),
+    OwnerFile(
+        "preuve",
+        private_files.PROOF,
+        "proof_sha256",
+        "Dossier de preuve (PDF)",
+        "Dossier de preuve {who} {month} v{version}.pdf",
+        "application/pdf",
+    ),
+    OwnerFile(
+        "dessin",
+        private_files.SIGNATURE_IMAGE,
+        "signature_png_sha256",
+        "Signature dessinée de {who} (PNG)",
+        "Signature dessinée {who} {month} v{version}.png",
+        "image/png",
+    ),
+    OwnerFile(
+        "dessin-employeur",
+        private_files.EMPLOYER_SIGNATURE_IMAGE,
+        workflow.EMPLOYER_DRAWING,
+        "Signature dessinée de l'employeur (PNG)",
+        "Signature dessinée de l'employeur - relevé {who} {month} v{version}.png",
+        "image/png",
+    ),
 )
 FILES_BY_SLUG = {spec.slug: spec for spec in OWNER_FILES}
 
@@ -180,7 +216,9 @@ def _employee(pk) -> Employee:
 def _request_of(person: Employee, month: date, version) -> SignatureRequest:
     return get_object_or_404(
         SignatureRequest.objects.select_related("timesheet__employee"),
-        timesheet__employee=person, timesheet__month=month, version=version,
+        timesheet__employee=person,
+        timesheet__month=month,
+        version=version,
     )
 
 
@@ -237,7 +275,7 @@ class RequestBlock:
     handed_code: str = ""
     verification: signing.Verification | None = None
     verified_at: str = ""
-    fingerprint: str = ""      # the authority's, beside a verification report
+    fingerprint: str = ""  # the authority's, beside a verification report
     # A « Contresigner » refused: what to say beside the pad, and the drawing
     # to paint back on it ("" when what was posted was no drawing).
     countersign_error: str = ""
@@ -349,9 +387,9 @@ class SignaturePanel:
     person: Employee
     month: date
     saved: bool
-    problem: str                       # why nothing can be sent: not saved, no establishment name
-    current: RequestBlock | None       # the request holding the month
-    earlier: list                      # the other versions, newest first
+    problem: str  # why nothing can be sent: not saved, no establishment name
+    current: RequestBlock | None  # the request holding the month
+    earlier: list  # the other versions, newest first
     key_warning: str
     adobe: str = signing.ADOBE_UNKNOWN_VALIDITY
 
@@ -430,8 +468,14 @@ def _block(request: SignatureRequest, person: Employee, month: date, shown: dict
     ]
     if shown.get("version") == request.version:
         for key in (
-            "new_link", "link_note", "link_level", "handed_code", "verification", "verified_at",
-            "countersign_error", "countersign_drawing",
+            "new_link",
+            "link_note",
+            "link_level",
+            "handed_code",
+            "verification",
+            "verified_at",
+            "countersign_error",
+            "countersign_drawing",
         ):
             if key in shown:
                 setattr(block, key, shown[key])
@@ -512,7 +556,11 @@ def _link_shown(request, person: Employee, sign_request: SignatureRequest, token
         else:
             outcome = signature_mail.send_link(sign_request, link, **client(request))
     except (signing.SigningError, private_files.AlteredFileError, FileNotFoundError) as error:
-        return {"new_link": link, "link_note": f"L'e-mail n'est pas parti : {_mail_error(error)}", "link_level": "warning"}
+        return {
+            "new_link": link,
+            "link_note": f"L'e-mail n'est pas parti : {_mail_error(error)}",
+            "link_level": "warning",
+        }
     if outcome.sent:
         note = f"{outcome.message} Vous pouvez aussi le copier pour l'envoyer autrement (SMS, messagerie)."
     else:
@@ -573,9 +621,7 @@ def signature_code(request, pk, month, version):
     if request.method != "POST":
         return _back(person, month)
     try:
-        code = workflow.issue_code(
-            sign_request, SignatureRequest.Identification.CODE_HANDED_OVER, **client(request)
-        )
+        code = workflow.issue_code(sign_request, SignatureRequest.Identification.CODE_HANDED_OVER, **client(request))
     except signing.SigningError as error:
         messages.error(request, str(error))
         return _back(person, month)
@@ -621,8 +667,12 @@ def signature_countersign(request, pk, month, version):
         return _back(person, month)
     except signing.SigningError as error:
         response = _render(
-            request, person, month, version=sign_request.version,
-            countersign_error=str(error), countersign_drawing=_drawn_back(posted, png),
+            request,
+            person,
+            month,
+            version=sign_request.version,
+            countersign_error=str(error),
+            countersign_drawing=_drawn_back(posted, png),
         )
         if isinstance(error, signing.TimestampUnavailable):
             response.status_code = 503
@@ -708,7 +758,11 @@ def signature_verify(request, pk, month, version):
         return _back(person, month)
     result = workflow.verify_request(sign_request, **client(request))
     return _render(
-        request, person, month, version=sign_request.version, verification=result,
+        request,
+        person,
+        month,
+        version=sign_request.version,
+        verification=result,
         verified_at=signing.french_moment(timezone.now()),
     )
 
@@ -762,8 +816,8 @@ FILE_LABELS = {spec.name: spec.label for spec in OWNER_FILES}
 
 @dataclass(frozen=True)
 class DoomedFile:
-    name: str       # in the private folder
-    label: str      # what it is
+    name: str  # in the private folder
+    label: str  # what it is
 
 
 @dataclass
@@ -959,13 +1013,20 @@ def signature_delete_confirm(request, pk, month, version):
         return redirect(step1)
     if not posted:
         page = DeletionPage(
-            sign_request, person, month, deletion.preview(sign_request),
-            with_hours=confirmation.with_hours, token=token.strip(),
+            sign_request,
+            person,
+            month,
+            deletion.preview(sign_request),
+            with_hours=confirmation.with_hours,
+            token=token.strip(),
         )
         return render(request, "staff/signature_delete_confirm.html", {"page": page})
     try:
         outcome = deletion.delete_signature_request(
-            sign_request, how=deletion.PAGE, with_hours=confirmation.with_hours, expected=confirmation.expected,
+            sign_request,
+            how=deletion.PAGE,
+            with_hours=confirmation.with_hours,
+            expected=confirmation.expected,
             ip=client(request)["ip"],
         )
     except deletion.DeletionRefused as error:

@@ -1,14 +1,14 @@
-"""Creating an espace, and migrating the espaces' databases.
+"""Creating a tenant, and migrating the tenants' databases.
 
-A new espace is a COPY of the template database
+A new tenant is a COPY of the template database
 (``TENANTS_ROOT/_template/db.sqlite3``, migrated and empty but for what the
 migrations seed), made with SQLite's backup API, then migrated bound to the
-espace (a no-op when the template is current). Its data migrations run with
-the espace bound as `default` - none of them names a database, so a
+tenant (a no-op when the template is current). Its data migrations run with
+the tenant bound as `default` - none of them names a database, so a
 ``migrate --database=<alias>`` would have seeded somebody else's file.
 
 The seed migrations wire the OWNER's integrations into every database: an
-active mailbox source (UBA) and Metro marked to fetch. A new espace that is
+active mailbox source (UBA) and Metro marked to fetch. A new tenant that is
 not the owner's has both switched off right after creation - and the
 integrations gate (accounts.tenancy.integrations_allowed) refuses them
 anyway.
@@ -19,7 +19,7 @@ seconds whenever the template is behind the code, and the accounts
 database's transactions are IMMEDIATE - SQLite's write lock from their first
 statement - so made inside one, every login and session write of every bar
 waited for them. `manage.py migrate_tenants` migrates the template at every
-deploy, which is what keeps a new espace's own migrate a no-op, and a signup
+deploy, which is what keeps a new tenant's own migrate a no-op, and a signup
 quick. A failure removes the folder made here: nothing half-made is left
 for a retry to trip on.
 """
@@ -48,7 +48,7 @@ _TEMPLATE_LOCK = threading.Lock()
 
 
 def new_dir_name() -> str:
-    """A random folder name no espace has: says nothing about the bar."""
+    """A random folder name no tenant has: says nothing about the bar."""
     for _ in range(20):
         name = "".join(secrets.choice(_DIR_ALPHABET) for _ in range(12))
         if not Tenant.objects.filter(dir_name=name).exists() and not (paths.tenants_root() / name).exists():
@@ -121,7 +121,7 @@ def migrate_tenant(tenant, verbosity=0, stdout=None) -> None:
 
 def switch_off_server_integrations() -> None:
     """What the seed migrations pre-wired to the owner's accounts, off in
-    the bound espace: its mailbox sources and Metro's own fetcher."""
+    the bound tenant: its mailbox sources and Metro's own fetcher."""
     from invoices.models import InvoiceType, Supplier
 
     InvoiceType.objects.filter(source_kind=InvoiceType.SourceKind.EMAIL).update(is_active=False)
@@ -133,7 +133,7 @@ def remove_tenant_files(tenant) -> None:
 
 
 def prepare_tenant(name: str, *, uses_server_integrations: bool = False, dir_name: str | None = None) -> Tenant:
-    """A new espace's FILES, ready to bind: its folder (database copied from
+    """A new tenant's FILES, ready to bind: its folder (database copied from
     the template and migrated, empty subfolders) and - unless it is the
     owner's - the server's integrations switched off in it. Returns the
     Tenant UNSAVED: no row of the accounts database is written, so the
@@ -166,7 +166,7 @@ def prepare_tenant(name: str, *, uses_server_integrations: bool = False, dir_nam
                 switch_off_server_integrations()
     except BaseException:
         # Only a folder made here: an existing one (a dir_name passed in
-        # that was taken) is somebody's espace.
+        # that was taken) is somebody's tenant.
         if made_folder:
             remove_tenant_files(tenant)
         raise
@@ -174,7 +174,7 @@ def prepare_tenant(name: str, *, uses_server_integrations: bool = False, dir_nam
 
 
 def create_tenant(name: str, *, uses_server_integrations: bool = False, dir_name: str | None = None) -> Tenant:
-    """A new espace, ready to bind: its files (`prepare_tenant`), then its
+    """A new tenant, ready to bind: its files (`prepare_tenant`), then its
     Tenant row. Multi mode only. On failure, nothing is left behind (and the
     error is raised)."""
     tenant = prepare_tenant(name, uses_server_integrations=uses_server_integrations, dir_name=dir_name)

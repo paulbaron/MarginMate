@@ -3,8 +3,8 @@ LB-3).
 
 A ticket that could not be read stored `str(exc)` as its line and in the
 batch's log, both drawn on the bar's batch page - and PIL's words are
-« cannot identify image file '<TENANTS_ROOT>\\<espace>\\imports\\
-receipt_batches/1/0000.jpg' »: the server's layout and the espace's folder.
+« cannot identify image file '<TENANTS_ROOT>\\<tenant>\\imports\\
+receipt_batches/1/0000.jpg' »: the server's layout and the tenant's folder.
 Now each kind of error is one fixed French sentence (`common.error_for_page`)
 - an image, a PDF, anything else - and its detail, path and traceback, goes
 to the server's log. The app's own refusals, written in French for the
@@ -73,7 +73,9 @@ class ErrorKindTests(SimpleTestCase):
     def test_an_image_or_a_pdf_its_library_cannot_read_says_so(self):
         from PIL import UnidentifiedImageError
 
-        self.assertEqual(error_for_page(UnidentifiedImageError("cannot identify image file 'C:\\x.jpg'")), UNREADABLE_IMAGE)
+        self.assertEqual(
+            error_for_page(UnidentifiedImageError("cannot identify image file 'C:\\x.jpg'")), UNREADABLE_IMAGE
+        )
         self.assertEqual(error_for_page(pdfium.PdfiumError("Failed to load document")), UNREADABLE_PDF)
 
     def test_the_app_s_own_refusals_keep_their_words(self):
@@ -142,8 +144,10 @@ class PdfImportErrorTests(TestCase):
     def test_the_import_card_says_no_path(self):
         secret = os.path.join(str(paths.tenants_root()), "secret", "facture.pdf")
         upload_ = SimpleUploadedFile("facture.pdf", b"%PDF-1.4", content_type="application/pdf")
-        with mock.patch("invoices.receipts.import_document", side_effect=OSError(2, "No such file", secret)), \
-                self.assertLogs("invoices.views", "ERROR") as logged:
+        with (
+            mock.patch("invoices.receipts.import_document", side_effect=OSError(2, "No such file", secret)),
+            self.assertLogs("invoices.views", "ERROR") as logged,
+        ):
             response = self.client.post(
                 reverse("invoices:invoice_upload"),
                 {"supplier": Supplier.objects.get(code="METRO").pk, "source_file": upload_},
@@ -160,8 +164,10 @@ class RereadErrorTests(TestCase):
         invoice = make_invoice(supplier=metro)
         secret = os.path.join(str(paths.media_root()), "invoices", "2026", "06", "secret.pdf")
         parser = type(receipts.get_parser(metro.parser_key))
-        with mock.patch.object(parser, "parse", side_effect=FileNotFoundError(2, "No such file", secret)), \
-                self.assertLogs("invoices.receipts", "ERROR"):
+        with (
+            mock.patch.object(parser, "parse", side_effect=FileNotFoundError(2, "No such file", secret)),
+            self.assertLogs("invoices.receipts", "ERROR"),
+        ):
             with self.assertRaises(RereadError) as refused:
                 receipts._reread_invoice_file(invoice, secret)
         self.assertIn("La relecture a échoué", str(refused.exception))
@@ -173,9 +179,12 @@ class RereadErrorTests(TestCase):
         shop = Supplier.objects.get(code="WINGSENG")
         invoice = make_invoice(supplier=shop)
         secret = os.path.join(str(paths.media_root()), "invoices", "secret.jpg")
-        with mock.patch.object(
-            receipts, "read_receipt", side_effect=UnidentifiedImageError(f"cannot identify image file {secret!r}")
-        ), self.assertLogs("invoices.receipts", "ERROR"):
+        with (
+            mock.patch.object(
+                receipts, "read_receipt", side_effect=UnidentifiedImageError(f"cannot identify image file {secret!r}")
+            ),
+            self.assertLogs("invoices.receipts", "ERROR"),
+        ):
             with self.assertRaises(RereadError) as refused:
                 receipts._reread_receipt_file(invoice, secret)
         self.assertIn(UNREADABLE_IMAGE, str(refused.exception))

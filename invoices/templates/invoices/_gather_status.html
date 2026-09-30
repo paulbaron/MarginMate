@@ -45,9 +45,9 @@
                 <tr>
                     <th>Source</th>
                     {% comment %}
-                    A gather of bons only (the Consignes page's) counts bons,
-                    not factures: « Trouvées / Importées » are feminine and
-                    mean invoices (ScrapeJob.slips_only).
+                    A gather of slips only (the Consignes page's) counts slips,
+                    not invoices: « Trouvées / Importées » are feminine and
+                    mean « factures » (ScrapeJob.slips_only).
                     {% endcomment %}
                     <th class="num">{% if job.slips_only %}Bons trouvés{% else %}Trouvées{% endif %}</th>
                     {% if job.kind != "TEST" %}<th class="num">{% if job.slips_only %}Nouveaux{% else %}Importées{% endif %}</th>{% endif %}

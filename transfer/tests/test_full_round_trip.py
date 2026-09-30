@@ -6,16 +6,15 @@ everything, clear everything, import everything - so what crosses sections
 has to survive the trip too: an invoice line a stock take was priced from,
 a bank payment to a ticket known only by its file (the second of two
 byte-identical ones), a supplier's code named by six sections' records, and
-by « Consignes »' reprise and format of bon (UBA's), the photos of a
-reprise and the PDF of a bon byte for byte, and the purchase movements and
+by « Consignes »' pickup and slip format (UBA's), the photos of a
+pickup and the PDF of a slip byte for byte, and the purchase movements and
 the till's sales per recipe rebuilt from what came back.
 
 Every name, amount and file below is invented.
 """
 
 import shutil
-from datetime import date, datetime
-from datetime import timezone as dt_timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from django.test import TestCase, TransactionTestCase
@@ -63,7 +62,6 @@ from transfer.tests.test_views import shown_preview
 
 MERGE, REPLACE = Strategy.MERGE, Strategy.REPLACE
 ALL = set(INFO)
-UTC = dt_timezone.utc
 D = Decimal
 PAUSED_UNTIL = datetime(2026, 10, 2, 6, 0, tzinfo=UTC)
 BLOCKED_AT = datetime(2026, 9, 18, 21, 40, 12, tzinfo=UTC)
@@ -83,14 +81,20 @@ def build_everything() -> dict:
 
     # Suppliers: Metro paused by its firewall, known prices, what names a shop.
     Supplier.objects.filter(code="METRO").update(
-        scrape_paused_until=PAUSED_UNTIL, scrape_last_block_at=BLOCKED_AT, scrape_pause_reason="Refus du pare-feu (essai)"
+        scrape_paused_until=PAUSED_UNTIL,
+        scrape_last_block_at=BLOCKED_AT,
+        scrape_pause_reason="Refus du pare-feu (essai)",
     )
     sabbh = Supplier.objects.get(code="SABBH")
     ShopItemPrice.objects.create(supplier=sabbh, unit_price_ttc=D("0.70"), label="Pita essai")
-    ShopItemPrice.objects.create(supplier=sabbh, unit_price_ttc=D("0.70"), label="Pita essai", valid_from=date(2026, 8, 1))
+    ShopItemPrice.objects.create(
+        supplier=sabbh, unit_price_ttc=D("0.70"), label="Pita essai", valid_from=date(2026, 8, 1)
+    )
     leroy = Supplier.objects.get(code="LEROY_ESSAI")
     Supplier.objects.filter(pk=leroy.pk).update(
-        ticket_header="LEROY ESSAI", ticket_identifiers=["web:leroy-essai.example"], refused_identifiers=["tel:0100000000"]
+        ticket_header="LEROY ESSAI",
+        ticket_identifiers=["web:leroy-essai.example"],
+        refused_identifiers=["tel:0100000000"],
     )
     water = Supplier.objects.get(code="EAU_ESSAI")
 
@@ -112,12 +116,21 @@ def build_everything() -> dict:
         stock_take_line=bread, invoice_line=twin_line, quantity_used=D("2"), unit_cost_ht=D("4.0000")
     )
     make_stock_take_line(
-        take, stock_type=StockType.objects.get(name="Gin"), counted_quantity="0.7", unit=UnitChoices.LITRE,
-        value_ht="0", has_shortfall=True, shortfall_quantity=D("0.7"),
+        take,
+        stock_type=StockType.objects.get(name="Gin"),
+        counted_quantity="0.7",
+        unit=UnitChoices.LITRE,
+        value_ht="0",
+        has_shortfall=True,
+        shortfall_quantity=D("0.7"),
     )
     make_movement(
-        stock_type=StockType.objects.get(name="Vodka essai"), quantity="-0.5", unit_cost_ht="13.5714",
-        kind=MovementKind.LOSS, note="Casse (essai)", occurred_on=date(2026, 8, 20),
+        stock_type=StockType.objects.get(name="Vodka essai"),
+        quantity="-0.5",
+        unit_cost_ht="13.5714",
+        kind=MovementKind.LOSS,
+        note="Casse (essai)",
+        occurred_on=date(2026, 8, 20),
     )
 
     # The bank: a payment by number, one by the twin's file, one by the
@@ -129,8 +142,8 @@ def build_everything() -> dict:
     CounterpartyAlias.objects.create(supplier=leroy, name="LEROY ESS")
     make_rule("URSSAF", "Cotisations")
 
-    # Consignes: the seeded types and UBA format, a reprise with two photos,
-    # and the bon its driver sent - its lines and its PDF - each made at a
+    # Returnables: the seeded types and UBA format, a pickup with two photos,
+    # and the slip its driver sent - its lines and its PDF - each made at a
     # moment of its own, which a round trip must put back.
     pickup = make_pickup(
         date=date(2026, 8, 12), counts={"Fûts": 14, "Bouteilles CO2": 1}, photos=2, note="Reprise d'essai"
@@ -147,7 +160,9 @@ def build_everything() -> dict:
     # Every product created on a day of its own: a round trip that forgot
     # to restore the moment would show the import's instead.
     for minute, pk in enumerate(Product.objects.order_by("pk").values_list("pk", flat=True)):
-        Product.objects.filter(pk=pk).update(created_at=datetime(2026, 3, 1 + minute, 9, minute, 30, 125000, tzinfo=UTC))
+        Product.objects.filter(pk=pk).update(
+            created_at=datetime(2026, 3, 1 + minute, 9, minute, 30, 125000, tzinfo=UTC)
+        )
     return built
 
 
@@ -164,9 +179,9 @@ def snapshots() -> dict:
 
 def metro_pause() -> tuple:
     return tuple(
-        Supplier.objects.filter(code="METRO").values_list(
-            "scrape_last_login_at", "scrape_last_block_at", "scrape_paused_until", "scrape_pause_reason"
-        ).get()
+        Supplier.objects.filter(code="METRO")
+        .values_list("scrape_last_login_at", "scrape_last_block_at", "scrape_paused_until", "scrape_pause_reason")
+        .get()
     )
 
 
@@ -223,7 +238,9 @@ class WholeArchiveTests(MediaMixin, TestCase):
         three purchase movements (a refund among them), the loss, and the
         till's sales per recipe."""
         movements = sorted(
-            StockMovement.objects.values_list("stock_type__name", "kind", "quantity", "unit_cost_ht", "invoice_line__raw_name")
+            StockMovement.objects.values_list(
+                "stock_type__name", "kind", "quantity", "unit_cost_ht", "invoice_line__raw_name"
+            )
         )
         self._check(REPLACE)
         self.assertEqual(
@@ -253,7 +270,8 @@ class WholeArchiveTests(MediaMixin, TestCase):
         with self.captureOnCommitCallbacks(execute=True):
             run = run_clear(ALL, preview=False)
         self.assertEqual(
-            run.rebuilt, {"mouvements de stock": 0, "statuts de factures": 0, "ventes par recette": 0, "produits caisse": 0}
+            run.rebuilt,
+            {"mouvements de stock": 0, "statuts de factures": 0, "ventes par recette": 0, "produits caisse": 0},
         )
 
     def _own_export(self, strategy):
@@ -328,8 +346,10 @@ class ClearFromThePageTests(MediaMixin, TransactionTestCase):
         posted = {"sections": sorted(cleared)}
         self.client.post(url, {**posted, "action": "previsualiser"})
         # The confirm names the preview its page shows (views.SHOWN_PREVIEW).
-        apercu = shown_preview(self.client.get(url))
-        response = self.client.post(url, {**posted, "action": "effacer", "confirmation": " effacer ", "apercu": apercu})
+        preview = shown_preview(self.client.get(url))
+        response = self.client.post(
+            url, {**posted, "action": "effacer", "confirmation": " effacer ", "apercu": preview}
+        )
         self.assertRedirects(response, url + "?rapport=1", fetch_redirect_response=False)
 
         # Everything but the bank is empty; the bank lost its payments and

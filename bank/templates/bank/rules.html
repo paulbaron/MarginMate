@@ -90,10 +90,10 @@
                             <td>{{ rule.description|default:"—" }}</td>
                             <td><code>{{ rule.pattern }}</code></td>
                             {% comment %}
-                            Modifiable ici : la page « Dépenses » dit que donner une catégorie à sa règle
-                            est LA façon de ne pas retaper le même mot tous les mois, et toute règle
-                            écrite avant ce champ en est dépourvue. Sans ce formulaire, corriger une
-                            faute de frappe voulait dire supprimer la règle et retaper son motif.
+                            Editable here: the « Dépenses » page says that giving its rule a category
+                            is THE way not to type the same word again every month, and every rule
+                            written before this field has none. Without this form, fixing a
+                            typo meant deleting the rule and typing its pattern again.
                             {% endcomment %}
                             <td data-sort="{{ rule.category }}">
                                 <form method="post" action="{% url 'bank:rule_action' rule.pk %}" class="inline-form">

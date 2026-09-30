@@ -75,7 +75,7 @@ class CecinaParserTests(SimpleTestCase):
         self.assertLess(line.unit_cost_ht, Decimal("5.83"))
 
     def test_vat_rate_comes_from_the_footer_code_table(self):
-        """Only codes actually printed with a taux/montant are used; the bare
+        """Only codes actually printed with a rate/amount are used; the bare
         "0"/"1"/"2"/"3" lines in the same table are unused codes."""
         self.assertEqual(line_named(parse(), "Le Vin Exemple Rouge AOP Languedoc 2025").vat_rate, Decimal("0.2"))
 

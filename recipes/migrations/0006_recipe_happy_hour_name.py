@@ -4,15 +4,18 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('recipes', '0005_recipesale'),
+        ("recipes", "0005_recipesale"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='recipe',
-            name='happy_hour_name',
-            field=models.CharField(blank=True, help_text="Nom du produit en happy hour sur la caisse, s'il diffère (ex : « Alcool + soda HH »).", max_length=255),
+            model_name="recipe",
+            name="happy_hour_name",
+            field=models.CharField(
+                blank=True,
+                help_text="Nom du produit en happy hour sur la caisse, s'il diffère (ex : « Alcool + soda HH »).",
+                max_length=255,
+            ),
         ),
     ]

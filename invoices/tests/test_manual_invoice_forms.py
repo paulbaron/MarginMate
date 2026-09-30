@@ -59,9 +59,7 @@ class ManualInvoiceLineFormSetTests(TestCase):
         self.assertTrue(formset.is_valid(), formset.errors)
 
     def test_an_invoice_with_no_lines_at_all_is_rejected(self):
-        formset = self.build(
-            payload({0: {"product_name": "", "quantity": "", "total_ht": "", "vat_rate": "20"}})
-        )
+        formset = self.build(payload({0: {"product_name": "", "quantity": "", "total_ht": "", "vat_rate": "20"}}))
         self.assertFalse(formset.is_valid())
         self.assertIn("Ajoutez au moins un produit.", formset.non_form_errors())
 
@@ -192,7 +190,9 @@ class InvoiceLineEditingTests(TestCase):
         )
         product = self.invoice.lines.get().product
         link_product_to_stock_type(
-            product, StockType.objects.create(name="Vodka", unit="L"), unit="L",
+            product,
+            StockType.objects.create(name="Vodka", unit="L"),
+            unit="L",
             stock_equivalent=Decimal("1"),
         )
         self.assertEqual(StockMovement.objects.count(), 1)
@@ -243,7 +243,10 @@ class EditInvoiceLinesRoundTripTests(TestCase):
         self.invoice = make_invoice(supplier=supplier, invoice_date=date(2026, 3, 1))
         product = make_product(supplier=supplier, raw_name="VODKA 70CL")
         make_invoice_line(
-            invoice=self.invoice, product=product, quantity=6, total_ht="90.00",
+            invoice=self.invoice,
+            product=product,
+            quantity=6,
+            total_ht="90.00",
             vat_rate=Decimal("0.2000"),
         )
 
@@ -264,9 +267,7 @@ class EditInvoiceLinesRoundTripTests(TestCase):
             f"{prefix}-0-vat_rate": str(rendered),
         }
         saved = self.client.post(reverse(url_name, args=[self.invoice.pk]), data)
-        self.assertEqual(
-            saved.status_code, 302, f"{url_name} rejected the VAT rate it rendered ({rendered})"
-        )
+        self.assertEqual(saved.status_code, 302, f"{url_name} rejected the VAT rate it rendered ({rendered})")
 
     def test_edit_invoice_lines_accepts_its_own_rendered_rate(self):
         self._round_trip("invoices:invoice_edit_lines", "form")

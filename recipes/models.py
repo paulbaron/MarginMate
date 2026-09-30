@@ -5,14 +5,12 @@ from contextlib import contextmanager
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
-from django.core.validators import MinValueValidator, MaxValueValidator
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils import timezone
 
 from common import JobLogMixin, search_key
-
 from inventory.models import StockType, UnitChoices
-
 
 _costing = threading.local()
 
@@ -131,7 +129,9 @@ class Recipe(models.Model):
     )
     category = models.CharField(max_length=255, blank=True)
     yield_quantity = models.DecimalField(
-        max_digits=10, decimal_places=4, default=Decimal("1"),
+        max_digits=10,
+        decimal_places=4,
+        default=Decimal("1"),
         # Must be positive: it's a divisor (see unit_cost_ht), and a recipe
         # that produces nothing isn't a recipe.
         validators=[MinValueValidator(Decimal("0.0001"))],
@@ -139,7 +139,9 @@ class Recipe(models.Model):
     )
     yield_unit = models.CharField(max_length=4, choices=UnitChoices.choices, default=UnitChoices.UNIT)
     sale_quantity = models.DecimalField(
-        max_digits=10, decimal_places=4, default=Decimal("1"),
+        max_digits=10,
+        decimal_places=4,
+        default=Decimal("1"),
         # Positive for the same reason yield_quantity is: it is what a
         # serving is measured in, and a sale of nothing is not a sale.
         validators=[MinValueValidator(Decimal("0.0001"))],
@@ -150,7 +152,10 @@ class Recipe(models.Model):
         ),
     )
     selling_price_ttc = models.DecimalField(
-        max_digits=8, decimal_places=2, null=True, blank=True,
+        max_digits=8,
+        decimal_places=2,
+        null=True,
+        blank=True,
         validators=[MinValueValidator(Decimal("0"))],
         help_text=(
             "Prix de vente affiché (TTC). Laissez vide pour une préparation qui n'est pas "
@@ -158,12 +163,17 @@ class Recipe(models.Model):
         ),
     )
     happy_hour_price_ttc = models.DecimalField(
-        max_digits=8, decimal_places=2, null=True, blank=True,
+        max_digits=8,
+        decimal_places=2,
+        null=True,
+        blank=True,
         validators=[MinValueValidator(Decimal("0"))],
         help_text="Optionnel - prix TTC en happy hour.",
     )
     vat_rate = models.DecimalField(
-        max_digits=4, decimal_places=3, default=Decimal("0.20"),
+        max_digits=4,
+        decimal_places=3,
+        default=Decimal("0.20"),
         # A rate of exactly -1 makes (1 + vat_rate) zero, and selling_price_ht
         # then divides by it - which 500s the recipe list, the detail page and
         # the admin all at once. Bounded to a plausible range rather than just
@@ -194,13 +204,13 @@ class Recipe(models.Model):
             raise ValidationError(
                 {"happy_hour_name": "Identique au nom de la recette - laissez vide si la caisse n'a qu'un seul nom."}
             )
-        clash = Recipe.objects.exclude(pk=self.pk).filter(
-            models.Q(name__iexact=happy_hour_name) | models.Q(happy_hour_name__iexact=happy_hour_name)
-        ).first()
+        clash = (
+            Recipe.objects.exclude(pk=self.pk)
+            .filter(models.Q(name__iexact=happy_hour_name) | models.Q(happy_hour_name__iexact=happy_hour_name))
+            .first()
+        )
         if clash is not None:
-            raise ValidationError(
-                {"happy_hour_name": f"Déjà utilisé par la recette « {clash.name} »."}
-            )
+            raise ValidationError({"happy_hour_name": f"Déjà utilisé par la recette « {clash.name} »."})
 
     @property
     def _vat_divisor(self) -> Decimal:
@@ -251,7 +261,7 @@ class Recipe(models.Model):
         return {
             "margin_ht": margin_ht,
             "margin_percent": (margin_ht / price_ht * Decimal("100")) if price_ht else Decimal("0"),
-            # "Combien de fois le coût" - the standard F&B costing multiplier
+            # "How many times the cost" - the standard F&B costing multiplier
             # (selling price = cost x factor), not margin/cost - e.g. a 2€
             # cost sold at 9€ is "x4.5", not "x3.5".
             "price_factor": (price_ht / cost_ht) if cost_ht else None,
@@ -442,9 +452,7 @@ class Recipe(models.Model):
             ),
         }
 
-    def _price_factor_range(
-        self, selling_price_ht, group_mins, group_min_positives, min_cost, max_cost
-    ):
+    def _price_factor_range(self, selling_price_ht, group_mins, group_min_positives, min_cost, max_cost):
         """price / cost, so the factor is highest for the cheapest variation
         - and undefined for a variation that costs nothing at all (an
         ingredient whose stock item has no purchases yet).
@@ -513,10 +521,7 @@ class Recipe(models.Model):
         if not groups:
             return None
         selection = list(selection) + [0] * (len(groups) - len(selection))
-        chosen = [
-            self.resolve_option(group, max(0, selection[position]))
-            for position, group in enumerate(groups)
-        ]
+        chosen = [self.resolve_option(group, max(0, selection[position])) for position, group in enumerate(groups)]
         return self._build_variation(chosen, groups)
 
     def _build_variation(self, chosen, groups, sizes=None) -> dict:
@@ -540,9 +545,7 @@ class Recipe(models.Model):
         ]
         cost_ht = sum((entry["cost_ht"] for entry in breakdown), start=Decimal("0"))
         happy_hour_price_ht = self.happy_hour_price_ht
-        varying_names = [
-            entry["name"] for entry, size in zip(breakdown, sizes) if size > 1
-        ]
+        varying_names = [entry["name"] for entry, size in zip(breakdown, sizes) if size > 1]
         return {
             "name": f"{self.name} ({', '.join(varying_names)})" if varying_names else self.name,
             "breakdown": breakdown,
@@ -556,9 +559,7 @@ class Recipe(models.Model):
             # Against one sale's cost, for the reason `_summary` gives above.
             **self._price_metrics(self.selling_price_ht, self.per_sale(cost_ht)),
             "happy_hour": (
-                self._price_metrics(happy_hour_price_ht, self.per_sale(cost_ht))
-                if happy_hour_price_ht
-                else None
+                self._price_metrics(happy_hour_price_ht, self.per_sale(cost_ht)) if happy_hour_price_ht else None
             ),
         }
 
@@ -581,14 +582,8 @@ class Recipe(models.Model):
 
     def _variations(self, groups) -> list[dict]:
         sizes = [self.group_size(group) for group in groups]
-        expanded = [
-            [self.resolve_option(group, index) for index in range(size)]
-            for group, size in zip(groups, sizes)
-        ]
-        return [
-            self._build_variation(list(combo), groups, sizes)
-            for combo in itertools.product(*expanded)
-        ]
+        expanded = [[self.resolve_option(group, index) for index in range(size)] for group, size in zip(groups, sizes)]
+        return [self._build_variation(list(combo), groups, sizes) for combo in itertools.product(*expanded)]
 
     def variation_selections(self, ingredients=None):
         """(option indices, display name) for every variation, in
@@ -817,9 +812,7 @@ class PosProduct(models.Model):
     """
 
     name = models.CharField(max_length=255, unique=True)
-    recipe = models.ForeignKey(
-        Recipe, null=True, blank=True, on_delete=models.SET_NULL, related_name="pos_products"
-    )
+    recipe = models.ForeignKey(Recipe, null=True, blank=True, on_delete=models.SET_NULL, related_name="pos_products")
     ignored = models.BooleanField(default=False)
     # Straight from the export's own TAG_ columns - handy for triage, since
     # "Liquide (Alcool)" is where the money leaks and "Solide" mostly isn't.
@@ -865,8 +858,8 @@ class PosProductDailyQuantity(models.Model):
 
     product = models.ForeignKey(PosProduct, related_name="daily_quantities", on_delete=models.CASCADE)
     sold_on = models.DateField()
-    #: Signed: the export's `Qte` is -1 on a refund, netted per (produit,
-    #: jour). All seven refunds stored so far happen to fall on days the
+    #: Signed: the export's `Qte` is -1 on a refund, netted per (product,
+    #: day). All seven refunds stored so far happen to fall on days the
     #: product also sold, so no row has ever gone below zero - but a pint
     #: refunded the day AFTER it was sold nets -1, and on a positive-only
     #: column that INSERT failed, rolling back the whole window's import,
@@ -894,9 +887,7 @@ class PosProductDailyQuantity(models.Model):
     revenue_read = models.BooleanField(default=False)
 
     class Meta:
-        constraints = [
-            models.UniqueConstraint(fields=["product", "sold_on"], name="unique_pos_product_daily_quantity")
-        ]
+        constraints = [models.UniqueConstraint(fields=["product", "sold_on"], name="unique_pos_product_daily_quantity")]
 
     @property
     def status(self) -> str:
@@ -977,9 +968,7 @@ class PosDailyPayment(models.Model):
 
     class Meta:
         ordering = ["sold_on", "method"]
-        constraints = [
-            models.UniqueConstraint(fields=["sold_on", "method"], name="unique_pos_daily_payment")
-        ]
+        constraints = [models.UniqueConstraint(fields=["sold_on", "method"], name="unique_pos_daily_payment")]
 
     def __str__(self):
         return f"{self.sold_on} {self.label} {self.amount}"
@@ -1157,7 +1146,10 @@ class SaleDocumentLine(models.Model):
     # but a stock item can be sold by the litre.
     quantity = models.DecimalField(max_digits=10, decimal_places=4)
     unit_price_ttc = models.DecimalField(
-        max_digits=8, decimal_places=2, null=True, blank=True,
+        max_digits=8,
+        decimal_places=2,
+        null=True,
+        blank=True,
         help_text="Optionnel — laissez vide pour le prix de vente de la recette.",
     )
 

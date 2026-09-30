@@ -4,25 +4,24 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('invoices', '0002_seed_suppliers'),
+        ("invoices", "0002_seed_suppliers"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='scrapejob',
-            name='progress',
+            model_name="scrapejob",
+            name="progress",
             field=models.JSONField(blank=True, default=dict),
         ),
         migrations.AddField(
-            model_name='scrapejob',
-            name='range_end',
+            model_name="scrapejob",
+            name="range_end",
             field=models.DateField(blank=True, null=True),
         ),
         migrations.AddField(
-            model_name='scrapejob',
-            name='range_start',
+            model_name="scrapejob",
+            name="range_start",
             field=models.DateField(blank=True, null=True),
         ),
     ]

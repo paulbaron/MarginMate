@@ -7,7 +7,7 @@ shows the link, whether it was mailed or not.
 Three messages, plain text, French, short: the link (with the month and how
 long it lasts), the one-time code, and the final copy (attached). Every
 subject names the employer - the establishment as the request's snapshot
-froze it, the bound espace's own: in multi mode the mail server and the
+froze it, the bound tenant's own: in multi mode the mail server and the
 sender are the platform's, shared by every bar, and the subject is what says
 which bar is asking. Each send
 is an event of the request's chain. **A send that fails is never a 500**:
@@ -20,8 +20,8 @@ be hammered from the employee's page.
 chooses both the address (the employee's) and words that go in the mail
 (its establishment's name) - « Nouveau lien » pressed twenty times sent
 twenty mails. At most `REQUEST_MAILS_PER_HOUR` link or copy mails for one
-request in an hour, and `ESPACE_MAILS_PER_DAY` signature mails of any kind
-(links, codes, copies, failed sends included) for the whole espace in 24
+request in an hour, and `TENANT_MAILS_PER_DAY` signature mails of any kind
+(links, codes, copies, failed sends included) for the whole tenant in 24
 hours, counted from the requests' own events. Over either, nothing is sent:
 the owner's page still shows the link, to hand over himself; the
 employee's page says to ask the employer for the code.
@@ -48,9 +48,9 @@ OTHER_CHANNEL = "transmettez-le par un autre moyen (SMS, messagerie, en main pro
 #: sent, one retry - the codes have their own three an hour
 #: (signature_requests.CODES_PER_HOUR).
 REQUEST_MAILS_PER_HOUR = 3
-#: Every signature mail of one espace in 24 hours: a link, a code and a
+#: Every signature mail of one tenant in 24 hours: a link, a code and a
 #: final copy for twenty employees on the same day is 60.
-ESPACE_MAILS_PER_DAY = 60
+TENANT_MAILS_PER_DAY = 60
 #: The events that are a mail sent - or tried: a failed send counts, so a
 #: broken server is not hammered either.
 _MAIL_EVENTS = (Kind.LINK_SENT, Kind.CODE_SENT, Kind.COPY_SENT, Kind.MAIL_FAILED)
@@ -60,11 +60,11 @@ REQUEST_CAP_REACHED = (
     "Déjà {count} e-mails envoyés pour cette demande dans l'heure : {what} n'a pas été envoyé, "
     "transmettez-le vous-même (SMS, messagerie, en main propre)."
 )
-ESPACE_CAP_REACHED = (
+TENANT_CAP_REACHED = (
     "Déjà {count} e-mails de signature envoyés depuis 24 heures : {what} n'a pas été envoyé, "
     "transmettez-le vous-même (SMS, messagerie, en main propre)."
 )
-#: The employee's page, when the espace's day is used up: the code comes
+#: The employee's page, when the tenant's day is used up: the code comes
 #: from the employer instead.
 CODE_CAP_REACHED = "Le code ne peut plus être envoyé par e-mail aujourd'hui : demandez-le à votre employeur."
 
@@ -73,26 +73,25 @@ def _request_mails_in_the_last_hour(request: SignatureRequest, now) -> int:
     events = SignatureEvent.objects.filter(request=request, at__gt=now - timedelta(hours=1), at__lte=now)
     sent = events.filter(kind__in=_REQUEST_MAIL_EVENTS).count()
     failed = sum(
-        1 for detail in events.filter(kind=Kind.MAIL_FAILED).values_list("detail", flat=True)
+        1
+        for detail in events.filter(kind=Kind.MAIL_FAILED).values_list("detail", flat=True)
         if (detail or {}).get("what") != "code"
     )
     return sent + failed
 
 
-def _espace_mails_in_the_last_day(now) -> int:
-    """Every signature mail of the bound espace (its own database)."""
-    return SignatureEvent.objects.filter(
-        kind__in=_MAIL_EVENTS, at__gt=now - timedelta(days=1), at__lte=now
-    ).count()
+def _tenant_mails_in_the_last_day(now) -> int:
+    """Every signature mail of the bound tenant (its own database)."""
+    return SignatureEvent.objects.filter(kind__in=_MAIL_EVENTS, at__gt=now - timedelta(days=1), at__lte=now).count()
 
 
 def cap_reached(request: SignatureRequest, what: str, *, now=None) -> str:
     """Why `what` (« le lien », « la copie signée », « le code ») may not be
     mailed now, or "" when it may."""
     now = now or timezone.now()
-    count = _espace_mails_in_the_last_day(now)
-    if count >= ESPACE_MAILS_PER_DAY:
-        return ESPACE_CAP_REACHED.format(count=count, what=what)
+    count = _tenant_mails_in_the_last_day(now)
+    if count >= TENANT_MAILS_PER_DAY:
+        return TENANT_CAP_REACHED.format(count=count, what=what)
     if what != "le code":
         count = _request_mails_in_the_last_hour(request, now)
         if count >= REQUEST_MAILS_PER_HOUR:
@@ -103,7 +102,7 @@ def cap_reached(request: SignatureRequest, what: str, *, now=None) -> str:
 @dataclass(frozen=True)
 class MailOutcome:
     sent: bool
-    message: str   # French, for the page
+    message: str  # French, for the page
 
 
 def mail_configured() -> bool:
@@ -122,7 +121,7 @@ def can_email(request: SignatureRequest) -> bool:
 def _unavailable(request: SignatureRequest, what: str) -> str:
     if not mail_configured():
         # The setting's name only where it can be acted on (multi mode: the
-        # owner's espace; the server is the platform's).
+        # owner's tenant; the server is the platform's).
         setting = " (EMAIL_HOST)" if signing.server_settings_may_be_named() else ""
         return f"Aucun serveur d'e-mail n'est configuré{setting} : {what} n'a pas été envoyé, {OTHER_CHANNEL}"
     return f"{request.timesheet.employee.display_name} n'a pas d'adresse e-mail : {what} n'a pas été envoyé, {OTHER_CHANNEL}"
@@ -141,7 +140,9 @@ def _label(request: SignatureRequest) -> str:
     return request.month_snapshot.get("label") or ""
 
 
-def _send(request, what: str, subject: str, body: str, *, attachments=(), now=None, ip=None, user_agent="") -> MailOutcome:
+def _send(
+    request, what: str, subject: str, body: str, *, attachments=(), now=None, ip=None, user_agent=""
+) -> MailOutcome:
     address = _address(request)
     message = EmailMessage(
         subject=" ".join(subject.split()), body=body, from_email=settings.DEFAULT_FROM_EMAIL, to=[address]
@@ -152,7 +153,11 @@ def _send(request, what: str, subject: str, body: str, *, attachments=(), now=No
         message.send(fail_silently=False)
     except (smtplib.SMTPException, OSError, ValueError) as error:
         signature_requests.log_event(
-            request, Kind.MAIL_FAILED, at=now, ip=ip, user_agent=user_agent,
+            request,
+            Kind.MAIL_FAILED,
+            at=now,
+            ip=ip,
+            user_agent=user_agent,
             detail={"what": what, "to": address, "error": type(error).__name__},
         )
         return MailOutcome(False, f"L'e-mail n'a pas pu être envoyé à {address} ({what}) : {OTHER_CHANNEL}")
@@ -166,7 +171,7 @@ def send_link(request: SignatureRequest, link: str, *, ip=None, user_agent="") -
     refused = cap_reached(request, "le lien")
     if refused:
         return MailOutcome(False, refused)
-    until =signing.french_moment(request.expires_at).split(" à ")[0]
+    until = signing.french_moment(request.expires_at).split(" à ")[0]
     body = (
         f"{_greeting(request)}\n\n"
         f"{_establishment(request)} vous demande de vérifier et de signer votre relevé d'heures de {_label(request)}.\n\n"
@@ -175,12 +180,17 @@ def send_link(request: SignatureRequest, link: str, *, ip=None, user_agent="") -
         "Ce lien vous est personnel : ne le transférez pas.\n"
     )
     outcome = _send(
-        request, "lien", f"Relevé d'heures de {_label(request)} à signer — {_establishment(request)}", body,
-        ip=ip, user_agent=user_agent,
+        request,
+        "lien",
+        f"Relevé d'heures de {_label(request)} à signer — {_establishment(request)}",
+        body,
+        ip=ip,
+        user_agent=user_agent,
     )
     if outcome.sent:
-        signature_requests.log_event(request, Kind.LINK_SENT, ip=ip, user_agent=user_agent,
-                                     detail={"to": _address(request)})
+        signature_requests.log_event(
+            request, Kind.LINK_SENT, ip=ip, user_agent=user_agent, detail={"to": _address(request)}
+        )
     return outcome
 
 
@@ -204,12 +214,18 @@ def send_code(request: SignatureRequest, *, now=None, ip=None, user_agent="") ->
         "Ne le communiquez à personne.\n"
     )
     outcome = _send(
-        request, "code", f"Votre code pour signer le relevé de {_label(request)} — {_establishment(request)}", body,
-        now=now, ip=ip, user_agent=user_agent,
+        request,
+        "code",
+        f"Votre code pour signer le relevé de {_label(request)} — {_establishment(request)}",
+        body,
+        now=now,
+        ip=ip,
+        user_agent=user_agent,
     )
     if outcome.sent:
-        signature_requests.log_event(request, Kind.CODE_SENT, at=now, ip=ip, user_agent=user_agent,
-                                     detail={"to": _address(request)})
+        signature_requests.log_event(
+            request, Kind.CODE_SENT, at=now, ip=ip, user_agent=user_agent, detail={"to": _address(request)}
+        )
         return MailOutcome(True, f"Code envoyé à {_address(request)} : il vaut 15 minutes.")
     signature_requests.withdraw_code(request)
     return outcome
@@ -224,7 +240,9 @@ def final_copy_name(request: SignatureRequest) -> str:
 def send_final_copy(request: SignatureRequest, link: str | None = None, *, ip=None, user_agent="") -> MailOutcome:
     """The countersigned PDF, attached, once the request is finished."""
     if request.status != SignatureRequest.Status.COMPLETE:
-        raise signature_requests.RequestStateError("Le relevé n'est pas encore contresigné : il n'y a pas de copie finale.")
+        raise signature_requests.RequestStateError(
+            "Le relevé n'est pas encore contresigné : il n'y a pas de copie finale."
+        )
     if not can_email(request):
         return MailOutcome(False, _unavailable(request, "la copie signée"))
     refused = cap_reached(request, "la copie signée")
@@ -240,10 +258,16 @@ def send_final_copy(request: SignatureRequest, link: str | None = None, *, ip=No
         body += f"\nVous pouvez aussi le télécharger ici tant que le lien est valable :\n{link}\n"
     body += f"\nDocument n° {request.document_id}\n"
     outcome = _send(
-        request, "copie signée", f"Votre relevé d'heures de {_label(request)} signé — {_establishment(request)}", body,
-        attachments=[(final_copy_name(request), content, "application/pdf")], ip=ip, user_agent=user_agent,
+        request,
+        "copie signée",
+        f"Votre relevé d'heures de {_label(request)} signé — {_establishment(request)}",
+        body,
+        attachments=[(final_copy_name(request), content, "application/pdf")],
+        ip=ip,
+        user_agent=user_agent,
     )
     if outcome.sent:
-        signature_requests.log_event(request, Kind.COPY_SENT, ip=ip, user_agent=user_agent,
-                                     detail={"to": _address(request)})
+        signature_requests.log_event(
+            request, Kind.COPY_SENT, ip=ip, user_agent=user_agent, detail={"to": _address(request)}
+        )
     return outcome

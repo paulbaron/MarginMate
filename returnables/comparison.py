@@ -1,46 +1,46 @@
-"""« Consignes »: which bons count, what each of their lines is, and how a
-day's reprises compare with that day's bons - worked out when a page is
-drawn, never stored (a motif edited reclassifies at once; a bon replaced
+"""« Consignes »: which slips count, what each of their lines is, and how a
+day's pickups compare with that day's slips - worked out when a page is
+drawn, never stored (a pattern edited reclassifies at once; a slip replaced
 stops counting at once).
 
-**Which bons count** (`effective_slips`, over EVERY bon of the formats
-involved - one values() query - never over the few a page shows: the bon
+**Which slips count** (`effective_slips`, over EVERY slip of the formats
+involved - one values() query - never over the few a page shows: the slip
 that replaces one on screen may be off it):
 
-1. A bon's moment is (printed_at or received_at, pk): both aware datetimes.
+1. A slip's moment is (printed_at or received_at, pk): both aware datetimes.
    The mail's date never orders anything.
-2. Re-sends: bons of one format with the same non-blank number AND the same
+2. Re-sends: slips of one format with the same non-blank number AND the same
    delivery date are one ticket (the driver e-mails it again, printed the
    next morning). The latest gives the content, the others are « renvoyé »;
-   the ticket's moment is its EARLIEST bon's. The same number on two
+   the ticket's moment is its EARLIEST slip's. The same number on two
    delivery dates is two tickets (a seller restarting its numbering).
 3. Replacements, per format: a ticket that says « annule et remplace »
    supersedes every ticket sharing a reference with it that does not say so,
    whatever order they arrived in - the original re-sent after its
    replacement included. Among replacing tickets sharing a reference, the
    latest wins. A ticket with no reference is never superseded by one.
-4. Only for a format with NO reference motif: a replacing ticket supersedes
+4. Only for a format with NO reference pattern: a replacing ticket supersedes
    the single latest earlier ticket of the same delivery date and another
    number (two blank numbers are not « the same number »).
 
 **What a line is** (`classify`, `Classifier`): the first type, in (position,
-pk) order and active or not, one of whose motifs is found in the line's
-designation. A type whose motif no longer compiles, or runs out of the
+pk) order and active or not, one of whose patterns is found in the line's
+designation. A type whose pattern no longer compiles, or runs out of the
 page's time, stops the search for that line: it is « non classée : motif
 invalide / trop lent », never filed under the type after it.
 
-**What is compared** (`Board`): per (supplier, day). All the reprises of a
+**What is compared** (`Board`): per (supplier, day). All the pickups of a
 supplier on one day are ONE side, counts summed (« 2 reprises ce jour-là,
-additionnées »); the other side is every bon that counts, of that
-supplier's formats (active or not), delivered that day. A bon whose
-delivery date was not read is never paired. An unpaired bon within
-HINT_DAYS of an unpaired reprise day is offered to the NEAREST such day only
+additionnées »); the other side is every slip that counts, of that
+supplier's formats (active or not), delivered that day. A slip whose
+delivery date was not read is never paired. An unpaired slip within
+HINT_DAYS of an unpaired pickup day is offered to the NEAREST such day only
 (ties: the earlier), once.
 
 Status, the first that applies: no_supplier, no_format (the supplier has no
-format at all), waiting, to_check (a paired bon failed its reading or one
+format at all), waiting, to_check (a paired slip failed its reading or one
 of its checks, or a line could not be classified for want of time or of a
-valid motif), differs, same.
+valid pattern), differs, same.
 
 Every sentence here is a plain str (never a SafeString): templates escape
 them, and a type name is whatever somebody typed. Type names are shown
@@ -52,24 +52,23 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
-from datetime import timezone as dt_timezone
+from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.db.models import Q
 
 from returnables import patterns
 from returnables.models import Pickup, ReturnableType, Slip, SlipFormat, SlipLine
-from returnables.patterns import Budget, MotifError
+from returnables.patterns import Budget, PatternError
 
 CENT = Decimal("0.01")
-#: How far (in days) an unpaired bon is offered to a reprise day.
+#: How far (in days) an unpaired slip is offered to a pickup day.
 HINT_DAYS = 3
-#: The pickups loaded around a page's days: a hint's bon is within HINT_DAYS
-#: of the day, and its nearest rival day within HINT_DAYS of the bon.
+#: The pickups loaded around a page's days: a hint's slip is within HINT_DAYS
+#: of the day, and its nearest rival day within HINT_DAYS of the slip.
 _AROUND = 2 * HINT_DAYS
 
-_EPOCH = datetime(1970, 1, 1, tzinfo=dt_timezone.utc)
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 #: The reading's check listing the lines it could not read (reading.py).
 UNREAD_CHECK = "Aucune ligne ignorée"
@@ -105,13 +104,11 @@ def slip_label(number, delivery_date=None, *, with_date: bool = False, capital: 
 def counts_summary(counts: dict, types) -> str:
     """« Fûts 15 · Bouteilles CO2 1 »: each type's name as typed, then its
     number, in the types' order; a zero is left out. "" when nothing."""
-    return " \N{MIDDLE DOT} ".join(
-        f"{kind.name} {counts[kind.pk]}" for kind in _ordered(types) if counts.get(kind.pk)
-    )
+    return " \N{MIDDLE DOT} ".join(f"{kind.name} {counts[kind.pk]}" for kind in _ordered(types) if counts.get(kind.pk))
 
 
 def counts_of(pickup) -> dict:
-    """{type pk: quantity} of one reprise (its counts prefetched, or one
+    """{type pk: quantity} of one pickup (its counts prefetched, or one
     query)."""
     counts = defaultdict(int)
     for count in pickup.counts.all():
@@ -120,7 +117,7 @@ def counts_of(pickup) -> dict:
 
 
 def pickup_summary(pickup, types) -> str:
-    """« Fûts 15 · Bouteilles CO2 1 » for one reprise."""
+    """« Fûts 15 · Bouteilles CO2 1 » for one pickup."""
     return counts_summary(counts_of(pickup), types)
 
 
@@ -137,7 +134,7 @@ def shifted(day: date, days: int) -> date:
     """`day` moved by `days`, cut at the calendar's ends: a date a damaged
     archive brought in before « Données » refused it (0001-01-02,
     9999-12-31) is never an OverflowError - /consignes/ shows the newest
-    reprise first, so one such row made every drawing of it a 500."""
+    pickup first, so one such row made every drawing of it a 500."""
     try:
         return day + timedelta(days=days)
     except OverflowError:
@@ -174,14 +171,14 @@ STATUSES = {
     SAME: Status("conforme", "COMPLETE"),
 }
 
-# -- Bons, as the comparison sees them --------------------------------------------------------------------------------
+# -- Slips, as the comparison sees them -------------------------------------------------------------------------------
 
 
 @dataclass
 class SlipInfo:
-    """What the comparison and the invoice check need of a bon, read by ONE
+    """What the comparison and the invoice check need of a slip, read by ONE
     values() query (SlipIndex): no text, no file. `lines` is None until
-    loaded (SlipIndex.ensure_lines), then the bon's SlipLines in order."""
+    loaded (SlipIndex.ensure_lines), then the slip's SlipLines in order."""
 
     pk: int
     format_id: int
@@ -230,7 +227,9 @@ class SlipInfo:
             delivery_date=row.get("delivery_date"),
             printed_at=row.get("printed_at"),
             received_at=row.get("received_at"),
-            references=[value for value in references if isinstance(value, str)] if isinstance(references, list) else [],
+            references=[value for value in references if isinstance(value, str)]
+            if isinstance(references, list)
+            else [],
             replaces=bool(row.get("replaces")),
             read_error=row.get("read_error") or "",
             checks=list(checks) if isinstance(checks, list) else [],
@@ -245,7 +244,7 @@ SUPERSEDED_PILLS = {RESENT: "renvoyé", REPLACED: "annulé et remplacé"}
 
 @dataclass
 class Superseded:
-    """Why a bon does not count: `by` the bon that took its place, `final`
+    """Why a slip does not count: `by` the slip that took its place, `final`
     the one that counts in the end (a replacement can be replaced in turn).
     Unpacks as (by, reason)."""
 
@@ -263,7 +262,7 @@ class Superseded:
 
 
 class _Ticket:
-    """One ticket: a bon and its re-sends."""
+    """One ticket: a slip and its re-sends."""
 
     def __init__(self, slips):
         self.slips = sorted(slips, key=lambda info: info.key)
@@ -284,7 +283,7 @@ def _same_number(one: _Ticket, other: _Ticket) -> bool:
 
 
 def _supersede(infos, formats_without_references) -> dict:
-    """{pk: Superseded} over `infos` (every bon of the formats involved)."""
+    """{pk: Superseded} over `infos` (every slip of the formats involved)."""
     decided = {}
     by_format = defaultdict(list)
     for info in infos:
@@ -308,7 +307,9 @@ def _supersede(infos, formats_without_references) -> dict:
             for reference in ticket.references:
                 by_reference[reference].append(ticket)
         for ticket in tickets:
-            sharing = {id(other): other for ref in ticket.references for other in by_reference[ref] if other is not ticket}
+            sharing = {
+                id(other): other for ref in ticket.references for other in by_reference[ref] if other is not ticket
+            }
             rivals = [
                 other
                 for other in sharing.values()
@@ -354,9 +355,9 @@ def _supersede(infos, formats_without_references) -> dict:
 
 
 class SlipIndex:
-    """Every bon of some formats, read in ONE values() query: what decides
-    which bons count, and what the invoice check searches. Lines are loaded
-    on demand, in one query for all the bons asked (`ensure_lines`)."""
+    """Every slip of some formats, read in ONE values() query: what decides
+    which slips count, and what the invoice check searches. Lines are loaded
+    on demand, in one query for all the slips asked (`ensure_lines`)."""
 
     FIELDS = (
         "pk",
@@ -416,8 +417,8 @@ class SlipIndex:
 
 
 def effective_slips(slips, *, index: SlipIndex | None = None) -> tuple:
-    """(kept, superseded): `kept` the given bons that count, in their order;
-    `superseded` {pk: Superseded} over EVERY bon of their formats (one
+    """(kept, superseded): `kept` the given slips that count, in their order;
+    `superseded` {pk: Superseded} over EVERY slip of their formats (one
     values() query, unless `index` already holds them). Works on Slip rows
     and on SlipInfo alike."""
     slips = list(slips)
@@ -435,12 +436,12 @@ INVALID = "motif invalide"
 
 @dataclass(frozen=True)
 class Classification:
-    """A designation's type (None: none), the motif that found it, or why it
+    """A designation's type (None: none), the pattern that found it, or why it
     could not be classified (`problem`: SLOW or INVALID, and the type whose
-    motif failed)."""
+    pattern failed)."""
 
     returnable_type: object = None
-    motif: str = ""
+    pattern: str = ""
     problem: str = ""
     type_in_error: object = None
 
@@ -457,41 +458,41 @@ def _ordered(types) -> list:
     return sorted(types, key=lambda kind: (kind.position, kind.pk))
 
 
-def _type_motifs(kind) -> list:
+def _type_patterns(kind) -> list:
     return patterns.compile_field(patterns.TYPE_FIELD, getattr(kind, "slip_patterns", "") or "")
 
 
-def _classification(designation: str, types, motifs_of, budget) -> Classification:
+def _classification(designation: str, types, patterns_of, budget) -> Classification:
     for kind in types:
         try:
-            motifs = motifs_of(kind)
-        except MotifError:
+            compiled_patterns = patterns_of(kind)
+        except PatternError:
             return Classification(problem=INVALID, type_in_error=kind)
-        for motif in motifs:
+        for compiled in compiled_patterns:
             try:
-                found = patterns.search(motif, designation, budget)
-            except MotifError:
+                found = patterns.search(compiled, designation, budget)
+            except PatternError:
                 return Classification(problem=SLOW, type_in_error=kind)
             if found is not None:
-                return Classification(kind, motif=motif.pattern)
+                return Classification(kind, pattern=compiled.pattern)
     return Classification()
 
 
 def classify(designation: str, types, budget, memo: dict):
-    """The type of a bon's line (None: no type), memoised in `memo` per
+    """The type of a slip's line (None: no type), memoised in `memo` per
     designation: the first type in (position, pk) order - active or not -
-    one of whose motifs is found in it. A motif that fails or runs out of
+    one of whose patterns is found in it. A pattern that fails or runs out of
     `budget` leaves it unclassified (`memo[designation].problem` says why)."""
     if designation not in memo:
-        memo[designation] = _classification(designation, _ordered(types), _type_motifs, budget)
+        memo[designation] = _classification(designation, _ordered(types), _type_patterns, budget)
     return memo[designation].returnable_type
 
 
 class Classifier:
-    """One page's classification: the types' motifs compiled once, one
+    """One page's classification: the types' patterns compiled once, one
     budget (PAGE_SECONDS, started at the first line classified, not when the
     page is set up), one memo per designation. `errors` {type pk: message}
-    names the types whose motifs no longer compile - the page says « motif
+    names the types whose patterns no longer compile - the page says « motif
     invalide : … — corrigez-le »."""
 
     def __init__(self, types, budget=None):
@@ -499,11 +500,11 @@ class Classifier:
         self._budget = budget
         self.memo = {}
         self.errors = {}
-        self._motifs = {}
+        self._patterns = {}
         for kind in self.types:
             try:
-                self._motifs[kind.pk] = _type_motifs(kind)
-            except MotifError as error:
+                self._patterns[kind.pk] = _type_patterns(kind)
+            except PatternError as error:
                 self.errors[kind.pk] = error.message
 
     @property
@@ -512,14 +513,14 @@ class Classifier:
             self._budget = Budget(patterns.PAGE_SECONDS)
         return self._budget
 
-    def _motifs_of(self, kind) -> list:
+    def _patterns_of(self, kind) -> list:
         if kind.pk in self.errors:
-            raise MotifError(self.errors[kind.pk])
-        return self._motifs.get(kind.pk, [])
+            raise PatternError(self.errors[kind.pk])
+        return self._patterns.get(kind.pk, [])
 
     def classify(self, designation: str) -> Classification:
         if designation not in self.memo:
-            self.memo[designation] = _classification(designation, self.types, self._motifs_of, self.budget)
+            self.memo[designation] = _classification(designation, self.types, self._patterns_of, self.budget)
         return self.memo[designation]
 
     def type_of(self, designation: str):
@@ -559,9 +560,9 @@ def _unit(lines) -> Decimal | None:
 
 @dataclass
 class Row:
-    """One type: counted on the reprise(s), on the bon(s) (|Σ quantity|:
+    """One type: counted on the pickup(s), on the slip(s) (|Σ quantity|:
     summed first, then its absolute value - a correction line « -1 »
-    subtracts), the unit price when the bons agree on one."""
+    subtracts), the unit price when the slips agree on one."""
 
     returnable_type: object
     counted: int
@@ -575,7 +576,7 @@ class Row:
 
     @property
     def gap(self) -> int:
-        """On the bon less counted: negative, some are missing on the bon."""
+        """On the slip less counted: negative, some are missing on the slip."""
         return self.on_slips - self.counted
 
     @property
@@ -604,7 +605,7 @@ class Row:
 
 @dataclass
 class Unclassified:
-    """Lines of the bon(s) of one designation that no type took: `problem`
+    """Lines of the slip(s) of one designation that no type took: `problem`
     is "" (no type recognises it), SLOW or INVALID (`type_in_error`)."""
 
     designation: str
@@ -637,7 +638,7 @@ class Comparison:
 
     @property
     def incomplete(self) -> list:
-        """The lines left unclassified for want of time or of a valid motif."""
+        """The lines left unclassified for want of time or of a valid pattern."""
         return [group for group in self.unclassified if group.problem]
 
     @property
@@ -646,7 +647,7 @@ class Comparison:
 
 
 def compare(counts: dict, slip_lines, types, *, classifier: Classifier | None = None) -> Comparison:
-    """Counts {type pk: number} against bon lines (anything with
+    """Counts {type pk: number} against slip lines (anything with
     designation, quantity, unit_amount, amount): one Row per type present on
     either side, in the types' order, plus the lines no type took."""
     classifier = classifier or Classifier(types)
@@ -686,12 +687,12 @@ def compare(counts: dict, slip_lines, types, *, classifier: Classifier | None = 
 
 @dataclass
 class Hint:
-    """An unpaired bon offered to this reprise day: « Mettre la reprise au
+    """An unpaired slip offered to this pickup day: « Mettre la reprise au
     <date> »."""
 
     slip: SlipInfo
     date: date
-    days: int  # the bon's day less the reprise's
+    days: int  # the slip's day less the pickup's
 
     @property
     def sentence(self) -> str:
@@ -704,7 +705,7 @@ def _unread_count(check: dict) -> int | None:
 
 
 def slip_problems(info: SlipInfo) -> list:
-    """Why a paired bon makes the comparison « à vérifier »."""
+    """Why a paired slip makes the comparison « à vérifier »."""
     label = slip_label(info.number, info.delivery_date)
     if info.read_error:
         return [f"Le {label} n'a pas pu être lu ({info.read_error.rstrip('.')}) : comparaison impossible."]
@@ -746,8 +747,8 @@ def _incomplete_reasons(comparison: Comparison) -> list:
 
 @dataclass
 class DayComparison:
-    """A supplier's reprises of one day against the bons that count for that
-    day. `comparison` is None when there is no bon to compare with."""
+    """A supplier's pickups of one day against the slips that count for that
+    day. `comparison` is None when there is no slip to compare with."""
 
     supplier: object
     date: date
@@ -803,8 +804,8 @@ class DayComparison:
 
 @dataclass
 class SlipState:
-    """How the « Bons reçus » table says a bon: its pill and why. `day` is
-    the comparison it is part of (paired); `hint_date` the reprise day it is
+    """How the « Bons reçus » table says a slip: its pill and why. `day` is
+    the comparison it is part of (paired); `hint_date` the pickup day it is
     offered to (unpaired)."""
 
     key: str
@@ -818,16 +819,16 @@ class SlipState:
 
 class Board:
     """The comparison for one page, loaded in a FIXED number of queries
-    whatever it shows (types, formats, every bon of those formats, the
-    reprises around the days shown and their counts, the lines needed):
+    whatever it shows (types, formats, every slip of those formats, the
+    pickups around the days shown and their counts, the lines needed):
 
-        board = Board.load(pickups=reprises, slips=bons)
-        board.day(reprise)        # DayComparison
-        board.slip_state(bon)     # SlipState
+        board = Board.load(pickups=pickups, slips=slips)
+        board.day(pickup)         # DayComparison
+        board.slip_state(slip)    # SlipState
         board.classify(designation)
         board.index               # for invoice_check.check_many(..., index=board.index)
 
-    Only the reprises and bons handed to `load` (and their days) can be
+    Only the pickups and slips handed to `load` (and their days) can be
     asked about."""
 
     def __init__(self):
@@ -888,19 +889,19 @@ class Board:
         board.units = dict(units)
 
         needed = {slip.pk for slip in slips}
-        for (supplier_id, day), _pickups in board.units.items():
+        for supplier_id, day in board.units:
             needed.update(info.pk for info in board.effective_on(supplier_id, day))
         board.index.ensure_lines(needed)
         return board
 
-    # -- the bons --
+    # -- the slips --
 
     @property
     def superseded(self) -> dict:
         return self.index.superseded
 
     def effective_on(self, supplier_id, day) -> list:
-        """The bons that count, of `supplier_id`'s formats, delivered `day`."""
+        """The slips that count, of `supplier_id`'s formats, delivered `day`."""
         if self._by_day is None:
             by_day = defaultdict(list)
             for info in self.index.effective():
@@ -916,7 +917,7 @@ class Board:
 
     @property
     def type_errors(self) -> list:
-        """[(type, message)] of the types whose motifs no longer compile."""
+        """[(type, message)] of the types whose patterns no longer compile."""
         return [(kind, self.classifier.errors[kind.pk]) for kind in self.types if kind.pk in self.classifier.errors]
 
     # -- the days --
@@ -927,8 +928,8 @@ class Board:
         return supplier_id in self.suppliers and self.window is not None and self.window[0] <= day <= self.window[1]
 
     def day(self, pickup) -> DayComparison:
-        """The comparison `pickup` is part of: every reprise of its supplier
-        that day, against the bons that count for that day."""
+        """The comparison `pickup` is part of: every pickup of its supplier
+        that day, against the slips that count for that day."""
         key = (pickup.supplier_id, pickup.date)
         if not self._loaded(*key):
             raise LookupError(f"La reprise {pickup.pk} n'a pas été chargée dans ce Board.")
@@ -967,8 +968,8 @@ class Board:
         return DayComparison(status=status, slips=slips, reasons=reasons, comparison=comparison, **base)
 
     def _hints_of(self, supplier_id) -> dict:
-        """{reprise day: [Hint]} for one supplier: each unpaired bon within
-        HINT_DAYS of an unpaired reprise day is offered to the nearest one
+        """{pickup day: [Hint]} for one supplier: each unpaired slip within
+        HINT_DAYS of an unpaired pickup day is offered to the nearest one
         (ties: the earlier) - once."""
         if supplier_id in self._hints:
             return self._hints[supplier_id]
@@ -976,7 +977,7 @@ class Board:
         unpaired_days = sorted(day for day in days_with_pickups if not self.effective_on(supplier_id, day))
         hints = defaultdict(list)
         if unpaired_days and self.window is not None:
-            # Only a bon whose every rival day was loaded: within HINT_DAYS
+            # Only a slip whose every rival day was loaded: within HINT_DAYS
             # of the days the page asked about.
             first = shifted(self.window[0], HINT_DAYS)
             last = shifted(self.window[1], -HINT_DAYS)
@@ -995,7 +996,7 @@ class Board:
         return self._hints[supplier_id]
 
     def slip_state(self, slip) -> SlipState:
-        """What the « Bons reçus » table says of a bon handed to `load`."""
+        """What the « Bons reçus » table says of a slip handed to `load`."""
         info = self.index.infos.get(slip.pk)
         if info is None:
             raise LookupError(f"Le bon {slip.pk} n'a pas été chargé dans ce Board.")
@@ -1019,14 +1020,19 @@ class Board:
             day = self.day(pickups[0])
             return SlipState("paired", day.pill, day.css, day.reasons[0] if day.reasons else "", day=day)
         hint_date = next(
-            (day for day, hints in self._hints_of(info.supplier_id).items() for hint in hints if hint.slip.pk == info.pk),
+            (
+                day
+                for day, hints in self._hints_of(info.supplier_id).items()
+                for hint in hints
+                if hint.slip.pk == info.pk
+            ),
             None,
         )
         self.index.ensure_lines([info.pk])
         if not info.lines:
-            # No line may be a part read empty - or rows the line motif no
+            # No line may be a part read empty - or rows the line pattern no
             # longer reads (a layout change): then a check failed, and
-            # « aucun vide repris » would say the opposite of the bon.
+            # « aucun vide repris » would say the opposite of the slip.
             problems = slip_problems(info)
             if problems:
                 return SlipState(TO_CHECK, STATUSES[TO_CHECK].pill, "pending", problems[0], hint_date=hint_date)
@@ -1043,8 +1049,8 @@ class Board:
 
 
 def latest_note() -> str:
-    """The latest reprise's comparison in one sentence ("" when there is no
-    reprise) - what the gather writes as its progress NOTE, never as an
+    """The latest pickup's comparison in one sentence ("" when there is no
+    pickup) - what the gather writes as its progress NOTE, never as an
     error."""
     pickup = Pickup.objects.order_by("-date", "-pk").first()
     if pickup is None:

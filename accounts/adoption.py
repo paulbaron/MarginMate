@@ -1,5 +1,5 @@
 """Adopting a database of the old single mode (one db.sqlite3, no login)
-into an espace (`manage.py adopt_database`) - a ONE-OFF. The owner's own
+into a tenant (`manage.py adopt_database`) - a ONE-OFF. The owner's own
 was adopted on 28/09/2026, before single mode was removed (29/09); the
 command stays for a copy of an old installation still to bring in: its
 source is only ever read, whatever the app's settings are today.
@@ -7,7 +7,7 @@ source is only ever read, whatever the app's settings are today.
 What it does, in order (`adopt`), after checking everything first (`plan`,
 which is also the whole of a dry run and writes nothing):
 
-1. an espace for him - a Tenant with ``uses_server_integrations`` (his .env
+1. a tenant for him - a Tenant with ``uses_server_integrations`` (his .env
    accounts: Metro, the mailbox, L'Addition, the AI, the portals), CLOSED
    until the end, so nothing half-made can be reached;
 2. his database COPIED into it with SQLite's backup API, read through a
@@ -19,28 +19,28 @@ which is also the whole of a dry run and writes nothing):
    log, content types, the accounts app's own), then the copy VACUUMed so
    their bytes go too: they live in the accounts database now. Kept, the
    copy would carry password hashes and live session keys into every safety
-   backup of the espace, and differ from
-   every espace made from the template - which has none of these tables
+   backup of the tenant, and differ from
+   every tenant made from the template - which has none of these tables
    (their migrations are recorded there all the same, as no-ops, and so they
    stay recorded in the copy). His logins are NOT copied: the one given by
    --email must already exist in the accounts database;
-4. his folders copied into the espace's (media, private, downloads,
+4. his folders copied into the tenant's (media, private, downloads,
    backups); the Tickets' waiting uploads (media/receipt_batches) go to
-   imports/, where an espace keeps them (accounts.paths.imports_dir);
+   imports/, where a tenant keeps them (accounts.paths.imports_dir);
 5. `migrate` bound to the copy - its data migrations write into it;
 6. the signing links' index (accounts.links) from the copied requests: EVERY
    request's link, whatever its state - the index holds exactly the hashes
-   the espace's requests hold (`staff.signature_requests.index_links`), and
+   the tenant's requests hold (`staff.signature_requests.index_links`), and
    a link leaves it only with its request (deleted or purged). So a link he
    already sent still opens, and a cancelled or superseded one still says
    so (410), as it did before the adoption, rather than « lien inconnu »
    (404);
-7. his membership (owner), and the espace opened.
+7. his membership (owner), and the tenant opened.
 
-Refused when another open espace already uses the server's accounts: there
-is one Metro account and one pause (accounts.checks.one_owner_espace).
+Refused when another open tenant already uses the server's accounts: there
+is one Metro account and one pause (accounts.checks.one_owner_tenant).
 
-Anything failing removes the espace's folder and its row: a second run
+Anything failing removes the tenant's folder and its row: a second run
 starts from nothing.
 """
 
@@ -61,12 +61,12 @@ from .router import ACCOUNTS_ALIAS, ACCOUNTS_APPS
 from .tenancy import bound_tenant
 from .users import normalize_email, user_for_email
 
-#: The folders an adoption copies, by option: each lands in the espace's
+#: The folders an adoption copies, by option: each lands in the tenant's
 #: folder of the same name (accounts.paths).
 FOLDERS = (paths.MEDIA, paths.PRIVATE, paths.DOWNLOADS, paths.BACKUPS)
 #: invoices.receipt_batches.STAGING_DIR (a test keeps the two equal): the
 #: Tickets' uploads waiting for their import, under media in a single-mode
-#: installation, under imports/ in an espace.
+#: installation, under imports/ in a tenant.
 RECEIPT_BATCHES = "receipt_batches"
 
 
@@ -158,8 +158,8 @@ def _folder_stats(copy: FolderCopy) -> FolderCopy:
 
 def _source_facts(source: Path) -> dict:
     """What the source holds, read through a read-only connection."""
-    from invoices.models import Invoice, Supplier
     from bank.models import BankTransaction
+    from invoices.models import Invoice, Supplier
     from recipes.models import Recipe
     from staff.models import Employee, SignatureRequest
 
@@ -200,7 +200,7 @@ def _source_facts(source: Path) -> dict:
 
 def _pending(applied: set) -> list[str]:
     """The business migrations the copy still needs (the central apps'
-    are recorded as no-ops in an espace: the router keeps them elsewhere)."""
+    are recorded as no-ops in a tenant: the router keeps them elsewhere)."""
     from django.db.migrations.loader import MigrationLoader
 
     graph = MigrationLoader(None, ignore_no_migrations=True).graph
@@ -239,9 +239,9 @@ def plan(*, email: str, name: str, source, folders: dict | None = None, leave_cu
             )
         leaving.append(tenant)
 
-    # One Metro account, one pause: a second espace using the server's
+    # One Metro account, one pause: a second tenant using the server's
     # accounts would sign in to Metro on a pause of its own
-    # (accounts.checks.one_owner_espace refuses to start with two).
+    # (accounts.checks.one_owner_tenant refuses to start with two).
     owners = Tenant.objects.filter(is_active=True, uses_server_integrations=True).exclude(
         pk__in=[tenant.pk for tenant in leaving]
     )
@@ -294,20 +294,27 @@ def describe(plan: Plan) -> list[str]:
     """What the plan does, in French, a line each."""
     lines = [
         f"Base d'origine : {plan.source} ({_megabytes(plan.size)}) - lue seulement, jamais modifiée ni déplacée.",
-        f"Compte : {plan.user.get_username()}{' (superutilisateur)' if plan.user.is_superuser else ''}, "
-        "propriétaire du nouvel espace.",
-        f"Nouvel espace : « {plan.name} », avec les accès du serveur (Metro, boîte aux lettres, L'Addition, "
-        "analyse IA, portails du fichier .env).",
+        (
+            f"Compte : {plan.user.get_username()}{' (superutilisateur)' if plan.user.is_superuser else ''}, "
+            "propriétaire du nouvel espace."
+        ),
+        (
+            f"Nouvel espace : « {plan.name} », avec les accès du serveur (Metro, boîte aux lettres, L'Addition, "
+            "analyse IA, portails du fichier .env)."
+        ),
     ]
     for tenant in plan.leaving:
-        lines.append(f"Espace actuel du compte fermé (--leave-current), ses fichiers gardés : « {tenant.name} » "
-                     f"(dossier {tenant.dir_name}).")
+        lines.append(
+            f"Espace actuel du compte fermé (--leave-current), ses fichiers gardés : « {tenant.name} » "
+            f"(dossier {tenant.dir_name})."
+        )
     held = ", ".join(f"{number} {label}" for number, label in plan.counts if number)
     lines.append(f"Contenu : {held or 'aucune donnée'}.")
     if plan.central_tables:
         lines.append(
             "Tables des comptes retirées de la COPIE (elles vivent dans la base des comptes) : "
-            + ", ".join(plan.central_tables) + "."
+            + ", ".join(plan.central_tables)
+            + "."
         )
     if plan.source_logins:
         lines.append(
@@ -315,9 +322,7 @@ def describe(plan: Plan) -> list[str]:
             f"{plan.user.get_username()} entre dans l'espace."
         )
     lines.append(f"Liens de signature à indexer : {plan.links}.")
-    lines.append(
-        "Migrations à appliquer à la copie : " + (", ".join(plan.pending) if plan.pending else "aucune") + "."
-    )
+    lines.append("Migrations à appliquer à la copie : " + (", ".join(plan.pending) if plan.pending else "aucune") + ".")
     if not plan.folders:
         lines.append("Dossiers : aucun (--media, --private, --downloads, --backups).")
     for copy in plan.folders:
@@ -332,10 +337,10 @@ def describe(plan: Plan) -> list[str]:
 
 
 def _copy_folder(copy: FolderCopy, tenant) -> None:
-    espace = paths.tenant_dir(tenant)
+    tenant_dir = paths.tenant_dir(tenant)
     for entry in copy.source.iterdir():
         kind = paths.IMPORTS if copy.option == paths.MEDIA and entry.name == RECEIPT_BATCHES else copy.option
-        target = espace / kind / entry.name
+        target = tenant_dir / kind / entry.name
         if entry.is_dir():
             shutil.copytree(entry, target, dirs_exist_ok=True)
         else:
@@ -371,7 +376,7 @@ def _check_copy(database: Path) -> None:
 
 
 def adopt(plan: Plan) -> Tenant:
-    """Do what `plan` says (see the module's docstring). Returns the espace,
+    """Do what `plan` says (see the module's docstring). Returns the tenant,
     open. On failure, nothing is left: no folder, no row."""
     from staff.models import SignatureRequest
 
@@ -399,7 +404,9 @@ def adopt(plan: Plan) -> Tenant:
             # Every request's link, whatever its state (the module's docstring).
             hashes = list(SignatureRequest.objects.values_list("token_hash", flat=True))
         with transaction.atomic(using=ACCOUNTS_ALIAS):
-            SigningLink.objects.bulk_create([SigningLink(token_hash=token_hash, tenant=tenant) for token_hash in hashes])
+            SigningLink.objects.bulk_create(
+                [SigningLink(token_hash=token_hash, tenant=tenant) for token_hash in hashes]
+            )
             for old in plan.leaving:
                 Membership.objects.filter(user=plan.user, tenant=old).delete()
                 Tenant.objects.filter(pk=old.pk).update(is_active=False)

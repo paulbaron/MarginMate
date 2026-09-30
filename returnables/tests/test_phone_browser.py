@@ -13,9 +13,9 @@ see.
   what is kept is what the server saves.
 * **The keypad's key**: Enter in a count (Android's « next » / « done »)
   moves to the next count, closes the keypad on the last, and never sends
-  the reprise half counted.
+  the pickup half counted.
 * **The draft**: a count typed and the tab lost comes back, keyed by the
-  espace, and is forgotten once the reprise is saved; a note restored is
+  tenant, and is forgotten once the pickup is saved; a note restored is
   said and shown; « Effacer » puts back today and « Repris par ».
 * **The stale tab**: shown again the next day, the date moves to today.
 * **Thumb-sized**: every small button, « Effacer » and a photo's « Retirer »
@@ -53,9 +53,9 @@ WIDTH, HEIGHT = 375, 667
 
 
 def draft_key() -> str:
-    """The reprise draft's key in the test espace: returnables.js builds it
-    from the espace's scope (base.html's <body data-tenant>,
-    accounts.tenancy.storage_scope - never the espace's id since 29/09)."""
+    """The pickup draft's key in the test tenant: returnables.js builds it
+    from the tenant's scope (base.html's <body data-tenant>,
+    accounts.tenancy.storage_scope - never the tenant's id since 29/09)."""
     from accounts.tenancy import storage_scope
     from tests.runner import TEST_TENANT
 
@@ -67,7 +67,7 @@ LONG_NAME = "Bon_de_livraison_EXEMPLE_20310312_numero_000123_exemplaire_A.pdf"
 
 
 @tag("browser")
-class ConsignesOnAPhoneInBrowserTests(StaticLiveServerTestCase):
+class ReturnablesOnAPhoneInBrowserTests(StaticLiveServerTestCase):
     # Its flush then fires no post_migrate (tests/test_transaction_cases.py).
     serialized_rollback = True
 
@@ -92,7 +92,8 @@ class ConsignesOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         super().setUp()
         log_in_the_browser(self.driver, self.live_server_url)
         self.driver.execute_cdp_cmd(
-            "Emulation.setDeviceMetricsOverride", {"width": WIDTH, "height": HEIGHT, "deviceScaleFactor": 2, "mobile": True}
+            "Emulation.setDeviceMetricsOverride",
+            {"width": WIDTH, "height": HEIGHT, "deviceScaleFactor": 2, "mobile": True},
         )
         self.driver.execute_cdp_cmd("Emulation.setTouchEmulationEnabled", {"enabled": True, "maxTouchPoints": 5})
         self.addCleanup(self.driver.execute_cdp_cmd, "Emulation.clearDeviceMetricsOverride", {})
@@ -135,19 +136,27 @@ class ConsignesOnAPhoneInBrowserTests(StaticLiveServerTestCase):
 
     def touch(self, x, y):
         """A finger's tap at (x, y), whatever is there."""
-        self.driver.execute_cdp_cmd("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]})
+        self.driver.execute_cdp_cmd(
+            "Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]}
+        )
         self.driver.execute_cdp_cmd("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
 
     def drag(self, x, y, to_y, steps=12):
         """A finger put down at (x, y), dragged to (x, to_y) and held there
         before it lifts: no fling goes on scrolling after it (a fling still
         running takes the next tap to stop itself)."""
-        self.driver.execute_cdp_cmd("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]})
+        self.driver.execute_cdp_cmd(
+            "Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]}
+        )
         for step in range(1, steps + 1):
             at = y + (to_y - y) * step / steps
-            self.driver.execute_cdp_cmd("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": x, "y": at}]})
+            self.driver.execute_cdp_cmd(
+                "Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": x, "y": at}]}
+            )
         time.sleep(0.3)
-        self.driver.execute_cdp_cmd("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": x, "y": to_y}]})
+        self.driver.execute_cdp_cmd(
+            "Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": x, "y": to_y}]}
+        )
         self.driver.execute_cdp_cmd("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
 
     def scrolled_still(self):
@@ -174,7 +183,8 @@ class ConsignesOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         return self.script(
             "var e = document.elementFromPoint(arguments[0], arguments[1]);"
             "return e ? (e.getAttribute('name') || e.className) : null;",
-            x, y,
+            x,
+            y,
         )
 
     def open_the_menu(self):
@@ -240,16 +250,18 @@ class ConsignesOnAPhoneInBrowserTests(StaticLiveServerTestCase):
             self.assertGreaterEqual(other, 44)
         smallest = self.script(
             "return Math.min.apply(null, Array.from(document.querySelectorAll("
-            "'.consignes-page input:not([type=hidden]), .consignes-page select, .consignes-page textarea'))"
+            "'.returnables-page input:not([type=hidden]), .returnables-page select, .returnables-page textarea'))"
             ".map(function (f) { return parseFloat(getComputedStyle(f).fontSize); }));"
         )
         self.assertGreaterEqual(smallest, 16)
         # It scrolls away with the page (not sticky), and stays the box its
         # menu and veil are drawn in: relative, not static (30/09) - static,
         # its z-index went and the veil dropped behind the page.
-        self.assertEqual(self.script("return getComputedStyle(document.querySelector('.topbar')).position;"), "relative")
+        self.assertEqual(
+            self.script("return getComputedStyle(document.querySelector('.topbar')).position;"), "relative"
+        )
         # And the page leaves it no room above what it scrolls to: the bar is
-        # not there once scrolled. html:has(.consignes-page) weighs what the
+        # not there once scrolled. html:has(.returnables-page) weighs what the
         # folded bar's html.topbar-menu-ready does - coming later is what
         # makes 0 win over 6rem, here only.
         self.assertTrue(self.script("return document.documentElement.classList.contains('topbar-menu-ready');"))
@@ -266,7 +278,8 @@ class ConsignesOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         lie under the veil below the open menu."""
         tall = 812
         self.driver.execute_cdp_cmd(
-            "Emulation.setDeviceMetricsOverride", {"width": WIDTH, "height": tall, "deviceScaleFactor": 2, "mobile": True}
+            "Emulation.setDeviceMetricsOverride",
+            {"width": WIDTH, "height": tall, "deviceScaleFactor": 2, "mobile": True},
         )
         self.open("/consignes/")
         self.script("window.pageMark = 'toujours là';")
@@ -285,7 +298,7 @@ class ConsignesOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         self.assertEqual(self.under(x, y), "topbar", "the veil is over the count")
         self.touch(x, y)
         self.wait_for(lambda: self.menu_state() == "false")
-        time.sleep(0.3)   # a focus, a keypad or a page left would be there by now
+        time.sleep(0.3)  # a focus, a keypad or a page left would be there by now
         self.assertFalse(self.script("return document.activeElement.matches('input, select, textarea');"))
         self.assertEqual(self.value(name), "")
         self.assertEqual(self.script("return window.pageMark;"), "toujours là")
@@ -338,9 +351,9 @@ class ConsignesOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         self.element(plus).click()
         self.assertEqual(self.value(self.kegs), "9999")
 
-    def test_the_keypad_s_key_moves_to_the_next_count_and_never_sends_the_reprise(self):
+    def test_the_keypad_s_key_moves_to_the_next_count_and_never_sends_the_pickup(self):
         """Android's keypad key is an Enter: in a field it sent the form,
-        the reprise saved with the kegs typed and nothing else."""
+        the pickup saved with the kegs typed and nothing else."""
         from selenium.webdriver.common.keys import Keys
 
         self.script("window.pageMark = 'toujours là';")
@@ -349,7 +362,7 @@ class ConsignesOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         field = self.element(f"[name='{self.kegs}']")
         field.send_keys("15")
         field.send_keys(Keys.ENTER)
-        time.sleep(0.5)   # a post, had one been sent, would have landed by now
+        time.sleep(0.5)  # a post, had one been sent, would have landed by now
         self.assertFalse(Pickup.objects.exists())
         self.assertEqual(self.script("return window.pageMark;"), "toujours là")
         self.wait_for(lambda: self.script("return document.activeElement.name;") == crates)
@@ -358,7 +371,7 @@ class ConsignesOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         self.element(f"[name='{co2}']").send_keys("1", Keys.ENTER)
         # The last count's key closes the keypad: nothing focused any more.
         self.wait_for(lambda: self.script("return document.activeElement === document.body;"))
-        time.sleep(0.5)   # a post, had one been sent, would have landed by now
+        time.sleep(0.5)  # a post, had one been sent, would have landed by now
         self.assertEqual(self.script("return window.pageMark;"), "toujours là")
         self.assertEqual(self.script("return location.pathname + location.search;"), "/consignes/")
         self.assertEqual((self.value(self.kegs), self.value(crates), self.value(co2)), ("15", "2", "1"))
@@ -371,7 +384,9 @@ class ConsignesOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         capture.send_keys(self.jpeg("IMG_0001.jpg"))
         self.wait_for(lambda: self.script("return document.querySelectorAll('[data-photo-previews] li').length;") == 1)
         self.assertEqual(self.script("return document.querySelectorAll('[data-photo-inputs] input').length;"), 1)
-        fresh = self.script("return document.querySelector('[data-photo-slot] input[data-photo-capture]').files.length;")
+        fresh = self.script(
+            "return document.querySelector('[data-photo-slot] input[data-photo-capture]').files.length;"
+        )
         self.assertEqual(fresh, 0)
         self.element("input[data-photo-capture]").send_keys(self.jpeg("IMG_0002.jpg"))
         self.wait_for(lambda: self.script("return document.querySelectorAll('[data-photo-previews] li').length;") == 2)
@@ -379,8 +394,10 @@ class ConsignesOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         self.script("document.querySelector('[data-photo-previews] li button').click();")
         self.assertEqual(self.script("return document.querySelectorAll('[data-photo-previews] li').length;"), 1)
         self.assertEqual(self.script("return document.querySelectorAll('[data-photo-inputs] input').length;"), 1)
-        self.script("document.querySelector('.reprise-submit').click();")
-        self.wait_for(lambda: "enregistree" not in self.script("return location.search;") and PickupPhoto.objects.exists())
+        self.script("document.querySelector('.pickup-submit').click();")
+        self.wait_for(
+            lambda: "enregistree" not in self.script("return location.search;") and PickupPhoto.objects.exists()
+        )
         self.assertEqual(PickupPhoto.objects.count(), 1)
         self.assertEqual(Pickup.objects.count(), 1)
 
@@ -402,13 +419,18 @@ class ConsignesOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         self.assertEqual(self.value(self.kegs), "15")
         notice = self.script("return document.querySelector('[data-draft-notice]').textContent;")
         self.assertEqual(notice, "Comptage non envoyé retrouvé (Fûts 15) — Effacer")
-        self.script("document.querySelector('.reprise-submit').click();")
-        self.wait_for(lambda: Pickup.objects.exists() and self.script("return document.readyState") == "complete"
-                      and self.script("return location.search;") == "")
+        self.script("document.querySelector('.pickup-submit').click();")
+        self.wait_for(
+            lambda: (
+                Pickup.objects.exists()
+                and self.script("return document.readyState") == "complete"
+                and self.script("return location.search;") == ""
+            )
+        )
         self.assertIsNone(self.script("return localStorage.getItem(arguments[0]);", key))
         self.assertEqual(self.value(self.kegs), "")
 
-    def test_effacer_forgets_the_draft(self):
+    def test_clear_forgets_the_draft(self):
         self.element(f"[name='{self.kegs}']").send_keys("7")
         self.assertIsNotNone(self.script("return localStorage.getItem(arguments[0]);", draft_key()))
         self.open("/consignes/")
@@ -416,10 +438,10 @@ class ConsignesOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         self.assertEqual(self.value(self.kegs), "")
         self.assertIsNone(self.script("return localStorage.getItem(arguments[0]);", draft_key()))
 
-    def test_effacer_puts_back_today_and_repris_par(self):
+    def test_clear_puts_back_today_and_taken_back_by(self):
         """A count typed yesterday evening, offered this morning, sets the
         day and « Repris par » to the draft's: « Effacer » puts back what the
-        page offers - else today's reprise was saved dated yesterday."""
+        page offers - else today's pickup was saved dated yesterday."""
         today = self.today()
         yesterday = (date.fromisoformat(today) - timedelta(days=1)).isoformat()
         offered = self.offered_supplier()
@@ -441,12 +463,12 @@ class ConsignesOnAPhoneInBrowserTests(StaticLiveServerTestCase):
 
     def test_a_note_restored_is_said_and_shown(self):
         """The note sits in the folded part: restored unseen, yesterday's
-        note was saved with the next reprise."""
+        note was saved with the next pickup."""
         self.draft(date=self.today(), supplier=self.offered_supplier(), note="fût abîmé")
         self.open("/consignes/")
         notice = self.script("return document.querySelector('[data-draft-notice]').textContent;")
         self.assertEqual(notice, "Comptage non envoyé retrouvé (une note) — Effacer")
-        self.assertTrue(self.script("return document.querySelector('.reprise-details').open;"))
+        self.assertTrue(self.script("return document.querySelector('.pickup-details').open;"))
         self.assertEqual(self.value("note"), "fût abîmé")
         # A draft whose counts' types left the form says nothing in brackets.
         self.draft(date=self.today(), counts={"nombre-999999": "4"})
@@ -466,7 +488,7 @@ class ConsignesOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         day = "/".join(reversed(today.split("-")))
         self.assertEqual(self.script("return document.querySelector('[data-summary-date]').textContent;"), day)
 
-    def test_the_reprise_s_page_fits_a_phone_too(self):
+    def test_the_pickup_s_page_fits_a_phone_too(self):
         from returnables.tests.support import make_pickup, make_slip
 
         pickup = make_pickup(photos=2)
@@ -496,7 +518,7 @@ class ConsignesOnAPhoneInBrowserTests(StaticLiveServerTestCase):
                 self.assertTrue(found)
                 self.assertTrue(all(height >= 44 for height in found.values()), found)
 
-        # A reprise's page: its photos (taken the day before), a bon of the
+        # A pickup's page: its photos (taken the day before), a slip of the
         # next day - « Retirer… », « Dater la reprise du … », « Mettre la
         # reprise au … ».
         evening_before = timezone.make_aware(datetime.combine(DELIVERY_DAY - timedelta(days=1), datetime.min.time()))
@@ -507,7 +529,7 @@ class ConsignesOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         self.assertEqual(len(self.script("return document.querySelectorAll('.photo-remove');")), 2)
         self.assertTrue(all(height >= 44 for height in summaries.values()), summaries)
         self.script("document.querySelectorAll('.photo-remove').forEach(function (d) { d.open = true; });")
-        small = self.heights(".consignes-page .btn-small")
+        small = self.heights(".returnables-page .btn-small")
         for label in ("Retirer", "Dater la reprise du 09/02/2026", "Mettre la reprise au 11/02/2026"):
             with self.subTest(button=label):
                 self.assertIn(label, small)
@@ -515,7 +537,7 @@ class ConsignesOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         self.assertLessEqual(self.script("return document.documentElement.scrollWidth;"), WIDTH)
 
     def test_a_long_file_name_never_scrolls_the_page_sideways(self):
-        """A file name has no space to break at: printed in a bon's subtitle
+        """A file name has no space to break at: printed in a slip's subtitle
         or in the upload's message, it widened the page past the phone."""
         from returnables.tests.support import make_slip
 
@@ -530,12 +552,14 @@ class ConsignesOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         document = self.photos_dir / LONG_NAME
         document.write_bytes(tiny_pdf(["FACTURE EXEMPLE", "TOTAL 12.00"]))
         self.open("/consignes/")
-        self.element("#bons-fichiers").send_keys(str(document))
+        self.element("#slip-files").send_keys(str(document))
         self.script("document.querySelector('#bons form button[type=submit]').click();")
         self.wait_for(
-            lambda: self.script("return location.hash;") == "#bons"
-            and self.script("return document.readyState;") == "complete"
-            and self.script("return !!document.querySelector('#bons .message');")
+            lambda: (
+                self.script("return location.hash;") == "#bons"
+                and self.script("return document.readyState;") == "complete"
+                and self.script("return !!document.querySelector('#bons .message');")
+            )
         )
         said = self.script("return document.querySelector('#bons .message').textContent;")
         self.assertIn(f"{LONG_NAME} : Aucun format de bon ne reconnaît ce document.", said)

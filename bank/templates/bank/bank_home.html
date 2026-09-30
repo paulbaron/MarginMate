@@ -107,9 +107,9 @@
                 </span>
             </div>
             {% comment %}
-            Ce qui est arrivé sur la même période. Le lien ouvre « Entrées d'argent »
-            sur ces dates-là (un mois choisi devient son premier et son dernier
-            jour), où l'argent reçu se lit à côté de ce que la caisse a encaissé.
+            What came in over the same period. The link opens « Entrées d'argent »
+            on those dates (a chosen month becomes its first and its last
+            day), where the money received reads beside what the till took.
             {% endcomment %}
             <div class="stat">
                 <span class="stat-label">Entrées</span>
@@ -199,7 +199,7 @@
                                                     <a href="{% url 'invoices:invoice_detail' link.invoice.pk %}">{{ link.invoice.supplier.name }} n° {{ link.invoice.invoice_number|default:link.invoice.pk }}</a>
                                                     <span class="muted">· {{ link.invoice.invoice_date|date:"d/m/Y"|default:"sans date" }} · {{ link.total|floatformat:2 }} €</span>
                                                     <span class="status-pill status-linked">{{ link.payment.get_method_display }}</span>
-                                                    {# Une facture à la fois : « Délier » seul retirait les trois. #}
+                                                    {# One invoice at a time: « Délier » alone took all three off. #}
                                                     {% if row.payments|length > 1 %}
                                                         <form method="post" action="{% url 'bank:bank_line_action' line.pk %}" class="inline-form">
                                                             {% csrf_token %}
@@ -215,16 +215,16 @@
                                                 </div>
                                             {% endfor %}
                                             {% if row.gap %}
-                                                {# L'écart est dit, jamais corrigé : la ligne reste rapprochée, et les deux chiffres disent le reste. #}
+                                                {# The gap is said, never corrected: the line stays linked, and the two figures say the rest. #}
                                                 <p class="read-as">
                                                     Factures {{ row.gap.invoiced|floatformat:2 }} € pour {{ row.gap.due|floatformat:2 }} € débités — {{ row.gap.difference|floatformat:2 }} € de {% if row.gap.over %}plus{% else %}moins{% endif %} que la dépense.
                                                     {% if row.gap.shared %}Une facture est aussi réglée par une autre opération.{% endif %}
                                                 </p>
                                             {% endif %}
                                             {% comment %}
-                                            Une dépense qui règle deux livraisons garde la liste : sans elle, la
-                                            deuxième facture ne se rattachait plus qu'en tapant une recherche, et il
-                                            fallait connaître un mot qui la trouve.
+                                            A debit settling two deliveries keeps the list: without it, the
+                                            second invoice could only be linked by typing a search, and that
+                                            took knowing a word that finds it.
                                             {% endcomment %}
                                             {% include "bank/_pick_invoice.html" %}
                                         {% elif row.status == "no_invoice" %}
@@ -236,9 +236,9 @@
                                             {% endif %}
                                         {% elif row.status == "income" %}
                                             {% comment %}
-                                            Ce qu'est l'entrée, lu comme « Entrées d'argent » la lit
-                                            (bank/income.py) : un versement carte et sa commission, un
-                                            dépôt, ou la catégorie tapée - pas « Entrée d'argent » pour tout.
+                                            What the entry is, read the way « Entrées d'argent » reads it
+                                            (bank/income.py): a card payout and its commission, a
+                                            deposit, or the typed category - not « Entrée d'argent » for everything.
                                             {% endcomment %}
                                             {% with entry=row.entry %}
                                                 {% if entry.gross is not None %}
@@ -253,11 +253,11 @@
                                         {% else %}
                                             {% if row.suggestion %}
                                                 <p class="read-as">
-                                                    {# Le degré de certitude, le même mot que sur « Propositions » où il se valide en série ; la pastille mène à la règle. #}
+                                                    {# The certainty tier, the same word as on « Propositions », where it is accepted in bulk; the pill leads to the rule. #}
                                                     <a href="{% url 'bank:proposals' %}#regles" class="status-pill status-tier-{{ row.suggestion.tier }}">{{ row.suggestion.tier_label }}</a>
                                                     {{ row.suggestion.reason }}
                                                 </p>
-                                                {# La raison du degré : les chiffres sur lesquels la règle a tranché. #}
+                                                {# The tier's reason: the figures the rule decided on. #}
                                                 {% if row.suggestion.tier_reason %}<p class="read-as">{{ row.suggestion.tier_reason }}</p>{% endif %}
                                                 {% for option in row.options %}
                                                     <form method="post" action="{% url 'bank:bank_line_action' line.pk %}" class="inline-form">
@@ -281,25 +281,25 @@
                                         {% endif %}
                                         {% if row.status != "income" %}
                                             {% comment %}
-                                            À côté des suggestions, jamais à leur place : la facture dont le montant ne
-                                            correspond pas, celle d'il y a six mois, celle qu'une autre opération règle
-                                            déjà.
+                                            Beside the suggestions, never in their place: the invoice whose amount does
+                                            not match, the one from six months ago, the one another operation already
+                                            settles.
 
-                                            La boîte demande ses résultats seuls et les échange dans sa propre ligne :
-                                            en GET sur la page, elle reconstruisait chaque ligne, chaque onglet et
-                                            chaque chiffre pour changer une cellule — et renvoyait le lecteur en haut
-                                            de la page, à chercher l'opération sur laquelle il était déjà.
+                                            The box asks for its results alone and swaps them into its own row:
+                                            as a GET on the page, it rebuilt every row, every tab and every
+                                            figure to change one cell — and sent the reader back to the top of
+                                            the page, to look for the operation they were already on.
 
-                                            Le formulaire reste un vrai GET dessous : sans JavaScript, c'est lui qui
-                                            répond, exactement comme avant. Les deux passent par views._found_for.
+                                            The form is still a real GET underneath: without JavaScript, it is what
+                                            answers, exactly as before. Both go through views._found_for.
                                             {% endcomment %}
                                             <form method="get" action="{% url 'bank:bank_home' %}" class="inline-form"
                                                   hx-get="{% url 'bank:invoice_search' line.pk %}"
-                                                  hx-target="#resultats-{{ line.pk }}" hx-swap="innerHTML"
+                                                  hx-target="#results-{{ line.pk }}" hx-swap="innerHTML"
                                                   hx-trigger="input delay:400ms, submit">
                                                 {% for name, value in page_fields.items %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
                                                 <input type="hidden" name="ligne" value="{{ line.pk }}">
-                                                {# Où « Rattacher » revient, depuis le fragment comme depuis la page. #}
+                                                {# Where « Rattacher » comes back to, from the fragment as from the page. #}
                                                 <input type="hidden" name="next" value="{{ page_url }}">
                                                 <input type="search" name="recherche" value="{{ row.search }}"
                                                        autocomplete="off"
@@ -307,7 +307,7 @@
                                                        aria-label="Chercher une facture à rattacher à cette opération">
                                                 <button class="btn btn-small btn-secondary" type="submit">Chercher une facture</button>
                                             </form>
-                                            <div id="resultats-{{ line.pk }}" aria-live="polite">
+                                            <div id="results-{{ line.pk }}" aria-live="polite">
                                                 {% include "bank/_found_invoices.html" with search=row.search found=row.found more_found=row.more_found %}
                                             </div>
                                         {% endif %}

@@ -7,6 +7,7 @@ is what the reader checks itself against.
 """
 
 from decimal import Decimal
+from typing import cast
 
 from django.test import SimpleTestCase
 
@@ -51,23 +52,27 @@ class CancelledItemTests(SimpleTestCase):
     """510, 566, 604: a Christmas tree scanned twice and cancelled twice
     ("NUL LIGNE", then the item at minus its price) was bought four times."""
 
-    TEXT = FRANPRIX_HEAD + (
-        "SAPIN INVENTE 1  T4 30.00Eur\n"
-        "SAPIN INVENTE 1  T4 30.00Eur\n"
-        "NUL LIGNE\n"
-        "SAPIN INVENTE 1  T4 -30.00Eur\n"
-        "30.00Eur\n"
-        "NUL LIGNE\n"
-        "SAPIN INVENTE 1  T4-30.00Eur\n"
-        "SOUS-TOTAL  0.00Eur\n"
-        "PAIN COMPLET  T1 0.55Eur\n"
-        "CITRON VERT 400G  T1 1.80Eur\n"
-        "SOUS-TOTAL  2.35Eur\n"
-        "TOTAL A PAYER  2.35Eur\n"
-        "CB SANS CONTACT  2.35Eur\n"
-        "rTaux-Tr-Tot.HT-r-Tot.TVA-r-Tot.TTC-\n"
-        "5.5%  2.23  0.12  2.35\n"
-    ) + FRANPRIX_FOOT
+    TEXT = (
+        FRANPRIX_HEAD
+        + (
+            "SAPIN INVENTE 1  T4 30.00Eur\n"
+            "SAPIN INVENTE 1  T4 30.00Eur\n"
+            "NUL LIGNE\n"
+            "SAPIN INVENTE 1  T4 -30.00Eur\n"
+            "30.00Eur\n"
+            "NUL LIGNE\n"
+            "SAPIN INVENTE 1  T4-30.00Eur\n"
+            "SOUS-TOTAL  0.00Eur\n"
+            "PAIN COMPLET  T1 0.55Eur\n"
+            "CITRON VERT 400G  T1 1.80Eur\n"
+            "SOUS-TOTAL  2.35Eur\n"
+            "TOTAL A PAYER  2.35Eur\n"
+            "CB SANS CONTACT  2.35Eur\n"
+            "rTaux-Tr-Tot.HT-r-Tot.TVA-r-Tot.TTC-\n"
+            "5.5%  2.23  0.12  2.35\n"
+        )
+        + FRANPRIX_FOOT
+    )
 
     def test_a_cancelled_item_is_not_bought(self):
         invoice = parse("FRANPRIX", self.TEXT)
@@ -80,23 +85,27 @@ class CancelledItemTests(SimpleTestCase):
     def test_an_item_cancelled_for_more_than_it_cost_is_a_refund(self):
         """568: a weighed courgette cancelled in two goes, for more than it
         was scanned at. What was paid says the till refunded the difference."""
-        text = FRANPRIX_HEAD + (
-            "Poids Brut 1.500 kg\n"
-            "Eur 2.80Eur / kg\n"
-            "COURGETTE INVENTEE  T1 4.20Eur\n"
-            "NUL-IMADIS M3\n"
-            "COURGETTE INVENTEE  T1-3.60Eur\n"
-            "NUL-IMADIS  M3\n"
-            "COURGETTE INVENTEE  T1-0.94Eur\n"
-            "FRUITS ET LEGUME  T1 0.79Eur\n"
-            "FRUITS ET LEGUME  T1 0.79Eur\n"
-            "FRUITS ET LEGUME  T1 0.79Eur\n"
-            "FRUITS ET LEGUME  T1 0.79Eur\n"
-            "SOUS-TOTAL  2.82Eur\n"
-            "TOTAL A PAYER  2.82Eur\n"
-            "CARTES BLEUES A  2.82Eur\n"
-            "5.5%  2.67  0.15  2.82\n"
-        ) + FRANPRIX_FOOT
+        text = (
+            FRANPRIX_HEAD
+            + (
+                "Poids Brut 1.500 kg\n"
+                "Eur 2.80Eur / kg\n"
+                "COURGETTE INVENTEE  T1 4.20Eur\n"
+                "NUL-IMADIS M3\n"
+                "COURGETTE INVENTEE  T1-3.60Eur\n"
+                "NUL-IMADIS  M3\n"
+                "COURGETTE INVENTEE  T1-0.94Eur\n"
+                "FRUITS ET LEGUME  T1 0.79Eur\n"
+                "FRUITS ET LEGUME  T1 0.79Eur\n"
+                "FRUITS ET LEGUME  T1 0.79Eur\n"
+                "FRUITS ET LEGUME  T1 0.79Eur\n"
+                "SOUS-TOTAL  2.82Eur\n"
+                "TOTAL A PAYER  2.82Eur\n"
+                "CARTES BLEUES A  2.82Eur\n"
+                "5.5%  2.67  0.15  2.82\n"
+            )
+            + FRANPRIX_FOOT
+        )
         invoice = parse("FRANPRIX", text)
         refund = invoice.lines[0]
         self.assertEqual((refund.raw_name, refund.quantity, refund.printed_ttc), ("COURGETTE INVENTEE", -1, D("-0.34")))
@@ -109,22 +118,26 @@ class PromotionTests(SimpleTestCase):
     """488: a "3 pour 2" worth 0,50 was charged to the one loaf whose name
     matched the promotion block's, which cost 0,49 - a loaf at -0,01."""
 
-    TEXT = FRANPRIX_HEAD + (
-        "CONCOMBRE  T1 1.99Eur\n"
-        "PAIN COMPLET  T1 0.49Eur\n"
-        "PAIN COMPLFT  T1 0.49Eur\n"
-        "PAIN COMPIET  T1 0.49Eur\n"
-        "SOUS-TOTAL  2.96Eur\n"
-        "TOTAL SANS AVANTAGES  3.46Eur\n"
-        "Detai des renises inmediates :\n"
-        "3 pour 2\n"
-        "PAIN COMPLEI  0.50Eur\n"
-        "TOTAL remise  0.50Eur\n"
-        "TOTAL A PAYER  2.96Eur\n"
-        "CB SANS CONTACT  2.96Eur\n"
-        "rTaux-Ir-Tot.HT-r-Tot.TVA-r-Tot.TTC-\n"
-        "15.5%  2.81  0.15  2.96\n"
-    ) + FRANPRIX_FOOT
+    TEXT = (
+        FRANPRIX_HEAD
+        + (
+            "CONCOMBRE  T1 1.99Eur\n"
+            "PAIN COMPLET  T1 0.49Eur\n"
+            "PAIN COMPLFT  T1 0.49Eur\n"
+            "PAIN COMPIET  T1 0.49Eur\n"
+            "SOUS-TOTAL  2.96Eur\n"
+            "TOTAL SANS AVANTAGES  3.46Eur\n"
+            "Detai des renises inmediates :\n"
+            "3 pour 2\n"
+            "PAIN COMPLEI  0.50Eur\n"
+            "TOTAL remise  0.50Eur\n"
+            "TOTAL A PAYER  2.96Eur\n"
+            "CB SANS CONTACT  2.96Eur\n"
+            "rTaux-Ir-Tot.HT-r-Tot.TVA-r-Tot.TTC-\n"
+            "15.5%  2.81  0.15  2.96\n"
+        )
+        + FRANPRIX_FOOT
+    )
 
     def test_the_promotion_goes_to_every_reading_of_the_product(self):
         invoice = parse("FRANPRIX", self.TEXT)
@@ -155,21 +168,25 @@ class MisreadAmountTests(SimpleTestCase):
     (1,47) said an item was wrong - and a person looking at three loaves at
     0,33 each saw nothing wrong with them."""
 
-    TEXT = FRANPRIX_HEAD + (
-        "PAIN COMPLET  T10.45\n"
-        "PAIN COMPLFT  T1 0.49\n"
-        "PAIN COMPLET  T1 0.49\n"
-        "SOUS-TOTAL  0.98\n"
-        "TOTAL SANS AVANTAGES  1.47\n"
-        "Detai des remises immediates :\n"
-        "3 pour 2\n"
-        "PAIN COMPLET  0.49\n"
-        "TOTAL renise  0.49\n"
-        "TOTAL A PAYER  0.98\n"
-        "CB SANS CONTACT  0.98\n"
-        "Rate  Taxaole Vat Total\n"
-        "15.5%  0.931  0.051  0.981\n"
-    ) + FRANPRIX_FOOT
+    TEXT = (
+        FRANPRIX_HEAD
+        + (
+            "PAIN COMPLET  T10.45\n"
+            "PAIN COMPLFT  T1 0.49\n"
+            "PAIN COMPLET  T1 0.49\n"
+            "SOUS-TOTAL  0.98\n"
+            "TOTAL SANS AVANTAGES  1.47\n"
+            "Detai des remises immediates :\n"
+            "3 pour 2\n"
+            "PAIN COMPLET  0.49\n"
+            "TOTAL renise  0.49\n"
+            "TOTAL A PAYER  0.98\n"
+            "CB SANS CONTACT  0.98\n"
+            "Rate  Taxaole Vat Total\n"
+            "15.5%  0.931  0.051  0.981\n"
+        )
+        + FRANPRIX_FOOT
+    )
 
     def test_the_amount_is_its_namesakes_when_that_is_what_the_ticket_adds_up_to(self):
         invoice = parse("FRANPRIX", self.TEXT)
@@ -197,17 +214,21 @@ class VatCodeReadAsDigitTests(SimpleTestCase):
     """534: "T2 0.30" read "120.30", and a sub-total misread "SOUSOTA4.25"
     among the items: 154,75 EUR of lines on a 14,25 EUR ticket."""
 
-    TEXT = FRANPRIX_HEAD + (
-        "SAC PAPIER INVENTE  120.30\n"
-        "PAIN COMPLET  T1 0.49.\n"
-        "CITRON VERT 400G  T1 1.80.\n"
-        "SOUSOTA1.29\n"
-        "TOTAL A PAYER  2.59.\n"
-        "CB SANS CONTACT  2.59.\n"
-        "Rate-Taxale-Vat  Total\n"
-        "5.5%  2.17  0.12  2.29\n"
-        "20%  0.25  0.05  0.30\n"
-    ) + FRANPRIX_FOOT
+    TEXT = (
+        FRANPRIX_HEAD
+        + (
+            "SAC PAPIER INVENTE  120.30\n"
+            "PAIN COMPLET  T1 0.49.\n"
+            "CITRON VERT 400G  T1 1.80.\n"
+            "SOUSOTA1.29\n"
+            "TOTAL A PAYER  2.59.\n"
+            "CB SANS CONTACT  2.59.\n"
+            "Rate-Taxale-Vat  Total\n"
+            "5.5%  2.17  0.12  2.29\n"
+            "20%  0.25  0.05  0.30\n"
+        )
+        + FRANPRIX_FOOT
+    )
 
     def test_the_shorter_reading_is_the_one_that_adds_up(self):
         invoice = parse("FRANPRIX", self.TEXT)
@@ -232,16 +253,20 @@ class VatCodeReadAsDigitTests(SimpleTestCase):
 
     def test_a_count_times_a_price_is_an_item_whatever_its_code_reads(self):
         """486: the ticket's only line, its "T1" read "11"."""
-        text = FRANPRIX_HEAD + (
-            "PAIN COMPLET  11  7 X 0.49Eur 3.43Eur\n"
-            "TOTAL ANS AVANTAGES  3.43Eur\n"
-            "Detai des remises immediates :\n"
-            "PAIN COMPLET  0.99Eur\n"
-            "TOTEL renise  0.99Eur\n"
-            "TOTAL 4 PAYER  2.44Lur\n"
-            "CB SANS CONTACT  2.44Eur\n"
-            "155%  2.31  0.131  2.441\n"
-        ) + FRANPRIX_FOOT
+        text = (
+            FRANPRIX_HEAD
+            + (
+                "PAIN COMPLET  11  7 X 0.49Eur 3.43Eur\n"
+                "TOTAL ANS AVANTAGES  3.43Eur\n"
+                "Detai des remises immediates :\n"
+                "PAIN COMPLET  0.99Eur\n"
+                "TOTEL renise  0.99Eur\n"
+                "TOTAL 4 PAYER  2.44Lur\n"
+                "CB SANS CONTACT  2.44Eur\n"
+                "155%  2.31  0.131  2.441\n"
+            )
+            + FRANPRIX_FOOT
+        )
         invoice = parse("FRANPRIX", text)
         self.assertEqual(lines(invoice), [("PAIN COMPLET", 7, D("3.43"), D("0.99"))])
         self.assertEqual(failed(invoice), {})
@@ -251,20 +276,24 @@ class MisreadSubtotalTests(SimpleTestCase):
     """525: "SOUS-TOTAL 7.05" read "1.25" ran the items past their end, into
     the promotion block."""
 
-    TEXT = FRANPRIX_HEAD + (
-        "CITRON VERT 400G  T1 1.80Eur\n"
-        "POMME INVENTEE BQ  T1 2.70Eur\n"
-        "SUCRE CASSOVA)  T1 3.40Eur\n"
-        "ISOUSHTOTALI  1.25Eur\n"
-        "TOTAL SANS AVANTAGES  7.90Eur\n"
-        "25 % RISucre  Detai des remises immediates :\n"
-        "SUCRE CASSONAD  0.85Eur\n"
-        "TOTAL renise  0.85Eur\n"
-        "TOTAL A PAYER  7.05Eur\n"
-        "CB SANS CONTACT  7.05Eur\n"
-        "rTaux-Tr-Tot.HT--r-Tot.TVA--Tot.TTC\n"
-        "5.5%  6.68|  0.371  7.051\n"
-    ) + FRANPRIX_FOOT
+    TEXT = (
+        FRANPRIX_HEAD
+        + (
+            "CITRON VERT 400G  T1 1.80Eur\n"
+            "POMME INVENTEE BQ  T1 2.70Eur\n"
+            "SUCRE CASSOVA)  T1 3.40Eur\n"
+            "ISOUSHTOTALI  1.25Eur\n"
+            "TOTAL SANS AVANTAGES  7.90Eur\n"
+            "25 % RISucre  Detai des remises immediates :\n"
+            "SUCRE CASSONAD  0.85Eur\n"
+            "TOTAL renise  0.85Eur\n"
+            "TOTAL A PAYER  7.05Eur\n"
+            "CB SANS CONTACT  7.05Eur\n"
+            "rTaux-Tr-Tot.HT--r-Tot.TVA--Tot.TTC\n"
+            "5.5%  6.68|  0.371  7.051\n"
+        )
+        + FRANPRIX_FOOT
+    )
 
     def test_the_items_stop_at_the_total_they_make(self):
         invoice = parse("FRANPRIX", self.TEXT)
@@ -308,16 +337,20 @@ class ItemPromotionTests(SimpleTestCase):
     elsewhere was unreadable - the gap on screen mixed the two."""
 
     def test_it_is_kept_and_the_gap_is_the_missing_item(self):
-        text = FRANPRIX_HEAD + (
-            "FROMAGE INVENTE  T1 2.50Eur\n"
-            "30%\n"
-            "REMISE 30%  -0.75Eur\n"
-            "PAIN COMPLET  T1 0.49Eur\n"
-            "T1 0 49Fur\n"
-            "TOTAL A PAYER  2.73Eur\n"
-            "CB SAN CONTACT  2.73Eur\n"
-            "15.5%  2.59  0.14  2.73\n"
-        ) + FRANPRIX_FOOT
+        text = (
+            FRANPRIX_HEAD
+            + (
+                "FROMAGE INVENTE  T1 2.50Eur\n"
+                "30%\n"
+                "REMISE 30%  -0.75Eur\n"
+                "PAIN COMPLET  T1 0.49Eur\n"
+                "T1 0 49Fur\n"
+                "TOTAL A PAYER  2.73Eur\n"
+                "CB SAN CONTACT  2.73Eur\n"
+                "15.5%  2.59  0.14  2.73\n"
+            )
+            + FRANPRIX_FOOT
+        )
         invoice = parse("FRANPRIX", text)
         self.assertEqual(invoice.lines[0].discount_ttc, D("0.75"))
         self.assertIn("écart +0.49 €", failed(invoice)["Somme des lignes = total imprimé"])
@@ -331,23 +364,27 @@ class SplitRowTests(SimpleTestCase):
     """617, 618, 631: a Monoprix row read in two pieces, its amount on the
     department heading above it - or its name lost altogether."""
 
-    TEXT = MONOPRIX_HEAD + (
-        "EPICERIE/BOISSONS.  6,70€\n"
-        "2 X SAUCE INVENTEE 3,35€\n"
-        "FRUITS/LEGUMES.  2,51€\n"
-        "POMME INVENTEE BIO\n"
-        "3 X BETTERAVE INVENTEE 1,29€  3,87€\n"
-        "SURGELES/PRODUITS FRAIS.\n"
-        "1,50€\n"
-        "TOTAL HORS AVANTAGES  14,58€\n"
-        "NOMBRE D'ARTICLES  7\n"
-        "RESTE A PAYER  14,58€\n"
-        "PAIEMENT\n"
-        "CB EMV  14,58€\n"
-        "TVA  H.T.  T.V.A.  T.T.C\n"
-        "5,5%  13,82  0,76  14,58\n"
-        "Total TVA  13,82  0,76  14,58\n"
-    ) + MONOPRIX_FOOT
+    TEXT = (
+        MONOPRIX_HEAD
+        + (
+            "EPICERIE/BOISSONS.  6,70€\n"
+            "2 X SAUCE INVENTEE 3,35€\n"
+            "FRUITS/LEGUMES.  2,51€\n"
+            "POMME INVENTEE BIO\n"
+            "3 X BETTERAVE INVENTEE 1,29€  3,87€\n"
+            "SURGELES/PRODUITS FRAIS.\n"
+            "1,50€\n"
+            "TOTAL HORS AVANTAGES  14,58€\n"
+            "NOMBRE D'ARTICLES  7\n"
+            "RESTE A PAYER  14,58€\n"
+            "PAIEMENT\n"
+            "CB EMV  14,58€\n"
+            "TVA  H.T.  T.V.A.  T.T.C\n"
+            "5,5%  13,82  0,76  14,58\n"
+            "Total TVA  13,82  0,76  14,58\n"
+        )
+        + MONOPRIX_FOOT
+    )
 
     def setUp(self):
         self.invoice = parse("MONOPRIX", self.TEXT)
@@ -399,7 +436,10 @@ class InvoiceStyleRowTests(SimpleTestCase):
 
     def test_each_row_carries_its_own_rate_and_count(self):
         self.assertEqual(
-            [(line.raw_name, line.quantity, line.printed_ttc, line.total_ht, line.vat_rate) for line in self.invoice.lines],
+            [
+                (line.raw_name, line.quantity, line.printed_ttc, line.total_ht, line.vat_rate)
+                for line in self.invoice.lines
+            ],
             [
                 ("1L RHUM INVENTE", 4, D("72.00"), D("60.00"), TWENTY),
                 ("FROMAGE BLANC INVENTE", 1, D("2.11"), D("2.00"), FIVE_FIVE),
@@ -408,7 +448,9 @@ class InvoiceStyleRowTests(SimpleTestCase):
         )
 
     def test_an_unreadable_ttc_is_worked_out_and_said(self):
-        self.assertIn("OIGNON INVENTE VRAC 0.63 € (HT 0.60 € + TVA 5.5 %)", check(self.invoice, "Montants recalculés").detail)
+        self.assertIn(
+            "OIGNON INVENTE VRAC 0.63 € (HT 0.60 € + TVA 5.5 %)", check(self.invoice, "Montants recalculés").detail
+        )
 
     def test_the_ticket_adds_up(self):
         self.assertEqual(failed(self.invoice), {})
@@ -535,40 +577,52 @@ class UnknownShopTests(SimpleTestCase):
 
 class LineShapeTests(SimpleTestCase):
     def test_two_amounts_with_a_point_are_not_a_phone_number(self):
-        """"10.49 31.47" has the shape "dd.dd dd.dd" a phone pattern took for
+        """ "10.49 31.47" has the shape "dd.dd dd.dd" a phone pattern took for
         a number: the line was dropped, three rillettes with it."""
-        text = FRANPRIX_HEAD + (
-            "RILLETTES INVENTEES  T1 3 X 10.49 31.47\n"
-            "TOTAL A PAYER  31.47\n"
-            "CB SANS CONTACT  31.47\n"
-            "5.5%  29.83  1.64  31.47\n"
-        ) + FRANPRIX_FOOT
+        text = (
+            FRANPRIX_HEAD
+            + (
+                "RILLETTES INVENTEES  T1 3 X 10.49 31.47\n"
+                "TOTAL A PAYER  31.47\n"
+                "CB SANS CONTACT  31.47\n"
+                "5.5%  29.83  1.64  31.47\n"
+            )
+            + FRANPRIX_FOOT
+        )
         invoice = parse("FRANPRIX", text)
         self.assertEqual(lines(invoice), [("RILLETTES INVENTEES", 3, D("31.47"), D("0"))])
         self.assertEqual(failed(invoice), {})
 
     def test_a_percentage_in_a_name_stays_in_the_name(self):
-        text = MONOPRIX_HEAD + (
-            "FROMAGE BLANC 20% MG  2,39\n"
-            "TOTAL HORS AVANTAGES  2,39\n"
-            "RESTE A PAYER  2,39\n"
-            "CB EMV  2,39\n"
-            "5,5%  2,27  0,12  2,39\n"
-        ) + MONOPRIX_FOOT
+        text = (
+            MONOPRIX_HEAD
+            + (
+                "FROMAGE BLANC 20% MG  2,39\n"
+                "TOTAL HORS AVANTAGES  2,39\n"
+                "RESTE A PAYER  2,39\n"
+                "CB EMV  2,39\n"
+                "5,5%  2,27  0,12  2,39\n"
+            )
+            + MONOPRIX_FOOT
+        )
         invoice = parse("MONOPRIX", text)
         self.assertEqual([line.raw_name for line in invoice.lines], ["FROMAGE BLANC 20% MG"])
 
     def test_a_promotion_never_makes_an_item_cost_less_than_nothing(self):
         """A misread "-0,75" under a 0,50 item: capped at the item, and the
         ticket does not add up."""
-        text = MONOPRIX_HEAD + (
-            "CITRON INVENTE  0,50\n"
-            "Remise immediate -0,75\n"
-            "TOTAL HORS AVANTAGES  0,50\n"
-            "RESTE A PAYER  0,25\n"
-            "CB EMV  0,25\n"
-            "5,5%  0,24  0,01  0,25\n"
-        ) + MONOPRIX_FOOT
+        text = (
+            MONOPRIX_HEAD
+            + (
+                "CITRON INVENTE  0,50\n"
+                "Remise immediate -0,75\n"
+                "TOTAL HORS AVANTAGES  0,50\n"
+                "RESTE A PAYER  0,25\n"
+                "CB EMV  0,25\n"
+                "5,5%  0,24  0,01  0,25\n"
+            )
+            + MONOPRIX_FOOT
+        )
         invoice = parse("MONOPRIX", text)
         (line,) = invoice.lines
         self.assertEqual((line.printed_ttc, line.discount_ttc), (D("0.50"), D("0.50")))
@@ -576,7 +630,7 @@ class LineShapeTests(SimpleTestCase):
         self.assertIn("Somme des lignes = total imprimé", failed(invoice))
 
     def test_a_short_ticket_number_is_a_count_of_the_day(self):
-        """"Ticket no 4278" comes round again: dated, it is not taken for the
+        """ "Ticket no 4278" comes round again: dated, it is not taken for the
         same ticket on another day."""
         text = InvoiceStyleRowTests.TEXT
         self.assertEqual(parse("MONOPRIX", text).invoice_number, "4278-20260124")
@@ -631,16 +685,21 @@ class DiscountTargetTests(SimpleTestCase):
             reading("PAIN CONPLET", "0.49", 1),
             reading("CITRON VERT", "1.80", 2),
         ]
-        targets = _discount_targets(items, ["PAIN COMPLEI"], D("0.49"))
+        targets = cast("list[Reading]", _discount_targets(items, ["PAIN COMPLEI"], D("0.49")))
         self.assertEqual([item.index for item in targets], [0, 1])
 
 
 class TaxedRowTests(SimpleTestCase):
     def test_ht_vat_and_ttc(self):
-        self.assertEqual(_taxed_row([D("15.00"), D("60.00"), D("20.00"), D("12.00"), D("72.00")]), (D("60.00"), D("72.00"), TWENTY, False))
+        self.assertEqual(
+            _taxed_row([D("15.00"), D("60.00"), D("20.00"), D("12.00"), D("72.00")]),
+            (D("60.00"), D("72.00"), TWENTY, False),
+        )
 
     def test_the_ttc_worked_out_from_the_printed_rate(self):
-        self.assertEqual(_taxed_row([D("0.60"), D("0.60"), D("5.50"), D("0.03")]), (D("0.60"), D("0.63"), FIVE_FIVE, True))
+        self.assertEqual(
+            _taxed_row([D("0.60"), D("0.60"), D("5.50"), D("0.03")]), (D("0.60"), D("0.63"), FIVE_FIVE, True)
+        )
 
     def test_a_count_and_two_prices_are_not_a_taxed_row(self):
         self.assertIsNone(_taxed_row([D("0.49"), D("2.94"), D("3.43")]))

@@ -16,8 +16,7 @@ written by hand as "5.5" is not what the page sends back. Data invented.
 
 import importlib
 import re
-from datetime import date, datetime
-from datetime import timezone as dt_timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from django.apps import apps
@@ -48,15 +47,23 @@ def shop_ticket(table, lines=(("PAIN DE CAMPAGNE", 1, "14.23", "0.055", "15.01")
     VAT table it prints."""
     shop = make_supplier(code="EPICERIE_X", name="Epicerie Exemple", parser_key="")
     invoice = Invoice.objects.create(
-        supplier=shop, invoice_number="T-0001", invoice_date=date(2026, 8, 12),
+        supplier=shop,
+        invoice_number="T-0001",
+        invoice_date=date(2026, 8, 12),
         parse_checks=[{"label": "Somme des lignes = total imprimé", "passed": True, "detail": ""}],
         printed_total_ttc=sum((D(printed) for *_rest, printed in lines), start=D("0")),
         vat_breakdown=[list(row) for row in table],
     )
     for name, quantity, total_ht, rate, printed in lines:
         make_invoice_line(
-            invoice=invoice, product=make_product(supplier=shop, raw_name=name), raw_name=name, read_as=name,
-            quantity=quantity, total_ht=total_ht, vat_rate=D(rate), printed_ttc=D(printed),
+            invoice=invoice,
+            product=make_product(supplier=shop, raw_name=name),
+            raw_name=name,
+            read_as=name,
+            quantity=quantity,
+            total_ht=total_ht,
+            vat_rate=D(rate),
+            printed_ttc=D(printed),
         )
     return invoice
 
@@ -95,8 +102,13 @@ class TableSavedFromThePageTests(TestCase):
         lost) corrected to the -2,76 / -0,15 printed, its rate left as drawn,
         and the 20 % row typed in the spare one."""
         invoice = shop_ticket([("0.055", "2.61", "0.15")], lines=CREDIT_AND_CHARGE)
-        typed = {"tva-0-base": "-2.76", "tva-0-vat": "-0.15", "tva-1-rate": "20", "tva-1-base": "100.00",
-                 "tva-1-vat": "20.00"}
+        typed = {
+            "tva-0-base": "-2.76",
+            "tva-0-vat": "-0.15",
+            "tva-1-rate": "20",
+            "tva-1-base": "100.00",
+            "tva-1-vat": "20.00",
+        }
         page = self.open(invoice)
         response = self.client.post(self.url, page_post(page, with_vat=True, **typed))
         self.assertEqual(response.status_code, 302)
@@ -151,8 +163,14 @@ class TableSavedFromThePageTests(TestCase):
         page = self.open(invoice)
         self.assertEqual(len(page.context["vat_form"].forms), 2)
         self.assertContains(page, "TVA imprimée sur le document (0 taux)")
-        typed = {"tva-0-rate": "5.5", "tva-0-base": "-2.76", "tva-0-vat": "-0.15",
-                 "tva-1-rate": "20", "tva-1-base": "100.00", "tva-1-vat": "20.00"}
+        typed = {
+            "tva-0-rate": "5.5",
+            "tva-0-base": "-2.76",
+            "tva-0-vat": "-0.15",
+            "tva-1-rate": "20",
+            "tva-1-base": "100.00",
+            "tva-1-vat": "20.00",
+        }
         self.assertEqual(self.client.post(self.url, page_post(page, with_vat=True, **typed)).status_code, 302)
         invoice.refresh_from_db()
         self.assertEqual(invoice.vat_breakdown, [["0.055", "-2.76", "-0.15"], ["0.2", "100.00", "20.00"]])
@@ -189,8 +207,16 @@ class VatRowFormTests(SimpleTestCase):
         return form, (form.row if form.is_valid() else None)
 
     def test_the_rate_is_stored_as_the_fraction_it_is(self):
-        for typed, stored in (("5.5", "0.055"), ("5.50", "0.055"), ("20", "0.2"), ("20.00", "0.2"), ("2.1", "0.021"),
-                              ("100", "1"), ("0", "0"), ("0.00", "0")):
+        for typed, stored in (
+            ("5.5", "0.055"),
+            ("5.50", "0.055"),
+            ("20", "0.2"),
+            ("20.00", "0.2"),
+            ("2.1", "0.021"),
+            ("100", "1"),
+            ("0", "0"),
+            ("0.00", "0"),
+        ):
             with self.subTest(typed=typed):
                 self.assertEqual(self.row(typed, "10.00", "1.00")[1][0], stored)
 
@@ -231,9 +257,7 @@ class NegativeRowChecksTests(TestCase):
     locked here so it stays so."""
 
     def setUp(self):
-        self.invoice = shop_ticket(
-            [("0.055", "-2.76", "-0.15"), ("0.2", "100.00", "20.00")], lines=CREDIT_AND_CHARGE
-        )
+        self.invoice = shop_ticket([("0.055", "-2.76", "-0.15"), ("0.2", "100.00", "20.00")], lines=CREDIT_AND_CHARGE)
 
     def test_every_check_passes_on_a_credit_row(self):
         checks = vat_table_checks(self.invoice)
@@ -297,10 +321,10 @@ class TypedTableMigrationTests(TestCase):
     def test_documents_validated_since_the_table_shipped_are_marked(self):
         migration = importlib.import_module("invoices.migrations.0031_invoice_vat_table_typed")
         shop = make_supplier(name="Epicerie Exemple")
-        shipped = datetime(2026, 9, 18, 1, 22, tzinfo=dt_timezone.utc)
+        shipped = datetime(2026, 9, 18, 1, 22, tzinfo=UTC)
         self.assertEqual(migration.TABLE_SHIPPED, shipped)
         for number, reviewed_at in (
-            ("A", datetime(2026, 9, 17, 23, 38, tzinfo=dt_timezone.utc)),  # the last one before it
+            ("A", datetime(2026, 9, 17, 23, 38, tzinfo=UTC)),  # the last one before it
             ("B", shipped),
             ("C", timezone.now()),
             ("D", None),

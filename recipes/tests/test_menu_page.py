@@ -45,7 +45,11 @@ def recipe_post(name, **extra):
 
 class SuggestRecipeTests(TestCase):
     def setUp(self):
-        self.recipes = [Recipe(pk=1, name="Pinte Blonde"), Recipe(pk=2, name="Spritz Apérol"), Recipe(pk=3, name="Mojito")]
+        self.recipes = [
+            Recipe(pk=1, name="Pinte Blonde"),
+            Recipe(pk=2, name="Spritz Apérol"),
+            Recipe(pk=3, name="Mojito"),
+        ]
 
     def test_the_same_name_whatever_the_case_and_accents(self):
         self.assertEqual(suggest_recipe("SPRITZ APEROL", self.recipes), (self.recipes[1], False))
@@ -66,7 +70,7 @@ class SuggestRecipeTests(TestCase):
 
 class MenuPageTests(TestCase):
     def setUp(self):
-        self.pinte = make_recipe(name="Pinte Blonde")
+        self.pint = make_recipe(name="Pinte Blonde")
         self.mojito = make_recipe(name="Mojito")
         self.pending = PosProduct.objects.create(name="Pinte Blonde HH", total_quantity=40)
         self.linked = PosProduct.objects.create(name="Mojito maison", recipe=self.mojito, total_quantity=12)
@@ -111,31 +115,31 @@ class MenuPageTests(TestCase):
     def test_the_likely_recipe_is_chosen_already(self):
         response = self.client.get(reverse("recipes:pos_product_list"))
         row = response.context["pending"][0]
-        self.assertEqual((row.suggested_recipe, row.suggested_happy_hour), (self.pinte, True))
-        self.assertContains(response, f'<option value="{self.pinte.pk}" selected>', html=False)
+        self.assertEqual((row.suggested_recipe, row.suggested_happy_hour), (self.pint, True))
+        self.assertContains(response, f'<option value="{self.pint.pk}" selected>', html=False)
         self.assertContains(response, 'name="as_happy_hour" value="1" checked')
 
     def test_a_recipe_is_created_for_the_till_product(self):
         response = self.client.get(reverse("recipes:pos_product_list"))
-        self.assertContains(response, f'{reverse("recipes:recipe_create")}?caisse={self.pending.pk}')
+        self.assertContains(response, f"{reverse('recipes:recipe_create')}?caisse={self.pending.pk}")
 
     def test_linking_in_place_says_where_it_went(self):
         PosProductDailyQuantity.objects.create(product=self.pending, sold_on=date(2026, 6, 1), quantity=4)
         response = self.client.post(
             reverse("recipes:pos_product_assign", args=[self.pending.pk]),
-            {"action": "link", "recipe": self.pinte.pk, "as_happy_hour": "1"},
+            {"action": "link", "recipe": self.pint.pk, "as_happy_hour": "1"},
             **HTMX,
         )
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, "<html")
         self.assertContains(response, "lié à")
-        self.assertContains(response, reverse("recipes:recipe_detail", args=[self.pinte.pk]))
+        self.assertContains(response, reverse("recipes:recipe_detail", args=[self.pint.pk]))
         self.assertContains(response, 'value="reset"')  # the undo
         self.assertEqual(json.loads(response["HX-Trigger"]), {"to-link-count": 0})
         self.pending.refresh_from_db()
-        self.pinte.refresh_from_db()
-        self.assertEqual((self.pending.recipe, self.pinte.happy_hour_name), (self.pinte, "Pinte Blonde HH"))
-        self.assertEqual(RecipeSale.objects.get(recipe=self.pinte).quantity, 4)
+        self.pint.refresh_from_db()
+        self.assertEqual((self.pending.recipe, self.pint.happy_hour_name), (self.pint, "Pinte Blonde HH"))
+        self.assertEqual(RecipeSale.objects.get(recipe=self.pint).quantity, 4)
 
     def test_ignoring_and_undoing_in_place(self):
         url = reverse("recipes:pos_product_assign", args=[self.pending.pk])
@@ -187,7 +191,9 @@ class RecipeFormLinksTests(TestCase):
         response = self.client.post(
             url, recipe_post("Spritz", happy_hour_name="Spritz HH", pos_products=[self.pending.pk])
         )
-        self.assertRedirects(response, reverse("recipes:recipe_detail", args=[recipe.pk]), fetch_redirect_response=False)
+        self.assertRedirects(
+            response, reverse("recipes:recipe_detail", args=[recipe.pk]), fetch_redirect_response=False
+        )
         self.pending.refresh_from_db()
         happy.refresh_from_db()
         recipe.refresh_from_db()

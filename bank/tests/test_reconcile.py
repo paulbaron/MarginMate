@@ -60,7 +60,10 @@ class ImportTests(Fixtures, TestCase):
         )
 
     def test_the_same_statement_twice_imports_nothing_new(self):
-        rows = (card_row(date(2026, 7, 15), "FRANPRIX 5333 PARIS", "13,06"), debit_row(date(2026, 7, 9), "U.B.A.", "120,35"))
+        rows = (
+            card_row(date(2026, 7, 15), "FRANPRIX 5333 PARIS", "13,06"),
+            debit_row(date(2026, 7, 9), "U.B.A.", "120,35"),
+        )
         self.load(*rows)
         summary = self.load(*rows)
         self.assertEqual((summary.created, summary.known), (0, 2))
@@ -98,7 +101,10 @@ class AutomaticPassTests(Fixtures, TestCase):
 
     def test_an_invoice_pays_one_line_only(self):
         self.invoice("METRO", date(2026, 6, 29), "100.00")
-        self.load(debit_row(date(2026, 7, 9), "METRO FRANCE", "120,00"), debit_row(date(2026, 7, 16), "METRO FRANCE", "120,00"))
+        self.load(
+            debit_row(date(2026, 7, 9), "METRO FRANCE", "120,00"),
+            debit_row(date(2026, 7, 16), "METRO FRANCE", "120,00"),
+        )
         reconcile.reconcile()
         self.assertEqual(InvoicePayment.objects.count(), 1)
 
@@ -135,7 +141,10 @@ class PersonTests(Fixtures, TestCase):
         automatic pass above still refuses (test_an_invoice_pays_one_line_only).
         See bank/tests/test_links.py for what the page then says."""
         invoice = self.invoice("METRO", date(2026, 6, 29), "100.00")
-        self.load(debit_row(date(2026, 7, 9), "METRO FRANCE", "120,00"), debit_row(date(2026, 7, 16), "METRO FRANCE", "120,00"))
+        self.load(
+            debit_row(date(2026, 7, 9), "METRO FRANCE", "120,00"),
+            debit_row(date(2026, 7, 16), "METRO FRANCE", "120,00"),
+        )
         reconcile.reconcile()
         other = BankTransaction.objects.get(payments__isnull=True)
         reconcile.link(other, [invoice])
@@ -190,7 +199,9 @@ class BlankPayeeTests(Fixtures, TestCase):
     def test_an_empty_payee_names_nobody_until_a_person_links_it(self):
         self.assertEqual(reconcile.reconcile(), 0)
         reconcile.link(self.may_line, [self.may])
-        self.assertEqual(list(CounterpartyAlias.objects.filter(supplier=self.bank).values_list("name", flat=True)), [FEE_KEY])
+        self.assertEqual(
+            list(CounterpartyAlias.objects.filter(supplier=self.bank).values_list("name", flat=True)), [FEE_KEY]
+        )
         # Next month: the same words under another number, the same amount,
         # one unpaid invoice of the bank's in the window.
         self.assertEqual(reconcile.reconcile(), 1)
@@ -206,7 +217,9 @@ class BlankPayeeTests(Fixtures, TestCase):
         CounterpartyAlias.objects.create(supplier=self.bank, name=FEE_KEY)
         candidates = reconcile.candidates_from(reconcile.unpaid_invoices(date(2026, 1, 1), date(2026, 12, 31)))
         found = matching.match(reconcile.payment_of(self.june_line), candidates, reconcile.supplier_naming())
-        self.assertEqual((found.confident, found.tier, found.options[0][0].pk), (False, matching.NEAR_SURE, self.june.pk))
+        self.assertEqual(
+            (found.confident, found.tier, found.options[0][0].pk), (False, matching.NEAR_SURE, self.june.pk)
+        )
 
     def premium(self, day, number, amount):
         """An insurer's premium the bank debits with no counterparty: the
@@ -224,7 +237,7 @@ class BlankPayeeTests(Fixtures, TestCase):
         """« ASSUREUR » in the premium's label IS the insurer's own name, and
         the pass still may not act on it: no line the bank printed no payee
         on was ever linked without a person, and a label carries the bank's
-        text and a motif beside the payee's name - one word of a supplier's
+        text and a reference beside the payee's name - one word of a supplier's
         name in it is a coincidence the pass would act on (a supplier named
         « Assurance Exemple », a fee line reading « ASSURANCE MOYENS DE
         PAIEMENT »). Once a person links one such line, its words are the
@@ -260,7 +273,9 @@ class BlankPayeeTests(Fixtures, TestCase):
         june = self.invoice("COMPTA", date(2026, 6, 5), "6.08", invoice_number="K-06")
         self.assertEqual(reconcile.reconcile(), 0)
         reconcile.link(self.may_line, [may])
-        self.assertEqual(list(CounterpartyAlias.objects.filter(supplier=bookkeeper).values_list("name", flat=True)), [FEE_KEY])
+        self.assertEqual(
+            list(CounterpartyAlias.objects.filter(supplier=bookkeeper).values_list("name", flat=True)), [FEE_KEY]
+        )
         self.assertEqual(reconcile.reconcile(), 1)
         self.assertEqual(InvoicePayment.objects.get(invoice=june).transaction, self.june_line)
 
@@ -293,7 +308,9 @@ class AcceptProposalsTests(Fixtures, TestCase):
             debit_row(date(2026, 7, 3), "METRO FRANCE", "120,00"),
         )
         self.card = BankTransaction.objects.get(kind=BankTransaction.Kind.CARD)
-        self.early, self.late = BankTransaction.objects.filter(kind=BankTransaction.Kind.DEBIT).order_by("operation_date")
+        self.early, self.late = BankTransaction.objects.filter(kind=BankTransaction.Kind.DEBIT).order_by(
+            "operation_date"
+        )
 
     def test_an_accepted_proposal_is_a_link_a_person_made(self):
         (outcome,) = reconcile.accept_proposals({self.card.pk: frozenset({self.receipt.pk})})
@@ -302,7 +319,9 @@ class AcceptProposalsTests(Fixtures, TestCase):
         self.card.refresh_from_db()
         self.assertEqual((payment.method, self.card.settled_by_hand), (InvoicePayment.Method.MANUAL, True))
         # It added up, so the payee the bank prints is learnt for the shop.
-        self.assertTrue(CounterpartyAlias.objects.filter(supplier=self.receipt.supplier, name="PAYTERM EPICERIE 12").exists())
+        self.assertTrue(
+            CounterpartyAlias.objects.filter(supplier=self.receipt.supplier, name="PAYTERM EPICERIE 12").exists()
+        )
 
     def test_two_lines_wanting_the_same_invoice_link_it_once_and_say_so(self):
         outcomes = reconcile.accept_proposals(

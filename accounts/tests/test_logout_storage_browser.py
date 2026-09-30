@@ -4,13 +4,13 @@ same day, LOGOUT-PREFS).
 
 The logout cleared the server's session and left the bar's own data in the
 browser's storage: the unsaved stock count (articles, quantities, note), a
-reprise's counts, readable on the public login page of a shared device. The
+pickup's counts, readable on the public login page of a shared device. The
 first fix answered ``Clear-Site-Data: "storage"``, which emptied everything
 with it: the gather's sources left unticked (Metro, a portal asking for a
 code every time) came back ticked, the folds and the tables' sort reset. Now:
 
 * no ``Clear-Site-Data`` (accounts/tests/test_sessions.py);
-* static/js/ui.js forgets this espace's DRAFTS as the form is sent - under
+* static/js/ui.js forgets this tenant's DRAFTS as the form is sent - under
   its scope and the old id of a session from before - and nothing else: its
   preferences stay, and another bar's count on the same device is that
   bar's.
@@ -69,7 +69,7 @@ class LogoutStorageInBrowserTests(TwoTenantsTestCase, StaticLiveServerTestCase):
     def log_in_and_count(self):
         """Alpha's login typed in, a row counted on a new stock take (the
         draft written as it is typed) - plus what else the device holds:
-        Alpha's reprise not sent, Alpha's preferences (a gather source left
+        Alpha's pickup not sent, Alpha's preferences (a gather source left
         unticked, the import tab, a table's sort for the tab) and bar
         Beta's own count."""
         from selenium.webdriver.common.by import By
@@ -117,7 +117,7 @@ class LogoutStorageInBrowserTests(TwoTenantsTestCase, StaticLiveServerTestCase):
     def test_it_is_the_script_that_forgets_them(self):
         """The form is sent nowhere (a listener after ui.js's cancels it):
         no answer - what is gone, the script took. A session from before
-        29/09 carries the espace's old id too (data-tenant-legacy): its
+        29/09 carries the tenant's old id too (data-tenant-legacy): its
         drafts under that id go, its preferences under it stay."""
         self.log_in_and_count()
         legacy = str(self.bar_a.pk)

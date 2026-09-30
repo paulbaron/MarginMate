@@ -60,6 +60,7 @@ import math
 import statistics
 import threading
 from dataclasses import dataclass, field
+from typing import cast
 
 # Two boxes are on one line when, measured along the local slope of the
 # text, they share at least this fraction of the smaller one's height.
@@ -191,9 +192,7 @@ def group_boxes_into_lines(boxes) -> list[OcrLine]:
     page_angle = statistics.median(box["angle"] for box in long_boxes) if long_boxes else 0.0
     for item in items:
         nearby = [
-            box["angle"]
-            for box in long_boxes
-            if abs(box["cy"] - item["cy"]) < SLOPE_NEIGHBOURHOOD_ROWS * median_height
+            box["angle"] for box in long_boxes if abs(box["cy"] - item["cy"]) < SLOPE_NEIGHBOURHOOD_ROWS * median_height
         ]
         item["slope"] = math.tan(statistics.median(nearby) if nearby else page_angle)
     # Each box's height on the page once the local slope is taken out - the
@@ -271,8 +270,8 @@ IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp")
 # What reading one document may cost (security audit UPLOAD-1). A page with
 # no photo is rendered at RENDER_DPI at whatever size its MediaBox DECLARES,
 # and a file of a few hundred bytes declares what it likes: 1200 pt square
-# came out at 5000 px (+96 Mo), the format's 14 400 pt would be 60 000 px
-# square, about 11 Go - in the one process serving every bar. So every page
+# came out at 5000 px (+96 MB), the format's 14 400 pt would be 60 000 px
+# square, about 11 GB - in the one process serving every bar. So every page
 # is weighed from its declared size and its images' pixel sizes BEFORE
 # anything is rendered or decoded, and a document that cannot be read within
 # these is refused (DocumentTooBig, said on that file's line).
@@ -296,9 +295,7 @@ TOO_MANY_PAGES = "Document trop long pour être lu : {pages} pages, {limit} au p
 PAGE_TOO_LARGE = (
     "Page trop grande pour être lue (page {number} : {width} × {height} cm) : ce n'est ni un ticket ni une facture."
 )
-IMAGE_TOO_LARGE = (
-    "Image trop grande pour être lue (page {number} : {pixels} millions de pixels, {limit} au plus)."
-)
+IMAGE_TOO_LARGE = "Image trop grande pour être lue (page {number} : {pixels} millions de pixels, {limit} au plus)."
 
 
 class DocumentTooBig(ValueError):
@@ -354,7 +351,7 @@ def _plan_pdf(document, pdfium_raw) -> list:
         width, height = page.get_size()
         images = list(page.get_objects(filter=(pdfium_raw.FPDF_PAGEOBJ_IMAGE,)))
         for image in images:
-            _check_pixels(*image.get_px_size(), number)
+            _check_pixels(*cast("tuple[int, int]", image.get_px_size()), number)
         if len(images) == 1 and covers_page(images[0].get_bounds(), width, height):
             plan.append((page, images[0], None))
             continue
@@ -468,8 +465,8 @@ def check_page_count(path: str) -> None:
     anything reads one of its pages (security review HARDEN-01).
 
     pdfplumber keeps every page it has read - its characters, its layout -
-    until the file is closed: 0,57 Mo a page of 300 glyphs, 5,7 Mo one of
-    3 000, and a PDF under the 25 Mo upload cap can carry tens of thousands
+    until the file is closed: 0,57 MB a page of 300 glyphs, 5,7 MB one of
+    3 000, and a PDF under the 25 MB upload cap can carry tens of thousands
     of pages sharing one content stream. The page cap in `page_images` came
     too late: the text layer (`text_layer_pages`) and a supplier's reader
     (`InvoiceParser.parse`) had read every page by then.
@@ -483,8 +480,8 @@ def check_page_count(path: str) -> None:
     threads at once, and this runs in a gather's and a folder import's. The
     number said is the one the file declares when that is over the cap,
     else « plus de N ». Measured on a file of 5 000 light pages: refused in
-    half a second and 1,8 Mo, where pdfplumber's own count (`len(pdf.pages)`,
-    every page made) took 4,5 s and 25 Mo.
+    half a second and 1,8 MB, where pdfplumber's own count (`len(pdf.pages)`,
+    every page made) took 4,5 s and 25 MB.
 
     Not a PDF (by its name: a photo is `page_images`' to weigh), or one
     pdfminer cannot open or walk: it passes - what is wrong with it is said
@@ -595,9 +592,7 @@ def estimate_skew_degrees(image) -> float:
 
     grey = cv2.cvtColor(numpy.asarray(image), cv2.COLOR_RGB2GRAY)
     grey = cv2.GaussianBlur(grey, (5, 5), 0)
-    binary = cv2.adaptiveThreshold(
-        grey, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 31, 15
-    )
+    binary = cv2.adaptiveThreshold(grey, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 31, 15)
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 3))
     smeared = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
     contours, _hierarchy = cv2.findContours(smeared, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -630,9 +625,7 @@ def deskew(image):
     array = numpy.asarray(image)
     height, width = array.shape[:2]
     matrix = cv2.getRotationMatrix2D((width / 2, height / 2), angle, 1.0)
-    rotated = cv2.warpAffine(
-        array, matrix, (width, height), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE
-    )
+    rotated = cv2.warpAffine(array, matrix, (width, height), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
     return Image.fromarray(rotated)
 
 
@@ -650,9 +643,7 @@ def ocr_prepared_image(image) -> OcrPage:
     output = _get_engine()(pixels)
     if output.boxes is None or not len(output.boxes):
         return OcrPage(lines=[])
-    boxes = [
-        (quad.tolist(), text, float(score)) for quad, text, score in zip(output.boxes, output.txts, output.scores)
-    ]
+    boxes = [(quad.tolist(), text, float(score)) for quad, text, score in zip(output.boxes, output.txts, output.scores)]
     return OcrPage(lines=group_boxes_into_lines(boxes))
 
 

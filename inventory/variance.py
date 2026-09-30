@@ -34,8 +34,8 @@ smaller. A floor is what you want to act on.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from datetime import date
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 
 from django.db.models import Count, Q
 
@@ -157,10 +157,10 @@ def recipe_usage_terms(recipe) -> list[list[dict[int, Decimal]]]:
 
     « Per serving sold » is `Recipe.per_sale` and not the yield alone: a
     terrine producing 1,6 kg and sold in 150 g plates gives up 0,15/1,6 of
-    itself a plate, and read per kilo the écarts would report ten times what
-    a plate really took as missing stock. The share IS one over the yield
-    while a recipe sells one whole preparation, which is every recipe filed
-    until a portion is - so nothing here moves for them.
+    itself a plate, and read per kilo the variance page would report ten
+    times what a plate really took as missing stock. The share IS one over
+    the yield while a recipe sells one whole preparation, which is every
+    recipe filed until a portion is - so nothing here moves for them.
     """
     terms = []
     for group in recipe.choice_groups():
@@ -184,6 +184,7 @@ def recipe_pool_groups(recipe) -> list[set[int]]:
 # --------------------------------------------------------------------------
 # Pools
 # --------------------------------------------------------------------------
+
 
 class _UnionFind:
     def __init__(self):
@@ -234,16 +235,13 @@ def build_pools(recipes, stock_type_ids=()) -> dict[int, frozenset[int]]:
     members: dict[int, set] = {}
     for stock_type_id in list(union_find.parent):
         members.setdefault(union_find.find(stock_type_id), set()).add(stock_type_id)
-    return {
-        stock_type_id: frozenset(group)
-        for group in members.values()
-        for stock_type_id in group
-    }
+    return {stock_type_id: frozenset(group) for group in members.values() for stock_type_id in group}
 
 
 # --------------------------------------------------------------------------
 # Counting what's on the shelf
 # --------------------------------------------------------------------------
+
 
 def stock_units_per_item(product: Product, ratios: dict | None = None) -> Decimal:
     """How much of the stock type's own unit one physical item of this
@@ -256,7 +254,7 @@ def stock_units_per_item(product: Product, ratios: dict | None = None) -> Decima
     `ratios` is {product_id: {ratio, ...}} from services.product_counting_ratios
     for a batch of products at once. Without it this runs that query for this
     ONE product - fine for a single stock-take line, ruinous across a whole
-    report (357 of them was most of the écarts page's runtime).
+    report (357 of them was most of the variance page's runtime).
     """
     if product.unit == UnitChoices.UNIT:
         return product.stock_equivalent
@@ -292,7 +290,7 @@ def counts_by_stock_type(stock_take: StockTake) -> dict[int, Decimal]:
     counts: dict[int, Decimal] = {}
     lines = list(stock_take.lines.select_related("product__stock_type", "stock_type"))
     # One counting-ratio query for the whole count rather than one per line -
-    # an inventory is hundreds of lines, and both the écarts page and the
+    # an inventory is hundreds of lines, and both the variance page and the
     # stock page's period mode read two of these per request.
     ratios = product_counting_ratios([line.product_id for line in lines if line.product_id])
     for line in lines:
@@ -332,6 +330,7 @@ def movements_between(start: date | None, end: date) -> dict[int, dict[str, Deci
 # --------------------------------------------------------------------------
 # The report
 # --------------------------------------------------------------------------
+
 
 @dataclass
 class PoolVariance:
@@ -377,8 +376,11 @@ class PoolVariance:
         return any(
             value
             for value in (
-                self.opening, self.closing, self.purchases,
-                self.known_losses, self.expected_usage_max,
+                self.opening,
+                self.closing,
+                self.purchases,
+                self.known_losses,
+                self.expected_usage_max,
             )
         )
 
@@ -506,7 +508,7 @@ class VarianceReport:
         view would set aside."""
         return len([pool for pool in self.missing if not pool.in_recipes])
 
-    def only_in_recipes(self) -> "VarianceReport":
+    def only_in_recipes(self) -> VarianceReport:
         """The same report with the pools no recipe can reach left out.
 
         A new report rather than a flag read by the properties: every figure
@@ -595,7 +597,7 @@ def typical_item_sizes(stock_type_ids=None) -> dict[int, Decimal]:
     Batched deliberately: the per-stock-type version ran three queries per
     stock type (its products, each product's counting ratio, each product's
     invoice-line count), which on 274 stock types was over 1,400 queries and
-    the bulk of the écarts page. This is three, whatever the size.
+    the bulk of the variance page. This is three, whatever the size.
     """
     from invoices.models import InvoiceLine
 
@@ -607,9 +609,7 @@ def typical_item_sizes(stock_type_ids=None) -> dict[int, Decimal]:
     product_ids = [product.id for product in products]
     ratios = product_counting_ratios(product_ids)
     line_counts = dict(
-        InvoiceLine.objects.filter(product_id__in=product_ids)
-        .values_list("product_id")
-        .annotate(total=Count("id"))
+        InvoiceLine.objects.filter(product_id__in=product_ids).values_list("product_id").annotate(total=Count("id"))
     )
 
     counts: dict[int, dict[Decimal, int]] = {}
@@ -661,19 +661,17 @@ def compute_variance(closing_take: StockTake, opening_take: StockTake | None = N
 
     # One read of each recipe for the whole report, as on the stock page: its
     # groups are asked for once per pool, once per expected amount and once
-    # per name, and each ask was a query (277 to draw the écarts page).
+    # per name, and each ask was a query (277 to draw the variance page).
     with variation_scope():
         return _compute_variance(closing_take, opening_take)
 
 
-def _compute_variance(closing_take: StockTake, opening_take: StockTake | None = None) -> "VarianceReport":
+def _compute_variance(closing_take: StockTake, opening_take: StockTake | None = None) -> VarianceReport:
     from recipes.models import Recipe
     from recipes.sales import sales_between, stock_type_sales_between
 
     if opening_take is None:
-        opening_take = (
-            StockTake.objects.filter(taken_at__lt=closing_take.taken_at).order_by("-taken_at").first()
-        )
+        opening_take = StockTake.objects.filter(taken_at__lt=closing_take.taken_at).order_by("-taken_at").first()
 
     report = VarianceReport(closing_take=closing_take, opening_take=opening_take)
 
@@ -795,6 +793,7 @@ def _compute_variance(closing_take: StockTake, opening_take: StockTake | None = 
 # One item, between two counts
 # --------------------------------------------------------------------------
 
+
 @dataclass
 class PeriodStock:
     """What happened to one stock item between two counts.
@@ -873,13 +872,11 @@ def stock_between(closing_take: StockTake, opening_take: StockTake | None = None
     The same two modes as compute_variance, picked the same way: between two
     counts when there is an earlier one, otherwise since the beginning with
     opening stock zero. Built from the same counts_by_stock_type() and
-    movements_between() so the stock page and the écarts page can never
+    movements_between() so the stock page and the variance page can never
     disagree about what a period contains.
     """
     if opening_take is None:
-        opening_take = (
-            StockTake.objects.filter(taken_at__lt=closing_take.taken_at).order_by("-taken_at").first()
-        )
+        opening_take = StockTake.objects.filter(taken_at__lt=closing_take.taken_at).order_by("-taken_at").first()
     period = StockPeriod(closing_take=closing_take, opening_take=opening_take)
 
     opening_counts = counts_by_stock_type(opening_take) if opening_take is not None else {}
@@ -897,10 +894,7 @@ def stock_between(closing_take: StockTake, opening_take: StockTake | None = None
             # from, so only the closing one matters - same rule as
             # compute_variance, and for the same reason: an item nobody
             # counted has everything it ever bought looking evaporated.
-            counted=(
-                stock_type_id in closing_counts
-                and (opening_take is None or stock_type_id in opening_counts)
-            ),
+            counted=(stock_type_id in closing_counts and (opening_take is None or stock_type_id in opening_counts)),
         )
     return period
 
@@ -1173,7 +1167,7 @@ def quantities_sold(
         return _quantities_sold(start, end, unit_costs, available)
 
 
-def _quantities_sold(start, end, unit_costs, available) -> dict[int, "SoldQuantity"]:
+def _quantities_sold(start, end, unit_costs, available) -> dict[int, SoldQuantity]:
     from django.utils import timezone
 
     from recipes.models import Recipe

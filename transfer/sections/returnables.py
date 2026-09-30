@@ -1,5 +1,5 @@
-"""« Consignes » (spec §8): the types of consigne, the formats of bons with
-their motifs, every reprise with its counts and photos, and every bon with
+"""« Consignes » (spec §8): the returnable types, the slip formats with
+their patterns, every pickup with its counts and photos, and every slip with
 its PDF and what its reading found.
 
 What is worth keeping is what nothing rebuilds: how many kegs were handed
@@ -7,26 +7,26 @@ back on which day, and the photos taken before the lorry left. So:
 
 * **Natural keys, never pks.** A type and a format are found by their name,
   the way their form refuses a twin: `search_key(" ".join(name.split()))`
-  (« Futs » finds « Fûts »). A reprise by its `reference` - random, never
-  shown, never edited, so a reprise whose date or counts were corrected is
-  still the same reprise. A bon by the sha256 of its PDF. A supplier by its
+  (« Futs » finds « Fûts »). A pickup by its `reference` - random, never
+  shown, never edited, so a pickup whose date or counts were corrected is
+  still the same pickup. A slip by the sha256 of its PDF. A supplier by its
   code (then its name, from `supplier_names`).
-* **A bon's reading is not compared.** It is a function of its text and its
-  format's motifs: compared, one motif edited here would turn every bon into
-  a conflict. It is copied when the bon is created, and under « Remplacer »
+* **A slip's reading is not compared.** It is a function of its text and its
+  format's patterns: compared, one pattern edited here would turn every slip
+  into a conflict. It is copied when the slip is created, and under « Remplacer »
   when the text or the format changed - never read again at import (an
   import reads nothing; a 0.25 s timeout could make the confirm differ from
   its preview, and the confirm would be refused).
-* **Every motif is checked as the forms check it** (`returnables.patterns`):
-  an archive is a file anybody can edit, and a motif that never went
+* **Every pattern is checked as the forms check it** (`returnables.patterns`):
+  an archive is a file anybody can edit, and a pattern that never went
   through the guard would be compiled at the first drawing of /consignes/ -
-  the 50 GB compile of 29/09, through an import. A refused motif skips its
+  the 50 GB compile of 29/09, through an import. A refused pattern skips its
   record: « motif refusé : <champ> — <raison> ».
 * **Every date is bounded as the form and the reader bound it**
-  (`check_date`): a reprise's day and a bon's delivery within [2000-01-01,
+  (`check_date`): a pickup's day and a slip's delivery within [2000-01-01,
   today + 7 days], a mail's date within [2000-01-01, today + 1 day]; past
   them the record is skipped (« date hors limites »). The codec reads any
-  ISO date, and a reprise dated 9999-12-31 - the newest, drawn first - made
+  ISO date, and a pickup dated 9999-12-31 - the newest, drawn first - made
   /consignes/ a 500 for good through the page's date arithmetic.
 * **Files** go through `ctx.check_file` / `ctx.save_file` (reused when the
   same bytes are there, written under an available name otherwise), under
@@ -78,18 +78,32 @@ KEY = "consignes"
 # -- what travels --------------------------------------------------------------------
 
 TYPE_FIELDS = ("name", "position", "is_active", "slip_patterns", "created_at")
-MOTIF_FIELDS = tuple(motif_field.attr for motif_field in patterns.FORMAT_FIELDS)
-FORMAT_FIELDS = ("name", "is_active", *MOTIF_FIELDS, "created_at")
+PATTERN_FIELDS = tuple(pattern_field.attr for pattern_field in patterns.FORMAT_FIELDS)
+FORMAT_FIELDS = ("name", "is_active", *PATTERN_FIELDS, "created_at")
 PICKUP_FIELDS = ("reference", "date", "note", "created_at")
 COUNT_FIELDS = ("quantity",)
 PHOTO_FILES = ("image", "thumb")
 PHOTO_FIELDS = ("taken_at", "width", "height", "created_at")
 SLIP_FIELDS = (
-    "sha256", "origin", "original_name", "mail_sender", "mail_subject", "mail_date", "received_at", "text",
+    "sha256",
+    "origin",
+    "original_name",
+    "mail_sender",
+    "mail_subject",
+    "mail_date",
+    "received_at",
+    "text",
 )
-#: What a reading wrote on the bon (returnables.slips): copied, never compared.
+#: What a reading wrote on the slip (returnables.slips): copied, never compared.
 READING_FIELDS = (
-    "delivery_date", "printed_at", "number", "references", "replaces", "printed_total", "remarks", "checks",
+    "delivery_date",
+    "printed_at",
+    "number",
+    "references",
+    "replaces",
+    "printed_total",
+    "remarks",
+    "checks",
     "read_error",
 )
 LINE_FIELDS = ("position", "designation", "quantity", "unit_amount", "amount")
@@ -97,10 +111,10 @@ LINE_FIELDS = ("position", "designation", "quantity", "unit_amount", "amount")
 # Never the moment a row was made (§6.4): an export of the same data taken a
 # minute later merges as « inchangé ».
 TYPE_COMPARED = ("name", "position", "is_active", "slip_patterns")
-FORMAT_COMPARED = ("name", "is_active", *MOTIF_FIELDS)
+FORMAT_COMPARED = ("name", "is_active", *PATTERN_FIELDS)
 PICKUP_COMPARED = ("date", "note")
 PHOTO_COMPARED = ("taken_at", "width", "height")
-#: A bon compared outside its reading: what was received, and the text read.
+#: A slip compared outside its reading: what was received, and the text read.
 SLIP_COMPARED = ("origin", "original_name", "mail_sender", "mail_subject", "mail_date", "text")
 
 #: Every concrete field of the seven models is exported or said why not - a
@@ -146,15 +160,15 @@ ENTITIES = (TYPES, FORMATS, PICKUPS, PHOTOS, SLIPS, LINES)
 
 #: The stored names this section writes: never another section's folder.
 FOLDER = "consignes/"
-#: What a bon's reading may hold (returnables.reading): more is not a reading
+#: What a slip's reading may hold (returnables.reading): more is not a reading
 #: this application wrote.
 MAX_REFERENCES = 20
 MAX_REFERENCE_CHARS = 40
 MAX_QUANTITY = patterns.MAX_QUANTITY
 MAX_POSITION = 32_767
 #: How far past today a date may be (from 2000-01-01, patterns.OLDEST_DATE):
-#: a reprise's day and a bon's delivery as the reader allows it (another
-#: machine's clock, a bon printed ahead); a mail's date one day.
+#: a pickup's day and a slip's delivery as the reader allows it (another
+#: machine's clock, a slip printed ahead); a mail's date one day.
 FUTURE_DAYS = patterns.FUTURE_DAYS
 MAIL_FUTURE_DAYS = 1
 
@@ -164,7 +178,10 @@ LABELS = {
     "is_active": "actif",
     "slip_patterns": "motifs des bons",
     "supplier": "fournisseur",
-    **{motif_field.attr: motif_field.label[0].lower() + motif_field.label[1:] for motif_field in patterns.FORMAT_FIELDS},
+    **{
+        pattern_field.attr: pattern_field.label[0].lower() + pattern_field.label[1:]
+        for pattern_field in patterns.FORMAT_FIELDS
+    },
     "date": "date",
     "note": "note",
     "counts": "nombres",
@@ -235,6 +252,7 @@ class _Slip:
 
 # -- keys and words --------------------------------------------------------------------
 
+
 def name_key(name: str) -> str:
     """How a type or a format is found: the forms' own rule, case, accents
     and spaces ignored - an archive's « Futs » is this database's « Fûts »,
@@ -251,7 +269,7 @@ def slip_label(number, delivery_date) -> str:
     return f"{label} du {day(delivery_date)}" if delivery_date else label
 
 
-def _refused(label: str, error: patterns.MotifError) -> str:
+def _refused(label: str, error: patterns.PatternError) -> str:
     """« motif refusé : <champ> — <raison> », from the guard's own sentence
     (« <champ> : <raison>. »)."""
     field_label, separator, reason = error.message.partition(" : ")
@@ -260,33 +278,33 @@ def _refused(label: str, error: patterns.MotifError) -> str:
     return f"motif refusé : {field_label} — {reason.rstrip('.')}"
 
 
-def check_type_motifs(value) -> None:
+def check_type_patterns(value) -> None:
     """A type's « motifs des bons », checked as its form checks them."""
     try:
         patterns.compile_field(patterns.TYPE_FIELD, value)
-    except patterns.MotifError as error:
+    except patterns.PatternError as error:
         raise codec.FieldValueError(_refused(patterns.TYPE_FIELD.label, error)) from None
 
 
-def check_format_motifs(values: dict) -> None:
-    """A format's motifs as they would be stored, checked as its form checks
+def check_format_patterns(values: dict) -> None:
+    """A format's patterns as they would be stored, checked as its form checks
     them: each by the guard (returnables.patterns), the line and the date
-    motifs required, and a sender motif naming an address or a domain, with
+    patterns required, and a sender pattern naming an address or a domain, with
     its subject."""
-    for motif_field in patterns.FORMAT_FIELDS:
-        value = values.get(motif_field.attr) or ""
-        if motif_field.required and not value.strip():
-            raise codec.FieldValueError(f"motif refusé : {motif_field.label} — le motif est vide")
+    for pattern_field in patterns.FORMAT_FIELDS:
+        value = values.get(pattern_field.attr) or ""
+        if pattern_field.required and not value.strip():
+            raise codec.FieldValueError(f"motif refusé : {pattern_field.label} — le motif est vide")
         try:
-            patterns.compile_field(motif_field, value)
-        except patterns.MotifError as error:
-            raise codec.FieldValueError(_refused(motif_field.label, error)) from None
+            patterns.compile_field(pattern_field, value)
+        except patterns.PatternError as error:
+            raise codec.FieldValueError(_refused(pattern_field.label, error)) from None
     sender = (values.get("sender_pattern") or "").strip()
     if sender:
         label = patterns.FIELD_BY_ATTR["sender_pattern"].label
         try:
-            patterns.check_sender_motif(sender)
-        except patterns.MotifError as error:
+            patterns.check_sender_pattern(sender)
+        except patterns.PatternError as error:
             raise codec.FieldValueError(_refused(label, error)) from None
         if not (values.get("subject_pattern") or "").strip():
             raise codec.FieldValueError(
@@ -297,7 +315,7 @@ def check_format_motifs(values: dict) -> None:
 
 def check_date(name: str, value, *, future_days: int, today: date | None = None):
     """`value` (a date codec.load read, or None) when it lies within
-    [2000-01-01, today + future_days] - the bounds of the reprise form and
+    [2000-01-01, today + future_days] - the bounds of the pickup form and
     of the reader - else FieldValueError: its record is skipped, said. The
     codec reads any ISO date; one at the calendar's ends (9999-12-31,
     0001-01-02) read in made every page doing date arithmetic on it a 500."""
@@ -361,9 +379,9 @@ def _stored(name: str) -> bool:
 
 # -- sizes, for count() ------------------------------------------------------------------
 
-#: (espace, media folder) → (hash of the names, when, bytes): as the
-#: invoices section keeps its own (sections/invoices.py) - per espace, since
-#: two espaces restored from one archive name the same files.
+#: (tenant, media folder) → (hash of the names, when, bytes): as the
+#: invoices section keeps its own (sections/invoices.py) - per tenant, since
+#: two tenants restored from one archive name the same files.
 _SIZES: dict[tuple[str, str], tuple[int, float, int]] = {}
 
 
@@ -385,7 +403,7 @@ def _bytes_of(names: frozenset[str]) -> int:
 
 
 def named_files() -> set[str]:
-    """Every file a row of this section names: photos, thumbnails, bons."""
+    """Every file a row of this section names: photos, thumbnails, slips."""
     names = set()
     for image, thumb in PickupPhoto.objects.values_list("image", "thumb"):
         names.update(name for name in (image, thumb) if name)
@@ -394,7 +412,7 @@ def named_files() -> set[str]:
 
 
 @registry.register
-class ConsignesSection(Section):
+class ReturnablesSection(Section):
     key = KEY
 
     # -- what this database holds ----------------------------------------------------
@@ -503,7 +521,8 @@ class ConsignesSection(Section):
                     "supplier": pickup.supplier.code if pickup.supplier_id else None,
                     **codec.record(pickup, PICKUP_FIELDS),
                     "counts": [
-                        {"type": count.returnable_type.name, "quantity": count.quantity} for count in pickup.counts.all()
+                        {"type": count.returnable_type.name, "quantity": count.quantity}
+                        for count in pickup.counts.all()
                     ],
                     "photos": [
                         {
@@ -534,9 +553,11 @@ class ConsignesSection(Section):
         out.write(
             {
                 # A code may differ in the database this is imported into:
-                # its name lets the formats and reprises still find their
+                # its name lets the formats and pickups still find their
                 # supplier (keys.SupplierResolver).
-                "supplier_names": {supplier.code: supplier.name for supplier in sorted(suppliers, key=lambda s: s.code)},
+                "supplier_names": {
+                    supplier.code: supplier.name for supplier in sorted(suppliers, key=lambda s: s.code)
+                },
                 "types": [codec.record(row, TYPE_FIELDS) for row in types],
                 "formats": [{"supplier": row.supplier.code, **codec.record(row, FORMAT_FIELDS)} for row in formats],
                 "pickups": pickup_records,
@@ -586,7 +607,7 @@ class ConsignesSection(Section):
     # .. types .......................................................................
     def _apply_types(self) -> dict:
         """Returns every type here by key, the archive's own first: what a
-        reprise's counts are resolved against."""
+        pickup's counts are resolved against."""
         report = self._report
         rows = list(ReturnableType.objects.order_by("position", "id"))
         by_name = {row.name: row for row in rows}
@@ -615,9 +636,11 @@ class ConsignesSection(Section):
                 self._claimed_types.add(row.pk)
                 resolved[key] = row
             try:
-                values = {name_: codec.load(ReturnableType, name_, record[name_]) for name_ in TYPE_FIELDS if name_ in record}
+                values = {
+                    name_: codec.load(ReturnableType, name_, record[name_]) for name_ in TYPE_FIELDS if name_ in record
+                }
                 if "slip_patterns" in values:
-                    check_type_motifs(values["slip_patterns"])
+                    check_type_patterns(values["slip_patterns"])
                 if row is None:
                     row = ReturnableType(**{name_: value for name_, value in values.items() if name_ != "created_at"})
                     row.save()
@@ -674,19 +697,23 @@ class ConsignesSection(Section):
                 report.skip(f"{label} : fournisseur inconnu (« {code} »)")
                 continue
             try:
-                values = {name_: codec.load(SlipFormat, name_, record[name_]) for name_ in FORMAT_FIELDS if name_ in record}
-                # The motifs as they would be stored: what the record says,
+                values = {
+                    name_: codec.load(SlipFormat, name_, record[name_]) for name_ in FORMAT_FIELDS if name_ in record
+                }
+                # The patterns as they would be stored: what the record says,
                 # else what is here (or the field's default, for a new one).
-                check_format_motifs(
+                check_format_patterns(
                     {
                         attr: values[attr]
                         if attr in values
                         else (getattr(row, attr) if row is not None else SlipFormat._meta.get_field(attr).get_default())
-                        for attr in MOTIF_FIELDS
+                        for attr in PATTERN_FIELDS
                     }
                 )
                 if row is None:
-                    row = SlipFormat(supplier=supplier, **{name_: value for name_, value in values.items() if name_ != "created_at"})
+                    row = SlipFormat(
+                        supplier=supplier, **{name_: value for name_, value in values.items() if name_ != "created_at"}
+                    )
                     row.save()
                     created.append((row, values.get("created_at")))
                     self._claimed_formats.add(row.pk)
@@ -759,7 +786,7 @@ class ConsignesSection(Section):
                 default_storage.delete(name)
                 self._ctx.stored_files.remove(name)
 
-    # .. reprises ....................................................................
+    # .. pickups .....................................................................
     def _apply_pickups(self, types: dict) -> None:
         report = self._report
         existing = {
@@ -823,7 +850,9 @@ class ConsignesSection(Section):
             for item in items:
                 codec.note_unknown(self._report, item, PHOTO_KEYS, where="reprises › photos › ")
                 photo_values = {
-                    name: codec.load(PickupPhoto, name, item[name]) for name in ("taken_at", "created_at") if name in item
+                    name: codec.load(PickupPhoto, name, item[name])
+                    for name in ("taken_at", "created_at")
+                    if name in item
                 }
                 for name in ("width", "height"):  # no default: a photo without them cannot be stored
                     photo_values[name] = codec.load(PickupPhoto, name, item.get(name))
@@ -990,7 +1019,7 @@ class ConsignesSection(Section):
         return len(changed)
 
     def _replace_pickup(self, pickup: Pickup, parsed: _Pickup, here: list, states: list, different: list) -> None:
-        """The reprise becomes the archive's: its fields, its counts as a
+        """The pickup becomes the archive's: its fields, its counts as a
         whole, its photos paired by rank - one equal to the archive's is left
         as it is, one that differs is rewritten in place (its old files
         deleted on commit), the extra ones here go, the archive's extra ones
@@ -1063,7 +1092,7 @@ class ConsignesSection(Section):
         for name in old_names:
             ctx.delete_file_on_commit(name)
 
-    # .. bons ........................................................................
+    # .. slips .......................................................................
     def _apply_slips(self, formats: dict) -> None:
         report = self._report
         existing = {slip.sha256: slip for slip in Slip.objects.select_related("format")}
@@ -1174,7 +1203,7 @@ class ConsignesSection(Section):
             report.skip(f"{parsed.label} : fichier absent du disque à l'export (« {ref.name} »)")
             return
         if not isinstance(ref, dict):
-            # The pages show a bon's PDF: a bon without one is not stored.
+            # The pages show a slip's PDF: a slip without one is not stored.
             report.skip(f"{parsed.label} : sans fichier dans l'archive")
             return
         written: list[str] = []
@@ -1230,7 +1259,7 @@ class ConsignesSection(Section):
             report.unchanged(LINES, len(lines))
 
     def _replace_slip(self, slip: Slip, parsed: _Slip, lines: list, different: list, state: str) -> None:
-        """The bon becomes the archive's. Its reading goes with it only when
+        """The slip becomes the archive's. Its reading goes with it only when
         the text or the format changed: read from the same text by the same
         format, this database's reading stands."""
         report = self._report
@@ -1271,10 +1300,12 @@ class ConsignesSection(Section):
     # .. prune ......................................................................
     def prune(self, ctx, report) -> None:
         """What the archive does not name goes, in the order the rows hold
-        one another: reprises (their counts and photos), bons (their lines),
+        one another: pickups (their counts and photos), slips (their lines),
         formats, types. A format or a type something kept still uses stays,
         said."""
-        pickups = [pk for pk, reference in Pickup.objects.values_list("pk", "reference") if reference not in self._references]
+        pickups = [
+            pk for pk, reference in Pickup.objects.values_list("pk", "reference") if reference not in self._references
+        ]
         if pickups:
             names, photos = [], 0
             for image, thumb in PickupPhoto.objects.filter(pickup_id__in=pickups).values_list("image", "thumb"):
@@ -1286,7 +1317,9 @@ class ConsignesSection(Section):
                 report.deleted(PHOTOS, photos)
             for name in names:
                 ctx.delete_file_on_commit(name)
-        slips = [(pk, name) for pk, sha, name in Slip.objects.values_list("pk", "sha256", "file") if sha not in self._shas]
+        slips = [
+            (pk, name) for pk, sha, name in Slip.objects.values_list("pk", "sha256", "file") if sha not in self._shas
+        ]
         if slips:
             lines = SlipLine.objects.filter(slip_id__in=[pk for pk, _name in slips]).count()
             _delete_ids(Slip, [pk for pk, _name in slips])
@@ -1296,11 +1329,19 @@ class ConsignesSection(Section):
             for _pk, name in slips:
                 ctx.delete_file_on_commit(name)
         self._prune_named(
-            report, SlipFormat, self._claimed_formats, FORMATS, "slips",
+            report,
+            SlipFormat,
+            self._claimed_formats,
+            FORMATS,
+            "slips",
             lambda name, n: f"Format de bon « {name} » : encore utilisé par {plural(n, 'bon')}",
         )
         self._prune_named(
-            report, ReturnableType, self._claimed_types, TYPES, "counts",
+            report,
+            ReturnableType,
+            self._claimed_types,
+            TYPES,
+            "counts",
             lambda name, n: f"Type de consigne « {name} » : encore compté dans {plural(n, 'reprise')}",
         )
 

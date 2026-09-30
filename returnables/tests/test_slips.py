@@ -3,7 +3,7 @@
 
 Every PDF is a few hundred bytes built from the invented tickets of
 returnables/tests/texts.py; every number, date and name is invented. A slow
-motif is simulated (a stand-in pattern raising TimeoutError), never run.
+pattern is simulated (a stand-in pattern raising TimeoutError), never run.
 """
 
 import hashlib
@@ -44,8 +44,8 @@ UPLOAD = Slip.Origin.UPLOAD
 MAIL = Slip.Origin.MAIL
 
 
-def consignes_files() -> list:
-    """Every file under the espace's consignes/ folder."""
+def returnables_files() -> list:
+    """Every file under the tenant's consignes/ folder."""
     root = Path(paths.media_root()) / "consignes"
     if not root.exists():
         return []
@@ -85,7 +85,7 @@ class FakeBudget:
 
 
 class NeverAnInvoiceMixin:
-    """The invoice importers replaced by spies that fail if called: a bon is
+    """The invoice importers replaced by spies that fail if called: a slip is
     never filed as an invoice."""
 
     def setUp(self):
@@ -108,7 +108,7 @@ class NeverAnInvoiceMixin:
 
 
 class StoreSlipTests(NeverAnInvoiceMixin, NoNetworkTestCase):
-    def test_a_bon_is_stored_with_its_reading_its_lines_and_its_file(self):
+    def test_a_slip_is_stored_with_its_reading_its_lines_and_its_file(self):
         content = pdf_of(texts.NORMAL.text)
         result = store_slip(content, filename="T0000001.pdf", origin=UPLOAD)
         self.assertEqual((result.kind, result.created), (CREATED, True))
@@ -120,8 +120,9 @@ class StoreSlipTests(NeverAnInvoiceMixin, NoNetworkTestCase):
         self.assertEqual(slip.original_name, "T0000001.pdf")
         self.assertEqual(slip.number, "1001")
         self.assertEqual(slip.delivery_date, texts.NORMAL.delivery_date)
-        self.assertEqual(timezone.localtime(slip.printed_at).replace(tzinfo=None),
-                         datetime.combine(*texts.NORMAL.printed))
+        self.assertEqual(
+            timezone.localtime(slip.printed_at).replace(tzinfo=None), datetime.combine(*texts.NORMAL.printed)
+        )
         self.assertEqual(slip.references, ["610001"])
         self.assertFalse(slip.replaces)
         self.assertEqual(slip.printed_total, Decimal("-175.00"))
@@ -158,58 +159,61 @@ class StoreSlipTests(NeverAnInvoiceMixin, NoNetworkTestCase):
         self.assertTrue(slip.mail_subject.startswith("Livraison du 14/05/2025 Tour. : EXEMPLE"))
         self.assertEqual(slip.mail_date, date(2025, 5, 14))
 
-    def test_the_same_bytes_twice_are_one_bon(self):
+    def test_the_same_bytes_twice_are_one_slip(self):
         content = pdf_of(texts.NORMAL.text)
         first = store_slip(content, filename="a.pdf", origin=UPLOAD)
-        files = consignes_files()
+        files = returnables_files()
         with mock.patch.object(reading, "pdf_text", side_effect=AssertionError("read again")) as extracted:
             again = store_slip(content, filename="b.pdf", origin=MAIL)
         extracted.assert_not_called()
         self.assertEqual((again.kind, again.created, again.slip), (DUPLICATE, False, first.slip))
         self.assertEqual(again.message, "déjà reçu (bon n° 1001 du 14/05/2025).")
         self.assertEqual(Slip.objects.count(), 1)
-        self.assertEqual(consignes_files(), files)
+        self.assertEqual(returnables_files(), files)
 
     def test_a_resend_is_not_stored_again(self):
         first = store_slip(pdf_of(texts.NORMAL.text), filename="a.pdf", origin=MAIL)
-        files = consignes_files()
+        files = returnables_files()
         again = store_slip(pdf_of(texts.RESEND.text), filename="b.pdf", origin=MAIL)
         self.assertEqual((again.kind, again.created, again.slip), (RESEND, False, first.slip))
         self.assertEqual(again.message, "bon n° 1001 du 14/05/2025 déjà reçu : ce document en est un renvoi.")
         self.assertEqual(again.reading.printed_at.date(), date(2025, 5, 15))
         self.assertEqual(Slip.objects.count(), 1)
-        self.assertEqual(consignes_files(), files)
+        self.assertEqual(returnables_files(), files)
 
-    def test_the_same_number_on_another_delivery_date_is_another_bon(self):
+    def test_the_same_number_on_another_delivery_date_is_another_slip(self):
         store_slip(pdf_of(texts.NORMAL.text), filename="a.pdf", origin=MAIL)
         other_day = texts.NORMAL.text.replace("BL No: 610001 du 14/05/2025", "BL No: 610001 du 21/05/2025")
         result = store_slip(pdf_of(other_day), filename="b.pdf", origin=MAIL)
         self.assertEqual(result.kind, CREATED)
         self.assertEqual(result.slip.delivery_date, date(2025, 5, 21))
 
-    def test_the_same_number_with_other_lines_is_another_bon(self):
+    def test_the_same_number_with_other_lines_is_another_slip(self):
         store_slip(pdf_of(texts.NORMAL.text), filename="a.pdf", origin=MAIL)
-        corrected = texts.NORMAL.text.replace(texts.row(texts.KEG, 3, "30.00", "90.00"),
-                                              texts.row(texts.KEG, 2, "30.00", "60.00"))
+        corrected = texts.NORMAL.text.replace(
+            texts.row(texts.KEG, 3, "30.00", "90.00"), texts.row(texts.KEG, 2, "30.00", "60.00")
+        )
         self.assertEqual(store_slip(pdf_of(corrected), filename="b.pdf", origin=MAIL).kind, CREATED)
 
-    def test_a_bon_naming_no_bon_is_never_taken_for_a_resend(self):
+    def test_a_slip_naming_no_slip_is_never_taken_for_a_resend(self):
         """No number and no reference: two deliveries of the same kegs on
-        one day are two bons."""
+        one day are two slips."""
         fmt = make_format(name="Sans numéro", number_patterns="", reference_patterns="")
         first = store_slip(pdf_of(texts.NORMAL.text), filename="a.pdf", fmt=fmt, origin=UPLOAD)
         second = store_slip(pdf_of(texts.RESEND.text), filename="b.pdf", fmt=fmt, origin=UPLOAD)
         self.assertEqual((first.kind, second.kind), (CREATED, CREATED))
         self.assertEqual((first.slip.number, first.slip.references), ("", []))
 
-    def test_a_reading_that_failed_is_stored_so_that_relire_can_fix_it(self):
+    def test_a_reading_that_failed_is_stored_so_that_reread_can_fix_it(self):
         fmt = make_format(name="Motif cassé", line_pattern=r"^(?P<designation>.+")
         content = pdf_of(texts.NORMAL.text)
         result = store_slip(content, filename="a.pdf", fmt=fmt, origin=MAIL)
         self.assertEqual((result.kind, result.created), (CREATED, True))
         slip = result.slip
         self.assertTrue(slip.read_error.startswith("Motif de ligne : parenthèse non fermée"), slip.read_error)
-        self.assertEqual(slip.checks, [{"label": "Lecture impossible", "passed": False, "detail": result.reading.error}])
+        self.assertEqual(
+            slip.checks, [{"label": "Lecture impossible", "passed": False, "detail": result.reading.error}]
+        )
         self.assertEqual(slip.lines.count(), 0)
         self.assertEqual((slip.number, slip.delivery_date), ("", None))
         self.assertEqual(slip.text, reading.pdf_text(content))
@@ -221,9 +225,9 @@ class StoreSlipTests(NeverAnInvoiceMixin, NoNetworkTestCase):
         real = patterns.compile_format
 
         def slow_lines(fmt, *args, **kwargs):
-            motifs = real(fmt, *args, **kwargs)
-            motifs["line_pattern"] = [SlowPattern()]
-            return motifs
+            regexes = real(fmt, *args, **kwargs)
+            regexes["line_pattern"] = [SlowPattern()]
+            return regexes
 
         with mock.patch.object(patterns, "compile_format", side_effect=slow_lines):
             result = store_slip(pdf_of(texts.NORMAL.text), filename="a.pdf", origin=MAIL)
@@ -240,11 +244,11 @@ class StoreSlipTests(NeverAnInvoiceMixin, NoNetworkTestCase):
         self.assertEqual(len(result.slip.read_error), 300)
 
     def test_no_format_recognises_it(self):
-        files = consignes_files()
+        files = returnables_files()
         result = store_slip(pdf_of(texts.JUNK), filename="cgv.pdf", origin=UPLOAD)
         self.assertEqual((result.kind, result.slip, result.message), (REFUSED, None, reading.NO_FORMAT))
         self.assertEqual(Slip.objects.count(), 0)
-        self.assertEqual(consignes_files(), files)
+        self.assertEqual(returnables_files(), files)
 
     def test_several_formats_recognise_it(self):
         make_format(name="Copie du format UBA")
@@ -257,7 +261,7 @@ class StoreSlipTests(NeverAnInvoiceMixin, NoNetworkTestCase):
         )
         self.assertEqual(Slip.objects.count(), 0)
 
-    def test_only_active_formats_with_a_start_motif_recognise_a_document(self):
+    def test_only_active_formats_with_a_start_pattern_recognise_a_document(self):
         no_defaults()
         make_format(name="Inactif", is_active=False)
         make_format(name="Sans début", section_start="")
@@ -273,8 +277,10 @@ class StoreSlipTests(NeverAnInvoiceMixin, NoNetworkTestCase):
 
     def test_over_five_megabytes_is_refused_before_it_is_read(self):
         content = pdf_of(texts.NORMAL.text)
-        with mock.patch.object(reading, "MAX_PDF_BYTES", len(content) - 1), \
-                mock.patch.object(reading, "pdf_text", side_effect=AssertionError("read")) as extracted:
+        with (
+            mock.patch.object(reading, "MAX_PDF_BYTES", len(content) - 1),
+            mock.patch.object(reading, "pdf_text", side_effect=AssertionError("read")) as extracted,
+        ):
             result = store_slip(content, filename="a.pdf", origin=UPLOAD)
         extracted.assert_not_called()
         self.assertEqual((result.kind, result.message), (REFUSED, reading.TOO_HEAVY))
@@ -290,12 +296,16 @@ class StoreSlipTests(NeverAnInvoiceMixin, NoNetworkTestCase):
 
     def test_a_text_already_extracted_is_not_extracted_again(self):
         with mock.patch.object(reading, "pdf_text", side_effect=AssertionError("extracted twice")):
-            result = store_slip(pdf_of(texts.NORMAL.text), filename="a.pdf", origin=UPLOAD,
-                                text=texts.NORMAL.text.replace("\n", "\r\n") + "\x00")
+            result = store_slip(
+                pdf_of(texts.NORMAL.text),
+                filename="a.pdf",
+                origin=UPLOAD,
+                text=texts.NORMAL.text.replace("\n", "\r\n") + "\x00",
+            )
         self.assertEqual(result.kind, CREATED)
         self.assertEqual(result.slip.text, texts.NORMAL.text)
 
-    def test_the_gather_ignores_an_attachment_that_is_no_bon_of_its_format(self):
+    def test_the_gather_ignores_an_attachment_that_is_no_slip_of_its_format(self):
         fmt = seeded_format()
         ignored = store_slip(pdf_of(texts.JUNK), filename="cgv.pdf", fmt=fmt, origin=MAIL, skip_non_slips=True)
         self.assertEqual((ignored.kind, ignored.slip), (IGNORED, None))
@@ -305,7 +315,7 @@ class StoreSlipTests(NeverAnInvoiceMixin, NoNetworkTestCase):
         kept = store_slip(pdf_of(texts.JUNK), filename="cgv.pdf", fmt=fmt, origin=UPLOAD)
         self.assertEqual(kept.kind, CREATED)
         self.assertFalse(kept.slip.checks[0]["passed"])
-        # A reading that FAILED is never taken for « not a bon ».
+        # A reading that FAILED is never taken for « not a slip ».
         broken = make_format(name="Cassé", line_pattern="(")
         failed = store_slip(pdf_of(texts.EMPTY.text), filename="t.pdf", fmt=broken, origin=MAIL, skip_non_slips=True)
         self.assertEqual(failed.kind, CREATED)
@@ -316,11 +326,13 @@ class StoreSlipTests(NeverAnInvoiceMixin, NoNetworkTestCase):
 
 
 class FileNameTests(NeverAnInvoiceMixin, NoNetworkTestCase):
-    """A number is whatever the motif captured: the file stays one flat,
+    """A number is whatever the pattern captured: the file stays one flat,
     safe name under consignes/bons/YYYY/MM/."""
 
     def store_numbered(self, number, **fields):
-        fmt = make_format(name=f"Numéros libres {number!r}", number_patterns=r"Ticket No\s*:\s*(?P<numero>.+)$", **fields)
+        fmt = make_format(
+            name=f"Numéros libres {number!r}", number_patterns=r"Ticket No\s*:\s*(?P<numero>.+)$", **fields
+        )
         text = texts.NORMAL.text.replace("Ticket No : 0000001001", f"Ticket No : {number}")
         return store_slip(pdf_of(text), filename="a.pdf", fmt=fmt, origin=UPLOAD).slip
 
@@ -341,7 +353,7 @@ class FileNameTests(NeverAnInvoiceMixin, NoNetworkTestCase):
         self.assertEqual(slip.number, "A" * 30 + "-B")
         self.assertStoredAs(slip, "bon-" + "A" * 20)
 
-    def test_without_a_usable_number_the_delivery_date_then_sans_numero(self):
+    def test_without_a_usable_number_the_delivery_date_then_a_no_number_name(self):
         self.assertStoredAs(self.store_numbered("///"), "bon-20250514")
         fmt = make_format(name="Rien", number_patterns="", date_patterns="rien(?P<date>x)")
         slip = store_slip(pdf_of(texts.EMPTY.text), filename="a.pdf", fmt=fmt, origin=UPLOAD).slip
@@ -355,36 +367,40 @@ class FileNameTests(NeverAnInvoiceMixin, NoNetworkTestCase):
 
 class WritingFailureTests(NeverAnInvoiceMixin, NoNetworkTestCase):
     def test_a_failure_after_the_file_is_saved_leaves_no_file_and_no_row(self):
-        files = consignes_files()
+        files = returnables_files()
         with mock.patch.object(SlipLine.objects, "bulk_create", side_effect=RuntimeError("disque plein")):
             with self.assertRaises(RuntimeError):
                 store_slip(pdf_of(texts.NORMAL.text), filename="a.pdf", origin=UPLOAD)
         self.assertEqual(Slip.objects.count(), 0)
         self.assertEqual(SlipLine.objects.count(), 0)
-        self.assertEqual(consignes_files(), files)
+        self.assertEqual(returnables_files(), files)
 
     def test_the_same_bytes_stored_at_the_same_moment_answer_already_received(self):
         """The sha check passed for both (an upload during a gather): the
         second insert hits the unique sha256, its file goes, and it answers
-        « déjà reçu » with the bon stored first."""
+        « déjà reçu » with the slip stored first."""
         content = pdf_of(texts.NORMAL.text)
         first = store_slip(content, filename="a.pdf", origin=MAIL).slip
-        files = consignes_files()
-        with mock.patch.object(slips, "_stored", side_effect=[None, first]), \
-                mock.patch.object(slips, "_resend_of", return_value=None):
+        files = returnables_files()
+        with (
+            mock.patch.object(slips, "_stored", side_effect=[None, first]),
+            mock.patch.object(slips, "_resend_of", return_value=None),
+        ):
             result = store_slip(content, filename="b.pdf", origin=UPLOAD)
         self.assertEqual((result.kind, result.created, result.slip), (DUPLICATE, False, first))
         self.assertIn("déjà reçu", result.message)
         self.assertEqual(Slip.objects.count(), 1)
-        self.assertEqual(consignes_files(), files)
+        self.assertEqual(returnables_files(), files)
 
     def test_another_integrity_error_is_raised_and_its_file_removed(self):
-        files = consignes_files()
-        with mock.patch.object(slips, "_stored", return_value=None), \
-                mock.patch.object(Slip, "save", side_effect=IntegrityError("autre contrainte")):
+        files = returnables_files()
+        with (
+            mock.patch.object(slips, "_stored", return_value=None),
+            mock.patch.object(Slip, "save", side_effect=IntegrityError("autre contrainte")),
+        ):
             with self.assertRaises(IntegrityError):
                 store_slip(pdf_of(texts.NORMAL.text), filename="a.pdf", origin=UPLOAD)
-        self.assertEqual(consignes_files(), files)
+        self.assertEqual(returnables_files(), files)
 
 
 class StoreUploadsTests(NeverAnInvoiceMixin, NoNetworkTestCase):
@@ -412,7 +428,9 @@ class StoreUploadsTests(NeverAnInvoiceMixin, NoNetworkTestCase):
 
     def test_one_document(self):
         summary = store_uploads([Upload("T1.pdf", pdf_of(texts.NORMAL.text))])
-        self.assertEqual(summary.message, "1 document : 1 bon ajouté, 0 déjà reçu, 0 renvoi d'un bon déjà reçu, 0 refusé.")
+        self.assertEqual(
+            summary.message, "1 document : 1 bon ajouté, 0 déjà reçu, 0 renvoi d'un bon déjà reçu, 0 refusé."
+        )
         self.assertFalse(summary.has_refusals)
 
     def test_at_most_ten_refusals_are_named(self):
@@ -420,9 +438,11 @@ class StoreUploadsTests(NeverAnInvoiceMixin, NoNetworkTestCase):
         self.assertEqual(len(summary.refusals), 10)
         self.assertEqual(summary.refusals[0], f"n00.pdf : {reading.NOT_A_PDF}")
         self.assertEqual(summary.more_refused, 2)
-        self.assertTrue(summary.message.startswith(
-            "12 documents : 0 bon ajouté, 0 déjà reçu, 0 renvoi d'un bon déjà reçu, 12 refusés. n00.pdf : "
-        ))
+        self.assertTrue(
+            summary.message.startswith(
+                "12 documents : 0 bon ajouté, 0 déjà reçu, 0 renvoi d'un bon déjà reçu, 12 refusés. n00.pdf : "
+            )
+        )
         self.assertTrue(summary.message.endswith("… et 2 autres."))
         self.assertNotIn("n10.pdf", summary.message)
 
@@ -440,8 +460,10 @@ class StoreUploadsTests(NeverAnInvoiceMixin, NoNetworkTestCase):
                 raise RuntimeError("base verrouillée")
             return real(content, **kwargs)
 
-        with mock.patch.object(slips, "store_slip", side_effect=breaks_on_the_first), \
-                self.assertLogs("returnables.slips", level="ERROR"):
+        with (
+            mock.patch.object(slips, "store_slip", side_effect=breaks_on_the_first),
+            self.assertLogs("returnables.slips", level="ERROR"),
+        ):
             summary = store_uploads([Upload("casse.pdf", b"x"), Upload("T1.pdf", pdf_of(texts.NORMAL.text))])
         self.assertEqual(summary.refusals, [f"casse.pdf : {UNEXPECTED}"])
         self.assertEqual(summary.created, 1)
@@ -457,7 +479,9 @@ class RereadTests(NeverAnInvoiceMixin, NoNetworkTestCase):
         slip = store_slip(pdf_of(texts.NORMAL.text), filename="a.pdf", origin=UPLOAD).slip
         first_read = slip.read_at
         fmt = seeded_format()
-        fmt.line_pattern = r"^(?P<designation>F.+?)\s+(?P<quantite>\d+)\s+x\s+(?P<prix>[\d.]+)\s+=\s+(?P<montant>[\d.]+)$"
+        fmt.line_pattern = (
+            r"^(?P<designation>F.+?)\s+(?P<quantite>\d+)\s+x\s+(?P<prix>[\d.]+)\s+=\s+(?P<montant>[\d.]+)$"
+        )
         fmt.save()
         slip = Slip.objects.get(pk=slip.pk)
         result = reread(slip)
@@ -473,7 +497,7 @@ class RereadTests(NeverAnInvoiceMixin, NoNetworkTestCase):
         fmt = make_format(name="Corrigé ensuite", line_pattern="(")
         slip = store_slip(pdf_of(texts.NORMAL.text), filename="a.pdf", fmt=fmt, origin=MAIL).slip
         self.assertTrue(slip.read_error)
-        fmt.line_pattern = texts.UBA_MOTIFS["line_pattern"]
+        fmt.line_pattern = texts.UBA_PATTERNS["line_pattern"]
         fmt.save()
         reread(Slip.objects.get(pk=slip.pk))
         slip.refresh_from_db()
@@ -481,16 +505,18 @@ class RereadTests(NeverAnInvoiceMixin, NoNetworkTestCase):
         self.assertEqual((slip.number, slip.references), ("1001", ["610001"]))
         self.assertEqual(stored_lines(slip), texts.NORMAL.lines)
 
-    def test_a_bon_deleted_meanwhile_is_left_alone(self):
+    def test_a_slip_deleted_meanwhile_is_left_alone(self):
         slip = store_slip(pdf_of(texts.NORMAL.text), filename="a.pdf", origin=UPLOAD).slip
         Slip.objects.filter(pk=slip.pk).delete()
         reread(slip)
         self.assertEqual(SlipLine.objects.count(), 0)
         self.assertFalse(Slip.objects.exists())
 
-    def test_reread_format_rereads_every_bon_of_its_format_only(self):
-        mine = [store_slip(pdf_of(ticket.text), filename=f"{ticket.name}.pdf", origin=MAIL).slip
-                for ticket in (texts.NORMAL, texts.EMPTY, texts.TWO_BLS)]
+    def test_reread_format_rereads_every_slip_of_its_format_only(self):
+        mine = [
+            store_slip(pdf_of(ticket.text), filename=f"{ticket.name}.pdf", origin=MAIL).slip
+            for ticket in (texts.NORMAL, texts.EMPTY, texts.TWO_DELIVERY_NOTES)
+        ]
         other = make_format(name="Autre", supplier=make_supplier())
         theirs = store_slip(pdf_of(texts.MIXED.text), filename="m.pdf", fmt=other, origin=MAIL).slip
         Slip.objects.update(read_at=None)
@@ -500,8 +526,10 @@ class RereadTests(NeverAnInvoiceMixin, NoNetworkTestCase):
         self.assertNoInvoice()
 
     def test_reread_format_stops_when_a_whole_reading_no_longer_fits(self):
-        made = [store_slip(pdf_of(ticket.text), filename=f"{ticket.name}.pdf", origin=MAIL).slip
-                for ticket in (texts.NORMAL, texts.EMPTY, texts.TWO_BLS)]
+        made = [
+            store_slip(pdf_of(ticket.text), filename=f"{ticket.name}.pdf", origin=MAIL).slip
+            for ticket in (texts.NORMAL, texts.EMPTY, texts.TWO_DELIVERY_NOTES)
+        ]
         Slip.objects.update(read_at=None)
         budget = FakeBudget(30.0, patterns.READING_SECONDS, patterns.READING_SECONDS - 0.01)
         self.assertEqual(reread_format(seeded_format(), budget=budget), (2, 1))

@@ -121,12 +121,12 @@ class FranprixDiscountedTests(SimpleTestCase):
     def test_every_item_line_is_read(self):
         self.assertEqual(len(self.invoice.lines), 4)
 
-    def test_the_duplicata_banner_is_not_a_product(self):
+    def test_the_duplicate_banner_is_not_a_product(self):
         for line in self.invoice.lines:
             self.assertNotIn("DUPLICATA", line.raw_name.upper())
 
     def test_a_vat_code_glued_to_the_price_is_still_the_code_and_the_price(self):
-        """"T10.55" is T1 and 0.55, not T and 10.55."""
+        """ "T10.55" is T1 and 0.55, not T and 10.55."""
         loaves = [line for line in self.invoice.lines if "PAIN" in line.raw_name]
         self.assertEqual(len(loaves), 3)
 
@@ -155,7 +155,7 @@ class FranprixDiscountedTests(SimpleTestCase):
 
 class FranprixWordsDoNotMatterTests(SimpleTestCase):
     def test_totals_are_found_however_the_words_came_out(self):
-        """"ISQUS-OTAL I", "OTALA PAYER": a parser keyed on the words found no
+        """ "ISQUS-OTAL I", "OTALA PAYER": a parser keyed on the words found no
         total on this ticket and failed it."""
         invoice = parse(GARBLED_WORDS)
         self.assertEqual(len(invoice.lines), 3)
@@ -176,7 +176,7 @@ class FranprixRateTests(SimpleTestCase):
 
 class FranprixMultiplierTests(SimpleTestCase):
     def test_a_multiplied_line_keeps_its_quantity_and_total(self):
-        """"T1 6 X 0.55  3.30" on one line. Unmatched, all six loaves vanish
+        """ "T1 6 X 0.55  3.30" on one line. Unmatched, all six loaves vanish
         while the receipt still balances against its own printed total."""
         invoice = parse(MULTIPLIER)
         self.assertEqual(len(invoice.lines), 1)

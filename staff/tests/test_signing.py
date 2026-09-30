@@ -15,6 +15,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from typing import cast
 from unittest import mock
 
 import pdfplumber
@@ -47,8 +48,8 @@ from tests.support import NoNetworkTestCase
 
 JUNE = date(2026, 6, 1)
 #: 08:24 UTC on 2 July 2026 is 10:24 in Paris (summer time).
-WHEN = dt.datetime(2026, 7, 2, 8, 24, tzinfo=dt.timezone.utc)
-LATER = dt.datetime(2026, 7, 3, 16, 5, tzinfo=dt.timezone.utc)
+WHEN = dt.datetime(2026, 7, 2, 8, 24, tzinfo=dt.UTC)
+LATER = dt.datetime(2026, 7, 3, 16, 5, tzinfo=dt.UTC)
 DOCUMENT_ID = "0f8e3a52-1111-4222-8333-444455556666"
 
 
@@ -159,8 +160,13 @@ class SigningCase(SigningTestMixin, NoNetworkTestCase):
 
     def signed_by_employee(self, reservation="", when=WHEN):
         return signing.sign_as_employee(
-            self.frozen(), self.person, drawn_signature(), when,
-            document_id=DOCUMENT_ID, reservation=reservation, establishment=self.bar,
+            self.frozen(),
+            self.person,
+            drawn_signature(),
+            when,
+            document_id=DOCUMENT_ID,
+            reservation=reservation,
+            establishment=self.bar,
         )
 
     def countersigned(self, reservation=""):
@@ -193,18 +199,25 @@ class AuthorityTests(SigningCase):
         )
 
     def test_ec_p256_sha256_ten_years(self):
-        for identity in (signing.authority(self.bar), signing.employer_identity(self.bar),
-                         signing.employee_identity(self.person, self.bar)):
+        for identity in (
+            signing.authority(self.bar),
+            signing.employer_identity(self.bar),
+            signing.employee_identity(self.person, self.bar),
+        ):
             with self.subTest(name=identity.name):
                 self.assertIsInstance(identity.key, ec.EllipticCurvePrivateKey)
                 self.assertIsInstance(identity.key.curve, ec.SECP256R1)
                 self.assertEqual(identity.certificate.signature_hash_algorithm.name, "sha256")
                 validity = identity.certificate.not_valid_after_utc - identity.certificate.not_valid_before_utc
                 self.assertGreaterEqual(validity, dt.timedelta(days=3650))
-        self.assertTrue(signing.authority(self.bar).certificate.extensions.get_extension_for_class(
-            x509.BasicConstraints).value.ca)
-        self.assertFalse(signing.employee_identity(self.person, self.bar).certificate.extensions.get_extension_for_class(
-            x509.BasicConstraints).value.ca)
+        self.assertTrue(
+            signing.authority(self.bar).certificate.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
+        )
+        self.assertFalse(
+            signing.employee_identity(self.person, self.bar)
+            .certificate.extensions.get_extension_for_class(x509.BasicConstraints)
+            .value.ca
+        )
 
     def test_made_once_then_reused(self):
         first = signing.authority(self.bar).sha256
@@ -310,8 +323,10 @@ class FreezeTests(SigningCase):
         self.assertEqual(len(reader.embedded_signatures), 0)
         self.assertEqual(
             signing.FIELD_BOXES,
-            ((signing.EMPLOYEE_FIELD, pdf.ELECTRONIC_SIGNATURE_BOXES[0]),
-             (signing.EMPLOYER_FIELD, pdf.ELECTRONIC_SIGNATURE_BOXES[1])),
+            (
+                (signing.EMPLOYEE_FIELD, pdf.ELECTRONIC_SIGNATURE_BOXES[0]),
+                (signing.EMPLOYER_FIELD, pdf.ELECTRONIC_SIGNATURE_BOXES[1]),
+            ),
         )
         for name, box in signing.FIELD_BOXES:
             with self.subTest(field=name):
@@ -329,7 +344,7 @@ class FreezeTests(SigningCase):
         rendered = render_month_pdf(self.sheet, self.bar, electronic=True)
         self.assertTrue(self.frozen().startswith(rendered))
 
-    def test_the_frozen_document_asks_for_no_handwritten_lu_et_approuve(self):
+    def test_the_frozen_document_asks_for_no_handwritten_read_and_approved(self):
         """The stamp goes where the paper sheet asks for a date, a signature
         and « Lu et approuvé » written by hand: the frozen document says what
         goes there instead. The download keeps the paper words."""
@@ -349,12 +364,19 @@ class FreezeTests(SigningCase):
         rendered = render_month_pdf(self.sheet, self.bar)
         writer = IncrementalPdfFileWriter(io.BytesIO(rendered))
         for name, box in ((signing.EMPLOYEE_FIELD, pdf.EMPLOYEE_BOX), (signing.EMPLOYER_FIELD, pdf.EMPLOYER_BOX)):
-            fields.append_signature_field(writer, fields.SigFieldSpec(sig_field_name=name, on_page=0, box=box.stamp_rect))
+            fields.append_signature_field(
+                writer, fields.SigFieldSpec(sig_field_name=name, on_page=0, box=box.stamp_rect)
+            )
         output = io.BytesIO()
         writer.write(output)
         old = output.getvalue()
         employee_signed = signing.sign_as_employee(
-            old, self.person, drawn_signature(), WHEN, document_id=DOCUMENT_ID, establishment=self.bar,
+            old,
+            self.person,
+            drawn_signature(),
+            WHEN,
+            document_id=DOCUMENT_ID,
+            establishment=self.bar,
         )
         final = signing.countersign(employee_signed.pdf, self.bar, employer_signature(), LATER, document_id=DOCUMENT_ID)
         self.assertTrue(final.pdf.startswith(old))
@@ -401,7 +423,7 @@ class SignatureTests(SigningCase):
         self.assertIn("contresignature", result.verdict)
 
     def test_the_timestamp_is_recorded(self):
-        fixed = dt.datetime(2026, 7, 2, 8, 24, 30, tzinfo=dt.timezone.utc)
+        fixed = dt.datetime(2026, 7, 2, 8, 24, 30, tzinfo=dt.UTC)
         with OfflineTimestamps(fixed_dt=fixed):
             signed = self.signed_by_employee()
         self.assertEqual(signed.timestamp, fixed)
@@ -413,8 +435,8 @@ class SignatureTests(SigningCase):
         self.assertIn(printed("Signé électroniquement par DUPONT Jeanne"), stamp)
         self.assertIn(printed("le 02/07/2026 à 10:24 (heure de Paris)"), stamp)
         self.assertIn(printed(f"Document n° {DOCUMENT_ID}"), stamp)
-        self.assertIn(b"/F1", stamp)   # Helvetica, the sheet's own font
-        self.assertIn(b" Do", stamp)   # the drawn signature
+        self.assertIn(b"/F1", stamp)  # Helvetica, the sheet's own font
+        self.assertIn(b" Do", stamp)  # the drawn signature
         self.assertNotIn(printed("réserves"), stamp)
         employer = appearance(signed.pdf, signing.EMPLOYER_FIELD)
         self.assertIn(printed("Contresigné électroniquement par BAR EXEMPLE"), employer)
@@ -422,7 +444,7 @@ class SignatureTests(SigningCase):
         self.assertIn(printed(f"Document n° {DOCUMENT_ID}"), employer)
 
     def test_winter_time_is_paris_time_too(self):
-        signed = self.signed_by_employee(when=dt.datetime(2026, 1, 5, 23, 30, tzinfo=dt.timezone.utc))
+        signed = self.signed_by_employee(when=dt.datetime(2026, 1, 5, 23, 30, tzinfo=dt.UTC))
         self.assertIn(printed("le 06/01/2026 à 00:30 (heure de Paris)"), appearance(signed.pdf, signing.EMPLOYEE_FIELD))
 
     def test_a_signature_with_reservations_says_so_on_the_document(self):
@@ -435,16 +457,18 @@ class SignatureTests(SigningCase):
         self.assertIn("salarié", str(caught.exception))
         signed = self.signed_by_employee()
         with self.assertRaises(signing.DocumentError):
-            signing.sign_as_employee(signed.pdf, self.person, drawn_signature(), WHEN, document_id=DOCUMENT_ID,
-                                     establishment=self.bar)
+            signing.sign_as_employee(
+                signed.pdf, self.person, drawn_signature(), WHEN, document_id=DOCUMENT_ID, establishment=self.bar
+            )
         final = signing.countersign(signed.pdf, self.bar, employer_signature(), LATER, document_id=DOCUMENT_ID)
         with self.assertRaises(signing.DocumentError):
             signing.countersign(final.pdf, self.bar, employer_signature(), LATER, document_id=DOCUMENT_ID)
 
     def test_a_file_that_is_no_pdf_is_a_document_error_not_a_timestamp_one(self):
         with self.assertRaises(signing.DocumentError):
-            signing.sign_as_employee(b"pas un PDF", self.person, drawn_signature(), WHEN, document_id=DOCUMENT_ID,
-                                     establishment=self.bar)
+            signing.sign_as_employee(
+                b"pas un PDF", self.person, drawn_signature(), WHEN, document_id=DOCUMENT_ID, establishment=self.bar
+            )
 
 
 class TimestampTests(SigningCase):
@@ -452,8 +476,13 @@ class TimestampTests(SigningCase):
         down = FailingTimestamper("http://premier-en-panne.test")
         working = FakeTimestampAuthority.shared().timestamper()
         signed = signing.sign_as_employee(
-            self.frozen(), self.person, drawn_signature(), WHEN, document_id=DOCUMENT_ID,
-            establishment=self.bar, stampers=[down, working],
+            self.frozen(),
+            self.person,
+            drawn_signature(),
+            WHEN,
+            document_id=DOCUMENT_ID,
+            establishment=self.bar,
+            stampers=[down, working],
         )
         self.assertGreaterEqual(down.calls, 1)
         self.assertEqual(signed.authority, "http://horodatage.test")
@@ -462,13 +491,21 @@ class TimestampTests(SigningCase):
     def test_when_none_answers_the_signature_is_refused(self):
         stampers = [FailingTimestamper("http://premier.test"), FailingTimestamper("http://second.test")]
         with self.assertRaises(signing.TimestampUnavailable) as caught:
-            signing.sign_as_employee(self.frozen(), self.person, drawn_signature(), WHEN, document_id=DOCUMENT_ID,
-                                     establishment=self.bar, stampers=stampers)
+            signing.sign_as_employee(
+                self.frozen(),
+                self.person,
+                drawn_signature(),
+                WHEN,
+                document_id=DOCUMENT_ID,
+                establishment=self.bar,
+                stampers=stampers,
+            )
         self.assertEqual(
             str(caught.exception), "Le service d'horodatage ne répond pas, réessayez dans quelques minutes."
         )
-        self.assertEqual([url for url, _reason in caught.exception.failures],
-                         ["http://premier.test", "http://second.test"])
+        self.assertEqual(
+            [url for url, _reason in caught.exception.failures], ["http://premier.test", "http://second.test"]
+        )
         self.assertTrue(all(stamper.calls for stamper in stampers))
 
     def test_no_server_configured_is_refused_the_same_way(self):
@@ -499,7 +536,7 @@ class VerifyTests(SigningCase):
         final = self.countersigned().pdf
         # The document's title, in the first revision - covered by both signatures.
         position = final.index(b"/Title <FEFF0046") + len(b"/Title <FEFF004")
-        tampered = final[:position] + b"7" + final[position + 1:]
+        tampered = final[:position] + b"7" + final[position + 1 :]
         self.assertEqual(len(tampered), len(final))
         result = signing.verify(tampered)
         self.assertFalse(result.ok)
@@ -549,19 +586,21 @@ class VerifyTests(SigningCase):
         signed content still said intact and who signed (review, 28/09)."""
         final = self.countersigned().pdf
         shutil.rmtree(self.private_dir / "keys")
-        signing.authority(self.bar)   # the next signature makes a new one
+        signing.authority(self.bar)  # the next signature makes a new one
         result = signing.verify(final)
         self.assertFalse(result.ok)
         self.assertTrue(all(check.intact and check.valid for check in result.signatures))
-        self.assertIn("ne se rattache à aucune autorité connue de cette installation (clés perdues ou remplacées ?)",
-                      result.verdict)
+        self.assertIn(
+            "ne se rattache à aucune autorité connue de cette installation (clés perdues ou remplacées ?)",
+            result.verdict,
+        )
         self.assertIn("intact", result.verdict)
         self.assertIn("signé par DUPONT Jeanne", result.verdict)
         self.assertIn("contresigné par BAR EXEMPLE", result.verdict)
 
     def test_an_unknown_timestamp_authority_is_said(self):
         final = self.countersigned().pdf
-        with mock.patch("staff.signing.timestamp_trust_roots", new=lambda: []):
+        with mock.patch("staff.signing.timestamp_trust_roots", new=list):
             result = signing.verify(final)
         self.assertFalse(result.ok)
         self.assertTrue(all(check.intact for check in result.signatures))
@@ -608,7 +647,8 @@ class LongNameTests(SigningCase):
         self.person.save()
 
     def common_name(self, common, organisation=LONG_BAR) -> str:
-        return signing._name(common, organisation).get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
+        # A common name's value is a str; only an X.500 unique identifier's is bytes.
+        return cast(str, signing._name(common, organisation).get_attributes_for_oid(NameOID.COMMON_NAME)[0].value)
 
     def test_a_name_is_cut_on_its_bytes_between_two_words(self):
         authority = f"Autorité interne de {LONG_BAR}"
@@ -670,7 +710,9 @@ class StampNameTests(SigningCase):
 
     def test_a_short_name_keeps_its_one_line(self):
         signed = self.signed_by_employee()
-        self.assertIn(printed("Signé électroniquement par DUPONT Jeanne"), appearance(signed.pdf, signing.EMPLOYEE_FIELD))
+        self.assertIn(
+            printed("Signé électroniquement par DUPONT Jeanne"), appearance(signed.pdf, signing.EMPLOYEE_FIELD)
+        )
 
     def test_letters_cp1252_lacks_are_written_as_their_nearest(self):
         for (last, first), shown in (
@@ -700,8 +742,14 @@ class ReasonTests(SigningCase):
     def test_his_reservations_are_inside_his_signature(self):
         words = "Le 12, j'ai fini à 23 h 30 et non à 23 h.\r\nEt le 13 → pareil."
         signed = signing.sign_as_employee(
-            self.frozen(), self.person, drawn_signature(), WHEN, document_id=DOCUMENT_ID,
-            establishment=self.bar, reservation=words, journal=self.JOURNAL,
+            self.frozen(),
+            self.person,
+            drawn_signature(),
+            WHEN,
+            document_id=DOCUMENT_ID,
+            establishment=self.bar,
+            reservation=words,
+            journal=self.JOURNAL,
         )
         reason = reason_of(signed.pdf, signing.EMPLOYEE_FIELD)
         self.assertIn(words, reason)
@@ -750,9 +798,7 @@ class EmployerDrawingTests(SigningCase):
             with self.subTest(png=png[:12] if png else png):
                 stamper = FailingTimestamper()
                 with self.assertRaises(signing.SignatureImageError) as caught:
-                    signing.countersign(
-                        signed.pdf, self.bar, png, LATER, document_id=DOCUMENT_ID, stampers=[stamper]
-                    )
+                    signing.countersign(signed.pdf, self.bar, png, LATER, document_id=DOCUMENT_ID, stampers=[stamper])
                 self.assertIn(words, str(caught.exception))
                 # Refused before anything was signed or timestamped.
                 self.assertEqual(stamper.calls, 0)
@@ -772,8 +818,9 @@ class EmployerDrawingTests(SigningCase):
         self.assertEqual(final.drawing_sha256, hashlib.sha256(final.drawing).hexdigest())
         reasons = signing.signed_reasons(final.pdf)
         employer = reasons[signing.EMPLOYER_FIELD]
-        self.assertEqual((employer.drawing, employer.journal, employer.reservation),
-                         (final.drawing_sha256, self.JOURNAL, None))
+        self.assertEqual(
+            (employer.drawing, employer.journal, employer.reservation), (final.drawing_sha256, self.JOURNAL, None)
+        )
         self.assertIn(
             f"signature dessinée SHA-256 {final.drawing_sha256}", reason_of(final.pdf, signing.EMPLOYER_FIELD)
         )
@@ -784,7 +831,7 @@ class EmployerDrawingTests(SigningCase):
     def test_his_drawing_is_stamped_above_his_lines_inside_the_box(self):
         final = self.countersigned()
         stamp = stamp_geometry(final.pdf, signing.EMPLOYER_FIELD)
-        (x, y, width, height), = stamp.drawings
+        ((x, y, width, height),) = stamp.drawings
         self.assertGreater(y, stamp.text_top)
         self.assertGreaterEqual(x, 0)
         self.assertLessEqual(x + width, stamp.width)
@@ -800,7 +847,12 @@ class EmployerDrawingTests(SigningCase):
         box, over lines of the same sizes on the same baselines."""
         same = drawn_signature()
         employee_signed = signing.sign_as_employee(
-            self.frozen(), self.person, same, WHEN, document_id=DOCUMENT_ID, establishment=self.bar,
+            self.frozen(),
+            self.person,
+            same,
+            WHEN,
+            document_id=DOCUMENT_ID,
+            establishment=self.bar,
         )
         final = signing.countersign(employee_signed.pdf, self.bar, same, LATER, document_id=DOCUMENT_ID)
         employee = stamp_geometry(final.pdf, signing.EMPLOYEE_FIELD)
@@ -825,7 +877,7 @@ class EmployerDrawingTests(SigningCase):
                 self.assertIn(f"Contresigné électroniquement par {name}", text)
                 self.assertNotIn("…", text)
                 stamp = stamp_geometry(final.pdf, signing.EMPLOYER_FIELD)
-                (x, y, width, height), = stamp.drawings
+                ((x, y, width, height),) = stamp.drawings
                 self.assertGreater(y, stamp.text_top)
                 self.assertLessEqual(x + width, stamp.width)
                 self.assertLessEqual(y + height, stamp.height)

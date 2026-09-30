@@ -9,8 +9,8 @@ import and a clear are two steps, the preview first, and the confirm
 refuses a selection other than the one previewed - and a preview other than
 the one on the page it was clicked from (SHOWN_PREVIEW).
 
-One espace per bar: every folder is the bound espace's own (safety,
-staging), the session's entries are keyed by the espace (`session_key`), and
+One tenant per bar: every folder is the bound tenant's own (safety,
+staging), the session's entries are keyed by the tenant (`session_key`), and
 the page names no folder of the server - a hosted bar can neither read a
 server path nor stop the server to put a database copy back, which the page
 asks the administrator to do instead.
@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 
 PREVIEW_MAX_AGE = timedelta(minutes=30)
 #: The session's entries - read and written through `session_key`: the
-#: session is the login's, and one login may work for two espaces (and a
+#: session is the login's, and one login may work for two tenants (and a
 #: membership may move): unkeyed, A's pending « Effacer » and
 #: A's report were drawn on B's page.
 SESSION_REPORT = "transfer.report"
@@ -92,7 +92,7 @@ OLD_PAGE_CLEAR = (
     "Voici l'aperçu à jour : vérifiez-le et confirmez de nouveau."
 )
 GONE = "Cette archive n'est plus en attente : envoyez-la de nouveau."
-TYPE_EFFACER = "Tapez EFFACER pour confirmer."
+TYPE_TO_CONFIRM = "Tapez EFFACER pour confirmer."
 #: Installed by the migrations into every database: a database holding only
 #: these (and no invoice) is new, and « Remplacer » is what gives them the
 #: archive's settings.
@@ -106,6 +106,7 @@ TABS = (
 
 
 # -- the selection -------------------------------------------------------------------
+
 
 def usable_keys(mode: str) -> set[str]:
     """Registered sections whose whole closure is registered too: while a
@@ -161,7 +162,21 @@ def _number(value: int) -> str:
 
 
 #: Words that end in s in the singular too.
-_INVARIABLE = {"alias", "appris", "avis", "colis", "compris", "fils", "fois", "mois", "pays", "poids", "pris", "prix", "repas"}
+_INVARIABLE = {
+    "alias",
+    "appris",
+    "avis",
+    "colis",
+    "compris",
+    "fils",
+    "fois",
+    "mois",
+    "pays",
+    "poids",
+    "pris",
+    "prix",
+    "repas",
+}
 #: Where the head of a count's label ends: what follows is its complement,
 #: which keeps its own number - « 1 jour de vente », « 1 Mo de fichiers ».
 _COMPLEMENT = {"à", "au", "aux", "avec", "chez", "de", "des", "du", "en", "par", "pour", "sans", "sur"}
@@ -253,48 +268,53 @@ def _picker(
                 disabled_reason = "indisponible : une partie dont elle dépend n'est pas encore installée"
             else:
                 disabled_reason = ""
-            rows.append({
-                "key": key,
-                "label": info.label,
-                "description": registry.description(key),
-                "counts": _counts_text(counts.get(key)),
-                "archive_counts": _counts_text((archive_counts or {}).get(key)),
-                "checked": key in ticked,
-                "forced": forced,
-                "forced_note": (
-                    ("effacé avec " if mode == "clear" else "nécessaire pour ")
-                    + ", ".join(INFO[other].label for other in forced_by)
-                ) if forced and forced_by else "",
-                "forced_by": json.dumps({other: INFO[other].label for other in forcers}, ensure_ascii=False),
-                # Where it applies: never on the Effacer tab, where « conseillé :
-                # Factures » read as advice to clear the invoices too - it says
-                # what a clear costs instead - and only for what can be ticked
-                # (on a stage, what the archive holds).
-                "hints": [
-                    info.recommend_reason[other]
-                    for other in info.recommends
-                    if mode != "clear" and other in usable and other in info.recommend_reason
-                ],
-                "clear_note": info.clear_note if mode == "clear" else "",
-                "disabled": bool(disabled_reason),
-                "disabled_reason": disabled_reason,
-                "strategy": strategies.get(key, Strategy.MERGE).value,
-            })
+            rows.append(
+                {
+                    "key": key,
+                    "label": info.label,
+                    "description": registry.description(key),
+                    "counts": _counts_text(counts.get(key)),
+                    "archive_counts": _counts_text((archive_counts or {}).get(key)),
+                    "checked": key in ticked,
+                    "forced": forced,
+                    "forced_note": (
+                        ("effacé avec " if mode == "clear" else "nécessaire pour ")
+                        + ", ".join(INFO[other].label for other in forced_by)
+                    )
+                    if forced and forced_by
+                    else "",
+                    "forced_by": json.dumps({other: INFO[other].label for other in forcers}, ensure_ascii=False),
+                    # Where it applies: never on the Effacer tab, where « conseillé :
+                    # Factures » read as advice to clear the invoices too - it says
+                    # what a clear costs instead - and only for what can be ticked
+                    # (on a stage, what the archive holds).
+                    "hints": [
+                        info.recommend_reason[other]
+                        for other in info.recommends
+                        if mode != "clear" and other in usable and other in info.recommend_reason
+                    ],
+                    "clear_note": info.clear_note if mode == "clear" else "",
+                    "disabled": bool(disabled_reason),
+                    "disabled_reason": disabled_reason,
+                    "strategy": strategies.get(key, Strategy.MERGE).value,
+                }
+            )
         if rows:
             groups.append({"key": group.value, "label": GROUP_LABELS[group], "rows": rows})
-    factures = counts.get("factures") or {}
+    invoice_counts = counts.get("factures") or {}
     return {
         "mode": mode,
         "groups": groups,
         "checked": ticked,
-        "factures_mb": factures.get("Mo de fichiers"),
+        "invoices_mb": invoice_counts.get("Mo de fichiers"),
     }
 
 
-# -- the espace ----------------------------------------------------------------------
+# -- the tenant ----------------------------------------------------------------------
+
 
 def session_key(name: str) -> str:
-    """The session entry `name` of the bound espace: `name:<espace id>`."""
+    """The session entry `name` of the bound tenant: `name:<tenant id>`."""
     return f"{name}:{tenant_key()}"
 
 
@@ -305,6 +325,7 @@ def _shown_backups(backups: dict[str, str]) -> dict[str, str]:
 
 
 # -- rendering -----------------------------------------------------------------------
+
 
 def _render(request, tab: str, *, status: int = 200, **context):
     context.setdefault("busy", busy_reason())
@@ -370,14 +391,15 @@ def _backup_message(done: str, backups: dict[str, str]) -> str:
 
 # -- Exporter ------------------------------------------------------------------------
 
+
 def _export_page(request, user: set[str], *, status=200):
     return _render(request, "export", status=status, picker=_picker("export", user))
 
 
 def data_home(request):
     """Exporter tab. `?cocher=` pre-ticks (§3.1)."""
-    cocher = set(request.GET.getlist("cocher")) & set(INFO)
-    return _export_page(request, cocher)
+    pre_ticked = set(request.GET.getlist("cocher")) & set(INFO)
+    return _export_page(request, pre_ticked)
 
 
 def data_export(request):
@@ -408,13 +430,15 @@ def data_export(request):
         messages.warning(
             request,
             f"{len(left_out)} fichier(s) laissé(s) hors de l'archive (absents du disque) : "
-            + ", ".join(left_out[:5]) + ("…" if len(left_out) > 5 else ""),
+            + ", ".join(left_out[:5])
+            + ("…" if len(left_out) > 5 else ""),
         )
     filename = f"marginmate-{timezone.localtime(timezone.now()):%Y-%m-%d-%H%M}.zip"
     return FileResponse(DeleteOnClose(path), as_attachment=True, filename=filename)
 
 
 # -- Importer ------------------------------------------------------------------------
+
 
 def data_import(request):
     if request.method == "POST":
@@ -495,7 +519,9 @@ def _fresh_database() -> bool:
 
 def _stored_strategies(stage) -> dict[str, Strategy]:
     stored = stage.state.get("sections") or {}
-    return {key: Strategy.REPLACE if value == Strategy.REPLACE.value else Strategy.MERGE for key, value in stored.items()}
+    return {
+        key: Strategy.REPLACE if value == Strategy.REPLACE.value else Strategy.MERGE for key, value in stored.items()
+    }
 
 
 def _stage_page(request, stage, *, user=None, strategies=None, status=200):
@@ -640,6 +666,7 @@ def _confirm_import(request, stage, strategies: dict[str, Strategy]):
 
 # -- Effacer -------------------------------------------------------------------------
 
+
 def _pending_clear(request) -> dict | None:
     pending = request.session.get(session_key(SESSION_CLEAR))
     if not pending:
@@ -701,7 +728,7 @@ def data_clear(request):
     # Typed, not ticked: it is irreversible from the page, and typing is the
     # deliberate act. Any case, spaces around it forgiven.
     if action == "effacer" and request.POST.get("confirmation", "").strip().upper() != "EFFACER":
-        messages.error(request, TYPE_EFFACER)
+        messages.error(request, TYPE_TO_CONFIRM)
         preview = RunReport.from_json(pending["report"]) if pending and set(pending["sections"]) == selected else None
         return _clear_page(request, selected, preview=preview)
     busy = busy_reason()

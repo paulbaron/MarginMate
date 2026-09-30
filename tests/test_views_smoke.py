@@ -22,7 +22,6 @@ from inventory.models import StockMovement, StockType, UnitChoices
 from invoices.models import Invoice, ReceiptBatch, ShopItemPrice
 from recipes.models import PosProduct, PosProductDailyQuantity, Recipe, RecipeSale
 from staff.tests.signing_support import SigningTestMixin
-from tests.support import NoNetworkTestCase
 from tests.factories import (
     make_ingredient,
     make_invoice,
@@ -36,6 +35,7 @@ from tests.factories import (
     make_stock_take_line,
     make_supplier,
 )
+from tests.support import NoNetworkTestCase
 
 
 def assertNoUnrenderedTemplateSyntax(test, response, label=""):
@@ -90,9 +90,7 @@ class PageSmokeTests(TestCase):
             ocr_text="Sabbh Oriental\nArticle divers\n3pcs  0,70  2,10A",
             ocr_confidence=Decimal("0.86"),
         )
-        cls.receipt_product = make_product(
-            supplier=cls.receipt_supplier, raw_name="Article divers (0.70 EUR/u)"
-        )
+        cls.receipt_product = make_product(supplier=cls.receipt_supplier, raw_name="Article divers (0.70 EUR/u)")
         make_invoice_line(
             invoice=cls.receipt,
             product=cls.receipt_product,
@@ -102,15 +100,20 @@ class PageSmokeTests(TestCase):
             vat_rate=Decimal("0.055"),
             raw_name="Article divers (0.70 EUR/u)",
         )
-        ShopItemPrice.objects.create(
-            supplier=cls.receipt_supplier, unit_price_ttc=Decimal("0.70"), label="Citron vert"
-        )
+        ShopItemPrice.objects.create(supplier=cls.receipt_supplier, unit_price_ttc=Decimal("0.70"), label="Citron vert")
         # A finished folder import with every outcome the batch page draws.
         cls.batch = ReceiptBatch.objects.create(
             status=ReceiptBatch.Status.SUCCESS,
             results=[
-                {"name": "ok.pdf", "status": "ok", "invoice_id": cls.receipt.pk, "shop": "Sabbh Oriental",
-                 "total": "2.10", "date": "14/07/2026", "verified": False},
+                {
+                    "name": "ok.pdf",
+                    "status": "ok",
+                    "invoice_id": cls.receipt.pk,
+                    "shop": "Sabbh Oriental",
+                    "total": "2.10",
+                    "date": "14/07/2026",
+                    "verified": False,
+                },
                 {"name": "dup.pdf", "status": "duplicate", "message": "Fichier déjà importé"},
                 {"name": "x.pdf", "status": "unrecognised", "message": "Enseigne non reconnue", "kept": True},
                 {"name": "Thumbs.db", "status": "ignored", "message": "Ni un PDF ni une photo : ignoré."},
@@ -134,9 +137,7 @@ class PageSmokeTests(TestCase):
         cls.pos_linked = PosProduct.objects.create(
             name="Moscow Mule", recipe=cls.recipe, category="Cocktails", typology="Liquide (Alcool)"
         )
-        cls.pos_unlinked = PosProduct.objects.create(
-            name="Planche apéro", category="Planches", typology="Solide"
-        )
+        cls.pos_unlinked = PosProduct.objects.create(name="Planche apéro", category="Planches", typology="Solide")
         for product, ttc, ht in ((cls.pos_linked, "85.00", "70.83"), (cls.pos_unlinked, "36.00", "34.12")):
             PosProductDailyQuantity.objects.create(
                 product=product,
@@ -149,8 +150,11 @@ class PageSmokeTests(TestCase):
 
         cls.stock_take = make_stock_take()
         make_stock_take_line(
-            stock_take=cls.stock_take, product=cls.product, counted_quantity="4",
-            unit=UnitChoices.UNIT, value_ht="60.00",
+            stock_take=cls.stock_take,
+            product=cls.product,
+            counted_quantity="4",
+            unit=UnitChoices.UNIT,
+            value_ht="60.00",
         )
 
     def assertPageOK(self, name, **kwargs):
@@ -277,7 +281,8 @@ class PageSmokeTests(TestCase):
         # of the Sources tab).
         self.assertContains(self.assertPageOK("invoices:supplier_list"), "Epicerie")
         checked = self.client.post(
-            reverse("invoices:supplier_edit", args=[shop.pk]), {"name": "Epicerie Deux", "header": "", "action": "verifier"}
+            reverse("invoices:supplier_edit", args=[shop.pk]),
+            {"name": "Epicerie Deux", "header": "", "action": "verifier"},
         )
         assertNoUnrenderedTemplateSyntax(self, checked, "la vérification d'une modification")
 
@@ -337,7 +342,7 @@ class PageSmokeTests(TestCase):
         product = PosProduct.objects.create(name="Pinte Blonde", total_quantity=5)
         self.assertRedirectsOnGet("recipes:pos_product_assign", pk=product.pk)
 
-    # --- marges ----------------------------------------------------------
+    # --- margins ---------------------------------------------------------
     def test_margins(self):
         """Over the dates the fixture sells on, so both branches of the
         tables render: a category with a recipe behind it and one without."""
@@ -434,7 +439,7 @@ class EmptyDatabasePageSmokeTests(TestCase):
     def test_receipt_queue(self):
         self.assertPageOK("invoices:receipt_queue")
 
-    def test_consignes(self):
+    def test_returnables(self):
         """With the seeds migration 0002 puts in every database, then
         without them (« Données » cleared them)."""
         from returnables.tests.support import no_defaults
@@ -467,12 +472,12 @@ class EmptyDatabasePageSmokeTests(TestCase):
         install there is none."""
         self.assertPageOK("margins:margins_home")
         # No article at all: a post names a category nobody carries.
-        response = self.client.post(reverse("margins:count_articles"), {"categorie": "", "action": "cocher"}, follow=True)
+        response = self.client.post(
+            reverse("margins:count_articles"), {"categorie": "", "action": "cocher"}, follow=True
+        )
         self.assertEqual(response.status_code, 200)
         assertNoUnrenderedTemplateSyntax(self, response, "les marges sans article")
-        self.assertEqual(
-            self.client.get(reverse("margins:margins_home"), {"du": "2026-03-01"}).status_code, 200
-        )
+        self.assertEqual(self.client.get(reverse("margins:margins_home"), {"du": "2026-03-01"}).status_code, 200)
 
     def test_bank_pages(self):
         """« Dépenses » divides every share by what left the account, and on
@@ -494,9 +499,7 @@ class EmptyDatabasePageSmokeTests(TestCase):
         url = reverse("bank:invoice_search", args=[line.pk])
         self.assertEqual(self.client.get(url).status_code, 200)
         self.assertEqual(self.client.get(url, {"recherche": "rien"}).status_code, 200)
-        assertNoUnrenderedTemplateSyntax(
-            self, self.client.get(url, {"recherche": "rien"}), "la recherche de factures"
-        )
+        assertNoUnrenderedTemplateSyntax(self, self.client.get(url, {"recherche": "rien"}), "la recherche de factures")
         self.assertEqual(self.client.get(reverse("bank:invoice_search", args=[999999])).status_code, 404)
 
 
@@ -589,9 +592,7 @@ class DateWindowSmokeTests(TestCase):
         make_invoice_line(
             invoice=make_invoice(supplier=supplier, invoice_date=date(2026, 5, 2)), product=product, total_ht="30.00"
         )
-        make_invoice_line(
-            invoice=make_invoice(supplier=supplier, invoice_date=None), product=product, total_ht="30.00"
-        )
+        make_invoice_line(invoice=make_invoice(supplier=supplier, invoice_date=None), product=product, total_ht="30.00")
 
         recipe = make_recipe(name="Moscow Mule", selling_price_ttc="8.50")
         make_ingredient(recipe, stock_type=stock_type, quantity="0.04")
@@ -660,12 +661,12 @@ class StaffPageSmokeTests(TestCase):
     not, its PDF. Every name and address is INVENTED - the repository is
     public and a timesheet is personal data."""
 
-    SAVED = date(2026, 5, 1)     # four public holidays: the holidays button is drawn
+    SAVED = date(2026, 5, 1)  # four public holidays: the holidays button is drawn
     UNSAVED = date(2026, 6, 1)
 
     @classmethod
     def setUpTestData(cls):
-        from staff.models import Establishment, Employee
+        from staff.models import Employee, Establishment
         from staff.timesheet import apply_range
 
         Establishment.objects.create(
@@ -728,9 +729,9 @@ class StaffPageSmokeTests(TestCase):
         self.assertPageOK("staff:home")
 
 
-class ConsignesPageSmokeTests(TestCase):
-    """« Consignes »: a reprise with photos compared with its bon, one waiting
-    for its bon, a bon replaced by another, a bon with a line no type
+class ReturnablesPageSmokeTests(TestCase):
+    """« Consignes »: a pickup with photos compared with its slip, one waiting
+    for its slip, a slip replaced by another, a slip with a line no type
     recognises. Every value INVENTED (returnables/tests/support.py): the
     owner's real tickets carry his account and his deliveries."""
 
@@ -738,7 +739,9 @@ class ConsignesPageSmokeTests(TestCase):
     def setUpTestData(cls):
         from returnables.tests.support import CO2_LINE, DELIVERY_DAY, KEG_LINE, make_pickup, make_slip
 
-        cls.pickup = make_pickup(date=DELIVERY_DAY, counts={"Fûts": 3, "Bouteilles CO2": 1}, photos=2, note="Un fût cabossé")
+        cls.pickup = make_pickup(
+            date=DELIVERY_DAY, counts={"Fûts": 3, "Bouteilles CO2": 1}, photos=2, note="Un fût cabossé"
+        )
         cls.waiting = make_pickup(date=date(2026, 2, 20))
         cls.original = make_slip(lines=(KEG_LINE, CO2_LINE), references=["900001"])
         cls.replacement = make_slip(lines=(KEG_LINE,), references=["900001"], replaces=True)
@@ -767,12 +770,12 @@ class ConsignesPageSmokeTests(TestCase):
                 self.assertEqual(response.status_code, 200)
                 assertNoUnrenderedTemplateSyntax(self, response, which)
 
-    def test_a_reprise(self):
+    def test_a_pickup(self):
         for pickup in (self.pickup, self.waiting):
             with self.subTest(pickup=pickup.pk):
                 self.assertPageOK("returnables:pickup_detail", pk=pickup.pk)
 
-    def test_a_bon(self):
+    def test_a_slip(self):
         for slip in (self.original, self.replacement, self.unknown):
             with self.subTest(slip=slip.pk):
                 self.assertPageOK("returnables:slip_detail", pk=slip.pk)
@@ -795,8 +798,13 @@ class ConsignesPageSmokeTests(TestCase):
         from returnables.models import Pickup, PickupPhoto, ReturnableType, Slip, SlipFormat
         from returnables.tests.support import seeded_format, seeded_type
 
-        before = (Pickup.objects.count(), PickupPhoto.objects.count(), Slip.objects.count(),
-                  SlipFormat.objects.count(), ReturnableType.objects.count())
+        before = (
+            Pickup.objects.count(),
+            PickupPhoto.objects.count(),
+            Slip.objects.count(),
+            SlipFormat.objects.count(),
+            ReturnableType.objects.count(),
+        )
         for name, kwargs in (
             ("returnables:pickup_delete", {"pk": self.pickup.pk}),
             ("returnables:pickup_date", {"pk": self.pickup.pk}),
@@ -812,8 +820,13 @@ class ConsignesPageSmokeTests(TestCase):
         ):
             with self.subTest(name=name):
                 self.assertEqual(self.client.get(reverse(name, kwargs=kwargs)).status_code, 302)
-        after = (Pickup.objects.count(), PickupPhoto.objects.count(), Slip.objects.count(),
-                 SlipFormat.objects.count(), ReturnableType.objects.count())
+        after = (
+            Pickup.objects.count(),
+            PickupPhoto.objects.count(),
+            Slip.objects.count(),
+            SlipFormat.objects.count(),
+            ReturnableType.objects.count(),
+        )
         self.assertEqual(after, before)
 
     def test_an_empty_install_with_its_seeds(self):

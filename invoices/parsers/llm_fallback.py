@@ -73,12 +73,11 @@ class LLMFallbackParser(InvoiceParser):
     supplier_code = "LLM"
 
     def parse(self, pdf_path: str, date_hint: date | None = None) -> ParsedInvoice:
-        # The key and its bill are the owner's: from an espace that may not
+        # The key and its bill are the owner's: from a tenant that may not
         # use the server's accounts, refused before the document is read or
         # anything is sent (invoices/integrations.py) - whichever path got
         # here (the PDF import, a source's reader, a gathered attachment).
         from accounts.tenancy import integrations_allowed
-
         from invoices import integrations
 
         if not integrations_allowed():
@@ -115,7 +114,7 @@ class LLMFallbackParser(InvoiceParser):
         raw_date = data.get("invoice_date")
         if raw_date:
             try:
-                invoice_date = datetime.strptime(raw_date, "%Y-%m-%d").date()
+                invoice_date = datetime.strptime(raw_date, "%Y-%m-%d").date()  # noqa: DTZ007 - a printed date, read into .date()
             except ValueError:
                 pass
 

@@ -1,9 +1,9 @@
 {% extends "accounts/page.html" %}
 {% comment %}
-Un compte connecté dont l'espace ne s'ouvre pas - sa base introuvable, un espace en cours de
-restauration (accounts.middleware.TenantMiddleware, 503, jamais gardée par le navigateur) : une
-phrase et de quoi se déconnecter, rendue hors de tout espace. Jamais une trace, un chemin ou un nom
-de dossier : la cause est dans le journal du serveur.
+A logged-in account whose tenant will not open - its database not found, a tenant being
+restored (accounts.middleware.TenantMiddleware, 503, never kept by the browser): one
+sentence and a way to log out, rendered outside any tenant. Never a traceback, a path or a folder
+name: the cause is in the server's log.
 {% endcomment %}
 {% block title %}Espace indisponible - MarginMate{% endblock %}
 {% block scripts %}{% load assets %}<script src="{% asset 'js/ui.js' %}" defer></script>{% endblock %}

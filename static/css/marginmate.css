@@ -1003,7 +1003,7 @@ th.sortable > button:focus-visible {
 .period-picker label { margin: 0; white-space: nowrap; }
 .period-picker select { min-width: 16rem; }
 @media (max-width: 860px) {
-    /* The select was as wide as its longest choice - an inventaire and the
+    /* The select was as wide as its longest choice - a stock take and the
        note of its count - beside its label and a min-width of 16rem, and the
        page wider than a 375 px phone: Chrome widened the layout viewport to
        it, the page zoomable sideways and the sticky bar drifting out of view
@@ -1014,8 +1014,8 @@ th.sortable > button:focus-visible {
     .period-picker select { flex: 1 1 12rem; width: 100%; min-width: 0; max-width: 100%; }
 }
 
-/* « Du … au … »: the window four pages are read through - les produits
-   achetés, les achats, les ventes et la banque. One rule for the four, so
+/* « Du … au … »: the window four pages are read through - the products
+   bought, the purchases, the sales and the bank. One rule for the four, so
    the same question is asked the same way and in the same place wherever it
    is asked. Wraps rather than overflows: it sits in a toolbar beside a
    search box on a narrow screen. */
@@ -1428,12 +1428,12 @@ tr.is-new > td:first-child { box-shadow: inset 3px 0 0 var(--amber); }
 .row-actions form { display: inline; }
 .sub-table-wrap { overflow-x: auto; }
 
-/* A poste of charge is a row under its supplier's, and sorting keeps the two
+/* A charge item is a row under its supplier's, and sorting keeps the two
    together (data-child-row) - so the indent is the only thing saying which
    supplier it belongs to. */
 .charges-table { table-layout: fixed; width: 100%; }
 .charges-table .charge-row td:first-child { padding-left: var(--s4); }
-/* A poste's name is one long unbroken word ("REMBOURSEMENTDEPOTGARANTIE"):
+/* A charge item's name is one long unbroken word ("REMBOURSEMENTDEPOTGARANTIE"):
    it breaks inside its own column rather than widening the table past the
    panel it sits beside, which pushed the curve button off the page. */
 .charges-table td:first-child, .charges-table th:first-child { overflow-wrap: anywhere; }
@@ -1524,7 +1524,7 @@ body:has(.container-wide) .topbar-inner { max-width: calc(var(--content-width) +
     table.phone-cards > tbody > tr:has(> td.phone-card-end) {
         grid-template-columns: repeat(auto-fill, minmax(min(6rem, calc((100% - var(--s3)) / 2)), 1fr));
     }
-    /* A cell with nothing to say (a poste's « Dernier », a foot's last
+    /* A cell with nothing to say (a charge item's « Dernier », a foot's last
        cell) takes no room. */
     table.phone-cards > * > tr > td:empty { display: none; }
     table.phone-cards > * > tr > td[data-label]::before {
@@ -1859,7 +1859,7 @@ fieldset.choice-group legend { font-weight: 650; padding: 0 var(--s2); }
 .filing-block p { margin: 0 0 var(--s1) 0; }
 .filing-block-warning { border-left-color: var(--amber); }
 
-/* Banque : le degré de certitude d'une proposition, sur « Sans facture » et « Propositions ». */
+/* Banque: how certain a proposal is, on « Sans facture » and « Propositions ». */
 .status-tier-near_sure { background: var(--green-bg); color: var(--green); border-color: #2f5233; }
 .status-tier-to_confirm { background: var(--amber-bg); color: var(--amber); border-color: #574728; }
 .status-tier-sure { background: var(--blue-bg); color: var(--blue); border-color: #2f3d57; }
@@ -1868,9 +1868,9 @@ fieldset.choice-group legend { font-weight: 650; padding: 0 var(--s2); }
 .proposal-group-title { display: flex; align-items: baseline; gap: var(--s3); flex-wrap: wrap; margin-top: var(--s5); }
 .proposal-group-title .muted { font-size: 0.9rem; font-weight: normal; }
 .proposal-option { margin-top: var(--s1); }
-/* Une facture proposée à plusieurs opérations : dit sur chaque option qui la porte. */
+/* An invoice proposed for several transactions: said on every option carrying it. */
 .proposal-shared { color: var(--amber); font-size: 0.8rem; margin-left: var(--s1); }
-/* Sur « Sans facture », la pastille est un lien vers la règle de son degré (« Propositions », #regles). */
+/* On « Sans facture », the pill is a link to the rule of its tier (« Propositions », #regles). */
 a.status-pill { text-decoration: none; }
 a.status-pill:hover, a.status-pill:focus { text-decoration: underline; }
 
@@ -1982,7 +1982,7 @@ p.unsaved-note { margin: 0 0 var(--s2); font-size: 0.85rem; }
     .staff-forms, .timesheet-layout { grid-template-columns: minmax(0, 1fr); }
 }
 /* On a phone a day is a small card - its name and hours on one line, the
-   motif and the note under them - rather than four columns scrolled
+   reason and the note under them - rather than four columns scrolled
    sideways, where « Motif » started off the screen. */
 @media (max-width: 600px) {
     .timesheet-grid, .timesheet-grid tbody, .timesheet-grid tfoot { display: block; }
@@ -2193,7 +2193,7 @@ html:has(body.public-page) { scroll-padding-top: var(--s4); }
     .copy-row { flex-wrap: wrap; }
 }
 
-/* ------------------------------------------------------------- espaces */
+/* ------------------------------------------------------------- tenants */
 
 /* Multi mode only (base.html): the bar's name and « Se déconnecter » after
    the links, outside their <nav>. Above 860 px one over the other, taking
@@ -2215,7 +2215,7 @@ html:has(body.public-page) { scroll-padding-top: var(--s4); }
     font-size: 0.85rem;
     line-height: 1.35;
 }
-.topbar-espace {
+.topbar-tenant {
     min-width: 0;
     max-width: 12rem;
     overflow: hidden;
@@ -2231,7 +2231,7 @@ html:has(body.public-page) { scroll-padding-top: var(--s4); }
 @media (min-width: 861px) and (max-width: 1000px) {
     /* Still three rows of links just above 860 px, stacked or not: 124 px
        at 861 with a name of common length, up to about 950 px with one at
-       the 12rem cap. Only where the name is drawn: a page with no espace
+       the 12rem cap. Only where the name is drawn: a page with no tenant
        (no .topbar-account) keeps the room its links alone take. */
     html:has(.topbar-account) { --topbar-room: 8rem; }
 }
@@ -2241,7 +2241,7 @@ html:has(body.public-page) { scroll-padding-top: var(--s4); }
     .topbar-menu > nav { order: 2; }
 }
 @media (max-width: 319px) {
-    .topbar-espace { display: none; }
+    .topbar-tenant { display: none; }
 }
 
 /* The login, the signup and « Aucun espace » (accounts/page.html): the
@@ -2304,7 +2304,7 @@ html:has(body.public-page) { scroll-padding-top: var(--s4); }
        honestly can be: its headings wrap (« Quantité comptée » over two
        lines, not a column 130 px wide for a count of four) and its cells
        keep half their side padding. :where() leaves these weaker than any
-       table's own rule (a poste's indent, a sub-table's padding); a card
+       table's own rule (a charge item's indent, a sub-table's padding); a card
        (.phone-cards) has its own. */
     :where(.table-wrap, .table-scroll) :is(th, td) { padding-left: var(--s2); padding-right: var(--s2); }
     :where(.table-wrap, .table-scroll) th.sortable > button { padding-left: var(--s2); padding-right: var(--s2); }
@@ -2435,7 +2435,7 @@ html:has(body.public-page) { scroll-padding-top: var(--s4); }
         border-top: 1px solid var(--border);
         font-size: 0.95rem;
     }
-    html.topbar-menu-ready .topbar-espace { display: block; max-width: 100%; padding: 0 var(--s3); }
+    html.topbar-menu-ready .topbar-tenant { display: block; max-width: 100%; padding: 0 var(--s3); }
     html.topbar-menu-ready .topbar-logout .link-button {
         display: inline-flex;
         align-items: center;
@@ -2466,7 +2466,7 @@ html:has(body.public-page) { scroll-padding-top: var(--s4); }
 .topbar-toggle[aria-expanded="true"] .topbar-toggle-icon::after { top: 0; transform: rotate(-45deg); }
 /* The dot on « Menu » while a link of the menu carries a badge. It is read
    off the badges themselves, so it is right after every writer of them -
-   base.html, the review panel's out-of-band #nav-count-produits, ui.js's
+   base.html, the review panel's out-of-band #nav-count-products, ui.js's
    to-link-count - with nothing to keep in step. Its words are for a screen
    reader. */
 .topbar-waiting { display: none; width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--red); }
@@ -2474,39 +2474,39 @@ html:has(body.public-page) { scroll-padding-top: var(--s4); }
 .topbar:has(nav .badge) .topbar-waiting { display: inline-block; }
 .topbar:has(nav .badge) .topbar-waiting-text { display: inline; }
 
-/* ------------------------------------------------------------- consignes */
+/* ----------------------------------------------------------- returnables */
 
 /* « Consignes » (returnables/): the empties handed back to the driver,
-   counted on a phone in a cellar. Every page of the app has .consignes-page
+   counted on a phone in a cellar. Every page of the app has .returnables-page
    on its root element. Its fields are 16 px at least - under that iOS Safari
    zooms the whole page in on focus (the app's inputs are 0.92rem), the
    table's search box included. Under 600 px the topbar scrolls away with
    the page here only (its three to five rows took a third of a phone's
    screen above the count being typed); every other page keeps its sticky
    bar and the room measured for it. */
-.consignes-page :is(input, select, textarea) { font-size: 1rem; }
+.returnables-page :is(input, select, textarea) { font-size: 1rem; }
 @media (max-width: 600px) {
     /* relative, not static (30/09): it scrolls away with the page the same,
        and stays the stacking context « Menu »'s veil and menu are drawn in
        (« topbar menu »). The room below comes AFTER « topbar menu » on
        purpose: it weighs what html.topbar-menu-ready weighs, so the later
        wins. */
-    html:has(.consignes-page) .topbar { position: relative; }
-    html:has(.consignes-page) { --topbar-room: 0rem; }
+    html:has(.returnables-page) .topbar { position: relative; }
+    html:has(.returnables-page) { --topbar-room: 0rem; }
 }
 /* Every tap target here is 44 px at least, the small buttons too: « Retirer »
    under a photo, « Mettre la reprise au … », « Dater la reprise du … »,
    « Classer » - .btn-small made them 30 (.btn is inline-flex, so min-height
    holds). */
-.consignes-page .btn-small { min-height: 44px; }
+.returnables-page .btn-small { min-height: 44px; }
 /* A file name has no space to break at (« Bon_de_livraison_…_000123.pdf »):
-   in a bon's subtitle or an upload's message it pushed the page past a
+   in a slip's subtitle or an upload's message it pushed the page past a
    phone's width. The top messages sit outside the page's root. */
-.consignes-page .page-subtitle { overflow-wrap: anywhere; }
-html:has(.consignes-page) .message { overflow-wrap: anywhere; }
+.returnables-page .page-subtitle { overflow-wrap: anywhere; }
+html:has(.returnables-page) .message { overflow-wrap: anywhere; }
 
-/* The latest reprise in one line, above the form. */
-.reprise-strip {
+/* The latest pickup in one line, above the form. */
+.pickup-strip {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
@@ -2517,17 +2517,17 @@ html:has(.consignes-page) .message { overflow-wrap: anywhere; }
     border: 1px solid var(--border);
     border-radius: var(--radius);
 }
-.reprise-strip a { font-weight: 600; color: var(--text); }
-.reprise-strip-empty { padding: var(--s4); margin: 0 0 var(--s3); }
+.pickup-strip a { font-weight: 600; color: var(--text); }
+.pickup-strip-empty { padding: var(--s4); margin: 0 0 var(--s3); }
 .gather-form { margin: 0 0 var(--s3); }
 
 /* « Reprise du 12/03/2031 · repris par UBA · modifier »: the day, who and a
    note, folded - on almost every morning nobody touches them. */
 /* On a wide screen the form keeps a phone's proportions: the − field + of
    a count stay next to its name. */
-.reprise-form { max-width: 42rem; }
-.reprise-details { margin-bottom: var(--s2); }
-.reprise-details > summary {
+.pickup-form { max-width: 42rem; }
+.pickup-details { margin-bottom: var(--s2); }
+.pickup-details > summary {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
@@ -2537,14 +2537,14 @@ html:has(.consignes-page) .message { overflow-wrap: anywhere; }
     list-style: none;
     color: var(--text-dim);
 }
-.reprise-details > summary::-webkit-details-marker { display: none; }
-.reprise-details[open] > summary { margin-bottom: var(--s2); }
-.reprise-details-edit { color: var(--amber); text-decoration: underline; }
+.pickup-details > summary::-webkit-details-marker { display: none; }
+.pickup-details[open] > summary { margin-bottom: var(--s2); }
+.pickup-details-edit { color: var(--amber); text-decoration: underline; }
 
-.reprise-photos, .reprise-counts { border: 0; margin: var(--s4) 0 0; padding: 0; min-width: 0; }
-.reprise-photos legend, .reprise-counts legend { padding: 0; margin-bottom: var(--s2); font-weight: 650; }
-.reprise-photos .upload-choices { grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); margin-bottom: var(--s2); }
-.reprise-photos .upload-choice { min-height: 56px; align-content: center; text-align: center; }
+.pickup-photos, .pickup-counts { border: 0; margin: var(--s4) 0 0; padding: 0; min-width: 0; }
+.pickup-photos legend, .pickup-counts legend { padding: 0; margin-bottom: var(--s2); font-weight: 650; }
+.pickup-photos .upload-choices { grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); margin-bottom: var(--s2); }
+.pickup-photos .upload-choice { min-height: 56px; align-content: center; text-align: center; }
 .photo-previews {
     list-style: none;
     margin: var(--s2) 0 0;
@@ -2558,7 +2558,7 @@ html:has(.consignes-page) .message { overflow-wrap: anywhere; }
 .photo-preview span { overflow-wrap: anywhere; }
 
 /* One count per type: the name, then − field +. The first active type (the
-   kegs: almost every reprise is mostly kegs) is bigger. The buttons are
+   kegs: almost every pickup is mostly kegs) is bigger. The buttons are
    thumb-sized and never select text or double-tap-zoom when tapped fast. */
 .count-row {
     display: grid;
@@ -2616,11 +2616,11 @@ html:has(.consignes-page) .message { overflow-wrap: anywhere; }
     padding: 0 var(--s2);
     text-decoration: underline;
 }
-.reprise-submit { width: 100%; max-width: 30rem; min-height: 48px; justify-content: center; font-size: 1rem; white-space: normal; text-align: center; }
+.pickup-submit { width: 100%; max-width: 30rem; min-height: 48px; justify-content: center; font-size: 1rem; white-space: normal; text-align: center; }
 
-/* A reprise and its comparison: the card on /consignes/, its own page. */
-.reprise-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin: 0 0 var(--s2); }
-.reprise-photo-grid {
+/* A pickup and its comparison: the card on /consignes/, its own page. */
+.pickup-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin: 0 0 var(--s2); }
+.pickup-photo-grid {
     list-style: none;
     margin: var(--s3) 0;
     padding: 0;
@@ -2628,13 +2628,13 @@ html:has(.consignes-page) .message { overflow-wrap: anywhere; }
     grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
     gap: var(--s3);
 }
-.reprise-photo { display: grid; gap: var(--s1); align-content: start; }
-.reprise-photo img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: var(--radius-sm); background: var(--bg); }
+.pickup-photo { display: grid; gap: var(--s1); align-content: start; }
+.pickup-photo img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: var(--radius-sm); background: var(--bg); }
 /* A saved photo's « Retirer… » opens its button: one mis-tap under the
    thumbnail deleted it. */
 .photo-remove > summary { min-height: 44px; padding: 0.6rem 0; cursor: pointer; color: var(--red); font-size: 0.85rem; font-weight: 600; }
-.reprise-date-warning p, .reprise-hint p { margin: 0 0 var(--s2); }
-.reprise-hint {
+.pickup-date-warning p, .pickup-hint p { margin: 0 0 var(--s2); }
+.pickup-hint {
     margin: var(--s2) 0;
     padding: var(--s2) var(--s3);
     border: 1px solid var(--border);
@@ -2647,12 +2647,12 @@ html:has(.consignes-page) .message { overflow-wrap: anywhere; }
 .invoice-check-rows { margin: var(--s1) 0; padding-left: var(--s5); }
 .invoice-check-rows .is-gap { color: var(--red); }
 
-.consignes-list { margin-top: var(--s5); }
-.consignes-upload { margin-top: var(--s5); }
-.consignes-upload h3 { margin: var(--s5) 0 var(--s2); }
-.consignes-settings { margin: var(--s5) 0 var(--s2); color: var(--text-dim); }
+.returnables-list { margin-top: var(--s5); }
+.returnables-upload { margin-top: var(--s5); }
+.returnables-upload h3 { margin: var(--s5) 0 var(--s2); }
+.returnables-settings { margin: var(--s5) 0 var(--s2); color: var(--text-dim); }
 .gather-rules { padding-left: var(--s5); color: var(--text-dim); font-size: 0.9rem; }
-.gather-rules code, .motif-cheatsheet code, .motif-example, .consignes-page td code {
+.gather-rules code, .pattern-cheatsheet code, .pattern-example, .returnables-page td code {
     font-family: var(--font-mono);
     font-size: 0.88em;
     overflow-wrap: anywhere;
@@ -2661,7 +2661,7 @@ html:has(.consignes-page) .message { overflow-wrap: anywhere; }
 .danger-zone > summary { cursor: pointer; color: var(--red); font-weight: 600; }
 .danger-zone form { margin-top: var(--s2); }
 
-/* A bon: what its reading found, its lines, the PDF itself. */
+/* A slip: what its reading found, its lines, the PDF itself. */
 .slip-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--s1) var(--s3); margin: var(--s3) 0; }
 .slip-facts dt { color: var(--muted); }
 .slip-facts dd { margin: 0; overflow-wrap: anywhere; }
@@ -2685,14 +2685,14 @@ html:has(.consignes-page) .message { overflow-wrap: anywhere; }
     background: var(--bg);
 }
 
-/* A format of bon: its motifs in groups, one column (a motif is long), and
+/* A slip format: its patterns in groups, one column (a pattern is long), and
    « Tester » - the text line by line, each line with what was read of it. */
 .format-form .form-grid { grid-template-columns: minmax(0, 1fr); }
 .format-group { border: 0; padding: 0; margin: 0 0 var(--s4); min-width: 0; }
 .format-group > legend, .format-group > summary { padding: 0; margin-bottom: var(--s2); font-size: 1.05rem; font-weight: 650; }
 details.format-group > summary { cursor: pointer; }
-.motif-input { width: 100%; font-family: var(--font-mono); font-size: 1rem; }
-.motif-cheatsheet { padding-left: var(--s5); color: var(--text-dim); font-size: 0.9rem; }
+.pattern-input { width: 100%; font-family: var(--font-mono); font-size: 1rem; }
+.pattern-cheatsheet { padding-left: var(--s5); color: var(--text-dim); font-size: 0.9rem; }
 .format-tester { margin: var(--s4) 0; padding-top: var(--s3); border-top: 1px solid var(--border); }
 .format-tester h2 { margin-top: 0; }
 .tester-sources { display: grid; gap: var(--s3); margin-bottom: var(--s3); }
@@ -2714,7 +2714,7 @@ details.format-group > summary { cursor: pointer; }
 .trace-text { font-family: var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .trace-tag { display: inline-block; padding: 0 0.45rem; border-radius: var(--radius-pill); background: var(--blue-bg); color: var(--blue); font-size: 0.75rem; }
 
-/* The types of consigne: one card each. */
+/* The returnable types: one card each. */
 .type-card.is-inactive h2 { color: var(--muted); }
 .position-input { width: 6rem; }
 
@@ -2728,7 +2728,7 @@ details.format-group > summary { cursor: pointer; }
 /* 16 px fields. Under that, iOS Safari zooms the whole page in on the field
    a finger taps, and leaves it zoomed - on nearly every page, the app's
    fields being 0.92rem (UX review, 30/09). « Consignes » fixed it for its
-   own pages (.consignes-page, which keeps its rule at every width); this is
+   own pages (.returnables-page, which keeps its rule at every width); this is
    the same rule for the others. .copy-row input is named: its own 0.85rem
    outweighs the rule, and « Copier » focuses it. */
 @media (pointer: coarse) {

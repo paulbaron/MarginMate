@@ -1,10 +1,10 @@
-"""Whether this espace may use the server's L'Addition account, and what it
+"""Whether this tenant may use the server's L'Addition account, and what it
 reads where it may not.
 
 The credentials in .env (LADDITION_EMAIL / LADDITION_PASSWORD) are the
-owner's own till. With one database per bar, they work in the owner's espace
+owner's own till. With one database per bar, they work in the owner's tenant
 only (`accounts.tenancy.integrations_allowed`). Everywhere else the import is « à configurer », a later
-step giving each espace settings of its own.
+step giving each tenant settings of its own.
 
 One rule, checked wherever the account can be reached, because each place is
 reachable on its own:
@@ -18,10 +18,10 @@ reachable on its own:
 - the commands refuse the download (`laddition_import`, `laddition_open`).
 
 Reading exports already on disk uses no account: the backfills and
-`laddition_import --file` read the espace's own folder, or what the operator
+`laddition_import --file` read the tenant's own folder, or what the operator
 names, and are not refused.
 
-What an espace that may not use the account is told is never the name of a
+What a tenant that may not use the account is told is never the name of a
 server variable: « X est absente du fichier .env » would say which names
 exist on the server.
 """
@@ -33,7 +33,7 @@ from django.utils.text import capfirst
 
 from accounts.tenancy import NoTenantBound, integrations_allowed, require_tenant
 
-#: The till import where it is not the espace's to use - as a clause, so a
+#: The till import where it is not the tenant's to use - as a clause, so a
 #: page can put it after « Pour le combler : ». `refusal()` is the sentence.
 TILL_TO_CONFIGURE = (
     "la récupération des ventes de la caisse (L'Addition) est à configurer — disponible prochainement "
@@ -42,7 +42,7 @@ TILL_TO_CONFIGURE = (
 
 
 def till_allowed() -> bool:
-    """Whether the server's L'Addition account may be used for the espace
+    """Whether the server's L'Addition account may be used for the tenant
     this thread works for."""
     return integrations_allowed()
 
@@ -52,8 +52,8 @@ def refusal() -> str:
     return f"{capfirst(TILL_TO_CONFIGURE)}."
 
 
-def require_espace(command: str) -> None:
-    """A command of the till's run for no espace (multi mode, unbound): say
+def require_tenant_for_command(command: str) -> None:
+    """A command of the till's run for no tenant (multi mode, unbound): say
     how to run it, rather than a « no such table » from the empty database
     an unbound `default` is."""
     try:

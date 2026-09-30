@@ -1,14 +1,14 @@
 """Adopt a database of the old single mode (one db.sqlite3, no login) into
-an espace - a ONE-OFF, with the owner's approval. His own was adopted on
+a tenant - a ONE-OFF, with the owner's approval. His own was adopted on
 28/09/2026; single mode itself was removed on 29/09 (accounts/adoption.py).
 
-    python manage.py adopt_database --email <son adresse> --name "<le bar>" --from <chemin>/db.sqlite3 \\
-        [--media <dossier>] [--private <dossier>] [--downloads <dossier>] [--backups <dossier>] \\
+    python manage.py adopt_database --email <his address> --name "<the bar>" --from <path>/db.sqlite3 \\
+        [--media <folder>] [--private <folder>] [--downloads <folder>] [--backups <folder>] \\
         [--leave-current] [--dry-run]
 
 The login must already exist in the accounts database (``createsuperuser
 --database accounts``, or a signup with an invitation - then --leave-current
-closes the empty espace the signup made). The source database and folders
+closes the empty tenant the signup made). The source database and folders
 are only read. --dry-run checks everything and says what would be done,
 writing nothing. What a real run does, step by step: accounts/adoption.py.
 """
@@ -24,7 +24,9 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("--email", required=True, help="L'adresse du compte, déjà créé dans la base des comptes.")
         parser.add_argument("--name", required=True, help="Le nom du bar, affiché en haut des pages.")
-        parser.add_argument("--from", dest="source", required=True, help="La base à adopter (db.sqlite3) : lue seulement.")
+        parser.add_argument(
+            "--from", dest="source", required=True, help="La base à adopter (db.sqlite3) : lue seulement."
+        )
         for option in adoption.FOLDERS:
             parser.add_argument(f"--{option}", help=f"Le dossier à copier dans {option}/ de l'espace.")
         parser.add_argument(

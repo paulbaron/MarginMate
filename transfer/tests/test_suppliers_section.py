@@ -9,8 +9,7 @@ supplier a reader or a till is keyed on is never deleted.
 Every name, code and figure below is invented.
 """
 
-from datetime import date, datetime
-from datetime import timezone as dt_timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from django.test import TestCase
@@ -40,7 +39,6 @@ from transfer.tests.support import (
 )
 
 MERGE, REPLACE = Strategy.MERGE, Strategy.REPLACE
-UTC = dt_timezone.utc
 SEEDS = {"METRO", "UBA", "OTHER", "FRANPRIX", "MONOPRIX", "SABBH", "WINGSENG"}
 BOUND = SEEDS | {"CECINA"}
 PAUSE = {
@@ -152,7 +150,11 @@ class RoundTripTests(TestCase):
     def test_dated_and_undated_prices_at_one_amount_are_two(self):
         _before, _after = round_trip({"fournisseurs"}, MERGE)
         self.assertEqual(
-            sorted(ShopItemPrice.objects.filter(supplier__code="SABBH", unit_price_ttc="0.70").values_list("label", flat=True)),
+            sorted(
+                ShopItemPrice.objects.filter(supplier__code="SABBH", unit_price_ttc="0.70").values_list(
+                    "label", flat=True
+                )
+            ),
             ["Citron", "Pita"],
         )
 
@@ -284,9 +286,7 @@ class MergeAndReplaceTests(TestCase):
         make_invoice(supplier=florist, invoice_number="F-1")
         report = import_archive(self.reader, REPLACE).section("fournisseurs")
         self.assertTrue(Supplier.objects.filter(code="FLEURISTE_ESSAI").exists())
-        self.assertIn(
-            "Fournisseur « Fleuriste Essai » : 1 document y est rangé (Factures non remplacées)", report.kept
-        )
+        self.assertIn("Fournisseur « Fleuriste Essai » : 1 document y est rangé (Factures non remplacées)", report.kept)
 
     def test_replace_never_deletes_a_code_bound_supplier(self):
         reader = forge(
@@ -311,15 +311,17 @@ class MergeAndReplaceTests(TestCase):
         florist = Supplier.objects.get(code="FLEURISTE_ESSAI")
         make_invoice_type(supplier=florist, name="Fleuriste - Factures")
         grocer = make_supplier(code="EPICERIE_ESSAI", name="Épicerie Essai")
-        make_product(supplier=grocer, raw_name="SEL FIN 1KG", stock_type=StockType.objects.create(name="Sel", unit="KG"))
-        report = import_archive(self.reader, REPLACE).section("fournisseurs")
-        self.assertIn("Fournisseur « Fleuriste Essai » : 1 source récupère pour lui (Sources non remplacées)", report.kept)
-        self.assertIn(
-            "Fournisseur « Épicerie Essai » : 1 produit classé (Associations non remplacées)", report.kept
+        make_product(
+            supplier=grocer, raw_name="SEL FIN 1KG", stock_type=StockType.objects.create(name="Sel", unit="KG")
         )
+        report = import_archive(self.reader, REPLACE).section("fournisseurs")
+        self.assertIn(
+            "Fournisseur « Fleuriste Essai » : 1 source récupère pour lui (Sources non remplacées)", report.kept
+        )
+        self.assertIn("Fournisseur « Épicerie Essai » : 1 produit classé (Associations non remplacées)", report.kept)
 
-    def test_replace_keeps_a_supplier_consignes_name_and_says_so(self):
-        """A format of bon and a reprise hold their supplier (PROTECT): kept
+    def test_replace_keeps_a_supplier_returnables_name_and_says_so(self):
+        """A slip format and a pickup hold their supplier (PROTECT): kept
         under the false « un de ses produits sert encore » before, since
         `_holders` looked at documents, sources and products only."""
         from returnables.tests.support import make_format, make_pickup
@@ -362,8 +364,8 @@ class MergeAndReplaceTests(TestCase):
 class RenameTests(TestCase):
     def setUp(self):
         self.water = make_supplier(code="EAU_ESSAI", name="Eau Essai", expenses_only=True)
-        poste = make_product(supplier=self.water, raw_name="Eau Essai", is_expense=True)
-        make_invoice_line(invoice=make_invoice(supplier=self.water), product=poste, raw_name="Eau Essai")
+        charge_item = make_product(supplier=self.water, raw_name="Eau Essai", is_expense=True)
+        make_invoice_line(invoice=make_invoice(supplier=self.water), product=charge_item, raw_name="Eau Essai")
         self.reader = export_archive({"fournisseurs"})
         self.addCleanup(self.reader.close)
         Supplier.objects.filter(pk=self.water.pk).update(name="Eau de la Ville")
@@ -377,10 +379,12 @@ class RenameTests(TestCase):
         )
         self.assertEqual(Supplier.objects.get(pk=self.water.pk).name, "Eau de la Ville")
 
-    def test_replace_renames_it_and_its_poste_follows_without_a_word_in_its_history(self):
+    def test_replace_renames_it_and_its_charge_item_follows_without_a_word_in_its_history(self):
         import_archive(self.reader, REPLACE)
         self.assertEqual(Supplier.objects.get(pk=self.water.pk).name, "Eau Essai")
-        self.assertEqual(list(Product.objects.filter(supplier=self.water).values_list("raw_name", flat=True)), ["Eau Essai"])
+        self.assertEqual(
+            list(Product.objects.filter(supplier=self.water).values_list("raw_name", flat=True)), ["Eau Essai"]
+        )
         self.assertEqual(
             list(InvoiceLine.objects.filter(invoice__supplier=self.water).values_list("raw_name", flat=True)),
             ["Eau Essai"],
@@ -393,7 +397,9 @@ class RenameTests(TestCase):
         self.assertEqual(Supplier.objects.get(pk=self.water.pk).name, "Eau de la Ville")
         said = [note for note in report.notes if "non repris" in note]
         self.assertEqual(len(said), 1)
-        self.assertIn("Fournisseur « Eau de la Ville » : nom « Eau Essai » non repris — « Eau Essai » existe déjà", said[0])
+        self.assertIn(
+            "Fournisseur « Eau de la Ville » : nom « Eau Essai » non repris — « Eau Essai » existe déjà", said[0]
+        )
 
 
 class FreshDatabaseTests(TestCase):
@@ -414,7 +420,9 @@ class FreshDatabaseTests(TestCase):
         report = import_archive(self.reader, MERGE).section("fournisseurs")
         self.assertEqual(report.tallies["fournisseurs"].created, 3)
         self.assertEqual(Supplier.objects.get(code="SABBH").ticket_header, "SABBH ORIENTAL ESSAI")
-        self.assertEqual(Supplier.objects.get(code="METRO").ticket_identifiers, ["siren:900000001", "web:metro.example"])
+        self.assertEqual(
+            Supplier.objects.get(code="METRO").ticket_identifiers, ["siren:900000001", "web:metro.example"]
+        )
         self.assertEqual(Supplier.objects.get(code="UBA").ticket_identifiers, ["siren:900000003"])
         self.assertEqual(Supplier.objects.get(code="UBA").name, "UBA")
         self.assertIn("Fournisseur « UBA » : différent dans l'archive (nom) — gardé tel quel", report.conflicts)
@@ -462,7 +470,13 @@ class CodesAndNamesTests(TestCase):
                 "products": [],
                 "invoices": [
                     {
-                        "key": {"supplier": "LIDL_BIS", "number": "B-1", "sha256": "", "file_sha256": "", "occurrence": 0},
+                        "key": {
+                            "supplier": "LIDL_BIS",
+                            "number": "B-1",
+                            "sha256": "",
+                            "file_sha256": "",
+                            "occurrence": 0,
+                        },
                         "supplier": "LIDL_BIS",
                         "invoice_number": "B-1",
                         "lines": [],
@@ -476,7 +490,9 @@ class CodesAndNamesTests(TestCase):
             run = import_archive(reader, MERGE)
         self.assertEqual(len(run.section("fournisseurs").skipped), 1)
         self.assertIn("répond déjà au code LIDL", run.section("fournisseurs").skipped[0])
-        self.assertEqual(run.section("factures").skipped, ["Facture LIDL_BIS n° B-1 : fournisseur inconnu « LIDL_BIS »"])
+        self.assertEqual(
+            run.section("factures").skipped, ["Facture LIDL_BIS n° B-1 : fournisseur inconnu « LIDL_BIS »"]
+        )
         self.assertFalse(Invoice.objects.exists())
         self.assertEqual(Supplier.objects.filter(name__startswith="Lidl").count(), 1)
 
@@ -605,7 +621,9 @@ class RefusalTests(TestCase):
         ShopItemPrice.objects.all().delete()
         report = import_archive(self._forged(change), MERGE).section("fournisseurs")
         self.assertEqual(ShopItemPrice.objects.count(), 3)
-        self.assertIn("Prix connu de Sabbh Oriental : « unit_price_ttc » : « 0.705 » a plus de 2 décimales", report.skipped)
+        self.assertIn(
+            "Prix connu de Sabbh Oriental : « unit_price_ttc » : « 0.705 » a plus de 2 décimales", report.skipped
+        )
 
     def test_a_record_without_a_code_or_a_name_is_skipped(self):
         def change(payload):
@@ -624,7 +642,9 @@ class ClearTests(TestCase):
         self.bakery = build_suppliers()
         CounterpartyAlias.objects.create(supplier=self.bakery, name="BOULANGERIE ESSAI SARL")
         SupplierChange.objects.create(
-            supplier=self.bakery, kind=SupplierChange.Kind.FIRST_DOCUMENT, summary="Premier document (essai).",
+            supplier=self.bakery,
+            kind=SupplierChange.Kind.FIRST_DOCUMENT,
+            summary="Premier document (essai).",
             needs_review=True,
         )
 
@@ -633,7 +653,12 @@ class ClearTests(TestCase):
         self.assertEqual(set(Supplier.objects.values_list("code", flat=True)), BOUND)
         for supplier in Supplier.objects.all():
             self.assertEqual(
-                (supplier.ticket_header, supplier.ticket_identifiers, supplier.refused_identifiers, supplier.expenses_only),
+                (
+                    supplier.ticket_header,
+                    supplier.ticket_identifiers,
+                    supplier.refused_identifiers,
+                    supplier.expenses_only,
+                ),
                 ("", [], [], False),
                 supplier.code,
             )
@@ -652,9 +677,7 @@ class ClearTests(TestCase):
         self.assertTrue(any(note.endswith("leurs identifiants appris sont remis à zéro") for note in report.notes))
         self.assertIn("Metro", report.notes[-1])
         self.assertNotIn("Autre (analyse IA)", report.notes[-1])
-        self.assertEqual(
-            registry.get("fournisseurs").count(), {"fournisseurs": len(BOUND) - 1, "prix connus": 0}
-        )
+        self.assertEqual(registry.get("fournisseurs").count(), {"fournisseurs": len(BOUND) - 1, "prix connus": 0})
 
     def test_a_clear_preview_changes_nothing(self):
         before = db_fingerprint()
@@ -667,9 +690,9 @@ class ClearTests(TestCase):
         self.assertTrue(Supplier.objects.filter(pk=self.bakery.pk).exists())
         self.assertIn("Fournisseur « Boulangerie Essai » : 1 document y est rangé", run.section("fournisseurs").kept)
 
-    def test_a_supplier_a_reprise_holds_is_kept_with_the_true_reason(self):
+    def test_a_supplier_a_pickup_holds_is_kept_with_the_true_reason(self):
         """Cleared alone (closed=False: the page clears « Consignes » with
-        it), a supplier a reprise holds is kept (PROTECT) - and said so, not
+        it), a supplier a pickup holds is kept (PROTECT) - and said so, not
         « un de ses produits sert encore »."""
         from returnables.tests.support import make_pickup
 
@@ -680,7 +703,7 @@ class ClearTests(TestCase):
             "Fournisseur « Boulangerie Essai » : 1 reprise de consignes est à son nom", run.section("fournisseurs").kept
         )
 
-    def test_cleared_with_consignes_the_supplier_goes(self):
+    def test_cleared_with_returnables_the_supplier_goes(self):
         """What the page does: « Consignes » requires the suppliers, so it is
         cleared first and holds nothing any more."""
         from returnables.tests.support import make_format, make_pickup

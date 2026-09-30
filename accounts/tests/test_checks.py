@@ -1,8 +1,8 @@
-"""accounts.E005 (accounts/checks.py): at most ONE active espace uses the
+"""accounts.E005 (accounts/checks.py): at most ONE active tenant uses the
 server's own accounts - one Metro account, one pause.
 
 Metro's pause (24 hours between two sign-ins, a week after a refusal) lives
-on the METRO row of the espace that signs in. Two espaces with
+on the METRO row of the tenant that signs in. Two tenants with
 `uses_server_integrations` would each keep a pause of their own and sign in
 to the ONE account twice as often - how its firewall blocks the owner - and
 two bars would share his mailbox, his till and his AI key. Names invented."""
@@ -19,20 +19,20 @@ from accounts.models import Tenant
 from accounts.tests.support import TenancyTestCase
 
 
-class OneOwnerEspaceTests(TenancyTestCase):
-    def test_one_espace_with_the_server_s_accounts_is_the_rule(self):
+class OneOwnerTenantTests(TenancyTestCase):
+    def test_one_tenant_with_the_server_s_accounts_is_the_rule(self):
         self.make_tenant("Bar du Propriétaire", owner=True)
         self.make_tenant("Bar Voisin")
-        self.assertEqual(checks.one_owner_espace(), [])
+        self.assertEqual(checks.one_owner_tenant(), [])
 
     def test_none_at_all_is_fine_too(self):
         self.make_tenant("Bar Voisin")
-        self.assertEqual(checks.one_owner_espace(), [])
+        self.assertEqual(checks.one_owner_tenant(), [])
 
     def test_two_active_ones_are_refused_and_named(self):
         first = self.make_tenant("Bar du Propriétaire", owner=True)
         second = self.make_tenant("Bar Copié", owner=True)
-        (issue,) = checks.one_owner_espace()
+        (issue,) = checks.one_owner_tenant()
         self.assertIsInstance(issue, Error)
         self.assertEqual(issue.id, "accounts.E005")
         for tenant in (first, second):
@@ -45,7 +45,7 @@ class OneOwnerEspaceTests(TenancyTestCase):
         self.make_tenant("Bar du Propriétaire", owner=True)
         old = self.make_tenant("Ancien Bar", owner=True)
         Tenant.objects.filter(pk=old.pk).update(is_active=False)
-        self.assertEqual(checks.one_owner_espace(), [])
+        self.assertEqual(checks.one_owner_tenant(), [])
 
 
 class LimiterCacheTests(TestCase):
@@ -93,7 +93,7 @@ class LimiterCacheTests(TestCase):
             self.assertIn("accounts.W002", [issue.id for issue in run_checks()])
 
 
-class OneOwnerEspaceWithoutDatabaseTests(SimpleTestCase):
+class OneOwnerTenantWithoutDatabaseTests(SimpleTestCase):
     """Never an accounts database created by looking for one (SQLite makes
     the file it opens)."""
 
@@ -106,5 +106,5 @@ class OneOwnerEspaceWithoutDatabaseTests(SimpleTestCase):
             with override_settings(
                 DATABASES={"default": memory, "accounts": {"ENGINE": memory["ENGINE"], "NAME": str(missing)}},
             ):
-                self.assertEqual(checks.one_owner_espace(), [])
+                self.assertEqual(checks.one_owner_tenant(), [])
         self.assertFalse(missing.exists())

@@ -146,7 +146,7 @@ class TwoMarginsTests(SelectionFixture, TestCase):
         self.assertIn("Charges 300.00 € HT", text)
         self.assertIn("450.00 € HT laissés de côté sur 725.00 € facturés", text)
 
-    def test_tout_remettre_is_the_same_period_with_nothing_left_out(self):
+    def test_putting_everything_back_is_the_same_period_with_nothing_left_out(self):
         response = self.get(MATERIAL)
 
         self.assertEqual(response.context["reset_url"], f"{reverse(PAGE)}?{urlencode(MARCH)}")
@@ -172,7 +172,7 @@ class TwoMarginsTests(SelectionFixture, TestCase):
         self.assertIn("on retire une dépense, pas une vente", text_of(everything))
 
     def test_something_left_out_with_nothing_in_the_window_is_named_as_such(self):
-        """The consignes were only bought in April: over March the question
+        """The Consignes were only bought in April: over March the question
         is still the owner's, and the page answers it rather than hiding it."""
         html = self.html(category_key("Consignes"))
 
@@ -259,12 +259,14 @@ class TheBreakdownIsTheSelectorTests(SelectionFixture, TestCase):
         self.assertNotIn(">Compter</th>", form)
         self.assertIn("Rien n'est enregistré : la sélection vit dans l'adresse de la page", text_of(form))
 
-    def test_recalculer_is_a_get_form_carrying_the_period(self):
+    def test_recalculate_is_a_get_form_carrying_the_period(self):
         html = self.html(tout="1")
         form = html[html.index('class="spend-selection"') :]
         form = form[: form.index("</form>")]
 
-        self.assertIn('method="get"', html[html.index('class="spend-selection"') - 40 : html.index('class="spend-selection"')])
+        self.assertIn(
+            'method="get"', html[html.index('class="spend-selection"') - 40 : html.index('class="spend-selection"')]
+        )
         self.assertIn('<input type="hidden" name="du" value="2026-03-01">', form)
         self.assertIn('<input type="hidden" name="au" value="2026-03-31">', form)
         self.assertIn('<input type="hidden" name="tout" value="1">', form)
@@ -312,7 +314,9 @@ class WhatTheFormSendsTests(SelectionFixture, TestCase):
     def test_what_the_form_did_not_show_keeps_its_state(self):
         """Consignes had nothing in March, so no row: left out before, it
         stays out - only a row the form showed can be ticked back."""
-        response = self.submit([*MARCH.items(), ("sans", category_key("Consignes")), *self.rows(unticked=(CHARGES_KEY,))])
+        response = self.submit(
+            [*MARCH.items(), ("sans", category_key("Consignes")), *self.rows(unticked=(CHARGES_KEY,))]
+        )
 
         self.assertRedirects(response, self.expected(category_key("Consignes"), CHARGES_KEY))
 
@@ -327,11 +331,13 @@ class WhatTheFormSendsTests(SelectionFixture, TestCase):
         self.assertRedirects(response, self.expected(CHARGES_KEY))
 
     def test_a_ticked_box_the_form_never_showed_changes_nothing(self):
-        response = self.submit([*MARCH.items(), *self.rows(unticked=(MATERIAL,)), ("garder", CHARGES_KEY), ("garder", "rien")])
+        response = self.submit(
+            [*MARCH.items(), *self.rows(unticked=(MATERIAL,)), ("garder", CHARGES_KEY), ("garder", "rien")]
+        )
 
         self.assertRedirects(response, self.expected(MATERIAL))
 
-    def test_recalculer_keeps_the_order_the_keys_were_asked_in(self):
+    def test_recalculate_keeps_the_order_the_keys_were_asked_in(self):
         """« sans : Nappe, Matériel » stays so after a « Recalculer » that
         changed nothing - in table order it read « Matériel, Nappe »."""
         cloth = article_key(self.cloth.pk)
@@ -353,7 +359,7 @@ class WhatTheFormSendsTests(SelectionFixture, TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(query_of(response["Location"]).getlist("sans"), [cloth, CHARGES_KEY, MATERIAL])
 
-    def test_depuis_le_debut_survives_recalculer(self):
+    def test_all_time_survives_recalculate(self):
         response = self.submit([*MARCH.items(), ("tout", "1"), *self.rows(unticked=(TO_CLASSIFY_KEY,))])
 
         self.assertRedirects(response, self.expected(TO_CLASSIFY_KEY, tout="1"))
@@ -375,7 +381,15 @@ class KeysInTheAddressTests(SelectionFixture, TestCase):
                 self.assertTrue(box(html, key))
 
     def test_a_key_the_page_does_not_know_is_ignored(self):
-        for key in ("", "rien", "article:abc", "article:²", "article:99999", "fournisseur:-1", "categorie:Inconnue au bataillon"):
+        for key in (
+            "",
+            "rien",
+            "article:abc",
+            "article:²",
+            "article:99999",
+            "fournisseur:-1",
+            "categorie:Inconnue au bataillon",
+        ):
             with self.subTest(key=key):
                 response = self.get(key)
                 self.assertNotContains(response, "sans :")
@@ -411,7 +425,7 @@ class KeysInTheAddressTests(SelectionFixture, TestCase):
         for key in both:
             self.assertIn(f'<input type="hidden" name="sans" value="{escape(key)}">', window_form)
 
-    def test_under_depuis_le_debut_the_links_keep_the_selection_too(self):
+    def test_under_all_time_the_links_keep_the_selection_too(self):
         """All of the history holds April's keg too: 1 000 € against 505 €
         of goods once the rent is left out."""
         response = self.get(CHARGES_KEY, tout="1")

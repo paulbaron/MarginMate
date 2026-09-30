@@ -5,6 +5,7 @@ removed or cut off the end after the fact no longer adds up."""
 
 import datetime as dt
 from datetime import date
+from itertools import pairwise
 
 from staff import signature_requests as requests_
 from staff.models import Establishment, SignatureEvent, SignatureRequest
@@ -14,7 +15,7 @@ from staff.timesheet import save_month
 from tests.support import NoNetworkTestCase
 
 JUNE = date(2026, 6, 1)
-NOW = dt.datetime(2026, 7, 2, 8, 0, tzinfo=dt.timezone.utc)
+NOW = dt.datetime(2026, 7, 2, 8, 0, tzinfo=dt.UTC)
 Kind = SignatureEvent.Kind
 
 
@@ -27,8 +28,12 @@ class EventChainTests(SigningTestMixin, NoNetworkTestCase):
         self.request, _token = requests_.create_request(self.person, JUNE, now=NOW, ip="203.0.113.7")
         for minute, kind in ((1, Kind.LINK_OPENED), (2, Kind.CODE_GIVEN), (3, Kind.CODE_FAILED)):
             requests_.log_event(
-                self.request, kind, at=NOW + dt.timedelta(minutes=minute), ip="203.0.113.8",
-                user_agent="Essai/1.0", detail={"essai": minute},
+                self.request,
+                kind,
+                at=NOW + dt.timedelta(minutes=minute),
+                ip="203.0.113.8",
+                user_agent="Essai/1.0",
+                detail={"essai": minute},
             )
         self.request.refresh_from_db()
 
@@ -42,7 +47,7 @@ class EventChainTests(SigningTestMixin, NoNetworkTestCase):
         self.assertIn("intègre", check.message)
         events = self.events()
         self.assertEqual(events[0].previous_hash, "0" * 64)
-        for before, after in zip(events, events[1:]):
+        for before, after in pairwise(events):
             self.assertEqual(after.previous_hash, before.hash)
         self.assertEqual(self.request.last_event_hash, events[-1].hash)
 
@@ -104,8 +109,11 @@ class EventChainTests(SigningTestMixin, NoNetworkTestCase):
         holding a date: all normalised BEFORE hashing, so reading them back
         gives the same hash."""
         requests_.log_event(
-            self.request, Kind.LINK_OPENED, ip="2001:0DB8:0000:0000:0000:0000:0000:0001",
-            user_agent="A" * 400, detail={"quand": dt.date(2026, 7, 2), "n": 3, "rien": None},
+            self.request,
+            Kind.LINK_OPENED,
+            ip="2001:0DB8:0000:0000:0000:0000:0000:0001",
+            user_agent="A" * 400,
+            detail={"quand": dt.date(2026, 7, 2), "n": 3, "rien": None},
         )
         requests_.log_event(self.request, Kind.LINK_OPENED, ip="pas une adresse", user_agent="")
         event, bad_ip = self.events()[-2:]

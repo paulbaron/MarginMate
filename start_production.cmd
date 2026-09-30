@@ -1,13 +1,13 @@
 @echo off
-rem MarginMate : le serveur de production (voir DEPLOY.md).
+rem MarginMate: the production server (see DEPLOY.md).
 rem
-rem Lance "manage.py serve" avec le Python du dossier .venv : c'est
-rem l'environnement virtuel lui-meme, pas besoin de l'activer. "serve"
-rem verifie tout avant de demarrer (mode debug coupe, cle secrete, noms
-rem d'hote, HTTPS, migrations), puis sert le site sur http://127.0.0.1:8765,
-rem l'adresse vers laquelle pointe le tunnel Cloudflare (pas 8000 : c'est
-rem le port de runserver, le serveur de developpement).
-rem Ctrl+C pour l'arreter. Les options sont transmises : start_production.cmd --port 8002
+rem Runs "manage.py serve" with the Python of the .venv folder: that is the
+rem virtual environment itself, no need to activate it, nor uv to serve.
+rem "serve" checks everything before it starts (debug mode off, secret key,
+rem host names, HTTPS, migrations), then serves the site on
+rem http://127.0.0.1:8765, the address the Cloudflare tunnel points at (not
+rem 8000: that is the port of runserver, the development server).
+rem Ctrl+C to stop it. Options are passed on: start_production.cmd --port 8002
 setlocal
 cd /d "%~dp0"
 if not exist ".venv\Scripts\python.exe" (

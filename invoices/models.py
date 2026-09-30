@@ -10,7 +10,6 @@ from django.utils import timezone
 
 from common import JobLogMixin
 
-
 #: Which attachment of an e-mail is the invoice, by default. Since the
 #: electronic invoicing reform an invoice arrives as a Factur-X PDF **or as
 #: the XML on its own** - a « plateforme agréée », or a supplier, may simply
@@ -33,8 +32,7 @@ class Supplier(models.Model):
     name = models.CharField(max_length=255)
     parser_key = models.CharField(max_length=32, blank=True)
     is_scrapable = models.BooleanField(
-        default=False,
-        help_text="Si « Récupérer les nouvelles factures » sait aller les chercher tout seul."
+        default=False, help_text="Si « Récupérer les nouvelles factures » sait aller les chercher tout seul."
     )
     # What a shop no reader was configured for prints at the top of its
     # tickets: an import finds it there (receipts.detect_parser), before the
@@ -157,8 +155,7 @@ class InvoiceType(models.Model):
     parser_key = models.CharField(max_length=32, blank=True)
     source_kind = models.CharField(max_length=10, choices=SourceKind.choices, default=SourceKind.EMAIL)
     is_active = models.BooleanField(
-        default=True,
-        help_text="Inclure ce type dans « Récupérer les nouvelles factures »."
+        default=True, help_text="Inclure ce type dans « Récupérer les nouvelles factures »."
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -270,7 +267,8 @@ class WebsiteInvoiceSource(models.Model):
         max_length=64, help_text="Nom de la variable du fichier .env qui contient l'identifiant (ex. FREEBOX_LOGIN)."
     )
     password_env = models.CharField(
-        max_length=64, help_text="Nom de la variable du fichier .env qui contient le mot de passe (ex. FREEBOX_PASSWORD)."
+        max_length=64,
+        help_text="Nom de la variable du fichier .env qui contient le mot de passe (ex. FREEBOX_PASSWORD).",
     )
     invoices_url = models.URLField(
         max_length=500,
@@ -282,9 +280,15 @@ class WebsiteInvoiceSource(models.Model):
         help_text="Liens à suivre dans l'ordre après la connexion, un texte par ligne (ex. « Conso et factures »). "
         "Vide : le premier lien qui parle de factures.",
     )
-    username_selector = models.CharField(max_length=300, blank=True, help_text="Sélecteur CSS du champ identifiant (vide : trouvé seul).")
-    password_selector = models.CharField(max_length=300, blank=True, help_text="Sélecteur CSS du champ mot de passe (vide : trouvé seul).")
-    submit_selector = models.CharField(max_length=300, blank=True, help_text="Sélecteur CSS du bouton de connexion (vide : trouvé seul).")
+    username_selector = models.CharField(
+        max_length=300, blank=True, help_text="Sélecteur CSS du champ identifiant (vide : trouvé seul)."
+    )
+    password_selector = models.CharField(
+        max_length=300, blank=True, help_text="Sélecteur CSS du champ mot de passe (vide : trouvé seul)."
+    )
+    submit_selector = models.CharField(
+        max_length=300, blank=True, help_text="Sélecteur CSS du bouton de connexion (vide : trouvé seul)."
+    )
     link_selector = models.CharField(
         max_length=300,
         blank=True,
@@ -358,9 +362,7 @@ class Invoice(models.Model):
     # all a supplier's PDF or a till receipt ever offers. Duty on alcohol is
     # 20 % on an invoice whose food is at 5,5 %: deduced there, the invoice
     # is filed below what the bank debits and no check notices.
-    adjustment_vat_rate = models.DecimalField(
-        max_digits=5, decimal_places=4, null=True, blank=True
-    )
+    adjustment_vat_rate = models.DecimalField(max_digits=5, decimal_places=4, null=True, blank=True)
     # A photographed receipt's printed total - what was paid. See total_ttc.
     printed_total_ttc = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     # Everything below is only populated for photographed till receipts (see
@@ -500,10 +502,13 @@ class Invoice(models.Model):
             return printed
         # Otherwise all from HT: the adjustment covers every line's rounding,
         # so mixing in printed amounts would count some of it twice.
-        total = sum(
-            (line.total_ht * (Decimal("1") + line.vat_rate) for line in lines),
-            start=Decimal("0"),
-        ) + self.adjustment_ttc
+        total = (
+            sum(
+                (line.total_ht * (Decimal("1") + line.vat_rate) for line in lines),
+                start=Decimal("0"),
+            )
+            + self.adjustment_ttc
+        )
         if self.printed_total_ttc is not None:
             if self.einvoice_format:
                 slack = max(RECONCILIATION_TOLERANCE, CENTS * len(lines))
@@ -552,7 +557,7 @@ class Invoice(models.Model):
     @property
     def needs_review_count(self):
         """How many of its lines wait for a stock item - never a charge's
-        postes, which are not products (see Product.needs_review)."""
+        charge items, which are not products (see Product.needs_review)."""
         return self.lines.filter(product__stock_type__isnull=True, product__is_expense=False).count()
 
     @property
@@ -900,13 +905,13 @@ class ScrapeJob(JobLogMixin):
 
     @property
     def slips_only(self) -> bool:
-        """A gather of bons de consignes only - every source of its progress
+        """A gather of returnables slips only - every source of its progress
         is a format's « bons-<pk> » (tasks._gather_slips), as when the
         Consignes page asks for it. Its status card then counts « Bons
         trouvés / Nouveaux » (_gather_status.html, which the polling view
         renders with the job alone), and Achats never offers its period
         again (workspace._import_card). A job with no source yet is not:
-        the task puts a gather of bons' formats on its progress before
+        the task puts a gather of slips' formats on its progress before
         anything can stop it (tasks._name_slip_sources)."""
         codes = list((self.progress or {}).keys())
         return bool(codes) and all(str(code).startswith("bons-") for code in codes)

@@ -4,23 +4,29 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('bank', '0001_initial'),
+        ("bank", "0001_initial"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='IgnoreRule',
+            name="IgnoreRule",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('pattern', models.CharField(help_text='Expression régulière cherchée dans le libellé complet, sans tenir compte des majuscules.', max_length=255, verbose_name='motif')),
-                ('description', models.CharField(blank=True, max_length=255, verbose_name='nom')),
-                ('is_active', models.BooleanField(default=True, verbose_name='active')),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
+                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
+                (
+                    "pattern",
+                    models.CharField(
+                        help_text="Expression régulière cherchée dans le libellé complet, sans tenir compte des majuscules.",
+                        max_length=255,
+                        verbose_name="motif",
+                    ),
+                ),
+                ("description", models.CharField(blank=True, max_length=255, verbose_name="nom")),
+                ("is_active", models.BooleanField(default=True, verbose_name="active")),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
             ],
             options={
-                'ordering': ['description', 'pattern'],
+                "ordering": ["description", "pattern"],
             },
         ),
     ]

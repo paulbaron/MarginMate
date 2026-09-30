@@ -66,15 +66,21 @@ class AtRiskTests(SimpleTestCase):
 
     def test_an_import(self):
         report = run_report(
-            fournisseurs={"fournisseurs": {"updated": 1}},        # merged: a blank filled
-            associations={"produits": {"created": 4}},            # merged: only added
-            factures={"documents": {"deleted": 1}},               # replaced
+            fournisseurs={"fournisseurs": {"updated": 1}},  # merged: a blank filled
+            associations={"produits": {"created": 4}},  # merged: only added
+            factures={"documents": {"deleted": 1}},  # replaced
             recettes={"recettes": {"created": 2, "unchanged": 3}},  # replaced: its creations are the undo's to prune
-            sources={"sources": {"unchanged": 5}},                # replaced, nothing changes
-            banque={"paiements": {"deleted": 1}},                 # not imported: the factures prune took them
+            sources={"sources": {"unchanged": 5}},  # replaced, nothing changes
+            banque={"paiements": {"deleted": 1}},  # not imported: the invoices prune took them
             liens_ventes={"produits caisse liés": {"updated": 1}},  # not imported: the recipes prune released them
         )
-        strategies = {"fournisseurs": MERGE, "associations": MERGE, "factures": REPLACE, "recettes": REPLACE, "sources": REPLACE}
+        strategies = {
+            "fournisseurs": MERGE,
+            "associations": MERGE,
+            "factures": REPLACE,
+            "recettes": REPLACE,
+            "sources": REPLACE,
+        }
         self.assertEqual(
             safety.sections_at_risk(report, strategies=strategies), {"factures", "recettes", "banque", "liens_ventes"}
         )
@@ -98,7 +104,9 @@ class AtRiskTests(SimpleTestCase):
         self.assertEqual(safety.sections_at_risk(report, strategies=strategies), {"factures", "banque"})
 
     def test_a_clear(self):
-        report = run_report("clear", factures={"documents": {"deleted": 3}}, inventaires={}, banque={"paiements": {"deleted": 1}})
+        report = run_report(
+            "clear", factures={"documents": {"deleted": 3}}, inventaires={}, banque={"paiements": {"deleted": 1}}
+        )
         self.assertEqual(
             safety.sections_at_risk(report, cleared={"factures", "inventaires"}),
             {"factures", "inventaires", "banque"},
@@ -215,19 +223,21 @@ class BeforeTests(FakeSectionsMixin, TransactionTestCase):
 
     def test_a_failed_backup_is_said(self):
         """In words that name no server path: the cause is logged."""
-        with mock.patch("transfer.safety.backup_database", side_effect=OSError("disque plein")), \
-                self.assertLogs("transfer.safety", "ERROR") as logged, \
-                self.assertRaises(safety.SafetyError) as caught:
+        with (
+            mock.patch("transfer.safety.backup_database", side_effect=OSError("disque plein")),
+            self.assertLogs("transfer.safety", "ERROR") as logged,
+            self.assertRaises(safety.SafetyError) as caught,
+        ):
             safety.before("import", set())
-        self.assertEqual(
-            str(caught.exception), f"Sauvegarde impossible ({safety.SERVER_ERROR}) : rien n'a été changé."
-        )
+        self.assertEqual(str(caught.exception), f"Sauvegarde impossible ({safety.SERVER_ERROR}) : rien n'a été changé.")
         self.assertIn("disque plein", "\n".join(logged.output))
 
     def test_no_room_is_said_before_anything_is_written(self):
         full = mock.Mock(free=0)
-        with mock.patch("transfer.safety.shutil.disk_usage", return_value=full), \
-                self.assertRaises(safety.SafetyError) as caught:
+        with (
+            mock.patch("transfer.safety.shutil.disk_usage", return_value=full),
+            self.assertRaises(safety.SafetyError) as caught,
+        ):
             safety.before("effacement", {"recettes"})
         self.assertIn("pas assez de place", str(caught.exception))
         self.assertEqual(safety.list_backups(), [])
@@ -260,8 +270,8 @@ class ConfirmOrderTests(FakeSectionsMixin, TransactionTestCase):
 
         StockType.objects.filter(name="Recette A").update(loss_percent="12.00")  # something to replace
         self.client.post(self.url, {**self.posted, "action": "previsualiser"})
-        apercu = shown_preview(self.client.get(self.url))
-        return self.client.post(self.url, {**self.posted, "action": "importer", "apercu": apercu})
+        preview = shown_preview(self.client.get(self.url))
+        return self.client.post(self.url, {**self.posted, "action": "importer", "apercu": preview})
 
     def test_a_replace_is_backed_up_before_any_section_applies(self):
         seen = []
@@ -281,8 +291,10 @@ class ConfirmOrderTests(FakeSectionsMixin, TransactionTestCase):
         self.assertEqual(sorted(backup.kind for backup in safety.list_backups()), ["sqlite"])
 
     def test_a_failed_backup_imports_nothing(self):
-        with mock.patch("transfer.safety.backup_database", side_effect=OSError("disque plein")), \
-                self.assertLogs("transfer.safety", "ERROR"):
+        with (
+            mock.patch("transfer.safety.backup_database", side_effect=OSError("disque plein")),
+            self.assertLogs("transfer.safety", "ERROR"),
+        ):
             response = self.preview_then_confirm()
         self.assertRedirects(response, self.url, fetch_redirect_response=False)
         applies = [call for call in FakeSection.calls if call[0] == "apply"]
@@ -331,7 +343,8 @@ class ThroughThePageTests(TransactionTestCase):
         self.addCleanup(lambda: [default_storage.delete(name) for name in self.files if default_storage.exists(name)])
         self.metro = Supplier.objects.get(code="METRO")
         self.kept = make_invoice(
-            self.metro, invoice_number="M-SURETE-0001",
+            self.metro,
+            invoice_number="M-SURETE-0001",
             source_file=self.store("invoices/2026/09/metro_surete_0001.pdf", b"%PDF-1.4 surete 0001"),
         )
 
@@ -351,7 +364,7 @@ class ThroughThePageTests(TransactionTestCase):
 
     def archive_taken(self) -> Path:
         """The archive the last confirm took, as its report names it: by its
-        name alone, in the espace's backups folder."""
+        name alone, in the tenant's backups folder."""
         report = self.client.session[views.session_key(views.SESSION_REPORT)]["report"]
         return paths.backups_dir() / report["safety"]["archive"]
 
@@ -359,7 +372,11 @@ class ThroughThePageTests(TransactionTestCase):
         url = self.stage({"factures", "fournisseurs"})
         extra = make_invoice(self.metro, invoice_number="M-APRES-EXPORT")
         paid(extra, 77)
-        posted = {"sections": ["factures", "fournisseurs"], "strategie-factures": "remplacer", "strategie-fournisseurs": "fusionner"}
+        posted = {
+            "sections": ["factures", "fournisseurs"],
+            "strategie-factures": "remplacer",
+            "strategie-fournisseurs": "fusionner",
+        }
         self.client.post(url, {**posted, "action": "previsualiser"})
         page = self.client.get(url)
         self.assertContains(page, "ainsi qu'une archive de ce qui change")
@@ -377,7 +394,11 @@ class ThroughThePageTests(TransactionTestCase):
 
     def test_a_document_that_arrived_after_the_preview_is_not_pruned_unseen(self):
         url = self.stage({"factures", "fournisseurs"})
-        posted = {"sections": ["factures", "fournisseurs"], "strategie-factures": "remplacer", "strategie-fournisseurs": "fusionner"}
+        posted = {
+            "sections": ["factures", "fournisseurs"],
+            "strategie-factures": "remplacer",
+            "strategie-fournisseurs": "fusionner",
+        }
         self.client.post(url, {**posted, "action": "previsualiser"})
         page = self.client.get(url)
         self.assertContains(page, 'value="importer"')
@@ -417,7 +438,9 @@ class ThroughThePageTests(TransactionTestCase):
         page = self.client.get(url)
         self.assertContains(page, "Banque › paiements")
 
-        response = self.client.post(url, {**posted, "action": "effacer", "confirmation": "EFFACER", "apercu": shown_preview(page)})
+        response = self.client.post(
+            url, {**posted, "action": "effacer", "confirmation": "EFFACER", "apercu": shown_preview(page)}
+        )
         self.assertRedirects(response, url + "?rapport=1", fetch_redirect_response=False)
         self.assertEqual(InvoicePayment.objects.count(), 0)
         with ArchiveReader(self.archive_taken()) as backup:
@@ -431,7 +454,11 @@ class ThroughThePageTests(TransactionTestCase):
         ticket and its photo - held to tab B's preview, not the one on its
         screen (review, 19/09)."""
         url = self.stage({"factures", "fournisseurs"})
-        posted = {"sections": ["factures", "fournisseurs"], "strategie-factures": "remplacer", "strategie-fournisseurs": "fusionner"}
+        posted = {
+            "sections": ["factures", "fournisseurs"],
+            "strategie-factures": "remplacer",
+            "strategie-fournisseurs": "fusionner",
+        }
         self.client.post(url, {**posted, "action": "previsualiser"})
         tab_a = self.client.get(url)
         self.assertNotContains(tab_a, "ainsi qu'une archive")

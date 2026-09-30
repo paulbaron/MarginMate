@@ -53,14 +53,14 @@ def notice_of(page) -> str:
     """The tab's list of changes to see (id="a-voir"), as HTML."""
     html = page.content.decode()
     start = html.rindex("<div", 0, html.index('id="a-voir"'))
-    return html[start:html.index('<div class="table-wrap">', start)]
+    return html[start : html.index('<div class="table-wrap">', start)]
 
 
-def fiche_notice_of(page) -> str:
+def supplier_page_notice_of(page) -> str:
     """The supplier page's « à voir » notice, as HTML."""
     html = page.content.decode()
     start = html.index('class="message message-warning supplier-notice"')
-    return html[start:html.index('<section class="card"', start)]
+    return html[start : html.index('<section class="card"', start)]
 
 
 def text_of(html: str) -> str:
@@ -73,48 +73,59 @@ def day_of(change) -> str:
     return timezone.localtime(change.created_at).strftime("%d/%m/%Y")
 
 
-class Traiteur(TestCase):
+class CatererTestCase(TestCase):
     def setUp(self):
         self.caterer = make_supplier(code="TRAITEUR_X", name="Traiteur Exemple", parser_key="")
         self.first = self.receipt("T-1")
         self.change = SupplierChange.objects.create(
-            supplier=self.caterer, kind=FIRST, summary=SUMMARY, invoice=self.first, needs_review=True,
+            supplier=self.caterer,
+            kind=FIRST,
+            summary=SUMMARY,
+            invoice=self.first,
+            needs_review=True,
             cause="Reçue par e-mail (« Traiteur - Factures »)",
             data={"learned": ["siren:900000019", "web:traiteur-exemple.fr"], "printed": []},
         )
-        self.fiche = reverse("invoices:supplier_detail", args=[self.caterer.pk])
+        self.supplier_page = reverse("invoices:supplier_detail", args=[self.caterer.pk])
         self.seen = reverse("invoices:supplier_change_seen", args=[self.caterer.pk, self.change.pk])
 
     def receipt(self, number):
         invoice = make_invoice(
-            supplier=self.caterer, invoice_number=number, ocr_text=TEXT,
+            supplier=self.caterer,
+            invoice_number=number,
+            ocr_text=TEXT,
             parse_checks=[{"label": "Somme des lignes = total imprimé", "passed": True, "detail": ""}],
         )
         product = Product.objects.filter(supplier=self.caterer, raw_name="PLATEAU APERITIF").first()
         make_invoice_line(
-            invoice=invoice, product=product or make_product(supplier=self.caterer, raw_name="PLATEAU APERITIF"),
-            raw_name="PLATEAU APERITIF", quantity=1, total_ht="36.36", vat_rate="0.10", printed_ttc="40.00",
+            invoice=invoice,
+            product=product or make_product(supplier=self.caterer, raw_name="PLATEAU APERITIF"),
+            raw_name="PLATEAU APERITIF",
+            quantity=1,
+            total_ht="36.36",
+            vat_rate="0.10",
+            printed_ttc="40.00",
         )
         return invoice
 
 
-class TabNoticeTests(Traiteur):
-    def test_the_tab_lists_it_at_its_top_saying_why_with_a_vu(self):
+class TabNoticeTests(CatererTestCase):
+    def test_the_tab_lists_it_at_its_top_saying_why_with_a_seen_button(self):
         page = self.client.get(SUPPLIERS)
         html = page.content.decode()
         self.assertLess(html.index('id="a-voir"'), html.index('data-table-label="fournisseurs"'))
         notice = notice_of(page)
         self.assertIn("1 changement à voir", notice)
-        self.assertIn(f'<a href="{self.fiche}">Traiteur Exemple</a>', notice)
+        self.assertIn(f'<a href="{self.supplier_page}">Traiteur Exemple</a>', notice)
         self.assertIn(escape(SUMMARY), notice)
         self.assertIn(escape(supplier_changes.why_to_see(self.change)), notice)
         self.assertIn(reverse("invoices:invoice_edit_lines", args=[self.first.pk]), notice)
-        self.assertIn(f"{self.fiche}#historique", notice)
+        self.assertIn(f"{self.supplier_page}#historique", notice)
         self.assertIn(f'action="{self.seen}"', notice)
         self.assertIn(f'<input type="hidden" name="retour" value="{SUPPLIERS}">', notice)
         self.assertIn(">Vu</button>", notice)
 
-    def test_vu_from_the_tab_comes_back_to_it_saying_what_it_did(self):
+    def test_seen_from_the_tab_comes_back_to_it_saying_what_it_did(self):
         response = self.client.post(self.seen, {"retour": SUPPLIERS})
         self.assertRedirects(response, SUPPLIERS, fetch_redirect_response=False)
         self.assertEqual(messages_of(response), ["Vu : premier document de Traiteur Exemple."])
@@ -125,7 +136,7 @@ class TabNoticeTests(Traiteur):
         self.assertNotContains(page, 'id="a-voir"')
         self.assertEqual(page.context["tabs"][3]["to_see"], 0)
 
-    def test_vu_twice_says_nothing_the_second_time(self):
+    def test_seen_twice_says_nothing_the_second_time(self):
         self.client.post(self.seen, {"retour": SUPPLIERS})
         self.client.get(SUPPLIERS)  # where the first one's message is shown
         response = self.client.post(self.seen, {"retour": SUPPLIERS})
@@ -134,7 +145,9 @@ class TabNoticeTests(Traiteur):
     def test_several_are_listed_oldest_first(self):
         other = make_supplier(code="CAVE_X", name="Cave Exemple", parser_key="")
         later = SupplierChange.objects.create(
-            supplier=other, kind=SupplierChange.Kind.IDENTIFIERS, needs_review=True,
+            supplier=other,
+            kind=SupplierChange.Kind.IDENTIFIERS,
+            needs_review=True,
             summary="Ne reconnaît plus Cave Exemple : site cave-exemple.fr.",
         )
         page = self.client.get(SUPPLIERS)
@@ -148,8 +161,10 @@ class TabNoticeTests(Traiteur):
     def test_an_undone_change_is_not_listed_nor_the_ai_pseudo_suppliers(self):
         SupplierChange.objects.filter(pk=self.change.pk).update(undone_at=timezone.now())
         SupplierChange.objects.create(
-            supplier=Supplier.objects.get(parser_key=LLM_PARSER_KEY), kind=SupplierChange.Kind.IDENTIFIERS,
-            summary="Appris : un site.", needs_review=True,
+            supplier=Supplier.objects.get(parser_key=LLM_PARSER_KEY),
+            kind=SupplierChange.Kind.IDENTIFIERS,
+            summary="Appris : un site.",
+            needs_review=True,
         )
         page = self.client.get(SUPPLIERS)
         self.assertEqual(page.context["changes_to_see"], [])
@@ -160,7 +175,9 @@ class TabNoticeTests(Traiteur):
         """The second table's « À voir » had no title at all."""
         uba = Supplier.objects.get(code="UBA")
         SupplierChange.objects.create(
-            supplier=uba, kind=SupplierChange.Kind.IDENTIFIERS, summary="Ne reconnaît plus UBA : un site.",
+            supplier=uba,
+            kind=SupplierChange.Kind.IDENTIFIERS,
+            summary="Ne reconnaît plus UBA : un site.",
             needs_review=True,
         )
         page = self.client.get(SUPPLIERS)
@@ -168,47 +185,47 @@ class TabNoticeTests(Traiteur):
         for supplier in (self.caterer, uba):
             html = page.content.decode()
             start = html.index(f'<tr data-row-href="{reverse("invoices:supplier_detail", args=[supplier.pk])}">')
-            self.assertIn(pill, html[start:html.index("</tr>", start)])
+            self.assertIn(pill, html[start : html.index("</tr>", start)])
 
     def test_the_tab_with_a_change_to_see_renders_whole(self):
         assertNoUnrenderedTemplateSyntax(self, self.client.get(SUPPLIERS), "suppliers tab, a change to see")
-        assertNoUnrenderedTemplateSyntax(self, self.client.get(self.fiche), "supplier page, a change to see")
+        assertNoUnrenderedTemplateSyntax(self, self.client.get(self.supplier_page), "supplier page, a change to see")
 
 
-class FicheNoticeTests(Traiteur):
-    def test_the_fiche_lists_it_with_why_and_a_vu_coming_back_to_it(self):
-        page = self.client.get(self.fiche)
+class SupplierPageNoticeTests(CatererTestCase):
+    def test_the_supplier_page_lists_it_with_why_and_a_seen_button_coming_back_to_it(self):
+        page = self.client.get(self.supplier_page)
         (notice,) = [notice for notice in page.context["notices"] if notice["kind"] == "review"]
         self.assertEqual([change.pk for change in notice["changes"]], [self.change.pk])
         html = page.content.decode()
         start = html.index('class="message message-warning supplier-notice"')
-        block = html[start:html.index('<section class="card"', start)]
+        block = html[start : html.index('<section class="card"', start)]
         self.assertIn(escape(SUMMARY), block)
         self.assertIn(escape(supplier_changes.why_to_see(self.change)), block)
         self.assertIn('href="#historique"', block)
         self.assertIn(f'action="{self.seen}"', block)
-        self.assertIn(f'<input type="hidden" name="retour" value="{self.fiche}">', block)
+        self.assertIn(f'<input type="hidden" name="retour" value="{self.supplier_page}">', block)
         # Still in the history, as before.
         self.assertContains(page, "À voir")
-        response = self.client.post(self.seen, {"retour": self.fiche})
-        self.assertRedirects(response, self.fiche, fetch_redirect_response=False)
-        self.assertNotContains(self.client.get(self.fiche), "À voir")
+        response = self.client.post(self.seen, {"retour": self.supplier_page})
+        self.assertRedirects(response, self.supplier_page, fetch_redirect_response=False)
+        self.assertNotContains(self.client.get(self.supplier_page), "À voir")
 
 
-class EachChangeSaysWhatItIsOnceTests(Traiteur):
+class EachChangeSaysWhatItIsOnceTests(CatererTestCase):
     """« Premier document du 19/09/2026 : Premier document : Leroy Merlin
-    n° … » (UX review, 19/09), on the tab and on the fiche: the kind was
-    printed before a summary that already says what it is - every summary
-    does, and the fiche's history prints the summary alone. A change's line
-    is its supplier (on the tab), its day and its summary."""
+    n° … » (UX review, 19/09), on the tab and on the supplier's page: the
+    kind was printed before a summary that already says what it is - every
+    summary does, and the supplier page's history prints the summary alone.
+    A change's line is its supplier (on the tab), its day and its summary."""
 
     def test_the_tab_says_the_supplier_the_day_and_the_summary(self):
         notice = text_of(notice_of(self.client.get(SUPPLIERS)))
         self.assertIn(f"Traiteur Exemple — {day_of(self.change)} : {SUMMARY}", notice)
         self.assertEqual(notice.count("Premier document"), 1)
 
-    def test_the_fiche_says_the_day_and_the_summary(self):
-        notice = text_of(fiche_notice_of(self.client.get(self.fiche)))
+    def test_the_supplier_page_says_the_day_and_the_summary(self):
+        notice = text_of(supplier_page_notice_of(self.client.get(self.supplier_page)))
         self.assertIn(f"Le {day_of(self.change)} : {SUMMARY}", notice)
         self.assertEqual(notice.count("Premier document"), 1)
 
@@ -223,7 +240,7 @@ class EachChangeSaysWhatItIsOnceTests(Traiteur):
         change = SupplierChange.objects.get(supplier=self.caterer, kind=FIRST)
         for where, notice in (
             ("tab", notice_of(self.client.get(SUPPLIERS))),
-            ("fiche", fiche_notice_of(self.client.get(self.fiche))),
+            ("supplier_page", supplier_page_notice_of(self.client.get(self.supplier_page))),
         ):
             with self.subTest(where):
                 self.assertIn(escape(change.summary), notice)
@@ -234,15 +251,19 @@ class EachChangeSaysWhatItIsOnceTests(Traiteur):
         no « Identifiants du … » before it."""
         other = make_supplier(code="CAVE_X", name="Cave Exemple", parser_key="")
         lost = SupplierChange.objects.create(
-            supplier=other, kind=SupplierChange.Kind.IDENTIFIERS, needs_review=True,
+            supplier=other,
+            kind=SupplierChange.Kind.IDENTIFIERS,
+            needs_review=True,
             summary="Ne reconnaît plus Cave Exemple : site cave-exemple.fr.",
         )
         notice = text_of(notice_of(self.client.get(SUPPLIERS)))
         self.assertIn(f"Cave Exemple — {day_of(lost)} : Ne reconnaît plus Cave Exemple : site cave-exemple.fr.", notice)
         self.assertNotIn("Identifiants", notice)
-        fiche = text_of(fiche_notice_of(self.client.get(reverse("invoices:supplier_detail", args=[other.pk]))))
-        self.assertIn(f"Le {day_of(lost)} : Ne reconnaît plus Cave Exemple", fiche)
-        self.assertNotIn("Identifiants", fiche)
+        supplier_page = text_of(
+            supplier_page_notice_of(self.client.get(reverse("invoices:supplier_detail", args=[other.pk])))
+        )
+        self.assertIn(f"Le {day_of(lost)} : Ne reconnaît plus Cave Exemple", supplier_page)
+        self.assertNotIn("Identifiants", supplier_page)
 
 
 def css_block(css: str, opening: str, start: int = 0) -> str:
@@ -266,16 +287,16 @@ def css_blocks(css: str, opening: str) -> list[str]:
     return found
 
 
-class TopbarRoomTests(Traiteur):
+class TopbarRoomTests(CatererTestCase):
     """The tab's link ends in #a-voir, but the topbar is sticky: arriving by
     the tab, the list's own heading and the supplier's name landed under it
     (UX review, 19/09 - at 1280 px the list's top at 0 under a 57 px bar;
     in a 450 px pane, the first line read was the middle of what the first
     document taught, « SIREN … , site … »). The
     page as a whole leaves the topbar's height above what it scrolls to:
-    #a-voir, the fiche's #historique, the stock list's #a-classer, and the
-    tab row htmx scrolls to the top when a tab is clicked lower down, which
-    went under the bar too. Where it lands is measured in Chrome
+    #a-voir, the supplier page's #historique, the stock list's #a-classer,
+    and the tab row htmx scrolls to the top when a tab is clicked lower
+    down, which went under the bar too. Where it lands is measured in Chrome
     (TopbarRoomInBrowserTests); here, that the rule is there, and taller
     where the topbar wraps.
 
@@ -361,7 +382,7 @@ class WhyToSeeTests(TestCase):
         )
 
 
-class ValidatingAnswersTheFirstDocumentTests(Traiteur):
+class ValidatingAnswersTheFirstDocumentTests(CatererTestCase):
     """Validating a document says it is this supplier's - which is all its
     « premier document » asks. The owner validated Leroy Merlin's at 00:18,
     eight minutes after it was recorded, and it went on lighting the tab."""
@@ -427,7 +448,7 @@ class TopbarRoomInBrowserTests(StaticLiveServerTestCase):
     the one those rows and rooms were measured for, is measured width by width
     by accounts/tests/test_topbar_browser.py, the class taken off.
 
-    Logged in as the test espace's owner, as every page wants: above 860 px
+    Logged in as the test tenant's owner, as every page wants: above 860 px
     the topbar then carries the bar's name and « Se déconnecter » too."""
 
     WIDTHS = (1280, 900, 860, 768, 600, 450, 375, 320, 280)
@@ -469,7 +490,11 @@ class TopbarRoomInBrowserTests(StaticLiveServerTestCase):
         )
         first = make_invoice(supplier=caterer, invoice_number="T-1", ocr_text=TEXT)
         SupplierChange.objects.create(
-            supplier=caterer, kind=FIRST, summary=SUMMARY, invoice=first, needs_review=True,
+            supplier=caterer,
+            kind=FIRST,
+            summary=SUMMARY,
+            invoice=first,
+            needs_review=True,
             data={"learned": ["siren:900000019"], "printed": []},
         )
         # Enough below each target for the page to bring it to the top:
@@ -479,10 +504,12 @@ class TopbarRoomInBrowserTests(StaticLiveServerTestCase):
             other = make_supplier(code=f"EXEMPLE_{n:02d}", name=f"Fournisseur Exemple {n:02d}", parser_key="")
             make_invoice(supplier=other, invoice_number=f"E-{n:02d}")
             SupplierChange.objects.create(
-                supplier=caterer, kind=SupplierChange.Kind.HEADER, summary=f"En-tête « TRAITEUR {n:02d} ».",
+                supplier=caterer,
+                kind=SupplierChange.Kind.HEADER,
+                summary=f"En-tête « TRAITEUR {n:02d} ».",
                 by_person=True,
             )
-        self.fiche = reverse("invoices:supplier_detail", args=[caterer.pk])
+        self.supplier_page = reverse("invoices:supplier_detail", args=[caterer.pk])
         log_in_the_browser(self.driver, self.live_server_url)
         # Every test sets its width: none leaves the next one its window.
         self.addCleanup(self.driver.execute_cdp_cmd, "Emulation.clearDeviceMetricsOverride", {})
@@ -541,11 +568,11 @@ class TopbarRoomInBrowserTests(StaticLiveServerTestCase):
                 self.settled()
                 self.assertClearOfTopbar("#a-voir strong", width)
 
-    def test_voir_la_fiche_brings_the_history_below_the_topbar(self):
+    def test_opening_the_supplier_page_brings_the_history_below_the_topbar(self):
         for width in self.WIDTHS:
             with self.subTest(width=width):
                 self.viewport(width)
-                self.driver.get(self.live_server_url + self.fiche + "#historique")
+                self.driver.get(self.live_server_url + self.supplier_page + "#historique")
                 self.settled()
                 self.assertClearOfTopbar("#historique h2", width)
 

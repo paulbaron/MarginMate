@@ -10,34 +10,34 @@ L'Addition.
 """
 
 from decimal import Decimal
+
 from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('recipes', '0012_reset_corrupted_pos_totals'),
+        ("recipes", "0012_reset_corrupted_pos_totals"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='posproductdailyquantity',
-            name='revenue_ht',
-            field=models.DecimalField(decimal_places=2, default=Decimal('0'), max_digits=10),
+            model_name="posproductdailyquantity",
+            name="revenue_ht",
+            field=models.DecimalField(decimal_places=2, default=Decimal("0"), max_digits=10),
         ),
         migrations.AddField(
-            model_name='posproductdailyquantity',
-            name='revenue_read',
+            model_name="posproductdailyquantity",
+            name="revenue_read",
             field=models.BooleanField(default=False),
         ),
         migrations.AddField(
-            model_name='posproductdailyquantity',
-            name='revenue_ttc',
-            field=models.DecimalField(decimal_places=2, default=Decimal('0'), max_digits=10),
+            model_name="posproductdailyquantity",
+            name="revenue_ttc",
+            field=models.DecimalField(decimal_places=2, default=Decimal("0"), max_digits=10),
         ),
         migrations.AddField(
-            model_name='posproductdailyquantity',
-            name='revenue_without_rate_ttc',
-            field=models.DecimalField(decimal_places=2, default=Decimal('0'), max_digits=10),
+            model_name="posproductdailyquantity",
+            name="revenue_without_rate_ttc",
+            field=models.DecimalField(decimal_places=2, default=Decimal("0"), max_digits=10),
         ),
     ]

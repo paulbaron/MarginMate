@@ -1,4 +1,4 @@
-"""« Dépenses » : voir les dépenses classées à la main.
+"""« Dépenses »: seeing the spending classified by hand.
 
 A debit with no invoice gets its category from one of three places - typed on
 the line, carried by an ignore rule, or nowhere - and the page prints which on
@@ -169,10 +169,10 @@ class ItCostsNothingTests(Fixtures, TestCase):
             with self.subTest(kind=kind):
                 report = spending_for(WINDOW, kind=kind)
                 with self.assertNumQueries(0):
-                    report.counts
+                    report.counts  # noqa: B018 - read on purpose, the pin counts its queries
                     list(report.selected)
                     list(report.listed)
-                    report.not_listed
+                    report.not_listed  # noqa: B018 - read on purpose, the pin counts its queries
 
     def test_a_filtered_report_costs_exactly_what_an_unfiltered_one_costs(self):
         """Pinned against the unfiltered call on the same data rather than
@@ -220,7 +220,7 @@ class ThePageTests(Fixtures, TestCase):
                 self.assertIn("du=2026-01-01", chip["url"])
                 self.assertIn("au=2026-12-31", chip["url"])
 
-    def test_a_chip_keeps_depuis_le_debut_too(self):
+    def test_a_chip_keeps_all_time_too(self):
         for chip in self.page(tout="1").context["kind_chips"]:
             with self.subTest(chip=chip["key"]):
                 self.assertIn("tout=1", chip["url"])
@@ -259,7 +259,7 @@ class ThePageTests(Fixtures, TestCase):
         answer = self.classify(line, "Travaux", self.url)
         self.assertNotIn("Elle passe", " ".join(str(m) for m in answer.context["messages"]))
 
-    def test_a_line_a_rule_still_names_moves_back_to_par_regle(self):
+    def test_a_line_a_rule_still_names_moves_back_to_by_rule(self):
         """Clearing a typed category does not make a line unnamed when a
         rule names it too - the message must not say it went to « À classer »."""
         line = BankTransaction.objects.get(label="PRLV REGLE")

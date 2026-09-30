@@ -1,7 +1,7 @@
 """What deploy.cmd and refresh_dev_data.cmd ask the settings (DEPLOY.md, section 10).
 
     .venv\\Scripts\\python.exe -c "import sys; from accounts import deployment; sys.exit(deployment.main())" production
-    .venv\\Scripts\\python.exe -c "import sys; from accounts import deployment; sys.exit(deployment.main())" developpement <sauvegarde>
+    .venv\\Scripts\\python.exe -c "import sys; from accounts import deployment; sys.exit(deployment.main())" development <backup>
 
 Two copies of MarginMate live on the owner's PC (CLAUDE.md, « Two copies:
 development and production »): PRODUCTION, C:\\MarginMate\\app, a git clone
@@ -20,16 +20,18 @@ decision would then be about another file than the one the server reads.
 Nothing here imports a model (no django.setup()): the settings alone.
 
 Answers go to stdout as NAME=value lines, which the scripts read with
-``for /f``; a refusal is a French sentence on stderr and exit code REFUSED;
-settings that do not load are said, exit code 1. Both refuse on anything
-but 0.
+``for /f`` into the variables MM_NAME; a refusal is a French sentence on
+stderr and exit code REFUSED; settings that do not load are said, exit code
+1. Both refuse on anything but 0. The modes and the answers' names are an
+interface between files of ONE version: deploy.cmd asks before its merge, on
+the code it was copied from, and refresh_dev_data.cmd runs beside its code.
 
 * ``production``: refused unless DEBUG is off and HTTPS on, when the data
   folder is the code's (TENANTS_ROOT at its default), or when the accounts
   database is outside the data folder (backup_data would refuse it - after
-  deploy.cmd had stopped the server); DONNEES= the data folder, which
+  deploy.cmd had stopped the server); DATA= the data folder, which
   deploy.cmd names in its rollback instructions.
-* ``developpement <sauvegarde>``: refused in production (HTTPS on), when the
+* ``development <backup>``: refused in production (HTTPS on), when the
   data folder is or holds the code's folder (moved aside, it would take the
   code with it), when the backup is not one `manage.py backup_data` finished
   (no data\\ or manifest.json, an -INCOMPLET folder), when the data folder is
@@ -38,10 +40,10 @@ but 0.
   accounts database is not inside the data folder (MARGINMATE_ACCOUNTS_DB
   left on production's: runserver would write its sessions into the live
   logins database, and DEPLOY.md 10.5's migrate_tenants would migrate it),
-  and when one is inside the other. DONNEES= the development data folder,
-  SAUVEGARDE= the backup, and ANCIEN= the name the current data folder is
-  moved to (``<nom>.ancien-<AAAA-MM-JJ_HHMMSS>``, never an existing one) when
-  there is one.
+  and when one is inside the other. DATA= the development data folder,
+  BACKUP= the backup, and PREVIOUS= the name the current data folder is
+  moved to (``<name>.ancien-<AAAA-MM-JJ_HHMMSS>``, never an existing one)
+  when there is one.
 """
 
 from __future__ import annotations
@@ -54,7 +56,7 @@ from pathlib import Path
 
 REFUSED = 3
 PRODUCTION = "production"
-DEVELOPMENT = "developpement"
+DEVELOPMENT = "development"
 #: Mirrors accounts.data_backup (not imported: it imports the models).
 INCOMPLETE = "-INCOMPLET"
 MANIFEST = "manifest.json"
@@ -126,7 +128,7 @@ def production(settings) -> dict[str, str]:
     data = data_folder(settings)
     _outside_the_code(settings, data)
     _accounts_in_the_data(settings, data)
-    return {"DONNEES": str(data)}
+    return {"DATA": str(data)}
 
 
 def _backup_source(backup: Path) -> Path:
@@ -171,15 +173,16 @@ def development(settings, backup, now: datetime | None = None) -> dict[str, str]
     _accounts_in_the_data(settings, data)
     if inside(data, backup) or inside(backup, data):
         raise Refused(f"le dossier des données ({data}) et la sauvegarde ({backup}) sont l'un dans l'autre.")
-    answers = {"DONNEES": str(data), "SAUVEGARDE": str(backup)}
+    answers = {"DATA": str(data), "BACKUP": str(backup)}
     if data.exists():
-        stamp = (now or datetime.now()).strftime("%Y-%m-%d_%H%M%S")
+        # The PC's local time: a folder name the owner reads.
+        stamp = (now or datetime.now()).strftime("%Y-%m-%d_%H%M%S")  # noqa: DTZ005
         old = data.with_name(f"{data.name}{OLD}{stamp}")
         number = 1
         while old.exists():
             number += 1
             old = data.with_name(f"{data.name}{OLD}{stamp}-{number}")
-        answers["ANCIEN"] = str(old)
+        answers["PREVIOUS"] = str(old)
     return answers
 
 
@@ -200,7 +203,7 @@ def main(argv=None, stdout=None, stderr=None) -> int:
     except Refused as exc:
         stderr.write(f"REFUS : {exc}\n")
         return REFUSED
-    except Exception as exc:  # the settings refuse to load (ImproperlyConfigured...)
+    except Exception as exc:  # noqa: BLE001 - the settings refuse to load (ImproperlyConfigured...)
         stderr.write(f"Les réglages de ce dossier ne se chargent pas : {exc}\n")
         return 1
     for name, value in answers.items():

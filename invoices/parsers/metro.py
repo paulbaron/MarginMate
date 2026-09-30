@@ -27,10 +27,10 @@ from decimal import Decimal
 from .base import InvoiceParser, ParsedInvoice, ParsedLine, PdfPage
 from .registry import register
 
-TVA_LETTER_TO_RATE = {"A": Decimal("0"), "B": Decimal("0.055"), "C": Decimal("0.2"), "D": Decimal("0.2")}
+VAT_LETTER_TO_RATE = {"A": Decimal("0"), "B": Decimal("0.055"), "C": Decimal("0.2"), "D": Decimal("0.2")}
 
 # The leftmost "MM" column prints a literal "M " before the EAN on Metro's
-# own-brand rows, exactly where a consigne prints "+ ". Anchored, and with
+# own-brand rows, exactly where a deposit line prints "+ ". Anchored, and with
 # only "+ " allowed, such rows matched nothing and were dropped in silence -
 # their money and their stock with them. Across every product row of the
 # invoices filed, "M " and "+ " are the only two prefixes that ever occur, so
@@ -40,7 +40,7 @@ LINE_REGEX = re.compile(
     r"(?:[+M]\s+)?(\d+\s+)?(\d+)\s+(.+?)\s+([A-Z]\s+)?(\d?\d,\d\s+)?(\d+,\d+\s+)?(\d+,\d+\s+)?"
     r"(\d+,\d+)\s+(\d+\s+)?(\d+-?)\s+(\d+,\d+-?)\s+([A-D])"
 )
-COTIS_SOCIALE_REGEX = re.compile(r"Plus : COTIS\. SECURITE SOCIALE\s+(\d+,\d+)\s+([A-D])")
+SOCIAL_SECURITY_LEVY_REGEX = re.compile(r"Plus : COTIS\. SECURITE SOCIALE\s+(\d+,\d+)\s+([A-D])")
 # Two printed forms of the same thing, a bulk promotion taken off the line
 # above. "N pour M" was unread until 24/09/2026, so its discount was never
 # subtracted and the invoice claimed MORE than Metro billed, overstating
@@ -53,7 +53,7 @@ DISCOUNT_REGEX = re.compile(
 CATEGORY_REGEX = re.compile(r"\*\*\*\s+(.+?)\s+Total:\s+(\d+,\d+)")
 
 # An amount as Metro prints it: French decimal comma, an optional space for
-# thousands, and the trailing minus an avoir uses instead of a leading one.
+# thousands, and the trailing minus a credit note uses instead of a leading one.
 # Exactly two decimals is what tells an amount from the three-decimal volume
 # printed beside it in the VAT table ("M 9,000 68,04 B = 5,50%") - read
 # greedily, that row files 9 000 68,04 EUR of goods at 5,5 %.
@@ -84,7 +84,7 @@ def _to_decimal(text: str | None, default: str = "0") -> Decimal:
     text = text.strip().replace(" ", "").replace(" ", "").replace(",", ".")
     if not text:
         return Decimal(default)
-    # Metro prints negative amounts (consigne refunds) with a trailing "-"
+    # Metro prints negative amounts (deposit refunds) with a trailing "-"
     # rather than a leading one, e.g. "5,50-" - Decimal() doesn't accept that
     # form directly, so move the sign before parsing.
     negative = text.endswith("-")
@@ -92,7 +92,7 @@ def _to_decimal(text: str | None, default: str = "0") -> Decimal:
         text = text[:-1]
     try:
         value = Decimal(text)
-    except Exception:
+    except Exception:  # noqa: BLE001 - an unreadable amount reads as the default
         return Decimal(default)
     return -value if negative else value
 
@@ -130,7 +130,7 @@ def _read_printed_totals(full_text: str):
     invoice and `vat_breakdown` empty on all of them, so no check had a
     second figure to disagree with.
 
-    An avoir prints every one of these with a TRAILING minus and this
+    A credit note prints every one of these with a TRAILING minus and this
     codebase files a credit note negative, so the sign is part of the
     reading, not a detail: taken unsigned, every credit note filed would
     disagree with its own totals by twice its value.
@@ -191,7 +191,7 @@ def _guess_invoice_number_and_date(full_text: str, source_name: str) -> tuple[st
     date_match = INVOICE_DATE_REGEX.search(full_text)
     if date_match:
         try:
-            invoice_date = datetime.strptime(date_match.group(1), "%d-%m-%Y").date()
+            invoice_date = datetime.strptime(date_match.group(1), "%d-%m-%Y").date()  # noqa: DTZ007 - a printed date, read into .date()
         except ValueError:
             invoice_date = None
     if invoice_date is None:
@@ -199,7 +199,7 @@ def _guess_invoice_number_and_date(full_text: str, source_name: str) -> tuple[st
         ts_match = FILENAME_TIMESTAMP_REGEX.search(filename)
         if ts_match:
             try:
-                invoice_date = datetime.strptime(ts_match.group(1), "%Y%m%d%H%M%S").date()
+                invoice_date = datetime.strptime(ts_match.group(1), "%Y%m%d%H%M%S").date()  # noqa: DTZ007 - a file name's local time, read into .date()
             except ValueError:
                 invoice_date = None
     return invoice_number, invoice_date
@@ -212,9 +212,7 @@ class MetroParser(InvoiceParser):
     # single line and the product regex stops matching.
     text_extraction_kwargs = {"y_tolerance": 0}
 
-    def parse_pages(
-        self, pages: list[PdfPage], date_hint: date | None = None, source_name: str = ""
-    ) -> ParsedInvoice:
+    def parse_pages(self, pages: list[PdfPage], date_hint: date | None = None, source_name: str = "") -> ParsedInvoice:
         lines_by_name: dict[str, ParsedLine] = {}
         products_in_category: list[str] = []
         full_text_parts: list[str] = []
@@ -234,7 +232,7 @@ class MetroParser(InvoiceParser):
                     quantity = _to_int(match.group(10))
                     total_units = colisage * quantity
                     total_ht = _to_decimal(match.group(11))
-                    vat_rate = TVA_LETTER_TO_RATE[match.group(12).strip()]
+                    vat_rate = VAT_LETTER_TO_RATE[match.group(12).strip()]
 
                     parsed_line = lines_by_name.get(product_name)
                     if parsed_line is None:
@@ -256,9 +254,9 @@ class MetroParser(InvoiceParser):
                     products_in_category.append(product_name)
                     continue
 
-                cotis_match = COTIS_SOCIALE_REGEX.match(line)
-                if cotis_match and current_product:
-                    lines_by_name[current_product].taxes += _to_decimal(cotis_match.group(1))
+                levy_match = SOCIAL_SECURITY_LEVY_REGEX.match(line)
+                if levy_match and current_product:
+                    lines_by_name[current_product].taxes += _to_decimal(levy_match.group(1))
 
                 discount_match = DISCOUNT_REGEX.match(line)
                 if discount_match and current_product:

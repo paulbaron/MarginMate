@@ -3,15 +3,15 @@
 The owner asked for three figures and they answer three different questions,
 so nothing here blends them:
 
-* **la marge réelle** - everything that came in against everything that was
+* **the real margin** - everything that came in against everything that was
   INVOICED over the window, goods and charges alike. It is the only one that
-  answers « ai-je gagné de l'argent ce mois-ci ».
-* **la marge produits** - everything that came in against what the recipes
+  answers « have I made money this month ».
+* **the products margin** - everything that came in against what the recipes
   sold actually consumed, plus the articles flagged « compter dans la marge
   produits » (the paper towels: no recipe eats them, so what was bought of
-  them over the window is the only measure there is). It answers « est-ce que
-  je vends assez cher ».
-* **les marges par catégorie**, on both dimensions the till already stores:
+  them over the window is the only measure there is). It answers « am I
+  selling dear enough ».
+* **the margins by category**, on both dimensions the till already stores:
   `PosProduct.category` (Bières, Cocktails, Planches…) and
   `PosProduct.typology` (the owner's « food, drinks »).
 
@@ -177,10 +177,10 @@ class Money:
     ht: Decimal = ZERO
     ttc: Decimal = ZERO
 
-    def __add__(self, other: "Money") -> "Money":
+    def __add__(self, other: Money) -> Money:
         return Money(self.ht + other.ht, self.ttc + other.ttc)
 
-    def __sub__(self, other: "Money") -> "Money":
+    def __sub__(self, other: Money) -> Money:
         return Money(self.ht - other.ht, self.ttc - other.ttc)
 
 
@@ -525,7 +525,7 @@ class MarginReport:
     uncosted_products: int = 0
     uncosted_revenue: Money = Money()
 
-    # -- la marge réelle --------------------------------------------------
+    # -- the real margin --------------------------------------------------
 
     @property
     def real_margin_ht(self) -> Decimal:
@@ -539,7 +539,7 @@ class MarginReport:
     def real_margin_percent(self) -> Decimal | None:
         return _percent(self.real_margin_ht, self.revenue.ht)
 
-    # -- la marge réelle, sans ce qu'on a décoché ----------------------------
+    # -- the real margin, without what was unticked --------------------------
     # The same revenue, always: what is left out is a COST. A purchase
     # belongs to no till category, so there is no sale to take out with it.
 
@@ -559,7 +559,7 @@ class MarginReport:
     def kept_margin_percent(self) -> Decimal | None:
         return _percent(self.kept_margin_ht, self.revenue.ht)
 
-    # -- la marge produits ------------------------------------------------
+    # -- the products margin ----------------------------------------------
 
     @property
     def is_costed(self) -> bool:
@@ -640,9 +640,9 @@ def margins_for(window: DateRange, left_out: Iterable[str] = ()) -> MarginReport
 
     report.revenue = report.revenue_till + report.revenue_documents
     report.hand_typed_units = (
-        window.limit(RecipeSale.objects.exclude(source=TILL_SOURCE), "sold_on").aggregate(
-            total=Sum("quantity")
-        )["total"]
+        window.limit(RecipeSale.objects.exclude(source=TILL_SOURCE), "sold_on").aggregate(total=Sum("quantity"))[
+            "total"
+        ]
         or 0
     )
     return report
@@ -675,15 +675,12 @@ _RECIPE_OF_ROW = _TILL_COLUMNS.index("product__recipe_id")
 
 
 def _till_rows(window: DateRange) -> list[tuple]:
-    return list(
-        window.limit(PosProductDailyQuantity.objects.all(), "sold_on").values_list(*_TILL_COLUMNS)
-    )
+    return list(window.limit(PosProductDailyQuantity.objects.all(), "sold_on").values_list(*_TILL_COLUMNS))
 
 
 def _document_lines(window: DateRange) -> list:
     return list(
-        window.limit(SaleDocumentLine.objects.all(), "document__sold_on")
-        .select_related("recipe", "stock_type")
+        window.limit(SaleDocumentLine.objects.all(), "document__sold_on").select_related("recipe", "stock_type")
     )
 
 
@@ -865,9 +862,7 @@ def _read_the_till(report: MarginReport, rows: list[tuple], costs: dict, why_not
         report.cogs_high += slice_.cost_ht_high
         report.revenue_uncosted += slice_.revenue_uncosted
     report.uncosted_products = len(uncosted)
-    report.uncosted_revenue = sum(
-        (entry.revenue for entry in uncosted.values()), start=Money()
-    )
+    report.uncosted_revenue = sum((entry.revenue for entry in uncosted.values()), start=Money())
     report.top_uncosted = sorted(
         uncosted.values(),
         # By the money first, since that is what the margin is short of; a
@@ -1131,7 +1126,7 @@ def _where_it_went(invoice: Invoice, whole: Money, total_ttc: Decimal) -> dict[P
     `spend` adds them - split over its places so that they add back up to
     it, to the cent, HT and TTC.
 
-    * A charge's document goes WHOLE to its supplier: its postes are how a
+    * A charge's document goes WHOLE to its supplier: its charge items are how a
       bill was read, not what the owner leaves out.
     * A document with no line at all is all adjustment: whole on its
       supplier (a charge) or on « à classer » (goods), since nothing says
@@ -1172,9 +1167,7 @@ def _where_it_went(invoice: Invoice, whole: Money, total_ttc: Decimal) -> dict[P
     # the lines is the printed total's own centimes: remainder, not duty.
     adjustment_ttc = ZERO if printed else total_ttc - sum(lines_ttc, start=ZERO)
     lines_ht, lines_ttc, carried = _charges_over_the_goods(lines, lines_ttc)
-    weights = [
-        line.total_ht if line.total_ht > 0 and not line.is_spread_charge else ZERO for line in lines
-    ]
+    weights = [line.total_ht if line.total_ht > 0 and not line.is_spread_charge else ZERO for line in lines]
     if not any(weights):
         weights = [abs(line.total_ht) for line in lines]
     weight_total = sum(weights, start=ZERO)
@@ -1270,7 +1263,10 @@ def _resolve(keys: Iterable[str]) -> list[Exclusion]:
         else {}
     )
     articles = (
-        {pk: (name, category) for pk, name, category in StockType.objects.filter(pk__in=article_ids).values_list("pk", "name", "category")}
+        {
+            pk: (name, category)
+            for pk, name, category in StockType.objects.filter(pk__in=article_ids).values_list("pk", "name", "category")
+        }
         if article_ids
         else {}
     )
@@ -1383,9 +1379,7 @@ def _read_the_flagged_articles(report: MarginReport, window: DateRange) -> None:
     Three queries whatever the number of articles: the articles, the recipe
     lines naming one, the purchases.
     """
-    articles = list(
-        StockType.objects.order_by().values_list("pk", "name", "category", "count_in_products_margin")
-    )
+    articles = list(StockType.objects.order_by().values_list("pk", "name", "category", "count_in_products_margin"))
     # An article ticked AND used in a recipe is paid for twice - once as what
     # the recipe consumed, once as what was bought. Its own help text says
     # not to do it and nothing checked; asked of every article at once, the
@@ -1447,7 +1441,7 @@ def _bought_over(window: DateRange) -> dict[int, Money]:
     Counted exactly the way « Produits & charges » counts a purchase - the
     invoice line's own `total_ht`, never quantity times the unit cost, which
     is that amount divided by the quantity and stored to four decimals, then
-    multiplied back (2 000 pailles charged 24,64 € came back 24,60 €).
+    multiplied back (2 000 straws charged 24,64 € came back 24,60 €).
 
     **Dated by its INVOICE**, like the real margin's spending, and only by
     the movement's own day when there is no invoice behind it (a correction

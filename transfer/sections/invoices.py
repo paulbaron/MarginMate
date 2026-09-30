@@ -270,17 +270,17 @@ def _stored(name: str) -> bool:
 
 # -- sizes, for count() ------------------------------------------------------------------
 
-#: (espace, media folder) → (hash of the names, when, bytes). Per espace:
-#: two espaces restored from one archive name the same files, and one slot
+#: (tenant, media folder) → (hash of the names, when, bytes). Per tenant:
+#: two tenants restored from one archive name the same files, and one slot
 #: for the process gave bar B the size kept for bar A a minute before (and
-#: two bars taking turns recounted every time). One small entry per espace.
+#: two bars taking turns recounted every time). One small entry per tenant.
 _SIZES: dict[tuple[str, str], tuple[int, float, int]] = {}
 
 
 def _bytes_of(names: frozenset[str]) -> int:
     """Their total size on disk, a missing one counting nothing. Drawn on
     every visit of the page: 1 520 stat calls, kept a minute - for the
-    bound espace's media folder only."""
+    bound tenant's media folder only."""
     where = (tenant_key(), os.fspath(paths.media_root()))
     token = hash(names)
     now = time.monotonic()
@@ -308,7 +308,7 @@ def _named_files() -> set[str]:
 
 def _orphan_files(named: set[str]) -> int:
     """Files under media/invoices and media/receipts no document names - left
-    as they are by a clear, as by everything else. The bound espace's media
+    as they are by a clear, as by everything else. The bound tenant's media
     (accounts.paths.media_root): walked from one server-wide media folder,
     every other bar's files counted as this bar's orphans."""
     count = 0
@@ -663,7 +663,7 @@ class InvoicesSection(Section):
 
     def _settle_products(self, doc: _Doc, products) -> None:
         """What the archive says of the products this document's lines use:
-        an unclassified one takes its nature (poste de charge or not), and
+        an unclassified one takes its nature (charge item or not), and
         one classified here but not there - or the reverse - has its
         invoices' statuses worked out again, since the status copied from
         the archive was right for the archive's classification."""
@@ -752,9 +752,7 @@ class InvoicesSection(Section):
                 line = lines[ordinal]
                 product = self._product(product_key, create=False)
                 line_changes.append(
-                    product is None
-                    or product.pk != line.product_id
-                    or bool(codec.differences(line, item, LINE_FIELDS))
+                    product is None or product.pk != line.product_id or bool(codec.differences(line, item, LINE_FIELDS))
                 )
             if len(doc.lines) != len(lines) or any(line_changes):
                 different.append("lines")
@@ -797,7 +795,9 @@ class InvoicesSection(Section):
                 report.unchanged("lignes", len(lines))
             report.note(f"{doc.label} : {RESTORED[tuple(fills)]}")
         if different:
-            report.conflict(f"{doc.label} : différente dans l'archive ({said(different, LABELS)}) — gardée telle quelle")
+            report.conflict(
+                f"{doc.label} : différente dans l'archive ({said(different, LABELS)}) — gardée telle quelle"
+            )
         elif not fills:
             self._unchanged(invoice, lines)
 
@@ -836,7 +836,9 @@ class InvoicesSection(Section):
         priced = sorted(
             (
                 (line_id, taken_at)
-                for line_id, take_id, taken_at in StockTakeLineSource.objects.filter(invoice_line__in=lines).values_list(
+                for line_id, take_id, taken_at in StockTakeLineSource.objects.filter(
+                    invoice_line__in=lines
+                ).values_list(
                     "invoice_line_id", "stock_take_line__stock_take_id", "stock_take_line__stock_take__taken_at"
                 )
                 if take_id not in self._released
@@ -886,7 +888,9 @@ class InvoicesSection(Section):
             and (doc.supplier.pk, number) != (invoice.supplier_id, invoice.invoice_number)
             and Invoice.objects.filter(supplier=doc.supplier, invoice_number=number).exclude(pk=invoice.pk).exists()
         ):
-            report.keep(f"{describe_invoice(invoice)} : n° {number} déjà porté ici par un autre document de {doc.supplier.name}")
+            report.keep(
+                f"{describe_invoice(invoice)} : n° {number} déjà porté ici par un autre document de {doc.supplier.name}"
+            )
             return
 
         files = [name for name in FILE_FIELDS if name in fills or name in different]

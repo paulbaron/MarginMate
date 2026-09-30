@@ -1,15 +1,15 @@
-"""The server's own accounts, and the one espace that may use them.
+"""The server's own accounts, and the one tenant that may use them.
 
 Metro, the invoice mailbox, the customer portals' credentials (the .env
 variables a portal names) and the AI reading (ANTHROPIC_API_KEY) are the
 OWNER's accounts, configured on the server. With one database per bar,
-only the espace flagged
+only the tenant flagged
 `Tenant.uses_server_integrations` may use them
-(`accounts.tenancy.integrations_allowed`): every other espace sees them as
-« à configurer » - a later step gives each espace accounts of its own - and
+(`accounts.tenancy.integrations_allowed`): every other tenant sees them as
+« à configurer » - a later step gives each tenant accounts of its own - and
 EVERY entry point refuses, each on its own, because the data is no guard (a
 « Données » import or the admin can switch a mailbox source or Metro back
-on in any espace):
+on in any tenant):
 
 * the views, before a job is made or a thread started (the gather, the
   mailbox's and a portal's « Tester », a source saved, the AI chosen on the
@@ -22,7 +22,7 @@ on in any espace):
   a refusal names no variable and reaches no account.
 
 The sentences name the feature, never a variable, a file or a host: in
-another bar's espace, « FREEBOX_PASSWORD est absente du fichier .env » would
+another bar's tenant, « FREEBOX_PASSWORD est absente du fichier .env » would
 tell which variables the server holds.
 """
 
@@ -35,7 +35,7 @@ def refused(feature: str) -> str:
 
 #: « Récupérer depuis les sources », the whole of it.
 GATHER = refused("Récupérer les factures depuis Metro, la boîte mail ou les espaces clients")
-#: « Récupérer les bons » on the Consignes page: the bons come through the
+#: « Récupérer les bons » on the Consignes page: the slips come through the
 #: same gather (tasks._gather_slips), so its view still refuses with GATHER;
 #: this is the sentence the page draws in place of the button.
 SLIPS = refused("Récupérer les bons de consignes depuis la boîte mail")

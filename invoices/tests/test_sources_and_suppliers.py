@@ -7,7 +7,7 @@ fournisseurs ») and the « Enseignes et fournisseurs »". The Sources tab
 listed the invoice « types » and, under them, every supplier: « type » read
 as a kind of document rather than where documents come from, and the two
 lists were one page. A source (InvoiceType) is now « une source de
-factures », always for one fournisseur, on the Sources tab; the suppliers
+factures », always for one supplier, on the Sources tab; the suppliers
 have a tab of their own at the address that used to send to the foot of the
 Sources tab, with the sources fetching for each. A gather is « récupérer »
 everywhere. The internal names do not change. Data invented.
@@ -46,14 +46,14 @@ def row_of(page, url):
     """The table row leading to `url` (data-row-href), as HTML."""
     html = page.content.decode()
     start = html.index(f'<tr data-row-href="{url}">')
-    return html[start:html.index("</tr>", start)]
+    return html[start : html.index("</tr>", start)]
 
 
 def element_with_id(page, element_id):
     html = page.content.decode()
     start = html.rindex("<", 0, html.index(f'id="{element_id}"'))
     tag = re.match(r"<(\w+)", html[start:]).group(1)
-    return html[start:html.index(f"</{tag}>", start)]
+    return html[start : html.index(f"</{tag}>", start)]
 
 
 def said(page):
@@ -105,7 +105,7 @@ class SuppliersTabTests(TestCase):
         self.assertIn(f'<a href="{edit}">Epicerie Exemple - Factures</a>', shop_row)
         self.assertIn(
             f'<a href="{reverse("invoices:invoice_type_update", args=[inactive.pk])}">'
-            "Epicerie Exemple - Ancienne boîte</a> <span class=\"muted\">(inactive)</span>",
+            'Epicerie Exemple - Ancienne boîte</a> <span class="muted">(inactive)</span>',
             shop_row,
         )
         alone_row = row_of(response, reverse("invoices:supplier_detail", args=[self.alone.pk]))
@@ -116,9 +116,10 @@ class SuppliersTabTests(TestCase):
     def test_each_tab_computes_only_its_own_list(self):
         """The suppliers' table reads the text of every document, and the
         tabs are on every page of Achats: the count must not build it."""
-        with mock.patch("invoices.workspace._suppliers", wraps=workspace._suppliers) as suppliers, mock.patch(
-            "invoices.workspace._sources", wraps=workspace._sources
-        ) as sources:
+        with (
+            mock.patch("invoices.workspace._suppliers", wraps=workspace._suppliers) as suppliers,
+            mock.patch("invoices.workspace._sources", wraps=workspace._sources) as sources,
+        ):
             self.client.get(reverse("invoices:invoice_list"))
             self.client.get(reverse("invoices:receipt_queue"))
             suppliers.assert_not_called()
@@ -147,12 +148,18 @@ class SuppliersTabTests(TestCase):
             )
         # Seen, undone: nothing waits on those.
         SupplierChange.objects.create(
-            supplier=self.alone, kind=SupplierChange.Kind.IDENTIFIERS, summary="Appris : un numéro.",
-            needs_review=True, reviewed_at=timezone.now(),
+            supplier=self.alone,
+            kind=SupplierChange.Kind.IDENTIFIERS,
+            summary="Appris : un numéro.",
+            needs_review=True,
+            reviewed_at=timezone.now(),
         )
         SupplierChange.objects.create(
-            supplier=self.alone, kind=SupplierChange.Kind.IDENTIFIERS, summary="Oublié : un site.",
-            needs_review=True, undone_at=timezone.now(),
+            supplier=self.alone,
+            kind=SupplierChange.Kind.IDENTIFIERS,
+            summary="Oublié : un site.",
+            needs_review=True,
+            undone_at=timezone.now(),
         )
         page = self.client.get(reverse("invoices:invoice_list"))
         tab = page.context["tabs"][3]
@@ -180,9 +187,7 @@ class SuppliersTabTests(TestCase):
         uba, metro = Supplier.objects.get(code="UBA"), Supplier.objects.get(code="METRO")
         source = make_invoice_type(supplier=uba, name="UBA Exemple - Factures")
         response = self.client.get(SUPPLIERS)
-        self.assertContains(
-            response, "<tr><th>Fournisseur</th><th>Reconnu par</th><th>Sources</th></tr>", html=True
-        )
+        self.assertContains(response, "<tr><th>Fournisseur</th><th>Reconnu par</th><th>Sources</th></tr>", html=True)
         uba_row = row_of(response, reverse("invoices:supplier_detail", args=[uba.pk]))
         self.assertIn(
             f'<a href="{reverse("invoices:invoice_type_update", args=[source.pk])}">UBA Exemple - Factures</a>', uba_row
@@ -201,9 +206,7 @@ class SourcesTabTests(TestCase):
         )
         response = self.client.get(SOURCES)
         self.assertContains(response, "<h2>Sources de factures</h2>", html=True)
-        self.assertContains(
-            response, f'<a class="btn" href="{CREATE_SOURCE}">+ Nouvelle source</a>', html=True
-        )
+        self.assertContains(response, f'<a class="btn" href="{CREATE_SOURCE}">+ Nouvelle source</a>', html=True)
         self.assertContains(response, "<th>Canal</th>", html=True)
         self.assertContains(response, '<td class="muted">E-mail</td>', html=True)
         self.assertContains(response, '<td class="muted">Espace client</td>', html=True)
@@ -233,7 +236,7 @@ class SourceFormTests(TestCase):
         self.assertLess(html.index('id="type-supplier"'), html.index(promise))
         self.assertLess(html.index(promise), html.index('name="name"'))
 
-    def test_the_channel_is_e_mail_or_espace_client(self):
+    def test_the_channel_is_e_mail_or_customer_portal(self):
         page = self.client.get(CREATE_SOURCE)
         form = page.context["type_form"]
         self.assertEqual(form["source_kind"].label, "Canal")
@@ -254,9 +257,16 @@ class SourceFormTests(TestCase):
         response = self.client.post(
             CREATE_SOURCE,
             {
-                "name": "Traiteur Exemple - Factures", "supplier": "new", "new_name": "Traiteur Exemple",
-                "source_kind": "EMAIL", "parser_key": "", "is_active": "on", "action": "save",
-                "sender_pattern": r"factures@traiteur\.exemple", "subject_pattern": "", "body_pattern": "",
+                "name": "Traiteur Exemple - Factures",
+                "supplier": "new",
+                "new_name": "Traiteur Exemple",
+                "source_kind": "EMAIL",
+                "parser_key": "",
+                "is_active": "on",
+                "action": "save",
+                "sender_pattern": r"factures@traiteur\.exemple",
+                "subject_pattern": "",
+                "body_pattern": "",
                 "attachment_pattern": r"\.pdf$",
             },
         )
@@ -274,11 +284,11 @@ class SourceFormTests(TestCase):
 class SupplierPagesTests(TestCase):
     def setUp(self):
         self.shop = make_supplier(code="EPICERIE_X", name="Epicerie Exemple", parser_key="")
-        self.fiche = reverse("invoices:supplier_detail", args=[self.shop.pk])
+        self.supplier_page = reverse("invoices:supplier_detail", args=[self.shop.pk])
 
     def test_they_lead_back_to_the_suppliers_tab(self):
         back = f'<a href="{SUPPLIERS}">← Achats · Enseignes et fournisseurs</a>'
-        self.assertContains(self.client.get(self.fiche), back, html=True)
+        self.assertContains(self.client.get(self.supplier_page), back, html=True)
         self.assertContains(self.client.get(reverse("invoices:supplier_create")), back, html=True)
         ai = self.client.get(reverse("invoices:supplier_detail", args=[Supplier.objects.get(code="OTHER").pk]))
         self.assertRedirects(ai, SUPPLIERS)
@@ -293,10 +303,12 @@ class SupplierPagesTests(TestCase):
     def test_a_supplier_names_its_sources(self):
         make_invoice_type(supplier=self.shop, name="Epicerie Exemple - Factures")
         make_invoice_type(
-            supplier=self.shop, name="Epicerie Exemple - Portail",
-            source_kind=InvoiceType.SourceKind.WEBSITE, is_active=False,
+            supplier=self.shop,
+            name="Epicerie Exemple - Portail",
+            source_kind=InvoiceType.SourceKind.WEBSITE,
+            is_active=False,
         )
-        page = self.client.get(self.fiche)
+        page = self.client.get(self.supplier_page)
         self.assertContains(page, "· 2 sources de factures")
         self.assertContains(page, '<h2 id="types">Sources de ses factures</h2>', html=True)
         self.assertContains(page, '<span class="muted">· E-mail</span>', html=True)
@@ -325,7 +337,7 @@ class SupplierPagesTests(TestCase):
         self.assertContains(page, f'<a href="{reverse("invoices:invoice_type_update", args=[source.pk])}">')
 
     def test_one_with_nothing_yet_is_told_how_its_first_document_comes(self):
-        page = self.client.get(self.fiche)
+        page = self.client.get(self.supplier_page)
         self.assertIn("par une source qui le récupère pour lui (e-mail, espace client)", said(page))
         self.assertContains(page, "sauf si une source le récupère pour lui.")
         created = self.client.post(
@@ -339,9 +351,11 @@ class GatherWordsTests(TestCase):
     """One verb: « Récupérer ». The button said « Rechercher », the card
     « Récupérer (Metro, e-mails) » while the portals are fetched too."""
 
-    def test_the_card_says_recuperer(self):
+    def test_the_card_says_fetch(self):
         ScrapeJob.objects.create(
-            kind=ScrapeJob.Kind.GATHER, status=ScrapeJob.Status.RUNNING, last_heartbeat=timezone.now(),
+            kind=ScrapeJob.Kind.GATHER,
+            status=ScrapeJob.Status.RUNNING,
+            last_heartbeat=timezone.now(),
             progress={"METRO": {"label": "Metro", "found": 2, "imported": 1}},
         )
         page = self.client.get(reverse("invoices:invoice_list"))
@@ -372,8 +386,9 @@ class GatherWordsTests(TestCase):
         from invoices.tasks import gather_invoices_task
 
         job = ScrapeJob.objects.create()
-        with mock.patch("invoices.tasks._GatherHeartbeat"), mock.patch(
-            "invoices.tasks._raise_if_cancelled", side_effect=RuntimeError("base verrouillée")
+        with (
+            mock.patch("invoices.tasks._GatherHeartbeat"),
+            mock.patch("invoices.tasks._raise_if_cancelled", side_effect=RuntimeError("base verrouillée")),
         ):
             gather_invoices_task(job.id, date(2026, 1, 1), date(2026, 9, 18), set())
         job.refresh_from_db()
@@ -401,7 +416,7 @@ class NoOldWordsTests(TestCase):
         "le stock qu'elles avaient fait entrer",
     )
 
-    def test_no_page_of_achats_says_them(self):
+    def test_no_page_of_purchases_says_them(self):
         shop = make_supplier(code="EPICERIE_X", name="Epicerie Exemple", parser_key="")
         source = make_invoice_type(supplier=shop, name="Epicerie Exemple - Factures")
         waiting = make_supplier(code="CAVE_X", name="Cave Exemple", parser_key="")
@@ -410,7 +425,9 @@ class NoOldWordsTests(TestCase):
             invoice=invoice, product=make_product(supplier=shop, raw_name="FARINE EXEMPLE"), total_ht="3.00"
         )
         ScrapeJob.objects.create(
-            kind=ScrapeJob.Kind.GATHER, status=ScrapeJob.Status.RUNNING, last_heartbeat=timezone.now(),
+            kind=ScrapeJob.Kind.GATHER,
+            status=ScrapeJob.Status.RUNNING,
+            last_heartbeat=timezone.now(),
             progress={"METRO": {"label": "Metro", "found": 0}},
         )
         urls = [
@@ -448,7 +465,7 @@ class ArticleWordsTests(TestCase):
         self.invoice = make_invoice(supplier=self.shop, status="NEEDS_REVIEW")
         make_invoice_line(invoice=self.invoice, product=make_product(supplier=self.shop, raw_name="FARINE EXEMPLE"))
 
-    def test_a_line_not_classified_is_a_classer(self):
+    def test_a_line_not_classified_is_to_classify(self):
         page = self.client.get(reverse("invoices:invoice_detail", args=[self.invoice.pk]))
         self.assertContains(page, "<th>Article</th>", html=True)
         self.assertContains(page, '<span class="status-pill status-NEEDS_REVIEW">À classer</span>', html=True)
@@ -460,8 +477,8 @@ class ArticleWordsTests(TestCase):
         waiting = self.client.get(reverse("invoices:receipt_queue"))
         self.assertContains(waiting, "les classer dans Produits &amp; charges</a>")
 
-    def test_a_poste_of_charge_is_no_line_to_classify(self):
-        """A charge's postes are never classified (Product.is_expense): marked
+    def test_a_charge_item_is_no_line_to_classify(self):
+        """A charge's items are never classified (Product.is_expense): marked
         « À classer », with a link to a panel they never appear in, every
         line of a rent or a phone bill contradicted the tab that says so."""
         rent = make_supplier(code="LOYER_X", name="Bailleur Exemple", parser_key="", expenses_only=True)

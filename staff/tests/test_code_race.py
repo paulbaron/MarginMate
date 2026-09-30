@@ -9,8 +9,8 @@ try is RESERVED by one conditional UPDATE before anything is compared, and
 the code is used up by an UPDATE filtered on that same code, so two right
 guesses cannot both identify.
 
-A real espace in temporary files (TenancyTestCase): every thread has its own
-connection to the espace's SQLite file, as a threaded server's requests do.
+A real tenant in temporary files (TenancyTestCase): every thread has its own
+connection to the tenant's SQLite file, as a threaded server's requests do.
 `code_hash` is slowed down to open the window the old code left between
 reading the count and writing it; nothing else is patched. Names invented."""
 
@@ -35,7 +35,7 @@ from staff.timesheet import PostedDay, save_month
 from tests.support import _Forbidden
 
 JUNE = date(2026, 6, 1)
-IP = "203.0.113.7"   # TEST-NET-3: an address that belongs to nobody
+IP = "203.0.113.7"  # TEST-NET-3: an address that belongs to nobody
 GUESSES = 16
 Kind = SignatureEvent.Kind
 HANDED_OVER = SignatureRequest.Identification.CODE_HANDED_OVER
@@ -47,14 +47,16 @@ class ConcurrentCodeTests(TenancyTestCase):
         for target, label in (
             ("smtplib.SMTP", "SMTP"),
             ("smtplib.SMTP_SSL", "SMTP"),
-            ("pyhanko.sign.timestamps.requests_client.RequestsHTTPTimeStamper.async_request_tsa_response",
-             "timestamp server (RFC 3161)"),
+            (
+                "pyhanko.sign.timestamps.requests_client.RequestsHTTPTimeStamper.async_request_tsa_response",
+                "timestamp server (RFC 3161)",
+            ),
         ):
             patcher = mock.patch(target, new=_Forbidden(label))
             patcher.start()
             self.addCleanup(patcher.stop)
         self.enterContext(override_settings(MARGINMATE_SIGNING_PASSPHRASE=""))
-        # Production's SQLite options on the espace's connections (WAL,
+        # Production's SQLite options on the tenant's connections (WAL,
         # IMMEDIATE transactions, a 60 s wait): the test settings' plain
         # `default` has none, and a deferred transaction racing another
         # writer fails at once with « database is locked » - a failure of

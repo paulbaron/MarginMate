@@ -72,7 +72,7 @@ class WingSengBasicTests(SimpleTestCase):
         self.invoice = parse(BASIC)
 
     def test_a_detail_line_is_not_a_product(self):
-        """"MAN 3.000kg × 3.00EUR/kg" explains the line above it. Read as an
+        """ "MAN 3.000kg × 3.00EUR/kg" explains the line above it. Read as an
         item it adds a third purchase at a fabricated price, and the receipt
         no longer matches its own total."""
         self.assertEqual(sorted(line.raw_name for line in self.invoice.lines), ["CITRON VERT", "MENTHE"])
@@ -110,7 +110,7 @@ class WingSengBasicTests(SimpleTestCase):
 
 class WingSengDroppedDecimalTests(SimpleTestCase):
     def test_a_total_with_no_decimal_point_is_flagged_not_guessed(self):
-        """"1351" could be 13.51 or 1351.00. The items do sum to 13.51, but
+        """ "1351" could be 13.51 or 1351.00. The items do sum to 13.51, but
         inferring the total from the lines would defeat the point of having a
         printed total to check them against - so it is reported instead."""
         invoice = parse(DROPPED_DECIMAL)

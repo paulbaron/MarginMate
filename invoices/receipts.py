@@ -49,7 +49,7 @@ from common import error_for_page
 from . import einvoice
 from .identifiers import describe as describe_identifier
 from .identifiers import document_identifiers, may_print
-from .importing import DuplicateInvoiceError, RoutedToConsignesError, import_parsed_invoice
+from .importing import DuplicateInvoiceError, RoutedToReturnablesError, import_parsed_invoice
 from .models import Invoice, InvoiceLine, ShopItemPrice, Supplier, label_for_unit_price
 from .ocr import (
     DocumentTooBig,
@@ -97,7 +97,7 @@ DATE_CHECK = "Date du ticket"
 ADJUSTMENT_CHECK = "Frais et remises sur la facture"
 # One recognition at a time in a request (a shop chosen by hand, a document
 # read again): each is seconds of CPU, and two tabs used to import one file
-# twice. One for the process, every espace included, on purpose: it takes
+# twice. One for the process, every tenant included, on purpose: it takes
 # turns on the CPU and holds no data, so sharing it mixes nothing between
 # bars (one bar's long OCR only makes another's wait - see the tenancy notes).
 OCR_LOCK = threading.Lock()
@@ -220,7 +220,10 @@ def shop_choices() -> list[tuple[str, list[Supplier]]]:
     return [
         (WAITING_GROUP, waiting),
         ("Magasins", [supplier for supplier in suppliers if is_ticket_shop(supplier)]),
-        ("Fournisseurs à factures (ticket papier)", [supplier for supplier in suppliers if not is_ticket_shop(supplier)]),
+        (
+            "Fournisseurs à factures (ticket papier)",
+            [supplier for supplier in suppliers if not is_ticket_shop(supplier)],
+        ),
     ]
 
 
@@ -236,7 +239,11 @@ def invoice_supplier_choices() -> list[tuple[str, list[Supplier]]]:
         ("Lecteur dédié", [supplier for supplier in suppliers if has_own_reader(supplier)]),
         (
             "Lue comme un ticket",
-            [supplier for supplier in suppliers if supplier.parser_key != LLM_PARSER_KEY and not has_own_reader(supplier)],
+            [
+                supplier
+                for supplier in suppliers
+                if supplier.parser_key != LLM_PARSER_KEY and not has_own_reader(supplier)
+            ],
         ),
         ("Analyse IA", ai if integrations_allowed() else []),
     ]
@@ -324,11 +331,15 @@ def recognise_shop(text: str) -> tuple[ReceiptParser | None, list[str], str]:
     if parser is not None:
         other = _company_of_another(text, parser.supplier_code)
         if other is not None:
-            owner = named.name if named is not None else getattr(
-                Supplier.objects.filter(code=parser.supplier_code).first(), "name", parser.supplier_code
+            owner = (
+                named.name
+                if named is not None
+                else getattr(Supplier.objects.filter(code=parser.supplier_code).first(), "name", parser.supplier_code)
             )
-            return None, [], (
-                f"Ce document porte l'en-tête de {owner} mais le n° SIREN de {other.name} : choisissez l'enseigne."
+            return (
+                None,
+                [],
+                (f"Ce document porte l'en-tête de {owner} mais le n° SIREN de {other.name} : choisissez l'enseigne."),
             )
         return parser, [], ""
     supplier, identifiers = identified_supplier(text)
@@ -474,8 +485,8 @@ def learn_identifiers(supplier: Supplier, *texts: str) -> list[str]:
         set_identifiers(supplier, kept, reasons=_why_lost(supplier, known - kept))
         learned = sorted(kept - known)
     if printed:
-        for other in Supplier.objects.exclude(pk=supplier.pk).exclude(parser_key=LLM_PARSER_KEY).exclude(
-            ticket_identifiers=[]
+        for other in (
+            Supplier.objects.exclude(pk=supplier.pk).exclude(parser_key=LLM_PARSER_KEY).exclude(ticket_identifiers=[])
         ):
             if printed.intersection(other.ticket_identifiers or ()):
                 _recheck(other)
@@ -524,7 +535,9 @@ def set_identifiers(supplier: Supplier, identifiers, reasons=None, asked: bool =
     gained, lost = sorted(after - before), sorted(before - after)
     said = []
     if gained:
-        said.append(f"Reconnaît désormais {supplier.name} : " + ", ".join(describe(identifier) for identifier in gained))
+        said.append(
+            f"Reconnaît désormais {supplier.name} : " + ", ".join(describe(identifier) for identifier in gained)
+        )
     if lost:
         said.append(
             f"Ne reconnaît plus {supplier.name} : "
@@ -663,7 +676,9 @@ def supplier_named(name: str, exclude=None) -> Supplier | None:
     return None
 
 
-def forget_identifiers(supplier: Supplier, *texts: str, reason: str = "imprimé sur des documents rangés ailleurs") -> None:
+def forget_identifiers(
+    supplier: Supplier, *texts: str, reason: str = "imprimé sur des documents rangés ailleurs"
+) -> None:
     """Documents printing them are not `supplier`'s after all: they name it
     no longer."""
     printed = set()
@@ -762,11 +777,11 @@ def document_corpus() -> list[tuple[int, str]]:
     queue. It only decides which chips are offered - a header saved is
     checked against the documents as they are (check_header, no corpus).
 
-    One per espace (accounts.tenancy.tenant_key): the
-    fingerprint is no identity - two fresh espaces, or two restored from one
+    One per tenant (accounts.tenancy.tenant_key): the
+    fingerprint is no identity - two fresh tenants, or two restored from one
     archive, share it, and one bar's chips were offered from another's
     texts, whose pks tickets_printing then looked up in the wrong database.
-    The CORPUS_ESPACES_KEPT espaces read last are kept."""
+    The CORPUS_TENANTS_KEPT tenants read last are kept."""
     fingerprint = tuple(
         Invoice.objects.aggregate(
             count=Count("pk"),
@@ -775,9 +790,9 @@ def document_corpus() -> list[tuple[int, str]]:
             read=Sum(Length("ocr_text") + Length("source_text")),
         ).values()
     )
-    espace = tenant_key()
+    tenant = tenant_key()
     with _CORPUS_LOCK:
-        kept = _CORPUS.pop(espace, None)
+        kept = _CORPUS.pop(tenant, None)
         if kept is None or kept[0] != fingerprint:
             texts = [
                 (pk, plain_text(ocr_text or source_text))
@@ -786,16 +801,16 @@ def document_corpus() -> list[tuple[int, str]]:
             ]
             kept = (fingerprint, texts)
         # Last read last: the oldest goes first when there are too many.
-        _CORPUS[espace] = kept
-        while len(_CORPUS) > CORPUS_ESPACES_KEPT:
+        _CORPUS[tenant] = kept
+        while len(_CORPUS) > CORPUS_TENANTS_KEPT:
             del _CORPUS[next(iter(_CORPUS))]
         return kept[1]
 
 
-#: {espace: (fingerprint, texts)}, in the order they were last read.
+#: {tenant: (fingerprint, texts)}, in the order they were last read.
 _CORPUS: dict = {}
 _CORPUS_LOCK = threading.Lock()
-CORPUS_ESPACES_KEPT = 8
+CORPUS_TENANTS_KEPT = 8
 
 
 def tickets_printing(header: str, ignoring=(), corpus=None) -> list[Invoice]:
@@ -806,7 +821,8 @@ def tickets_printing(header: str, ignoring=(), corpus=None) -> list[Invoice]:
         return []
     ignored = {invoice.pk for invoice in ignoring}
     found = [
-        pk for pk, text in (corpus if corpus is not None else document_corpus())
+        pk
+        for pk, text in (corpus if corpus is not None else document_corpus())
         if pk not in ignored and _has_header(text, plain)
     ]
     return list(Invoice.objects.filter(pk__in=found).select_related("supplier").order_by("invoice_date", "pk"))
@@ -814,7 +830,9 @@ def tickets_printing(header: str, ignoring=(), corpus=None) -> list[Invoice]:
 
 def describe_tickets(tickets) -> str:
     return ", ".join(
-        f"{ticket.supplier.name} du {ticket.invoice_date:%d/%m/%Y}" if ticket.invoice_date else f"{ticket.supplier.name} n° {ticket.pk}"
+        f"{ticket.supplier.name} du {ticket.invoice_date:%d/%m/%Y}"
+        if ticket.invoice_date
+        else f"{ticket.supplier.name} n° {ticket.pk}"
         for ticket in tickets
     )
 
@@ -845,11 +863,11 @@ def check_header(header: str, ignoring=(), shop: Supplier | None = None, corpus=
         None,
     )
     if taken is not None:
-        raise ValueError(f"« {header} » est déjà l'en-tête de {taken.name} : deux enseignes ne partagent pas un en-tête.")
+        raise ValueError(
+            f"« {header} » est déjà l'en-tête de {taken.name} : deux enseignes ne partagent pas un en-tête."
+        )
     elsewhere = [
-        ticket
-        for ticket in tickets_printing(header, ignoring, corpus)
-        if shop is None or ticket.supplier_id != shop.pk
+        ticket for ticket in tickets_printing(header, ignoring, corpus) if shop is None or ticket.supplier_id != shop.pk
     ]
     if len(elsewhere) > MAX_TICKETS_ELSEWHERE or len({ticket.supplier_id for ticket in elsewhere}) > 1:
         raise ValueError(
@@ -890,20 +908,20 @@ def _record_header(supplier: Supplier, before: str, after: str) -> None:
 class Renamed:
     before: str
     after: str
-    # A supplier of charges: the lines and the poste named after it.
+    # A supplier of charges: the lines and the charge item named after it.
     lines: int = 0
-    postes: int = 0
+    charge_items: int = 0
 
 
 def rename_supplier(supplier: Supplier, name: str, dry_run: bool = False) -> Renamed:
     """Give `supplier` another name - what it is called on every page, not
     its code, which nothing shows and the configured tills are keyed on. A
-    supplier of charges files its documents on a poste named after it, and
-    their lines carry that name: both follow, or its next bill would open a
-    poste of the new name beside the old one. Bank matching keeps the payee
-    names it learned (CounterpartyAlias). Raises ValueError, for the
-    operator, with nothing changed: no name, a name taken, or a poste of
-    the new name already there. `dry_run`: what it would do, nothing done."""
+    supplier of charges files its documents on a charge item named after it,
+    and their lines carry that name: both follow, or its next bill would open
+    a charge item of the new name beside the old one. Bank matching keeps the
+    payee names it learned (CounterpartyAlias). Raises ValueError, for the
+    operator, with nothing changed: no name, a name taken, or a charge item
+    of the new name already there. `dry_run`: what it would do, nothing done."""
     from inventory.models import Product
 
     from . import supplier_changes
@@ -920,19 +938,19 @@ def rename_supplier(supplier: Supplier, name: str, dry_run: bool = False) -> Ren
     if name == before:
         return renamed
     lines = InvoiceLine.objects.filter(invoice__supplier=supplier, raw_name=before)
-    postes = Product.objects.filter(supplier=supplier, raw_name=before)
+    charge_items = Product.objects.filter(supplier=supplier, raw_name=before)
     if supplier.expenses_only:
         renamed.lines = lines.count()
-        renamed.postes = postes.count()
-        # One of its postes is already called that, whatever its case: its
-        # next bill read as a total alone would be filed on that poste, and a
-        # rename undone would have renamed that poste's lines too. Not the
-        # poste being renamed with it.
+        renamed.charge_items = charge_items.count()
+        # One of its charge items is already called that, whatever its case:
+        # its next bill read as a total alone would be filed on that charge
+        # item, and a rename undone would have renamed that charge item's
+        # lines too. Not the charge item being renamed with it.
         if any(
-            " ".join(poste.split()).casefold() == name.casefold()
-            for poste in Product.objects.filter(supplier=supplier).exclude(raw_name=before).values_list(
-                "raw_name", flat=True
-            )
+            " ".join(charge_item.split()).casefold() == name.casefold()
+            for charge_item in Product.objects.filter(supplier=supplier)
+            .exclude(raw_name=before)
+            .values_list("raw_name", flat=True)
         ):
             raise ValueError(
                 f"{before} a déjà un poste « {name} » : renommer le sien en ferait deux du même nom. "
@@ -943,12 +961,14 @@ def rename_supplier(supplier: Supplier, name: str, dry_run: bool = False) -> Ren
     with transaction.atomic():
         if supplier.expenses_only:
             lines.update(raw_name=name)
-            postes.update(raw_name=name)
+            charge_items.update(raw_name=name)
         supplier.name = name
         supplier.save(update_fields=["name"])
         took = f" ; {renamed.lines} ligne(s) de charge et son poste portent le nouveau nom" if renamed.lines else ""
         supplier_changes.record(
-            supplier, SupplierChange.Kind.RENAMED, f"Nom : « {before} » → « {name} »{took}.",
+            supplier,
+            SupplierChange.Kind.RENAMED,
+            f"Nom : « {before} » → « {name} »{took}.",
             data={"before": before, "after": name},
         )
     return renamed
@@ -988,7 +1008,9 @@ def _record_created(supplier: Supplier) -> None:
     said = [f"en-tête « {supplier.ticket_header} »"] if supplier.ticket_header else []
     said.append("charges" if supplier.expenses_only else "produits")
     supplier_changes.record(
-        supplier, SupplierChange.Kind.CREATED, f"Créé ({', '.join(said)}).",
+        supplier,
+        SupplierChange.Kind.CREATED,
+        f"Créé ({', '.join(said)}).",
         data={"name": supplier.name, "header": supplier.ticket_header},
     )
 
@@ -1020,7 +1042,7 @@ def move_documents(invoices, supplier: Supplier) -> Moved:
     - **a charge stays a charge.** Read as goods and moved into a supplier
       of charges, a document is read again as one (refile_as_charge, the
       path ticking "Charges" takes): kept as they were, a rent statement's
-      previous balance, direct debit and rent became three postes and the
+      previous balance, direct debit and rent became three charge items and the
       charge three times what it charges. Moved between two suppliers of
       charges, a line named after the supplier takes the new name. Either
       way its state is its total's (charge_state): an unread total marked
@@ -1063,9 +1085,12 @@ def move_documents(invoices, supplier: Supplier) -> Moved:
     if twice:
         raise ValueError(f"Deux des documents portent le n° {twice[0]} : ils ne vont pas chez le même fournisseur.")
     for invoice in moving:
-        if Invoice.objects.filter(supplier=supplier, invoice_number=invoice.invoice_number).exclude(
-            invoice_number=""
-        ).exclude(pk=invoice.pk).exists():
+        if (
+            Invoice.objects.filter(supplier=supplier, invoice_number=invoice.invoice_number)
+            .exclude(invoice_number="")
+            .exclude(pk=invoice.pk)
+            .exists()
+        ):
             raise ValueError(
                 f"{supplier.name} a déjà un document n° {invoice.invoice_number} : c'est peut-être le même."
             )
@@ -1086,7 +1111,11 @@ def move_documents(invoices, supplier: Supplier) -> Moved:
                 name = supplier.name if renamed and line.raw_name == old.name else line.raw_name
                 moved.renamed += name != line.raw_name
                 parsed = corrected_line(
-                    line, raw_name=name, quantity=line.quantity, total_ht=line.total_ht, vat_rate=line.vat_rate,
+                    line,
+                    raw_name=name,
+                    quantity=line.quantity,
+                    total_ht=line.total_ht,
+                    vat_rate=line.vat_rate,
                     # Nobody is editing these lines, so each keeps what it
                     # is. `corrected_line` defaults the box to unticked -
                     # which is right for the correction page, where an
@@ -1114,8 +1143,10 @@ def move_documents(invoices, supplier: Supplier) -> Moved:
                 ] + [{"label": CHOSEN_SHOP_CHECK, "passed": True, "detail": f"Rangé chez {supplier.name} à la main."}]
                 fields.append("parse_checks")
             invoice.save(update_fields=fields)
-            if supplier.expenses_only and not old.expenses_only and refile_as_charge(
-                invoice, _as_parsed(invoice, stored)
+            if (
+                supplier.expenses_only
+                and not old.expenses_only
+                and refile_as_charge(invoice, _as_parsed(invoice, stored))
             ):
                 continue  # read again as a charge, its state included
             replace_invoice_lines(invoice, lines)
@@ -1197,7 +1228,8 @@ def identifier_report(supplier: Supplier) -> dict:
 
     def where_else(identifier) -> str:
         return ", ".join(
-            f"{count} document{'s' if count > 1 else ''} de {name}" for name, count in elsewhere[identifier].most_common(3)
+            f"{count} document{'s' if count > 1 else ''} de {name}"
+            for name, count in elsewhere[identifier].most_common(3)
         )
 
     typed = set(supplier.typed_identifiers or ())
@@ -1229,8 +1261,13 @@ def identifier_report(supplier: Supplier) -> dict:
             else:
                 reason = f"sur {counts[identifier]} de ses {total} documents : trop rare pour le reconnaître"
         rows_printed.append(
-            {"identifier": identifier, "label": describe(identifier), "count": counts[identifier],
-             "can_keep": can_keep, "reason": reason}
+            {
+                "identifier": identifier,
+                "label": describe(identifier),
+                "count": counts[identifier],
+                "can_keep": can_keep,
+                "reason": reason,
+            }
         )
     return {
         "known": rows_known,
@@ -1298,14 +1335,16 @@ def filing_report(invoice: Invoice, suppliers=None) -> dict:
         if identifier in held and not others:
             report["names_it"].append({"kind": "identifier", "identifier": identifier, "label": f"son {label}"})
         elif others:
-            report["names_another"].append({
-                "identifier": identifier,
-                "label": label,
-                "holders": others,
-                # Retained on both sides: it names NEITHER, and every
-                # document printing it goes unrecognised in silence.
-                "shared": identifier in held,
-            })
+            report["names_another"].append(
+                {
+                    "identifier": identifier,
+                    "label": label,
+                    "holders": others,
+                    # Retained on both sides: it names NEITHER, and every
+                    # document printing it goes unrecognised in silence.
+                    "shared": identifier in held,
+                }
+            )
         else:
             report["unknown"].append({"identifier": identifier, "label": label})
     return report
@@ -1336,102 +1375,112 @@ def filing_rules(supplier: Supplier, is_till: bool = False, own_reader: bool = F
     rules: list[dict] = []
     sources = list(InvoiceType.objects.filter(supplier=supplier).order_by("name"))
     if sources:
-        rules.append({
-            "kind": "source",
-            "title": "Récupéré par une de ses sources",
-            "detail": (
-                "Un document que « "
-                + " », « ".join(source.name for source in sources)
-                + " » rapporte est rangé ici quoi qu'il imprime. S'il porte ce qui nomme un autre "
-                "fournisseur, il est rangé ici tout de même et marqué « fournisseur à confirmer »."
-            ),
-        })
+        rules.append(
+            {
+                "kind": "source",
+                "title": "Récupéré par une de ses sources",
+                "detail": (
+                    "Un document que « "
+                    + " », « ".join(source.name for source in sources)
+                    + " » rapporte est rangé ici quoi qu'il imprime. S'il porte ce qui nomme un autre "
+                    "fournisseur, il est rangé ici tout de même et marqué « fournisseur à confirmer »."
+                ),
+            }
+        )
     if supplier.ticket_identifiers and any(key.startswith("siren:") for key in supplier.ticket_identifiers):
-        rules.append({
-            "kind": "einvoice",
-            "title": "Facture électronique : le n° SIREN qu'elle déclare",
-            "detail": (
-                "Sur une facture électronique (Factur-X, UBL, CII), le n° SIREN du vendeur est lu dans "
-                "les données du fichier et passe avant l'en-tête : c'est le seul cas où l'ordre "
-                "s'inverse."
-            ),
-        })
+        rules.append(
+            {
+                "kind": "einvoice",
+                "title": "Facture électronique : le n° SIREN qu'elle déclare",
+                "detail": (
+                    "Sur une facture électronique (Factur-X, UBL, CII), le n° SIREN du vendeur est lu dans "
+                    "les données du fichier et passe avant l'en-tête : c'est le seul cas où l'ordre "
+                    "s'inverse."
+                ),
+            }
+        )
     if is_till:
-        rules.append({
-            "kind": "till",
-            "title": "Sa caisse, réglée dans l'application",
-            "detail": "Ses tickets sont reconnus à ce que sa caisse imprime : ils n'ont besoin ni d'en-tête ni d'identifiant.",
-        })
+        rules.append(
+            {
+                "kind": "till",
+                "title": "Sa caisse, réglée dans l'application",
+                "detail": "Ses tickets sont reconnus à ce que sa caisse imprime : ils n'ont besoin ni d'en-tête ni d'identifiant.",
+            }
+        )
     elif own_reader:
-        rules.append({
-            "kind": "reader",
-            "title": "Son propre lecteur",
-            "detail": (
-                "Ses factures numériques sont lues par son lecteur - mais seulement une fois le document "
-                "reconnu comme le sien par son en-tête ou par un n° SIREN qu'il retient : un téléphone "
-                "ou un site ne suffisent pas à lancer un lecteur."
-            ),
-        })
+        rules.append(
+            {
+                "kind": "reader",
+                "title": "Son propre lecteur",
+                "detail": (
+                    "Ses factures numériques sont lues par son lecteur - mais seulement une fois le document "
+                    "reconnu comme le sien par son en-tête ou par un n° SIREN qu'il retient : un téléphone "
+                    "ou un site ne suffisent pas à lancer un lecteur."
+                ),
+            }
+        )
     if not is_till:
         if supplier.ticket_header:
-            rules.append({
-                "kind": "header",
-                "title": f"Son en-tête « {supplier.ticket_header} »",
-                "detail": (
-                    "Cherché mot pour mot dans le texte du document, accents et ponctuation ignorés. "
-                    "Un en-tête ajoute des documents, il n'en retire aucun : un document qui ne le "
-                    "porte pas peut encore être rangé ici par un identifiant."
-                ),
-                "url": reverse("invoices:supplier_edit", args=[supplier.pk]),
-            })
+            rules.append(
+                {
+                    "kind": "header",
+                    "title": f"Son en-tête « {supplier.ticket_header} »",
+                    "detail": (
+                        "Cherché mot pour mot dans le texte du document, accents et ponctuation ignorés. "
+                        "Un en-tête ajoute des documents, il n'en retire aucun : un document qui ne le "
+                        "porte pas peut encore être rangé ici par un identifiant."
+                    ),
+                    "url": reverse("invoices:supplier_edit", args=[supplier.pk]),
+                }
+            )
         else:
-            rules.append({
-                "kind": "header",
-                "title": "Aucun en-tête",
-                "detail": "Rien n'est cherché en haut de ses documents. Ses identifiants ci-dessous sont tout ce qui le nomme.",
-                "url": reverse("invoices:supplier_edit", args=[supplier.pk]),
-                "missing": True,
-            })
-        rules.append({
-            "kind": "guard",
-            "title": "Sauf si le document porte le n° SIREN d'un autre",
-            "detail": (
-                (
-                    "Même reconnu par son en-tête, un document "
-                    if supplier.ticket_header
-                    else "Un document "
-                )
-                + "qui imprime un n° SIREN qu'un autre fournisseur retient n'est rangé nulle part : "
-                "l'enseigne vous est demandée."
-                + (
-                    " Deux en-têtes sur un même document font la même chose."
-                    if supplier.ticket_header
-                    else ""
-                )
-            ),
-        })
-        for identifier in sorted(supplier.ticket_identifiers or ()):
-            rules.append({
-                "kind": "identifier",
-                "identifier": identifier,
-                "title": _first_capital(describe_identifier(identifier)),
+            rules.append(
+                {
+                    "kind": "header",
+                    "title": "Aucun en-tête",
+                    "detail": "Rien n'est cherché en haut de ses documents. Ses identifiants ci-dessous sont tout ce qui le nomme.",
+                    "url": reverse("invoices:supplier_edit", args=[supplier.pk]),
+                    "missing": True,
+                }
+            )
+        rules.append(
+            {
+                "kind": "guard",
+                "title": "Sauf si le document porte le n° SIREN d'un autre",
                 "detail": (
-                    "Cherché sur les documents qu'aucun en-tête n'a nommés."
-                    + (
-                        " Un site seul ne reconnaît personne : il en faut un autre avec lui."
-                        if identifier.startswith("web:")
-                        else ""
-                    )
+                    ("Même reconnu par son en-tête, un document " if supplier.ticket_header else "Un document ")
+                    + "qui imprime un n° SIREN qu'un autre fournisseur retient n'est rangé nulle part : "
+                    "l'enseigne vous est demandée."
+                    + (" Deux en-têtes sur un même document font la même chose." if supplier.ticket_header else "")
                 ),
-                "typed": identifier in (supplier.typed_identifiers or ()),
-            })
+            }
+        )
+        for identifier in sorted(supplier.ticket_identifiers or ()):
+            rules.append(
+                {
+                    "kind": "identifier",
+                    "identifier": identifier,
+                    "title": _first_capital(describe_identifier(identifier)),
+                    "detail": (
+                        "Cherché sur les documents qu'aucun en-tête n'a nommés."
+                        + (
+                            " Un site seul ne reconnaît personne : il en faut un autre avec lui."
+                            if identifier.startswith("web:")
+                            else ""
+                        )
+                    ),
+                    "typed": identifier in (supplier.typed_identifiers or ()),
+                }
+            )
         if not supplier.ticket_header and not supplier.ticket_identifiers:
-            rules.append({
-                "kind": "nothing",
-                "title": "Rien ne le reconnaît pour l'instant",
-                "detail": "Ses documents vous seront demandés à l'import, et il apprendra ce qu'ils impriment.",
-                "missing": True,
-            })
+            rules.append(
+                {
+                    "kind": "nothing",
+                    "title": "Rien ne le reconnaît pour l'instant",
+                    "detail": "Ses documents vous seront demandés à l'import, et il apprendra ce qu'ils impriment.",
+                    "missing": True,
+                }
+            )
     return rules
 
 
@@ -1446,17 +1495,19 @@ def supplier_notices(supplier: Supplier) -> list[dict]:
         Invoice.objects.filter(supplier=supplier).exclude(supplier_doubt="").order_by("pk").values_list("pk", flat=True)
     )
     if doubted:
-        notices.append({
-            "kind": "type_check",
-            "text": (
-                f"{len(doubted)} document{'s' if len(doubted) > 1 else ''} récupéré{'s' if len(doubted) > 1 else ''} "
-                f"par une source de {supplier.name} "
-                f"{'portent' if len(doubted) > 1 else 'porte'} ce qui reconnaît un autre fournisseur : rien n'en a "
-                "été appris. Validez-le s'il est bien le sien, ou changez-le de fournisseur."
-            ),
-            "count": len(doubted),
-            "invoice": doubted[0],
-        })
+        notices.append(
+            {
+                "kind": "type_check",
+                "text": (
+                    f"{len(doubted)} document{'s' if len(doubted) > 1 else ''} récupéré{'s' if len(doubted) > 1 else ''} "
+                    f"par une source de {supplier.name} "
+                    f"{'portent' if len(doubted) > 1 else 'porte'} ce qui reconnaît un autre fournisseur : rien n'en a "
+                    "été appris. Validez-le s'il est bien le sien, ou changez-le de fournisseur."
+                ),
+                "count": len(doubted),
+                "invoice": doubted[0],
+            }
+        )
     # The changes themselves, each with why it asks to be seen and its « Vu »
     # beside it: a count sent the owner to the foot of the page to find out
     # what it counted, and why it asked was said nowhere.
@@ -1470,8 +1521,14 @@ def supplier_notices(supplier: Supplier) -> list[dict]:
 
         for change in to_see:
             change.why = why_to_see(change)
-        notices.append({"kind": "review", "text": f"{len(to_see)} changement{'s' if len(to_see) > 1 else ''} à voir :",
-                        "count": len(to_see), "changes": to_see})
+        notices.append(
+            {
+                "kind": "review",
+                "text": f"{len(to_see)} changement{'s' if len(to_see) > 1 else ''} à voir :",
+                "count": len(to_see),
+                "changes": to_see,
+            }
+        )
     if (
         supplier.parser_key != LLM_PARSER_KEY
         and ticket_parser_for(supplier.code) is None
@@ -1480,15 +1537,20 @@ def supplier_notices(supplier: Supplier) -> list[dict]:
         and not supplier.ticket_identifiers
     ):
         empty = not Invoice.objects.filter(supplier=supplier).exists()
-        notices.append({
-            "kind": "unrecognised",
-            "text": (
-                f"Rien ne reconnaît encore {supplier.name} : "
-                + ("son premier document vous sera demandé à l'import, sauf si une source le récupère pour lui."
-                   if empty else "ses documents vous sont demandés à l'import, sauf ceux qu'une source récupère pour lui.")
-            ),
-            "count": 0,
-        })
+        notices.append(
+            {
+                "kind": "unrecognised",
+                "text": (
+                    f"Rien ne reconnaît encore {supplier.name} : "
+                    + (
+                        "son premier document vous sera demandé à l'import, sauf si une source le récupère pour lui."
+                        if empty
+                        else "ses documents vous sont demandés à l'import, sauf ceux qu'une source récupère pour lui."
+                    )
+                ),
+                "count": 0,
+            }
+        )
     return notices
 
 
@@ -1517,7 +1579,7 @@ def recognise(pdf_path: str):
 
     Only the first page's image is kept: every page of 300 dpi held until
     the end grew with the page count (security audit UPLOAD-1: 50 pages of
-    2 400 pt would have been some 15 Go); the others are dropped once read.
+    2 400 pt would have been some 15 GB); the others are dropped once read.
 
     What a document may cost at all is refused before anything is read:
     its page count by `text_layer_pages`, which runs first (ocr.pdf_pages,
@@ -1553,16 +1615,19 @@ def read_receipt(pdf_path: str, date_hint: date | None = None, supplier: Supplie
     parsed, problem = None, ""
     if parser is not None:
         try:
-            parsed = parser.parse_ocr_pages(
-                ocr_pages, date_hint=date_hint, source_name=os.path.basename(pdf_path)
-            )
-        except Exception as exc:  # noqa: BLE001 - only swallowed for a shop chosen by hand
+            parsed = parser.parse_ocr_pages(ocr_pages, date_hint=date_hint, source_name=os.path.basename(pdf_path))
+        except Exception as exc:
             if supplier is None:
                 raise
             problem = str(exc).strip() or exc.__class__.__name__
     return ReceiptRead(
-        parser=parser, parsed=parsed, preview=_encode_preview(images), text=text, problem=problem,
-        identified_by=identified_by, conflict=conflict,
+        parser=parser,
+        parsed=parsed,
+        preview=_encode_preview(images),
+        text=text,
+        problem=problem,
+        identified_by=identified_by,
+        conflict=conflict,
     )
 
 
@@ -1720,10 +1785,7 @@ def rename_product(product, name: str) -> int:
     if len(name) > longest:
         raise ValueError(f"Nom trop long : {longest} caractères au plus.")
     clash = (
-        type(product)
-        .objects.filter(supplier=product.supplier, raw_name__iexact=name)
-        .exclude(pk=product.pk)
-        .first()
+        type(product).objects.filter(supplier=product.supplier, raw_name__iexact=name).exclude(pk=product.pk).first()
     )
     if clash is not None:
         raise ValueError(
@@ -1749,9 +1811,7 @@ def lines_check(invoice: Invoice, prefix: str = "") -> dict:
     discounts = sum((line.discount_ttc for line in lines if line.printed_ttc is not None), start=Decimal("0"))
     # The promotions apart, as the page shows them: the articles are what the
     # ticket prints as its total before promotions.
-    promotions = (
-        f" - articles {lines_total + discounts:.2f} € moins {discounts:.2f} € de remises" if discounts else ""
-    )
+    promotions = f" - articles {lines_total + discounts:.2f} € moins {discounts:.2f} € de remises" if discounts else ""
     # Duty, an eco-participation, a document-level charge: money the lines do
     # not carry, which the total does. "lignes" has to mean the LINES, so the
     # adjustment is added in front of the eye rather than folded into the
@@ -1775,8 +1835,7 @@ def lines_check(invoice: Invoice, prefix: str = "") -> dict:
         "label": SUM_CHECK,
         "passed": abs(gap) <= RECONCILIATION_TOLERANCE,
         "detail": (
-            f"{prefix}lignes {lines_only:.2f} €{counted} / {printed} {paid:.2f} € "
-            f"(écart {gap:+.2f} €){promotions}"
+            f"{prefix}lignes {lines_only:.2f} €{counted} / {printed} {paid:.2f} € (écart {gap:+.2f} €){promotions}"
         ),
     }
 
@@ -1786,7 +1845,7 @@ def adjustment_counted(invoice: Invoice) -> Decimal:
     total with it - a supplier's invoice, tax included.
 
     Never a ticket's: there it is the cents each line lost being divided by
-    (1 + taux), which the printed amounts never lost, and added on top six
+    (1 + rate), which the printed amounts never lost, and added on top six
     baguettes of 0,49 € came to 2,97 €. On a supplier's invoice it is duty
     charged globally (or a document-level charge on an electronic invoice),
     and left out of the sum an invoice that balances to the cent read as
@@ -1813,7 +1872,10 @@ def vat_table(invoice: Invoice) -> list[dict]:
         parser = parser_for(invoice.supplier)
         if parser is not None and hasattr(parser, "parse_text"):
             try:
-                rows = [[str(rate), str(base), str(tax)] for rate, base, tax in parser.parse_text(invoice.ocr_text).vat_breakdown]
+                rows = [
+                    [str(rate), str(base), str(tax)]
+                    for rate, base, tax in parser.parse_text(invoice.ocr_text).vat_breakdown
+                ]
             except Exception:  # noqa: BLE001 - a reading that fails leaves the table to be typed
                 rows = []
     table = []
@@ -1848,9 +1910,7 @@ def vat_table_checks(invoice: Invoice, table: list[dict] | None = None) -> list[
             {
                 "label": f"TVA {percent}% cohérente",
                 "passed": abs(expected - row["vat"]) <= VAT_IDENTITY_TOLERANCE,
-                "detail": (
-                    f"HT {row['base']:.2f} € x {percent}% = {expected:.2f} € / document {row['vat']:.2f} €"
-                ),
+                "detail": (f"HT {row['base']:.2f} € x {percent}% = {expected:.2f} € / document {row['vat']:.2f} €"),
             }
         )
     base_total = sum((row["base"] for row in table), start=Decimal("0"))
@@ -1881,9 +1941,7 @@ def recheck_after_review(invoice: Invoice) -> None:
     if invoice.printed_total_ttc is not None:
         dropped.add(UNREAD_TOTAL_CHECK)
     kept = [check for check in invoice.parse_checks if check["label"] not in dropped]
-    invoice.parse_checks = (
-        kept + [lines_check(invoice, prefix="vérifié à la main : ")] + vat_table_checks(invoice)
-    )
+    invoice.parse_checks = kept + [lines_check(invoice, prefix="vérifié à la main : ")] + vat_table_checks(invoice)
 
 
 def _vat_check_labels(invoice: Invoice) -> set:
@@ -1893,8 +1951,7 @@ def _vat_check_labels(invoice: Invoice) -> set:
     return {
         check["label"]
         for check in invoice.parse_checks
-        if check["label"].startswith(("TVA ", "Table TVA"))
-        or check["label"] == HT_CHECK
+        if check["label"].startswith(("TVA ", "Table TVA")) or check["label"] == HT_CHECK
     }
 
 
@@ -1949,7 +2006,11 @@ def reread_receipt(invoice: Invoice) -> bool:
                 invoice.status = Invoice.Status.NEEDS_REVIEW
             invoice.save(
                 update_fields=[
-                    "reconciliation_adjustment", "printed_total_ttc", "invoice_date", "parse_checks", "status",
+                    "reconciliation_adjustment",
+                    "printed_total_ttc",
+                    "invoice_date",
+                    "parse_checks",
+                    "status",
                 ]
             )
     except InvoiceLinesInUseError:
@@ -2022,9 +2083,7 @@ def _reread_einvoice_file(invoice: Invoice, path: str) -> str:
         invoice.vat_table_typed = False
         invoice.einvoice_format = kind
         invoice.parse_checks = checks
-        invoice.error_message = " ".join(
-            parsed.warnings + einvoice_date_problem(invoice.invoice_date)
-        )
+        invoice.error_message = " ".join(parsed.warnings + einvoice_date_problem(invoice.invoice_date))
         if invoice.error_message:
             invoice.status = Invoice.Status.NEEDS_REVIEW
         invoice.save()
@@ -2043,7 +2102,7 @@ def _reread_receipt_file(invoice: Invoice, path: str) -> str:
         read = read_receipt(path, supplier=supplier)
     except DocumentTooBig as exc:
         raise RereadError(f"{exc} Le ticket n'a pas été modifié.") from exc
-    except Exception as exc:  # noqa: BLE001 - said to the operator; nothing changed
+    except Exception as exc:
         # A file the image or PDF library cannot open raised past every
         # handler (a 500); its words name the stored file's path (LB-3).
         said = error_for_page(exc, log=logger, what=f"Relecture du ticket {invoice.pk}")
@@ -2098,7 +2157,7 @@ def _reread_invoice_file(invoice: Invoice, path: str) -> str:
     except DocumentTooBig as exc:
         # The app's own refusal, in its words - as a ticket's re-read says it.
         raise RereadError(f"{exc} La facture n'a pas été modifiée.") from exc
-    except Exception as exc:  # noqa: BLE001 - said to the operator; nothing changed
+    except Exception as exc:
         # By kind, never the exception's own words: a library's name the
         # stored file's path on the server (audit LB-3) - the log has them.
         said = error_for_page(exc, log=logger, what=f"Relecture du document {invoice.pk}")
@@ -2228,43 +2287,48 @@ def _record_first_document(supplier: Supplier, invoice: Invoice, how: str, learn
     # A document whose supplier is in doubt teaches nothing and vouches for
     # nothing: it is not the first, and the next one, the one that teaches,
     # is recorded as the first instead.
-    if invoice.supplier_doubt or Invoice.objects.filter(supplier=supplier, supplier_doubt="").exclude(
-        pk=invoice.pk
-    ).exists():
+    if (
+        invoice.supplier_doubt
+        or Invoice.objects.filter(supplier=supplier, supplier_doubt="").exclude(pk=invoice.pk).exists()
+    ):
         return
     printed = sorted(document_identifiers(text or ""))
     if learned:
         taught = "Il lui a appris : " + ", ".join(describe_identifier(identifier) for identifier in learned) + "."
     elif printed:
         taught = (
-            "Il imprime " + ", ".join(describe_identifier(identifier) for identifier in printed)
+            "Il imprime "
+            + ", ".join(describe_identifier(identifier) for identifier in printed)
             + " : rien n'en a été retenu (« Retenir » sur la fiche)."
         )
     else:
         taught = "Il n'imprime ni n° SIREN, ni téléphone, ni site."
     supplier_changes.record(
-        supplier, SupplierChange.Kind.FIRST_DOCUMENT,
+        supplier,
+        SupplierChange.Kind.FIRST_DOCUMENT,
         f"Premier document : {_describe(invoice)} ({how.rstrip('.')}). {taught}",
-        invoice=invoice, needs_review=True, data={"learned": list(learned), "printed": printed},
+        invoice=invoice,
+        needs_review=True,
+        data={"learned": list(learned), "printed": printed},
     )
 
 
-def route_consignes(path: str, display_filename: str | None) -> None:
-    """Achats' guard: a PDF that one active format de bon recognises (its
-    « début de la partie » on a line) is a driver's bon de consignes, not a
+def route_to_returnables(path: str, display_filename: str | None) -> None:
+    """Achats' guard: a PDF that one active slip format recognises (its
+    « début de la partie » on a line) is a driver's returnables slip, not a
     purchase. It is stored in Consignes (returnables.slips.store_slip, «
-    Déposé à la main ») and RoutedToConsignesError says so - no Invoice.
-    Read as a purchase, UBA's bon was filed under UBA (its phone number, a
+    Déposé à la main ») and RoutedToReturnablesError says so - no Invoice.
+    Read as a purchase, UBA's slip was filed under UBA (its phone number, a
     learned identifier) by the ticket reader, the empties taken back as
     POSITIVE purchase lines: silently wrong money.
 
     Nothing happens - the import carries on as it always did - for a file
-    that is not a PDF, when no active format has a start motif, and for a
-    PDF the bon reader cannot read (over 5 MB, over 5 pages, a scan: its
+    that is not a PDF, when no active format has a start pattern, and for a
+    PDF the slip reader cannot read (over 5 MB, over 5 pages, a scan: its
     caps, returnables.reading.pdf_text). A PDF SEVERAL formats recognise is
-    a bon all the same, and refused: which one is for a person to say, on
-    the Consignes page. A format whose start motif runs out of time takes no
-    part (it cannot say)."""
+    a slip all the same, and refused: which one is for a person to say, on
+    the Consignes page. A format whose start pattern runs out of time takes
+    no part (it cannot say)."""
     if not path.lower().endswith(".pdf"):
         return
     from returnables import reading, slips
@@ -2300,7 +2364,7 @@ def route_consignes(path: str, display_filename: str | None) -> None:
         return
     if len(recognising) > 1:
         names = ", ".join(f"« {fmt.name} »" for fmt in recognising)
-        raise RoutedToConsignesError(
+        raise RoutedToReturnablesError(
             f"Bon de consignes : plusieurs formats le reconnaissent ({names}) — déposez-le sur la page Consignes "
             "en choisissant son format ; ce n'est pas une facture."
         )
@@ -2317,7 +2381,7 @@ def route_consignes(path: str, display_filename: str | None) -> None:
         said = f"déjà reçu dans Consignes ({slip_label(result.slip.number)})"
     else:
         said = f"il n'a pas pu être rangé dans Consignes ({result.message.rstrip('.')}) : déposez-le sur leur page"
-    raise RoutedToConsignesError(f"Bon de consignes : {said} — ce n'est pas une facture.", slip=result.slip)
+    raise RoutedToReturnablesError(f"Bon de consignes : {said} — ce n'est pas une facture.", slip=result.slip)
 
 
 def import_document(
@@ -2347,9 +2411,9 @@ def import_document(
     is recognised, by `supplier` or by what the document prints; anything
     else is read by the ticket reader, which reads an invoice's table too.
 
-    A driver's bon de consignes is no purchase at all: recognised by a
-    format de bon, it is stored in Consignes and RoutedToConsignesError (a
-    DuplicateInvoiceError) says so - `route_consignes`, after the e-invoice
+    A driver's returnables slip is no purchase at all: recognised by a
+    slip format, it is stored in Consignes and RoutedToReturnablesError (a
+    DuplicateInvoiceError) says so - `route_to_returnables`, after the e-invoice
     and before any reader.
 
     `by_type`: the name of the invoice type that fetched it for `supplier` -
@@ -2364,24 +2428,34 @@ def import_document(
     xml = einvoice.document_xml(path)
     if xml is not None:
         return import_einvoice(
-            path, xml, display_filename=display_filename, supplier=supplier, date_hint=date_hint,
-            chosen_because=chosen_because, by_type=by_type,
+            path,
+            xml,
+            display_filename=display_filename,
+            supplier=supplier,
+            date_hint=date_hint,
+            chosen_because=chosen_because,
+            by_type=by_type,
         )
     # Past the e-invoice (read from its attachment, never from its pages),
     # a PDF of more than ocr.MAX_PAGES pages is refused before anything
-    # reads a page of it: the bon reader below, then the text layer
+    # reads a page of it: the slip reader below, then the text layer
     # (DocumentTooBig, said on the file's line - security review HARDEN-01).
     check_page_count(path)
-    # A driver's bon de consignes is no purchase: it goes to Consignes and
-    # this raises (RoutedToConsignesError) - before any reader sees it.
-    route_consignes(path, display_filename)
+    # A driver's returnables slip is no purchase: it goes to Consignes and
+    # this raises (RoutedToReturnablesError) - before any reader sees it.
+    route_to_returnables(path, display_filename)
     text = document_text(path)
     if text:
         found = supplier if supplier is not None else document_supplier(text)
         if found is not None and has_own_reader(found):
             return import_invoice_pdf(
-                path, found, display_filename=display_filename, text=text, date_hint=date_hint,
-                by_type=by_type if found == supplier else None, chosen_because=chosen_because,
+                path,
+                found,
+                display_filename=display_filename,
+                text=text,
+                date_hint=date_hint,
+                by_type=by_type if found == supplier else None,
+                chosen_because=chosen_because,
             )
     said = {} if chosen_because is None else {"chosen_because": chosen_because}
     return import_receipt(
@@ -2478,8 +2552,10 @@ def einvoice_date_problem(invoice_date: date | None) -> list[str]:
     today = timezone.localdate()
     if not EARLIEST_DOCUMENT_DATE <= invoice_date <= today:
         return [
-            f"Date invraisemblable sur la facture électronique ({invoice_date:%d/%m/%Y}) : "
-            "corrigez-la dans « Corriger les lignes »."
+            (
+                f"Date invraisemblable sur la facture électronique ({invoice_date:%d/%m/%Y}) : "
+                "corrigez-la dans « Corriger les lignes »."
+            )
         ]
     return []
 
@@ -2498,10 +2574,7 @@ def einvoice_checks(kind: str, facts, parsed: ParsedInvoice) -> list[dict]:
         {
             "label": f"Facture électronique ({kind})",
             "passed": True,
-            "detail": (
-                f"{said}es montants sont les données de la facture (EN 16931), "
-                "et non une lecture de la page."
-            ),
+            "detail": (f"{said}es montants sont les données de la facture (EN 16931), et non une lecture de la page."),
         }
     ]
     if parsed.reconciliation_adjustment:
@@ -2510,14 +2583,16 @@ def einvoice_checks(kind: str, facts, parsed: ParsedInvoice) -> list[dict]:
         # Its reasons are stated in the sender's own words, and an amount
         # with no reason beside it is a figure nobody can check.
         why = ", ".join(facts.adjustment_reasons) or "motif non précisé par le fournisseur"
-        checks.append({
-            "label": ADJUSTMENT_CHECK,
-            "passed": True,
-            "detail": (
-                f"{parsed.reconciliation_adjustment:+.2f} € HT facturés globalement ({why}) : "
-                "comptés dans le total et dans la base de TVA, imputés à aucune ligne."
-            ),
-        })
+        checks.append(
+            {
+                "label": ADJUSTMENT_CHECK,
+                "passed": True,
+                "detail": (
+                    f"{parsed.reconciliation_adjustment:+.2f} € HT facturés globalement ({why}) : "
+                    "comptés dans le total et dans la base de TVA, imputés à aucune ligne."
+                ),
+            }
+        )
     return checks + [_as_dict(check) for check in parsed.checks]
 
 
@@ -2565,11 +2640,13 @@ def import_einvoice(
     parsed.invoice_date = parsed.invoice_date or date_hint
     checks = einvoice_checks(kind, facts, parsed)
     if named_by_hand:
-        checks.append({
-            "label": CHOSEN_SHOP_CHECK,
-            "passed": True,
-            "detail": chosen_because or f"Rangée chez {supplier.name} à la main.",
-        })
+        checks.append(
+            {
+                "label": CHOSEN_SHOP_CHECK,
+                "passed": True,
+                "detail": chosen_because or f"Rangée chez {supplier.name} à la main.",
+            }
+        )
     if not supplier.expenses_only:
         if facts.carries_no_lines:
             # MINIMUM and BASIC WL carry the totals and the VAT breakdown and
@@ -2594,7 +2671,9 @@ def import_einvoice(
     doubt = type_supplier_doubt(parsed.source_text, supplier, by_type) if by_type and named_by_hand else ""
 
     invoice = import_parsed_invoice(
-        supplier, parsed, source_file_path=path,
+        supplier,
+        parsed,
+        source_file_path=path,
         display_filename=display_filename or os.path.basename(path),
     )
     problems = list(parsed.warnings)
@@ -2624,8 +2703,14 @@ def import_einvoice(
             invoice.status = Invoice.Status.NEEDS_REVIEW
     invoice.save(
         update_fields=[
-            "source_text", "source_sha256", "einvoice_format", "adjustment_vat_rate",
-            "parse_checks", "supplier_doubt", "error_message", "status",
+            "source_text",
+            "source_sha256",
+            "einvoice_format",
+            "adjustment_vat_rate",
+            "parse_checks",
+            "supplier_doubt",
+            "error_message",
+            "status",
         ]
     )
     # A stated SIREN is the strongest thing a document ever says about its
@@ -2634,9 +2719,11 @@ def import_einvoice(
     # document may not be this supplier's at all.
     learned = [] if doubt else learn_identifiers(supplier, invoice.source_text)
     _record_first_document(
-        supplier, invoice,
+        supplier,
+        invoice,
         chosen_because or f"lue dans sa facture électronique ({kind})",
-        learned, invoice.source_text,
+        learned,
+        invoice.source_text,
     )
     return invoice
 
@@ -2677,16 +2764,20 @@ def import_receipt(
         supplier = Supplier.objects.get(code=read.parser.supplier_code)
         parsed = read.parsed
         if read.identified_by:
-            parsed.checks.append(ParseCheck(
-                label=IDENTIFIED_CHECK,
-                passed=True,
-                detail=(
-                    f"Sans son en-tête « {supplier.ticket_header} »" if supplier.ticket_header else "Aucun en-tête connu"
+            parsed.checks.append(
+                ParseCheck(
+                    label=IDENTIFIED_CHECK,
+                    passed=True,
+                    detail=(
+                        f"Sans son en-tête « {supplier.ticket_header} »"
+                        if supplier.ticket_header
+                        else "Aucun en-tête connu"
+                    )
+                    + " : reconnue par son "
+                    + ", son ".join(describe_identifier(identifier) for identifier in read.identified_by)
+                    + " (vu sur ses tickets).",
                 )
-                + " : reconnue par son "
-                + ", son ".join(describe_identifier(identifier) for identifier in read.identified_by)
-                + " (vu sur ses tickets).",
-            ))
+            )
     else:
         parsed = _chosen_shop_read(supplier, read, date_hint, chosen_because)
     doubt = type_supplier_doubt(read.text, supplier, by_type) if by_type and named_by_hand and read.text else ""
@@ -2706,8 +2797,7 @@ def import_receipt(
     invoice.ocr_confidence = parsed.confidence
     if not supplier.expenses_only:
         invoice.parse_checks = [
-            {"label": check.label, "passed": check.passed, "detail": check.detail}
-            for check in parsed.checks
+            {"label": check.label, "passed": check.passed, "detail": check.detail} for check in parsed.checks
         ]
     # A charge keeps its own checks and state, which the charge reading has
     # just set (importing.charge_state): the ticket reader's are about lines
@@ -2729,7 +2819,13 @@ def import_receipt(
     invoice.supplier_doubt = doubt
     invoice.save(
         update_fields=[
-            "ocr_text", "ocr_confidence", "parse_checks", "preview_image", "status", "source_sha256", "supplier_doubt",
+            "ocr_text",
+            "ocr_confidence",
+            "parse_checks",
+            "preview_image",
+            "status",
+            "source_sha256",
+            "supplier_doubt",
         ]
     )
     learned = []
@@ -2789,9 +2885,6 @@ def file_sha256(path: str) -> str:
 __all__ = [
     "PLACEHOLDER_MARKER",
     "DuplicateInvoiceError",
-    "einvoice_format",
-    "einvoice_supplier",
-    "import_einvoice",
     "PricesApplied",
     "ReceiptRead",
     "RereadError",
@@ -2805,6 +2898,8 @@ __all__ = [
     "detect_shop",
     "document_supplier",
     "document_text",
+    "einvoice_format",
+    "einvoice_supplier",
     "first_reading",
     "forget_identifiers",
     "has_own_reader",
@@ -2813,6 +2908,7 @@ __all__ = [
     "header_guess",
     "identified_supplier",
     "import_document",
+    "import_einvoice",
     "import_invoice_pdf",
     "import_receipt",
     "invoice_supplier_choices",

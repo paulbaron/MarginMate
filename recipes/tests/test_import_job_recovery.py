@@ -136,8 +136,11 @@ class DownloadCancellationTests(TestCase):
         with mock.patch("recipes.pos.laddition_download.laddition_session") as session:
             with self.assertRaises(DownloadCancelled):
                 download_sales_lines(
-                    date(2026, 1, 1), date(2026, 1, 31), "/tmp/x",
-                    log=lambda *a: None, should_cancel=lambda: True,
+                    date(2026, 1, 1),
+                    date(2026, 1, 31),
+                    "/tmp/x",
+                    log=lambda *a: None,
+                    should_cancel=lambda: True,
                 )
         session.assert_not_called()
 
@@ -147,9 +150,7 @@ class DownloadCancellationTests(TestCase):
         job = make_job(status=SalesImportJob.Status.PENDING)
         from recipes.pos.laddition_download import DownloadCancelled
 
-        with mock.patch(
-            "recipes.tasks.download_sales_lines", side_effect=DownloadCancelled()
-        ):
+        with mock.patch("recipes.tasks.download_sales_lines", side_effect=DownloadCancelled()):
             import_laddition_sales_task(job.pk, date(2026, 1, 1), date(2026, 1, 31))
         job.refresh_from_db()
         self.assertEqual(job.status, SalesImportJob.Status.CANCELLED)
@@ -203,9 +204,7 @@ class WriteBatchingTests(TestCase):
         make_recipe(name="Mule")
         entries = [("Mule", date(2026, 1, 1) + timedelta(days=n), n) for n in range(10)]
 
-        with mock.patch(
-            "recipes.models.RecipeSale.objects.update_or_create", side_effect=RuntimeError("boom")
-        ):
+        with mock.patch("recipes.models.RecipeSale.objects.update_or_create", side_effect=RuntimeError("boom")):
             with self.assertRaises(RuntimeError):
                 record_sales(entries, source="test")
         self.assertEqual(RecipeSale.objects.count(), 0)
@@ -221,7 +220,8 @@ class SqliteConcurrencyTests(TestCase):
         from config.settings import SQLITE_OPTIONS as options
 
         self.assertGreaterEqual(
-            options.get("timeout", 5), 30,
+            options.get("timeout", 5),
+            30,
             "SQLite's default 5s lock timeout is not enough for a multi-year import",
         )
 

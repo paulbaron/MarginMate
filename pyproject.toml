@@ -1,0 +1,89 @@
+[project]
+name = "marginmate"
+version = "0.1.0"
+description = "Bar inventory and costing: invoices in, real per-unit costs out, recipe margins on top."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11,<3.12"
+# What the code imports (or names, like whitenoise in the settings); every
+# version, these and their own dependencies, is pinned in uv.lock.
+dependencies = [
+    "anthropic>=1.2.0",
+    "asn1crypto>=1.5.1",
+    "certifi>=2026.7.22",
+    "cryptography>=50.0.1",
+    "django>=5.2.17,<5.3",
+    "numpy>=2.4.6",
+    # The OCR's inference engine: rapidocr names it, it does not install it.
+    "onnxruntime>=1.29.0",
+    "opencv-python>=5.0.0.93",
+    "pdfminer-six>=20260107",
+    "pdfplumber>=0.11.10",
+    "pillow>=12.3.0",
+    "pyhanko>=0.37.0",
+    "pyhanko-certvalidator>=0.32.1",
+    "pypdfium2>=5.13.0",
+    "python-dotenv>=1.2.3",
+    "rapidfuzz>=3.14.6",
+    "rapidocr>=3.9.2",
+    "regex>=2026.9.29",
+    "requests>=2.34.2",
+    "selenium>=4.48.0",
+    "waitress>=3.0.2",
+    "webdriver-manager>=4.1.2",
+    "whitenoise>=6.12.0",
+]
+
+[dependency-groups]
+# The development tools, run by the git hooks (prek.toml); production installs
+# without them (`uv sync --no-dev`, deploy.cmd).
+dev = [
+    # Django's types for ty, the version matching Django's.
+    "django-stubs>=5.2.9,<5.3",
+    "ruff>=0.16.9",
+    "ty>=0.0.84",
+    "types-regex>=2026.9.10",
+    "types-requests>=2.33.0",
+]
+
+[tool.uv]
+# A Django project run from its folder (manage.py), not a package to build:
+# `uv sync` installs the dependencies only.
+package = false
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+# ruff's default rule set, pinned with ruff itself in uv.lock, less:
+extend-ignore = [
+    # Decimal("0") rather than Decimal(0): money is built from strings everywhere
+    # (CLAUDE.md, "Money is always Decimal"), and one habit is safer than two.
+    "FURB157",
+    # Django declares lists on classes by design (Meta.ordering, form fields,
+    # view attributes).
+    "RUF012",
+    # Nested `with` blocks, each context on its own line, read better than one
+    # long statement.
+    "SIM117",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Test fixtures build naive datetimes on purpose (a photo's EXIF time, a
+# document's printed date).
+"**/tests/**" = ["DTZ001"]
+
+[tool.ty.rules]
+# These report a problem, never block a commit. Django builds much of a model
+# at run time - `id`, `<field>_id`, reverse relations, get_<field>_display -
+# which no stub declares and ty has no plugin to learn; and ty does not narrow
+# an Optional through unittest's assertIsNotNone, nor through the invariants
+# the code keeps (a value set once a guard has passed). On this codebase
+# nearly every report of these rules is one or the other.
+unresolved-attribute = "warn"
+invalid-argument-type = "warn"
+invalid-assignment = "warn"
+no-matching-overload = "warn"
+not-subscriptable = "warn"
+unsupported-operator = "warn"

@@ -504,33 +504,35 @@ CII_DOCUMENT_CHARGE = """<?xml version="1.0" encoding="UTF-8"?>
 
 # A document-level ALLOWANCE (BG-20): the same element, ChargeIndicator
 # false - a discount taken off the whole invoice.
-CII_DOCUMENT_ALLOWANCE = CII_DOCUMENT_CHARGE.replace(
-    "<udt:Indicator>true</udt:Indicator>", "<udt:Indicator>false</udt:Indicator>"
-).replace(
-    "<ram:ActualAmount>12.00</ram:ActualAmount>", "<ram:ActualAmount>5.00</ram:ActualAmount>"
-).replace(
-    "<ram:Reason>Droits de circulation</ram:Reason>", "<ram:Reason>Remise de fin d'annee</ram:Reason>"
-).replace(
-    "<ram:CalculatedAmount>22.40</ram:CalculatedAmount>", "<ram:CalculatedAmount>19.00</ram:CalculatedAmount>"
-).replace(
-    "<ram:BasisAmount>112.00</ram:BasisAmount>", "<ram:BasisAmount>95.00</ram:BasisAmount>"
-).replace(
-    "<ram:ChargeTotalAmount>12.00</ram:ChargeTotalAmount>", "<ram:ChargeTotalAmount>0.00</ram:ChargeTotalAmount>"
-).replace(
-    "<ram:AllowanceTotalAmount>0.00</ram:AllowanceTotalAmount>",
-    "<ram:AllowanceTotalAmount>5.00</ram:AllowanceTotalAmount>",
-).replace(
-    "<ram:TaxBasisTotalAmount>112.00</ram:TaxBasisTotalAmount>",
-    "<ram:TaxBasisTotalAmount>95.00</ram:TaxBasisTotalAmount>",
-).replace(
-    "<ram:TaxTotalAmount currencyID=\"EUR\">22.40</ram:TaxTotalAmount>",
-    "<ram:TaxTotalAmount currencyID=\"EUR\">19.00</ram:TaxTotalAmount>",
-).replace(
-    "<ram:GrandTotalAmount>134.40</ram:GrandTotalAmount>",
-    "<ram:GrandTotalAmount>114.00</ram:GrandTotalAmount>",
-).replace(
-    "<ram:DuePayableAmount>134.40</ram:DuePayableAmount>",
-    "<ram:DuePayableAmount>114.00</ram:DuePayableAmount>",
+CII_DOCUMENT_ALLOWANCE = (
+    CII_DOCUMENT_CHARGE.replace("<udt:Indicator>true</udt:Indicator>", "<udt:Indicator>false</udt:Indicator>")
+    .replace("<ram:ActualAmount>12.00</ram:ActualAmount>", "<ram:ActualAmount>5.00</ram:ActualAmount>")
+    .replace("<ram:Reason>Droits de circulation</ram:Reason>", "<ram:Reason>Remise de fin d'annee</ram:Reason>")
+    .replace("<ram:CalculatedAmount>22.40</ram:CalculatedAmount>", "<ram:CalculatedAmount>19.00</ram:CalculatedAmount>")
+    .replace("<ram:BasisAmount>112.00</ram:BasisAmount>", "<ram:BasisAmount>95.00</ram:BasisAmount>")
+    .replace(
+        "<ram:ChargeTotalAmount>12.00</ram:ChargeTotalAmount>", "<ram:ChargeTotalAmount>0.00</ram:ChargeTotalAmount>"
+    )
+    .replace(
+        "<ram:AllowanceTotalAmount>0.00</ram:AllowanceTotalAmount>",
+        "<ram:AllowanceTotalAmount>5.00</ram:AllowanceTotalAmount>",
+    )
+    .replace(
+        "<ram:TaxBasisTotalAmount>112.00</ram:TaxBasisTotalAmount>",
+        "<ram:TaxBasisTotalAmount>95.00</ram:TaxBasisTotalAmount>",
+    )
+    .replace(
+        '<ram:TaxTotalAmount currencyID="EUR">22.40</ram:TaxTotalAmount>',
+        '<ram:TaxTotalAmount currencyID="EUR">19.00</ram:TaxTotalAmount>',
+    )
+    .replace(
+        "<ram:GrandTotalAmount>134.40</ram:GrandTotalAmount>",
+        "<ram:GrandTotalAmount>114.00</ram:GrandTotalAmount>",
+    )
+    .replace(
+        "<ram:DuePayableAmount>134.40</ram:DuePayableAmount>",
+        "<ram:DuePayableAmount>114.00</ram:DuePayableAmount>",
+    )
 )
 
 # A rate of 0 (category Z) beside an exempt line (category E, which carries
@@ -877,7 +879,7 @@ CII_SELLER_GLN = CII_TWO_RATES.replace(
 # carry lines and one of them is lost, which must never read like the
 # MINIMUM profile's "this invoice has no lines".
 CII_LINE_WITHOUT_FIGURES = CII_TWO_RATES.replace(
-    "        <ram:BilledQuantity unitCode=\"H87\">6</ram:BilledQuantity>\n", ""
+    '        <ram:BilledQuantity unitCode="H87">6</ram:BilledQuantity>\n', ""
 ).replace("          <ram:LineTotalAmount>25.20</ram:LineTotalAmount>\n", "")
 
 # --------------------------------------------------------------------------
@@ -972,14 +974,12 @@ CII_CHARGE_AT_ITS_OWN_RATE = """<?xml version="1.0" encoding="UTF-8"?>
 
 # The same invoice the other way: a year-end discount at 20 % taken off lines
 # charged at 5,5 %. Guessed, it files the invoice ABOVE what is due.
-CII_ALLOWANCE_AT_ITS_OWN_RATE = CII_CHARGE_AT_ITS_OWN_RATE.replace(
-    "<ram:ID>FA-2026-0061</ram:ID>", "<ram:ID>FA-2026-0062</ram:ID>"
-).replace(
-    "<udt:Indicator>true</udt:Indicator>", "<udt:Indicator>false</udt:Indicator>"
-).replace(
-    "<ram:Reason>Droits de circulation</ram:Reason>", "<ram:Reason>Remise de fin d'annee</ram:Reason>"
-).replace(
-    """      <ram:ApplicableTradeTax>
+CII_ALLOWANCE_AT_ITS_OWN_RATE = (
+    CII_CHARGE_AT_ITS_OWN_RATE.replace("<ram:ID>FA-2026-0061</ram:ID>", "<ram:ID>FA-2026-0062</ram:ID>")
+    .replace("<udt:Indicator>true</udt:Indicator>", "<udt:Indicator>false</udt:Indicator>")
+    .replace("<ram:Reason>Droits de circulation</ram:Reason>", "<ram:Reason>Remise de fin d'annee</ram:Reason>")
+    .replace(
+        """      <ram:ApplicableTradeTax>
         <ram:CalculatedAmount>20.00</ram:CalculatedAmount>
         <ram:TypeCode>VAT</ram:TypeCode>
         <ram:BasisAmount>100.00</ram:BasisAmount>
@@ -987,7 +987,7 @@ CII_ALLOWANCE_AT_ITS_OWN_RATE = CII_CHARGE_AT_ITS_OWN_RATE.replace(
         <ram:RateApplicablePercent>20.00</ram:RateApplicablePercent>
       </ram:ApplicableTradeTax>
 """,
-    """      <ram:ApplicableTradeTax>
+        """      <ram:ApplicableTradeTax>
         <ram:CalculatedAmount>-20.00</ram:CalculatedAmount>
         <ram:TypeCode>VAT</ram:TypeCode>
         <ram:BasisAmount>-100.00</ram:BasisAmount>
@@ -995,42 +995,50 @@ CII_ALLOWANCE_AT_ITS_OWN_RATE = CII_CHARGE_AT_ITS_OWN_RATE.replace(
         <ram:RateApplicablePercent>20.00</ram:RateApplicablePercent>
       </ram:ApplicableTradeTax>
 """,
-).replace(
-    "<ram:ChargeTotalAmount>100.00</ram:ChargeTotalAmount>", "<ram:ChargeTotalAmount>0.00</ram:ChargeTotalAmount>"
-).replace(
-    "<ram:AllowanceTotalAmount>0.00</ram:AllowanceTotalAmount>",
-    "<ram:AllowanceTotalAmount>100.00</ram:AllowanceTotalAmount>",
-).replace(
-    "<ram:TaxBasisTotalAmount>1100.00</ram:TaxBasisTotalAmount>",
-    "<ram:TaxBasisTotalAmount>900.00</ram:TaxBasisTotalAmount>",
-).replace(
-    '<ram:TaxTotalAmount currencyID="EUR">75.00</ram:TaxTotalAmount>',
-    '<ram:TaxTotalAmount currencyID="EUR">35.00</ram:TaxTotalAmount>',
-).replace(
-    "<ram:GrandTotalAmount>1175.00</ram:GrandTotalAmount>",
-    "<ram:GrandTotalAmount>935.00</ram:GrandTotalAmount>",
-).replace(
-    "<ram:DuePayableAmount>1175.00</ram:DuePayableAmount>",
-    "<ram:DuePayableAmount>935.00</ram:DuePayableAmount>",
+    )
+    .replace(
+        "<ram:ChargeTotalAmount>100.00</ram:ChargeTotalAmount>", "<ram:ChargeTotalAmount>0.00</ram:ChargeTotalAmount>"
+    )
+    .replace(
+        "<ram:AllowanceTotalAmount>0.00</ram:AllowanceTotalAmount>",
+        "<ram:AllowanceTotalAmount>100.00</ram:AllowanceTotalAmount>",
+    )
+    .replace(
+        "<ram:TaxBasisTotalAmount>1100.00</ram:TaxBasisTotalAmount>",
+        "<ram:TaxBasisTotalAmount>900.00</ram:TaxBasisTotalAmount>",
+    )
+    .replace(
+        '<ram:TaxTotalAmount currencyID="EUR">75.00</ram:TaxTotalAmount>',
+        '<ram:TaxTotalAmount currencyID="EUR">35.00</ram:TaxTotalAmount>',
+    )
+    .replace(
+        "<ram:GrandTotalAmount>1175.00</ram:GrandTotalAmount>",
+        "<ram:GrandTotalAmount>935.00</ram:GrandTotalAmount>",
+    )
+    .replace(
+        "<ram:DuePayableAmount>1175.00</ram:DuePayableAmount>",
+        "<ram:DuePayableAmount>935.00</ram:DuePayableAmount>",
+    )
 )
 
 # The same trap in UBL: cac:AllowanceCharge/cac:TaxCategory/cbc:Percent is
 # where the charge's own rate is stated there.
-UBL_CHARGE_AT_ITS_OWN_RATE = UBL_DOCUMENT_CHARGE.replace(
-    "<cbc:ID>FA-2026-0051</cbc:ID>", "<cbc:ID>FA-2026-0063</cbc:ID>"
-).replace(
-    """      <cac:ClassifiedTaxCategory>
+UBL_CHARGE_AT_ITS_OWN_RATE = (
+    UBL_DOCUMENT_CHARGE.replace("<cbc:ID>FA-2026-0051</cbc:ID>", "<cbc:ID>FA-2026-0063</cbc:ID>")
+    .replace(
+        """      <cac:ClassifiedTaxCategory>
         <cbc:ID>S</cbc:ID>
         <cbc:Percent>20.00</cbc:Percent>
         <cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme>
       </cac:ClassifiedTaxCategory>""",
-    """      <cac:ClassifiedTaxCategory>
+        """      <cac:ClassifiedTaxCategory>
         <cbc:ID>S</cbc:ID>
         <cbc:Percent>5.50</cbc:Percent>
         <cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme>
       </cac:ClassifiedTaxCategory>""",
-).replace(
-    """  <cac:TaxTotal>
+    )
+    .replace(
+        """  <cac:TaxTotal>
     <cbc:TaxAmount currencyID="EUR">22.40</cbc:TaxAmount>
     <cac:TaxSubtotal>
       <cbc:TaxableAmount currencyID="EUR">112.00</cbc:TaxableAmount>
@@ -1042,7 +1050,7 @@ UBL_CHARGE_AT_ITS_OWN_RATE = UBL_DOCUMENT_CHARGE.replace(
       </cac:TaxCategory>
     </cac:TaxSubtotal>
   </cac:TaxTotal>""",
-    """  <cac:TaxTotal>
+        """  <cac:TaxTotal>
     <cbc:TaxAmount currencyID="EUR">7.90</cbc:TaxAmount>
     <cac:TaxSubtotal>
       <cbc:TaxableAmount currencyID="EUR">100.00</cbc:TaxableAmount>
@@ -1063,12 +1071,15 @@ UBL_CHARGE_AT_ITS_OWN_RATE = UBL_DOCUMENT_CHARGE.replace(
       </cac:TaxCategory>
     </cac:TaxSubtotal>
   </cac:TaxTotal>""",
-).replace(
-    '<cbc:TaxInclusiveAmount currencyID="EUR">134.40</cbc:TaxInclusiveAmount>',
-    '<cbc:TaxInclusiveAmount currencyID="EUR">119.90</cbc:TaxInclusiveAmount>',
-).replace(
-    '<cbc:PayableAmount currencyID="EUR">134.40</cbc:PayableAmount>',
-    '<cbc:PayableAmount currencyID="EUR">119.90</cbc:PayableAmount>',
+    )
+    .replace(
+        '<cbc:TaxInclusiveAmount currencyID="EUR">134.40</cbc:TaxInclusiveAmount>',
+        '<cbc:TaxInclusiveAmount currencyID="EUR">119.90</cbc:TaxInclusiveAmount>',
+    )
+    .replace(
+        '<cbc:PayableAmount currencyID="EUR">134.40</cbc:PayableAmount>',
+        '<cbc:PayableAmount currencyID="EUR">119.90</cbc:PayableAmount>',
+    )
 )
 
 # --------------------------------------------------------------------------
@@ -1077,15 +1088,16 @@ UBL_CHARGE_AT_ITS_OWN_RATE = UBL_DOCUMENT_CHARGE.replace(
 # EN 16931 says BT-112 = BT-109 + BT-110 + BT-114. Ignored, BT-114 turns an
 # invoice that balances into an accusation against a supplier who did
 # nothing wrong - and there is nothing anybody can do about it.
-CII_ROUNDING = CII_TWO_RATES.replace(
-    "<ram:ID>FA-2026-0042</ram:ID>", "<ram:ID>FA-2026-0064</ram:ID>"
-).replace(
-    "<ram:GrandTotalAmount>229.39</ram:GrandTotalAmount>",
-    "<ram:RoundingAmount>0.01</ram:RoundingAmount>\n"
-    "        <ram:GrandTotalAmount>229.40</ram:GrandTotalAmount>",
-).replace(
-    "<ram:DuePayableAmount>229.39</ram:DuePayableAmount>",
-    "<ram:DuePayableAmount>229.40</ram:DuePayableAmount>",
+CII_ROUNDING = (
+    CII_TWO_RATES.replace("<ram:ID>FA-2026-0042</ram:ID>", "<ram:ID>FA-2026-0064</ram:ID>")
+    .replace(
+        "<ram:GrandTotalAmount>229.39</ram:GrandTotalAmount>",
+        "<ram:RoundingAmount>0.01</ram:RoundingAmount>\n        <ram:GrandTotalAmount>229.40</ram:GrandTotalAmount>",
+    )
+    .replace(
+        "<ram:DuePayableAmount>229.39</ram:DuePayableAmount>",
+        "<ram:DuePayableAmount>229.40</ram:DuePayableAmount>",
+    )
 )
 
 UBL_ROUNDING = UBL_TWO_RATES.replace(
@@ -1099,9 +1111,7 @@ UBL_ROUNDING = UBL_TWO_RATES.replace(
 
 # BT-113 / BT-115: part of the invoice was paid in advance, so the bank will
 # only ever show what is left. The purchase is still the whole invoice.
-CII_PREPAID = CII_TWO_RATES.replace(
-    "<ram:ID>FA-2026-0042</ram:ID>", "<ram:ID>FA-2026-0065</ram:ID>"
-).replace(
+CII_PREPAID = CII_TWO_RATES.replace("<ram:ID>FA-2026-0042</ram:ID>", "<ram:ID>FA-2026-0065</ram:ID>").replace(
     "<ram:DuePayableAmount>229.39</ram:DuePayableAmount>",
     "<ram:TotalPrepaidAmount>100.00</ram:TotalPrepaidAmount>\n"
     "        <ram:DuePayableAmount>129.39</ram:DuePayableAmount>",
@@ -1113,24 +1123,24 @@ CII_PREPAID = CII_TWO_RATES.replace(
 # An ORDINARY invoice (380) carrying a discount as a line: a count of 1 at a
 # negative amount. Nothing signs it - the document is not a credit note - and
 # booked as it stands it puts a unit of stock on the shelf at MINUS 60 €.
-CII_DISCOUNT_LINE = CII_TWO_RATES.replace(
-    "<ram:ID>FA-2026-0042</ram:ID>", "<ram:ID>FA-2026-0066</ram:ID>"
-).replace(
-    "<ram:Name>SIROP CITRON 1L</ram:Name>", "<ram:Name>REMISE COMMERCIALE</ram:Name>"
-).replace(
-    "<ram:ChargeAmount>4.20</ram:ChargeAmount>", "<ram:ChargeAmount>60.00</ram:ChargeAmount>"
-).replace(
-    '<ram:BilledQuantity unitCode="H87">6</ram:BilledQuantity>',
-    '<ram:BilledQuantity unitCode="H87">1</ram:BilledQuantity>',
-).replace(
-    # Only the LINE's rate: the header's 5,5 % row goes away entirely below,
-    # and replacing both here would leave nothing for that to match.
-    "<ram:RateApplicablePercent>5.50</ram:RateApplicablePercent>",
-    "<ram:RateApplicablePercent>20.00</ram:RateApplicablePercent>", 1
-).replace(
-    "<ram:LineTotalAmount>25.20</ram:LineTotalAmount>", "<ram:LineTotalAmount>-60.00</ram:LineTotalAmount>", 1
-).replace(
-    """      <ram:ApplicableTradeTax>
+CII_DISCOUNT_LINE = (
+    CII_TWO_RATES.replace("<ram:ID>FA-2026-0042</ram:ID>", "<ram:ID>FA-2026-0066</ram:ID>")
+    .replace("<ram:Name>SIROP CITRON 1L</ram:Name>", "<ram:Name>REMISE COMMERCIALE</ram:Name>")
+    .replace("<ram:ChargeAmount>4.20</ram:ChargeAmount>", "<ram:ChargeAmount>60.00</ram:ChargeAmount>")
+    .replace(
+        '<ram:BilledQuantity unitCode="H87">6</ram:BilledQuantity>',
+        '<ram:BilledQuantity unitCode="H87">1</ram:BilledQuantity>',
+    )
+    .replace(
+        # Only the LINE's rate: the header's 5,5 % row goes away entirely below,
+        # and replacing both here would leave nothing for that to match.
+        "<ram:RateApplicablePercent>5.50</ram:RateApplicablePercent>",
+        "<ram:RateApplicablePercent>20.00</ram:RateApplicablePercent>",
+        1,
+    )
+    .replace("<ram:LineTotalAmount>25.20</ram:LineTotalAmount>", "<ram:LineTotalAmount>-60.00</ram:LineTotalAmount>", 1)
+    .replace(
+        """      <ram:ApplicableTradeTax>
         <ram:CalculatedAmount>1.39</ram:CalculatedAmount>
         <ram:TypeCode>VAT</ram:TypeCode>
         <ram:BasisAmount>25.20</ram:BasisAmount>
@@ -1138,33 +1148,33 @@ CII_DISCOUNT_LINE = CII_TWO_RATES.replace(
         <ram:RateApplicablePercent>5.50</ram:RateApplicablePercent>
       </ram:ApplicableTradeTax>
 """,
-    "",
-).replace(
-    "<ram:BasisAmount>169.00</ram:BasisAmount>", "<ram:BasisAmount>109.00</ram:BasisAmount>"
-).replace(
-    "<ram:CalculatedAmount>33.80</ram:CalculatedAmount>", "<ram:CalculatedAmount>21.80</ram:CalculatedAmount>"
-).replace(
-    "<ram:LineTotalAmount>194.20</ram:LineTotalAmount>", "<ram:LineTotalAmount>109.00</ram:LineTotalAmount>"
-).replace(
-    "<ram:TaxBasisTotalAmount>194.20</ram:TaxBasisTotalAmount>",
-    "<ram:TaxBasisTotalAmount>109.00</ram:TaxBasisTotalAmount>",
-).replace(
-    '<ram:TaxTotalAmount currencyID="EUR">35.19</ram:TaxTotalAmount>',
-    '<ram:TaxTotalAmount currencyID="EUR">21.80</ram:TaxTotalAmount>',
-).replace(
-    "<ram:GrandTotalAmount>229.39</ram:GrandTotalAmount>",
-    "<ram:GrandTotalAmount>130.80</ram:GrandTotalAmount>",
-).replace(
-    "<ram:DuePayableAmount>229.39</ram:DuePayableAmount>",
-    "<ram:DuePayableAmount>130.80</ram:DuePayableAmount>",
+        "",
+    )
+    .replace("<ram:BasisAmount>169.00</ram:BasisAmount>", "<ram:BasisAmount>109.00</ram:BasisAmount>")
+    .replace("<ram:CalculatedAmount>33.80</ram:CalculatedAmount>", "<ram:CalculatedAmount>21.80</ram:CalculatedAmount>")
+    .replace("<ram:LineTotalAmount>194.20</ram:LineTotalAmount>", "<ram:LineTotalAmount>109.00</ram:LineTotalAmount>")
+    .replace(
+        "<ram:TaxBasisTotalAmount>194.20</ram:TaxBasisTotalAmount>",
+        "<ram:TaxBasisTotalAmount>109.00</ram:TaxBasisTotalAmount>",
+    )
+    .replace(
+        '<ram:TaxTotalAmount currencyID="EUR">35.19</ram:TaxTotalAmount>',
+        '<ram:TaxTotalAmount currencyID="EUR">21.80</ram:TaxTotalAmount>',
+    )
+    .replace(
+        "<ram:GrandTotalAmount>229.39</ram:GrandTotalAmount>",
+        "<ram:GrandTotalAmount>130.80</ram:GrandTotalAmount>",
+    )
+    .replace(
+        "<ram:DuePayableAmount>229.39</ram:DuePayableAmount>",
+        "<ram:DuePayableAmount>130.80</ram:DuePayableAmount>",
+    )
 )
 
 # The mirror shape, and the one nothing can repair: a NEGATIVE count at a
 # POSITIVE amount on a 380. Neither a purchase nor a return, and the header
 # totals agree with it, so every check that works on the totals passes.
-CII_NEGATIVE_QUANTITY = CII_TWO_RATES.replace(
-    "<ram:ID>FA-2026-0042</ram:ID>", "<ram:ID>FA-2026-0067</ram:ID>"
-).replace(
+CII_NEGATIVE_QUANTITY = CII_TWO_RATES.replace("<ram:ID>FA-2026-0042</ram:ID>", "<ram:ID>FA-2026-0067</ram:ID>").replace(
     '<ram:BilledQuantity unitCode="H87">2</ram:BilledQuantity>',
     '<ram:BilledQuantity unitCode="H87">-2</ram:BilledQuantity>',
 )
@@ -1177,79 +1187,81 @@ CII_NEGATIVE_QUANTITY = CII_TWO_RATES.replace(
 # back by Django's SQLite decimal converter as decimal.InvalidOperation, and
 # from then on the document cannot be opened, corrected, re-read OR deleted
 # through the application - only raw SQL gets it out.
-CII_AMOUNT_TOO_WIDE = CII_TWO_RATES.replace(
-    "<ram:ID>FA-2026-0042</ram:ID>", "<ram:ID>FA-2026-0071</ram:ID>"
-).replace(
-    "<ram:LineTotalAmount>169.00</ram:LineTotalAmount>",
-    "<ram:LineTotalAmount>10000000000.00</ram:LineTotalAmount>", 1
-).replace(
-    "<ram:BasisAmount>169.00</ram:BasisAmount>", "<ram:BasisAmount>10000000000.00</ram:BasisAmount>"
-).replace(
-    "<ram:CalculatedAmount>33.80</ram:CalculatedAmount>",
-    "<ram:CalculatedAmount>2000000000.00</ram:CalculatedAmount>",
-).replace(
-    "<ram:LineTotalAmount>194.20</ram:LineTotalAmount>",
-    "<ram:LineTotalAmount>10000000025.20</ram:LineTotalAmount>",
-).replace(
-    "<ram:TaxBasisTotalAmount>194.20</ram:TaxBasisTotalAmount>",
-    "<ram:TaxBasisTotalAmount>10000000025.20</ram:TaxBasisTotalAmount>",
-).replace(
-    '<ram:TaxTotalAmount currencyID="EUR">35.19</ram:TaxTotalAmount>',
-    '<ram:TaxTotalAmount currencyID="EUR">2000000001.39</ram:TaxTotalAmount>',
-).replace(
-    "<ram:GrandTotalAmount>229.39</ram:GrandTotalAmount>",
-    "<ram:GrandTotalAmount>12000000026.59</ram:GrandTotalAmount>",
-).replace(
-    "<ram:DuePayableAmount>229.39</ram:DuePayableAmount>",
-    "<ram:DuePayableAmount>12000000026.59</ram:DuePayableAmount>",
+CII_AMOUNT_TOO_WIDE = (
+    CII_TWO_RATES.replace("<ram:ID>FA-2026-0042</ram:ID>", "<ram:ID>FA-2026-0071</ram:ID>")
+    .replace(
+        "<ram:LineTotalAmount>169.00</ram:LineTotalAmount>",
+        "<ram:LineTotalAmount>10000000000.00</ram:LineTotalAmount>",
+        1,
+    )
+    .replace("<ram:BasisAmount>169.00</ram:BasisAmount>", "<ram:BasisAmount>10000000000.00</ram:BasisAmount>")
+    .replace(
+        "<ram:CalculatedAmount>33.80</ram:CalculatedAmount>",
+        "<ram:CalculatedAmount>2000000000.00</ram:CalculatedAmount>",
+    )
+    .replace(
+        "<ram:LineTotalAmount>194.20</ram:LineTotalAmount>",
+        "<ram:LineTotalAmount>10000000025.20</ram:LineTotalAmount>",
+    )
+    .replace(
+        "<ram:TaxBasisTotalAmount>194.20</ram:TaxBasisTotalAmount>",
+        "<ram:TaxBasisTotalAmount>10000000025.20</ram:TaxBasisTotalAmount>",
+    )
+    .replace(
+        '<ram:TaxTotalAmount currencyID="EUR">35.19</ram:TaxTotalAmount>',
+        '<ram:TaxTotalAmount currencyID="EUR">2000000001.39</ram:TaxTotalAmount>',
+    )
+    .replace(
+        "<ram:GrandTotalAmount>229.39</ram:GrandTotalAmount>",
+        "<ram:GrandTotalAmount>12000000026.59</ram:GrandTotalAmount>",
+    )
+    .replace(
+        "<ram:DuePayableAmount>229.39</ram:DuePayableAmount>",
+        "<ram:DuePayableAmount>12000000026.59</ram:DuePayableAmount>",
+    )
 )
 
 # InvoiceLine.vat_rate holds five digits, four of them decimals: 1000 % needs
 # six.
-CII_RATE_TOO_WIDE = CII_TWO_RATES.replace(
-    "<ram:ID>FA-2026-0042</ram:ID>", "<ram:ID>FA-2026-0072</ram:ID>"
-).replace("<ram:RateApplicablePercent>20.00</ram:RateApplicablePercent>",
-          "<ram:RateApplicablePercent>1000.00</ram:RateApplicablePercent>")
+CII_RATE_TOO_WIDE = CII_TWO_RATES.replace("<ram:ID>FA-2026-0042</ram:ID>", "<ram:ID>FA-2026-0072</ram:ID>").replace(
+    "<ram:RateApplicablePercent>20.00</ram:RateApplicablePercent>",
+    "<ram:RateApplicablePercent>1000.00</ram:RateApplicablePercent>",
+)
 
 # InvoiceLine.unit_cost_ht holds ten digits, four of them decimals.
 CII_UNIT_PRICE_TOO_WIDE = CII_TWO_RATES.replace(
     "<ram:ID>FA-2026-0042</ram:ID>", "<ram:ID>FA-2026-0073</ram:ID>"
-).replace("<ram:ChargeAmount>84.50</ram:ChargeAmount>",
-          "<ram:ChargeAmount>1000000.00</ram:ChargeAmount>")
+).replace("<ram:ChargeAmount>84.50</ram:ChargeAmount>", "<ram:ChargeAmount>1000000.00</ram:ChargeAmount>")
 
 # InvoiceLine.quantity holds twelve digits, three of them decimals.
-CII_QUANTITY_TOO_WIDE = CII_TWO_RATES.replace(
-    "<ram:ID>FA-2026-0042</ram:ID>", "<ram:ID>FA-2026-0074</ram:ID>"
-).replace('<ram:BilledQuantity unitCode="H87">2</ram:BilledQuantity>',
-          '<ram:BilledQuantity unitCode="H87">1000000000</ram:BilledQuantity>')
+CII_QUANTITY_TOO_WIDE = CII_TWO_RATES.replace("<ram:ID>FA-2026-0042</ram:ID>", "<ram:ID>FA-2026-0074</ram:ID>").replace(
+    '<ram:BilledQuantity unitCode="H87">2</ram:BilledQuantity>',
+    '<ram:BilledQuantity unitCode="H87">1000000000</ram:BilledQuantity>',
+)
 
 # Invoice.reconciliation_adjustment holds ten digits, two of them decimals.
 CII_ADJUSTMENT_TOO_WIDE = CII_DOCUMENT_CHARGE.replace(
     "<ram:ID>FA-2026-0051</ram:ID>", "<ram:ID>FA-2026-0075</ram:ID>"
-).replace("<ram:ActualAmount>12.00</ram:ActualAmount>",
-          "<ram:ActualAmount>100000000.00</ram:ActualAmount>")
+).replace("<ram:ActualAmount>12.00</ram:ActualAmount>", "<ram:ActualAmount>100000000.00</ram:ActualAmount>")
 
 # An exponent rather than a width: decimal.InvalidOperation and
 # decimal.Overflow are ArithmeticErrors, not ValueErrors, so they escaped
 # every handler the import has and reached the owner as a traceback.
-CII_EXPONENT_LINE = CII_TWO_RATES.replace(
-    "<ram:ID>FA-2026-0042</ram:ID>", "<ram:ID>FA-2026-0076</ram:ID>"
-).replace("<ram:LineTotalAmount>169.00</ram:LineTotalAmount>",
-          "<ram:LineTotalAmount>1E+500</ram:LineTotalAmount>", 1)
+CII_EXPONENT_LINE = CII_TWO_RATES.replace("<ram:ID>FA-2026-0042</ram:ID>", "<ram:ID>FA-2026-0076</ram:ID>").replace(
+    "<ram:LineTotalAmount>169.00</ram:LineTotalAmount>", "<ram:LineTotalAmount>1E+500</ram:LineTotalAmount>", 1
+)
 
-CII_EXPONENT_TOTAL = CII_TWO_RATES.replace(
-    "<ram:ID>FA-2026-0042</ram:ID>", "<ram:ID>FA-2026-0077</ram:ID>"
-).replace("<ram:GrandTotalAmount>229.39</ram:GrandTotalAmount>",
-          "<ram:GrandTotalAmount>1E+999999999</ram:GrandTotalAmount>")
+CII_EXPONENT_TOTAL = CII_TWO_RATES.replace("<ram:ID>FA-2026-0042</ram:ID>", "<ram:ID>FA-2026-0077</ram:ID>").replace(
+    "<ram:GrandTotalAmount>229.39</ram:GrandTotalAmount>", "<ram:GrandTotalAmount>1E+999999999</ram:GrandTotalAmount>"
+)
 
 # A product name longer than the column that stores it (255). Past about
 # 50 000 characters SQLite's own LIKE limit turns the import into an English
 # OperationalError; below it the name is simply stored whole, on the line AND
 # on the Product it creates.
-CII_ENDLESS_NAME = CII_TWO_RATES.replace(
-    "<ram:ID>FA-2026-0042</ram:ID>", "<ram:ID>FA-2026-0078</ram:ID>"
-).replace("<ram:Name>BIERE BLONDE FUT 30L</ram:Name>",
-          "<ram:Name>" + "BIERE " * 12000 + "</ram:Name>")
+CII_ENDLESS_NAME = CII_TWO_RATES.replace("<ram:ID>FA-2026-0042</ram:ID>", "<ram:ID>FA-2026-0078</ram:ID>").replace(
+    "<ram:Name>BIERE BLONDE FUT 30L</ram:Name>", "<ram:Name>" + "BIERE " * 12000 + "</ram:Name>"
+)
 
 # --------------------------------------------------------------------------
 # Dates no invoice was ever issued on
@@ -1257,15 +1269,15 @@ CII_ENDLESS_NAME = CII_TWO_RATES.replace(
 # In no window, no valuation, no bank match and no margin - and, before this
 # was said on the document, in no queue either: error_message was empty, so
 # nothing anywhere pointed at it.
-CII_DATE_YEAR_ONE = CII_TWO_RATES.replace(
-    "<ram:ID>FA-2026-0042</ram:ID>", "<ram:ID>FA-2026-0081</ram:ID>"
-).replace('<udt:DateTimeString format="102">20260903</udt:DateTimeString>',
-          '<udt:DateTimeString format="102">00010101</udt:DateTimeString>')
+CII_DATE_YEAR_ONE = CII_TWO_RATES.replace("<ram:ID>FA-2026-0042</ram:ID>", "<ram:ID>FA-2026-0081</ram:ID>").replace(
+    '<udt:DateTimeString format="102">20260903</udt:DateTimeString>',
+    '<udt:DateTimeString format="102">00010101</udt:DateTimeString>',
+)
 
-CII_DATE_FAR_FUTURE = CII_TWO_RATES.replace(
-    "<ram:ID>FA-2026-0042</ram:ID>", "<ram:ID>FA-2026-0082</ram:ID>"
-).replace('<udt:DateTimeString format="102">20260903</udt:DateTimeString>',
-          '<udt:DateTimeString format="102">99991231</udt:DateTimeString>')
+CII_DATE_FAR_FUTURE = CII_TWO_RATES.replace("<ram:ID>FA-2026-0042</ram:ID>", "<ram:ID>FA-2026-0082</ram:ID>").replace(
+    '<udt:DateTimeString format="102">20260903</udt:DateTimeString>',
+    '<udt:DateTimeString format="102">99991231</udt:DateTimeString>',
+)
 
 # --------------------------------------------------------------------------
 # A billion laughs that walks past a byte grep
@@ -1282,6 +1294,4 @@ XML_UTF16_DOCTYPE = """<?xml version="1.0" encoding="UTF-16"?>
   <!ENTITY d "&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;">
   <!ENTITY e "&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;">
 ]>
-""" + CII_TWO_RATES.split("?>", 1)[1].replace(
-    "<ram:Name>BIERE BLONDE FUT 30L</ram:Name>", "<ram:Name>&e;</ram:Name>"
-)
+""" + CII_TWO_RATES.split("?>", 1)[1].replace("<ram:Name>BIERE BLONDE FUT 30L</ram:Name>", "<ram:Name>&e;</ram:Name>")

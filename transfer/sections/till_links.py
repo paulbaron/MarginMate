@@ -180,9 +180,9 @@ class TillLinksSection(Section):
         ]
         happy_hour_names = [
             {"recipe": name, "name": happy_hour_name}
-            for name, happy_hour_name in Recipe.objects.exclude(happy_hour_name="").order_by("name").values_list(
-                "name", "happy_hour_name"
-            )
+            for name, happy_hour_name in Recipe.objects.exclude(happy_hour_name="")
+            .order_by("name")
+            .values_list("name", "happy_hour_name")
         ]
         return {"till_products": till_products, "happy_hour_names": happy_hour_names}
 
@@ -254,8 +254,11 @@ class TillLinksSection(Section):
 
         if product is None:
             product = PosProduct.objects.create(
-                name=name, recipe=recipe, ignored=ignored,
-                category=values.get("category", ""), typology=values.get("typology", ""),
+                name=name,
+                recipe=recipe,
+                ignored=ignored,
+                category=values.get("category", ""),
+                typology=values.get("typology", ""),
             )
             self.tills.add(product)
             self.named.add(product.pk)
@@ -447,8 +450,11 @@ class TillLinksSection(Section):
         elif released:
             # The rows count links; this says the products they were on stay.
             report.note(
-                plural(released, "produit caisse remis « à lier » (ses ventes par jour restent)",
-                       "produits caisse remis « à lier » (leurs ventes par jour restent)")
+                plural(
+                    released,
+                    "produit caisse remis « à lier » (ses ventes par jour restent)",
+                    "produits caisse remis « à lier » (leurs ventes par jour restent)",
+                )
             )
         if "recettes" in ctx.clearing:
             return  # the recipes go too, and their sales with them

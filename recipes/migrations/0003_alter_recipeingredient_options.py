@@ -4,14 +4,13 @@ from django.db import migrations
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('recipes', '0002_recipe_category_recipe_happy_hour_price_ttc_and_more'),
+        ("recipes", "0002_recipe_category_recipe_happy_hour_price_ttc_and_more"),
     ]
 
     operations = [
         migrations.AlterModelOptions(
-            name='recipeingredient',
-            options={'ordering': ['group', 'id']},
+            name="recipeingredient",
+            options={"ordering": ["group", "id"]},
         ),
     ]

@@ -1,26 +1,26 @@
 """The test runner: the whole suite runs as production does - one database
-per espace, a login on every page, the only mode there is
+per tenant, a login on every page, the only mode there is
 (config/settings_test.py: ``TEST_RUNNER = "tests.runner.TenantTestRunner"``).
 
-**The test espace.** One espace - `Tenant` pk 1, the owner's (its server
+**The test tenant.** One tenant - `Tenant` pk 1, the owner's (its server
 integrations allowed, as the suite always assumed; their credentials are
 blank in the test settings) - with one owner login and its membership. They
 are written into the `accounts` test database WHILE it is migrated
-(post_migrate, `_create_test_espace`), which is before the parallel
+(post_migrate, `_create_test_tenant`), which is before the parallel
 runner clones it and before the snapshot every TransactionTestCase restores
 is taken: every worker and every restore has them.
 
 **Its database IS the runner's `default`.** In the test process the
-binding's DEFAULT is the test espace (`accounts.tenancy._current` is
+binding's DEFAULT is the test tenant (`accounts.tenancy._current` is
 replaced by a ContextVar whose default is `TEST_TENANT`). So the main
 thread, every thread a test starts - with `bound()` or without - and every
 request work for it without `default` ever being swapped: the middleware
-finds the logged-in owner's espace, the same one, and `bound_tenant` nests
+finds the logged-in owner's tenant, the same one, and `bound_tenant` nests
 into it as a no-op. A TestCase's transaction therefore holds everything a
 request reads and writes, as it always did. Its folders are the real
 `accounts.paths` ones, under a temporary TENANTS_ROOT.
 
-**Every test client is logged in** as the test espace's owner from its
+**Every test client is logged in** as the test tenant's owner from its
 first request (`TenantClient`), unless the test logs in, forces a login or
 logs out itself - so every page a test fetches goes through the real
 LoginRequiredMiddleware, TenantMiddleware, file storage and integrations
@@ -29,8 +29,8 @@ are fetched by nobody logged in. A browser test logs its Chrome in with
 `log_in_the_browser`.
 
 **`TenancyTestCase`** (accounts/tests/support.py) takes all of that away for
-its classes: nothing bound by default, no test espace rows, an anonymous
-client - production's starting point, for real espaces in real files.
+its classes: nothing bound by default, no test tenant rows, an anonymous
+client - production's starting point, for real tenants in real files.
 
 What this sets for the whole run, in the main process and in every parallel
 worker (`install`): `TransactionTestCase.databases` (both test databases),
@@ -57,7 +57,7 @@ TEST_TENANT_NAME = "Bar des tests"
 #: The owner's login. Invented, like every address of the suite.
 TEST_EMAIL = "gerant-tests@example.invalid"
 
-_ESPACE_SIGNAL = "tests.runner.test_espace"
+_TENANT_SIGNAL = "tests.runner.test_tenant"
 
 
 def _build_test_tenant():
@@ -76,20 +76,20 @@ def _build_test_tenant():
     return tenant
 
 
-#: The test espace, built in memory on first use (no query: a SimpleTestCase
+#: The test tenant, built in memory on first use (no query: a SimpleTestCase
 #: and a thread read it as freely as a TestCase).
 TEST_TENANT = SimpleLazyObject(_build_test_tenant)
 
 
 def test_user():
-    """The test espace's owner (a query on the accounts database)."""
+    """The test tenant's owner (a query on the accounts database)."""
     from django.contrib.auth import get_user_model
 
     return get_user_model().objects.get(username=TEST_EMAIL)
 
 
-def member_of_the_test_espace(user):
-    """`user`, given a membership of the test espace: a login with none meets
+def member_of_the_test_tenant(user):
+    """`user`, given a membership of the test tenant: a login with none meets
     the « aucun espace » page. Returns `user`."""
     from accounts.models import Membership
 
@@ -98,7 +98,7 @@ def member_of_the_test_espace(user):
 
 
 class TenantClient(Client):
-    """Logged in as the test espace's owner from its first request - unless
+    """Logged in as the test tenant's owner from its first request - unless
     the test logs in, forces a login or logs out first, or the client already
     carries a session."""
 
@@ -127,7 +127,7 @@ class TenantClient(Client):
 
 
 def log_in_the_browser(driver, live_server_url, user=None) -> None:
-    """Log a browser test's Chrome in, as `user` or the test espace's owner:
+    """Log a browser test's Chrome in, as `user` or the test tenant's owner:
     a session made by a test client, its cookie handed to the browser. On a
     page of this site first - a cookie belongs to the page's own host - and
     the login page, which needs no login. Call it in `setUp`: a
@@ -146,7 +146,7 @@ def log_in_the_browser(driver, live_server_url, user=None) -> None:
     )
 
 
-def _create_test_espace(sender, using, **kwargs):
+def _create_test_tenant(sender, using, **kwargs):
     """post_migrate, while the runner builds the `accounts` test database."""
     from accounts.router import ACCOUNTS_ALIAS
 
@@ -165,8 +165,8 @@ def _create_test_espace(sender, using, **kwargs):
             "is_active": True,
         },
     )
-    user, _ = get_user_model().objects.db_manager(using).get_or_create(
-        username=TEST_EMAIL, defaults={"email": TEST_EMAIL}
+    user, _ = (
+        get_user_model().objects.db_manager(using).get_or_create(username=TEST_EMAIL, defaults={"email": TEST_EMAIL})
     )
     Membership.objects.using(using).get_or_create(
         user=user, tenant_id=TEST_TENANT_PK, defaults={"role": Membership.Role.OWNER}
@@ -255,9 +255,9 @@ class TenantTestRunner(DiscoverRunner):
     def setup_databases(self, **kwargs):
         # Only while the test databases are built: a test that migrates the
         # accounts database itself (migrate_tenants) must not get the test
-        # espace back - it would then look for its file.
-        post_migrate.connect(_create_test_espace, dispatch_uid=_ESPACE_SIGNAL)
+        # tenant back - it would then look for its file.
+        post_migrate.connect(_create_test_tenant, dispatch_uid=_TENANT_SIGNAL)
         try:
             return super().setup_databases(**kwargs)
         finally:
-            post_migrate.disconnect(dispatch_uid=_ESPACE_SIGNAL)
+            post_migrate.disconnect(dispatch_uid=_TENANT_SIGNAL)

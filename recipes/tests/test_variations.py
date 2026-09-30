@@ -186,9 +186,7 @@ class SummaryMatchesBruteForceTests(TestCase):
         would take minutes for no extra confidence.
         """
         pool = ["0", "2", "7"]
-        option_sets = [
-            list(itertools.combinations_with_replacement(pool, size)) for size in (1, 2, 3)
-        ]
+        option_sets = [list(itertools.combinations_with_replacement(pool, size)) for size in (1, 2, 3)]
         checked = 0
         for group_count in (1, 2, 3):
             for sizes in itertools.product((0, 1, 2), repeat=group_count):
@@ -320,8 +318,10 @@ class SubRecipeCostingTests(TestCase):
     def test_a_sub_recipe_costs_per_unit_of_its_own_yield(self):
         syrup = make_recipe(name="Sirop", yield_quantity="2")
         RecipeIngredient.objects.create(
-            recipe=syrup, stock_type=make_priced_stock_type(unit_cost_ht="4", quantity="10"),
-            quantity=Decimal("3"), group=0,
+            recipe=syrup,
+            stock_type=make_priced_stock_type(unit_cost_ht="4", quantity="10"),
+            quantity=Decimal("3"),
+            group=0,
         )
         # 3 units at 4.00 = 12.00 per batch, yielding 2 => 6.00 per unit.
         self.assertEqual(syrup.cost_ht(), Decimal("12"))
@@ -334,8 +334,10 @@ class SubRecipeCostingTests(TestCase):
     def test_a_zero_yield_sub_recipe_costs_nothing_rather_than_dividing_by_zero(self):
         syrup = make_recipe(name="Sirop", yield_quantity="0")
         RecipeIngredient.objects.create(
-            recipe=syrup, stock_type=make_priced_stock_type(unit_cost_ht="4", quantity="10"),
-            quantity=Decimal("3"), group=0,
+            recipe=syrup,
+            stock_type=make_priced_stock_type(unit_cost_ht="4", quantity="10"),
+            quantity=Decimal("3"),
+            group=0,
         )
         self.assertEqual(syrup.unit_cost_ht(), Decimal("0"))
 
@@ -374,6 +376,4 @@ class ChoiceGroupTests(TestCase):
 
     def test_math_prod_of_group_sizes_is_the_variation_count(self):
         recipe = build_recipe([["1", "2"], ["3", "4", "5"], ["6"]])
-        self.assertEqual(
-            recipe.variation_count, math.prod(len(g) for g in recipe.choice_groups())
-        )
+        self.assertEqual(recipe.variation_count, math.prod(len(g) for g in recipe.choice_groups()))

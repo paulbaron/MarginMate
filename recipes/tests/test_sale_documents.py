@@ -41,29 +41,29 @@ class SaleDocumentModelTests(TestCase):
             SaleDocumentLine.objects.create(document=self.document, quantity=Decimal("1"))
 
     def test_a_recipe_line_falls_back_to_the_recipes_own_price(self):
-        line = SaleDocumentLine.objects.create(
-            document=self.document, recipe=self.recipe, quantity=Decimal("3")
-        )
+        line = SaleDocumentLine.objects.create(document=self.document, recipe=self.recipe, quantity=Decimal("3"))
         self.assertEqual(line.total_ttc, Decimal("25.50"))
 
     def test_an_explicit_price_wins(self):
         line = SaleDocumentLine.objects.create(
-            document=self.document, recipe=self.recipe, quantity=Decimal("3"),
+            document=self.document,
+            recipe=self.recipe,
+            quantity=Decimal("3"),
             unit_price_ttc=Decimal("5.00"),
         )
         self.assertEqual(line.total_ttc, Decimal("15.00"))
 
     def test_a_stock_item_has_no_default_price(self):
         """There is no "price" on a stock item, only a cost."""
-        line = SaleDocumentLine.objects.create(
-            document=self.document, stock_type=self.vodka, quantity=Decimal("2")
-        )
+        line = SaleDocumentLine.objects.create(document=self.document, stock_type=self.vodka, quantity=Decimal("2"))
         self.assertEqual(line.total_ttc, Decimal("0"))
 
     def test_the_document_total_sums_its_lines(self):
         SaleDocumentLine.objects.create(document=self.document, recipe=self.recipe, quantity=Decimal("2"))
         SaleDocumentLine.objects.create(
-            document=self.document, stock_type=self.vodka, quantity=Decimal("1"),
+            document=self.document,
+            stock_type=self.vodka,
+            quantity=Decimal("1"),
             unit_price_ttc=Decimal("20.00"),
         )
         self.assertEqual(self.document.total_ttc, Decimal("37.00"))
@@ -86,9 +86,7 @@ class SaleDocumentsReachTheVarianceReportTests(TestCase):
         self.assertEqual(sales_between(date(2026, 3, 1), date(2026, 3, 10)), {self.recipe.pk: 30})
 
     def test_a_stock_line_is_reported_separately(self):
-        SaleDocumentLine.objects.create(
-            document=self.document, stock_type=self.vodka, quantity=Decimal("0.7")
-        )
+        SaleDocumentLine.objects.create(document=self.document, stock_type=self.vodka, quantity=Decimal("0.7"))
         self.assertEqual(
             stock_type_sales_between(date(2026, 3, 1), date(2026, 3, 10)),
             {self.vodka.pk: Decimal("0.7")},
@@ -247,7 +245,7 @@ class QuantitiesSoldTests(TestCase):
         self.assertEqual(overridden[self.gin.pk].shared, Decimal("0"))
 
     def test_two_independent_choices_in_one_recipe_do_not_cross_wire(self):
-        """"Vodka OU gin" AND, separately, "coca OU sprite" - two pools in
+        """ "Vodka OU gin" AND, separately, "coca OU sprite" - two pools in
         one recipe, each with its own priciest winner. A bug that let one
         group's options leak into the other's would either double-count a
         quantity or crown the wrong item priciest."""
@@ -398,7 +396,7 @@ class SaleDocumentPageTests(TestCase):
 
         self.assertEqual(SaleDocumentForm()["sold_on"].value(), timezone.localdate())
 
-    def test_documents_appear_on_the_ventes_page(self):
+    def test_documents_appear_on_the_sales_page(self):
         document = SaleDocument.objects.create(sold_on=date(2026, 3, 5), reference="T-9")
         SaleDocumentLine.objects.create(document=document, recipe=self.recipe, quantity=Decimal("2"))
         html = self.client.get(reverse("recipes:sales_list")).content.decode()

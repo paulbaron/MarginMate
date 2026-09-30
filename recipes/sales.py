@@ -156,9 +156,9 @@ def resync_recipe_from_daily_quantities(recipe: Recipe) -> None:
     from .models import PosProductDailyQuantity
 
     totals: dict[date, int] = defaultdict(int)
-    for sold_on, quantity in PosProductDailyQuantity.objects.filter(
-        product__recipe=recipe
-    ).values_list("sold_on", "quantity"):
+    for sold_on, quantity in PosProductDailyQuantity.objects.filter(product__recipe=recipe).values_list(
+        "sold_on", "quantity"
+    ):
         totals[sold_on] += quantity
 
     with transaction.atomic():
@@ -204,7 +204,7 @@ def recount_pos_products(product_ids) -> int:
     ids = sorted(set(product_ids))
     changed = 0
     for start in range(0, len(ids), RECOUNT_BATCH):
-        batch = ids[start:start + RECOUNT_BATCH]
+        batch = ids[start : start + RECOUNT_BATCH]
         days = {
             row["product_id"]: (row["total"], row["first"], row["last"])
             for row in PosProductDailyQuantity.objects.filter(product_id__in=batch)
@@ -245,9 +245,7 @@ def sales_between(start: date | None, end: date) -> dict[int, int]:
 
     # Hand-written sale documents count too: a tab settled off the books
     # consumed exactly as much stock as one rung up on the till.
-    document_lines = SaleDocumentLine.objects.filter(
-        recipe__isnull=False, document__sold_on__lte=end
-    )
+    document_lines = SaleDocumentLine.objects.filter(recipe__isnull=False, document__sold_on__lte=end)
     if start is not None:
         document_lines = document_lines.filter(document__sold_on__gt=start)
     for recipe_id, quantity in document_lines.values_list("recipe_id", "quantity"):
@@ -256,7 +254,7 @@ def sales_between(start: date | None, end: date) -> dict[int, int]:
     return totals
 
 
-def stock_type_sales_between(start: date | None, end: date) -> dict[int, "Decimal"]:
+def stock_type_sales_between(start: date | None, end: date) -> dict[int, Decimal]:
     """{stock_type_id: quantity} sold directly, as itself, over the window.
 
     A bottle sold over the counter is not a recipe and has no ingredients to

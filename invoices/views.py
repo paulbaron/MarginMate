@@ -19,7 +19,7 @@ from common import error_for_page, is_id, local_return, safe_next
 
 logger = logging.getLogger(__name__)
 
-#: What a bank line is compared against: a document's total to the centime,
+#: What a bank line is compared against: a document's total to the cent,
 #: the way bank/reconcile.py rounds it before matching.
 CENTS = Decimal("0.01")
 
@@ -61,7 +61,7 @@ from .workspace import batch_deleted, batch_invoice_ids, batch_status_context, r
 
 
 def invoice_list(request):
-    """"Achats", on its list of every document."""
+    """ "Achats", on its list of every document."""
     return render_purchases(request, "documents")
 
 
@@ -100,9 +100,7 @@ class InvoiceDetailView(DetailView):
         # See _correction_page for both: « Avoir » was a word no screen said,
         # and a rebuilt MINIMUM line is not an article.
         context["einvoice_is_credit"] = (
-            invoice.is_einvoice
-            and invoice.printed_total_ttc is not None
-            and invoice.printed_total_ttc < 0
+            invoice.is_einvoice and invoice.printed_total_ttc is not None and invoice.printed_total_ttc < 0
         )
         context["einvoice_no_lines"] = invoice.is_einvoice and any(
             check["label"] == EINVOICE_NO_LINES for check in invoice.parse_checks
@@ -114,12 +112,8 @@ class InvoiceDetailView(DetailView):
         # whether a document was settled, so it has to compare the two
         # instead of printing « Payée » over a list of amounts nobody adds.
         payments = list(invoice.payments.all())
-        context["paid_total"] = sum(
-            (payment.transaction.amount_due for payment in payments), Decimal("0")
-        )
-        context["paid_gap"] = context["paid_total"] - invoice.total_ttc.quantize(
-            CENTS, rounding=ROUND_HALF_UP
-        )
+        context["paid_total"] = sum((payment.transaction.amount_due for payment in payments), Decimal("0"))
+        context["paid_gap"] = context["paid_total"] - invoice.total_ttc.quantize(CENTS, rounding=ROUND_HALF_UP)
         return context
 
 
@@ -137,7 +131,7 @@ def upload_invoice(request):
     supplier's - a new one's included - is read like a ticket and opens on
     the correction page, beside its PDF."""
     from .ocr import check_page_count
-    from .receipts import OCR_LOCK, OCR_WAIT_SECONDS, route_consignes, import_document
+    from .receipts import OCR_LOCK, OCR_WAIT_SECONDS, import_document, route_to_returnables
 
     if request.method != "POST":
         return render_purchases(request, "documents", import_tab="pdf")
@@ -158,14 +152,14 @@ def upload_invoice(request):
             for chunk in uploaded.chunks():
                 tmp.write(chunk)
         if supplier.parser_key == LLM_PARSER_KEY:
-            # Achats' guard first, as import_document runs it: a driver's bon
+            # Achats' guard first, as import_document runs it: a driver's slip
             # read by the AI (« every purchased product line ») filed the
-            # empties taken back as purchases. RoutedToConsignesError is a
+            # empties taken back as purchases. RoutedToReturnablesError is a
             # DuplicateInvoiceError: said below, no Invoice. The page count
             # first, as there too: nothing reads a page of a PDF past
             # ocr.MAX_PAGES (DocumentTooBig, a READING_REFUSAL).
             check_page_count(tmp_path)
-            route_consignes(tmp_path, uploaded.name)
+            route_to_returnables(tmp_path, uploaded.name)
             invoice = parse_and_import(tmp_path, supplier, display_filename=uploaded.name)
         else:
             # A scan is OCR, seconds of CPU: one document at a time. The file
@@ -174,9 +168,10 @@ def upload_invoice(request):
             if not OCR_LOCK.acquire(timeout=OCR_WAIT_SECONDS):
                 raise _OcrBusy(OCR_BUSY)
             try:
-                with supplier_changes.cause(
-                    f"import de {uploaded.name}, {supplier.name} choisi", by_person=True
-                ), supplier_changes.collect() as changes:
+                with (
+                    supplier_changes.cause(f"import de {uploaded.name}, {supplier.name} choisi", by_person=True),
+                    supplier_changes.collect() as changes,
+                ):
                     invoice = import_document(
                         tmp_path,
                         display_filename=uploaded.name,
@@ -332,7 +327,7 @@ def trigger_gather(request):
         start_date = _parse_date(request.POST.get("start_date"))
         end_date = _parse_date(request.POST.get("end_date"))
         active_job = ScrapeJob.objects.create(range_start=start_date, range_end=end_date)
-        # bound(): the thread works in this request's espace - a new thread
+        # bound(): the thread works in this request's tenant - a new thread
         # starts with nothing bound (accounts/tenancy.py).
         thread = threading.Thread(
             target=bound(gather_invoices_task),
@@ -370,7 +365,7 @@ def cancel_gather(request, job_id):
 
 
 def invoice_type_list(request):
-    """"Achats", on where invoices come from."""
+    """ "Achats", on where invoices come from."""
     return render_purchases(request, "sources")
 
 
@@ -391,7 +386,7 @@ def invoice_type_form(request, pk=None):
     source = getattr(invoice_type, "email_source", None) if invoice_type else None
     website = getattr(invoice_type, "website_source", None) if invoice_type else None
     test_job = None
-    retour = _local_return(request)
+    return_to = _local_return(request)
     sources_refused = None if integrations_allowed() else integrations.SOURCES
 
     if request.method == "POST" and sources_refused:
@@ -421,7 +416,7 @@ def invoice_type_form(request, pk=None):
             if request.POST.get("action") == "test":
                 test_job = _test_website(request, type_form, website_form)
             elif type_form.is_valid() and website_form.is_valid():
-                saved = _save_invoice_type(request, type_form, invoice_type, website_form, "website", retour)
+                saved = _save_invoice_type(request, type_form, invoice_type, website_form, "website", return_to)
                 if saved is not None:
                     return saved
         elif request.POST.get("action") == "test":
@@ -447,7 +442,7 @@ def invoice_type_form(request, pk=None):
                 thread.start()
         else:
             if type_form.is_valid() and source_form.is_valid():
-                saved = _save_invoice_type(request, type_form, invoice_type, source_form, "email", retour)
+                saved = _save_invoice_type(request, type_form, invoice_type, source_form, "email", return_to)
                 if saved is not None:
                     return saved
     else:
@@ -483,7 +478,7 @@ def invoice_type_form(request, pk=None):
             "supplier_selected": str(type_form["supplier"].value() or ""),
             "typed_name": type_form["new_name"].value() or "",
             "typed_expenses": bool(type_form["new_expenses"].value()),
-            "retour": retour,
+            "return_to": return_to,
             # What the page was drawn with, carried through a redraw (« Tester
             # », an error): taken from the database again, a redrawn page
             # moved the type back unrefused.
@@ -503,7 +498,7 @@ def _supplier_was(request, type_form, invoice_type):
     return int(posted) if is_id(posted) else invoice_type.supplier_id
 
 
-def _save_invoice_type(request, type_form, invoice_type, source_form, kind, retour):
+def _save_invoice_type(request, type_form, invoice_type, source_form, kind, return_to):
     """The type and its source saved - with its supplier, made now if it is
     a new one, all in one transaction: a refusal leaves nothing. A type
     moved to another supplier is recorded on both. None when refused (the
@@ -556,7 +551,7 @@ def _save_invoice_type(request, type_form, invoice_type, source_form, kind, reto
             f"déjà récupérés restent chez {before.name} : s'ils sont de {supplier.name}, changez-les de fournisseur "
             "depuis leur page.",
         )
-    return redirect(retour or "invoices:invoice_type_list")
+    return redirect(return_to or "invoices:invoice_type_list")
 
 
 def _test_website(request, type_form, website_form):
@@ -575,7 +570,13 @@ def _test_website(request, type_form, website_form):
     job = ScrapeJob.objects.create(kind=ScrapeJob.Kind.TEST)
     thread = threading.Thread(
         target=bound(test_website_task),
-        args=(job.id, WebsiteRecipe.from_source(site, name=name), int(supplier_id) if is_id(supplier_id) else 0, start, end),
+        args=(
+            job.id,
+            WebsiteRecipe.from_source(site, name=name),
+            int(supplier_id) if is_id(supplier_id) else 0,
+            start,
+            end,
+        ),
         daemon=True,
     )
     thread.start()
@@ -630,7 +631,7 @@ def receipt_upload(request):
     form = ReceiptBatchUploadForm(request.POST, request.FILES)
     if not form.is_valid():
         return render_purchases(request, "documents", import_tab="tickets", receipt_form=form)
-    # A file over 25 Mo is that file's error, never written (form.refused).
+    # A file over 25 MB is that file's error, never written (form.refused).
     batch = stage_batch(form.cleaned_data["files"], form.ignored_names, form.refused)
     start_batch(batch)
     return redirect("invoices:receipt_batch", pk=batch.pk)
@@ -697,9 +698,10 @@ def receipt_batch_assign(request, pk, index):
         messages.error(request, str(exc))
         return redirect("invoices:receipt_batch", pk=batch.pk)
     try:
-        with supplier_changes.cause(
-            f"import d'un fichier du lot, {supplier.name} choisi", by_person=True
-        ), supplier_changes.collect() as changes:
+        with (
+            supplier_changes.cause(f"import d'un fichier du lot, {supplier.name} choisi", by_person=True),
+            supplier_changes.collect() as changes,
+        ):
             entry = import_with_shop(batch, index, supplier)
     except ShopChoiceError as exc:
         messages.error(request, str(exc))
@@ -776,7 +778,7 @@ def supplier_expenses(request, pk):
     from .models import SupplierChange
 
     supplier = get_object_or_404(Supplier, pk=pk)
-    fiche = reverse("invoices:supplier_detail", args=[supplier.pk])
+    supplier_page = reverse("invoices:supplier_detail", args=[supplier.pk])
     if request.method == "POST":
         wanted = bool(request.POST.get("expenses_only"))
     else:
@@ -792,16 +794,18 @@ def supplier_expenses(request, pk):
                 "unchanged": wanted == supplier.expenses_only,
                 "document_count": documents.count(),
                 "checked_count": documents.filter(reviewed_at__isnull=False).count(),
-                "to_classify": Product.objects.filter(supplier=supplier, stock_type__isnull=True, is_expense=False).count(),
-                "postes": Product.objects.filter(supplier=supplier, is_expense=True).count(),
+                "to_classify": Product.objects.filter(
+                    supplier=supplier, stock_type__isnull=True, is_expense=False
+                ).count(),
+                "charge_items": Product.objects.filter(supplier=supplier, is_expense=True).count(),
                 # Turned into returns on the way back to goods (stop_expenses).
                 "credits": charge_credits(supplier).count(),
-                "fiche": fiche,
+                "supplier_page": supplier_page,
             },
         )
     if wanted == supplier.expenses_only:
         messages.info(request, f"{supplier.name} est déjà un fournisseur de {'charges' if wanted else 'produits'}.")
-        return redirect(fiche)
+        return redirect(supplier_page)
     with supplier_changes.cause(
         f"« {'Charges' if wanted else 'Produits'} » confirmé sur la fiche de {supplier.name}", by_person=True
     ):
@@ -824,11 +828,11 @@ def supplier_expenses(request, pk):
             supplier, SupplierChange.Kind.CHARGES, said, data={"expenses_only": supplier.expenses_only}
         )
     messages.success(request, said)
-    return redirect(fiche)
+    return redirect(supplier_page)
 
 
 def receipt_queue(request):
-    """"Achats", on what waits to be checked: the tickets, as a wall of
+    """ "Achats", on what waits to be checked: the tickets, as a wall of
     thumbnails, and the documents to fix."""
     return render_purchases(request, "a-verifier")
 
@@ -1041,9 +1045,8 @@ def _correction_page(request, invoice):
             # einvoice.NO_LINES_CHECK, which is where this reads it from -
             # the lead paragraph called every line the invoice's own data,
             # four lines above a check saying the invoice carries none.
-            "einvoice_no_lines": invoice.is_einvoice and any(
-                check["label"] == EINVOICE_NO_LINES for check in invoice.parse_checks
-            ),
+            "einvoice_no_lines": invoice.is_einvoice
+            and any(check["label"] == EINVOICE_NO_LINES for check in invoice.parse_checks),
             # « Avoir » is a word this application never said out loud: a
             # credit note read as Factur-X was « Facture électronique » in the
             # list, in the header and in every check, and only the minus signs
@@ -1051,9 +1054,7 @@ def _correction_page(request, invoice):
             # a negative stated total IS the credit note - no second field,
             # and true for one typed by hand too.
             "einvoice_is_credit": (
-                invoice.is_einvoice
-                and invoice.printed_total_ttc is not None
-                and invoice.printed_total_ttc < 0
+                invoice.is_einvoice and invoice.printed_total_ttc is not None and invoice.printed_total_ttc < 0
             ),
             "source_is_pdf": bool(invoice.source_file) and invoice.source_file.name.lower().endswith(".pdf"),
             "source_lines": invoice.source_text.split("\n") if invoice.is_einvoice else [],
@@ -1153,17 +1154,19 @@ def _save_corrections(request, invoice, formset, header_form, vat_form=None) -> 
                 fields += ["parse_checks", "reviewed_at"]
                 # Checked, it is this shop's: its next tickets are
                 # recognised by what this one prints, header or not.
-                with supplier_changes.cause(
-                    f"validation de {_describe(invoice)}", invoice=invoice, by_person=True
-                ), supplier_changes.collect() as changes:
+                with (
+                    supplier_changes.cause(f"validation de {_describe(invoice)}", invoice=invoice, by_person=True),
+                    supplier_changes.collect() as changes,
+                ):
                     learn_identifiers(invoice.supplier, invoice.ocr_text)
                 _say_supplier_changes(request, changes)
             elif doubted and invoice.source_text:
                 # A digital invoice read by its supplier's own reader learns
                 # at import - not this one, until now.
-                with supplier_changes.cause(
-                    f"validation de {_describe(invoice)}", invoice=invoice, by_person=True
-                ), supplier_changes.collect() as changes:
+                with (
+                    supplier_changes.cause(f"validation de {_describe(invoice)}", invoice=invoice, by_person=True),
+                    supplier_changes.collect() as changes,
+                ):
                     learn_identifiers(invoice.supplier, invoice.source_text)
                 _say_supplier_changes(request, changes)
             if invoice.is_receipt or doubted:
@@ -1317,9 +1320,12 @@ def _move_shop(request, invoice) -> None:
         messages.info(request, f"Ce {kind} est déjà rangé chez {invoice.supplier.name}.")
         return
     try:
-        with supplier_changes.cause(
-            f"changement de fournisseur de {_describe(invoice)}", invoice=invoice, by_person=True
-        ), supplier_changes.collect() as changes:
+        with (
+            supplier_changes.cause(
+                f"changement de fournisseur de {_describe(invoice)}", invoice=invoice, by_person=True
+            ),
+            supplier_changes.collect() as changes,
+        ):
             supplier, created = form.shop(ignoring=[invoice])
             move_to_shop(invoice, supplier)
     except (ValueError, InvoiceLinesInUseError) as exc:
@@ -1386,7 +1392,9 @@ def _say_headerless(request, shop) -> None:
         return
     total = Invoice.objects.filter(supplier=shop).count()
     learned = set(shop.ticket_identifiers or ())
-    named_by = sorted({identifier for invoice in headerless for identifier in document_identifiers(invoice.document_text)} & learned)
+    named_by = sorted(
+        {identifier for invoice in headerless for identifier in document_identifiers(invoice.document_text)} & learned
+    )
     messages.info(
         request,
         f"{len(headerless)} des {total} documents {shop.name} ne portent pas « {shop.ticket_header} » : ils restent "
@@ -1421,11 +1429,7 @@ def _rename_product_from_review(request, invoice):
     from .receipts import rename_product
 
     product_id = request.POST.get("product", "")
-    line = (
-        invoice.lines.select_related("product").filter(product_id=product_id).first()
-        if is_id(product_id)
-        else None
-    )
+    line = invoice.lines.select_related("product").filter(product_id=product_id).first() if is_id(product_id) else None
     if line is None:
         messages.error(request, "Ce produit n'est pas sur ce ticket.")
         return

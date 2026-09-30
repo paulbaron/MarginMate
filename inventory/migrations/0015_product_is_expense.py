@@ -4,15 +4,14 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('inventory', '0014_stocktype_loss_percent'),
+        ("inventory", "0014_stocktype_loss_percent"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='product',
-            name='is_expense',
-            field=models.BooleanField(default=False, verbose_name='poste de charge'),
+            model_name="product",
+            name="is_expense",
+            field=models.BooleanField(default=False, verbose_name="poste de charge"),
         ),
     ]

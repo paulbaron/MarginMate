@@ -83,8 +83,10 @@ class JournalTests(TestCase):
             learn_identifiers(kwargs["supplier"], TEXT)
 
         job = ScrapeJob.objects.create()
-        with mock.patch("invoices.tasks.scrape_email_invoices", return_value=[("/tmp/q.pdf", date(2026, 5, 2))]), \
-                mock.patch("invoices.receipts.import_document", side_effect=imported):
+        with (
+            mock.patch("invoices.tasks.scrape_email_invoices", return_value=[("/tmp/q.pdf", date(2026, 5, 2))]),
+            mock.patch("invoices.receipts.import_document", side_effect=imported),
+        ):
             gather_invoices_task(job.id, date(2026, 5, 1), date(2026, 5, 31), {f"type-{invoice_type.id}"})
         job.refresh_from_db()
         self.assertIn("quincaillerie-exemple.fr", job.log)

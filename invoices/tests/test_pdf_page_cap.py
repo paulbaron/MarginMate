@@ -6,8 +6,8 @@ two readers ran before it or without it: the text layer
 (`ocr.text_layer_pages`, which `receipts.import_document` asks first) and a
 supplier's own reader (`InvoiceParser.parse`, which never renders). Both
 looped over every page with pdfplumber, which keeps each page it read until
-the file is closed - measured at 0,57 Mo a page of 300 glyphs and 5,7 Mo one
-of 3 000, and a PDF under the 25 Mo upload cap can carry tens of thousands of
+the file is closed - measured at 0,57 MB a page of 300 glyphs and 5,7 MB one
+of 3 000, and a PDF under the 25 MB upload cap can carry tens of thousands of
 pages sharing one content stream: gigabytes in the one process serving every
 bar, before DocumentTooBig could be raised.
 
@@ -86,8 +86,14 @@ class PageReadings:
         self.events = []
         self.patches = []
         for name in reading_methods:
-            self.patches.append(mock.patch.object(pdfplumber.page.Page, name, self._recording(name, getattr(pdfplumber.page.Page, name))))
-        self.patches.append(mock.patch.object(pdfplumber.page.Page, "close", self._recording("close", pdfplumber.page.Page.close)))
+            self.patches.append(
+                mock.patch.object(
+                    pdfplumber.page.Page, name, self._recording(name, getattr(pdfplumber.page.Page, name))
+                )
+            )
+        self.patches.append(
+            mock.patch.object(pdfplumber.page.Page, "close", self._recording("close", pdfplumber.page.Page.close))
+        )
 
     def _recording(self, name, original):
         events = self.events
@@ -132,9 +138,10 @@ class CheckedBeforeAnyPageTests(SimpleTestCase):
 
     def test_the_text_layer_refuses_before_reading_a_page(self):
         path = self.pdf("long.pdf", 3)
-        with mock.patch.object(ocr, "MAX_PAGES", 2), mock.patch.object(
-            pdfplumber.page.Page, "extract_words", never("extract_words")
-        ) as words:
+        with (
+            mock.patch.object(ocr, "MAX_PAGES", 2),
+            mock.patch.object(pdfplumber.page.Page, "extract_words", never("extract_words")) as words,
+        ):
             with self.assertRaises(ocr.DocumentTooBig) as refused:
                 ocr.text_layer_pages(path)
         words.assert_not_called()
@@ -161,9 +168,10 @@ class CheckedBeforeAnyPageTests(SimpleTestCase):
             self.assertEqual(len(document), 1)
         finally:
             document.close()
-        with mock.patch.object(ocr, "MAX_PAGES", 2), mock.patch.object(
-            pdfplumber.page.Page, "extract_words", never("extract_words")
-        ) as words:
+        with (
+            mock.patch.object(ocr, "MAX_PAGES", 2),
+            mock.patch.object(pdfplumber.page.Page, "extract_words", never("extract_words")) as words,
+        ):
             with self.assertRaises(ocr.DocumentTooBig) as refused:
                 ocr.text_layer_pages(path)
         words.assert_not_called()
@@ -188,9 +196,12 @@ class CheckedBeforeAnyPageTests(SimpleTestCase):
     def test_a_supplier_s_reader_refuses_before_reading_a_page(self):
         path = self.pdf("long.pdf", 3)
         for parser in (Recorder(), get_parser("METRO")):
-            with self.subTest(parser=type(parser).__name__), mock.patch.object(ocr, "MAX_PAGES", 2), mock.patch.object(
-                pdfplumber.page.Page, "extract_text", never("extract_text")
-            ) as text, mock.patch.object(pdfplumber.page.Page, "extract_tables", never("extract_tables")) as tables:
+            with (
+                self.subTest(parser=type(parser).__name__),
+                mock.patch.object(ocr, "MAX_PAGES", 2),
+                mock.patch.object(pdfplumber.page.Page, "extract_text", never("extract_text")) as text,
+                mock.patch.object(pdfplumber.page.Page, "extract_tables", never("extract_tables")) as tables,
+            ):
                 with self.assertRaises(ocr.DocumentTooBig) as refused:
                     parser.parse(path)
                 text.assert_not_called()
@@ -216,7 +227,14 @@ class CheckedBeforeAnyPageTests(SimpleTestCase):
         self.assertEqual([("ARTICLE EXEMPLE" in page.text) for page in parser.pages], [True, True])
         self.assertEqual(
             [event for event in readings.events[:6]],
-            [("extract_text", 1), ("extract_tables", 1), ("close", 1), ("extract_text", 2), ("extract_tables", 2), ("close", 2)],
+            [
+                ("extract_text", 1),
+                ("extract_tables", 1),
+                ("close", 1),
+                ("extract_text", 2),
+                ("extract_tables", 2),
+                ("close", 2),
+            ],
         )
 
     def test_what_is_no_pdf_is_not_counted(self):
@@ -268,7 +286,7 @@ class NoReaderMakesEveryPageTests(SimpleTestCase):
     def test_the_e_invoice_reader_makes_no_page(self):
         """`einvoice.document_xml` runs first on every PDF, before the count.
         Opened through pdfplumber, whose close() makes every page it has not
-        made yet, it walked all of them - 4,5 s and 15 Mo for 5 000 light
+        made yet, it walked all of them - 4,5 s and 15 MB for 5 000 light
         pages - to read an attachment that lives in the catalog."""
         from invoices import einvoice
         from invoices.tests import einvoice_files
@@ -297,9 +315,10 @@ class NoReaderMakesEveryPageTests(SimpleTestCase):
         path = os.path.join(self.folder, "long.pdf")
         with open(path, "wb") as handle:
             handle.write(pdf_of_pages(3))
-        with mock.patch.object(ocr, "MAX_PAGES", 2), mock.patch.object(
-            pdfplumber.page.Page, "extract_text", never("extract_text")
-        ) as text:
+        with (
+            mock.patch.object(ocr, "MAX_PAGES", 2),
+            mock.patch.object(pdfplumber.page.Page, "extract_text", never("extract_text")) as text,
+        ):
             with self.assertRaises(ocr.DocumentTooBig) as refused:
                 llm_fallback._extract_text(path)
         text.assert_not_called()
@@ -327,14 +346,16 @@ class RefusedWhereTheDocumentArrivesTests(TestCase):
         self.content = pdf_of_pages(3)
 
     def test_the_one_import_refuses_before_any_reader_reads_a_page(self):
-        """Before the bon reader (Consignes' guard, which reads up to five
-        pages) and before the text layer."""
+        """Before the slip reader (the returnables guard, which reads up to
+        five pages) and before the text layer."""
         path = os.path.join(self.folder, "long.pdf")
         with open(path, "wb") as handle:
             handle.write(self.content)
-        with mock.patch.object(ocr, "MAX_PAGES", 2), mock.patch.object(
-            pdfplumber.page.Page, "extract_words", never("extract_words")
-        ) as words, mock.patch.object(pdfplumber.page.Page, "extract_text", never("extract_text")) as text:
+        with (
+            mock.patch.object(ocr, "MAX_PAGES", 2),
+            mock.patch.object(pdfplumber.page.Page, "extract_words", never("extract_words")) as words,
+            mock.patch.object(pdfplumber.page.Page, "extract_text", never("extract_text")) as text,
+        ):
             with self.assertRaises(ocr.DocumentTooBig) as refused:
                 import_document(path, display_filename="long.pdf")
         words.assert_not_called()
@@ -364,9 +385,11 @@ class RefusedWhereTheDocumentArrivesTests(TestCase):
         from invoices.parsers import LLM_PARSER_KEY
 
         ai = Supplier.objects.get(parser_key=LLM_PARSER_KEY)
-        with override_settings(ANTHROPIC_API_KEY="cle-de-test"), mock.patch.object(ocr, "MAX_PAGES", 2), mock.patch(
-            "anthropic.Anthropic", never("l'API")
-        ) as api:
+        with (
+            override_settings(ANTHROPIC_API_KEY="cle-de-test"),
+            mock.patch.object(ocr, "MAX_PAGES", 2),
+            mock.patch("anthropic.Anthropic", never("l'API")) as api,
+        ):
             response = self.client.post(
                 reverse("invoices:invoice_upload"),
                 {"supplier": ai.pk, "source_file": SimpleUploadedFile("facture.pdf", self.content)},
@@ -397,9 +420,10 @@ class RefusedWhereTheDocumentArrivesTests(TestCase):
         had read every page, twice."""
         batch = stage_batch([SimpleUploadedFile("long.pdf", self.content)])
         self.addCleanup(shutil.rmtree, os.path.join(paths.imports_dir(), "receipt_batches", str(batch.pk)), True)
-        with mock.patch.object(ocr, "MAX_PAGES", 2), mock.patch.object(
-            pdfplumber.page.Page, "extract_words", never("extract_words")
-        ) as words:
+        with (
+            mock.patch.object(ocr, "MAX_PAGES", 2),
+            mock.patch.object(pdfplumber.page.Page, "extract_words", never("extract_words")) as words,
+        ):
             batch = run_receipt_batch(batch.pk)
         words.assert_not_called()
         (entry,) = batch.results

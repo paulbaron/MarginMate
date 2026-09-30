@@ -2,7 +2,7 @@
 {% load assets %}
 {% block title %}{{ title }} - MarginMate{% endblock %}
 {% block content %}
-<div class="consignes-page">
+<div class="returnables-page">
     <p class="breadcrumb"><a href="{% url 'returnables:home' %}#bons-recus">← Consignes</a></p>
     <div class="page-header">
         <div>
@@ -35,7 +35,7 @@
             </p>
         {% endif %}
         {% for pickup in hint_pickups %}
-            <div class="reprise-hint">
+            <div class="pickup-hint">
                 <p>La reprise la plus proche est <a href="{% url 'returnables:pickup_detail' pickup.pk %}">celle du {{ pickup.date|date:"d/m/Y" }}</a> : est-elle bien datée ?</p>
                 <form method="post" action="{% url 'returnables:pickup_date' pickup.pk %}" class="inline-form">
                     {% csrf_token %}
@@ -76,7 +76,7 @@
         </form>
     </section>
 
-    <section class="consignes-list" id="lignes">
+    <section class="returnables-list" id="lines">
         <h2>Les lignes des consignes</h2>
         {% if lines %}
             <div class="table-wrap">
@@ -102,7 +102,7 @@
                                 <td class="num" data-sort="{{ line.amount|default_if_none:'' }}">{% if line.amount is not None %}{{ line.amount|floatformat:2 }} €{% else %}—{% endif %}</td>
                                 <td>
                                     {% if found.returnable_type %}
-                                        {{ found.returnable_type.name }} <span class="muted small">(motif <code>{{ found.motif }}</code>)</span>
+                                        {{ found.returnable_type.name }} <span class="muted small">(motif <code>{{ found.pattern }}</code>)</span>
                                     {% else %}
                                         <span class="muted">{{ found.note }}</span>
                                     {% endif %}
@@ -111,8 +111,8 @@
                                     {% if not found.returnable_type and types %}
                                         <form method="post" action="{% url 'returnables:line_classify' line.pk %}" class="inline-form">
                                             {% csrf_token %}
-                                            <label class="visually-hidden" for="classer-{{ line.pk }}">Classer comme</label>
-                                            <select id="classer-{{ line.pk }}" name="type">
+                                            <label class="visually-hidden" for="classify-{{ line.pk }}">Classer comme</label>
+                                            <select id="classify-{{ line.pk }}" name="type">
                                                 {% for kind in types %}<option value="{{ kind.pk }}">{{ kind.name }}</option>{% endfor %}
                                             </select>
                                             <button class="btn btn-small btn-secondary" type="submit">Classer</button>

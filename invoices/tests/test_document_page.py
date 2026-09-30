@@ -61,13 +61,18 @@ def scratch_file(test, name):
 
 def typed_line(name, total_ht, printed_ttc):
     return ParsedLine(
-        raw_name=name, quantity=1, total_volume=D("0"), unit_cost_ht=D(total_ht), total_ht=D(total_ht),
-        vat_rate=FIVE_FIVE, printed_ttc=D(printed_ttc),
+        raw_name=name,
+        quantity=1,
+        total_volume=D("0"),
+        unit_cost_ht=D(total_ht),
+        total_ht=D(total_ht),
+        vat_rate=FIVE_FIVE,
+        printed_ttc=D(printed_ttc),
     )
 
 
 class RereadTicketTests(TestCase):
-    """"Relire le document": the photo read again, the corrections gone, the
+    """ "Relire le document": the photo read again, the corrections gone, the
     ticket back in the queue."""
 
     def setUp(self):
@@ -116,7 +121,8 @@ class RereadTicketTests(TestCase):
     def test_a_line_a_stock_take_was_priced_from_stops_it(self):
         line = self.ticket.lines.get()
         count = make_stock_take_line(
-            stock_take=make_stock_take(taken_at=datetime(2026, 7, 20, 21, 0)), product=line.product,
+            stock_take=make_stock_take(taken_at=datetime(2026, 7, 20, 21, 0)),
+            product=line.product,
             unit=UnitChoices.UNIT,
         )
         StockTakeLineSource.objects.create(
@@ -154,15 +160,27 @@ class RereadInvoiceTests(TestCase):
 
     def test_the_pdf_is_parsed_again(self):
         parsed = ParsedInvoice(
-            supplier_code="METRO", invoice_number="X", invoice_date=date(2026, 5, 3),
-            lines=[ParsedLine(raw_name="VODKA EXEMPLE", quantity=6, total_volume=D("4.2"), unit_cost_ht=D("10"),
-                              total_ht=D("60.00"), vat_rate=D("0.20"))],
+            supplier_code="METRO",
+            invoice_number="X",
+            invoice_date=date(2026, 5, 3),
+            lines=[
+                ParsedLine(
+                    raw_name="VODKA EXEMPLE",
+                    quantity=6,
+                    total_volume=D("4.2"),
+                    unit_cost_ht=D("10"),
+                    total_ht=D("60.00"),
+                    vat_rate=D("0.20"),
+                )
+            ],
         )
         with mock.patch("invoices.parsers.metro.MetroParser.parse", return_value=parsed):
             response = self.client.post(self.url, {"action": "reread"})
         self.assertRedirects(response, self.url)
         self.invoice.refresh_from_db()
-        self.assertEqual([(line.raw_name, line.total_ht) for line in self.invoice.lines.all()], [("VODKA EXEMPLE", D("60.00"))])
+        self.assertEqual(
+            [(line.raw_name, line.total_ht) for line in self.invoice.lines.all()], [("VODKA EXEMPLE", D("60.00"))]
+        )
         self.assertEqual(self.invoice.invoice_date, date(2026, 5, 3))
 
     def test_no_total_typed_is_not_a_failure(self):
@@ -175,15 +193,22 @@ class RereadInvoiceTests(TestCase):
     def test_a_supplier_with_no_parser_offers_nothing(self):
         invoice = make_invoice(supplier=make_supplier(code="SANS", name="Sans parseur"))
         invoice.source_file.save("facture.pdf", ContentFile(b"%PDF-1.4"), save=True)
-        self.assertNotContains(self.client.get(reverse("invoices:invoice_edit_lines", args=[invoice.pk])), 'value="reread"')
+        self.assertNotContains(
+            self.client.get(reverse("invoices:invoice_edit_lines", args=[invoice.pk])), 'value="reread"'
+        )
 
 
 class UnverifyTests(TestCase):
     def setUp(self):
         shop = Supplier.objects.get(code="FRANPRIX")
         self.ticket = make_invoice(supplier=shop, parse_checks=CHECKED, reviewed_at=timezone.now())
-        make_invoice_line(invoice=self.ticket, product=make_product(supplier=shop), total_ht="0.46",
-                          vat_rate=FIVE_FIVE, printed_ttc=D("0.49"))
+        make_invoice_line(
+            invoice=self.ticket,
+            product=make_product(supplier=shop),
+            total_ht="0.46",
+            vat_rate=FIVE_FIVE,
+            printed_ttc=D("0.49"),
+        )
         self.url = reverse("invoices:receipt_review", args=[self.ticket.pk])
 
     def test_a_checked_ticket_goes_back_to_the_queue(self):
@@ -205,8 +230,15 @@ class ForgetPriceTests(TestCase):
     def setUp(self):
         self.sabbh = Supplier.objects.get(code="SABBH")
         self.ticket = make_invoice(supplier=self.sabbh, parse_checks=CHECKED)
-        make_invoice_line(invoice=self.ticket, product=make_product(supplier=self.sabbh), raw_name="Pain Pita",
-                          quantity=10, total_ht="6.64", vat_rate=FIVE_FIVE, printed_ttc=D("7.00"))
+        make_invoice_line(
+            invoice=self.ticket,
+            product=make_product(supplier=self.sabbh),
+            raw_name="Pain Pita",
+            quantity=10,
+            total_ht="6.64",
+            vat_rate=FIVE_FIVE,
+            printed_ttc=D("7.00"),
+        )
         self.price = ShopItemPrice.objects.create(supplier=self.sabbh, unit_price_ttc=D("0.70"), label="Pain Pita")
         self.url = reverse("invoices:receipt_review", args=[self.ticket.pk])
 
@@ -243,12 +275,22 @@ class PromotionOnThePageTests(TestCase):
         shop = Supplier.objects.get(code="FRANPRIX")
         self.ticket = make_invoice(supplier=shop, parse_checks=CHECKED, printed_total_ttc=D("2.12"))
         self.loaf = make_invoice_line(
-            invoice=self.ticket, product=make_product(supplier=shop, raw_name="PAIN"), raw_name="PAIN",
-            total_ht="0.30", discount="0.16", vat_rate=FIVE_FIVE, printed_ttc=D("0.49"), discount_ttc=D("0.17"),
+            invoice=self.ticket,
+            product=make_product(supplier=shop, raw_name="PAIN"),
+            raw_name="PAIN",
+            total_ht="0.30",
+            discount="0.16",
+            vat_rate=FIVE_FIVE,
+            printed_ttc=D("0.49"),
+            discount_ttc=D("0.17"),
         )
         make_invoice_line(
-            invoice=self.ticket, product=make_product(supplier=shop, raw_name="CITRON"), raw_name="CITRON",
-            total_ht="1.71", vat_rate=FIVE_FIVE, printed_ttc=D("1.80"),
+            invoice=self.ticket,
+            product=make_product(supplier=shop, raw_name="CITRON"),
+            raw_name="CITRON",
+            total_ht="1.71",
+            vat_rate=FIVE_FIVE,
+            printed_ttc=D("1.80"),
         )
         self.url = reverse("invoices:receipt_review", args=[self.ticket.pk])
 
@@ -308,13 +350,23 @@ class UnitPriceTests(TestCase):
         shop = Supplier.objects.get(code="FRANPRIX")
         self.ticket = make_invoice(supplier=shop, parse_checks=CHECKED, printed_total_ttc=D("3.75"))
         make_invoice_line(
-            invoice=self.ticket, product=make_product(supplier=shop, raw_name="BAGUETTE"), raw_name="BAGUETTE",
-            quantity=5, total_ht="1.85", discount="0.47", vat_rate=FIVE_FIVE, printed_ttc=D("2.45"),
+            invoice=self.ticket,
+            product=make_product(supplier=shop, raw_name="BAGUETTE"),
+            raw_name="BAGUETTE",
+            quantity=5,
+            total_ht="1.85",
+            discount="0.47",
+            vat_rate=FIVE_FIVE,
+            printed_ttc=D("2.45"),
             discount_ttc=D("0.50"),
         )
         make_invoice_line(
-            invoice=self.ticket, product=make_product(supplier=shop, raw_name="CITRON"), raw_name="CITRON",
-            total_ht="1.71", vat_rate=FIVE_FIVE, printed_ttc=D("1.80"),
+            invoice=self.ticket,
+            product=make_product(supplier=shop, raw_name="CITRON"),
+            raw_name="CITRON",
+            total_ht="1.71",
+            vat_rate=FIVE_FIVE,
+            printed_ttc=D("1.80"),
         )
         self.url = reverse("invoices:receipt_review", args=[self.ticket.pk])
 
@@ -365,8 +417,14 @@ class WeightOnThePageTests(TestCase):
     def test_a_weight_can_be_corrected(self):
         shop = Supplier.objects.get(code="WINGSENG")
         ticket = make_invoice(supplier=shop, parse_checks=CHECKED)
-        make_invoice_line(invoice=ticket, product=make_product(supplier=shop), total_volume="4.184",
-                          total_ht="11.86", vat_rate=FIVE_FIVE, printed_ttc=D("12.51"))
+        make_invoice_line(
+            invoice=ticket,
+            product=make_product(supplier=shop),
+            total_volume="4.184",
+            total_ht="11.86",
+            vat_rate=FIVE_FIVE,
+            printed_ttc=D("12.51"),
+        )
         url = reverse("invoices:receipt_review", args=[ticket.pk])
         response = self.client.get(url)
         self.assertContains(response, 'value="4.184"')
@@ -377,8 +435,14 @@ class WeightOnThePageTests(TestCase):
     def test_a_round_weight_is_not_written_in_powers_of_ten(self):
         shop = Supplier.objects.get(code="WINGSENG")
         ticket = make_invoice(supplier=shop, parse_checks=CHECKED)
-        make_invoice_line(invoice=ticket, product=make_product(supplier=shop), total_volume="10.000",
-                          total_ht="11.86", vat_rate=FIVE_FIVE, printed_ttc=D("12.51"))
+        make_invoice_line(
+            invoice=ticket,
+            product=make_product(supplier=shop),
+            total_volume="10.000",
+            total_ht="11.86",
+            vat_rate=FIVE_FIVE,
+            printed_ttc=D("12.51"),
+        )
         response = self.client.get(reverse("invoices:receipt_review", args=[ticket.pk]))
         self.assertEqual(response.context["formset"].forms[0].initial["total_volume"], D("10"))
         self.assertNotContains(response, "1E+1")
@@ -388,16 +452,29 @@ class DetailPageTests(TestCase):
     def test_a_ticket_line_shows_its_price_its_promotion_and_its_ttc(self):
         shop = Supplier.objects.get(code="FRANPRIX")
         ticket = make_invoice(supplier=shop, parse_checks=CHECKED, reconciliation_adjustment=D("0.01"))
-        make_invoice_line(invoice=ticket, product=make_product(supplier=shop), total_ht="0.30", discount="0.16",
-                          vat_rate=FIVE_FIVE, printed_ttc=D("0.49"), discount_ttc=D("0.17"))
+        make_invoice_line(
+            invoice=ticket,
+            product=make_product(supplier=shop),
+            total_ht="0.30",
+            discount="0.16",
+            vat_rate=FIVE_FIVE,
+            printed_ttc=D("0.49"),
+            discount_ttc=D("0.17"),
+        )
         # Typed again by hand before promotions were kept apart: its HT
         # discount no longer says anything.
-        make_invoice_line(invoice=ticket, product=make_product(supplier=shop), total_ht="0.46", discount="0.47",
-                          vat_rate=FIVE_FIVE, printed_ttc=D("0.49"))
+        make_invoice_line(
+            invoice=ticket,
+            product=make_product(supplier=shop),
+            total_ht="0.46",
+            discount="0.47",
+            vat_rate=FIVE_FIVE,
+            printed_ttc=D("0.49"),
+        )
         response = self.client.get(reverse("invoices:invoice_detail", args=[ticket.pk]))
         self.assertContains(response, "0.49 € TTC imprimé, − 0.17 € de remise")
         self.assertNotContains(response, "0.47 € HT de remise")
-        self.assertContains(response, "<th class=\"num\">Total TTC</th>", html=True)
+        self.assertContains(response, '<th class="num">Total TTC</th>', html=True)
         self.assertContains(response, "Arrondi")
         self.assertNotContains(response, "accise")
 

@@ -18,10 +18,10 @@
  *                   the annoyance. Opt in with `data-persist-durable`.
  *
  * Keys are scoped by pathname, so two pages can both have a "search" without
- * one clobbering the other - and by espace first (<body data-tenant>, see
+ * one clobbering the other - and by tenant first (<body data-tenant>, see
  * base.html): storage belongs to the origin, and the same address, or a box
- * named after a pk ("type-3"), is another bar's too. With no espace (a page
- * no espace is bound to) the key carries none.
+ * named after a pk ("type-3"), is another bar's too. With no tenant (a page
+ * no tenant is bound to) the key carries none.
  */
 (function () {
     "use strict";
@@ -30,13 +30,13 @@
         return element.hasAttribute("data-persist-durable") ? localStorage : sessionStorage;
     }
 
-    function espaceScope() {
-        var espace = document.body ? document.body.getAttribute("data-tenant") : "";
-        return espace ? "espace-" + espace + ":" : "";
+    function tenantScope() {
+        var tenant = document.body ? document.body.getAttribute("data-tenant") : "";
+        return tenant ? "espace-" + tenant + ":" : "";
     }
 
     function keyFor(element) {
-        return "mm:" + espaceScope() + location.pathname + ":" + element.getAttribute("data-persist");
+        return "mm:" + tenantScope() + location.pathname + ":" + element.getAttribute("data-persist");
     }
 
     /** Storage can throw outright in private mode, and a remembered filter is
@@ -312,12 +312,12 @@
     // "Recettes & ventes": a till product linked or set aside in place - the
     // counts of what is left to link follow. The topbar's badge is built as
     // nodes, never written as markup, in the shape base.html draws it:
-    // « <span id="nav-count-recettes"> <span class="badge">N</span></span> ».
+    // « <span id="nav-count-recipes"> <span class="badge">N</span></span> ».
     // The « Menu » button's dot reads it (marginmate.css, « topbar menu »).
     document.addEventListener("to-link-count", function (event) {
         var count = event.detail && typeof event.detail.value !== "undefined" ? event.detail.value : event.detail;
         document.querySelectorAll("[data-to-link-count]").forEach(function (pill) { pill.textContent = count; });
-        var nav = document.getElementById("nav-count-recettes");
+        var nav = document.getElementById("nav-count-recipes");
         if (!nav) return;
         nav.textContent = "";
         if (!count) return;
@@ -474,9 +474,9 @@
 })();
 
 /* « Se déconnecter » (base.html's form.topbar-logout, and the « indisponible »
-   503 page's, accounts/unavailable.html): the espace's DRAFTS
+   503 page's, accounts/unavailable.html): the tenant's DRAFTS
    leave with the session (security audit LOAD-2) - an unsaved count's
-   articles and quantities, a reprise's counts and note, readable otherwise
+   articles and quantities, a pickup's counts and note, readable otherwise
    by whoever opened the public login page next on that device. Nothing
    else does: the gather's sources left unticked (Metro, a portal asking for
    a code at every run), the folds, a table's sort are the owner's choices,
@@ -484,9 +484,9 @@
    ticked Metro again with nothing on screen saying so (review of 29/09,
    LOGOUT-PREFS). A new draft kept in the browser is added to DRAFTS:
    accounts/tests/test_sessions.py lists every « marginmate: » key a page
-   builds and fails on one nobody classified. This espace's drafts only -
+   builds and fails on one nobody classified. This tenant's drafts only -
    its scope (<body data-tenant>), and the old id of a session from before
-   29/09 (data-tenant-legacy, espace_storage_legacy.js): another bar's count
+   29/09 (data-tenant-legacy, tenant_storage_legacy.js): another bar's count
    on a shared device is that bar's. */
 (function () {
     var DRAFTS = ["stock-take-draft:", "consignes:brouillon"];

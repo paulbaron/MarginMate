@@ -1,7 +1,7 @@
 """`manage.py adopt_database` (accounts/adoption.py): the owner's current
-database becomes his espace - a copy, never the source.
+database becomes his tenant - a copy, never the source.
 
-The source is built here, never the real db.sqlite3: an espace of its own
+The source is built here, never the real db.sqlite3: a tenant of its own
 stands in for the owner's database (a supplier, an invoice with its PDF, an
 employee's four signing requests), one migration behind, with the central
 tables a single-mode database carries (logins, sessions) added to it, and
@@ -38,8 +38,12 @@ from tests.factories import make_invoice, make_supplier
 LEAF = ("invoices", "0035_supplier_typed_identifiers")
 BEHIND = "0034"
 STATUS = SignatureRequest.Status
-TOKENS = {STATUS.PENDING: "lien-en-attente", STATUS.COMPLETE: "lien-signe", STATUS.CANCELLED: "lien-annule",
-          STATUS.SUPERSEDED: "lien-remplace"}
+TOKENS = {
+    STATUS.PENDING: "lien-en-attente",
+    STATUS.COMPLETE: "lien-signe",
+    STATUS.CANCELLED: "lien-annule",
+    STATUS.SUPERSEDED: "lien-remplace",
+}
 
 
 def digest(path: Path) -> str:
@@ -74,12 +78,18 @@ class AdoptTestCase(TenancyTestCase):
             # One request holds a month at a time: June's first two versions
             # went, its third was signed; July's waits.
             for timesheet, version, status in (
-                (june, 1, STATUS.CANCELLED), (june, 2, STATUS.SUPERSEDED), (june, 3, STATUS.COMPLETE),
+                (june, 1, STATUS.CANCELLED),
+                (june, 2, STATUS.SUPERSEDED),
+                (june, 3, STATUS.COMPLETE),
                 (july, 1, STATUS.PENDING),
             ):
                 SignatureRequest.objects.create(
-                    timesheet=timesheet, version=version, status=status, token_hash=hash_secret(TOKENS[status]),
-                    expires_at=timezone.now() + timedelta(days=10), document_sha256="0" * 64,
+                    timesheet=timesheet,
+                    version=version,
+                    status=status,
+                    token_hash=hash_secret(TOKENS[status]),
+                    expires_at=timezone.now() + timedelta(days=10),
+                    document_sha256="0" * 64,
                 )
             call_command("migrate", LEAF[0], BEHIND, verbosity=0, skip_checks=True)
         folder = paths.tenant_dir(self.old)
@@ -113,13 +123,20 @@ class AdoptTestCase(TenancyTestCase):
         out = StringIO()
         call_command(
             "adopt_database",
-            "--email", email,
-            "--name", "Le Bar du Propriétaire",
-            "--from", str(source or self.source),
-            "--media", str(self.media),
-            "--private", str(self.private),
-            "--downloads", str(self.downloads),
-            "--backups", str(self.backups),
+            "--email",
+            email,
+            "--name",
+            "Le Bar du Propriétaire",
+            "--from",
+            str(source or self.source),
+            "--media",
+            str(self.media),
+            "--private",
+            str(self.private),
+            "--downloads",
+            str(self.downloads),
+            "--backups",
+            str(self.backups),
             *extra,
             stdout=out,
         )
@@ -161,11 +178,16 @@ class DryRunTests(AdoptTestCase):
         out = TextIOWrapper(raw, encoding="cp1252")
         call_command(
             "adopt_database",
-            "--email", "proprio@example.invalid",
-            "--name", "Le Bar du Propriétaire",
-            "--from", str(self.source),
-            "--media", str(self.media),
-            "--private", str(self.private),
+            "--email",
+            "proprio@example.invalid",
+            "--name",
+            "Le Bar du Propriétaire",
+            "--from",
+            str(self.source),
+            "--media",
+            str(self.media),
+            "--private",
+            str(self.private),
             "--dry-run",
             stdout=out,
         )
@@ -176,7 +198,7 @@ class DryRunTests(AdoptTestCase):
 
 
 class RealRunTests(AdoptTestCase):
-    def test_the_espace_is_a_migrated_copy_with_his_files_and_his_links(self):
+    def test_the_tenant_is_a_migrated_copy_with_his_files_and_his_links(self):
         before = (digest(self.source), listing(paths.tenant_dir(self.old)))
         output = self.adopt()
         # The source: not a byte changed, nothing created beside it.
@@ -190,7 +212,7 @@ class RealRunTests(AdoptTestCase):
         membership = Membership.objects.get(user=self.owner)
         self.assertEqual((membership.tenant, membership.role), (tenant, Membership.Role.OWNER))
 
-        # Every link he already sent finds his espace - a cancelled or a
+        # Every link he already sent finds his tenant - a cancelled or a
         # superseded one too, whose page must go on saying so (below).
         for status, token in TOKENS.items():
             with self.subTest(status=status):
@@ -202,7 +224,7 @@ class RealRunTests(AdoptTestCase):
             self.assertIn(LEAF, MigrationRecorder(connections["default"]).applied_migrations())
             tables = connections["default"].introspection.table_names()
             # The central tables left the copy; their migrations stay recorded,
-            # as in an espace made from the template.
+            # as in a tenant made from the template.
             self.assertNotIn("auth_user", tables)
             self.assertNotIn("django_session", tables)
             self.assertIn(("auth", "0001_initial"), MigrationRecorder(connections["default"]).applied_migrations())
@@ -210,16 +232,18 @@ class RealRunTests(AdoptTestCase):
             with invoice.source_file.open("rb") as handle:
                 self.assertEqual(handle.read(), b"%PDF-1.4 facture d'essai")
 
-        espace = paths.tenant_dir(tenant)
-        self.assertEqual((espace / "imports" / adoption.RECEIPT_BATCHES / "7" / "0000.jpg").read_bytes(), b"photo d'un ticket")
-        self.assertFalse((espace / "media" / adoption.RECEIPT_BATCHES).exists())
-        self.assertEqual((espace / "private" / "keys" / "authority.key.pem").read_text(), "CLE D'ESSAI")
-        self.assertTrue((espace / "private" / "deletions.log").is_file())
-        self.assertTrue((espace / "downloads" / "type-1" / "facture-portail.pdf").is_file())
-        self.assertTrue((espace / "backups" / "sauvegarde.zip").is_file())
+        tenant_dir = paths.tenant_dir(tenant)
+        self.assertEqual(
+            (tenant_dir / "imports" / adoption.RECEIPT_BATCHES / "7" / "0000.jpg").read_bytes(), b"photo d'un ticket"
+        )
+        self.assertFalse((tenant_dir / "media" / adoption.RECEIPT_BATCHES).exists())
+        self.assertEqual((tenant_dir / "private" / "keys" / "authority.key.pem").read_text(), "CLE D'ESSAI")
+        self.assertTrue((tenant_dir / "private" / "deletions.log").is_file())
+        self.assertTrue((tenant_dir / "downloads" / "type-1" / "facture-portail.pdf").is_file())
+        self.assertTrue((tenant_dir / "backups" / "sauvegarde.zip").is_file())
 
     def test_the_central_tables_leave_no_byte_behind(self):
-        """A DROP only frees the pages: their bytes stayed in the espace's
+        """A DROP only frees the pages: their bytes stayed in the tenant's
         file - the owner's password hashes and live session keys - and in
         every safety copy of it (the backup API copies the freelist too)."""
         self.assertGreater(stored_bytes(self.source).count(b"pbkdf2_sha256$essai"), 0)
@@ -301,7 +325,7 @@ class RefusalTests(AdoptTestCase):
         get_user_model().objects.create_user(username="double", email="proprio@example.invalid", password="x")
         self.assertRefused(said="Aucun compte (un seul)")
 
-    def test_a_login_already_in_an_espace_needs_leave_current(self):
+    def test_a_login_already_in_a_tenant_needs_leave_current(self):
         signed_up = self.make_tenant("Bar de l'inscription")
         Membership.objects.create(user=self.owner, tenant=signed_up)
         self.assertRefused(said="--leave-current")
@@ -311,7 +335,7 @@ class RefusalTests(AdoptTestCase):
         self.assertTrue(paths.tenant_database(signed_up).is_file())
         self.assertEqual([m.tenant for m in Membership.objects.filter(user=self.owner)], [self.adopted()])
 
-    def test_leave_current_never_closes_an_espace_others_work_in(self):
+    def test_leave_current_never_closes_a_tenant_others_work_in(self):
         shared = self.make_tenant("Bar partagé")
         Membership.objects.create(user=self.owner, tenant=shared)
         self.make_member(shared, "collegue@example.invalid")
@@ -319,9 +343,9 @@ class RefusalTests(AdoptTestCase):
         shared.refresh_from_db()
         self.assertTrue(shared.is_active)
 
-    def test_a_second_espace_using_the_server_s_accounts_is_refused(self):
-        """One Metro account, one pause (accounts.checks.one_owner_espace):
-        the adoption is the one thing that makes such an espace, so it
+    def test_a_second_tenant_using_the_server_s_accounts_is_refused(self):
+        """One Metro account, one pause (accounts.checks.one_owner_tenant):
+        the adoption is the one thing that makes such a tenant, so it
         refuses a second - unless the login is leaving that very one."""
         first = self.make_tenant("Bar déjà adopté", owner=True)
         self.assertRefused(said="utilise déjà les accès du serveur")
@@ -343,18 +367,32 @@ class RefusalTests(AdoptTestCase):
         text.write_text("ceci n'est pas une base " * 50)
         self.assertRefused(source=text, said="ne se lit pas")
 
-    def test_a_folder_holding_the_espaces_is_never_copied(self):
+    def test_a_folder_holding_the_tenants_is_never_copied(self):
         with self.assertRaises(CommandError) as refused:
             call_command(
-                "adopt_database", "--email", "proprio@example.invalid", "--name", "Bar", "--from", str(self.source),
-                "--media", str(paths.tenants_root().parent), stdout=StringIO(),
+                "adopt_database",
+                "--email",
+                "proprio@example.invalid",
+                "--name",
+                "Bar",
+                "--from",
+                str(self.source),
+                "--media",
+                str(paths.tenants_root().parent),
+                stdout=StringIO(),
             )
         self.assertIn("contient TENANTS_ROOT", str(refused.exception))
 
     def test_a_name_is_required(self):
         with self.assertRaises(CommandError):
             call_command(
-                "adopt_database", "--email", "proprio@example.invalid", "--name", "   ", "--from", str(self.source),
+                "adopt_database",
+                "--email",
+                "proprio@example.invalid",
+                "--name",
+                "   ",
+                "--from",
+                str(self.source),
                 stdout=StringIO(),
             )
 

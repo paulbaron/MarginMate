@@ -13,7 +13,7 @@ from .models import (
 
 
 class _FilesOnCommit(admin.ModelAdmin):
-    """A reprise, a photo or a bon deleted here takes its files along -
+    """A pickup, a photo or a slip deleted here takes its files along -
     once the deletion commits, like everywhere else (models.delete_with_files).
     Deleted by the admin's own code, the rows would go and the files stay."""
 
@@ -49,7 +49,7 @@ class SlipAdmin(_FilesOnCommit):
     list_display = ("__str__", "format", "origin", "delivery_date", "received_at", "read_error")
     list_filter = ("format", "origin")
     search_fields = ("number", "original_name", "sha256")
-    # What the bon IS - its file and the bytes' fingerprint - is never
+    # What the slip IS - its file and the bytes' fingerprint - is never
     # edited by hand; its reading is rewritten by « Relire » on the page.
     readonly_fields = ("sha256", "received_at", "read_at")
     inlines = [SlipLineInline]
@@ -64,7 +64,7 @@ class PickupPhotoInline(admin.TabularInline):
     model = PickupPhoto
     extra = 0
     # Deleted from here the photo's row would go and its two files stay:
-    # a photo is removed from the reprise's page, or with its PickupPhoto.
+    # a photo is removed from the pickup's page, or with its PickupPhoto.
     can_delete = False
 
 
@@ -72,7 +72,7 @@ class PickupPhotoInline(admin.TabularInline):
 class PickupAdmin(_FilesOnCommit):
     list_display = ("__str__", "date", "supplier", "created_at")
     list_filter = ("supplier",)
-    # The natural key « Données » names a reprise by: never edited.
+    # The natural key « Données » names a pickup by: never edited.
     readonly_fields = ("reference", "created_at", "updated_at")
     inlines = [PickupCountInline, PickupPhotoInline]
 

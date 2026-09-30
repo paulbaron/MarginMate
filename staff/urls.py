@@ -52,7 +52,6 @@ urlpatterns = [
     # Anything else under signer/ - no token, a token cut or run into another
     # address - is a link that reaches nothing, said in French.
     re_path(r"^signer/(?P<rest>.*)$", public_views.unknown, name="sign_unknown"),
-
     # The establishment's header, the employees, « Ajouter un salarié ».
     path("", views.home, name="home"),
     # The name and the typical week (GET, POST), the months.

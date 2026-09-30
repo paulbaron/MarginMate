@@ -158,7 +158,8 @@ class CreateShopTests(TestCase):
         """Épicerie Sabah's tickets went to Sabbh while it had no shop of its
         own: they carry its header, and are said, to be moved."""
         misfiled = make_invoice(
-            supplier=Supplier.objects.get(code="SABBH"), invoice_date=date(2024, 1, 30),
+            supplier=Supplier.objects.get(code="SABBH"),
+            invoice_date=date(2024, 1, 30),
             ocr_text="EPICERIE SABAH\n77 RUE CROZATIER\n",
         )
         shop = create_shop("Épicerie Sabah", "RUE CROZATIER")
@@ -174,8 +175,13 @@ class MoveToShopTests(TestCase):
         self.ticket = make_invoice(supplier=self.sabbh, invoice_number="42", parse_checks=CHECKED)
         self.misread = make_product(supplier=self.sabbh, raw_name="TAHINA INVENTEE")
         make_invoice_line(
-            invoice=self.ticket, product=self.misread, raw_name="TAHINA INVENTEE", read_as="TAHINA INVENTEE",
-            total_ht="8.06", vat_rate=FIVE_FIVE, printed_ttc=D("8.50"),
+            invoice=self.ticket,
+            product=self.misread,
+            raw_name="TAHINA INVENTEE",
+            read_as="TAHINA INVENTEE",
+            total_ht="8.06",
+            vat_rate=FIVE_FIVE,
+            printed_ttc=D("8.50"),
         )
 
     def test_the_lines_find_their_products_at_the_new_shop(self):
@@ -229,7 +235,10 @@ class MoveToShopTests(TestCase):
         url = reverse("invoices:receipt_review", args=[self.ticket.pk])
         response = self.client.post(url, {"action": "move_shop", "supplier": self.sabbh.pk})
         self.assertIn("Ce ticket est déjà rangé chez Sabbh Oriental.", messages_of(response))
-        self.assertNotIn("Enseigne choisie à la main", [check["label"] for check in Invoice.objects.get(pk=self.ticket.pk).parse_checks])
+        self.assertNotIn(
+            "Enseigne choisie à la main",
+            [check["label"] for check in Invoice.objects.get(pk=self.ticket.pk).parse_checks],
+        )
 
     def test_a_new_shop_needs_a_name(self):
         url = reverse("invoices:receipt_review", args=[self.ticket.pk])
@@ -251,8 +260,12 @@ class ShopFormTests(TestCase):
         self.assertEqual(shop.name, "Épicerie du coin")
 
     def test_what_is_refused(self):
-        for data in ({"supplier": ""}, {"supplier": "abc"}, {"supplier": "new"},
-                     {"supplier": str(Supplier.objects.get(code="OTHER").pk)}):
+        for data in (
+            {"supplier": ""},
+            {"supplier": "abc"},
+            {"supplier": "new"},
+            {"supplier": str(Supplier.objects.get(code="OTHER").pk)},
+        ):
             with self.subTest(data=data):
                 self.assertFalse(ReceiptShopForm(data).is_valid())
 
@@ -262,11 +275,13 @@ class NewShopFromBatchTests(TestCase):
     the first sends the second to it."""
 
     def setUp(self):
-        batch = stage_batch([
-            SimpleUploadedFile("coin-1.pdf", b"%PDF-1.4 un"),
-            SimpleUploadedFile("coin-2.pdf", b"%PDF-1.4 deux"),
-        ])
-        self.addCleanup(shutil.rmtree, os.path.join(paths.imports_dir(), "receipt_batches",str(batch.pk)), True)
+        batch = stage_batch(
+            [
+                SimpleUploadedFile("coin-1.pdf", b"%PDF-1.4 un"),
+                SimpleUploadedFile("coin-2.pdf", b"%PDF-1.4 deux"),
+            ]
+        )
+        self.addCleanup(shutil.rmtree, os.path.join(paths.imports_dir(), "receipt_batches", str(batch.pk)), True)
         second = UNKNOWN_SHOP.replace("12/03/2026", "13/03/2026")
         with mock.patch("invoices.receipts.recognise", side_effect=[recognised(UNKNOWN_SHOP), recognised(second)]):
             self.batch = run_receipt_batch(batch.pk)
@@ -279,7 +294,7 @@ class NewShopFromBatchTests(TestCase):
         self.assertContains(page, "À ranger")
         self.assertEqual((self.batch.failed_count, self.batch.awaiting_shop_count), (0, 2))
         upload_page = self.client.get(reverse("invoices:receipt_upload"))
-        self.assertContains(upload_page, "<th class=\"num\">À ranger</th>", html=True)
+        self.assertContains(upload_page, '<th class="num">À ranger</th>', html=True)
 
     def test_a_ticket_waiting_for_its_shop_shows_what_it_reads_as(self):
         entry = self.batch.results[0]
@@ -298,8 +313,10 @@ class NewShopFromBatchTests(TestCase):
     def test_naming_the_shop_imports_it_and_the_header_reads_the_others_again(self):
         """The shop is named here, its header given on the ticket's own page:
         the other files no shop was recognised on are read again then."""
-        with mock.patch("invoices.receipts.recognise", return_value=recognised(UNKNOWN_SHOP)), \
-                mock.patch("invoices.receipt_batches.start_batch") as start:
+        with (
+            mock.patch("invoices.receipts.recognise", return_value=recognised(UNKNOWN_SHOP)),
+            mock.patch("invoices.receipt_batches.start_batch") as start,
+        ):
             response = self.client.post(self.url, {"supplier": "new", "new_name": "Épicerie du coin"})
         shop = Supplier.objects.get(name="Épicerie du coin")
         ticket = Invoice.objects.get(supplier=shop)
@@ -334,8 +351,10 @@ class NewShopFromBatchTests(TestCase):
         self.assertTrue(any("existe déjà" in message for message in messages_of(response)))
 
     def test_a_shop_named_here_is_sent_to_the_ticket_for_its_header(self):
-        with mock.patch("invoices.receipts.recognise", return_value=recognised(UNKNOWN_SHOP)), \
-                mock.patch("invoices.receipt_batches.start_batch") as start:
+        with (
+            mock.patch("invoices.receipts.recognise", return_value=recognised(UNKNOWN_SHOP)),
+            mock.patch("invoices.receipt_batches.start_batch") as start,
+        ):
             response = self.client.post(self.url, {"supplier": "new", "new_name": "Épicerie du coin"})
         start.assert_not_called()
         said = messages_of(response)
@@ -350,7 +369,9 @@ class ImportTests(TestCase):
             ticket = import_receipt(path)
         self.assertEqual(ticket.supplier.code, "EPICERIE")
         self.assertEqual(ticket.invoice_date, date(2026, 3, 12))
-        self.assertEqual([line.raw_name for line in ticket.lines.all()], ["TOMATES GRAPPE", "SIROP MENTHE", "PAIN DE MIE"])
+        self.assertEqual(
+            [line.raw_name for line in ticket.lines.all()], ["TOMATES GRAPPE", "SIROP MENTHE", "PAIN DE MIE"]
+        )
 
     def test_an_unknown_ticket_says_what_it_read(self):
         path = staged_file(self, "coin.pdf")

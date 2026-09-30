@@ -1,19 +1,19 @@
 """The test runner's contract (tests/runner.py): the whole suite runs as
-production does - one database per espace, a login on every page - on one
-« test espace » whose database is the runner's own `default`.
+production does - one database per tenant, a login on every page - on one
+« test tenant » whose database is the runner's own `default`.
 
 What every other test file takes for granted, pinned here:
 
 * the main thread, a thread started WITHOUT `bound()` and a request all
-  work for the test espace, and a request's binding nests into it - it
+  work for the test tenant, and a request's binding nests into it - it
   never swaps `default`, so a TestCase's transaction holds the rows the
   request reads and writes;
-* every test client is logged in as the test espace's owner from its first
+* every test client is logged in as the test tenant's owner from its first
   request, unless the test logs in, forces a login or logs out itself;
-* the central rows (logins, sessions, the espace itself) live in the
+* the central rows (logins, sessions, the tenant itself) live in the
   runner's own `accounts` test database, never in `default`;
 * `TenancyTestCase` (accounts/tests/support.py) takes all of that away for
-  its classes - nothing bound, no test espace - so real espaces, threads
+  its classes - nothing bound, no test tenant - so real tenants, threads
   started without `bound()`, signups and adoptions are still tested
   against what production starts from.
 
@@ -50,7 +50,7 @@ def in_a_raw_thread(function):
     def target():
         try:
             seen.append(function())
-        except BaseException as exc:  # reported by the calling thread
+        except BaseException as exc:  # noqa: BLE001 - reported by the calling thread
             errors.append(exc)
         finally:
             connections.close_all()
@@ -64,7 +64,7 @@ def in_a_raw_thread(function):
 
 
 class TheBindingTests(SimpleTestCase):
-    """No query: the binding's default is an espace built in memory."""
+    """No query: the binding's default is a tenant built in memory."""
 
     def test_the_runner_replaces_the_binding_the_module_reads(self):
         self.assertIsInstance(tenancy._current, ContextVar)
@@ -78,13 +78,13 @@ class TheBindingTests(SimpleTestCase):
         self.assertFalse(hasattr(settings, "TENANCY_MODE"))
         self.assertFalse(hasattr(tenancy, "multi_mode"))
 
-    def test_the_main_thread_works_for_the_test_espace(self):
+    def test_the_main_thread_works_for_the_test_tenant(self):
         tenant = tenancy.current_tenant()
         self.assertEqual(tenant.pk, runner.TEST_TENANT_PK)
         self.assertEqual(tenant.dir_name, runner.TEST_TENANT_DIR)
         self.assertEqual(tenancy.require_tenant().pk, runner.TEST_TENANT_PK)
         self.assertEqual(tenancy.tenant_key(), str(runner.TEST_TENANT_PK))
-        # The owner's espace: the suite has always assumed the server's
+        # The owner's tenant: the suite has always assumed the server's
         # integrations were allowed (their credentials are blank anyway).
         self.assertTrue(tenancy.integrations_allowed())
 
@@ -115,7 +115,7 @@ class TheBindingTests(SimpleTestCase):
         self.assertIs(runner.TenantTestRunner.parallel_test_suite.process_setup, runner._worker_setup)
 
 
-class TheTestEspaceTests(TestCase):
+class TheTestTenantTests(TestCase):
     def test_its_rows_are_in_the_accounts_database(self):
         tenant = Tenant.objects.get(pk=runner.TEST_TENANT_PK)
         self.assertEqual(tenant._state.db, "accounts")
@@ -138,7 +138,7 @@ class TheTestEspaceTests(TestCase):
 
 
 class TheClientTests(TestCase):
-    def test_it_is_logged_in_as_the_test_espace_s_owner(self):
+    def test_it_is_logged_in_as_the_test_tenant_s_owner(self):
         response = self.client.get(reverse("invoices:supplier_list"))
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.wsgi_request.user.username, runner.TEST_EMAIL)
@@ -147,7 +147,7 @@ class TheClientTests(TestCase):
 
     def test_a_request_nests_into_the_binding_without_swapping_default(self):
         """The row written in this test's transaction is on the page the
-        request draws, and no espace database was opened for it."""
+        request draws, and no tenant database was opened for it."""
         make_supplier(code="T-TEMOIN", name="Grossiste Témoin")
         before = connections["default"]
         with mock.patch("accounts.tenancy._wrapper_for", side_effect=AssertionError("default was swapped")):
@@ -161,7 +161,7 @@ class TheClientTests(TestCase):
         self.assertEqual(client.get(reverse("invoices:supplier_list")).status_code, 200)
 
     def test_a_test_that_logs_in_is_not_logged_in_again(self):
-        other = runner.member_of_the_test_espace(
+        other = runner.member_of_the_test_tenant(
             get_user_model().objects.create_user(username="serveur@example.invalid", email="serveur@example.invalid")
         )
         self.client.force_login(other)
@@ -183,7 +183,7 @@ class TheClientTests(TestCase):
 class NothingBoundInTenancyTestCaseTests(TenancyTestCase):
     """A TenancyTestCase starts from what production starts from."""
 
-    def test_nothing_is_bound_and_there_is_no_test_espace(self):
+    def test_nothing_is_bound_and_there_is_no_test_tenant(self):
         self.assertIsNone(tenancy.current_tenant())
         self.assertIsNone(in_a_raw_thread(tenancy.current_tenant))
         self.assertFalse(Tenant.objects.filter(pk=runner.TEST_TENANT_PK).exists())

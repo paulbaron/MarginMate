@@ -232,9 +232,7 @@ class InvoiceParser:
         ]
         return self.parse_pages(pages, date_hint=date_hint, source_name=os.path.basename(pdf_path))
 
-    def parse_pages(
-        self, pages: list[PdfPage], date_hint: date | None = None, source_name: str = ""
-    ) -> ParsedInvoice:
+    def parse_pages(self, pages: list[PdfPage], date_hint: date | None = None, source_name: str = "") -> ParsedInvoice:
         """`source_name` is the PDF's bare filename - Metro invoices fall back
         to it for the invoice number and date when the page text doesn't
         yield them, so it's part of the raw material, not just metadata."""

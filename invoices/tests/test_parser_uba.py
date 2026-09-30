@@ -23,28 +23,104 @@ from invoices.parsers.base import PdfPage
 from invoices.parsers.uba import UBAParser
 
 HEADER_ROW = [
-    "CODE", "8\nDESIGNATION", "Quantité Livré", "Quantité en Rupture", "QUANTITE",
-    "PRIX HTHD", "MNT HTHD", "% REMISE", "DROITS", "CONSIG.\nCONSIG.", "DECONS.",
-    "10-1\n%", "CONT.\nUNIT.", "10\nVOLUME\nEFFECTIF", "10-2\nALCOOL\nPUR", "11-12\nPOIDS KG",
+    "CODE",
+    "8\nDESIGNATION",
+    "Quantité Livré",
+    "Quantité en Rupture",
+    "QUANTITE",
+    "PRIX HTHD",
+    "MNT HTHD",
+    "% REMISE",
+    "DROITS",
+    "CONSIG.\nCONSIG.",
+    "DECONS.",
+    "10-1\n%",
+    "CONT.\nUNIT.",
+    "10\nVOLUME\nEFFECTIF",
+    "10-2\nALCOOL\nPUR",
+    "11-12\nPOIDS KG",
 ]
 
 # A keg: priced per litre, with a deposit on the keg itself.
-KEG_ROW = ["7412", "BIERE EXEMPLE FÛT 30L 4,9°", "5 FUT", "", "150 L",
-           "1,3000", "195,00", "", "0,20", "150,00", "", "4,90", "1,00", "150,00", "7,35", "195,00"]
+KEG_ROW = [
+    "7412",
+    "BIERE EXEMPLE FÛT 30L 4,9°",
+    "5 FUT",
+    "",
+    "150 L",
+    "1,3000",
+    "195,00",
+    "",
+    "0,20",
+    "150,00",
+    "",
+    "4,90",
+    "1,00",
+    "150,00",
+    "7,35",
+    "195,00",
+]
 # Bottles: priced per bottle, no deposit.
-BOTTLE_ROW = ["3325", "LIQUEUR EXEMPLE 70 CL 15° N", "4 BT", "", "4 BT",
-              "6,0480", "24,19", "10,00 %", "2,03", "", "", "15,00", "0,70", "2,80", "0,42", "5,20"]
+BOTTLE_ROW = [
+    "3325",
+    "LIQUEUR EXEMPLE 70 CL 15° N",
+    "4 BT",
+    "",
+    "4 BT",
+    "6,0480",
+    "24,19",
+    "10,00 %",
+    "2,03",
+    "",
+    "",
+    "15,00",
+    "0,70",
+    "2,80",
+    "0,42",
+    "5,20",
+]
 # A CO2 cylinder: flat per-unit price in a "TUB" unit, deposit on top, and
 # no volume at all - so the cost comes from MNT HTHD directly.
-CYLINDER_ROW = ["8056", "BOUTEILLE CO2 10 KG GRISE - CONS. 85€", "2 TUB", "", "2 TUB",
-                "72,0000", "144,00", "", "", "170,00", "", "", "", "", "", "20,00"]
+CYLINDER_ROW = [
+    "8056",
+    "BOUTEILLE CO2 10 KG GRISE - CONS. 85€",
+    "2 TUB",
+    "",
+    "2 TUB",
+    "72,0000",
+    "144,00",
+    "",
+    "",
+    "170,00",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "20,00",
+]
 # An empty crate handed back: PRIX HTHD echoes the deposit, but MNT HTHD is
 # BLANK - there is no product charge here, only the deposit.
-EMPTY_CRATE_ROW = ["EMB29", "CFP VIDE", "1 EMB", "", "1 EMB",
-                   "0,2000", "", "", "", "0,20", "", "", "", "", "", ""]
+EMPTY_CRATE_ROW = ["EMB29", "CFP VIDE", "1 EMB", "", "1 EMB", "0,2000", "", "", "", "0,20", "", "", "", "", "", ""]
 # Returning empty kegs: a refund, its whole value in the DECONS. column.
-DECONSIGNE_ROW = ["EMB01", "FÛT 15/16/20/30 L", "-9 EMB", "", "-9 EMB",
-                  "30,0000", "", "", "", "", "-270,00", "", "", "", "", ""]
+DEPOSIT_REFUND_ROW = [
+    "EMB01",
+    "FÛT 15/16/20/30 L",
+    "-9 EMB",
+    "",
+    "-9 EMB",
+    "30,0000",
+    "",
+    "",
+    "",
+    "",
+    "-270,00",
+    "",
+    "",
+    "",
+    "",
+    "",
+]
 BLANK_ROW = [None] * 9 + [""] + [None] * 6
 
 TEXT = """\
@@ -53,7 +129,7 @@ FRANCE Tel: 01.48.81.00.99 - Fax: 01.48.81.22.85 Facture No : VE-2026080299
 VE-2026080299 12/11/2024 15/11/2024
 """
 
-ALL_ROWS = [KEG_ROW, BOTTLE_ROW, CYLINDER_ROW, EMPTY_CRATE_ROW, DECONSIGNE_ROW]
+ALL_ROWS = [KEG_ROW, BOTTLE_ROW, CYLINDER_ROW, EMPTY_CRATE_ROW, DEPOSIT_REFUND_ROW]
 
 
 def make_page(rows=None, text=TEXT):
@@ -83,7 +159,7 @@ class UBAProductLineTests(SimpleTestCase):
         self.assertEqual(line.taxes, Decimal("30.00"))
 
     def test_duties_are_part_of_the_real_cost(self):
-        """"DROITS" is a per-unit excise duty, not VAT - dropping it silently
+        """ "DROITS" is a per-unit excise duty, not VAT - dropping it silently
         understated every alcohol line (213 lines, fixed this session)."""
         line = line_named(parse([BOTTLE_ROW]), "LIQUEUR EXEMPLE 70 CL 15° N")
         # 2,80 L / 0,70 L per bottle = 4 bottles; 4 x 6,048 + 4 x 2,03
@@ -105,8 +181,7 @@ class UBAProductLineTests(SimpleTestCase):
     def test_vat_rate_comes_from_the_text_pass(self):
         """Product VAT lives only in the free text, keyed by code+name."""
         text = TEXT + (
-            "7412 BIERE EXEMPLE FÛT 30L 4,9° 5 FUT 150 L 1,3000 195,00 "
-            "0,20 150,00 4,90 1,00 150,00 7,35 195,00 2\n"
+            "7412 BIERE EXEMPLE FÛT 30L 4,9° 5 FUT 150 L 1,3000 195,00 0,20 150,00 4,90 1,00 150,00 7,35 195,00 2\n"
         )
         line = line_named(parse([KEG_ROW], text=text), "BIERE EXEMPLE FÛT 30L 4,9°")
         self.assertEqual(line.vat_rate, Decimal("0.055"))
@@ -116,20 +191,20 @@ class UBAProductLineTests(SimpleTestCase):
 
 
 class UBADepositTests(SimpleTestCase):
-    def test_consigne_becomes_its_own_line(self):
+    def test_deposit_becomes_its_own_line(self):
         """A deposit is billed on the product's own row but is a refundable
         charge on the container, not part of what the product is worth."""
         invoice = parse([KEG_ROW])
         self.assertIn("Consigne BIERE EXEMPLE FÛT 30L 4,9°", names(invoice))
-        consigne = line_named(invoice, "Consigne BIERE EXEMPLE FÛT 30L 4,9°")
-        self.assertEqual(consigne.total_ht, Decimal("150.00"))
-        self.assertEqual(consigne.quantity, 5)
-        self.assertEqual(consigne.unit_cost_ht, Decimal("30.0000"))
-        self.assertEqual(consigne.vat_rate, Decimal("0"))
-        self.assertEqual(consigne.category, "UBA - Consignes")
+        deposit = line_named(invoice, "Consigne BIERE EXEMPLE FÛT 30L 4,9°")
+        self.assertEqual(deposit.total_ht, Decimal("150.00"))
+        self.assertEqual(deposit.quantity, 5)
+        self.assertEqual(deposit.unit_cost_ht, Decimal("30.0000"))
+        self.assertEqual(deposit.vat_rate, Decimal("0"))
+        self.assertEqual(deposit.category, "UBA - Consignes")
 
-    def test_deconsigne_row_is_a_negative_line(self):
-        invoice = parse([DECONSIGNE_ROW])
+    def test_a_deposit_refund_row_is_a_negative_line(self):
+        invoice = parse([DEPOSIT_REFUND_ROW])
         line = line_named(invoice, "FÛT 15/16/20/30 L")
         self.assertEqual(line.quantity, -9)
         self.assertEqual(line.total_ht, Decimal("-270.00"))
@@ -147,8 +222,7 @@ class UBADepositTests(SimpleTestCase):
     def test_zero_cost_informational_rows_are_skipped(self):
         """UBA prints a nominal 0,0001 in PRIX HTHD for equipment loans and
         POS material - not real purchases."""
-        freebie = ["9001", "PUB VERRE EXEMPLE", "6 PUB", "", "6 PUB",
-                   "0,0001", "", "", "", "", "", "", "", "", "", ""]
+        freebie = ["9001", "PUB VERRE EXEMPLE", "6 PUB", "", "6 PUB", "0,0001", "", "", "", "", "", "", "", "", "", ""]
         self.assertEqual(parse([freebie]).lines, [])
 
 

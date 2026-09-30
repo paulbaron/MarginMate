@@ -20,8 +20,8 @@ it starts from the settings every other command reads (.env), runs Django's
 own checks with the deployment ones, reads the migrations with Django's own
 executor and runs collectstatic - each a call away - and it is where the
 owner already goes (`manage.py migrate_tenants`). In accounts/ because what
-it checks before serving is the espaces': the accounts database, the
-template, each espace's database.
+it checks before serving is the tenants': the accounts database, the
+template, each tenant's database.
 
 In order:
 
@@ -37,7 +37,7 @@ In order:
    cache the login limiter cannot count in (W002)… each printed with what
    to do.
 3. **The migrations**: none left to apply in the accounts database, the
-   template new espaces are copied from, or any open espace - each one
+   template new tenants are copied from, or any open tenant - each one
    named, and a missing database too. `serve` never migrates: it tells the
    owner to back up the data folder and run migrate_tenants.
 4. **collectstatic --clear** into STATIC_ROOT, which WhiteNoise serves - from
@@ -51,7 +51,7 @@ In order:
    by collectstatic (gitignored).
 5. **Waitress**, on 127.0.0.1 only (cloudflared, on this machine, is the way
    in: no port is opened on the router), `THREADS` threads, ONE process -
-   the espaces' binding is per thread, and the login limiter counts in this
+   the tenants' binding is per thread, and the login limiter counts in this
    process's memory (accounts/limiter.py). Its socket is bound EXCLUSIVELY
    (Windows lets a second server bind a port already listened on - a
    forgotten runserver would share the tunnel's requests): a port in use is
@@ -199,7 +199,7 @@ def _pending(where: str, names: list[str]) -> str:
 
 def migration_problems() -> list[str]:
     """What is not migrated - the accounts database, the template, every
-    open espace - or missing; with, once, what to do about it."""
+    open tenant - or missing; with, once, what to do about it."""
     problems = []
     accounts_name = (settings.DATABASES.get(ACCOUNTS_ALIAS) or {}).get("NAME")
     if not _is_memory(accounts_name) and not Path(str(accounts_name or "")).is_file():
@@ -257,10 +257,13 @@ class Command(BaseCommand):
             "--port", type=int, default=DEFAULT_PORT, help=f"Le port, sur {HOST} ({DEFAULT_PORT} par défaut)."
         )
         parser.add_argument(
-            "--verifier", action="store_true", help="Faire les vérifications seulement, sans lancer le serveur."
+            "--verifier",
+            dest="check_only",
+            action="store_true",
+            help="Faire les vérifications seulement, sans lancer le serveur.",
         )
 
-    def handle(self, *args, port=DEFAULT_PORT, verifier=False, **options):
+    def handle(self, *args, port=DEFAULT_PORT, check_only=False, **options):
         if not 1 <= port <= 65535:
             raise CommandError("Le port est un nombre entre 1 et 65535.")
         was_on = settings.DEBUG
@@ -283,7 +286,7 @@ class Command(BaseCommand):
                 self.stderr.write(f"- {problem}")
             raise CommandError(f"Le serveur ne démarre pas : {len(problems)} point(s) ci-dessus.")
         self.stdout.write("Vérifications : tout est en ordre.")
-        if verifier:
+        if check_only:
             return
 
         try:

@@ -33,31 +33,44 @@ def backfill_unit(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('inventory', '0010_remove_stocktakeline_unique_product_per_stock_take_and_more'),
-        ('invoices', '0004_invoiceline_colisage'),
+        ("inventory", "0010_remove_stocktakeline_unique_product_per_stock_take_and_more"),
+        ("invoices", "0004_invoiceline_colisage"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='stocktakeline',
-            name='unit',
-            field=models.CharField(choices=[('L', 'Litre'), ('UNIT', 'Unité'), ('KG', 'Kilogramme')], default='UNIT', max_length=4),
+            model_name="stocktakeline",
+            name="unit",
+            field=models.CharField(
+                choices=[("L", "Litre"), ("UNIT", "Unité"), ("KG", "Kilogramme")], default="UNIT", max_length=4
+            ),
             preserve_default=False,
         ),
         migrations.RunPython(backfill_unit, migrations.RunPython.noop),
         migrations.CreateModel(
-            name='StockTakeLineSource',
+            name="StockTakeLineSource",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('quantity_used', models.DecimalField(decimal_places=4, max_digits=10)),
-                ('unit_cost_ht', models.DecimalField(decimal_places=4, max_digits=10)),
-                ('invoice_line', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='+', to='invoices.invoiceline')),
-                ('stock_take_line', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='sources', to='inventory.stocktakeline')),
+                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
+                ("quantity_used", models.DecimalField(decimal_places=4, max_digits=10)),
+                ("unit_cost_ht", models.DecimalField(decimal_places=4, max_digits=10)),
+                (
+                    "invoice_line",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.PROTECT, related_name="+", to="invoices.invoiceline"
+                    ),
+                ),
+                (
+                    "stock_take_line",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="sources",
+                        to="inventory.stocktakeline",
+                    ),
+                ),
             ],
             options={
-                'ordering': ['-invoice_line__invoice__invoice_date'],
+                "ordering": ["-invoice_line__invoice__invoice_date"],
             },
         ),
     ]

@@ -47,12 +47,18 @@ class BarScenarioTests(TestCase):
         for name, unit_cost in {**SPIRITS, **MIXERS}.items():
             stock_type = make_stock_type(name=name, unit=UnitChoices.LITRE)
             make_product(
-                supplier=cls.supplier, raw_name=f"{name.upper()} 70CL", stock_type=stock_type,
-                unit=UnitChoices.UNIT, stock_equivalent="0.7",
+                supplier=cls.supplier,
+                raw_name=f"{name.upper()} 70CL",
+                stock_type=stock_type,
+                unit=UnitChoices.UNIT,
+                stock_equivalent="0.7",
             )
             StockMovement.objects.create(
-                stock_type=stock_type, quantity=Decimal("100"), unit_cost_ht=Decimal(unit_cost),
-                kind=MovementKind.PURCHASE, occurred_on=date(2026, 1, 1),
+                stock_type=stock_type,
+                quantity=Decimal("100"),
+                unit_cost_ht=Decimal(unit_cost),
+                kind=MovementKind.PURCHASE,
+                occurred_on=date(2026, 1, 1),
             )
             cls.stock[name] = stock_type
 
@@ -72,8 +78,10 @@ class BarScenarioTests(TestCase):
         take = make_stock_take(taken_at=timezone.make_aware(datetime(2026, 3, taken_on, 12, 0)))
         for name, litres in quantities.items():
             make_stock_take_line(
-                stock_take=take, stock_type=self.stock[name],
-                counted_quantity=litres, unit=UnitChoices.LITRE,
+                stock_take=take,
+                stock_type=self.stock[name],
+                counted_quantity=litres,
+                unit=UnitChoices.LITRE,
             )
         return take
 
@@ -111,8 +119,11 @@ class BarScenarioTests(TestCase):
         report = self.run_period(
             opening=dict.fromkeys(self.stock, "40"),
             closing={
-                "Gin": "32", "Vodka": "30", "Whisky": "38", "Rhum": "40",   # 20 L of spirit gone
-                **MIXERS_BALANCED,                                          # 100 L of mixer gone
+                "Gin": "32",
+                "Vodka": "30",
+                "Whisky": "38",
+                "Rhum": "40",  # 20 L of spirit gone
+                **MIXERS_BALANCED,  # 100 L of mixer gone
             },
             sales={"Alcool + Soda": 300, "Mule": 200},
         )
@@ -156,7 +167,10 @@ class BarScenarioTests(TestCase):
         report = self.run_period(
             opening=dict.fromkeys(self.stock, "40"),
             closing={
-                "Gin": "30", "Vodka": "28", "Whisky": "37", "Rhum": "40",   # 25 L gone
+                "Gin": "30",
+                "Vodka": "28",
+                "Whisky": "37",
+                "Rhum": "40",  # 25 L gone
                 **MIXERS_BALANCED,
             },
             sales={"Alcool + Soda": 300, "Mule": 200},
@@ -183,14 +197,20 @@ class BarScenarioTests(TestCase):
 
     def test_a_broken_bottle_you_logged_is_not_shrinkage(self):
         StockMovement.objects.create(
-            stock_type=self.stock["Whisky"], quantity=Decimal("-0.7"),
-            unit_cost_ht=Decimal("40"), kind=MovementKind.LOSS,
-            note="Bouteille cassée au service", occurred_on=date(2026, 3, 12),
+            stock_type=self.stock["Whisky"],
+            quantity=Decimal("-0.7"),
+            unit_cost_ht=Decimal("40"),
+            kind=MovementKind.LOSS,
+            note="Bouteille cassée au service",
+            occurred_on=date(2026, 3, 12),
         )
         report = self.run_period(
             opening=dict.fromkeys(self.stock, "40"),
             closing={
-                "Gin": "32", "Vodka": "30", "Whisky": "37.3", "Rhum": "40",  # 20.7 L gone
+                "Gin": "32",
+                "Vodka": "30",
+                "Whisky": "37.3",
+                "Rhum": "40",  # 20.7 L gone
                 **MIXERS_BALANCED,
             },
             sales={"Alcool + Soda": 300, "Mule": 200},
@@ -205,7 +225,10 @@ class BarScenarioTests(TestCase):
         report = self.run_period(
             opening=dict.fromkeys(self.stock, "40"),
             closing={
-                "Gin": "38", "Vodka": "38", "Whisky": "40", "Rhum": "40",   # only 4 L gone
+                "Gin": "38",
+                "Vodka": "38",
+                "Whisky": "40",
+                "Rhum": "40",  # only 4 L gone
                 **MIXERS_BALANCED,
             },
             sales={"Alcool + Soda": 300, "Mule": 200},  # says 20 L
@@ -223,20 +246,21 @@ class BarScenarioTests(TestCase):
         report = self.run_period(
             opening=dict.fromkeys(self.stock, "40"),
             closing={
-                "Gin": "30", "Vodka": "28", "Whisky": "37", "Rhum": "40",
+                "Gin": "30",
+                "Vodka": "28",
+                "Whisky": "37",
+                "Rhum": "40",
                 **MIXERS_BALANCED,
             },
             sales={"Alcool + Soda": 300, "Mule": 200},
         )
-        response = self.client.get(
-            reverse("inventory:stock_take_variance", kwargs={"pk": report.closing_take.pk})
-        )
+        response = self.client.get(reverse("inventory:stock_take_variance", kwargs={"pk": report.closing_take.pk}))
         self.assertEqual(response.status_code, 200)
         assertNoUnrenderedTemplateSyntax(self, response, "variance report")
         self.assertContains(response, "Gin / Vodka / Whisky / Rhum")
-        self.assertContains(response, "37.50")   # the floor, in euros
+        self.assertContains(response, "37.50")  # the floor, in euros
         self.assertContains(response, "Perte estimée")
-        self.assertContains(response, "Rhum")    # priced as the cheapest
+        self.assertContains(response, "Rhum")  # priced as the cheapest
         self.assertContains(response, "500 ventes")
 
     def test_the_report_page_warns_when_there_are_no_sales(self):
@@ -247,9 +271,7 @@ class BarScenarioTests(TestCase):
             closing=dict.fromkeys(self.stock, "38"),
             sales={},
         )
-        response = self.client.get(
-            reverse("inventory:stock_take_variance", kwargs={"pk": report.closing_take.pk})
-        )
+        response = self.client.get(reverse("inventory:stock_take_variance", kwargs={"pk": report.closing_take.pk}))
         self.assertContains(response, "Aucune vente enregistrée")
 
     def test_a_manual_sale_and_an_uncounted_item_both_land_correctly(self):
@@ -264,7 +286,10 @@ class BarScenarioTests(TestCase):
         closing_take = self.count(
             31,
             {
-                "Gin": "31", "Vodka": "30", "Whisky": "38", "Rhum": "40",  # 21 L gone
+                "Gin": "31",
+                "Vodka": "30",
+                "Whisky": "38",
+                "Rhum": "40",  # 21 L gone
                 **MIXERS_BALANCED,
             },
         )
@@ -307,8 +332,11 @@ class BarScenarioTests(TestCase):
         report = self.run_period(
             opening=dict.fromkeys(self.stock, "40"),
             closing={
-                "Gin": "30", "Vodka": "28", "Whisky": "37", "Rhum": "40",   # 5 L of spirit missing
-                **MIXERS_SHORT_BY_5,                                        # 5 L of mixer missing
+                "Gin": "30",
+                "Vodka": "28",
+                "Whisky": "37",
+                "Rhum": "40",  # 5 L of spirit missing
+                **MIXERS_SHORT_BY_5,  # 5 L of mixer missing
             },
             sales={"Alcool + Soda": 300, "Mule": 200},
         )

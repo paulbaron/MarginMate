@@ -9,7 +9,7 @@ What must never come back:
   EMPTY environment (no MARGINMATE_*, no DJANGO_* but a SECRET_KEY - with
   none, DEBUG being off by default, the settings refuse to load - and no
   .env file), keeps one
-  database per espace and sends EVERY page but the public ones to the login -
+  database per tenant and sends EVERY page but the public ones to the login -
   each URL of the project asked anonymously, GET and POST - and has no
   /media/ route;
 * `LeftoverSettingTests`: a stale TENANCY_MODE = "single" setting opens
@@ -156,6 +156,7 @@ class EmptyEnvironmentTests(SimpleTestCase):
         env["PYTHONIOENCODING"] = "utf-8"
         result = subprocess.run(
             [sys.executable, "-c", SWEEP, str(scratch)],
+            check=False,
             cwd=settings.BASE_DIR,
             env=env,
             capture_output=True,
@@ -165,11 +166,13 @@ class EmptyEnvironmentTests(SimpleTestCase):
         )
         line = next((line for line in result.stdout.splitlines() if line.startswith("REPORT")), None)
         self.assertIsNotNone(line, result.stderr[-3000:])
-        report = json.loads(line[len("REPORT"):])
+        report = json.loads(line[len("REPORT") :])
 
-        # What the settings decide on their own: the espaces, never a file
+        # What the settings decide on their own: the tenants, never a file
         # as `default`, none of single mode's settings.
-        self.assertEqual(report["decided"], {"default": ":memory:", "aliases": ["accounts", "default"], "old_names": []})
+        self.assertEqual(
+            report["decided"], {"default": ":memory:", "aliases": ["accounts", "default"], "old_names": []}
+        )
         # Every URL of the project that is not public, GET and POST, sent to
         # the login - none answered, none missing its sample (a 404 would be
         # listed too).
@@ -195,13 +198,13 @@ class LeftoverSettingTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertTrue(response["Location"].startswith(reverse("accounts:login")), response["Location"])
 
-    def test_a_request_is_still_bound_to_the_user_s_espace(self):
+    def test_a_request_is_still_bound_to_the_user_s_tenant(self):
         response = self.client.get(reverse("invoices:supplier_list"))
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.wsgi_request.tenant.pk, runner.TEST_TENANT_PK)
         self.assertEqual(tenancy.current_tenant().pk, runner.TEST_TENANT_PK)
 
-    def test_the_folders_are_still_the_espace_s(self):
+    def test_the_folders_are_still_the_tenant_s(self):
         self.assertEqual(paths.media_root(), paths.tenant_dir(runner.TEST_TENANT) / paths.MEDIA)
         self.assertEqual(paths.imports_dir(), paths.tenant_dir(runner.TEST_TENANT) / paths.IMPORTS)
 
@@ -216,7 +219,7 @@ class LeftoverSettingTests(TestCase):
             self.assertIn("accounts.E002", [issue.id for issue in tenancy_settings()])
 
     def test_the_admin_is_still_for_superusers_only(self):
-        staff = runner.member_of_the_test_espace(
+        staff = runner.member_of_the_test_tenant(
             get_user_model().objects.create_user(
                 username="equipe@example.invalid", email="equipe@example.invalid", is_staff=True
             )

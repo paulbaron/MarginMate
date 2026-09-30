@@ -1,6 +1,6 @@
 """The archive, format version 1 (§4): a zip holding `manifest.json`
 (written last), one `<key>.json` per section, and `files/` - the invoices'
-PDFs and photos, and « Consignes »' photos and bons, under their stored
+PDFs and photos, and « Consignes »' photos and slips, under their stored
 names.
 
 Two things drive how it is written and read.
@@ -48,9 +48,9 @@ FILES_PREFIX = "files/"
 CHUNK = 1024 * 1024
 
 # Limits (§4.5). Module constants so tests can patch them small. They are
-# per archive, not per espace: in multi mode every espace shares the
+# per archive, not per tenant: in multi mode every tenant shares the
 # server's disk, and nothing yet caps what one keeps (staged archives until
-# its sweep, backups for ever) - a quota per espace is a later step.
+# its sweep, backups for ever) - a quota per tenant is a later step.
 MAX_ARCHIVE_BYTES = 4 * 1024**3
 MAX_MEMBERS = 100_000
 MAX_FILE_BYTES = 200 * 1024**2
@@ -63,7 +63,7 @@ RATIO_MIN_BYTES = 10 * 1024**2
 STORED_SUFFIXES = {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".zip", ".xlsx"}
 
 #: Where an import may write a file: the invoices' documents and previews,
-#: and « Consignes »' photos and bons (returnables.models, all under
+#: and « Consignes »' photos and slips (returnables.models, all under
 #: consignes/). Adding a folder here does not bump VERSION: an older
 #: installation ignores the section it does not know (« partie inconnue
 #: ignorée ») and never reads its files.
@@ -101,6 +101,7 @@ def _shown(name) -> str:
 
 # -- names ---------------------------------------------------------------------------
 
+
 def safe_member_name(name: str) -> bool:
     """A member name that cannot point outside where it is written: not
     empty, at most 255 characters, no control character, no backslash, not
@@ -118,10 +119,10 @@ def storage_name_problem(name) -> str | None:
     """Why an import may not write a file under this storage name, or None.
     The name comes from the archive's record, so it is checked like a member
     name, kept to the folders documents live in (`STORAGE_FOLDERS`), and
-    must stay inside the espace's media folder once joined (Django's
+    must stay inside the tenant's media folder once joined (Django's
     safe_join; accounts.paths.media_root). Checked against a server-wide
     MEDIA_ROOT, every file of every archive was refused: the storage writes
-    under the espace's own media/."""
+    under the tenant's own media/."""
     from accounts import paths
 
     if not isinstance(name, str) or not safe_member_name(name):
@@ -142,6 +143,7 @@ def storage_name_problem(name) -> str | None:
 
 # -- what the manifest says about the app ----------------------------------------------
 
+
 @functools.lru_cache(maxsize=1)
 def app_revision() -> str | None:
     """The commit the app runs, first 7 hex digits, read from .git without
@@ -152,14 +154,14 @@ def app_revision() -> str | None:
             text = git.read_text(encoding="utf-8").strip()
             if not text.startswith("gitdir:"):
                 return None
-            git = (git.parent / text[len("gitdir:"):].strip()).resolve()
+            git = (git.parent / text[len("gitdir:") :].strip()).resolve()
         common = git
         if (git / "commondir").is_file():
             common = (git / (git / "commondir").read_text(encoding="utf-8").strip()).resolve()
         head = (git / "HEAD").read_text(encoding="utf-8").strip()
         sha = head
         if head.startswith("ref:"):
-            ref = head[len("ref:"):].strip()
+            ref = head[len("ref:") :].strip()
             sha = ""
             for base in (git, common):
                 if (base / ref).is_file():
@@ -200,6 +202,7 @@ def applied_migrations() -> dict[str, str]:
 
 
 # -- writing -------------------------------------------------------------------------
+
 
 def _zip_info(member: str, compress_type: int) -> zipfile.ZipInfo:
     info = zipfile.ZipInfo(member, date_time=time.localtime()[:6])
@@ -362,6 +365,7 @@ class DeleteOnClose(io.FileIO):
 
 # -- reading -------------------------------------------------------------------------
 
+
 def _refuse_constant(value):
     raise ValueError(value)
 
@@ -429,7 +433,9 @@ def _read_json(zf: zipfile.ZipFile, member: str, what: str):
         data = json.loads(text, parse_constant=_refuse_constant)
     except ValueError as exc:  # JSONDecodeError and the NaN refusal alike
         if not isinstance(exc, json.JSONDecodeError) and str(exc) in ("NaN", "Infinity", "-Infinity"):
-            raise ArchiveError(f"Archive refusée : {what} contient une valeur qui n'est pas un nombre ({exc}).") from None
+            raise ArchiveError(
+                f"Archive refusée : {what} contient une valeur qui n'est pas un nombre ({exc})."
+            ) from None
         raise ArchiveError(f"Archive refusée : {what} est illisible.") from None
     if unencodable(text, data):
         raise ArchiveError(UNENCODABLE.format(what=what))
@@ -650,7 +656,10 @@ class ArchiveReader:
         declared = self._files.get(ref.get("member"))
         if declared is None:
             return False
-        return ref.get("size", declared["size"]) == declared["size"] and ref.get("sha256", declared["sha256"]) == declared["sha256"]
+        return (
+            ref.get("size", declared["size"]) == declared["size"]
+            and ref.get("sha256", declared["sha256"]) == declared["sha256"]
+        )
 
     def open_file(self, ref: dict) -> IO[bytes]:
         """Declared members only; verifies the size as it goes, and the sha

@@ -55,7 +55,8 @@ def till_export(entries) -> ParsedExport:
     products: dict = {}
     for name, sold_on, quantity in entries:
         info = products.setdefault(
-            name, {"quantity": 0, "category": "Liquide (Alcool)", "typology": "Cocktails", "first": sold_on, "last": sold_on}
+            name,
+            {"quantity": 0, "category": "Liquide (Alcool)", "typology": "Cocktails", "first": sold_on, "last": sold_on},
         )
         info["quantity"] += quantity
         info["first"] = min(info["first"], sold_on)
@@ -79,13 +80,17 @@ def build_till():
     build_recipes()
     make_recipe("Pinte IPA", selling_price_ttc="7.00", happy_hour_name="Pinte IPA HH")
     make_recipe("Planche apéro", selling_price_ttc="15.00")
-    run_till_import([
-        ("MOJITO CLASSIQUE", day(1), 12), ("MOJITO CLASSIQUE", day(2), 8),
-        ("Mojito HH", day(1), 5),
-        ("Pinte IPA", day(1), 30), ("Pinte IPA", day(3), 25),
-        ("CAFÉ", day(1), 40),
-        ("PLANCHE", day(2), 2),
-    ])
+    run_till_import(
+        [
+            ("MOJITO CLASSIQUE", day(1), 12),
+            ("MOJITO CLASSIQUE", day(2), 8),
+            ("Mojito HH", day(1), 5),
+            ("Pinte IPA", day(1), 30),
+            ("Pinte IPA", day(3), 25),
+            ("CAFÉ", day(1), 40),
+            ("PLANCHE", day(2), 2),
+        ]
+    )
     links.link(PosProduct.objects.get(name="MOJITO CLASSIQUE"), Recipe.objects.get(name="Mojito"))
     links.set_aside(PosProduct.objects.get(name="CAFÉ"), ignored=True)
 
@@ -108,7 +113,10 @@ def undone(action):
     try:
         with transaction.atomic():
             action()
-            result = (laddition_rows(), sorted(Recipe.objects.exclude(happy_hour_name="").values_list("name", "happy_hour_name")))
+            result = (
+                laddition_rows(),
+                sorted(Recipe.objects.exclude(happy_hour_name="").values_list("name", "happy_hour_name")),
+            )
             raise _Undo
     except _Undo:
         return result
@@ -123,9 +131,7 @@ class TillLinksRoundTripTests(LaneSectionsMixin, TestCase):
         self.assertEqual(link_of("Mojito HH"), ("Mojito", False))
         self.assertEqual(link_of("Pinte IPA"), ("Pinte IPA", False))
         self.assertEqual(sales_of("Mojito"), {"2026-09-01": 17, "2026-09-02": 8})
-        self.assertEqual(
-            TillLinksSection().count(), {"produits caisse liés": 3, "ignorés": 1, "noms happy hour": 2}
-        )
+        self.assertEqual(TillLinksSection().count(), {"produits caisse liés": 3, "ignorés": 1, "noms happy hour": 2})
 
     def after_clear(self):
         self.assertEqual(TillLinksSection().count(), {"produits caisse liés": 0, "ignorés": 0, "noms happy hour": 0})
@@ -159,7 +165,7 @@ class TillLinksRoundTripTests(LaneSectionsMixin, TestCase):
         must still be the app's own, row for row - for links made, moved,
         undone and a product set aside with its happy-hour name."""
         state_before = undone(lambda: None)
-        mojito_classique = PosProduct.objects.get(name="MOJITO CLASSIQUE")
+        classic_mojito = PosProduct.objects.get(name="MOJITO CLASSIQUE")
         archive_before = self.export(EXPORTED)
 
         def by_hand():
@@ -177,7 +183,7 @@ class TillLinksRoundTripTests(LaneSectionsMixin, TestCase):
         import_archive(archive_before, LINKS_REPLACED)
         self.assertEqual(undone(lambda: None), state_before)
         self.assertEqual(link_of("MOJITO CLASSIQUE"), ("Mojito", False))
-        self.assertEqual(PosProduct.objects.get(name="MOJITO CLASSIQUE").pk, mojito_classique.pk)
+        self.assertEqual(PosProduct.objects.get(name="MOJITO CLASSIQUE").pk, classic_mojito.pk)
 
         import_archive(archive_by_hand, LINKS_REPLACED)
         self.assertEqual(undone(lambda: None), state_by_hand)
@@ -237,9 +243,11 @@ class TillLinksMergeAndReplaceTests(LaneSectionsMixin, TestCase):
         self.assertEqual(link_of("Pinte IPA"), ("Alcool + Soda", False))
         self.assertEqual(link_of("PLANCHE"), ("Planche apéro", False))
         # Created as the archive has it: ignored, no day, no total.
-        cafe = PosProduct.objects.get(name="CAFÉ")
-        self.assertEqual((cafe.ignored, cafe.recipe, cafe.total_quantity, cafe.first_seen), (True, None, 0, None))
-        self.assertEqual((cafe.category, cafe.typology), ("Liquide (Alcool)", "Cocktails"))
+        coffee = PosProduct.objects.get(name="CAFÉ")
+        self.assertEqual(
+            (coffee.ignored, coffee.recipe, coffee.total_quantity, coffee.first_seen), (True, None, 0, None)
+        )
+        self.assertEqual((coffee.category, coffee.typology), ("Liquide (Alcool)", "Cocktails"))
 
     def test_replace(self):
         run = import_archive(self.reader, LINKS_REPLACED)
@@ -435,7 +443,7 @@ class TillLinksRefusalTests(LaneSectionsMixin, TestCase):
     def test_linked_and_ignored_at_once_or_neither(self):
         def change(products):
             products[0]["recipe"] = "Planche apéro"  # CAFÉ, ignored
-            products[1]["ignored"] = True       # MOJITO CLASSIQUE, linked
+            products[1]["ignored"] = True  # MOJITO CLASSIQUE, linked
             products.append({"name": "PLANCHE", "recipe": None, "ignored": False})
             products.append({"name": "SANS NOM"})
             products.append(["illisible"])

@@ -8,8 +8,8 @@ from datetime import timedelta
 
 from django.db import migrations, models
 
-BLOCKED_RE = re.compile(r"bloqu[ée]e?s?\s+par\s+(?:notre|le)\s+pare-feu", re.I)
-REFERENCE_RE = re.compile(r"#\d+\.[0-9a-f]+\.\d+\.[0-9a-f]+", re.I)
+BLOCKED_RE = re.compile(r"bloqu[ée]e?s?\s+par\s+(?:notre|le)\s+pare-feu", re.IGNORECASE)
+REFERENCE_RE = re.compile(r"#\d+\.[0-9a-f]+\.\d+\.[0-9a-f]+", re.IGNORECASE)
 # As scrapers/metro.py at the time of writing - a migration keeps its own copy.
 BLOCK_PAUSE = timedelta(days=7)
 REPEAT_BLOCK_WITHIN = timedelta(days=30)

@@ -1,10 +1,10 @@
 """Where the timesheet signatures keep their files: the private folder,
-`accounts.paths.private_dir()` - the bound espace's own `private/` (under
+`accounts.paths.private_dir()` - the bound tenant's own `private/` (under
 TENANTS_ROOT, read at call time, so a test's override_settings redirects
 it), and NOTHING unbound (NoTenantBound).
-One folder per espace is what gives each bar its own signing authority, its
+One folder per tenant is what gives each bar its own signing authority, its
 own employer and employee keys (`keys/employees/<pk>`: pks restart at 1 in
-every espace's database), its own signed files and its own deletions.log -
+every tenant's database), its own signed files and its own deletions.log -
 `signing.verify` trusts the authorities of THIS folder only.
 
     keys/                          the internal authority, the employer's and each
@@ -25,7 +25,7 @@ every espace's database), its own signed files and its own deletions.log -
 a signed timesheet - or a private key - there would be downloadable by its
 address. `private_dir()` refuses such a folder (and a served folder inside
 it) rather than creating it. Media is no served folder: the old single
-mode's public /media/ route is gone (29/09/2026), and an espace's media/ is
+mode's public /media/ route is gone (29/09/2026), and a tenant's media/ is
 read only through the logged-in file view, which never reaches private/. The files are written whole or not at
 all (a temporary file, then `os.replace`), and the database keeps each
 one's SHA-256: `read_checked` is what notices a file changed on disk.
@@ -84,7 +84,7 @@ def _served_folders() -> list[tuple[str, Path]]:
 def private_dir() -> Path:
     """The private folder, created on demand - and refused, never created,
     when it is inside a folder the site serves (or holds one). The bound
-    espace's `private/`, beside its `media/` and never in it
+    tenant's `private/`, beside its `media/` and never in it
     (accounts/paths.py); unbound, NoTenantBound."""
     folder = Path(paths.private_dir()).resolve()
     for setting, served in _served_folders():
@@ -107,7 +107,7 @@ def keys_dir() -> Path:
 def keys_folder() -> Path:
     """Where the keys are, creating nothing - for what only reads them
     (`signing.key_warning`, `authority_certificates`, `authority_fingerprint`).
-    The same folder as `keys_dir`: the bound espace's, NoTenantBound
+    The same folder as `keys_dir`: the bound tenant's, NoTenantBound
     unbound."""
     return Path(paths.private_dir()) / KEYS
 
@@ -118,7 +118,7 @@ def _request_id(request_id) -> str:
     if isinstance(request_id, uuid.UUID):
         return str(request_id)
     if not isinstance(request_id, str):
-        raise ValueError(f"Identifiant de demande invalide : {request_id!r}")
+        raise ValueError(f"Identifiant de demande invalide : {request_id!r}")  # noqa: TRY004 - any bad id is a ValueError, as documented
     try:
         parsed = uuid.UUID(request_id)
     except ValueError:

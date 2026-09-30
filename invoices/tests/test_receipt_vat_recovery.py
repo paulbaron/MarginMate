@@ -30,7 +30,7 @@ FIVE_FIVE = D("0.055")
 
 class MoneyIsCentsTests(SimpleTestCase):
     def test_a_euro_sign_read_as_a_digit_is_not_a_third_decimal(self):
-        """"8,44€" arrives as "8,448"; kept, it invented a 0,008 EUR discount."""
+        """ "8,44€" arrives as "8,448"; kept, it invented a 0,008 EUR discount."""
         self.assertEqual(line_amounts("TOTAL HORS AVANTAGES  8,448"), [D("8.44")])
         self.assertEqual(line_amounts("IOTAI HOR: AVANTAGES  14,302"), [D("14.30")])
 
@@ -57,7 +57,7 @@ class DerivedFromTheTotalTests(SimpleTestCase):
         self.assertIsNone(summary.base)
 
     def test_a_zero_tax_printed_beside_its_rate_is_a_bucket_of_nothing(self):
-        """"Total TVA 20 %  0,00" under a table whose rows are all at 5,5 %:
+        """ "Total TVA 20 %  0,00" under a table whose rows are all at 5,5 %:
         derived from the total, that 20 % stood for a second bucket the size
         of the whole invoice and failed two checks on a document read right.
         A rate that taxes nothing has no base to derive - and no bucket."""

@@ -4,15 +4,14 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('invoices', '0003_scrapejob_progress_scrapejob_range_end_and_more'),
+        ("invoices", "0003_scrapejob_progress_scrapejob_range_end_and_more"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='invoiceline',
-            name='colisage',
+            model_name="invoiceline",
+            name="colisage",
             field=models.IntegerField(default=1),
         ),
     ]

@@ -2,7 +2,7 @@
 
     python manage.py laddition_backfill_payments --dry-run
     python manage.py laddition_backfill_payments
-    python manage.py laddition_backfill_payments --folder /un/dossier
+    python manage.py laddition_backfill_payments --folder /some/folder
 
 The export's « SalesDocument » sheet - one row per ticket, and how it was
 paid - was not read until now, and the .xlsx already downloaded carry it.
@@ -27,8 +27,8 @@ Three things it will not do:
 how many it leaves out, and the payments per year and per method - before
 anything is written.
 
-The folder is the espace's own, for the reason laddition_backfill_revenue
-gives: run it as `manage.py tenant <dossier> laddition_backfill_payments` in
+The folder is the tenant's own, for the reason laddition_backfill_revenue
+gives: run it as `manage.py tenant <folder> laddition_backfill_payments` in
 multi mode, and a bar's card and cash totals never land on another's days.
 """
 
@@ -40,7 +40,7 @@ from pathlib import Path
 from django.core.management.base import BaseCommand, CommandError
 
 from accounts import paths
-from recipes.integration import require_espace
+from recipes.integration import require_tenant_for_command
 from recipes.management.commands.laddition_backfill_revenue import SHOWN, euros
 from recipes.models import PosDailyPayment, PosProductDailyQuantity
 from recipes.payments import by_method, changed_days, day_total, oddities, replace_days
@@ -80,7 +80,7 @@ class Command(BaseCommand):
         parser.add_argument("--dry-run", action="store_true", help="Montrer sans rien enregistrer.")
 
     def handle(self, *args, folder=None, dry_run=False, **options):
-        require_espace("laddition_backfill_payments")
+        require_tenant_for_command("laddition_backfill_payments")
         directory = Path(folder) if folder else paths.downloads_dir()
         if not directory.is_dir():
             raise CommandError(f"Dossier introuvable : {directory}")
@@ -93,9 +93,7 @@ class Command(BaseCommand):
 
         readings, conflicts = self._read(files)
         if not readings:
-            self.stdout.write(
-                "Aucun paiement lu : ces fichiers ne portent pas la feuille des tickets (SalesDocument)."
-            )
+            self.stdout.write("Aucun paiement lu : ces fichiers ne portent pas la feuille des tickets (SalesDocument).")
             return
         self._report_conflicts(conflicts)
         self._report_years(readings)
@@ -120,8 +118,7 @@ class Command(BaseCommand):
         written = replace_days(readings, fill)
         self.stdout.write(
             self.style.SUCCESS(
-                f"{written.days_written} jour(s) mis à jour ({written.rows_created} total(aux) par moyen "
-                "de paiement)."
+                f"{written.days_written} jour(s) mis à jour ({written.rows_created} total(aux) par moyen de paiement)."
             )
         )
 

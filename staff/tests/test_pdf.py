@@ -55,10 +55,10 @@ from staff.timesheet import (
     save_month,
 )
 
-JUNE = date(2026, 6, 1)      # starts on a Monday, 30 days
-MARCH = date(2026, 3, 1)     # starts on a Sunday, 31 days: six week totals, the most a month can have
-MAY = date(2026, 5, 1)       # four public holidays
-AUGUST = date(2026, 8, 1)    # « Mois d'août », starts on a Saturday: six week totals too
+JUNE = date(2026, 6, 1)  # starts on a Monday, 30 days
+MARCH = date(2026, 3, 1)  # starts on a Sunday, 31 days: six week totals, the most a month can have
+MAY = date(2026, 5, 1)  # four public holidays
+AUGUST = date(2026, 8, 1)  # « Mois d'août », starts on a Saturday: six week totals too
 
 BAR = Establishment(name="BAR EXEMPLE", address="12 rue Imaginaire\n75000 PARIS")
 
@@ -186,7 +186,13 @@ class ContentTests(SimpleTestCase):
 
     def test_every_day_every_figure_and_every_week_total_of_a_typical_june(self):
         week = [
-            "Lundi {}", "Mardi {} 7,5", "Mercredi {} 6", "Jeudi {} 7,5", "Vendredi {} 7,5", "Samedi {} 7,5", "Dimanche {}"
+            "Lundi {}",
+            "Mardi {} 7,5",
+            "Mercredi {} 6",
+            "Jeudi {} 7,5",
+            "Vendredi {} 7,5",
+            "Samedi {} 7,5",
+            "Dimanche {}",
         ]
         expected = []
         for monday in (1, 8, 15, 22):
@@ -238,7 +244,11 @@ class ContentTests(SimpleTestCase):
 
     def test_the_hours_are_right_aligned(self):
         sheet = changed(
-            JUNE, [DayEntry(date(2026, 6, 2), Decimal("7.25"), "travail"), DayEntry(date(2026, 6, 3), Decimal("10"), "travail")]
+            JUNE,
+            [
+                DayEntry(date(2026, 6, 2), Decimal("7.25"), "travail"),
+                DayEntry(date(2026, 6, 3), Decimal("10"), "travail"),
+            ],
         )
         with opened(pdf_of(sheet)) as pdf:
             words = pdf.pages[0].extract_words()
@@ -270,7 +280,9 @@ class ContentTests(SimpleTestCase):
         """Every kind of absence, and the difference below the typical week
         printed with a minus cp1252 has (the app's own « − » is not in it)."""
         kinds = ["conges", "repos_comp", "ferie", "maladie", "absence"]
-        sheet = changed(AUGUST, [DayEntry(day, Decimal("0"), kinds[index % 5]) for index, day in enumerate(month_days(AUGUST))])
+        sheet = changed(
+            AUGUST, [DayEntry(day, Decimal("0"), kinds[index % 5]) for index, day in enumerate(month_days(AUGUST))]
+        )
         text = "\n".join(lines_of(pdf_of(sheet)))
         for fragment in (
             "Heures travaillées : 0 h",
@@ -334,7 +346,7 @@ class ContentTests(SimpleTestCase):
         self.assertIn("Vendredi 8 Férié chômé — Victoire 1945", table)
         self.assertIn("Jeudi 14 7,5 Férié : Ascension", table)
         self.assertIn("Lundi 25", table)
-        # Worked, the holiday is said in grey: it is information, not a motif.
+        # Worked, the holiday is said in grey: it is information, not an absence's label.
         with opened(data) as pdf:
             words = pdf.pages[0].extract_words(extra_attrs=["non_stroking_color"])
         colours = {word["text"]: word["non_stroking_color"] for word in words}
@@ -347,7 +359,7 @@ class ContentTests(SimpleTestCase):
 
     def test_a_holiday_inside_a_leave_says_so(self):
         """A public holiday inside a week of paid leave is not a day of
-        leave: the sheet shows which day it was, beside the motif."""
+        leave: the sheet shows which day it was, beside the absence's label."""
         sheet = changed(AUGUST, [DayEntry(date(2026, 8, day), Decimal("0"), "conges") for day in range(11, 16)])
         table = table_of(pdf_of(sheet))
         self.assertIn("Vendredi 14 Congés payés", table)
@@ -385,11 +397,15 @@ class ContentTests(SimpleTestCase):
                 self.assertGreaterEqual(box["bottom"] - box["top"], 85)
                 self.assertAlmostEqual(box["bottom"], PAGE_HEIGHT - MARGIN_BOTTOM, places=2)
             self.assertEqual(
-                page.crop((employee_box["x0"], employee_box["top"], employee_box["x1"], employee_box["bottom"])).extract_text(),
+                page.crop(
+                    (employee_box["x0"], employee_box["top"], employee_box["x1"], employee_box["bottom"])
+                ).extract_text(),
                 "Le salarié\nDate et signature, précédées de la mention “Lu et approuvé”",
             )
             self.assertEqual(
-                page.crop((employer_box["x0"], employer_box["top"], employer_box["x1"], employer_box["bottom"])).extract_text(),
+                page.crop(
+                    (employer_box["x0"], employer_box["top"], employer_box["x1"], employer_box["bottom"])
+                ).extract_text(),
                 "L'employeur\nDate et signature",
             )
 
@@ -411,7 +427,12 @@ class ContentTests(SimpleTestCase):
                 DayEntry(date(2026, 6, 2), Decimal("7"), "travail", "réunion 東京 😀"),
                 # What cp1252 lacks but has an equivalent for: a narrow
                 # no-break space before a colon, the minus sign.
-                DayEntry(date(2026, 6, 3), Decimal("8"), "travail", "départ\N{NARROW NO-BREAK SPACE}: 22\N{NARROW NO-BREAK SPACE}h, écart \N{MINUS SIGN}1 h"),
+                DayEntry(
+                    date(2026, 6, 3),
+                    Decimal("8"),
+                    "travail",
+                    "départ\N{NARROW NO-BREAK SPACE}: 22\N{NARROW NO-BREAK SPACE}h, écart \N{MINUS SIGN}1 h",
+                ),
                 # An « é » typed as « e » + a combining accent is one « é ».
                 DayEntry(date(2026, 6, 4), Decimal("8"), "travail", "Jose\N{COMBINING ACUTE ACCENT} remplace"),
                 DayEntry(date(2026, 6, 5), Decimal("8"), "travail", "(voir \\ plus bas)"),
@@ -432,7 +453,9 @@ class ContentTests(SimpleTestCase):
     def test_no_establishment_prints_no_header(self):
         for establishment in (None, Establishment()):
             with self.subTest(establishment=establishment):
-                self.assertEqual(lines_of(pdf_of(planned(JUNE), establishment))[0], "Fiche de temps — Mois de juin 2026")
+                self.assertEqual(
+                    lines_of(pdf_of(planned(JUNE), establishment))[0], "Fiche de temps — Mois de juin 2026"
+                )
 
     def test_an_address_without_a_name_prints_no_header(self):
         """What the page says where the header is typed (« Sans nom, les
@@ -452,7 +475,9 @@ class ContentTests(SimpleTestCase):
         )
 
     def test_an_employee_with_no_first_name(self):
-        self.assertIn("Salarié : MARTIN", lines_of(pdf_of(planned(JUNE, employee(save=False, last_name="Martin", first_name="")))))
+        self.assertIn(
+            "Salarié : MARTIN", lines_of(pdf_of(planned(JUNE, employee(save=False, last_name="Martin", first_name=""))))
+        )
 
 
 def content_stream(data) -> bytes:
@@ -567,7 +592,9 @@ class OnePageTests(SimpleTestCase):
         table = lines[lines.index("Jour Heures Motif / note") + 1 : lines.index("Récapitulatif du mois")]
         self.assertEqual(len(table), 37)
         self.assertEqual(sum(line.startswith("Total") for line in table), 6)
-        self.assertEqual([line.split()[1] for line in table if not line.startswith("Total")], [str(n) for n in range(1, 32)])
+        self.assertEqual(
+            [line.split()[1] for line in table if not line.startswith("Total")], [str(n) for n in range(1, 32)]
+        )
         self.assertTrue(table[0].startswith("Dimanche 1 Remplacement imprévu"), table[0])
         self.assertTrue(table[0].endswith("…"))
         self.assertEqual(table[-1], "Total (semaine incomplète) 10,75")
@@ -580,7 +607,8 @@ class OnePageTests(SimpleTestCase):
         # Nothing overlaps: the last row, then the summary, then the signatures.
         last_total = max(word["bottom"] for word in words if word["text"] == "Total")
         summary, *signatures = sorted(
-            (rect for rect in page.rects if rect["stroke"] and not rect["fill"]), key=lambda rect: (rect["top"], rect["x0"])
+            (rect for rect in page.rects if rect["stroke"] and not rect["fill"]),
+            key=lambda rect: (rect["top"], rect["x0"]),
         )
         self.assertLess(last_total, summary["top"])
         self.assertLess(summary["bottom"], min(box["top"] for box in signatures))
@@ -627,11 +655,11 @@ class TextTests(SimpleTestCase):
     def test_printable_name(self):
         """A name loses an accent rather than a letter: « ?ukasz » is a name
         misspelt, « Lukasz » is still his (review, 28/09)."""
-        self.assertEqual(printable_name("Łódź"), "Lódz")   # « ó » is cp1252's: kept
+        self.assertEqual(printable_name("Łódź"), "Lódz")  # « ó » is cp1252's: kept
         self.assertEqual(printable_name("WÓJCIK Łukasz"), "WÓJCIK Lukasz")
         self.assertEqual(printable_name("NGUYỄN Thị Đào"), "NGUYÊN Thi Dào")
         self.assertEqual(printable_name("  DUPONT\tJeanne-Marie  "), "DUPONT Jeanne-Marie")
-        self.assertEqual(printable_name("Martin et ﬁls"), "Martin et fils")   # a ligature, spelt out
+        self.assertEqual(printable_name("Martin et ﬁls"), "Martin et fils")  # a ligature, spelt out
         # A letter nothing brings back into cp1252 is still « ? », never an error.
         self.assertEqual(printable_name("李 Jeanne"), "? Jeanne")
 
@@ -669,7 +697,7 @@ class FilenameTests(SimpleTestCase):
         header = content_disposition(planned(AUGUST))
         self.assertEqual(
             header,
-            "attachment; filename=\"Fiche de temps DUPONT Jeanne aout 2026.pdf\"; "
+            'attachment; filename="Fiche de temps DUPONT Jeanne aout 2026.pdf"; '
             "filename*=UTF-8''Fiche%20de%20temps%20DUPONT%20Jeanne%20ao%C3%BBt%202026.pdf",
         )
         header.encode("ascii")
@@ -683,7 +711,7 @@ class FilenameTests(SimpleTestCase):
         response["Content-Disposition"] = content_disposition(sheet)
         self.assertEqual(
             response["Content-Disposition"],
-            "attachment; filename=\"Fiche de temps D'EON Zoe aout 2026.pdf\"; "
+            'attachment; filename="Fiche de temps D\'EON Zoe aout 2026.pdf"; '
             "filename*=UTF-8''Fiche%20de%20temps%20D%27%C3%89ON%20Zo%C3%A9%20ao%C3%BBt%202026.pdf",
         )
 

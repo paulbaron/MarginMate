@@ -21,9 +21,7 @@ from tests.factories import make_invoice, make_invoice_type, make_supplier
 
 
 def website_type(supplier, name="Box Exemple - Factures", **settings):
-    invoice_type = InvoiceType.objects.create(
-        supplier=supplier, name=name, source_kind=InvoiceType.SourceKind.WEBSITE
-    )
+    invoice_type = InvoiceType.objects.create(supplier=supplier, name=name, source_kind=InvoiceType.SourceKind.WEBSITE)
     WebsiteInvoiceSource.objects.create(
         invoice_type=invoice_type,
         login_url="https://box.exemple.fr/login",
@@ -41,10 +39,17 @@ class TypeFormTests(TestCase):
 
     def post(self, url=None, **fields):
         data = {
-            "name": "Box Exemple - Factures", "supplier": self.supplier.pk, "source_kind": "WEBSITE",
-            "parser_key": "", "is_active": "on", "action": "save",
-            "site-login_url": "https://box.exemple.fr/login", "site-username_env": "box_login",
-            "site-password_env": "BOX_PASSWORD", "site-invoices_url": "", "site-navigation": "Mes factures",
+            "name": "Box Exemple - Factures",
+            "supplier": self.supplier.pk,
+            "source_kind": "WEBSITE",
+            "parser_key": "",
+            "is_active": "on",
+            "action": "save",
+            "site-login_url": "https://box.exemple.fr/login",
+            "site-username_env": "box_login",
+            "site-password_env": "BOX_PASSWORD",
+            "site-invoices_url": "",
+            "site-navigation": "Mes factures",
         }
         data.update(fields)
         return self.client.post(url or self.url, data)
@@ -118,21 +123,37 @@ class TypeFormTests(TestCase):
         EmailInvoiceSource.objects.create(invoice_type=invoice_type, sender_pattern="factures@box")
         url = reverse("invoices:invoice_type_update", args=[invoice_type.pk])
         with mock.patch("invoices.views.threading.Thread"):
-            response = self.client.post(url, {
-                "name": "Box Exemple - Factures", "supplier": self.supplier.pk, "source_kind": "WEBSITE",
-                "action": "test", "test_start_date": "2026-04-01", "test_end_date": "2026-05-31",
-                "site-login_url": "https://box.exemple.fr/login", "site-username_env": "BOX_LOGIN",
-                "site-password_env": "BOX_PASSWORD",
-            })
+            response = self.client.post(
+                url,
+                {
+                    "name": "Box Exemple - Factures",
+                    "supplier": self.supplier.pk,
+                    "source_kind": "WEBSITE",
+                    "action": "test",
+                    "test_start_date": "2026-04-01",
+                    "test_end_date": "2026-05-31",
+                    "site-login_url": "https://box.exemple.fr/login",
+                    "site-username_env": "BOX_LOGIN",
+                    "site-password_env": "BOX_PASSWORD",
+                },
+            )
         self.assertContains(response, 'value="factures@box"')
         self.assertContains(response, 'value="2026-04-01"')
 
     def test_an_email_type_is_saved_as_before(self):
-        response = self.client.post(self.url, {
-            "name": "Grossiste - Factures", "supplier": self.supplier.pk, "source_kind": "EMAIL",
-            "parser_key": "", "is_active": "on", "action": "save", "sender_pattern": "factures@",
-            "attachment_pattern": r"(?i)\.pdf$",
-        })
+        response = self.client.post(
+            self.url,
+            {
+                "name": "Grossiste - Factures",
+                "supplier": self.supplier.pk,
+                "source_kind": "EMAIL",
+                "parser_key": "",
+                "is_active": "on",
+                "action": "save",
+                "sender_pattern": "factures@",
+                "attachment_pattern": r"(?i)\.pdf$",
+            },
+        )
         self.assertRedirects(response, reverse("invoices:invoice_type_list"))
         self.assertEqual(InvoiceType.objects.get(name="Grossiste - Factures").source_kind, "EMAIL")
         self.assertFalse(WebsiteInvoiceSource.objects.exists())
@@ -145,7 +166,10 @@ class TypeFormTests(TestCase):
         job = ScrapeJob.objects.get(kind=ScrapeJob.Kind.TEST)
         self.assertEqual(response.context["test_job"], job)
         _job_id, recipe, supplier_id, start, end = thread.call_args.kwargs["args"]
-        self.assertEqual((recipe.login_url, recipe.username_env, recipe.navigation), ("https://box.exemple.fr/login", "BOX_LOGIN", ["Mes factures"]))
+        self.assertEqual(
+            (recipe.login_url, recipe.username_env, recipe.navigation),
+            ("https://box.exemple.fr/login", "BOX_LOGIN", ["Mes factures"]),
+        )
         self.assertEqual((supplier_id, start, end), (self.supplier.pk, date(2026, 4, 1), date(2026, 5, 31)))
 
 
@@ -154,7 +178,9 @@ class TestTaskTests(TestCase):
         supplier = make_supplier(code="BOX_X", name="Box Exemple", parser_key="")
         make_invoice(supplier=supplier, invoice_number="F-2026-0417")
         job = ScrapeJob.objects.create(kind=ScrapeJob.Kind.TEST)
-        rows = [{"row": "Facture de mai 2026", "link": "Télécharger", "date": "01/05/2026", "decision": "à télécharger"}]
+        rows = [
+            {"row": "Facture de mai 2026", "link": "Télécharger", "date": "01/05/2026", "decision": "à télécharger"}
+        ]
         recipe = WebsiteRecipe(name="Box", login_url="https://box.exemple.fr", username_env="A", password_env="B")
         with mock.patch("invoices.tasks.list_website_invoices", return_value=rows) as listing:
             test_website_task(job.id, recipe, supplier.pk, date(2026, 4, 1), date(2026, 5, 31))
@@ -176,11 +202,16 @@ class GatherTests(TestCase):
 
     def gather(self, fetch, imported=None):
         job = ScrapeJob.objects.create()
-        with mock.patch("invoices.tasks.fetch_website_invoices", side_effect=fetch), mock.patch(
-            "invoices.receipts.import_document", side_effect=imported or (lambda path, **kwargs: None)
-        ) as import_document:
+        with (
+            mock.patch("invoices.tasks.fetch_website_invoices", side_effect=fetch),
+            mock.patch(
+                "invoices.receipts.import_document", side_effect=imported or (lambda path, **kwargs: None)
+            ) as import_document,
+        ):
             gather_invoices_task(
-                job.id, date(2026, 4, 1), date(2026, 5, 31),
+                job.id,
+                date(2026, 4, 1),
+                date(2026, 5, 31),
                 {f"type-{self.box_type.id}", f"type-{self.water_type.id}"},
             )
         job.refresh_from_db()
@@ -193,7 +224,8 @@ class GatherTests(TestCase):
         job, import_document = self.gather(fetch)
         self.assertEqual(job.status, ScrapeJob.Status.SUCCESS)
         self.assertEqual(
-            sorted(call.kwargs["supplier"].name for call in import_document.call_args_list), ["Box Exemple", "Eau Exemple"]
+            sorted(call.kwargs["supplier"].name for call in import_document.call_args_list),
+            ["Box Exemple", "Eau Exemple"],
         )
         self.assertEqual(job.progress[f"type-{self.box_type.id}"]["imported"], 1)
         self.assertEqual(job.invoices_created, 2)

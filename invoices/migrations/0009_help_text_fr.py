@@ -4,20 +4,23 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('invoices', '0008_scrapejob_cancel_requested_alter_scrapejob_status'),
+        ("invoices", "0008_scrapejob_cancel_requested_alter_scrapejob_status"),
     ]
 
     operations = [
         migrations.AlterField(
-            model_name='invoicetype',
-            name='is_active',
-            field=models.BooleanField(default=True, help_text='Inclure ce type dans « Récupérer les nouvelles factures ».'),
+            model_name="invoicetype",
+            name="is_active",
+            field=models.BooleanField(
+                default=True, help_text="Inclure ce type dans « Récupérer les nouvelles factures »."
+            ),
         ),
         migrations.AlterField(
-            model_name='supplier',
-            name='is_scrapable',
-            field=models.BooleanField(default=False, help_text='Si « Récupérer les nouvelles factures » sait aller les chercher tout seul.'),
+            model_name="supplier",
+            name="is_scrapable",
+            field=models.BooleanField(
+                default=False, help_text="Si « Récupérer les nouvelles factures » sait aller les chercher tout seul."
+            ),
         ),
     ]

@@ -1,13 +1,13 @@
 """What an upload may weigh, and what a PDF may cost to read (security
 audit UPLOAD-1).
 
-Nothing capped a file's size - a 64 Mo file named .jpg was staged whole in
-the espace's imports/ - nor what reading a PDF costs: a page with no text is
+Nothing capped a file's size - a 64 MB file named .jpg was staged whole in
+the tenant's imports/ - nor what reading a PDF costs: a page with no text is
 rendered at 300 dpi at whatever size its MediaBox declares, every page of
 it, so a few hundred bytes decided a bitmap of gigabytes in the one process
 that serves every bar.
 
-Now: 25 Mo a file on every form (`common.UPLOAD_MAX_FILE_BYTES`), refused by
+Now: 25 MB a file on every form (`common.UPLOAD_MAX_FILE_BYTES`), refused by
 its name - in a folder of tickets, that file's own error and the others read
 - a total per request (`invoices.forms.RECEIPT_BATCH_MAX_BYTES` for the
 folder), and in `ocr.page_images` a page cap and a pixel budget worked out
@@ -66,7 +66,7 @@ class ReceiptFolderFormTests(SimpleTestCase):
     def form(self, *uploads):
         return ReceiptBatchUploadForm(data={}, files=MultiValueDict({"files": list(uploads)}))
 
-    def test_a_file_over_25_mo_is_set_aside_by_name_and_the_rest_is_read(self):
+    def test_a_file_over_25_mb_is_set_aside_by_name_and_the_rest_is_read(self):
         form = self.form(upload("a.pdf"), upload("enorme.jpg", size=30 * MEGABYTE), upload("b.jpg"))
         self.assertTrue(form.is_valid(), form.errors)
         self.assertEqual([item.name for item in form.cleaned_data["files"]], ["a.pdf", "b.jpg"])
@@ -95,7 +95,7 @@ class ReceiptFolderFormTests(SimpleTestCase):
         self.assertEqual(form.ignored_names, ["VID_0001.mp4"])
 
     def test_files_refused_on_their_own_are_not_in_the_total_either(self):
-        """Each over 25 Mo, each that file's error, none written."""
+        """Each over 25 MB, each that file's error, none written."""
         scans = [upload(f"scan-{n:02d}.pdf", size=30 * MEGABYTE) for n in range(20)]
         form = self.form(upload("ticket.pdf"), *scans)
         self.assertTrue(form.is_valid(), form.errors)
@@ -109,17 +109,30 @@ class ReceiptFolderFormTests(SimpleTestCase):
         self.assertIn("La sélection pèse 540 Mo : 500 Mo au plus en une fois", str(form.errors["files"]))
 
     def test_a_normal_folder_of_phone_photos_goes_through(self):
-        """Eighty photos of 5 Mo - several months of tickets - or 1 500 scans
-        like the owner's (0.3 Mo): both under the total."""
+        """Eighty photos of 5 MB - several months of tickets - or 1 500 scans
+        like the owner's (0.3 MB): both under the total."""
         photos = [upload(f"photo-{n:03d}.jpg", size=5 * MEGABYTE) for n in range(80)]
         self.assertTrue(self.form(*photos).is_valid())
         scans = [upload(f"scan-{n:04d}.pdf", size=300 * 1024) for n in range(1500)]
         self.assertTrue(self.form(*scans).is_valid())
 
 
+def clear_staged_batches():
+    """SQLite gives a rolled-back pk out again, and the folders an earlier test
+    staged stay on disk: a batch's folder may already hold a file another
+    test's batch of the same pk wrote (test_receipt_batches run first, in the
+    same process, did - the parallel runner's order)."""
+    shutil.rmtree(os.path.join(paths.imports_dir(), "receipt_batches"), ignore_errors=True)
+
+
 class StagedRefusalsTests(TestCase):
+    def setUp(self):
+        clear_staged_batches()
+
     def test_a_refused_file_is_that_file_s_error_and_never_written(self):
-        batch = stage_batch([upload("a.pdf")], ["Thumbs.db"], [("enorme.jpg", "« enorme.jpg » pèse 30 Mo : 25 Mo au plus par fichier.")])
+        batch = stage_batch(
+            [upload("a.pdf")], ["Thumbs.db"], [("enorme.jpg", "« enorme.jpg » pèse 30 Mo : 25 Mo au plus par fichier.")]
+        )
         self.addCleanup(shutil.rmtree, os.path.join(paths.imports_dir(), "receipt_batches", str(batch.pk)), True)
         self.assertEqual([entry["status"] for entry in batch.results], ["pending", "error", "ignored"])
         refused = batch.results[1]
@@ -131,27 +144,34 @@ class StagedRefusalsTests(TestCase):
 
 
 class ReceiptUploadPageTests(TestCase):
+    def setUp(self):
+        clear_staged_batches()
+
     def test_the_folder_upload_stages_only_what_fits(self):
-        with mock.patch("common.UPLOAD_MAX_FILE_BYTES", 30), mock.patch(
-            "invoices.receipt_batches.threading.Thread"
-        ):
+        with mock.patch("common.UPLOAD_MAX_FILE_BYTES", 30), mock.patch("invoices.receipt_batches.threading.Thread"):
             response = self.client.post(
                 reverse("invoices:receipt_upload"),
                 {"files": [upload("petit.pdf", b"%PDF-1.4 x"), upload("gros.jpg", b"x" * 64)]},
             )
         batch = ReceiptBatch.objects.get()
         self.addCleanup(shutil.rmtree, os.path.join(paths.imports_dir(), "receipt_batches", str(batch.pk)), True)
-        self.assertRedirects(response, reverse("invoices:receipt_batch", args=[batch.pk]), fetch_redirect_response=False)
-        self.assertEqual([(entry["name"], entry["status"]) for entry in batch.results], [("petit.pdf", "pending"), ("gros.jpg", "error")])
+        self.assertRedirects(
+            response, reverse("invoices:receipt_batch", args=[batch.pk]), fetch_redirect_response=False
+        )
+        self.assertEqual(
+            [(entry["name"], entry["status"]) for entry in batch.results],
+            [("petit.pdf", "pending"), ("gros.jpg", "error")],
+        )
         self.assertEqual(os.listdir(os.path.join(paths.imports_dir(), "receipt_batches", str(batch.pk))), ["0000.pdf"])
         page = self.client.get(reverse("invoices:receipt_batch", args=[batch.pk]))
         self.assertContains(page, "gros.jpg")
         self.assertContains(page, "au plus par fichier")
 
     def test_a_folder_over_its_total_stages_nothing(self):
-        with mock.patch("invoices.forms.RECEIPT_BATCH_MAX_BYTES", 40), mock.patch(
-            "invoices.receipt_batches.threading.Thread"
-        ) as thread:
+        with (
+            mock.patch("invoices.forms.RECEIPT_BATCH_MAX_BYTES", 40),
+            mock.patch("invoices.receipt_batches.threading.Thread") as thread,
+        ):
             response = self.client.post(
                 reverse("invoices:receipt_upload"),
                 {"files": [upload(f"{n}.pdf", b"%PDF-1.4 " + b"x" * 20) for n in range(3)]},
@@ -246,7 +266,10 @@ class PdfCostTests(SimpleTestCase):
 
     def test_a_page_too_big_even_at_the_lowest_scale_is_refused_before_any_render(self):
         path = self.blank_pdf("immense.pdf", 2)
-        with mock.patch.object(ocr, "RENDER_MAX_PIXELS", 100_000), mock.patch.object(pdfium.PdfPage, "render") as render:
+        with (
+            mock.patch.object(ocr, "RENDER_MAX_PIXELS", 100_000),
+            mock.patch.object(pdfium.PdfPage, "render") as render,
+        ):
             with self.assertRaises(ocr.DocumentTooBig) as refused:
                 list(ocr.page_images(path))
         render.assert_not_called()
@@ -254,7 +277,7 @@ class PdfCostTests(SimpleTestCase):
 
     def test_a_declared_page_of_the_audit_s_size_is_refused_without_a_render(self):
         """The audit's bomb: a page of 14 400 pt (5 m) is 60 000 px square at
-        300 dpi, about 11 Go. Its size is read from a file of a few hundred
+        300 dpi, about 11 GB. Its size is read from a file of a few hundred
         bytes and refused - nothing is rendered."""
         path = self.blank_pdf("bombe.pdf", 1, size=(14400, 14400))
         self.assertLess(os.path.getsize(path), 2000)
@@ -267,7 +290,10 @@ class PdfCostTests(SimpleTestCase):
         path = self.photo_pdf("scan.pdf")
         (image,) = list(ocr.page_images(path))
         self.assertEqual(image.size, (40, 20))
-        with mock.patch.object(ocr, "IMAGE_MAX_PIXELS", 100), mock.patch.object(pdfium.PdfImage, "get_bitmap") as bitmap:
+        with (
+            mock.patch.object(ocr, "IMAGE_MAX_PIXELS", 100),
+            mock.patch.object(pdfium.PdfImage, "get_bitmap") as bitmap,
+        ):
             with self.assertRaises(ocr.DocumentTooBig) as refused:
                 list(ocr.page_images(path))
         bitmap.assert_not_called()
@@ -323,7 +349,12 @@ class PdfCostTests(SimpleTestCase):
 
     def test_a_document_left_half_read_is_closed_under_the_lock(self):
         path = self.blank_pdf("abandon.pdf", 2, size=(72, 36))
-        with mock.patch.object(pdfium.PdfDocument, "close", autospec=True, side_effect=lambda document: closed.append(ocr.PDFIUM_LOCK._is_owned())):
+        with mock.patch.object(
+            pdfium.PdfDocument,
+            "close",
+            autospec=True,
+            side_effect=lambda document: closed.append(ocr.PDFIUM_LOCK._is_owned()),
+        ):
             closed = []
             pages = ocr.page_images(path)
             next(pages)

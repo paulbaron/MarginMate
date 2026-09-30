@@ -8,13 +8,13 @@ outcome could otherwise inherit from the local .env (notably the fuzzy-match
 threshold), so a passing suite means the same thing on every machine. Third,
 the suite runs the application the way production does - there is no other
 way left since single mode was removed: every page behind the login, every
-file in an espace's own folders.
+file in a tenant's own folders.
 
 How (tests/runner.py): the test runner's `default` IS the database of one
-« test espace », whose rows - the espace, its owner's login, his membership -
+« test tenant », whose rows - the tenant, its owner's login, his membership -
 live in the `accounts` test database, as the central rows do in production.
 Every test client is logged in as that owner from its first request, and
-every folder a test reads or writes is the espace's own
+every folder a test reads or writes is the tenant's own
 (`accounts.paths.*`), under the temporary TENANTS_ROOT below.
 """
 
@@ -33,13 +33,13 @@ os.environ.setdefault(
 
 from .settings import *
 
-# Every espace's folder, the test espace's included - never the owner's
+# Every tenant's folder, the test tenant's included - never the owner's
 # (the .env may name his; this wins).
 TENANTS_ROOT = Path(tempfile.mkdtemp(prefix="marginmate-tests-tenants-"))
 
 # Two in-memory test databases, split between them by the router as in
-# production: `default` is the test espace's data (the runner never swaps
-# it), `accounts` the logins, sessions and espaces. Not a TEST MIRROR of one
+# production: `default` is the test tenant's data (the runner never swaps
+# it), `accounts` the logins, sessions and tenants. Not a TEST MIRROR of one
 # another: a mirror is a second connection to the same database, and the
 # router would never create the central tables on it.
 DATABASES = {
@@ -93,7 +93,7 @@ ANTHROPIC_API_KEY = ""
 PRODUCT_FUZZY_MATCH_THRESHOLD = 94
 
 # The timesheet signatures (staff/signing.py): keys, signed PDFs and proof
-# files in the espace's private/ folder (the signing tests give each test a
+# files in the tenant's private/ folder (the signing tests give each test a
 # TENANTS_ROOT of its own), no passphrase unless a test sets one, and NO
 # timestamp server - a test that forgot to inject its own
 # (staff.tests.signing_support) is refused « le service d'horodatage ne

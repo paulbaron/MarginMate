@@ -4,20 +4,29 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('invoices', '0007_seed_uba_invoice_type'),
+        ("invoices", "0007_seed_uba_invoice_type"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='scrapejob',
-            name='cancel_requested',
+            model_name="scrapejob",
+            name="cancel_requested",
             field=models.BooleanField(default=False),
         ),
         migrations.AlterField(
-            model_name='scrapejob',
-            name='status',
-            field=models.CharField(choices=[('PENDING', 'En attente'), ('RUNNING', 'En cours'), ('SUCCESS', 'Terminé'), ('FAILED', 'Échoué'), ('CANCELLED', 'Annulé')], default='PENDING', max_length=20),
+            model_name="scrapejob",
+            name="status",
+            field=models.CharField(
+                choices=[
+                    ("PENDING", "En attente"),
+                    ("RUNNING", "En cours"),
+                    ("SUCCESS", "Terminé"),
+                    ("FAILED", "Échoué"),
+                    ("CANCELLED", "Annulé"),
+                ],
+                default="PENDING",
+                max_length=20,
+            ),
         ),
     ]

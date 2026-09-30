@@ -6,15 +6,16 @@ though - a rent statement prints the rent, the building provision, the water
 provision and the tax, and those are worth keeping apart: the rent is not
 the charges, and the charges are the ones that get regularised.
 
-Nothing here knows a word of it. A poste is a label and the amount printed
-after it, and a document's postes are the run of them adding up to an amount
-the document prints below them - which is what proves the reading, and what
-settles which amount is the one charged: a statement prints last month's
-échéance, the direct debit that paid it and this month's, and the largest
-amount printed twice is last month's. The run that adds up is this month's.
+Nothing here knows a word of it. A charge item is a label and the amount
+printed after it, and a document's charge items are the run of them adding up
+to an amount the document prints below them - which is what proves the
+reading, and what settles which amount is the one charged: a statement prints
+last month's instalment, the direct debit that paid it and this month's, and
+the largest amount printed twice is last month's. The run that adds up is
+this month's.
 
-A tax line is the poste that is a French rate of another one; it is not a
-poste of its own, it is that one's VAT.
+A tax line is the charge item that is a French rate of another one; it is not
+a charge item of its own, it is that one's VAT.
 
 No database, no parser: text and arithmetic, so it can be tested from a
 hand-written statement.
@@ -33,12 +34,12 @@ ZERO = Decimal("0")
 # three letters, so a column of figures does not pass for one.
 LETTERS = re.compile(r"[A-Za-zÀ-ÿ]")
 MIN_LABEL_LETTERS = 3
-# One poste is not a breakdown - it is the total under another name.
-MIN_POSTES = 2
+# One charge item is not a breakdown - it is the total under another name.
+MIN_CHARGE_ITEMS = 2
 # What it takes for a breakdown to overrule the total read from the document:
 # three labelled amounts in a row adding up to a fourth printed under them is
 # not a coincidence; two could be.
-MIN_POSTES_TO_SETTLE_THE_TOTAL = 3
+MIN_CHARGE_ITEMS_TO_SETTLE_THE_TOTAL = 3
 # How far apart the lines of one breakdown can stand, and how far below the
 # last of them its total can be printed. A breakdown is a block: two lines of
 # a consumption table three pages apart that happen to add up to something
@@ -48,7 +49,7 @@ MAX_LINES_BETWEEN = 4
 
 
 @dataclass(frozen=True)
-class Poste:
+class ChargeItem:
     """One line of what a charge is made of: what it is called, what it came
     to (tax included) and the rate its tax was worked out at."""
 
@@ -61,25 +62,26 @@ class Poste:
         return (self.amount / (Decimal("1") + self.rate)).quantize(CENTS, rounding=ROUND_HALF_UP)
 
 
-def read_charge(text: str, read_total: Decimal | None) -> tuple[Decimal | None, list[Poste]]:
-    """What the document charges and the postes it is made of.
+def read_charge(text: str, read_total: Decimal | None) -> tuple[Decimal | None, list[ChargeItem]]:
+    """What the document charges and the charge items it is made of.
 
     `read_total` is what the reader made of it; it stands unless a long
-    enough run of postes says otherwise. The postes are [] when nothing
-    proves a breakdown - a phone bill details its calls, not its charges.
+    enough run of charge items says otherwise. The charge items are [] when
+    nothing proves a breakdown - a phone bill details its calls, not its
+    charges.
     """
     run = _longest_run_adding_up(_labelled_amounts(text), text)
-    if len(run) < MIN_POSTES:
+    if len(run) < MIN_CHARGE_ITEMS:
         return read_total, []
-    total = sum((poste.amount for poste in run), start=ZERO)
+    total = sum((charge_item.amount for charge_item in run), start=ZERO)
     disagrees = read_total is not None and abs(total - read_total) > CENTS
-    if disagrees and len(run) < MIN_POSTES_TO_SETTLE_THE_TOTAL:
+    if disagrees and len(run) < MIN_CHARGE_ITEMS_TO_SETTLE_THE_TOTAL:
         return read_total, []
     kept = _with_the_tax_folded_in(run)
-    return total, kept if len(kept) >= MIN_POSTES else []
+    return total, kept if len(kept) >= MIN_CHARGE_ITEMS else []
 
 
-def _labelled_amounts(text: str) -> list[tuple[int, Poste]]:
+def _labelled_amounts(text: str) -> list[tuple[int, ChargeItem]]:
     """The last amount of each line, and the label printed in front of it.
 
     The last one because a statement puts two columns on one line - "Solde
@@ -104,30 +106,28 @@ def _labelled_amounts(text: str) -> list[tuple[int, Poste]]:
         # label is the last column of it that reads like a label - the last
         # one is "57 m³" where the label is "Votre consommation" beside it.
         chunks = [chunk.strip(" \t.:-|()") for chunk in re.split(r"\s{2,}", before)]
-        label = next(
-            (chunk for chunk in reversed(chunks) if len(LETTERS.findall(chunk)) >= MIN_LABEL_LETTERS), ""
-        )
+        label = next((chunk for chunk in reversed(chunks) if len(LETTERS.findall(chunk)) >= MIN_LABEL_LETTERS), "")
         if not label:
             continue
         amount = money_value(last)
         if before.rstrip().endswith("-"):
             amount = -amount
-        found.append((index, Poste(name=label, amount=amount)))
+        found.append((index, ChargeItem(name=label, amount=amount)))
     return found
 
 
-def _longest_run_adding_up(pairs: list[tuple[int, Poste]], text: str) -> list[Poste]:
-    """The longest run of postes, in the order they are printed, adding up to
-    an amount the document prints just under them - what it charges for the
-    period, its own total ("Total de votre avis d'échéance"). What is taken
-    from the account can be more, the arrears of an avis already filed
+def _longest_run_adding_up(pairs: list[tuple[int, ChargeItem]], text: str) -> list[ChargeItem]:
+    """The longest run of charge items, in the order they are printed, adding
+    up to an amount the document prints just under them - what it charges for
+    the period, its own total ("Total de votre avis d'échéance"). What is taken
+    from the account can be more, the arrears of a notice already filed
     among them, and a document is worth what it charges.
 
     A subtotal printed among them ("Total de votre avis d'échéance (B)") is
     the run so far restated: it is stepped over rather than counted twice.
     Each run stops at the first amount that answers - carried on, one that
     had already added up swallowed the direct debit paying it and the total
-    restating it, and read them as postes of the month.
+    restating it, and read them as charge items of the month.
 
     The run has to be a block (MAX_LINES_BETWEEN), and the amount it makes
     has to be printed below it rather than anywhere: what adds up across a
@@ -135,17 +135,17 @@ def _longest_run_adding_up(pairs: list[tuple[int, Poste]], text: str) -> list[Po
     """
     lines = text.split("\n")
     printed = [{value for value in line_amounts(line) if value} for line in lines]
-    best: list[Poste] = []
+    best: list[ChargeItem] = []
     for start in range(len(pairs)):
         running, kept, last_line = ZERO, [], None
-        for index, poste in pairs[start:]:
+        for index, charge_item in pairs[start:]:
             if last_line is not None and index - last_line > MAX_LINES_BETWEEN:
                 break
-            if kept and abs(poste.amount - running) <= CENTS:
+            if kept and abs(charge_item.amount - running) <= CENTS:
                 continue
-            kept.append(poste)
-            running, last_line = running + poste.amount, index
-            if len(kept) >= MIN_POSTES and _printed_below(printed, index, running):
+            kept.append(charge_item)
+            running, last_line = running + charge_item.amount, index
+            if len(kept) >= MIN_CHARGE_ITEMS and _printed_below(printed, index, running):
                 if len(kept) > len(best):
                     best = list(kept)
                 break
@@ -154,17 +154,17 @@ def _longest_run_adding_up(pairs: list[tuple[int, Poste]], text: str) -> list[Po
 
 def _printed_below(printed: list[set], index: int, total: Decimal) -> bool:
     """Whether `total` is printed on one of the few lines under the last
-    poste - where a document puts the total of what stands above it."""
+    charge item - where a document puts the total of what stands above it."""
     return any(
         any(abs(total - amount) <= CENTS for amount in printed[line])
         for line in range(index, min(index + MAX_LINES_BETWEEN + 1, len(printed)))
     )
 
 
-def _with_the_tax_folded_in(run: list[Poste]) -> list[Poste]:
-    """A poste that is a French rate of exactly one other is that one's tax,
-    not a poste: "TVA TAUX NORMAL 126,88" is the 20% of the rent above it,
-    and the rent is what is filed, at 20%."""
+def _with_the_tax_folded_in(run: list[ChargeItem]) -> list[ChargeItem]:
+    """A charge item that is a French rate of exactly one other is that one's
+    tax, not a charge item: "TVA TAUX NORMAL 126,88" is the 20% of the rent
+    above it, and the rent is what is filed, at 20%."""
     for position, tax in enumerate(run):
         rated = [
             (other, rate)
@@ -177,11 +177,13 @@ def _with_the_tax_folded_in(run: list[Poste]) -> list[Poste]:
             continue
         base, rate = rated[0]
         folded = []
-        for other_position, poste in enumerate(run):
+        for other_position, charge_item in enumerate(run):
             if other_position == position:
                 continue
             folded.append(
-                Poste(name=poste.name, amount=poste.amount + tax.amount, rate=rate) if poste is base else poste
+                ChargeItem(name=charge_item.name, amount=charge_item.amount + tax.amount, rate=rate)
+                if charge_item is base
+                else charge_item
             )
         return folded
     return run

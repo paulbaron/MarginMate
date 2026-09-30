@@ -1,4 +1,4 @@
-"""`manage.py running_jobs`: is anything running in the background, in any espace?
+"""`manage.py running_jobs`: is anything running in the background, in any tenant?
 
     .venv\\Scripts\\python.exe manage.py running_jobs
 
@@ -8,9 +8,9 @@ process, which stopping the server kills in the middle of what it writes.
 deploy.cmd asks this command before it stops anything (DEPLOY.md,
 section 10) and refuses while a job runs, naming it.
 
-Every espace the accounts database names is looked at, bound in turn
+Every tenant the accounts database names is looked at, bound in turn
 (accounts.tenancy.bound_tenant): its ScrapeJob, ReceiptBatch and
-SalesImportJob rows still PENDING or RUNNING, with the espace, what the job
+SalesImportJob rows still PENDING or RUNNING, with the tenant, what the job
 is and when it was last heard from.
 
 **Read-only.** A job nothing has been heard from for its STALE_AFTER
@@ -20,11 +20,11 @@ which reaps such jobs first; this command writes nothing, the pages reap
 them when they are drawn.
 
 Exit code: 0 nothing runs, 1 something runs, 2 something could not be looked
-at (an OPEN espace's database that does not open, the accounts database
-missing - never created: SQLite would make an empty file). A CLOSED espace
+at (an OPEN tenant's database that does not open, the accounts database
+missing - never created: SQLite would make an empty file). A CLOSED tenant
 (« actif » unticked) receives no request, so nothing is started in it: one
-that cannot be looked at is a note, never a 2 - closing an espace is what
-serve and DEPLOY.md §11 tell the owner to do with a base that is gone, and a
+that cannot be looked at is a note, never a 2 - closing a tenant is what
+serve and DEPLOY.md §11 tell the owner to do with a database that is gone, and a
 2 made deploy.cmd refuse every deployment for it.
 """
 
@@ -140,7 +140,7 @@ class Command(BaseCommand):
         self.stdout.write(f"Aucun travail en cours ({looked_at} espace(s) vérifié(s)).")
 
     def _unseen(self, tenant, label, what, problems):
-        """An espace that could not be looked at: no answer when it is open,
+        """A tenant that could not be looked at: no answer when it is open,
         a note when it is closed."""
         if tenant.is_active:
             problems.append(f"{label} : {what}.")

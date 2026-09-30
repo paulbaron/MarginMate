@@ -205,8 +205,11 @@ class VarianceArithmeticTests(TestCase):
         self.supplier = make_supplier()
         self.vodka = make_stock_type(name="Vodka", unit=UnitChoices.LITRE)
         self.product = make_product(
-            supplier=self.supplier, raw_name="VODKA 70CL", stock_type=self.vodka,
-            unit=UnitChoices.UNIT, stock_equivalent="0.7",
+            supplier=self.supplier,
+            raw_name="VODKA 70CL",
+            stock_type=self.vodka,
+            unit=UnitChoices.UNIT,
+            stock_equivalent="0.7",
         )
         self.recipe = make_recipe(name="Vodka tonic", selling_price_ttc="8.50")
         make_ingredient(self.recipe, stock_type=self.vodka, quantity="0.04", group=0)
@@ -215,20 +218,27 @@ class VarianceArithmeticTests(TestCase):
         invoice = make_invoice(supplier=self.supplier, invoice_date=on)
         line = make_invoice_line(invoice=invoice, product=self.product, quantity=1, total_ht=cost)
         return StockMovement.objects.create(
-            stock_type=self.vodka, quantity=Decimal(litres), unit_cost_ht=Decimal(cost),
-            invoice_line=line, kind=MovementKind.PURCHASE,
+            stock_type=self.vodka,
+            quantity=Decimal(litres),
+            unit_cost_ht=Decimal(cost),
+            invoice_line=line,
+            kind=MovementKind.PURCHASE,
         )
 
     def report(self, opening_litres, closing_litres, sold=None, opening_day=1, closing_day=10):
         opening = make_stock_take(taken_at=at(opening_day))
         make_stock_take_line(
-            stock_take=opening, stock_type=self.vodka,
-            counted_quantity=opening_litres, unit=UnitChoices.LITRE,
+            stock_take=opening,
+            stock_type=self.vodka,
+            counted_quantity=opening_litres,
+            unit=UnitChoices.LITRE,
         )
         closing = make_stock_take(taken_at=at(closing_day))
         make_stock_take_line(
-            stock_take=closing, stock_type=self.vodka,
-            counted_quantity=closing_litres, unit=UnitChoices.LITRE,
+            stock_take=closing,
+            stock_type=self.vodka,
+            counted_quantity=closing_litres,
+            unit=UnitChoices.LITRE,
         )
         if sold:
             record_sales([(self.recipe.name, date(2026, 3, 5), sold)])
@@ -262,8 +272,8 @@ class VarianceArithmeticTests(TestCase):
     def test_a_delivery_outside_the_window_is_not_counted(self):
         """It's already in the opening count, or not yet in the closing one -
         either way, counting it here would invent stock."""
-        self.buy("5", on=date(2026, 2, 20))   # before the opening count
-        self.buy("5", on=date(2026, 3, 20))   # after the closing count
+        self.buy("5", on=date(2026, 2, 20))  # before the opening count
+        self.buy("5", on=date(2026, 3, 20))  # after the closing count
         pool = self.pool(self.report("10", "6", sold=100))
         self.assertEqual(pool.purchases, Decimal("0"))
         self.assertFalse(pool.is_missing)
@@ -279,8 +289,12 @@ class VarianceArithmeticTests(TestCase):
     def test_a_known_loss_is_not_counted_as_shrinkage(self):
         """A bottle you already know you broke shouldn't show up as theft."""
         StockMovement.objects.create(
-            stock_type=self.vodka, quantity=Decimal("-1"), unit_cost_ht=Decimal("10"),
-            kind=MovementKind.LOSS, note="Bouteille cassée", occurred_on=date(2026, 3, 5),
+            stock_type=self.vodka,
+            quantity=Decimal("-1"),
+            unit_cost_ht=Decimal("10"),
+            kind=MovementKind.LOSS,
+            note="Bouteille cassée",
+            occurred_on=date(2026, 3, 5),
         )
         pool = self.pool(self.report("10", "5", sold=100))
         self.assertEqual(pool.known_losses, Decimal("1"))
@@ -307,9 +321,7 @@ class VarianceArithmeticTests(TestCase):
         shelf. See SingleInventoryTests."""
         self.buy("10", on=date(2026, 3, 4))
         closing = make_stock_take(taken_at=at(10))
-        make_stock_take_line(
-            stock_take=closing, stock_type=self.vodka, counted_quantity="6", unit=UnitChoices.LITRE
-        )
+        make_stock_take_line(stock_take=closing, stock_type=self.vodka, counted_quantity="6", unit=UnitChoices.LITRE)
         report = compute_variance(closing)
         self.assertIsNone(report.opening_take)
         self.assertTrue(report.since_beginning)
@@ -325,9 +337,7 @@ class VarianceArithmeticTests(TestCase):
 
     def test_an_item_missing_from_one_count_is_flagged_not_guessed(self):
         opening = make_stock_take(taken_at=at(1))
-        make_stock_take_line(
-            stock_take=opening, stock_type=self.vodka, counted_quantity="10", unit=UnitChoices.LITRE
-        )
+        make_stock_take_line(stock_take=opening, stock_type=self.vodka, counted_quantity="10", unit=UnitChoices.LITRE)
         closing = make_stock_take(taken_at=at(10))  # vodka simply not counted
         gin = make_stock_type(name="Gin")
         make_stock_take_line(stock_take=closing, stock_type=gin, counted_quantity="1", unit=UnitChoices.LITRE)
@@ -345,13 +355,17 @@ class VarianceArithmeticTests(TestCase):
         self.buy("50", on=date(2026, 3, 4))
         opening = make_stock_take(taken_at=at(1))  # vodka in neither count
         make_stock_take_line(
-            stock_take=opening, stock_type=make_stock_type(name="Autre"),
-            counted_quantity="1", unit=UnitChoices.LITRE,
+            stock_take=opening,
+            stock_type=make_stock_type(name="Autre"),
+            counted_quantity="1",
+            unit=UnitChoices.LITRE,
         )
         closing = make_stock_take(taken_at=at(10))
         make_stock_take_line(
-            stock_take=closing, stock_type=make_stock_type(name="Encore"),
-            counted_quantity="1", unit=UnitChoices.LITRE,
+            stock_take=closing,
+            stock_type=make_stock_type(name="Encore"),
+            counted_quantity="1",
+            unit=UnitChoices.LITRE,
         )
 
         report = compute_variance(closing)
@@ -366,13 +380,17 @@ class VarianceArithmeticTests(TestCase):
         stock that never existed."""
         opening = make_stock_take(taken_at=at(1))
         make_stock_take_line(
-            stock_take=opening, stock_type=make_stock_type(name="Autre"),
-            counted_quantity="1", unit=UnitChoices.LITRE,
+            stock_take=opening,
+            stock_type=make_stock_type(name="Autre"),
+            counted_quantity="1",
+            unit=UnitChoices.LITRE,
         )
         closing = make_stock_take(taken_at=at(10))
         make_stock_take_line(
-            stock_take=closing, stock_type=make_stock_type(name="Encore"),
-            counted_quantity="1", unit=UnitChoices.LITRE,
+            stock_take=closing,
+            stock_type=make_stock_type(name="Encore"),
+            counted_quantity="1",
+            unit=UnitChoices.LITRE,
         )
         record_sales([(self.recipe.name, date(2026, 3, 5), 100)])
 
@@ -392,7 +410,7 @@ class VarianceArithmeticTests(TestCase):
 class LossAllowanceTests(TestCase):
     """Part of what leaves the shelf was never going to be sold: over-pours,
     the last centilitres of a bottle, a keg's foam. StockType.loss_percent
-    says how much, per item, and the écarts report deducts it before calling
+    says how much, per item, and the variance report deducts it before calling
     anything missing - otherwise every normal week reads as theft.
 
     Kept separate from the `unexplained_*` figures, which stay raw: those are
@@ -409,13 +427,17 @@ class LossAllowanceTests(TestCase):
             self.vodka.save(update_fields=["loss_percent"])
         opening_take = make_stock_take(taken_at=at(1))
         make_stock_take_line(
-            stock_take=opening_take, stock_type=self.vodka,
-            counted_quantity=opening, unit=UnitChoices.LITRE,
+            stock_take=opening_take,
+            stock_type=self.vodka,
+            counted_quantity=opening,
+            unit=UnitChoices.LITRE,
         )
         closing_take = make_stock_take(taken_at=at(10))
         make_stock_take_line(
-            stock_take=closing_take, stock_type=self.vodka,
-            counted_quantity=closing, unit=UnitChoices.LITRE,
+            stock_take=closing_take,
+            stock_type=self.vodka,
+            counted_quantity=closing,
+            unit=UnitChoices.LITRE,
         )
         report = compute_variance(closing_take)
         return next(p for p in report.pools if self.vodka in p.stock_types)
@@ -461,8 +483,10 @@ class LossAllowanceTests(TestCase):
         for take, counts in ((opening_take, ("100", "100")), (closing_take, ("90", "50"))):
             for stock_type, quantity in zip((self.vodka, gin), counts):
                 make_stock_take_line(
-                    stock_take=take, stock_type=stock_type,
-                    counted_quantity=quantity, unit=UnitChoices.LITRE,
+                    stock_take=take,
+                    stock_type=stock_type,
+                    counted_quantity=quantity,
+                    unit=UnitChoices.LITRE,
                 )
 
         report = compute_variance(closing_take)
@@ -508,8 +532,11 @@ class RecipeLinkedFilterTests(TestCase):
         # purchase inside the window.
         for stock_type, cost in ((self.vodka, "20"), (self.prosecco, "8")):
             StockMovement.objects.create(
-                stock_type=stock_type, quantity=Decimal("100"), unit_cost_ht=Decimal(cost),
-                kind=MovementKind.PURCHASE, occurred_on=date(2026, 1, 1),
+                stock_type=stock_type,
+                quantity=Decimal("100"),
+                unit_cost_ht=Decimal(cost),
+                kind=MovementKind.PURCHASE,
+                occurred_on=date(2026, 1, 1),
             )
         recipe = make_recipe(name="Vodka tonic")
         make_ingredient(recipe, stock_type=self.vodka, quantity="0.04", group=0)
@@ -520,8 +547,10 @@ class RecipeLinkedFilterTests(TestCase):
         for take, quantity in ((opening, "100"), (closing, "50")):
             for stock_type in (self.vodka, self.prosecco):
                 make_stock_take_line(
-                    stock_take=take, stock_type=stock_type,
-                    counted_quantity=quantity, unit=UnitChoices.LITRE,
+                    stock_take=take,
+                    stock_type=stock_type,
+                    counted_quantity=quantity,
+                    unit=UnitChoices.LITRE,
                 )
         return compute_variance(closing)
 
@@ -550,7 +579,7 @@ class RecipeLinkedFilterTests(TestCase):
         self.assertEqual(report.total_value_missing_min, before)
 
     def test_an_item_reached_only_through_a_sub_recipe_counts(self):
-        """"Vodka OU <sirop maison>", where the syrup is its own recipe: the
+        """ "Vodka OU <sirop maison>", where the syrup is its own recipe: the
         syrup's own ingredients are used by a recipe just as much."""
         sugar = make_stock_type(name="Sucre", unit=UnitChoices.KILOGRAM)
         syrup = make_recipe(name="Sirop maison", yield_quantity="1")
@@ -562,8 +591,10 @@ class RecipeLinkedFilterTests(TestCase):
         closing = make_stock_take(taken_at=at(10))
         for take, quantity in ((opening, "10"), (closing, "5")):
             make_stock_take_line(
-                stock_take=take, stock_type=sugar,
-                counted_quantity=quantity, unit=UnitChoices.KILOGRAM,
+                stock_take=take,
+                stock_type=sugar,
+                counted_quantity=quantity,
+                unit=UnitChoices.KILOGRAM,
             )
         report = compute_variance(closing)
         self.assertTrue(self.pool_for(report, sugar).in_recipes)
@@ -609,17 +640,24 @@ class CheapestBottleTests(TestCase):
         self.dear = make_stock_type(name="Whisky Nikka", unit=UnitChoices.LITRE)
         for stock_type, unit_cost in ((self.cheap, "10"), (self.dear, "60")):
             product = make_product(
-                supplier=self.supplier, raw_name=f"{stock_type.name} 70CL", stock_type=stock_type,
-                unit=UnitChoices.UNIT, stock_equivalent="0.7",
+                supplier=self.supplier,
+                raw_name=f"{stock_type.name} 70CL",
+                stock_type=stock_type,
+                unit=UnitChoices.UNIT,
+                stock_equivalent="0.7",
             )
             # One purchase so the format registers as the one usually bought.
             make_invoice_line(
                 invoice=make_invoice(supplier=self.supplier, invoice_date=date(2026, 1, 1)),
-                product=product, quantity=6, total_ht="60",
+                product=product,
+                quantity=6,
+                total_ht="60",
             )
             StockMovement.objects.create(
-                stock_type=stock_type, quantity=Decimal("10"),
-                unit_cost_ht=Decimal(unit_cost), kind=MovementKind.PURCHASE,
+                stock_type=stock_type,
+                quantity=Decimal("10"),
+                unit_cost_ht=Decimal(unit_cost),
+                kind=MovementKind.PURCHASE,
                 occurred_on=date(2026, 1, 1),
             )
             setattr(self, f"product_{stock_type.pk}", product)
@@ -633,12 +671,16 @@ class CheapestBottleTests(TestCase):
         closing_take = make_stock_take(taken_at=at(10))
         for stock_type, (open_qty, close_qty) in zip((self.cheap, self.dear), zip(opening, closing)):
             make_stock_take_line(
-                stock_take=opening_take, stock_type=stock_type,
-                counted_quantity=open_qty, unit=UnitChoices.LITRE,
+                stock_take=opening_take,
+                stock_type=stock_type,
+                counted_quantity=open_qty,
+                unit=UnitChoices.LITRE,
             )
             make_stock_take_line(
-                stock_take=closing_take, stock_type=stock_type,
-                counted_quantity=close_qty, unit=UnitChoices.LITRE,
+                stock_take=closing_take,
+                stock_type=stock_type,
+                counted_quantity=close_qty,
+                unit=UnitChoices.LITRE,
             )
         record_sales([(self.recipe.name, date(2026, 3, 5), sold)])
         report = compute_variance(closing_take)
@@ -684,8 +726,11 @@ class CheapestBottleTests(TestCase):
         from inventory.variance import typical_item_size
 
         big = make_product(
-            supplier=self.supplier, raw_name="RHUM 3L", stock_type=self.cheap,
-            unit=UnitChoices.UNIT, stock_equivalent="3",
+            supplier=self.supplier,
+            raw_name="RHUM 3L",
+            stock_type=self.cheap,
+            unit=UnitChoices.UNIT,
+            stock_equivalent="3",
         )
         usual = self.cheap.products.exclude(pk=big.pk).first()
         invoice = make_invoice(supplier=self.supplier, invoice_date=date(2026, 1, 5))
@@ -726,8 +771,8 @@ class DifferentQuantitiesTests(TestCase):
         record_sales([(self.recipe.name, date(2026, 3, 5), 100)])
 
         pool = next(p for p in compute_variance(closing).pools if self.vodka in p.stock_types)
-        self.assertEqual(pool.expected_usage_min, Decimal("4"))   # all vodka
-        self.assertEqual(pool.expected_usage_max, Decimal("5"))   # all gin
+        self.assertEqual(pool.expected_usage_min, Decimal("4"))  # all vodka
+        self.assertEqual(pool.expected_usage_max, Decimal("5"))  # all gin
         self.assertEqual(pool.actual_usage, Decimal("6"))
         # The floor assumes the most generous reading (every drink was gin).
         self.assertEqual(pool.unexplained_min, Decimal("1"))
@@ -742,8 +787,11 @@ class ReportSummaryTests(TestCase):
         for stock_type, unit_cost in ((cheap, "1"), (dear, "40")):
             make_product(supplier=supplier, stock_type=stock_type, unit=UnitChoices.UNIT, stock_equivalent="1")
             StockMovement.objects.create(
-                stock_type=stock_type, quantity=Decimal("100"), unit_cost_ht=Decimal(unit_cost),
-                kind=MovementKind.PURCHASE, occurred_on=date(2026, 1, 1),
+                stock_type=stock_type,
+                quantity=Decimal("100"),
+                unit_cost_ht=Decimal(unit_cost),
+                kind=MovementKind.PURCHASE,
+                occurred_on=date(2026, 1, 1),
             )
         opening = make_stock_take(taken_at=at(1))
         closing = make_stock_take(taken_at=at(10))
@@ -791,8 +839,11 @@ class SingleInventoryTests(TestCase):
         self.supplier = make_supplier()
         self.vodka = make_stock_type(name="Vodka", unit=UnitChoices.LITRE)
         self.product = make_product(
-            supplier=self.supplier, raw_name="VODKA 70CL", stock_type=self.vodka,
-            unit=UnitChoices.UNIT, stock_equivalent="0.7",
+            supplier=self.supplier,
+            raw_name="VODKA 70CL",
+            stock_type=self.vodka,
+            unit=UnitChoices.UNIT,
+            stock_equivalent="0.7",
         )
         self.recipe = make_recipe(name="Vodka tonic")
         make_ingredient(self.recipe, stock_type=self.vodka, quantity="0.04", group=0)
@@ -801,15 +852,20 @@ class SingleInventoryTests(TestCase):
         invoice = make_invoice(supplier=self.supplier, invoice_date=on)
         line = make_invoice_line(invoice=invoice, product=self.product, quantity=1, total_ht=cost)
         StockMovement.objects.create(
-            stock_type=self.vodka, quantity=Decimal(litres), unit_cost_ht=Decimal(cost),
-            invoice_line=line, kind=MovementKind.PURCHASE,
+            stock_type=self.vodka,
+            quantity=Decimal(litres),
+            unit_cost_ht=Decimal(cost),
+            invoice_line=line,
+            kind=MovementKind.PURCHASE,
         )
 
     def count(self, litres, day=31):
         take = make_stock_take(taken_at=at(day))
         make_stock_take_line(
-            stock_take=take, stock_type=self.vodka,
-            counted_quantity=litres, unit=UnitChoices.LITRE,
+            stock_take=take,
+            stock_type=self.vodka,
+            counted_quantity=litres,
+            unit=UnitChoices.LITRE,
         )
         return take
 
@@ -818,10 +874,10 @@ class SingleInventoryTests(TestCase):
 
     def test_everything_bought_minus_everything_sold_should_be_on_the_shelf(self):
         self.buy("20", on=date(2026, 3, 2))
-        record_sales([(self.recipe.name, date(2026, 3, 15), 100)])   # 4 L
+        record_sales([(self.recipe.name, date(2026, 3, 15), 100)])  # 4 L
         pool = self.pool(compute_variance(self.count("16")))
         self.assertEqual(pool.purchases, Decimal("20"))
-        self.assertEqual(pool.actual_usage, Decimal("4"))   # 0 + 20 - 16
+        self.assertEqual(pool.actual_usage, Decimal("4"))  # 0 + 20 - 16
         self.assertEqual(pool.expected_usage_min, Decimal("4"))
         self.assertFalse(pool.is_missing)
 
@@ -855,8 +911,12 @@ class SingleInventoryTests(TestCase):
     def test_known_losses_still_apply(self):
         self.buy("20", on=date(2026, 3, 2))
         StockMovement.objects.create(
-            stock_type=self.vodka, quantity=Decimal("-1"), unit_cost_ht=Decimal("10"),
-            kind=MovementKind.LOSS, note="Cassée", occurred_on=date(2026, 3, 10),
+            stock_type=self.vodka,
+            quantity=Decimal("-1"),
+            unit_cost_ht=Decimal("10"),
+            kind=MovementKind.LOSS,
+            note="Cassée",
+            occurred_on=date(2026, 3, 10),
         )
         pool = self.pool(compute_variance(self.count("19")))
         self.assertEqual(pool.known_losses, Decimal("1"))
@@ -866,8 +926,10 @@ class SingleInventoryTests(TestCase):
         self.buy("20", on=date(2026, 3, 2))
         take = make_stock_take(taken_at=at(31))
         make_stock_take_line(
-            stock_take=take, stock_type=make_stock_type(name="Autre"),
-            counted_quantity="1", unit=UnitChoices.LITRE,
+            stock_take=take,
+            stock_type=make_stock_type(name="Autre"),
+            counted_quantity="1",
+            unit=UnitChoices.LITRE,
         )
         report = compute_variance(take)
         pool = self.pool(report)
@@ -877,20 +939,18 @@ class SingleInventoryTests(TestCase):
     def test_a_second_count_switches_back_to_measuring_the_window(self):
         """With two counts the invoice history before the opening one stops
         mattering - which is the whole point of having two."""
-        self.buy("100", on=date(2024, 1, 1))       # long before, deliberately ignored
+        self.buy("100", on=date(2024, 1, 1))  # long before, deliberately ignored
         first = make_stock_take(taken_at=at(1))
-        make_stock_take_line(
-            stock_take=first, stock_type=self.vodka, counted_quantity="20", unit=UnitChoices.LITRE
-        )
+        make_stock_take_line(stock_take=first, stock_type=self.vodka, counted_quantity="20", unit=UnitChoices.LITRE)
         self.buy("10", on=date(2026, 3, 10))
-        record_sales([(self.recipe.name, date(2026, 3, 15), 100)])   # 4 L
+        record_sales([(self.recipe.name, date(2026, 3, 15), 100)])  # 4 L
 
         report = compute_variance(self.count("26"))
         self.assertFalse(report.since_beginning)
         self.assertEqual(report.opening_take, first)
         pool = self.pool(report)
         self.assertEqual(pool.opening, Decimal("20"))
-        self.assertEqual(pool.purchases, Decimal("10"))     # not the 100 from 2024
+        self.assertEqual(pool.purchases, Decimal("10"))  # not the 100 from 2024
         self.assertEqual(pool.actual_usage, Decimal("4"))
         self.assertFalse(pool.is_missing)
 
@@ -940,8 +1000,7 @@ class NestedAlternativePoolingTests(TestCase):
         self.assertEqual(len(terms), 1)
         self.assertEqual(
             sorted(sorted(option) for option in terms[0]),
-            [[self.sugar.id], [self.honey.id]] if self.sugar.id < self.honey.id
-            else [[self.honey.id], [self.sugar.id]],
+            [[self.sugar.id], [self.honey.id]] if self.sugar.id < self.honey.id else [[self.honey.id], [self.sugar.id]],
         )
 
     def test_an_astronomically_nested_recipe_does_not_hang_the_report(self):

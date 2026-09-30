@@ -54,13 +54,16 @@ class OldDraftInBrowserTests(StaticLiveServerTestCase):
         supplier = make_supplier(name="Grossiste Exemple")
         vodka = make_stock_type(name="Vodka", unit=UnitChoices.LITRE)
         product = make_product(
-            supplier=supplier, raw_name="VODKA EXEMPLE 70CL", stock_type=vodka,
-            unit=UnitChoices.UNIT, stock_equivalent="0.7",
+            supplier=supplier,
+            raw_name="VODKA EXEMPLE 70CL",
+            stock_type=vodka,
+            unit=UnitChoices.UNIT,
+            stock_equivalent="0.7",
         )
         # Ten 70cl bottles at 12 €.
         invoice = make_invoice(supplier=supplier, invoice_date=date(2026, 1, 10))
         make_invoice_line(invoice=invoice, product=product, quantity=10, total_ht="120")
-        # Every page wants a login: the test espace's owner.
+        # Every page wants a login: the test tenant's owner.
         log_in_the_browser(self.driver, self.live_server_url)
 
     def wait_for(self, condition):
@@ -79,7 +82,7 @@ class OldDraftInBrowserTests(StaticLiveServerTestCase):
             "note": "",
             "rows": [{"entry": "Vodka (type de stock)", "quantity": "2.1", "unit": UnitChoices.LITRE}],
         }
-        # Under the key the page itself uses (its espace's scope included).
+        # Under the key the page itself uses (its tenant's scope included).
         self.script(
             "var draft = JSON.parse(arguments[0]); draft.savedAt = Date.now();"
             "localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));",

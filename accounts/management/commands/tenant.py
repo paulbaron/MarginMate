@@ -1,15 +1,15 @@
-"""Run a management command for ONE espace.
+"""Run a management command for ONE tenant.
 
-    python manage.py tenant <dossier> <commande> [arguments…]
+    python manage.py tenant <folder> <command> [arguments…]
     python manage.py tenant k3v9x2m7q1ab reread_receipts --dry-run
 
-The espace is bound as `default` for the whole command - its database, and
+The tenant is bound as `default` for the whole command - its database, and
 its folders through accounts.paths - so the backfills, the purge, a
 re-read… act on that bar and on no other. A business command run without
 this finds no table at all: it fails loudly by construction.
 
 Refused: the commands that act on the logins (they belong to the accounts
-database, not an espace), the tenancy commands themselves, and the ones
+database, not a tenant), the tenancy commands themselves, and the ones
 that would wipe or serve.
 """
 
@@ -30,7 +30,7 @@ REFUSED = frozenset(
         "flush",
         "runserver",
         "testserver",
-        # The production server serves every espace, never one bound.
+        # The production server serves every tenant, never one bound.
         "serve",
         "test",
     }

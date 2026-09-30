@@ -42,7 +42,9 @@ def movement_rows(line_ids=None):
     if line_ids is not None:
         movements = movements.filter(invoice_line_id__in=line_ids)
     return sorted(
-        movements.values_list("invoice_line_id", "stock_type_id", "kind", "quantity", "unit_cost_ht", "note", "occurred_on")
+        movements.values_list(
+            "invoice_line_id", "stock_type_id", "kind", "quantity", "unit_cost_ht", "note", "occurred_on"
+        )
     )
 
 
@@ -124,7 +126,9 @@ class RebuildPurchaseMovementsTests(TestCase):
     def test_lines_and_products_together_count_each_line_once(self):
         reference = self.per_line_reference()
 
-        deleted, created = rebuild_purchase_movements(line_ids=self.line_ids[:2], product_ids=[self.bottle.pk, self.net.pk])
+        deleted, created = rebuild_purchase_movements(
+            line_ids=self.line_ids[:2], product_ids=[self.bottle.pk, self.net.pk]
+        )
 
         bottle, keg, _meat, net, refund, empty, _unclassified = self.lines
         wanted = {bottle.pk, keg.pk, net.pk, refund.pk, empty.pk}
@@ -150,9 +154,10 @@ class RebuildPurchaseMovementsTests(TestCase):
         deleted, created = rebuild_purchase_movements(line_ids=[bottle_line.pk])
 
         self.assertEqual((deleted, created), (1, 1))
-        self.assertEqual(movement_rows([bottle_line.pk]), [
-            (bottle_line.pk, self.vodka.pk, MovementKind.PURCHASE, Decimal("4.200"), Decimal("13.5714"), "", None)
-        ])
+        self.assertEqual(
+            movement_rows([bottle_line.pk]),
+            [(bottle_line.pk, self.vodka.pk, MovementKind.PURCHASE, Decimal("4.200"), Decimal("13.5714"), "", None)],
+        )
 
     def test_a_product_unclassified_since_loses_its_movements_like_unlink_product(self):
         rebuild_purchase_movements(line_ids=self.line_ids)
@@ -174,7 +179,9 @@ class RebuildPurchaseMovementsTests(TestCase):
         rebuild_purchase_movements(product_ids=[self.bottle.pk])
 
         self.assertEqual(
-            set(StockMovement.objects.filter(invoice_line__product=self.bottle).values_list("stock_type_id", flat=True)),
+            set(
+                StockMovement.objects.filter(invoice_line__product=self.bottle).values_list("stock_type_id", flat=True)
+            ),
             {gin.pk},
         )
 
@@ -284,7 +291,7 @@ class RefreshInvoiceStatusesTests(TestCase):
         # Stale either way: what the rule is for.
         self.stale_complete = invoice_with(Status.COMPLETE, self.classified, self.unclassified)
         self.stale_waiting = invoice_with(Status.NEEDS_REVIEW, self.classified)
-        # A charge's poste never waits for a stock item.
+        # A charge item never waits for a stock item.
         self.with_charge = invoice_with(Status.NEEDS_REVIEW, self.classified, self.charge)
         # Right already.
         self.right_waiting = invoice_with(Status.NEEDS_REVIEW, self.unclassified)

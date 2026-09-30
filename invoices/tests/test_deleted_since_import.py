@@ -27,9 +27,27 @@ class DeletedSinceTheImportTests(TestCase):
         self.batch = ReceiptBatch.objects.create(
             status=ReceiptBatch.Status.SUCCESS,
             results=[
-                {"name": "ticket-1.jpg", "status": "ok", "invoice_id": self.kept.pk, "receipt": True, "shop": "Épicerie Exemple"},
-                {"name": "ticket-2.jpg", "status": "ok", "invoice_id": self.gone_pk, "receipt": True, "shop": "Épicerie Exemple"},
-                {"name": "facture.pdf", "status": "ok", "invoice_id": self.gone_invoice_pk, "receipt": False, "shop": "Épicerie Exemple"},
+                {
+                    "name": "ticket-1.jpg",
+                    "status": "ok",
+                    "invoice_id": self.kept.pk,
+                    "receipt": True,
+                    "shop": "Épicerie Exemple",
+                },
+                {
+                    "name": "ticket-2.jpg",
+                    "status": "ok",
+                    "invoice_id": self.gone_pk,
+                    "receipt": True,
+                    "shop": "Épicerie Exemple",
+                },
+                {
+                    "name": "facture.pdf",
+                    "status": "ok",
+                    "invoice_id": self.gone_invoice_pk,
+                    "receipt": False,
+                    "shop": "Épicerie Exemple",
+                },
             ],
         )
         self.page = reverse("invoices:receipt_batch", args=[self.batch.pk])

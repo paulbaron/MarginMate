@@ -1,30 +1,30 @@
 {% comment %}
-One reprise and its comparison with the day's bons (views.DayView `view`):
-the home page's « Dernière reprise » card and the reprise's own page.
-`retour` is where the date buttons come back to (the home page, or blank:
-the reprise's page); `removable` draws a « Retirer » under each photo.
+One pickup and its comparison with the day's slips (views.DayView `view`):
+the home page's « Dernière reprise » card and the pickup's own page.
+`return_to` is where the date buttons come back to (the home page, or blank:
+the pickup's page); `removable` draws a « Retirer » under each photo.
 Every sentence comes built from returnables/comparison.py and
 invoice_check.py as plain text - escaped here, never |safe.
 {% endcomment %}
 {% with day=view.day pickup=view.pickup %}
-<p class="reprise-head">
+<p class="pickup-head">
     <strong>Reprise du {{ pickup.date|date:"d/m/Y" }}</strong>
     · repris par {% if pickup.supplier %}{{ pickup.supplier.name }}{% else %}— non précisé{% endif %}
     <span class="status-pill status-{{ day.css }}">{{ day.pill }}</span>
 </p>
-{% if view.summary %}<p class="reprise-counts-line">{{ view.summary }}</p>{% else %}<p class="muted">Aucun nombre compté.</p>{% endif %}
+{% if view.summary %}<p class="pickup-counts-line">{{ view.summary }}</p>{% else %}<p class="muted">Aucun nombre compté.</p>{% endif %}
 {% if day.summed %}<p class="muted small">{{ day.summed_note|capfirst }} : {{ day.counts_summary }}.</p>{% endif %}
 {% if pickup.note %}<p class="muted">Note : {{ pickup.note }}</p>{% endif %}
 
 {% if view.photos %}
-    <ul class="reprise-photo-grid">
+    <ul class="pickup-photo-grid">
         {% for shown in view.photos %}
-            <li class="reprise-photo">
+            <li class="pickup-photo">
                 <a href="{{ shown.photo.image.url }}"><img src="{{ shown.photo.thumb.url }}" alt="{{ shown.caption }}" loading="lazy"></a>
                 <span class="small muted">{{ shown.caption }}</span>
                 {% if removable %}
                     {% comment %}
-                    Behind a <details>, like the reprise's own delete: right
+                    Behind a <details>, like the pickup's own delete: right
                     under the thumbnail's link, one mis-tap deleted the photo
                     and its file at once.
                     {% endcomment %}
@@ -42,12 +42,12 @@ invoice_check.py as plain text - escaped here, never |safe.
 {% endif %}
 
 {% if view.date_warning %}
-    <div class="message message-warning reprise-date-warning">
+    <div class="message message-warning pickup-date-warning">
         <p>{{ view.date_warning }}</p>
         <form method="post" action="{% url 'returnables:pickup_date' pickup.pk %}" class="inline-form">
             {% csrf_token %}
             <input type="hidden" name="date" value="{{ view.photos_date|date:'Y-m-d' }}">
-            {% if retour %}<input type="hidden" name="retour" value="{{ retour }}">{% endif %}
+            {% if return_to %}<input type="hidden" name="retour" value="{{ return_to }}">{% endif %}
             <button class="btn btn-small btn-secondary" type="submit">Dater la reprise du {{ view.photos_date|date:"d/m/Y" }}</button>
         </form>
     </div>
@@ -63,12 +63,12 @@ invoice_check.py as plain text - escaped here, never |safe.
 {% elif day.status == "waiting" %}
     <p class="muted">Aucun bon de {{ day.supplier.name }} livré le {{ day.date|date:"d/m/Y" }} n'est encore arrivé.</p>
     {% for hint in day.hints %}
-        <div class="reprise-hint">
+        <div class="pickup-hint">
             <p>{{ hint.sentence }} La reprise est-elle bien datée ?</p>
             <form method="post" action="{% url 'returnables:pickup_date' pickup.pk %}" class="inline-form">
                 {% csrf_token %}
                 <input type="hidden" name="date" value="{{ hint.date|date:'Y-m-d' }}">
-                {% if retour %}<input type="hidden" name="retour" value="{{ retour }}">{% endif %}
+                {% if return_to %}<input type="hidden" name="retour" value="{{ return_to }}">{% endif %}
                 <button class="btn btn-small btn-secondary" type="submit">Mettre la reprise au {{ hint.date|date:"d/m/Y" }}</button>
             </form>
         </div>
@@ -95,7 +95,7 @@ invoice_check.py as plain text - escaped here, never |safe.
 {% endif %}
 
 {% if day.slips %}
-    <p class="reprise-slips">
+    <p class="pickup-slips">
         Bon{{ day.slips|length|pluralize }} du jour :
         {% for info in day.slips %}<a href="{% url 'returnables:slip_detail' info.pk %}">{{ info.title }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
     </p>

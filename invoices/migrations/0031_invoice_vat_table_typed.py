@@ -7,12 +7,12 @@ validated through a page that posted its table, even empty. Three of them
 (765, 842, 893 on 19/09) were saved with it emptied, and were being given
 the reading's back."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from django.db import migrations, models
 
 #: When the VAT table shipped on the review page, in UTC.
-TABLE_SHIPPED = datetime(2026, 9, 18, 1, 22, tzinfo=timezone.utc)
+TABLE_SHIPPED = datetime(2026, 9, 18, 1, 22, tzinfo=UTC)
 
 
 def mark_typed_tables(apps, schema_editor):
@@ -21,16 +21,18 @@ def mark_typed_tables(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('invoices', '0030_remove_split_kind'),
+        ("invoices", "0030_remove_split_kind"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='invoice',
-            name='vat_table_typed',
-            field=models.BooleanField(default=False, help_text="La table de TVA est celle qu'une personne a enregistrée, même vide : elle n'est plus relue."),
+            model_name="invoice",
+            name="vat_table_typed",
+            field=models.BooleanField(
+                default=False,
+                help_text="La table de TVA est celle qu'une personne a enregistrée, même vide : elle n'est plus relue.",
+            ),
         ),
         migrations.RunPython(mark_typed_tables, migrations.RunPython.noop),
     ]

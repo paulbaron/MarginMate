@@ -26,9 +26,7 @@ def ingredient(recipe, group=0, quantity="1", stock_cost=None, sub_recipe=None):
         group=group,
         quantity=Decimal(quantity),
         stock_type=(
-            make_priced_stock_type(unit_cost_ht=stock_cost, quantity="1000")
-            if stock_cost is not None
-            else None
+            make_priced_stock_type(unit_cost_ht=stock_cost, quantity="1000") if stock_cost is not None else None
         ),
         sub_recipe=sub_recipe,
     )
@@ -45,7 +43,7 @@ class NestedCountingTests(TestCase):
         self.assertEqual(self.syrup.variation_count, 2)
 
     def test_a_group_offers_the_sum_of_what_its_options_offer(self):
-        """"Vodka OU <syrup>" is three ways, not two: vodka, syrup-with-sugar
+        """ "Vodka OU <syrup>" is three ways, not two: vodka, syrup-with-sugar
         and syrup-with-honey."""
         cocktail = make_recipe(name="Cocktail")
         ingredient(cocktail, group=0, stock_cost="10")
@@ -63,21 +61,21 @@ class NestedCountingTests(TestCase):
     def test_counts_multiply_across_groups(self):
         cocktail = make_recipe(name="Cocktail")
         ingredient(cocktail, group=0, stock_cost="10")
-        ingredient(cocktail, group=0, sub_recipe=self.syrup)   # 1 + 2 = 3
+        ingredient(cocktail, group=0, sub_recipe=self.syrup)  # 1 + 2 = 3
         ingredient(cocktail, group=1, stock_cost="1")
-        ingredient(cocktail, group=1, stock_cost="2")          # 2
+        ingredient(cocktail, group=1, stock_cost="2")  # 2
         self.assertEqual(cocktail.variation_count, 6)
 
     def test_three_levels_deep(self):
         base = make_recipe(name="Base")
         ingredient(base, group=0, stock_cost="1")
-        ingredient(base, group=0, stock_cost="2")              # 2
+        ingredient(base, group=0, stock_cost="2")  # 2
         middle = make_recipe(name="Milieu")
         ingredient(middle, group=0, sub_recipe=base)
-        ingredient(middle, group=0, stock_cost="3")            # 2 + 1 = 3
+        ingredient(middle, group=0, stock_cost="3")  # 2 + 1 = 3
         top = make_recipe(name="Haut")
         ingredient(top, group=0, sub_recipe=middle)
-        ingredient(top, group=0, stock_cost="4")               # 3 + 1 = 4
+        ingredient(top, group=0, stock_cost="4")  # 3 + 1 = 4
         self.assertEqual(top.variation_count, 4)
 
     def test_the_enumerated_variations_match_the_count(self):
@@ -108,8 +106,8 @@ class NestedCostTests(TestCase):
 
     def test_the_parent_range_spans_the_option_and_the_sub_recipe(self):
         cocktail = make_recipe(name="Cocktail", selling_price_ttc="12")
-        ingredient(cocktail, group=0, stock_cost="7")           # exactly 7
-        ingredient(cocktail, group=0, sub_recipe=self.syrup)    # 2 to 5
+        ingredient(cocktail, group=0, stock_cost="7")  # exactly 7
+        ingredient(cocktail, group=0, sub_recipe=self.syrup)  # 2 to 5
         self.assertEqual(cocktail.summary()["cost_range"], (Decimal("2"), Decimal("7")))
 
     def test_the_range_matches_enumerating_every_variation(self):
@@ -161,7 +159,7 @@ class NestedSelectionTests(TestCase):
         self.assertEqual(self.cocktail.variation_for([2])["cost_ht"], Decimal("5"))
 
     def test_the_names_distinguish_the_sub_recipes_variants(self):
-        """"Sirop maison" alone would read identically for both."""
+        """ "Sirop maison" alone would read identically for both."""
         names = [name for _indices, name in self.cocktail.variation_selections()]
         self.assertEqual(len(names), 3)
         self.assertEqual(len(set(names)), 3, f"ambiguous variation names: {names}")
@@ -329,7 +327,7 @@ class NestedQueryCountTests(TestCase):
     # level it walks into, so the real driver is the number of distinct
     # sub-recipe NODES. Measured on invented graphs: ten syrups of three
     # levels under sixty cocktails cost a hundred queries here. See
-    # CLAUDE.md, « Les recettes qui utilisent un article ».
+    # CLAUDE.md, « The recipes that use an article ».
     ARTICLE_PICKER_QUERIES = 2
 
     def test_the_detail_page_stays_cheap(self):
@@ -337,13 +335,7 @@ class NestedQueryCountTests(TestCase):
             self.assertEqual(self.client.get(f"/recipes/{self.recipe.pk}/").status_code, 200)
 
     def test_the_list_page_stays_cheap(self):
-        expected = (
-            7
-            + self.TILL_QUERIES
-            + self.TAB_QUERIES
-            + self.NAV_BADGE_QUERIES
-            + self.ARTICLE_PICKER_QUERIES
-        )
+        expected = 7 + self.TILL_QUERIES + self.TAB_QUERIES + self.NAV_BADGE_QUERIES + self.ARTICLE_PICKER_QUERIES
         with self.assertNumQueries(expected):
             self.assertEqual(self.client.get("/recipes/").status_code, 200)
 

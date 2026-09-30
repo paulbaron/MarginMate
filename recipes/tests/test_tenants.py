@@ -1,7 +1,7 @@
-"""The till in multi mode: one espace's sales never land in another's, and
-the server's L'Addition account works for the owner's espace only.
+"""The till in multi mode: one tenant's sales never land in another's, and
+the server's L'Addition account works for the owner's tenant only.
 
-`TwoTenantsTestCase` (accounts/tests/support.py) gives two real espaces in
+`TwoTenantsTestCase` (accounts/tests/support.py) gives two real tenants in
 temporary files: bar A is the owner's (`owner_a`), bar B another bar. The
 rule is the spec's: the .env integrations are the owner's own accounts, so
 everywhere else the import is « à configurer », refused by the page, the
@@ -52,7 +52,7 @@ def till_day(tenant) -> None:
 
 
 class SalesTabTests(TwoTenantsTestCase):
-    """What « Recettes & ventes · Ventes » offers each espace."""
+    """What « Recettes & ventes · Ventes » offers each tenant."""
 
     owner_a = True
 
@@ -68,7 +68,7 @@ class SalesTabTests(TwoTenantsTestCase):
         self.assertNotIn("LADDITION_EMAIL", page)
         self.assertNotIn(".env", page)
 
-    def test_the_owner_s_espace_keeps_the_form(self):
+    def test_the_owner_s_tenant_keeps_the_form(self):
         page = self.tab(self.user_a)
         self.assertIn(reverse("recipes:trigger_sales_import"), page)
         self.assertNotIn("à configurer", page)
@@ -92,11 +92,11 @@ class TriggerTests(TwoTenantsTestCase):
         with bound_tenant(self.bar_b):
             self.assertFalse(SalesImportJob.objects.exists())
 
-    def test_the_owner_s_thread_works_for_the_owner_s_espace(self):
+    def test_the_owner_s_thread_works_for_the_owner_s_tenant(self):
         _response, thread = self.post(self.user_a)
         thread.assert_called_once()
         target = thread.call_args.kwargs["target"]
-        # target=bound(...): the thread binds the espace that started it,
+        # target=bound(...): the thread binds the tenant that started it,
         # and the arguments are the ones the task has always taken.
         self.assertIs(target.__wrapped__, import_laddition_sales_task)
         self.assertEqual(target.tenant.pk, self.bar_a.pk)
@@ -106,8 +106,8 @@ class TriggerTests(TwoTenantsTestCase):
         with bound_tenant(self.bar_b):
             self.assertFalse(SalesImportJob.objects.exists())
 
-    def test_a_job_running_in_another_espace_blocks_nothing_here(self):
-        """« Une récupération est déjà en cours » is about this espace's
+    def test_a_job_running_in_another_tenant_blocks_nothing_here(self):
+        """« Une récupération est déjà en cours » is about this tenant's
         jobs: a job of the same pk in another file is another bar's."""
         with bound_tenant(self.bar_b):
             SalesImportJob.objects.create(status=SalesImportJob.Status.RUNNING)
@@ -132,7 +132,7 @@ class TaskTests(TwoTenantsTestCase):
         self.assertNotIn("Traceback", job.log)
         self.assertIsNotNone(job.finished_at)
 
-    def test_a_real_thread_imports_into_its_espace_from_its_espace_s_folder(self):
+    def test_a_real_thread_imports_into_its_tenant_from_its_tenant_s_folder(self):
         seen = {}
 
         def download(start, end, download_dir, **kwargs):
@@ -196,7 +196,7 @@ class SessionTests(TwoTenantsTestCase):
         driver.get.assert_not_called()
         driver.find_element.assert_not_called()
 
-    def test_the_owner_s_espace_opens_one(self):
+    def test_the_owner_s_tenant_opens_one(self):
         with bound_tenant(self.bar_a):
             with (
                 mock.patch.object(session_module, "build_driver") as build,
@@ -207,8 +207,8 @@ class SessionTests(TwoTenantsTestCase):
 
 
 class CommandsTests(TwoTenantsTestCase):
-    """The L'Addition commands, run for one espace with
-    `manage.py tenant <dossier> <commande>`."""
+    """The L'Addition commands, run for one tenant with
+    `manage.py tenant <folder> <command>`."""
 
     owner_a = True
 
@@ -221,7 +221,7 @@ class CommandsTests(TwoTenantsTestCase):
         call_command("tenant", tenant.dir_name, *arguments, stdout=out)
         return out.getvalue()
 
-    def test_the_revenue_backfill_reads_the_espace_s_own_exports(self):
+    def test_the_revenue_backfill_reads_the_tenant_s_own_exports(self):
         till_day(self.bar_a)
         till_day(self.bar_b)
         an_export(self.downloads_of(self.bar_a))
@@ -239,13 +239,13 @@ class CommandsTests(TwoTenantsTestCase):
         with bound_tenant(self.bar_b):
             self.assertFalse(PosProductDailyQuantity.objects.get().revenue_read)
 
-    def test_the_payments_backfill_reads_the_espace_s_own_exports(self):
+    def test_the_payments_backfill_reads_the_tenant_s_own_exports(self):
         an_export(self.downloads_of(self.bar_a))
         self.assertIn("ventes-essai.xlsx", self.run_for(self.bar_a, "laddition_backfill_payments", "--dry-run"))
         with self.assertRaisesMessage(CommandError, "Aucun fichier .xlsx"):
             self.run_for(self.bar_b, "laddition_backfill_payments", "--dry-run")
 
-    def test_run_for_no_espace_they_say_how_to_run_them(self):
+    def test_run_for_no_tenant_they_say_how_to_run_them(self):
         for name, arguments in (
             ("laddition_backfill_revenue", ["--dry-run"]),
             ("laddition_backfill_payments", ["--dry-run"]),
@@ -279,7 +279,7 @@ class CommandsTests(TwoTenantsTestCase):
         with bound_tenant(self.bar_b):
             self.assertFalse(PosProduct.objects.exists())
 
-    def test_a_file_named_by_hand_is_read_in_any_espace(self):
+    def test_a_file_named_by_hand_is_read_in_any_tenant(self):
         """--file uses no account: it reads what the operator names."""
         path = an_export(tempfile.mkdtemp())
         self.run_for(self.bar_b, "laddition_import", "--file", path)
@@ -331,7 +331,7 @@ class ImportCommandBusyTests(TestCase):
         self.run_import("--file", an_export(tempfile.mkdtemp()))
         self.assertTrue(PosProduct.objects.filter(name="Pinte Exemple").exists())
 
-    def test_it_downloads_into_the_espace_s_own_folder(self):
+    def test_it_downloads_into_the_tenant_s_own_folder(self):
         seen = {}
 
         def download(start, end, download_dir, **kwargs):

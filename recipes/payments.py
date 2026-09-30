@@ -19,6 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
+from typing import TypeVar
 
 from django.db import transaction
 
@@ -26,6 +27,9 @@ from .models import PosDailyPayment
 
 #: Rows written or deleted per query: SQLite caps a statement's parameters.
 BATCH = 500
+
+#: Whatever a {method: ...} dict holds, handed back as it is (`by_method`).
+_Held = TypeVar("_Held")
 
 
 @dataclass
@@ -90,7 +94,7 @@ def replace_days(readings: dict, days) -> RecordedPayments:
     with transaction.atomic():
         changed, result.days_unchanged = changed_days(readings, days)
         for start in range(0, len(changed), BATCH):
-            deleted, _ = PosDailyPayment.objects.filter(sold_on__in=changed[start:start + BATCH]).delete()
+            deleted, _ = PosDailyPayment.objects.filter(sold_on__in=changed[start : start + BATCH]).delete()
             result.rows_deleted += deleted
         rows = [
             PosDailyPayment(sold_on=day, method=method, amount=payment.amount, payments=payment.count)
@@ -113,7 +117,7 @@ def record_payments(export) -> RecordedPayments:
     return replace_days(export.payments_by_day(), export.payment_days)
 
 
-def by_method(payments: dict) -> list[tuple[str, object]]:
+def by_method(payments: dict[str, _Held]) -> list[tuple[str, _Held]]:
     """{method: anything} as [(method, anything)] in PosDailyPayment's
     display order."""
     return sorted(payments.items(), key=lambda item: PosDailyPayment.sort_key(item[0]))

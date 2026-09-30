@@ -4,20 +4,25 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('inventory', '0002_initial'),
+        ("inventory", "0002_initial"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='product',
-            name='stock_equivalent',
-            field=models.DecimalField(blank=True, decimal_places=4, help_text="How much of the stock type's unit is in one unit_label above.", max_digits=10, null=True),
+            model_name="product",
+            name="stock_equivalent",
+            field=models.DecimalField(
+                blank=True,
+                decimal_places=4,
+                help_text="How much of the stock type's unit is in one unit_label above.",
+                max_digits=10,
+                null=True,
+            ),
         ),
         migrations.AddField(
-            model_name='product',
-            name='unit_label',
+            model_name="product",
+            name="unit_label",
             field=models.CharField(blank=True, help_text='e.g. "bouteille 70cl", "carton de 100"', max_length=100),
         ),
     ]

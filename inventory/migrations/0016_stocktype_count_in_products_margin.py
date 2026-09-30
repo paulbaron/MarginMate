@@ -4,15 +4,18 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('inventory', '0015_product_is_expense'),
+        ("inventory", "0015_product_is_expense"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='stocktype',
-            name='count_in_products_margin',
-            field=models.BooleanField(default=False, help_text='Article sans recette dont les achats comptent dans la marge produits (essuie-tout, gobelets, pailles…).', verbose_name='compter dans la marge produits'),
+            model_name="stocktype",
+            name="count_in_products_margin",
+            field=models.BooleanField(
+                default=False,
+                help_text="Article sans recette dont les achats comptent dans la marge produits (essuie-tout, gobelets, pailles…).",
+                verbose_name="compter dans la marge produits",
+            ),
         ),
     ]

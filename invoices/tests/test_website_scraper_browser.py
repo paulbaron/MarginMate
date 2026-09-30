@@ -40,7 +40,10 @@ BANNER = """<div id="banner" style="position:fixed;inset:0;background:#fff;z-ind
   Ce site utilise des cookies. <button onclick="document.cookie='consent=all'">Tout accepter</button>
   <button onclick="document.getElementById('banner').remove()">Tout refuser</button></div>"""
 
-LOGIN = """<!doctype html><html><head><meta charset="utf-8"></head><body>""" + BANNER + """
+LOGIN = (
+    """<!doctype html><html><head><meta charset="utf-8"></head><body>"""
+    + BANNER
+    + """
 <h1>Espace client</h1>
 <form id="f"><label>Adresse e-mail <input name="u1"></label>
 <label>Mot de passe <input type="password" name="p1"></label>
@@ -54,6 +57,7 @@ document.getElementById('f').addEventListener('submit', function (event) {
   else { document.getElementById('msg').innerHTML = '<p role="alert">Identifiants incorrects</p>'; }
 });
 </script></body></html>"""
+)
 
 HOME = """<!doctype html><html><head><meta charset="utf-8"></head><body><nav><a href="compte.html">Mon compte</a>
 <a href="factures.html">Mes factures</a></nav><p>Bienvenue</p></body></html>"""
@@ -86,7 +90,10 @@ def invoices_page(rows, next_page=""):
     body = "".join(ROW.format(**row) for row in rows)
     more = f'<a href="{next_page}">Suivant</a>' if next_page else ""
     return (
-        "<!doctype html><html><head><meta charset='utf-8'></head><body><h1>Mes factures</h1><table>" + body + "</table>" + more
+        "<!doctype html><html><head><meta charset='utf-8'></head><body><h1>Mes factures</h1><table>"
+        + body
+        + "</table>"
+        + more
         + '<footer><a href="cgv.pdf">CGV (PDF)</a></footer></body></html>'
     )
 
@@ -135,19 +142,29 @@ CARDS = (
 # file type (served as a download).
 VIEW_ONLY_CARDS = CARDS.replace('<button type="button"', '<button hidden type="button"')
 
+
 def scripted_list(rows, more_rows=()):
     """An invoice list whose rows download through a script - never through
     an address: `rows` are (month, file, script) with `{file}` in the
     script. « Voir plus » appends `more_rows` to the same list."""
+
     def row(month, file, script):
-        return (f'<tr><td>Facture {month}</td><td>9,99 €</td><td><a title="Télécharger" '
-                f'onclick="{script.format(file=file)}"><img alt="pdf"> PDF</a></td></tr>')
+        return (
+            f'<tr><td>Facture {month}</td><td>9,99 €</td><td><a title="Télécharger" '
+            f'onclick="{script.format(file=file)}"><img alt="pdf"> PDF</a></td></tr>'
+        )
+
     more = "".join(row(*r) for r in more_rows).replace('"', "&quot;")
-    button = (f'<button type="button" onclick="document.getElementById(\'list\').insertAdjacentHTML('
-              f"'beforeend', this.dataset.more); this.remove();\" data-more=\"{more}\">Voir plus</button>"
-              if more_rows else "")
-    return ('<!doctype html><html><head><meta charset="utf-8"></head><body><h1>Mes factures</h1>'
-            f'<table id="list">{"".join(row(*r) for r in rows)}</table>{button}</body></html>')
+    button = (
+        f'<button type="button" onclick="document.getElementById(\'list\').insertAdjacentHTML('
+        f'\'beforeend\', this.dataset.more); this.remove();" data-more="{more}">Voir plus</button>'
+        if more_rows
+        else ""
+    )
+    return (
+        '<!doctype html><html><head><meta charset="utf-8"></head><body><h1>Mes factures</h1>'
+        f'<table id="list">{"".join(row(*r) for r in rows)}</table>{button}</body></html>'
+    )
 
 
 # Opened a moment after the click, by the page's own script (the file
@@ -237,7 +254,7 @@ def portal(folder: str, after_login: str = "home.html", login_page: str | None =
 
 
 class _Quiet(http.server.SimpleHTTPRequestHandler):
-    def log_message(self, *args):
+    def log_message(self, format, *args):
         pass
 
 
@@ -299,8 +316,12 @@ class WebsiteScraperInBrowserTests(SimpleTestCase):
 
     def fetch(self, recipe, known=()):
         return fetch_website_invoices(
-            recipe, self.downloads.name, date(2026, 4, 1), date(2026, 5, 31),
-            known_numbers=known, log=self.logged.append,
+            recipe,
+            self.downloads.name,
+            date(2026, 4, 1),
+            date(2026, 5, 31),
+            known_numbers=known,
+            log=self.logged.append,
         )
 
     def test_it_signs_in_follows_the_invoices_and_downloads_the_period_only(self):
@@ -309,13 +330,13 @@ class WebsiteScraperInBrowserTests(SimpleTestCase):
         both April invoices - not March, not February, not the terms of sale."""
         portal(self.site.name)
         files = self.fetch(self.recipe())
-        contents = sorted(open(path, "rb").read()[len(PDF):].decode() for path in files)
+        contents = sorted(open(path, "rb").read()[len(PDF) :].decode() for path in files)  # noqa: SIM115 - read at once, closed as it is dropped
         self.assertEqual(contents, ["2026-04", "2026-04-bis", "2026-05"], self.logged)
 
     def test_an_invoice_already_imported_is_not_downloaded_again(self):
         portal(self.site.name)
         files = self.fetch(self.recipe(), known=["F-2026-0417"])
-        contents = sorted(open(path, "rb").read()[len(PDF):].decode() for path in files)
+        contents = sorted(open(path, "rb").read()[len(PDF) :].decode() for path in files)  # noqa: SIM115 - read at once, closed as it is dropped
         self.assertEqual(contents, ["2026-04-bis", "2026-05"])
 
     def test_a_given_invoices_page_is_opened_directly(self):
@@ -330,8 +351,13 @@ class WebsiteScraperInBrowserTests(SimpleTestCase):
         )
         self.assertEqual(
             [(row["date"], row["decision"]) for row in rows],
-            [("01/05/2026", "à télécharger"), ("01/04/2026", "à télécharger"), ("01/03/2026", "hors période"),
-             ("02/04/2026", "à télécharger"), ("01/02/2026", "hors période")],
+            [
+                ("01/05/2026", "à télécharger"),
+                ("01/04/2026", "à télécharger"),
+                ("01/03/2026", "hors période"),
+                ("02/04/2026", "à télécharger"),
+                ("01/02/2026", "hors période"),
+            ],
         )
         self.assertEqual([name for name in os.listdir(self.downloads.name) if name.endswith(".pdf")], [])
         # A test is how a site is set up: the page it read is kept, found or not.
@@ -343,8 +369,11 @@ class WebsiteScraperInBrowserTests(SimpleTestCase):
         there are what "Liens à suivre" is set from."""
         portal(self.site.name)
         rows = list_website_invoices(
-            self.recipe(invoices_url=f"{self.base}/home.html"), self.downloads.name,
-            date(2026, 4, 1), date(2026, 5, 31), log=self.logged.append,
+            self.recipe(invoices_url=f"{self.base}/home.html"),
+            self.downloads.name,
+            date(2026, 4, 1),
+            date(2026, 5, 31),
+            log=self.logged.append,
         )
         self.assertEqual(rows, [])
         said = "\n".join(self.logged)
@@ -363,7 +392,7 @@ class WebsiteScraperInBrowserTests(SimpleTestCase):
         "Mon compte" was clicked for the first invoice, and nothing came."""
         portal(self.site.name, home=SPA_HOME)
         files = self.fetch(self.recipe())
-        contents = sorted(open(path, "rb").read()[len(PDF):].decode() for path in files)
+        contents = sorted(open(path, "rb").read()[len(PDF) :].decode() for path in files)  # noqa: SIM115 - read at once, closed as it is dropped
         self.assertEqual(contents, ["2026-04", "2026-05"], self.logged)
 
     def test_a_check_before_the_login_form_hands_over_to_a_person(self):
@@ -422,7 +451,7 @@ class WebsiteScraperInBrowserTests(SimpleTestCase):
         with open(os.path.join(self.site.name, "verify.html"), "w", encoding="utf-8") as handle:
             handle.write(
                 '<!doctype html><html><head><meta charset="utf-8"></head><body>'
-                "<p>Saisissez le code reçu par SMS</p><input name=\"c\"></body></html>"
+                '<p>Saisissez le code reçu par SMS</p><input name="c"></body></html>'
             )
         with self.assertRaises(NeedsAPerson):
             self.fetch(self.recipe())
@@ -443,7 +472,7 @@ class WebsiteScraperInBrowserTests(SimpleTestCase):
         self.assertTrue(os.listdir(os.path.join(self.downloads.name, website.DEBUG_DIR)))
 
     def contents(self, files):
-        return sorted(open(path, "rb").read()[len(PDF):].decode() for path in files)
+        return sorted(open(path, "rb").read()[len(PDF) :].decode() for path in files)
 
     def test_a_list_of_cards_downloads_by_its_icon_once_each(self):
         """Free Mobile's list: « Voir ma facture » and a button holding only
@@ -456,7 +485,7 @@ class WebsiteScraperInBrowserTests(SimpleTestCase):
         files = self.fetch(self.recipe(navigation=["Mes factures"]))
         self.assertEqual(self.contents(files), ["2026-04", "2026-05"], self.logged)
 
-    def test_a_list_offering_only_voir_ma_facture_is_followed(self):
+    def test_a_list_offering_only_view_my_invoice_is_followed(self):
         portal(self.site.name)
         with open(os.path.join(self.site.name, "factures.html"), "w", encoding="utf-8") as handle:
             handle.write(VIEW_ONLY_CARDS)
@@ -484,32 +513,44 @@ class WebsiteScraperInBrowserTests(SimpleTestCase):
         """The form replaced by « Connexion en cours… », the code asked a
         moment later: taken for signed in, the run ended with nothing."""
         portal(self.site.name, after_login="attente.html")
-        self.page("attente.html", """<p>Connexion en cours…</p><script>setTimeout(function () {
-          document.body.innerHTML = '<p>Entrez le code envoyé par SMS</p><input name="c">'; }, 1000);</script>""")
+        self.page(
+            "attente.html",
+            """<p>Connexion en cours…</p><script>setTimeout(function () {
+          document.body.innerHTML = '<p>Entrez le code envoyé par SMS</p><input name="c">'; }, 1000);</script>""",
+        )
         with self.assertRaises(NeedsAPerson):
             self.fetch(self.recipe())
 
     def test_a_dashboard_with_a_search_box_and_the_recaptcha_notice_is_signed_into(self):
-        portal(self.site.name, home=HOME.replace(
-            "<p>Bienvenue</p>",
-            '<form role="search"><input type="text" placeholder="Rechercher"></form><p>Bienvenue</p>'
-            "<footer>Ce site est protégé par reCAPTCHA et les règles de confidentialité de Google.</footer>",
-        ))
+        portal(
+            self.site.name,
+            home=HOME.replace(
+                "<p>Bienvenue</p>",
+                '<form role="search"><input type="text" placeholder="Rechercher"></form><p>Bienvenue</p>'
+                "<footer>Ce site est protégé par reCAPTCHA et les règles de confidentialité de Google.</footer>",
+            ),
+        )
         self.assertEqual(len(self.fetch(self.recipe())), 3, self.logged)
 
     def test_a_check_page_with_an_answer_box_gets_no_login_typed_in(self):
         """No password field: the first text field took the login - the
         captcha's answer, or the site's search box."""
-        portal(self.site.name, login_page="""<!doctype html><html><head><meta charset="utf-8"></head><body>
+        portal(
+            self.site.name,
+            login_page="""<!doctype html><html><head><meta charset="utf-8"></head><body>
         <p>Prouvez que vous n'êtes pas un robot : recopiez les caractères de l'image.</p>
-        <form action="typed.html"><input name="answer"><button type="submit">Valider</button></form></body></html>""")
+        <form action="typed.html"><input name="answer"><button type="submit">Valider</button></form></body></html>""",
+        )
         with self.assertRaises(NeedsAPerson):
             self.fetch(self.recipe())
 
     def test_a_code_between_identifier_and_password_is_handed_over(self):
-        portal(self.site.name, login_page="""<!doctype html><html><head><meta charset="utf-8"></head><body>
+        portal(
+            self.site.name,
+            login_page="""<!doctype html><html><head><meta charset="utf-8"></head><body>
         <form action="code.html"><label>Adresse e-mail <input type="email" name="u1"></label>
-        <button type="submit">Suivant</button></form></body></html>""")
+        <button type="submit">Suivant</button></form></body></html>""",
+        )
         self.page("code.html", '<p>Saisissez le code reçu par SMS</p><input name="c">')
         with self.assertRaises(NeedsAPerson) as raised:
             self.fetch(self.recipe())
@@ -518,9 +559,14 @@ class WebsiteScraperInBrowserTests(SimpleTestCase):
     def test_a_form_drawn_late_beside_its_words_is_filled(self):
         """The page's help text is there at once, its form a moment later:
         taken for a check, it was handed over."""
-        late = EXPLAINED_LOGIN.replace("NEXT", "home.html").replace(
-            '<form id="f">', '<form id="f" style="display:none">'
-        ).replace("</script>", "setTimeout(function () { document.getElementById('f').style.display = ''; }, 1500);</script>")
+        late = (
+            EXPLAINED_LOGIN.replace("NEXT", "home.html")
+            .replace('<form id="f">', '<form id="f" style="display:none">')
+            .replace(
+                "</script>",
+                "setTimeout(function () { document.getElementById('f').style.display = ''; }, 1500);</script>",
+            )
+        )
         portal(self.site.name, login_page=late)
         self.assertEqual(len(self.fetch(self.recipe())), 3, self.logged)
 
@@ -542,36 +588,49 @@ class WebsiteScraperInBrowserTests(SimpleTestCase):
         self.assertLess(time.monotonic() - started, 20)
 
     def test_a_script_opening_the_invoice_after_a_moment_is_downloaded(self):
-        self.serve_list(scripted_list([("de mai 2026", "2026-05", OPEN_LATER), ("d'avril 2026", "2026-04", OPEN_LATER)]))
+        self.serve_list(
+            scripted_list([("de mai 2026", "2026-05", OPEN_LATER), ("d'avril 2026", "2026-04", OPEN_LATER)])
+        )
         files = self.fetch(self.recipe(navigation=["Mes factures"]))
         self.assertEqual(self.contents(files), ["2026-04", "2026-05"], self.logged)
 
     def test_several_invoices_saved_from_memory_all_arrive(self):
-        self.serve_list(scripted_list([
-            ("de mai 2026", "2026-05", SAVE_FROM_MEMORY),
-            ("d'avril 2026", "2026-04", SAVE_FROM_MEMORY),
-            ("du 02/04/2026", "2026-04-bis", SAVE_FROM_MEMORY),
-        ]))
+        self.serve_list(
+            scripted_list(
+                [
+                    ("de mai 2026", "2026-05", SAVE_FROM_MEMORY),
+                    ("d'avril 2026", "2026-04", SAVE_FROM_MEMORY),
+                    ("du 02/04/2026", "2026-04-bis", SAVE_FROM_MEMORY),
+                ]
+            )
+        )
         files = self.fetch(self.recipe(navigation=["Mes factures"]))
         self.assertEqual(self.contents(files), ["2026-04", "2026-04-bis", "2026-05"], self.logged)
 
-    def test_a_list_growing_under_voir_plus_is_downloaded_once(self):
+    def test_a_list_growing_under_show_more_is_downloaded_once(self):
         """Free Mobile's list shows five, then eight: all eight were
         downloaded again - the five first twice."""
-        self.serve_list(scripted_list(
-            [("de mai 2026", "2026-05", SAVE_FROM_MEMORY), ("d'avril 2026", "2026-04", SAVE_FROM_MEMORY)],
-            more_rows=[("du 02/04/2026", "2026-04-bis", SAVE_FROM_MEMORY)],
-        ))
+        self.serve_list(
+            scripted_list(
+                [("de mai 2026", "2026-05", SAVE_FROM_MEMORY), ("d'avril 2026", "2026-04", SAVE_FROM_MEMORY)],
+                more_rows=[("du 02/04/2026", "2026-04-bis", SAVE_FROM_MEMORY)],
+            )
+        )
         files = self.fetch(self.recipe(navigation=["Mes factures"]))
         self.assertEqual(self.contents(files), ["2026-04", "2026-04-bis", "2026-05"], self.logged)
 
     def test_a_click_starting_nothing_is_given_up_early_and_the_source_fails(self):
         """Eau de Paris: nothing came for three invoices, 45 seconds each, and
         the gather said there was nothing to download."""
-        self.serve_list(scripted_list([("de mai 2026", "2026-05", NOTHING_HAPPENS), ("d'avril 2026", "2026-04", NOTHING_HAPPENS)]))
+        self.serve_list(
+            scripted_list([("de mai 2026", "2026-05", NOTHING_HAPPENS), ("d'avril 2026", "2026-04", NOTHING_HAPPENS)])
+        )
         started = time.monotonic()
-        with mock.patch.object(website, "DOWNLOAD_TIMEOUT_SECONDS", 60), \
-                mock.patch.object(website, "DOWNLOAD_START_SECONDS", 2), self.assertRaises(WebsiteError) as raised:
+        with (
+            mock.patch.object(website, "DOWNLOAD_TIMEOUT_SECONDS", 60),
+            mock.patch.object(website, "DOWNLOAD_START_SECONDS", 2),
+            self.assertRaises(WebsiteError) as raised,
+        ):
             self.fetch(self.recipe(navigation=["Mes factures"]))
         self.assertLess(time.monotonic() - started, 40)
         self.assertIn("aucune des 2 factures", str(raised.exception))

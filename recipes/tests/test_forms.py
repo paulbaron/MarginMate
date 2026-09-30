@@ -44,9 +44,7 @@ class RecipeIngredientFormSetTests(TestCase):
         self.ginger = make_stock_type(name="Ginger Beer")
 
     def build(self, data):
-        return RecipeIngredientFormSet(
-            data, instance=self.recipe, form_kwargs={"parent_recipe": self.recipe}
-        )
+        return RecipeIngredientFormSet(data, instance=self.recipe, form_kwargs={"parent_recipe": self.recipe})
 
     def test_a_single_ingredient_saves(self):
         formset = self.build(
@@ -113,16 +111,12 @@ class RecipeIngredientFormSetTests(TestCase):
 
     def test_a_row_with_a_quantity_but_no_ingredient_is_still_an_error(self):
         """The gap-row fix must not silently swallow a half-filled row."""
-        formset = self.build(
-            formset_payload({0: {"source": "", "quantity": "0.04", "group": "0"}})
-        )
+        formset = self.build(formset_payload({0: {"source": "", "quantity": "0.04", "group": "0"}}))
         self.assertFalse(formset.is_valid())
         self.assertIn("source", formset.errors[0])
 
     def test_a_row_with_an_ingredient_but_no_quantity_is_an_error(self):
-        formset = self.build(
-            formset_payload({0: {"source": f"stock:{self.vodka.id}", "quantity": "", "group": "0"}})
-        )
+        formset = self.build(formset_payload({0: {"source": f"stock:{self.vodka.id}", "quantity": "", "group": "0"}}))
         self.assertFalse(formset.is_valid())
         self.assertIn("quantity", formset.errors[0])
 
@@ -187,9 +181,7 @@ class RecipeIngredientFormSetTests(TestCase):
         RecipeIngredient.objects.create(recipe=sub, stock_type=self.gin, quantity=Decimal("1"), group=1)
         self.assertTrue(sub.has_variations)
 
-        formset = self.build(
-            formset_payload({0: {"source": f"recipe:{sub.id}", "quantity": "0.02", "group": "0"}})
-        )
+        formset = self.build(formset_payload({0: {"source": f"recipe:{sub.id}", "quantity": "0.02", "group": "0"}}))
         self.assertTrue(formset.is_valid(), formset.errors)
         formset.save()
         # The parent inherits the sub-recipe's two ways of being made.
@@ -204,8 +196,6 @@ class RecipeIngredientFormSetTests(TestCase):
     def test_a_cycle_between_two_recipes_is_rejected(self):
         syrup = make_recipe(name="Sirop")
         RecipeIngredient.objects.create(recipe=syrup, sub_recipe=self.recipe, quantity=Decimal("1"), group=0)
-        formset = self.build(
-            formset_payload({0: {"source": f"recipe:{syrup.id}", "quantity": "0.02", "group": "0"}})
-        )
+        formset = self.build(formset_payload({0: {"source": f"recipe:{syrup.id}", "quantity": "0.02", "group": "0"}}))
         self.assertFalse(formset.is_valid())
         self.assertEqual(Recipe.objects.filter(name="Sirop").count(), 1)

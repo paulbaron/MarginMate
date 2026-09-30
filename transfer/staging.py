@@ -1,19 +1,19 @@
 """An archive waiting between its upload and its import (§5.11).
 
-Staged under the espace's staging folder (`accounts.paths.staging_dir`:
-`<espace>/staging/`), `<token>/` - **not in media/**: the old single mode's
+Staged under the tenant's staging folder (`accounts.paths.staging_dir`:
+`<tenant>/staging/`), `<token>/` - **not in media/**: the old single mode's
 /media/ route (removed 29/09/2026) served all of media when DEBUG was on,
 so a staged archive of the owner's invoices would have been downloadable by
 its URL, and media/ is still what the file view serves. Temporary exports
 live beside, in `exports/`.
 
-**One folder per espace.** With one folder for the whole server, every
+**One folder per tenant.** With one folder for the whole server, every
 bar's Importer tab listed the archives every other bar had just sent (up to
 4 GB of invoices, IBANs and addresses) with « Reprendre » and « Annuler »
-beside them, and a token opened any of them. Bound to its espace, `get`,
-`pending`, `discard` and `sweep` see that espace's stages only: another
+beside them, and a token opened any of them. Bound to its tenant, `get`,
+`pending`, `discard` and `sweep` see that tenant's stages only: another
 bar's token is simply not in the folder. A backup is staged by its NAME,
-found again in the espace's own backups (safety.find_backup) at every
+found again in the tenant's own backups (safety.find_backup) at every
 `get`.
 
 A token is `secrets.token_urlsafe(16)`, checked against its exact shape
@@ -49,8 +49,8 @@ UPLOADED = "archive.zip"
 EXPORT_MAX_AGE = timedelta(hours=1)
 
 #: 4 GB an archive (archive.MAX_ARCHIVE_BYTES), per upload: left as it is in
-#: multi mode, where it is no quota - every espace shares the server's disk,
-#: and a stage waits 24 h (until the sweep of ITS espace's Importer tab).
+#: multi mode, where it is no quota - every tenant shares the server's disk,
+#: and a stage waits 24 h (until the sweep of ITS tenant's Importer tab).
 TOO_BIG = "Archive trop grosse ({size} Go, 4 Go au plus)."
 NO_SPACE = "Pas assez de place sur le disque pour préparer l'import."
 LEGACY_UNAVAILABLE = "Les anciens fichiers d'associations ne peuvent pas encore être importés ici."
@@ -58,7 +58,7 @@ LEGACY_UNENCODABLE = "Export d'associations refusé : il contient un caractère 
 
 
 def staging_dir() -> Path:
-    """The bound espace's staging folder (read at call time), created on
+    """The bound tenant's staging folder (read at call time), created on
     demand."""
     path = paths.staging_dir()
     path.mkdir(parents=True, exist_ok=True)
@@ -77,9 +77,11 @@ class Stage:
     dir: Path
     archive_path: Path
     created_at: datetime
-    source: str                      # "envoi" | "sauvegarde <name>"
+    source: str  # "envoi" | "sauvegarde <name>"
     manifest: dict
-    state: dict = field(default_factory=dict)  # {"sections": {...key: strategy}, "preview": RunReport json, "preview_at": iso}
+    state: dict = field(
+        default_factory=dict
+    )  # {"sections": {...key: strategy}, "preview": RunReport json, "preview_at": iso}
     notes: list[str] = field(default_factory=list)
     legacy: bool = False
     backup: str = ""
@@ -300,7 +302,7 @@ def discard(stage: Stage) -> None:
 
 def sweep(max_age=timedelta(hours=24)) -> int:
     """on every GET of the import tab; also removes stale exports/ temp files.
-    The bound espace's folder only: another bar's stages are that bar's to
+    The bound tenant's folder only: another bar's stages are that bar's to
     sweep, when it opens its own tab."""
     removed = 0
     root = staging_dir()

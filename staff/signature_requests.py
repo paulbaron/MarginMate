@@ -58,18 +58,18 @@ proof file (staff/proof.py) is written again after each step
 `settle_expiry`, called by `resolve_link`, `open_request` and every action.
 A request already signed never « expires »: only its link does.
 
-**Several espaces.** The link carries no espace and the employee has no
+**Several tenants.** The link carries no tenant and the employee has no
 account, so the accounts database indexes every link's hash under the
-espace that issued it (`accounts.links`): the public page resolves the
-espace from the hash, binds it, then reads the request in that espace's
-database. The index holds exactly the hashes this espace's requests hold -
+tenant that issued it (`accounts.links`): the public page resolves the
+tenant from the hash, binds it, then reads the request in that tenant's
+database. The index holds exactly the hashes this tenant's requests hold -
 written when a link is issued (`create_request`) or renewed (`renew_link`,
 the old hash forgotten), forgotten when its request is deleted or purged
 (`signature_deletion`). A cancelled, superseded or expired request KEEPS
 its link: its page says « annulée », « corrigé depuis » or « expiré » (410)
 - forgotten, it would say « vérifiez qu'il a été copié en entier » (404),
-which is not what happened. `index_links` rebuilds the espace's index from
-its requests (an adopted database, a copy put back). Each espace's keys,
+which is not what happened. `index_links` rebuilds the tenant's index from
+its requests (an adopted database, a copy put back). Each tenant's keys,
 signed files and deletions.log are in its own private folder
 (`private_files`).
 """
@@ -86,6 +86,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import date, timedelta
 from functools import partial
+from typing import cast
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -317,7 +318,7 @@ def _clean_detail(detail) -> dict:
 
 
 def _moment(at: dt.datetime) -> str:
-    return at.astimezone(dt.timezone.utc).isoformat(timespec="microseconds")
+    return at.astimezone(dt.UTC).isoformat(timespec="microseconds")
 
 
 def event_hash(request_uuid, previous_hash: str, at, kind: str, ip, user_agent: str, detail: dict) -> str:
@@ -356,8 +357,14 @@ def log_event(request: SignatureRequest, kind: str, *, at=None, ip=None, user_ag
         last = SignatureEvent.objects.filter(request=request).order_by("-id").values_list("hash", flat=True).first()
         previous = last or GENESIS
         event = SignatureEvent.objects.create(
-            request=request, at=at, kind=kind, ip=ip, user_agent=user_agent, detail=detail,
-            previous_hash=previous, hash=event_hash(request.uuid, previous, at, kind, ip, user_agent, detail),
+            request=request,
+            at=at,
+            kind=kind,
+            ip=ip,
+            user_agent=user_agent,
+            detail=detail,
+            previous_hash=previous,
+            hash=event_hash(request.uuid, previous, at, kind, ip, user_agent, detail),
         )
         SignatureRequest.objects.filter(pk=request.pk).update(last_event_hash=event.hash)
     request.last_event_hash = event.hash
@@ -369,7 +376,7 @@ class ChainCheck:
     ok: bool
     count: int
     message: str
-    broken_at: int | None = None   # 1-based position of the first event that does not add up
+    broken_at: int | None = None  # 1-based position of the first event that does not add up
 
 
 #: The signatures that seal the journal before them - the event recording
@@ -414,20 +421,21 @@ def verify_event_chain(request: SignatureRequest, events=None) -> ChainCheck:
     just read with it, is then the head compared."""
     if events is None:
         events = list(SignatureEvent.objects.filter(request=request).order_by("id")) if request.pk else []
-        head = SignatureRequest.objects.filter(pk=request.pk).values_list("last_event_hash", flat=True).first() if (
-            request.pk
-        ) else request.last_event_hash
+        head = (
+            SignatureRequest.objects.filter(pk=request.pk).values_list("last_event_hash", flat=True).first()
+            if (request.pk)
+            else request.last_event_hash
+        )
     else:
         events = list(events)
         head = request.last_event_hash
     previous = GENESIS
     for position, event in enumerate(events, start=1):
-        expected = event_hash(
-            request.uuid, previous, event.at, event.kind, event.ip, event.user_agent, event.detail
-        )
+        expected = event_hash(request.uuid, previous, event.at, event.kind, event.ip, event.user_agent, event.detail)
         if event.previous_hash != previous or event.hash != expected:
             return ChainCheck(
-                False, len(events),
+                False,
+                len(events),
                 f"Journal altéré : l'événement n° {position} ({event.get_kind_display()}) ne correspond plus à "
                 "son empreinte ou à celle de l'événement précédent - il a été modifié, ou un événement a été "
                 "retiré avant lui.",
@@ -436,7 +444,8 @@ def verify_event_chain(request: SignatureRequest, events=None) -> ChainCheck:
         previous = event.hash
     if (head or "") != (events[-1].hash if events else ""):
         return ChainCheck(
-            False, len(events),
+            False,
+            len(events),
             "Journal altéré : le dernier événement enregistré n'est pas celui que la demande a noté - des "
             "événements ont été retirés à la fin, ou le journal a été réécrit.",
             len(events) or None,
@@ -447,7 +456,9 @@ def verify_event_chain(request: SignatureRequest, events=None) -> ChainCheck:
     heads, unreadable = _sealed_heads(request)
     if unreadable:
         return ChainCheck(
-            True, len(events), f"{intact}. Son scellement dans le document signé n'a pas pu être contrôlé : {unreadable}."
+            True,
+            len(events),
+            f"{intact}. Son scellement dans le document signé n'a pas pu être contrôlé : {unreadable}.",
         )
     position = {event.hash: index for index, event in enumerate(events)}
     sealed_by = ""
@@ -458,13 +469,16 @@ def verify_event_chain(request: SignatureRequest, events=None) -> ChainCheck:
         recorded = next((index for index, event in enumerate(events) if event.kind == kind), None)
         if stated not in position or recorded is None or position[stated] >= recorded:
             return ChainCheck(
-                False, len(events),
+                False,
+                len(events),
                 f"Journal altéré : les événements d'avant {words} ne sont plus ceux que le document signé a scellés "
                 "- le journal a été réécrit.",
             )
         sealed_by = words
     if sealed_by:
-        return ChainCheck(True, len(events), f"{intact} ; ceux d'avant {sealed_by} sont scellés dans le document signé.")
+        return ChainCheck(
+            True, len(events), f"{intact} ; ceux d'avant {sealed_by} sont scellés dans le document signé."
+        )
     return ChainCheck(True, len(events), f"{intact}.")
 
 
@@ -472,14 +486,15 @@ def verify_event_chain(request: SignatureRequest, events=None) -> ChainCheck:
 class EventLine:
     """An event as a person reads it (the proof file, the owner's history)."""
 
-    when: str                  # « 02/07/2026 à 10:24:13 », Paris
-    title: str                 # what happened
-    where: str                 # « adresse IP 203.0.113.7 · appareil : … », or ""
-    details: tuple[str, ...]   # what the detail says, in words
+    when: str  # « 02/07/2026 à 10:24:13 », Paris
+    title: str  # what happened
+    where: str  # « adresse IP 203.0.113.7 · appareil : … », or ""
+    details: tuple[str, ...]  # what the detail says, in words
 
 
 def _method_words(method) -> str:
-    return dict(Identification.choices).get(str(method), str(method))
+    # The labels are plain strings (no gettext_lazy): the stubs' `str | _StrPromise` is wider than what is there.
+    return cast(str, dict(Identification.choices).get(str(method), str(method)))
 
 
 def _details(event: SignatureEvent) -> tuple[str, ...]:
@@ -633,19 +648,21 @@ def create_request(employee, month: date, *, now=None, ip=None, user_agent="") -
             )
             private_files.write(request.uuid, private_files.DOCUMENT, frozen)
             log_event(
-                request, Kind.CREATED, at=now, ip=ip, user_agent=user_agent,
+                request,
+                Kind.CREATED,
+                at=now,
+                ip=ip,
+                user_agent=user_agent,
                 detail={"version": request.version, "month": sheet.slug, "document_sha256": request.document_sha256},
             )
-            # The public page finds this espace by the link's hash.
+            # The public page finds this tenant by the link's hash.
             # Written here, it rolls this request back if it fails; a
             # rollback after it leaves a hash no request holds: « lien
             # inconnu », as it would be anyway.
             links.register(request.token_hash)
     except IntegrityError:
         # Another request was made for the month in the same instant.
-        raise RequestStateError(
-            f"Le mois de {month_label(first)} a déjà une demande de signature en cours."
-        ) from None
+        raise RequestStateError(f"Le mois de {month_label(first)} a déjà une demande de signature en cours.") from None
     store_proof(request, now=now)
     return request, token
 
@@ -656,9 +673,7 @@ def renew_link(request: SignatureRequest, *, now=None, ip=None, user_agent="") -
     now = _now(now)
     request = settle_expiry(request, now)
     if not request.locks_month:
-        raise RequestStateError(
-            "Cette demande n'est plus en cours : envoyez le mois de nouveau pour obtenir un lien."
-        )
+        raise RequestStateError("Cette demande n'est plus en cours : envoyez le mois de nouveau pour obtenir un lien.")
     token = secrets.token_urlsafe(32)
     old_hash = request.token_hash
     request.token_hash = hash_token(token)
@@ -668,13 +683,21 @@ def renew_link(request: SignatureRequest, *, now=None, ip=None, user_agent="") -
     # reaches no request - « lien inconnu », as it should.
     links.register(request.token_hash)
     request.save(update_fields=["token_hash", "expires_at"])
-    log_event(request, Kind.LINK_RENEWED, at=now, ip=ip, user_agent=user_agent,
-              detail={"expires_at": _moment(request.expires_at)})
+    log_event(
+        request,
+        Kind.LINK_RENEWED,
+        at=now,
+        ip=ip,
+        user_agent=user_agent,
+        detail={"expires_at": _moment(request.expires_at)},
+    )
     transaction.on_commit(partial(links.forget, old_hash), robust=True)
     return token
 
 
-def cancel_request(request: SignatureRequest, reason: str = "", *, now=None, ip=None, user_agent="") -> SignatureRequest:
+def cancel_request(
+    request: SignatureRequest, reason: str = "", *, now=None, ip=None, user_agent=""
+) -> SignatureRequest:
     """« Annuler la demande »: a waiting or half-signed request, files kept."""
     now = _now(now)
     request = settle_expiry(request, now)
@@ -697,7 +720,9 @@ def cancel_request(request: SignatureRequest, reason: str = "", *, now=None, ip=
     return request
 
 
-def reopen_month(timesheet: Timesheet, reason: str = "", *, now=None, ip=None, user_agent="") -> SignatureRequest | None:
+def reopen_month(
+    timesheet: Timesheet, reason: str = "", *, now=None, ip=None, user_agent=""
+) -> SignatureRequest | None:
     """« Corriger ce mois »: the request holding the month is cancelled
     (waiting, or signed by the employee only) or superseded (finished) -
     its files kept - and the month can be edited again. None when no
@@ -728,7 +753,7 @@ def reopen_month(timesheet: Timesheet, reason: str = "", *, now=None, ip=None, u
 def resolve_link(token, now=None) -> SignatureRequest:
     """The request a link reaches, or LinkError (404 unknown, 410 gone).
     Nothing about any other request is ever said. Looked up in the BOUND
-    espace: the public views bind the one the link's hash is indexed under
+    tenant: the public views bind the one the link's hash is indexed under
     first (staff/public_views.py)."""
     now = _now(now)
     token_hash = link_hash(token)
@@ -748,10 +773,10 @@ def resolve_link(token, now=None) -> SignatureRequest:
 
 
 def index_links() -> tuple[int, int]:
-    """Make the accounts database's index of this espace's links hold
+    """Make the accounts database's index of this tenant's links hold
     exactly the hashes its requests hold (bound): the missing ones are
-    registered, the ones no request holds any more are forgotten - for an
-    espace whose database was adopted or put back from a copy. Returns
+    registered, the ones no request holds any more are forgotten - for a
+    tenant whose database was adopted or put back from a copy. Returns
     (added, removed)."""
     tenant = require_tenant()
     held = set(SignatureRequest.objects.values_list("token_hash", flat=True))
@@ -782,7 +807,7 @@ def note_link_opened(request: SignatureRequest, session, *, ip=None, user_agent=
 
 def code_hash(request: SignatureRequest, code: str) -> str:
     """HMAC-SHA256 of the code with SECRET_KEY, bound to the request."""
-    message = f"{request.uuid}:{code}".encode("utf-8")
+    message = f"{request.uuid}:{code}".encode()
     return hmac.new(settings.SECRET_KEY.encode("utf-8"), message, hashlib.sha256).hexdigest()
 
 
@@ -798,7 +823,8 @@ def _codes_in_the_last_hour(request: SignatureRequest, now, method: str) -> int:
         return events.filter(kind=Kind.CODE_GIVEN).count()
     sent = events.filter(kind=Kind.CODE_SENT).count()
     failed_mails = sum(
-        1 for detail in events.filter(kind=Kind.MAIL_FAILED).values_list("detail", flat=True)
+        1
+        for detail in events.filter(kind=Kind.MAIL_FAILED).values_list("detail", flat=True)
         if (detail or {}).get("what") == "code"
     )
     return sent + failed_mails
@@ -853,7 +879,7 @@ def issue_code(request: SignatureRequest, method: str, *, now=None, ip=None, use
         raise CodeError(
             f"Déjà {CODES_PER_HOUR} codes demandés dans l'heure : attendez un peu avant d'en demander un autre."
         )
-    code = f"{secrets.randbelow(10 ** CODE_DIGITS):0{CODE_DIGITS}d}"
+    code = f"{secrets.randbelow(10**CODE_DIGITS):0{CODE_DIGITS}d}"
     request.code_hash = code_hash(request, code)
     request.code_sent_at = now
     request.code_attempts = 0
@@ -947,8 +973,9 @@ def check_code(request: SignatureRequest, typed, session, *, now=None, ip=None, 
         request.code_hash = ""
         request.code_verified_at = now
         request.identification = identification
-        log_event(request, Kind.CODE_VERIFIED, at=now, ip=ip, user_agent=user_agent,
-                  detail={"method": request.identification})
+        log_event(
+            request, Kind.CODE_VERIFIED, at=now, ip=ip, user_agent=user_agent, detail={"method": request.identification}
+        )
         session[_session_key(request)] = _moment(now)
         return
     left = CODE_MAX_ATTEMPTS - attempts
@@ -956,8 +983,10 @@ def check_code(request: SignatureRequest, typed, session, *, now=None, ip=None, 
         with transaction.atomic():
             SignatureRequest.objects.filter(pk=request.pk, code_hash=stored).update(code_hash="")
         request.code_hash = ""
-        refuse("Code erroné, et c'était le dernier essai : demandez un nouveau code.",
-               f"code erroné, essai {attempts} sur {CODE_MAX_ATTEMPTS}")
+        refuse(
+            "Code erroné, et c'était le dernier essai : demandez un nouveau code.",
+            f"code erroné, essai {attempts} sur {CODE_MAX_ATTEMPTS}",
+        )
     refuse(
         f"Code erroné. Encore {left} essai{'s' if left > 1 else ''} avec ce code.",
         f"code erroné, essai {attempts} sur {CODE_MAX_ATTEMPTS}",
@@ -1016,12 +1045,24 @@ def sign_for_employee(
     journal = SignatureRequest.objects.filter(pk=request.pk).values_list("last_event_hash", flat=True).first() or ""
     try:
         signed = signing.sign_as_employee(
-            frozen, employee, image, now, document_id=request.document_id, establishment=_establishment(),
-            reservation=reservation, journal=journal,
+            frozen,
+            employee,
+            image,
+            now,
+            document_id=request.document_id,
+            establishment=_establishment(),
+            reservation=reservation,
+            journal=journal,
         )
     except signing.TimestampUnavailable as error:
-        log_event(request, Kind.TIMESTAMP_FAILED, at=now, ip=ip, user_agent=user_agent,
-                  detail={"servers": [server for server, _reason in error.failures], "step": "salarié"})
+        log_event(
+            request,
+            Kind.TIMESTAMP_FAILED,
+            at=now,
+            ip=ip,
+            user_agent=user_agent,
+            detail={"servers": [server for server, _reason in error.failures], "step": "salarié"},
+        )
         raise
     except signing.SignatureImageError:
         raise
@@ -1047,7 +1088,11 @@ def sign_for_employee(
         private_files.write(request.uuid, private_files.SIGNATURE_IMAGE, image)
         private_files.write(request.uuid, private_files.EMPLOYEE_SIGNED, signed.pdf)
         log_event(
-            request, Kind.EMPLOYEE_SIGNED, at=now, ip=ip, user_agent=user_agent,
+            request,
+            Kind.EMPLOYEE_SIGNED,
+            at=now,
+            ip=ip,
+            user_agent=user_agent,
             detail={
                 "signed_sha256": signed_sha,
                 "signature_png_sha256": image_sha,
@@ -1110,8 +1155,14 @@ def countersign_request(
             employee_signed, _establishment(), png, now, document_id=request.document_id, journal=journal
         )
     except signing.TimestampUnavailable as error:
-        log_event(request, Kind.TIMESTAMP_FAILED, at=now, ip=ip, user_agent=user_agent,
-                  detail={"servers": [server for server, _reason in error.failures], "step": "employeur"})
+        log_event(
+            request,
+            Kind.TIMESTAMP_FAILED,
+            at=now,
+            ip=ip,
+            user_agent=user_agent,
+            detail={"servers": [server for server, _reason in error.failures], "step": "employeur"},
+        )
         raise
     except signing.SignatureImageError:
         raise
@@ -1134,7 +1185,11 @@ def countersign_request(
         private_files.write(request.uuid, private_files.EMPLOYER_SIGNATURE_IMAGE, signed.drawing)
         private_files.write(request.uuid, private_files.FINAL, signed.pdf)
         log_event(
-            request, Kind.COUNTERSIGNED, at=now, ip=ip, user_agent=user_agent,
+            request,
+            Kind.COUNTERSIGNED,
+            at=now,
+            ip=ip,
+            user_agent=user_agent,
             detail={
                 "final_sha256": final_sha,
                 EMPLOYER_DRAWING: signed.drawing_sha256,
@@ -1192,8 +1247,14 @@ def verify_request(request: SignatureRequest, *, now=None, ip=None, user_agent="
         name = ""
     else:
         result = signing.verify(data)
-    log_event(request, Kind.VERIFIED, at=now, ip=ip, user_agent=user_agent,
-              detail={"file": name, "ok": result.ok, "verdict": result.verdict[:500]})
+    log_event(
+        request,
+        Kind.VERIFIED,
+        at=now,
+        ip=ip,
+        user_agent=user_agent,
+        detail={"file": name, "ok": result.ok, "verdict": result.verdict[:500]},
+    )
     return result
 
 

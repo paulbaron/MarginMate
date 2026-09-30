@@ -13,8 +13,7 @@ import json
 import os
 import tracemalloc
 import zipfile
-from datetime import date, datetime
-from datetime import timezone as dt_timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from unittest import mock
@@ -71,7 +70,7 @@ def manifest_for(sections=(), files=()):
 
 
 def stored(name: str, data: bytes) -> str:
-    """A file in the test espace's media, under exactly this name."""
+    """A file in the test tenant's media, under exactly this name."""
     if default_storage.exists(name):
         default_storage.delete(name)
     return default_storage.save(name, ContentFile(data))
@@ -80,8 +79,10 @@ def stored(name: str, data: bytes) -> str:
 class WritingTests(TestCase):
     def build(self, **files):
         path = new_archive_path("written")
-        with mock.patch("transfer.archive.app_revision", return_value="abc1234"), \
-                ArchiveWriter(path, reason="export") as writer:
+        with (
+            mock.patch("transfer.archive.app_revision", return_value="abc1234"),
+            ArchiveWriter(path, reason="export") as writer,
+        ):
             section = writer.section("factures")
             refs = [section.add_file(name) for name in files]
             section.write({"invoices": [], "refs": refs}, {"documents": 0, "fichiers": len(files)})
@@ -105,7 +106,9 @@ class WritingTests(TestCase):
             manifest["files"],
             [{"member": f"files/{name}", "size": 16, "sha256": sha(b"%PDF-1.4 exemple")}],
         )
-        self.assertEqual(refs[0], {"member": f"files/{name}", "name": name, "size": 16, "sha256": sha(b"%PDF-1.4 exemple")})
+        self.assertEqual(
+            refs[0], {"member": f"files/{name}", "name": name, "size": 16, "sha256": sha(b"%PDF-1.4 exemple")}
+        )
         with zipfile.ZipFile(path) as written:
             # Written last: an archive cut short has no manifest.
             self.assertEqual(written.namelist()[-1], "manifest.json")
@@ -242,7 +245,17 @@ class RefusalTests(SimpleTestCase):
                 self.assertRefused(write_zip({}, {**manifest_for(), "version": version}), archive.NOT_ARCHIVE)
 
     def test_zip_slip(self):
-        for name in ("../x", "/abs", "C:/x", "a\\..\\b", "files/../../x", "files/a\x00.pdf", "files//x", "files/./x", ""):
+        for name in (
+            "../x",
+            "/abs",
+            "C:/x",
+            "a\\..\\b",
+            "files/../../x",
+            "files/a\x00.pdf",
+            "files//x",
+            "files/./x",
+            "",
+        ):
             with self.subTest(name=name):
                 path = write_zip({"placeholder": b"x"}, manifest_for(), raw_names={"placeholder": name})
                 with self.assertRaises(ArchiveError) as caught:
@@ -357,7 +370,9 @@ def damaged(member: str, *, header: bool = False, compress_type=zipfile.ZIP_STOR
     """An archive changed on the way: bytes in the middle of `member`'s data
     (its CRC no longer matches, or its deflate stream no longer inflates),
     or - `header` - the signature of its local header."""
-    manifest = manifest_for(["sources"], files=[{"member": DOCUMENT, "size": len(DOCUMENT_DATA), "sha256": sha(DOCUMENT_DATA)}])
+    manifest = manifest_for(
+        ["sources"], files=[{"member": DOCUMENT, "size": len(DOCUMENT_DATA), "sha256": sha(DOCUMENT_DATA)}]
+    )
     members = {
         "sources.json": json.dumps({"sources": [], "marque": "abcdefgh" * 40}).encode(),
         DOCUMENT: DOCUMENT_DATA,
@@ -397,15 +412,25 @@ class DamagedArchiveTests(TestCase):
         self.assertEqual(str(caught.exception), "Fichier altéré dans l'archive : sources.json")
 
     def test_a_spoilt_deflate_stream_is_refused(self):
-        with ArchiveReader(damaged("sources.json", compress_type=zipfile.ZIP_DEFLATED)) as reader, \
-                self.assertRaises(ArchiveError) as caught:
+        with (
+            ArchiveReader(damaged("sources.json", compress_type=zipfile.ZIP_DEFLATED)) as reader,
+            self.assertRaises(ArchiveError) as caught,
+        ):
             reader.section("sources").payload()
         self.assertEqual(str(caught.exception), "Fichier altéré dans l'archive : sources.json")
 
     def test_a_damaged_file_header_is_refused_when_it_is_opened(self):
-        ref = {"member": DOCUMENT, "name": "invoices/2026/09/essai.pdf", "size": len(DOCUMENT_DATA), "sha256": sha(DOCUMENT_DATA)}
-        with ArchiveReader(damaged(DOCUMENT, header=True)) as reader, self.assertRaises(ArchiveError) as caught, \
-                reader.open_file(ref) as stream:
+        ref = {
+            "member": DOCUMENT,
+            "name": "invoices/2026/09/essai.pdf",
+            "size": len(DOCUMENT_DATA),
+            "sha256": sha(DOCUMENT_DATA),
+        }
+        with (
+            ArchiveReader(damaged(DOCUMENT, header=True)) as reader,
+            self.assertRaises(ArchiveError) as caught,
+            reader.open_file(ref) as stream,
+        ):
             stream.read()
         self.assertEqual(str(caught.exception), "Fichier altéré dans l'archive : invoices/2026/09/essai.pdf")
 
@@ -417,7 +442,12 @@ class DamagedArchiveTests(TestCase):
                 if info.filename != "sources.json":
                     target.writestr(info, source.read(info.filename))
             target.writestr("sources.json", json.dumps({"sources": []}))
-        ref = {"member": DOCUMENT, "name": "invoices/2026/09/essai.pdf", "size": len(DOCUMENT_DATA), "sha256": sha(DOCUMENT_DATA)}
+        ref = {
+            "member": DOCUMENT,
+            "name": "invoices/2026/09/essai.pdf",
+            "size": len(DOCUMENT_DATA),
+            "sha256": sha(DOCUMENT_DATA),
+        }
         with ArchiveReader(path) as reader:
             self.assertEqual(reader.section("sources").payload(), {"sources": []})
             with reader.open_file(ref) as stream:
@@ -429,8 +459,16 @@ class StorageNameTests(TestCase):
     record: it may not leave the two folders documents live in."""
 
     def test_names_that_are_refused(self):
-        for name in ("../x.pdf", "invoices/../../x.pdf", "/etc/passwd", "C:/x.pdf", "config/settings.py",
-                     "invoices/" + "a" * 100 + ".pdf", "", None):
+        for name in (
+            "../x.pdf",
+            "invoices/../../x.pdf",
+            "/etc/passwd",
+            "C:/x.pdf",
+            "config/settings.py",
+            "invoices/" + "a" * 100 + ".pdf",
+            "",
+            None,
+        ):
             with self.subTest(name=name):
                 self.assertIsNotNone(storage_name_problem(name))
 
@@ -445,9 +483,9 @@ class StorageNameTests(TestCase):
         self.assertIsNone(storage_name_problem("invoices/2026/09/Monoprix_8EUR44_26_02_2025.pdf"))
         self.assertIsNone(storage_name_problem("receipts/2026/09/0149.jpg"))
 
-    def test_a_consignes_photo_or_bon_name_is_accepted(self):
+    def test_a_returnables_photo_or_slip_name_is_accepted(self):
         """« Consignes » stores under consignes/ (returnables.models): refused
-        here, every photo and bon of an archive was skipped on import."""
+        here, every photo and slip of an archive was skipped on import."""
         self.assertIsNone(storage_name_problem("consignes/photos/2026/09/reprise-20260210-1.jpg"))
         self.assertIsNone(storage_name_problem("consignes/bons/2026/09/bon-1234.pdf"))
         for name in ("consignes/../config/x.pdf", "consignes/" + "a" * 100 + ".jpg", "consignesx/a.jpg"):
@@ -505,7 +543,7 @@ class CodecTests(TestCase):
     def test_dates_and_moments(self):
         self.assertEqual(codec.dump(Invoice(invoice_date=date(2026, 9, 19)), "invoice_date"), "2026-09-19")
         self.assertEqual(codec.load(Invoice, "invoice_date", "2026-09-19"), date(2026, 9, 19))
-        moment = datetime(2026, 9, 19, 10, 2, 16, 915895, tzinfo=dt_timezone.utc)
+        moment = datetime(2026, 9, 19, 10, 2, 16, 915895, tzinfo=UTC)
         self.assertEqual(codec.dump(Invoice(imported_at=moment), "imported_at"), "2026-09-19T10:02:16.915895+00:00")
         self.assertEqual(codec.load(Invoice, "imported_at", "2026-09-19T12:02:16.915895+02:00"), moment)
         for bad in ("19/09/2026", 20260919, None):
@@ -517,7 +555,7 @@ class CodecTests(TestCase):
             codec.load(Invoice, "imported_at", "2026-09-19T10:02:16")
         self.assertIn("sans fuseau horaire", str(caught.exception))
         with self.assertRaises(codec.FieldValueError):
-            codec.dump(Invoice(imported_at=datetime(2026, 9, 19, 10, 0)), "imported_at")  # noqa: DTZ001 - naive on purpose
+            codec.dump(Invoice(imported_at=datetime(2026, 9, 19, 10, 0)), "imported_at")
 
     def test_a_moment_off_the_calendar_is_refused(self):
         """A moment that cannot be shown here is refused where it is read,
@@ -536,7 +574,9 @@ class CodecTests(TestCase):
             codec.load(InvoiceLine, "total_ht", None)
 
     def test_json_booleans_integers_and_text(self):
-        self.assertEqual(codec.load(Invoice, "parse_checks", [{"label": "x", "passed": True}]), [{"label": "x", "passed": True}])
+        self.assertEqual(
+            codec.load(Invoice, "parse_checks", [{"label": "x", "passed": True}]), [{"label": "x", "passed": True}]
+        )
         self.assertEqual(codec.load(InvoiceLine, "colisage", 6), 6)
         with self.assertRaises(codec.FieldValueError):
             codec.load(InvoiceLine, "colisage", True)  # a bool is not an int
@@ -573,7 +613,7 @@ class CodecTests(TestCase):
         data = {"loss_percent": "10.00", "category": "", "unit": "L"}
         self.assertEqual(codec.differences(article, data, ("loss_percent", "category", "unit")), [])
         invoice = Invoice(
-            imported_at=datetime(2026, 9, 19, 12, 0, tzinfo=dt_timezone.utc),
+            imported_at=datetime(2026, 9, 19, 12, 0, tzinfo=UTC),
             parse_checks=[{"passed": True, "label": "x"}],
         )
         self.assertEqual(
@@ -630,7 +670,9 @@ class ReportTests(SimpleTestCase):
         self.assertEqual(len(section.skipped), 200)
         self.assertEqual(section.overflow, {"skipped": 50})
         shown = section.display_lists[0]
-        self.assertEqual((shown["title"], len(shown["items"]), shown["more"], shown["total"]), ("Ignorés", 20, 230, 250))
+        self.assertEqual(
+            (shown["title"], len(shown["items"]), shown["more"], shown["total"]), ("Ignorés", 20, 230, 250)
+        )
 
     def test_changes_and_destructive(self):
         section = SectionReport(key="banque", label="Banque")
@@ -654,11 +696,22 @@ class ReportTests(SimpleTestCase):
             section.deleted("documents", documents)
             section.unchanged("lignes", 4)
             section.note("Facture Metro n° 1 : gardée")
-            return RunReport(**{"mode": "import", "preview": True, "sections": [section], "rebuilt": {"mouvements de stock": 2}, **fields})
+            return RunReport(
+                **{
+                    "mode": "import",
+                    "preview": True,
+                    "sections": [section],
+                    "rebuilt": {"mouvements de stock": 2},
+                    **fields,
+                }
+            )
 
         shown = report(1)
         self.assertRegex(shown.fingerprint, r"^[0-9a-f]{64}$")
-        self.assertEqual(report(1, preview=False, duration_s=9.4, safety={"database": "x", "archive": ""}).fingerprint, shown.fingerprint)
+        self.assertEqual(
+            report(1, preview=False, duration_s=9.4, safety={"database": "x", "archive": ""}).fingerprint,
+            shown.fingerprint,
+        )
         self.assertEqual(RunReport.from_json(json.loads(json.dumps(shown.to_json()))).fingerprint, shown.fingerprint)
         self.assertNotEqual(report(2).fingerprint, shown.fingerprint)
         self.assertNotEqual(report(1, mode="clear").fingerprint, shown.fingerprint)
@@ -707,7 +760,9 @@ class LoneSurrogateTests(SimpleTestCase):
                 path = write_zip({"sources.json": json.dumps(payload)}, manifest_for(["sources"]))
                 with ArchiveReader(path) as reader, self.assertRaises(ArchiveError) as caught:
                     reader.section("sources").payload()
-                self.assertEqual(str(caught.exception), "Archive refusée : sources.json contient un caractère invalide.")
+                self.assertEqual(
+                    str(caught.exception), "Archive refusée : sources.json contient un caractère invalide."
+                )
 
     def test_a_whole_pair_escaped_is_one_character(self):
         """An emoji written as its two escapes, as an ASCII-only editor
@@ -730,7 +785,15 @@ class ShownMomentTests(SimpleTestCase):
     a 500 until the 24 h sweep (review, 19/09)."""
 
     def test_what_cannot_be_shown_is_none(self):
-        for value in ("0001-01-01T00:00:00+14:00", "9999-12-31T23:30:00-14:00", "pas une date", "", None, 20260919, ["2026"]):
+        for value in (
+            "0001-01-01T00:00:00+14:00",
+            "9999-12-31T23:30:00-14:00",
+            "pas une date",
+            "",
+            None,
+            20260919,
+            ["2026"],
+        ):
             with self.subTest(value=value):
                 self.assertIsNone(archive.shown_moment(value))
 

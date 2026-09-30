@@ -12,7 +12,8 @@ from django.core import mail
 from django.core.mail.backends.base import BaseEmailBackend
 from django.test import override_settings
 
-from staff import private_files, signature_mail, signature_requests as requests_
+from staff import private_files, signature_mail
+from staff import signature_requests as requests_
 from staff.models import Establishment, SignatureEvent, SignatureRequest
 from staff.tests.signing_support import SigningTestMixin, drawn_signature, employer_signature
 from staff.tests.support import employee
@@ -20,7 +21,7 @@ from staff.timesheet import save_month
 from tests.support import NoNetworkTestCase
 
 JUNE = date(2026, 6, 1)
-NOW = dt.datetime(2026, 7, 2, 8, 0, tzinfo=dt.timezone.utc)
+NOW = dt.datetime(2026, 7, 2, 8, 0, tzinfo=dt.UTC)
 LINK = "https://bar.example.invalid/personnel/signer/jeton-d-essai/"
 Kind = SignatureEvent.Kind
 CONFIGURED = override_settings(EMAIL_HOST="smtp.example.invalid", DEFAULT_FROM_EMAIL="bar@example.invalid")
@@ -29,7 +30,7 @@ CONFIGURED = override_settings(EMAIL_HOST="smtp.example.invalid", DEFAULT_FROM_E
 class FailingBackend(BaseEmailBackend):
     """A mail server that refuses the connection."""
 
-    def send_messages(self, messages):
+    def send_messages(self, email_messages):
         raise smtplib.SMTPConnectError(421, "service indisponible (essai)")
 
 
@@ -60,7 +61,7 @@ class LinkMailTests(MailCase):
         self.assertEqual(message.content_subtype, "plain")
         self.assertIn("juin 2026", message.subject)
         self.assertIn(LINK, message.body)
-        self.assertIn("16/07/2026", message.body)   # valid until
+        self.assertIn("16/07/2026", message.body)  # valid until
         self.assertIn("réserves", message.body)
         self.assertEqual(self.kinds()[-1], Kind.LINK_SENT)
         self.assertEqual(self.request.events.last().detail, {"to": "jeanne.dupont@example.invalid"})
@@ -155,7 +156,7 @@ class FinalCopyTests(MailCase):
         self.assertTrue(outcome.sent)
         message = mail.outbox[-1]
         self.assertIn("BAR EXEMPLE", message.subject)
-        (name, content, mimetype), = message.attachments
+        ((name, content, mimetype),) = message.attachments
         self.assertEqual(mimetype, "application/pdf")
         self.assertTrue(name.endswith(".pdf"))
         self.assertIn("DUPONT Jeanne", name)

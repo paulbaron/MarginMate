@@ -104,9 +104,7 @@ class SpendingFixtures:
 
     def pay(self, line, *invoices):
         for document in invoices:
-            InvoicePayment.objects.create(
-                transaction=line, invoice=document, method=InvoicePayment.Method.MANUAL
-            )
+            InvoicePayment.objects.create(transaction=line, invoice=document, method=InvoicePayment.Method.MANUAL)
         line.settled_by_hand = True
         line.save(update_fields=["settled_by_hand"])
         return line
@@ -124,9 +122,7 @@ class WhereADebitWentTests(SpendingFixtures, TestCase):
         self.assertEqual(report.total, euros("120.00"))
 
     def test_a_debit_with_one_invoice_of_several_articles_is_split_between_them(self):
-        document = self.invoice(
-            self.goods, date(2026, 6, 10), (self.beer, "75.00"), (self.wine, "25.00")
-        )
+        document = self.invoice(self.goods, date(2026, 6, 10), (self.beer, "75.00"), (self.wine, "25.00"))
         self.pay(self.debit(date(2026, 6, 12), "GROSSISTE EXEMPLE", "120.00"), document)
         report = spending.spending_for(WINDOW)
         self.assertEqual(self.amounts(report), {"Bières": euros("90.00"), "Vins": euros("30.00")})
@@ -155,11 +151,9 @@ class WhereADebitWentTests(SpendingFixtures, TestCase):
         report = spending.spending_for(WINDOW)
         self.assertEqual(self.amounts(report), {computation.TO_CLASSIFY_NAME: euros("120.00")})
 
-    def test_the_places_are_the_ones_marges_reads(self):
+    def test_the_places_are_the_ones_the_margins_page_reads(self):
         """One definition of « where an invoice's money went », not two."""
-        document = self.invoice(
-            self.goods, date(2026, 6, 10), (self.beer, "75.00"), (self.wine, "25.00")
-        )
+        document = self.invoice(self.goods, date(2026, 6, 10), (self.beer, "75.00"), (self.wine, "25.00"))
         places = computation.where_it_went(document)
         self.assertEqual(
             sum((money.ttc for money in places.values()), Decimal("0")),
@@ -303,9 +297,7 @@ class ByHandAndByRuleTests(SpendingFixtures, TestCase):
         self.assertEqual(self.amounts(report), {spending.NO_CATEGORY: euros("450.00")})
 
     def test_a_suspended_rule_categorises_nothing(self):
-        IgnoreRule.objects.create(
-            pattern="PRET EXEMPLE", description="Prêt", category="Emprunt", is_active=False
-        )
+        IgnoreRule.objects.create(pattern="PRET EXEMPLE", description="Prêt", category="Emprunt", is_active=False)
         self.debit(date(2026, 6, 5), "PRET EXEMPLE", "450.00")
         report = spending.spending_for(WINDOW)
         self.assertEqual(self.amounts(report), {spending.NO_CATEGORY: euros("450.00")})
@@ -330,9 +322,7 @@ class UncategorisedTests(SpendingFixtures, TestCase):
         self.debit(date(2026, 6, 3), "PETIT PAYEUR", "10.00")
         self.debit(date(2026, 6, 4), "GROS PAYEUR", "800.00")
         report = spending.spending_for(WINDOW)
-        self.assertEqual(
-            [one.line.counterparty for one in report.uncategorised], ["GROS PAYEUR", "PETIT PAYEUR"]
-        )
+        self.assertEqual([one.line.counterparty for one in report.uncategorised], ["GROS PAYEUR", "PETIT PAYEUR"])
 
     def test_a_spending_already_named_stays_listed_so_a_typo_can_be_retyped(self):
         """Named once and gone from the page, a category typed by mistake
@@ -346,7 +336,7 @@ class UncategorisedTests(SpendingFixtures, TestCase):
             [("PETIT PAYEUR", spending.NO_CATEGORY), ("GROS PAYEUR", "Travo")],
         )
 
-    def test_the_sans_categorie_row_and_the_list_below_it_are_reconciled(self):
+    def test_the_uncategorised_row_and_the_list_below_it_are_reconciled(self):
         """The row holds the part of a debit its invoice did not cover; the
         list below holds the debits with no invoice at all. Two figures under
         one label, and the page has to say what separates them."""
@@ -468,7 +458,7 @@ class ThePieTests(SpendingFixtures, TestCase):
         self.assertEqual(len(report.slices), len(PIE_COLORS) + 1)
         self.assertNotEqual(report.slices[-1].color, report.slices[0].color)
 
-    def test_sans_categorie_keeps_its_own_slice_however_small(self):
+    def test_uncategorised_keeps_its_own_slice_however_small(self):
         """Thinner than the bar and still its own wedge: it is the work the
         page exists to get rid of, and folded away nobody would see it."""
         self.debit(date(2026, 6, 3), "PAYEUR A", "990.00", category="Gros poste")
@@ -494,7 +484,7 @@ class ThePieTests(SpendingFixtures, TestCase):
         self.assertEqual(sorted(shares), [Decimal("33.3"), Decimal("33.3"), Decimal("33.4")])
         self.assertEqual(sum(piece.share for piece in report.slices), Decimal("100"))
 
-    def test_the_tail_folded_into_autres_carries_the_shares_it_holds(self):
+    def test_the_tail_folded_into_the_others_slice_carries_the_shares_it_holds(self):
         """« Autres » is the sum of its members' shares, not a second
         division: otherwise the legend and the table beside it print two
         different figures for the same money, and the wedges stop coming to
@@ -507,9 +497,7 @@ class ThePieTests(SpendingFixtures, TestCase):
         self.assertEqual(others.name, spending.OTHERS)
         drawn = {category.name: category.share for category in report.categories}
         named = {piece.name for piece in report.slices[:-1]}
-        self.assertEqual(
-            others.share, sum(share for name, share in drawn.items() if name not in named)
-        )
+        self.assertEqual(others.share, sum(share for name, share in drawn.items() if name not in named))
         self.assertEqual(sum(piece.share for piece in report.slices), Decimal("100"))
 
     def test_a_category_given_back_more_than_it_cost_is_out_of_the_pie_and_said(self):
@@ -528,7 +516,7 @@ class ThePieTests(SpendingFixtures, TestCase):
 
 
 class ThePageTests(SpendingFixtures, TestCase):
-    def test_the_page_says_what_it_counts_and_points_at_marges(self):
+    def test_the_page_says_what_it_counts_and_points_at_the_margins_page(self):
         self.debit(date(2026, 6, 3), "PAYEUR EXEMPLE", "100.00", category="Travaux")
         page = self.client.get(self.url, WINDOW.parameters)
         self.assertEqual(page.status_code, 200)
@@ -623,14 +611,12 @@ class SettingACategoryTests(SpendingFixtures, TestCase):
         line.refresh_from_db()
         self.assertFalse(line.settled_by_hand)
 
-    def test_an_empty_category_takes_the_spending_back_to_sans_categorie(self):
+    def test_an_empty_category_takes_the_spending_back_to_uncategorised(self):
         line = self.debit(date(2026, 6, 3), "PAYEUR EXEMPLE", "100.00", category="Travaux")
         self.post(line, "   ")
         line.refresh_from_db()
         self.assertEqual(line.category, "")
-        self.assertEqual(
-            self.amounts(spending.spending_for(WINDOW)), {spending.NO_CATEGORY: euros("100.00")}
-        )
+        self.assertEqual(self.amounts(spending.spending_for(WINDOW)), {spending.NO_CATEGORY: euros("100.00")})
 
     def test_a_category_wider_than_its_column_is_cut_rather_than_stored_whole(self):
         """SQLite stores an over-long string without a word; every read of it
@@ -660,19 +646,17 @@ class SettingACategoryTests(SpendingFixtures, TestCase):
         are right and one under the other they read as a subtraction error.
         The header and a sentence say the same line can be in several
         categories - on the one page whose argument is that it adds up."""
-        document = self.invoice(
-            self.goods, date(2026, 6, 10), (self.beer, "50.00"), (self.wine, "50.00")
-        )
+        document = self.invoice(self.goods, date(2026, 6, 10), (self.beer, "50.00"), (self.wine, "50.00"))
         self.pay(self.debit(date(2026, 6, 12), "GROSSISTE EXEMPLE", "120.00"), document)
         page = self.client.get(self.url, WINDOW.parameters)
         self.assertContains(page, "Opérations concernées")
         self.assertContains(page, "plusieurs catégories")
 
     def test_what_came_back_on_the_statement_is_not_claimed_by_the_deduction_stat(self):
-        """`given_back` is the avoirs and consignes the LINKED invoices carry,
-        not money the bank paid back: a credit is an entrée d'argent and this
-        page counts what went out. Named « Rendu sur la période », the stat
-        promised a figure it does not hold."""
+        """`given_back` is the credit notes and returnable deposits the LINKED
+        invoices carry, not money the bank paid back: a credit is income and
+        this page counts what went out. Named « Rendu sur la période », the
+        stat promised a figure it does not hold."""
         document = self.invoice(self.goods, date(2026, 6, 10), (self.beer, "-100.00"))
         self.pay(self.debit(date(2026, 6, 12), "GROSSISTE EXEMPLE", "50.00"), document)
         self.debit(date(2026, 6, 13), "PAYEUR EXEMPLE", "200.00", category="Travaux")
@@ -721,9 +705,7 @@ class SettingACategoryTests(SpendingFixtures, TestCase):
 class QueryCountTests(SpendingFixtures, TestCase):
     def build(self, count):
         for index in range(count):
-            document = self.invoice(
-                self.goods, date(2026, 6, 10), (self.beer, "10.00"), (self.wine, "5.00")
-            )
+            document = self.invoice(self.goods, date(2026, 6, 10), (self.beer, "10.00"), (self.wine, "5.00"))
             self.pay(self.debit(date(2026, 6, 12), f"GROSSISTE {index}", "18.00"), document)
             self.debit(date(2026, 6, 13), f"AUTRE {index}", "3.00")
 

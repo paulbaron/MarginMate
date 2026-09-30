@@ -38,7 +38,8 @@ from django.urls import reverse
 from PIL import Image
 
 from invoices.scrapers import website
-from staff import private_files, public_views, signature_requests as requests_
+from staff import private_files, public_views
+from staff import signature_requests as requests_
 from staff.models import Establishment, SignatureRequest
 from staff.tests.signing_support import FailingTimestamper, OfflineTimestamps, SigningTestMixin, drawn_signature
 from staff.tests.support import employee
@@ -134,7 +135,9 @@ class PadInBrowserCase(SigningTestMixin, StaticLiveServerTestCase):
         """A stroke by touch, through the DevTools protocol: what a phone sends."""
         points = self.points(shape)
         send = self.driver.execute_cdp_cmd
-        send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": points[0][0], "y": points[0][1]}]})
+        send(
+            "Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": points[0][0], "y": points[0][1]}]}
+        )
         for x, y in points[1:]:
             send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": x, "y": y}]})
         send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
@@ -216,13 +219,15 @@ class SigningPadInBrowserTests(PadInBrowserCase):
         self.wait_for(lambda: self.driver.find_elements("css selector", "[data-signed]"))
         request = SignatureRequest.objects.get()
         self.assertEqual(request.status, SignatureRequest.Status.EMPLOYEE_SIGNED)
-        drawing = Image.open(io.BytesIO(
-            private_files.read_checked(request.uuid, private_files.SIGNATURE_IMAGE, request.signature_png_sha256)
-        ))
+        drawing = Image.open(
+            io.BytesIO(
+                private_files.read_checked(request.uuid, private_files.SIGNATURE_IMAGE, request.signature_png_sha256)
+            )
+        )
         self.assertEqual(drawing.mode, "RGBA")
         self.assertLessEqual(drawing.width, 1200)
         self.assertLessEqual(drawing.height, 400)
-        self.assertEqual(drawing.getpixel((0, 0))[3], 0)          # transparent around the ink
+        self.assertEqual(drawing.getpixel((0, 0))[3], 0)  # transparent around the ink
 
     def test_thumb_sized_controls_and_boxes_beside_their_words(self):
         """At 375 px: « Annuler le dernier trait » and « Effacer » are tapped
@@ -302,7 +307,7 @@ class SigningPadInBrowserTests(PadInBrowserCase):
         self.tick(public_views.STATEMENT_FIELD)
         self.tick(public_views.RESERVED_FIELD)
         self.assertTrue(self.element("[data-reservations]").is_displayed())
-        self.submit()   # the reservations left empty: refused
+        self.submit()  # the reservations left empty: refused
         self.wait_for(lambda: public_views.RESERVATION_EMPTY in self.element(".message-error").text)
         self.wait_for(lambda: self.ink() > 0)
         # Painted back at the frame's size: about the same ink, not a new drawing to make.
@@ -384,9 +389,9 @@ class CountersignPadInBrowserTests(PadInBrowserCase):
         request = SignatureRequest.objects.get()
         self.assertEqual(request.status, SignatureRequest.Status.COMPLETE)
         digest = requests_.employer_drawing_sha256(request)
-        drawing = Image.open(io.BytesIO(
-            private_files.read_checked(request.uuid, private_files.EMPLOYER_SIGNATURE_IMAGE, digest)
-        ))
+        drawing = Image.open(
+            io.BytesIO(private_files.read_checked(request.uuid, private_files.EMPLOYER_SIGNATURE_IMAGE, digest))
+        )
         self.assertEqual(drawing.mode, "RGBA")
         self.assertLessEqual((drawing.width, drawing.height), (1200, 400))
         self.assertEqual(drawing.getpixel((0, 0))[3], 0)
@@ -399,7 +404,7 @@ class CountersignPadInBrowserTests(PadInBrowserCase):
         self.device(375, 812, 3, touch=True)
         self.month_page()
         self.open_pad()
-        self.assertEqual(self.backing_store()[1], 400)   # 176 CSS px at 3×, capped
+        self.assertEqual(self.backing_store()[1], 400)  # 176 CSS px at 3×, capped
         for css in ("[data-signature-undo]", "[data-signature-clear]"):
             height = self.script("return arguments[0].getBoundingClientRect().height;", self.element(css))
             self.assertGreaterEqual(height, 44)

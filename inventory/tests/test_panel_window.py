@@ -1,20 +1,20 @@
-"""Ce qu'une ligne de « Produits & charges » ouvre suit les deux dates.
+"""What a row of « Produits & charges » opens follows the two dates.
 
 The owner, 20/09: « filtre aussi les articles avec les dates quand on
 déroule les articles de la page Produits & charges ».
 
 « Du … au … » already narrowed the list - the articles bought between the
-dates, their « Acheté », leurs totaux, les charges en dessous. Opening a row
+dates, their « Acheté », their totals, the charges below. Opening a row
 still answered with the whole history, so the panel contradicted the very
-row it explains: « Acheté 12 » on the row, quarante achats dans le panneau
-juste en dessous. What this file pins down:
+row it explains: « Acheté 12 » on the row, forty purchases in the panel
+just below it. What this file pins down:
 
 * an article's panel holds the purchases of the window and no others,
   chosen on `StockMovement.effective_date` - the date `catalogue_context`
   summed the row's own figures by. Chosen on the invoice's date instead,
   the panel would not add up to the row above it, which is the
   silently-wrong-money class this codebase exists to avoid;
-* a charge's panel - a supplier's, a poste's - does the same on
+* a charge's panel - a supplier's, a charge item's - does the same on
   `invoice_date`, which is what `charge_suppliers` windows its rows by,
   documents filed with nothing read included: they count on the row, so
   they follow the row;
@@ -148,8 +148,11 @@ class ItIsTheDateTheRowWasSummedByTests(ArticlePanelTestCase):
     def test_a_manual_correction_is_dated_by_occurred_on(self):
         """No invoice at all - a stock correction typed by hand."""
         make_movement(
-            stock_type=self.vodka, quantity="-2", unit_cost_ht="20",
-            occurred_on=date(2026, 2, 14), note="Casse",
+            stock_type=self.vodka,
+            quantity="-2",
+            unit_cost_ht="20",
+            occurred_on=date(2026, 2, 14),
+            note="Casse",
         )
         self.assertEqual(len(self.panel(**FEBRUARY).context["movements"]), 2)
         self.assertEqual(len(self.panel(du="2026-03-01").context["movements"]), 0)
@@ -185,8 +188,11 @@ class TheDateShownIsTheDateThatSelectedItTests(ArticlePanelTestCase):
 
     def test_a_manual_correction_prints_its_own_date(self):
         make_movement(
-            stock_type=self.vodka, quantity="-2", unit_cost_ht="20",
-            occurred_on=date(2026, 2, 14), note="Casse",
+            stock_type=self.vodka,
+            quantity="-2",
+            unit_cost_ht="20",
+            occurred_on=date(2026, 2, 14),
+            note="Casse",
         )
         self.assertContains(self.panel(**FEBRUARY), "14/02/2026")
 
@@ -220,21 +226,21 @@ class AWindowedPanelSaysSoTests(ArticlePanelTestCase):
         # The link keeps the dates so the widened panel can offer them back
         # (see test_panel_matches_its_row): `tout=1` is « everything, and
         # remember what was asked ».
-        self.assertContains(panel, 'hx-get="%s?du=2026-02-01&amp;au=2026-02-28&amp;tout=1"' % self.panel_url())
+        self.assertContains(panel, f'hx-get="{self.panel_url()}?du=2026-02-01&amp;au=2026-02-28&amp;tout=1"')
 
     def test_nothing_is_said_without_a_window(self):
         panel = self.panel()
         self.assertNotContains(panel, "Achats du 01/02/2026")
         self.assertNotContains(panel, "tout l'historique")
 
-    def test_an_empty_window_says_rien_entre_ces_dates(self):
+    def test_an_empty_window_says_nothing_between_these_dates(self):
         """« Aucun achat enregistré pour le moment » says this article was
         never bought. Between two dates the truth is that nothing was bought
         between them, and the way out has to be clickable."""
         panel = self.panel(du="2026-06-01", au="2026-06-30")
         self.assertContains(panel, "Aucun achat du 01/06/2026 au 30/06/2026")
         self.assertNotContains(panel, "Aucun achat enregistré pour le moment")
-        self.assertContains(panel, 'hx-get="%s?du=2026-06-01&amp;au=2026-06-30&amp;tout=1"' % self.panel_url())
+        self.assertContains(panel, f'hx-get="{self.panel_url()}?du=2026-06-01&amp;au=2026-06-30&amp;tout=1"')
 
     def test_an_article_never_bought_still_says_so(self):
         absinthe = make_stock_type(name="Absinthe", unit=UnitChoices.LITRE, category="Spiritueux")
@@ -258,21 +264,17 @@ class ChargePanelsFollowTheWindowTests(PurchaseWindowTestCase):
 
     def setUp(self):
         super().setUp()
-        self.bailleur = make_supplier(
-            code="BAILLEUR_X", name="Bailleur Exemple", parser_key="", expenses_only=True
-        )
-        self.loyer = make_product(supplier=self.bailleur, raw_name="LOYER", is_expense=True)
+        self.landlord = make_supplier(code="BAILLEUR_X", name="Bailleur Exemple", parser_key="", expenses_only=True)
+        self.rent = make_product(supplier=self.landlord, raw_name="LOYER", is_expense=True)
         for month, day in ((1, date(2026, 1, 5)), (2, date(2026, 2, 5)), (3, date(2026, 3, 5))):
-            bill = make_invoice(
-                supplier=self.bailleur, invoice_date=day, invoice_number=f"LOYER-2026-{month:02d}"
-            )
-            make_invoice_line(invoice=bill, product=self.loyer, total_ht="500", vat_rate=D("0.20"))
+            bill = make_invoice(supplier=self.landlord, invoice_date=day, invoice_number=f"LOYER-2026-{month:02d}")
+            make_invoice_line(invoice=bill, product=self.rent, total_ht="500", vat_rate=D("0.20"))
 
     def supplier_url(self):
-        return reverse("inventory:charge_supplier_documents", args=[self.bailleur.pk])
+        return reverse("inventory:charge_supplier_documents", args=[self.landlord.pk])
 
-    def poste_url(self):
-        return reverse("inventory:charge_documents", args=[self.loyer.pk])
+    def charge_item_url(self):
+        return reverse("inventory:charge_documents", args=[self.rent.pk])
 
     def test_the_supplier_panel_holds_the_documents_of_the_window(self):
         panel = self.client.get(self.supplier_url(), FEBRUARY)
@@ -286,13 +288,13 @@ class ChargePanelsFollowTheWindowTests(PurchaseWindowTestCase):
         self.assertEqual(len(panel.context["rows"]), row["documents"])
         self.assertEqual(panel.context["total_ttc"], row["total_ttc"])
 
-    def test_a_poste_panel_does_the_same(self):
-        panel = self.client.get(self.poste_url(), FEBRUARY)
+    def test_a_charge_item_panel_does_the_same(self):
+        panel = self.client.get(self.charge_item_url(), FEBRUARY)
         self.assertContains(panel, "LOYER-2026-02")
         self.assertNotContains(panel, "LOYER-2026-01")
 
     def test_without_a_window_both_are_the_whole_history(self):
-        for url in (self.supplier_url(), self.poste_url()):
+        for url in (self.supplier_url(), self.charge_item_url()):
             with self.subTest(url=url):
                 panel = self.client.get(url)
                 self.assertContains(panel, "LOYER-2026-01")
@@ -302,23 +304,17 @@ class ChargePanelsFollowTheWindowTests(PurchaseWindowTestCase):
         """It counts on the supplier's row - and it is the one that most
         needs its « Corriger », so it has to be reachable in the window that
         counted it, and absent from the ones that did not."""
-        empty = make_invoice(
-            supplier=self.bailleur, invoice_date=date(2026, 2, 20), invoice_number="AVIS-SANS-LIGNE"
-        )
+        empty = make_invoice(supplier=self.landlord, invoice_date=date(2026, 2, 20), invoice_number="AVIS-SANS-LIGNE")
         (row,) = self.page(**FEBRUARY).context["charge_suppliers"]
         self.assertEqual(row["documents"], 2)
         self.assertContains(self.client.get(self.supplier_url(), FEBRUARY), empty.invoice_number)
-        self.assertNotContains(
-            self.client.get(self.supplier_url(), {"du": "2026-03-01"}), empty.invoice_number
-        )
+        self.assertNotContains(self.client.get(self.supplier_url(), {"du": "2026-03-01"}), empty.invoice_number)
 
     def test_an_undated_document_is_in_no_window(self):
         """« Sans date » is where those are looked at, and the row does not
         count it either - charge_suppliers excludes them outright."""
-        undated = make_invoice(
-            supplier=self.bailleur, invoice_date=date(2026, 2, 20), invoice_number="AVIS-SANS-DATE"
-        )
-        make_invoice_line(invoice=undated, product=self.loyer, total_ht="90", vat_rate=D("0.20"))
+        undated = make_invoice(supplier=self.landlord, invoice_date=date(2026, 2, 20), invoice_number="AVIS-SANS-DATE")
+        make_invoice_line(invoice=undated, product=self.rent, total_ht="90", vat_rate=D("0.20"))
         Invoice.objects.filter(pk=undated.pk).update(invoice_date=None)
         self.assertContains(self.client.get(self.supplier_url()), "AVIS-SANS-DATE")
         self.assertNotContains(self.client.get(self.supplier_url(), FEBRUARY), "AVIS-SANS-DATE")
@@ -326,14 +322,12 @@ class ChargePanelsFollowTheWindowTests(PurchaseWindowTestCase):
     def test_the_foot_names_the_window_instead_of_promising_everything(self):
         panel = self.client.get(self.supplier_url(), FEBRUARY)
         self.assertContains(panel, "1 document du 01/02/2026 au 28/02/2026")
-        self.assertContains(
-            panel, 'hx-get="%s?du=2026-02-01&amp;au=2026-02-28&amp;tout=1"' % self.supplier_url()
-        )
+        self.assertContains(panel, f'hx-get="{self.supplier_url()}?du=2026-02-01&amp;au=2026-02-28&amp;tout=1"')
 
     def test_the_foot_still_says_all_history_without_a_window(self):
         self.assertContains(self.client.get(self.supplier_url()), "3 documents — tout l'historique")
 
-    def test_an_empty_window_says_rien_entre_ces_dates(self):
+    def test_an_empty_window_says_nothing_between_these_dates(self):
         """Naming the window proves nothing on its own - the foot of a FULL
         panel names it too, so this used to pass with the filter taken out.
         What says the filter ran is that no document is left."""
@@ -341,9 +335,7 @@ class ChargePanelsFollowTheWindowTests(PurchaseWindowTestCase):
         self.assertEqual(panel.context["rows"], [])
         self.assertContains(panel, "Aucun document pour « Bailleur Exemple » du 01/06/2026 au 30/06/2026")
         self.assertNotContains(panel, "LOYER-2026-02")
-        self.assertContains(
-            panel, 'hx-get="%s?du=2026-06-01&amp;au=2026-06-30&amp;tout=1"' % self.supplier_url()
-        )
+        self.assertContains(panel, f'hx-get="{self.supplier_url()}?du=2026-06-01&amp;au=2026-06-30&amp;tout=1"')
 
     def test_the_link_replaces_the_whole_panel_and_not_the_foot_it_sits_in(self):
         """The link is in the foot of the table, so `closest td` is that
@@ -363,15 +355,13 @@ class ThePanelsAreFetchedWithTheWindowTests(PurchaseWindowTestCase):
         super().setUp()
         self.vodka = make_stock_type(name="Vodka", unit=UnitChoices.LITRE, category="Spiritueux")
         self.buy(self.vodka, date(2026, 2, 10), quantity="12", total_ht="240")
-        self.bailleur = make_supplier(
-            code="BAILLEUR_X", name="Bailleur Exemple", parser_key="", expenses_only=True
-        )
-        # Two postes on one document, so the poste rows - the third
+        self.landlord = make_supplier(code="BAILLEUR_X", name="Bailleur Exemple", parser_key="", expenses_only=True)
+        # Two charge items on one document, so their rows - the third
         # `data-movements-url` - are drawn at all.
-        self.loyer = make_product(supplier=self.bailleur, raw_name="LOYER", is_expense=True)
-        self.provisions = make_product(supplier=self.bailleur, raw_name="PROVISIONS", is_expense=True)
-        bill = make_invoice(supplier=self.bailleur, invoice_date=date(2026, 2, 5))
-        make_invoice_line(invoice=bill, product=self.loyer, total_ht="500", vat_rate=D("0.20"))
+        self.rent = make_product(supplier=self.landlord, raw_name="LOYER", is_expense=True)
+        self.provisions = make_product(supplier=self.landlord, raw_name="PROVISIONS", is_expense=True)
+        bill = make_invoice(supplier=self.landlord, invoice_date=date(2026, 2, 5))
+        make_invoice_line(invoice=bill, product=self.rent, total_ht="500", vat_rate=D("0.20"))
         make_invoice_line(invoice=bill, product=self.provisions, total_ht="80", vat_rate=D("0.20"))
 
     def test_the_three_urls_carry_the_two_dates(self):
@@ -379,19 +369,17 @@ class ThePanelsAreFetchedWithTheWindowTests(PurchaseWindowTestCase):
         self.assertEqual(response.context["panel_window_query"], "?du=2026-02-01&au=2026-02-28")
         for url in (
             reverse("inventory:stock_type_movements", args=[self.vodka.pk]),
-            reverse("inventory:charge_supplier_documents", args=[self.bailleur.pk]),
-            reverse("inventory:charge_documents", args=[self.loyer.pk]),
+            reverse("inventory:charge_supplier_documents", args=[self.landlord.pk]),
+            reverse("inventory:charge_documents", args=[self.rent.pk]),
         ):
             with self.subTest(url=url):
-                self.assertContains(
-                    response, 'data-movements-url="%s?du=2026-02-01&amp;au=2026-02-28"' % url
-                )
+                self.assertContains(response, f'data-movements-url="{url}?du=2026-02-01&amp;au=2026-02-28"')
 
     def test_with_nothing_asked_they_stay_bare(self):
         response = self.page()
         self.assertEqual(response.context["panel_window_query"], "")
         url = reverse("inventory:stock_type_movements", args=[self.vodka.pk])
-        self.assertContains(response, 'data-movements-url="%s"' % url)
+        self.assertContains(response, f'data-movements-url="{url}"')
 
     def test_the_curves_are_never_windowed(self):
         """A curve IS a history: narrowed to one month it is two points and
@@ -400,22 +388,20 @@ class ThePanelsAreFetchedWithTheWindowTests(PurchaseWindowTestCase):
         response = self.page(**FEBRUARY)
         for url in (
             reverse("inventory:stock_type_price_history", args=[self.vodka.pk]),
-            reverse("inventory:charge_supplier_history", args=[self.bailleur.pk]),
-            reverse("inventory:charge_history", args=[self.loyer.pk]),
+            reverse("inventory:charge_supplier_history", args=[self.landlord.pk]),
+            reverse("inventory:charge_history", args=[self.rent.pk]),
         ):
             with self.subTest(url=url):
-                self.assertContains(response, 'data-price-history-url="%s"' % url)
+                self.assertContains(response, f'data-price-history-url="{url}"')
 
     def test_a_curve_asked_with_dates_still_draws_them_all(self):
         self.buy(self.vodka, date(2026, 1, 10), quantity="6", total_ht="60")
-        curve = self.client.get(
-            reverse("inventory:stock_type_price_history", args=[self.vodka.pk]), FEBRUARY
-        )
+        curve = self.client.get(reverse("inventory:stock_type_price_history", args=[self.vodka.pk]), FEBRUARY)
         self.assertTrue(curve.context["has_enough_data"])
 
 
-class AnInventaireKeepsItsAllHistoryPanelsTests(PurchaseWindowTestCase):
-    """A chosen inventaire is two physical counts with its own arithmetic,
+class AStockTakeKeepsItsAllHistoryPanelsTests(PurchaseWindowTestCase):
+    """A chosen stock take is two physical counts with its own arithmetic,
     and CLAUDE.md documents what its rows open as the whole history. The
     dates are disabled under it, so they must not reach the panels either -
     which falls out of building the query from the window APPLIED rather
@@ -431,7 +417,7 @@ class AnInventaireKeepsItsAllHistoryPanelsTests(PurchaseWindowTestCase):
         response = self.page(inventaire=self.take.pk, **FEBRUARY)
         self.assertEqual(response.context["panel_window_query"], "")
         url = reverse("inventory:stock_type_movements", args=[self.vodka.pk])
-        self.assertContains(response, 'data-movements-url="%s"' % url)
+        self.assertContains(response, f'data-movements-url="{url}"')
 
     def test_and_the_page_does_not_claim_the_panels_are_windowed(self):
         response = self.page(inventaire=self.take.pk, **FEBRUARY)

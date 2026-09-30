@@ -1,4 +1,4 @@
-"""Creating an espace, and migrating and commanding the espaces
+"""Creating a tenant, and migrating and commanding the tenants
 (accounts/provisioning.py, manage.py migrate_tenants, manage.py tenant)."""
 
 from io import StringIO
@@ -36,26 +36,24 @@ def columns(table) -> set:
 
 
 class CreateTenantTests(TenancyTestCase):
-    def test_a_new_espace_is_a_migrated_copy_in_a_folder_of_its_own(self):
+    def test_a_new_tenant_is_a_migrated_copy_in_a_folder_of_its_own(self):
         tenant = provisioning.create_tenant("Le Comptoir d'Essai")
         self.assertTrue(Tenant.objects.filter(pk=tenant.pk, name="Le Comptoir d'Essai").exists())
         self.assertRegex(tenant.dir_name, r"^[a-z0-9]{12}$")
         self.assertNotIn("comptoir", tenant.dir_name)
         self.assertFalse(tenant.uses_server_integrations)
         folder = paths.tenant_dir(tenant)
-        self.assertEqual(
-            sorted(p.name for p in folder.iterdir()), sorted(["db.sqlite3", *paths.FOLDERS])
-        )
+        self.assertEqual(sorted(p.name for p in folder.iterdir()), sorted(["db.sqlite3", *paths.FOLDERS]))
         with bound_tenant(tenant):
             self.assertEqual(pending_migrations(), [])
             # What the seed migrations put in every database is there.
             self.assertTrue(Supplier.objects.filter(code="METRO").exists())
 
-    def test_two_espaces_never_share_a_folder(self):
+    def test_two_tenants_never_share_a_folder(self):
         one, other = provisioning.create_tenant("Bar Un"), provisioning.create_tenant("Bar Deux")
         self.assertNotEqual(one.dir_name, other.dir_name)
 
-    def test_the_owner_s_integrations_are_switched_off_in_a_new_espace(self):
+    def test_the_owner_s_integrations_are_switched_off_in_a_new_tenant(self):
         tenant = provisioning.create_tenant("Bar Nouveau")
         with bound_tenant(tenant):
             self.assertFalse(Supplier.objects.get(code="METRO").is_scrapable)
@@ -63,7 +61,7 @@ class CreateTenantTests(TenancyTestCase):
             self.assertTrue(mailbox.exists())
             self.assertFalse(mailbox.filter(is_active=True).exists())
 
-    def test_the_owner_s_espace_keeps_them(self):
+    def test_the_owner_s_tenant_keeps_them(self):
         tenant = provisioning.create_tenant("Bar du Propriétaire", uses_server_integrations=True)
         with bound_tenant(tenant):
             self.assertTrue(Supplier.objects.get(code="METRO").is_scrapable)
@@ -112,7 +110,7 @@ class MigrateTenantsTests(TenancyTestCase):
                 call_command("migrate", LEAF[0], "0034", verbosity=0, skip_checks=True)
                 self.assertFalse(applied(LEAF))
 
-    def test_every_espace_is_migrated_bound_to_itself(self):
+    def test_every_tenant_is_migrated_bound_to_itself(self):
         out = StringIO()
         call_command("migrate_tenants", stdout=out)
         for tenant in (self.alpha, self.beta):
@@ -124,14 +122,14 @@ class MigrateTenantsTests(TenancyTestCase):
         self.assertIn("Bar Alpha", out.getvalue())
         self.assertIn("Bar Beta", out.getvalue())
 
-    def test_one_espace_only(self):
+    def test_one_tenant_only(self):
         call_command("migrate_tenants", "--tenant", self.alpha.dir_name, stdout=StringIO())
         with bound_tenant(self.alpha):
             self.assertTrue(applied(LEAF))
         with bound_tenant(self.beta):
             self.assertFalse(applied(LEAF))
 
-    def test_one_espace_failing_does_not_stop_the_others(self):
+    def test_one_tenant_failing_does_not_stop_the_others(self):
         paths.tenant_database(self.alpha).unlink()
         err = StringIO()
         with self.assertRaisesMessage(CommandError, "Bar Alpha"):
@@ -140,15 +138,15 @@ class MigrateTenantsTests(TenancyTestCase):
             self.assertTrue(applied(LEAF))
         self.assertIn("Bar Alpha", err.getvalue())
 
-    def test_an_unknown_espace(self):
+    def test_an_unknown_tenant(self):
         with self.assertRaises(CommandError):
             call_command("migrate_tenants", "--tenant", "inconnu999", stdout=StringIO())
 
     def close(self, tenant):
         Tenant.objects.filter(pk=tenant.pk).update(is_active=False)
 
-    def test_a_closed_espace_without_its_database_is_passed_over(self):
-        """serve and DEPLOY.md §11 say « fermez l'espace » for a base that is
+    def test_a_closed_tenant_without_its_database_is_passed_over(self):
+        """serve and DEPLOY.md §11 say « fermez l'espace » for a database that is
         gone, and serve then starts: migrate_tenants failed on it all the
         same, so deploy.cmd - which runs it after the merge - ended every
         deployment with the site down."""
@@ -161,7 +159,7 @@ class MigrateTenantsTests(TenancyTestCase):
         with bound_tenant(self.beta):
             self.assertTrue(applied(LEAF))
 
-    def test_a_closed_espace_that_does_not_migrate_is_a_warning(self):
+    def test_a_closed_tenant_that_does_not_migrate_is_a_warning(self):
         self.close(self.alpha)
         real = provisioning.migrate_tenant
 
@@ -178,7 +176,7 @@ class MigrateTenantsTests(TenancyTestCase):
         with bound_tenant(self.beta):
             self.assertTrue(applied(LEAF))
 
-    def test_an_open_espace_that_does_not_migrate_still_fails(self):
+    def test_an_open_tenant_that_does_not_migrate_still_fails(self):
         real = provisioning.migrate_tenant
 
         def failing_for_alpha(tenant, **kwargs):
@@ -203,7 +201,7 @@ class TenantCommandTests(TenancyTestCase):
         with bound_tenant(self.beta):
             Supplier.objects.create(code="T-BETA", name="Grossiste Beta")
 
-    def test_a_command_runs_bound_to_one_espace(self):
+    def test_a_command_runs_bound_to_one_tenant(self):
         out = StringIO()
         call_command("tenant", self.alpha.dir_name, "dumpdata", "invoices.Supplier", "--indent", "2", stdout=out)
         self.assertIn("Grossiste Alpha", out.getvalue())
@@ -216,6 +214,6 @@ class TenantCommandTests(TenancyTestCase):
             with self.subTest(name=name), self.assertRaises(CommandError):
                 call_command("tenant", self.alpha.dir_name, name, stdout=StringIO())
 
-    def test_an_unknown_espace(self):
+    def test_an_unknown_tenant(self):
         with self.assertRaises(CommandError):
             call_command("tenant", "inconnu999", "dumpdata", "invoices.Supplier", stdout=StringIO())

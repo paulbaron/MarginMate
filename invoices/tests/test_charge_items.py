@@ -2,9 +2,9 @@
 provisions, and what the statement really charges this month.
 
 The layout is a rent statement's, copied from real ones: two columns on one
-line (the account's history on the left, this month's postes on the right),
-no spaces between words - that is how the text comes out of these PDFs - and
-the month's own total under them. Every name and amount invented.
+line (the account's history on the left, this month's charge items on the
+right), no spaces between words - that is how the text comes out of these
+PDFs - and the month's own total under them. Every name and amount invented.
 """
 
 from decimal import Decimal
@@ -35,13 +35,13 @@ Avantrèglement,soldetotaldevotrecompteennotrefaveur(A+B):  820,00"""
 
 
 class RentStatementTests(SimpleTestCase):
-    def test_the_postes_are_the_right_column_of_this_month(self):
-        """The left column is the account's history - last month's échéance
+    def test_the_charge_items_are_the_right_column_of_this_month(self):
+        """The left column is the account's history - last month's amount due
         and the direct debit that paid it - and only the last amount of each
         line is this month's."""
-        total, postes = read_charge(STATEMENT, D("830.00"))
+        total, charge_items = read_charge(STATEMENT, D("830.00"))
         self.assertEqual(
-            [(poste.name, poste.amount, poste.rate) for poste in postes],
+            [(charge_item.name, charge_item.amount, charge_item.rate) for charge_item in charge_items],
             [
                 ("LOYERLOCAUXACTIVITEHT", D("720.00"), D("0.20")),
                 ("PROV.CHARGESIMMEUBLE", D("90.00"), D("0")),
@@ -50,41 +50,48 @@ class RentStatementTests(SimpleTestCase):
         )
         self.assertEqual(total, D("820.00"))
 
-    def test_the_tax_is_folded_into_the_poste_it_taxes(self):
-        """"TVA TAUX NORMAL 120,00" is the 20% of the rent, not a poste of
-        its own: the rent is filed at 720,00 TTC, and its HT is the 600,00
-        printed."""
-        _total, postes = read_charge(STATEMENT, D("830.00"))
-        rent = postes[0]
+    def test_the_tax_is_folded_into_the_charge_item_it_taxes(self):
+        """ "TVA TAUX NORMAL 120,00" is the 20% of the rent, not a charge
+        item of its own: the rent is filed at 720,00 TTC, and its HT is the
+        600,00 printed."""
+        _total, charge_items = read_charge(STATEMENT, D("830.00"))
+        rent = charge_items[0]
         self.assertEqual((rent.total_ht, rent.rate), (D("600.00"), D("0.20")))
-        self.assertNotIn("TVATAUXNORMAL", [poste.name for poste in postes])
+        self.assertNotIn("TVATAUXNORMAL", [charge_item.name for charge_item in charge_items])
 
-    def test_the_postes_settle_what_the_statement_charges(self):
-        """830,00 is last month's échéance, printed twice - as the amount
+    def test_the_charge_items_settle_what_the_statement_charges(self):
+        """830,00 is last month's amount due, printed twice - as the amount
         called and again as the debit paying it - which is what the reader
         takes for the total. The run adding up says 820,00."""
         self.assertEqual(read_charge(STATEMENT, D("830.00"))[0], D("820.00"))
 
-    def test_a_refund_among_the_postes_is_taken_off(self):
-        refunded = STATEMENT.replace(
-            "PRELV.SEPAau10/11/2025  -  830,00  PROVISIONEAUFROIDE  10,00",
-            "PRELV.SEPAau10/11/2025  -  830,00  PROVISIONEAUFROIDE  10,00\nREMBOURSEMENTDEPOTGARANTIE  -  3,00",
-        ).replace("(B)  820,00", "(B)  817,00").replace("Prélevéle10/12/2025  820,00", "Prélevéle10/12/2025  817,00")
-        total, postes = read_charge(refunded, D("830.00"))
+    def test_a_refund_among_the_charge_items_is_taken_off(self):
+        refunded = (
+            STATEMENT.replace(
+                "PRELV.SEPAau10/11/2025  -  830,00  PROVISIONEAUFROIDE  10,00",
+                "PRELV.SEPAau10/11/2025  -  830,00  PROVISIONEAUFROIDE  10,00\nREMBOURSEMENTDEPOTGARANTIE  -  3,00",
+            )
+            .replace("(B)  820,00", "(B)  817,00")
+            .replace("Prélevéle10/12/2025  820,00", "Prélevéle10/12/2025  817,00")
+        )
+        total, charge_items = read_charge(refunded, D("830.00"))
         self.assertEqual(total, D("817.00"))
-        self.assertIn(("REMBOURSEMENTDEPOTGARANTIE", D("-3.00")), [(poste.name, poste.amount) for poste in postes])
+        self.assertIn(
+            ("REMBOURSEMENTDEPOTGARANTIE", D("-3.00")),
+            [(charge_item.name, charge_item.amount) for charge_item in charge_items],
+        )
 
     def test_what_was_owed_before_is_not_charged_again(self):
-        """A statement with arrears debits more than it charges: the postes
-        stop at the month's own total, and the arrears were charged on the
-        avis they come from."""
-        with_arrears = STATEMENT.replace(
-            "d'échéance(A)  0,00", "d'échéance(A)  301,99"
-        ).replace("Prélevéle10/12/2025  820,00", "Pland'apurement(C)  301,99\nPrélevéle10/12/2025  1121,99")
-        total, postes = read_charge(with_arrears, D("830.00"))
-        self.assertEqual((total, len(postes)), (D("820.00"), 3))
+        """A statement with arrears debits more than it charges: the charge
+        items stop at the month's own total, and the arrears were charged on
+        the notice they come from."""
+        with_arrears = STATEMENT.replace("d'échéance(A)  0,00", "d'échéance(A)  301,99").replace(
+            "Prélevéle10/12/2025  820,00", "Pland'apurement(C)  301,99\nPrélevéle10/12/2025  1121,99"
+        )
+        total, charge_items = read_charge(with_arrears, D("830.00"))
+        self.assertEqual((total, len(charge_items)), (D("820.00"), 3))
 
-    def test_a_document_that_names_nothing_gets_no_postes(self):
+    def test_a_document_that_names_nothing_gets_no_charge_items(self):
         """A phone bill details its calls, not its charges: one line for what
         it costs is the whole point of a charge supplier."""
         bill = """Forfait Exemple
@@ -94,7 +101,7 @@ Somme a payer TTC*  9.99
 Appels depuis la France  1 h 13 min  0.00"""
         self.assertEqual(read_charge(bill, D("9.99")), (D("9.99"), []))
 
-    def test_two_postes_never_overrule_the_total_that_was_read(self):
+    def test_two_charge_items_never_overrule_the_total_that_was_read(self):
         """Two labelled amounts making a third is a coincidence a document
         can print; three in a row is not."""
         thin = """Facture

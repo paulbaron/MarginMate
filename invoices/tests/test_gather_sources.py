@@ -36,9 +36,11 @@ class MetroInTheGatherTests(TestCase):
 
     def gather(self, metro_outcome, codes=None, start=date(2026, 1, 1), **kwargs):
         job = ScrapeJob.objects.create()
-        with mock.patch("invoices.tasks.scrape_metro_invoices", side_effect=metro_outcome) as scrape_metro, mock.patch(
-            "invoices.tasks.scrape_email_invoices", return_value=[]
-        ) as scrape_email, mock.patch("invoices.tasks.parse_and_import") as parse_and_import:
+        with (
+            mock.patch("invoices.tasks.scrape_metro_invoices", side_effect=metro_outcome) as scrape_metro,
+            mock.patch("invoices.tasks.scrape_email_invoices", return_value=[]) as scrape_email,
+            mock.patch("invoices.tasks.parse_and_import") as parse_and_import,
+        ):
             gather_invoices_task(job.id, start, date(2026, 9, 18), self.codes if codes is None else codes, **kwargs)
         job.refresh_from_db()
         return job, scrape_metro, scrape_email, parse_and_import
@@ -47,7 +49,9 @@ class MetroInTheGatherTests(TestCase):
         from invoices.scrapers.metro import MetroBlocked, blocked_message
 
         def refused(*args, **kwargs):
-            raise MetroBlocked(blocked_message("#18.0000000.1700000000.00000abc"), reference="#18.0000000.1700000000.00000abc")
+            raise MetroBlocked(
+                blocked_message("#18.0000000.1700000000.00000abc"), reference="#18.0000000.1700000000.00000abc"
+            )
 
         job, _scrape_metro, scrape_email, _import = self.gather(refused)
         self.assertEqual(job.status, ScrapeJob.Status.SUCCESS, job.log)
@@ -99,19 +103,21 @@ class MetroInTheGatherTests(TestCase):
     def test_metro_is_contacted_only_when_named(self):
         """A gather started from a shell or a script (source_codes=None) used
         to sign in to Metro too - most of 31/08's sign-ins were such. The
-        mailbox's sources are every eligible one, the seeded format de bon's
+        mailbox's sources are every eligible one, the seeded slip format's
         mails included (returnables, migration 0002): searched once."""
         from returnables.models import SlipFormat
 
         job = ScrapeJob.objects.create()
-        with mock.patch("invoices.tasks.scrape_metro_invoices") as scrape_metro, mock.patch(
-            "invoices.tasks.scrape_email_invoices", return_value=[]
-        ), mock.patch("invoices.tasks.find_matching_emails", return_value=[]) as find_bons:
+        with (
+            mock.patch("invoices.tasks.scrape_metro_invoices") as scrape_metro,
+            mock.patch("invoices.tasks.scrape_email_invoices", return_value=[]),
+            mock.patch("invoices.tasks.find_matching_emails", return_value=[]) as find_slips,
+        ):
             gather_invoices_task(job.id, date(2026, 1, 1), date(2026, 9, 18), None)
         scrape_metro.assert_not_called()
         seeded = SlipFormat.objects.get(sender_pattern__gt="")
-        find_bons.assert_called_once()
-        self.assertEqual(find_bons.call_args.kwargs["sender_pattern"], seeded.sender_pattern)
+        find_slips.assert_called_once()
+        self.assertEqual(find_slips.call_args.kwargs["sender_pattern"], seeded.sender_pattern)
 
     def test_one_sign_in_asked_for_passes_the_pause(self):
         _job, scrape_metro, *_ = self.gather(lambda *a, **k: [], metro_now=True)
@@ -123,7 +129,9 @@ class MetroInTheGatherTests(TestCase):
         searched on Metro. Its rows already imported are not downloaded."""
         from invoices.models import Supplier
 
-        make_invoice(supplier=Supplier.objects.get(code="METRO"), invoice_date=date(2026, 8, 28), invoice_number="134-052-1")
+        make_invoice(
+            supplier=Supplier.objects.get(code="METRO"), invoice_date=date(2026, 8, 28), invoice_number="134-052-1"
+        )
         _job, scrape_metro, *_ = self.gather(lambda *a, **k: [], start=date(2026, 9, 15))
         self.assertLessEqual(scrape_metro.call_args.args[1], date(2026, 8, 28))
         _job, scrape_metro, *_ = self.gather(lambda *a, **k: [], start=date(2026, 3, 1))
@@ -157,6 +165,7 @@ class MailboxInTheGatherTests(TestCase):
 
         first = email_type(make_supplier(code="SALLE_X", name="Salle Exemple", parser_key=""), "Salle Exemple")
         second = email_type(make_supplier(code="GROS_Y", name="Grossiste Y", parser_key=""), "Grossiste Y")
+
         def mailbox(download_dir, *args, **kwargs):
             if download_dir.endswith(f"type-{first.id}"):
                 raise imaplib.IMAP4.error("AUTHENTICATIONFAILED")
@@ -189,8 +198,8 @@ class HeartbeatTests(TestCase):
     def test_a_gather_stuck_in_one_call_stops_being_said_alive(self):
         """Beating whatever the gather did, a thread blocked for good in one
         call was never reaped: every new gather refused until a restart."""
-        from invoices.tasks import _GatherHeartbeat
         from common import JobLogMixin
+        from invoices.tasks import _GatherHeartbeat
 
         job = ScrapeJob.objects.create(status=ScrapeJob.Status.RUNNING, log="[+   1.0s] Metro : connexion…")
         now = [0.0]
@@ -228,9 +237,11 @@ class HeartbeatTests(TestCase):
 class EmailImportTests(TestCase):
     def gather(self, invoice_type, files):
         job = ScrapeJob.objects.create()
-        with mock.patch("invoices.tasks.scrape_email_invoices", return_value=files), mock.patch(
-            "invoices.receipts.import_document"
-        ) as import_document, mock.patch("invoices.tasks.parse_and_import") as parse_and_import:
+        with (
+            mock.patch("invoices.tasks.scrape_email_invoices", return_value=files),
+            mock.patch("invoices.receipts.import_document") as import_document,
+            mock.patch("invoices.tasks.parse_and_import") as parse_and_import,
+        ):
             gather_invoices_task(job.id, date(2026, 1, 1), date(2026, 9, 18), {f"type-{invoice_type.id}"})
         job.refresh_from_db()
         return job, import_document, parse_and_import
@@ -260,8 +271,9 @@ class EmailImportTests(TestCase):
         venue = make_supplier(code="SALLE_X", name="Salle Exemple", parser_key="")
         invoice_type = email_type(venue, "Salle Exemple - Factures")
         job = ScrapeJob.objects.create()
-        with mock.patch("invoices.tasks.scrape_email_invoices", return_value=[("/tmp/f.pdf", None)]), mock.patch(
-            "invoices.receipts.import_document", side_effect=DuplicateInvoiceError("Fichier déjà importé")
+        with (
+            mock.patch("invoices.tasks.scrape_email_invoices", return_value=[("/tmp/f.pdf", None)]),
+            mock.patch("invoices.receipts.import_document", side_effect=DuplicateInvoiceError("Fichier déjà importé")),
         ):
             gather_invoices_task(job.id, date(2026, 1, 1), date(2026, 9, 18), {f"type-{invoice_type.id}"})
         job.refresh_from_db()
@@ -280,13 +292,13 @@ class EmailImportTests(TestCase):
             handle.write(b"%PDF-1.4 facture exemple")
         self.addCleanup(os.remove, handle.name)
         invoice = mock.Mock(source_text="")
-        with mock.patch("invoices.receipts.document_text", return_value="Grossiste Exemple"), mock.patch(
-            "invoices.receipts.has_own_reader", return_value=True
-        ), mock.patch("invoices.receipts.learn_identifiers"), mock.patch(
-            "invoices.receipts._record_first_document"
-        ), mock.patch(
-            "invoices.importing.parse_and_import", return_value=invoice
-        ) as parse_and_import:
+        with (
+            mock.patch("invoices.receipts.document_text", return_value="Grossiste Exemple"),
+            mock.patch("invoices.receipts.has_own_reader", return_value=True),
+            mock.patch("invoices.receipts.learn_identifiers"),
+            mock.patch("invoices.receipts._record_first_document"),
+            mock.patch("invoices.importing.parse_and_import", return_value=invoice) as parse_and_import,
+        ):
             import_document(handle.name, supplier=wholesaler, date_hint=date(2026, 5, 2))
         self.assertEqual(parse_and_import.call_args.kwargs["date_hint"], date(2026, 5, 2))
 

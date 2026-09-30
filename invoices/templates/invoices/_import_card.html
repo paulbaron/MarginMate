@@ -3,12 +3,12 @@ Adding purchases, three ways, and the import that runs - on every tab of
 "Achats". What an import brings in shows up in the list below it (the live
 parts trigger `documents-changed` when they end).
 {% endcomment %}
-<section class="card import-card" id="ajouter" aria-labelledby="import-title" data-initial-tab="{{ import_tab }}">
+<section class="card import-card" id="add-card" aria-labelledby="import-title" data-initial-tab="{{ import_tab }}">
     <div class="import-card-head">
         <h2 id="import-title">Ajouter des achats</h2>
         <div class="segmented" role="tablist" aria-label="Façon d'ajouter">
             <button type="button" role="tab" data-import-tab="documents" aria-controls="import-documents">📥 Tickets et factures</button>
-            <button type="button" role="tab" data-import-tab="recuperer" aria-controls="import-recuperer">
+            <button type="button" role="tab" data-import-tab="recuperer" aria-controls="import-fetch">
                 🔄 Récupérer depuis les sources{% if latest_job.is_active %} <span class="live-dot" data-job-control="gather-status" title="Récupération en cours"></span>{% endif %}
             </button>
         </div>
@@ -26,7 +26,7 @@ parts trigger `documents-changed` when they end).
                 <label class="upload-choice">
                     <span class="upload-choice-title">Des fichiers</span>
                     <span class="muted">Photos de tickets, scans, factures PDF ou XML : ensemble, dans le désordre.</span>
-                    {# .xml : une facture électronique (Factur-X, UBL, CII) peut arriver seule, sans PDF autour. #}
+                    {# .xml: an electronic invoice (Factur-X, UBL, CII) can arrive on its own, with no PDF around it. #}
                     <input type="file" name="files" multiple
                            accept=".pdf,.xml,.jpg,.jpeg,.png,.webp,.tif,.tiff,.bmp,application/pdf,text/xml,application/xml,image/*">
                 </label>
@@ -45,10 +45,10 @@ parts trigger `documents-changed` when they end).
                     en a un, tout le reste par la lecture de ticket. Son enseigne ou son fournisseur est reconnu
                     sur le document, et chacun est vérifié contre ses propres totaux.
                     {% comment %}
-                    Dit ici aussi, parce que c'est ici que la phrase se lit
-                    comme « le côté facturation électronique est géré » : les
-                    factures sont lues, mais c'est à vous de les rapporter de
-                    la plateforme. Voir _tab_sources.html.
+                    Said here too, because this is where the sentence reads
+                    as « the e-invoicing side is handled »: the invoices are
+                    read, but bringing them back from the platform is up to
+                    you. See _tab_sources.html.
                     {% endcomment %}
                     <strong>MarginMate ne va pas chercher vos factures sur votre plateforme de facturation
                     électronique</strong> : téléchargez-les chez votre comptable et déposez-les ici.
@@ -136,11 +136,11 @@ parts trigger `documents-changed` when they end).
         </details>
     </div>
 
-    <div id="import-recuperer" role="tabpanel" data-import-panel="recuperer" hidden>
+    <div id="import-fetch" role="tabpanel" data-import-panel="recuperer" hidden>
         {% if gather_refused %}
         {% comment %}
         Metro, the mailbox and the portals are the server's own accounts
-        (invoices/integrations.py): an espace that may not use them gets the
+        (invoices/integrations.py): a tenant that may not use them gets the
         sentence and no form - trigger_gather refuses a post all the same.
         {% endcomment %}
         <div class="message">{{ gather_refused }}</div>

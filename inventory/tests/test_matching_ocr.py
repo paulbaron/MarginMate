@@ -105,8 +105,8 @@ class OcrTolerantResolveTests(TestCase):
         self.assertCreatesNew("Article divers (0.75 EUR/u)")
 
     def test_a_short_name_forgives_lookalikes_but_not_typos(self):
-        oeuf = make_product(supplier=self.shop, raw_name="OEUF")
-        self.assertFinds("0EUF", oeuf)
+        egg = make_product(supplier=self.shop, raw_name="OEUF")
+        self.assertFinds("0EUF", egg)
         make_product(supplier=self.shop, raw_name="THE")
         self.assertCreatesNew("TEE")
 

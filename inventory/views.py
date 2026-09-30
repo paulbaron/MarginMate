@@ -29,16 +29,17 @@ from .forms import (
     is_stock_type_entry,
     stock_take_entry_lookup,
 )
-from .models import MovementKind, Product, StockMovement, StockTake, StockTakeLine, StockTakeLineSource, StockType, UnitChoices
-from .product_matching_rules import SuggestionContext, apply_rules_to_pending_products, is_current, suggest_for_product
-from .variance import (
-    PeriodStock,
-    SoldQuantity,
-    StockPeriod,
-    compute_variance,
-    quantities_sold,
-    stock_between,
+from .models import (
+    MovementKind,
+    Product,
+    StockMovement,
+    StockTake,
+    StockTakeLine,
+    StockTakeLineSource,
+    StockType,
+    UnitChoices,
 )
+from .product_matching_rules import SuggestionContext, apply_rules_to_pending_products, is_current, suggest_for_product
 from .services import (
     link_product_to_stock_type,
     merge_stock_types,
@@ -49,6 +50,14 @@ from .services import (
     value_counted_quantity,
     value_counted_stock_type_quantity,
 )
+from .variance import (
+    PeriodStock,
+    SoldQuantity,
+    StockPeriod,
+    compute_variance,
+    quantities_sold,
+    stock_between,
+)
 
 
 def existing_categories():
@@ -56,7 +65,7 @@ def existing_categories():
 
 
 class StockListView(TemplateView):
-    """"Produits & charges": every stock item and what was spent on it, the
+    """ "Produits & charges": every stock item and what was spent on it, the
     charges under them - and, beside them, the products no stock item has
     claimed yet.
 
@@ -136,10 +145,10 @@ def catalogue_context(request) -> dict:
     `?inventaire=` names."""
     period = selected_period(request)
     asked = date_range(request)
-    # An inventaire is not two dates: it is two physical counts, and the
+    # A stock take is not two dates: it is two physical counts, and the
     # figures it produces - opening, closing, what left the shelf, what is
     # missing - come out of them. A free pair of dates cannot produce those,
-    # so the inventaire wins and the page says so, rather than drawing one
+    # so the stock take wins and the page says so, rather than drawing one
     # period's arithmetic under another period's dates.
     window = DateRange() if period is not None else asked
     stock_types = list(StockType.objects.all().order_by("category", "name"))
@@ -188,26 +197,38 @@ def catalogue_context(request) -> dict:
     bought_ht_by_type: dict[int, Decimal] = {}
     value_ttc_by_type: dict[int, Decimal] = {}
     values = StockMovement.objects.values_list(
-        "stock_type_id", "kind", "quantity", "unit_cost_ht", "invoice_line__total_ht", "invoice_line__vat_rate",
-        "invoice_line__printed_ttc", "invoice_line__discount_ttc",
-        "occurred_on", "invoice_line__invoice__invoice_date", "created_at",
+        "stock_type_id",
+        "kind",
+        "quantity",
+        "unit_cost_ht",
+        "invoice_line__total_ht",
+        "invoice_line__vat_rate",
+        "invoice_line__printed_ttc",
+        "invoice_line__discount_ttc",
+        "occurred_on",
+        "invoice_line__invoice__invoice_date",
+        "created_at",
     )
     for (
-        stock_type_id, kind, quantity, unit_cost_ht, line_total_ht, vat_rate,
-        printed_ttc, discount_ttc,
-        occurred_on, invoice_date, created_at,
+        stock_type_id,
+        kind,
+        quantity,
+        unit_cost_ht,
+        line_total_ht,
+        vat_rate,
+        printed_ttc,
+        discount_ttc,
+        occurred_on,
+        invoice_date,
+        created_at,
     ) in values:
         quantity_by_type[stock_type_id] = quantity_by_type.get(stock_type_id, Decimal("0")) + quantity
-        value_ht_by_type[stock_type_id] = value_ht_by_type.get(stock_type_id, Decimal("0")) + (
-            quantity * unit_cost_ht
-        )
+        value_ht_by_type[stock_type_id] = value_ht_by_type.get(stock_type_id, Decimal("0")) + (quantity * unit_cost_ht)
         # The two sums above are all time whatever the window: they are what
         # an article COSTS per unit, and a price is not a property of a
         # window - valued over a window holding one delivery, every bottle
         # would be worth what that delivery charged.
-        if window and not window.holds(
-            occurred_on or invoice_date or (created_at.date() if created_at else None)
-        ):
+        if window and not window.holds(occurred_on or invoice_date or (created_at.date() if created_at else None)):
             continue
         ledger_in_window[stock_type_id] = ledger_in_window.get(stock_type_id, Decimal("0")) + quantity
         if kind != MovementKind.PURCHASE:
@@ -217,7 +238,7 @@ def catalogue_context(request) -> dict:
         # and the one the panel under the row lists - not quantity times
         # unit_cost_ht, which is that amount divided by the quantity and
         # stored to four decimals, then multiplied back: 2 000 units at a
-        # real 0,01442 are priced 0,0144 and come back 4 centimes short of
+        # real 0,01442 are priced 0,0144 and come back 4 cents short of
         # the 28,84 € the invoice charges, and the row read 28,80 € over a
         # panel whose lines add up to 28,84 €. Only where there is no line at all - a
         # correction typed by hand - is there nothing but the ledger's own
@@ -233,14 +254,12 @@ def catalogue_context(request) -> dict:
             # already fetches - the amount the document PRINTED where there
             # is one, less the promotion beside it, and HT times the rate
             # only where nothing was printed. Worked out from HT alone, a
-            # facturette printing 39,99 € was counted 40,00 € on the row
+            # receipt printing 39,99 € was counted 40,00 € on the row
             # while the panel it opens printed 39,99 € under it: one
             # purchase, two answers, and the panel is now the row's own
             # lines rather than a different history.
             value_ttc_by_type[stock_type_id] = value_ttc_by_type.get(stock_type_id, Decimal("0")) + (
-                printed_ttc - discount_ttc
-                if printed_ttc is not None
-                else line_total_ht * (vat_rate + Decimal("1"))
+                printed_ttc - discount_ttc if printed_ttc is not None else line_total_ht * (vat_rate + Decimal("1"))
             )
 
     rows = [
@@ -251,7 +270,7 @@ def catalogue_context(request) -> dict:
             "value_ttc": value_ttc_by_type.get(st.id, Decimal("0")),
         }
         for st in stock_types
-        # « Voir seulement les produits achetés entre deux dates »: an
+        # « Only see the products bought between two dates »: an
         # article nothing was bought of over the window is not a row of
         # zeroes to scroll past, it is not part of the answer at all. Its
         # category goes with it, having nothing left in it.
@@ -287,9 +306,7 @@ def catalogue_context(request) -> dict:
     context["period"] = period
     context["stock_takes"] = StockTake.objects.all()
     if period is not None:
-        sold = quantities_sold(
-            period.start, period.end, unit_costs=unit_costs, available=period.ceilings()
-        )
+        sold = quantities_sold(period.start, period.end, unit_costs=unit_costs, available=period.ceilings())
     else:
         # The ledger quantities are the ceiling: what was bought (the
         # "Acheté" column beside "Vendu"), less the losses recorded, which
@@ -302,8 +319,7 @@ def catalogue_context(request) -> dict:
             # stock bought before it would give a negative ceiling, and a
             # negative ceiling lets an item soak up sales it never covered.
             available = {
-                stock_type_id: max(Decimal("0"), quantity)
-                for stock_type_id, quantity in ledger_in_window.items()
+                stock_type_id: max(Decimal("0"), quantity) for stock_type_id, quantity in ledger_in_window.items()
             }
         else:
             available = quantity_by_type
@@ -340,15 +356,13 @@ def catalogue_context(request) -> dict:
     # `{% if %}` fragment per attribute - which is where one of the three
     # ends up being the one that forgets it.
     #
-    # From `window` and NOT from `asked`: under a chosen inventaire the
+    # From `window` and NOT from `asked`: under a chosen stock take the
     # dates are disabled and the panels stay all-history (CLAUDE.md, « what
     # a row opens is the whole history »), and building this from the
     # window APPLIED is what makes that true without a second condition.
     context["panel_window_query"] = f"?{urlencode(window.parameters)}" if window else ""
     context["charge_suppliers"] = charge_suppliers(period if period is not None else window)
-    context["charge_total_ttc"] = sum(
-        (row["total_ttc"] for row in context["charge_suppliers"]), Decimal("0")
-    )
+    context["charge_total_ttc"] = sum((row["total_ttc"] for row in context["charge_suppliers"]), Decimal("0"))
     # What the charges' « Documents » column counts over, said once for its
     # header and for each row's count: on a phone the header row is not
     # drawn and every row says it itself (data-label, _catalogue.html) -
@@ -382,13 +396,14 @@ def charge_suppliers(window=None) -> list[dict]:
     about which end is included: here both are, as they were.
 
     **Every supplier is a row that opens**, on its documents and on its
-    curve, exactly as a stock item does - the water bill has one poste and
-    the rent statement six, and a page that only opened the second left
+    curve, exactly as a stock item does - the water bill has one charge item
+    and the rent statement six, and a page that only opened the second left
     five suppliers out of six with nothing to click. Where a document names
-    several postes, those are rows of their own underneath (the rent apart
-    from the building provision, which is the one that gets regularised -
-    see invoices.charges); where it names one, the supplier's row *is* that
-    poste and repeating it below would say the same thing twice.
+    several charge items, those are rows of their own underneath (the rent
+    apart from the building provision, which is the one that gets
+    regularised - see invoices.charges); where it names one, the supplier's
+    row *is* that charge item and repeating it below would say the same
+    thing twice.
 
     A supplier that billed nothing over the window is listed all the same,
     with the date of its last document: a water bill arriving twice a year
@@ -416,8 +431,12 @@ def charge_suppliers(window=None) -> list[dict]:
         documents = documents.filter(invoice_date__gte=since)
     rows: dict[int, dict] = {
         supplier.pk: {
-            "supplier": supplier, "documents": 0, "documents_all": 0, "total_ttc": Decimal("0"),
-            "last": None, "postes": {},
+            "supplier": supplier,
+            "documents": 0,
+            "documents_all": 0,
+            "total_ttc": Decimal("0"),
+            "last": None,
+            "charge_items": {},
         }
         for supplier in suppliers
     }
@@ -428,12 +447,12 @@ def charge_suppliers(window=None) -> list[dict]:
         # back out to 40,00 € where the bill says 39,99 €.
         amount = line.total_ttc.quantize(Decimal("0.01"))
         row["total_ttc"] += amount
-        poste = row["postes"].setdefault(
+        charge_item = row["charge_items"].setdefault(
             line.raw_name,
             {"name": line.raw_name, "product": line.product, "total_ttc": Decimal("0"), "invoices": set()},
         )
-        poste["total_ttc"] += amount
-        poste["invoices"].add(line.invoice_id)
+        charge_item["total_ttc"] += amount
+        charge_item["invoices"].add(line.invoice_id)
     for invoice in documents.only("supplier_id", "invoice_date"):
         rows[invoice.supplier_id]["documents"] += 1
     # The last document ever, inside the window or not: it is what says a
@@ -452,19 +471,19 @@ def charge_suppliers(window=None) -> list[dict]:
         row
         | {
             "since": since,
-            # One poste is the charge itself under another name, and the
+            # One charge item is the charge itself under another name, and the
             # supplier's own row already opens on it.
-            "postes": sorted(
+            "charge_items": sorted(
                 (
-                    poste | {"documents": len(poste["invoices"])}
-                    for poste in row["postes"].values()
+                    charge_item | {"documents": len(charge_item["invoices"])}
+                    for charge_item in row["charge_items"].values()
                     # A line nobody attached to a product cannot be opened;
                     # it is still counted in the supplier's total above.
-                    if poste["product"] is not None
+                    if charge_item["product"] is not None
                 ),
-                key=lambda poste: -poste["total_ttc"],
+                key=lambda charge_item: -charge_item["total_ttc"],
             )
-            if len(row["postes"]) > 1
+            if len(row["charge_items"]) > 1
             else [],
         }
         for row in rows.values()
@@ -476,7 +495,7 @@ def selected_period(request) -> StockPeriod | None:
     """The window `?inventaire=<pk>` asks for, or None for all time.
 
     Only the CLOSING count is named; the opening one is whichever came
-    before it, exactly as on the écarts page - naming both would let the
+    before it, exactly as on the variance page - naming both would let the
     two pages disagree about what "this period" means, and there is no
     second thing to choose anyway.
     """
@@ -489,6 +508,7 @@ def selected_period(request) -> StockPeriod | None:
         return None
     closing_take = StockTake.objects.filter(pk=take_id).first()
     return stock_between(closing_take) if closing_take is not None else None
+
 
 def _attach_sold(context, categories, sold, period, unit_costs):
     """Hang the sold/period figures on each row, and total them up."""
@@ -730,9 +750,9 @@ def stock_type_price_history(request, pk):
     for one stock type, plotting every movement's unit_cost_ht against its
     invoice date."""
     stock_type = get_object_or_404(StockType, pk=pk)
-    raw_movements = StockMovement.objects.filter(
-        stock_type=stock_type, invoice_line__isnull=False
-    ).values_list("invoice_line__invoice__invoice_date", "quantity", "unit_cost_ht")
+    raw_movements = StockMovement.objects.filter(stock_type=stock_type, invoice_line__isnull=False).values_list(
+        "invoice_line__invoice__invoice_date", "quantity", "unit_cost_ht"
+    )
     points = _aggregate_price_points(raw_movements)
     return render(
         request,
@@ -742,8 +762,8 @@ def stock_type_price_history(request, pk):
 
 
 def _charge_document_rows(lines, invoices=()) -> list[dict]:
-    """One row per document, from the lines given - one poste's, or a whole
-    supplier's.
+    """One row per document, from the lines given - one charge item's, or a
+    whole supplier's.
 
     A bill printing two rates is read as two lines (see
     invoices.charge_reading), and a person opening a charge is counting
@@ -781,9 +801,9 @@ def _charge_document_rows(lines, invoices=()) -> list[dict]:
 
 
 def _charge_panel(request, title, all_url, lines, invoices=None):
-    """The documents behind a charge - a supplier's, or one of its postes -
-    fetched when its row is opened, like a stock item's purchases. Each
-    links to the document it came from.
+    """The documents behind a charge - a supplier's, or one of its charge
+    items - fetched when its row is opened, like a stock item's purchases.
+    Each links to the document it came from.
 
     Narrowed to the « Du … au … » the row was counted over, on
     `invoice_date` - the very filter charge_suppliers uses - so the panel
@@ -839,7 +859,7 @@ def _charge_curve(request, title, lines):
     )
 
 
-def _poste_lines(product_id):
+def _charge_item_lines(product_id):
     from invoices.models import InvoiceLine
 
     product = get_object_or_404(Product, pk=product_id, is_expense=True)
@@ -856,14 +876,12 @@ def _charge_supplier_lines(supplier_id):
 
 
 def charge_documents(request, product_id):
-    title, lines = _poste_lines(product_id)
-    return _charge_panel(
-        request, title, reverse("inventory:charge_documents", args=[product_id]), lines
-    )
+    title, lines = _charge_item_lines(product_id)
+    return _charge_panel(request, title, reverse("inventory:charge_documents", args=[product_id]), lines)
 
 
 def charge_history(request, product_id):
-    return _charge_curve(request, *_poste_lines(product_id))
+    return _charge_curve(request, *_charge_item_lines(product_id))
 
 
 def charge_supplier_documents(request, supplier_id):
@@ -995,7 +1013,7 @@ class StockTypeUpdateView(CategoryAutocompleteMixin, UpdateView):
             if products:
                 messages.info(
                     self.request,
-                    f"Unité changée : {len(products)} produit(s) lié(s) à \"{self.object.name}\" "
+                    f'Unité changée : {len(products)} produit(s) lié(s) à "{self.object.name}" '
                     "recalculé(s) en conséquence.",
                 )
         return response
@@ -1041,7 +1059,7 @@ def merge_stock_type(request, pk):
         messages.error(
             request,
             f'Fusion impossible : "{source.name}" est en {source.get_unit_display()}, '
-            f'"{target.name}" est en {target.get_unit_display()}. Changez d\'abord l\'unité '
+            f"\"{target.name}\" est en {target.get_unit_display()}. Changez d'abord l'unité "
             "de l'un des deux, ou déplacez les produits manuellement.",
         )
         return redirect("inventory:stock_type_update", pk=source.pk)
@@ -1112,7 +1130,9 @@ def _where_used(objects) -> str:
     from recipes.models import RecipeIngredient, SaleDocumentLine
 
     recipes = sorted({obj.recipe.name for obj in objects if isinstance(obj, RecipeIngredient)})
-    takes = sorted({timezone.localtime(obj.stock_take.taken_at).date() for obj in objects if isinstance(obj, StockTakeLine)})
+    takes = sorted(
+        {timezone.localtime(obj.stock_take.taken_at).date() for obj in objects if isinstance(obj, StockTakeLine)}
+    )
     documents = {obj.document_id for obj in objects if isinstance(obj, SaleDocumentLine)}
     parts = []
     if recipes:

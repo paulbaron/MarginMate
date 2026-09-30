@@ -17,7 +17,8 @@ from django.template.loader import render_to_string
 from django.test import override_settings
 from django.utils import timezone
 
-from staff import private_files, signature_requests as requests_, signing
+from staff import private_files, signing
+from staff import signature_requests as requests_
 from staff.models import Establishment, SignatureEvent, SignatureRequest, Timesheet, TimesheetDay
 from staff.tests.signing_support import (
     FailingTimestamper,
@@ -35,8 +36,8 @@ from tests.support import NoNetworkTestCase
 
 JUNE = date(2026, 6, 1)
 JULY = date(2026, 7, 1)
-NOW = dt.datetime(2026, 7, 2, 8, 0, tzinfo=dt.timezone.utc)
-IP = "203.0.113.7"          # TEST-NET-3: an address that belongs to nobody
+NOW = dt.datetime(2026, 7, 2, 8, 0, tzinfo=dt.UTC)
+IP = "203.0.113.7"  # TEST-NET-3: an address that belongs to nobody
 PHONE = "Mozilla/5.0 (Linux; Android 14) Essai/1.0"
 
 Status = SignatureRequest.Status
@@ -75,8 +76,14 @@ class RequestCase(SigningTestMixin, NoNetworkTestCase):
     def employee_signs(self, request, now=NOW, reservation="", session=None):
         session = self.identified(request, now=now, session=session)
         return requests_.sign_for_employee(
-            request, drawn_signature(), session=session, statement_accepted=True, reservation=reservation,
-            now=now + dt.timedelta(minutes=2), ip=IP, user_agent=PHONE,
+            request,
+            drawn_signature(),
+            session=session,
+            statement_accepted=True,
+            reservation=reservation,
+            now=now + dt.timedelta(minutes=2),
+            ip=IP,
+            user_agent=PHONE,
         )
 
     def kinds(self, request):
@@ -93,7 +100,7 @@ class CreateTests(RequestCase):
         self.assertFalse(SignatureRequest.objects.exists())
 
     def test_the_request_freezes_the_month(self):
-        request, token = self.create()
+        request, _token = self.create()
         self.assertEqual(request.version, 1)
         self.assertEqual(request.status, Status.PENDING)
         self.assertEqual(request.created_at, NOW)
@@ -288,9 +295,7 @@ class LockTests(RequestCase):
             "save_month": lambda: sheets.save_month(
                 self.person, JUNE, [PostedDay(date(2026, 6, 2), hours=Decimal("9"))]
             ),
-            "apply_range": lambda: sheets.apply_range(
-                self.person, JUNE, date(2026, 6, 2), date(2026, 6, 3), "conges"
-            ),
+            "apply_range": lambda: sheets.apply_range(self.person, JUNE, date(2026, 6, 2), date(2026, 6, 3), "conges"),
             "reset_to_typical_week": lambda: sheets.reset_to_typical_week(self.person, JUNE),
         }
         for name, write in writes.items():
@@ -362,11 +367,18 @@ class CodeTests(RequestCase):
         request, _token = self.create()
         code = requests_.issue_code(request, SignatureRequest.Identification.CODE_HANDED_OVER, now=NOW)
         with self.assertRaises(requests_.CodeError) as caught:
-            requests_.check_code(request, code, self.session, now=NOW + dt.timedelta(minutes=15, seconds=1),
-                                 ip=IP, user_agent=PHONE)
+            requests_.check_code(
+                request, code, self.session, now=NOW + dt.timedelta(minutes=15, seconds=1), ip=IP, user_agent=PHONE
+            )
         self.assertIn("expiré", str(caught.exception))
-        requests_.check_code(request, requests_.issue_code(request, "code_remis", now=NOW + dt.timedelta(minutes=16)),
-                             self.session, now=NOW + dt.timedelta(minutes=30), ip=IP, user_agent=PHONE)
+        requests_.check_code(
+            request,
+            requests_.issue_code(request, "code_remis", now=NOW + dt.timedelta(minutes=16)),
+            self.session,
+            now=NOW + dt.timedelta(minutes=30),
+            ip=IP,
+            user_agent=PHONE,
+        )
         self.assertTrue(requests_.is_identified(self.session, request))
 
     def test_three_codes_an_hour(self):
@@ -396,8 +408,15 @@ class CodeTests(RequestCase):
         self.assertTrue(requests_.is_identified(self.session, request))
         self.assertFalse(requests_.is_identified(self.session, other))
         with self.assertRaises(requests_.IdentificationRequired):
-            requests_.sign_for_employee(other, drawn_signature(), session=self.session, statement_accepted=True,
-                                        now=NOW, ip=IP, user_agent=PHONE)
+            requests_.sign_for_employee(
+                other,
+                drawn_signature(),
+                session=self.session,
+                statement_accepted=True,
+                now=NOW,
+                ip=IP,
+                user_agent=PHONE,
+            )
         other.refresh_from_db()
         self.assertEqual(other.status, Status.PENDING)
 
@@ -438,23 +457,26 @@ class EmployeeSignatureTests(RequestCase):
         request, _token = self.create()
         session = self.identified(request)
         with self.assertRaises(requests_.RequestError) as caught:
-            requests_.sign_for_employee(request, drawn_signature(), session=session, statement_accepted=False,
-                                        now=NOW, ip=IP, user_agent=PHONE)
+            requests_.sign_for_employee(
+                request, drawn_signature(), session=session, statement_accepted=False, now=NOW, ip=IP, user_agent=PHONE
+            )
         self.assertIn("Je certifie", str(caught.exception))
         request.refresh_from_db()
         self.assertEqual(request.status, Status.PENDING)
 
     def test_an_empty_drawing_stores_nothing(self):
-        from PIL import Image
         import io
+
+        from PIL import Image
 
         request, _token = self.create()
         session = self.identified(request)
         blank = io.BytesIO()
         Image.new("RGBA", (600, 200), (0, 0, 0, 0)).save(blank, format="PNG")
         with self.assertRaises(signing.SignatureImageError):
-            requests_.sign_for_employee(request, blank.getvalue(), session=session, statement_accepted=True,
-                                        now=NOW, ip=IP, user_agent=PHONE)
+            requests_.sign_for_employee(
+                request, blank.getvalue(), session=session, statement_accepted=True, now=NOW, ip=IP, user_agent=PHONE
+            )
         self.assertFalse(private_files.exists(request.uuid, private_files.SIGNATURE_IMAGE))
         request.refresh_from_db()
         self.assertEqual(request.status, Status.PENDING)
@@ -464,8 +486,15 @@ class EmployeeSignatureTests(RequestCase):
         session = self.identified(request)
         with OfflineTimestamps(stampers=[FailingTimestamper("http://a.test"), FailingTimestamper("http://b.test")]):
             with self.assertRaises(signing.TimestampUnavailable) as caught:
-                requests_.sign_for_employee(request, drawn_signature(), session=session, statement_accepted=True,
-                                            now=NOW, ip=IP, user_agent=PHONE)
+                requests_.sign_for_employee(
+                    request,
+                    drawn_signature(),
+                    session=session,
+                    statement_accepted=True,
+                    now=NOW,
+                    ip=IP,
+                    user_agent=PHONE,
+                )
         self.assertIn("réessayez dans quelques minutes", str(caught.exception))
         request.refresh_from_db()
         self.assertEqual(request.status, Status.PENDING)
@@ -475,8 +504,9 @@ class EmployeeSignatureTests(RequestCase):
         failed = request.events.get(kind=Kind.TIMESTAMP_FAILED)
         self.assertEqual(failed.detail["servers"], ["http://a.test", "http://b.test"])
         # And once a server answers again, the same identification signs.
-        signed = requests_.sign_for_employee(request, drawn_signature(), session=session, statement_accepted=True,
-                                             now=NOW, ip=IP, user_agent=PHONE)
+        signed = requests_.sign_for_employee(
+            request, drawn_signature(), session=session, statement_accepted=True, now=NOW, ip=IP, user_agent=PHONE
+        )
         self.assertEqual(signed.status, Status.EMPLOYEE_SIGNED)
 
     def test_a_frozen_document_changed_on_disk_is_never_signed(self):
@@ -484,9 +514,13 @@ class EmployeeSignatureTests(RequestCase):
         session = self.identified(request)
         path = private_files.request_dir(request.uuid) / private_files.DOCUMENT
         path.write_bytes(path.read_bytes() + b"\n% ajout")
-        with self.assertRaises(requests_.RequestError) as caught, self.assertLogs("staff.signature_requests", "WARNING"):
-            requests_.sign_for_employee(request, drawn_signature(), session=session, statement_accepted=True,
-                                        now=NOW, ip=IP, user_agent=PHONE)
+        with (
+            self.assertRaises(requests_.RequestError) as caught,
+            self.assertLogs("staff.signature_requests", "WARNING"),
+        ):
+            requests_.sign_for_employee(
+                request, drawn_signature(), session=session, statement_accepted=True, now=NOW, ip=IP, user_agent=PHONE
+            )
         self.assertEqual(str(caught.exception), requests_.DOCUMENT_CHANGED)
         request.refresh_from_db()
         self.assertEqual(request.status, Status.PENDING)
@@ -495,16 +529,30 @@ class EmployeeSignatureTests(RequestCase):
         request, _token = self.create()
         self.employee_signs(request)
         with self.assertRaises(requests_.RequestStateError) as caught:
-            requests_.sign_for_employee(request, drawn_signature(), session=self.session, statement_accepted=True,
-                                        now=NOW, ip=IP, user_agent=PHONE)
+            requests_.sign_for_employee(
+                request,
+                drawn_signature(),
+                session=self.session,
+                statement_accepted=True,
+                now=NOW,
+                ip=IP,
+                user_agent=PHONE,
+            )
         self.assertIn("déjà signé", str(caught.exception))
 
     def test_an_expired_request_cannot_be_signed(self):
         request, _token = self.create()
         session = self.identified(request)
         with self.assertRaises(requests_.RequestStateError):
-            requests_.sign_for_employee(request, drawn_signature(), session=session, statement_accepted=True,
-                                        now=NOW + dt.timedelta(days=15), ip=IP, user_agent=PHONE)
+            requests_.sign_for_employee(
+                request,
+                drawn_signature(),
+                session=session,
+                statement_accepted=True,
+                now=NOW + dt.timedelta(days=15),
+                ip=IP,
+                user_agent=PHONE,
+            )
 
 
 class CountersignTests(RequestCase):
@@ -563,9 +611,7 @@ class EmployerDrawingTests(RequestCase):
         return request
 
     def countersign(self, request, png):
-        return requests_.countersign_request(
-            request, png, now=NOW + dt.timedelta(days=1), ip=IP, user_agent="Bureau"
-        )
+        return requests_.countersign_request(request, png, now=NOW + dt.timedelta(days=1), ip=IP, user_agent="Bureau")
 
     def test_kept_hashed_logged_and_sealed(self):
         request = self.signed()
@@ -586,9 +632,7 @@ class EmployerDrawingTests(RequestCase):
         self.assertNotEqual(done.signature_png_sha256, digest)
         private_files.read_checked(done.uuid, private_files.SIGNATURE_IMAGE, done.signature_png_sha256)
         self.assertTrue(requests_.verify_event_chain(done).ok)
-        self.assertIn(
-            f"signature dessinée de l'employeur : SHA-256 {digest}", requests_.describe_event(event).details
-        )
+        self.assertIn(f"signature dessinée de l'employeur : SHA-256 {digest}", requests_.describe_event(event).details)
 
     def test_no_drawing_no_countersignature_and_nothing_stored(self):
         request = self.signed()
@@ -683,14 +727,18 @@ class RequestModelTests(RequestCase):
     def test_the_database_holds_one_open_request_per_month_too(self):
         from django.db import IntegrityError, transaction
 
-        request, _token = self.create()
+        _request, _token = self.create()
         with self.assertRaises(IntegrityError), transaction.atomic():
             SignatureRequest.objects.create(
                 timesheet=self.timesheet, version=2, expires_at=NOW, token_hash="f" * 64, document_sha256="0" * 64
             )
         with self.assertRaises(IntegrityError), transaction.atomic():
             SignatureRequest.objects.create(
-                timesheet=self.timesheet, version=1, status=Status.CANCELLED, expires_at=NOW, token_hash="e" * 64,
+                timesheet=self.timesheet,
+                version=1,
+                status=Status.CANCELLED,
+                expires_at=NOW,
+                token_hash="e" * 64,
                 document_sha256="0" * 64,
             )
 
@@ -705,12 +753,12 @@ class RequestModelTests(RequestCase):
         from django.contrib.auth.models import User
         from django.urls import reverse
 
-        from tests.runner import member_of_the_test_espace
+        from tests.runner import member_of_the_test_tenant
 
-        request, token = self.create()
-        # The admin is a superuser's who works in an espace.
+        request, _token = self.create()
+        # The admin is a superuser's who works in a tenant.
         self.client.force_login(
-            member_of_the_test_espace(User.objects.create_superuser("proprio", "proprio@example.invalid", "x"))
+            member_of_the_test_tenant(User.objects.create_superuser("proprio", "proprio@example.invalid", "x"))
         )
         event = request.events.first()
         for name, obj in (("signaturerequest", request), ("signatureevent", event)):
@@ -746,19 +794,31 @@ class IdentificationRecordTests(RequestCase):
 
     def sign(self, request, session):
         signed = requests_.sign_for_employee(
-            request, drawn_signature(), session=session, statement_accepted=True,
-            now=NOW + dt.timedelta(minutes=5), ip=IP, user_agent=PHONE,
+            request,
+            drawn_signature(),
+            session=session,
+            statement_accepted=True,
+            now=NOW + dt.timedelta(minutes=5),
+            ip=IP,
+            user_agent=PHONE,
         )
         event = signed.events.get(kind=Kind.EMPLOYEE_SIGNED)
-        return signed.identification, event.detail["identification"], pdf_text(
-            private_files.read(signed.uuid, private_files.PROOF)
+        return (
+            signed.identification,
+            event.detail["identification"],
+            pdf_text(private_files.read(signed.uuid, private_files.PROOF)),
         )
 
     def test_handed_over_then_a_code_asked_by_email_from_elsewhere(self):
         request, _token = self.create()
-        session = self.identified(request)   # handed over, typed on his phone
-        requests_.issue_code(request, Identification.CODE_BY_EMAIL, now=NOW + dt.timedelta(minutes=1),
-                             ip="198.51.100.4", user_agent="Autre navigateur")
+        session = self.identified(request)  # handed over, typed on his phone
+        requests_.issue_code(
+            request,
+            Identification.CODE_BY_EMAIL,
+            now=NOW + dt.timedelta(minutes=1),
+            ip="198.51.100.4",
+            user_agent="Autre navigateur",
+        )
         row, detail, proof = self.sign(request, session)
         self.assertEqual((row, detail), (Identification.CODE_HANDED_OVER, Identification.CODE_HANDED_OVER))
         self.assertIn("Méthode : code à usage unique affiché à l'employeur", proof)
@@ -770,8 +830,9 @@ class IdentificationRecordTests(RequestCase):
         code = requests_.issue_code(request, Identification.CODE_BY_EMAIL, now=NOW)
         session = {}
         requests_.check_code(request, code, session, now=NOW, ip=IP, user_agent=PHONE)
-        requests_.issue_code(request, Identification.CODE_HANDED_OVER, now=NOW + dt.timedelta(minutes=1),
-                             user_agent="Bureau")
+        requests_.issue_code(
+            request, Identification.CODE_HANDED_OVER, now=NOW + dt.timedelta(minutes=1), user_agent="Bureau"
+        )
         row, detail, proof = self.sign(request, session)
         self.assertEqual((row, detail), (Identification.CODE_BY_EMAIL, Identification.CODE_BY_EMAIL))
         self.assertIn("Méthode : code à usage unique envoyé par e-mail", proof)
@@ -808,8 +869,9 @@ class CodeChannelTests(RequestCase):
         code = requests_.issue_code(request, Identification.CODE_HANDED_OVER, now=NOW)
         for minute in (1, 2):
             with self.assertRaises(requests_.CodeError) as caught:
-                requests_.issue_code(request, Identification.CODE_BY_EMAIL, now=NOW + dt.timedelta(minutes=minute),
-                                     ip="198.51.100.4")
+                requests_.issue_code(
+                    request, Identification.CODE_BY_EMAIL, now=NOW + dt.timedelta(minutes=minute), ip="198.51.100.4"
+                )
             self.assertEqual(str(caught.exception), requests_.HANDED_OVER_CODE_WAITING)
         requests_.check_code(request, code, self.session, now=NOW + dt.timedelta(minutes=3), ip=IP, user_agent=PHONE)
         self.assertTrue(requests_.is_identified(self.session, request))
@@ -861,8 +923,9 @@ class EmployeeSignatureTextTests(RequestCase):
 
     def attempt(self, request, session):
         with self.assertRaises(requests_.RequestError) as caught:
-            requests_.sign_for_employee(request, drawn_signature(), session=session, statement_accepted=True,
-                                        now=NOW, ip=IP, user_agent=PHONE)
+            requests_.sign_for_employee(
+                request, drawn_signature(), session=session, statement_accepted=True, now=NOW, ip=IP, user_agent=PHONE
+            )
         request.refresh_from_db()
         self.assertEqual(request.status, Status.PENDING)
         return str(caught.exception)
@@ -893,8 +956,9 @@ class EmployeeSignatureTextTests(RequestCase):
         request, _token = self.create()
         session = self.identified(request)
         with self.assertRaises(signing.SignatureImageError):
-            requests_.sign_for_employee(request, b"pas une image", session=session, statement_accepted=True,
-                                        now=NOW, ip=IP, user_agent=PHONE)
+            requests_.sign_for_employee(
+                request, b"pas une image", session=session, statement_accepted=True, now=NOW, ip=IP, user_agent=PHONE
+            )
 
 
 class SignedFactsTests(RequestCase):
@@ -991,13 +1055,17 @@ class SnapshotAsPrintedTests(RequestCase):
     def rows_of(self, data) -> list[str]:
         with pdfplumber.open(io.BytesIO(data)) as document:
             lines = document.pages[0].extract_text().splitlines()
-        return lines[lines.index("Jour Heures Motif / note") + 1:lines.index("Récapitulatif du mois")]
+        return lines[lines.index("Jour Heures Motif / note") + 1 : lines.index("Récapitulatif du mois")]
 
     def test_every_note_reads_as_the_signed_document_prints_it(self):
-        save_month(self.person, JUNE, [
-            PostedDay(date(2026, 6, 4), hours=Decimal("10"), note=self.LONG_NOTE),
-            PostedDay(date(2026, 6, 8), kind="conges", note="pont"),
-        ])
+        save_month(
+            self.person,
+            JUNE,
+            [
+                PostedDay(date(2026, 6, 4), hours=Decimal("10"), note=self.LONG_NOTE),
+                PostedDay(date(2026, 6, 8), kind="conges", note="pont"),
+            ],
+        )
         # A character the month's form refuses now, stored before it did.
         TimesheetDay.objects.filter(timesheet=self.timesheet, date=date(2026, 6, 5)).update(note="service 18 h → 2 h")
         request, _token = self.create()

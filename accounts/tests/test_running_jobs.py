@@ -1,5 +1,5 @@
 """`manage.py running_jobs`: what deploy.cmd asks before it stops the
-server (DEPLOY.md, section 10). Two espaces, each a temporary one; every job
+server (DEPLOY.md, section 10). Two tenants, each a temporary one; every job
 is a row, nothing runs."""
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ class RunningJobsTests(TwoTenantsTestCase):
             SalesImportJob.objects.create(status=SalesImportJob.Status.FAILED)
         self.assertIn("Aucun travail en cours", self.run_it()[0])
 
-    def test_every_kind_in_every_espace_is_named(self):
+    def test_every_kind_in_every_tenant_is_named(self):
         now = timezone.now()
         with bound_tenant(self.bar_a):
             ScrapeJob.objects.create(status=ScrapeJob.Status.RUNNING, last_heartbeat=now - timedelta(seconds=5))
@@ -84,7 +84,7 @@ class RunningJobsTests(TwoTenantsTestCase):
             stale.refresh_from_db()
         self.assertEqual(stale.status, ScrapeJob.Status.RUNNING)
 
-    def test_an_espace_without_a_database_has_nothing_running(self):
+    def test_a_tenant_without_a_database_has_nothing_running(self):
         for leftover in paths.tenant_database(self.bar_b).parent.glob("db.sqlite3*"):
             leftover.unlink()
         out, _ = self.run_it()
@@ -96,10 +96,10 @@ class RunningJobsTests(TwoTenantsTestCase):
         self.refused(2)
         self.assertIn(f"espace « Bar Beta » ({self.bar_b.dir_name}) : sa base ne se lit pas", self.err.getvalue())
 
-    def test_a_closed_espace_that_cannot_be_read_blocks_nothing(self):
-        """A closed espace (« actif » unticked: what serve and DEPLOY.md §11
-        say to do with an espace whose base is gone) receives no request, so
-        nothing can be started in it. Its unreadable base made the command
+    def test_a_closed_tenant_that_cannot_be_read_blocks_nothing(self):
+        """A closed tenant (« actif » unticked: what serve and DEPLOY.md §11
+        say to do with a tenant whose database is gone) receives no request, so
+        nothing can be started in it. Its unreadable database made the command
         exit 2, and deploy.cmd refused every deployment for it."""
         paths.tenant_database(self.bar_b).write_bytes(b"ceci n'est pas une base SQLite " * 8)
         type(self.bar_b).objects.filter(pk=self.bar_b.pk).update(is_active=False)
@@ -109,7 +109,7 @@ class RunningJobsTests(TwoTenantsTestCase):
         self.assertIn("ignoré", out)
         self.assertIn("Aucun travail en cours (1 espace(s) vérifié(s)).", out)
 
-    def test_a_closed_espace_with_a_bad_folder_name_blocks_nothing(self):
+    def test_a_closed_tenant_with_a_bad_folder_name_blocks_nothing(self):
         type(self.bar_b).objects.filter(pk=self.bar_b.pk).update(is_active=False, dir_name="../dehors")
         out, err = self.run_it()
         self.assertEqual(err, "")
@@ -119,7 +119,7 @@ class RunningJobsTests(TwoTenantsTestCase):
         self.refused(2)
         self.assertIn("son nom de dossier est invalide", self.err.getvalue())
 
-    def test_a_running_job_wins_over_an_unreadable_espace(self):
+    def test_a_running_job_wins_over_an_unreadable_tenant(self):
         with bound_tenant(self.bar_a):
             ScrapeJob.objects.create(status=ScrapeJob.Status.RUNNING, last_heartbeat=timezone.now())
         paths.tenant_database(self.bar_b).write_bytes(b"ceci n'est pas une base SQLite " * 8)

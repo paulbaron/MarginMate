@@ -103,9 +103,7 @@ def capture_export_template(driver, log=print) -> str:
             log(f"Export button not wired up yet (attempt {attempt}/{CAPTURE_ATTEMPTS}).")
 
     if not template:
-        raise LadditionDownloadError(
-            "Pressing 'Exporter en XLS' opened no URL - the export button may have changed."
-        )
+        raise LadditionDownloadError("Pressing 'Exporter en XLS' opened no URL - the export button may have changed.")
     if "date_start" not in template or "date_end" not in template:
         raise LadditionDownloadError(f"Export URL has no date parameters to rewrite: {template}")
     log("Captured a signed export URL.")
@@ -125,11 +123,7 @@ def _wait_for_new_xlsx(download_dir: str, before: set[str], on_wait=None) -> str
     """
     deadline = time.time() + DOWNLOAD_TIMEOUT_SECONDS
     while time.time() < deadline:
-        new = [
-            name
-            for name in set(os.listdir(download_dir)) - before
-            if name.lower().endswith(".xlsx")
-        ]
+        new = [name for name in set(os.listdir(download_dir)) - before if name.lower().endswith(".xlsx")]
         if new:
             return os.path.join(download_dir, new[0])
         # The caller gets a look in on every tick: this is the longest wait in
@@ -138,14 +132,10 @@ def _wait_for_new_xlsx(download_dir: str, before: set[str], on_wait=None) -> str
         if on_wait is not None:
             on_wait()
         time.sleep(2)
-    raise LadditionDownloadError(
-        f"No .xlsx appeared in {download_dir} within {DOWNLOAD_TIMEOUT_SECONDS}s."
-    )
+    raise LadditionDownloadError(f"No .xlsx appeared in {download_dir} within {DOWNLOAD_TIMEOUT_SECONDS}s.")
 
 
-def download_sales_lines(
-    start: date, end: date, download_dir: str, log=print, should_cancel=None
-) -> list[str]:
+def download_sales_lines(start: date, end: date, download_dir: str, log=print, should_cancel=None) -> list[str]:
     """Download the sales-lines export covering [start, end].
 
     One file per date window: the back office caps a range at two years, so

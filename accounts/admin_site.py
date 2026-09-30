@@ -6,7 +6,7 @@ default site): every app's `admin.site.register` lands on this site.
 
 Superusers only. Staff alone is not enough: the admin lists every login of
 every bar (auth.User) and edits raw rows, and a signup never sets is_staff
-anyway. The business models it shows are the superuser's own espace's - the
+anyway. The business models it shows are the superuser's own tenant's - the
 request is bound to it like any page (accounts.middleware.TenantMiddleware).
 Its login page, Django's and public, counts its attempts on the login
 page's counters (accounts/limiter.py), and a login that succeeds there

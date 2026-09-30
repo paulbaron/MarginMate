@@ -2,7 +2,7 @@
 {% load assets %}
 {% block title %}Reprise du {{ pickup.date|date:"d/m/Y" }} - MarginMate{% endblock %}
 {% block content %}
-<div class="consignes-page">
+<div class="returnables-page">
     <p class="breadcrumb"><a href="{% url 'returnables:home' %}">← Consignes</a></p>
     <div class="page-header">
         <div>
@@ -18,13 +18,13 @@
         <p class="message message-error">Type « {{ kind.name }} » : motif invalide : {{ problem }} — <a href="{% url 'returnables:type_list' %}#type-{{ kind.pk }}">corrigez-le</a></p>
     {% endfor %}
 
-    <section class="card reprise-card">
-        {% include "returnables/_day.html" with view=view retour="" removable=True %}
+    <section class="card pickup-card">
+        {% include "returnables/_day.html" with view=view return_to="" removable=True %}
     </section>
 
     <section class="card" id="modifier">
         <h2>Modifier ou compléter</h2>
-        <form method="post" action="{% url 'returnables:pickup_detail' pickup.pk %}" enctype="multipart/form-data" class="reprise-form" data-reprise-form>
+        <form method="post" action="{% url 'returnables:pickup_detail' pickup.pk %}" enctype="multipart/form-data" class="pickup-form" data-pickup-form>
             {% csrf_token %}
             {% include "returnables/_pickup_fields.html" with submit_label="Enregistrer les modifications" details_open=True same_day=None %}
         </form>

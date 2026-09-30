@@ -9,8 +9,8 @@ Packaging deposits ("consignes"): buying a keg/case with its own container
 charges a refundable deposit (column CONSIG.), and returning an empty one
 refunds it (column DECONS.) - the same "consigne"/"déconsigne" concept
 Metro's own parser already separates out (see metro.py's docstring). A
-consigne is billed on the SAME row as the product it came with (so it's
-split out into its own "Consigne <product>" line here); a déconsigne
+deposit is billed on the SAME row as the product it came with (so it's
+split out into its own "Consigne <product>" line here); a deposit
 refund is its own row, with a generic packaging code/name (e.g. "EMB01
 FÛT 10/15/20/25/30/50 L") rather than tied to any specific product - kept
 as its own line with a negative quantity/total, the same way Metro's
@@ -19,7 +19,7 @@ other product and have its value actually subtracted.
 
 Not every row has a volume/weight (CONT. UNIT./VOLUME EFFECTIF, used to
 derive most products' totals) - a CO2 gas cylinder, for one, is billed as
-a flat "1 TUB" at a per-cylinder price with its own consigne on top (e.g.
+a flat "1 TUB" at a per-cylinder price with its own deposit on top (e.g.
 "BOUTEILLE CO2 10 KG GRISE"), so that case falls back to quantity * unit
 price directly.
 """
@@ -33,7 +33,7 @@ from decimal import Decimal
 from .base import InvoiceParser, ParsedInvoice, ParsedLine, PdfPage
 from .registry import register
 
-TVA_INDEX_TO_RATE = {1: Decimal("0.2"), 2: Decimal("0.055"), 3: Decimal("0")}
+VAT_INDEX_TO_RATE = {1: Decimal("0.2"), 2: Decimal("0.055"), 3: Decimal("0")}
 
 LINE_REGEX = re.compile(
     r"([A-Z0-9]+)\s+(.+?)\s+(-?\d+)\s+(FUT|CAR|CAI|BT|EMB|TUB|UNI|PUB)\s(-?\d+)\s+(L|BT|BOI|EMB|TUB|UNI|PUB)\s+(\d+,\d+)\s+(-?\d+,\d+)\s+"
@@ -75,7 +75,7 @@ def _to_decimal(text: str | None, default: str = "0") -> Decimal:
         return Decimal(default)
     try:
         return Decimal(text)
-    except Exception:
+    except Exception:  # noqa: BLE001 - an unreadable amount reads as the default
         return Decimal(default)
 
 
@@ -98,14 +98,14 @@ def _row_is_valid(row) -> bool:
     # A packaging-deposit refund row (e.g. "EMB01 FÛT 10/15/20/25/30/50 L")
     # has no price of its own - column 5 (PRIX HTHD) is blank - but does
     # have a DECONS. (column 10) amount. See the module docstring.
-    is_deconsigne = bool(row[10])
-    # UBA prints a nominal "0,0001" (or the literal text "GRA"/gratuit) in
+    is_deposit_refund = bool(row[10])
+    # UBA prints a nominal "0,0001" (or the text "GRA", for "gratuit": free) in
     # PRIX HTHD for informational, zero-cost rows (equipment loans, POS
     # material, return tickets) - real prices are never that small, so this
     # tells those apart from an actually-priced row without hardcoding
     # which product codes are which.
     has_price = _to_decimal(row[5]) >= _NEGLIGIBLE_PRICE
-    return has_price or is_deconsigne
+    return has_price or is_deposit_refund
 
 
 def _guess_invoice_number_and_date(full_text: str) -> tuple[str, date | None]:
@@ -121,7 +121,7 @@ def _guess_invoice_number_and_date(full_text: str) -> tuple[str, date | None]:
         date_matches = DATE_REGEX.findall(window)
         if date_matches:
             try:
-                invoice_date = datetime.strptime(date_matches[-1], "%d/%m/%Y").date()
+                invoice_date = datetime.strptime(date_matches[-1], "%d/%m/%Y").date()  # noqa: DTZ007 - a printed date, read into .date()
             except ValueError:
                 invoice_date = None
     return invoice_number, invoice_date
@@ -132,9 +132,7 @@ class UBAParser(InvoiceParser):
     supplier_code = "UBA"
     needs_tables = True
 
-    def parse_pages(
-        self, pages: list[PdfPage], date_hint: date | None = None, source_name: str = ""
-    ) -> ParsedInvoice:
+    def parse_pages(self, pages: list[PdfPage], date_hint: date | None = None, source_name: str = "") -> ParsedInvoice:
         products_vat: dict[str, Decimal] = {}
         full_text_parts: list[str] = []
         tables = []
@@ -146,8 +144,8 @@ class UBAParser(InvoiceParser):
                 match = LINE_REGEX.match(line)
                 if match:
                     product_key = match.group(1) + match.group(2)
-                    tva_idx = _to_int(match.group(18))
-                    products_vat[product_key] = TVA_INDEX_TO_RATE.get(tva_idx, Decimal("0.2"))
+                    vat_idx = _to_int(match.group(18))
+                    products_vat[product_key] = VAT_INDEX_TO_RATE.get(vat_idx, Decimal("0.2"))
             tables += page.tables
 
         parsed_lines: list[ParsedLine] = []
@@ -166,9 +164,9 @@ class UBAParser(InvoiceParser):
                     continue
                 quantity = _to_int(quantity_match.group(1))
 
-                deconsigne_total = _to_decimal(row[10])
-                if deconsigne_total:
-                    # A déconsigne (packaging deposit refund) row - see the
+                deposit_refund_total = _to_decimal(row[10])
+                if deposit_refund_total:
+                    # A packaging deposit refund ("déconsigne") row - see the
                     # module docstring. Its whole "price" is the DECONS.
                     # column; there's no product price/volume to derive.
                     if not quantity:
@@ -178,8 +176,8 @@ class UBAParser(InvoiceParser):
                             raw_name=product_name,
                             quantity=quantity,
                             total_volume=Decimal("0"),
-                            unit_cost_ht=(deconsigne_total / quantity).quantize(Decimal("0.0001")),
-                            total_ht=deconsigne_total,
+                            unit_cost_ht=(deposit_refund_total / quantity).quantize(Decimal("0.0001")),
+                            total_ht=deposit_refund_total,
                             vat_rate=Decimal("0"),  # a deposit refund, not a taxable sale
                             category="UBA - Consignes",
                             ean=product_code,
@@ -201,12 +199,12 @@ class UBAParser(InvoiceParser):
                     # billed as a flat "1 TUB" with a real MNT HTHD (row[6])
                     # printed, but some rows (e.g. "EMB29 CFP VIDE", an
                     # empty crate/box) have NOTHING in that column - PRIX
-                    # HTHD there just echoes the consigne value rather than
+                    # HTHD there just echoes the deposit value rather than
                     # being a real per-unit price, so deriving quantity *
                     # unit_price would fabricate a charge that isn't really
                     # there. Reading MNT HTHD directly (0 when blank) avoids
                     # that: no printed total means no real product charge,
-                    # only whatever consigne (below) applies.
+                    # only whatever deposit (below) applies.
                     total_volume = Decimal("0")
                     total_taxes = Decimal("0")
                     base_total_ht = _to_decimal(row[6])
@@ -224,7 +222,9 @@ class UBAParser(InvoiceParser):
                             raw_name=product_name,
                             quantity=quantity,
                             total_volume=total_volume,
-                            unit_cost_ht=(total_ht / quantity).quantize(Decimal("0.0001")) if quantity else Decimal("0"),
+                            unit_cost_ht=(total_ht / quantity).quantize(Decimal("0.0001"))
+                            if quantity
+                            else Decimal("0"),
                             total_ht=total_ht,
                             taxes=total_taxes,
                             vat_rate=vat_rate,
@@ -234,20 +234,20 @@ class UBAParser(InvoiceParser):
                     )
                     product_lines_total += total_ht
 
-                # A consigne (packaging deposit charge) is billed on the
+                # A packaging deposit charge ("consigne") is billed on the
                 # SAME row as the product it came with - split out into its
                 # own line (see module docstring) rather than folded into
                 # the product's own cost, since it's a refundable deposit
                 # on the container, not part of what the product is worth.
-                consigne_total = _to_decimal(row[9])
-                if consigne_total and quantity:
+                deposit_total = _to_decimal(row[9])
+                if deposit_total and quantity:
                     parsed_lines.append(
                         ParsedLine(
                             raw_name=f"Consigne {product_name}",
                             quantity=quantity,
                             total_volume=Decimal("0"),
-                            unit_cost_ht=(consigne_total / quantity).quantize(Decimal("0.0001")),
-                            total_ht=consigne_total,
+                            unit_cost_ht=(deposit_total / quantity).quantize(Decimal("0.0001")),
+                            total_ht=deposit_total,
                             vat_rate=Decimal("0"),  # a refundable deposit, not a taxable sale
                             category="UBA - Consignes",
                             ean="",
@@ -268,8 +268,8 @@ class UBAParser(InvoiceParser):
         grand_total_match = GRAND_TOTAL_REGEX.search(full_text)
         if grand_total_match:
             printed_ht = _to_decimal(grand_total_match.group(1).replace(" ", ""))
-            printed_droits = _to_decimal(grand_total_match.group(2).replace(" ", ""))
-            reconciliation_adjustment = (printed_ht + printed_droits) - product_lines_total
+            printed_duties = _to_decimal(grand_total_match.group(2).replace(" ", ""))
+            reconciliation_adjustment = (printed_ht + printed_duties) - product_lines_total
 
         return ParsedInvoice(
             supplier_code=self.supplier_code,

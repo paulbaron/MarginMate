@@ -40,16 +40,16 @@ class StockTakePayloadTests(TestCase):
         self.supplier = make_supplier(name="Metro")
         self.vodka = make_stock_type(name="Vodka", unit=UnitChoices.LITRE)
         self.gin = make_stock_type(name="Gin", unit=UnitChoices.LITRE)
-        self.bottles = [
-            self.priced_product(f"BOUTEILLE {n}", self.vodka if n % 2 else self.gin)
-            for n in range(1, 7)
-        ]
+        self.bottles = [self.priced_product(f"BOUTEILLE {n}", self.vodka if n % 2 else self.gin) for n in range(1, 7)]
 
     def priced_product(self, name, stock_type):
         """A product with a purchase behind it, so a count can be valued."""
         product = make_product(
-            supplier=self.supplier, raw_name=name, stock_type=stock_type,
-            unit=UnitChoices.UNIT, stock_equivalent="0.7",
+            supplier=self.supplier,
+            raw_name=name,
+            stock_type=stock_type,
+            unit=UnitChoices.UNIT,
+            stock_equivalent="0.7",
         )
         invoice = make_invoice(supplier=self.supplier, invoice_date=date(2026, 1, 10))
         make_invoice_line(invoice=invoice, product=product, quantity=12, total_ht="120")
@@ -62,8 +62,11 @@ class StockTakePayloadTests(TestCase):
         the size of the payload, not what a count is worth."""
         return [
             make_product(
-                supplier=self.supplier, raw_name=f"ARTICLE {index:04d}",
-                stock_type=self.vodka, unit=UnitChoices.UNIT, stock_equivalent="0.7",
+                supplier=self.supplier,
+                raw_name=f"ARTICLE {index:04d}",
+                stock_type=self.vodka,
+                unit=UnitChoices.UNIT,
+                stock_equivalent="0.7",
             )
             for index in range(count)
         ]
@@ -129,11 +132,13 @@ class StockTakePayloadTests(TestCase):
         self.assertEqual(StockTake.objects.get().lines.count(), 1)
 
     def test_a_stock_type_line_can_be_counted_directly(self):
-        rows = {0: {
-            "entry_search": stock_type_entry_name(self.vodka),
-            "counted_quantity": "3.5",
-            "unit": UnitChoices.LITRE,
-        }}
+        rows = {
+            0: {
+                "entry_search": stock_type_entry_name(self.vodka),
+                "counted_quantity": "3.5",
+                "unit": UnitChoices.LITRE,
+            }
+        }
         self.post(self.payload(rows))
         line = StockTake.objects.get().lines.get()
         self.assertEqual(line.stock_type, self.vodka)
@@ -149,11 +154,13 @@ class StockTakePayloadTests(TestCase):
         """A count in progress lives in the browser (localStorage) as it was
         typed: one started before the rename says « (type de stock) », and
         comes back to be saved - it must not read « introuvable »."""
-        rows = {0: {
-            "entry_search": "Vodka (type de stock)",
-            "counted_quantity": "3.5",
-            "unit": UnitChoices.LITRE,
-        }}
+        rows = {
+            0: {
+                "entry_search": "Vodka (type de stock)",
+                "counted_quantity": "3.5",
+                "unit": UnitChoices.LITRE,
+            }
+        }
         response = self.post(self.payload(rows))
         self.assertEqual(response.status_code, 302)
         line = StockTake.objects.get().lines.get()
@@ -181,8 +188,11 @@ class StockTakePayloadTests(TestCase):
         take = make_stock_take(taken_at=datetime(2026, 3, 31, 12, 0))
         lines = [
             make_stock_take_line(
-                stock_take=take, product=product, counted_quantity="2",
-                unit=UnitChoices.UNIT, value_ht="20",
+                stock_take=take,
+                product=product,
+                counted_quantity="2",
+                unit=UnitChoices.UNIT,
+                value_ht="20",
             )
             for product in self.bottles[:3]
         ]
@@ -195,15 +205,10 @@ class StockTakePayloadTests(TestCase):
         """The browser hides the row rather than unplugging it, so every
         field still arrives - alongside DELETE=on."""
         take, lines = self.existing_take()
-        rows = {
-            index: self.row(self.bottles[index], id=line.pk)
-            for index, line in enumerate(lines)
-        }
+        rows = {index: self.row(self.bottles[index], id=line.pk) for index, line in enumerate(lines)}
         rows[1]["DELETE"] = "on"
 
-        response = self.post(
-            self.payload(rows, initial_forms=3, taken_at="2026-03-31 12:00:00"), self.edit_url(take)
-        )
+        response = self.post(self.payload(rows, initial_forms=3, taken_at="2026-03-31 12:00:00"), self.edit_url(take))
         self.assertEqual(response.status_code, 302)
         self.assertEqual(take.lines.count(), 2)
         self.assertFalse(StockTakeLine.objects.filter(pk=lines[1].pk).exists())
@@ -278,15 +283,15 @@ class StockTakePayloadTests(TestCase):
         products = self.many_products(300)
         lines = [
             make_stock_take_line(
-                stock_take=take, product=product, counted_quantity="1",
-                unit=UnitChoices.UNIT, value_ht="10",
+                stock_take=take,
+                product=product,
+                counted_quantity="1",
+                unit=UnitChoices.UNIT,
+                value_ht="10",
             )
             for product in products
         ]
-        rows = {
-            index: self.row(products[index], quantity="3", id=line.pk)
-            for index, line in enumerate(lines)
-        }
+        rows = {index: self.row(products[index], quantity="3", id=line.pk) for index, line in enumerate(lines)}
 
         response = self.post(self.payload(rows, initial_forms=300), self.edit_url(take))
         self.assertEqual(response.status_code, 302)

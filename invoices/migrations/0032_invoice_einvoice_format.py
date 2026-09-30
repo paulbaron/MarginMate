@@ -23,19 +23,18 @@ NEW_DEFAULT = r"(?i)\.(pdf|xml)$"
 
 
 def widen(apps, schema_editor):
-    apps.get_model("invoices", "EmailInvoiceSource").objects.filter(
-        attachment_pattern=OLD_DEFAULT
-    ).update(attachment_pattern=NEW_DEFAULT)
+    apps.get_model("invoices", "EmailInvoiceSource").objects.filter(attachment_pattern=OLD_DEFAULT).update(
+        attachment_pattern=NEW_DEFAULT
+    )
 
 
 def narrow(apps, schema_editor):
-    apps.get_model("invoices", "EmailInvoiceSource").objects.filter(
-        attachment_pattern=NEW_DEFAULT
-    ).update(attachment_pattern=OLD_DEFAULT)
+    apps.get_model("invoices", "EmailInvoiceSource").objects.filter(attachment_pattern=NEW_DEFAULT).update(
+        attachment_pattern=OLD_DEFAULT
+    )
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
         ("invoices", "0031_invoice_vat_table_typed"),
     ]

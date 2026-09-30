@@ -8,8 +8,7 @@ not with a copy of the rebuild.
 
 import json
 import zipfile
-from datetime import datetime
-from datetime import timezone as dt_timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from django.test import TestCase
@@ -45,14 +44,16 @@ QUANTITIES, DAYS = "quantités par produit et par jour (caisse)", "jours de cais
 
 
 def moment(hour: int) -> datetime:
-    return datetime(2026, 9, 10, hour, 5, 30, 250000, tzinfo=dt_timezone.utc)
+    return datetime(2026, 9, 10, hour, 5, 30, 250000, tzinfo=UTC)
 
 
 def add_document(sold_on, lines, reference="", note="", created=None) -> SaleDocument:
     document = SaleDocument.objects.create(sold_on=sold_on, reference=reference, note=note)
     for target, quantity, price in lines:
         kind = "recipe" if isinstance(target, Recipe) else "stock_type"
-        SaleDocumentLine.objects.create(document=document, quantity=Decimal(quantity), unit_price_ttc=price, **{kind: target})
+        SaleDocumentLine.objects.create(
+            document=document, quantity=Decimal(quantity), unit_price_ttc=price, **{kind: target}
+        )
     if created is not None:
         SaleDocument.objects.filter(pk=document.pk).update(created_at=created)
     return document
@@ -68,8 +69,11 @@ def build_sales():
         sale = RecipeSale.objects.create(recipe=recipe, sold_on=day(5), quantity=quantity, source=MANUAL_SALE_SOURCE)
         RecipeSale.objects.filter(pk=sale.pk).update(recorded_at=moment(hour))
     add_document(
-        day(6), [(mojito, "10", Decimal("7.50")), (StockType.objects.get(name="Gin"), "0.7", None)],
-        reference="SOIRÉE-1", note="Anniversaire", created=moment(10),
+        day(6),
+        [(mojito, "10", Decimal("7.50")), (StockType.objects.get(name="Gin"), "0.7", None)],
+        reference="SOIRÉE-1",
+        note="Anniversaire",
+        created=moment(10),
     )
     add_document(day(7), [(mint, "1", None)], created=moment(11))
     add_document(day(7), [(mint, "1", None)], created=moment(12))
@@ -173,7 +177,10 @@ class SalesIdempotenceTests(LaneSectionsMixin, TestCase):
         self.assertEqual(tally(run, "ventes", "ventes saisies"), (0, 0, 0, 2))
         self.assertEqual(tally(run, "ventes", "bons de vente"), (0, 0, 0, 3))
         self.assertEqual((report.conflicts, report.skipped, report.kept, report.notes), ([], [], [], []))
-        self.assertEqual(run.rebuilt, {"mouvements de stock": 0, "statuts de factures": 0, "ventes par recette": 0, "produits caisse": 0})
+        self.assertEqual(
+            run.rebuilt,
+            {"mouvements de stock": 0, "statuts de factures": 0, "ventes par recette": 0, "produits caisse": 0},
+        )
 
     def test_merge(self):
         before = db_fingerprint()
@@ -330,14 +337,13 @@ class SalesRefusalTests(LaneSectionsMixin, TestCase):
         the refund. The archive has to carry it: refused as « nombre positif
         attendu », a restore silently dropped that day, and the next till
         import - which nets the same figure - could not write it either."""
+
         def change(rows):
             rows[0][2] = -3
 
         import_archive(self.edited(daily=change), MERGE)
 
-        self.assertEqual(
-            PosProductDailyQuantity.objects.get(product__name="CAFÉ", sold_on=day(1)).quantity, -3
-        )
+        self.assertEqual(PosProductDailyQuantity.objects.get(product__name="CAFÉ", sold_on=day(1)).quantity, -3)
 
     def test_a_sale_typed_in_for_a_recipe_unknown_here_is_skipped(self):
         def change(sales):
@@ -366,7 +372,12 @@ class SalesRefusalTests(LaneSectionsMixin, TestCase):
         self.assertEqual(SaleDocumentLine.objects.count(), 1)
 
     def test_the_columns_of_the_days_are_checked(self):
-        reader = self.open(forge(self.reader, ventes=lambda payload: {**payload, "daily_columns": ["sold_on", "till_product", "quantity"]}))
+        reader = self.open(
+            forge(
+                self.reader,
+                ventes=lambda payload: {**payload, "daily_columns": ["sold_on", "till_product", "quantity"]},
+            )
+        )
         with self.assertRaisesMessage(ArchiveError, "« daily_columns » doit être"):
             import_archive(reader, MERGE)
         reader = self.open(forge(self.reader, ventes=lambda payload: {**payload, "daily": {"MOJITO": 1}}))
@@ -481,4 +492,3 @@ class SalesPaymentsTests(LaneSectionsMixin, TestCase):
                 self.assertEqual(db_fingerprint(), before)
                 self.assertEqual(tally(run, "ventes", PAYMENTS), (0, 0, 0, 0))
                 self.assertEqual(run.section("ventes").notes, [])
-

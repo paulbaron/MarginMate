@@ -172,7 +172,9 @@ def record_block(reference: str, now=None):
     supplier.scrape_last_block_at = now
     supplier.scrape_paused_until = now + BLOCK_PAUSE * (2 if repeat else 1)
     supplier.scrape_pause_reason = (
-        f"Metro a bloqué la connexion le {_said(now)} (pare-feu" + (f", référence {reference}" if reference else "") + ")."
+        f"Metro a bloqué la connexion le {_said(now)} (pare-feu"
+        + (f", référence {reference}" if reference else "")
+        + ")."
     )
     supplier.save(update_fields=["scrape_last_block_at", "scrape_paused_until", "scrape_pause_reason"])
     return supplier.scrape_paused_until
@@ -183,9 +185,9 @@ BLOCKED_RE = re.compile(
     r"bloqu[ée]e?s?\s+par\s+(?:notre|le)\s+pare-feu|too many requests|trop de (?:requ[êe]tes|demandes)"
     r"|access denied|acc[eè]s refus[ée]|request (?:was )?(?:rejected|blocked)|requested url was rejected"
     r"|you have been blocked",
-    re.I,
+    re.IGNORECASE,
 )
-REFERENCE_RE = re.compile(r"#\d+\.[0-9a-f]+\.\d+\.[0-9a-f]+", re.I)
+REFERENCE_RE = re.compile(r"#\d+\.[0-9a-f]+\.\d+\.[0-9a-f]+", re.IGNORECASE)
 
 
 def blocked_reference(text: str) -> str | None:
@@ -235,13 +237,13 @@ def _capture_diagnostics(driver, download_dir: str, log, context: str, screensho
     try:
         current_url = driver.current_url
         title = driver.title
-    except Exception:
+    except Exception:  # noqa: BLE001, S110 - a diagnostic never hides the timeout it reports
         pass
 
     body_text = ""
     try:
         body_text = driver.find_element(By.TAG_NAME, "body").text.strip()[:800]
-    except Exception:
+    except Exception:  # noqa: BLE001, S110 - a diagnostic never hides the timeout it reports
         pass
 
     log(f"Timed out {context}.")
@@ -257,7 +259,7 @@ def _capture_diagnostics(driver, download_dir: str, log, context: str, screensho
             # Removed right after (the text above stands for it): the path
             # was said as if it could still be opened.
             log(f"  (screenshot captured, {len(f.read())} bytes, not kept)")
-    except Exception:
+    except Exception:  # noqa: BLE001 - no screenshot is a diagnostic without one
         screenshot_path = None
 
     return current_url, title, body_text, screenshot_path
@@ -414,7 +416,7 @@ def _js_click(driver, element):
 
 def _read_date_field(field) -> date | None:
     try:
-        return datetime.strptime(field.get_attribute("value"), "%d.%m.%Y").date()
+        return datetime.strptime(field.get_attribute("value"), "%d.%m.%Y").date()  # noqa: DTZ007 - a date field's text, read into .date()
     except (ValueError, TypeError):
         return None
 
@@ -682,7 +684,9 @@ def _download_window(
             read = {key for _button, key in rows if key is not None}
             seen |= read
             unreadable = max(unreadable, len(rows) - len(read))
-            waiting = [(place, key) for place, (_button, key) in enumerate(rows) if key is not None and key not in decided]
+            waiting = [
+                (place, key) for place, (_button, key) in enumerate(rows) if key is not None and key not in decided
+            ]
             if not waiting:
                 if len(read) < len(seen) and short_reads < SHORT_READS_TOLERATED:
                     # Caught between two drawings of the list: read again.
@@ -816,12 +820,11 @@ def scrape_metro_invoices(
     while Metro is to be left alone (metro_pause), unless a person asked for
     one sign-in all the same (`ignore_pause`).
 
-    The account is the owner's: from an espace that may not use the
+    The account is the owner's: from a tenant that may not use the
     server's accounts, refused first - before the settings, the pause or a
     browser (invoices/integrations.py). The pause lives on the METRO row of
-    the espace that signs in, which is therefore the owner's only."""
+    the tenant that signs in, which is therefore the owner's only."""
     from accounts.tenancy import integrations_allowed
-
     from invoices import integrations
 
     if not integrations_allowed():
@@ -835,9 +838,9 @@ def scrape_metro_invoices(
     from invoices.models import Invoice  # local import: scrapers avoid a hard dependency on models otherwise
 
     known_numbers = set(
-        Invoice.objects.filter(supplier__code="METRO").exclude(invoice_number="").values_list(
-            "invoice_number", flat=True
-        )
+        Invoice.objects.filter(supplier__code="METRO")
+        .exclude(invoice_number="")
+        .values_list("invoice_number", flat=True)
     )
 
     os.makedirs(download_dir, exist_ok=True)
@@ -847,7 +850,11 @@ def scrape_metro_invoices(
     # Debug screenshots are deleted right after being logged now, but this
     # also mops up any left over from before that change.
     for stale in os.listdir(download_dir):
-        if stale.endswith(".crdownload") or stale.startswith("metro_debug_screenshot") or not stale.lower().endswith(".pdf"):
+        if (
+            stale.endswith(".crdownload")
+            or stale.startswith("metro_debug_screenshot")
+            or not stale.lower().endswith(".pdf")
+        ):
             try:
                 os.remove(os.path.join(download_dir, stale))
             except OSError:
@@ -905,7 +912,7 @@ def scrape_metro_invoices(
                     # Rows appearing isn't the same as the page being done re-rendering
                     # them (event handlers, etc.) - wait for the count to stop
                     # changing before trusting it or starting to click.
-                    total = _wait_for_stable_results(lambda: _visible_download_buttons(driver))
+                    total = _wait_for_stable_results(lambda: _visible_download_buttons(driver))  # noqa: B023 - called before the loop moves on
                     if total >= 100:
                         log(
                             f"⚠ 100 factures ou plus trouvées entre {window_start} et {window_end} - "
@@ -963,7 +970,7 @@ def scrape_metro_invoices(
             finally:
                 try:
                     driver.quit()
-                except Exception:
+                except Exception:  # noqa: BLE001, S110 - a browser already gone, or never started
                     pass
                 driver = None
         if run.unreadable and not cancelled:
@@ -983,7 +990,7 @@ def scrape_metro_invoices(
                 if until is not None:
                     log(f"Metro ne sera plus contacté avant le {_said(until)}.")
         raise
-    except Exception as exc:  # noqa: BLE001 - said in words, with what landed
+    except Exception as exc:
         raise MetroError(
             f"Metro : erreur inattendue ({exc.__class__.__name__} - {str(exc).strip()[:200]}).", files=landed()
         ) from exc
@@ -991,7 +998,7 @@ def scrape_metro_invoices(
         if driver is not None:
             try:
                 driver.quit()
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 - a browser already gone
                 pass
 
     return landed()
