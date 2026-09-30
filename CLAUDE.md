@@ -2784,7 +2784,8 @@ payments' invoice lines, the rules. An invoice on two lines is read once.
 
 No new navigation link: « Dépenses par catégorie » is reached from Banque's
 own header. Another entry in the topbar moves where the links wrap, which is
-measured width by width by `TopbarRoomInBrowserTests`.
+measured width by width by `accounts/tests/test_topbar_browser.py` (the bar
+without its script, under 860 px) and `TopbarRoomInBrowserTests`.
 
 **Hors du camembert.** A category can be left out of THE PIE, and of nothing
 else - the VAT paid over to the State, say: in the pie, it makes every other
@@ -4404,12 +4405,36 @@ back and forth between them. The rules that came with merging them:
   (`to-link-count`, handled in `ui.js`).
 - A page with a side panel is wider (`container-wide`), and the stock list's
   columns are shares, not pixels, so it fits beside the panel.
+- **Under 1280 px the panel sits ABOVE the list, and is no scroll box**
+  (the owner, 30/09: « I cannot scroll down when I have new products to
+  classify »). Stacked, it kept `overflow-y: auto` and `overscroll-behavior:
+  contain` from the sticky side panel, and Chrome takes a scroll container
+  with `contain` for a boundary even when it has nothing to scroll: a wheel or
+  a finger over the cards moved nothing - and on a phone the cards were the
+  whole screen. There it is a plain block (`overflow: visible`,
+  `overscroll-behavior: auto`, `overflow-wrap: anywhere`), it draws its
+  **first product only** - the next takes its place as each is classified -
+  and « Voir les N autres produits » shows the rest: a `<label>` for a box
+  that sits OUTSIDE `#review-panel-body` (`#review-unfold`, stock_list.html),
+  so it needs no script and a classification leaves the list as the reader
+  set it. Two links lead between the panel and the list (« La liste ↓ »,
+  the toolbar's « ↑ À classer », `.review-panel-jump`). A classification no
+  longer scrolls the page down to the article there (`panelBesideList()`,
+  read off the panel's computed `position`): the row opens and blinks where
+  it is, and « classé dans … » takes the reader to it. Where a keyboard comes
+  up on the screen (`KEYBOARD_ON_SCREEN`: a coarse pointer without hover -
+  a touch screen, never a width: a laptop at 150 % zoom is under 860 px and
+  types) nothing focuses the next field, and the toolbar's
+  « Produits à classer » scrolls the panel into view instead. Beside the list,
+  1280 px and up, nothing changed.
 
 Beside the workspaces, Banque, Marges, **Personnel** (the staff's
 timesheets, `staff/`), Inventaires and **Consignes** (the empties handed
 back to the delivery driver, `returnables/`) are links of their own. A new app
-lights its link only once it is in `navigation.SECTION_BY_APP`, and a new
-link is measured again (UI conventions, the topbar).
+lights its link only once it is in `navigation.SECTION_BY_APP`, and its words
+in `navigation.SECTION_LABELS` (what the folded bar says, checked against the
+lit link by tests/test_navigation.py); a new link is measured again (UI
+conventions, the topbar).
 
 **The words on screen, and why** (the owner, 19/09: tell the sources of the
 invoices apart from the « Enseignes et fournisseurs », and the Produits page
@@ -4984,7 +5009,7 @@ code is said ONCE (« Code vérifié : vous pouvez signer. », drawn while the
 session is identified; `check_code` adds no notice of its own). Two CSS
 traps the browser test measures at 375 px: « Annuler le dernier trait » /
 « Effacer » are 44 px tap targets beside either pad (`.btn-small` made them
-30; every other `.btn-small` of the owner's pages stays small), and
+30; every other `.btn-small` of the owner's pages stays small with a mouse, at any width; on a touch screen every button of `<main>` is 44 px, 30/09), and
 `.public-form > label` must leave `.public-check` alone - its
 specificity beat the flex row and put the certification's second line under
 the checkbox.
@@ -5251,7 +5276,9 @@ at least):
   button of the app are 44 px, and « Retirer » asks twice (a `<details>`).
 - Under 600 px the topbar scrolls away with the page HERE only
   (`html:has(.consignes-page)`): its three to five rows took a third of a
-  phone's screen above the count being typed. Every page of the app has
+  phone's screen above the count being typed - one row with « Menu » since
+  30/09, still let go for the keypad's sake. `position: relative` since then,
+  not static: the menu's veil needs a stacking context. Every page of the app has
   `.consignes-page` on its root, and its fields are 1rem (iOS zooms the page
   in on a smaller one).
 - A format's page: « Tester » is the form's FIRST submit button, hidden, so
@@ -5413,7 +5440,8 @@ for the pattern.
 **The topbar is sticky, so the page leaves its height above what it scrolls
 to** (`html { scroll-padding-top: var(--topbar-room) }` in marginmate.css:
 6rem, 10rem under 860 px where the brand sits above the links, 11rem under
-440 px, 13rem under 310 px). A fragment - Achats' `#a-voir`, the fiche's
+440 px, 13rem under 310 px - those three for the bar WITHOUT topbar.js; with
+it the bar is one row under 860 px and its room 6rem, below). A fragment - Achats' `#a-voir`, the fiche's
 `#historique`, the stock list's `#a-classer` - and the tab row htmx's boost
 brings to the top when an Achats tab is clicked lower down all landed under
 it: « 1 changement à voir » and the supplier's name hidden (UX review,
@@ -5441,6 +5469,87 @@ and every width of that test passed all the same, because its database had
 nothing waiting anywhere and so no badge to widen a link. With a product to
 classify, a ticket to check and a till product to link, 450 px fails, and
 `--topbar-room` is 10rem under 860 px.
+
+**Under 860 px the links fold into « Menu »** (30/09, the owner: « the top
+menu is too big, maybe do something that can be expanded »;
+`static/js/topbar.js`, marginmate.css « topbar menu »).
+- The bar is one row there, from 860 down to 280 px: the brand, the page's
+  section (`navigation.SECTION_LABELS`, checked against the lit link) and
+  « Menu », with a red dot while any link carries a badge - a `:has()` on the
+  badges themselves, so every writer keeps it right (base.html,
+  `_review_panel_refresh.html`'s out-of-band `#nav-count-produits`, ui.js's
+  `to-link-count`, which builds its badge as nodes). Its room is 6rem.
+- The menu holds the links, the espace's name and « Se déconnecter », each
+  44 px tall. It drops OVER the page under a veil (the bar's `::after`): a
+  tap on the veil only closes it - through a listener put ON the header
+  while the menu is open (iOS sends no click to a document listener from an
+  element nothing listens on, and Chrome's touch adjustment would move the
+  tap onto « Se déconnecter », the menu's last item) - and a finger
+  dragged on the veil scrolls nothing: the same header listener stops the
+  `touchmove` (Chrome does not honour `touch-action` on a pseudo-element).
+  Escape, the focus leaving the bar and widening past 860 px close it too.
+  The state is the button's `aria-expanded`, which the stylesheet reads.
+- **topbar.js is the one script of `<head>` without `defer`.** The class it
+  puts on `<html>` (`topbar-menu-ready`) is what folds the links: without it
+  (JavaScript off, the file missing) the bar is the old one, in the rooms
+  measured above. Deferred, a phone painted three rows and jumped; in the
+  body, htmx's history restore would run it again. It sets itself up once.
+- `accounts/tests/test_topbar_browser.py` measures both bars (the old one with
+  the class taken off). A new link still counts: it changes how many rows the
+  bar without the script wraps to, and it adds 44 px to the open menu, which
+  on a small phone already fills most of the screen.
+
+**On a phone a table is read as cards** (`table.phone-cards`, marginmate.css
+« phone cards »; 30/09 - « columns overlapping and hard to read », the owner:
+squeezed by `table-layout: fixed`, the stock list's seven columns printed over
+one another). Under 860 px each row is a small grid: its first cell across as
+the title (after its bulk box, `.select-col`, when it has one), every figure
+under its label - `data-label` on the `<td>`, **the column's header word for
+word**, drawn by CSS so the cell's own text (what datatable.js sorts and
+searches by) is untouched - `.row-actions` / `.phone-card-wide` across,
+`.phone-card-end` at the end of the title's line, an empty cell gone. The
+header row is not drawn (no sort on a phone; a sort chosen in the session
+still orders the cards). A `data-child-row` that is not itself a card (an
+opened panel) runs across under its card. Used by the four tables of
+Produits & charges, Achats' documents and « Documents à corriger », an
+import's files and the recipes. Not a sideways scroll with the name pinned:
+that put a purchases table wider than the phone inside a box scrolling
+sideways. `inventory/tests/test_products_phone.py` compares every label with
+its header.
+
+**Nothing is wider than a phone** (UX review, 30/09: a ticket's check, a
+supplier's page, a recipe's and the stock list were wider than 375 px, and
+Chrome then widens the whole page - it zooms out sideways and the sticky bar
+drifts out of view). Every `<table>` sits in a box that scrolls sideways
+(`.table-wrap`, or `.table-scroll` - no frame, nothing drawn where the table
+fits) or is read as cards; `tests/test_ui.py` reads every template for a bare
+one. A one-column grid is `minmax(0, 1fr)`, never a bare `1fr`
+(`minmax(auto, 1fr)` grew to its widest table). The « phone widths » section
+lets words, fields and buttons give way under 860 px. Checked in Chrome at
+320, 375 and 430 px by `tests/test_phone_width_browser.py`.
+
+**A box that scrolls on its own is a wall on a phone** (30/09). Where a
+layout stacks, the scroll box goes with the side-by-side it was made for:
+`overflow: visible` and `overscroll-behavior: auto`, never only `max-height:
+none` (« À classer », Three workspaces). Nor does a sticky box stay sticky
+once it sits above what it was beside (the receipt's photo under 900 px). What
+still scrolls inside a page on a phone is small (a job's log, the OCR text,
+a pick list) or sideways only (a table). A height taken from the viewport is
+written `vh` then `svh` (the screen with the address bar shown).
+
+**A touch screen is `(pointer: coarse)`, not a width** (the « touch » section
+at the end of marginmate.css, 30/09): a phone held sideways is wider than 860
+px, and a narrow desktop window needs none of it. There: fields at 16 px (iOS
+zooms the page in on a smaller one; .consignes-page keeps its own rule at
+every width), controls 44 px tall in `<main>` - 36 in a table's row, a chip
+or a segmented choice, with 8 px between two row actions -, checkboxes 20 px,
+and a phone held sideways keeps no inner table scroll box. Scoped to
+`<main>`: the topbar is measured on its own. Browser tests emulate touch
+(`Emulation.setTouchEmulationEnabled`, as returnables' phone test does):
+without it `(pointer: coarse)` does not match and none of this is seen
+(`tests/test_touch_browser.py`). **Headless Chrome's default window is 800 ×
+600**, under 860 px: a browser test that sets no viewport sees the phone
+layout - a test about the desktop pins its window.
 
 **Dates are always `|date:"d/m/Y"`.** `LANGUAGE_CODE` is `en-us`, so an
 unformatted date renders "March 31, 2026" in an otherwise French interface.

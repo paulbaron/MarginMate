@@ -1,7 +1,10 @@
 """The topbar of an espace's pages (templates/base.html): the bar's name and
 « Se déconnecter », OUTSIDE the first <nav> (tests/test_navigation.py reads
-its links). How much room it takes is measured in a browser
+its links) and inside #topbar-menu, what « Menu » opens under 860 px (30/09).
+How much room it takes is measured in a browser
 (accounts/tests/test_topbar_browser.py)."""
+
+import re
 
 from django.urls import reverse
 
@@ -14,6 +17,20 @@ LOGOUT = reverse("accounts:logout")
 def after_the_nav(response) -> str:
     html = response.content.decode()
     return html[html.index("</nav>"):html.index("</header>")]
+
+
+def element_by_id(html: str, element_id: str) -> str:
+    """The element whose id is `element_id`, as HTML, up to ITS closing tag:
+    the tags of its name opened and closed inside it are counted."""
+    opening = re.search(r"<([a-z]+)\b[^>]*\bid=\"" + re.escape(element_id) + r"\"[^>]*>", html)
+    assert opening is not None, element_id
+    name = opening.group(1)
+    depth = 0
+    for tag in re.finditer(r"<(/?)" + name + r"\b[^>]*>", html[opening.start():]):
+        depth += -1 if tag.group(1) else 1
+        if depth == 0:
+            return html[opening.start():opening.start() + tag.end()]
+    raise AssertionError(f"#{element_id} is never closed")
 
 
 class EspaceTopbarTests(TwoTenantsTestCase):
@@ -31,6 +48,28 @@ class EspaceTopbarTests(TwoTenantsTestCase):
                 # The links themselves are the ones every page has.
                 labels = [label_of(link) for link in nav_links(response)]
                 self.assertEqual(labels, LABELS)
+
+    def test_the_bar_s_name_and_the_logout_are_in_the_menu(self):
+        """Folded under 860 px, « Menu » opens the links, the bar's name and
+        « Se déconnecter » together: left beside the brand, the name and the
+        logout were the row the fold exists to save (UX review, 30/09) - and
+        a logout alone on the bar is one tap from throwing a count away."""
+        self.client.force_login(self.user_a)
+        response = self.client.get(reverse("invoices:supplier_list"))
+        header = response.content.decode()
+        header = header[header.index('<header class="topbar">'):header.index("</header>")]
+        menu = element_by_id(header, "topbar-menu")
+        self.assertIn('<span class="topbar-espace" title="Bar Alpha">Bar Alpha</span>', menu)
+        self.assertIn(f'<form method="post" action="{LOGOUT}" class="topbar-logout">', menu)
+        self.assertIn("Se déconnecter", menu)
+        # The links are in it too, first; the brand and the button are not.
+        self.assertLess(menu.index("<nav"), menu.index('class="topbar-account"'))
+        self.assertNotIn('class="brand"', menu)
+        self.assertNotIn("data-topbar-toggle", menu)
+        # Nothing of the account is left outside it.
+        outside = header.replace(menu, "")
+        self.assertNotIn("topbar-espace", outside)
+        self.assertNotIn("topbar-logout", outside)
 
     def test_the_name_is_text_whatever_it_holds(self):
         type(self.bar_a).objects.filter(pk=self.bar_a.pk).update(name='Le <b>Zinc</b> "essai"')

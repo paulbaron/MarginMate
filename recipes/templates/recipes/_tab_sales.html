@@ -90,6 +90,7 @@ nothing saying the period had been dropped.
         </p>
     {% endif %}
     {% if totals %}
+    <div class="table-scroll">
     <table class="sub-table">
         <thead><tr><th>Origine</th><th class="num">Lignes</th><th class="num">Unités vendues</th></tr></thead>
         <tbody>
@@ -102,6 +103,7 @@ nothing saying the period had been dropped.
             {% endfor %}
         </tbody>
     </table>
+    </div>
     {% else %}
         <div class="empty-state">Aucune vente sur cette période.</div>
     {% endif %}

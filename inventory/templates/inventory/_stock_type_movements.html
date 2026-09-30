@@ -38,10 +38,14 @@ page is reloaded whole - the row is fetched once and never again.
 {% endif %}
 {% comment %}
 Nine columns in a row of the list: beside the panel of products to classify
-it is narrow, so it scrolls sideways on its own rather than squeezing.
+it is narrow, so it scrolls sideways on its own rather than squeezing. Under
+860 px each purchase is a card (marginmate.css, « phone cards »): scrolled
+sideways inside a row that was itself too narrow, the
+conversion and « Retirer » were off the phone. A cell's data-label is its
+column's header word for word (inventory/tests/test_products_phone.py).
 {% endcomment %}
 <div class="sub-table-wrap">
-<table class="sub-table movements-table">
+<table class="sub-table movements-table phone-cards">
     <thead>
         <tr>
             <th>Produit</th>
@@ -79,29 +83,29 @@ it is narrow, so it scrolls sideways on its own rather than squeezing.
                 {% endcomment %}
                 {% if entry.kind_label %}<span class="muted">({{ entry.kind_label }})</span>{% endif %}
             </td>
-            <td class="muted">{{ entry.line.invoice.supplier.name|default:"—" }}</td>
+            <td class="muted" data-label="Fournisseur">{{ entry.line.invoice.supplier.name|default:"—" }}</td>
             {% comment %}
             The date the movement COUNTS on (views._stock_type_movement_entries),
             not its invoice's: a manual correction dated by occurred_on printed
             "—" here, and a row two dates had just picked out then read as a row
             with no date at all.
             {% endcomment %}
-            <td>{{ entry.date|date:"d/m/Y"|default:"—" }}</td>
-            <td class="num">
+            <td data-label="Date">{{ entry.date|date:"d/m/Y"|default:"—" }}</td>
+            <td class="num" data-label="Quantité achetée">
                 {{ entry.purchased_quantity|quantity }} {{ entry.purchased_quantity_unit }}
             </td>
-            <td class="num">{{ entry.movement.unit_cost_ht|floatformat:2 }} €</td>
-            <td class="num">{{ entry.line.total_ht|floatformat:2 }} €</td>
-            <td class="num">{{ entry.vat_percent|floatformat:1 }} %</td>
-            <td class="num">{{ entry.total_ttc|floatformat:2 }} €</td>
-            <td>
+            <td class="num" data-label="Prix (HT) / {{ stock_type.get_unit_display }}">{{ entry.movement.unit_cost_ht|floatformat:2 }} €</td>
+            <td class="num" data-label="Total HT">{{ entry.line.total_ht|floatformat:2 }} €</td>
+            <td class="num" data-label="TVA">{{ entry.vat_percent|floatformat:1 }} %</td>
+            <td class="num" data-label="Total TTC">{{ entry.total_ttc|floatformat:2 }} €</td>
+            <td class="phone-card-wide">
                 {% if entry.line %}
                 <form method="post" action="{% url 'inventory:edit_product_conversion' entry.line.product.id %}"
                       class="conversion-form"
                       title="Facteur = quantité de l'article (dans son unité) contenue dans un produit acheté (ex. 0,7 pour une bouteille de 70 cl). Si la « Quantité achetée » affichée est déjà mesurée dans l'unité de l'article (volume ou poids), laissez 1 - un facteur ≠ 1 la multiplierait une deuxième fois.">
                     {% csrf_token %}
                     <span class="muted">1 produit =</span>
-                    <input type="text" name="stock_equivalent" value="{{ entry.stock_equivalent_display }}">
+                    <input type="text" name="stock_equivalent" inputmode="decimal" value="{{ entry.stock_equivalent_display }}">
                     <span class="muted">{{ stock_type.get_unit_display }}</span>
                     <button type="submit" class="btn btn-small" title="Enregistrer">💾</button>
                 </form>

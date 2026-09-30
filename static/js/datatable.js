@@ -262,7 +262,11 @@
         toolbar.appendChild(search);
         toolbar.appendChild(count);
 
-        var anchor = table.closest(".table-wrap") || table;
+        // Before the box the table scrolls in, never inside it: there the
+        // search box scrolled away sideways with the columns on a phone.
+        // .table-scroll is a box that draws nothing where the table fits
+        // (marginmate.css), .sub-table-wrap the stock list's name for it.
+        var anchor = table.closest(".table-wrap, .table-scroll, .sub-table-wrap") || table;
         anchor.parentNode.insertBefore(toolbar, anchor);
 
         // This input is created here, AFTER ui.js has already swept the page

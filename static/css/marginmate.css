@@ -48,6 +48,9 @@
 
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 16px rgba(0, 0, 0, 0.25);
     --shadow-pop: 0 8px 28px rgba(0, 0, 0, 0.5);
+    /* What the page is dimmed by under the topbar's open menu (under 860 px):
+       a tap on it closes the menu and reaches nothing under it. */
+    --veil: rgba(0, 0, 0, 0.5);
 
     --content-width: 1240px;
 
@@ -126,6 +129,13 @@ h4 { font-size: 0.95rem; margin: 0 0 var(--s2); }
     white-space: nowrap;
 }
 .brand:hover { text-decoration: none; }
+
+/* « Menu » (base.html, static/js/topbar.js, « topbar menu » below). The
+   button and the page's section are drawn only where the links are folded.
+   #topbar-menu - the links and the account - is no box of its own anywhere
+   else: its children are the bar's items, as they always were. */
+.topbar-toggle, .topbar-section { display: none; }
+.topbar-menu { display: contents; }
 
 nav { display: flex; gap: var(--s1); flex-wrap: wrap; align-items: center; }
 nav a {
@@ -221,6 +231,17 @@ nav a.active { color: var(--amber); background: var(--panel); }
     background: var(--panel);
 }
 .table-wrap > table { border: 0; border-radius: 0; }
+
+/* A table that fits a laptop - a supplier's identifiers, a recipe's
+   ingredients, a gather's test, a document's lines under its row - scrolls
+   sideways in this box on a phone instead of making the whole page wider
+   than the screen: straight in a .card, one made a supplier's page and
+   another a recipe's wider than a 375 px phone (UX review, 30/09). No frame
+   and no height of its own, unlike .table-wrap: where the table fits,
+   nothing shows. Every table of the app sits in one or the other, or in a
+   page's own box - tests/test_ui.py reads every template for it. The stock
+   list's panels call the same box .sub-table-wrap. */
+.table-scroll { overflow-x: auto; }
 
 table {
     width: 100%;
@@ -560,7 +581,9 @@ form p { margin: var(--s3) 0; }
 /* ---------------------------------------------------------------- responsive */
 
 @media (max-width: 860px) {
-    /* The brand above the links: up to 112px tall - and 141px between 441
+    /* Without static/js/topbar.js (JavaScript off - with it the links fold
+       into « Menu », « topbar menu » below, and the room is a one-row
+       bar's): the brand above the links, up to 112px tall - and 141px between 441
        and 465px, where seven links wrap onto three rows (measured 20/09,
        badges on: « Marges » is what pushed them there, and 8.5rem left the
        heading a page scrolled to five pixels under the bar). Eight links
@@ -755,6 +778,15 @@ form p { margin: var(--s3) 0; }
     font: inherit;
 }
 .link-button:hover { text-decoration: underline; }
+/* `all: unset` above took the app's focus ring with it (it weighs what the
+   :where() rule weighs, and comes later): « Se déconnecter », the last item
+   of the open « Menu », showed no focus at all. */
+.link-button:focus-visible,
+th.sortable > button:focus-visible {
+    outline: 2px solid var(--amber);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+}
 
 /* ------------------------------------------------------------------ forms */
 
@@ -764,7 +796,9 @@ form p { margin: var(--s3) 0; }
    look like it expects far more than it does. */
 .form-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+    /* min(…, 100%): a card narrower than 15rem (a folding phone's 280 px
+       cover screen) keeps one column instead of overflowing it. */
+    grid-template-columns: repeat(auto-fill, minmax(min(15rem, 100%), 1fr));
     gap: var(--s3);
     margin-bottom: var(--s4);
 }
@@ -968,6 +1002,17 @@ form p { margin: var(--s3) 0; }
 .period-picker { display: flex; align-items: center; gap: var(--s2); }
 .period-picker label { margin: 0; white-space: nowrap; }
 .period-picker select { min-width: 16rem; }
+@media (max-width: 860px) {
+    /* The select was as wide as its longest choice - an inventaire and the
+       note of its count - beside its label and a min-width of 16rem, and the
+       page wider than a 375 px phone: Chrome widened the layout viewport to
+       it, the page zoomable sideways and the sticky bar drifting out of view
+       (UX review, 30/09). It takes the toolbar's width and cuts its own text
+       instead. After the rules above on purpose: same weight, the later one
+       wins. */
+    .period-picker { flex: 1 1 100%; flex-wrap: wrap; min-width: 0; max-width: 100%; }
+    .period-picker select { flex: 1 1 12rem; width: 100%; min-width: 0; max-width: 100%; }
+}
 
 /* « Du … au … »: the window four pages are read through - les produits
    achetés, les achats, les ventes et la banque. One rule for the four, so
@@ -1009,7 +1054,11 @@ form p { margin: var(--s3) 0; }
 }
 
 @media (max-width: 900px) {
-    .receipt-review { grid-template-columns: 1fr; }
+    /* minmax(0, 1fr), never a bare 1fr: that is minmax(auto, 1fr), and the
+       one column grew to the widest thing in it - the shop's known prices,
+       a table already in its own scroll box - taking a ticket's check wider
+       than a 375 px phone (UX review, 30/09). */
+    .receipt-review { grid-template-columns: minmax(0, 1fr); }
 }
 
 .receipt-photo {
@@ -1024,6 +1073,17 @@ form p { margin: var(--s3) 0; }
 }
 
 .receipt-photo img { width: 100%; display: block; border-radius: var(--radius-sm); }
+/* Stacked (900 px and under), the photo is ABOVE the lines, with nothing to
+   stay beside: left sticky, a box as tall as the screen scrolling on its own,
+   it was a second page inside the page - a finger on the receipt, most of a
+   phone's screen, scrolled the photo and not the lines (UX review, 30/09,
+   « there are scroll issues with some panels »). Drawn whole at the phone's
+   width, it is read like the rest of the page; pinch to zoom, or « Photo
+   d'origine ». After the rule above on purpose: same weight, the later one
+   wins. */
+@media (max-width: 900px) {
+    .receipt-photo { position: static; max-height: none; overflow: visible; }
+}
 
 /* The parser's own verdict. Green and red carry the whole message at a
    glance, so the detail text is secondary until something is wrong. */
@@ -1105,8 +1165,15 @@ form p { margin: var(--s3) 0; }
 .rename-product p { margin: var(--s1) 0 0; font-size: 0.8rem; }
 
 /* Receipt import: two ways in (files, a folder), and a batch that fills in. */
-.upload-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--s3); margin-bottom: var(--s3); }
+.upload-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: var(--s3); margin-bottom: var(--s3); }
 .upload-choice { display: grid; gap: var(--s1); padding: var(--s3); border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); margin: 0; cursor: pointer; }
+/* A file field is as wide as its button and « Aucun fichier choisi », over
+   300 px at 16 px: in the choice's implicit `auto` column it made Achats
+   wider than a 320 px phone (UX review, 30/09). A max-width, not a width:
+   a width here outweighed .visually-hidden's 1 px and drew Consignes'
+   camera input, hidden under its label, as wide as the page. */
+.upload-choice { grid-template-columns: minmax(0, 1fr); }
+.upload-choice input[type="file"] { max-width: 100%; min-width: 0; }
 .upload-choice:hover { background: var(--panel-hover); }
 .upload-choice-title { font-weight: 600; }
 .batch-progress { height: 6px; margin: var(--s3) 0; border-radius: 999px; background: var(--bg); overflow: hidden; }
@@ -1136,7 +1203,10 @@ form p { margin: var(--s3) 0; }
    the placeholders say which box is which. Measured on the lines' own width
    (a container query), not the window's: at 1000px, a row wider than its
    column pushed the page sideways. */
-.correction-grid { display: grid; gap: var(--s2); margin-bottom: var(--s3); container-type: inline-size; }
+/* minmax(0, 1fr): its implicit `auto` column grew to a row's longest word
+   (a shop's name printed as one word, in « Renommer … sur tous les
+   tickets »), and a ticket's check was wider than a 320 px phone (30/09). */
+.correction-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s2); margin-bottom: var(--s3); container-type: inline-size; }
 .correction-head,
 .correction-row {
     display: grid;
@@ -1181,8 +1251,13 @@ form p { margin: var(--s3) 0; }
 .document-pdf { padding: 0; overflow: hidden; }
 .document-frame { display: block; width: 100%; height: calc(100vh - 2 * var(--s4)); border: 0; }
 @media (max-width: 900px) {
-    .receipt-review:has(.document-pdf) { grid-template-columns: 1fr; }
-    .document-frame { height: 70vh; }
+    .receipt-review:has(.document-pdf) { grid-template-columns: minmax(0, 1fr); }
+    /* 60 % of the screen, never all of it: a finger on the frame scrolls the
+       PDF - or nothing, where a phone's browser draws no PDF in a frame;
+       « Ouvrir le PDF » is the phone's way in - and the page has to stay
+       reachable around it. svh: the screen with the address bar shown, which
+       does not change while the page scrolls. */
+    .document-frame { height: 60vh; height: 60svh; }
 }
 
 /* ------------------------------------------------ workspaces (merged pages) */
@@ -1285,9 +1360,66 @@ tr.is-new > td:first-child { box-shadow: inset 3px 0 0 var(--amber); }
 .stock-type-hint.is-new { color: var(--amber); }
 .review-card-form .btn { justify-self: end; }
 
+/* The ways between the panel and the list, and the panel's way to its other
+   products, where the panel sits ABOVE the list (under 1280 px, below): none
+   beside it, and none while the panel is closed - « Produits à classer » is
+   then the way back. */
+.review-panel-jump, .review-unfold, .review-unfold-box { display: none; }
+.review-panel-head .review-panel-jump { margin-left: auto; }
+
 @media (max-width: 1279px) {
     .products-layout.has-panel { grid-template-columns: minmax(0, 1fr); }
-    .review-panel { position: static; max-height: none; order: -1; }
+    /* Above the list rather than beside it, the panel is as tall as its
+       cards and it is the PAGE that scrolls them: here it is no scroll box
+       at all. `max-height: none` alone kept `overflow-y: auto` and
+       `overscroll-behavior: contain` on a box with nothing left to scroll,
+       and Chrome takes that for a wall - a wheel or a finger on the cards
+       moved nothing, and on a phone the cards are the whole screen: « I
+       cannot scroll down when I have new products to classify » (the owner,
+       30/09). No longer a scroll box, it no longer keeps a long word inside
+       it either: a product's raw name can have no space to break at, and it
+       would push the page sideways. Beside the list, 1280 px and up, it
+       stays the box that scrolls on its own. */
+    .review-panel {
+        position: static;
+        max-height: none;
+        overflow: visible;
+        overscroll-behavior: auto;
+        overflow-wrap: anywhere;
+        order: -1;
+    }
+    .review-panel-jump { display: inline-flex; align-items: center; }
+    .products-layout.panel-closed .review-panel-jump { display: none; }
+    /* Above the list the panel draws its first product only: every card
+       came before the first article - screens of them on a phone. The next
+       product takes the first one's place as each is classified; « Voir les
+       N autres produits » shows them - a box and its label, so no script is
+       needed, and the box (#review-unfold, stock_list.html) sits outside
+       what a classification swaps, so the list stays unfolded from one
+       product to the next. Without :has() every rule here is dropped and
+       every card is drawn, as before. */
+    .review-panel:not(:has(.review-unfold-box:checked)) .review-card ~ .review-card { display: none; }
+    .review-panel:has(.review-unfold-box) .review-unfold {
+        display: flex;
+        justify-content: center;
+        width: 100%;
+        min-height: 44px;
+        margin: var(--s2) 0 0;
+        white-space: normal;
+        text-align: center;
+    }
+    .review-panel:has(.review-unfold-box:checked) .review-unfold-more,
+    .review-panel:not(:has(.review-unfold-box:checked)) .review-unfold-less { display: none; }
+    /* Out of sight (.visually-hidden), still the control a keyboard and a
+       screen reader reach - named by its label - while there is one. */
+    .review-panel:has(.review-unfold) .review-unfold-box { display: block; }
+    .review-panel:has(.review-unfold-box:focus-visible) .review-unfold { outline: 2px solid var(--amber); outline-offset: 2px; }
+    /* Chrome keeps the page still around an anchor it picks in DOCUMENT
+       order, and the list comes before the panel in the page although it is
+       drawn under it (order: -1): « Voir les N autres produits » kept the
+       list still and carried the page past every card it had just drawn -
+       none of the products asked for was on the screen (30/09). */
+    .products-layout.has-panel > .products-main { overflow-anchor: none; }
 }
 
 .row-actions { white-space: nowrap; }
@@ -1314,6 +1446,158 @@ tr.is-new > td:first-child { box-shadow: inset 3px 0 0 var(--amber); }
 
 /* The top bar lines up with a widened page. */
 body:has(.container-wide) .topbar-inner { max-width: calc(var(--content-width) + 420px); }
+
+/* ------------------------------------------------------------- phone cards */
+
+/* Under 860 px a table marked .phone-cards is read as cards: each row a
+   small grid - its first cell across, as the card's title (after its bulk
+   box, .select-col, when it has one); every figure
+   under its label (data-label, the column's header word for word, drawn
+   here: the cell's own text, which datatable.js sorts and searches by, is
+   left as it is); .row-actions and .phone-card-wide across at the foot;
+   .phone-card-end at the end of the title's line; an empty cell gone. The
+   header row is not drawn (a sort chosen in the session still orders the
+   cards). A row that opens under another (data-child-row: its purchases,
+   its curve) runs across under its card.
+   Why: squeezed by table-layout: fixed into a phone, the list's seven
+   columns came down to a few letters each and printed over one another -
+   the header read « ARTICLEACHETÉVENDU TOTALUNITÉ TTC » (UX review, 30/09;
+   the owner: « columns overlapping and hard to read »). The lists a phone
+   opens right after taking its photos or at the bar - Achats' documents,
+   an import's files, the recipes - were tables two to three times as wide
+   as the screen, their figures and buttons off it. A sideways scroll
+   with the name pinned was the other way, and it put a purchases table,
+   itself wider than the phone, inside a box scrolling sideways: two scroll
+   boxes in each other, on the page where a scroll box had already trapped
+   the reader's finger. */
+@media (max-width: 860px) {
+    /* overflow: visible - `table` clips (its rounded corners): a figure
+       wider than its card would be cut off unseen instead of wrapping. */
+    table.phone-cards { min-width: 0; table-layout: auto; overflow: visible; }
+    table.phone-cards,
+    table.phone-cards > tbody,
+    table.phone-cards > tfoot { display: block; }
+    table.phone-cards > colgroup,
+    table.phone-cards > thead { display: none; }
+    table.phone-cards > tbody > tr,
+    table.phone-cards > tfoot > tr {
+        display: grid;
+        /* Three figures to a line at 375 px, two at 320, more where they fit. */
+        grid-template-columns: repeat(auto-fill, minmax(min(6rem, 100%), 1fr));
+        align-items: start;
+        gap: var(--s2) var(--s3);
+        padding: var(--s3);
+        border-bottom: 1px solid var(--border);
+    }
+    table.phone-cards > tbody > tr > td,
+    table.phone-cards > tfoot > tr > td {
+        display: block;
+        min-width: 0;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        text-align: left;
+        /* A figure's cell is nowrap on the wide table (.num): its label and
+           its value wrap in a card rather than run over the next figure -
+           « Documents (12 mois) » is wider than a third of a phone. */
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+    table.phone-cards > tbody > tr > td:first-child:not(.select-col),
+    table.phone-cards > tbody > tr > td.select-col + td { grid-column: 1 / -1; font-weight: 600; }
+    table.phone-cards > * > tr > td.row-actions,
+    table.phone-cards > * > tr > td.phone-card-wide,
+    table.phone-cards > * > tr > td[colspan] { grid-column: 1 / -1; }
+    table.phone-cards > tbody > tr:has(> td.phone-card-end) > td:first-child:not(.select-col),
+    table.phone-cards > tbody > tr:has(> td.phone-card-end) > td.select-col + td { grid-column: 1 / -2; }
+    /* A row's bulk box sits before its title, not on a line of its own. */
+    table.phone-cards > tbody > tr:has(> td.select-col) { position: relative; padding-left: calc(var(--s3) + 2rem); }
+    /* Under the same :has() as the row's position: where :has() is not
+       supported both rules are dropped together, and the box is an ordinary
+       cell above the title - never every row's box at one spot of the page. */
+    table.phone-cards > tbody > tr:has(> td.select-col) > td.select-col { position: absolute; left: var(--s3); top: var(--s3); width: auto; }
+    table.phone-cards > tbody > tr > td.select-col input { width: 1.25rem; height: 1.25rem; }
+    table.phone-cards > tbody > tr > td.phone-card-end { grid-column: -2 / -1; grid-row: 1; justify-self: end; }
+    /* A row with an end cell always has two tracks: `1 / -2` and `-2 / -1`
+       assume them, and at 280 px a document's card fell to one - its button
+       above its supplier's name. A track is never more than half the row. */
+    table.phone-cards > tbody > tr:has(> td.phone-card-end) {
+        grid-template-columns: repeat(auto-fill, minmax(min(6rem, calc((100% - var(--s3)) / 2)), 1fr));
+    }
+    /* A cell with nothing to say (a poste's « Dernier », a foot's last
+       cell) takes no room. */
+    table.phone-cards > * > tr > td:empty { display: none; }
+    table.phone-cards > * > tr > td[data-label]::before {
+        content: attr(data-label);
+        display: block;
+        color: var(--muted);
+        font-size: 0.68rem;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+    }
+    table.phone-cards .row-actions {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        align-items: center;
+        gap: var(--s2);
+    }
+    table.phone-cards .row-actions > * + * { margin-left: 0; }
+    table.phone-cards .row-actions > a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 var(--s2); }
+    table.phone-cards .row-actions .btn-small { min-height: 44px; }
+    /* An opened panel: under its card, across, a shade apart - never bold
+       like a card's title. */
+    table.phone-cards > tbody > tr[data-child-row]:not(.stock-row) { display: block; padding: 0; background: var(--bg-raised); }
+    table.phone-cards > tbody > tr[data-child-row]:not(.stock-row) > td { font-weight: inherit; padding: var(--s3); }
+    /* A row's state colours the card, not its cells one by one: the grid's
+       gaps would stripe it. */
+    table.phone-cards > tbody > tr.is-open { background: var(--panel-hover); }
+    table.phone-cards > tbody > tr.is-open > td { background: transparent; }
+    table.phone-cards > tbody > tr.is-new { box-shadow: inset 3px 0 0 var(--amber); }
+    table.phone-cards > tbody > tr.is-new > td:first-child { box-shadow: none; }
+    /* Where a product just went flashes as a card, not as seven cells each
+       drawing its own amber bar (revealStockType). */
+    table.phone-cards > tbody > tr.flash > td { animation: none; }
+    table.phone-cards > tfoot > tr { border-top: 2px solid var(--border-strong); border-bottom: 0; background: var(--bg-raised); }
+    /* A state's pill and a till's name wrap inside their card cell: nowrap
+       (kept for the wide table) put « Fournisseur à confirmer » over the
+       next figure, or past the card. */
+    table.phone-cards .status-pill,
+    table.phone-cards .till-chip { white-space: normal; }
+    /* A table inside a card - a document's lines under its row - keeps the
+       page's break-word: inherited from the card's cells, « anywhere » let
+       its columns shrink to one letter instead of scrolling in its
+       .table-scroll. */
+    table.phone-cards td table { overflow-wrap: break-word; }
+    /* Between two counts the ten columns scrolled sideways in their own box
+       (min-width 1240 px): read as cards they fit, and nothing scrolls. */
+    .stock-table-wrap { overflow: visible; }
+    /* A purchase's conversion wraps inside its card: on one line (nowrap,
+       kept for the wide table) « 1 produit = [ ] Kilogramme 💾 » was wider
+       than a phone. */
+    table.phone-cards form.conversion-form { flex-wrap: wrap; white-space: normal; }
+    table.phone-cards form.conversion-form input { width: 6rem; min-width: 0; }
+
+    /* The page's buttons two to a row, the same width, thumb-sized: four
+       of three widths wrapped into ragged rows under the title. Written
+       under .page-header: `.page-header .actions` weighs more than a lone
+       class and would win. */
+    .page-header .actions-compact { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s2); width: 100%; }
+    .page-header .actions-compact > form { display: flex; margin: 0; }
+    .page-header .actions-compact .btn { width: 100%; min-height: 44px; justify-content: center; text-align: center; white-space: normal; }
+    /* The headline figures two to a row: one to a row, the cards of some
+       200 px each came before anything to act on. */
+    .stat-row-compact { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s2); }
+    .stat-row-compact .stat { min-width: 0; padding: var(--s2) var(--s3); }
+    .stat-row-compact .stat-value { font-size: 1.15rem; overflow-wrap: anywhere; }
+    .stat-row-compact .stat-value-link { font-size: 0.95rem; }
+    .stat-row-compact .stat-note { font-size: 0.72rem; }
+    /* A category opens by its line: a line of text was the whole target,
+       and a long name or its totals now wrap instead of running on. */
+    .category-header { min-height: 44px; flex-wrap: wrap; overflow-wrap: anywhere; }
+    .charges > summary { min-height: 44px; }
+}
 
 /* Achats: the import card, then tabs. */
 .import-card-head {
@@ -1875,7 +2159,9 @@ html:has(body.public-page) { scroll-padding-top: var(--s4); }
 /* « Annuler le dernier trait » and « Effacer » are tapped with a thumb, beside
    the frame: 44 px tall at least (WCAG 2.5.5, Apple's guidelines), where
    .btn-small made them 30 - on the employee's page and beside the employer's
-   pad alike. Every other .btn-small of the owner's pages stays small. */
+   pad alike. With a mouse every other .btn-small stays small; on a touch
+   screen every button of <main> is 44 px (the touch section, end of file,
+   30/09). */
 .signature-pad-actions .btn { min-height: 44px; padding: 0.5rem var(--s4); font-size: 0.9rem; }
 .public-check {
     display: flex;
@@ -1913,8 +2199,9 @@ html:has(body.public-page) { scroll-padding-top: var(--s4); }
    the links, outside their <nav>. Above 860 px one over the other, taking
    as little width from the links as they can: side by side, they took the
    links from two rows to three between 861 and 960 px, 124 px of bar for
-   96 of room (measured 28/09, three-digit badges). Under 860 px they share
-   the brand's row - a basis of 0 always fits there, the name gives way
+   96 of room (measured 28/09, three-digit badges). Under 860 px, without
+   static/js/topbar.js, they share the brand's row (with it, they are at the
+   foot of « Menu », « topbar menu » below) - a basis of 0 always fits there, the name gives way
    first (ellipsis) - so the links wrap exactly as before, and the name goes
    where it would be three letters. Measured width by width by
    accounts/tests/test_topbar_browser.py. */
@@ -1950,7 +2237,8 @@ html:has(body.public-page) { scroll-padding-top: var(--s4); }
 }
 @media (max-width: 860px) {
     .topbar-account { order: 1; flex: 1 1 0; flex-direction: row; justify-content: flex-end; align-items: center; gap: var(--s3); }
-    .topbar-inner > nav { order: 2; }
+    /* #topbar-menu is display: contents here: the nav is still the bar's item. */
+    .topbar-menu > nav { order: 2; }
 }
 @media (max-width: 319px) {
     .topbar-espace { display: none; }
@@ -1961,6 +2249,230 @@ html:has(body.public-page) { scroll-padding-top: var(--s4); }
 .account-brand { margin: var(--s4) 0 0; font-size: 1.15rem; font-weight: 750; color: var(--amber); letter-spacing: -0.02em; }
 .account-card { margin-top: var(--s4); }
 .account-card .form-grid { grid-template-columns: 1fr; }
+
+/* ----------------------------------------------------------- phone widths */
+
+/* Nothing on a page is wider than a phone. UX review of 30/09, at 375 px: a
+   ticket's check, a supplier's page, a recipe's and the stock list were all
+   wider than the screen - and Chrome then widens the whole page: it zooms
+   out sideways and the sticky topbar drifts out of view. Tables scroll in
+   their own box (.table-wrap, .table-scroll) or are read as cards
+   (.phone-cards); what is left is a word, a field or a button longer than
+   the line it sits on. tests/test_phone_width_browser.py measures the
+   pages at 320, 375 and 430 px. */
+@media (max-width: 860px) {
+    /* A word longer than its line breaks there instead of pushing the page:
+       a file name, a bank reference, a supplier's name printed as one word.
+       break-word leaves an auto-layout table's columns as they are - they
+       are sized before it is asked. */
+    body { overflow-wrap: break-word; }
+    /* Where the box around the word is sized by what it holds - a button, a
+       chip, a title beside buttons - « anywhere » lets the box shrink too. */
+    h1, .page-subtitle, .breadcrumb, .message, .chip, .btn { overflow-wrap: anywhere; }
+    /* A row's items may be narrower than their longest word or field: one
+       of them set the row's width, and the page's. Rows still wrap by their
+       items' whole widths - this only reaches an item wider than its line. */
+    :is(.page-header, .section-head, .table-toolbar, .inline-form, .actions, .search-row, .date-range, .filter-row) > * { min-width: 0; }
+    /* A field is never wider than its line (a select is as wide as its
+       longest option). Not in a table's cell: there the column is sized
+       from what it holds, and a percentage max-width lets a form control's
+       column fall to its heading - the table scrolls in its own box. */
+    :where(input:not([type="checkbox"], [type="radio"]), select, textarea):not(:is(td, th) *) { max-width: 100%; }
+    /* A button's words wrap before it leaves the screen: « + Nouvelle source
+       pour » a supplier's name, some a sentence long, made his page wider
+       than the phone. In a table it keeps its one line: the table scrolls
+       in its own box, and a column of two-line buttons is taller for
+       nothing. */
+    .btn { white-space: normal; }
+    :is(td, th) .btn { white-space: nowrap; overflow-wrap: normal; }
+}
+@media (max-width: 600px) {
+    /* A card gave 48 px of a 375 px screen to its side padding: 12 px a
+       side leaves its table or its form a seventh more room. */
+    .card:not(.card-flush) { padding: var(--s3); }
+    /* A label beside its field goes above it when the two do not fit
+       (« Texte imprimé en tête » and its box, on a ticket's check). */
+    .inline-label { flex-wrap: wrap; white-space: normal; }
+    /* Fields sized for a laptop: 18rem is wider than a card at 320 px. */
+    .add-identifier input[type="text"],
+    .sale-line-row .inline-form select { min-width: 0; width: 100%; }
+    /* In a grid of one column « span 2 » grew a second one, as wide as the
+       gap and whatever the field asked: a recipe's till products take the
+       grid's whole width instead - the same as span 2 in two columns. */
+    .form-field-selectmultiple { grid-column: 1 / -1; }
+    /* A table that still scrolls sideways on a phone is as narrow as it
+       honestly can be: its headings wrap (« Quantité comptée » over two
+       lines, not a column 130 px wide for a count of four) and its cells
+       keep half their side padding. :where() leaves these weaker than any
+       table's own rule (a poste's indent, a sub-table's padding); a card
+       (.phone-cards) has its own. */
+    :where(.table-wrap, .table-scroll) :is(th, td) { padding-left: var(--s2); padding-right: var(--s2); }
+    :where(.table-wrap, .table-scroll) th.sortable > button { padding-left: var(--s2); padding-right: var(--s2); }
+    :where(.table-wrap, .table-scroll) thead :is(th, th.num) { white-space: normal; }
+}
+
+/* ------------------------------------------------------------ topbar menu */
+
+/* Under 860 px, once static/js/topbar.js has run (html.topbar-menu-ready),
+   the links and the account fold into « Menu » and the bar is ONE row: the
+   brand, the page's section, the button - where the links took three to
+   five rows, sticky on every page (accounts/tests/test_topbar_browser.py
+   measures both bars). The owner, 30/09: « the top menu is too big, maybe
+   do something that can be expanded ». Every rule of the media blocks here
+   needs the class: without the script the bar wraps as before, in the room
+   measured for that (« responsive » above; tests/test_ui.py checks it). One
+   row whatever the links, so one room: 6rem, a one-row bar's everywhere.
+
+   Opened, the menu drops OVER the page from under the bar instead of pushing
+   it down: the bar is sticky, so grown in place it moved whatever was on the
+   screen by the menu's height, and back when it closed. The page is veiled
+   (the bar's ::after): a tap on the veil only closes the menu (topbar.js),
+   so it never follows a link or focuses a field under the finger, and a
+   finger dragged on it scrolls nothing (topbar.js stops the drag: Chrome
+   does not honour touch-action on a pseudo-element, so `touch-action: none`
+   below is only a hint to the engines that do) - on /consignes/ the bar
+   scrolls with the page and would carry its menu off the screen.
+   Every link and « Se déconnecter » is 44 px tall (a thumb, as on the
+   Consignes pages). Taller than the screen (a phone on its side), the menu
+   scrolls itself: `overscroll-behavior: contain` is wanted HERE - a finger
+   on the open menu must not scroll the page behind it - unlike « À
+   classer », where a panel as tall as the page kept it from scrolling at
+   all (30/09). */
+@media (max-width: 860px) {
+    html.topbar-menu-ready { --topbar-room: 6rem; }
+    html.topbar-menu-ready .topbar-inner {
+        position: relative;
+        flex-wrap: nowrap;
+        gap: var(--s3);
+        padding: var(--s1) var(--s4);
+        background: var(--bg-raised);
+    }
+    /* The brand is a 44 px target like the rest of the bar. The section
+       takes only the room left and gives way first, then the brand: « Menu »
+       never does - a bigger font (Android's text scaling) pushed the one way
+       to the links off the screen. */
+    html.topbar-menu-ready .brand { display: block; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; padding: 0.55rem 0; }
+    html.topbar-menu-ready .topbar-section {
+        display: block;
+        flex: 1 1 0;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--text-dim);
+        font-size: 0.85rem;
+        font-weight: 600;
+    }
+    html.topbar-menu-ready .topbar-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--s2);
+        flex: none;
+        margin-left: auto;
+        min-height: 44px;
+        padding: 0 var(--s3);
+        font: inherit;
+        font-size: 0.9rem;
+        font-weight: 650;
+        color: var(--text);
+        background: transparent;
+        border: 1px solid var(--border-strong);
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+        touch-action: manipulation;
+    }
+    html.topbar-menu-ready .topbar-toggle[aria-expanded="true"] { background: var(--panel); border-color: var(--muted); }
+    html.topbar-menu-ready .topbar-menu {
+        display: none;
+        position: absolute;
+        top: calc(100% + 1px);
+        left: 0;
+        right: 0;
+        z-index: 1;
+        max-height: calc(100vh - 4rem);
+        max-height: calc(100svh - 4rem);
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        /* Room under « Se déconnecter », the last item, before the veil a
+           tap closes the menu on: a slip there must not log out. */
+        padding: var(--s2) var(--s4) var(--s5);
+        background: var(--bg-raised);
+        border-bottom: 1px solid var(--border);
+        box-shadow: var(--shadow-pop);
+    }
+    html.topbar-menu-ready .topbar-toggle[aria-expanded="true"] ~ .topbar-menu { display: block; }
+    /* Under the bar's row (.topbar-inner has its own background) and under
+       the menu (z-index 1), over the page: the bar is its stacking context. */
+    html.topbar-menu-ready .topbar:has(.topbar-toggle[aria-expanded="true"])::after {
+        content: "";
+        position: fixed;
+        inset: 0;
+        z-index: -1;
+        background: var(--veil);
+        cursor: pointer;
+        touch-action: none;
+    }
+    html.topbar-menu-ready .topbar-menu > nav {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+        gap: var(--s1);
+    }
+    html.topbar-menu-ready .topbar-menu > nav a {
+        display: flex;
+        align-items: center;
+        min-height: 44px;
+        padding: var(--s1) var(--s3);
+        font-size: 1rem;
+        white-space: normal;
+    }
+    /* The bar's name over « Se déconnecter », both at the left. */
+    html.topbar-menu-ready .topbar-account {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: var(--s1);
+        margin-top: var(--s3);
+        padding-top: var(--s3);
+        border-top: 1px solid var(--border);
+        font-size: 0.95rem;
+    }
+    html.topbar-menu-ready .topbar-espace { display: block; max-width: 100%; padding: 0 var(--s3); }
+    html.topbar-menu-ready .topbar-logout .link-button {
+        display: inline-flex;
+        align-items: center;
+        min-height: 44px;
+        padding: 0 var(--s3);
+    }
+}
+@media (max-width: 339px) {
+    /* No room for the section's name beside the brand and « Menu »: the
+       page's own title says it, under the bar. */
+    html.topbar-menu-ready .topbar-section { display: none; }
+}
+/* The button's three lines, and a cross while the menu is open. */
+.topbar-toggle-icon { position: relative; width: 1.1rem; height: 2px; background: currentColor; border-radius: 1px; }
+.topbar-toggle-icon::before, .topbar-toggle-icon::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    width: 100%;
+    height: 2px;
+    background: currentColor;
+    border-radius: 1px;
+}
+.topbar-toggle-icon::before { top: -6px; }
+.topbar-toggle-icon::after { top: 6px; }
+.topbar-toggle[aria-expanded="true"] .topbar-toggle-icon { background: transparent; }
+.topbar-toggle[aria-expanded="true"] .topbar-toggle-icon::before { top: 0; transform: rotate(45deg); }
+.topbar-toggle[aria-expanded="true"] .topbar-toggle-icon::after { top: 0; transform: rotate(-45deg); }
+/* The dot on « Menu » while a link of the menu carries a badge. It is read
+   off the badges themselves, so it is right after every writer of them -
+   base.html, the review panel's out-of-band #nav-count-produits, ui.js's
+   to-link-count - with nothing to keep in step. Its words are for a screen
+   reader. */
+.topbar-waiting { display: none; width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--red); }
+.topbar-waiting-text { display: none; }
+.topbar:has(nav .badge) .topbar-waiting { display: inline-block; }
+.topbar:has(nav .badge) .topbar-waiting-text { display: inline; }
 
 /* ------------------------------------------------------------- consignes */
 
@@ -1974,7 +2486,12 @@ html:has(body.public-page) { scroll-padding-top: var(--s4); }
    bar and the room measured for it. */
 .consignes-page :is(input, select, textarea) { font-size: 1rem; }
 @media (max-width: 600px) {
-    html:has(.consignes-page) .topbar { position: static; }
+    /* relative, not static (30/09): it scrolls away with the page the same,
+       and stays the stacking context « Menu »'s veil and menu are drawn in
+       (« topbar menu »). The room below comes AFTER « topbar menu » on
+       purpose: it weighs what html.topbar-menu-ready weighs, so the later
+       wins. */
+    html:has(.consignes-page) .topbar { position: relative; }
     html:has(.consignes-page) { --topbar-room: 0rem; }
 }
 /* Every tap target here is 44 px at least, the small buttons too: « Retirer »
@@ -2200,3 +2717,62 @@ details.format-group > summary { cursor: pointer; }
 /* The types of consigne: one card each. */
 .type-card.is-inactive h2 { color: var(--muted); }
 .position-input { width: 6rem; }
+
+/* ------------------------------------------------------------------ touch */
+
+/* A touch screen, whatever its width: a phone held sideways is wider than
+   860 px, and a narrow desktop window has nothing here to fix. A
+   mouse-driven desktop never matches, at any width. Last in the file on
+   purpose: a rule here outweighs the same-weight one it corrects above. */
+
+/* 16 px fields. Under that, iOS Safari zooms the whole page in on the field
+   a finger taps, and leaves it zoomed - on nearly every page, the app's
+   fields being 0.92rem (UX review, 30/09). « Consignes » fixed it for its
+   own pages (.consignes-page, which keeps its rule at every width); this is
+   the same rule for the others. .copy-row input is named: its own 0.85rem
+   outweighs the rule, and « Copier » focuses it. */
+@media (pointer: coarse) {
+    input, select, textarea, .copy-row input { font-size: 1rem; }
+    /* Six digits still fit a conversion's box at 16 px. */
+    form.conversion-form input { width: 4.75rem; }
+}
+
+/* Thumb-sized: 44 px (the rule Consignes and the signature pad already
+   follow), where .btn-small is 30 and a summary or a link-looking button
+   one line of text. Inside <main> only: the topbar is measured on its own.
+   In a table's row 36 px, with 8 px between two actions, so a table of
+   figures is not doubled in height - and a row is mostly tapped whole
+   (data-toggle, data-row-href); chips and a segmented choice sit in a
+   wrapping row, 36 too. A summary keeps its line at the top of its 44 px
+   box, no padding: the whole box is the target, and padding grew every
+   summary that wraps. Separate selectors, never one :is() list: :is()
+   weighs as its heaviest member, and the table's 36 would lose to the
+   tabs' weight. */
+@media (pointer: coarse) {
+    main .btn, main .link-button, main summary, main .tabs a.tab,
+    main .review-panel-jump { min-height: 44px; }
+    main .link-button { display: inline-flex; align-items: center; }
+    main td .btn, main th .btn, main td .link-button, main th .link-button,
+    main td summary, main th summary,
+    main .chip, main .segmented button, main .pick-chip { min-height: 36px; }
+    main .row-actions > a { display: inline-flex; align-items: center; min-height: 36px; }
+    main .row-actions > * + * { margin-left: var(--s2); }
+    main input:is([type="checkbox"], [type="radio"]),
+    main .correction-row input[type="checkbox"] { min-width: 1.25rem; min-height: 1.25rem; }
+    /* « Pas de chez X ? Changer d'enseigne » is an inline summary, and
+       min-height does nothing to an inline box: one line of text to hit, on
+       the page a phone re-types tickets on. `anywhere`: a flex box cannot
+       shrink below its longest word, and a shop's name printed as one word
+       then pushed the page past a 320 px phone. */
+    main .move-shop summary { display: inline-flex; align-items: center; overflow-wrap: anywhere; }
+}
+
+/* A phone held sideways is wider than 860 px and some 430 tall: the
+   desktop's table box (100vh - 13rem) left it a strip of rows scrolling
+   inside the page - the very box the rule under 860 px removes (UX review,
+   30/09). Touch and short only: a desktop window keeps its pinned headers,
+   and so does a tablet. */
+@media (pointer: coarse) and (max-height: 600px) {
+    .table-wrap { max-height: none; }
+    thead th { position: static; }
+}

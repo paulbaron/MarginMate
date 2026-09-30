@@ -38,7 +38,7 @@
                 </p>
             {% endif %}
         </div>
-        <div class="actions">
+        <div class="actions actions-compact">
             {% if empty_stock_type_count %}
             <form method="post" action="{% url 'inventory:clear_empty_stock_types' %}"
                   onsubmit="return confirm('Supprimer {{ empty_stock_type_count }} article(s) sans aucun produit lié ?');">
@@ -55,7 +55,7 @@
     {% include "inventory/_stock_stats.html" %}
 
     <div class="products-layout{% if review_total %} has-panel{% endif %}" id="products-layout">
-        <div class="products-main">
+        <div class="products-main" id="articles">
             <div class="table-toolbar">
                 <div class="table-search">
                     <input type="search" id="stock-search" autocomplete="off"
@@ -106,6 +106,15 @@
                     <button type="button" class="btn btn-small" data-panel-open hidden>
                         Produits à classer <span class="count-pill" data-review-count>{{ review_total }}</span>
                     </button>
+                    {% comment %}
+                    Under 1280 px the panel is above this list, not beside it:
+                    the way back up to it past the articles (marginmate.css
+                    shows it there only). A link, so it works without the
+                    page's script.
+                    {% endcomment %}
+                    <a class="btn btn-small btn-secondary review-panel-jump" href="#a-classer" data-panel-jump>
+                        ↑ À classer <span class="count-pill" data-review-count>{{ review_total }}</span>
+                    </a>
                 {% endif %}
                 <p class="table-count" id="stock-search-status" hidden></p>
             </div>
@@ -128,6 +137,22 @@
         {% if review_total %}
             <aside class="review-panel" id="a-classer" aria-labelledby="review-panel-title">
                 {% include "inventory/_review_panel.html" %}
+                {% comment %}
+                Above the list (under 1280 px) the panel draws its first product
+                only (marginmate.css, « À classer » above the list): every card
+                came before the first article - screens of them on a phone. This
+                box unfolds the others, through the label under the first card,
+                with no script, and sits outside #review-panel-body, which every
+                classification swaps, so the list stays unfolded from one product
+                to the next. Not drawn beside the list, where every card is.
+                autocomplete="off": Firefox would tick it again on a reload.
+                Named by the label's « Voir les N autres produits » alone
+                (aria-labelledby reads it even hidden): the label's words flip
+                with the box, and « N'afficher que le premier, cochée » said the
+                opposite of what was on the screen.
+                {% endcomment %}
+                <input type="checkbox" id="review-unfold" class="review-unfold-box visually-hidden"
+                       autocomplete="off" aria-controls="review-panel-body" aria-labelledby="review-unfold-name">
             </aside>
         {% endif %}
     </div>
@@ -147,6 +172,13 @@
 // in bar B's list. Empty on a page no espace is bound to.
 var ESPACE_SCOPE = document.body.getAttribute("data-tenant") ? "espace-" + document.body.getAttribute("data-tenant") + ":" : "";
 var EXPANDED_STORAGE_KEY = "marginmate:" + ESPACE_SCOPE + "stock:rows";
+
+// Where focusing a field opens an on-screen keyboard - a phone, upright or
+// on its side, a tablet: no field is focused for the reader there (syncPanel,
+// data-panel-open below). A touch screen, not a width: a desk's keyboard in
+// a narrow window (a laptop at 150 % zoom) keeps typing one product after
+// the other, and its focus was dropped on the page instead.
+var KEYBOARD_ON_SCREEN = window.matchMedia("(hover: none) and (pointer: coarse)");
 
 function loadExpandedIds() {
     try {
@@ -490,7 +522,11 @@ function syncPanel(focus) {
     loadStockTypes();
     var names = document.querySelectorAll("#review-panel-body .js-stock-type-name");
     names.forEach(syncStockTypeName);
-    if (focus && names.length) {
+    // Not where a keyboard comes up on the screen: there the next field
+    // sits above the list this classification is reloading, and focusing
+    // it opened the keyboard over the list - the page pulled between the
+    // two (30/09). The reader taps the field when they want it.
+    if (focus && names.length && !KEYBOARD_ON_SCREEN.matches) {
         names[0].focus();
         names[0].select();
     }
@@ -502,6 +538,8 @@ function syncPanel(focus) {
     if (!count) document.querySelectorAll("[data-panel-open]").forEach(function (button) {
         if (button.tagName === "BUTTON") button.hidden = true;
     });
+    // The toolbar's way up to the panel says nothing once nothing is left.
+    document.querySelectorAll("[data-panel-jump]").forEach(function (link) { link.hidden = !count; });
 }
 
 var PANEL_STORAGE_KEY = "marginmate:" + ESPACE_SCOPE + "stock:panel-closed";
@@ -521,6 +559,14 @@ document.addEventListener("click", function (event) {
     }
     if (event.target.closest("[data-panel-open]")) {
         setPanelClosed(false);
+        if (KEYBOARD_ON_SCREEN.matches) {
+            // Above the list here, not beside it: the toolbar's button opened
+            // it out of sight, over the reader's head. Brought to them, the
+            // keyboard left down. (The figure « À classer » is a link to
+            // #a-classer and gets there by itself.)
+            if (!event.target.closest("a[href]")) document.getElementById("a-classer").scrollIntoView({ block: "start" });
+            return;
+        }
         var first = document.querySelector("#review-panel-body .js-stock-type-name");
         if (first) first.focus();
         return;
@@ -528,13 +574,26 @@ document.addEventListener("click", function (event) {
     var reveal = event.target.closest("[data-reveal-stock-type]");
     if (reveal) {
         event.preventDefault();
-        revealStockType(reveal.dataset.revealStockType);
+        revealStockType(reveal.dataset.revealStockType, true);
     }
 });
 
+// Beside the list (1280 px and up) the panel is sticky, and the article a
+// product went to is scrolled into sight. Under that the panel sits ABOVE
+// the list (marginmate.css): taken down to the article after every
+// « Classer », the reader landed screens away from the next product to
+// classify (UX review, 30/09). There the row opens and blinks where it is,
+// and « classé dans … » in the panel takes the reader to it when asked.
+// Read off the panel's own style, not a width: the CSS decides where the
+// panel is, and this follows it.
+function panelBesideList() {
+    var panel = document.getElementById("a-classer");
+    return !panel || getComputedStyle(panel).position === "sticky";
+}
+
 // Opens the list on one stock item and makes it blink: where a product was
-// just classified.
-function revealStockType(id) {
+// just classified. `scroll`: brought into sight as well.
+function revealStockType(id, scroll) {
     var row = document.querySelector('#catalogue .stock-row[data-stock-type-id="' + id + '"]');
     if (!row) return;
     // The search was the name being typed in the panel, and that name has
@@ -568,7 +627,7 @@ function revealStockType(id) {
         expandTarget(row, details);
         revealedDetails = details.id;
     }
-    row.scrollIntoView({ block: "center", behavior: "smooth" });
+    if (scroll) row.scrollIntoView({ block: "center", behavior: "smooth" });
     row.classList.remove("flash");
     void row.offsetWidth;
     row.classList.add("flash");
@@ -592,7 +651,7 @@ document.body.addEventListener("htmx:afterSwap", function (event) {
         restoreExpanded()
             .then(function () { return runSearch(query); })
             .then(function () {
-                if (pendingReveal) revealStockType(pendingReveal);
+                if (pendingReveal) revealStockType(pendingReveal, panelBesideList());
                 pendingReveal = null;
             });
     }

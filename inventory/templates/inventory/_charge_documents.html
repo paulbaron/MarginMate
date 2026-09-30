@@ -10,8 +10,12 @@ the panel would be swapped inside itself.
 {% endcomment %}
 <div class="row-panel">
 {% if rows %}
+    {% comment %}
+    Under 860 px each document is a card (marginmate.css, « phone cards »),
+    every figure under its column's header word for word (data-label).
+    {% endcomment %}
     <div class="sub-table-wrap">
-        <table class="sub-table charge-documents">
+        <table class="sub-table charge-documents phone-cards">
             <thead>
                 <tr>
                     <th>Document</th>
@@ -36,18 +40,18 @@ the panel would be swapped inside itself.
                                 {% else %}Document sans numéro{% endif %}
                             </a>
                         </td>
-                        <td class="nowrap" data-sort="{{ row.invoice.invoice_date|date:'Y-m-d' }}">
+                        <td class="nowrap" data-label="Date" data-sort="{{ row.invoice.invoice_date|date:'Y-m-d' }}">
                             {{ row.invoice.invoice_date|date:"d/m/Y"|default:"—" }}
                         </td>
-                        <td class="num">{{ row.total_ht|floatformat:2 }} €</td>
+                        <td class="num" data-label="HT">{{ row.total_ht|floatformat:2 }} €</td>
                         {% comment %}
                         The tax as an amount, not as a rate: a water bill prints
                         two of them on one document, and printing one would be a
                         lie about the other while "—" says nothing at all.
                         {% endcomment %}
-                        <td class="num">{{ row.total_vat|floatformat:2 }} €</td>
-                        <td class="num">{{ row.total_ttc|floatformat:2 }} €</td>
-                        <td class="num">
+                        <td class="num" data-label="TVA">{{ row.total_vat|floatformat:2 }} €</td>
+                        <td class="num" data-label="TTC">{{ row.total_ttc|floatformat:2 }} €</td>
+                        <td class="num phone-card-end">
                             <a class="btn btn-small btn-secondary" href="{% url 'invoices:invoice_edit_lines' row.invoice.pk %}">Corriger</a>
                         </td>
                     </tr>
@@ -70,7 +74,7 @@ the panel would be swapped inside itself.
                         <a href="{{ back_url }}" hx-get="{{ back_url }}" hx-target="closest .row-panel" hx-swap="outerHTML">revenir {{ back_label }}</a>
                         {% else %} — tout l'historique{% endif %}
                     </td>
-                    <td class="num">{{ total_ttc|floatformat:2 }} €</td>
+                    <td class="num" data-label="TTC">{{ total_ttc|floatformat:2 }} €</td>
                     <td></td>
                 </tr>
             </tfoot>

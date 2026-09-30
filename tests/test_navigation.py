@@ -4,13 +4,23 @@ Stock and its review queue are one page ("Produits & charges"); invoices, ticket
 their sources and suppliers another ("Achats"); recipes, till products and sales a third
 ("Recettes & ventes"). Each link lights up on every page of its workspace -
 and only it - and carries the count of what is waiting there.
+
+Under 860 px the links fold into « Menu » (30/09, the owner: « the top menu
+is too big, maybe do something that can be expanded »; templates/base.html,
+static/js/topbar.js): the bar is then the brand, the page's section - the
+words of the link it lights (config/navigation.py SECTION_LABELS) - and the
+button. What the markup promises is checked here; what Chrome draws, in
+accounts/tests/test_topbar_browser.py.
 """
 
 import re
+from types import SimpleNamespace
 
 from django.test import TestCase
 from django.urls import reverse
+from django.utils.html import escape
 
+from config import navigation
 from recipes.models import PosProduct
 from staff.models import Employee
 from tests.factories import make_invoice, make_product, make_recipe, make_stock_type, make_supplier
@@ -49,6 +59,28 @@ def label_of(link):
 
 def active_labels(response):
     return [label_of(link) for link in nav_links(response) if 'class="active"' in link]
+
+
+def topbar_of(response) -> str:
+    """The page's <header class="topbar">, as HTML."""
+    html = response.content.decode()
+    start = html.index('<header class="topbar">')
+    return html[start:html.index("</header>", start)]
+
+
+def section_shown(response):
+    """What the folded bar says the page is (its .topbar-section), as HTML -
+    None when it draws none."""
+    found = re.findall(r'<span class="topbar-section">(.*?)</span>', topbar_of(response), flags=re.S)
+    return found[0].strip() if len(found) == 1 else None
+
+
+def toggle_of(response) -> str:
+    """The opening tag of « Menu », the one element carrying data-topbar-toggle."""
+    header = topbar_of(response)
+    tags = re.findall(r"<[a-z]+\b[^>]*\bdata-topbar-toggle\b[^>]*>", header)
+    assert len(tags) == 1, tags
+    return tags[0]
 
 
 class NavigationTests(TestCase):
@@ -118,6 +150,21 @@ class NavigationTests(TestCase):
                     response = self.client.get(url)
                     self.assertEqual(response.status_code, 200)
                     self.assertEqual(active_labels(response), [label])
+                    # Folded under 860 px, the bar says it in the lit link's
+                    # own words: the one place left saying where the page is
+                    # once its title has scrolled away.
+                    self.assertEqual(section_shown(response), label)
+
+    def test_every_section_has_its_words(self):
+        """A section navigation can light with no words in SECTION_LABELS
+        draws a folded bar saying nothing (base.html's `{% if %}`): a new
+        app added to SECTION_BY_APP needs its words too. And the words are
+        a link's own, one link per section, nothing else."""
+        pages = [("inventory", url_name) for url_name in ("stock_list", *navigation.STOCK_TAKE_VIEWS)]
+        pages += [(app, "any_view") for app in navigation.SECTION_BY_APP]
+        can_light = {navigation.section_of(SimpleNamespace(app_name=app, url_name=view)) for app, view in pages}
+        self.assertEqual(set(navigation.SECTION_LABELS), can_light)
+        self.assertEqual(sorted(escape(words) for words in navigation.SECTION_LABELS.values()), sorted(LABELS))
 
     def test_each_workspace_counts_what_waits_there(self):
         supplier = make_supplier(code="SABBH", name="Sabbh")
@@ -134,3 +181,54 @@ class NavigationTests(TestCase):
     def test_nothing_waiting_means_no_badge(self):
         links = nav_links(self.client.get(reverse("inventory:stock_list")))
         self.assertFalse(any("badge" in link for link in links))
+
+
+class MenuButtonTests(TestCase):
+    """« Menu » and what it opens, as base.html draws them (30/09). The
+    stylesheet opens #topbar-menu with `.topbar-toggle[aria-expanded="true"]
+    ~ .topbar-menu`, so the button comes BEFORE the menu; it stays out of the
+    <nav>, whose links nav_links() reads one by one - inside, it would be a
+    tenth workspace to every test reading them."""
+
+    def page(self):
+        return self.client.get(reverse("inventory:stock_list"))
+
+    def test_the_button_says_what_it_opens(self):
+        response = self.page()
+        header = topbar_of(response)
+        toggle = toggle_of(response)
+        self.assertTrue(toggle.startswith("<button "), toggle)
+        for attribute in ('type="button"', 'aria-expanded="false"', 'aria-controls="topbar-menu"'):
+            self.assertIn(attribute, toggle)
+        # Drawn shut, as every page arrives (aria-expanded="false" above): the
+        # state is that attribute, which the stylesheet reads.
+        self.assertEqual(header.count('id="topbar-menu"'), 1)
+        button = header.index(toggle)
+        menu = header.index('id="topbar-menu"')
+        self.assertLess(button, menu)
+        self.assertLess(menu, header.index("<nav"))
+        self.assertLess(header.index("</button>", button), menu)
+        # What the button says, and the dot's words for a screen reader.
+        inside = header[button:header.index("</button>", button)]
+        self.assertIn("<span>Menu</span>", inside)
+        self.assertIn('<span class="topbar-waiting-text visually-hidden">, du travail en attente</span>', inside)
+        # Nothing of it in the navigation: its links are the workspaces.
+        self.assertNotIn("data-topbar-toggle", header[header.index("<nav"):header.index("</nav>")])
+        self.assertEqual([label_of(link) for link in nav_links(response)], LABELS)
+
+    def test_the_script_runs_in_the_head_before_the_bar(self):
+        """static/js/topbar.js puts the class that folds the links on <html>:
+        deferred like the others, a phone painted three rows of links, then
+        one. So it is in the head, after the stylesheet it switches, with no
+        defer nor async - and once, htmx never swapping the head in again."""
+        html = self.page().content.decode()
+        head = html[:html.index("</head>")]
+        scripts = re.findall(r"<script\b[^>]*\bsrc=\"[^\"]*js/topbar\.js[^\"]*\"[^>]*>", html)
+        self.assertEqual(len(scripts), 1, scripts)
+        (script,) = scripts
+        self.assertIn(script, head)
+        self.assertNotRegex(script, r"\s(defer|async)\b")
+        self.assertRegex(script, r'src="/static/js/topbar\.js\?v=\d+"')
+        stylesheet = re.search(r'<link rel="stylesheet" href="[^"]*css/marginmate\.css[^"]*">', head)
+        self.assertIsNotNone(stylesheet)
+        self.assertLess(stylesheet.start(), head.index(script))

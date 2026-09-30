@@ -142,14 +142,29 @@ Every invoice and ticket. Reloads itself when an import ends
         <form id="invoice-bulk-form" method="post" action="{% url 'invoices:invoice_bulk_delete' %}" class="bulk-bar" data-bulk-select>
             {% csrf_token %}
             <input type="hidden" name="next" value="{{ request.get_full_path }}">
+            {% comment %}
+            « Tout sélectionner » in the bar, not in the table's header, as
+            « À vérifier » has it: on a phone the header is not drawn (the
+            rows are cards), and every document of an import had to be ticked
+            one by one. The one box ui.js wires (input[data-bulk-all][form]).
+            {% endcomment %}
+            <label class="bulk-all"><input type="checkbox" data-bulk-all form="invoice-bulk-form"> Tout sélectionner</label>
             <span class="muted" data-bulk-count data-empty="Cochez des documents pour les supprimer."></span>
             <button class="btn btn-small btn-danger" type="submit" data-bulk-submit disabled>Supprimer la sélection…</button>
         </form>
+        {% comment %}
+        Under 860 px each document is a card (marginmate.css, « phone
+        cards »): its box and its supplier on the first line with
+        « Vérifier » / « Corriger » at its end, every other cell under
+        its column's header word for word (data-label). At 375 px the table
+        was three times as wide as the phone, the date, the state and the
+        button off the screen (UX review, 30/09).
+        {% endcomment %}
         <div class="table-wrap">
-        <table data-table data-table-sort-only data-table-label="documents" class="documents-table">
+        <table data-table data-table-sort-only data-table-label="documents" class="documents-table phone-cards">
             <thead>
                 <tr>
-                    <th class="select-col" data-no-sort><input type="checkbox" data-bulk-all form="invoice-bulk-form" aria-label="Tout sélectionner"></th>
+                    <th class="select-col" data-no-sort></th>
                     <th>Fournisseur</th>
                     <th>Type</th>
                     <th>N°</th>
@@ -178,12 +193,12 @@ Every invoice and ticket. Reloads itself when an import ends
                     CII) et non une lecture, et c'est la seule ligne de ce
                     tableau qui le dise.
                     {% endcomment %}
-                    <td class="muted">{% if invoice.is_einvoice %}Facture électronique{% elif invoice.is_receipt %}Ticket{% else %}Facture{% endif %}</td>
-                    <td>{{ invoice.invoice_number|default:"—" }}</td>
-                    <td data-sort="{{ invoice.invoice_date|date:'Y-m-d' }}">
+                    <td class="muted" data-label="Type">{% if invoice.is_einvoice %}Facture électronique{% elif invoice.is_receipt %}Ticket{% else %}Facture{% endif %}</td>
+                    <td data-label="N°">{{ invoice.invoice_number|default:"—" }}</td>
+                    <td data-label="Date" data-sort="{{ invoice.invoice_date|date:'Y-m-d' }}">
                         {% if invoice.invoice_date %}{{ invoice.invoice_date|date:"d/m/Y" }}{% else %}<span class="status-pill status-ERROR">sans date</span>{% endif %}
                     </td>
-                    <td>
+                    <td data-label="État">
                         {% comment %}
                         One definition, shared with the "À vérifier" tab's count
                         (Invoice.review_state): 107 charges said "À vérifier" on
@@ -200,9 +215,9 @@ Every invoice and ticket. Reloads itself when an import ends
                             <span class="status-pill status-{{ invoice.bank_state.css }}">{{ invoice.bank_state.label }}</span>
                         {% endif %}
                     </td>
-                    <td class="num">{{ invoice.total_ht|floatformat:2 }} €</td>
-                    <td class="num">{{ invoice.total_ttc|floatformat:2 }} €</td>
-                    <td class="num">
+                    <td class="num" data-label="Total HT">{{ invoice.total_ht|floatformat:2 }} €</td>
+                    <td class="num" data-label="Total TTC">{{ invoice.total_ttc|floatformat:2 }} €</td>
+                    <td class="num phone-card-end">
                         {% if invoice.waiting_check %}
                             <a class="btn btn-small" href="{% url 'invoices:receipt_review' invoice.pk %}{% if lot %}?lot={{ lot.pk }}{% endif %}">Vérifier</a>
                         {% elif invoice.is_receipt %}

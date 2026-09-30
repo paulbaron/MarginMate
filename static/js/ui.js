@@ -310,12 +310,22 @@
     };
 
     // "Recettes & ventes": a till product linked or set aside in place - the
-    // counts of what is left to link follow.
+    // counts of what is left to link follow. The topbar's badge is built as
+    // nodes, never written as markup, in the shape base.html draws it:
+    // « <span id="nav-count-recettes"> <span class="badge">N</span></span> ».
+    // The « Menu » button's dot reads it (marginmate.css, « topbar menu »).
     document.addEventListener("to-link-count", function (event) {
         var count = event.detail && typeof event.detail.value !== "undefined" ? event.detail.value : event.detail;
         document.querySelectorAll("[data-to-link-count]").forEach(function (pill) { pill.textContent = count; });
         var nav = document.getElementById("nav-count-recettes");
-        if (nav) nav.innerHTML = count ? ' <span class="badge">' + count + "</span>" : "";
+        if (!nav) return;
+        nav.textContent = "";
+        if (!count) return;
+        var badge = document.createElement("span");
+        badge.className = "badge";
+        badge.textContent = count;
+        nav.appendChild(document.createTextNode(" "));
+        nav.appendChild(badge);
     });
 
     // A form with `data-confirm` asks first. The correction page's forms ask

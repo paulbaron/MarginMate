@@ -7,6 +7,20 @@
     <title>{% block title %}MarginMate{% endblock %}</title>
     <link rel="stylesheet" href="{% asset 'css/marginmate.css' %}">
     {% comment %}
+    topbar.js is the one script of the page loaded without defer, on purpose.
+    Under 860 px it folds the topbar's links into « Menu » by putting a class
+    on <html>, and the stylesheet folds nothing without that class: a page
+    where it did not run (JavaScript off, the file missing) draws every link
+    as it always did, and the fold and the button that opens it come and go
+    together. It has to run before the bar is drawn - deferred like the four
+    below, a phone painted three rows of links and then jumped. It reads
+    nothing from the page. In the head, which htmx never swaps in again (a
+    Back with no history cache swaps the whole BODY and runs its scripts once
+    more). The owner, 30/09: « the top menu is too big, maybe do something
+    that can be expanded ».
+    {% endcomment %}
+    <script src="{% asset 'js/topbar.js' %}"></script>
+    {% comment %}
     A bar's page (a request bound to its espace): htmx keeps no page. Its
     history cache holds whole pages (the boosted Achats tabs store each page
     left) under ONE key of the origin's browser storage, the one key not
@@ -49,6 +63,30 @@ those keys under the scope (accounts.middleware.LEGACY_STORAGE_SESSION_KEY).
     <header class="topbar">
         <div class="topbar-inner">
             <a class="brand" href="{% url 'inventory:stock_list' %}">MarginMate</a>
+            {% comment %}
+            Under 860 px, once topbar.js has run, the bar is one row: the brand,
+            the section the page belongs to (config/navigation.py SECTION_LABELS -
+            tests/test_navigation.py checks it is the lit link's words) and
+            « Menu ». The stylesheet draws a dot on « Menu » while a link of the
+            menu carries a badge (.topbar:has(nav .badge)). The button is outside
+            the <nav>, which tests/test_navigation.py reads link by link, and
+            before #topbar-menu, which the stylesheet opens with `~`. Both are
+            hidden above 860 px and wherever the script did not run.
+            {% endcomment %}
+            {% if nav_section_label %}<span class="topbar-section">{{ nav_section_label }}</span>{% endif %}
+            <button type="button" class="topbar-toggle" data-topbar-toggle aria-expanded="false" aria-controls="topbar-menu">
+                <span class="topbar-toggle-icon" aria-hidden="true"></span>
+                <span>Menu</span>
+                <span class="topbar-waiting" aria-hidden="true"></span>
+                <span class="topbar-waiting-text visually-hidden">, du travail en attente</span>
+            </button>
+            {% comment %}
+            The links and the account. Above 860 px, and wherever topbar.js did
+            not run, #topbar-menu is display: contents: its children are the
+            bar's items exactly as before. Under 860 px it is what « Menu »
+            opens, over the page.
+            {% endcomment %}
+            <div class="topbar-menu" id="topbar-menu">
             <nav aria-label="Navigation principale">
                 <a href="{% url 'inventory:stock_list' %}"{% if nav_section == "produits" %} class="active"{% endif %}>Produits &amp; charges<span id="nav-count-produits">{% if review_count_nav %} <span class="badge">{{ review_count_nav }}</span>{% endif %}</span></a>
                 <a href="{% url 'invoices:invoice_list' %}"{% if nav_section == "achats" %} class="active"{% endif %}>Achats<span id="nav-count-achats">{% if receipt_review_count_nav %} <span class="badge">{{ receipt_review_count_nav }}</span>{% endif %}</span></a>
@@ -63,10 +101,11 @@ those keys under the scope (accounts.middleware.LEGACY_STORAGE_SESSION_KEY).
             </nav>
             {% comment %}
             A request bound to its espace: the bar's name and « Se déconnecter ». Outside the <nav> -
-            tests/test_navigation.py reads its links - and on the brand's row under 860 px, so the bar
-            is no taller than its links make it (--topbar-room, marginmate.css;
-            accounts/tests/test_topbar_browser.py measures it). The Admin link above is a superuser's
-            only (accounts/admin_site.py).
+            tests/test_navigation.py reads its links. Above 860 px they come after the links. Under
+            860 px without topbar.js they sit on the brand's row, so the bar is no taller than its
+            links make it (--topbar-room, marginmate.css); with topbar.js they are at the foot of
+            « Menu ». accounts/tests/test_topbar_browser.py measures every case. The Admin link above
+            is a superuser's only (accounts/admin_site.py).
             {% endcomment %}
             {% if request.tenant %}
                 <div class="topbar-account">
@@ -77,6 +116,7 @@ those keys under the scope (accounts.middleware.LEGACY_STORAGE_SESSION_KEY).
                     </form>
                 </div>
             {% endif %}
+            </div>
         </div>
     </header>
 

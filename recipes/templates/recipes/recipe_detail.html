@@ -162,6 +162,7 @@
     {% if variation %}
     <div class="card">
         {% if summary.variation_count > 1 %}<h3>{{ variation.name }}</h3>{% endif %}
+        <div class="table-scroll">
         <table class="sub-table">
             <thead>
                 <tr>
@@ -188,6 +189,7 @@
                 {% endfor %}
             </tbody>
         </table>
+        </div>
         <p class="muted" style="text-align:right; margin-top:0.5rem;">
             Coût total (HT) pour {{ recipe.yield_quantity|floatformat:2 }} {{ recipe.get_yield_unit_display }} :
             <strong style="color:var(--text);">{{ variation.cost_ht|floatformat:2 }} €</strong>

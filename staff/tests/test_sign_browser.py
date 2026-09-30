@@ -13,6 +13,10 @@ what static/js/signature_pad.js does, which the test client cannot see.
   box.
 * It all runs under the page's Content-Security-Policy, which allows this
   site's own script only.
+* **Thumb-sized on a touch screen, small with a mouse**: the pad's two
+  buttons at 375 px, and since 30/09 the owner's month page's too (the
+  « touch » section of marginmate.css), which a mouse keeps small at any
+  width.
 * **The employer's pad** (« Contresigner… » on the month's page, 28/09) is
   the same script in a frame folded away: opened, it takes its size, draws
   with a mouse or a finger, refuses to leave with nothing drawn, and paints a
@@ -226,7 +230,15 @@ class SigningPadInBrowserTests(PadInBrowserCase):
         and each checkbox is a row, its words beside it down to their last
         line: `.public-form > label { display: block }` outweighed
         `.public-check` and put the certification's second line under the
-        box (review, 28/09)."""
+        box (review, 28/09).
+
+        The owner's pages: since 30/09 every button of `<main>` is 44 px on
+        a touch screen too (the « touch » section of marginmate.css, UX
+        review - .btn-small was 30 px under a thumb on every page), and
+        stays small with a mouse, at any width. Measured on a button that is
+        drawn and outside a table's cell (36 px there): the first .btn-small
+        of the month's page can sit in the countersign pad folded away,
+        where it is 0 px tall and would say nothing."""
         for css in ("[data-signature-undo]", "[data-signature-clear]"):
             with self.subTest(button=css):
                 height = self.script("return arguments[0].getBoundingClientRect().height;", self.element(css))
@@ -255,13 +267,32 @@ class SigningPadInBrowserTests(PadInBrowserCase):
             certification,
         )
         self.assertGreater(line_count, 1)
-        # The owner's pages keep their small buttons: the rule is the employee's page's.
-        # They want the owner's login (the employee's page above needs none).
+        # The owner's pages want the owner's login (the employee's page above
+        # needs none). On this touch screen their small buttons are thumb-sized
+        # too; with a mouse they stay small - in a window as narrow as this
+        # phone too: a touch screen is (pointer: coarse), not a width.
+        self.assertTrue(self.script("return window.matchMedia('(pointer: coarse)').matches;"))
         log_in_the_browser(self.driver, self.live_server_url)
-        self.open(reverse("staff:month", args=[self.person.pk, JUNE]))
-        small = self.driver.find_elements("css selector", ".btn-small")
-        self.assertTrue(small)
-        self.assertLess(self.script("return arguments[0].getBoundingClientRect().height;", small[0]), 44)
+        month = reverse("staff:month", args=[self.person.pk, JUNE])
+        self.open(month)
+        self.assertGreaterEqual(self.first_drawn_small_button_height(), 44)
+        for width, height in ((375, 812), (1280, 900)):
+            with self.subTest(mouse=width):
+                self.device(width, height, 2, touch=False)
+                self.open(month)
+                self.assertFalse(self.script("return window.matchMedia('(pointer: coarse)').matches;"))
+                self.assertLess(self.first_drawn_small_button_height(), 44)
+
+    def first_drawn_small_button_height(self) -> float:
+        """The height of the month page's first .btn-small that is drawn and
+        sits outside a table's cell."""
+        height = self.script(
+            "var button = Array.from(document.querySelectorAll('main .btn-small')).find(function (e) {"
+            " return e.getClientRects().length && !e.closest('td, th'); });"
+            "return button ? button.getBoundingClientRect().height : null;"
+        )
+        self.assertIsNotNone(height, "aucun .btn-small dessiné hors d'un tableau")
+        return height
 
     def test_a_refused_post_paints_the_drawing_back(self):
         box = self.element("[data-reservations]")

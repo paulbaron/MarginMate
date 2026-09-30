@@ -245,15 +245,25 @@ class EachChangeSaysWhatItIsOnceTests(Traiteur):
         self.assertNotIn("Identifiants", fiche)
 
 
-def css_block(css: str, opening: str) -> str:
-    """The body of the first block `opening` starts, braces matched."""
-    start = css.index(opening) + len(opening)
+def css_block(css: str, opening: str, start: int = 0) -> str:
+    """The body of the first block `opening` starts (from `start`), braces
+    matched."""
+    start = css.index(opening, start) + len(opening)
     depth = 1
     for position in range(start, len(css)):
         depth += {"{": 1, "}": -1}.get(css[position], 0)
         if depth == 0:
             return css[start:position]
     raise AssertionError(f"{opening!r} is never closed")
+
+
+def css_blocks(css: str, opening: str) -> list[str]:
+    """The body of every block `opening` starts, in the file's order."""
+    found, at = [], css.find(opening)
+    while at != -1:
+        found.append(css_block(css, opening, at))
+        at = css.find(opening, at + len(opening))
+    return found
 
 
 class TopbarRoomTests(Traiteur):
@@ -267,16 +277,42 @@ class TopbarRoomTests(Traiteur):
     tab row htmx scrolls to the top when a tab is clicked lower down, which
     went under the bar too. Where it lands is measured in Chrome
     (TopbarRoomInBrowserTests); here, that the rule is there, and taller
-    where the topbar wraps."""
+    where the topbar wraps.
+
+    Since 30/09 the topbar wraps under 860 px only where static/js/topbar.js
+    did not run (JavaScript off, the file missing): where it did, the links
+    fold into « Menu » and the bar is one row again, whose room is a one-row
+    bar's. Both rooms are the stylesheet's."""
 
     def test_the_page_leaves_the_topbars_height_above_what_it_scrolls_to(self):
         css = (settings.BASE_DIR / "static/css/marginmate.css").read_text(encoding="utf-8")
         self.assertIn("scroll-padding-top: var(--topbar-room)", css_block(css, "html {"))
-        self.assertIn("--topbar-room:", css_block(css, ":root {"))
-        # Under 860 px the topbar wraps (.topbar-inner): a taller room.
+        self.assertIn("--topbar-room: 6rem;", css_block(css, ":root {"))
+        # Under 860 px the topbar without the script wraps (.topbar-inner):
+        # a taller room.
         narrow = css_block(css, "@media (max-width: 860px) {")
         self.assertIn(".topbar-inner { flex-wrap: wrap;", narrow)
-        self.assertIn("--topbar-room:", narrow)
+        self.assertIn(":root { --topbar-room: 10rem; }", narrow)
+
+    def test_folded_the_topbar_leaves_a_one_row_bars_room(self):
+        """With topbar.js, one row whatever the links (57 px measured), so
+        the room is the 6rem of a one-row bar - and it must win over the
+        10rem above: a later block, and the class on <html> weighing more
+        than :root. Left at 10rem, a heading the page scrolls to would sit
+        100 px under a 57 px bar, the space the fold was made to give back."""
+        css = (settings.BASE_DIR / "static/css/marginmate.css").read_text(encoding="utf-8")
+        narrow = css_blocks(css, "@media (max-width: 860px) {")
+        folded = [block for block in narrow if "html.topbar-menu-ready { --topbar-room: 6rem; }" in block]
+        self.assertEqual(len(folded), 1, "one block folds the bar under 860 px and sets its room")
+        (folded,) = folded
+        self.assertGreater(narrow.index(folded), narrow.index(next(b for b in narrow if "--topbar-room: 10rem" in b)))
+        inner = css_block(folded, "html.topbar-menu-ready .topbar-inner {")
+        self.assertIn("flex-wrap: nowrap;", inner)
+        # The rooms of the bar without the script are left as they were
+        # measured (accounts/tests/test_topbar_browser.py, class removed).
+        for width, room in (("440px", "11rem"), ("310px", "13rem")):
+            with self.subTest(width=width):
+                self.assertIn(f":root {{ --topbar-room: {room}; }}", css_block(css, f"@media (max-width: {width}) {{"))
 
     def test_the_tabs_fragment_is_the_list(self):
         url = self.client.get(reverse("invoices:invoice_list")).context["tabs"][3]["url"]
@@ -384,8 +420,15 @@ class TopbarRoomInBrowserTests(StaticLiveServerTestCase):
     280 px is a folding phone's cover screen: « Personnel » (28/09) took the
     links to five rows there, 199 px against the 176 px that 11rem left.
 
-    Logged in as the test espace's owner, as every page wants: the topbar
-    then carries the bar's name and « Se déconnecter » too."""
+    Since 30/09, under 860 px this measures the FOLDED bar: static/js/topbar.js
+    runs in this Chrome, and the links, the bar's name and « Se déconnecter »
+    are behind « Menu » - one row (57 px) in a 6rem room at every width from
+    860 down (each measure checks it is that bar). The bar without the script,
+    the one those rows and rooms were measured for, is measured width by width
+    by accounts/tests/test_topbar_browser.py, the class taken off.
+
+    Logged in as the test espace's owner, as every page wants: above 860 px
+    the topbar then carries the bar's name and « Se déconnecter » too."""
 
     WIDTHS = (1280, 900, 860, 768, 600, 450, 375, 320, 280)
     HEIGHT = 700
@@ -441,6 +484,8 @@ class TopbarRoomInBrowserTests(StaticLiveServerTestCase):
             )
         self.fiche = reverse("invoices:supplier_detail", args=[caterer.pk])
         log_in_the_browser(self.driver, self.live_server_url)
+        # Every test sets its width: none leaves the next one its window.
+        self.addCleanup(self.driver.execute_cdp_cmd, "Emulation.clearDeviceMetricsOverride", {})
 
     def script(self, source, *args):
         return self.driver.execute_script(source, *args)
@@ -468,11 +513,16 @@ class TopbarRoomInBrowserTests(StaticLiveServerTestCase):
         self.wait_for(still)
 
     def assertClearOfTopbar(self, selector, width):
-        top, bar, scrolled = self.script(
+        top, bar, scrolled, folded = self.script(
             "return [document.querySelector(arguments[0]).getBoundingClientRect().top,"
-            " document.querySelector('.topbar').getBoundingClientRect().bottom, window.scrollY];",
+            " document.querySelector('.topbar').getBoundingClientRect().bottom, window.scrollY,"
+            " !!document.querySelector('[data-topbar-toggle]')"
+            " && document.querySelector('[data-topbar-toggle]').getClientRects().length > 0];",
             selector,
         )
+        # The bar measured is the one the docstring says: folded into « Menu »
+        # from 860 px down, every link drawn above.
+        self.assertEqual(folded, width <= 860, f"{selector} at {width} px: « Menu » drawn: {folded}")
         # Scrolled to it - or this proves nothing - and not under the bar.
         self.assertGreater(scrolled, 0, f"{selector} at {width} px: the page did not scroll")
         self.assertGreaterEqual(top, bar, f"{selector} at {width} px: at {top:.0f}, under the topbar ({bar:.0f})")

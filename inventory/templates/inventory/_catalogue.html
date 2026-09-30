@@ -52,7 +52,15 @@ next classification.
         down a long category, to buy a scrollbar it never needs.
         {% endcomment %}
         {% if period %}<div class="stock-table-wrap">{% endif %}
-        <table id="cat-{{ category.name|slugify }}" class="stock-table{% if period %} stock-table-period{% endif %}"
+        {% comment %}
+        `phone-cards`: under 860 px each article is a card, every figure under
+        the name its cell carries as `data-label` (marginmate.css, « phone
+        cards ») - seven columns squeezed into a phone printed over one
+        another (30/09). The label is the column's header word for
+        word: inventory/tests/test_products_phone.py compares them. The
+        colgroups below are the wide screen's and are not drawn there.
+        {% endcomment %}
+        <table id="cat-{{ category.name|slugify }}" class="stock-table phone-cards{% if period %} stock-table-period{% endif %}"
                data-table data-table-sort-only hidden>
             {% if period %}
             <colgroup>
@@ -121,25 +129,25 @@ next classification.
                     </td>
                     {% if period %}
                     {% if row.in_period %}
-                    <td class="num">{{ row.period.opening|floatformat:2 }}</td>
-                    <td class="num">{{ row.period.purchases|floatformat:2 }}</td>
-                    <td class="num">{{ row.period.closing|floatformat:2 }}</td>
-                    <td class="num" data-sort="{{ row.period.sellable }}">
+                    <td class="num" data-label="Ouverture">{{ row.period.opening|floatformat:2 }}</td>
+                    <td class="num" data-label="Achats">{{ row.period.purchases|floatformat:2 }}</td>
+                    <td class="num" data-label="Clôture">{{ row.period.closing|floatformat:2 }}</td>
+                    <td class="num" data-label="Sorti" data-sort="{{ row.period.sellable }}">
                         {{ row.period.sellable|floatformat:2 }}
                         {% if row.period.known_losses %}
                             <span class="sold-shared" title="{{ row.period.left_the_shelf|floatformat:2 }} sont sortis du stock, dont {{ row.period.known_losses|floatformat:2 }} de pertes déjà déclarées — celles-ci ne peuvent pas avoir été vendues.">*</span>
                         {% endif %}
                     </td>
                     {% else %}
-                    <td class="num muted">—</td>
-                    <td class="num muted">—</td>
-                    <td class="num muted">—</td>
-                    <td class="num muted">—</td>
+                    <td class="num muted" data-label="Ouverture">—</td>
+                    <td class="num muted" data-label="Achats">—</td>
+                    <td class="num muted" data-label="Clôture">—</td>
+                    <td class="num muted" data-label="Sorti">—</td>
                     {% endif %}
                     {% else %}
-                    <td class="num">{{ row.quantity|floatformat:2 }}</td>
+                    <td class="num" data-label="Acheté">{{ row.quantity|floatformat:2 }}</td>
                     {% endif %}
-                    <td class="num" data-sort="{{ row.sold.headline|default_if_none:'' }}">
+                    <td class="num" data-label="Vendu" data-sort="{{ row.sold.headline|default_if_none:'' }}">
                         {% if row.sold and row.sold.headline %}
                             <span {% if row.flag_over %}class="sold-over"
                                   title="Vendu plus qu'il n'en {% if period %}est sorti du stock sur la période{% else %}a été acheté, pertes déclarées déduites{% endif %} : il manque {{ row.sold.missing|floatformat:2 }} {{ row.stock_type.get_unit_display }}. Facture manquante, recette erronée, ou produit caisse mal rattaché."{% endif %}>{{ row.sold.headline|floatformat:2 }}</span>
@@ -153,25 +161,25 @@ next classification.
                     </td>
                     {% if period %}
                     {% if row.in_period and row.reliable %}
-                    <td class="num" data-sort="{{ row.sold.unexplained }}">
+                    <td class="num" data-label="Manquant" data-sort="{{ row.sold.unexplained }}">
                         {% if row.sold.unexplained %}
                             <span class="stock-missing">{{ row.sold.unexplained|floatformat:2 }}</span>
                         {% else %}<span class="muted">—</span>{% endif %}
                     </td>
-                    <td class="num" data-sort="{{ row.missing_value_ht|default:0 }}">
+                    <td class="num" data-label="Manquant (HT)" data-sort="{{ row.missing_value_ht|default:0 }}">
                         {% if row.missing_value_ht %}
                             <span class="stock-missing">{{ row.missing_value_ht|floatformat:2 }} €</span>
                         {% else %}<span class="muted">—</span>{% endif %}
                     </td>
                     {% else %}
-                    <td class="num muted" data-sort="">—</td>
-                    <td class="num muted" data-sort="">—</td>
+                    <td class="num muted" data-label="Manquant" data-sort="">—</td>
+                    <td class="num muted" data-label="Manquant (HT)" data-sort="">—</td>
                     {% endif %}
-                    <td>{{ row.stock_type.get_unit_display }}</td>
+                    <td data-label="Unité">{{ row.stock_type.get_unit_display }}</td>
                     {% else %}
-                    <td>{{ row.stock_type.get_unit_display }}</td>
-                    <td class="num">{{ row.value_ht|floatformat:2 }} €</td>
-                    <td class="num">{{ row.value_ttc|floatformat:2 }} €</td>
+                    <td data-label="Unité">{{ row.stock_type.get_unit_display }}</td>
+                    <td class="num" data-label="Total HT">{{ row.value_ht|floatformat:2 }} €</td>
+                    <td class="num" data-label="Total TTC">{{ row.value_ttc|floatformat:2 }} €</td>
                     {% endif %}
                     <td class="row-actions">
                         <a href="{% url 'inventory:stock_type_update' row.stock_type.pk %}">Modifier</a>
@@ -250,7 +258,7 @@ where its documents name several.
             📈 couvre tout l'historique.{% else %}Ce qu'une ligne ouvre couvre tout l'historique.{% endif %}
         </p>
         <div class="table-wrap">
-            <table class="sub-table charges-table" data-table data-table-sort-only data-table-label="charges">
+            <table class="sub-table charges-table phone-cards" data-table data-table-sort-only data-table-label="charges">
                 {% comment %}
                 Shares and a fixed layout: this list sits beside the panel of
                 products to classify, where a name like
@@ -278,9 +286,11 @@ where its documents name several.
                         « période » is this page's word for two physical
                         counts; the free dates are not one, and a column
                         naming the wrong window is exactly what this header
-                        exists to prevent.
+                        exists to prevent. The words come from the view
+                        (charge_documents_heading), which each row's count
+                        repeats on a phone, where this header is not drawn.
                         {% endcomment %}
-                            Documents {% if period %}(période){% elif date_window %}(ces dates){% else %}(12 mois){% endif %}
+                            {{ charge_documents_heading }}
                         </th>
                         <th class="num">Total TTC</th>
                         <th title="Le dernier document reçu, même hors de la fenêtre des totaux">Dernier</th>
@@ -292,12 +302,12 @@ where its documents name several.
                         <tr class="stock-row" data-toggle="charge-supplier-{{ row.supplier.pk }}"
                             data-movements-url="{% url 'inventory:charge_supplier_documents' row.supplier.pk %}{{ panel_window_query }}">
                             <td><span class="chevron">▸</span> {{ row.supplier.name }}</td>
-                            <td class="num" data-sort="{{ row.documents }}">
+                            <td class="num" data-label="{{ charge_documents_heading }}" data-sort="{{ row.documents }}">
                                 {{ row.documents }}{% if row.documents_all != row.documents %} <span class="muted">sur {{ row.documents_all }}</span>{% endif %}
                             </td>
-                            <td class="num">{{ row.total_ttc|floatformat:2 }} €</td>
-                            <td data-sort="{{ row.last|date:'Y-m-d' }}">{{ row.last|date:"d/m/Y"|default:"—" }}</td>
-                            <td class="row-actions">
+                            <td class="num" data-label="Total TTC">{{ row.total_ttc|floatformat:2 }} €</td>
+                            <td data-label="Dernier" data-sort="{{ row.last|date:'Y-m-d' }}">{{ row.last|date:"d/m/Y"|default:"—" }}</td>
+                            <td class="row-actions phone-card-end">
                                 <button type="button" class="btn btn-small btn-secondary js-price-history-toggle"
                                         title="Évolution de la charge" aria-label="Évolution de la charge"
                                         data-price-history-url="{% url 'inventory:charge_supplier_history' row.supplier.pk %}"
@@ -317,10 +327,10 @@ where its documents name several.
                                 data-toggle="charge-{{ poste.product.pk }}"
                                 data-movements-url="{% url 'inventory:charge_documents' poste.product.pk %}{{ panel_window_query }}">
                                 <td class="muted"><span class="chevron">▸</span>{{ poste.name }}</td>
-                                <td class="num muted">{{ poste.documents }}</td>
-                                <td class="num muted">{{ poste.total_ttc|floatformat:2 }} €</td>
+                                <td class="num muted" data-label="{{ charge_documents_heading }}">{{ poste.documents }}</td>
+                                <td class="num muted" data-label="Total TTC">{{ poste.total_ttc|floatformat:2 }} €</td>
                                 <td></td>
-                                <td class="row-actions">
+                                <td class="row-actions phone-card-end">
                                     <button type="button" class="btn btn-small btn-secondary js-price-history-toggle"
                                             title="Évolution du poste" aria-label="Évolution du poste"
                                             data-price-history-url="{% url 'inventory:charge_history' poste.product.pk %}"

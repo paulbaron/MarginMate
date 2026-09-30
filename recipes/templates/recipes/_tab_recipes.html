@@ -62,8 +62,14 @@ servi.
 {% endif %}
 
 {% if recipes %}
+    {% comment %}
+    Under 860 px each recipe is a card (marginmate.css, « phone cards »),
+    every figure under its column's header word for word (data-label): at
+    375 px the cost, the price and the margin were off the
+    screen of a table three times as wide (UX review, 30/09).
+    {% endcomment %}
     <div class="table-wrap">
-    <table data-table data-table-label="recettes">
+    <table data-table data-table-label="recettes" class="phone-cards">
         <thead>
             <tr>
                 <th>Nom</th>
@@ -91,34 +97,34 @@ servi.
                     la sous-recette que la recette liste elle-même, celle qu'on
                     ouvre ensuite ; ce qu'il y a en dessous est sur sa fiche.
                     {% endcomment %}
-                    <td class="muted">
+                    <td class="muted" data-label="Utilisé">
                         {% for use in recipe.article_uses %}{% if use.via %}Via « {{ use.via }} »{% else %}Directement{% endif %}{% if not use.certain %} — peut-être (« OU »){% endif %}{% if not forloop.last %} · {% endif %}{% endfor %}
                     </td>
                 {% endif %}
-                <td class="muted">{{ recipe.category|default:"—" }}</td>
-                <td>
+                <td class="muted" data-label="Catégorie">{{ recipe.category|default:"—" }}</td>
+                <td class="phone-card-wide" data-label="Vendue en caisse sous">
                     {% for name in recipe.till_names %}
                         <span class="till-chip{% if name|lower == recipe.happy_hour_name|lower %} till-chip-hh" title="Son nom en happy hour{% endif %}">{{ name }}</span>
                     {% empty %}
                         <span class="muted">—</span>
                     {% endfor %}
                 </td>
-                <td class="num" data-sort="{{ recipe.units_sold }}">{% if recipe.units_sold %}{{ recipe.units_sold }}{% else %}<span class="muted">0</span>{% endif %}</td>
-                <td class="num" data-sort="{{ recipe.yield_quantity }}">
+                <td class="num" data-label="Vendus" data-sort="{{ recipe.units_sold }}">{% if recipe.units_sold %}{{ recipe.units_sold }}{% else %}<span class="muted">0</span>{% endif %}</td>
+                <td class="num" data-label="Produit" data-sort="{{ recipe.yield_quantity }}">
                     {{ recipe.yield_quantity|floatformat:2 }} {{ recipe.get_yield_unit_display }}
                     {# Dit seulement quand une vente n'est pas la préparation entière. #}
                     {% if recipe.is_sold_directly and recipe.servings_per_batch != 1 %}
                         <span class="read-as">vendu par {{ recipe.sale_quantity|quantity }}</span>
                     {% endif %}
                 </td>
-                <td class="num">
+                <td class="num" data-label="Coût (HT)">
                     {% with range=recipe.summary_data.cost_range %}
                         {% if range %}
                             {% if range.0 == range.1 %}{{ range.0|floatformat:2 }} €{% else %}{{ range.0|floatformat:2 }} – {{ range.1|floatformat:2 }} €{% endif %}
                         {% else %}—{% endif %}
                     {% endwith %}
                 </td>
-                <td class="num" data-sort="{{ recipe.selling_price_ttc|default_if_none:'' }}">
+                <td class="num" data-label="Prix (TTC)" data-sort="{{ recipe.selling_price_ttc|default_if_none:'' }}">
                     {% if recipe.is_sold_directly %}
                         {{ recipe.selling_price_ttc|floatformat:2 }} €
                     {% else %}
@@ -126,14 +132,14 @@ servi.
                         <span class="read-as">Pas vendue directement</span>
                     {% endif %}
                 </td>
-                <td class="num">
+                <td class="num" data-label="Marge (HT)">
                     {% with range=recipe.summary_data.margin_percent_range %}
                         {% if range %}
                             {% if range.0 == range.1 %}{{ range.0|floatformat:0 }} %{% else %}{{ range.0|floatformat:0 }} – {{ range.1|floatformat:0 }} %{% endif %}
                         {% else %}—{% endif %}
                     {% endwith %}
                 </td>
-                <td class="num">
+                <td class="num" data-label="Facteur">
                     {% with range=recipe.summary_data.price_factor_range %}
                         {% if range %}
                             {% if range.0 == range.1 %}x{{ range.0|floatformat:1 }}{% else %}x{{ range.0|floatformat:1 }} – x{{ range.1|floatformat:1 }}{% endif %}

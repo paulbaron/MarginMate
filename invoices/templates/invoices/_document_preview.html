@@ -14,6 +14,7 @@ import read what it should, and where each product went.
         <p class="message message-error">{{ invoice.error_message }}</p>
     {% endif %}
     {% if lines %}
+        <div class="table-scroll">
         <table class="sub-table">
             <thead>
                 <tr>
@@ -46,6 +47,7 @@ import read what it should, and where each product went.
                 {% endfor %}
             </tbody>
         </table>
+        </div>
     {% else %}
         <p class="muted">Aucune ligne lue.</p>
     {% endif %}

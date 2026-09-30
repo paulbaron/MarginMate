@@ -97,8 +97,13 @@ what was typed in them across swaps (hx-preserve, stable ids).
         {% endif %}
     </div>
 
+    {% comment %}
+    Under 860 px each file is a card (marginmate.css, « phone cards »), its
+    name as the title: the import a phone just sent, read on that phone (UX
+    review, 30/09).
+    {% endcomment %}
     <div class="table-wrap">
-        <table>
+        <table class="phone-cards">
             <thead>
                 <tr>
                     <th>Fichier</th>
@@ -120,16 +125,16 @@ what was typed in them across swaps (hx-preserve, stable ids).
                         <td>{{ entry.name }}</td>
                         {% if entry.gone %}
                             {# Deleted since the import: said, and never linked to - its page is gone (workspace.batch_rows). #}
-                            <td class="muted">{{ entry.shop|default:"—" }}</td>
-                            <td class="muted">—</td>
-                            <td class="num muted">—</td>
-                            <td><span class="status-pill status-ignored">Supprimé depuis l'import</span></td>
+                            <td class="muted" data-label="Enseigne">{{ entry.shop|default:"—" }}</td>
+                            <td class="muted" data-label="Date">—</td>
+                            <td class="num muted" data-label="Total TTC">—</td>
+                            <td data-label="Résultat"><span class="status-pill status-ignored">Supprimé depuis l'import</span></td>
                             <td></td>
                         {% elif entry.status == "ok" %}
-                            <td>{{ entry.invoice.supplier.name|default:entry.shop }}</td>
-                            <td>{% if entry.invoice %}{{ entry.invoice.invoice_date|date:"d/m/Y"|default:"—" }}{% else %}{{ entry.date|default:"—" }}{% endif %}</td>
-                            <td class="num">{% if entry.invoice %}{{ entry.invoice.total_ttc|floatformat:2 }}{% else %}{{ entry.total }}{% endif %} €</td>
-                            <td>
+                            <td data-label="Enseigne">{{ entry.invoice.supplier.name|default:entry.shop }}</td>
+                            <td data-label="Date">{% if entry.invoice %}{{ entry.invoice.invoice_date|date:"d/m/Y"|default:"—" }}{% else %}{{ entry.date|default:"—" }}{% endif %}</td>
+                            <td class="num" data-label="Total TTC">{% if entry.invoice %}{{ entry.invoice.total_ttc|floatformat:2 }}{% else %}{{ entry.total }}{% endif %} €</td>
+                            <td data-label="Résultat">
                                 {% if entry.invoice %}
                                     <span class="status-pill status-{{ entry.invoice.review_state.css }}">{{ entry.invoice.review_state.label }}</span>
                                 {% elif entry.receipt is False %}
@@ -140,7 +145,7 @@ what was typed in them across swaps (hx-preserve, stable ids).
                                     <span class="status-pill status-NEEDS_REVIEW">À vérifier</span>
                                 {% endif %}
                             </td>
-                            <td>
+                            <td class="phone-card-wide">
                                 {% if entry.receipt is False %}
                                     <a class="btn btn-small btn-secondary" href="{% url 'invoices:invoice_edit_lines' entry.invoice_id %}">Voir les lignes</a>
                                 {% else %}
@@ -149,17 +154,17 @@ what was typed in them across swaps (hx-preserve, stable ids).
                             </td>
                         {% elif entry.status == "pending" %}
                             <td colspan="3" class="muted">{% if batch.is_active %}en attente{% else %}pas encore lu{% endif %}</td>
-                            <td><span class="status-pill status-PENDING">{% if batch.is_active %}En attente{% else %}Non lu{% endif %}</span></td>
+                            <td data-label="Résultat"><span class="status-pill status-PENDING">{% if batch.is_active %}En attente{% else %}Non lu{% endif %}</span></td>
                             <td></td>
                         {% elif entry.status == "unrecognised" %}
-                            <td class="muted">{% if entry.header %}« {{ entry.header }} »{% else %}{{ entry.message }}{% endif %}</td>
-                            <td>{{ entry.read_date|default:"—" }}</td>
-                            <td class="num">{% if entry.read_total %}{{ entry.read_total }} €{% else %}—{% endif %}</td>
-                            <td>
+                            <td class="muted" data-label="Enseigne">{% if entry.header %}« {{ entry.header }} »{% else %}{{ entry.message }}{% endif %}</td>
+                            <td data-label="Date">{{ entry.read_date|default:"—" }}</td>
+                            <td class="num" data-label="Total TTC">{% if entry.read_total %}{{ entry.read_total }} €{% else %}—{% endif %}</td>
+                            <td data-label="Résultat">
                                 <span class="status-pill status-ERROR">Enseigne inconnue</span>
                                 {% if not entry.kept %}<span class="muted">réimportez ce fichier pour choisir son enseigne</span>{% endif %}
                             </td>
-                            <td>
+                            <td class="phone-card-wide">
                                 {% if entry.kept %}
                                     <form id="shop-choice-{{ batch.pk }}-{{ forloop.counter0 }}" hx-preserve method="post" action="{% url 'invoices:receipt_batch_assign' batch.pk forloop.counter0 %}" class="inline-form shop-choice">
                                         {% csrf_token %}
@@ -172,7 +177,7 @@ what was typed in them across swaps (hx-preserve, stable ids).
                             </td>
                         {% else %}
                             <td colspan="3" class="muted">{{ entry.message }}</td>
-                            <td>
+                            <td data-label="Résultat">
                                 {% if entry.consignes %}<span class="status-pill status-ignored">Rangé dans Consignes</span>
                                 {% elif entry.status == "duplicate" %}<span class="status-pill status-CANCELLED">Déjà importé</span>
                                 {% elif entry.status == "ignored" %}<span class="status-pill status-CANCELLED">Ignoré</span>

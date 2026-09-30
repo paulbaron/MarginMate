@@ -39,6 +39,7 @@
     {% endif %}
 
     {% if job.progress %}
+        <div class="table-scroll">
         <table class="job-status-spaced">
             <thead>
                 <tr>
@@ -62,6 +63,7 @@
                 {% endfor %}
             </tbody>
         </table>
+        </div>
     {% endif %}
 
     {% if job.test_matches and job.test_matches.0.decision %}
@@ -69,6 +71,7 @@
         A website's test: what each invoice link found is, and what a gather
         would do with it (scrapers/website.list_website_invoices).
         {% endcomment %}
+        <div class="table-scroll">
         <table class="job-status-spaced">
             <thead>
                 <tr><th>Ligne de la page</th><th>Date lue</th><th>Lien</th><th>Récupération</th></tr>
@@ -84,7 +87,9 @@
                 {% endfor %}
             </tbody>
         </table>
+        </div>
     {% elif job.test_matches %}
+        <div class="table-scroll">
         <table class="job-status-spaced">
             <thead>
                 <tr>
@@ -105,6 +110,7 @@
                 {% endfor %}
             </tbody>
         </table>
+        </div>
     {% elif job.kind == "TEST" and job.status == "SUCCESS" %}
         <p class="muted job-status-spaced">Aucun email ne correspond à ces critères sur cette période.</p>
     {% endif %}

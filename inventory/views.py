@@ -349,6 +349,18 @@ def catalogue_context(request) -> dict:
     context["charge_total_ttc"] = sum(
         (row["total_ttc"] for row in context["charge_suppliers"]), Decimal("0")
     )
+    # What the charges' « Documents » column counts over, said once for its
+    # header and for each row's count: on a phone the header row is not
+    # drawn and every row says it itself (data-label, _catalogue.html) -
+    # « 12 » read as every bill there is was the 20/09 confusion (« Free est
+    # dit avoir 12 documents alors qu'en réalité il y en a plus »).
+    # « période » is this page's word for two counts, never for two dates.
+    if period is not None:
+        context["charge_documents_heading"] = "Documents (période)"
+    elif asked:
+        context["charge_documents_heading"] = "Documents (ces dates)"
+    else:
+        context["charge_documents_heading"] = "Documents (12 mois)"
     return context
 
 

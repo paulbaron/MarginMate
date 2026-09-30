@@ -42,7 +42,8 @@ photo, oldest first, and the documents that cannot be used as they are.
 {% if to_fix %}
     <h2>Documents à corriger</h2>
     <div class="table-wrap">
-        <table data-table data-table-label="documents à corriger">
+        {% comment %}Under 860 px each document is a card (marginmate.css, « phone cards »).{% endcomment %}
+        <table data-table data-table-label="documents à corriger" class="phone-cards">
             <thead>
                 <tr>
                     <th>Fournisseur</th>
@@ -56,22 +57,22 @@ photo, oldest first, and the documents that cannot be used as they are.
                 {% for invoice in to_fix %}
                     <tr>
                         <td><a href="{% url 'invoices:invoice_detail' invoice.pk %}">{{ invoice.supplier.name }}</a></td>
-                        <td>{{ invoice.invoice_number|default:"—" }}</td>
-                        <td>
+                        <td data-label="N°">{{ invoice.invoice_number|default:"—" }}</td>
+                        <td class="phone-card-wide" data-label="Problème">
                             {% if not invoice.invoice_date %}<span class="status-pill status-ERROR">sans date</span>{% endif %}
                             {% if invoice.status == "ERROR" %}<span class="status-pill status-ERROR">import en échec</span>{% endif %}
                             {% if invoice.supplier_doubt %}<span class="status-pill status-NEEDS_REVIEW">fournisseur à confirmer</span> <span class="muted">{{ invoice.supplier_doubt|truncatechars:160 }}</span>{% endif %}
                             {% if invoice.is_einvoice and invoice.error_message %}<span class="status-pill status-NEEDS_REVIEW">totaux du fournisseur</span>{% endif %}
                             {% if invoice.error_message %}<span class="muted">{{ invoice.error_message|truncatechars:90 }}</span>{% endif %}
                         </td>
-                        <td class="num">{{ invoice.total_ht|floatformat:2 }} €</td>
+                        <td class="num" data-label="Total HT">{{ invoice.total_ht|floatformat:2 }} €</td>
                         {% comment %}
                         « Corriger » sur une facture électronique dont
                         l'arithmétique du fournisseur ne tient pas : personne
                         ici ne corrige cela, le fournisseur doit la
                         réémettre. « Ouvrir » dit ce que le bouton fait.
                         {% endcomment %}
-                        <td class="num"><a class="btn btn-small" href="{% url 'invoices:invoice_edit_lines' invoice.pk %}">{% if invoice.is_einvoice %}Ouvrir{% else %}Corriger{% endif %}</a></td>
+                        <td class="num phone-card-end"><a class="btn btn-small" href="{% url 'invoices:invoice_edit_lines' invoice.pk %}">{% if invoice.is_einvoice %}Ouvrir{% else %}Corriger{% endif %}</a></td>
                     </tr>
                 {% endfor %}
             </tbody>

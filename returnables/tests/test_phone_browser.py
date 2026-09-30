@@ -21,6 +21,11 @@ see.
 * **Thumb-sized**: every small button, « Effacer » and a photo's « Retirer »
   44 px tall at least; a long file name never scrolls the page sideways; an
   upload's result is in the screen its redirect lands on.
+* **« Menu »** (30/09, the topbar folded under 860 px): it opens under the
+  bar, which scrolls away with the page here; a tap on the veil around it
+  only shuts it - never a count field focused under the finger - and a
+  finger dragged on the veil scrolls nothing (the bar would carry its menu
+  off the screen).
 
 Tagged "browser": `--exclude-tag=browser` for the fast loop; run with the
 cached chromedriver (webdriver-manager looks the latest one up online).
@@ -126,9 +131,59 @@ class ConsignesOnAPhoneInBrowserTests(StaticLiveServerTestCase):
         element = self.element(css)
         self.script("arguments[0].scrollIntoView({block: 'center'})", element)
         box = self.box(css)
-        x, y = box["left"] + box["width"] / 2, box["top"] + box["height"] / 2
+        self.touch(box["left"] + box["width"] / 2, box["top"] + box["height"] / 2)
+
+    def touch(self, x, y):
+        """A finger's tap at (x, y), whatever is there."""
         self.driver.execute_cdp_cmd("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]})
         self.driver.execute_cdp_cmd("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+
+    def drag(self, x, y, to_y, steps=12):
+        """A finger put down at (x, y), dragged to (x, to_y) and held there
+        before it lifts: no fling goes on scrolling after it (a fling still
+        running takes the next tap to stop itself)."""
+        self.driver.execute_cdp_cmd("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]})
+        for step in range(1, steps + 1):
+            at = y + (to_y - y) * step / steps
+            self.driver.execute_cdp_cmd("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": x, "y": at}]})
+        time.sleep(0.3)
+        self.driver.execute_cdp_cmd("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": x, "y": to_y}]})
+        self.driver.execute_cdp_cmd("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+
+    def scrolled_still(self):
+        """Until the page stops scrolling."""
+        seen = []
+
+        def still():
+            seen.append(self.script("return window.scrollY;"))
+            time.sleep(0.1)
+            return len(seen) > 2 and seen[-1] == seen[-2] == seen[-3]
+
+        self.wait_for(still)
+        return seen[-1]
+
+    def menu_state(self):
+        """« Menu »'s aria-expanded - None where there is no « Menu »."""
+        return self.script(
+            "var toggle = document.querySelector('[data-topbar-toggle]');"
+            "return toggle ? toggle.getAttribute('aria-expanded') : null;"
+        )
+
+    def under(self, x, y):
+        """What a finger at (x, y) lands on: a field's name, else its class."""
+        return self.script(
+            "var e = document.elementFromPoint(arguments[0], arguments[1]);"
+            "return e ? (e.getAttribute('name') || e.className) : null;",
+            x, y,
+        )
+
+    def open_the_menu(self):
+        """« Menu » tapped, the page at its top - where the bar is, here."""
+        self.assertEqual(self.script("return window.scrollY;"), 0)
+        self.assertEqual(self.menu_state(), "false", "« Menu » drawn shut")
+        box = self.box("[data-topbar-toggle]")
+        self.touch(box["left"] + box["width"] / 2, box["top"] + box["height"] / 2)
+        self.wait_for(lambda: self.menu_state() == "true")
 
     def value(self, name):
         return self.script("return document.querySelector('[name=\"' + arguments[0] + '\"]').value;", name)
@@ -189,9 +244,78 @@ class ConsignesOnAPhoneInBrowserTests(StaticLiveServerTestCase):
             ".map(function (f) { return parseFloat(getComputedStyle(f).fontSize); }));"
         )
         self.assertGreaterEqual(smallest, 16)
-        self.assertEqual(self.script("return getComputedStyle(document.querySelector('.topbar')).position;"), "static")
+        # It scrolls away with the page (not sticky), and stays the box its
+        # menu and veil are drawn in: relative, not static (30/09) - static,
+        # its z-index went and the veil dropped behind the page.
+        self.assertEqual(self.script("return getComputedStyle(document.querySelector('.topbar')).position;"), "relative")
+        # And the page leaves it no room above what it scrolls to: the bar is
+        # not there once scrolled. html:has(.consignes-page) weighs what the
+        # folded bar's html.topbar-menu-ready does - coming later is what
+        # makes 0 win over 6rem, here only.
+        self.assertTrue(self.script("return document.documentElement.classList.contains('topbar-menu-ready');"))
+        self.assertEqual(self.script("return getComputedStyle(document.documentElement).scrollPaddingTop;"), "0px")
         # The draft of nothing is nothing: no notice on a fresh page.
         self.assertTrue(self.script("return document.querySelector('[data-draft-notice]').hidden;"))
+
+    def test_the_menu_opens_under_the_bar_and_a_tap_on_the_veil_types_nothing(self):
+        """The bar scrolls away with the page here, and « Menu » still opens
+        under it, over the counts. A tap beside the menu - on its veil, over
+        a count - only shuts it: on a phone the tap that closes a menu would
+        land on the field under the finger, and the keypad come up over a
+        count nobody meant to type. A taller phone (812 px), so that counts
+        lie under the veil below the open menu."""
+        tall = 812
+        self.driver.execute_cdp_cmd(
+            "Emulation.setDeviceMetricsOverride", {"width": WIDTH, "height": tall, "deviceScaleFactor": 2, "mobile": True}
+        )
+        self.open("/consignes/")
+        self.script("window.pageMark = 'toujours là';")
+        self.open_the_menu()
+        menu, bar = self.box("#topbar-menu"), self.box(".topbar")
+        self.assertLessEqual(abs(menu["top"] - (bar["top"] + bar["height"])), 1, (menu, bar))
+        self.assertLessEqual(menu["left"] + menu["width"], WIDTH)
+        bottom = menu["top"] + menu["height"]
+        counts = self.script(
+            "return Array.from(document.querySelectorAll('input[name^=\"nombre-\"]')).map(function (f) {"
+            " var r = f.getBoundingClientRect(); return [f.name, r.left + r.width / 2, r.top + r.height / 2]; });"
+        )
+        below = [count for count in counts if bottom + 8 < count[2] < tall - 4]
+        self.assertTrue(below, f"no count under the veil: menu to {bottom:.0f}, counts {counts}")
+        name, x, y = below[0]
+        self.assertEqual(self.under(x, y), "topbar", "the veil is over the count")
+        self.touch(x, y)
+        self.wait_for(lambda: self.menu_state() == "false")
+        time.sleep(0.3)   # a focus, a keypad or a page left would be there by now
+        self.assertFalse(self.script("return document.activeElement.matches('input, select, textarea');"))
+        self.assertEqual(self.value(name), "")
+        self.assertEqual(self.script("return window.pageMark;"), "toujours là")
+        self.assertEqual(self.script("return location.pathname + location.search;"), "/consignes/")
+        self.assertEqual(self.script("return window.visualViewport.scale;"), 1)
+        # Shut, the veil is gone: the count is what a tap there reaches.
+        self.assertEqual(self.under(x, y), name)
+
+    def test_a_finger_dragged_on_the_veil_scrolls_nothing(self):
+        """Here the bar is not sticky: a page scrolled under the open menu
+        carried the bar and its menu off the top of the screen, the veil
+        still dimming all of it, nothing left in sight to close it with. The
+        veil takes no scrolling (touch-action: none). The same drag, the menu
+        shut, scrolls the page - what the veil has to stop."""
+        x, y, to_y = 20, HEIGHT - 20, HEIGHT - 260
+        self.assertGreater(self.script("return document.documentElement.scrollHeight;"), HEIGHT + 300)
+        self.drag(x, y, to_y)
+        self.assertGreater(self.scrolled_still(), 100)
+        self.script("window.scrollTo(0, 0);")
+        self.assertEqual(self.scrolled_still(), 0)
+
+        self.open_the_menu()
+        menu = self.box("#topbar-menu")
+        self.assertLess(menu["top"] + menu["height"], y - 8, "the finger is on the veil, below the menu")
+        self.assertEqual(self.under(x, y), "topbar")
+        self.drag(x, y, to_y)
+        self.assertEqual(self.scrolled_still(), 0, "a finger dragged on the veil scrolled the page under the open menu")
+        bar = self.box(".topbar")
+        self.assertEqual(bar["top"], 0)
+        self.assertLessEqual(abs(self.box("#topbar-menu")["top"] - menu["top"]), 2)
 
     def test_two_quick_taps_on_plus_make_two_and_nothing_is_sent(self):
         self.script("window.pageMark = 'toujours là';")

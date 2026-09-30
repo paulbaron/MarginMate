@@ -112,6 +112,7 @@
 
             <h3>Identifiants retenus</h3>
             {% if report.known %}
+                <div class="table-scroll">
                 <table data-table data-table-label="identifiants">
                     <thead><tr><th>Identifiant</th><th>Sur ses documents</th><th></th></tr></thead>
                     <tbody>
@@ -139,6 +140,7 @@
                         {% endfor %}
                     </tbody>
                 </table>
+                </div>
             {% else %}
                 <p class="muted">Aucun.</p>
             {% endif %}
@@ -186,6 +188,7 @@
             {% if report.printed %}
                 <details{% if not report.known %} open{% endif %}>
                     <summary>Imprimés sur ses documents, non retenus ({{ report.printed|length }})</summary>
+                    <div class="table-scroll">
                     <table data-table data-table-label="imprimés">
                         <thead><tr><th>Identifiant</th><th>Pourquoi</th><th></th></tr></thead>
                         <tbody>
@@ -207,6 +210,7 @@
                             {% endfor %}
                         </tbody>
                     </table>
+                    </div>
                 </details>
             {% endif %}
 
@@ -275,6 +279,7 @@
     <section class="card" aria-labelledby="historique" id="historique">
         <h2>Historique</h2>
         {% if changes %}
+            <div class="table-scroll">
             <table data-table data-table-sort-only data-table-label="historique">
                 <thead><tr><th>Date</th><th>Changement</th><th>Cause</th><th></th></tr></thead>
                 <tbody>
@@ -308,6 +313,7 @@
                     {% endfor %}
                 </tbody>
             </table>
+            </div>
         {% else %}
             <p class="muted">Rien encore : chaque changement de ce qui le reconnaît s'inscrit ici, avec sa cause et son annulation.</p>
         {% endif %}

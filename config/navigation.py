@@ -35,6 +35,21 @@ SECTION_BY_APP = {
     "returnables": "consignes",
 }
 
+#: What the folded topbar says under 860 px (base.html's .topbar-section):
+#: the words of the link a page lights. The links keep their own words in
+#: base.html; tests/test_navigation.py checks each page shows its lit link's.
+SECTION_LABELS = {
+    "produits": "Produits & charges",
+    "achats": "Achats",
+    "banque": "Banque",
+    "recettes": "Recettes & ventes",
+    "marges": "Marges",
+    "personnel": "Personnel",
+    "inventaires": "Inventaires",
+    "consignes": "Consignes",
+    "donnees": "Données",
+}
+
 
 def section_of(match) -> str:
     if match is None:
@@ -52,7 +67,9 @@ def navigation(request):
         # Multi mode, no espace bound (the login, 404 and CSRF pages): no
         # section to light, no database to count in.
         return {}
+    section = section_of(getattr(request, "resolver_match", None))
     return {
-        "nav_section": section_of(getattr(request, "resolver_match", None)),
+        "nav_section": section,
+        "nav_section_label": SECTION_LABELS.get(section, ""),
         "pos_pending_count_nav": PosProduct.objects.filter(recipe__isnull=True, ignored=False).count(),
     }

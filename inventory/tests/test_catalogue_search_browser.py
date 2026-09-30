@@ -64,6 +64,16 @@ class CatalogueSearchInBrowserTests(StaticLiveServerTestCase):
         super().tearDownClass()
 
     def setUp(self):
+        # A computer's window, the list beside the panel: these tests are
+        # about the desktop's table. Headless Chrome's own window is 800 ×
+        # 600, under 860 px, where since 30/09 the rows are cards and the
+        # panel shows one product at a time - the phone's page, which
+        # test_products_phone_browser.py drives.
+        self.driver.execute_cdp_cmd(
+            "Emulation.setDeviceMetricsOverride",
+            {"width": 1400, "height": 900, "deviceScaleFactor": 1, "mobile": False},
+        )
+        self.addCleanup(self.driver.execute_cdp_cmd, "Emulation.clearDeviceMetricsOverride", {})
         self.supplier = make_supplier(name="Grossiste Exemple")
         self.vodka = make_stock_type(name="Vodka Exemple", unit=UnitChoices.LITRE, category="Spiritueux")
         self.gin = make_stock_type(name="Gin Exemple", unit=UnitChoices.LITRE, category="Spiritueux")
@@ -96,6 +106,9 @@ class CatalogueSearchInBrowserTests(StaticLiveServerTestCase):
         log_in_the_browser(self.driver, self.live_server_url)
         self.driver.get(self.live_server_url + reverse("inventory:stock_list"))
         self.script("localStorage.clear()")
+        # The pin held, or every test below passes on the phone's cards and
+        # nothing drives the desktop's table any more (they do pass there).
+        self.assertEqual(self.script("return window.innerWidth;"), 1400)
 
     def wait_for(self, condition):
         from selenium.webdriver.support.ui import WebDriverWait

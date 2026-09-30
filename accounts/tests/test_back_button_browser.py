@@ -79,6 +79,11 @@ class BackButtonInBrowserTests(TwoTenantsTestCase, StaticLiveServerTestCase):
         except Exception as exc:  # noqa: BLE001
             raise unittest.SkipTest(f"Chrome indisponible : {exc}")
         self.addCleanup(self.driver.quit)
+        # Wide enough for the topbar to draw its links and the bar's name:
+        # under 860 px (headless Chrome's window is 800 px) they fold into
+        # « Menu » (30/09), out of innerText - and « Bar Alpha » in the topbar
+        # is half of what Back must never show.
+        self.driver.set_window_size(1280, 900)
 
     def script(self, source):
         return self.driver.execute_script(source)
@@ -111,6 +116,12 @@ class BackButtonInBrowserTests(TwoTenantsTestCase, StaticLiveServerTestCase):
         self.script("document.querySelector('.topbar-logout button').click()")
         self.wait_for(lambda: self.path() == reverse("accounts:login"))
 
+    def assertShowsBarA(self):
+        """Bar A's page as it is drawn: its row and its name in the topbar -
+        or Back finding neither would prove nothing."""
+        text = self.text()
+        self.assertEqual([word for word in ALPHA if word not in text], [])
+
     def assertBackNeverShowsBarA(self, steps):
         """Back, step by step, until the tab's first page: never a word of
         bar A's page."""
@@ -127,7 +138,7 @@ class BackButtonInBrowserTests(TwoTenantsTestCase, StaticLiveServerTestCase):
     def test_back_after_another_bar_s_login_never_shows_the_first_bar_s_page(self):
         self.log_in("alpha@example.invalid")
         self.open("invoices:supplier_list")
-        self.assertIn("Alphaville", self.text())
+        self.assertShowsBarA()
         self.log_out()
         self.log_in("beta@example.invalid")
         self.open("invoices:supplier_list")
@@ -138,7 +149,7 @@ class BackButtonInBrowserTests(TwoTenantsTestCase, StaticLiveServerTestCase):
     def test_back_after_a_logout_never_shows_the_page_left(self):
         self.log_in("alpha@example.invalid")
         self.open("invoices:supplier_list")
-        self.assertIn("Alphaville", self.text())
+        self.assertShowsBarA()
         self.log_out()
         self.assertBackNeverShowsBarA(steps=2)
 
@@ -146,7 +157,7 @@ class BackButtonInBrowserTests(TwoTenantsTestCase, StaticLiveServerTestCase):
         """Achats' tabs are boosted: htmx stored the page each click left."""
         self.log_in("alpha@example.invalid")
         self.open("invoices:invoice_list")
-        self.assertIn("Alphaville", self.text())
+        self.assertShowsBarA()
         tab = self.script("var tab = document.querySelectorAll('nav.tabs a')[1]; tab.click(); return tab.pathname;")
         self.wait_for(lambda: self.path() == tab)
         time.sleep(SETTLE_SECONDS)

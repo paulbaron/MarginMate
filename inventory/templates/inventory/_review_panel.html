@@ -7,6 +7,11 @@ JavaScript the same forms post normally and come back to the page.
 <div id="review-panel-body" class="review-panel-body">
     <div class="review-panel-head">
         <h2 id="review-panel-title">À classer <span class="count-pill">{{ review_total }}</span></h2>
+        {% comment %}
+        Under 1280 px the panel comes before the list: the way past it (shown
+        there only, marginmate.css).
+        {% endcomment %}
+        <a class="review-panel-jump" href="#articles">La liste ↓</a>
         <button type="button" class="link-button" data-panel-close>Masquer</button>
     </div>
 
@@ -180,6 +185,20 @@ Confiance : {{ confidence_counts.high|default:0 }} haute, {{ confidence_counts.m
             <button type="button" class="btn btn-small btn-secondary" data-panel-close>Fermer le panneau</button>
         </div>
     {% endfor %}
+
+    {% if review_products|length > 1 %}
+        {% comment %}
+        The way to the other cards where the panel sits above the list
+        (stock_list.html's #review-unfold, which the panel's answers leave in
+        place): drawn under the first card there, and nowhere beside the list.
+        {% endcomment %}
+        {% with hidden=review_products|length|add:"-1" %}
+        <label for="review-unfold" class="btn btn-secondary review-unfold">
+            <span class="review-unfold-more" id="review-unfold-name">{% if hidden == 1 %}Voir l'autre produit{% else %}Voir les {{ hidden }} autres produits{% endif %}</span>
+            <span class="review-unfold-less" aria-hidden="true">N'afficher que le premier</span>
+        </label>
+        {% endwith %}
+    {% endif %}
 
     {% if review_more %}
         <p class="muted">… et {{ review_more }} autres produits, affichés à mesure que ceux-ci sont classés.</p>
