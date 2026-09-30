@@ -2929,8 +2929,13 @@ is Django's problem on every later read.
 (`spending.QUERIES`, pinned by a test): the lines, their payments, those
 payments' invoice lines, the rules. An invoice on two lines is read once.
 
-No new navigation link: « Dépenses par catégorie » is reached from Banque's
-own header. Another entry in the topbar moves where the links wrap, which is
+No new navigation link: « Dépenses par catégorie » is one of **Banque's
+three tabs** (`bank/_tabs.html`: « Opérations », « Dépenses par catégorie »,
+« Entrées d'argent », each page passing `bank_url`, `spending_url`,
+`income_url` over its period and `bank_tab` for the lit one). The owner,
+01/10/2026: a button to it in several places (Banque's header, Marges'
+header, each page's own) was one too many - the tabs are the only buttons
+now, and Marges no longer links there. Another entry in the topbar moves where the links wrap, which is
 measured width by width by `accounts/tests/test_topbar_browser.py` (the bar
 without its script, under 860 px) and `TopbarRoomInBrowserTests`.
 
@@ -3092,8 +3097,37 @@ it received - a payout of the 1st pays the month before, and the page says
 so. « Versements carte », a row a day, comes last: earlier, it pushed the
 rest of the page out of reach.
 
-Reached from Banque's header button and its « Entrées » stat, both over
+Reached from Banque's tab and its « Entrées » stat, both over
 Banque's period (`_bank_income_url`), and from « Dépenses ». No topbar link.
+
+### A document's file: its download name, and Banque's zip
+
+**Every door out names the file « Darty 11€55 01_10_2026.pdf »** (the owner,
+01/10/2026): the supplier, the total TTC with « € » for the decimal point,
+the date with underscores, « sans date » when there is none, the stored
+file's own extension (a ticket's photo stays « .jpg »). One definition,
+`invoices/filenames.py::download_name`; the stored file keeps its name.
+
+- `invoices:invoice_file` (`/invoices/<pk>/fichier/`) serves a document's
+  file under that name - inline for a PDF or a photo, so the frame and
+  « Voir le PDF » show it and the browser's own « save » takes the name from
+  the header; `?telecharger=1` saves it. The document's two pages link here,
+  never to `source_file.url` (`/fichiers/…`, which still serves the stored
+  name). Its headers are `accounts.views.file_response`, shared with that
+  view: nosniff, no-store, sandboxed when not inline, SAMEORIGIN.
+- **« Télécharger les factures de la période »** on Banque
+  (`bank:invoice_files`, `/banque/factures/`, `bank/invoice_files.py`): every
+  document a DEBIT of Banque's period paid, once each, in one zip. The
+  period is read by `views._period` / `_in_period`, the same as the page, so
+  the zip holds what the operations on screen are linked to; its name says
+  the period (« Factures juin 2026.zip »). Two files of one name are numbered
+  (`UniqueNames`, case-blind as Windows is). A document with no file is
+  listed in « Factures sans fichier.txt » inside the zip, and the page says
+  how many - never dropped in silence. Nothing paid: back to the page with a
+  message. The count beside the button is taken off the rows the page
+  already read (no query).
+
+Tests: `invoices/tests/test_filenames.py`, `bank/tests/test_invoice_files.py`.
 
 ### Export, import and clear (`transfer/`, « Données »)
 
@@ -4175,9 +4209,15 @@ counts, because a number nobody can explain is a number nobody will trust.
 The view does no arithmetic: `margins_for` answers and the page says what the
 figures are worth.
 
-**The page says which base it counts, in its first sentence, and links to the
-other one.** « Ce qui a été **facturé** … à la date des factures », beside a
-link to « Dépenses par catégorie » carrying the window. It used to open on
+**Short sentences** (the owner, 01/10/2026: « trop verbose »): each section
+says in one line what it counts, and the warnings say what is wrong with a
+figure and nothing more. The long explanations were cut from the page and
+live here; the figures, the coverage beside every margin and every warning
+stayed. A sentence added back to this page has to earn its line.
+
+**The page says which base it counts, in its first sentence.** « Ce qui a
+été **facturé** … à la date des factures ». It no longer links to
+« Dépenses par catégorie » (one of Banque's tabs now). It used to open on
 « ce qui est sorti » - the words « Dépenses » uses for the statement - and
 said « facturé » a hundred lines down, where a reader arriving from the
 topbar never sees it: the confusion the rule was written against, live in
@@ -4442,7 +4482,9 @@ is an id**: a link handing garbage back makes a stale bookmark permanent.
 
 The navigation is **Produits & charges** (what was bought, by article, the
 charges, and the products to classify),
-**Achats** (invoices, tickets, their sources and suppliers) and **Recettes & ventes**
+**Factures** (invoices, tickets, their sources and suppliers - « Achats »
+until 01/10/2026, renamed on screen only: the section key stays
+`purchases`) and **Recettes & ventes**
 (recipes, till products, sales), each with the count of what waits there
 (`config/navigation.py` decides which link a page lights up), and **Données**
 (export, import, clear). They were

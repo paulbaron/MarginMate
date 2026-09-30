@@ -90,7 +90,7 @@ def portal_note(how: str, name: str = "Eau Essai", supplier: str = "Eau Essai") 
     return (
         f"Source « {name} » ({supplier}) : {how} — elle se connecte à https://portail.eau.example/connexion avec "
         "EAU_ESSAI_LOGIN et EAU_ESSAI_PASSWORD du fichier .env ; vérifiez l'adresse et les variables, puis cochez "
-        "« Active » sur sa page (Achats → Sources)."
+        "« Active » sur sa page (Factures → Sources)."
     )
 
 
@@ -384,7 +384,7 @@ class PortalTrustTests(TestCase):
                 (
                     "Source « Portail essai » (UBA) : créée inactive — elle se connecte à "
                     "https://portail-inconnu.example/connexion avec PORTAIL_ESSAI_LOGIN et PORTAIL_ESSAI_PASSWORD du "
-                    "fichier .env ; vérifiez l'adresse et les variables, puis cochez « Active » sur sa page (Achats "
+                    "fichier .env ; vérifiez l'adresse et les variables, puis cochez « Active » sur sa page (Factures "
                     "→ Sources)."
                 ),
                 (

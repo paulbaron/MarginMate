@@ -287,7 +287,7 @@ class SupplierPagesTests(TestCase):
         self.supplier_page = reverse("invoices:supplier_detail", args=[self.shop.pk])
 
     def test_they_lead_back_to_the_suppliers_tab(self):
-        back = f'<a href="{SUPPLIERS}">← Achats · Enseignes et fournisseurs</a>'
+        back = f'<a href="{SUPPLIERS}">← Factures · Enseignes et fournisseurs</a>'
         self.assertContains(self.client.get(self.supplier_page), back, html=True)
         self.assertContains(self.client.get(reverse("invoices:supplier_create")), back, html=True)
         ai = self.client.get(reverse("invoices:supplier_detail", args=[Supplier.objects.get(code="OTHER").pk]))
@@ -298,7 +298,7 @@ class SupplierPagesTests(TestCase):
     def test_a_creation_asked_from_elsewhere_leads_back_there(self):
         page = self.client.get(reverse("invoices:supplier_create") + f"?retour={CREATE_SOURCE}")
         self.assertContains(page, f'<a href="{CREATE_SOURCE}">← Retour</a>', html=True)
-        self.assertNotContains(page, "← Achats · Enseignes et fournisseurs")
+        self.assertNotContains(page, "← Factures · Enseignes et fournisseurs")
 
     def test_a_supplier_names_its_sources(self):
         make_invoice_type(supplier=self.shop, name="Epicerie Exemple - Factures")
@@ -325,7 +325,7 @@ class SupplierPagesTests(TestCase):
         metro = Supplier.objects.get(code="METRO")
         make_invoice(supplier=metro)
         page = self.client.get(reverse("invoices:supplier_detail", args=[metro.pk]))
-        own = "Récupérées par son propre module, avec « Récupérer les nouvelles factures » en haut d'Achats"
+        own = "Récupérées par son propre module, avec « Récupérer les nouvelles factures » en haut de Factures"
         self.assertContains(page, own)
         self.assertNotContains(page, "arrivent par l'import")
         self.assertNotContains(page, "Comment arrivera son premier document")

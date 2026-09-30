@@ -15,8 +15,6 @@
             {% if has_lines %}
                 <a class="btn btn-secondary" href="{% url 'bank:proposals' %}">Propositions à valider</a>
             {% endif %}
-            <a class="btn btn-secondary" href="{{ spending_url }}">Dépenses par catégorie</a>
-            <a class="btn btn-secondary" href="{{ income_url }}">Entrées d'argent</a>
             <a class="btn btn-secondary" href="{% url 'bank:rule_list' %}">Dépenses sans facture attendue</a>
             {% if has_lines %}
                 <form method="post" action="{% url 'bank:bank_reconcile' %}">
@@ -27,6 +25,8 @@
             {% endif %}
         </div>
     </div>
+
+    {% include "bank/_tabs.html" %}
 
     <div class="card">
         <form method="post" enctype="multipart/form-data" class="inline-form">
@@ -66,6 +66,16 @@
             <button class="btn btn-small btn-secondary" type="submit">Afficher</button>
             {% if date_window %}<a class="btn btn-small btn-secondary" href="{{ clear_window_url }}">Effacer</a>{% endif %}
             {% if month %}<span class="muted">Le mois choisi l'emporte : « Tous les mois » rend les dates libres.</span>{% endif %}
+            {% comment %}
+            Every invoice the period's spending paid, in one zip, each file
+            named « Darty 11€55 01_10_2026.pdf » (bank/invoice_files.py).
+            {% endcomment %}
+            {% if invoice_files_count or invoice_files_missing %}
+                <a class="btn btn-small" href="{{ invoice_files_url }}">⬇️ Télécharger les factures de la période ({{ invoice_files_count }})</a>
+                {% if invoice_files_missing %}
+                    <span class="muted">{{ invoice_files_missing }} sans fichier, listée{{ invoice_files_missing|pluralize }} dans le zip</span>
+                {% endif %}
+            {% endif %}
         </form>
 
         {% if date_window %}

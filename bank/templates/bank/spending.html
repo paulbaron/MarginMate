@@ -1,14 +1,13 @@
 {% extends "base.html" %}
-{% block title %}Dépenses - MarginMate{% endblock %}
+{% block title %}Dépenses par catégorie - Banque - MarginMate{% endblock %}
 {% block content %}
     <div class="page-header">
         <div>
-            <h1>Dépenses par catégorie</h1>
+            <h1>Banque</h1>
             <p class="page-subtitle">
                 Tout ce qui est <strong>sorti du compte</strong> sur la période, avec ou sans facture. Une dépense
                 que sa facture explique compte dans les catégories de ce que cette facture a acheté ; les autres
-                se classent ici, à la main ou par une règle. Les entrées d'argent n'en font pas
-                partie{% if income_url %} : elles sont sur <a href="{{ income_url }}">Entrées d'argent</a>{% endif %}.
+                se classent ici, à la main ou par une règle. Les entrées d'argent n'en font pas partie.
             </p>
             <p class="muted">
                 Ce n'est pas la même question que <a href="{{ margins_url }}">Marges</a>, qui compte ce qui a été
@@ -16,11 +15,9 @@
                 banque a pris l'argent.
             </p>
         </div>
-        <div class="actions">
-            <a class="btn btn-secondary" href="{{ bank_url }}">Rapprocher les factures</a>
-            {% if income_url %}<a class="btn btn-secondary" href="{{ income_url }}">Entrées d'argent</a>{% endif %}
-        </div>
     </div>
+
+    {% include "bank/_tabs.html" %}
 
     {% if has_lines %}
         {% comment %}

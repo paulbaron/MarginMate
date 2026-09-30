@@ -345,7 +345,7 @@ class SourcesSection(Section):
         return (
             f"Source « {name} » ({supplier.name}) : {how} — elle se connecte à {sign_in['login_url']} avec "
             f"{sign_in['username_env']} et {sign_in['password_env']} du fichier .env ; vérifiez l'adresse et les "
-            "variables, puis cochez « Active » sur sa page (Achats → Sources)."
+            "variables, puis cochez « Active » sur sa page (Factures → Sources)."
         )
 
     def _check(self, record, supplier, existing) -> tuple[str, dict]:

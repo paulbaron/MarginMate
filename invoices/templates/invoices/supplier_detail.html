@@ -8,7 +8,7 @@
     {% endcomment %}
     <div class="page-header">
         <div>
-            <p class="breadcrumb"><a href="{% url 'invoices:supplier_list' %}">← Achats · Enseignes et fournisseurs</a></p>
+            <p class="breadcrumb"><a href="{% url 'invoices:supplier_list' %}">← Factures · Enseignes et fournisseurs</a></p>
             <h1>{{ supplier.name }}</h1>
             <p class="page-subtitle">
                 {% if supplier.expenses_only %}Charges{% else %}Produits{% endif %}
@@ -239,7 +239,7 @@
         <h2 id="types">Sources de ses factures</h2>
         {% if own_module %}
             <p class="muted">
-                Récupérées par son propre module, avec « Récupérer les nouvelles factures » en haut d'Achats{% if not invoice_types %} : il n'a besoin d'aucune source{% endif %}.
+                Récupérées par son propre module, avec « Récupérer les nouvelles factures » en haut de Factures{% if not invoice_types %} : il n'a besoin d'aucune source{% endif %}.
             </p>
         {% endif %}
         {% if invoice_types %}

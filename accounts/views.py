@@ -44,9 +44,19 @@ def media(request, name):
     # caught once resolved.
     if root not in full.parents or not full.is_file():
         raise Http404
-    content_type, encoding = mimetypes.guess_type(full.name)
-    inline = content_type in INLINE_TYPES and encoding is None
-    response = FileResponse(open(full, "rb"), as_attachment=not inline, filename=full.name)  # noqa: SIM115 - the FileResponse closes it
+    return file_response(open(full, "rb"), full.name)
+
+
+def file_response(handle, filename: str, *, download: bool = False) -> FileResponse:
+    """A stored file, under `filename`: shown in the page when it is a PDF or
+    a photo and no download was asked, saved otherwise - and sandboxed, since
+    a file a user put there must not run script on this site's origin.
+
+    Shared with a document's own file route (invoices.views.invoice_file),
+    which serves the same files under the name they are downloaded as."""
+    content_type, encoding = mimetypes.guess_type(filename)
+    inline = not download and content_type in INLINE_TYPES and encoding is None
+    response = FileResponse(handle, as_attachment=not inline, filename=filename)
     response["X-Content-Type-Options"] = "nosniff"
     response["Cache-Control"] = "private, no-store"
     if not inline:

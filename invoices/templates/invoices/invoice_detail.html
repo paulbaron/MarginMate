@@ -4,7 +4,7 @@
 {% block content %}
     <div class="page-header">
         <div>
-            <p class="breadcrumb"><a href="{% url 'invoices:invoice_list' %}">← Achats</a></p>
+            <p class="breadcrumb"><a href="{% url 'invoices:invoice_list' %}">← Factures</a></p>
             <h1>{{ invoice.supplier.name }} — {{ invoice.invoice_number|default:"sans numéro" }}</h1>
             <p class="muted">
                 {% if invoice.invoice_date %}Datée du {{ invoice.invoice_date|date:"d/m/Y" }}{% else %}Sans date{% endif %}
@@ -35,7 +35,9 @@
             <span class="status-pill status-{{ invoice.review_state.css }}">{{ invoice.review_state.label }}</span>
             {% if invoice.source_file %}
                 {# The file received is the legal invoice: an XML opens as it is. #}
-                <a class="btn btn-secondary" href="{{ invoice.source_file.url }}" target="_blank" rel="noopener">{% if invoice.is_einvoice %}Voir le fichier reçu{% else %}Voir le PDF{% endif %}</a>
+                <a class="btn btn-secondary" href="{% url 'invoices:invoice_file' invoice.pk %}" target="_blank" rel="noopener">{% if invoice.is_einvoice %}Voir le fichier reçu{% else %}Voir le PDF{% endif %}</a>
+                {# Saved as « Darty 11€55 01_10_2026.pdf » (invoices/filenames.py), wherever it is saved from. #}
+                <a class="btn btn-secondary" href="{% url 'invoices:invoice_file' invoice.pk %}?telecharger=1">Télécharger</a>
             {% endif %}
             <a class="btn {% if not lines %}btn{% else %}btn-secondary{% endif %}"
                href="{% if invoice.is_receipt %}{% url 'invoices:receipt_review' invoice.pk %}{% else %}{% url 'invoices:invoice_edit_lines' invoice.pk %}{% endif %}">

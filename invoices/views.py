@@ -7,17 +7,24 @@ from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.contrib import messages
+from django.core.exceptions import SuspiciousFileOperation
 from django.db import transaction
 from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
+from django.views.decorators.clickjacking import xframe_options_sameorigin
+from django.views.decorators.http import require_safe
 from django.views.generic import DetailView
 
 from accounts.tenancy import bound, integrations_allowed
+from accounts.views import file_response
 from common import error_for_page, is_id, local_return, safe_next
 
 logger = logging.getLogger(__name__)
+
+#: `?telecharger=1` on a document's file: saved rather than shown.
+DOWNLOAD_PARAM = "telecharger"
 
 #: What a bank line is compared against: a document's total to the cent,
 #: the way bank/reconcile.py rounds it before matching.
@@ -26,6 +33,7 @@ CENTS = Decimal("0.01")
 from . import integrations, supplier_changes
 from .deletion import InvoiceInUseError, blocking_stock_takes, delete_invoice
 from .einvoice import NO_LINES_CHECK as EINVOICE_NO_LINES
+from .filenames import download_name
 from .forms import (
     DOCUMENT_INVOICE,
     DOCUMENT_RECEIPT,
@@ -206,6 +214,23 @@ def upload_invoice(request):
     finally:
         os.unlink(tmp_path)
     return redirect(f"{reverse('invoices:invoice_list')}?ajouter=pdf")
+
+
+@require_safe
+@xframe_options_sameorigin
+def invoice_file(request, pk):
+    """A document's own file, under the name it is downloaded as
+    (invoices/filenames.py): « Darty 11€55 01_10_2026.pdf », whether it is
+    saved from the frame, from the browser's viewer or with « Télécharger »
+    (`?telecharger=1`). Framed by the correction page, hence SAMEORIGIN."""
+    invoice = get_object_or_404(Invoice.objects.select_related("supplier").prefetch_related("lines"), pk=pk)
+    if not invoice.source_file:
+        raise Http404
+    try:
+        handle = invoice.source_file.open("rb")
+    except (FileNotFoundError, SuspiciousFileOperation):
+        raise Http404
+    return file_response(handle, download_name(invoice), download=request.GET.get(DOWNLOAD_PARAM) == "1")
 
 
 def invoice_preview(request, pk):

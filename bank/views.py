@@ -3,9 +3,10 @@ invoice, settle the rest by hand - the rules for payments that never have
 one - and, on « Dépenses », where everything that left the account went;
 on « Entrées d'argent », what came in, beside what the till was paid.
 
-« Dépenses » is deliberately a page of its own rather than a seventh tab:
-the tabs are about a line's invoice, and that page is about the money, over
-a period, whether or not there is an invoice at all. See bank/spending.py
+« Dépenses » is deliberately a page of its own rather than a seventh filter
+of the operations: those are about a line's invoice, and that page is about
+the money, over a period, whether or not there is an invoice at all. The
+three pages are Banque's tabs (bank/_tabs.html). See bank/spending.py
 for what it counts and what it refuses to blend with « Marges », and
 bank/income.py for the money that came in.
 """
@@ -15,6 +16,7 @@ from __future__ import annotations
 import calendar
 import math
 import re
+import tempfile
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -23,10 +25,12 @@ from urllib.parse import parse_qs, urlparse
 
 from django.contrib import messages
 from django.db.models import Prefetch
+from django.http import FileResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import NoReverseMatch, reverse
 from django.utils.html import escape
 from django.utils.http import urlencode
+from django.views.decorators.http import require_safe
 
 from common import (
     LEFT_OUT_PARAM,
@@ -45,6 +49,7 @@ from invoices.workspace import documents_matching
 from recipes.integration import TILL_TO_CONFIGURE, till_allowed
 
 from . import income, matching, reconcile, spending
+from . import invoice_files as invoice_files_module
 from .forms import IgnoreRuleForm
 from .models import BankTransaction, IgnoreRule, InvoicePayment
 from .rules import ignoring_rule
@@ -262,16 +267,7 @@ def bank_home(request):
     if view not in VIEWS:
         view = DEFAULT_VIEW
     months = _months()
-    month = request.GET.get("mois", "")
-    if month not in dict(months):
-        month = ""
-    # A month chosen is the answer to the question the free dates ask, so it
-    # takes it whole rather than being crossed with them: two windows on one
-    # page, one of them invisible, is how a figure comes out narrower than
-    # the period the page says it is counting. The inputs are drawn disabled
-    # and no link carries « du »/« au » while a month is on, so the dates
-    # cannot come back on the next click either.
-    window = DateRange() if month else date_range(request)
+    month, window = _period(request, months)
 
     lines = BankTransaction.objects.prefetch_related(
         Prefetch(
@@ -285,15 +281,9 @@ def bank_home(request):
             ),
         )
     )
-    if month:
-        year, number = (int(part) for part in month.split("-"))
-        lines = lines.filter(operation_date__year=year, operation_date__month=number)
-    # On the date the bank booked the operation, which is what « Mois »
-    # filters on too: windowed on the card's own date instead, the two
-    # pickers would disagree about which period a card payment belongs to.
     # Everything below - the stats, the tab counts, the payee groups - is
     # built from these rows, so it all follows the window by construction.
-    lines = window.limit(lines, "operation_date")
+    lines = _in_period(lines, month, window)
     rules = reconcile.active_rules()
     rows = [Row(line, *classify(line, rules)) for line in lines]
     by_status = defaultdict(list)
@@ -318,6 +308,14 @@ def bank_home(request):
     for row in shown:
         if row.status == INCOME:
             row.entry = income.entry_for(row.line)
+    # « Télécharger les factures »: what the zip will hold, counted off the
+    # rows already read (their payments are prefetched) - no query.
+    paid = {
+        payment.invoice.pk: payment.invoice
+        for row in rows
+        if row.line.amount < 0
+        for payment in row.line.payments.all()
+    }
     tabs = [
         {
             "key": key,
@@ -356,12 +354,34 @@ def bank_home(request):
             # those pages read dates and not months.
             "income_url": _bank_income_url(month, window),
             "spending_url": _spending_url(*_bank_period(month, window)),
+            # Banque's tabs (bank/_tabs.html): this one is the operations.
+            "bank_url": _page_url(view, month, window),
+            "bank_tab": "operations",
+            "invoice_files_url": _invoice_files_url(month, window),
+            "invoice_files_count": sum(1 for invoice in paid.values() if invoice.source_file),
+            "invoice_files_missing": sum(1 for invoice in paid.values() if not invoice.source_file),
             # Deliberately the whole statement, window or not: windowed, a
             # period with nothing in it would show « Aucun relevé importé »
             # and read as an empty database rather than as empty dates.
             "has_lines": BankTransaction.objects.exists(),
         },
     )
+
+
+@require_safe
+def invoice_files(request):
+    """Every document the spending of Banque's period paid, in one zip,
+    each file under its download name (bank/invoice_files.py)."""
+    month, window = _period(request, _months())
+    invoices = invoice_files_module.paid_by(_in_period(BankTransaction.objects.all(), month, window))
+    if not invoices:
+        messages.info(request, "Aucune dépense de cette période n'est rattachée à une facture : rien à télécharger.")
+        return redirect(_page_url(DEFAULT_VIEW, month, window))
+    handle = tempfile.TemporaryFile()  # noqa: SIM115 - the FileResponse closes it
+    invoice_files_module.write_zip(invoices, handle)
+    handle.seek(0)
+    name = invoice_files_module.zip_name(_period_label(month, window))
+    return FileResponse(handle, as_attachment=True, filename=name, content_type="application/zip")
 
 
 def spending_home(request):
@@ -453,6 +473,7 @@ def spending_home(request):
             # Money that came IN, and what the till says it sold - the page
             # this one is not. Empty where it does not exist (yet).
             "income_url": _income_url(window),
+            "bank_tab": "spending",
             "has_lines": BankTransaction.objects.exists(),
         },
     )
@@ -504,6 +525,9 @@ def income_home(request):
             "bank_url": _page_url("entrees", "", window),
             "spending_url": _other_page_url("bank:spending_home", window),
             "margins_url": _other_page_url("margins:margins_home", window),
+            # Banque's tabs (bank/_tabs.html): this one is the money in.
+            "income_url": here,
+            "bank_tab": "income",
             "has_lines": BankTransaction.objects.exists(),
         },
     )
@@ -915,6 +939,57 @@ def _import_statements(request):
             f"{linked} paiement(s) rattaché(s) automatiquement à leur facture.",
         )
     return redirect(back)
+
+
+def _period(request, months) -> tuple[str, DateRange]:
+    """The month and the free dates Banque is read through - one reading for
+    the page and for its zip, so the zip holds what the page shows.
+
+    A month chosen is the answer to the question the free dates ask, so it
+    takes it whole rather than being crossed with them: two windows on one
+    page, one of them invisible, is how a figure comes out narrower than the
+    period the page says it is counting. The inputs are drawn disabled and
+    no link carries « du »/« au » while a month is on, so the dates cannot
+    come back on the next click either."""
+    month = request.GET.get("mois", "")
+    if month not in dict(months):
+        month = ""
+    return month, DateRange() if month else date_range(request)
+
+
+def _in_period(lines, month: str, window: DateRange):
+    """`lines` booked in that month or window. On the date the bank booked
+    the operation, which is what « Mois » filters on too: windowed on the
+    card's own date instead, the two pickers would disagree about which
+    period a card payment belongs to."""
+    if month:
+        year, number = (int(part) for part in month.split("-"))
+        lines = lines.filter(operation_date__year=year, operation_date__month=number)
+    return window.limit(lines, "operation_date")
+
+
+def _invoice_files_url(month: str, window: DateRange) -> str:
+    """The zip over the period the page is showing."""
+    parameters = {"mois": month} if month else window.parameters
+    query = urlencode(parameters)
+    return f"{reverse('bank:invoice_files')}{'?' + query if query else ''}"
+
+
+def _period_label(month: str, window: DateRange) -> str:
+    """« juin 2026 », « du 01_06_2026 au 30_06_2026 », « tout l'historique »:
+    what the zip's name says it holds, dated the way its files are."""
+    if month:
+        year, number = (int(part) for part in month.split("-"))
+        return f"{MONTH_NAMES[number - 1]} {year}"
+    start = window.start.strftime("%d_%m_%Y") if window.start else ""
+    end = window.end.strftime("%d_%m_%Y") if window.end else ""
+    if start and end:
+        return f"du {start} au {end}"
+    if start:
+        return f"depuis le {start}"
+    if end:
+        return f"jusqu'au {end}"
+    return "tout l'historique"
 
 
 def _page_url(view: str, month: str, window: DateRange) -> str:

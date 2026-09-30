@@ -249,8 +249,10 @@ class ThePanelTests(PanelFixture, TestCase):
         self.assertRegex(equipment, r'<button[^>]*value="decocher"[^>]*disabled')
         self.assertNotRegex(equipment, r'<button[^>]*value="cocher"[^>]*disabled')
 
-    def test_it_says_beside_the_buttons_that_a_newcomer_arrives_unticked(self):
-        self.assertIn("arrivera décoché", text_of(panel_of(self.html())))
+    def test_the_tick_all_button_says_that_a_newcomer_arrives_unticked(self):
+        # In the button's title: the sentence under the table was cut
+        # (the owner, 01/10/2026: the page was too wordy).
+        self.assertIn("arrivera décoché", panel_of(self.html()))
 
     def test_each_article_has_its_box_and_what_ticking_it_would_add(self):
         html = self.html()
@@ -263,11 +265,11 @@ class ThePanelTests(PanelFixture, TestCase):
         # Never bought over the period: nothing to add, and said so.
         self.assertIn("rien acheté", text_of(equipment))
 
-    def test_it_says_where_it_asks_that_this_is_the_article_s_own_box(self):
-        text = text_of(panel_of(self.html()))
-
-        self.assertIn("fiche de l'article", text)
-        self.assertIn("compté deux fois", text)
+    def test_it_says_which_article_a_recipe_already_uses(self):
+        """Ticking one would count it twice: the row says so where its box is."""
+        self.assertIn(
+            "Rhum ambré dans une recette", " ".join(text_of(category_body(self.html(), "Spiritueux")).split())
+        )
 
     def test_with_nothing_ticked_the_page_points_to_the_panel(self):
         StockType.objects.update(count_in_products_margin=False)
@@ -275,7 +277,7 @@ class ThePanelTests(PanelFixture, TestCase):
         text = text_of(self.html())
 
         self.assertIn("Aucun article coché", text)
-        self.assertIn("ci-dessous", text)
+        self.assertIn("voir plus bas", text)
 
 
 class TickingTheWholeCategoryTests(PanelFixture, TestCase):
@@ -345,21 +347,6 @@ class TickingTheWholeCategoryTests(PanelFixture, TestCase):
                     "en consomme. Décochez-le, ou retirez-le de la recette."
                 ),
             ],
-        )
-
-
-class WhatTheBoughtFigureCountsTests(PanelFixture, TestCase):
-    def test_it_says_the_bought_figure_leaves_the_invoice_s_duty_out(self):
-        """The same article reads 40,00 € here and 45,00 € in « Ce qui a été
-        facturé » on an invoice carrying 5,00 € of duty: the products margin
-        counts the line's own amount, the breakdown adds the line's share of
-        the duty. One page, two figures - said where the second one is."""
-        text = text_of(panel_of(self.html()))
-
-        self.assertIn(
-            "le montant des lignes elles-mêmes, sans la part des droits de la facture que « Ce qui a été "
-            "facturé » leur ajoute",
-            text,
         )
 
 

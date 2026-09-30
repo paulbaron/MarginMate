@@ -174,7 +174,7 @@ class TouchScreenInBrowserTests(StaticLiveServerTestCase):
     def pages(self):
         return (
             ("Produits & charges", reverse("inventory:stock_list")),
-            ("Achats", reverse("invoices:invoice_list")),
+            ("Factures", reverse("invoices:invoice_list")),
             ("Banque", reverse("bank:bank_home")),
         )
 

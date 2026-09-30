@@ -7,7 +7,7 @@
                 {% if lot %}
                     <a href="{% url 'invoices:receipt_batch' lot.pk %}">← Import du {{ lot.started_at|date:"d/m/Y H:i" }}</a>
                 {% elif is_receipt %}
-                    <a href="{% url 'invoices:receipt_queue' %}">← Achats · tickets à vérifier</a>
+                    <a href="{% url 'invoices:receipt_queue' %}">← Factures · tickets à vérifier</a>
                 {% else %}
                     <a href="{% url 'invoices:invoice_detail' invoice.pk %}">← {{ invoice.supplier.name }} {{ invoice.invoice_number }}</a>
                 {% endif %}
@@ -84,7 +84,8 @@
         </div>
         <div class="actions">
             {% if invoice.source_file %}
-                <a class="btn btn-secondary" href="{{ invoice.source_file.url }}" target="_blank" rel="noopener">{% if source_is_pdf %}Ouvrir le PDF{% elif is_einvoice %}Ouvrir le fichier reçu{% else %}Photo d'origine{% endif %}</a>
+                <a class="btn btn-secondary" href="{% url 'invoices:invoice_file' invoice.pk %}" target="_blank" rel="noopener">{% if source_is_pdf %}Ouvrir le PDF{% elif is_einvoice %}Ouvrir le fichier reçu{% else %}Photo d'origine{% endif %}</a>
+                <a class="btn btn-secondary" href="{% url 'invoices:invoice_file' invoice.pk %}?telecharger=1">Télécharger</a>
             {% endif %}
             {% if is_receipt %}
                 <a class="btn btn-secondary" href="{% url 'invoices:invoice_detail' invoice.pk %}">Fiche facture</a>
@@ -117,7 +118,7 @@
                 Factur-X is the invoice itself, and its thumbnail would only
                 be a photo of it.
                 {% endcomment %}
-                <iframe src="{{ invoice.source_file.url }}" title="Le document" class="document-frame"></iframe>
+                <iframe src="{% url 'invoices:invoice_file' invoice.pk %}" title="Le document" class="document-frame"></iframe>
             {% elif invoice.preview_image %}
                 <img src="{{ invoice.preview_image.url }}" alt="Photo du ticket">
             {% elif is_einvoice %}
@@ -129,7 +130,7 @@
                 <div class="ocr-dump" aria-label="La facture électronique telle qu'elle est déclarée">{% for line in source_lines %}{{ line }}
 {% endfor %}</div>
             {% elif invoice.source_file %}
-                <img src="{{ invoice.source_file.url }}" alt="Le document">
+                <img src="{% url 'invoices:invoice_file' invoice.pk %}" alt="Le document">
             {% else %}
                 <p class="muted">Aucun document enregistré.</p>
             {% endif %}

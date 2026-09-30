@@ -315,12 +315,6 @@ def margins_home(request):
             "undated_url": f"{reverse('invoices:invoice_list')}?sans_date=1",
             "purchases_url": _elsewhere("inventory:stock_list", window),
             "sales_url": _elsewhere("recipes:sales_list", window),
-            # The other base, named and reachable: this page counts what was
-            # INVOICED and « Dépenses » counts what the bank took, and each
-            # of the two has to say which it is and point at the other or a
-            # reader takes one figure for the other. The window travels, so
-            # the two are read over the same dates.
-            "spending_url": _elsewhere("bank:spending_home", window),
             "to_link_url": reverse("recipes:pos_product_list"),
             "sales_import_url": reverse("recipes:sales_import"),
         },

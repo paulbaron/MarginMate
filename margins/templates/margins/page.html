@@ -19,25 +19,18 @@ that is where it says what changed (views._messages_by_place).
         <div>
             <h1>Marges</h1>
             {% comment %}
-            « Facturé » from the first sentence, and the link to « Dépenses » beside it: the
-            two pages count two things and each has to say which (see CLAUDE.md,
-            « Dépenses par catégorie »). « Ce qui est sorti » is the word the other page
-            uses for the statement, and here it was the first word read.
+            « Facturé » from the first sentence: this page counts the invoices,
+            Banque's « Dépenses par catégorie » the statement (see CLAUDE.md).
+            Kept to one sentence at the owner's request (01/10/2026: the page
+            was too wordy).
             {% endcomment %}
             <p class="page-subtitle">
-                Ce qui a été <strong>facturé</strong> face à ce qui a été vendu, sur une période, à la date
-                des factures : la marge réelle (toutes les factures, charges comprises), la marge produits
-                (ce que les recettes vendues ont consommé) et le détail par catégorie de la caisse.
-            </p>
-            <p class="muted">
-                Ce n'est pas la même question que <a href="{{ spending_url }}">Dépenses</a>, qui compte ce
-                qui est <strong>sorti du compte</strong>, à la date où la banque a pris l'argent.
+                Ce qui a été <strong>facturé</strong> face à ce qui a été vendu, à la date des factures.
             </p>
         </div>
         <div class="actions">
             <a class="btn btn-secondary" href="{{ documents_url }}">Les factures de la période</a>
             <a class="btn btn-secondary" href="{{ sales_url }}">Les ventes de la période</a>
-            <a class="btn btn-secondary" href="{{ spending_url }}">Dépenses par catégorie</a>
         </div>
     </div>
 
@@ -69,32 +62,25 @@ that is where it says what changed (views._messages_by_place).
 
     <p class="muted date-range-note">
         {% if showing_all %}
-            Tout l'historique : toutes les ventes et toutes les factures depuis le début, quelles que soient
-            leurs dates. Une marge sur trois ans mélange trois ans de prix d'achat et trois ans de prix de
-            vente — pour savoir où on en est, choisissez une période.
+            Tout l'historique, quelles que soient les dates.
         {% elif is_default %}
-            Période par défaut : les <strong>12 derniers mois</strong>, {{ window_dates }}. Une marge dépend
-            entièrement de la période qu'on lui donne : choisissez deux dates ci-dessus, ou regardez
-            <a href="{{ all_url }}">depuis le début</a>.
+            Période par défaut : les <strong>12 derniers mois</strong>, {{ window_dates }}.
         {% else %}
-            {{ window_dates|capfirst }} : tout ce qui suit ne compte que cette période, les deux bornes
-            incluses.
+            {{ window_dates|capfirst }}, les deux bornes incluses.
         {% endif %}
     </p>
 
     {% if report.unread_days %}
         <div class="message message-warning">
-            Les ventes de <strong>{{ report.unread_days }} jour{{ report.unread_days|pluralize }}</strong> de
-            cette période n'ont pas encore de prix ({{ report.unread_units }} unité{{ report.unread_units|pluralize }}
-            vendue{{ report.unread_units|pluralize }}) : leur chiffre d'affaires manque alors que leur coût est bien
-            compté, donc <strong>toutes les marges ci-dessous sont trop basses</strong>.
+            Les ventes de <strong>{{ report.unread_days }} jour{{ report.unread_days|pluralize }}</strong>
+            ({{ report.unread_units }} unité{{ report.unread_units|pluralize }}) n'ont pas encore de prix :
+            <strong>toutes les marges ci-dessous sont trop basses</strong>.
             {% comment %}
             The command is the server's: only the tenant whose till the
             server reads is handed it (recipes/integration.py).
             {% endcomment %}
             {% if till_allowed %}
-            Pour le combler : <code>manage.py laddition_backfill_revenue</code>, qui relit les exports déjà
-            sur le disque et ne va rien chercher en ligne.
+            Pour le combler : <code>manage.py laddition_backfill_revenue</code>.
             {% else %}
             Pour le combler : {{ till_to_configure }}.
             {% endif %}
@@ -104,20 +90,14 @@ that is where it says what changed (views._messages_by_place).
     {% if no_sales %}
         <div class="empty-state">
             <p>Aucune vente enregistrée sur cette période.</p>
-            <p class="muted">
-                Les ventes viennent de la caisse : sans elles, il n'y a pas de chiffre d'affaires à comparer
-                aux dépenses.
-            </p>
             <a class="btn" href="{{ sales_import_url }}">Importer les ventes de L'Addition</a>
         </div>
     {% endif %}
 
     <h2>Marge réelle</h2>
     <p class="lead">
-        Réelle : tout ce qui a été encaissé sur la période face à <strong>tout ce qui a été facturé</strong>
-        sur ces mêmes dates, charges comprises (loyer, abonnements, assurances…). C'est la réponse à
-        « est-ce que j'ai gagné de l'argent ». Ce qui a été facturé, pas ce qui a été payé ni ce qui a été
-        consommé : une livraison stockée compte le jour de sa facture.
+        L'encaissé face à <strong>tout ce qui a été facturé</strong>, charges comprises : « est-ce que
+        j'ai gagné de l'argent ». Calculée sur le HT.
     </p>
 
     <div class="stat-row">
@@ -165,36 +145,20 @@ that is where it says what changed (views._messages_by_place).
             <strong>Laissé de côté</strong> dans la seconde marge :
             {% for row in exclusions %}{% if row.exclusion.invoiced %}{{ row.exclusion.name }} {{ row.exclusion.money.ht|floatformat:2 }} € HT{% else %}{{ row.exclusion.name }} : rien de facturé sur cette période{% endif %} (<a href="{{ row.put_back_url }}">remettre</a>){% if not forloop.last %}, {% endif %}{% endfor %}
             — {{ report.spend_left_out.ht|floatformat:2 }} € HT laissés de côté sur {{ report.spend.ht|floatformat:2 }} € facturés.
-            L'encaissé ne change pas : on retire une dépense, pas une vente.
             <a href="{{ reset_url }}">tout remettre</a>
         </p>
     {% endif %}
 
-    <div class="card">
-        {% comment %}
-        The sales made off the till are named only when there are some: « 0,00 € HT
-        (0,00 € TTC) » on a page of figures reads as a figure, and
-        that one says nothing at all.
-        {% endcomment %}
-        <p>
-            <strong>Ce qui est entré</strong> — caisse {{ report.revenue_till.ht|floatformat:2 }} € HT
-            ({{ report.revenue_till.ttc|floatformat:2 }} € TTC){% if report.revenue_documents.ttc %}, ventes hors caisse
-            {{ report.revenue_documents.ht|floatformat:2 }} € HT
-            ({{ report.revenue_documents.ttc|floatformat:2 }} € TTC), qui n'ont pas de catégorie de caisse et ne
-            sont donc dans aucun tableau plus bas{% endif %}.
-            <a href="{{ sales_url }}">Le détail des ventes</a>.
-        </p>
-        <p>
-            <strong>Ce qui a été facturé</strong> — marchandises {{ report.spend_goods.ht|floatformat:2 }} € HT,
-            charges {{ report.spend_charges.ht|floatformat:2 }} € HT (loyer, abonnements : les fournisseurs
-            marqués « charges »). <a href="{{ documents_url }}">Les factures</a>,
-            <a href="{{ purchases_url }}">les achats par article</a>.
-        </p>
+    {% comment %}
+    The sales made off the till have no till category: said once, only when
+    there are some, since they are in no table further down.
+    {% endcomment %}
+    {% if report.revenue_documents.ttc %}
         <p class="muted small">
-            La caisse encaisse en TTC et les factures chargent en HT : la TVA n'est pas l'argent du bar, donc
-            la marge est faite sur le HT et le TTC n'est là qu'à côté.
+            Dont ventes hors caisse {{ report.revenue_documents.ht|floatformat:2 }} € HT
+            ({{ report.revenue_documents.ttc|floatformat:2 }} € TTC), dans aucun tableau par catégorie.
         </p>
-    </div>
+    {% endif %}
 
     {% comment %}
     The counterpart, for the real margin, of the sentence on the costed share: zero
@@ -204,9 +168,8 @@ that is where it says what changed (views._messages_by_place).
     {% endcomment %}
     {% if not report.invoice_count and report.revenue.ht > 0 %}
         <p class="message message-warning">
-            <strong>Aucune facture sur cette période.</strong> La marge réelle ci-dessus est donc celle d'une
-            période où rien n'a encore été facturé — c'est l'état du mois en cours tant que les factures des
-            fournisseurs ne sont pas rentrées, pas un mois sans dépenses.
+            <strong>Aucune facture sur cette période</strong> : les factures ne sont sans doute pas encore
+            rentrées, la marge réelle ci-dessus n'en tient pas compte.
             <a href="{{ documents_url }}">Les factures de la période</a>.
         </p>
     {% endif %}
@@ -222,12 +185,9 @@ that is where it says what changed (views._messages_by_place).
     {% endcomment %}
     <h3 id="invoiced-breakdown">Ce qui a été facturé</h3>
     <p class="muted small">
-        Où est allé l'argent facturé sur la période : les charges fournisseur par fournisseur, les
-        marchandises par catégorie d'article puis article par article, chacune avec sa part du total.
-        Décochez ce que la marge réelle doit laisser de côté (le Matériel, les charges…) puis
-        « Recalculer » : une seconde marge réelle s'affiche à côté de celle de tout, qui reste là.
-        L'encaissé, lui, ne change pas : <strong>on retire une dépense, pas une vente</strong> — un achat
-        n'appartient à aucune catégorie de la caisse, il n'y a donc aucune vente à retirer avec lui.
+        Décochez ce que la marge réelle doit laisser de côté puis « Recalculer » : une seconde marge
+        s'affiche à côté de la première. L'encaissé ne change pas : <strong>on retire une dépense, pas une
+        vente</strong>.
     </p>
     {% if report.spend_groups %}
         <form method="get" class="spend-selection" action="{{ page_path }}">
@@ -295,11 +255,7 @@ that is where it says what changed (views._messages_by_place).
                 <button class="btn btn-small" type="submit">Recalculer</button>
                 {% if report.exclusions %}<a class="btn btn-small btn-secondary" href="{{ reset_url }}">Tout remettre</a>{% endif %}
                 <span class="muted small">
-                    Une catégorie décochée emporte tous ses articles ; chacun garde sa propre case, qui compte de
-                    nouveau quand la catégorie est recochée. Les droits qu'une facture ajoute à ses lignes sont
-                    répartis sur ses lignes au prorata de leur HT.
-                    <strong>Rien n'est enregistré</strong> : la sélection vit dans l'adresse de la page — gardez le
-                    lien en favori pour la retrouver, le menu ramène à la marge de tout.
+                    <strong>Rien n'est enregistré</strong> : la sélection vit dans l'adresse de la page.
                 </span>
             </div>
         </form>
@@ -309,11 +265,9 @@ that is where it says what changed (views._messages_by_place).
 
     <h2>Marge produits</h2>
     <p class="lead">
-        Produits : le même encaissement face à <strong>ce que les recettes vendues ont consommé</strong>,
-        plus les achats des articles cochés « compter dans la marge produits » (l'essuie-tout n'est dans
-        aucune recette : rien ne le sort du stock quand une vente est tapée, donc ce qui en a été acheté
-        sur la période est la seule mesure qu'il y ait). C'est la réponse à « est-ce que je vends assez
-        cher ». Le coût d'une recette n'existe qu'en HT : cette marge n'a pas de TTC.
+        L'encaissé face à <strong>ce que les recettes vendues ont consommé</strong>, plus les achats des
+        articles cochés « compter dans la marge produits » : « est-ce que je vends assez cher ».
+        En HT seulement.
     </p>
 
     <div class="stat-row">
@@ -364,11 +318,9 @@ that is where it says what changed (views._messages_by_place).
     {% if report.flagged_in_recipes %}
         <p class="message message-warning">
             <strong>Compté deux fois :</strong> {% for name in report.flagged_in_recipes %}{{ name }}{% if not forloop.last %}, {% endif %}{% endfor %} —
-            coché{{ report.flagged_in_recipes|pluralize }} « compter dans la marge produits » <em>et</em> utilisé{{ report.flagged_in_recipes|pluralize }} dans une recette.
-            Le coût passe alors deux fois : une fois comme ce que la recette consomme, une fois comme ce
-            qui en a été acheté, et la marge produits ci-dessus est <strong>trop basse</strong>.
-            Décochez-le dans <a href="#{{ panel }}">les articles comptés</a> ci-dessous (ou sur sa fiche),
-            ou retirez-le de la recette.
+            coché{{ report.flagged_in_recipes|pluralize }} « compter dans la marge produits » <em>et</em> utilisé{{ report.flagged_in_recipes|pluralize }} dans une recette :
+            la marge produits est <strong>trop basse</strong>.
+            Décochez-le dans <a href="#{{ panel }}">les articles comptés</a> ou retirez-le de la recette.
         </p>
     {% endif %}
 
@@ -378,17 +330,13 @@ that is where it says what changed (views._messages_by_place).
         </p>
     {% elif not report.is_costed %}
         <p class="message message-warning">
-            Pas de marge produits : aucune vente chiffrée sur cette période — aucun des produits vendus
-            n'a de recette dont le coût soit connu. Un chiffre d'affaires sans coût donnerait une marge de
-            100 %, ce qui serait faux.{% if report.extra_products_ht %} Les {{ report.extra_products_ht|floatformat:2 }} € d'achats
-            des articles cochés ci-dessus n'entrent donc dans aucun calcul de cette page.{% endif %}
+            Pas de marge produits : aucun des produits vendus sur cette période n'a de recette dont le coût
+            soit connu.
         </p>
     {% elif revenue_coverage_percent is not None and revenue_coverage_percent < 100 %}
         <p class="message message-warning">
-            <strong>{{ revenue_coverage_percent|floatformat:0 }} %</strong> du chiffre d'affaires de cette
-            période a un coût connu derrière lui. Le reste a été vendu et n'a pas de recette : son coût ne
-            compte nulle part, donc la marge produits ci-dessus est <strong>surestimée</strong>, et elle le
-            restera tant que ces produits n'auront pas de recette.
+            Seulement <strong>{{ revenue_coverage_percent|floatformat:0 }} %</strong> du chiffre d'affaires a
+            une recette chiffrée : la marge produits est <strong>surestimée</strong>.
         </p>
     {% endif %}
 
@@ -399,15 +347,12 @@ that is where it says what changed (views._messages_by_place).
     {% endcomment %}
     {% if not report.flagged_articles %}
         <p class="muted small">
-            <strong>Aucun article coché</strong> « compter dans la marge produits ». La case sert à ce
-            qu'aucune recette ne consomme — l'essuie-tout, les gobelets : cochez-les
-            <a href="#{{ panel }}">ci-dessous</a>, une catégorie entière ou article par article.
+            <strong>Aucun article coché</strong> « compter dans la marge produits » (<a href="#{{ panel }}">voir plus bas</a>).
         </p>
     {% elif not report.extra_products %}
         <p class="muted small">
             <strong>{{ report.flagged_articles }} article{{ report.flagged_articles|pluralize }} coché{{ report.flagged_articles|pluralize }}</strong>
-            « compter dans la marge produits », mais rien n'en a été acheté sur cette période : ils ne
-            changent donc rien à la marge ci-dessus.
+            « compter dans la marge produits », rien acheté sur cette période.
         </p>
     {% endif %}
 
@@ -415,10 +360,8 @@ that is where it says what changed (views._messages_by_place).
         <h3>Articles comptés en plus</h3>
         <p class="muted small">
             {{ report.extra_products|length }} article{{ report.extra_products|length|pluralize }} acheté{{ report.extra_products|length|pluralize }} sur cette période{% if report.flagged_articles > report.extra_products|length %},
-            sur {{ report.flagged_articles }} coché{{ report.flagged_articles|pluralize }} « compter dans la marge produits »{% else %},
-            coché{{ report.extra_products|length|pluralize }} « compter dans la marge produits »{% endif %} : aucune recette n'en consomme, donc
-            c'est ce qui en a été <strong>acheté</strong> qui compte. Le montant est signé :
-            une consigne rendue le fait descendre, ce qui est juste.
+            sur {{ report.flagged_articles }} coché{{ report.flagged_articles|pluralize }}{% endif %} : c'est ce qui en a été
+            <strong>acheté</strong> qui compte.
         </p>
         <div class="table-wrap">
             <table data-table data-table-label="articles">
@@ -456,13 +399,8 @@ that is where it says what changed (views._messages_by_place).
         <p class="message message-{{ message.level_tag }}">{{ message }}</p>
     {% endfor %}
     <p class="muted small">
-        La même case que sur la fiche de l'article, ici catégorie par catégorie. Cochée, ce qui a été
-        <strong>acheté</strong> de l'article sur la période s'ajoute au coût de la marge produits : la
-        colonne « Acheté » dit combien, et la marge bouge de ce montant-là — le montant des lignes
-        elles-mêmes, sans la part des droits de la facture que « Ce qui a été facturé » leur ajoute. Elle sert à ce qu'aucune recette
-        ne consomme — l'essuie-tout, les gobelets. Un article qui sert déjà dans une recette est coûté par
-        elle : coché aussi, il serait compté deux fois, et la liste le dit. La marge réelle, elle, ne bouge
-        pas : elle compte déjà toutes les factures.
+        Pour ce qu'aucune recette ne consomme (essuie-tout, gobelets) : coché, ce qui en a été
+        <strong>acheté</strong> sur la période s'ajoute au coût de la marge produits.
     </p>
     {% if report.countable %}
         <div class="table-wrap">
@@ -503,7 +441,7 @@ that is where it says what changed (views._messages_by_place).
                                     <input type="hidden" form="count-articles-{{ forloop.parentloop.counter }}" name="affiche" value="{{ article.pk }}">
                                     {% if article.ticked %}<input type="hidden" form="count-articles-{{ forloop.parentloop.counter }}" name="etait" value="{{ article.pk }}">{% endif %}
                                     <label><input type="checkbox" form="count-articles-{{ forloop.parentloop.counter }}" name="coche" value="{{ article.pk }}"{% if article.ticked %} checked{% endif %}> {{ article.name }}</label>
-                                    {% if article.counted_twice %}<span class="status-pill status-twice">compté deux fois</span>{% elif article.in_recipe %}<span class="muted small">dans une recette : le cocher le compterait deux fois</span>{% endif %}
+                                    {% if article.counted_twice %}<span class="status-pill status-twice">compté deux fois</span>{% elif article.in_recipe %}<span class="muted small">dans une recette</span>{% endif %}
                                 </td>
                                 <td class="num">{% if article.was_bought %}{{ article.bought.ht|floatformat:2 }} €{% else %}<span class="muted">rien acheté</span>{% endif %}</td>
                                 <td></td>
@@ -518,12 +456,6 @@ that is where it says what changed (views._messages_by_place).
                 {% endfor %}
             </table>
         </div>
-        <p class="muted small">
-            « Tout cocher » coche les articles que la catégorie contient <strong>aujourd'hui</strong> : un
-            article classé dedans plus tard arrivera décoché, et la catégorie se lira alors « 31 sur 32 ».
-            Dépliée, une catégorie montre chacun de ses articles avec sa case : cochez, décochez, puis
-            « Enregistrer » — seuls les articles de cette catégorie changent.
-        </p>
     {% else %}
         <p class="table-empty">
             Aucun article pour l'instant : ils naissent des factures, quand leurs produits sont classés dans
@@ -543,10 +475,8 @@ that is where it says what changed (views._messages_by_place).
                 Les <strong>{{ report.top_uncosted|length }} plus gros sur {{ report.uncosted_products }}</strong> —
                 {{ report.uncosted_revenue.ht|floatformat:2 }} € HT en tout.
             {% endif %}
-            Ces produits de la caisse ont un chiffre d'affaires et aucun coût : ce sont eux qui tirent la
-            marge produits vers le haut, les plus gros d'abord. Leur écrire une recette depuis
-            <a href="{{ to_link_url }}">« À lier »</a> les fait entrer dans le calcul ; un produit
-            « ignoré » l'est volontairement et pèse quand même sur la part chiffrée.
+            Vendus sans recette : leur en écrire une depuis <a href="{{ to_link_url }}">« À lier »</a> les
+            fait entrer dans le calcul.
         </p>
         <div class="table-wrap">
             <table data-table data-table-label="produits">
@@ -574,11 +504,7 @@ that is where it says what changed (views._messages_by_place).
 
     <h2>Marges par catégorie</h2>
     <p class="lead">
-        Les deux dimensions que la caisse range déjà elle-même : sa catégorie (Bières, Cocktails,
-        Planches…) et sa typologie (solide, liquide alcoolisé ou non — « la bouffe et les boissons »).
-        C'est le même argent lu deux fois, donc les deux tableaux font le même total. La part chiffrée
-        est dans chaque ligne : une catégorie dont rien n'a de recette n'a <strong>pas</strong> de marge,
-        et n'en affiche aucune.
+        Par catégorie et par typologie de la caisse : le même argent lu deux fois.
     </p>
 
     {% comment %}
@@ -592,9 +518,8 @@ that is where it says what changed (views._messages_by_place).
         {% include "margins/_slices.html" with rows=categories total=categories_total label="catégories" heading="Catégorie" %}
         {% include "margins/_slices.html" with rows=typologies total=typologies_total label="typologies" heading="Typologie" %}
         <p class="muted small">
-            Les deux totaux ci-dessus sont ceux de la <strong>caisse seule</strong>. La marge produits en
-            haut de page n'est pas ce total : elle compte en plus
-            {% if report.extra_products_ht %}les achats des articles cochés ({{ report.extra_products_ht|floatformat:2 }} € HT){% else %}les achats des articles cochés{% endif %}{% if report.revenue_documents.ttc %} et les ventes hors caisse ({{ report.revenue_documents.ht|floatformat:2 }} € HT), qui n'ont pas de catégorie de caisse{% endif %}.
+            Totaux de la <strong>caisse seule</strong> : la marge produits compte en plus les achats des
+            articles cochés{% if report.extra_products_ht %} ({{ report.extra_products_ht|floatformat:2 }} € HT){% endif %}{% if report.revenue_documents.ttc %} et les ventes hors caisse ({{ report.revenue_documents.ht|floatformat:2 }} € HT){% endif %}.
         </p>
     {% else %}
         <p class="table-empty">Aucune vente de caisse sur cette période : il n'y a rien à répartir.</p>
@@ -613,10 +538,7 @@ that is where it says what changed (views._messages_by_place).
             {% if report.revenue_without_rate_ttc %}
                 <p>
                     {{ report.revenue_without_rate_ttc|floatformat:2 }} € encaissés sans taux de TVA connu :
-                    ils comptent en TTC et pas en HT, aucun taux n'est supposé. Une vente de caisse dans ce
-                    cas garde son coût, donc la marge en HT est trop basse de ce montant ; un article vendu
-                    tel quel sur un bon de vente n'a de taux nulle part, et son coût reste dehors avec lui —
-                    ni le montant ni ce qu'il a coûté n'entrent dans la marge produits.
+                    absents du HT, la marge en HT est trop basse d'autant.
                 </p>
             {% endif %}
             {% if report.undated_invoices %}
@@ -624,18 +546,17 @@ that is where it says what changed (views._messages_by_place).
                     <a href="{{ undated_url }}">{{ report.undated_invoices }} facture{{ report.undated_invoices|pluralize }} sans date</a>
                     ({{ report.undated_spend.ht|floatformat:2 }} € HT)
                     {% if report.undated_in_spend %}
-                        : sans période choisie, elles sont comptées ci-dessus.
+                        : comptées ci-dessus, faute de période choisie.
                     {% else %}
-                        : elles ne sont dans aucune période, donc pas dans les chiffres ci-dessus.
-                        Leur donner une date les y fait entrer.
+                        : dans aucune période, donc pas dans les chiffres ci-dessus.
                     {% endif %}
                 </p>
             {% endif %}
             {% if report.hand_typed_units %}
                 <p>
                     {{ report.hand_typed_units }} unité{{ report.hand_typed_units|pluralize }} vendue{{ report.hand_typed_units|pluralize }}
-                    saisie{{ report.hand_typed_units|pluralize }} à la main : rien nulle part ne dit à quel prix,
-                    donc elles ne sont ni dans le chiffre d'affaires ni dans le coût.
+                    saisie{{ report.hand_typed_units|pluralize }} à la main, sans prix : ni dans le chiffre
+                    d'affaires ni dans le coût.
                 </p>
             {% endif %}
         </details>

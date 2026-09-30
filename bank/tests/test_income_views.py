@@ -315,7 +315,8 @@ class BankHomeTests(Page, TestCase):
         url = response.context["income_url"]
         self.assertEqual(urlsplit(url).path, reverse("bank:income_home"))
         self.assertEqual((query_of(url)["du"], query_of(url)["au"]), ("2026-06-01", "2026-06-30"))
-        self.assertContains(response, f'href="{url.replace("&", "&amp;")}">Entrées d\'argent</a>')
+        # Banque's tab (bank/_tabs.html), and the stat's own link.
+        self.assertContains(response, f'href="{url.replace("&", "&amp;")}" class="tab">Entrées d\'argent</a>')
         self.assertContains(response, f'href="{url.replace("&", "&amp;")}">face aux ventes</a>')
 
     def test_a_chosen_month_becomes_its_first_and_last_day(self):
@@ -330,9 +331,9 @@ class BankHomeTests(Page, TestCase):
         self.assertEqual((query.get("du"), query["tout"]), (None, "1"))
 
     def test_it_opens_spending_over_its_period_too(self):
-        """« Dépenses par catégorie », beside « Entrées d'argent » in the
-        header, was a bare link: Dépenses then opened on its own default, a
-        year, whatever month Banque was showing."""
+        """« Dépenses par catégorie », Banque's tab beside « Entrées
+        d'argent », was a bare link: Dépenses then opened on its own default,
+        a year, whatever month Banque was showing."""
         for parameters, expected in (
             ({"mois": "2026-06"}, {"du": "2026-06-01", "au": "2026-06-30"}),
             (JUNE_PARAMS, {"du": "2026-06-01", "au": "2026-06-30"}),
@@ -343,7 +344,9 @@ class BankHomeTests(Page, TestCase):
                 url = response.context["spending_url"]
                 self.assertEqual(urlsplit(url).path, reverse("bank:spending_home"))
                 self.assertEqual(dict(query_of(url).items()), expected)
-                self.assertContains(response, f'href="{url.replace("&", "&amp;")}">Dépenses par catégorie</a>')
+                self.assertContains(
+                    response, f'href="{url.replace("&", "&amp;")}" class="tab">Dépenses par catégorie</a>'
+                )
 
     def test_each_credit_says_what_it_is(self):
         # Unescaped, as a reader sees it: a name is a variable, and its
@@ -375,7 +378,7 @@ class SpendingLinksHereTests(Page, TestCase):
         url = response.context["income_url"]
         self.assertEqual(urlsplit(url).path, reverse("bank:income_home"))
         self.assertEqual(query_of(url)["du"], "2026-06-01")
-        self.assertContains(response, f'href="{url.replace("&", "&amp;")}">Entrées d\'argent</a>')
+        self.assertContains(response, f'href="{url.replace("&", "&amp;")}" class="tab">Entrées d\'argent</a>')
 
     def test_under_all_history_it_opens_everything(self):
         response = self.client.get(reverse("bank:spending_home"), {"tout": "1"})

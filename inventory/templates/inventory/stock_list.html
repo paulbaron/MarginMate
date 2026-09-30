@@ -46,8 +46,6 @@
                 <button class="btn btn-secondary" type="submit">🧹 Supprimer les articles vides ({{ empty_stock_type_count }})</button>
             </form>
             {% endif %}
-            <a class="btn btn-secondary" href="{% url 'transfer:data_home' %}?cocher=associations">⬇️ Exporter…</a>
-            <a class="btn btn-secondary" href="{% url 'transfer:data_import' %}">⬆️ Importer…</a>
             <a class="btn" href="{% url 'inventory:stock_type_create' %}">+ Nouvel article</a>
         </div>
     </div>

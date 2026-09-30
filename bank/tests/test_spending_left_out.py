@@ -653,7 +653,7 @@ class TheSelectionTravelsTests(Fixtures, TestCase):
         if income:
             self.assertNotIn(LEFT_OUT_PARAM, query_of(income))
             self.assertEqual(query_of(income)["du"], JUNE_PARAMS["du"])
-            self.assertContains(response, f'href="{income.replace("&", "&amp;")}">Entrées d\'argent</a>')
+            self.assertContains(response, f'href="{income.replace("&", "&amp;")}" class="tab">Entrées d\'argent</a>')
         else:
             self.assertNotContains(response, ">Entrées d'argent</a>")
         # « Rapprocher les factures », the « une facture manque » stat and the

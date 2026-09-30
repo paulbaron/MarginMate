@@ -131,7 +131,7 @@ SLIP_SOURCE_PREFIX = "bons-"
 
 ALREADY_GATHERING = (
     "Une récupération est déjà en cours : elle récupère aussi les bons quand « Bons de consignes » est coché "
-    "sur Achats."
+    "sur Factures."
 )
 
 

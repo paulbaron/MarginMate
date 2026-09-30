@@ -264,14 +264,12 @@ class ArticleWordingTests(TestCase):
         self.assertContains(response, "<title>Produits & charges - MarginMate</title>")
         self.assertContains(response, "<h1>Produits &amp; charges</h1>")
 
-    def test_export_and_import_lead_to_the_data_page(self):
-        """The two associations buttons became « Données »'s: the export tab
-        with the associations ticked, and the import tab."""
+    def test_export_and_import_live_on_the_data_page_only(self):
+        """« Données » exports and imports; the workspace carries no button
+        of its own for it (the owner, 01/10/2026)."""
         response = self.client.get(reverse("inventory:stock_list"))
-        self.assertContains(
-            response, '<a class="btn btn-secondary" href="/donnees/?cocher=associations">⬇️ Exporter…</a>'
-        )
-        self.assertContains(response, '<a class="btn btn-secondary" href="/donnees/importer/">⬆️ Importer…</a>')
+        self.assertNotContains(response, "⬇️ Exporter…")
+        self.assertNotContains(response, "⬆️ Importer…")
         self.assertNotContains(response, "Exporter les associations")
 
     def test_a_name_already_taken_is_refused_in_french(self):

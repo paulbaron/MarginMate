@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}Entrées d'argent - MarginMate{% endblock %}
+{% block title %}Entrées d'argent - Banque - MarginMate{% endblock %}
 {% block content %}
     <div class="page-header">
         <div>
-            <h1>Entrées d'argent</h1>
+            <h1>Banque</h1>
             <p class="page-subtitle">
                 Tout ce qui est <strong>arrivé sur le compte</strong> sur la période, à côté de ce que la caisse dit
                 avoir <strong>encaissé</strong> les mêmes jours : carte, espèces, chèques. D'un côté ce qui a été
@@ -16,11 +16,9 @@
                 encaissé, au jour de la vente.
             </p>
         </div>
-        <div class="actions">
-            <a class="btn btn-secondary" href="{{ bank_url }}">Banque</a>
-            <a class="btn btn-secondary" href="{{ spending_url }}">Dépenses par catégorie</a>
-        </div>
     </div>
+
+    {% include "bank/_tabs.html" %}
 
     {% if has_lines %}
         <form method="get" class="date-range">

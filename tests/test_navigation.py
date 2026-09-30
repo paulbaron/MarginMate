@@ -1,7 +1,7 @@
 """The top navigation: three workspaces instead of eight pages.
 
 Stock and its review queue are one page ("Produits & charges"); invoices, tickets and
-their sources and suppliers another ("Achats"); recipes, till products and sales a third
+their sources and suppliers another ("Factures"); recipes, till products and sales a third
 ("Recettes & ventes"). Each link lights up on every page of its workspace -
 and only it - and carries the count of what is waiting there.
 
@@ -27,7 +27,7 @@ from tests.factories import make_invoice, make_product, make_recipe, make_stock_
 
 LABELS = [
     "Produits &amp; charges",
-    "Achats",
+    "Factures",
     "Banque",
     "Recettes &amp; ventes",
     # The margins read both sides - what came in, what went out - so
@@ -107,7 +107,7 @@ class NavigationTests(TestCase):
                 reverse("inventory:stock_type_update", args=[stock_type.pk]),
                 reverse("inventory:stock_type_create"),
             ],
-            "Achats": [
+            "Factures": [
                 reverse("invoices:invoice_list"),
                 reverse("invoices:receipt_queue"),
                 reverse("invoices:invoice_type_list"),
@@ -175,7 +175,7 @@ class NavigationTests(TestCase):
         PosProduct.objects.create(name="Café", ignored=True)
         links = {label_of(link): link for link in nav_links(self.client.get(reverse("inventory:stock_list")))}
         self.assertIn('<span class="badge">1</span>', links["Produits &amp; charges"])
-        self.assertIn('<span class="badge">1</span>', links["Achats"])
+        self.assertIn('<span class="badge">1</span>', links["Factures"])
         self.assertIn('<span class="badge">1</span>', links["Recettes &amp; ventes"])
         self.assertNotIn("badge", links["Inventaires"])
 
