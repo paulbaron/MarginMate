@@ -221,6 +221,8 @@ LEADING_NUMBER_RE = re.compile(r"^(?P<count>\d{1,3})\s+(?=[A-Za-zÀ-ÿ]{2})")
 # Ticket numbers, in the forms the tills print them.
 TICKET_WORD_RE = re.compile(r"(?i)ticket\D{0,15}?(\d{4,10})(?!\d)")
 # A ticket number this short is the till's count of the day: it comes round.
+# Counted without the zeros a till pads it with: Wing Seng's « 000172 » is
+# such a count, and bare it was refused as another day's ticket.
 DAILY_COUNT_DIGITS = 4
 STORE_TILL_RE = re.compile(r"R\d\s*(\d{5,6}-\d{2})\s*(\d{2,4})")
 BARCODE_RE = re.compile(r"(?<!\d)(\d{18,26})(?!\d)")
@@ -2151,7 +2153,7 @@ def _ticket_number(text: str, invoice_date: date | None) -> str:
     match = TICKET_WORD_RE.search(text)
     if match:
         number = match.group(1)
-        if len(number) <= DAILY_COUNT_DIGITS and invoice_date is not None:
+        if len(number.lstrip("0")) <= DAILY_COUNT_DIGITS and invoice_date is not None:
             return f"{number}-{invoice_date:%Y%m%d}"
         return number
     # Before the long digit runs below: a payment reference is one too.

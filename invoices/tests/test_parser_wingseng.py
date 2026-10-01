@@ -100,7 +100,9 @@ class WingSengBasicTests(SimpleTestCase):
             self.assertNotIn("TOTAL", line.raw_name.upper())
 
     def test_ticket_number_and_date(self):
-        self.assertEqual(self.invoice.invoice_number, "000197")
+        # « Ticket:000197 » is the till's count of the day, zeros and all:
+        # dated, or another day's 000197 is refused as this one.
+        self.assertEqual(self.invoice.invoice_number, "000197-20260602")
         self.assertEqual(self.invoice.invoice_date.isoformat(), "2026-06-02")
 
     def test_the_rate_is_applied_to_every_line(self):

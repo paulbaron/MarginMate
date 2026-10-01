@@ -2044,7 +2044,13 @@ removed).
 
 A ticket number of four digits or fewer ("Ticket no 4278") is the till's count
 of the day: it comes round, so it is stored with the date, or a later ticket
-was refused as a duplicate.
+was refused as a duplicate. **The digits are counted without the zeros a till
+pads with**: Wing Seng prints « Ticket:000172 », six digits, and its tickets
+run from 000035 to 000473 every day of the year - bare, the 18/09/2026 ticket
+was refused as the 19/11/2025 one (the owner, 01/10/2026). Tickets filed bare
+before that are dated by `manage.py tenant <espace> refresh_document_numbers`
+(only where the text prints that very number after « Ticket »): left bare, a
+second photo of one, read dated now, would not be recognised.
 
 **The autoreloader kills an import outright** on any code change: a
 137-ticket batch died one second in, while code was being edited, and showed
