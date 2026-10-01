@@ -499,15 +499,16 @@ class ReturnablesWritesNoMarkupTests(TestCase):
         self.assertEqual(offenders, [])
 
     def test_the_returnables_script_never_writes_markup(self):
+        """photos.js too: the photos' previews moved there (01/10), shared
+        with Achats' « Prendre une photo », and they print a file's name."""
         import pathlib
         import re
 
-        source = (pathlib.Path(__file__).resolve().parent.parent / "static/js/returnables.js").read_text(
-            encoding="utf-8"
-        )
-        for pattern in (r"\.innerHTML\s*[+]?=", r"\.outerHTML\s*[+]?=", r"insertAdjacentHTML", r"document\.write"):
-            with self.subTest(pattern=pattern):
-                self.assertIsNone(re.search(pattern, source))
+        for name in ("returnables.js", "photos.js"):
+            source = (pathlib.Path(__file__).resolve().parent.parent / "static/js" / name).read_text(encoding="utf-8")
+            for pattern in (r"\.innerHTML\s*[+]?=", r"\.outerHTML\s*[+]?=", r"insertAdjacentHTML", r"document\.write"):
+                with self.subTest(script=name, pattern=pattern):
+                    self.assertIsNone(re.search(pattern, source))
 
     def test_no_inline_script_nor_style_in_the_app_s_templates(self):
         """A strict Content-Security-Policy is planned: the page's script is
@@ -1944,6 +1945,23 @@ class TouchStylesheetTests(StylesheetTestCase):
             if ":is(" in selector
         ]
         self.assertEqual(mixed, [])
+
+    def test_the_camera_tile_is_a_touch_screen_s(self):
+        """Achats' « Prendre une photo » (01/10): a desktop browser ignores
+        `capture`, so the tile is hidden there and drawn on a touch screen -
+        never by a width, a phone held sideways being wider than 860 px. The
+        hiding rule comes after .upload-choice's display, which weighs the
+        same; test_receipt_camera_browser.py looks at both in Chrome."""
+        self.assertDeclares(".upload-choice-camera", None, {"display": "none"})
+        # Its gap to its previews and the other choices drawn with it: a
+        # desktop gets none.
+        self.assertDeclares(".upload-choice-camera", self.COARSE, {"display": "grid", "margin-bottom": "var(--s3)"})
+        choice = [rule.where for rule in self.naming(".upload-choice") if "display" in rule.declarations]
+        camera = [rule.where for rule in self.naming(".upload-choice-camera")]
+        self.assertGreater(min(camera), max(choice))
+        self.assertEqual(
+            [rule.media for rule in self.rules if ".upload-choice-camera" in rule.selectors], [None, self.COARSE]
+        )
 
     def test_a_phone_on_its_side_keeps_no_strip_of_rows(self):
         """Wider than 860 px and some 430 tall: the desktop's table box left

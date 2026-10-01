@@ -83,6 +83,15 @@ UPLOAD_MAX_FILE_BYTES = 25 * MEGABYTE
 #: statements). The folder of tickets has its own, larger one
 #: (invoices.forms.RECEIPT_BATCH_MAX_BYTES).
 UPLOAD_MAX_TOTAL_BYTES = 100 * MEGABYTE
+#: What ONE request may carry online. Cloudflare's free plan refuses a body
+#: over 100 MB with its own English page before the server sees it, and a
+#: browser never gives back the photos of a refused post: they are lost. So
+#: a page that piles up camera shots in one form (Achats' « Prendre une
+#: photo », static/js/photos.js's data-max-bytes) stops short of it, with
+#: room left for the multipart framing. The server does NOT enforce it: a
+#: folder imported from the PC itself (up to forms.RECEIPT_BATCH_MAX_BYTES,
+#: 500 MB) never goes through Cloudflare and stays legitimate.
+ONLINE_SEND_MAX_BYTES = 90 * MEGABYTE
 
 FILE_TOO_BIG = "« {name} » pèse {size} : {limit} au plus par fichier."
 SELECTION_TOO_BIG = "La sélection pèse {size} : {limit} au plus en une fois. Envoyez-la en plusieurs fois."

@@ -14,6 +14,7 @@ Data invented.
 import json
 from datetime import date, timedelta
 from decimal import Decimal
+from html.parser import HTMLParser
 from unittest import mock
 
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -21,6 +22,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
+import common
 from invoices.models import Invoice, InvoiceType, ReceiptBatch, ScrapeJob, Supplier
 from invoices.parsers import LLM_PARSER_KEY
 from invoices.tests.page_posts import page_post
@@ -336,6 +338,169 @@ class PurchasesPageTests(TestCase):
         self.assertContains(
             self.client.get(reverse("invoices:invoice_type_list")), reverse("invoices:invoice_type_create")
         )
+
+
+class _Elements(HTMLParser):
+    """Every element of a page with its attributes and the elements around
+    it (outermost first): enough to say where a field sits."""
+
+    VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.stack, self.found = [], []
+
+    def handle_starttag(self, tag, attrs):
+        element = (tag, dict(attrs))
+        self.found.append((tag, element[1], list(self.stack)))
+        if tag not in self.VOID:
+            self.stack.append(element)
+
+    def handle_endtag(self, tag):
+        # Close up to the matching tag: a template's markup is well formed.
+        for index in range(len(self.stack) - 1, -1, -1):
+            if self.stack[index][0] == tag:
+                del self.stack[index:]
+                return
+
+
+def elements(html: str) -> list:
+    parser = _Elements()
+    parser.feed(html)
+    return parser.found
+
+
+class CameraOnTheImportCardTests(TestCase):
+    """« Prendre une photo » on « Tickets et factures » (the owner, 01/10:
+    « comme pour les consignes »): a camera input posting as "files" in the
+    one import's form, set up by static/js/photos.js - which stops the post
+    short of what Cloudflare refuses and renames each shot. What a browser
+    does with it: test_receipt_camera_browser.py."""
+
+    def setUp(self):
+        self.url = reverse("invoices:invoice_list")
+
+    def camera(self, html):
+        (found,) = [(attrs, around) for tag, attrs, around in elements(html) if "data-photo-capture" in attrs]
+        return found
+
+    def test_the_camera_posts_as_files_in_the_import_form(self):
+        attrs, around = self.camera(self.client.get(self.url).content.decode())
+        self.assertEqual(
+            attrs,
+            {
+                "type": "file",
+                "name": "files",
+                "accept": "image/*",
+                "capture": "environment",
+                "data-photo-capture": None,
+            },
+        )
+        (form,) = [element for tag, element in around if tag == "form"]
+        self.assertEqual(form["action"], reverse("invoices:receipt_upload"))
+        self.assertEqual(form["enctype"], "multipart/form-data")
+        self.assertIn("data-receipt-upload", form)
+        (label,) = [element for tag, element in around if tag == "label"]
+        self.assertIn("data-photo-slot", label)
+        self.assertEqual(label["class"].split(), ["upload-choice", "upload-choice-camera"])
+        (box,) = [element for _tag, element in around if "data-photos" in element]
+        self.assertEqual(box["data-max-bytes"], str(common.ONLINE_SEND_MAX_BYTES))
+        self.assertIn("data-photo-rename", box)
+        # No count: as many tickets as there are, the bytes alone stop it.
+        self.assertNotIn("data-max-photos", box)
+
+    def test_the_cap_is_read_when_the_page_is_drawn(self):
+        with mock.patch("common.ONLINE_SEND_MAX_BYTES", 1234):
+            _attrs, around = self.camera(self.client.get(self.url).content.decode())
+        (box,) = [element for _tag, element in around if "data-photos" in element]
+        self.assertEqual(box["data-max-bytes"], "1234")
+
+    def test_the_camera_comes_first_and_the_other_choices_stay_native(self):
+        html = self.client.get(self.url).content.decode()
+        found = elements(html)
+        choices = [
+            attrs
+            for tag, attrs, _around in found
+            if tag == "label" and "upload-choice" in attrs.get("class", "").split()
+        ]
+        inputs = [
+            attrs
+            for tag, attrs, around in found
+            if tag == "input"
+            and attrs.get("name") == "files"
+            and any("data-receipt-upload" in element for _tag, element in around)
+        ]
+        self.assertEqual(len(choices), 3)
+        self.assertEqual(["data-photo-slot" in label for label in choices], [True, False, False])
+        # Three inputs, one field: « Des fichiers » and « Un dossier entier »
+        # are picked as they always were.
+        self.assertEqual(len(inputs), 3)
+        self.assertIn("data-photo-capture", inputs[0])
+        self.assertIn("multiple", inputs[1])
+        self.assertIn("webkitdirectory", inputs[2])
+        self.assertIn("Prendre une photo", html)
+        self.assertIn("chacune lue à part", html)
+
+    def test_the_box_holds_its_store_its_refusal_and_its_previews(self):
+        found = elements(self.client.get(self.url).content.decode())
+        inside = {
+            name
+            for tag, attrs, around in found
+            for name in ("data-photo-inputs", "data-photo-refused", "data-photo-previews")
+            if name in attrs and any("data-photos" in element for _t, element in around)
+        }
+        self.assertEqual(inside, {"data-photo-inputs", "data-photo-refused", "data-photo-previews"})
+        (store,) = [attrs for _tag, attrs, _around in found if "data-photo-inputs" in attrs]
+        self.assertIn("hidden", store)
+
+    def test_what_a_shot_says_sits_right_under_its_tile(self):
+        """The refusal and the previews come straight after the camera's
+        tile, before the two other choices - as on Consignes. After the whole
+        grid of choices, a phone drew them a screen below the tile tapped:
+        a refused shot was said where nobody looked (review of 01/10)."""
+        html = self.client.get(self.url).content.decode()
+        found = elements(html)
+        names = ("data-photo-slot", "data-photo-inputs", "data-photo-refused", "data-photo-previews")
+        # The box's own children, in the page's order.
+        children = [
+            next((name for name in names if name in attrs), attrs.get("class", tag))
+            for tag, attrs, around in found
+            if around and "data-photos" in around[-1][1]
+        ]
+        self.assertEqual(children, [*names, "upload-choices"])
+        # The camera's tile is in no grid of choices: it is drawn on a touch
+        # screen only, and its feedback with it.
+        (_attrs, around) = self.camera(html)
+        self.assertFalse(any("upload-choices" in element.get("class", "").split() for _t, element in around))
+        # A sentence said while the eye is elsewhere is read out too.
+        (refusal,) = [attrs for _tag, attrs, _around in found if "data-photo-refused" in attrs]
+        self.assertEqual(refusal.get("role"), "status")
+        self.assertEqual(refusal.get("aria-live"), "polite")
+        self.assertIn("hidden", refusal)
+
+    def test_photos_js_is_loaded_on_achats(self):
+        for name in ("invoices:invoice_list", "invoices:receipt_queue", "invoices:receipt_upload"):
+            with self.subTest(page=name):
+                html = self.client.get(reverse(name)).content.decode()
+                (script,) = [
+                    attrs
+                    for tag, attrs, _around in elements(html)
+                    if tag == "script" and "js/photos.js" in attrs.get("src", "")
+                ]
+                self.assertIn("defer", script)
+                self.assertIn("?v=", script["src"])
+                self.assertIn("MarginMatePhotos.setUp(form)", html)
+
+    def test_the_cap_stops_short_of_cloudflare_s_100_mb(self):
+        """90 MiB: under the free plan's 100 MB however it counts them, with
+        room for the multipart framing - and not enforced by the server, whose
+        folder import takes 500 MB from the PC itself."""
+        from invoices.forms import RECEIPT_BATCH_MAX_BYTES
+
+        self.assertEqual(common.ONLINE_SEND_MAX_BYTES, 90 * common.MEGABYTE)
+        self.assertLess(common.ONLINE_SEND_MAX_BYTES, 100 * 1000 * 1000)
+        self.assertEqual(common.weight(common.ONLINE_SEND_MAX_BYTES), "90 Mo")
+        self.assertGreater(RECEIPT_BATCH_MAX_BYTES, common.ONLINE_SEND_MAX_BYTES)
 
 
 class CheckingAnImportTests(TestCase):

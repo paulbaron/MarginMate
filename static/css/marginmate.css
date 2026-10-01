@@ -1180,6 +1180,19 @@ th.sortable > button:focus-visible {
 .upload-choice input[type="file"] { max-width: 100%; min-width: 0; }
 .upload-choice:hover { background: var(--panel-hover); }
 .upload-choice-title { font-weight: 600; }
+/* « Prendre une photo » (Achats' import card, static/js/photos.js) is drawn
+   on a touch screen only - the « touch » section, at the end, shows it: a
+   desktop browser ignores `capture`, and the tile would only open a file
+   dialog beside « Des fichiers ». After .upload-choice, which weighs the
+   same and draws every choice. */
+.upload-choice-camera { display: none; }
+/* The shots kept, and a shot refused, right under the camera's tile and
+   above the two other choices, as on Consignes (review of 01/10: under the
+   whole grid, a phone drew them a screen below the tile tapped). Nothing
+   drawn while there is no photo: an empty list adds no gap. */
+.receipt-photos .photo-previews { margin: 0 0 var(--s3); }
+.receipt-photos .photo-previews:empty { display: none; }
+.receipt-photos .field-error { margin: 0 0 var(--s3); }
 .batch-progress { height: 6px; margin: var(--s3) 0; border-radius: 999px; background: var(--bg); overflow: hidden; }
 .batch-progress-bar { height: 100%; background: var(--green); transition: width 0.4s ease; }
 /* A file no shop was recognised on: some supplier names are a sentence long. */
@@ -2741,6 +2754,14 @@ details.format-group > summary { cursor: pointer; }
     input, select, textarea, .copy-row input { font-size: 1rem; }
     /* Six digits still fit a conversion's box at 16 px. */
     form.conversion-form input { width: 4.75rem; }
+}
+
+/* Achats' « Prendre une photo », hidden with a mouse (.upload-choice-camera,
+   above): a phone's camera opens from it - and a phone held sideways is
+   wider than 860 px, so this is no width. Its gap to what follows (its
+   previews, the two other choices) is drawn with it: a desktop gets none. */
+@media (pointer: coarse) {
+    .upload-choice-camera { display: grid; margin-bottom: var(--s3); }
 }
 
 /* Thumb-sized: 44 px (the rule Consignes and the signature pad already
