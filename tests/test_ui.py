@@ -366,6 +366,7 @@ class PageChromeTests(TestCase):
             "inventory:stock_take_list",
             "margins:margins_home",
             "bank:income_home",
+            "bank:recognition",
             "staff:home",
             "returnables:home",
             "returnables:format_list",

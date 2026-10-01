@@ -17,7 +17,7 @@ from decimal import Decimal
 from django.test import Client, TestCase
 from django.urls import reverse
 
-from bank.models import BankTransaction
+from bank.models import BankTransaction, OperationRule
 from inventory.models import StockMovement, StockType, UnitChoices
 from invoices.models import Invoice, ReceiptBatch, ShopItemPrice
 from recipes.models import PosProduct, PosProductDailyQuantity, Recipe, RecipeSale
@@ -495,9 +495,28 @@ class EmptyDatabasePageSmokeTests(TestCase):
     def test_bank_pages(self):
         """« Dépenses » divides every share by what left the account, and on
         a new install nothing has."""
-        for name in ("bank:bank_home", "bank:spending_home", "bank:income_home", "bank:rule_list", "bank:proposals"):
+        for name in (
+            "bank:bank_home",
+            "bank:spending_home",
+            "bank:income_home",
+            "bank:rule_list",
+            "bank:proposals",
+            "bank:recognition",
+            "bank:recognition_reapply",
+        ):
             with self.subTest(page=name):
                 self.assertPageOK(name)
+
+    def test_the_recognition_pages(self):
+        """A seeded rule's own page, and the list with no rule at all - an
+        espace whose « Données » were cleared. A rule that is not there is a
+        404."""
+        self.assertPageOK("bank:recognition_rule", pk=OperationRule.objects.first().pk)
+        OperationRule.objects.all().delete()
+        for name in ("bank:recognition", "bank:recognition_reapply", "bank:income_home"):
+            with self.subTest(page=name):
+                self.assertPageOK(name)
+        self.assertEqual(self.client.get(reverse("bank:recognition_rule", args=[999999])).status_code, 404)
 
     def test_the_invoice_files(self):
         """The zip of the period's invoices goes back to Banque when nothing

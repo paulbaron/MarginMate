@@ -9,19 +9,21 @@ tickets record them (`recipes.PosDailyPayment`) - against what reached the
 account. The owner's question (27/09): does the money that came in match
 what was sold?
 
-What the statement shows, and how each line is recognised - every rule said
-on the page, because what the application recognises has to be visible:
+What the statement shows, and how each line is recognised - by the till
+rules a person edits (`bank.recognition`, « Reconnaissance des opérations »),
+said on the page, because what the application recognises has to be visible:
 
-* **A card payout** is a credit whose label carries « TOTAL ENCAISSE <number>
-  EURO(S) » (`PAYOUT_RE`): the payment terminal's provider pays the card
-  takings in one transfer, prints the GROSS in the label (dot decimal), and
-  the line's amount is what arrived - net of its commission. Recognised by
-  those words, never by the provider's name: a name is the one thing a new
-  contract changes. The commission is gross − net, said as it is, even when
-  it comes out odd (a net above the gross is a negative commission, printed
-  so, never corrected).
-* **Cash deposited**: bank type « VERSEMENT ESPECES ». **Cheques deposited**:
-  « REMISE CHEQUES ».
+* **A card payout**: a credit a « Versement de carte (TPE) » rule finds. The
+  terminal's provider pays the card takings in one transfer, and the line's
+  amount is what arrived - net of its commission. Where the rule reads the
+  GROSS printed in the label (`(?P<encaisse>…)`), the commission is
+  gross − net, said as it is, even when it comes out odd (a net above the
+  gross is a negative commission, printed so, never corrected). Recognised
+  by words, never by the provider's name: a name is the one thing a new
+  contract changes.
+* **Cash and cheques deposited**, meal vouchers, an « Avoir », no sale at
+  all: whatever a rule of that meaning finds (the owner's bank says its
+  deposits in the operation type).
 * **Everything else** is « Autres entrées »: a private party paying an
   event, a partner's contribution, a supplier's refund, a direct debit
   returned. A person names them with the SAME free-text
@@ -31,15 +33,13 @@ on the page, because what the application recognises has to be visible:
 
 **A person can say what a credit is in the till** (« En caisse », on every
 credit of the page): card, cash, cheque, « Avoir », meal vouchers, or no sale
-at all (`models.IncomeSource`). Those words are one terminal's: another
-provider's payouts print others, and the rules above would file them under
-« Autres entrées » for good. A choice is kept two ways (`reading_of`, in
-this order):
+at all (`models.IncomeSource`), for a credit no rule recognises - or one a
+rule reads wrong. A choice is kept two ways (`reading_of`, in this order):
 
 * on the LINE (`BankTransaction.income_source`), for that line alone - it
   beats everything, the rules included;
-* then the rules, where they RECOGNISE the line (a gross printed, a deposit
-  type): what the line itself prints is data about it;
+* then the rules, where one RECOGNISES the line - « Pas une vente » included:
+  what the line itself prints is data about it;
 * then its PAYER (`IncomePayer`, keyed by `payer_key`), « retenir pour ce
   payeur »: every credit of that payer the rules do not recognise, past and
   future, follows - the one click that teaches the page a new terminal. Read
@@ -49,10 +49,12 @@ this order):
   for a transfer from the bar's other account under that name moved every
   payout of the statement out of the card figures (review, 01/10/2026).
 
-A card credit whose label prints no gross counts the amount received as its
-gross (a bank's own terminal pays the gross and takes its fee apart): its
-commission is UNKNOWN, never 0 - left out of the commission and its rate,
-and the page says how many payouts are counted that way.
+A card credit whose label prints no gross - a payout rule reading none, or
+a card said by a person where no rule reads a gross on the line - counts the
+amount received as its gross (a bank's own terminal pays the gross and takes
+its fee apart): its commission is UNKNOWN, never 0 - left out of the
+commission and its rate, and the page says how many payouts are counted that
+way.
 
 **How a payout is linked to the till's card sales.** Measured on the real
 statement (the measurement stays out of a public repository; the rules do
@@ -75,12 +77,12 @@ Pure of request and template: a `DateRange` in, an `IncomeReport` out, in
 
 from __future__ import annotations
 
-import re
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal
+from typing import NamedTuple
 
 from django.db import transaction
 from django.db.models import Max, Min
@@ -89,24 +91,13 @@ from common import DateRange, search_key
 from recipes.integration import TILL_TO_CONFIGURE
 from recipes.models import PosDailyPayment, PosProductDailyQuantity
 
-from . import matching
+from . import matching, recognition
 from .models import BankTransaction, IncomePayer, IncomeSource
 from .spending import NO_CATEGORY
 
 ZERO = Decimal("0")
 HUNDRED = Decimal("100")
 RATE_PLACES = Decimal("0.01")
-
-#: « … TOTAL ENCAISSE 987.65 EUROS … »: the words, the gross, the currency.
-#: The number is the provider's own (a dot decimal; a comma is read too, and
-#: thousands grouped by spaces). Anything else - no number, a number the
-#: pattern cannot read whole - is NOT a payout: it falls to « Autres
-#: entrées », where it is seen, rather than being read as a wrong gross.
-PAYOUT_RE = re.compile(r"TOTAL\s+ENCAISS[EÉ]\s+(\d{1,3}(?:\s\d{3})+|\d+)(?:[.,](\d+))?\s+EUROS?\b", re.IGNORECASE)
-#: The bank types of the two deposits, compared accent- and case-blind
-#: (`common.search_key`), so « ESPÈCES » and « Especes » are one type.
-CASH_TYPE = "versement especes"
-CHEQUE_TYPE = "remise cheque"
 
 #: Where a credit came from - one vocabulary for the report, the page,
 #: « Banque »'s « Entrées » tab and what a person chooses
@@ -166,40 +157,24 @@ RUN_DAYS = 8
 ANCHOR_DAYS = 7
 
 #: What `income_for` costs, whatever the history holds: the payers retained,
-#: the credits, the till's payments, the till's days of the window, the
-#: till's last day, and the statement's first and last day (one aggregate). A
-#: test holds it - an N+1 here is one query per day of the year.
-QUERIES = 6
+#: the recognition rules, the credits, the till's payments, the till's days
+#: of the window, the till's last day, and the statement's first and last day
+#: (one aggregate). A test holds it - an N+1 here is one query per day of the
+#: year.
+QUERIES = 7
 
 #: The sources a till row is compared with - « Autres entrées » is compared
 #: with nothing, so nothing of it can be « before the till ».
 COMPARED = (CARD, CASH, CHEQUE, VOUCHER, CREDIT)
 
 
-def payout_gross(label) -> Decimal | None:
-    """The gross a card payout's label prints, or None when the label is no
-    payout's (`PAYOUT_RE`)."""
-    found = PAYOUT_RE.search(label or "")
-    if found is None:
+def automatic_source(line: BankTransaction, rules: recognition.Rules | None) -> recognition.TillReading | None:
+    """What the first till rule finding the credit says it is - None where
+    none does, and where no rules are given (`recognition.load`, read once
+    by the caller: never a query here)."""
+    if rules is None:
         return None
-    whole, decimals = found.groups()
-    try:
-        return Decimal(f"{''.join(whole.split())}.{decimals or '0'}")
-    except InvalidOperation:  # pragma: no cover - the pattern holds digits only
-        return None
-
-
-def automatic_source(line: BankTransaction) -> str:
-    """CARD, CASH, CHEQUE or OTHER - the rules the page states, for a credit
-    nobody said anything about."""
-    if payout_gross(line.label) is not None:
-        return CARD
-    kind = search_key(line.bank_type or "")
-    if CASH_TYPE in kind:
-        return CASH
-    if CHEQUE_TYPE in kind:
-        return CHEQUE
-    return OTHER
+    return recognition.till_reading(rules, line.label or "", line.bank_type or "")
 
 
 def payer_key(line: BankTransaction) -> str:
@@ -214,36 +189,50 @@ def payer_key(line: BankTransaction) -> str:
     return key[:PAYER_KEY_MAX].rstrip()
 
 
+class Reading(NamedTuple):
+    """What a credit is, who said so, and - where a till rule said so - what
+    that rule read (its name, a payout's gross)."""
+
+    source: str
+    how: str
+    till: recognition.TillReading | None = None
+
+
 def reading_of(
-    line: BankTransaction, payers: dict[str, str] | None = None, payer: str | None = None
-) -> tuple[str, str]:
-    """(source, how): what a credit is, and who said so - the line's own
-    choice, else the rules where they recognise it, else its payer's
-    (`payers`: {payer key: source}), else « Autres entrées ». A stored value
-    that is no source (written by hand in the database) is passed over,
-    never raised on. `payer` is the line's key when the caller has it
-    already."""
+    line: BankTransaction,
+    payers: dict[str, str] | None = None,
+    payer: str | None = None,
+    rules: recognition.Rules | None = None,
+) -> Reading:
+    """What a credit is, and who said so - the line's own choice, else the
+    first till rule that recognises it (`rules`; « Pas une vente » is a
+    recognition too), else its payer's (`payers`: {payer key: source}), else
+    « Autres entrées ». A stored value that is no source (written by hand in
+    the database) is passed over, never raised on. `payer` is the line's key
+    when the caller has it already."""
     if line.income_source in CHOSEN:
-        return line.income_source, BY_LINE
-    recognised = automatic_source(line)
-    if recognised != OTHER:
-        return recognised, BY_RULE
+        return Reading(line.income_source, BY_LINE)
+    recognised = automatic_source(line, rules)
+    if recognised is not None:
+        return Reading(recognised.source, BY_RULE, recognised)
     if payers:
         learnt = payers.get(payer_key(line) if payer is None else payer)
         if learnt in CHOSEN:
-            return learnt, BY_PAYER
-    return OTHER, BY_RULE
+            return Reading(learnt, BY_PAYER)
+    return Reading(OTHER, BY_RULE)
 
 
-def follows_its_payer(line: BankTransaction) -> bool:
+def follows_its_payer(line: BankTransaction, rules: recognition.Rules | None = None) -> bool:
     """Whether a retained payer decides this credit: nothing chosen on the
-    line, and nothing the rules recognise (`reading_of`)."""
-    return line.income_source not in CHOSEN and automatic_source(line) == OTHER
+    line, and no till rule of `rules` recognising it (`reading_of`)."""
+    return line.income_source not in CHOSEN and automatic_source(line, rules) is None
 
 
-def source_of(line: BankTransaction, payers: dict[str, str] | None = None) -> str:
+def source_of(
+    line: BankTransaction, payers: dict[str, str] | None = None, rules: recognition.Rules | None = None
+) -> str:
     """CARD, CASH, CHEQUE, VOUCHER, CREDIT or OTHER (`reading_of`)."""
-    return reading_of(line, payers)[0]
+    return reading_of(line, payers, rules=rules).source
 
 
 @dataclass(frozen=True)
@@ -264,6 +253,8 @@ class Entry:
     how: str = BY_RULE
     #: `payer_key` of the line, worked out once.
     payer: str = ""
+    #: The name of the till rule that recognised it (BY_RULE), « » for none.
+    rule: str = ""
 
     @property
     def day(self) -> date:
@@ -299,10 +290,8 @@ class Entry:
             return "choisi pour cette entrée"
         if self.how == BY_PAYER:
             return "payeur retenu"
-        if self.source == CARD:
-            return "libellé « TOTAL ENCAISSE »"
-        if self.source in (CASH, CHEQUE):
-            return "type d'opération"
+        if self.rule:
+            return f"règle « {self.rule} »"
         return "non reconnue"
 
     @property
@@ -314,7 +303,7 @@ class Entry:
         exception, and its payer's other credits are no business of it."""
         if not self.payer:
             return False
-        return self.how == BY_PAYER or (self.how == BY_RULE and self.source == OTHER)
+        return self.how == BY_PAYER or (self.how == BY_RULE and not self.rule)
 
     @property
     def category(self) -> str:
@@ -333,18 +322,29 @@ class Entry:
         return ONE.get(self.source) or self.category
 
 
-def entry_for(line: BankTransaction, payers: dict[str, str] | None = None) -> Entry:
+def entry_for(
+    line: BankTransaction, payers: dict[str, str] | None = None, rules: recognition.Rules | None = None
+) -> Entry:
     """One credit read whole. `payers` ({payer key: source}, `known_payers`)
-    is read once by the caller: pure, no query, whatever the number of
-    lines."""
+    and `rules` (`recognition.load`) are read once by the caller: pure, no
+    query, whatever the number of lines. A payout's gross is what the rule
+    that recognised it reads; a card said by the line or its payer takes the
+    gross the first payout rule reads on it (`recognition.printed_gross`) -
+    and with none, the amount received, its commission unknown."""
     payer = payer_key(line)
-    source, how = reading_of(line, payers, payer)
+    source, how, till = reading_of(line, payers, payer, rules)
+    rule = till.rule if till is not None else ""
     if source != CARD:
-        return Entry(line, source, how=how, payer=payer)
-    printed = payout_gross(line.label)
-    if printed is None:
-        return Entry(line, source, line.amount, gross_from_amount=True, how=how, payer=payer)
-    return Entry(line, source, printed, how=how, payer=payer)
+        return Entry(line, source, how=how, payer=payer, rule=rule)
+    if till is not None:
+        gross = till.gross
+    elif rules is not None:
+        gross = recognition.printed_gross(rules, line.label or "", line.bank_type or "")
+    else:
+        gross = None
+    if gross is None:
+        return Entry(line, source, line.amount, gross_from_amount=True, how=how, payer=payer, rule=rule)
+    return Entry(line, source, gross, how=how, payer=payer, rule=rule)
 
 
 def known_payers() -> dict[str, str]:
@@ -373,8 +373,8 @@ class SourceChange:
     remembered: bool = False
     forgotten: bool = False
     #: The payer's OTHER credits that follow it now, and those whose own
-    #: choice beats it - counted only when the payer changed. Those the
-    #: rules recognise are neither: a payer never reaches them.
+    #: choice beats it - counted only when the payer changed. Those a rule
+    #: recognises are neither: a payer never reaches them.
     followers: int = 0
     kept: int = 0
 
@@ -400,8 +400,11 @@ def set_source(line: BankTransaction, value, *, remember: bool) -> SourceChange:
         raise SourceRefused(NOT_A_CREDIT)
     if not isinstance(value, str) or value not in VALUES:
         raise SourceRefused(UNKNOWN_CHOICE)
+    # The rules, read once - for this line and every other credit of its
+    # payer below.
+    rules = recognition.load()
     key = payer_key(line)
-    recognised = automatic_source(line)
+    recognised = automatic_source(line, rules)
     remembered = forgotten = False
     with transaction.atomic():
         if remember and key:
@@ -410,19 +413,21 @@ def set_source(line: BankTransaction, value, *, remember: bool) -> SourceChange:
             else:
                 IncomePayer.objects.update_or_create(key=key, defaults={"source": value})
                 remembered = True
-            # The line follows its payer - unless the rules recognise it as
+            # The line follows its payer - unless a rule recognises it as
             # something else, where only its own choice can say otherwise.
-            reached = recognised == OTHER or value in (AUTOMATIC, recognised)
+            reached = recognised is None or value in (AUTOMATIC, recognised.source)
             line.income_source = AUTOMATIC if reached else value
         else:
             line.income_source = value
         line.save(update_fields=["income_source"])
-    change = SourceChange(entry_for(line, known_payers()), key, remembered, forgotten)
+    change = SourceChange(entry_for(line, known_payers(), rules), key, remembered, forgotten)
     if remembered or forgotten:
         others = BankTransaction.objects.filter(amount__gt=0).exclude(pk=line.pk)
+        # The rules read the label and the operation type only, both fetched
+        # here: a deferred field read in the loop would be a query a credit.
         for other in others.only("pk", "counterparty", "label", "bank_type", "income_source"):
-            # What the rules recognise no payer reaches, chosen or not.
-            if payer_key(other) != key or automatic_source(other) != OTHER:
+            # What a rule recognises no payer reaches, chosen or not.
+            if payer_key(other) != key or automatic_source(other, rules) is not None:
                 continue
             if other.income_source in CHOSEN:
                 change.kept += 1
@@ -434,12 +439,13 @@ def set_source(line: BankTransaction, value, *, remember: bool) -> SourceChange:
 def forget_payer(payer: IncomePayer) -> int:
     """« Oublier »: the payer no longer decides. Returns how many of its
     credits go back to « Autres entrées » - those with a choice of their own
-    keep it, and those the rules recognise never followed it."""
+    keep it, and those a rule recognises never followed it."""
+    rules = recognition.load()
     credits = BankTransaction.objects.filter(amount__gt=0).exclude(income_source__in=CHOSEN)
     back = sum(
         1
         for line in credits.only("counterparty", "label", "bank_type", "income_source")
-        if payer_key(line) == payer.key and follows_its_payer(line)
+        if payer_key(line) == payer.key and follows_its_payer(line, rules)
     )
     payer.delete()
     return back
@@ -609,6 +615,14 @@ class IncomeReport:
     other_means: list[Entry] = field(default_factory=list)
     #: Every payer retained, whatever the window.
     payers: list[PayerRow] = field(default_factory=list)
+    #: What went wrong with the till rules while the credits were read
+    #: (`recognition.Rules.problems`), in French: a rule that recognised
+    #: nothing has to be said, or its credits sit in « Autres entrées »
+    #: unexplained.
+    rule_problems: list[str] = field(default_factory=list)
+    #: The till rules the credits were read with, in their order - what the
+    #: page states it recognises, without reading the rules a second time.
+    till_rules: tuple = ()
 
     #: The till over the same days. `takings` counts the days whose money
     #: was read (`revenue_read`); `unread_revenue_days` says how many were not.
@@ -775,14 +789,19 @@ def income_for(window: DateRange) -> IncomeReport:
     # them in Python (`entry_for`), never one query a line.
     retained = list(IncomePayer.objects.all())
     payers = {payer.key: payer.source for payer in retained}
+    # The till rules, the same way: one query.
+    rules = recognition.load()
     # Every credit, the whole history: the balance and the exact runs are
     # worked out from the first payout on, so that a window cannot change
     # them. Windowed here, in Python, with the one definition of « in the
     # window » that is not SQL (`DateRange.holds`).
     entries = [
-        entry_for(line, payers)
+        entry_for(line, payers, rules)
         for line in BankTransaction.objects.filter(amount__gt=0).order_by("operation_date", "pk")
     ]
+    # After every credit: a rule found too slow on one of them is said too.
+    report.rule_problems = rules.problems
+    report.till_rules = rules.till
     report.payers = _payer_rows(retained, entries, window)
     payments = list(PosDailyPayment.objects.values_list("sold_on", "method", "amount", "payments"))
     # Where each side starts and stops - read before the loops below, which

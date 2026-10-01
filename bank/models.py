@@ -17,11 +17,12 @@ class IncomeSource(models.TextChoices):
     one vocabulary of `BankTransaction.income_source`, `IncomePayer.source`,
     bank/income.py and the page's « En caisse » menu.
 
-    AUTOMATIC is « nobody said » on the line: the page's rules decide where
-    they recognise it (the label's « TOTAL ENCAISSE … EUROS », the bank's
-    deposit types), else its payer retained (`IncomePayer`). It is a member,
-    not just a blank, because the « Données » archive checks every value it
-    reads against the choices, and a blank line would be refused there.
+    AUTOMATIC is « nobody said » on the line: the first active till rule of
+    « Reconnaissance des opérations » that recognises the credit decides
+    (`OperationRule`, `bank.recognition.till_reading`), else its payer
+    retained (`IncomePayer`). It is a member, not just a blank, because the
+    « Données » archive checks every value it reads against the choices, and
+    a blank line would be refused there.
     """
 
     AUTOMATIC = "", "Automatique"
@@ -69,11 +70,12 @@ class BankTransaction(models.Model):
     # counts and lists first, never folds into « Autres ».
     category = models.CharField(max_length=255, blank=True)
     # What this CREDIT is in the till, said by a person on « Entrées d'argent »
-    # for this line alone - a card payout from a terminal whose label the
-    # page does not recognise, a deposit for a private event the till took
-    # as an « Avoir ». Blank: the page's rules where they recognise the line,
-    # else its payer (`IncomePayer`), decide. Never set on a debit; a statement imported again
-    # never touches it (`reconcile.import_statement` only adds lines).
+    # for this line alone - a card payout from a terminal whose label no till
+    # rule recognises, a deposit for a private event the till took as an
+    # « Avoir ». Blank: the first active till rule of « Reconnaissance des
+    # opérations » that recognises the line (`OperationRule`), else its payer
+    # (`IncomePayer`), decides. Never set on a debit; a statement imported
+    # again never touches it (`reconcile.import_statement` only adds lines).
     income_source = models.CharField(max_length=10, blank=True, default="", choices=IncomeSource.choices)
     # A person decided this line - linked it, unlinked it, or said there is
     # no invoice - so the automatic pass never touches it again.
@@ -148,13 +150,14 @@ class IncomePayer(models.Model):
     person says what one of them is on « Entrées d'argent » and leaves
     « retenir pour ce payeur » ticked.
 
-    A payment terminal is recognised by its provider's transfers, and a new
-    terminal is a new label the page's rules do not know: one choice on one
-    of its transfers is then enough for every transfer it ever sent and will
-    send. Read when the page is drawn, never written onto the lines, so
-    « Oublier » puts them straight back. It decides only what the rules do
-    not recognise, and a line a person chose on its own
-    (`BankTransaction.income_source`) beats it (`bank.income.reading_of`).
+    A payment terminal pays out by its provider's transfers, and a new
+    terminal is a new label no till rule of « Reconnaissance des opérations »
+    knows: one choice on one of its transfers is then enough for every
+    transfer it ever sent and will send. Read when the page is drawn, never
+    written onto the lines, so « Oublier » puts them straight back. It
+    decides only what no till rule recognises (« Pas une vente » included),
+    and a line a person chose on its own (`BankTransaction.income_source`)
+    beats it (`bank.income.reading_of`).
     """
 
     #: `bank.income.payer_key` of a line: `matching.alias_key` of who the
@@ -168,6 +171,73 @@ class IncomePayer(models.Model):
 
     def __str__(self):
         return f"{self.key} = {self.get_source_display()}"
+
+
+class OperationRule(models.Model):
+    """How an operation of the statement is recognised: a pattern searched in
+    its label or its operation type, and what the operation is when found.
+
+    Nothing about a bank's words is written in the code: the owner's bank
+    is seeded (migration 0006) as rules like any other, and another bank's
+    statement is read by editing them on « Reconnaissance des opérations ».
+    Two questions, each answered by the first active rule of its kind in
+    their order - `bank.recognition` has the rules of reading:
+
+    * what the operation IS (`KIND_MEANINGS`): decided at import and stored on
+      the line (`BankTransaction.kind`, `counterparty`, `card_date`);
+    * what a credit is in the TILL (`TILL_MEANINGS`): read whenever « Entrées
+      d'argent » is drawn, never stored - a card terminal's payout, with or
+      without the gross it collected printed in its label, a deposit...
+    """
+
+    class Meaning(models.TextChoices):
+        # What the operation is - stored at import.
+        CARD_PAYMENT = "card_payment", "Paiement par carte"
+        DEBIT = "debit", "Prélèvement"
+        TRANSFER = "transfer", "Virement"
+        OTHER_OPERATION = "other_operation", "Autre opération"
+        # What a credit is in the till - read when « Entrées d'argent » is drawn.
+        PAYOUT = "payout", "Versement de carte (TPE)"
+        CASH = "cash", "Dépôt d'espèces"
+        CHEQUE = "cheque", "Remise de chèques"
+        VOUCHER = "voucher", "Titres-restaurant"
+        CREDIT = "credit", "Avoir"
+        NOT_A_SALE = "not_a_sale", "Pas une vente"
+
+    class Searched(models.TextChoices):
+        LABEL = "label", "Libellé"
+        BANK_TYPE = "bank_type", "Type d'opération"
+
+    #: Unique whatever its case and accents (`bank.recognition.name_key`, the
+    #: form's check): the « Données » archive keys a rule by it, and the
+    #: pages name a rule by it.
+    name = models.CharField("nom", max_length=100, unique=True)
+    meaning = models.CharField("signifie", max_length=20, choices=Meaning.choices)
+    searched = models.CharField("cherché dans", max_length=10, choices=Searched.choices, default=Searched.LABEL)
+    pattern = models.CharField("motif", max_length=300)
+    #: The first rule of its kind that finds its pattern decides: the order is
+    #: part of what a rule says. Rules of one position are asked by name, never
+    #: by id: an id is this database's, and a « Données » import gives new ones.
+    position = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField("active", default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["position", "name"]
+
+    def __str__(self):
+        return self.name
+
+    def clean(self):
+        # Imported here: bank.recognition reads this module's choices.
+        from returnables.patterns import PatternError
+
+        from .recognition import check
+
+        try:
+            check(self.meaning, self.searched, self.pattern)
+        except PatternError as error:
+            raise ValidationError({"pattern": error.message}) from None
 
 
 class IgnoreRule(models.Model):

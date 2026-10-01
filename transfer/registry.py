@@ -142,8 +142,8 @@ INFO: dict[str, SectionInfo] = {
             70,
             recommends=["factures", "fournisseurs"],
             description=(
-                "Opérations importées, leurs liens aux factures, règles « sans facture », noms de payeurs appris "
-                "et payeurs retenus des entrées d'argent."
+                "Opérations importées, leurs liens aux factures, règles « sans facture », règles de reconnaissance "
+                "des opérations, noms de payeurs appris et payeurs retenus des entrées d'argent."
             ),
             # In two imports the bank cannot tell a line whose payment went
             # with its invoice from one a person unlinked (bank.UNDONE_NOTE).
@@ -154,6 +154,12 @@ INFO: dict[str, SectionInfo] = {
                 ),
                 "fournisseurs": "Enseignes et fournisseurs — un nom de payeur appris pour un fournisseur absent est ignoré",
             },
+            # The rules seeded by bank/0006 go too (sections/bank.py,
+            # RECOGNITION_CLEAR_NOTE).
+            clear_note=(
+                "les règles de reconnaissance des opérations partent aussi : sans elles un relevé importé n'est plus "
+                "reconnu ; la sauvegarde prise avant l'effacement les ramène"
+            ),
         ),
         _info(
             "ventes",

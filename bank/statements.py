@@ -1,12 +1,16 @@
-"""Reading a bank statement exported as CSV (BNP Paribas).
+"""Reading a bank statement exported as CSV.
 
     "Compte de chèques";"Compte de chèques";****0042;14/09/2026;;1 234,56
     03/08/2026;PAIEMENT CB;FACTURE CARTE;FACTURE CARTE DU 010826 FRANPRIX 5333   PARIS   CARTE   4974XXXXXXXX1111;03/08/2026;-4,10
 
-A header line (account, export date, balance), then one line per operation:
-date, type, short type, label, value date, amount - French decimals, a space
-between thousands, negative when money went out. Nothing here touches the
-database, so every layout quirk is testable from a string.
+The layout is the BNP Paribas export's: a header line (account, export date,
+balance), then one line per operation: date, type, short type, label, value
+date, amount - French decimals, a space between thousands, negative when
+money went out. What each operation IS - its kind, its payee, the day a card
+was used - is not read here but by the rules a person edits
+(`bank.recognition.describe`, handed in as `rules`): no bank's words are
+written in this module. Nothing here touches the database, so every layout
+quirk is testable from a string.
 """
 
 from __future__ import annotations
@@ -20,14 +24,10 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
+from . import recognition
+
 DATE_RE = re.compile(r"^\d{2}/\d{2}/\d{4}$")
 ACCOUNT_RE = re.compile(r"\*{2,}\d+")
-# "FACTURE CARTE DU 150726 FRANPRIX 5333 PARIS CARTE 4974XXXXXXXX1111": the
-# day the card was used, then the merchant up to the masked card number.
-CARD_RE = re.compile(r"FACTURE CARTE DU (\d{2})(\d{2})(\d{2}) (.*?)\s+CARTE\s+\d{4}X+\d{4}")
-DEBIT_RE = re.compile(r"^PRLV SEPA (?:B2B )?(.*?) ECH/")
-TRANSFER_OUT_RE = re.compile(r"/BEN (.*?) /REFDO")
-TRANSFER_IN_RE = re.compile(r"/FRM (.*?) /")
 
 
 @dataclass
@@ -49,7 +49,13 @@ class Statement:
     lines: list[StatementLine] = field(default_factory=list)
 
 
-def parse_statement(content: bytes) -> Statement:
+def parse_statement(content: bytes, rules: recognition.Rules) -> Statement:
+    """Every operation of the file, each described by `rules` (one
+    `recognition.load()`, read by the caller). Refused - ValueError, a
+    French sentence - for a file that is no statement, a row cut short, an
+    amount that cannot be read, and, once every row was read, any rule that
+    could not be applied (`Rules.refusal`): a kind stored wrong is never
+    read again."""
     rows = [
         row for row in csv.reader(io.StringIO(_decode(content)), delimiter=";") if any(cell.strip() for cell in row)
     ]
@@ -64,46 +70,38 @@ def parse_statement(content: bytes) -> Statement:
         if len(row) < 6:
             raise ValueError(f"Ligne incomplète dans le relevé : {';'.join(row)[:80]}")
         label = " ".join(row[3].split())
-        kind, counterparty, card_date = describe(label)
+        bank_type = row[1].strip()
+        operation_date = _date(row[0])
+        described = recognition.describe(rules, label, bank_type, operation_date)
         lines.append(
             StatementLine(
-                operation_date=_date(row[0]),
+                operation_date=operation_date,
                 value_date=_date(row[4]) if DATE_RE.match(row[4].strip()) else None,
-                bank_type=row[1].strip(),
+                bank_type=bank_type,
                 label=label,
                 amount=parse_amount(row[5]),
-                kind=kind,
-                counterparty=counterparty,
-                card_date=card_date,
+                kind=described.kind,
+                counterparty=described.counterparty,
+                card_date=described.card_date,
             )
         )
     if not lines:
         raise ValueError("Aucune opération trouvée : ce fichier ne ressemble pas à un relevé bancaire exporté en CSV.")
+    # After every row: a rule found too slow on the last one counts too.
+    if rules.refusal:
+        raise ValueError(rules.refusal)
     _fingerprint(account, lines)
     return Statement(account=account, lines=lines)
 
 
-def describe(label: str) -> tuple[str, str, date | None]:
-    """(kind, counterparty, card date) from an operation's label."""
-    card = CARD_RE.search(label)
-    if card:
-        day, month, year, merchant = card.groups()
-        try:
-            card_date = date(2000 + int(year), int(month), int(day))
-        except ValueError:
-            card_date = None
-        return "CARD", merchant.strip(), card_date
-    debit = DEBIT_RE.search(label)
-    if debit:
-        return "DEBIT", debit.group(1).strip(), None
-    if label.startswith("VIR"):
-        found = TRANSFER_OUT_RE.search(label) or TRANSFER_IN_RE.search(label)
-        return "TRANSFER", found.group(1).strip() if found else "", None
-    return "OTHER", "", None
-
-
 def parse_amount(text: str) -> Decimal:
-    cleaned = text.strip().replace(" ", "").replace(" ", "").replace(" ", "").replace(",", ".")
+    cleaned = (
+        text.strip()
+        .replace("\N{NO-BREAK SPACE}", "")
+        .replace("\N{NARROW NO-BREAK SPACE}", "")
+        .replace(" ", "")
+        .replace(",", ".")
+    )
     try:
         return Decimal(cleaned)
     except InvalidOperation:

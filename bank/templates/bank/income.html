@@ -66,6 +66,12 @@
                 {% endif %}
             </div>
         {% endif %}
+        {% if report.rule_problems %}
+            <div class="message message-warning">
+                {% for problem in report.rule_problems %}<p>{{ problem }}</p>{% endfor %}
+                <p><a href="{% url 'bank:recognition' %}">Corriger sur « Reconnaissance des opérations »</a></p>
+            </div>
+        {% endif %}
         {% if report.unread_revenue_days %}
             <div class="message message-warning">
                 Les ventes de <strong>{{ report.unread_revenue_days|length }} jour{{ report.unread_revenue_days|length|pluralize }}</strong>
@@ -165,18 +171,21 @@
 
         {% comment %}
         What the page recognises, said plainly: a rule nobody can see is
-        a rule nobody can know was wrong.
+        a rule nobody can know was wrong - the active till rules, in their
+        order, as « Reconnaissance des opérations » holds them.
         {% endcomment %}
         <ul class="muted small">
-            <li><strong>Versement carte</strong> : libellé portant « TOTAL ENCAISSE &lt;montant&gt; EUROS » (le brut) ;
-                la ligne du relevé est le net, la commission la différence.</li>
-            <li><strong>Dépôt d'espèces</strong> : le type d'opération « VERSEMENT ESPECES ».
-                <strong>Remise de chèques</strong> : « REMISE CHEQUES ».</li>
+            {% for rule, meaning in till_rules %}
+                <li><strong>{{ rule.name }}</strong> : {{ meaning }}{% if rule.meaning == "payout" %}, {% if rule.reads_gross %}brut lu dans le libellé (la ligne est le net, la commission la différence){% else %}brut non imprimé : compté au montant reçu, commission inconnue{% endif %}{% endif %}.</li>
+            {% empty %}
+                <li>Aucune règle « En caisse » active : rien n'est reconnu.</li>
+            {% endfor %}
             <li><strong>En caisse</strong>, sur chaque entrée : ce qu'elle est vraiment (carte, espèces, chèque, avoir,
                 titres-restaurant, pas une vente) ; « retenir pour ce payeur » vaut pour toutes ses entrées. Un versement
                 carte sans brut imprimé compte au montant reçu, commission inconnue.</li>
             <li><strong>Autres entrées</strong> : tout le reste, à classer ci-dessous.</li>
         </ul>
+        <p class="muted small"><a href="{% url 'bank:recognition' %}">Modifier les règles</a></p>
 
         <h2>Ce que la caisse a encaissé, et ce qui est arrivé sur le compte</h2>
         <div class="table-wrap">
@@ -289,13 +298,14 @@
             {% endif %}
         {% endif %}
         {% comment %}
-        Another terminal prints other words, and the rules above would file
-        its payouts under « Autres entrées » for good: said here, where they
-        go missing from the balance, with the payers already retained.
+        A terminal no rule recognises has its payouts filed under « Autres
+        entrées », out of the balance: said here, where they go missing,
+        with the payers already retained.
         {% endcomment %}
         <p class="muted">
-            Un versement carte non reconnu (autre terminal) ? Choisissez « Carte » sur son virement dans
-            <a href="#autres-entrees">Autres entrées</a> : « retenir pour ce payeur » compte aussi tous ses autres virements.
+            Un versement carte non reconnu ? Ajoutez une règle sur
+            <a href="{% url 'bank:recognition' %}">Reconnaissance des opérations</a>, ou choisissez « Carte » sur son
+            virement dans <a href="#autres-entrees">Autres entrées</a>.
         </p>
         {% if report.payers %}
             <h3 id="payeurs-retenus">Payeurs retenus</h3>

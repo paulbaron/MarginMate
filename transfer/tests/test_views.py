@@ -962,6 +962,7 @@ class CountsTextTests(SimpleTestCase):
             "mouvements d'achat": "1 mouvement d'achat",
             "ventes saisies à la main": "1 vente saisie à la main",
             "règles « sans facture »": "1 règle « sans facture »",
+            "règles de reconnaissance": "1 règle de reconnaissance",
             "Mo de fichiers": "1 Mo de fichiers",
             "alias": "1 alias",
             # Two things counted together stay as they are.

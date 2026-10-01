@@ -11,6 +11,7 @@
                 <a class="btn btn-secondary" href="{% url 'bank:proposals' %}">Propositions à valider</a>
             {% endif %}
             <a class="btn btn-secondary" href="{% url 'bank:rule_list' %}">Dépenses sans facture attendue</a>
+            <a class="btn btn-secondary" href="{% url 'bank:recognition' %}">Reconnaissance des opérations</a>
             {% if has_lines %}
                 <form method="post" action="{% url 'bank:bank_reconcile' %}">
                     {% csrf_token %}
@@ -127,6 +128,14 @@
                 </a>
             {% endfor %}
         </div>
+
+        {# A till rule that recognised nothing while the credits below were read, said as « Entrées d'argent » says it. #}
+        {% if rule_problems %}
+            <div class="message message-warning">
+                {% for problem in rule_problems %}<p>{{ problem }}</p>{% endfor %}
+                <p><a href="{% url 'bank:recognition' %}">Corriger sur « Reconnaissance des opérations »</a></p>
+            </div>
+        {% endif %}
 
         {% if view == "par-beneficiaire" %}
             {% if groups %}

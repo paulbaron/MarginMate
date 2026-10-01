@@ -25,4 +25,10 @@ urlpatterns = [
     path("operations/<int:pk>/chercher/", views.invoice_search, name="invoice_search"),
     path("regles/", views.rule_list, name="rule_list"),
     path("regles/<int:pk>/", views.rule_action, name="rule_action"),
+    # « Reconnaissance des opérations »: the rules saying what an operation
+    # is and what a credit is in the till (bank/recognition.py); one rule;
+    # and the operations already imported read again by them.
+    path("reconnaissance/", views.recognition_page, name="recognition"),
+    path("reconnaissance/relire/", views.recognition_reapply, name="recognition_reapply"),
+    path("reconnaissance/<int:pk>/", views.recognition_rule, name="recognition_rule"),
 ]

@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Reconnaissance des opérations - Banque - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <p class="breadcrumb"><a href="{% url 'bank:bank_home' %}">← Banque</a></p>
+            <h1>Reconnaissance des opérations</h1>
+            <p class="page-subtitle">Les règles qui disent ce qu'est chaque opération du relevé et chaque entrée d'argent en caisse.</p>
+        </div>
+    </div>
+
+    {% if blocked %}
+        <div class="message message-warning">
+            Aucun relevé ne s'importe tant qu'une règle active a un motif invalide ou trop lent : corrigez-la ou suspendez-la.
+        </div>
+    {% endif %}
+
+    <section id="nature">
+        <h2>Nature de l'opération</h2>
+        <p class="muted">
+            Lue à l'import : une règle modifiée vaut pour les relevés importés ensuite.
+            {% if pending %}<a href="{% url 'bank:recognition_reapply' %}">Relire les opérations déjà importées ({{ pending }})</a>{% endif %}
+        </p>
+        {% include "bank/_recognition_rules.html" with rows=kind_rows table_label="règles de nature" %}
+    </section>
+
+    <section id="en-caisse">
+        <h2>En caisse</h2>
+        <p class="muted">Lue sur chaque entrée d'argent, à chaque affichage d'<a href="{% url 'bank:income_home' %}">Entrées d'argent</a>.</p>
+        {% include "bank/_recognition_rules.html" with rows=till_rows table_label="règles en caisse" %}
+    </section>
+
+    <div class="card" id="nouvelle-regle">
+        <h2>Nouvelle règle</h2>
+        <form method="post" action="{% url 'bank:recognition' %}#nouvelle-regle">
+            {% csrf_token %}
+            {% include "_form_fields.html" with form=form %}
+            {% comment %}
+            « Tester » first: Enter in a field presses the form's first submit
+            button, and it tries the rule - it never saves it.
+            {% endcomment %}
+            <div class="form-actions">
+                <button class="btn btn-secondary" type="submit" name="action" value="tester">Tester</button>
+                <button class="btn" type="submit" name="action" value="enregistrer">Enregistrer la règle</button>
+            </div>
+        </form>
+        {% include "bank/_recognition_test.html" %}
+    </div>
+
+    {% include "bank/_recognition_help.html" %}
+{% endblock %}

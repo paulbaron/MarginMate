@@ -1,0 +1,24 @@
+{% comment %}
+How a rule reads an operation, under the rules. Context: `groups`
+(views._group_help), `examples` (views.PATTERN_EXAMPLES, each run by the
+tests).
+{% endcomment %}
+<details class="explainer pattern-help">
+    <summary>Écrire un motif</summary>
+    <ul class="pattern-cheatsheet">
+        <li>La première règle active de sa partie, dans l'ordre, qui trouve son motif décide.</li>
+        <li>Majuscules et minuscules sont confondues ; les accents aussi, quand le motif n'en écrit pas.</li>
+        {% for group, said, meanings in groups %}
+            <li><code>(?P&lt;{{ group }}&gt;…)</code> {{ said }} : {{ meanings }}.</li>
+        {% endfor %}
+    </ul>
+    <p>Exemples, sur des libellés inventés :</p>
+    <ul class="pattern-cheatsheet">
+        {% for example in examples %}
+            <li>
+                {{ example.meaning_label }}, « {{ example.label }} » : <code>{{ example.pattern }}</code>
+                → {{ example.reads }}.
+            </li>
+        {% endfor %}
+    </ul>
+</details>

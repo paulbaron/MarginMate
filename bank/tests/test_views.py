@@ -1,13 +1,14 @@
 """The bank page and the actions on each of its lines."""
 
 from datetime import date
+from unittest import mock
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 
-from bank import reconcile
-from bank.models import BankTransaction, InvoicePayment
+from bank import recognition, reconcile
+from bank.models import BankTransaction, InvoicePayment, OperationRule
 from bank.tests.test_reconcile import FIVE_FIVE, Fixtures, card_row, debit_row, statement
 from tests.test_views_smoke import assertNoUnrenderedTemplateSyntax
 
@@ -112,6 +113,30 @@ class UploadTests(TestCase):
         response = self.upload("Compte Juillet.csv", statement(debit_row(date(2026, 7, 9), "METRO FRANCE", "120,00")))
         self.assertContains(response, "1 opération(s) importée(s)")
         self.assertEqual(InvoicePayment.objects.get().invoice, invoice)
+
+    def test_an_import_no_rule_of_nature_reads_says_so(self):
+        OperationRule.objects.filter(meaning__in=recognition.KIND_MEANINGS).update(is_active=False)
+        response = self.upload("Compte Juillet.csv", statement(debit_row(date(2026, 7, 9), "METRO FRANCE", "120,00")))
+        self.assertContains(response, "1 opération(s) importée(s)")
+        self.assertContains(response, "Aucune règle de nature d")
+        line = BankTransaction.objects.get()
+        self.assertEqual((line.kind, line.counterparty), (BankTransaction.Kind.OTHER, ""))
+
+    def test_an_import_read_by_the_rules_says_nothing_of_them(self):
+        response = self.upload("Compte Juillet.csv", statement(debit_row(date(2026, 7, 9), "METRO FRANCE", "120,00")))
+        self.assertNotContains(response, "Aucune règle de nature d")
+
+    def test_the_rules_are_read_once_for_every_file_of_an_upload(self):
+        files = [
+            SimpleUploadedFile(
+                f"Compte {month}.csv", statement(debit_row(date(2026, month, 9), "METRO FRANCE", "1,00"))
+            )
+            for month in (7, 8, 9)
+        ]
+        with mock.patch("bank.views.recognition.load", wraps=recognition.load) as load:
+            self.client.post(reverse("bank:bank_home"), {"files": files})
+        self.assertEqual(load.call_count, 1)
+        self.assertEqual(BankTransaction.objects.count(), 3)
 
     def test_a_file_that_is_not_a_statement_is_refused(self):
         response = self.upload("notes.csv", b"nom;prenom\nDupont;Jean\n")

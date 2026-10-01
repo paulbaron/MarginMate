@@ -2,6 +2,8 @@
 
 Structurally faithful to the real export - field order, quoting, the spacing
 inside labels, French amounts - with every name, number and amount invented.
+What each operation is comes from the seeded rules (`support.SEEDED`, no
+database); bank/tests/test_recognition.py holds the rules themselves.
 """
 
 from datetime import date
@@ -9,7 +11,8 @@ from decimal import Decimal
 
 from django.test import SimpleTestCase
 
-from bank.statements import parse_statement
+from bank.statements import parse_amount, parse_statement
+from bank.tests.support import SEEDED, rule, rules_of
 
 HEADER = '"Compte de ch&egrave;ques";"Compte de ch&amp;egrave;ques";****0042;14/09/2026;;1 234,56\n'
 CARD = (
@@ -35,8 +38,8 @@ B2B = (
 LOAN = "20/07/2026;ECHEANCE PRET;ECHEANCE PRET;ECHEANCE PRET 00000 00000000;19/07/2026;-1 500,00\n"
 
 
-def parse(*rows, encoding="utf-8"):
-    return parse_statement((HEADER + "".join(rows)).encode(encoding))
+def parse(*rows, encoding="utf-8", rules=SEEDED):
+    return parse_statement((HEADER + "".join(rows)).encode(encoding), rules)
 
 
 class StatementTests(SimpleTestCase):
@@ -98,8 +101,57 @@ class StatementTests(SimpleTestCase):
 
     def test_a_file_that_is_not_a_statement_is_refused(self):
         with self.assertRaises(ValueError):
-            parse_statement(b"nom;prenom\nDupont;Jean\n")
+            parse_statement(b"nom;prenom\nDupont;Jean\n", SEEDED)
 
     def test_an_unreadable_amount_is_refused_rather_than_guessed(self):
         with self.assertRaises(ValueError):
             parse(CARD.replace("-12,34", "-12,3x"))
+
+    def test_thousands_are_read_whatever_space_groups_them(self):
+        for space in (" ", "\N{NO-BREAK SPACE}", "\N{NARROW NO-BREAK SPACE}"):
+            with self.subTest(space=hex(ord(space))):
+                self.assertEqual(parse_amount(f"-1{space}234,50"), Decimal("-1234.50"))
+
+    def test_every_refusal_is_said_as_it_was(self):
+        """The rules moved out of this module; its own sentences did not."""
+        cases = [
+            (
+                lambda: parse_statement(b"nom;prenom\nDupont;Jean\n", SEEDED),
+                "Aucune opération trouvée : ce fichier ne ressemble pas à un relevé bancaire exporté en CSV.",
+            ),
+            (
+                lambda: parse("02/07/2026;PAIEMENT CB;FACTURE\n"),
+                "Ligne incomplète dans le relevé : 02/07/2026;PAIEMENT CB;FACTURE",
+            ),
+            (lambda: parse(CARD.replace("-12,34", "-12,3x")), "Montant illisible dans le relevé : '-12,3x'"),
+        ]
+        for read, said in cases:
+            with self.subTest(said=said), self.assertRaises(ValueError) as refused:
+                read()
+            self.assertEqual(str(refused.exception), said)
+
+    def test_with_no_rule_every_operation_is_kept_as_other(self):
+        """Another bank before its rules are written: read, never guessed."""
+        lines = parse(CARD, DEBIT, TRANSFER_OUT, rules=rules_of()).lines
+        self.assertEqual({(line.kind, line.counterparty, line.card_date) for line in lines}, {("OTHER", "", None)})
+        # The layout is read all the same, and the fingerprints owe nothing
+        # to the rules: a statement imported again is known again.
+        self.assertEqual(
+            [line.fingerprint for line in lines],
+            [line.fingerprint for line in parse(CARD, DEBIT, TRANSFER_OUT).lines],
+        )
+
+    def test_a_rule_that_cannot_be_applied_refuses_the_file(self):
+        broken = rules_of(rule("Carte cassée", "card_payment", "CARTE ("))
+        with self.assertRaises(ValueError) as refused:
+            parse(CARD, rules=broken)
+        self.assertEqual(
+            str(refused.exception),
+            "Import annulé : la règle de reconnaissance « Carte cassée » ne peut pas être appliquée (motif invalide "
+            "ou trop lent). Corrigez-la sur « Reconnaissance des opérations », puis importez à nouveau.",
+        )
+
+    def test_a_file_that_is_no_statement_is_said_so_before_the_rules(self):
+        broken = rules_of(rule("Carte cassée", "card_payment", "CARTE ("))
+        with self.assertRaisesMessage(ValueError, "ne ressemble pas"):
+            parse_statement(b"nom;prenom\nDupont;Jean\n", broken)

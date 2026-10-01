@@ -18,7 +18,7 @@ from django.db.models import Min, Q
 
 from invoices.models import Invoice, Supplier
 
-from . import matching
+from . import matching, recognition
 from .models import BankTransaction, CounterpartyAlias, IgnoreRule, InvoicePayment
 from .rules import compile_rules, ignoring_rule
 from .statements import parse_statement
@@ -44,8 +44,12 @@ def invoice_label(invoice: Invoice) -> str:
 
 
 @transaction.atomic
-def import_statement(content: bytes) -> ImportSummary:
-    statement = parse_statement(content)
+def import_statement(content: bytes, rules: recognition.Rules | None = None) -> ImportSummary:
+    """The statement's new lines, written - described by `rules` (the active
+    rules, `recognition.load()`, when not given). Refused whole (ValueError,
+    the sentence to show) before anything is written: one file refused
+    never leaves half its lines."""
+    statement = parse_statement(content, recognition.load() if rules is None else rules)
     known = set(
         BankTransaction.objects.filter(fingerprint__in=[line.fingerprint for line in statement.lines]).values_list(
             "fingerprint", flat=True
