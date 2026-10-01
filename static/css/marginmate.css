@@ -1157,6 +1157,10 @@ th.sortable > button:focus-visible {
 /* A line attached to a known product under another spelling: what was read. */
 .unit-price { margin: var(--s1) 0 0; color: var(--text-dim); font-size: 0.8rem; text-align: right; }
 .read-as { display: block; margin: var(--s1) 0 0; color: var(--text-dim); font-size: 0.8rem; font-family: var(--font-mono); }
+/* « En caisse » on a credit of « Entrées d'argent » (bank/_income_source.html),
+   and the « changer » that draws it on a payout's row. */
+.income-source { align-items: center; }
+.income-change { margin-left: var(--s2); font-size: 0.85rem; }
 /* Renaming a receipt's product everywhere, under its line. */
 .rename-product { margin: var(--s1) 0 0; font-size: 0.85rem; }
 .rename-product summary { cursor: pointer; color: var(--text-dim); }
@@ -2758,6 +2762,9 @@ details.format-group > summary { cursor: pointer; }
     main td summary, main th summary,
     main .chip, main .segmented button, main .pick-chip { min-height: 36px; }
     main .row-actions > a { display: inline-flex; align-items: center; min-height: 36px; }
+    /* « changer » on a payout's row, the one way to draw its « En caisse »:
+       a row's action, sized like one (it was a line of text, 18 px). */
+    main td a.income-change { display: inline-flex; align-items: center; min-height: 36px; }
     main .row-actions > * + * { margin-left: var(--s2); }
     main input:is([type="checkbox"], [type="radio"]),
     main .correction-row input[type="checkbox"] { min-width: 1.25rem; min-height: 1.25rem; }

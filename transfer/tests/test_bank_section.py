@@ -1,8 +1,10 @@
 """« Banque » (§7.7, §10.2): the bank's lines, their links to invoices, the
-ignore rules and the payee names learnt.
+ignore rules, the payee names learnt and the payers retained on « Entrées
+d'argent ».
 
 What these guard is the owner's decisions: a link made by hand, a line
-unlinked, a line declared « pas de facture ». Nothing rebuilds them, so a
+unlinked, a line declared « pas de facture », what a credit is in the till
+(« En caisse », on the line or for its payer). Nothing rebuilds them, so a
 round trip must bring every one back exactly, a merge must never overwrite
 one, and a link whose invoice is not here must be said, never guessed.
 
@@ -18,7 +20,9 @@ from unittest import mock
 from django.test import TestCase
 
 from bank import reconcile
-from bank.models import BankTransaction, CounterpartyAlias, IgnoreRule, InvoicePayment
+from bank.income import income_for
+from bank.models import BankTransaction, CounterpartyAlias, IgnoreRule, IncomePayer, IncomeSource, InvoicePayment
+from common import DateRange
 from invoices.deletion import delete_invoice
 from invoices.models import Invoice, Supplier
 from tests.factories import make_invoice, make_supplier
@@ -30,6 +34,7 @@ from transfer.sections.bank import (
     ALIASES,
     ENTITIES,
     OPERATIONS,
+    PAYERS,
     PAYMENTS,
     RECONCILE_NOTE,
     RULES,
@@ -48,14 +53,26 @@ from transfer.tests.support import (
 MERGE, REPLACE = Strategy.MERGE, Strategy.REPLACE
 CARD, DEBIT, TRANSFER = BankTransaction.Kind.CARD, BankTransaction.Kind.DEBIT, BankTransaction.Kind.TRANSFER
 MANUAL, AUTO = InvoicePayment.Method.MANUAL, InvoicePayment.Method.AUTO
+# What a credit is in the till (« En caisse »).
+AUTOMATIC, TILL_CARD, TILL_CASH = IncomeSource.AUTOMATIC, IncomeSource.CARD, IncomeSource.CASH
+TILL_CHEQUE, TILL_CREDIT, VOUCHER, NOT_A_SALE = (
+    IncomeSource.CHEQUE,
+    IncomeSource.CREDIT,
+    IncomeSource.VOUCHER,
+    IncomeSource.OTHER,
+)
+PAYER_MOMENT = datetime(2026, 7, 28, 11, 5, 30, 125000, tzinfo=UTC)
 
 _counter = itertools.count(1)
 
 
-def make_line(day, counterparty, amount, *, kind=CARD, settled=False, no_invoice=False) -> BankTransaction:
+def make_line(
+    day, counterparty, amount, *, kind=CARD, settled=False, no_invoice=False, income_source=AUTOMATIC
+) -> BankTransaction:
     """A statement line as bank.reconcile.import_statement leaves it, with an
     import moment in the past: a round trip that forgot to restore it would
-    show today's instead."""
+    show today's instead. `income_source` is what a person said a credit is
+    in the till."""
     n = next(_counter)
     line = BankTransaction.objects.create(
         account="****0042",
@@ -70,6 +87,7 @@ def make_line(day, counterparty, amount, *, kind=CARD, settled=False, no_invoice
         fingerprint=hashlib.sha256(f"releve-essai|{n}".encode()).hexdigest(),
         no_invoice=no_invoice,
         settled_by_hand=settled,
+        income_source=income_source,
     )
     BankTransaction.objects.filter(pk=line.pk).update(
         imported_at=datetime(2026, 8, 1, 9, 0, n % 60, 250000, tzinfo=UTC)
@@ -92,16 +110,32 @@ def make_rule(pattern, description="", is_active=True, category="") -> IgnoreRul
     return rule
 
 
+def make_payer(key, source) -> IncomePayer:
+    """A payer retained on « Entrées d'argent » (`key` in the form
+    `bank.income.payer_key` makes), made at a moment in the past: a round
+    trip that forgot to restore it would show today's instead."""
+    payer = IncomePayer.objects.create(key=key, source=source)
+    IncomePayer.objects.filter(pk=payer.pk).update(created_at=PAYER_MOMENT)
+    payer.refresh_from_db()
+    return payer
+
+
 def wipe_bank() -> None:
     InvoicePayment.objects.all().delete()
     BankTransaction.objects.all().delete()
     CounterpartyAlias.objects.all().delete()
     IgnoreRule.objects.all().delete()
+    IncomePayer.objects.all().delete()
 
 
 def links() -> set[tuple[str, str, str]]:
     """(line fingerprint, invoice number, method) for every payment."""
     return set(InvoicePayment.objects.values_list("transaction__fingerprint", "invoice__invoice_number", "method"))
+
+
+def payers() -> dict[str, str]:
+    """key → source of every payer retained."""
+    return dict(IncomePayer.objects.values_list("key", "source"))
 
 
 def bank_report(run):
@@ -113,8 +147,9 @@ def tally(run, entity):
 
 
 class BankData:
-    """Two suppliers, four invoices, and one line for every decision the bank
-    page lets a person take."""
+    """Two suppliers, four invoices, one line for every decision the bank
+    page lets a person take, and the two ways « Entrées d'argent » lets one
+    say what a credit is in the till: on the line, and for its payer."""
 
     def setUp(self):
         super().setUp()
@@ -134,8 +169,9 @@ class BankData:
         self.unlinked = make_line(date(2026, 7, 10), "BOULANGERIE", "-3.40", settled=True)
         # « Pas de facture ».
         self.no_invoice = make_line(date(2026, 7, 5), "URSSAF", "-450.00", kind=DEBIT, settled=True, no_invoice=True)
-        # Money in.
-        self.income = make_line(date(2026, 7, 31), "CLIENT SOIREE", "500.00", kind=TRANSFER)
+        # Money in: a private party's deposit, said to be an « Avoir » of the
+        # till on its own line.
+        self.income = make_line(date(2026, 7, 31), "CLIENT SOIREE", "500.00", kind=TRANSFER, income_source=TILL_CREDIT)
         # One debit for two deliveries.
         self.double = make_line(date(2026, 7, 15), "EPICERIE LILAS", "-40.00", settled=True)
         pay(self.double, self.invoice_c)
@@ -145,6 +181,10 @@ class BankData:
         # and one that only says there is nothing to link.
         make_rule("URSSAF", "Cotisations", category="Cotisations sociales")
         make_rule("PRET LOCAL", "Prêt du local", is_active=False)
+        # Two payers retained: a payment terminal whose payouts print no
+        # « TOTAL ENCAISSE », and a contribution that is no sale.
+        make_payer("TERMINAL EXEMPLE", TILL_CARD)
+        make_payer("ASSOCIATION EXEMPLE", NOT_A_SALE)
 
     def export(self) -> ArchiveReader:
         reader = export_archive({"banque"})
@@ -180,9 +220,43 @@ class ContractTests(TestCase):
 
 class ExportTests(BankData, TestCase):
     def test_counts(self):
-        expected = {OPERATIONS: 6, PAYMENTS: 4, RULES: 2, ALIASES: 1}
+        expected = {OPERATIONS: 6, PAYMENTS: 4, RULES: 2, ALIASES: 1, PAYERS: 2}
         self.assertEqual(BankSection().count(), expected)
         self.assertEqual(self.export().section("banque").counts, expected)
+
+    def test_every_line_says_what_it_is_in_the_till(self):
+        # « Automatique » is said too: blank, the line follows its payer or
+        # the rules.
+        payload = self.export().section("banque").payload()
+        self.assertEqual(
+            [(item["counterparty"], item["income_source"]) for item in payload["transactions"]],
+            [
+                ("EPICERIE LILAS", ""),
+                ("QUINCAILLERIE NORD", ""),
+                ("BOULANGERIE", ""),
+                ("URSSAF", ""),
+                ("CLIENT SOIREE", "credit"),
+                ("EPICERIE LILAS", ""),
+            ],
+        )
+
+    def test_the_payers_retained_are_exported_by_key(self):
+        payload = self.export().section("banque").payload()
+        self.assertEqual(
+            payload["income_payers"],
+            [
+                {"key": "ASSOCIATION EXEMPLE", "source": "other", "created_at": "2026-07-28T11:05:30.125000+00:00"},
+                {"key": "TERMINAL EXEMPLE", "source": "card", "created_at": "2026-07-28T11:05:30.125000+00:00"},
+            ],
+        )
+
+    def test_no_payer_is_an_empty_list_never_a_missing_one(self):
+        # Exported with nothing retained, the list is said empty: absent, an
+        # archive reads as written before payers existed (« not said »).
+        IncomePayer.objects.all().delete()
+        payload = self.export().section("banque").payload()
+        self.assertEqual(payload["income_payers"], [])
+        self.assertEqual(self.export().section("banque").counts[PAYERS], 0)
 
     def test_every_line_keeps_the_decisions_taken_on_it(self):
         payload = self.export().section("banque").payload()
@@ -283,6 +357,12 @@ class RoundTripTests(BankData, TestCase):
         self.assertTrue(unlinked.settled_by_hand)
         self.assertFalse(unlinked.payments.exists())
         self.assertTrue(BankTransaction.objects.get(fingerprint=self.no_invoice.fingerprint).no_invoice)
+        # What a credit is in the till, on its line and for its payer.
+        self.assertEqual(
+            dict(BankTransaction.objects.exclude(income_source="").values_list("fingerprint", "income_source")),
+            {self.income.fingerprint: TILL_CREDIT},
+        )
+        self.assertEqual(payers(), {"TERMINAL EXEMPLE": TILL_CARD, "ASSOCIATION EXEMPLE": NOT_A_SALE})
         # Restored after the insert, not the moment of the import.
         self.assertEqual(
             BankTransaction.objects.get(fingerprint=self.manual.fingerprint).imported_at, self.manual.imported_at
@@ -291,6 +371,7 @@ class RoundTripTests(BankData, TestCase):
             set(InvoicePayment.objects.values_list("created_at", flat=True)),
             {datetime(2026, 8, 3, 18, 45, 12, tzinfo=UTC)},
         )
+        self.assertEqual(set(IncomePayer.objects.values_list("created_at", flat=True)), {PAYER_MOMENT})
 
     def test_merge(self):
         before, after = round_trip({"banque"}, MERGE, after_clear=self.assert_empty)
@@ -319,7 +400,7 @@ class RoundTripTests(BankData, TestCase):
 class IdempotenceTests(BankData, TestCase):
     def assert_nothing_moves(self, run):
         report = bank_report(run)
-        expected = {OPERATIONS: 6, PAYMENTS: 4, RULES: 2, ALIASES: 1}
+        expected = {OPERATIONS: 6, PAYMENTS: 4, RULES: 2, ALIASES: 1, PAYERS: 2}
         for entity, number in expected.items():
             with self.subTest(entity=entity):
                 counted = report.tallies[entity]
@@ -348,6 +429,7 @@ class IdempotenceTests(BankData, TestCase):
         BankTransaction.objects.update(imported_at=datetime(2026, 9, 1, 12, 0, tzinfo=UTC))
         InvoicePayment.objects.update(created_at=datetime(2026, 9, 1, 12, 1, tzinfo=UTC))
         IgnoreRule.objects.update(created_at=datetime(2026, 9, 1, 12, 2, tzinfo=UTC))
+        IncomePayer.objects.update(created_at=datetime(2026, 9, 1, 12, 3, tzinfo=UTC))
         for strategy in (MERGE, REPLACE):
             with self.subTest(strategy=strategy):
                 before = db_fingerprint()
@@ -495,6 +577,406 @@ class CategoryTests(BankData, TestCase):
         run = import_archive(reader, MERGE)
         self.assertEqual(self.line().category, "Entretien")
         self.assertIn("catégorie", " ".join(bank_report(run).conflicts))
+
+
+class IncomeSourceTests(BankData, TestCase):
+    """What a credit is in the till (« En caisse »), said on its own line: a
+    decision like a category - a statement imported again brings the line
+    back and not one word of it - so it rides with the line, and a merge
+    never changes it."""
+
+    INCOME = "Opération du 31/07/2026 (CLIENT SOIREE, 500,00 €)"
+
+    def line(self) -> BankTransaction:
+        return BankTransaction.objects.get(fingerprint=self.income.fingerprint)
+
+    def test_what_a_credit_is_comes_back_from_the_archive(self):
+        reader = self.export()
+        wipe_bank()
+        run = import_archive(reader, MERGE)
+        self.assertEqual(self.line().income_source, TILL_CREDIT)
+        self.assertEqual((bank_report(run).conflicts, bank_report(run).skipped), ([], []))
+
+    def test_a_credit_said_otherwise_here_is_a_conflict_kept_whole(self):
+        reader = self.export()
+        BankTransaction.objects.filter(pk=self.income.pk).update(income_source=VOUCHER)
+        run = import_archive(reader, MERGE)
+        self.assertEqual(
+            bank_report(run).conflicts,
+            [f"{self.INCOME} : différente dans l'archive (« en caisse ») — gardée telle quelle"],
+        )
+        self.assertEqual(self.line().income_source, VOUCHER)
+        operations = tally(run, OPERATIONS)
+        self.assertEqual(
+            (operations.created, operations.updated, operations.deleted, operations.unchanged), (0, 0, 0, 5)
+        )
+        self.assertFalse(run.affected())
+
+    def test_replace_puts_the_archives_word_back(self):
+        reader = self.export()
+        BankTransaction.objects.filter(pk=self.income.pk).update(income_source=VOUCHER)
+        run = import_archive(reader, REPLACE)
+        self.assertEqual(self.line().income_source, TILL_CREDIT)
+        operations = tally(run, OPERATIONS)
+        self.assertEqual(
+            (operations.created, operations.updated, operations.deleted, operations.unchanged), (0, 1, 0, 5)
+        )
+        self.assertEqual(bank_report(run).conflicts, [])
+        self.assertEqual(run.affected(), {"banque"})
+
+    def test_a_credit_said_here_after_the_export_is_not_undone_by_a_merge(self):
+        # The archive says « Automatique »: blank is a value it states, and
+        # the merge does not read it as « nothing said ».
+        refund = make_line(date(2026, 7, 20), "ASSOCIATION EXEMPLE", "120.00", kind=TRANSFER)
+        reader = self.export()
+        BankTransaction.objects.filter(pk=refund.pk).update(income_source=NOT_A_SALE)
+        run = import_archive(reader, MERGE)
+        self.assertEqual(
+            bank_report(run).conflicts,
+            [
+                (
+                    "Opération du 20/07/2026 (ASSOCIATION EXEMPLE, 120,00 €) : différente dans l'archive "
+                    "(« en caisse ») — gardée telle quelle"
+                )
+            ],
+        )
+        refund.refresh_from_db()
+        self.assertEqual(refund.income_source, NOT_A_SALE)
+        # « Remplacer » is asked for: the archive's « Automatique » comes back.
+        import_archive(reader, REPLACE)
+        refund.refresh_from_db()
+        self.assertEqual(refund.income_source, AUTOMATIC)
+
+    def test_a_new_line_saying_an_unknown_source_is_skipped_with_its_reason(self):
+        def change(payload):
+            self.record(payload, self.income)["income_source"] = "ticket"
+            return payload
+
+        reader = self.forged(change)
+        wipe_bank()
+        run = import_archive(reader, MERGE)
+        self.assertEqual(
+            bank_report(run).skipped,
+            [f"Opération {self.income.fingerprint[:12]}… : « income_source » : valeur inconnue (« ticket »)"],
+        )
+        self.assertEqual(BankTransaction.objects.count(), 5)
+        self.assertFalse(BankTransaction.objects.filter(fingerprint=self.income.fingerprint).exists())
+
+    def test_a_line_here_whose_record_says_no_source_is_kept_whole(self):
+        # « Remplacer » included: a record that cannot be read says nothing
+        # about the line, which is neither rewritten nor pruned.
+        reasons = {
+            "ticket": "« income_source » : valeur inconnue (« ticket »)",
+            "CREDIT": "« income_source » : valeur inconnue (« CREDIT »)",
+            None: "« income_source » : valeur manquante",
+            3: "« income_source » : texte attendu (« 3 »)",
+        }
+        for value, reason in reasons.items():
+            with self.subTest(value=value):
+
+                def change(payload, value=value):
+                    self.record(payload, self.income)["income_source"] = value
+                    return payload
+
+                run = import_archive(self.forged(change), REPLACE)
+                self.assertEqual(bank_report(run).skipped, [f"{self.INCOME} : {reason}"])
+                self.assertEqual(self.line().income_source, TILL_CREDIT)
+                self.assertEqual(tally(run, OPERATIONS).deleted, 0)
+
+
+class PayerTests(BankData, TestCase):
+    """The payers retained moved on after the export: one said otherwise
+    here, one only here, one only in the archive. Merged like a rule: one
+    changed here is a conflict, kept."""
+
+    def setUp(self):
+        super().setUp()
+        self.before = BankSection().snapshot()
+        self.reader = self.export()
+        IncomePayer.objects.filter(key="TERMINAL EXEMPLE").update(source=TILL_CASH)
+        make_payer("CAISSE EXEMPLE", TILL_CHEQUE)
+        IncomePayer.objects.filter(key="ASSOCIATION EXEMPLE").delete()
+
+    def test_merge_adds_what_is_missing_and_keeps_what_differs(self):
+        run = import_archive(self.reader, MERGE)
+        counted = tally(run, PAYERS)
+        self.assertEqual((counted.created, counted.updated, counted.deleted, counted.unchanged), (1, 0, 0, 0))
+        self.assertEqual(
+            bank_report(run).conflicts,
+            ["Payeur retenu « TERMINAL EXEMPLE » : « Espèces » ici, « Carte » dans l'archive — gardé tel quel"],
+        )
+        self.assertEqual(
+            payers(), {"TERMINAL EXEMPLE": TILL_CASH, "CAISSE EXEMPLE": TILL_CHEQUE, "ASSOCIATION EXEMPLE": NOT_A_SALE}
+        )
+        # Only in the archive: created, with the moment it was retained.
+        self.assertEqual(IncomePayer.objects.get(key="ASSOCIATION EXEMPLE").created_at, PAYER_MOMENT)
+        # Nothing else of the bank moved.
+        self.assertEqual(tally(run, OPERATIONS).unchanged, 6)
+        # A merge updates and deletes nothing: no safety export is needed.
+        self.assertFalse(run.affected())
+
+    def test_replace_makes_the_payers_exactly_the_archives(self):
+        run = import_archive(self.reader, REPLACE)
+        counted = tally(run, PAYERS)
+        self.assertEqual((counted.created, counted.updated, counted.deleted, counted.unchanged), (1, 1, 1, 0))
+        self.assertEqual(bank_report(run).conflicts, [])
+        self.assertEqual(payers(), {"TERMINAL EXEMPLE": TILL_CARD, "ASSOCIATION EXEMPLE": NOT_A_SALE})
+        self.assertEqual(BankSection().snapshot(), self.before)
+        self.assertEqual(run.affected(), {"banque"})
+
+    def test_a_preview_changes_nothing_and_says_what_the_confirm_does(self):
+        before = db_fingerprint()
+        preview = import_archive(self.reader, REPLACE, preview=True)
+        self.assertEqual(db_fingerprint(), before)
+        confirmed = import_archive(self.reader, REPLACE)
+        self.assertEqual(preview.outcome(), confirmed.outcome())
+
+    def test_an_empty_list_forgets_every_payer_under_replace_only(self):
+        # Said empty, the archive retains nobody: « Remplacer » forgets them
+        # all, « Fusionner » adds nothing and forgets nothing.
+        def change(payload):
+            payload["income_payers"] = []
+            return payload
+
+        reader = self.forged(change)
+        run = import_archive(reader, MERGE)
+        self.assertEqual(tally(run, PAYERS).deleted, 0)
+        self.assertEqual(set(payers()), {"TERMINAL EXEMPLE", "CAISSE EXEMPLE"})
+        run = import_archive(reader, REPLACE)
+        self.assertEqual(tally(run, PAYERS).deleted, 2)
+        self.assertEqual(payers(), {})
+
+
+class PayerCreatedByTheRunTests(BankData, TestCase):
+    """A payer a merge creates brings the choices its lines held beside it in
+    the archive (`_took_its_payers_choice`): there they were one decision -
+    « every transfer of this terminal is a card payout, but this one » - and
+    the payer alone would decide the line the archive kept apart from it, a
+    state neither database held. Only onto a line saying nothing here: a
+    choice made here, or a payer already retained here, is a decision this
+    database holds."""
+
+    REFUND = "Opération du 22/07/2026 (TERMINAL EXEMPLE, 35,00 €)"
+
+    def setUp(self):
+        super().setUp()
+        # A fee refund from the payment terminal: its label prints no « TOTAL
+        # ENCAISSE », so no rule recognises it, and in the archive it is kept
+        # « Pas une vente » beside its payer « Carte ».
+        self.refund = make_line(date(2026, 7, 22), "TERMINAL EXEMPLE", "35.00", kind=TRANSFER, income_source=NOT_A_SALE)
+        self.reader = self.export()
+        # Here, neither was ever said: no payer retained, nothing on the line.
+        IncomePayer.objects.filter(key="TERMINAL EXEMPLE").delete()
+        BankTransaction.objects.filter(pk=self.refund.pk).update(income_source=AUTOMATIC)
+
+    def line(self) -> BankTransaction:
+        return BankTransaction.objects.get(pk=self.refund.pk)
+
+    def test_a_line_saying_nothing_here_takes_its_choice_with_its_payer(self):
+        before = db_fingerprint()
+        preview = import_archive(self.reader, MERGE, preview=True)
+        self.assertEqual(db_fingerprint(), before)
+        run = import_archive(self.reader, MERGE)
+        self.assertEqual(preview.outcome(), run.outcome())
+        self.assertEqual(self.line().income_source, NOT_A_SALE)
+        self.assertEqual(payers(), {"TERMINAL EXEMPLE": TILL_CARD, "ASSOCIATION EXEMPLE": NOT_A_SALE})
+        operations = tally(run, OPERATIONS)
+        self.assertEqual(
+            (operations.created, operations.updated, operations.deleted, operations.unchanged), (0, 1, 0, 6)
+        )
+        self.assertEqual((bank_report(run).conflicts, bank_report(run).skipped), ([], []))
+        # Counted « modifiée »: the safety archive takes the bank.
+        self.assertEqual(run.affected(), {"banque"})
+        # Read as « Entrées d'argent » reads it: « Pas une vente », in no
+        # payout.
+        report = income_for(DateRange())
+        self.assertNotIn(self.refund.pk, [row.entry.line.pk for row in report.payouts])
+        self.assertIn(self.refund.pk, [entry.line.pk for entry in report.others])
+        # Left saying nothing, the payer alone made it a card payout.
+        BankTransaction.objects.filter(pk=self.refund.pk).update(income_source=AUTOMATIC)
+        self.assertIn(self.refund.pk, [row.entry.line.pk for row in income_for(DateRange()).payouts])
+
+    def test_a_line_that_also_differs_otherwise_is_a_conflict_that_takes_it_all_the_same(self):
+        BankTransaction.objects.filter(pk=self.refund.pk).update(category="Remboursements")
+        run = import_archive(self.reader, MERGE)
+        self.assertEqual(
+            bank_report(run).conflicts,
+            [
+                (
+                    f"{self.REFUND} : différente dans l'archive (catégorie) — gardée telle quelle, son choix "
+                    "« en caisse » repris avec son payeur"
+                )
+            ],
+        )
+        line = self.line()
+        self.assertEqual((line.income_source, line.category), (NOT_A_SALE, "Remboursements"))
+
+    def test_a_payer_already_retained_here_brings_nothing(self):
+        make_payer("TERMINAL EXEMPLE", TILL_CARD)
+        run = import_archive(self.reader, MERGE)
+        self.assertEqual(
+            bank_report(run).conflicts,
+            [f"{self.REFUND} : différente dans l'archive (« en caisse ») — gardée telle quelle"],
+        )
+        self.assertEqual(self.line().income_source, AUTOMATIC)
+        self.assertEqual(tally(run, PAYERS).created, 0)
+
+    def test_a_choice_made_here_stays_a_conflict(self):
+        BankTransaction.objects.filter(pk=self.refund.pk).update(income_source=VOUCHER)
+        run = import_archive(self.reader, MERGE)
+        self.assertEqual(
+            bank_report(run).conflicts,
+            [f"{self.REFUND} : différente dans l'archive (« en caisse ») — gardée telle quelle"],
+        )
+        self.assertEqual(self.line().income_source, VOUCHER)
+        # The payer comes all the same.
+        self.assertEqual(payers()["TERMINAL EXEMPLE"], TILL_CARD)
+
+    def test_replace_writes_the_archives_line_as_before(self):
+        BankTransaction.objects.filter(pk=self.refund.pk).update(category="Remboursements")
+        run = import_archive(self.reader, REPLACE)
+        self.assertEqual(bank_report(run).conflicts, [])
+        line = self.line()
+        self.assertEqual((line.income_source, line.category), (NOT_A_SALE, ""))
+        operations = tally(run, OPERATIONS)
+        self.assertEqual(
+            (operations.created, operations.updated, operations.deleted, operations.unchanged), (0, 1, 0, 6)
+        )
+
+
+def written_before_payers(payload) -> dict:
+    """banque.json as an archive written before « En caisse » holds it: no
+    payers retained, no line saying what it is in the till."""
+    del payload["income_payers"]
+    for record in payload["transactions"]:
+        del record["income_source"]
+    return payload
+
+
+class OldArchiveTests(BankData, TestCase):
+    """An archive written before « En caisse » says nothing of it - which is
+    not « Automatique » everywhere, nor « forget every payer »."""
+
+    def test_after_a_wipe_it_merges_cleanly_every_credit_automatic(self):
+        reader = self.forged(written_before_payers)
+        wipe_bank()
+        run = import_archive(reader, MERGE)
+        report = bank_report(run)
+        self.assertEqual((report.conflicts, report.skipped), ([], []))
+        self.assertEqual([note for note in report.notes if "champ inconnu" in note], [])
+        self.assertEqual(BankTransaction.objects.count(), 6)
+        self.assertEqual(set(BankTransaction.objects.values_list("income_source", flat=True)), {AUTOMATIC})
+        self.assertEqual(payers(), {})
+        counted = tally(run, PAYERS)
+        self.assertEqual((counted.created, counted.updated, counted.deleted, counted.unchanged), (0, 0, 0, 0))
+
+    def test_replace_keeps_this_databases_payers_and_marks(self):
+        reader = self.forged(written_before_payers)
+        before = db_fingerprint()
+        preview = import_archive(reader, REPLACE, preview=True)
+        confirmed = import_archive(reader, REPLACE)
+        self.assertEqual(preview.outcome(), confirmed.outcome())
+        counted = tally(confirmed, PAYERS)
+        self.assertEqual((counted.created, counted.updated, counted.deleted, counted.unchanged), (0, 0, 0, 0))
+        operations = tally(confirmed, OPERATIONS)
+        self.assertEqual((operations.updated, operations.deleted, operations.unchanged), (0, 0, 6))
+        self.assertEqual(bank_report(confirmed).conflicts, [])
+        self.assertEqual(payers(), {"TERMINAL EXEMPLE": TILL_CARD, "ASSOCIATION EXEMPLE": NOT_A_SALE})
+        self.assertEqual(BankTransaction.objects.get(pk=self.income.pk).income_source, TILL_CREDIT)
+        self.assertEqual(db_fingerprint(), before)
+        self.assertFalse(confirmed.affected())
+
+    def test_merge_keeps_them_too(self):
+        before = db_fingerprint()
+        run = import_archive(self.forged(written_before_payers), MERGE)
+        self.assertEqual((bank_report(run).conflicts, bank_report(run).skipped), ([], []))
+        self.assertEqual(db_fingerprint(), before)
+
+
+class PayerCheckTests(BankData, TestCase):
+    """What the archive says of the payers retained, read before it is
+    trusted: a key `bank.income.payer_key` could make, a source of the
+    menu."""
+
+    def test_payers_that_are_no_list_of_objects_refuse_the_archive_before_anything_is_written(self):
+        for value in ({}, "TERMINAL EXEMPLE", ["TERMINAL EXEMPLE"], [{"key": "BAR EXEMPLE", "source": "card"}, 3]):
+            with self.subTest(value=value):
+
+                def change(payload, value=value):
+                    payload["income_payers"] = value
+                    return payload
+
+                reader = self.forged(change)
+                before = db_fingerprint()
+                with self.assertRaisesMessage(ArchiveError, "« income_payers » n'est pas une liste d'objets"):
+                    import_archive(reader, REPLACE)
+                self.assertEqual(db_fingerprint(), before)
+
+    def test_a_payer_it_cannot_read_is_skipped_with_its_reason_and_the_others_come(self):
+        def change(payload):
+            terminal = next(item for item in payload["income_payers"] if item["key"] == "TERMINAL EXEMPLE")
+            payload["income_payers"] += [
+                {"key": "  ", "source": "card"},
+                {"source": "card"},
+                {"key": 7, "source": "card"},
+                dict(terminal, source="cash"),
+                {"key": "Terminal exemple", "source": "card"},
+                {"key": "TERMINAL-EXEMPLE", "source": "card"},
+                {"key": "BAR EXEMPLE", "source": "ticket"},
+                {"key": "BUVETTE EXEMPLE", "source": ""},
+                {"key": "CLUB EXEMPLE"},
+                {"key": "A" * 256, "source": "card"},
+            ]
+            return payload
+
+        reader = self.forged(change)
+        wipe_bank()
+        run = import_archive(reader, MERGE)
+        self.assertEqual(
+            bank_report(run).skipped,
+            [
+                "Payeur retenu sans nom",
+                "Payeur retenu sans nom",
+                "Payeur retenu sans nom",
+                "Payeur retenu « TERMINAL EXEMPLE » : en double dans l'archive",
+                "Payeur retenu « Terminal exemple » : nom illisible",
+                "Payeur retenu « TERMINAL-EXEMPLE » : nom illisible",
+                "Payeur retenu « BAR EXEMPLE » : « source » : valeur inconnue (« ticket »)",
+                # « Automatique » is no choice to retain: a payer always says something.
+                "Payeur retenu « BUVETTE EXEMPLE » : « source » : valeur inconnue («  »)",
+                "Payeur retenu « CLUB EXEMPLE » : « source » : valeur manquante",
+                f"Payeur retenu « {'A' * 256} » : « key » : plus de 255 caractères",
+            ],
+        )
+        # The first of two is the one kept.
+        self.assertEqual(payers(), {"TERMINAL EXEMPLE": TILL_CARD, "ASSOCIATION EXEMPLE": NOT_A_SALE})
+        self.assertEqual(tally(run, PAYERS).created, 2)
+
+    def test_replace_keeps_a_payer_whose_record_it_cannot_read(self):
+        def change(payload):
+            for item in payload["income_payers"]:
+                if item["key"] == "TERMINAL EXEMPLE":
+                    item["source"] = "ticket"
+            return payload
+
+        run = import_archive(self.forged(change), REPLACE)
+        self.assertEqual(
+            bank_report(run).skipped,
+            ["Payeur retenu « TERMINAL EXEMPLE » : « source » : valeur inconnue (« ticket »)"],
+        )
+        self.assertEqual(payers(), {"TERMINAL EXEMPLE": TILL_CARD, "ASSOCIATION EXEMPLE": NOT_A_SALE})
+        counted = tally(run, PAYERS)
+        self.assertEqual((counted.updated, counted.deleted, counted.unchanged), (0, 0, 1))
+
+    def test_an_unknown_field_of_a_payer_is_said_once(self):
+        def change(payload):
+            for item in payload["income_payers"]:
+                item["humeur"] = "calme"
+            return payload
+
+        run = import_archive(self.forged(change), MERGE)
+        self.assertEqual(bank_report(run).notes.count("champ inconnu ignoré : payeurs retenus › humeur"), 1)
+        self.assertEqual(bank_report(run).skipped, [])
 
 
 class LinkTests(BankData, TestCase):
@@ -1064,6 +1546,87 @@ class CheckTests(BankData, TestCase):
         self.assertEqual(tally(run, PAYMENTS).deleted, 0)
 
 
+class UnreadableMomentTests(BankData, TestCase):
+    """Under « Remplacer » a record whose compared fields differ is written
+    whole, its moment included - a moment that is never compared. One the
+    section cannot read is that record's reason: skipped and said, the record
+    here kept as it was, and never a 500 on the preview."""
+
+    #: The moment the archive gives → the reason said after the field's name.
+    MOMENTS = {None: "valeur manquante", "hier": "date illisible (« hier »)"}
+
+    def assert_skipped_as_previewed(self, change, skipped):
+        """Preview, then confirm, `change` under « Remplacer »: both say
+        exactly `skipped` and nothing else, and nothing is written."""
+        reader = self.forged(change)
+        before = db_fingerprint()
+        preview = import_archive(reader, REPLACE, preview=True)
+        self.assertEqual(db_fingerprint(), before)
+        run = import_archive(reader, REPLACE)
+        self.assertEqual(preview.outcome(), run.outcome())
+        self.assertEqual((bank_report(run).skipped, bank_report(run).conflicts), ([skipped], []))
+        self.assertEqual(db_fingerprint(), before)
+        self.assertFalse(run.affected())
+        return run
+
+    def test_a_payer_whose_moment_cannot_be_read_is_kept_as_it_was(self):
+        for moment, reason in self.MOMENTS.items():
+            with self.subTest(moment=moment):
+
+                def change(payload, moment=moment):
+                    terminal = next(item for item in payload["income_payers"] if item["key"] == "TERMINAL EXEMPLE")
+                    terminal.update(source="cash", created_at=moment)
+                    return payload
+
+                run = self.assert_skipped_as_previewed(
+                    change, f"Payeur retenu « TERMINAL EXEMPLE » : « created_at » : {reason}"
+                )
+                self.assertEqual(payers(), {"TERMINAL EXEMPLE": TILL_CARD, "ASSOCIATION EXEMPLE": NOT_A_SALE})
+                self.assertEqual(IncomePayer.objects.get(key="TERMINAL EXEMPLE").created_at, PAYER_MOMENT)
+                counted = tally(run, PAYERS)
+                self.assertEqual((counted.created, counted.updated, counted.deleted, counted.unchanged), (0, 0, 0, 1))
+
+    def test_a_rule_whose_moment_cannot_be_read_is_kept_as_it_was(self):
+        for moment, reason in self.MOMENTS.items():
+            with self.subTest(moment=moment):
+
+                def change(payload, moment=moment):
+                    urssaf = next(item for item in payload["rules"] if item["pattern"] == "URSSAF")
+                    urssaf.update(description="Cotisations du trimestre", created_at=moment)
+                    return payload
+
+                run = self.assert_skipped_as_previewed(change, f"Règle « URSSAF » : « created_at » : {reason}")
+                rule = IgnoreRule.objects.get(pattern="URSSAF")
+                self.assertEqual(
+                    (rule.description, rule.created_at), ("Cotisations", datetime(2026, 7, 20, 8, 30, tzinfo=UTC))
+                )
+                counted = tally(run, RULES)
+                self.assertEqual((counted.created, counted.updated, counted.deleted, counted.unchanged), (0, 0, 0, 1))
+
+    def test_a_line_whose_import_moment_cannot_be_read_is_kept_with_its_links(self):
+        # The archive also says the line pays nothing: written, it would lose
+        # its link. The field is compared whatever the line's sign.
+        for moment, reason in self.MOMENTS.items():
+            with self.subTest(moment=moment):
+
+                def change(payload, moment=moment):
+                    self.record(payload, self.manual).update(income_source="other", imported_at=moment, payments=[])
+                    return payload
+
+                run = self.assert_skipped_as_previewed(
+                    change, f"Opération du 02/07/2026 (EPICERIE LILAS, -12,30 €) : « imported_at » : {reason}"
+                )
+                manual = BankTransaction.objects.get(pk=self.manual.pk)
+                self.assertEqual((manual.income_source, manual.imported_at), (AUTOMATIC, self.manual.imported_at))
+                self.assertEqual(manual.payments.get().invoice, self.invoice_a)
+                operations = tally(run, OPERATIONS)
+                self.assertEqual(
+                    (operations.created, operations.updated, operations.deleted, operations.unchanged), (0, 0, 0, 5)
+                )
+                payments = tally(run, PAYMENTS)
+                self.assertEqual((payments.created, payments.deleted, payments.unchanged), (0, 0, 3))
+
+
 class ImportMakesNoDecisionTests(BankData, TestCase):
     def test_no_automatic_matching_runs(self):
         reader = self.export()
@@ -1087,7 +1650,7 @@ class ClearTests(BankData, TestCase):
         run = run_clear({"banque"}, preview=False)
         self.assertEqual(BankSection().count(), dict.fromkeys(ENTITIES, 0))
         deleted = {entity: tally(run, entity).deleted for entity in ENTITIES}
-        self.assertEqual(deleted, {OPERATIONS: 6, PAYMENTS: 4, RULES: 2, ALIASES: 1})
+        self.assertEqual(deleted, {OPERATIONS: 6, PAYMENTS: 4, RULES: 2, ALIASES: 1, PAYERS: 2})
         self.assertIn(section.CLEAR_NOTE, bank_report(run).notes)
         self.assertEqual(run.affected(), {"banque"})
         # The invoices and suppliers the bank pointed at are not the bank's.
