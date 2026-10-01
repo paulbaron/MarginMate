@@ -40,6 +40,7 @@ from tests.factories import (
     make_stock_take_line,
     make_supplier,
 )
+from tests.test_views_smoke import make_gaps_to_fill
 
 
 class BaseTemplateTests(TestCase):
@@ -181,6 +182,39 @@ class SearchableSortableTableTests(TestCase):
 
     def test_stock_take_detail(self):
         self.assertEnhancedTable("inventory:stock_take_detail", pk=self.take.pk)
+
+    def test_stock_gap_filler(self):
+        """« Combler les écarts »: the sales to ring up, the amounts typed
+        before them and the gaps are three lists like any other - their
+        money sorts by a bare number, not by « 36.00 € » read as text, and
+        when an amount was typed by a date that sorts as one."""
+        take = make_gaps_to_fill()
+        url = reverse("inventory:stock_gap_filler")
+
+        def table(html, label):
+            found = re.search(
+                r'<table data-table data-table-label="' + label + r'"[^>]*>.*?</table>', html, flags=re.DOTALL
+            )
+            return found.group(0) if found else ""
+
+        # Without a list, the gaps alone, still a list like any other.
+        response = self.client.get(url, {"depuis": take.pk})
+        self.assertContains(response, '<table data-table data-table-label="écarts"')
+        self.assertNotContains(response, 'data-table-label="recettes à encaisser"')
+        self.assertNotContains(response, 'data-table-label="montants déjà saisis"')
+        # 70 € is a bottle of each wine; 36 €, on top of it, the red again.
+        for amount in ("70", "36"):
+            added = self.client.post(reverse("inventory:stock_gap_filler_add"), {"depuis": take.pk, "montant": amount})
+            self.assertEqual(added.status_code, 302)
+        response = self.client.get(url, {"depuis": take.pk})
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode()
+        self.assertContains(response, '<table data-table data-table-label="écarts"')
+        latest = table(html, "recettes à encaisser")
+        self.assertIn('data-sort="36.00"', latest)
+        earlier = table(html, "montants déjà saisis")
+        self.assertIn('data-sort="70.00"', earlier)
+        self.assertRegex(earlier, r'<td data-sort="\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}">')
 
     def test_stock_list_sorts_without_a_second_search_box(self):
         """It already has a server-backed fuzzy search; a second box filtering
@@ -335,6 +369,8 @@ class PageChromeTests(TestCase):
             "recipes:recipe_list",
             "recipes:sales_list",
             "inventory:stock_take_list",
+            # No count in this database: its empty state still says it.
+            "inventory:stock_gap_filler",
             "margins:margins_home",
             "bank:income_home",
             "staff:home",
@@ -344,6 +380,21 @@ class PageChromeTests(TestCase):
         ):
             with self.subTest(page=url_name):
                 self.assertContains(self.client.get(reverse(url_name)), "page-subtitle")
+
+    def test_the_gap_filler_explains_itself_with_a_list(self):
+        """With a count and a list, not only in its empty state: the
+        subtitle says what the page is for, amount after amount."""
+        take = make_gaps_to_fill()
+        added = self.client.post(reverse("inventory:stock_gap_filler_add"), {"depuis": take.pk, "montant": "70"})
+        self.assertEqual(added.status_code, 302)
+        response = self.client.get(reverse("inventory:stock_gap_filler"), {"depuis": take.pk})
+        self.assertContains(response, 'id="a-encaisser"')
+        self.assertContains(
+            response,
+            '<p class="page-subtitle">Les ventes à encaisser pour réduire chaque écart de stock dans la même '
+            "proportion, montant après montant.</p>",
+            count=1,
+        )
 
     def test_the_stock_page_leads_with_its_headline_figures(self):
         make_priced_stock_type(name="Vodka", unit_cost_ht="12", quantity="10")
@@ -1650,6 +1701,37 @@ class PhoneCardsLabelTests(TestCase):
         chosen = self.cards(f"{reverse('recipes:recipe_list')}?article={rum.pk}", "data-table-label", "recettes")
         self.assertIn("Utilisé", [cell["text"].strip() for cell in chosen["head"]])
         self.assertLabelled(chosen, 1)
+
+    def test_the_gaps_to_fill_with_and_without_a_list(self):
+        """« Combler les écarts »: the gaps on every kind of row (to fill,
+        never counted, sold past what it had), the sales to ring up and the
+        amounts typed before them. The gaps grow « Proposé » and « Comblé »
+        once the list holds an amount: both states, each cell under its own
+        header's words."""
+        take = make_gaps_to_fill()
+        page = f"{reverse('inventory:stock_gap_filler')}?depuis={take.pk}"
+
+        def headers(table):
+            return [" ".join(cell["text"].split()) for cell in table["head"]]
+
+        gaps = self.cards(page, "data-table-label", "écarts")
+        self.assertNotIn("Proposé", headers(gaps))
+        self.assertNotIn("Comblé", headers(gaps))
+        self.assertLabelled(gaps, 3)
+
+        # 70 € is one bottle at 36 € and one at 34 €; then 36 €, the red
+        # alone; then 34 €, the rosé alone.
+        for amount in ("70", "36", "34"):
+            added = self.client.post(reverse("inventory:stock_gap_filler_add"), {"depuis": take.pk, "montant": amount})
+            self.assertEqual(added.status_code, 302)
+        gaps = self.cards(page, "data-table-label", "écarts")
+        self.assertEqual(headers(gaps)[-2:], ["Proposé", "Comblé"])
+        self.assertLabelled(gaps, 3)
+        # The last amount, one recipe; the two typed before it, one row each.
+        self.assertLabelled(self.cards(page, "data-table-label", "recettes à encaisser"), 1)
+        earlier = self.cards(page, "data-table-label", "montants déjà saisis")
+        self.assertEqual(headers(earlier), ["Saisi", "Montant (TTC)", "Proposé (TTC)", "Recettes"])
+        self.assertLabelled(earlier, 2)
 
 
 class ReviewPanelStylesheetTests(StylesheetTestCase):

@@ -12,6 +12,7 @@
         </div>
         <div class="page-header-actions">
             <a class="btn" href="{% url 'inventory:stock_take_variance' stock_take.pk %}">Voir les écarts</a>
+            <a class="btn btn-secondary" href="{% url 'inventory:stock_gap_filler' %}?depuis={{ stock_take.pk }}">Combler depuis</a>
             <a class="btn btn-secondary" href="{% url 'inventory:stock_take_update' stock_take.pk %}">Modifier</a>
             <form method="post" action="{% url 'inventory:stock_take_delete' stock_take.pk %}"
                   onsubmit="return confirm('Supprimer cet inventaire ?');">

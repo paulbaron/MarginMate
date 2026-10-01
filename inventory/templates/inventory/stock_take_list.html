@@ -6,7 +6,10 @@
             <h1>Inventaires physiques</h1>
             <p class="page-subtitle">Chaque comptage fige la valeur du stock à sa date, au prix des derniers achats.</p>
         </div>
-        <a class="btn" href="{% url 'inventory:stock_take_create' %}">+ Nouvel inventaire</a>
+        <div class="actions">
+            {% if stock_takes %}<a class="btn btn-secondary" href="{% url 'inventory:stock_gap_filler' %}">Combler les écarts</a>{% endif %}
+            <a class="btn" href="{% url 'inventory:stock_take_create' %}">+ Nouvel inventaire</a>
+        </div>
     </div>
 
     {% if stock_takes %}

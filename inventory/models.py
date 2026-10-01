@@ -281,6 +281,58 @@ class StockTake(models.Model):
         return self.lines.filter(has_shortfall=True).exists()
 
 
+class GapFillEntry(models.Model):
+    """One amount typed on « Combler les écarts » and the sales proposed for
+    it - a working list, entry after entry, until it is cleared.
+
+    Each entry is planned ON TOP of the ones before it (their sales are
+    played through the engine as if already rung up), so 7 € and then 7 €
+    again fill what is still behind rather than proposing the same glasses
+    twice. What was proposed is kept as it was proposed (`lines`): the owner
+    may already have rung it up, and a later invoice or count must not
+    rewrite a list he is holding. `sales_seen` is every serving sold from
+    `sales_from` on, as known then (`sales_up_to` the last day of sales):
+    once that moves, sales from this list may be in them, and the page says
+    to clear it.
+
+    Never exported by « Données »: it is a scratch list, and it goes with
+    its stock take.
+    """
+
+    stock_take = models.ForeignKey(StockTake, on_delete=models.CASCADE, related_name="gap_fill_entries")
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    total = models.DecimalField(max_digits=10, decimal_places=2)
+    # Plan.reason when the total is short of the amount (gap_planner).
+    reason = models.CharField(max_length=32, blank=True)
+    # [{"recipe": pk, "name", "till", "till_price" (str or None), "count",
+    # "price" (str), "fills": [article names]}], in the order shown.
+    lines = models.JSONField(default=list, blank=True)
+    sales_up_to = models.DateField(null=True, blank=True)
+    # Every serving sold from `sales_from` on, then (gaps.servings_from): a
+    # day imported again with more sales leaves `sales_up_to` as it was, not
+    # this. `sales_from` is the day before the entry was made - the till
+    # files a sale rung after midnight under the day its service began.
+    sales_from = models.DateField(null=True, blank=True)
+    sales_seen = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "pk"]
+
+    def __str__(self):
+        return f"{self.amount} € le {self.created_at:%d/%m/%Y %H:%M}"
+
+    @property
+    def remainder(self) -> Decimal:
+        return self.amount - self.total
+
+    @property
+    def sales(self) -> int:
+        from .gaps import entry_rows
+
+        return sum(row.count for row in entry_rows(self))
+
+
 class StockTakeLine(models.Model):
     """One counted product OR stock type within a StockTake - exactly one of
     the two (see the CheckConstraint below): a specific product when you
