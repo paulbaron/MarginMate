@@ -12,6 +12,30 @@ from django.core.exceptions import ValidationError
 from django.db import models
 
 
+class IncomeSource(models.TextChoices):
+    """What a credit is in the till, as « Entrées d'argent » reads it - the
+    one vocabulary of `BankTransaction.income_source`, `IncomePayer.source`,
+    bank/income.py and the page's « En caisse » menu.
+
+    AUTOMATIC is « nobody said » on the line: the page's rules decide where
+    they recognise it (the label's « TOTAL ENCAISSE … EUROS », the bank's
+    deposit types), else its payer retained (`IncomePayer`). It is a member,
+    not just a blank, because the « Données » archive checks every value it
+    reads against the choices, and a blank line would be refused there.
+    """
+
+    AUTOMATIC = "", "Automatique"
+    CARD = "card", "Carte"
+    CASH = "cash", "Espèces"
+    CHEQUE = "cheque", "Chèque"
+    #: The till's « Avoir »: in a bar, mostly a deposit paid beforehand,
+    #: often by transfer, for a private event.
+    CREDIT = "credit", "Avoir"
+    VOUCHER = "voucher", "Titres-restaurant"
+    #: Money the till never saw: a contribution, a refund, a private party.
+    OTHER = "other", "Pas une vente"
+
+
 class BankTransaction(models.Model):
     class Kind(models.TextChoices):
         CARD = "CARD", "Carte"
@@ -44,6 +68,13 @@ class BankTransaction(models.Model):
     # ones they will look for. Blank means nobody has said - which the page
     # counts and lists first, never folds into « Autres ».
     category = models.CharField(max_length=255, blank=True)
+    # What this CREDIT is in the till, said by a person on « Entrées d'argent »
+    # for this line alone - a card payout from a terminal whose label the
+    # page does not recognise, a deposit for a private event the till took
+    # as an « Avoir ». Blank: the page's rules where they recognise the line,
+    # else its payer (`IncomePayer`), decide. Never set on a debit; a statement imported again
+    # never touches it (`reconcile.import_statement` only adds lines).
+    income_source = models.CharField(max_length=10, blank=True, default="", choices=IncomeSource.choices)
     # A person decided this line - linked it, unlinked it, or said there is
     # no invoice - so the automatic pass never touches it again.
     settled_by_hand = models.BooleanField(default=False)
@@ -110,6 +141,33 @@ class CounterpartyAlias(models.Model):
 
     def __str__(self):
         return f"{self.name} = {self.supplier}"
+
+
+class IncomePayer(models.Model):
+    """A payer whose credits are all one thing in the till - learnt when a
+    person says what one of them is on « Entrées d'argent » and leaves
+    « retenir pour ce payeur » ticked.
+
+    A payment terminal is recognised by its provider's transfers, and a new
+    terminal is a new label the page's rules do not know: one choice on one
+    of its transfers is then enough for every transfer it ever sent and will
+    send. Read when the page is drawn, never written onto the lines, so
+    « Oublier » puts them straight back. It decides only what the rules do
+    not recognise, and a line a person chose on its own
+    (`BankTransaction.income_source`) beats it (`bank.income.reading_of`).
+    """
+
+    #: `bank.income.payer_key` of a line: `matching.alias_key` of who the
+    #: bank says paid, else of the label's words without their digits.
+    key = models.CharField(max_length=255, unique=True)
+    source = models.CharField(max_length=10, choices=[choice for choice in IncomeSource.choices if choice[0]])
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["key"]
+
+    def __str__(self):
+        return f"{self.key} = {self.get_source_display()}"
 
 
 class IgnoreRule(models.Model):

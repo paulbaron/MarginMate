@@ -21,7 +21,7 @@ from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
 
 from accounts import paths
-from bank.models import BankTransaction, CounterpartyAlias, IgnoreRule, InvoicePayment
+from bank.models import BankTransaction, CounterpartyAlias, IgnoreRule, IncomePayer, IncomeSource, InvoicePayment
 from inventory.models import (
     MovementKind,
     Product,
@@ -48,7 +48,7 @@ from transfer.tests.support import (
     media_listing,
     round_trip,
 )
-from transfer.tests.test_bank_section import make_line, make_rule, pay
+from transfer.tests.test_bank_section import make_line, make_payer, make_rule, pay
 from transfer.tests.test_invoices_section import (
     MediaMixin,
     build_invoices,
@@ -134,13 +134,24 @@ def build_everything() -> dict:
     )
 
     # The bank: a payment by number, one by the twin's file, one by the
-    # receipt's stored fingerprint, a « pas de facture », a payee name learned.
+    # receipt's stored fingerprint, a « pas de facture », a payee name learned,
+    # a credit said to be an « Avoir » of the till on its own line, and a
+    # payment terminal retained as « Carte » for every credit it sends.
     pay(make_line(date(2026, 8, 3), "METRO ESSAI", "-50.70", settled=True), built["invoice"])
     pay(make_line(date(2026, 2, 27), "MONOPRIX ESSAI", "-8.44"), built["twins"][1], InvoicePayment.Method.AUTO)
     pay(make_line(date(2026, 9, 3), "MONOPRIX ESSAI", "-117.09", settled=True), built["receipt"])
     make_line(date(2026, 8, 5), "URSSAF", "-450.00", kind=BankTransaction.Kind.DEBIT, settled=True, no_invoice=True)
     CounterpartyAlias.objects.create(supplier=leroy, name="LEROY ESS")
     make_rule("URSSAF", "Cotisations")
+    make_line(
+        date(2026, 8, 14),
+        "CLIENT ESSAI",
+        "240.00",
+        kind=BankTransaction.Kind.TRANSFER,
+        income_source=IncomeSource.CREDIT,
+    )
+    make_line(date(2026, 8, 18), "TERMINAL ESSAI", "312.40", kind=BankTransaction.Kind.TRANSFER)
+    make_payer("TERMINAL ESSAI", IncomeSource.CARD)
 
     # Returnables: the seeded types and UBA format, a pickup with two photos,
     # and the slip its driver sent - its lines and its PDF - each made at a
@@ -316,6 +327,18 @@ def empty_backups():
     shutil.rmtree(paths.backups_dir(), ignore_errors=True)
 
 
+def bank_kept() -> tuple:
+    """What clearing every other section leaves the bank: its lines, its
+    rules, its payers retained, and what its credits were said to be in
+    the till."""
+    return (
+        BankTransaction.objects.count(),
+        IgnoreRule.objects.count(),
+        IncomePayer.objects.count(),
+        sorted(BankTransaction.objects.exclude(income_source="").values_list("fingerprint", "income_source")),
+    )
+
+
 class ClearFromThePageTests(MediaMixin, TransactionTestCase):
     """« Effacer Enseignes et fournisseurs », typed EFFACER, for real: the
     transaction commits and the files go, as on the owner's computer."""
@@ -337,7 +360,7 @@ class ClearFromThePageTests(MediaMixin, TransactionTestCase):
         self.files = {name: sha(name) for name in named_files()}
         self.code_bound = {supplier.code for supplier in Supplier.objects.all() if code_bound(supplier)}
         self.pause = metro_pause()
-        self.bank = (BankTransaction.objects.count(), IgnoreRule.objects.count())
+        self.bank = bank_kept()
 
     def test_clearing_the_suppliers_clears_all_but_the_bank_and_the_backup_brings_it_back(self):
         url = reverse("transfer:data_clear")
@@ -353,12 +376,13 @@ class ClearFromThePageTests(MediaMixin, TransactionTestCase):
         self.assertRedirects(response, url + "?rapport=1", fetch_redirect_response=False)
 
         # Everything but the bank is empty; the bank lost its payments and
-        # its payee names, not its lines or its rules.
+        # its payee names, not its lines, its rules, its payers retained nor
+        # what its credits are in the till.
         for key in registry.ordered(cleared - {"fournisseurs"}):
             counts = registry.get(key).count()
             with self.subTest(section=key):
                 self.assertFalse(any(counts.values()), counts)
-        self.assertEqual((BankTransaction.objects.count(), IgnoreRule.objects.count()), self.bank)
+        self.assertEqual(bank_kept(), self.bank)
         self.assertFalse(InvoicePayment.objects.exists())
         self.assertFalse(CounterpartyAlias.objects.exists())
         # The suppliers with a reader or a till of their own stay, Metro

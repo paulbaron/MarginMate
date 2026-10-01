@@ -3054,6 +3054,80 @@ one nobody can correct) and read the same way by Banque's « Entrées » tab
   debits), and `_moved_out_of_view` runs for debits only. A category typed
   on a payout or a deposit renames nothing: the rules above name them.
 
+**« En caisse »: a person says what a credit is** (the owner, 01/10/2026:
+another payment terminal will not print « TOTAL ENCAISSE », and its payouts
+landed in « Autres entrées », out of the card balance, for good). Every credit
+of the window carries the menu - Automatique, Carte, Espèces, Chèque, Avoir,
+Titres-restaurant, Pas une vente (`models.IncomeSource`, the ONE vocabulary:
+`income.CARD`… are its values) - and sits in exactly one of three lists
+(`payouts`, `others`, `other_means`), the row's id `entree-<pk>` being where
+the choice answers (`views.income_source`), whichever list it moved to.
+- **Order, and nothing else** (`income.reading_of`): the LINE's own choice
+  (`BankTransaction.income_source`), else the rules above WHERE THEY
+  RECOGNISE the line (a gross printed, a deposit type: data about that
+  line), else its PAYER's (`IncomePayer`), else « Autres entrées ». A payer
+  never un-recognises a line: the provider prints the bar's own name as the
+  payee of its payouts, so « Pas une vente » retained for a transfer from
+  the bar's other account under that name moved every payout out of the card
+  figures when the payer came before the rules (review, 01/10/2026). A stored
+  value that is no source is passed over, never raised on. `entry.how`
+  (`BY_LINE`, `BY_PAYER`, `BY_RULE`) is printed on the row, and on Banque's
+  tab where a person decided - who decided is part of the answer.
+- **The payer** is `income.payer_key`: `matching.alias_key(payee_of(...))`,
+  the counterparty the bank prints, else the label's words without their
+  digits, cut to the column - asked the same way everywhere, and an empty
+  key is never retained. « retenir pour ce payeur » (the owner's choice: one
+  click teaches a new terminal) makes the PAYER hold the choice and the line
+  follow it like its siblings, so « Oublier » (`income.forget_payer`)
+  undoes it whole - except a line the rules recognise, which no payer
+  reaches: it keeps the choice as its own (`set_source`). AUTOMATIC with the
+  box ticked forgets the payer. Unticked, the choice is the line's alone and
+  beats everything. The counts said after a choice and on « Oublier » are of
+  the credits a payer really decides (`follows_its_payer`). The box is drawn
+  ticked only where the payer decides or nothing was recognised
+  (`Entry.remember_by_default`). Measured on a scratch copy (read-only,
+  01/10): every card payout of the statement shares one payer key, the
+  other credits one each.
+- **Read when the page is drawn, never written onto the lines**, like
+  `IgnoreRule`: the payers are ONE query (`income.QUERIES` went to 6;
+  Banque's tab reads them once, `income.known_payers`), and a statement
+  imported again never touches `income_source` (`import_statement` only
+  adds lines). A choice settles nothing - `settled_by_hand` is untouched.
+- **A card credit printing no gross counts the amount received as its gross**
+  (`Entry.gross_from_amount`; the owner's choice - a bank's own terminal pays
+  the gross and takes its fee apart). Its commission is **None, never 0**:
+  left out of `card_commission`, of its rate (`card_printed_gross`) and of a
+  month's, said as « commission inconnue », and the card stat and the
+  balance say how many payouts are counted that way (`card_from_amount`).
+  Summed as 0 it read as « no fee » and lowered the rate; `month.commission
+  += None` was a TypeError. **Every commission figure says what it leaves
+  out**: `card_commission` is None when no payout of the window printed its
+  gross, a month whose payouts all printed none reads « inconnue »
+  (`Month.payouts`, `Month.from_amount`), and a partial figure - the card
+  row's, a month's - carries « hors N au montant reçu ». 0,00 € printed for
+  a month of such payouts read as « no fee » (review, 01/10/2026).
+- **Meal vouchers and « Avoir » have a bank side** once a credit is said to
+  be one (`BANK_SIDE`, `COMPARED`): their rows draw « — » while none is, never
+  0 - an Écart of the whole till figure would accuse a transfer still filed
+  under « Autres entrées ».
+- **The payouts' menu is drawn on the row asked for only** (`?changer=<pk>`,
+  « changer »): a payout a day is a form a day otherwise.
+- **« Données »**: `income_source` rides with the line (compared, a conflict
+  kept whole like `category`), the payers as `income_payers` (merged like
+  rules). `IncomeSource.AUTOMATIC` is a member, not just a blank: `codec.load`
+  checks every value against the choices, and a blank line was refused. An
+  archive written before them says nothing of either: a line keeps its
+  choice, and `income_payers` absent is « not said » - never an empty list,
+  which « Remplacer » would read as « forget every payer ». **A payer a merge
+  creates brings its lines' own choices** onto lines saying nothing here
+  (`_took_its_payers_choice`): there they were one decision, and the payer
+  alone turned a fee refund kept « Pas une vente » beside it into a card
+  payout neither database counted, under « gardée telle quelle ». A
+  « Remplacer » reads every field of a record inside its try (the moments
+  included) - one it could not read was a 500 on the preview.
+- Migration `bank/0005`, **WRITTEN and left to be applied** (the owner, after
+  a backup, `migrate_tenants`; `serve` refuses to start until then).
+
 **The till beside it** (`recipes.PosDailyPayment`, under « L'Addition »):
 payments per method over the same days, and the takings (`revenue_ttc` of
 the rows whose money was read, the rule « Marges » follows). `tips` is
@@ -3067,7 +3141,8 @@ over the days both cover.** The till's payments can reach back long before the
 statement's first line; compared over « tout » - where Banque's « Entrées »
 stat lands - most card takings read as never arrived, with no warning.
 `till_before_statement` and `bank_before_till` (card at the gross, cash,
-cheques; never « Autres entrées », compared with nothing) are counted apart
+cheques, meal vouchers, « Avoir »; never « Autres entrées », compared with
+nothing) are counted apart
 and left out of `MethodRow.difference`, while the two columns still show the
 whole window; a warning names what the other side cannot see, and
 « Comparer sur les jours couverts des deux côtés » opens the page from
@@ -3078,8 +3153,9 @@ whole window; a warning names what the other side cannot see, and
 payouts' **gross** - the figure the till can equal - the commission in a
 column of its own. Cash: the difference is « gardé en caisse ou payé en
 liquide », said, never judged - the page sees neither the drawer nor what
-was paid in notes. « Avoir » is the till's alone (paid before, usually by
-transfer, an « Autre entrée »); « Autres entrées » the bank's alone.
+was paid in notes. « Avoir » (paid before, usually by transfer) and meal
+vouchers are the till's alone until a person says which credits they are
+(« En caisse », above); « Autres entrées » is the bank's alone.
 
 **A payout is tied to the sales by a RUNNING BALANCE**, « ventes carte pas
 encore versées » (`running_balance`), **never by a claim that it paid given

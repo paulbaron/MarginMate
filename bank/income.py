@@ -29,6 +29,31 @@ on the page, because what the application recognises has to be visible:
   listed first - and the datalist offers the words already typed on credits
   only, never the spending ones.
 
+**A person can say what a credit is in the till** (« En caisse », on every
+credit of the page): card, cash, cheque, « Avoir », meal vouchers, or no sale
+at all (`models.IncomeSource`). Those words are one terminal's: another
+provider's payouts print others, and the rules above would file them under
+« Autres entrées » for good. A choice is kept two ways (`reading_of`, in
+this order):
+
+* on the LINE (`BankTransaction.income_source`), for that line alone - it
+  beats everything, the rules included;
+* then the rules, where they RECOGNISE the line (a gross printed, a deposit
+  type): what the line itself prints is data about it;
+* then its PAYER (`IncomePayer`, keyed by `payer_key`), « retenir pour ce
+  payeur »: every credit of that payer the rules do not recognise, past and
+  future, follows - the one click that teaches the page a new terminal. Read
+  when the page is drawn, never written onto the lines, so « Oublier » puts
+  them back. A payer never un-recognises a line: the provider prints the
+  bar's own name as the payee of its payouts, and « Pas une vente » retained
+  for a transfer from the bar's other account under that name moved every
+  payout of the statement out of the card figures (review, 01/10/2026).
+
+A card credit whose label prints no gross counts the amount received as its
+gross (a bank's own terminal pays the gross and takes its fee apart): its
+commission is UNKNOWN, never 0 - left out of the commission and its rate,
+and the page says how many payouts are counted that way.
+
 **How a payout is linked to the till's card sales.** Measured on the real
 statement (the measurement stays out of a public repository; the rules do
 not): a payout lands one to three days after the sale, Monday pays Friday and
@@ -57,13 +82,15 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
+from django.db import transaction
 from django.db.models import Max, Min
 
 from common import DateRange, search_key
 from recipes.integration import TILL_TO_CONFIGURE
 from recipes.models import PosDailyPayment, PosProductDailyQuantity
 
-from .models import BankTransaction
+from . import matching
+from .models import BankTransaction, IncomePayer, IncomeSource
 from .spending import NO_CATEGORY
 
 ZERO = Decimal("0")
@@ -81,13 +108,27 @@ PAYOUT_RE = re.compile(r"TOTAL\s+ENCAISS[EÉ]\s+(\d{1,3}(?:\s\d{3})+|\d+)(?:[.,]
 CASH_TYPE = "versement especes"
 CHEQUE_TYPE = "remise cheque"
 
-#: Where a credit came from - one vocabulary for the report, the page and
-#: « Banque »'s « Entrées » tab.
-CARD, CASH, CHEQUE, OTHER = "card", "cash", "cheque", "other"
+#: Where a credit came from - one vocabulary for the report, the page,
+#: « Banque »'s « Entrées » tab and what a person chooses
+#: (`models.IncomeSource`, whose values these are).
+CARD = IncomeSource.CARD.value
+CASH = IncomeSource.CASH.value
+CHEQUE = IncomeSource.CHEQUE.value
+CREDIT = IncomeSource.CREDIT.value
+VOUCHER = IncomeSource.VOUCHER.value
+OTHER = IncomeSource.OTHER.value
+AUTOMATIC = IncomeSource.AUTOMATIC.value
+#: Every value a person may choose for a line - AUTOMATIC included, which
+#: hands the line back to its payer and the rules.
+VALUES = frozenset(value for value, _label in IncomeSource.choices)
+#: Every value that IS a source: what a line or a payer can hold.
+CHOSEN = VALUES - {AUTOMATIC}
 SOURCES = {
     CARD: "Versements carte",
     CASH: "Espèces déposées",
     CHEQUE: "Chèques remis",
+    CREDIT: "Acomptes (avoirs)",
+    VOUCHER: "Titres-restaurant remboursés",
     OTHER: "Autres entrées",
 }
 #: What one line of each is called on « Banque ».
@@ -95,7 +136,24 @@ ONE = {
     CARD: "Versement carte",
     CASH: "Dépôt d'espèces",
     CHEQUE: "Remise de chèques",
+    CREDIT: "Acompte (avoir en caisse)",
+    VOUCHER: "Remboursement de titres-restaurant",
 }
+#: The till's methods the account can see, and the source each is compared
+#: with, in the till's own order (`PosDailyPayment.ORDER`).
+BANK_SIDE = {
+    PosDailyPayment.CARD: CARD,
+    PosDailyPayment.CASH: CASH,
+    PosDailyPayment.CHEQUE: CHEQUE,
+    PosDailyPayment.MEAL_VOUCHER: VOUCHER,
+    PosDailyPayment.CREDIT: CREDIT,
+}
+
+#: How a credit's source was decided - said on the page, since a
+#: recognition nobody can see is one nobody can correct.
+BY_LINE, BY_PAYER, BY_RULE = "line", "payer", "rule"
+#: `IncomePayer.key`'s width, asked of the model rather than written twice.
+PAYER_KEY_MAX = IncomePayer._meta.get_field("key").max_length
 
 #: A payout pays sales of the days BEFORE it: an exact run is looked for in
 #: [T − RUN_DAYS, T − 1]. Eight, so Monday's payout still reaches back past
@@ -107,15 +165,15 @@ RUN_DAYS = 8
 #: the longest gap measured.
 ANCHOR_DAYS = 7
 
-#: What `income_for` costs, whatever the history holds: the credits, the
-#: till's payments, the till's days of the window, the till's last day, and
-#: the statement's first and last day (one aggregate). A test holds it - an
-#: N+1 here is one query per day of the year.
-QUERIES = 5
+#: What `income_for` costs, whatever the history holds: the payers retained,
+#: the credits, the till's payments, the till's days of the window, the
+#: till's last day, and the statement's first and last day (one aggregate). A
+#: test holds it - an N+1 here is one query per day of the year.
+QUERIES = 6
 
 #: The sources a till row is compared with - « Autres entrées » is compared
 #: with nothing, so nothing of it can be « before the till ».
-COMPARED = (CARD, CASH, CHEQUE)
+COMPARED = (CARD, CASH, CHEQUE, VOUCHER, CREDIT)
 
 
 def payout_gross(label) -> Decimal | None:
@@ -131,8 +189,9 @@ def payout_gross(label) -> Decimal | None:
         return None
 
 
-def source_of(line: BankTransaction) -> str:
-    """CARD, CASH, CHEQUE or OTHER - the rules the page states."""
+def automatic_source(line: BankTransaction) -> str:
+    """CARD, CASH, CHEQUE or OTHER - the rules the page states, for a credit
+    nobody said anything about."""
     if payout_gross(line.label) is not None:
         return CARD
     kind = search_key(line.bank_type or "")
@@ -143,15 +202,68 @@ def source_of(line: BankTransaction) -> str:
     return OTHER
 
 
+def payer_key(line: BankTransaction) -> str:
+    """Who paid a credit, as `IncomePayer.key` holds it: `matching.alias_key`
+    of the payee the bank prints, else of the label's words without their
+    digits (`matching.payee_of`: « … N° 000123 DU 05/06/26 » is the same key
+    next month). Cut to the column, the same way wherever it is asked. Empty
+    where nothing names anybody - and an empty key is never retained."""
+    # Stripped first: a counterparty of spaces alone (an archive's, a hand
+    # edit) is no payee, and taken for one it named nobody.
+    key = matching.alias_key(matching.payee_of((line.counterparty or "").strip(), line.label or ""))
+    return key[:PAYER_KEY_MAX].rstrip()
+
+
+def reading_of(
+    line: BankTransaction, payers: dict[str, str] | None = None, payer: str | None = None
+) -> tuple[str, str]:
+    """(source, how): what a credit is, and who said so - the line's own
+    choice, else the rules where they recognise it, else its payer's
+    (`payers`: {payer key: source}), else « Autres entrées ». A stored value
+    that is no source (written by hand in the database) is passed over,
+    never raised on. `payer` is the line's key when the caller has it
+    already."""
+    if line.income_source in CHOSEN:
+        return line.income_source, BY_LINE
+    recognised = automatic_source(line)
+    if recognised != OTHER:
+        return recognised, BY_RULE
+    if payers:
+        learnt = payers.get(payer_key(line) if payer is None else payer)
+        if learnt in CHOSEN:
+            return learnt, BY_PAYER
+    return OTHER, BY_RULE
+
+
+def follows_its_payer(line: BankTransaction) -> bool:
+    """Whether a retained payer decides this credit: nothing chosen on the
+    line, and nothing the rules recognise (`reading_of`)."""
+    return line.income_source not in CHOSEN and automatic_source(line) == OTHER
+
+
+def source_of(line: BankTransaction, payers: dict[str, str] | None = None) -> str:
+    """CARD, CASH, CHEQUE, VOUCHER, CREDIT or OTHER (`reading_of`)."""
+    return reading_of(line, payers)[0]
+
+
 @dataclass(frozen=True)
 class Entry:
-    """One credit, as this page reads it: where it came from, and for a
-    payout what the provider says it collected."""
+    """One credit, as this page reads it: where it came from, who said so,
+    and for a payout what the provider says it collected."""
 
     line: BankTransaction
     source: str
-    #: The payout's gross, as its label prints it. None on anything else.
+    #: A payout's gross: what its label prints - else, a terminal printing
+    #: none, the amount received (`gross_from_amount`). None on anything
+    #: but a payout.
     gross: Decimal | None = None
+    #: The label printed no gross: `gross` is the amount received, and the
+    #: commission is unknown - never 0, which would read as « no fee ».
+    gross_from_amount: bool = False
+    #: BY_LINE, BY_PAYER or BY_RULE.
+    how: str = BY_RULE
+    #: `payer_key` of the line, worked out once.
+    payer: str = ""
 
     @property
     def day(self) -> date:
@@ -164,12 +276,45 @@ class Entry:
 
     @property
     def commission(self) -> Decimal | None:
-        """Gross − net, as it comes: odd (negative) is said, not mended."""
-        return None if self.gross is None else self.gross - self.net
+        """Gross − net, as it comes: odd (negative) is said, not mended.
+        None where the label printed no gross: nothing says what was kept."""
+        if self.gross is None or self.gross_from_amount:
+            return None
+        return self.gross - self.net
 
     @property
     def commission_rate(self) -> Decimal | None:
-        return rate(self.commission, self.gross) if self.gross is not None else None
+        return rate(self.commission, self.gross)
+
+    @property
+    def choice(self) -> str:
+        """What the page's « En caisse » menu shows chosen: the line's own
+        choice, its payer's, else « Automatique »."""
+        return AUTOMATIC if self.how == BY_RULE else self.source
+
+    @property
+    def how_label(self) -> str:
+        """Who said what this credit is, in the page's words."""
+        if self.how == BY_LINE:
+            return "choisi pour cette entrée"
+        if self.how == BY_PAYER:
+            return "payeur retenu"
+        if self.source == CARD:
+            return "libellé « TOTAL ENCAISSE »"
+        if self.source in (CASH, CHEQUE):
+            return "type d'opération"
+        return "non reconnue"
+
+    @property
+    def remember_by_default(self) -> bool:
+        """« retenir pour ce payeur » drawn ticked: on a credit its payer
+        decides, and on one nothing recognised - the transfer of a terminal
+        the rules do not know, where retaining is the point. Unticked where
+        the rules or the line itself decided: changing one of those is an
+        exception, and its payer's other credits are no business of it."""
+        if not self.payer:
+            return False
+        return self.how == BY_PAYER or (self.how == BY_RULE and self.source == OTHER)
 
     @property
     def category(self) -> str:
@@ -188,9 +333,116 @@ class Entry:
         return ONE.get(self.source) or self.category
 
 
-def entry_for(line: BankTransaction) -> Entry:
-    source = source_of(line)
-    return Entry(line, source, payout_gross(line.label) if source == CARD else None)
+def entry_for(line: BankTransaction, payers: dict[str, str] | None = None) -> Entry:
+    """One credit read whole. `payers` ({payer key: source}, `known_payers`)
+    is read once by the caller: pure, no query, whatever the number of
+    lines."""
+    payer = payer_key(line)
+    source, how = reading_of(line, payers, payer)
+    if source != CARD:
+        return Entry(line, source, how=how, payer=payer)
+    printed = payout_gross(line.label)
+    if printed is None:
+        return Entry(line, source, line.amount, gross_from_amount=True, how=how, payer=payer)
+    return Entry(line, source, printed, how=how, payer=payer)
+
+
+def known_payers() -> dict[str, str]:
+    """{payer key: source} of every payer retained - one query, for a page
+    reading many credits."""
+    return dict(IncomePayer.objects.values_list("key", "source"))
+
+
+class SourceRefused(ValueError):
+    """A choice « En caisse » cannot record, with the sentence to say."""
+
+
+#: The refusals, said as they are.
+NOT_A_CREDIT = "Seule une entrée d'argent se compte en caisse."
+UNKNOWN_CHOICE = "Choix inconnu : rien n'a changé."
+
+
+@dataclass
+class SourceChange:
+    """What `set_source` did, for the message saying so."""
+
+    entry: Entry
+    #: The payer's key: « » where nothing names one.
+    payer: str = ""
+    #: The payer now holds the choice / no longer holds any.
+    remembered: bool = False
+    forgotten: bool = False
+    #: The payer's OTHER credits that follow it now, and those whose own
+    #: choice beats it - counted only when the payer changed. Those the
+    #: rules recognise are neither: a payer never reaches them.
+    followers: int = 0
+    kept: int = 0
+
+
+def set_source(line: BankTransaction, value, *, remember: bool) -> SourceChange:
+    """Say what a credit is in the till.
+
+    `remember` (« retenir pour ce payeur »): the payer holds the choice -
+    AUTOMATIC forgets it - and the line follows its payer like every other
+    credit of it, so one decision answers for all of them and « Oublier »
+    undoes it whole. A line the rules recognise is one no payer reaches
+    (`reading_of`): it keeps the choice as its own, or a payer « Carte »
+    retained from a payout reading something else would leave that payout
+    as it was. Otherwise the choice is the line's alone, beating everything;
+    AUTOMATIC hands the line back to the rules and its payer.
+
+    Settles nothing in `reconcile`'s sense: a credit pays no invoice, and
+    `settled_by_hand` is left alone. Refused (`SourceRefused`) on a line that
+    is not a credit, or a value the menu does not offer - the menu posts
+    exact values, so nothing is trimmed or guessed.
+    """
+    if line.amount <= 0:
+        raise SourceRefused(NOT_A_CREDIT)
+    if not isinstance(value, str) or value not in VALUES:
+        raise SourceRefused(UNKNOWN_CHOICE)
+    key = payer_key(line)
+    recognised = automatic_source(line)
+    remembered = forgotten = False
+    with transaction.atomic():
+        if remember and key:
+            if value == AUTOMATIC:
+                forgotten = IncomePayer.objects.filter(key=key).delete()[0] > 0
+            else:
+                IncomePayer.objects.update_or_create(key=key, defaults={"source": value})
+                remembered = True
+            # The line follows its payer - unless the rules recognise it as
+            # something else, where only its own choice can say otherwise.
+            reached = recognised == OTHER or value in (AUTOMATIC, recognised)
+            line.income_source = AUTOMATIC if reached else value
+        else:
+            line.income_source = value
+        line.save(update_fields=["income_source"])
+    change = SourceChange(entry_for(line, known_payers()), key, remembered, forgotten)
+    if remembered or forgotten:
+        others = BankTransaction.objects.filter(amount__gt=0).exclude(pk=line.pk)
+        for other in others.only("pk", "counterparty", "label", "bank_type", "income_source"):
+            # What the rules recognise no payer reaches, chosen or not.
+            if payer_key(other) != key or automatic_source(other) != OTHER:
+                continue
+            if other.income_source in CHOSEN:
+                change.kept += 1
+            else:
+                change.followers += 1
+    return change
+
+
+def forget_payer(payer: IncomePayer) -> int:
+    """« Oublier »: the payer no longer decides. Returns how many of its
+    credits go back to « Autres entrées » - those with a choice of their own
+    keep it, and those the rules recognise never followed it."""
+    credits = BankTransaction.objects.filter(amount__gt=0).exclude(income_source__in=CHOSEN)
+    back = sum(
+        1
+        for line in credits.only("counterparty", "label", "bank_type", "income_source")
+        if payer_key(line) == payer.key and follows_its_payer(line)
+    )
+    payer.delete()
+    return back
 
 
 def rate(part: Decimal | None, whole: Decimal | None) -> Decimal | None:
@@ -236,9 +488,12 @@ class MethodRow:
     till_payments: int = 0
     bank: Decimal | None = None
     bank_count: int = 0
-    #: The card row only: what the payouts' gross became on the account.
+    #: The card row only: what the payouts' gross became on the account,
+    #: the commission of those printing their gross, and how many printed
+    #: none (counted at the amount received).
     net: Decimal | None = None
     commission: Decimal | None = None
+    from_amount: int = 0
     note: str = ""
     #: Of `till`, what was taken on days before the statement's first line:
     #: the account cannot show it, whatever happened to it.
@@ -269,7 +524,12 @@ class Month:
     takings: Decimal = ZERO
     card_sold: Decimal = ZERO
     payouts_gross: Decimal = ZERO
+    #: Of the payouts printing their gross; `payouts` and `from_amount`
+    #: (those printing none) say how much of the month that covers - all of
+    #: it unknown is « inconnue » on the page, never 0,00 €.
     commission: Decimal = ZERO
+    payouts: int = 0
+    from_amount: int = 0
     net: Decimal = ZERO
     cash_sold: Decimal = ZERO
     cash_deposited: Decimal = ZERO
@@ -286,6 +546,21 @@ class PayoutRow:
     #: « Ventes carte pas encore versées » after this payout. None for a
     #: payout the balance does not count (dated before the till's history).
     pending: Decimal | None = None
+
+
+@dataclass
+class PayerRow:
+    """A payer retained, and what follows it: its credits whose own choice
+    does not beat it, over the window and over the whole history."""
+
+    payer: IncomePayer
+    count: int = 0
+    total: Decimal = ZERO
+    count_all: int = 0
+
+    @property
+    def source_label(self) -> str:
+        return str(IncomeSource(self.payer.source).label) if self.payer.source in CHOSEN else self.payer.source
 
 
 @dataclass
@@ -328,6 +603,12 @@ class IncomeReport:
     payouts: list[PayoutRow] = field(default_factory=list)
     others: list[Entry] = field(default_factory=list)
     other_categories: list[CategoryTotal] = field(default_factory=list)
+    #: The window's cash and cheque deposits, « Avoir » and meal vouchers:
+    #: every credit of the window is in exactly one of `payouts`, `others`
+    #: and this list, each with its « En caisse » choice.
+    other_means: list[Entry] = field(default_factory=list)
+    #: Every payer retained, whatever the window.
+    payers: list[PayerRow] = field(default_factory=list)
 
     #: The till over the same days. `takings` counts the days whose money
     #: was read (`revenue_read`); `unread_revenue_days` says how many were not.
@@ -407,15 +688,33 @@ class IncomeReport:
 
     @property
     def card_gross(self) -> Decimal:
+        """The payouts' gross - the amount received for those printing none."""
         return sum((row.entry.gross for row in self.payouts), ZERO)
 
     @property
-    def card_commission(self) -> Decimal:
-        return self.card_gross - self.card_net
+    def card_printed_gross(self) -> Decimal:
+        """The gross of the payouts printing it: what a commission is of."""
+        return sum((row.entry.gross for row in self.payouts if not row.entry.gross_from_amount), ZERO)
+
+    @property
+    def card_commission(self) -> Decimal | None:
+        """Of the payouts printing their gross: nothing says what the others
+        kept, and counted as 0 they would make the rate look lower. None
+        where not one payout of the window printed it - 0,00 € would read
+        as « no fee »."""
+        known = [row.entry.commission for row in self.payouts if row.entry.commission is not None]
+        if not known and self.card_from_amount:
+            return None
+        return sum(known, ZERO)
 
     @property
     def card_commission_rate(self) -> Decimal | None:
-        return rate(self.card_commission, self.card_gross)
+        return rate(self.card_commission, self.card_printed_gross)
+
+    @property
+    def card_from_amount(self) -> int:
+        """Payouts printing no gross, counted at the amount received."""
+        return sum(1 for row in self.payouts if row.entry.gross_from_amount)
 
     @property
     def cash_total(self) -> Decimal:
@@ -472,13 +771,19 @@ def income_for(window: DateRange) -> IncomeReport:
     whole history and only SHOWN for the window."""
     report = IncomeReport(window=window)
 
+    # The payers retained, read once: every credit below is read against
+    # them in Python (`entry_for`), never one query a line.
+    retained = list(IncomePayer.objects.all())
+    payers = {payer.key: payer.source for payer in retained}
     # Every credit, the whole history: the balance and the exact runs are
     # worked out from the first payout on, so that a window cannot change
     # them. Windowed here, in Python, with the one definition of « in the
     # window » that is not SQL (`DateRange.holds`).
     entries = [
-        entry_for(line) for line in BankTransaction.objects.filter(amount__gt=0).order_by("operation_date", "pk")
+        entry_for(line, payers)
+        for line in BankTransaction.objects.filter(amount__gt=0).order_by("operation_date", "pk")
     ]
+    report.payers = _payer_rows(retained, entries, window)
     payments = list(PosDailyPayment.objects.values_list("sold_on", "method", "amount", "payments"))
     # Where each side starts and stops - read before the loops below, which
     # set apart what one side holds on days the other cannot see. The
@@ -529,14 +834,22 @@ def income_for(window: DateRange) -> IncomeReport:
             report.payouts.append(PayoutRow(entry, runs.get(entry.line.pk), report.balance.pending.get(entry.line.pk)))
             month.payouts_gross += entry.gross
             month.net += entry.net
-            month.commission += entry.commission
-        elif entry.source == CASH:
-            month.cash_deposited += entry.net
+            month.payouts += 1
+            # An unknown commission adds nothing, and is counted: a month of
+            # them alone is « inconnue », never a 0 that reads as « no fee ».
+            if entry.commission is not None:
+                month.commission += entry.commission
+            else:
+                month.from_amount += 1
         elif entry.source == OTHER:
             report.others.append(entry)
             category = categories.setdefault(entry.category, CategoryTotal(entry.category))
             category.amount += entry.net
             category.count += 1
+        else:
+            report.other_means.append(entry)
+            if entry.source == CASH:
+                month.cash_deposited += entry.net
     report.by_source = {key: (value[0], value[1]) for key, value in by_source.items()}
     report.bank_before_till = dict(bank_before)
     if bank_before_days:
@@ -603,6 +916,23 @@ def income_for(window: DateRange) -> IncomeReport:
 
     report.last_till_day = PosProductDailyQuantity.objects.aggregate(last=Max("sold_on"))["last"]
     return report
+
+
+def _payer_rows(retained: list[IncomePayer], entries: list[Entry], window: DateRange) -> list[PayerRow]:
+    """Each payer retained, with the credits it decides - counted off the
+    entries already read, no query."""
+    rows = {payer.key: PayerRow(payer) for payer in retained}
+    for entry in entries:
+        if entry.how != BY_PAYER:
+            continue
+        row = rows.get(entry.payer)
+        if row is None:  # pragma: no cover - a payer reading is a retained key
+            continue
+        row.count_all += 1
+        if window.holds(entry.day):
+            row.count += 1
+            row.total += entry.net
+    return list(rows.values())
 
 
 def running_balance(card_days: dict[date, Decimal], payouts: list[Entry]) -> Balance:
@@ -713,7 +1043,14 @@ NOTES = {
     ),
     CASH: "La différence est gardée en caisse ou payée en liquide : la page ne sait pas laquelle.",
     CHEQUE: "Un chèque se remet quand on passe à la banque, pas le jour de la vente.",
-    PosDailyPayment.CREDIT: ("Réglé par un acompte encaissé avant, souvent par virement : voir « Autres entrées »."),
+    CREDIT: (
+        "Réglé par un acompte encaissé avant, souvent par virement : choisissez « Avoir » sur ce virement pour "
+        "le compter ici."
+    ),
+    VOUCHER: (
+        "Remboursés plus tard par l'émetteur, nets de sa commission : choisissez « Titres-restaurant » sur ses "
+        "virements pour les compter ici."
+    ),
     PosDailyPayment.UNREAD: "Tickets dont la caisse n'a pas pu lire les paiements, comptés à leur total.",
     PosDailyPayment.UNPAID: "Tickets sans paiement enregistré, comptés à leur total.",
     OTHER: "Ce que la caisse ne voit pas : un virement reçu, un apport, un remboursement.",
@@ -722,7 +1059,9 @@ NOTES = {
 
 def _method_rows(report: IncomeReport, till: dict[str, TillMethod]) -> list[MethodRow]:
     """« Ce que la caisse a encaissé, et ce qui est arrivé sur le compte »:
-    one row per means of payment, the three the account can see first."""
+    one row per means of payment, those the account can see first
+    (`BANK_SIDE`: meal vouchers and « Avoir » once a credit is said to be
+    one), then the till's others, then « Autres entrées »."""
 
     def paid(method: str) -> TillMethod:
         return till.get(method) or TillMethod(method)
@@ -749,6 +1088,7 @@ def _method_rows(report: IncomeReport, till: dict[str, TillMethod]) -> list[Meth
             report.card_count,
             net=report.card_net,
             commission=report.card_commission,
+            from_amount=report.card_from_amount,
             note=NOTES[CARD],
             **edges(PosDailyPayment.CARD, CARD),
         ),
@@ -776,7 +1116,29 @@ def _method_rows(report: IncomeReport, till: dict[str, TillMethod]) -> list[Meth
                 **edges(PosDailyPayment.CHEQUE, CHEQUE),
             )
         )
-    seen = {PosDailyPayment.CARD, PosDailyPayment.CASH, PosDailyPayment.CHEQUE}
+    # Meal vouchers and « Avoir »: the till's, and - once a person said
+    # which credits they are - the account's. Until then the account holds
+    # nothing it knows to be theirs (« — », never 0: an Écart of the whole
+    # till figure would accuse a transfer filed under « Autres entrées »).
+    for method in (PosDailyPayment.MEAL_VOUCHER, PosDailyPayment.CREDIT):
+        source = BANK_SIDE[method]
+        one = paid(method)
+        counted = report.source_count(source)
+        if method not in till and not counted:
+            continue
+        rows.append(
+            MethodRow(
+                source,
+                PosDailyPayment.label_for(method),
+                one.amount,
+                one.payments,
+                report.source_total(source) if counted else None,
+                counted,
+                note=NOTES[source],
+                **edges(method, source),
+            )
+        )
+    seen = set(BANK_SIDE)
     for one in report.till:
         if one.method in seen:
             continue

@@ -237,16 +237,21 @@
                                             What the entry is, read the way « Entrées d'argent » reads it
                                             (bank/income.py): a card payout and its commission, a
                                             deposit, or the typed category - not « Entrée d'argent » for everything.
+                                            A payout printing no gross has no commission to say, and who
+                                            decided is said when a person did (« payeur retenu »).
                                             {% endcomment %}
                                             {% with entry=row.entry %}
-                                                {% if entry.gross is not None %}
+                                                {% if entry.commission is not None %}
                                                     <span>{{ entry.name }} : {{ entry.gross|floatformat:2 }} € encaissés, {{ entry.commission|floatformat:2 }} € de commission</span>
+                                                {% elif entry.gross_from_amount %}
+                                                    <span>{{ entry.name }} : brut non imprimé, commission inconnue</span>
                                                 {% elif entry.unnamed %}
                                                     <span class="muted">Autre entrée, {{ entry.category|lower }}</span>
                                                     <a class="read-as" href="{{ income_url }}#autres-entrees">à classer sur « Entrées d'argent »</a>
                                                 {% else %}
                                                     <span>{{ entry.name }}</span>
                                                 {% endif %}
+                                                {% if entry.how != "rule" %}<span class="read-as">{{ entry.how_label }}</span>{% endif %}
                                             {% endwith %}
                                         {% else %}
                                             {% if row.suggestion %}

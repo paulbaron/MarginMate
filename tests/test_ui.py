@@ -135,20 +135,49 @@ class SearchableSortableTableTests(TestCase):
         self.assertContains(self.assertEnhancedTable("margins:margins_home"), 'data-table-label="catégories"')
 
     def test_income(self):
-        """« Entrées d'argent »: its means of payment, its months and its
-        other entries are lists like any other."""
-        from bank.models import BankTransaction
+        """« Entrées d'argent »: its means of payment, its months, its other
+        entries, its deposits, its card payouts and its payers retained are
+        lists like any other. Each of the last three is drawn only when
+        there is something in it: a cash deposit, and a terminal's transfer
+        counted as card through its payer."""
+        from bank import income
+        from bank.models import BankTransaction, IncomePayer
 
+        # Inside the page's default period whenever this runs.
+        today = timezone.localdate()
         BankTransaction.objects.create(
-            # Inside the page's default period whenever this runs.
-            operation_date=timezone.localdate(),
+            operation_date=today,
             label="VIR SEPA RECU /FRM CLIENT EXEMPLE",
             amount=Decimal("50.00"),
             fingerprint="ui-income",
         )
+        BankTransaction.objects.create(
+            operation_date=today,
+            bank_type="VERSEMENT ESPECES",
+            label="VERSEMENT ESPECES",
+            amount=Decimal("40.00"),
+            fingerprint="ui-income-cash",
+        )
+        terminal = BankTransaction.objects.create(
+            operation_date=today,
+            label="VIR SEPA RECU /FRM TERMINAL EXEMPLE",
+            counterparty="TERMINAL EXEMPLE",
+            amount=Decimal("79.50"),
+            fingerprint="ui-income-terminal",
+        )
+        IncomePayer.objects.create(key=income.payer_key(terminal), source=income.CARD)
         response = self.assertEnhancedTable("bank:income_home")
-        self.assertContains(response, 'data-table-label="moyens de paiement"')
-        self.assertContains(response, 'data-table-label="autres entrées"')
+        for label in (
+            "moyens de paiement",
+            "mois",
+            "catégories d'entrées",
+            "autres entrées",
+            "dépôts et autres moyens de paiement",
+            "versements carte",
+            "payeurs retenus",
+        ):
+            with self.subTest(label=label):
+                self.assertContains(response, f'data-table-label="{label}"')
 
     def test_staff(self):
         """« Personnel »: the employees and an employee's months are lists;

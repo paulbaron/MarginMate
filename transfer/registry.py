@@ -142,7 +142,8 @@ INFO: dict[str, SectionInfo] = {
             70,
             recommends=["factures", "fournisseurs"],
             description=(
-                "Opérations importées, leurs liens aux factures, règles « sans facture » et noms de payeurs appris."
+                "Opérations importées, leurs liens aux factures, règles « sans facture », noms de payeurs appris "
+                "et payeurs retenus des entrées d'argent."
             ),
             # In two imports the bank cannot tell a line whose payment went
             # with its invoice from one a person unlinked (bank.UNDONE_NOTE).
