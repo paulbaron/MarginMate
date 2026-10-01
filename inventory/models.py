@@ -333,6 +333,41 @@ class GapFillEntry(models.Model):
         return sum(row.count for row in entry_rows(self))
 
 
+class GapExclusion(models.Model):
+    """An article, or a whole category of articles, left out of « Combler
+    les écarts » - the owner's choice, kept for the espace until he takes it
+    back (01/10/2026: « exclure des articles/catégories de ces écarts, et que
+    cela reste en mémoire »).
+
+    Exactly one of the two: `stock_type` for one article, `category` for
+    every article filed under that category name - those classified into it
+    later included, which is what excluding a category means. A blank
+    category ("") is the articles with none. An article left out is ignored
+    whole: no gap to fill, no limit on a sale, out of the lists and of the
+    average (gaps.gaps_since). Never exported by « Données »: like the list,
+    it belongs to this page. An article merged into another or deleted takes
+    its exclusion with it.
+    """
+
+    stock_type = models.OneToOneField(
+        StockType, null=True, blank=True, on_delete=models.CASCADE, related_name="gap_exclusion"
+    )
+    category = models.CharField(max_length=255, null=True, blank=True, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(models.Q(stock_type__isnull=False) & models.Q(category__isnull=True))
+                | (models.Q(stock_type__isnull=True) & models.Q(category__isnull=False)),
+                name="gap_exclusion_article_or_category",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Catégorie « {self.category} »" if self.stock_type_id is None else str(self.stock_type)
+
+
 class StockTakeLine(models.Model):
     """One counted product OR stock type within a StockTake - exactly one of
     the two (see the CheckConstraint below): a specific product when you

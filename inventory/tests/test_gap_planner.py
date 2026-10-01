@@ -2,8 +2,10 @@
 
 No database, no request: the offers are built by hand and the engine is a
 `Consumption` handed in. A plan is either made alone or on top of a list's
-earlier sales (`already`, the « amount after amount » list): the classes at
-the end pin the second. Three engines:
+earlier sales (`already`, the « amount after amount » list): the classes
+near the end pin the second. The last ones pin `ignored`, the articles the
+owner left out of the page (`GapExclusion`): no gap to fill, no limit on a
+sale. Three engines:
 
 * an ADDITIVE engine - what the window's sales consume is the base plus,
   per recipe, the count times its fixed pour. Right for recipes no « OU »
@@ -1789,3 +1791,460 @@ class ListDeterminismTests(SimpleTestCase):
         amounts = [900, 1850, 740, 4000]
         reference = plan_a_list(amounts, offers, rooms, consumption, revive.UNIT_COSTS)
         self.assertEqual(plan_a_list(amounts, offers[::-1], rooms, consumption, revive.UNIT_COSTS), reference)
+
+
+# ---------------------------------------------------------------------------
+# Articles the owner left out: plan_sales(ignored=...), first_sales(ignored=...)
+# ---------------------------------------------------------------------------
+
+
+def without(offers, article) -> list[Offer]:
+    """`offers` as if none of them poured `article`: an option pouring it
+    alone goes, and so does a term left with no option. Leaving an article
+    out must plan exactly like this - the sales, the money, the reason - and
+    differ only in `used` (and `poured`), which still say what the sales add
+    to it."""
+    stripped = []
+    for offer in offers:
+        terms = []
+        for options in offer.terms:
+            kept = []
+            for option in options:
+                rest = {other: amount for other, amount in option.items() if other != article}
+                if rest:
+                    kept.append(rest)
+            if kept:
+                terms.append(tuple(kept))
+        stripped.append(
+            Offer(offer.recipe_id, offer.name, offer.price_cents, offer.sold, tuple(terms), offer.independent)
+        )
+    return stripped
+
+
+def within_rooms_but(case, plan, rooms, ignored):
+    """Every article but the ignored ones stays within its room."""
+    for article in (set(rooms) | set(plan.used)) - set(ignored):
+        case.assertLessEqual(
+            plan.used.get(article, ZERO),
+            limit(rooms, article),
+            f"article {article}: added {plan.used.get(article)} past its room {rooms.get(article)}",
+        )
+
+
+class IgnoredArticleTests(SimpleTestCase):
+    """`ignored`: the articles the owner left out of « Combler les écarts »
+    (`GapExclusion`, handed over by `gaps.gaps_since`). An ignored article is
+    no gap to fill - nothing ranks a sale on it, and an offer filling nothing
+    else is never proposed - and no limit: a sale may take it past its room
+    (a herb « vendu plus qu'acheté » no longer holds its cocktail back).
+    `used` still says what the plan adds to it, as the engine attributes it:
+    the sales pour it all the same."""
+
+    DEMI, SHOT, TI_PUNCH, GIN_TONIC = 10, 43, 50, 51
+
+    def demi_and_shot(self):
+        # « Demi exemple » at 3,30 €, « Shot exemple » at 3,70 €.
+        offers = [
+            fixed_offer(self.DEMI, HALF_PRICE, {BLONDE: "0.25"}, sold=20, name="Demi exemple"),
+            fixed_offer(self.SHOT, 370, {RHUM: "4"}, sold=5, name="Shot exemple"),
+        ]
+        return offers, {BLONDE: D("30"), RHUM: D("400")}, additive_engine(offers)
+
+    def ti_punch(self, lemon_room):
+        # « Ti punch exemple » at 8,90 €: 4 cl of rum and a lemon wedge.
+        offers = [fixed_offer(self.TI_PUNCH, 890, {RHUM: "4", CITRON: "1"}, sold=6, name="Ti punch exemple")]
+        return offers, {RHUM: D("40"), CITRON: D(lemon_room)}, additive_engine(offers)
+
+    def test_an_offer_filling_only_an_ignored_article_is_never_proposed(self):
+        offers, rooms, engine = self.demi_and_shot()
+        # The control: 13,20 € is four halves, and no other mix of the prices.
+        control = plan_sales(4 * HALF_PRICE, offers, rooms, engine)
+        self.assertEqual((control.counts, control.reason), ({self.DEMI: 4}, EXACT))
+        # The keg left out, a half fills no gap: three shots, and the 2,10 €
+        # left no shot makes.
+        plan = plan_sales(4 * HALF_PRICE, offers, rooms, engine, ignored={BLONDE})
+        self.assertEqual(plan.counts, {self.SHOT: 3})
+        self.assertEqual((plan.total_cents, plan.remainder_cents), (3 * 370, 4 * HALF_PRICE - 3 * 370))
+        self.assertEqual(plan.reason, NO_COMBINATION)
+        self.assertEqual(plan.used, {RHUM: D(12)})
+        for amount in (HALF_PRICE, 2 * HALF_PRICE, 3700, 9990, 33000):
+            with self.subTest(amount=amount):
+                plan = plan_sales(amount, offers, rooms, engine, ignored={BLONDE})
+                self.assertNotIn(self.DEMI, plan.counts)
+                self.assertNotIn(BLONDE, plan.used)
+
+    def test_with_nothing_else_to_fill_it_is_nothing_to_fill(self):
+        offers, rooms, engine = self.demi_and_shot()
+        offers = offers[:1]
+        self.assertEqual(plan_sales(5000, offers, rooms, engine, ignored={BLONDE}), Plan({}, 0, 5000, NOTHING_TO_FILL))
+        # Under its price too: the half is no offer at all, not one too dear.
+        self.assertEqual(plan_sales(HALF_PRICE - 1, offers, rooms, engine).reason, BELOW_CHEAPEST)
+        self.assertEqual(
+            plan_sales(HALF_PRICE - 1, offers, rooms, engine, ignored={BLONDE}),
+            Plan({}, 0, HALF_PRICE - 1, NOTHING_TO_FILL),
+        )
+
+    def test_one_sale_past_an_ignored_article_s_room_blocks_nothing(self):
+        # The lemon sold past what was bought (« vendu plus qu'acheté »): one
+        # ti punch takes it further. Counted, it blocks the ti punch.
+        offers, rooms, engine = self.ti_punch("-3")
+        self.assertEqual(blocked(offers, rooms, engine), {self.TI_PUNCH: {CITRON}})
+        self.assertEqual(first_sales(offers, rooms, engine)[self.TI_PUNCH], ({RHUM: D(4), CITRON: D(1)}, {CITRON}))
+        # Left out, it blocks nothing - and what one sale adds is still said,
+        # the lemon included.
+        self.assertEqual(blocked(offers, rooms, engine, ignored={CITRON}), {})
+        self.assertEqual(
+            first_sales(offers, rooms, engine, ignored={CITRON}),
+            {self.TI_PUNCH: ({RHUM: D(4), CITRON: D(1)}, set())},
+        )
+        # The rum is still a limit: only what is left out stops being one.
+        rooms[RHUM] = D("2")
+        self.assertEqual(blocked(offers, rooms, engine, ignored={CITRON}), {self.TI_PUNCH: {RHUM}})
+
+    def test_a_plan_goes_past_an_ignored_article_s_room_and_used_says_how_far(self):
+        offers, rooms, engine = self.ti_punch("2")
+        # The control: two lemon wedges to fill, two ti punches.
+        control = plan_sales(20 * 890, offers, rooms, engine)
+        self.assertEqual((control.counts, control.reason), ({self.TI_PUNCH: 2}, GAPS_FULL))
+        # The lemon left out: the rum's 40 cl is the only limit - ten.
+        plan = plan_sales(20 * 890, offers, rooms, engine, ignored={CITRON})
+        self.assertEqual(plan.counts, {self.TI_PUNCH: 10})
+        self.assertEqual((plan.total_cents, plan.remainder_cents, plan.reason), (10 * 890, 10 * 890, GAPS_FULL))
+        self.assertEqual(plan.used, {RHUM: D(40), CITRON: D(10)})
+        self.assertEqual(plan.poured, {self.TI_PUNCH: {RHUM: D(40), CITRON: D(10)}})
+        self.assertGreater(plan.used[CITRON], rooms[CITRON])
+        within_rooms_but(self, plan, rooms, {CITRON})
+
+    def test_the_run_neither_targets_nor_limits_an_ignored_article(self):
+        offers, rooms, engine = self.ti_punch("2")
+        run = _Run(offers, rooms, engine, ignored=[CITRON])
+        self.assertEqual(run.ignored, frozenset({CITRON}))
+        self.assertEqual(run.targets, {RHUM})
+        self.assertEqual(run.past({RHUM: D(4), CITRON: D(5)}), set())
+        self.assertEqual(run.past({RHUM: D(44), CITRON: D(5)}), {RHUM})
+        self.assertEqual(run.past_with({self.TI_PUNCH: 11})[1], {RHUM})
+        # Nothing left out: the lemon is a target and a limit like the rum.
+        counted = _Run(offers, rooms, engine)
+        self.assertEqual(counted.ignored, frozenset())
+        self.assertEqual(counted.targets, {RHUM, CITRON})
+        self.assertEqual(counted.past({RHUM: D(4), CITRON: D(5)}), {CITRON})
+        self.assertEqual(counted.past_with({self.TI_PUNCH: 11})[1], {RHUM, CITRON})
+
+    def test_an_ignored_article_neither_holds_a_sale_back_nor_drives_it(self):
+        # A ti punch and a gin tonic, priced and sold alike; the lemon has 3
+        # wedges to fill. Counted, the lemon - far behind the gin after one
+        # wedge - holds the ti punch back: six sales all go to the gin
+        # tonic. Left out, the rum and the gin are all there is, and the two
+        # take turns.
+        offers = [
+            fixed_offer(self.TI_PUNCH, 890, {RHUM: "4", CITRON: "1"}, sold=5, name="Ti punch exemple"),
+            fixed_offer(self.GIN_TONIC, 890, {GIN: "4"}, sold=5, name="Gin tonic exemple"),
+        ]
+        rooms = {RHUM: D("400"), GIN: D("400"), CITRON: D("3")}
+        engine = additive_engine(offers)
+        self.assertEqual(plan_sales(6 * 890, offers, rooms, engine).counts, {self.GIN_TONIC: 6})
+        plan = plan_sales(6 * 890, offers, rooms, engine, ignored={CITRON})
+        self.assertEqual(plan.counts, {self.GIN_TONIC: 3, self.TI_PUNCH: 3})
+        self.assertEqual(plan.used, {RHUM: D(12), GIN: D(12), CITRON: D(3)})
+        self.assertEqual(plan.reason, EXACT)
+
+    def test_leaving_an_article_out_plans_like_offers_that_never_poured_it(self):
+        rng = random.Random(20261003)
+        maker = NeverOverfillTests()
+        changed = past_its_room = 0
+        for case in range(40):
+            amount, offers, rooms, engine = maker.random_additive_case(rng)
+            article = rng.choice(sorted(rooms))
+            others = without(offers, article)
+            alone = plan_sales(amount, others, rooms, AdditiveEngine(others, engine.base))
+            plan = plan_sales(amount, offers, rooms, engine, ignored={article})
+            with self.subTest(case=case, amount=amount, article=article, rooms=rooms):
+                # The same sales, chosen in the same order, for the same reason.
+                self.assertEqual(list(plan.counts.items()), list(alone.counts.items()))
+                self.assertEqual(
+                    (plan.total_cents, plan.remainder_cents, plan.reason),
+                    (alone.total_cents, alone.remainder_cents, alone.reason),
+                )
+                # What they add to the article left out, and to the others.
+                pour = {offer.recipe_id: offer.fixed_pour().get(article, ZERO) for offer in offers}
+                added = sum((pour[recipe] * count for recipe, count in plan.counts.items()), start=ZERO)
+                self.assertEqual(plan.used.get(article, ZERO), added)
+                self.assertEqual({other: value for other, value in plan.used.items() if other != article}, alone.used)
+                within_rooms_but(self, plan, rooms, {article})
+            changed += plan.counts != plan_sales(amount, offers, rooms, engine).counts
+            past_its_room += plan.used.get(article, ZERO) > limit(rooms, article)
+        # The instances prove something: leaving an article out changed some
+        # plans, and some went past the room of what was left out.
+        self.assertGreater(changed, 0)
+        self.assertGreater(past_its_room, 0)
+
+    def test_measured_a_choice_the_engine_books_on_an_ignored_article_fills_no_gap(self):
+        # MeasuredEffectTests' trap with 2 cl of vodka left to fill. As the
+        # engine books them, a shot pours the vodka and a sunrise pushes a
+        # shot onto it: counted, the vodka blocks both.
+        trap = MeasuredEffectTests()
+        offers, rooms, engine = trap.trap(vodka_room="2")
+        self.assertEqual(blocked(offers, rooms, engine), {trap.SHOT: {trap.VODKA}, trap.SUNRISE: {trap.VODKA}})
+        control = plan_sales(20 * 630, offers, rooms, engine)
+        self.assertEqual(set(control.counts), {trap.TI_PUNCH, trap.GIN_TONIC})
+        # The vodka left out, neither is blocked. The sunrise fills the juice
+        # and is proposed; the shot - whose terms reach the tequila, which
+        # has room - pours only the vodka as the engine books it: never.
+        self.assertEqual(blocked(offers, rooms, engine, ignored={trap.VODKA}), {})
+        plan = plan_sales(20 * 630, offers, rooms, engine, ignored={trap.VODKA})
+        self.assertEqual(plan.reason, EXACT)
+        self.assertNotIn(trap.SHOT, plan.counts)
+        self.assertGreater(plan.counts.get(trap.SUNRISE, 0), 0)
+        self.assertEqual(plan.used[trap.VODKA], D(4) * plan.counts[trap.SUNRISE])
+        self.assertGreater(plan.used[trap.VODKA], rooms[trap.VODKA])
+        self.assertEqual(plan.used.get(trap.TEQUILA, ZERO), ZERO)
+        within_rooms_but(self, plan, rooms, {trap.VODKA})
+
+
+class IgnoredDeterminismTests(SimpleTestCase):
+    """Same input, same plan, with articles left out too - and nothing left
+    out is the plan it always was."""
+
+    def test_nothing_left_out_is_the_plan_it_always_was(self):
+        offers, rooms = DeterministicTests().instance()
+        trap_offers, trap_rooms, trap_engine = MeasuredEffectTests().trap()
+        revive = ReviveTests()
+        consumption, revive_rooms = revive.engine()
+        cases = [
+            (12345, offers, rooms, additive_engine(offers), None),
+            (15000, trap_offers, trap_rooms, trap_engine, None),
+            (20000, revive.offers(), revive_rooms, consumption, revive.UNIT_COSTS),
+        ]
+        for index, (amount, case_offers, case_rooms, engine, values) in enumerate(cases):
+            reference = plan_sales(amount, case_offers, case_rooms, engine, values)
+            first = first_sales(case_offers, case_rooms, engine)
+            for ignored in ((), [], set(), frozenset()):
+                with self.subTest(case=index, ignored=ignored):
+                    plan = plan_sales(amount, case_offers, case_rooms, engine, values, ignored=ignored)
+                    self.assertEqual(plan, reference)
+                    self.assertEqual(list(plan.counts.items()), list(reference.counts.items()))
+                    self.assertEqual(first_sales(case_offers, case_rooms, engine, ignored), first)
+
+    def test_leaving_out_an_article_no_offer_pours_changes_nothing(self):
+        offers, rooms = DeterministicTests().instance()
+        rooms = {**rooms, 99: D("5")}
+        reference = plan_sales(12345, offers, rooms, additive_engine(offers))
+        # In the rooms, or not even named there.
+        for ignored in ({99}, {98}):
+            with self.subTest(ignored=ignored):
+                self.assertEqual(plan_sales(12345, offers, rooms, additive_engine(offers), ignored=ignored), reference)
+
+    def test_any_collection_of_the_same_articles_is_the_same_plan(self):
+        offers, rooms = DeterministicTests().instance()
+        reference = plan_sales(12345, offers, rooms, additive_engine(offers), ignored=frozenset({CITRON, AMBREE}))
+        # The test proves something: leaving them out is another plan.
+        self.assertNotEqual(reference.counts, plan_sales(12345, offers, rooms, additive_engine(offers)).counts)
+        for ignored in ([CITRON, AMBREE], (AMBREE, CITRON), {CITRON, AMBREE}, [CITRON, AMBREE, CITRON]):
+            with self.subTest(ignored=ignored):
+                plan = plan_sales(12345, offers, rooms, additive_engine(offers), ignored=ignored)
+                self.assertEqual(plan, reference)
+                self.assertEqual(list(plan.counts.items()), list(reference.counts.items()))
+
+    def test_the_offers_order_does_not_matter(self):
+        offers, rooms = DeterministicTests().instance()
+        reference = plan_sales(12345, offers, rooms, additive_engine(offers), ignored={CITRON})
+        rng = random.Random(19)
+        orders = [offers[::-1]] + [rng.sample(offers, len(offers)) for _ in range(5)]
+        for index, order in enumerate(orders):
+            with self.subTest(order=index):
+                plan = plan_sales(12345, order, rooms, additive_engine(order), ignored={CITRON})
+                self.assertEqual(plan, reference)
+                self.assertEqual(list(plan.counts.items()), list(reference.counts.items()))
+
+    def test_nor_with_an_ou(self):
+        trap = MeasuredEffectTests()
+        offers, rooms, engine = trap.trap(vodka_room="2")
+        reference = plan_sales(20 * 630, offers, rooms, engine, ignored={trap.VODKA})
+        for index, order in enumerate([offers[::-1], offers[2:] + offers[:2]]):
+            with self.subTest(order=index):
+                self.assertEqual(plan_sales(20 * 630, order, rooms, engine, ignored={trap.VODKA}), reference)
+
+
+class IgnoredWithAListTests(SimpleTestCase):
+    """`ignored` with `already`: what a list's earlier sales poured into an
+    article left out is counted in `used` and holds nothing back."""
+
+    DEMI, TI_PUNCH, GIN_TONIC = 10, 50, 51
+
+    def test_a_list_that_took_an_ignored_article_past_its_room_holds_nothing_back(self):
+        offers = [fixed_offer(self.TI_PUNCH, 890, {RHUM: "4", CITRON: "1"}, sold=6, name="Ti punch exemple")]
+        rooms = {RHUM: D("40"), CITRON: D("2")}
+        engine = additive_engine(offers)
+        # The control: the list's five ti punches took five wedges of two.
+        control = plan_sales(3 * 890, offers, rooms, engine, already={self.TI_PUNCH: 5})
+        self.assertEqual((control.counts, control.reason), ({}, GAPS_FULL))
+        self.assertEqual(control.used, {RHUM: D(20), CITRON: D(5)})
+        plan = plan_sales(3 * 890, offers, rooms, engine, already={self.TI_PUNCH: 5}, ignored={CITRON})
+        self.assertEqual((plan.counts, plan.reason), ({self.TI_PUNCH: 3}, EXACT))
+        # The new sales, and the list as a whole.
+        self.assertEqual(plan.poured, {self.TI_PUNCH: {RHUM: D(12), CITRON: D(3)}})
+        self.assertEqual(plan.used, {RHUM: D(32), CITRON: D(8)})
+
+    def test_a_list_of_sales_filling_only_an_ignored_article_is_used_and_nothing_more(self):
+        offers = [fixed_offer(self.DEMI, HALF_PRICE, {BLONDE: "0.25"}, sold=20, name="Demi exemple")]
+        rooms = {BLONDE: D("30")}
+        engine = additive_engine(offers)
+        already = {self.DEMI: 4}
+        self.assertEqual(
+            plan_sales(0, offers, rooms, engine, already=already, ignored={BLONDE}),
+            Plan({}, 0, 0, EXACT, used={BLONDE: D("1")}),
+        )
+        self.assertEqual(
+            plan_sales(5000, offers, rooms, engine, already=already, ignored={BLONDE}),
+            Plan({}, 0, 5000, NOTHING_TO_FILL, used={BLONDE: D("1")}),
+        )
+
+    def test_amount_after_amount_ends_where_one_plan_of_the_sum_does(self):
+        offers = [
+            fixed_offer(self.TI_PUNCH, 890, {RHUM: "4", CITRON: "1"}, sold=5, name="Ti punch exemple"),
+            fixed_offer(self.GIN_TONIC, 890, {GIN: "4"}, sold=5, name="Gin tonic exemple"),
+        ]
+        rooms = {RHUM: D("40"), GIN: D("40"), CITRON: D("1")}
+        engine = additive_engine(offers)
+        whole = plan_sales(16 * 890, offers, rooms, engine, ignored={CITRON})
+        self.assertEqual((whole.counts, whole.reason), ({self.TI_PUNCH: 8, self.GIN_TONIC: 8}, EXACT))
+        self.assertEqual(whole.used, {RHUM: D(32), GIN: D(32), CITRON: D(8)})
+        for pieces in ([8, 8], [3, 5, 8], [1] * 16):
+            with self.subTest(pieces=pieces):
+                already: dict[int, int] = {}
+                plan = None
+                for sales in pieces:
+                    plan = plan_sales(sales * 890, offers, rooms, engine, already=already, ignored={CITRON})
+                    self.assertEqual(plan.reason, EXACT)
+                    self.assertEqual(sum(plan.counts.values()), sales)
+                    already = with_list(already, plan.counts)
+                    self.assertEqual(plan.used, engine_adds(engine, already))
+                    within_rooms_but(self, plan, rooms, {CITRON})
+                self.assertEqual(already, whole.counts)
+                assert plan is not None
+                self.assertEqual(plan.used, whole.used)
+
+
+class RecordingEngine(AdditiveEngine):
+    """An additive engine that keeps every count it was asked about, in
+    `asked` - so a test can say which recipes the planner measured."""
+
+    def __init__(self, offers, base=None):
+        super().__init__(offers, base)
+        self.asked: list[dict[int, int]] = []
+
+    def __call__(self, extra):
+        self.asked.append(dict(extra))
+        return super().__call__(extra)
+
+    def measured(self, recipe_id) -> bool:
+        """Whether a count of `recipe_id` was ever asked about."""
+        return any(extra.get(recipe_id) for extra in self.asked)
+
+
+class OfferReachingNoGapTests(SimpleTestCase):
+    """`plan_sales` works on the offers that reach a gap only (`run.offers =
+    live`). An offer pouring nothing but ignored articles is never proposed,
+    so its price is no way to make the rest of an amount: counted among the
+    prices, it made a rest look makeable that no proposed sale then made -
+    the ranking's first sale was kept, and the plan fell short with
+    NO_COMBINATION where one without that offer was exact. Nor is it ever
+    measured or revived: the targets never grow, it would never fill one.
+
+    « Pinte exemple » (A) at 7,10 € pours 1 of the blonde (room 100),
+    « Demi ambrée exemple » (C) at 5,10 € 1 of the amber (room 10), « Sirop
+    à l'eau exemple » (X) at 3,10 € the syrup alone (room 50), left out.
+    10,20 € is A + X, or C + C - and A ranks first, its gap the furthest
+    behind."""
+
+    A, C, X = 61, 62, 63
+    AMOUNT = 1020
+
+    def offers(self, independent=True) -> list[Offer]:
+        return [
+            fixed_offer(self.A, 710, {BLONDE: "1"}, sold=10, name="Pinte exemple", independent=independent),
+            fixed_offer(self.C, 510, {AMBREE: "1"}, sold=10, name="Demi ambrée exemple", independent=independent),
+            fixed_offer(self.X, 310, {SIROP: "1"}, sold=10, name="Sirop à l'eau exemple", independent=independent),
+        ]
+
+    def rooms(self, blonde="100", amber="10") -> dict[int, Decimal]:
+        return {BLONDE: D(blonde), AMBREE: D(amber), SIROP: D("50")}
+
+    def test_the_amount_is_two_halves_of_amber_exactly(self):
+        offers, rooms = self.offers(), self.rooms()
+        plan = plan_sales(self.AMOUNT, offers, rooms, additive_engine(offers), ignored={SIROP})
+        self.assertEqual(plan, Plan({self.C: 2}, 1020, 0, EXACT, used={AMBREE: D(2)}, poured={self.C: {AMBREE: D(2)}}))
+        # Exactly the plan of a menu that never had the syrup and water.
+        others = offers[:2]
+        self.assertEqual(plan_sales(self.AMOUNT, others, rooms, additive_engine(others)), plan)
+        # Not the ranking's doing: ranked alone, the pint comes first (the
+        # blonde's gap the furthest behind) - it is the price reckoning that
+        # turns it down, no proposed sale making the 3,10 € it would leave.
+        run = _Run(offers, rooms, additive_engine(offers), ignored={SIROP})
+        pint, half, syrup = offers
+        self.assertLess(run.rank(pint), run.rank(half))
+        self.assertIsNone(run.rank(syrup))
+
+    def test_the_syrup_counted_its_price_does_make_the_rest(self):
+        # The control: a gap of its own, the syrup and water is proposed, and
+        # then 10,20 € is the pint and it.
+        offers, rooms = self.offers(), self.rooms()
+        plan = plan_sales(self.AMOUNT, offers, rooms, additive_engine(offers))
+        self.assertEqual((plan.counts, plan.total_cents, plan.reason), ({self.A: 1, self.X: 1}, 1020, EXACT))
+
+    def test_other_amounts_plan_as_if_it_were_not_offered(self):
+        offers, rooms = self.offers(), self.rooms()
+        others = offers[:2]
+        # 8,20 € was the demi alone, short by the syrup's 3,10 € that nothing
+        # then proposed: now the pint, short by 1,10 € - no mix of 7,10 € and
+        # 5,10 € comes closer.
+        plan = plan_sales(820, offers, rooms, additive_engine(offers), ignored={SIROP})
+        self.assertEqual((plan.counts, plan.total_cents, plan.reason), ({self.A: 1}, 710, NO_COMBINATION))
+        # Under the cheapest offer that fills a gap: nothing, whatever its own
+        # price.
+        self.assertEqual(
+            plan_sales(310, offers, rooms, additive_engine(offers), ignored={SIROP}),
+            Plan({}, 0, 310, BELOW_CHEAPEST),
+        )
+        for amount in range(0, 6001, 30):
+            with self.subTest(amount=amount):
+                plan = plan_sales(amount, offers, rooms, additive_engine(offers), ignored={SIROP})
+                self.assertEqual(plan, plan_sales(amount, others, rooms, additive_engine(others)))
+                self.assertNotIn(self.X, plan.counts)
+
+    def test_it_is_never_measured_nor_revived(self):
+        """No offer is independent here, so every other one is measured and,
+        set aside, measured again by `_Run.revive` - the syrup and water,
+        never. Two pints and two demis fill the rooms; then revive runs."""
+        offers, rooms = self.offers(independent=False), self.rooms(blonde="2", amber="2")
+        seen: list[set[int]] = []
+        revive = _Run.revive
+
+        def spy(run):
+            seen.append({offer.recipe_id for offer in run.offers})
+            return revive(run)
+
+        engine = RecordingEngine(offers)
+        with mock.patch.object(_Run, "revive", spy):
+            plan = plan_sales(5000, offers, rooms, engine, ignored={SIROP})
+        self.assertEqual((plan.counts, plan.total_cents, plan.reason), ({self.A: 2, self.C: 2}, 2440, GAPS_FULL))
+        self.assertTrue(seen, "revive never ran: the test proves nothing")
+        self.assertTrue(all(self.X not in offered for offered in seen), seen)
+        self.assertTrue(engine.measured(self.A))
+        self.assertFalse(engine.measured(self.X), engine.asked)
+        others = offers[:2]
+        self.assertEqual(plan_sales(5000, others, rooms, additive_engine(others)), plan)
+        # The control: the syrup counted, the recorder sees it measured.
+        counted = RecordingEngine(offers)
+        plan_sales(5000, offers, rooms, counted)
+        self.assertTrue(counted.measured(self.X))
+
+    def test_a_list_s_earlier_sales_of_it_still_count_in_used(self):
+        """Two syrups and water proposed before the syrup was left out: they
+        stay the list's, and what they pour is said - nothing more is
+        proposed of it."""
+        offers, rooms = self.offers(independent=False), self.rooms()
+        plan = plan_sales(self.AMOUNT, offers, rooms, additive_engine(offers), already={self.X: 2}, ignored={SIROP})
+        self.assertEqual((plan.counts, plan.total_cents, plan.reason), ({self.C: 2}, 1020, EXACT))
+        self.assertEqual(plan.used, {SIROP: D(2), AMBREE: D(2)})
+        self.assertEqual(plan.poured, {self.C: {AMBREE: D(2)}})

@@ -3705,7 +3705,8 @@ imports (`transfer/legacy.py`).
   restore resetting it would let the next gather sign in), `SupplierChange`
   (its undo data holds pks), job history, `ai_suggestion` (the review panel
   fills it again when it is drawn), « Combler les écarts »' list
-  (`GapFillEntry`, a scratch list that goes with its stock take). Suppliers
+  (`GapFillEntry`, a scratch list that goes with its stock take) and its
+  exclusions (`GapExclusion`). Suppliers
   with a reader or a till of their own are never deleted by a clear or a
   replace; a clear only forgets what they learned.
 - **Nor the till's money and payments.** « Ventes » carries the quantities
@@ -4183,8 +4184,9 @@ measured again once the plan has moved on (`_Run.revive`): a fixed pour taking
 a bottle to its cap sends the next « au choix » onto another bottle with
 plenty - set aside for good, the plan stopped far short of the amount and
 said the gaps were full. The one promise: **nothing goes past max(0, room) as
-the engine counts it**, so what the page predicts is what the stock page
-shows once the sales are in.
+the engine counts it** - the articles left out aside, which have no room to
+keep to - so what the page predicts is what the stock page shows once the
+sales are in.
 
 **The ranking is Webster's divisor method, weighted by value.** An article's
 level is (added + half its usual serving) / room - the usual serving being
@@ -4246,6 +4248,43 @@ heads the page, with a warning when the till's sales stop before yesterday
 or before a delivery (the gaps still hold sales the till has not handed over:
 ringing the plan up before importing them would count them twice) and one
 when till buttons are linked to no recipe (what they sell reads as a gap).
+
+**Articles and categories left out** (the owner, 01/10/2026: « exclure des
+articles/catégories de produit de ces écarts, et que cela reste en
+mémoire »). `GapExclusion` (inventory 0019) holds, for the espace, either one
+article (`stock_type`, one-to-one, CASCADE) or one category name
+(`category`, unique; "" is the articles with none) - exactly one, a check
+constraint says so. A category left out covers every article filed under
+it, those classified into it later too: that is what excluding a category
+means, where ticking its articles one by one (the « Marges » pattern) would
+leave a newcomer counted. `gaps_since` marks every such article `excluded`
+and hands their ids to the planner as `ignored`: an ignored article is no
+target (nothing ranks a sale on it, `share_summary` leaves it out) and no
+limit (`_Run.past` skips it - a recipe it alone held back, a herb whose gap
+reads « vendu plus qu'acheté », is proposed again; one that fills only
+ignored articles fills no gap and is not). It leaves the gaps table, the
+unreached and outside-recipes lists; an empty table says « Tous les articles
+de ces écarts sont exclus. » rather than that no recipe uses one. « Exclus
+des écarts » (`#exclusions`, open while anything is excluded) lists each
+exclusion with « Réinclure » - a category with how many of the page's
+articles it covers, an article alone with « catégorie exclue aussi » when
+its category is left out too (taking it back alone then says it stays out).
+Each gap row has « Exclure » (`stock_gap_filler_exclude`, `article`, back to
+`#ecarts`); the section excludes a category of the report's articles
+(`categorie`: one some article carries, else refused); `stock_gap_filler_include`
+deletes one exclusion (`exclusion`). All POST, redirecting to the page; a
+GET goes to it. Their messages are said where the redirect lands - above the
+gaps table, or in the fold, opened for them (`views._messages_by_place`,
+the tags `ecarts` and `exclusions`, as Marges does): said at the top, two
+screens above, nobody saw « Catégorie introuvable ».
+
+The planner works on the offers that reach a gap only (`plan_sales`:
+`run.offers = live`): an offer pouring nothing but left-out articles kept
+its price among those the rest of the amount could be made of, and a plan
+fell short with « aucune combinaison » where one without it was exact. The engine still attributes the sales of an excluded
+article - only the planner looks away - so the stock page and « Écarts »
+are untouched, and so is a list already made: its entries keep what they
+proposed. Not exported by « Données », like the list.
 
 **What is typed.** `montant` goes through `common.read_number` for its size
 (« 20 000 000 000 » is too big, not unreadable) then `read_amount`. A space

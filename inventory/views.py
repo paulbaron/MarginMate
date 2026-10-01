@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation
 from itertools import groupby
 
 from django.contrib import messages
+from django.contrib.messages import get_messages
 from django.core import signing
 from django.db import transaction
 from django.db.models import ProtectedError
@@ -53,6 +54,7 @@ from .gaps import (
     show_list,
 )
 from .models import (
+    GapExclusion,
     GapFillEntry,
     MovementKind,
     Product,
@@ -1611,13 +1613,19 @@ def stock_gap_filler(request):
     shows the list, the last entry to ring up first. A count that cannot be
     read falls back to the latest, never a 500: it arrives from an address."""
     takes = list(StockTake.objects.order_by("-taken_at"))
+    said = _messages_by_place(request)
     context = {
+        "top_messages": said[""],
+        "gap_messages": said[GAPS_MESSAGES],
+        "exclusion_messages": said[EXCLUSION_MESSAGES],
         "takes": takes,
         "since_param": SINCE_PARAM,
         "amount_param": AMOUNT_PARAM,
         "last_shown_param": LAST_SHOWN_PARAM,
     }
     if not takes:
+        # No table and no fold to say them in: every message at the top.
+        context["top_messages"] = said[""] + said[GAPS_MESSAGES] + said[EXCLUSION_MESSAGES]
         return render(request, "inventory/stock_gap_filler.html", context)
 
     asked = request.GET.get(SINCE_PARAM, "")
@@ -1729,6 +1737,100 @@ def stock_gap_filler_clear(request):
     if deleted:
         messages.success(request, "Liste effacée.")
     return redirect(_gap_filler_url(take))
+
+
+#: The fields the exclusion forms post: an article, a category, an exclusion.
+EXCLUDED_ARTICLE_PARAM = "article"
+EXCLUDED_CATEGORY_PARAM = "categorie"
+EXCLUSION_PARAM = "exclusion"
+#: Where an exclusion's message is said: its redirect lands on the gaps table
+#: (an article's « Exclure ») or on « Exclus des écarts », screens under the
+#: top of the page - so the message is said there, as Marges does.
+GAPS_MESSAGES = "ecarts"
+EXCLUSION_MESSAGES = "exclusions"
+
+
+def _messages_by_place(request) -> dict[str, list]:
+    """{place: messages} - "" the top of the page, GAPS_MESSAGES above the
+    gaps, EXCLUSION_MESSAGES in « Exclus des écarts ». Read once, which also
+    marks them said."""
+    places: dict[str, list] = {"": [], GAPS_MESSAGES: [], EXCLUSION_MESSAGES: []}
+    for message in get_messages(request):
+        tags = (message.extra_tags or "").split()
+        place = next((tag for tag in (GAPS_MESSAGES, EXCLUSION_MESSAGES) if tag in tags), "")
+        places[place].append(message)
+    return places
+
+
+def _back_to_the_gaps(request, anchor: str):
+    """The page of the count the form came from, at `anchor`."""
+    take = _chosen_take(request.POST.get(SINCE_PARAM, ""), StockTake.objects.order_by("-taken_at"))
+    if take is None:
+        return redirect("inventory:stock_gap_filler")
+    return redirect(f"{_gap_filler_url(take)}#{anchor}")
+
+
+def _category_words(category: str) -> str:
+    return f"« {category} »" if category else "non renseignée"
+
+
+def stock_gap_filler_exclude(request):
+    """Leave an article (`article`, from its row) or a whole category
+    (`categorie`, a category some article carries) out of « Combler les
+    écarts », for the espace - see GapExclusion."""
+    if request.method != "POST":
+        return redirect("inventory:stock_gap_filler")
+    article = request.POST.get(EXCLUDED_ARTICLE_PARAM, "")
+    category = request.POST.get(EXCLUDED_CATEGORY_PARAM)
+    if article:
+        stock_type = StockType.objects.filter(pk=int(article)).first() if is_id(article) else None
+        if stock_type is None:
+            messages.error(request, "Article introuvable : rien n'a été exclu.", extra_tags=GAPS_MESSAGES)
+        else:
+            GapExclusion.objects.get_or_create(stock_type=stock_type)
+            messages.success(
+                request, f"« {stock_type.name} » ne compte plus dans les écarts.", extra_tags=GAPS_MESSAGES
+            )
+        return _back_to_the_gaps(request, "ecarts")
+    if category is not None and StockType.objects.filter(category=category).exists():
+        GapExclusion.objects.get_or_create(category=category)
+        messages.success(
+            request, f"Catégorie {_category_words(category)} exclue des écarts.", extra_tags=EXCLUSION_MESSAGES
+        )
+    else:
+        messages.error(request, "Catégorie introuvable : rien n'a été exclu.", extra_tags=EXCLUSION_MESSAGES)
+    return _back_to_the_gaps(request, "exclusions")
+
+
+def stock_gap_filler_include(request):
+    """Take an exclusion back (`exclusion`, its id): the category, or the
+    article, counts in the gaps again - unless the article's category is
+    left out too, which the message then says."""
+    if request.method != "POST":
+        return redirect("inventory:stock_gap_filler")
+    asked = request.POST.get(EXCLUSION_PARAM, "")
+    exclusion = (
+        GapExclusion.objects.select_related("stock_type").filter(pk=int(asked)).first() if is_id(asked) else None
+    )
+    if exclusion is None:
+        messages.warning(request, "Cette exclusion n'existe plus : rien n'a changé.", extra_tags=EXCLUSION_MESSAGES)
+        return _back_to_the_gaps(request, "exclusions")
+    still_covered = (
+        exclusion.stock_type_id is not None
+        and GapExclusion.objects.filter(category=exclusion.stock_type.category).exists()
+    )
+    if exclusion.stock_type_id is None:
+        said = f"La catégorie {_category_words(exclusion.category)} compte de nouveau dans les écarts."
+    elif still_covered:
+        said = (
+            f"« {exclusion.stock_type.name} » reste exclu : "
+            f"sa catégorie {_category_words(exclusion.stock_type.category)} l'est aussi."
+        )
+    else:
+        said = f"« {exclusion.stock_type.name} » compte de nouveau dans les écarts."
+    exclusion.delete()
+    (messages.warning if still_covered else messages.success)(request, said, extra_tags=EXCLUSION_MESSAGES)
+    return _back_to_the_gaps(request, "exclusions")
 
 
 class StockTakeListView(ListView):

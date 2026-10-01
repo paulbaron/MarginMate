@@ -1443,6 +1443,8 @@ tr.is-new > td:first-child { box-shadow: inset 3px 0 0 var(--amber); }
 .row-actions > * { vertical-align: middle; }
 .row-actions > * + * { margin-left: var(--s1); }
 .row-actions form { display: inline; }
+/* « Exclus des écarts »: each exclusion with its « Réinclure » on its line. */
+.exclusion-list form { display: inline; margin-left: var(--s2); }
 .sub-table-wrap { overflow-x: auto; }
 
 /* A charge item is a row under its supplier's, and sorting keeps the two

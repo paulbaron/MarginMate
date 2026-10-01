@@ -19,6 +19,16 @@ tab left open, posts a list that has moved since and is refused - checked
 again inside the transaction that writes, so another click committing while
 this one plans is caught too.
 
+Articles and categories are left out of the gaps (the owner, 01/10/2026:
+« exclure des articles/catégories de produit de ces écarts, et que cela
+reste en mémoire quand on réouvre la page »): « Exclure » on a gap's row,
+« Exclure la catégorie » in « Exclus des écarts » (#exclusions), and
+« Réinclure » on each line there - POSTs to `stock_gap_filler_exclude` and
+`stock_gap_filler_include`, kept for the espace (GapExclusion), whatever
+count's page they were posted from. Their messages are said where the
+redirect lands - under « Écarts », or in the fold, opened for them - and at
+the top only when there is no count to show either.
+
 The view reads today (`gaps_since(take)` ends today), so the data here is
 dated relative to `timezone.localdate()`.
 
@@ -39,7 +49,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from inventory.gaps import gaps_since
-from inventory.models import GapFillEntry, MovementKind, StockTake, StockType, UnitChoices
+from inventory.models import GapExclusion, GapFillEntry, MovementKind, StockTake, StockType, UnitChoices
 from margins.tests.test_page import cells_of, row_of, rows_of, stat_of, text_of, value_of
 from recipes.models import PosProduct, PosProductDailyQuantity, Recipe, RecipeSale
 from recipes.sales import record_sales
@@ -58,7 +68,11 @@ PAGE = "inventory:stock_gap_filler"
 ADD = "inventory:stock_gap_filler_add"
 UNDO = "inventory:stock_gap_filler_undo"
 CLEAR = "inventory:stock_gap_filler_clear"
+EXCLUDE = "inventory:stock_gap_filler_exclude"
+INCLUDE = "inventory:stock_gap_filler_include"
 GAPS_TABLE = "écarts"
+#: The last cell of every gaps row, as it reads: its « Exclure » button.
+EXCLUDE_BUTTON = "Exclure"
 PLAN_TABLE = "recettes à encaisser"
 EARLIER_TABLE = "montants déjà saisis"
 ENTERED = "Saisi (TTC)"
@@ -364,8 +378,11 @@ class OnePintBarTests(PageTestCase):
         self.assertNotIn(PROPOSED, html)
         self.assertEqual(heading_of(html), "")
         self.assertEqual(table_of(html, PLAN_TABLE), "")
-        # The gaps are still there, without the list's two columns.
-        self.assertEqual(len(self.gaps_row(html)), 9)
+        # The gaps are still there, without the list's two columns: the
+        # value, then the row's « Exclure ».
+        row = self.gaps_row(html)
+        self.assertEqual(len(row), 10)
+        self.assertEqual(row[-2:], [f"1{NBSP}000.00 €", EXCLUDE_BUTTON])
 
     # -- no list -----------------------------------------------------------
 
@@ -373,7 +390,7 @@ class OnePintBarTests(PageTestCase):
         html = self.html()
         self.assertEqual(
             self.gaps_row(html),
-            ["Blonde exemple litre", "100", "200", "0", "20", "280", "30", "250", f"1{NBSP}000.00 €"],
+            ["Blonde exemple litre", "100", "200", "0", "20", "280", "30", "250", f"1{NBSP}000.00 €", EXCLUDE_BUTTON],
         )
         self.assertNotIn(PROPOSED, html)
         self.assertNotIn(ENTERED, html)
@@ -467,7 +484,20 @@ class OnePintBarTests(PageTestCase):
         self.assertEqual(note_of(shares), "en moyenne, de 2.4 % à 2.4 % selon l'article")
         self.assertEqual(
             self.gaps_row(html),
-            ["Blonde exemple litre", "100", "200", "0", "20", "280", "30", "250", f"1{NBSP}000.00 €", "6", "2.4 %"],
+            [
+                "Blonde exemple litre",
+                "100",
+                "200",
+                "0",
+                "20",
+                "280",
+                "30",
+                "250",
+                f"1{NBSP}000.00 €",
+                "6",
+                "2.4 %",
+                EXCLUDE_BUTTON,
+            ],
         )
 
     def test_a_second_amount_adds_to_the_figures_of_the_whole_list(self):
@@ -478,7 +508,7 @@ class OnePintBarTests(PageTestCase):
         self.assertEqual(value_of(stat_of(html, PROPOSED)), "840.00 €")
         self.assertEqual(value_of(stat_of(html, SALES)), "24")
         self.assertEqual(value_of(stat_of(html, SHARES)), "4.8 %")  # 12 L of 250
-        self.assertEqual(self.gaps_row(html)[-2:], ["12", "4.8 %"])
+        self.assertEqual(self.gaps_row(html)[-3:], ["12", "4.8 %", EXCLUDE_BUTTON])
         # The second entry holds its own twelve pints, not twenty-four.
         self.assertEqual(
             self.plan_row(html),
@@ -947,8 +977,8 @@ class WhatCannotBeFilledTests(PageTestCase):
             self.assertEqual(row_of(table_of(html, PLAN_TABLE), name), "", name)
         # The blocked articles add nothing: « — » in the list's columns.
         table = table_of(html, GAPS_TABLE)
-        self.assertEqual(cells_of(row_of(table, "Sirop exemple"))[-2:], ["—", "—"])
-        self.assertEqual(cells_of(row_of(table, "Blonde exemple"))[-2:-1], ["1.50"])
+        self.assertEqual(cells_of(row_of(table, "Sirop exemple"))[-3:], ["—", "—", EXCLUDE_BUTTON])
+        self.assertEqual(cells_of(row_of(table, "Blonde exemple"))[-3:-2], ["1.50"])
 
 
 class BlockedByLessThanOneServingTests(PageTestCase):
@@ -1505,7 +1535,7 @@ class SecondaryTargetTests(PageTestCase):
         self.assertEqual(value_of(shares), "8.6 %")
         self.assertEqual(note_of(shares), "en moyenne, de 8.6 % à 8.6 % selon l'article")
         row = cells_of(row_of(table_of(html, GAPS_TABLE), "Rhum blanc exemple"))
-        self.assertEqual(row[-2:], ["—", "0.0 %"])
+        self.assertEqual(row[-3:], ["—", "0.0 %", EXCLUDE_BUTTON])
 
 
 class AmountAfterAmountTests(PageTestCase):
@@ -1557,8 +1587,8 @@ class AmountAfterAmountTests(PageTestCase):
         self.assertEqual([line["name"] for line in second.lines], ["Pinte blonde exemple"])
         # And the gaps show what both add, not the last alone.
         rows = self.gaps_rows(html)
-        self.assertEqual(rows["Ambrée exemple"][-2:], ["0.50", "0.2 %"])
-        self.assertEqual(rows["Blonde exemple"][-2:], ["0.50", "0.2 %"])
+        self.assertEqual(rows["Ambrée exemple"][-3:], ["0.50", "0.2 %", EXCLUDE_BUTTON])
+        self.assertEqual(rows["Blonde exemple"][-3:], ["0.50", "0.2 %", EXCLUDE_BUTTON])
         self.assertEqual(value_of(stat_of(html, SALES)), "2")
         # 35 € alone, on a list cleared, is the amber pint again.
         GapFillEntry.objects.filter(stock_take=self.take).delete()
@@ -1574,16 +1604,17 @@ class AmountAfterAmountTests(PageTestCase):
         self.assertEqual([entry.sales for entry in entries_of(self.take)], [2, 2])
         self.assertEqual(value_of(stat_of(html, SALES)), "4")
         rows = self.gaps_rows(html)
-        self.assertEqual(rows["Ambrée exemple"][-2], "1")
-        self.assertEqual(rows["Blonde exemple"][-2], "1")
+        self.assertEqual(rows["Ambrée exemple"][-3], "1")
+        self.assertEqual(rows["Blonde exemple"][-3], "1")
 
     def test_the_list_columns_only_with_a_list(self):
+        # Nine figures and the row's « Exclure »; with a list, eleven.
         html = self.html(depuis=str(self.take.pk))
-        self.assertEqual(len(self.gaps_rows(html)["Blonde exemple"]), 9)
+        self.assertEqual(len(self.gaps_rows(html)["Blonde exemple"]), 10)
         html = self.add("35")
-        self.assertEqual(len(self.gaps_rows(html)["Blonde exemple"]), 11)
+        self.assertEqual(len(self.gaps_rows(html)["Blonde exemple"]), 12)
         # The blonde has no pint yet: nothing proposed, 0 % filled.
-        self.assertEqual(self.gaps_rows(html)["Blonde exemple"][-2:], ["—", "0.0 %"])
+        self.assertEqual(self.gaps_rows(html)["Blonde exemple"][-3:], ["—", "0.0 %", EXCLUDE_BUTTON])
 
     def test_the_earlier_entries_newest_first(self):
         for amount in ("35", "70"):
@@ -1646,14 +1677,14 @@ class AmountAfterAmountTests(PageTestCase):
         self.assertEqual(amounts_of(self.older), [Decimal("35.00")])
         self.assertEqual(heading_of(html), "À encaisser : 35.00 €")
         self.assertEqual(table_of(html, EARLIER_TABLE), "")
-        self.assertEqual(self.gaps_rows(html)["Ambrée exemple"][-2], "0.50")
-        self.assertEqual(self.gaps_rows(html)["Blonde exemple"][-2], "—")
+        self.assertEqual(self.gaps_rows(html)["Ambrée exemple"][-3], "0.50")
+        self.assertEqual(self.gaps_rows(html)["Blonde exemple"][-3], "—")
         # The last one too: the page is back to the gaps alone.
         html = self.post(UNDO, depuis=self.take.pk).content.decode()
         self.assertEqual(notices_of(html, "success"), [UNDONE])
         self.assertEqual(entries_of(self.take), [])
         self.assertNotIn(PROPOSED, html)
-        self.assertEqual(len(self.gaps_rows(html)["Blonde exemple"]), 9)
+        self.assertEqual(len(self.gaps_rows(html)["Blonde exemple"]), 10)
         # Nothing left to undo: nothing said, the other count's list intact.
         html = self.post(UNDO, depuis=self.take.pk).content.decode()
         self.assertEqual(notices_of(html, "success"), [])
@@ -1673,7 +1704,7 @@ class AmountAfterAmountTests(PageTestCase):
         self.assertEqual(heading_of(html), "")
         self.assertEqual(form_of(html, UNDO), "")
         self.assertEqual(form_of(html, CLEAR), "")
-        self.assertEqual(len(self.gaps_rows(html)["Blonde exemple"]), 9)
+        self.assertEqual(len(self.gaps_rows(html)["Blonde exemple"]), 10)
         # The other count still shows its own.
         self.assertEqual(heading_of(self.html(depuis=str(self.older.pk))), "À encaisser : 35.00 €")
         # An empty list: nothing to clear, nothing said.
@@ -2249,7 +2280,8 @@ class StoredTillPriceNoteTests(PageTestCase):
         self.assertEqual(value_of(stat_of(html, SALES)), "1")
         self.assertEqual(value_of(stat_of(html, PROPOSED)), "33.70 €")
         # The gaps show the one line kept: one pint, 0,5 L.
-        self.assertEqual(cells_of(row_of(table_of(html, GAPS_TABLE), "Blonde exemple"))[-2], "0.50")
+        row = cells_of(row_of(table_of(html, GAPS_TABLE), "Blonde exemple"))
+        self.assertEqual((row[-3], row[-1]), ("0.50", EXCLUDE_BUTTON))
 
     def test_a_price_of_ten_billion_or_more_is_left_out_without_breaking_the_page(self):
         # « 12345678901 € » printed as a price no column holds. Bounded like a
@@ -2363,3 +2395,1342 @@ class StaleListTests(PageTestCase):
                 self.assertFalse(self.stale())
                 self.imported(2, 6)
                 self.assertTrue(self.stale())
+
+
+# -- articles and categories left out (the owner, 01/10/2026) ----------------
+
+#: What each exclusion route says, by outcome.
+ARTICLE_EXCLUDED = "« {} » ne compte plus dans les écarts."
+ARTICLE_BACK = "« {} » compte de nouveau dans les écarts."
+CATEGORY_EXCLUDED = "Catégorie « {} » exclue des écarts."
+BLANK_EXCLUDED = "Catégorie non renseignée exclue des écarts."
+CATEGORY_BACK = "La catégorie « {} » compte de nouveau dans les écarts."
+BLANK_BACK = "La catégorie non renseignée compte de nouveau dans les écarts."
+ARTICLE_NOT_FOUND = "Article introuvable : rien n'a été exclu."
+CATEGORY_NOT_FOUND = "Catégorie introuvable : rien n'a été exclu."
+EXCLUSION_GONE = "Cette exclusion n'existe plus : rien n'a changé."
+#: « Réinclure » on an article whose category is left out too: its own
+#: exclusion goes, and it stays out.
+STILL_OUT = "« {} » reste exclu : sa catégorie « {} » l'est aussi."
+STILL_OUT_BLANK = "« {} » reste exclu : sa catégorie non renseignée l'est aussi."
+#: What the fold's line of such an article adds after its category.
+CATEGORY_OUT_TOO = " · catégorie exclue aussi"
+#: The fold's sentence while nothing is left out.
+NOTHING_EXCLUDED = "Rien d'exclu : tous les articles comptent."
+#: The fold's one sentence of help, above the category form.
+EXCLUSION_HELP = "Une catégorie exclue vaut aussi pour les articles classés plus tard."
+#: What an empty gaps table says: every gap it would hold left out, or none
+#: at all to hold.
+ALL_LEFT_OUT = "Tous les articles de ces écarts sont exclus."
+NO_RECIPE_USES_ONE = "Aucune recette vendue depuis cet inventaire n'utilise un article compté ou acheté."
+#: « Comment c'est calculé », on the promise the planner keeps.
+NEVER_PAST_A_GAP = (
+    "Chaque vente proposée est comptée comme la page Produits la comptera : "
+    "aucune ne fait dépasser un écart, hors articles exclus."
+)
+#: How the fold names the articles with no category.
+BLANK_CATEGORY = "Catégorie non renseignée"
+#: What every line of the fold ends on, as it reads.
+INCLUDE_BUTTON = "Réinclure"
+
+
+def said_in(fragment: str) -> list[tuple[str, str]]:
+    """(level, words) of every message (an <li class="message ...">) in
+    `fragment`, in the order drawn - unescaped, as a reader reads it."""
+    return [
+        (level, unescape(text_of(words)))
+        for level, words in re.findall(r'<li class="message message-([a-z]+)">(.*?)</li>', fragment, flags=re.DOTALL)
+    ]
+
+
+def said_at_the_top(html: str) -> list[tuple[str, str]]:
+    """The messages drawn above the page's header - the page's own block,
+    where base.html says every other page's."""
+    start = html.find("<main")
+    end = html.find('<div class="page-header">')
+    return said_in(html[start:end]) if 0 <= start < end else []
+
+
+def said_under_the_gaps(html: str) -> list[tuple[str, str]]:
+    """The messages drawn right under the « Écarts » heading, nothing between
+    the two - where an article's « Exclure » lands (#ecarts)."""
+    found = re.search(r'<h2 id="ecarts">Écarts</h2>\s*(<ul class="messages">.*?</ul>)', html, flags=re.DOTALL)
+    return said_in(found.group(1)) if found else []
+
+
+def said_in_the_fold(html: str) -> list[tuple[str, str]]:
+    """The messages drawn first thing in « Exclus des écarts », under its
+    summary - where a category and every « Réinclure » land (#exclusions)."""
+    found = re.search(
+        r'<details class="explainer" id="exclusions"[^>]*>\s*<summary>[^<]*</summary>\s*(<ul class="messages">.*?</ul>)',
+        html,
+        flags=re.DOTALL,
+    )
+    return said_in(found.group(1)) if found else []
+
+
+def gap_sentences(html: str) -> list[str]:
+    """What the page says in sentences under « Écarts », up to the fold of
+    what is left out - where an empty table says why it is empty."""
+    start = html.find('<h2 id="ecarts">')
+    end = html.find('<details class="explainer" id="exclusions"')
+    return [unescape(sentence) for sentence in sentences_of(html[start:end])] if 0 <= start < end else []
+
+
+def worked_out_of(html: str) -> list[str]:
+    """« Comment c'est calculé », each bullet as it reads."""
+    found = re.search(
+        r"<details class=\"explainer\">\s*<summary>Comment c'est calculé</summary>(.*?)</details>",
+        html,
+        flags=re.DOTALL,
+    )
+    if not found:
+        return []
+    return [unescape(text_of(item)) for item in re.findall(r"<li>(.*?)</li>", found.group(1), flags=re.DOTALL)]
+
+
+def exclusions_of(html: str) -> str:
+    """The « Exclus des écarts » fold (#exclusions), or ""."""
+    found = re.search(r'<details class="explainer" id="exclusions"[^>]*>.*?</details>', html, flags=re.DOTALL)
+    return found.group(0) if found else ""
+
+
+def exclusions_open(html: str) -> bool | None:
+    """Whether the fold is drawn open; None when there is no fold."""
+    found = re.search(r'<details class="explainer" id="exclusions"( open)?>', html)
+    return bool(found.group(1)) if found else None
+
+
+def exclusions_summary_of(html: str) -> str:
+    found = re.search(r"<summary>(.*?)</summary>", exclusions_of(html), flags=re.DOTALL)
+    return text_of(found.group(1)) if found else ""
+
+
+def excluded_lines(html: str) -> list[str]:
+    """Each line of the fold's list as it reads, its « Réinclure » last -
+    unescaped, as a reader reads it."""
+    found = re.search(r'<ul class="exclusion-list">(.*?)</ul>', exclusions_of(html), flags=re.DOTALL)
+    if not found:
+        return []
+    return [unescape(text_of(item)) for item in re.findall(r"<li>(.*?)</li>", found.group(1), flags=re.DOTALL)]
+
+
+def include_form_of(html: str, words: str) -> str:
+    """The « Réinclure » form on the fold's line reading `words`, or ""."""
+    for item in re.findall(r"<li>(.*?)</li>", exclusions_of(html), flags=re.DOTALL):
+        if words in unescape(text_of(item)):
+            return form_of(item, INCLUDE)
+    return ""
+
+
+def category_form_of(html: str) -> str:
+    """The fold's « Exclure la catégorie » form, or ""."""
+    return form_of(exclusions_of(html), EXCLUDE)
+
+
+def category_choices(html: str) -> list[tuple[str, str]]:
+    """(value posted, what it reads) of every category the fold offers,
+    both unescaped as the browser reads them."""
+    return [
+        (unescape(value), unescape(text_of(words)))
+        for value, words in re.findall(
+            r'<option value="([^"]*)">(.*?)</option>', category_form_of(html), flags=re.DOTALL
+        )
+    ]
+
+
+def exclude_form_of(html: str, name: str) -> str:
+    """The « Exclure » form on the gaps row of `name`, or ""."""
+    return form_of(row_of(table_of(html, GAPS_TABLE), name), EXCLUDE)
+
+
+def hidden_fields(form: str) -> dict[str, str]:
+    """What a form posts of itself: its hidden fields, as the browser sends
+    them."""
+    return {
+        name: unescape(value)
+        for name, value in re.findall(r'<input type="hidden" name="([^"]+)" value="([^"]*)">', form)
+    }
+
+
+def gap_names(html: str) -> list[str]:
+    """The gaps table's rows by their first cell, as they read."""
+    return [cells_of(row)[0] for row in body_rows(table_of(html, GAPS_TABLE))]
+
+
+def filed(name: str, category: str):
+    """An article in litres, filed under `category` ("" for none)."""
+    return make_stock_type(name=name, unit=UnitChoices.LITRE, category=category)
+
+
+def fixed_recipe(name: str, price, *pours):
+    """A recipe whose every ingredient is fixed: one group each,
+    `pours` being (article, amount) pairs."""
+    made = make_recipe(name=name, selling_price_ttc=price)
+    for group, (stock_type, amount) in enumerate(pours):
+        make_ingredient(made, stock_type=stock_type, quantity=amount, group=group)
+    return made
+
+
+class ExclusionTestCase(PageTestCase):
+    """The page's exclusion forms as a browser posts them: every action
+    answered with one redirect, then the page it lands on."""
+
+    def exclude(self, take=None, **data):
+        """« Exclure » (an article) or « Exclure la catégorie » posted from
+        the page of `take` (the class's own by default)."""
+        return self.post(EXCLUDE, depuis=(take or self.take).pk, **data)
+
+    def include(self, exclusion, take=None):
+        """« Réinclure » posted for `exclusion` (a GapExclusion, or what the
+        form's field holds) from the page of `take`."""
+        posted = exclusion.pk if isinstance(exclusion, GapExclusion) else exclusion
+        return self.post(INCLUDE, depuis=(take or self.take).pk, exclusion=posted)
+
+    def send(self, form: str):
+        """`form` sent as drawn: its hidden fields, CSRF token included."""
+        action = re.search(r'action="([^"]*)"', form)
+        self.assertIsNotNone(action, form)
+        response = self.client.post(action.group(1) if action else "", hidden_fields(form), follow=True)
+        self.assertEqual([status for _url, status in response.redirect_chain], [302])
+        return response
+
+    def page_at(self, anchor: str, take=None) -> str:
+        return f"{self.page_of(take or self.take)}#{anchor}"
+
+
+class ExcludeAnArticleTests(ExclusionTestCase):
+    """« Exclure » on a gap's row: the article leaves the gaps for the whole
+    espace - every count's page, every later visit - until « Réinclure ».
+
+    Since the latest count (20 days ago): a blonde (« Bières exemple »)
+    with 250 L to fill, worth 1 000,00 € HT; an amber of the same category,
+    268 L, 1 072,00 € HT; a cider filed nowhere, 85 L, never bought so of no
+    value. Pints at 35,00 €, a bowl at 32,00 €, all sold yesterday. An older
+    count (40 days ago) has the blonde too."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.today = timezone.localdate()
+        sale_day = cls.today - timedelta(days=1)
+        cls.older = make_stock_take(taken_at=noon(cls.today - timedelta(days=40)))
+        cls.take = make_stock_take(taken_at=noon(cls.today - timedelta(days=20)))
+        cls.blonde = filed("Blonde exemple", "Bières exemple")
+        cls.amber = filed("Ambrée exemple", "Bières exemple")
+        cls.cider = filed("Cidre exemple", "")
+        counted(cls.older, cls.blonde, "50")
+        counted(cls.take, cls.blonde, "100")
+        counted(cls.take, cls.amber, "120")
+        counted(cls.take, cls.cider, "100")
+        for keg in (cls.blonde, cls.amber):
+            bought(keg, "200", cls.today - timedelta(days=10))
+        cls.blonde_pint = recipe("Pinte blonde exemple", "35.00", cls.blonde, "0.5")
+        cls.amber_pint = recipe("Pinte ambrée exemple", "35.00", cls.amber, "0.5")
+        cls.bowl = recipe("Bolée exemple", "32.00", cls.cider, "0.5")
+        for pint in (cls.blonde_pint, cls.amber_pint):
+            RecipeSale.objects.create(recipe=pint, sold_on=sale_day, quantity=40)
+        RecipeSale.objects.create(recipe=cls.bowl, sold_on=sale_day, quantity=10)
+
+    ALL = ["Ambrée exemple litre", "Blonde exemple litre", "Cidre exemple litre"]
+
+    # -- the forms -----------------------------------------------------------
+
+    def test_every_row_ends_on_its_own_exclude_form(self):
+        html = self.html()
+        self.assertEqual(gap_names(html), self.ALL)
+        for stock_type in (self.amber, self.blonde, self.cider):
+            with self.subTest(article=stock_type.name):
+                form = exclude_form_of(html, stock_type.name)
+                fields = hidden_fields(form)
+                self.assertEqual(fields["depuis"], str(self.take.pk))
+                self.assertEqual(fields["article"], str(stock_type.pk))
+                self.assertTrue(fields["csrfmiddlewaretoken"])
+                self.assertEqual(set(fields), {"csrfmiddlewaretoken", "depuis", "article"})
+                self.assertIn(">Exclure</button>", form)
+                self.assertEqual(cells_of(row_of(table_of(html, GAPS_TABLE), stock_type.name))[-1], EXCLUDE_BUTTON)
+        # Nothing left out yet: the fold is shut and says so.
+        self.assertIs(exclusions_open(html), False)
+        self.assertEqual(exclusions_summary_of(html), "Exclus des écarts")
+        self.assertEqual(excluded_lines(html), [])
+        self.assertIn(NOTHING_EXCLUDED, unescape(text_of(exclusions_of(html))))
+
+    def test_exclure_sends_its_row_and_lands_on_the_gaps(self):
+        """The row's form as a browser sends it - its token checked - lands
+        on the gaps with its message, the row gone and named in the fold."""
+        client = TenantClient(enforce_csrf_checks=True)
+        page = client.get(reverse(PAGE), {"depuis": self.take.pk}).content.decode()
+        form = exclude_form_of(page, "Blonde exemple")
+        # Without its token: refused, nothing excluded.
+        refused = client.post(reverse(EXCLUDE), {"depuis": self.take.pk, "article": self.blonde.pk})
+        self.assertEqual(refused.status_code, 403)
+        self.assertFalse(GapExclusion.objects.exists())
+        response = client.post(reverse(EXCLUDE), hidden_fields(form))
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], self.page_at("ecarts"))
+        html = client.get(reverse(PAGE), {"depuis": self.take.pk}).content.decode()
+        self.assertEqual(notices_of(html, "success"), [ARTICLE_EXCLUDED.format("Blonde exemple")])
+        self.assertEqual(gap_names(html), ["Ambrée exemple litre", "Cidre exemple litre"])
+        self.assertEqual(row_of(table_of(html, GAPS_TABLE), "Blonde exemple"), "")
+        self.assertEqual(excluded_lines(html), [f"Blonde exemple Bières exemple {INCLUDE_BUTTON}"])
+        self.assertEqual(exclusions_summary_of(html), "Exclus des écarts · 1 article")
+        self.assertIs(exclusions_open(html), True)
+        self.assertEqual(list(GapExclusion.objects.values_list("stock_type", "category")), [(self.blonde.pk, None)])
+
+    def test_the_line_s_form_carries_its_exclusion_and_its_token(self):
+        self.exclude(article=self.blonde.pk)
+        exclusion = GapExclusion.objects.get()
+        client = TenantClient(enforce_csrf_checks=True)
+        page = client.get(reverse(PAGE), {"depuis": self.take.pk}).content.decode()
+        fields = hidden_fields(include_form_of(page, "Blonde exemple"))
+        self.assertEqual(set(fields), {"csrfmiddlewaretoken", "depuis", "exclusion"})
+        self.assertEqual((fields["depuis"], fields["exclusion"]), (str(self.take.pk), str(exclusion.pk)))
+        # Without its token: refused, the exclusion kept.
+        refused = client.post(reverse(INCLUDE), {"depuis": self.take.pk, "exclusion": exclusion.pk})
+        self.assertEqual(refused.status_code, 403)
+        self.assertEqual(list(GapExclusion.objects.all()), [exclusion])
+        response = client.post(reverse(INCLUDE), fields)
+        self.assertEqual((response.status_code, response["Location"]), (302, self.page_at("exclusions")))
+        self.assertFalse(GapExclusion.objects.exists())
+
+    def test_the_category_form_carries_its_token(self):
+        client = TenantClient(enforce_csrf_checks=True)
+        page = client.get(reverse(PAGE), {"depuis": self.take.pk}).content.decode()
+        refused = client.post(reverse(EXCLUDE), {"depuis": self.take.pk, "categorie": "Bières exemple"})
+        self.assertEqual(refused.status_code, 403)
+        self.assertFalse(GapExclusion.objects.exists())
+        fields = {**hidden_fields(category_form_of(page)), "categorie": "Bières exemple"}
+        response = client.post(reverse(EXCLUDE), fields)
+        self.assertEqual((response.status_code, response["Location"]), (302, self.page_at("exclusions")))
+        self.assertEqual(GapExclusion.objects.get().category, "Bières exemple")
+
+    # -- it stays ----------------------------------------------------------
+
+    def test_it_stays_excluded_on_a_fresh_page(self):
+        self.exclude(article=self.blonde.pk)
+        for params in ({}, {"depuis": str(self.take.pk)}):
+            with self.subTest(params=params):
+                html = self.html(**params)
+                self.assertEqual(gap_names(html), ["Ambrée exemple litre", "Cidre exemple litre"])
+                self.assertEqual(excluded_lines(html), [f"Blonde exemple Bières exemple {INCLUDE_BUTTON}"])
+                # Said once, where it was done: a fresh page has no message.
+                self.assertEqual(notices_of(html, "success"), [])
+
+    def test_it_is_the_espace_s_not_the_count_s(self):
+        """Left out from the latest count's page, the blonde is out of the
+        older count's too, its line there taking it back from that page;
+        and the other way round."""
+        older = self.html(depuis=str(self.older.pk))
+        self.assertIn("Blonde exemple litre", gap_names(older))
+        self.exclude(article=self.blonde.pk)
+        older = self.html(depuis=str(self.older.pk))
+        self.assertNotIn("Blonde exemple litre", gap_names(older))
+        # The amber and the cider were not counted then: their rows say so.
+        self.assertEqual(
+            gap_names(older), ["Ambrée exemple litre non compté", "Cidre exemple litre non compté vendu plus qu'acheté"]
+        )
+        self.assertEqual(excluded_lines(older), [f"Blonde exemple Bières exemple {INCLUDE_BUTTON}"])
+        self.assertEqual(hidden_fields(include_form_of(older, "Blonde exemple"))["depuis"], str(self.older.pk))
+        # Left out from the older count's page: out of the latest's too.
+        response = self.exclude(take=self.older, article=self.amber.pk)
+        self.assertEqual(self.landing(response), self.page_at("ecarts", self.older))
+        self.assertEqual(gap_names(response.content.decode()), ["Cidre exemple litre non compté vendu plus qu'acheté"])
+        self.assertEqual(gap_names(self.html()), ["Cidre exemple litre"])
+
+    def test_a_double_click_keeps_one_exclusion(self):
+        for _click in range(2):
+            html = self.exclude(article=self.blonde.pk).content.decode()
+            self.assertEqual(notices_of(html, "success"), [ARTICLE_EXCLUDED.format("Blonde exemple")])
+        self.assertEqual(GapExclusion.objects.count(), 1)
+        self.assertEqual(excluded_lines(html), [f"Blonde exemple Bières exemple {INCLUDE_BUTTON}"])
+
+    def test_a_count_the_form_no_longer_names_only_changes_where_it_lands(self):
+        """The exclusion is the espace's: posted for a count deleted since,
+        it is made all the same, and the page is the latest count's."""
+        for asked in ("abc", "999999", ""):
+            with self.subTest(depuis=asked):
+                GapExclusion.objects.all().delete()
+                response = self.post(EXCLUDE, depuis=asked, article=self.blonde.pk)
+                self.assertEqual(self.landing(response), reverse(PAGE))
+                html = response.content.decode()
+                self.assertEqual(notices_of(html, "success"), [ARTICLE_EXCLUDED.format("Blonde exemple")])
+                self.assertEqual(selected_take(html), str(self.take.pk))
+                self.assertNotIn("Blonde exemple litre", gap_names(html))
+
+    def test_an_article_of_no_gap_is_listed_and_goes_with_its_article(self):
+        """Any article may be left out - the form names one of the page's
+        rows, but the espace's exclusions are listed on every page, this
+        report's articles or not. Deleted, it takes its exclusion with it."""
+        glass = make_stock_type(name="Verre exemple", unit=UnitChoices.UNIT, category="Vaisselle exemple")
+        html = self.exclude(article=glass.pk).content.decode()
+        self.assertEqual(notices_of(html, "success"), [ARTICLE_EXCLUDED.format("Verre exemple")])
+        self.assertEqual(gap_names(html), self.ALL)
+        self.assertEqual(excluded_lines(html), [f"Verre exemple Vaisselle exemple {INCLUDE_BUTTON}"])
+        glass.delete()
+        self.assertFalse(GapExclusion.objects.exists())
+        html = self.html()
+        self.assertEqual(excluded_lines(html), [])
+        self.assertIs(exclusions_open(html), False)
+
+    # -- « Réinclure » -------------------------------------------------------
+
+    def test_reinclure_brings_it_back(self):
+        self.exclude(article=self.blonde.pk)
+        response = self.send(include_form_of(self.html(), "Blonde exemple"))
+        html = response.content.decode()
+        self.assertEqual(self.landing(response), self.page_at("exclusions"))
+        self.assertEqual(notices_of(html, "success"), [ARTICLE_BACK.format("Blonde exemple")])
+        self.assertEqual(gap_names(html), self.ALL)
+        self.assertEqual(hidden_fields(exclude_form_of(html, "Blonde exemple"))["article"], str(self.blonde.pk))
+        self.assertEqual(excluded_lines(html), [])
+        self.assertIn(NOTHING_EXCLUDED, unescape(text_of(exclusions_of(html))))
+        self.assertFalse(GapExclusion.objects.exists())
+        # Nothing is left out, but the fold is drawn open for its message,
+        # said inside it; a fresh page has it shut again.
+        self.assertIs(exclusions_open(html), True)
+        self.assertEqual(said_in_the_fold(html), [("success", ARTICLE_BACK.format("Blonde exemple"))])
+        self.assertIs(exclusions_open(self.html()), False)
+
+    def test_an_exclusion_taken_back_twice(self):
+        """« Réinclure » clicked twice, or from a tab left open: the second
+        finds nothing to take back, says so, and the other exclusions stay."""
+        self.exclude(article=self.blonde.pk)
+        self.exclude(article=self.cider.pk)
+        form = include_form_of(self.html(), "Blonde exemple")
+        self.assertEqual(
+            notices_of(self.send(form).content.decode(), "success"), [ARTICLE_BACK.format("Blonde exemple")]
+        )
+        response = self.send(form)
+        html = response.content.decode()
+        self.assertEqual(self.landing(response), self.page_at("exclusions"))
+        self.assertEqual(notices_of(html, "warning"), [EXCLUSION_GONE])
+        self.assertEqual(notices_of(html, "success"), [])
+        self.assertEqual(excluded_lines(html), [f"Cidre exemple {INCLUDE_BUTTON}"])
+        self.assertEqual(gap_names(html), ["Ambrée exemple litre", "Blonde exemple litre"])
+
+    def test_an_exclusion_that_cannot_be_read_changes_nothing(self):
+        self.exclude(article=self.blonde.pk)
+        kept = list(GapExclusion.objects.values_list("pk", flat=True))
+        unknown = str(max(kept) + 1000)
+        for asked in ("abc", "²", "-1", "1.5", "", " ", "9" * 30, unknown):
+            with self.subTest(exclusion=asked):
+                response = self.include(asked)
+                html = response.content.decode()
+                self.assertEqual(self.landing(response), self.page_at("exclusions"))
+                self.assertEqual(notices_of(html, "warning"), [EXCLUSION_GONE])
+                self.assertEqual(notices_of(html, "success"), [])
+                self.assertEqual(list(GapExclusion.objects.values_list("pk", flat=True)), kept)
+                self.assertNotIn("Blonde exemple litre", gap_names(html))
+        # Not sent at all: the same.
+        html = self.post(INCLUDE, depuis=self.take.pk).content.decode()
+        self.assertEqual(notices_of(html, "warning"), [EXCLUSION_GONE])
+        self.assertEqual(list(GapExclusion.objects.values_list("pk", flat=True)), kept)
+
+    # -- what is refused -----------------------------------------------------
+
+    def test_an_article_that_cannot_be_found_is_not_excluded(self):
+        unknown = str(max(StockType.objects.values_list("pk", flat=True)) + 1000)
+        for asked in ("abc", "²", "-1", "1.5", " ", "0", "9" * 30, unknown):
+            with self.subTest(article=asked):
+                response = self.exclude(article=asked)
+                html = response.content.decode()
+                self.assertEqual(self.landing(response), self.page_at("ecarts"))
+                self.assertEqual(notices_of(html, "error"), [ARTICLE_NOT_FOUND])
+                self.assertEqual(notices_of(html, "success"), [])
+                self.assertFalse(GapExclusion.objects.exists())
+                self.assertEqual(gap_names(html), self.ALL)
+
+    def test_neither_an_article_nor_a_category_is_not_excluded(self):
+        for data in ({}, {"article": ""}):
+            with self.subTest(data=data):
+                response = self.exclude(**data)
+                self.assertEqual(self.landing(response), self.page_at("exclusions"))
+                self.assertEqual(notices_of(response.content.decode(), "error"), [CATEGORY_NOT_FOUND])
+                self.assertFalse(GapExclusion.objects.exists())
+
+    def test_a_get_changes_nothing(self):
+        self.exclude(article=self.cider.pk)
+        exclusion = GapExclusion.objects.get()
+        for name, query in (
+            (EXCLUDE, {"depuis": self.take.pk, "article": self.blonde.pk}),
+            (EXCLUDE, {"depuis": self.take.pk, "categorie": "Bières exemple"}),
+            (INCLUDE, {"depuis": self.take.pk, "exclusion": exclusion.pk}),
+        ):
+            with self.subTest(action=name, query=query):
+                response = self.client.get(reverse(name), query)
+                self.assertEqual(response.status_code, 302)
+                self.assertEqual(response["Location"], reverse(PAGE))
+                self.assertEqual(list(GapExclusion.objects.all()), [exclusion])
+
+    # -- the fold ------------------------------------------------------------
+
+    def test_the_fold_is_open_only_while_something_is_left_out(self):
+        self.assertIs(exclusions_open(self.html()), False)
+        self.exclude(article=self.blonde.pk)
+        self.assertIs(exclusions_open(self.html()), True)
+        self.include(GapExclusion.objects.get())
+        self.assertIs(exclusions_open(self.html()), False)
+        self.exclude(categorie="")
+        self.assertIs(exclusions_open(self.html()), True)
+        self.include(GapExclusion.objects.get())
+        self.assertIs(exclusions_open(self.html()), False)
+
+    def test_the_fold_s_help_is_one_sentence(self):
+        """Above the category form, one sentence - the one thing a category
+        does that ticking its articles would not."""
+        self.assertEqual(sentences_of(exclusions_of(self.html())), [EXCLUSION_HELP, NOTHING_EXCLUDED])
+        html = self.exclude(article=self.blonde.pk).content.decode()
+        self.assertEqual(sentences_of(exclusions_of(html)), [EXCLUSION_HELP])
+        self.assertEqual(sentences_of(exclusions_of(self.html())), [EXCLUSION_HELP])
+
+    def test_how_it_is_worked_out_keeps_every_gap_but_the_ones_left_out(self):
+        """« Comment c'est calculé »: no proposed sale goes past a gap - the
+        articles left out aside, which have none to keep to. Said whether
+        anything is left out or not."""
+        ending = "aucune ne fait dépasser un écart, hors articles exclus."
+        for html in (self.html(), self.exclude(article=self.blonde.pk).content.decode()):
+            bullets = worked_out_of(html)
+            self.assertEqual(len(bullets), 6)
+            self.assertEqual(bullets[2], NEVER_PAST_A_GAP)
+            self.assertEqual([bullet for bullet in bullets if bullet.endswith(ending)], [NEVER_PAST_A_GAP])
+
+    # -- the list ------------------------------------------------------------
+
+    def test_a_list_already_made_keeps_what_it_proposed(self):
+        """An entry may have been rung up: leaving an article out rewrites
+        none of it. The next amount fills the gaps left - the blonde's pint
+        is no longer one of them."""
+        html = self.add("70")
+        before = self.plan_rows(html)
+        self.assertIn("Pinte blonde exemple", [row[0] for row in before])
+        (entry,) = entries_of(self.take)
+        lines = entry.lines
+        html = self.exclude(article=self.blonde.pk).content.decode()
+        self.assertEqual(self.plan_rows(html), before)
+        self.assertEqual(GapFillEntry.objects.get(pk=entry.pk).lines, lines)
+        self.assertEqual(value_of(stat_of(html, PROPOSED)), "70.00 €")
+        self.assertEqual(gap_names(html), ["Ambrée exemple litre", "Cidre exemple litre"])
+        html = self.add("70")
+        self.assertNotIn("Pinte blonde exemple", [row[0] for row in self.plan_rows(html)])
+        self.assertEqual(value_of(stat_of(html, ENTERED)), "140.00 €")
+
+    def plan_rows(self, html) -> list[list[str]]:
+        return [cells_of(row) for row in body_rows(table_of(html, PLAN_TABLE))]
+
+
+class ExcludeACategoryTests(ExclusionTestCase):
+    """« Exclure la catégorie »: every article filed under it leaves the
+    gaps - those filed there later too - and the fold names the category,
+    how many of the page's articles it covers, and « Réinclure ».
+
+    Since the latest count: a blonde and an amber (« Bières exemple »), a
+    cider filed nowhere, a red (« Vins exemple »), all poured by a recipe
+    sold since; a port (« Vins exemple ») whose glass has not sold since,
+    1,8 L to fill at 10,00 € HT; a tablecloth (« Matériel exemple ») bought
+    and in no recipe."""
+
+    @classmethod
+    def setUpTestData(cls):
+        today = timezone.localdate()
+        sale_day = today - timedelta(days=1)
+        cls.take = make_stock_take(taken_at=noon(today - timedelta(days=20)))
+        cls.blonde = filed("Blonde exemple", "Bières exemple")
+        cls.amber = filed("Ambrée exemple", "Bières exemple")
+        cls.cider = filed("Cidre exemple", "")
+        cls.red = filed("Rouge exemple", "Vins exemple")
+        cls.port = filed("Porto exemple", "Vins exemple")
+        for stock_type, quantity in ((cls.blonde, "100"), (cls.amber, "120"), (cls.cider, "100"), (cls.red, "30")):
+            counted(cls.take, stock_type, quantity)
+        bought(cls.port, "1", today - timedelta(days=30), unit_cost="10.00")
+        counted(cls.take, cls.port, "2")
+        for made, sold in (
+            (recipe("Pinte blonde exemple", "35.00", cls.blonde, "0.5"), 40),
+            (recipe("Pinte ambrée exemple", "35.00", cls.amber, "0.5"), 40),
+            (recipe("Bolée exemple", "32.00", cls.cider, "0.5"), 10),
+            (recipe("Verre de rouge exemple", "33.00", cls.red, "0.15"), 20),
+        ):
+            RecipeSale.objects.create(recipe=made, sold_on=sale_day, quantity=sold)
+        recipe("Verre de porto exemple", "34.00", cls.port, "0.06")  # not sold since
+        cls.cloth = make_stock_type(name="Nappe exemple", unit=UnitChoices.UNIT, category="Matériel exemple")
+        bought(cls.cloth, "10", today - timedelta(days=10), unit_cost="2.00")
+
+    ALL = ["Ambrée exemple litre", "Blonde exemple litre", "Cidre exemple litre", "Rouge exemple litre"]
+    OFFERED = [
+        ("Bières exemple", "Bières exemple (2)"),
+        ("Matériel exemple", "Matériel exemple (1)"),
+        ("Vins exemple", "Vins exemple (2)"),
+        ("", f"{BLANK_CATEGORY} (1)"),
+    ]
+
+    def test_the_fold_offers_every_category_of_the_page_s_articles(self):
+        html = self.html()
+        self.assertEqual(sorted(gap_names(html)), self.ALL)
+        # The blank one last, under the words the fold names it by.
+        self.assertEqual(category_choices(html), self.OFFERED)
+        form = category_form_of(html)
+        fields = hidden_fields(form)
+        self.assertEqual(set(fields), {"csrfmiddlewaretoken", "depuis"})
+        self.assertEqual(fields["depuis"], str(self.take.pk))
+        self.assertIn('<select name="categorie">', form)
+        self.assertIn(">Exclure la catégorie</button>", form)
+
+    def test_excluding_a_category(self):
+        response = self.exclude(categorie="Bières exemple")
+        html = response.content.decode()
+        self.assertEqual(self.landing(response), self.page_at("exclusions"))
+        self.assertEqual(notices_of(html, "success"), [CATEGORY_EXCLUDED.format("Bières exemple")])
+        self.assertEqual(sorted(gap_names(html)), ["Cidre exemple litre", "Rouge exemple litre"])
+        self.assertEqual(category_choices(html), [choice for choice in self.OFFERED if choice[0] != "Bières exemple"])
+        self.assertEqual(excluded_lines(html), [f"Catégorie « Bières exemple » · 2 articles {INCLUDE_BUTTON}"])
+        self.assertEqual(exclusions_summary_of(html), "Exclus des écarts · 1 catégorie")
+        self.assertIs(exclusions_open(html), True)
+        self.assertEqual(list(GapExclusion.objects.values_list("stock_type", "category")), [(None, "Bières exemple")])
+        # It stays: a fresh page says the same, and no message.
+        html = self.html()
+        self.assertEqual(sorted(gap_names(html)), ["Cidre exemple litre", "Rouge exemple litre"])
+        self.assertEqual(excluded_lines(html), [f"Catégorie « Bières exemple » · 2 articles {INCLUDE_BUTTON}"])
+        self.assertEqual(notices_of(html, "success"), [])
+
+    def test_the_category_picked_from_the_select_is_the_one_excluded(self):
+        """What the select offers is what the view takes, the blank
+        category included: each posted as the browser would."""
+        for value, words in self.OFFERED:
+            with self.subTest(categorie=value):
+                GapExclusion.objects.all().delete()
+                form = category_form_of(self.html())
+                response = self.client.post(reverse(EXCLUDE), {**hidden_fields(form), "categorie": value}, follow=True)
+                self.assertEqual(GapExclusion.objects.get().category, value)
+                self.assertNotIn((value, words), category_choices(response.content.decode()))
+
+    def test_an_article_filed_there_afterwards_is_out_too(self):
+        """Reclassified into the category, the cider leaves the gaps; so does
+        a brown beer filed there after the category was left out."""
+        self.exclude(categorie="Bières exemple")
+        StockType.objects.filter(pk=self.cider.pk).update(category="Bières exemple")
+        html = self.html()
+        self.assertEqual(gap_names(html), ["Rouge exemple litre"])
+        self.assertEqual(excluded_lines(html), [f"Catégorie « Bières exemple » · 3 articles {INCLUDE_BUTTON}"])
+        # No article left without a category: the blank one is no longer offered.
+        self.assertNotIn("", [value for value, _words in category_choices(html)])
+        brown = filed("Brune exemple", "Bières exemple")
+        counted(self.take, brown, "50")
+        RecipeSale.objects.create(
+            recipe=recipe("Pinte brune exemple", "35.00", brown, "0.5"),
+            sold_on=timezone.localdate() - timedelta(days=1),
+            quantity=10,
+        )
+        html = self.html()
+        self.assertEqual(gap_names(html), ["Rouge exemple litre"])
+        self.assertEqual(excluded_lines(html), [f"Catégorie « Bières exemple » · 4 articles {INCLUDE_BUTTON}"])
+        # Taken out of the category, the cider counts again.
+        StockType.objects.filter(pk=self.cider.pk).update(category="Cidres exemple")
+        self.assertEqual(gap_names(self.html()), ["Cidre exemple litre", "Rouge exemple litre"])
+
+    def test_the_blank_category(self):
+        response = self.exclude(categorie="")
+        html = response.content.decode()
+        self.assertEqual(notices_of(html, "success"), [BLANK_EXCLUDED])
+        self.assertEqual(self.landing(response), self.page_at("exclusions"))
+        self.assertNotIn("Cidre exemple litre", gap_names(html))
+        self.assertEqual(excluded_lines(html), [f"{BLANK_CATEGORY} · 1 article {INCLUDE_BUTTON}"])
+        self.assertEqual(category_choices(html), self.OFFERED[:-1])
+        self.assertEqual(list(GapExclusion.objects.values_list("stock_type", "category")), [(None, "")])
+        response = self.send(include_form_of(html, BLANK_CATEGORY))
+        html = response.content.decode()
+        self.assertEqual(notices_of(html, "success"), [BLANK_BACK])
+        self.assertIn("Cidre exemple litre", gap_names(html))
+        self.assertEqual(category_choices(html), self.OFFERED)
+
+    def test_reinclure_a_category(self):
+        self.exclude(categorie="Bières exemple")
+        response = self.send(include_form_of(self.html(), "Bières exemple"))
+        html = response.content.decode()
+        self.assertEqual(self.landing(response), self.page_at("exclusions"))
+        self.assertEqual(notices_of(html, "success"), [CATEGORY_BACK.format("Bières exemple")])
+        self.assertEqual(sorted(gap_names(html)), self.ALL)
+        self.assertEqual(category_choices(html), self.OFFERED)
+        self.assertEqual(excluded_lines(html), [])
+        # Open for its message alone, which it holds; shut on a fresh page.
+        self.assertIs(exclusions_open(html), True)
+        self.assertEqual(said_in_the_fold(html), [("success", CATEGORY_BACK.format("Bières exemple"))])
+        self.assertIs(exclusions_open(self.html()), False)
+
+    def test_a_category_no_article_carries_is_not_excluded(self):
+        """The gaps compare a category exactly: a name no article carries -
+        another case, a space more - would leave out nothing, and is
+        refused rather than listed as if it did."""
+        for asked in (
+            "Inconnue exemple",
+            "bières exemple",
+            "BIÈRES EXEMPLE",
+            " Bières exemple",
+            "Bières exemple ",
+            "\x00",
+        ):
+            with self.subTest(categorie=asked):
+                response = self.exclude(categorie=asked)
+                html = response.content.decode()
+                self.assertEqual(self.landing(response), self.page_at("exclusions"))
+                self.assertEqual(notices_of(html, "error"), [CATEGORY_NOT_FOUND])
+                self.assertEqual(notices_of(html, "success"), [])
+                self.assertFalse(GapExclusion.objects.exists())
+                self.assertEqual(category_choices(html), self.OFFERED)
+
+    def test_an_article_left_out_alone_and_with_its_category(self):
+        """Both listed - the categories first, the article's line saying its
+        category is out too - and taking the category back leaves the
+        article out still: it was left out on its own, and its line no
+        longer says so."""
+        self.exclude(article=self.blonde.pk)
+        html = self.exclude(categorie="Bières exemple").content.decode()
+        self.assertEqual(
+            excluded_lines(html),
+            [
+                f"Catégorie « Bières exemple » · 2 articles {INCLUDE_BUTTON}",
+                f"Blonde exemple Bières exemple{CATEGORY_OUT_TOO} {INCLUDE_BUTTON}",
+            ],
+        )
+        self.assertEqual(exclusions_summary_of(html), "Exclus des écarts · 1 catégorie · 1 article")
+        html = self.send(include_form_of(html, "Catégorie « Bières exemple »")).content.decode()
+        self.assertEqual(
+            sorted(gap_names(html)), ["Ambrée exemple litre", "Cidre exemple litre", "Rouge exemple litre"]
+        )
+        self.assertEqual(excluded_lines(html), [f"Blonde exemple Bières exemple {INCLUDE_BUTTON}"])
+
+    def test_reinclure_on_an_article_whose_category_is_out_too_keeps_it_out(self):
+        """Its own exclusion goes, and the page warns that it stays out - its
+        category is - rather than saying it counts again; it does once the
+        category is taken back."""
+        self.exclude(article=self.blonde.pk)
+        html = self.exclude(categorie="Bières exemple").content.decode()
+        response = self.send(include_form_of(html, "Blonde exemple"))
+        html = response.content.decode()
+        self.assertEqual(self.landing(response), self.page_at("exclusions"))
+        warned = STILL_OUT.format("Blonde exemple", "Bières exemple")
+        self.assertEqual(said_in_the_fold(html), [("warning", warned)])
+        self.assertEqual(said_in(html), [("warning", warned)])
+        self.assertEqual(list(GapExclusion.objects.values_list("stock_type", "category")), [(None, "Bières exemple")])
+        self.assertEqual(sorted(gap_names(html)), ["Cidre exemple litre", "Rouge exemple litre"])
+        self.assertEqual(excluded_lines(html), [f"Catégorie « Bières exemple » · 2 articles {INCLUDE_BUTTON}"])
+        # The category taken back, the blonde counts again: nothing of its own
+        # exclusion was left to keep it out.
+        html = self.send(include_form_of(html, "Catégorie « Bières exemple »")).content.decode()
+        self.assertEqual(said_in(html), [("success", CATEGORY_BACK.format("Bières exemple"))])
+        self.assertEqual(sorted(gap_names(html)), self.ALL)
+        self.assertFalse(GapExclusion.objects.exists())
+
+    def test_only_the_article_whose_category_is_out_is_marked(self):
+        """The red, alone, its « Vins exemple » counted; the blonde, its
+        « Bières exemple » out too."""
+        self.exclude(article=self.red.pk)
+        self.exclude(article=self.blonde.pk)
+        html = self.exclude(categorie="Bières exemple").content.decode()
+        self.assertEqual(
+            excluded_lines(html),
+            [
+                f"Catégorie « Bières exemple » · 2 articles {INCLUDE_BUTTON}",
+                f"Blonde exemple Bières exemple{CATEGORY_OUT_TOO} {INCLUDE_BUTTON}",
+                f"Rouge exemple Vins exemple {INCLUDE_BUTTON}",
+            ],
+        )
+        # « Réinclure » on the red brings it back, said as such.
+        html = self.send(include_form_of(html, "Rouge exemple")).content.decode()
+        self.assertEqual(said_in_the_fold(html), [("success", ARTICLE_BACK.format("Rouge exemple"))])
+        self.assertIn("Rouge exemple litre", gap_names(html))
+
+    def test_the_blank_category_keeps_its_article_out_too(self):
+        self.exclude(article=self.cider.pk)
+        html = self.exclude(categorie="").content.decode()
+        html = self.send(include_form_of(html, "Cidre exemple")).content.decode()
+        self.assertEqual(said_in_the_fold(html), [("warning", STILL_OUT_BLANK.format("Cidre exemple"))])
+        self.assertEqual(list(GapExclusion.objects.values_list("stock_type", "category")), [(None, "")])
+        self.assertNotIn("Cidre exemple litre", gap_names(html))
+        self.assertEqual(excluded_lines(html), [f"{BLANK_CATEGORY} · 1 article {INCLUDE_BUTTON}"])
+
+    def test_the_line_of_an_article_with_no_category_says_the_blank_one_is_out_too(self):
+        # An article with no category, left out alone while « Catégorie non
+        # renseignée » is out too, is covered, and its « Réinclure » warns
+        # that it stays out. Its line once said nothing of it: the mark was
+        # drawn inside `{% if exclusion.stock_type.category %}`, which a blank
+        # category skips - a line promising nothing, answered by a warning.
+        self.exclude(article=self.cider.pk)
+        html = self.exclude(categorie="").content.decode()
+        (line,) = [line for line in excluded_lines(html) if line.startswith("Cidre exemple")]
+        self.assertIn(CATEGORY_OUT_TOO.strip(" ·"), line)
+
+    def test_two_categories_and_two_articles_counted_in_the_summary(self):
+        self.exclude(categorie="Bières exemple")
+        self.exclude(categorie="")
+        self.exclude(article=self.red.pk)
+        html = self.exclude(article=self.cloth.pk).content.decode()
+        self.assertEqual(exclusions_summary_of(html), "Exclus des écarts · 2 catégories · 2 articles")
+        # The categories first, the blank one last of them; then the articles
+        # by name.
+        self.assertEqual(
+            excluded_lines(html),
+            [
+                f"Catégorie « Bières exemple » · 2 articles {INCLUDE_BUTTON}",
+                f"{BLANK_CATEGORY} · 1 article {INCLUDE_BUTTON}",
+                f"Nappe exemple Matériel exemple {INCLUDE_BUTTON}",
+                f"Rouge exemple Vins exemple {INCLUDE_BUTTON}",
+            ],
+        )
+
+    def test_what_cannot_be_filled_leaves_out_what_is_left_out(self):
+        """The port no proposed recipe pours and the tablecloth no recipe
+        pours at all are no gap left behind once their category is out: the
+        fold says only what still is."""
+        html = self.html()
+        self.assertEqual(summary_of(html), "Ce qui ne peut pas être comblé · 1 article sans recette proposée")
+        self.assertEqual(
+            sentences_of(explainer_of(html)),
+            [
+                "Pas vendue depuis l'inventaire, donc pas proposée : Verre de porto exemple",
+                "Aucune recette proposée ne l'utilise (18.00 € HT à combler) : Porto exemple",
+                OUTSIDE_ONE,
+            ],
+        )
+        self.exclude(categorie="Matériel exemple")
+        html = self.exclude(categorie="Vins exemple").content.decode()
+        self.assertEqual(summary_of(html), "Ce qui ne peut pas être comblé")
+        # The recipe not sold since is still not proposed: that is about the
+        # recipe, not the article.
+        self.assertEqual(
+            sentences_of(explainer_of(html)),
+            ["Pas vendue depuis l'inventaire, donc pas proposée : Verre de porto exemple"],
+        )
+        self.assertNotIn("Rouge exemple litre", gap_names(html))
+
+
+class ExcludedBlockerTests(ExclusionTestCase):
+    """A recipe held back by an article alone: once that article is left out
+    it is no longer blocked, and proposed - when it fills something else.
+
+    A syrup counted at 0,1 L and sold far past it (0,9 L: « vendu plus
+    qu'acheté »). A diabolo at 31,00 € pours 2 cl of it and 25 cl of a
+    lemonade with 82,5 L to fill; a syrup and water at 30,50 € pours the
+    syrup alone. Both sold since."""
+
+    @classmethod
+    def setUpTestData(cls):
+        today = timezone.localdate()
+        sale_day = today - timedelta(days=1)
+        cls.take = make_stock_take(taken_at=noon(today - timedelta(days=20)))
+        cls.syrup = filed("Sirop exemple", "Sirops exemple")
+        cls.lemonade = filed("Limonade exemple", "Softs exemple")
+        counted(cls.take, cls.syrup, "0.1")
+        counted(cls.take, cls.lemonade, "100")
+        diabolo = fixed_recipe("Diabolo exemple", "31.00", (cls.syrup, "0.02"), (cls.lemonade, "0.25"))
+        water = fixed_recipe("Sirop à l'eau exemple", "30.50", (cls.syrup, "0.03"))
+        RecipeSale.objects.create(recipe=diabolo, sold_on=sale_day, quantity=30)
+        RecipeSale.objects.create(recipe=water, sold_on=sale_day, quantity=10)
+
+    def blocked_items(self, html) -> list[str]:
+        return [unescape(text_of(item)) for item in re.findall(r"<li>(.*?)</li>", explainer_of(html), flags=re.DOTALL)]
+
+    def test_held_back_by_the_syrup(self):
+        html = self.html()
+        self.assertEqual(
+            summary_of(html), "Ce qui ne peut pas être comblé · 2 recettes bloquées · 1 article sans recette proposée"
+        )
+        self.assertEqual(
+            self.blocked_items(html),
+            [
+                "Diabolo exemple — Sirop exemple (vendu plus qu'acheté)",
+                "Sirop à l'eau exemple — Sirop exemple (vendu plus qu'acheté)",
+            ],
+        )
+        self.assertEqual(gap_names(html), ["Sirop exemple litre vendu plus qu'acheté"])
+        self.assertEqual(notices_of(self.add("31"), "warning"), [f"Rien pour 31.00 € : {GAPS_FULL}."])
+        self.assertEqual(entries_of(self.take), [])
+
+    def test_the_syrup_left_out_the_diabolo_is_proposed(self):
+        response = self.send(exclude_form_of(self.html(), "Sirop exemple"))
+        html = response.content.decode()
+        self.assertEqual(self.landing(response), self.page_at("ecarts"))
+        # Nothing blocked, nothing left unreached: the fold is gone.
+        self.assertEqual(explainer_of(html), "")
+        self.assertEqual(summary_of(html), "")
+        # The lemonade the diabolo was held back from is a gap to fill now.
+        self.assertEqual(
+            cells_of(row_of(table_of(html, GAPS_TABLE), "Limonade exemple")),
+            ["Limonade exemple litre", "100", "0", "0", "7.50", "92.50", "10", "82.50", "—", EXCLUDE_BUTTON],
+        )
+        self.assertEqual(gap_names(html), ["Limonade exemple litre"])
+        html = self.add("31")
+        self.assertEqual(
+            [cells_of(row) for row in body_rows(table_of(html, PLAN_TABLE))],
+            [["Diabolo exemple", "Diabolo exemple", "1", "31.00 €", "31.00 €", "Limonade exemple"]],
+        )
+        self.assertEqual(note_of(stat_of(html, PROPOSED)), EXACT)
+
+    def test_a_recipe_pouring_only_what_is_left_out_fills_no_gap(self):
+        """The syrup and water is no longer blocked, and still not proposed:
+        all it would fill is left out. Under the diabolo's price, nothing."""
+        self.exclude(article=self.syrup.pk)
+        html = self.add("30.50")
+        self.assertEqual(notices_of(html, "warning"), [f"Rien pour 30.50 € : {BELOW_CHEAPEST}."])
+        html = self.add("61")
+        self.assertEqual(
+            [cells_of(row)[:3] for row in body_rows(table_of(html, PLAN_TABLE))],
+            [["Diabolo exemple", "Diabolo exemple", "1"]],
+        )
+        self.assertEqual(note_of(stat_of(html, PROPOSED)), "30.00 € non proposés")
+
+    def test_taken_back_it_holds_the_diabolo_back_again(self):
+        self.exclude(article=self.syrup.pk)
+        self.include(GapExclusion.objects.get())
+        html = self.html()
+        self.assertEqual(len(self.blocked_items(html)), 2)
+        self.assertEqual(notices_of(self.add("31"), "warning"), [f"Rien pour 31.00 € : {GAPS_FULL}."])
+
+
+class ExcludedShareTests(ExclusionTestCase):
+    """« Écarts réduits de » averages the share of every gap the list fills:
+    an article left out is no gap, and leaves the average.
+
+    A mojito at 33,00 € pours 4 cl of rum and 2 cl of mint, ten sold since
+    the count: the rum has 1,4 L to fill, the mint 1,15 L. One mojito fills
+    2,86 % of the rum's and 1,74 % of the mint's - 2,30 % on average."""
+
+    @classmethod
+    def setUpTestData(cls):
+        today = timezone.localdate()
+        cls.take = make_stock_take(taken_at=noon(today - timedelta(days=20)))
+        cls.rum = filed("Rhum exemple", "Rhums exemple")
+        cls.mint = filed("Menthe exemple", "Herbes exemple")
+        bought(cls.rum, "1", today - timedelta(days=30), unit_cost="30.00")
+        bought(cls.mint, "1", today - timedelta(days=30), unit_cost="31.50")
+        counted(cls.take, cls.rum, "2")
+        counted(cls.take, cls.mint, "1.5")
+        mojito = fixed_recipe("Mojito exemple", "33.00", (cls.rum, "0.04"), (cls.mint, "0.02"))
+        RecipeSale.objects.create(recipe=mojito, sold_on=today - timedelta(days=1), quantity=10)
+
+    def shares(self, html) -> tuple[str, str]:
+        found = stat_of(html, SHARES)
+        return value_of(found), note_of(found)
+
+    def plan(self, html) -> list[list[str]]:
+        return [cells_of(row) for row in body_rows(table_of(html, PLAN_TABLE))]
+
+    def test_the_average_leaves_the_mint_out(self):
+        html = self.add("33")
+        self.assertEqual(self.shares(html), ("2.3 %", "en moyenne, de 1.7 % à 2.9 % selon l'article"))
+        mojito = [["Mojito exemple", "Mojito exemple", "1", "33.00 €", "33.00 €", "Rhum exemple, Menthe exemple"]]
+        self.assertEqual(self.plan(html), mojito)
+        html = self.exclude(article=self.mint.pk).content.decode()
+        self.assertEqual(self.shares(html), ("2.9 %", "en moyenne, de 2.9 % à 2.9 % selon l'article"))
+        self.assertEqual(gap_names(html), ["Rhum exemple litre"])
+        self.assertEqual(
+            cells_of(row_of(table_of(html, GAPS_TABLE), "Rhum exemple"))[-3:], ["0.04", "2.9 %", EXCLUDE_BUTTON]
+        )
+        # The entry keeps what it proposed, the mint included.
+        self.assertEqual(self.plan(html), mojito)
+        # The next mojito fills the rum alone.
+        html = self.add("33")
+        self.assertEqual(
+            self.plan(html), [["Mojito exemple", "Mojito exemple", "1", "33.00 €", "33.00 €", "Rhum exemple"]]
+        )
+        # Taken back, the mint is in the average again.
+        html = self.include(GapExclusion.objects.get()).content.decode()
+        self.assertEqual(gap_names(html), ["Rhum exemple litre", "Menthe exemple litre"])
+        self.assertEqual(self.shares(html)[0], "4.6 %")
+
+    def test_with_every_article_left_out_there_is_no_average(self):
+        self.add("33")
+        self.exclude(categorie="Rhums exemple")
+        self.exclude(categorie="Herbes exemple")
+        html = self.html()
+        self.assertEqual(stat_of(html, SHARES), "")
+        self.assertEqual(table_of(html, GAPS_TABLE), "")
+        # Every category is out: none left to offer, and no empty select.
+        self.assertEqual(category_form_of(html), "")
+        self.assertEqual(
+            excluded_lines(html),
+            [
+                f"Catégorie « Herbes exemple » · 1 article {INCLUDE_BUTTON}",
+                f"Catégorie « Rhums exemple » · 1 article {INCLUDE_BUTTON}",
+            ],
+        )
+        # The list stands, its amount still entered.
+        self.assertEqual(value_of(stat_of(html, ENTERED)), "33.00 €")
+        self.assertEqual(notices_of(self.add("33"), "warning"), [f"Rien pour 33.00 € : {GAPS_FULL}."])
+
+    def test_with_every_article_left_out_the_page_does_not_say_no_recipe_uses_one(self):
+        # Regression: with every gap left out, the empty table's sentence
+        # claimed « Aucune recette vendue depuis cet inventaire n'utilise un
+        # article compté ou acheté. » - false: the mojito was sold and pours
+        # the rum and the mint, both counted; they were left out, which the
+        # sentence did not say. Fixed 01/10/2026: the page says they are
+        # (GapReport.rows_left_out), and never states what it has not checked.
+        self.exclude(categorie="Rhums exemple")
+        html = self.exclude(categorie="Herbes exemple").content.decode()
+        self.assertEqual(table_of(html, GAPS_TABLE), "")
+        # What the page says under « Écarts », up to the fold of what is out.
+        said = unescape(
+            text_of(html[html.index('<h2 id="ecarts">') : html.index('<details class="explainer" id="exclusions"')])
+        )
+        self.assertNotIn(NO_RECIPE_USES_ONE, said)
+        self.assertEqual(said, f"Écarts {ALL_LEFT_OUT}")
+
+    def test_the_last_gap_left_out_from_its_row(self):
+        """The mint out, the rum's row is the table's last: its « Exclure »
+        lands under the heading on the message, then the sentence where the
+        table was. One taken back, the table is back and says nothing."""
+        html = self.exclude(article=self.mint.pk).content.decode()
+        self.assertEqual(gap_names(html), ["Rhum exemple litre"])
+        self.assertEqual(gap_sentences(html), [])
+        response = self.send(exclude_form_of(html, "Rhum exemple"))
+        html = response.content.decode()
+        self.assertEqual(self.landing(response), self.page_at("ecarts"))
+        self.assertEqual(table_of(html, GAPS_TABLE), "")
+        self.assertEqual(said_under_the_gaps(html), [("success", ARTICLE_EXCLUDED.format("Rhum exemple"))])
+        self.assertEqual(gap_sentences(html), [ALL_LEFT_OUT])
+        self.assertEqual(gap_sentences(self.html()), [ALL_LEFT_OUT])
+        html = self.send(include_form_of(html, "Menthe exemple")).content.decode()
+        self.assertEqual(gap_names(html), ["Menthe exemple litre"])
+        self.assertEqual(gap_sentences(html), [])
+
+
+class ExcludedDearerSideTests(ExclusionTestCase):
+    """A shot « au choix » between a dear rum and a cheaper one, the dear one
+    left out. The engine still books every shot on the dear one while it
+    has room - an exclusion is the planner's, not the till's - so a shot
+    fills none of the cheaper rum's gap, and none is proposed for it: the
+    page says no sale reaches it rather than promising a fill the stock page
+    would not show. (SecondaryTargetTests' fixture.)"""
+
+    @classmethod
+    def setUpTestData(cls):
+        today = timezone.localdate()
+        cls.take = make_stock_take(taken_at=noon(today - timedelta(days=20)))
+        cls.premium, cls.standard = article("Rhum vieux exemple"), article("Rhum blanc exemple")
+        bought(cls.premium, "1", today - timedelta(days=30), unit_cost="40.00")
+        bought(cls.standard, "1", today - timedelta(days=30), unit_cost="20.00")
+        counted(cls.take, cls.premium, "2")
+        counted(cls.take, cls.standard, "1")
+        shot = make_recipe(name="Shot au choix exemple", selling_price_ttc="33.00")
+        make_ingredient(shot, stock_type=cls.premium, quantity="0.04", group=0)
+        make_ingredient(shot, stock_type=cls.standard, quantity="0.04", group=0)
+        RecipeSale.objects.create(recipe=shot, sold_on=today - timedelta(days=1), quantity=10)
+
+    def test_no_shot_is_proposed_for_the_cheaper_side(self):
+        html = self.exclude(article=self.premium.pk).content.decode()
+        self.assertEqual(gap_names(html), [f"Rhum blanc exemple litre {SECONDARY}"])
+        html = self.add("99")
+        self.assertEqual(notices_of(html, "warning"), [f"Rien pour 99.00 € : {GAPS_FULL}."])
+        self.assertEqual(entries_of(self.take), [])
+        # Taken back, the dear rum is the shots' gap again.
+        self.include(GapExclusion.objects.get())
+        html = self.add("99")
+        self.assertEqual(value_of(stat_of(html, PROPOSED)), "99.00 €")
+
+
+class ExcludedNamesWithMarkupTests(ExclusionTestCase):
+    """An article's name and a category come from invoices and from what
+    somebody typed: in the fold's list, its select and its messages they
+    are text, never markup."""
+
+    NAME = "<em>Gras exemple</em>"
+    CATEGORY = '"><em>Catégorie exemple</em>'
+
+    @classmethod
+    def setUpTestData(cls):
+        today = timezone.localdate()
+        cls.take = make_stock_take(taken_at=noon(today - timedelta(days=20)))
+        cls.fat = filed(cls.NAME, cls.CATEGORY)
+        counted(cls.take, cls.fat, "100")
+        RecipeSale.objects.create(
+            recipe=recipe("Verre gras exemple", "34.00", cls.fat, "0.5"), sold_on=today - timedelta(days=1), quantity=10
+        )
+
+    def assertNoMarkup(self, html):
+        self.assertNotIn(self.NAME, html)
+        self.assertNotIn("<em>Catégorie exemple</em>", html)
+
+    def test_the_select_offers_it_as_text(self):
+        html = self.html()
+        self.assertNoMarkup(html)
+        self.assertIn(
+            '<option value="&quot;&gt;&lt;em&gt;Catégorie exemple&lt;/em&gt;">'
+            "&quot;&gt;&lt;em&gt;Catégorie exemple&lt;/em&gt; (1)</option>",
+            category_form_of(html),
+        )
+        self.assertEqual(category_choices(html), [(self.CATEGORY, f"{self.CATEGORY} (1)")])
+
+    def test_the_article_excluded_is_named_as_text(self):
+        html = self.send(exclude_form_of(self.html(), "Gras exemple")).content.decode()
+        self.assertNoMarkup(html)
+        self.assertEqual(notices_of(html, "success"), [ARTICLE_EXCLUDED.format(self.NAME)])
+        self.assertEqual(excluded_lines(html), [f"{self.NAME} {self.CATEGORY} {INCLUDE_BUTTON}"])
+        self.assertIn("&lt;em&gt;Gras exemple&lt;/em&gt;", exclusions_of(html))
+        html = self.send(include_form_of(html, self.NAME)).content.decode()
+        self.assertNoMarkup(html)
+        self.assertEqual(notices_of(html, "success"), [ARTICLE_BACK.format(self.NAME)])
+
+    def test_the_category_excluded_is_named_as_text(self):
+        html = self.send_category(self.html()).content.decode()
+        self.assertNoMarkup(html)
+        self.assertEqual(notices_of(html, "success"), [CATEGORY_EXCLUDED.format(self.CATEGORY)])
+        self.assertEqual(excluded_lines(html), [f"Catégorie « {self.CATEGORY} » · 1 article {INCLUDE_BUTTON}"])
+        html = self.send(include_form_of(html, self.CATEGORY)).content.decode()
+        self.assertNoMarkup(html)
+        self.assertEqual(notices_of(html, "success"), [CATEGORY_BACK.format(self.CATEGORY)])
+
+    def send_category(self, html):
+        """« Exclure la catégorie » with the select's one option, as the
+        browser posts its value."""
+        ((value, _words),) = category_choices(html)
+        return self.client.post(
+            reverse(EXCLUDE), {**hidden_fields(category_form_of(html)), "categorie": value}, follow=True
+        )
+
+
+class ExclusionMessagesTests(ExclusionTestCase):
+    """Each exclusion message is said where its redirect lands, which is
+    where the owner reads the page from: an article's « Exclure » right
+    under the « Écarts » heading (#ecarts); a category's, and every
+    « Réinclure », first thing in « Exclus des écarts » (#exclusions),
+    drawn open for it. Said at the top, two screens above, nobody saw them.
+    Every other message stays at the top. Each once, in its place only.
+
+    A blonde (« Bières exemple ») and a cider filed nowhere, counted 20 days
+    ago; pints at 35,00 € and bowls at 32,00 €, sold yesterday."""
+
+    @classmethod
+    def setUpTestData(cls):
+        today = timezone.localdate()
+        cls.take = make_stock_take(taken_at=noon(today - timedelta(days=20)))
+        cls.blonde = filed("Blonde exemple", "Bières exemple")
+        cls.cider = filed("Cidre exemple", "")
+        counted(cls.take, cls.blonde, "100")
+        counted(cls.take, cls.cider, "100")
+        bought(cls.blonde, "200", today - timedelta(days=10))
+        for made, sold in (
+            (recipe("Pinte blonde exemple", "35.00", cls.blonde, "0.5"), 40),
+            (recipe("Bolée exemple", "32.00", cls.cider, "0.5"), 10),
+        ):
+            RecipeSale.objects.create(recipe=made, sold_on=today - timedelta(days=1), quantity=sold)
+
+    def assertSaidOnlyThere(self, html, *, top=(), gaps=(), fold=()):
+        """`top` above the page's header, `gaps` under « Écarts », `fold` in
+        « Exclus des écarts » - and not one message anywhere else."""
+        self.assertEqual(said_at_the_top(html), list(top))
+        self.assertEqual(said_under_the_gaps(html), list(gaps))
+        self.assertEqual(said_in_the_fold(html), list(fold))
+        self.assertEqual(said_in(html), [*top, *gaps, *fold])
+
+    def test_an_article_s_exclure_is_said_under_the_gaps(self):
+        # Not found, with nothing left out: under the gaps too - and it is no
+        # message of the fold's, which stays shut.
+        html = self.exclude(article="999999").content.decode()
+        self.assertSaidOnlyThere(html, gaps=[("error", ARTICLE_NOT_FOUND)])
+        self.assertIs(exclusions_open(html), False)
+        response = self.send(exclude_form_of(self.html(), "Blonde exemple"))
+        self.assertEqual(self.landing(response), self.page_at("ecarts"))
+        html = response.content.decode()
+        self.assertSaidOnlyThere(html, gaps=[("success", ARTICLE_EXCLUDED.format("Blonde exemple"))])
+        # Open for what is left out, with no message in it.
+        self.assertIs(exclusions_open(html), True)
+
+    def test_a_category_is_said_in_the_fold(self):
+        response = self.exclude(categorie="Bières exemple")
+        html = response.content.decode()
+        self.assertEqual(self.landing(response), self.page_at("exclusions"))
+        self.assertSaidOnlyThere(html, fold=[("success", CATEGORY_EXCLUDED.format("Bières exemple"))])
+        html = self.exclude(categorie="Inconnue exemple").content.decode()
+        self.assertSaidOnlyThere(html, fold=[("error", CATEGORY_NOT_FOUND)])
+
+    def test_every_reinclure_is_said_in_the_fold(self):
+        self.exclude(article=self.blonde.pk)
+        self.exclude(categorie="")
+        blonde = GapExclusion.objects.get(stock_type=self.blonde)
+        html = self.include(blonde).content.decode()
+        self.assertSaidOnlyThere(html, fold=[("success", ARTICLE_BACK.format("Blonde exemple"))])
+        # Clicked again from the same page: gone, said in the same place.
+        html = self.include(blonde).content.decode()
+        self.assertSaidOnlyThere(html, fold=[("warning", EXCLUSION_GONE)])
+        html = self.include(GapExclusion.objects.get()).content.decode()
+        self.assertSaidOnlyThere(html, fold=[("success", BLANK_BACK)])
+
+    def test_the_fold_opens_for_its_message_with_nothing_left_out(self):
+        """Nothing left out keeps the fold shut - unless a message of its own
+        is there: it is drawn open to show it, and shut again on the next
+        visit."""
+        self.exclude(article=self.cider.pk)
+        html = self.include(GapExclusion.objects.get()).content.decode()
+        self.assertFalse(GapExclusion.objects.exists())
+        self.assertIs(exclusions_open(html), True)
+        self.assertSaidOnlyThere(html, fold=[("success", ARTICLE_BACK.format("Cidre exemple"))])
+        self.assertEqual(excluded_lines(html), [])
+        self.assertIn(NOTHING_EXCLUDED, sentences_of(exclusions_of(html)))
+        for name, data, said in (
+            (EXCLUDE, {"categorie": "Inconnue exemple"}, ("error", CATEGORY_NOT_FOUND)),
+            (INCLUDE, {"exclusion": "999999"}, ("warning", EXCLUSION_GONE)),
+        ):
+            with self.subTest(said=said):
+                html = self.post(name, depuis=self.take.pk, **data).content.decode()
+                self.assertFalse(GapExclusion.objects.exists())
+                self.assertIs(exclusions_open(html), True)
+                self.assertSaidOnlyThere(html, fold=[said])
+        html = self.html()
+        self.assertIs(exclusions_open(html), False)
+        self.assertEqual(said_in(html), [])
+
+    def test_the_list_s_messages_stay_at_the_top(self):
+        """An amount refused, an entry taken back, the list cleared: the
+        list's forms are at the top of the page, and so are their messages -
+        neither under the gaps nor in the fold, which they do not open."""
+        html = self.add("abc")
+        self.assertSaidOnlyThere(html, top=[("error", UNREADABLE)])
+        self.assertIs(exclusions_open(html), False)
+        self.add("70")
+        html = self.post(UNDO, depuis=self.take.pk).content.decode()
+        self.assertSaidOnlyThere(html, top=[("success", UNDONE)])
+        self.add("70")
+        html = self.post(CLEAR, depuis=self.take.pk).content.decode()
+        self.assertSaidOnlyThere(html, top=[("success", CLEARED)])
+        self.assertIs(exclusions_open(html), False)
+        # Something left out: the fold is open, the list's message still not
+        # in it.
+        self.exclude(article=self.cider.pk)
+        html = self.add("abc")
+        self.assertSaidOnlyThere(html, top=[("error", UNREADABLE)])
+        self.assertIs(exclusions_open(html), True)
+
+    def test_several_actions_each_said_in_its_place(self):
+        """Posted one after the other with the page read once at the end
+        (a tab left behind): every message in its place, in the order said."""
+        for name, data in (
+            (EXCLUDE, {"article": self.blonde.pk}),
+            (ADD, {"montant": "abc"}),
+            (EXCLUDE, {"categorie": ""}),
+            (INCLUDE, {"exclusion": "999999"}),
+            (EXCLUDE, {"article": "999999"}),
+        ):
+            response = self.client.post(reverse(name), {"depuis": self.take.pk, **data})
+            self.assertEqual(response.status_code, 302)
+        html = self.html()
+        self.assertSaidOnlyThere(
+            html,
+            top=[("error", UNREADABLE)],
+            gaps=[("success", ARTICLE_EXCLUDED.format("Blonde exemple")), ("error", ARTICLE_NOT_FOUND)],
+            fold=[("success", BLANK_EXCLUDED), ("warning", EXCLUSION_GONE)],
+        )
+        # Said once: the next visit has none.
+        self.assertEqual(said_in(self.html()), [])
+
+
+class ExclusionMessagesWithNoCountTests(PageTestCase):
+    """No count at all: no gaps table and no fold to say a message in, so
+    every message is said at the top of the page - the exclusions are the
+    espace's, and are made all the same. Two articles, nothing counted: a
+    blonde (« Bières exemple ») and a cider filed nowhere."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.blonde = filed("Blonde exemple", "Bières exemple")
+        cls.cider = filed("Cidre exemple", "")
+
+    def assertSaidAtTheTop(self, response, said):
+        html = response.content.decode()
+        self.assertEqual(self.landing(response), reverse(PAGE))
+        self.assertIn('class="empty-state"', html)
+        self.assertNotIn('<h2 id="ecarts">', html)
+        self.assertEqual(exclusions_of(html), "")
+        self.assertEqual(said_at_the_top(html), [said])
+        self.assertEqual(said_in(html), [said])
+
+    def test_each_message_at_the_top(self):
+        self.assertSaidAtTheTop(
+            self.post(EXCLUDE, depuis="", article=self.blonde.pk),
+            ("success", ARTICLE_EXCLUDED.format("Blonde exemple")),
+        )
+        self.assertSaidAtTheTop(
+            self.post(EXCLUDE, depuis="", categorie="Bières exemple"),
+            ("success", CATEGORY_EXCLUDED.format("Bières exemple")),
+        )
+        self.assertSaidAtTheTop(
+            self.post(INCLUDE, depuis="", exclusion=GapExclusion.objects.get(stock_type=self.blonde).pk),
+            ("warning", STILL_OUT.format("Blonde exemple", "Bières exemple")),
+        )
+        self.assertSaidAtTheTop(
+            self.post(INCLUDE, depuis="", exclusion=GapExclusion.objects.get().pk),
+            ("success", CATEGORY_BACK.format("Bières exemple")),
+        )
+        self.assertFalse(GapExclusion.objects.exists())
+        for name, data, said in (
+            (EXCLUDE, {"article": "999999"}, ("error", ARTICLE_NOT_FOUND)),
+            (EXCLUDE, {"categorie": "Inconnue exemple"}, ("error", CATEGORY_NOT_FOUND)),
+            (INCLUDE, {"exclusion": "999999"}, ("warning", EXCLUSION_GONE)),
+            (ADD, {"montant": "70"}, ("error", TAKE_UNKNOWN)),
+        ):
+            with self.subTest(said=said):
+                self.assertSaidAtTheTop(self.post(name, depuis="", **data), said)
+
+    def test_several_at_once_all_at_the_top(self):
+        for name, data in (
+            (EXCLUDE, {"article": self.cider.pk}),
+            (ADD, {"montant": "70"}),
+            (EXCLUDE, {"categorie": ""}),
+            (INCLUDE, {"exclusion": "999999"}),
+        ):
+            self.assertEqual(self.client.post(reverse(name), {"depuis": "", **data}).status_code, 302)
+        html = self.html()
+        said = [
+            ("success", ARTICLE_EXCLUDED.format("Cidre exemple")),
+            ("error", TAKE_UNKNOWN),
+            ("success", BLANK_EXCLUDED),
+            ("warning", EXCLUSION_GONE),
+        ]
+        self.assertCountEqual(said_at_the_top(html), said)
+        self.assertCountEqual(said_in(html), said)
+        self.assertEqual(said_in(self.html()), [])
+
+
+class EmptyGapsTableTests(ExclusionTestCase):
+    """An empty gaps table says why: every gap it would hold is left out
+    (« Tous les articles de ces écarts sont exclus. », `rows_left_out`), or
+    no recipe sold since pours one - and then that is what it says, left
+    out or not, since leaving out an article no recipe sold pours empties
+    nothing.
+
+    A blonde (« Bières exemple ») counted 20 days ago, its pint at 35,00 €
+    not sold since; tablecloths (« Matériel exemple ») bought, in no
+    recipe."""
+
+    @classmethod
+    def setUpTestData(cls):
+        today = timezone.localdate()
+        cls.take = make_stock_take(taken_at=noon(today - timedelta(days=20)))
+        cls.blonde = filed("Blonde exemple", "Bières exemple")
+        counted(cls.take, cls.blonde, "100")
+        recipe("Pinte blonde exemple", "35.00", cls.blonde, "0.5")
+        cls.cloth = make_stock_type(name="Nappe exemple", unit=UnitChoices.UNIT, category="Matériel exemple")
+        bought(cls.cloth, "10", today - timedelta(days=10))
+
+    def test_no_recipe_sold_says_so(self):
+        html = self.html()
+        self.assertEqual(table_of(html, GAPS_TABLE), "")
+        self.assertEqual(gap_sentences(html), [NO_RECIPE_USES_ONE])
+
+    def test_left_out_or_not_no_recipe_sold_still_says_so(self):
+        html = self.exclude(article=self.cloth.pk).content.decode()
+        self.assertEqual(said_under_the_gaps(html), [("success", ARTICLE_EXCLUDED.format("Nappe exemple"))])
+        self.assertEqual(gap_sentences(html), [NO_RECIPE_USES_ONE])
+        html = self.exclude(categorie="Bières exemple").content.decode()
+        self.assertEqual(gap_sentences(html), [NO_RECIPE_USES_ONE])
+        self.assertNotIn(ALL_LEFT_OUT, html)
+
+    def test_once_its_pint_sold_the_blonde_left_out_empties_the_table(self):
+        RecipeSale.objects.create(
+            recipe=Recipe.objects.get(name="Pinte blonde exemple"),
+            sold_on=timezone.localdate() - timedelta(days=1),
+            quantity=10,
+        )
+        html = self.html()
+        self.assertEqual(gap_names(html), ["Blonde exemple litre"])
+        self.assertEqual(gap_sentences(html), [])
+        html = self.exclude(categorie="Bières exemple").content.decode()
+        self.assertEqual(table_of(html, GAPS_TABLE), "")
+        self.assertEqual(gap_sentences(html), [ALL_LEFT_OUT])
+        self.assertNotIn(NO_RECIPE_USES_ONE, html)

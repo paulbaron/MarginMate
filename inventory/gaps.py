@@ -32,6 +32,13 @@ the till's own price for each button is read off what it took since the take
 recipe as a dearer cocktail is never named for the cocktail's price. A line
 whose best button still rings another price says so.
 
+The owner can leave articles out, one by one or a whole category at a time
+(`GapExclusion`, kept for the espace): an article left out is ignored whole
+- no gap to fill, no limit on a sale (a recipe it held back is proposed
+again), out of the table, the lists and the average. « Exclus des écarts »
+lists each exclusion with the way back - a category with how many of the
+page's articles it covers.
+
 Pure arithmetic is in `gap_planner`; this reads the database once and hands
 it a closure over `attribute_sales`, which no longer touches the database.
 """
@@ -47,7 +54,7 @@ from django.db.models import Max
 from django.utils import timezone
 
 from .gap_planner import Consumption, Offer, Plan, first_sales, plan_sales
-from .models import MovementKind, StockMovement, StockTake, StockType
+from .models import GapExclusion, MovementKind, StockMovement, StockTake, StockType
 from .variance import (
     PeriodStock,
     attribute_sales,
@@ -91,6 +98,8 @@ class ArticleGap:
     # cheaper side of an « OU » whose dearer side still has room, or a fixed
     # pour whose sale pushes an « au choix » onto another bottle instead.
     secondary: bool = False
+    # Left out by the owner, alone or with its category (GapExclusion).
+    excluded: bool = False
 
     @property
     def gap(self) -> Decimal:
@@ -176,6 +185,9 @@ class GapReport:
     values: dict[int, Decimal] = field(default_factory=dict)
     # Every article some recipe pours, proposed or not.
     in_recipes: set[int] = field(default_factory=set)
+    # The articles left out by the owner, and the exclusions that say so.
+    ignored: frozenset = frozenset()
+    exclusions: list = field(default_factory=list)
     last_sale_day: date | None = None
     last_purchase_day: date | None = None
 
@@ -189,7 +201,7 @@ class GapReport:
         biggest in value first, then the ones holding a recipe back."""
         touched = {article for offer in self.offers for article in offer.reach()}
         touched |= {article.stock_type.pk for blocked in self.blocked for article in blocked.articles}
-        rows = [self.articles[article] for article in touched if article in self.articles]
+        rows = [self.articles[article] for article in touched - self.ignored if article in self.articles]
         return sorted(
             rows,
             key=lambda row: (
@@ -211,7 +223,10 @@ class GapReport:
         rows = [
             article
             for article in self.articles.values()
-            if article.room > 0 and not article.target and article.stock_type.pk in self.in_recipes
+            if article.room > 0
+            and not article.target
+            and not article.excluded
+            and article.stock_type.pk in self.in_recipes
         ]
         return sorted(rows, key=lambda row: (-(row.room_value or ZERO), row.stock_type.name.lower()))
 
@@ -226,8 +241,62 @@ class GapReport:
         return sum(
             1
             for article in self.articles.values()
-            if article.room > 0 and not article.target and article.stock_type.pk not in self.in_recipes
+            if article.room > 0
+            and not article.target
+            and not article.excluded
+            and article.stock_type.pk not in self.in_recipes
         )
+
+    @property
+    def rows_left_out(self) -> int:
+        """How many of the gaps a recipe of the menu touches are left out -
+        so an empty table can say why it is empty."""
+        touched = {article for offer in self.offers for article in offer.reach()}
+        touched |= {article.stock_type.pk for blocked in self.blocked for article in blocked.articles}
+        return len(touched & self.ignored)
+
+    @property
+    def excluded_rows(self) -> list[ArticleGap]:
+        """The articles left out that moved since the take, by name."""
+        rows = [article for article in self.articles.values() if article.excluded]
+        return sorted(rows, key=lambda row: (row.stock_type.name.lower(), row.stock_type.pk))
+
+    @property
+    def excluded_categories(self) -> list:
+        """The category exclusions, each with how many of the report's
+        articles it leaves out (`.covers`)."""
+        shown = []
+        for exclusion in self.exclusions:
+            if exclusion.stock_type_id is None:
+                exclusion.covers = sum(
+                    1 for article in self.articles.values() if article.stock_type.category == exclusion.category
+                )
+                shown.append(exclusion)
+        return sorted(shown, key=lambda exclusion: (exclusion.category == "", exclusion.category.lower()))
+
+    @property
+    def excluded_articles(self) -> list:
+        """The article exclusions, by name - each saying (`.covered`) whether
+        its category is left out as well, so taking it back alone changes
+        nothing."""
+        left_out = {exclusion.category for exclusion in self.exclusions if exclusion.stock_type_id is None}
+        shown = []
+        for exclusion in self.exclusions:
+            if exclusion.stock_type_id is not None:
+                exclusion.covered = exclusion.stock_type.category in left_out
+                shown.append(exclusion)
+        return sorted(shown, key=lambda exclusion: (exclusion.stock_type.name.lower(), exclusion.stock_type_id))
+
+    @property
+    def categories_to_exclude(self) -> list[tuple[str, int]]:
+        """(category, how many articles) of the report's articles, those not
+        left out yet - the blank one last, as « Catégorie non renseignée »."""
+        left_out = {exclusion.category for exclusion in self.exclusions if exclusion.stock_type_id is None}
+        counts: dict[str, int] = {}
+        for article in self.articles.values():
+            if article.stock_type.category not in left_out:
+                counts[article.stock_type.category] = counts.get(article.stock_type.category, 0) + 1
+        return sorted(counts.items(), key=lambda pair: (pair[0] == "", pair[0].lower()))
 
     @property
     def purchases_after_sales(self) -> bool:
@@ -333,7 +402,8 @@ def _offer_terms(terms, unit_costs) -> tuple[tuple[dict[int, Decimal], ...], ...
 
 def gaps_since(take: StockTake, end: date | None = None) -> GapReport:
     """Every article's gap from `take` to `end` (today by default), and the
-    recipes that could fill them."""
+    recipes that could fill them - the articles the owner left out
+    (GapExclusion) ignored."""
     from recipes.models import RecipeSale, variation_scope
 
     end = end or timezone.localdate()
@@ -434,7 +504,14 @@ def gaps_since(take: StockTake, end: date | None = None) -> GapReport:
         )
     rooms = {article_id: article.room for article_id, article in articles.items()}
 
-    first = first_sales(offers, rooms, consumption)
+    exclusions = list(GapExclusion.objects.select_related("stock_type"))
+    left_out_articles = {exclusion.stock_type_id for exclusion in exclusions if exclusion.stock_type_id is not None}
+    left_out_categories = {exclusion.category for exclusion in exclusions if exclusion.stock_type_id is None}
+    for article_id, article in articles.items():
+        article.excluded = article_id in left_out_articles or article.stock_type.category in left_out_categories
+    ignored = frozenset(article_id for article_id, article in articles.items() if article.excluded)
+
+    first = first_sales(offers, rooms, consumption, ignored)
     blocked_recipes = [
         BlockedRecipe(
             recipe=priced[recipe_id],
@@ -452,7 +529,7 @@ def gaps_since(take: StockTake, end: date | None = None) -> GapReport:
     reached = {article for offer in proposable for article, amount in first[offer.recipe_id][0].items() if amount > 0}
     for offer in proposable:
         for article in offer.reach():
-            if article in articles and articles[article].room > 0:
+            if article in articles and articles[article].room > 0 and article not in ignored:
                 articles[article].target = True
     for article in articles.values():
         article.secondary = article.target and article.stock_type.pk not in reached
@@ -474,6 +551,8 @@ def gaps_since(take: StockTake, end: date | None = None) -> GapReport:
         consumption=consumption,
         values=unit_costs,
         in_recipes=in_recipes,
+        ignored=ignored,
+        exclusions=exclusions,
         last_sale_day=last_sale,
         last_purchase_day=_last_purchase_day(start, end),
     )
@@ -489,7 +568,9 @@ def fill_gaps(report: GapReport, amount: Decimal, already: dict[int, int] | None
     """The sales to ring up for `amount` (TTC, 0 < amount <= MAX_AMOUNT) on
     top of `already` (the list's earlier sales, {recipe_id: count}), and
     what the old and the new add to every article."""
-    plan = plan_sales(int(amount * 100), report.offers, report.rooms, report.consumption, report.values, already)
+    plan = plan_sales(
+        int(amount * 100), report.offers, report.rooms, report.consumption, report.values, already, report.ignored
+    )
     _show_added(report, plan.used)
     lines = []
     for recipe_id, count in plan.counts.items():
@@ -519,7 +600,10 @@ def fill_gaps(report: GapReport, amount: Decimal, already: dict[int, int] | None
 def show_list(report: GapReport, already: dict[int, int]) -> None:
     """Write on every article what the list's sales add, with no new amount."""
     if already:
-        _show_added(report, plan_sales(0, report.offers, report.rooms, report.consumption, report.values, already).used)
+        _show_added(
+            report,
+            plan_sales(0, report.offers, report.rooms, report.consumption, report.values, already, report.ignored).used,
+        )
 
 
 def list_counts(entries) -> dict[int, int]:
