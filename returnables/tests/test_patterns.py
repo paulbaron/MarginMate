@@ -581,6 +581,16 @@ class MailMatcherTests(SimpleTestCase):
 
 
 class ReadAmountTests(SimpleTestCase):
+    def test_it_is_the_app_s_one_reader(self):
+        """Moved to common.py for « Combler les écarts »' amount field and
+        re-exported here: one reading of « 1 234,50 » for the whole app, so
+        the two cannot drift. tests/test_common_numbers.py reads it there."""
+        import common
+
+        self.assertIs(read_amount, common.read_amount)
+        self.assertIs(patterns.read_amount, common.read_amount)
+        self.assertIs(patterns.read_number, common.read_number)
+
     def test_what_is_read(self):
         cases = {
             "90.00": "90.00",

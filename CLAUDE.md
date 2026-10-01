@@ -3433,7 +3433,8 @@ imports (`transfer/legacy.py`).
 - **Never exported:** Metro's `scrape_*` fields (the firewall's pause - a
   restore resetting it would let the next gather sign in), `SupplierChange`
   (its undo data holds pks), job history, `ai_suggestion` (the review panel
-  fills it again when it is drawn). Suppliers with a reader or a till of their
+  fills it again when it is drawn), « Combler les écarts »' list
+  (`GapFillEntry`, a scratch list that goes with its stock take). Suppliers with a reader or a till of their
   own are never deleted by a clear or a replace; a clear only forgets what
   they learned.
 - **Nor the till's money and payments.** « Ventes » carries the quantities
@@ -3828,6 +3829,162 @@ Two things carried over rather than rediscovered:
   *cheapest* pool member (a floor you can put to someone), while the stock
   page names bottles by attributing the pool (a guess you can act on). They
   cross-link.
+
+### « Combler les écarts » (`/stock-takes/fill-gaps/`, `inventory/gaps.py`, `inventory/gap_planner.py`)
+
+The owner, 01/10/2026: « entrer une somme d'argent à encaisser et que cela
+donne une liste de produits (recettes) qu'il faudrait vendre pour cette somme
+pour remplir les trous de stock ». A GET page of « Inventaires »
+(`STOCK_TAKE_VIEWS`), linked from the stock-take list and from each take;
+`?depuis=<pk>` is the count the gaps run from (the latest by default, an
+unknown one falls back to it and says so) - not `inventaire`, which names the
+CLOSING count on Produits & charges. An amount TTC is POSTed to
+`stock_gap_filler_add` (`montant`, read by `common.read_amount` - moved from
+`returnables.patterns`, which re-exports it: no NaN, no Infinity, two
+decimals at most - above 0 and at most `gaps.MAX_AMOUNT`) and kept.
+
+**A list, amount after amount** (the owner, 01/10/2026: « si je rentre 7 €
+et encore 7 € … que cela soit mis à jour pour combler les trous au fur et à
+mesure. Ensuite je peux "clear" la liste »). Each amount is a
+`GapFillEntry` of its stock take, planned ON TOP of the entries before it -
+their sales are handed to the planner as `already` and count as added - so a
+second 7 € fills what the first left behind rather than proposing the same
+glasses again. An entry keeps its lines as proposed (names, prices, till
+button, the gaps they fill): the owner may have rung them up, and an
+invoice imported or a recipe repriced later must not rewrite them. The page
+shows the last entry first (« À encaisser : X € », `#a-encaisser`), the
+earlier ones folded, the totals of the whole list, and the gaps with what the
+whole list adds; « Annuler la dernière saisie » (`stock_gap_filler_undo`) and
+« Effacer la liste » (`stock_gap_filler_clear`, `data-confirm`) are POSTs
+redirecting back, a GET to any of the three goes to the page. An amount
+nothing can be proposed for is said (why, by `Plan.reason`) and NOT kept.
+`sales_seen` records every serving sold from `sales_from` on, as known when
+an entry was made (`gaps.servings_from`); `sales_from` is the day BEFORE it
+was made, because the till files a sale rung after midnight under the day its
+service began - dated by the calendar, a list made and rung up at 00:30 was in
+the previous day's sales and never flagged. Once that count moves - a newer
+day imported, or one of those days imported again with more sales, which
+leaves the last day of sales where it was - the rung-up list is in them and
+counts twice, and the page says to clear it (`gaps.list_is_stale`). A late
+import of an older day moves nothing; one of the day before is a false alarm
+on purpose.
+Each of the three forms carries the last entry the page showed (`derniere`):
+a second click on « Ajouter » or « Annuler la dernière saisie », or « Effacer
+la liste » from a tab left open, posts a list that has moved and is refused
+rather than acting twice. The check is made again inside the transaction
+that writes - SQLite's IMMEDIATE mode takes the write lock as it opens -
+because planning takes a second and two clicks inside it both passed a
+check made before; the buttons also go busy once pressed (`data-busy-label`). What an entry
+stored is read by `gaps.entry_rows` alone (a bool is no count, NaN no price). The list is never exported by « Données »
+and goes with its stock take (CASCADE).
+
+Three answers of the owner fix the arithmetic:
+
+1. **gap = counted at the take + bought since − lost since − sold since**,
+   « sold » being the stock page's « Vendu » from the same engine, « OU »
+   attributions included. There is no closing count, so the gap also holds
+   what is still on the shelf - his choice; the page says it once.
+2. **The loss allowance is not a hole**: what is left to fill (`room`, « À
+   combler ») is the gap less `variance.loss_allowance(opening + purchases,
+   loss_percent)` - the « Écarts » page's own rule, one function for both.
+3. **Proportional**: every gap shrinks by about the same share, a big gap
+   gets more sales, but every gap gets some.
+
+**Every sale proposed is played through the engine.** The till records a
+recipe, never which side of an « OU » was poured, and once imported a choice
+is attributed priciest first and a fixed ingredient pushes a choice off a
+bottle onto the next option (`allocate_choices`). `_quantities_sold` was
+split in two for this: `read_sales` (once) and `attribute_sales(sales,
+available, unit_costs, extra)` (pure, no query once `sales.terms` holds every
+recipe asked about - fill it inside a `variation_scope`). The planner ranks
+each recipe on its MEASURED effect - what one more sale adds per article, as
+the engine attributes it - measured lazily (an effect a few sales old ranks
+the recipe until it comes out on top, then is measured again). Ranked on a
+model of its pour instead, a cocktail with a fixed spirit kept coming back
+while each one shifted a « shot au choix » onto another spirit the ranking
+never saw, which ended far past every other gap. A recipe no « OU » can
+reach (`Offer.independent`) adds exactly its terms and is never measured. A
+recipe set aside (its next sale would go past a room, or fill no gap) is
+measured again once the plan has moved on (`_Run.revive`): a fixed pour taking
+a bottle to its cap sends the next « au choix » onto another bottle with
+plenty - set aside for good, the plan stopped at a quarter of the amount and
+said the gaps were full. The one promise: **nothing goes past max(0, room) as
+the engine counts it**, so what the page predicts is what the stock page
+shows once the sales are in.
+
+**The ranking is Webster's divisor method, weighted by value.** An article's
+level is (added + half its usual serving) / room - the usual serving being
+what its most-sold recipe pours, so a pint and a half of one keg rank alike.
+A sale's level is the levels of the gaps it fills averaged by what it pours
+of each IN VALUE (the cost per unit, `values`), and the next sale goes to the
+lowest. Both simpler keys failed on the real menu: by its most advanced
+article, a cocktail sharing a lemonade with the best-sellers was never chosen
+and its own syrup stayed at 0 % at any amount; by its least advanced, a
+garnish weighing a few grams a glass (far behind, being huge beside what one
+glass pours) drove its cocktail and sold the rum past every other gap.
+Weighted by value, a garnish neither drives nor blocks; it may run ahead of
+the common level, within its room. Ties - recipes filling the same gaps alike
+- go to the recipe furthest behind its share of what the till really sold
+since the take ((planned + ½) / (sold + 1)), so the list reads like the bar's
+own orders. A gap whose share is under half a serving waits for a bigger
+amount. Then name, then pk: same input, same list.
+
+**The total is the amount whenever the prices can make it.** Every sale is
+chosen among those that leave a rest the prices of the recipes still
+proposable can make up (`_Makeable`: unbounded coin change as a bitset on a
+Python int, in steps of the prices' gcd, each price folded in by doubling - a
+handful of shifts whatever the amount). Ranked freely, a sale taken early
+left a rest no mix of the prices makes (a pint first, then nothing made what
+was left where four halves made the amount). When a recipe drops out, what
+can be made is worked out again and, if the rest no longer can be, the plan
+aims at the closest total below that can. Rooms are not part of that
+reckoning: once they bind, the total is the ranking's, not a proven best.
+`Plan.reason` says why a plan is short - under the cheapest recipe, no more
+sale fits the gaps, or no combination of prices.
+
+**What the page sets aside, and says.** A recipe blocked (one sale of it
+alone would take an article past its room: sold more than bought, within the
+loss allowance, not counted, or less than a serving left) is named with the
+article. A priced recipe not sold since the take is not proposed (it is
+probably off the menu). A gap some recipe pours but none proposed is listed
+with its value (`GapReport.unreached`); a gap no recipe pours at all - the
+equipment, the paper towels - is only counted (`outside_recipes`): no sale
+fills it. A target no proposed sale reaches as the engine books one
+(`ArticleGap.secondary`, measured from each recipe's first sale: the cheaper
+side of an « OU » whose dearer side has room, or a fixed pour whose sale
+pushes an « au choix » onto another bottle) is left out of the « Écarts
+réduits de » average. An article absent from the count is read at 0 there,
+which can only UNDERSTATE its gap: it stays fillable, flagged « non compté » -
+unlike the « Écarts » page, where an uncounted CLOSING would overstate it.
+
+**The till button is the one that rings the recipe's price.** A recipe often
+has several buttons (a plain glass and a dearer cocktail linked to one recipe):
+each button's price is what it charged most often since the take (a day's
+money over its units, weighted by units - a comped glass makes one day odd,
+never the most frequent), the line names the button at the recipe's price,
+then the most rung, never the happy-hour one. Where no button rings the
+recipe's price (the menu changed, the recipe did not) the cell says « en
+caisse X € » and the entry's note says how many lines differ: the plan is
+priced « au prix de la carte », which is the recipe's.
+
+**Fresh data matters.** « ventes importées jusqu'au … · achats jusqu'au … »
+heads the page, with a warning when the till's sales stop before yesterday
+or before a delivery (the gaps still hold sales the till has not handed over:
+ringing the plan up before importing them would count them twice) and one
+when till buttons are linked to no recipe (what they sell reads as a gap).
+
+**What is typed.** `montant` goes through `common.read_number` for its size
+(« 20 000 000 000 » is too big, not unreadable) then `read_amount`. A space
+or « ' » only ever separates thousands (« 42 50 » is no amount - it read as
+4 250 € - and that rule is the slips' too now), and one separator followed by
+exactly three digits (« 10.000 », « 1,500 ») is asked again rather than read
+as 10 € (`views.AMBIGUOUS_THOUSANDS`; a slip still reads « 4,000 » as 4).
+
+**Cost.** `gaps_since` reads like the « Écarts » page (one query per
+sub-recipe level in `build_pools`, two per recipe in `choice_groups`, every
+recipe read once inside one `variation_scope`); the plan grows with the
+amount, a sale at a time and an engine call per sale that is not
+independent - which is what `MAX_AMOUNT` bounds.
 
 ### L'Addition (the till)
 

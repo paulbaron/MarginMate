@@ -21,9 +21,18 @@ from django.urls import reverse
 from django.utils.html import escape
 
 from config import navigation
+from inventory.models import GapFillEntry
 from recipes.models import PosProduct
 from staff.models import Employee
-from tests.factories import make_invoice, make_product, make_recipe, make_stock_type, make_supplier
+from tests.factories import (
+    make_invoice,
+    make_product,
+    make_recipe,
+    make_stock_take,
+    make_stock_type,
+    make_supplier,
+)
+from tests.test_views_smoke import make_gaps_to_fill
 
 LABELS = [
     "Produits &amp; charges",
@@ -101,6 +110,16 @@ class NavigationTests(TestCase):
 
         pickup = make_pickup()
         slip = make_slip()
+        # A count, so « Combler les écarts » draws its form rather than its
+        # empty state - and an amount typed, so it draws its list too.
+        take = make_gaps_to_fill()
+        gap_filler = reverse("inventory:stock_gap_filler")
+        added = self.client.post(reverse("inventory:stock_gap_filler_add"), {"depuis": take.pk, "montant": "70"})
+        self.assertEqual(added.status_code, 302)
+        self.assertTrue(GapFillEntry.objects.filter(stock_take=take).exists())
+        self.assertContains(self.client.get(gap_filler, {"depuis": take.pk}), 'id="a-encaisser"')
+        # And one count with no list: the latest, so the page with none.
+        make_stock_take()
         pages = {
             "Produits &amp; charges": [
                 reverse("inventory:stock_list"),
@@ -126,7 +145,16 @@ class NavigationTests(TestCase):
                 reverse("recipes:sales_list"),
                 reverse("recipes:sale_document_create"),
             ],
-            "Inventaires": [reverse("inventory:stock_take_list"), reverse("inventory:stock_take_create")],
+            "Inventaires": [
+                reverse("inventory:stock_take_list"),
+                reverse("inventory:stock_take_create"),
+                gap_filler,
+                # The page with a list.
+                f"{gap_filler}?depuis={take.pk}",
+                # An address from before the list, its amount now read as none.
+                f"{gap_filler}?montant=50",
+                f"{gap_filler}?depuis={take.pk}&montant=50",
+            ],
             "Banque": [reverse("bank:bank_home")],
             "Marges": [reverse("margins:margins_home")],
             "Personnel": [

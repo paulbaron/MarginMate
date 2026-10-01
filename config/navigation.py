@@ -23,6 +23,10 @@ STOCK_TAKE_VIEWS = {
     "stock_take_detail",
     "stock_take_update",
     "stock_take_variance",
+    "stock_gap_filler",
+    "stock_gap_filler_add",
+    "stock_gap_filler_undo",
+    "stock_gap_filler_clear",
 }
 
 SECTION_BY_APP = {

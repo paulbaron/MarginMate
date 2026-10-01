@@ -55,13 +55,14 @@ import re
 import time as clock
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
-from decimal import Decimal, InvalidOperation
 from re import _constants as sre_constants  # ty: ignore[unresolved-import]  # the motif guard reads it on purpose
 from re import _parser as sre_parser  # ty: ignore[unresolved-import]  # the motif guard reads it on purpose
 
 import regex
 from django.utils import timezone
 from regex import _regex_core
+
+from common import read_amount, read_number  # noqa: F401 - read_amount is this module's interface too
 
 logger = logging.getLogger(__name__)
 
@@ -636,83 +637,10 @@ def mail_matcher(text, *, log=None) -> MailMatcher:
 
 # -- Numbers, dates, times ------------------------------------------------------------------------------------------
 
-_DIGITS = re.compile(r"[0-9]+")
-
-
-def _grouped(text: str, separator: str) -> bool:
-    """Thousands groups: 1 to 3 digits, then groups of exactly 3."""
-    return re.fullmatch(r"[0-9]{1,3}(?:" + re.escape(separator) + r"[0-9]{3})+", text) is not None
-
-
-def _read_number(text) -> Decimal | None:
-    """A number as a slip prints it, unbounded: spaces, no-break spaces and
-    « ' » dropped; a leading « - » or « − » or a trailing « - » is the sign;
-    with both « . » and « , » the rightmost is the decimal separator and the
-    others separate thousands; one of them once is the decimal separator
-    (« 4,000 » is 4); one of them several times separates thousands."""
-    if not isinstance(text, str):
-        return None
-    digits = "".join(char for char in text.strip() if not char.isspace() and char != "'")
-    if not digits or len(digits) > 40:
-        return None
-    negative = False
-    if digits[0] in ("-", "\N{MINUS SIGN}"):
-        negative, digits = True, digits[1:]
-    if digits.endswith("-"):
-        if negative:
-            return None
-        negative, digits = True, digits[:-1]
-    if not digits:
-        return None
-    dots, commas = digits.count("."), digits.count(",")
-    if dots and commas:
-        decimal_mark = "." if digits.rfind(".") > digits.rfind(",") else ","
-        thousands = "," if decimal_mark == "." else "."
-        if digits.count(decimal_mark) != 1:
-            return None
-        whole, fraction = digits.split(decimal_mark)
-        if not _grouped(whole, thousands):
-            return None
-        whole = whole.replace(thousands, "")
-    elif dots + commas == 1:
-        whole, fraction = re.split(r"[.,]", digits)
-        if not fraction:
-            return None
-    elif dots + commas > 1:
-        separator = "." if dots else ","
-        if not _grouped(digits, separator):
-            return None
-        whole, fraction = digits.replace(separator, ""), ""
-    else:
-        whole, fraction = digits, ""
-    if not _DIGITS.fullmatch(whole) or (fraction and not _DIGITS.fullmatch(fraction)):
-        return None
-    value = Decimal(f"{whole}.{fraction}" if fraction else whole)
-    return -value if negative else value
-
-
-def read_amount(text, places: int = 2, *, digits: int = 12) -> Decimal | None:
-    """An amount, exact to `places` decimals (a unit price: places=4), that
-    fits a DecimalField(`digits`, `places`): |x| < 10^(digits - places) -
-    10^10 for an amount. More decimals than `places` (other than zeros), or
-    wider than the column: None, « nombre hors limites » - never rounded."""
-    number = _read_number(text)
-    if number is None:
-        return None
-    if abs(number) >= Decimal(10) ** (digits - places):
-        return None
-    try:
-        quantized = number.quantize(Decimal(1).scaleb(-places))
-    except InvalidOperation:
-        return None
-    if quantized != number:
-        return None
-    return abs(quantized) if quantized == 0 else quantized
-
 
 def read_quantity(text) -> int | None:
     """A whole quantity (« 4,000 » is 4), |q| ≤ 99 999, else None."""
-    number = _read_number(text)
+    number = read_number(text)
     if number is None or number != number.to_integral_value():
         return None
     quantity = int(number)

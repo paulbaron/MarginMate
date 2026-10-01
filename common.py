@@ -8,12 +8,112 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from django import forms
 from django.db import models
 from django.utils import timezone
 from django.utils.dateparse import parse_date
+
+# -- Numbers typed or printed ----------------------------------------------------------------------
+# Read by « Consignes » off a seller's slip (returnables.patterns re-exports
+# them) and by « Combler les écarts » off its amount field: one reading of
+# « 1 234,50 » for the whole app.
+
+_DIGITS = re.compile(r"[0-9]+")
+
+
+def _grouped(text: str, separator: str) -> bool:
+    """Thousands groups: 1 to 3 digits, then groups of exactly 3."""
+    return re.fullmatch(r"[0-9]{1,3}(?:" + re.escape(separator) + r"[0-9]{3})+", text) is not None
+
+
+_SPACES = re.compile(r"[\s']+")
+_THOUSANDS_HEAD = re.compile(r"[0-9]{1,3}")
+_THOUSANDS_GROUP = re.compile(r"[0-9]{3}")
+_THOUSANDS_LAST = re.compile(r"[0-9]{3}(?:[.,][0-9]*)?")
+
+
+def _spaces_group_thousands(text: str) -> bool:
+    """Whether every space (or « ' ») inside a number sits between groups of
+    thousands - « 1 234,50 », « 12 345 678 » - and never elsewhere: « 42 50 »
+    typed for 42,50 € would otherwise read as 4 250 €."""
+    pieces = _SPACES.split(text.strip().strip("-−").strip())
+    if len(pieces) == 1:
+        return True
+    head, *groups = pieces
+    if not _THOUSANDS_HEAD.fullmatch(head):
+        return False
+    return all(_THOUSANDS_GROUP.fullmatch(group) for group in groups[:-1]) and bool(
+        _THOUSANDS_LAST.fullmatch(groups[-1])
+    )
+
+
+def read_number(text) -> Decimal | None:
+    """A number as a slip or a person types it, unbounded: spaces, no-break
+    spaces and « ' » separate thousands and nothing else (« 42 50 » is no
+    number); a leading « - » or « − » or a trailing « - » is the sign;
+    with both « . » and « , » the rightmost is the decimal separator and the
+    others separate thousands; one of them once is the decimal separator
+    (« 4,000 » is 4); one of them several times separates thousands."""
+    if not isinstance(text, str) or not _spaces_group_thousands(text):
+        return None
+    digits = "".join(char for char in text.strip() if not char.isspace() and char != "'")
+    if not digits or len(digits) > 40:
+        return None
+    negative = False
+    if digits[0] in ("-", "\N{MINUS SIGN}"):
+        negative, digits = True, digits[1:]
+    if digits.endswith("-"):
+        if negative:
+            return None
+        negative, digits = True, digits[:-1]
+    if not digits:
+        return None
+    dots, commas = digits.count("."), digits.count(",")
+    if dots and commas:
+        decimal_mark = "." if digits.rfind(".") > digits.rfind(",") else ","
+        thousands = "," if decimal_mark == "." else "."
+        if digits.count(decimal_mark) != 1:
+            return None
+        whole, fraction = digits.split(decimal_mark)
+        if not _grouped(whole, thousands):
+            return None
+        whole = whole.replace(thousands, "")
+    elif dots + commas == 1:
+        whole, fraction = re.split(r"[.,]", digits)
+        if not fraction:
+            return None
+    elif dots + commas > 1:
+        separator = "." if dots else ","
+        if not _grouped(digits, separator):
+            return None
+        whole, fraction = digits.replace(separator, ""), ""
+    else:
+        whole, fraction = digits, ""
+    if not _DIGITS.fullmatch(whole) or (fraction and not _DIGITS.fullmatch(fraction)):
+        return None
+    value = Decimal(f"{whole}.{fraction}" if fraction else whole)
+    return -value if negative else value
+
+
+def read_amount(text, places: int = 2, *, digits: int = 12) -> Decimal | None:
+    """An amount, exact to `places` decimals (a unit price: places=4), that
+    fits a DecimalField(`digits`, `places`): |x| < 10^(digits - places) -
+    10^10 for an amount. More decimals than `places` (other than zeros), or
+    wider than the column: None, « nombre hors limites » - never rounded."""
+    number = read_number(text)
+    if number is None:
+        return None
+    if abs(number) >= Decimal(10) ** (digits - places):
+        return None
+    try:
+        quantized = number.quantize(Decimal(1).scaleb(-places))
+    except InvalidOperation:
+        return None
+    if quantized != number:
+        return None
+    return abs(quantized) if quantized == 0 else quantized
 
 
 def is_id(value) -> bool:
