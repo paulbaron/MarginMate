@@ -18,7 +18,7 @@ from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from bank.models import BankTransaction
+from bank.models import BankTransaction, OperationRule, StatementFormat
 from inventory.models import GapExclusion, GapFillEntry, GapFillSetting, StockMovement, StockType, UnitChoices
 from invoices.models import Invoice, ReceiptBatch, ShopItemPrice
 from recipes.models import PosProduct, PosProductDailyQuantity, Recipe, RecipeSale
@@ -752,9 +752,44 @@ class EmptyDatabasePageSmokeTests(TestCase):
     def test_bank_pages(self):
         """« Dépenses » divides every share by what left the account, and on
         a new install nothing has."""
-        for name in ("bank:bank_home", "bank:spending_home", "bank:income_home", "bank:rule_list", "bank:proposals"):
+        for name in (
+            "bank:bank_home",
+            "bank:spending_home",
+            "bank:income_home",
+            "bank:rule_list",
+            "bank:proposals",
+            "bank:recognition",
+            "bank:recognition_reapply",
+            "bank:statement_formats",
+        ):
             with self.subTest(page=name):
                 self.assertPageOK(name)
+
+    def test_the_recognition_pages(self):
+        """A seeded rule's own page, and the list with no rule at all - an
+        espace whose « Données » were cleared. A rule that is not there is a
+        404."""
+        self.assertPageOK("bank:recognition_rule", pk=OperationRule.objects.first().pk)
+        OperationRule.objects.all().delete()
+        for name in ("bank:recognition", "bank:recognition_reapply", "bank:income_home"):
+            with self.subTest(page=name):
+                self.assertPageOK(name)
+        self.assertEqual(self.client.get(reverse("bank:recognition_rule", args=[999999])).status_code, 404)
+
+    def test_the_statement_format_pages(self):
+        """The seeded format's own page, and the list and Banque with no
+        format at all - an espace whose « Données » were cleared, where no
+        statement imports. A format that is not there is a 404."""
+        url = reverse("bank:statement_format", args=[StatementFormat.objects.first().pk])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        assertNoUnrenderedTemplateSyntax(self, response, url)
+        StatementFormat.objects.all().delete()
+        for name in ("bank:statement_formats", "bank:bank_home"):
+            with self.subTest(page=name):
+                self.assertPageOK(name)
+                assertNoUnrenderedTemplateSyntax(self, self.client.get(reverse(name)), name)
+        self.assertEqual(self.client.get(reverse("bank:statement_format", args=[999999])).status_code, 404)
 
     def test_the_invoice_files(self):
         """The zip of the period's invoices goes back to Banque when nothing

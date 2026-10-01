@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}{{ rule.name }} - Reconnaissance des opérations - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <p class="breadcrumb"><a href="{% url 'bank:recognition' %}">← Reconnaissance des opérations</a></p>
+            <h1>Règle « {{ rule.name }} »</h1>
+            <p class="page-subtitle">
+                {% if is_kind %}Lue à l'import : enregistrée, elle vaut pour les relevés importés ensuite.{% else %}Lue à chaque affichage d'« Entrées d'argent ».{% endif %}
+            </p>
+        </div>
+    </div>
+
+    {% if problem %}
+        <div class="message message-error">Motif invalide : {{ problem }} - la règle ne reconnaît rien ; corrigez-le ci-dessous.</div>
+    {% endif %}
+
+    <div class="card" id="essai-regle">
+        <form method="post" action="{% url 'bank:recognition_rule' rule.pk %}#essai-regle">
+            {% csrf_token %}
+            {% include "_form_fields.html" with form=form %}
+            {% comment %}
+            « Tester » first: Enter in a field presses the form's first submit
+            button, and it tries the rule - it never saves it.
+            {% endcomment %}
+            <div class="form-actions">
+                <button class="btn btn-secondary" type="submit" name="action" value="tester">Tester</button>
+                <button class="btn" type="submit" name="action" value="enregistrer">Enregistrer</button>
+                <a class="btn btn-secondary" href="{% url 'bank:recognition' %}#regle-{{ rule.pk }}">Annuler</a>
+            </div>
+        </form>
+        {% include "bank/_recognition_test.html" %}
+    </div>
+
+    {% include "bank/_recognition_help.html" %}
+{% endblock %}

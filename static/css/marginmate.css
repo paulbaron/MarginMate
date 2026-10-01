@@ -2680,6 +2680,9 @@ html:has(.returnables-page) .message { overflow-wrap: anywhere; }
     font-size: 0.88em;
     overflow-wrap: anywhere;
 }
+/* A rule's pattern in a table: wide enough to read, so a narrow screen
+   scrolls the table sideways rather than stacking it one letter a line. */
+.pattern-cell { min-width: 16rem; }
 .danger-zone { margin: var(--s5) 0; }
 .danger-zone > summary { cursor: pointer; color: var(--red); font-weight: 600; }
 .danger-zone form { margin-top: var(--s2); }

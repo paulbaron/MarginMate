@@ -21,7 +21,16 @@ from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
 
 from accounts import paths
-from bank.models import BankTransaction, CounterpartyAlias, IgnoreRule, IncomePayer, IncomeSource, InvoicePayment
+from bank.models import (
+    BankTransaction,
+    CounterpartyAlias,
+    IgnoreRule,
+    IncomePayer,
+    IncomeSource,
+    InvoicePayment,
+    OperationRule,
+    StatementFormat,
+)
 from inventory.models import (
     MovementKind,
     Product,
@@ -48,7 +57,14 @@ from transfer.tests.support import (
     media_listing,
     round_trip,
 )
-from transfer.tests.test_bank_section import make_line, make_payer, make_rule, pay
+from transfer.tests.test_bank_section import (
+    make_line,
+    make_operation_rule,
+    make_payer,
+    make_rule,
+    make_statement_format,
+    pay,
+)
 from transfer.tests.test_invoices_section import (
     MediaMixin,
     build_invoices,
@@ -135,8 +151,11 @@ def build_everything() -> dict:
 
     # The bank: a payment by number, one by the twin's file, one by the
     # receipt's stored fingerprint, a « pas de facture », a payee name learned,
-    # a credit said to be an « Avoir » of the till on its own line, and a
-    # payment terminal retained as « Carte » for every credit it sends.
+    # a credit said to be an « Avoir » of the till on its own line, a
+    # payment terminal retained as « Carte » for every credit it sends,
+    # beside the seeded recognition rules one typed for a terminal printing
+    # no gross, and beside the seeded statement format one typed for another
+    # bank's export, split by tabulations.
     pay(make_line(date(2026, 8, 3), "METRO ESSAI", "-50.70", settled=True), built["invoice"])
     pay(make_line(date(2026, 2, 27), "MONOPRIX ESSAI", "-8.44"), built["twins"][1], InvoicePayment.Method.AUTO)
     pay(make_line(date(2026, 9, 3), "MONOPRIX ESSAI", "-117.09", settled=True), built["receipt"])
@@ -152,6 +171,19 @@ def build_everything() -> dict:
     )
     make_line(date(2026, 8, 18), "TERMINAL ESSAI", "312.40", kind=BankTransaction.Kind.TRANSFER)
     make_payer("TERMINAL ESSAI", IncomeSource.CARD)
+    make_operation_rule("Versement TPE (ESSAI PAY)", "payout", r"ESSAI PAY REMISE", position=9)
+    make_statement_format(
+        "Banque d'essai (tabulations)",
+        position=2,
+        delimiter="\t",
+        date_format="yyyy-mm-dd",
+        decimal_mark=".",
+        date_column=1,
+        label_columns="2",
+        debit_column=3,
+        credit_column=4,
+        account_pattern=r"COMPTE (?P<compte>[0-9]+)",
+    )
 
     # Returnables: the seeded types and UBA format, a pickup with two photos,
     # and the slip its driver sent - its lines and its PDF - each made at a
@@ -329,11 +361,13 @@ def empty_backups():
 
 def bank_kept() -> tuple:
     """What clearing every other section leaves the bank: its lines, its
-    rules, its payers retained, and what its credits were said to be in
-    the till."""
+    rules, its recognition rules and statement formats in their order, its
+    payers retained, and what its credits were said to be in the till."""
     return (
         BankTransaction.objects.count(),
         IgnoreRule.objects.count(),
+        list(OperationRule.objects.order_by("position", "name").values_list("name", "pattern", "created_at")),
+        list(StatementFormat.objects.order_by("position", "name").values_list("name", "delimiter", "created_at")),
         IncomePayer.objects.count(),
         sorted(BankTransaction.objects.exclude(income_source="").values_list("fingerprint", "income_source")),
     )
@@ -376,8 +410,9 @@ class ClearFromThePageTests(MediaMixin, TransactionTestCase):
         self.assertRedirects(response, url + "?rapport=1", fetch_redirect_response=False)
 
         # Everything but the bank is empty; the bank lost its payments and
-        # its payee names, not its lines, its rules, its payers retained nor
-        # what its credits are in the till.
+        # its payee names, not its lines, its rules, its recognition rules,
+        # its statement formats, its payers retained nor what its credits are
+        # in the till.
         for key in registry.ordered(cleared - {"fournisseurs"}):
             counts = registry.get(key).count()
             with self.subTest(section=key):

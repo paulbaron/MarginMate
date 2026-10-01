@@ -2853,18 +2853,28 @@ vérifier" - an empty invoice used to say "ce fournisseur n'a pas de parseur".
 
 ### Bank statements (`bank/`)
 
-`/banque/` imports the account's CSV export (BNP Paribas) and links each
-spending line to the invoice or receipt it paid. `bank/statements.py` reads
-the file and `bank/matching.py` decides - both on plain values, no database;
+`/banque/` imports the account's CSV export and links each spending line to
+the invoice or receipt it paid. No bank is written in the code: how the CSV
+is LAID OUT - its encoding, its separator, which column holds what, how
+dates and amounts are printed, where the account number is - is a
+`StatementFormat` a person edits (« Format du relevé », « The statement's
+layout », the next section), and what each operation IS - a card payment, a
+debit, a transfer, its payee, the day a card was used - comes from the rules
+a person edits (`bank/recognition.py`, « Reconnaissance des opérations »,
+the section after it). Both are read once per upload - for every file of
+one POST (`views._import_statements`) - and handed in; an upload that wrote
+lines while no rule of that question was active says so after the fact
+(`views.NO_KIND_RULE`). `bank/statements.py` reads the file and
+`bank/matching.py` decides - both on plain values, no database;
 `bank/reconcile.py` does the rest.
 
 A link is made automatically only when **the amount is exact to the cent**,
 **the date fits** (a receipt dated three days before to one day after the card
-date the label prints; a supplier invoice dated up to 180 days *before* a
-debit or transfer, never after) and **the payee the bank prints names the
-supplier** ("SABBAH" names "Sabbh Oriental", "U.B.A." names "UBA"; a word of
-five letters may be one letter off; legal forms, "FILS", "PARIS" never
-count). Several invoices of that supplier adding up exactly to one debit count
+date the card-payment rule reads; a supplier invoice dated up to 180 days
+*before* a debit or transfer, never after) and **the payee the bank prints
+names the supplier** ("SABBAH" names "Sabbh Oriental", "U.B.A." names "UBA";
+a word of five letters may be one letter off; legal forms, "FILS", "PARIS"
+never count). Several invoices of that supplier adding up exactly to one debit count
 too, when exactly one combination does. Anything short of that is a
 suggestion, with its reason on screen: the same amount at a payee the bank
 doesn't name, or the named shop with a different amount - a misread receipt,
@@ -3101,6 +3111,638 @@ brought back (absent when it started) gets its link back. Merged back, the
 export once made again a link a person had undone, and put an AUTO link under
 a « réglée à la main » the automatic pass never revisits.
 
+### The statement's layout (`bank/statements.py`, « Format du relevé »)
+
+**No bank's CSV layout is written in the code either** (the owner,
+01/10/2026, once the operations were rules: « Oui, rends aussi le format du
+CSV configurable »). `statements.py` read BNP Paribas' export and nothing
+else - « ; », date;type;short type;label;value date;amount, dd/mm/yyyy,
+French decimals, the masked account `****0042` in the header line
+(`DATE_RE`, `ACCOUNT_RE`, `row[3]`… - all gone). The layout is a row now,
+`StatementFormat` (bank/models.py), edited on « Format du relevé »:
+
+- **Its fields.** `name` (unique; the import card and « Données » name a
+  format by it, `recognition.name_key`), `position` (the first by position,
+  then name, is what an import reads with when nobody chooses), `encoding`
+  (`auto`, `utf-8`, `cp1252`, `iso-8859-1`, `utf-16`), `delimiter` (« ; »,
+  « , », tab, « | »), `date_format` (jj/mm/aaaa, jj/mm/aa, jj-mm-aaaa,
+  jj.mm.aaaa, aaaa-mm-jj, mm/jj/aaaa: `DATE_FORMATS`, a pattern for the
+  whole cell and its `strptime`), `decimal_mark` (« , » or « . »), then the
+  columns, **counted from 1, as a person reads them off the file** (the
+  compiled `Layout` holds them from 0): `date_column` (required),
+  `label_columns` (text, « 4 » or « 3, 4 », at most `MAX_LABEL_COLUMNS` 5,
+  joined in the order given), `amount_column` (signed) OR `debit_column` /
+  `credit_column` (either may be missing), `value_date_column` and
+  `bank_type_column` (optional) - each 1..`MAX_COLUMN` (50) - and
+  `account_pattern` (a regex, optional). `clean()` is
+  `statements.check_format(fmt) -> Layout`, which takes any object carrying
+  those fields (a row, the form's data, a test's namespace) and raises
+  `FormatError(field, message)`, French, on the field: a column missing,
+  out of range or given two roles (« La colonne 3 sert deux fois : pour le
+  libellé et pour le montant. »), no amount or an amount said both ways, a
+  choice the model does not offer, an account pattern the guard refuses.
+  `parse_statement(content, rules, fmt)` takes the row or its `Layout` and
+  touches no database.
+- **What a row is.** **An operation when its date column holds a date of
+  the format - the whole cell, spaces aside**; every other row (a header of
+  column names, a balance, a blank) is passed over, and **the rows above the
+  first operation are searched for the account** - each joined by its
+  separator, a tab as a space; the last one that finds it wins, as before;
+  nothing is searched under the first operation. The label is its columns
+  joined by a space, each cell's spaces collapsed, an empty cell left out;
+  the type is stripped and cut to its column (below); a value-date cell
+  holding no date of the format is no value date (None, as before). **A
+  day and a month of one digit or two are read** (`DATE_FORMATS`, the year
+  as wide as the format says): a US export, or a spreadsheet re-saving the
+  file, drops the zeros, and the row « 3/8/2026 » was passed over - a
+  payment lost in silence while the rest of the file imported as if whole
+  (review, 01/10/2026). `strptime` reads both, and the fingerprint spells
+  the day by `isoformat`: an export re-saved without its zeros is known
+  again, its value dates included
+  (`test_one_day_printed_with_or_without_its_zeros_has_one_fingerprint`).
+  **Passed over in silence, as the old reader did**: a row whose date is
+  printed in another shape than the format's (« 2026-08-03 » or
+  « 03/08/26 » for jj/mm/aaaa); and a header row whose date column holds a
+  date of the format would be read as an operation. mm/jj/aaaa on a
+  day-first file is refused only where a day past the 12th shows
+  (« 13/08/2026 », « 13/7/2026 »): a file whose days are all 12 or less
+  reads, misdated. « Tester » is where a person sees all three - the
+  numbered rows beside what is read.
+- **The account pattern** (`ACCOUNT` = « compte »): the whole match, or its
+  `(?P<compte>…)` - any other group is refused, « ne sert à rien » - is the
+  account, part of every fingerprint; none typed, the account is « ». It
+  goes through `returnables.patterns` only (the guard, case ignored,
+  `PATTERN_TIMEOUT` a search; one finding an empty line is refused), **each
+  search asked twice before it is too slow, as a rule's match is**
+  (`recognition.search`, shared): the limit is the clock's, one search can
+  lose it to a busy server, and `ACCOUNT_TOO_SLOW` told the owner to
+  simplify a pattern that was fine (review, 01/10/2026). And **its searches
+  share `recognition.RULE_SECONDS` of the thread's time over the whole
+  file** (`_AccountSearch`, billed as a rule is): a pattern just short of
+  the per-search limit on row after row - a file whose date column never
+  holds a date - is too slow all the same (`ACCOUNT_TOO_SLOW`); a budget
+  per search alone let it run for a very long time on a large file.
+- **The type and the account fit their columns** (`BANK_TYPE_MAX` 80,
+  `ACCOUNT_MAX` 40, read off `BankTransaction`'s fields). A format may name
+  any column as the type, and an account pattern without its
+  `(?P<compte>…)` keeps its whole match - « IBAN .* » the rest of the
+  header line. SQLite stored either whole without a word, but the
+  « Données » restore (`codec.load`) refuses a value wider than its field
+  (« plus de 40 caractères ») and skipped the line with its links,
+  « pas de facture », category and « En caisse » choice: the safety
+  archive of an « Effacer » or a « Remplacer » could not bring them back
+  (review, 01/10/2026). **The type is cut** - stripped, cut to 80, the
+  spaces the cut leaves at its end dropped - **before the rules read it**:
+  the type they read is the type stored, so « Relire » finds what the
+  import found; it is in no fingerprint. **The account is never cut: it
+  refuses the file** (`ACCOUNT_TOO_LONG`, « Le numéro de compte lu fait
+  plus de 40 caractères : resserrez le motif du format du relevé avec
+  (?P<compte>…). »), the account kept - the last found - measured once
+  every row is read. It is in every fingerprint, and a cut one is no
+  account: the pattern tightened later reads another, and every operation
+  of an export imported again would be new.
+- **Refused - the whole FILE, in French, nothing written** (the ValueError
+  the page shows; one line dropped in silence is a payment nobody looks
+  for): a stored format the check refuses now (`reconcile._layout`,
+  « Import annulé : le format « X » est à corriger sur « Format du
+  relevé » - <phrase> »: a pattern the guard has since learnt to refuse -
+  the field's sentence alone said nothing of where to correct it); a file
+  not in the format's encoding (`_not_in`, « Ce fichier n'est pas en
+  UTF-8 : changez l'encodage du format du relevé, ou exportez-le à
+  nouveau. »); one the csv module cannot split, or holding a NUL
+  (`NOT_A_CSV`); a row shorter than the widest column the format uses
+  (« Ligne incomplète ») or, where the separator can be printed in an
+  amount, wider than its header (« Ligne plus longue que l'en-tête »,
+  below); a date of the format that is no day, or outside 2000-2099, in
+  the date or the value-date column (« Date illisible »); an amount that
+  cannot be read whole, or a row with neither debit nor credit (« Montant
+  illisible »); the account pattern too slow; no operation at all
+  (« Aucune opération trouvée : … exporté en CSV (format « X ») » - it
+  names the format, now there may be two); then, after the last row, an
+  account wider than its column (`ACCOUNT_TOO_LONG`, above) and
+  `rules.refusal`.
+- **The seed is the old reader, to the byte, because a statement imported
+  again must be known again.** `import_statement` writes only the lines
+  whose fingerprint is not stored (`reconcile.known_fingerprints`, in
+  chunks, below) - the sha256 of
+  `account|day|value date|label|amount|occurrence`, its composition
+  unchanged (`_fingerprint`). A file read one character otherwise - « »
+  for « ****0042 », a label's spaces, « 120.0 » for « 120.00 » - gives new
+  fingerprints, and every overlapping export imported after the upgrade
+  would put each operation in twice: every debit counted twice, each
+  waiting for an invoice. So migration
+  `bank/0007` seeds « BNP Paribas (CSV) » as literals (`NAME`, `FORMAT`,
+  imported by the tests through `importlib`, like 0006's `RULES`): position
+  1, `auto`, « ; », jj/mm/aaaa, « , », date 1, type 2, label 4, value date
+  5, amount 6, account `\*{2,}[0-9]+` (column 3, a short type, was never
+  read). `get_or_create` by name - seeding again keeps a person's edits -,
+  reversing does nothing, every new espace has it through `_template`
+  (`TenantTests`, `test_provisioning`). **`test_statement_formats.OracleTests`
+  replays the old reader**, copied from commit 79e638c, over 400 BNP-shaped
+  files generated from a fixed seed (headers, quotes, twins, blanks, footers,
+  Windows-1252, every refusal): the seeded format gives the same account,
+  the same lines to the character and the same fingerprints. It has teeth:
+  any single field of the format changed makes tens to hundreds of the 400
+  differ (checked by hand), and `test_the_corpus_holds_every_shape_it_is_meant_to`
+  keeps the corpus from agreeing because it reads nothing. What reads
+  otherwise on purpose is pinned, old and new
+  (`test_what_reads_otherwise_now_on_purpose`) - none of it in a statement
+  of the owner's bank: **« 1.234 » was 1,234 € and is 1 234 €; « 12.5 » was
+  read and is refused**; « 5, », « 1e5 », « NaN », « 1_000 », digits that
+  are not ASCII and an amount wider than the column - « 9 999 999 999,995 »
+  included - are refused; « 12,00- », « −12,00 », « 1.234,56 » and
+  « 1'234,56 » are read; **a day or a month printed without its zero is
+  read** (the row was passed over; a value date so printed was none, and
+  the fingerprint another); an account wider than its column is refused
+  (the seeded pattern reads any run of digits behind its stars) and a type
+  wider than its own is cut; a 31/02 and a 1999 are refused in French
+  (English, or read); a NUL, a byte Windows-1252 has no letter for, a
+  UTF-8 mark before what is no UTF-8 and lines ended by a lone carriage
+  return are refused in French (read, English, or a 500);
+  UTF-16 is read (it was garbage); an account in digits that are not ASCII
+  is « ». The pure tests read with `support.SEEDED_FORMAT`, built from the
+  migration's literals (`SeedTests` checks it is the stored row);
+  `support.make_format` runs `full_clean` before saving.
+- **Debits and credits**: amount = |crédit| − |débit|, whichever is
+  printed; neither refuses the file; one column alone (debits only, or
+  credits only) is a format. A negative figure in the credit column is
+  money in all the same - its sign dropped, as designed - and a debit
+  printed signed beside a credit is money out (« -10,00;2,50 » is -7,50,
+  « -10,00;0,00 » -10,00): each `abs()` is pinned by a row of
+  `test_debits_and_credits_are_signed_as_money_out_and_money_in` - two of
+  them could be dropped with every suite green (review, 01/10/2026).
+- **Amounts are read digit for digit** (`parse_amount(text, decimal_mark)`):
+  spaces of any kind and « ' » between the thousands, the other mark only
+  between groups of exactly three digits, a sign in front (« + », « - »,
+  « − ») or a « - » behind (« − » behind is refused); refused rather than
+  guessed - two decimal marks, a group that is not three digits, a letter,
+  an exponent, nothing, and **anything past `MAX_AMOUNT`,
+  9 999 999 999,99**: `BankTransaction.amount` is (12, 2), « A figure
+  wider than the column », the cliff the column exactly, as
+  `einvoice.MAX_AMOUNT`. **Bounded as printed, before any rounding.** It
+  was `AMOUNT_LIMIT`, 10^10, and « 9 999 999 999,995 » is under that:
+  SQLite keeps a REAL, which Django's converter reads back to the cent
+  under the field's twelve digits - ten billion, `decimal.InvalidOperation`
+  on every read of the line: the Banque page a 500 at every visit, and not
+  even a delete got it out, the collector reads the row (review,
+  01/10/2026). Rounding to the cent before comparing would not do either:
+  the REAL comes back as fifteen digits, and from 9 999 999 999,994995 up
+  rounds past the column. Within it a third decimal reads as before
+  (« 9 999 999 999,990 »). **Never normalised**: « 120,00 » is
+  `Decimal("120.00")` and the
+  fingerprint spells `str(amount)` - « 120 » or « 120.0 » there is another
+  operation. « ,50 » is 0.50, as before.
+- **A separator an amount can print** (`_splits_amounts`: the decimal mark,
+  or the one grouping thousands - « , » under either) cuts an unquoted
+  amount in two: « -4,10 » is « -4 » and « 10 », read -4, the cents gone;
+  « -1,234.56 » read -1; nothing said (review, 01/10/2026). Every such row
+  grows by the same cell, so the operations agree with one another and
+  only the header gives it away: **an operation row wider than the header
+  above it is refused** (`WIDER_THAN_HEADER`, « Ligne plus longue que
+  l'en-tête : un montant non entre guillemets ? Exportez avec un autre
+  séparateur et changez celui du format du relevé - <ligne> »). The header
+  is the widest row above the first operation holding at least the cells
+  the format reads (`Layout.width`): a title or an account line is none -
+  measured by one, every row of a sound file was refused. Not caught: a
+  file with no such header above its operations. Under « ; », a tab or
+  « | » a row may be wider than its header, as the owner's bank's always
+  was.
+- **Days between 2000 and 2099** (`FIRST_DAY`, `LAST_DAY`), the operation's
+  and the value date: anything else is a misread column, and a year 1 put
+  every matching window out of the calendar. jj/mm/aa reads « 00 »-« 68 »
+  as 2000-2068 and the rest as 19xx (Python's `%y`): refused.
+- **Encodings** (`_decode`): « auto » is UTF-16 behind its byte order mark,
+  else UTF-8 with or without one, else Windows-1252 - the old reader's, plus
+  UTF-16; a UTF-8 mark before what is no UTF-8 is refused (the file says it
+  is UTF-8, and is a broken one). « utf-8 » drops the mark. **Windows-1252
+  and ISO-8859-1 refuse a file opening on a Unicode mark**: either decodes
+  anything, the mark became « ï»¿ » in the first date cell, and a first
+  operation with no header above it was passed over, nothing said. A byte
+  the encoding has no letter for is refused in French (it was Python's
+  English).
+- **`csv.Error` is no ValueError**: a cell past `csv.field_size_limit()` or
+  lines ended by a lone carriage return were a 500 at the import; both are
+  `NOT_A_CSV` now (`rows`). So is a NUL: since Python 3.11 the csv module
+  reads it into the cell, and it went into the stored label.
+- **What is already stored is asked `FINGERPRINT_CHUNK` (900)
+  fingerprints at a time** (`reconcile.known_fingerprints`, the import's
+  and « Tester »'s « déjà importées »): Django never splits an `__in` list
+  on SQLite, whose bound variables are capped (32 766 in the bundled
+  build, 999 in older ones), and a statement of more operations than that
+  was an OperationalError - a 500 on the upload and on « Tester » (review,
+  01/10/2026). The tests lower the cap to 999 on the raw connection
+  (`bound_variables`, `setlimit`) and read 1 000 operations.
+- **Several formats** (two banks). Banque's import card offers a « Format »
+  select only with two or more (`views.FORMAT_PARAM`, the first selected),
+  the posted id through `common.is_id`, one not there refused (« Format de
+  relevé inconnu. », `UNKNOWN_FORMAT`, nothing imported); one line under it
+  says « Format : <nom> · modifier », « Formats : N · modifier » or
+  « Aucun format de relevé — en ajouter un ». With no format at all an
+  import is refused before anything is read (`reconcile.NO_FORMAT`,
+  « Aucun format de relevé : ajoutez-en un sur « Format du relevé ». »).
+  The default is the first by (position, name), `reconcile.default_format()`,
+  one query. `views._import_format` reads the format once per POST, like
+  the rules, and hands the row to `import_statement(content, rules, fmt)`
+  for every file (checked per file, no query); called without one,
+  `import_statement` loads it, once a file
+  (`test_what_is_not_handed_in_costs_one_query_each`: two queries, format
+  and rules).
+- **The page** (`/banque/format/`, `bank:statement_formats`; one format,
+  `/banque/format/<pk>/`, `bank:statement_format`; « ← Banque », no tabs;
+  linked from the import card and from « Reconnaissance des opérations »,
+  each page linking the other): the formats in their order - « par défaut »
+  on the first, which column holds what (`_columns_said`, « date 1 ·
+  libellé 4 · montant 6 »), separator, dates, decimals, « à corriger » and
+  the reason on a stored format the check refuses (`_format_problem`; a
+  banner on its own page) -, ↑/↓ (« monter » / « descendre »,
+  `views._swapped`, shared with the rules' `_move`; « c'est maintenant
+  celui de l'import » when it reaches the top), Modifier, Supprimer, each
+  with an `aria-label` naming its format; « Nouveau format » below, saved
+  last (`_saved(..., model=StatementFormat, taken=FORMAT_NAME_TAKEN)`: a
+  name taken meanwhile is caught as for the rules). `StatementFormatForm`:
+  number fields 1..50 whose every message is French (the site's language
+  setting is English, so Django's own would reach the page) - a NUL in a
+  text field too: Django puts its validator on every CharField, « Null
+  characters are not allowed. », and every text field of this form and of
+  `OperationRuleForm` says `forms.NUL_REFUSED` instead (« Caractère
+  interdit (NUL) : retapez ce champ. »; review, 01/10/2026). Each form's
+  `test_every_text_field_says_a_nul_in_french` walks its text fields, so
+  one added later says it too; the site's other forms (`IgnoreRuleForm`…)
+  still say Django's. The name unique by `name_key`, the format itself
+  excepted; `clean()` runs
+  `check_format` and puts each refusal on its field, skipped when a field
+  is refused already - nothing said twice; `_post_clean` skips the model's
+  check, as `OperationRuleForm` does; the label columns are stored as the
+  page prints them (« 3,4 » → « 3, 4 »). **The last format is never
+  deleted**: deleted, then counted, in one transaction rolled back when
+  none is left - two tabs deleting the last two leave one - « Gardez au
+  moins un format : modifiez-le plutôt. ». A GET writes nothing, an unknown
+  action neither. « Lire un format » says how a format reads a file and
+  reads an invented export (`views.FORMAT_EXAMPLE`, parsed by a test).
+- **« Tester » numbers the columns** - the first submit button, so Enter
+  tests and never saves; the page drawn again, 200. A CSV picked on the
+  form (`views.TEST_FILE`, multipart, `.csv` only, `common.file_too_big`) is
+  read with the format AS TYPED and **never stored** - nor kept between two
+  tests: a browser never refills a file input, so it is picked again and
+  the page names the file it read. **Both forms must say
+  `enctype="multipart/form-data"`**, and the test client posts multipart
+  whenever a file is in the data, whatever the form says: dropped from
+  the format's own page, every test stayed green while a browser sent the
+  file's name alone and « Tester » always answered « Choisissez un
+  fichier … » (review, 01/10/2026). So the tests' `Page.send` checks the
+  form's `enctype` before it attaches a file. Shown: the file's first
+  `TEST_ROWS_SHOWN` (15) rows split into columns numbered from 1, as the
+  form counts them - what a person picks the numbers from; at most 50
+  (more is said), cells cut to 40 characters; split by `statements.rows`,
+  the reader's own decoding and splitting, so the column numbered here is
+  the one the format names. Then the operations it reads - date, type,
+  label, value date, amount, nature and payee by the active recognition
+  rules, the first `TEST_LINES_SHOWN` (30) and « … et N de plus » -, the
+  account, and **how many are « déjà importées »** (their fingerprint is
+  stored, asked in chunks as the import asks): the way to check that a
+  format edited after statements were imported still reads them as before -
+  read otherwise, the next overlapping import would put them in twice, and
+  the explainer says so. Or the import's own refusal sentence. Nothing is
+  read while the format is refused (the errors are on the form); the name
+  alone wrong still reads.
+- **« Données »** carries the formats (`statement_formats` in banque.json,
+  « formats de relevé » in the counts), as it carries the rules: the key is
+  `name_key(name)`, every field but `created_at` is compared (the name as
+  spelt and the position included), a difference is a conflict kept under
+  « Fusionner » and replaced under « Remplacer », whose prune deletes the
+  formats the archive does not name - only when the archive said the list.
+  Every format written goes through `sections/bank._check_format`: the
+  model's `clean` first (« format refusé — <champ> : <la phrase de
+  check_format> »), then `full_clean`, whose English is never shown
+  (« « champ » : valeur refusée »), then **a position past `MAX_POSITION`
+  (`2**31 - 1`) is refused the same way** (`_check_position`, the rules'
+  too). Django's range for the field on SQLite runs to `2**63 - 1`, and
+  the page puts a new format at the highest plus one and makes positions
+  shared distinct by adding one (`_saved`, `_swapped`): past `2**63 - 1`
+  that is an OverflowError, and once a « Fusionner » brought one in at
+  it, every « Nouveau format » saved, and « descendre » on two sharing it,
+  was a 500 (review, 01/10/2026). One AT the bound leaves the page room
+  for the next - which an archive of it then refuses in turn. Always
+  exported, in (position, name), an empty list included; **absent is « not
+  said »** (an archive written before 0007): no format created - even into
+  a wiped bank - none pruned; anything but a list of objects is an
+  `ArchiveError`. « Effacer » takes
+  them, the seeded one too, and says so before (the section's
+  `clear_note`) and after (`FORMAT_CLEAR_NOTE`): with none, every import is
+  refused until one is brought back or typed again - as after a
+  « Remplacer » with an empty list. A line keeps the fingerprint it was
+  imported with: a format an archive brings reads no statement again.
+- Migration `bank/0007`, **WRITTEN and left to be applied** with 0003-0006
+  (the owner, after a backup, `migrate_tenants`; `serve` refuses to start
+  until then).
+
+### Recognising the operations (`bank/recognition.py`, « Reconnaissance des opérations »)
+
+**No bank's words are written in the code** (the owner, 01/10/2026: « Je ne
+veux rien en dur / hardcodé dans la reconnaissance des différentes
+opérations de banque » - configurable for another bank with other labels,
+by regular expressions saying which operation is what, a cash deposit, a
+card terminal's payout; and a terminal's payout received WITHOUT the sum it
+collected printed in its label). What an operation is used to be read by
+one bank's and one terminal's words written in `statements.py` (`CARD_RE`,
+`DEBIT_RE`, a label starting « VIR ») and `income.py` (`PAYOUT_RE`,
+`CASH_TYPE`, `CHEQUE_TYPE`, `payout_gross`) - all gone. They are rows now,
+`OperationRule`: a name, what it means (`meaning`), the field searched
+(`searched`: « Libellé » or « Type d'opération »), a pattern, a `position`,
+active or suspended. The engine is `bank/recognition.py`, pure - plain
+values in, plain values out - but for its last three functions (`load`,
+`stored_changes`, `apply_changes`).
+
+- **Two questions, each answered by the first active rule of its layer, in
+  their order, that finds its pattern** (`Rules.kinds`, `Rules.till`). The
+  rules' order decides, never where in the text a match falls, and a rule of
+  one layer never answers the other's question. **The order is `position`,
+  then the NAME - never the id** (`OperationRule.Meta.ordering`, `load`, the
+  page's list, « Tester », `views._move`, the « Données » export): an id is
+  this database's, and an import gives new ones. By id, a « Remplacer »
+  bringing back one of two rules of one position, the other still here, put
+  the one created again last: `describe` then read its tie-mate's kind and
+  payee where the archive said its own, and the section's snapshot, sorted by
+  name, saw nothing (review, 01/10/2026;
+  `test_rules_of_one_position_keep_their_order_when_one_of_them_is_still_here`).
+  By name, every database holding the same rules asks them in one order.
+  - **What the operation IS** (« Paiement par carte », « Prélèvement »,
+    « Virement », « Autre opération »; `KIND_MEANINGS`) is asked at IMPORT
+    (`describe`, from `statements.parse_statement`) and STORED on the line:
+    `kind`, `counterparty`, `card_date`, the columns they always were. No
+    rule found: « Autre », no payee, no card date.
+  - **What a credit is in the TILL** (« Versement de carte (TPE) », « Dépôt
+    d'espèces », « Remise de chèques », « Titres-restaurant », « Avoir »,
+    « Pas une vente »; `TILL_MEANINGS`) is asked whenever « Entrées
+    d'argent » or Banque's « Entrées » tab is drawn (`till_reading`, through
+    `income.automatic_source`), never stored - read on draw as it always was.
+- **The named groups are what a rule reads** (`GROUPS`; the page lists them
+  from `GROUP_LABELS`): `(?P<tiers>…)` the payee, for every meaning of the
+  first question; `(?P<jour>…)` and `(?P<mois>…)` the day a card was used,
+  for a card payment, with `(?P<annee>…)` - two digits are 20yy, four are
+  read as written - or without, the year then being the latest of the
+  booking's and the one before that does not put the card after the booking
+  (used 30/12, booked 02/01). Anything that is no date (a 31/02, a year
+  outside 2000-2099, digits that are not ASCII, a day or a month of ten
+  digits and more) is no card date, and the payment stays a card. That last
+  one is an OverflowError, not a ValueError - `date` refuses an int past a C
+  long before it can say it is no day - and `_card_date` catches both: an
+  unbounded `(?P<jour>[0-9]+)` meeting a long reference (« CB
+  20260715123456/2 … ») passes every check, and was a 500 on the import, on
+  « Tester », on « Relire » and on the rules page at every visit, with no
+  link left on screen to the rule's own page (review, 01/10/2026).
+  `(?P<encaisse>…)` is a payout's gross. `check`
+  refuses a group the meaning does not read (a group that reads nothing is a
+  rule that does not do what its author believes), the day without the
+  month, the year without both. A payee has its spaces folded and is cut to
+  its column (255; it was stored whole).
+- **Case never matters, an accent only where the pattern spells one**: the
+  pattern is searched with `returnables.patterns.FLAGS` (IGNORECASE) in the
+  field it names, cut to `TEXT_LIMIT` (1 000 characters), and, not found as
+  printed, again in `common.search_key(text)` - « VERSEMENT ESPECES » finds
+  « Versement espèces ». **A match found only on the folded text is read
+  back on the text as printed** (`_AsPrinted`): the capture keeps its
+  accents and its case - `^PRELEVEMENT (?P<tiers>.+)$` reads « CAFÉ ÉTOILE »
+  on « PRÉLÈVEMENT CAFÉ ÉTOILE » - whenever every character of the text
+  folds to exactly one (`_aligned`, the usual case of precomposed accents:
+  the positions then line up). Only a text holding one that does not (an
+  accent written as a separate combining mark) gives the folded text's own
+  capture, accent-free and lower case (« cafe »). Never « fix » the read-back:
+  the payee is stored, and the aliases learnt and the payers retained are
+  keyed on it.
+- **A pattern is never trusted, typed or stored.** It goes through
+  `returnables.patterns` only (« The motif guard », under « Consignes »:
+  refused before `regex` compiles anything that could freeze the machine,
+  then `PATTERN_TIMEOUT` per match). A stored rule that no longer passes
+  `check` lands in `Rules.invalid` and recognises nothing; one too slow lands
+  in `Rules.slow` and is skipped for the rest of that `Rules` - one reading:
+  one page drawn, one « Tester », one « Relire » preview or write, one
+  import, which is **every file of one POST**
+  (`views._import_statements` loads the rules once for all of them: a rule
+  found slow on the first file refuses the files after it too, rather than
+  being tried afresh on each). Too slow is either of two things:
+  - **a match out of time twice running** (`search`, public: the format's
+    account pattern searches through it too): the per-match limit is the
+    clock's, and one match can lose it to a busy server rather than to its
+    pattern, so a match out of time is asked once more before its rule is
+    set aside;
+  - **`RULE_SECONDS` (5 s) spent by one rule over the whole reading**
+    (`Rules.spent`, cumulative per rule): every match under the limit and
+    still the slowest thing the page does - a pattern just short of the
+    limit on line after line, which no single match gives away. **Billed in
+    the THREAD's CPU time** (`time.thread_time`), never the clock's:
+    production is one Waitress process whose gathers, receipt batches and
+    other requests are threads running Python, and a match that releases the
+    GIL waits behind them to get it back - a wait that is not its
+    pattern's. Billed by the clock, 600 ordinary « PRLV SEPA … » labels
+    beside two busy threads put 5 s on the seeded debit rule: the import
+    refused naming a correct rule, and every credit read after the moment a
+    till rule crossed the limit lost its reading (review, 01/10/2026).
+    `thread_time` ticks by about 15 ms on Windows, coarse but unbiased over
+    5 s. `test_a_rule_is_billed_its_own_time_never_the_wait_behind_busy_threads`
+    reads fifty labels beside two busy threads with the limit lowered to
+    0,1 s - fifty, not hundreds: each match there waits a real GIL switch.
+  Neither raises. « Entrées d'argent » (`IncomeReport.rule_problems`) and
+  Banque's « Entrées » tab (`rule_problems`, « Entrées d'argent », below)
+  say them, each read after the last credit - a rule turns out slow only
+  once it has read lines. The rules page marks the row (« motif invalide »,
+  « trop lent ») and warns « Aucun relevé ne s'importe … » **only where an
+  import WOULD refuse** (`views._import_refused`: a rule invalid, of either
+  question - `load` compiles both and `refusal` names both - or a rule of
+  the FIRST question found slow). A till rule never runs at import
+  (`describe` only), so one found slow while the list read the credits marks
+  its row and stops nothing: the warning said imports were stopped while
+  they ran (review, 01/10/2026). « Relire »'s preview draws its own
+  « blocked » by the same question: its `_detached` runs the till rules for
+  the payers, and its POST, like an import, runs `describe` only. **An
+  import refuses to run** (`Rules.refusal`, « Import annulé : la règle de
+  reconnaissance « … » ne peut pas être appliquée … », the ValueError the
+  page shows, nothing written) while one cannot be applied - checked after
+  the LAST row, so a rule slow on it counts - because a kind stored wrong is
+  never read again. Suspending the rule is the other way out. « Relire »
+  refuses the same way (« Rien n'a changé : … »).
+- **« Recognised » is « a till rule matched »** (`till_reading(...) is not
+  None`), never « its source is not OTHER »: a « Pas une vente » rule
+  (source OTHER) recognises its line, beats a retained payer and reads
+  « règle « <nom> » » like any other. Every test of it in `income.py` asks
+  exactly that - `reading_of`, `follows_its_payer`, `set_source` (`reached`,
+  the payer's other credits), `forget_payer`, `Entry.how_label`,
+  `Entry.remember_by_default`.
+- **A terminal that prints no gross** (the owner's last ask): a payout rule
+  WITHOUT `(?P<encaisse>…)` reads the credit as a card payout counted at the
+  amount received, its commission unknown (`Entry.gross_from_amount`, None
+  never 0 - « Entrées d'argent », below). WITH the group, the capture is read
+  by `patterns.read_amount`, whole or not at all: one that is no amount
+  (three decimals, wider than an amount) is no payout OF THAT RULE, and the
+  next rule is asked - a gross misread is a wrong commission. A card said by
+  the LINE or its PAYER takes `recognition.printed_gross` - what the first
+  payout rule reading a gross reads on it - else the amount received, as
+  `PAYOUT_RE` did.
+- **What is stored is never read again in silence.** A rule of the first
+  question added, edited, moved or suspended changes nothing already
+  imported (« elle vaut pour les relevés importés ensuite », said when one is
+  saved). The page counts the stored lines the active rules would read
+  otherwise and links « Relire les opérations déjà importées (N) »
+  (`/banque/reconnaissance/relire/`, `bank:recognition_reapply`): the GET
+  shows each change - kind, payee, card date, before → after, the first
+  `MAX_CHANGES_SHOWN` and how many more - and writes nothing; the POST writes
+  exactly that, held to the digest the preview was drawn with
+  (`stored_changes().digest`, `apply_changes(expected_digest)`): lines or
+  rules moved meanwhile is `ChangedMeanwhile`, nothing written, « Vérifiez le
+  nouvel aperçu ». It writes `kind`, `counterparty` and `card_date` and
+  nothing else - links, decisions, categories, `income_source` stay, and the
+  matching is NOT run (« Rapprocher automatiquement » stays the person's).
+  **The preview promises only that** - « Les rapprochements, les catégories
+  et le choix « En caisse » propre à chaque opération restent tels quels » -
+  **and says what a new payee unties without a field being written**
+  (`views._detached`; three queries, none when no payee changes): the
+  credits that follow a retained payer and whose payer key moves with their
+  payee (`income.payer_key` is read off it; worked out on a copy carrying
+  the new counterparty, `follows_its_payer` asked with the rules loaded),
+  « N entrées ne suivront plus leur payeur retenu : à reclasser sur
+  « Entrées d'argent » », and the debits whose alias key
+  (`alias_key(payee_of(...))`) is a learnt `CounterpartyAlias`'s and moves,
+  « N dépenses ne correspondront plus au libellé bancaire appris pour leur
+  fournisseur ». It used to promise
+  « choix « En caisse » » whole: a payee capture shortened from « TERMINAL
+  EXEMPLE » to « TERMINAL » took two card payouts retained by their payer
+  into « Autres entrées », « non reconnue », out of the card figures and the
+  balance, the payer still listed and following nothing (review,
+  01/10/2026). A credit whose new key is another retained payer's is counted
+  too: it no longer follows its own. Nothing is repaired - retaining the
+  payer under its new key is the person's. The « Date de carte » column
+  sorts by the date the POST would write (`data-sort`).
+  Never automatic, because the payee feeds the aliases learnt
+  (`CounterpartyAlias`, keyed on `payee_of`), the payers retained
+  (`income.payer_key`) and the matching (`PAID_ON_THE_SPOT` is by kind, a
+  receipt's window by card date), and « Données » compares the three as
+  fields of a line: lines read again in one database alone would come back
+  as conflicts from every archive of the other.
+- **The seed: migration `bank/0006`** writes the eight rules that are
+  exactly what the code recognised before, as literals (`RULES`, which the
+  tests import through `importlib`; a migration replays the same whatever
+  the code becomes, like returnables/0002): card payment (« FACTURE CARTE DU
+  ddmmyy … CARTE 1234XXXXXXXX5678 »), direct debit (« PRLV SEPA [B2B ]…
+  ECH/ »), transfer sent (« /BEN »), received (« /FRM »), any other « VIR »,
+  then the payout (« TOTAL ENCAISSE <brut> EURO(S) ») and cash and cheques by
+  the operation type. `get_or_create` by name; reversing does nothing (the
+  table goes with the CreateModel). Test databases run it, and every new
+  espace has it through `_template` (`TenantTests`).
+  `test_recognition.OracleTests` replays the OLD functions, copied into the
+  test, against the seeded rows over a corpus holding every kind and every
+  source; what reads otherwise on purpose is pinned there
+  (`test_what_reads_otherwise_now_on_purpose`) - a gross with three decimals
+  or wider than an amount is no payout (it was one), case no longer matters
+  to the kind rules (the old patterns were case-sensitive), a payee is cut
+  to 255 - none of which a statement of the owner's bank prints. The lines
+  already stored are untouched. Migration `bank/0006`, **WRITTEN and left to
+  be applied** (the owner, after a backup, `migrate_tenants`; `serve`
+  refuses to start until then - like 0003-0005).
+- **The page** (`/banque/reconnaissance/`, `bank:recognition`; a button on
+  Banque beside « Dépenses sans facture attendue »; linked from « Entrées
+  d'argent »): two tables, « Nature de l'opération » (`#nature`) and « En
+  caisse » (`#en-caisse`), each in its order. ↑/↓ (« monter » / « descendre »,
+  POSTed to `bank:recognition_rule`) move a rule among the rules of ITS
+  question only - an order across both would mean nothing - and
+  `views._move` makes positions two rules share distinct first, so a swap
+  always moves something and nothing else changes place. Each row says how
+  many lines it decides NOW (« Opérations »: every stored line read again by
+  the active rules, for the first question; for the till, the credits it
+  recognises whose own « En caisse » choice does not beat it - `income.CHOSEN`
+  left out, as `reading_of` orders them: three payouts set « Pas une vente »
+  by hand counted three for the payout rule that decides none of them; « — »
+  for a rule suspended or invalid), « brut lu » / « brut non imprimé :
+  montant reçu » on a payout rule, « motif invalide » / « trop lent », and
+  Modifier, Suspendre / Réactiver, Supprimer, each with an `aria-label`
+  naming its rule (as ↑/↓ have); the pattern's cell keeps `.pattern-cell`'s
+  min-width, so a narrow screen scrolls the table rather than stacking the
+  pattern a letter a line. A new rule comes last (`position` = the highest +
+  1): its order is never typed. **So does a rule edited into the other
+  question** (`views._saved(form, last=True)`, in one transaction; « Règle
+  « … » enregistrée, dernière de sa nouvelle partie »): positions are
+  numbered across both questions while each is ordered on its own, and the
+  number it kept put it wherever it fell there - the seeded « Autre virement
+  (VIR) » (position 5) turned into « Pas une vente » became the FIRST till
+  rule, above the payout rule, and every card payout read « Pas une vente »,
+  nothing said (review, 01/10/2026). Kept in its question, a rule keeps its
+  place. **« Tester »** (the first button, so Enter tries and never saves)
+  runs the rule as typed over the stored lines - every line for the first
+  question, the credits for the till - and saves nothing: how many it finds
+  and what they come to - a till rule's total (credits only), a rule of the
+  first question's « X € reçus, Y € payés » apart, each said when it is not
+  zero, since it finds money both ways and a transfer each way nets 0 -, how
+  many something already decides (« Dont N déjà décidée(s) par une règle
+  placée avant », « ou à la main » for the till: a credit's own choice beats
+  every rule) - it will never read them -, the newest `MAX_EXAMPLES` with
+  what it reads. On a rule's own page « before » is the rules before it in
+  its question, and every active rule of the other question when the edit
+  moves it there (it is saved last of it). The list and « Tester » cost the
+  same whatever the number of lines and rules (pinned). `OperationRuleForm`
+  checks the name unique by `name_key` (case, accents and spaces aside) and
+  the pattern by `check` with its meaning; its `_post_clean` skips the
+  model's own `clean`, which repeated the pattern's refusal about a value
+  nobody typed. The name is checked by a read before the write, so
+  `views._saved` - the one save of a new rule and of an edit - also catches
+  the IntegrityError of the name another tab committed meanwhile
+  (`OperationRule.name` is unique; two tabs, a double click stalled behind
+  SQLite's write lock) and says `forms.NAME_TAKEN` (« Une règle porte déjà
+  ce nom. », the form's `unique` message too) on the name, the page drawn
+  again with 200 and nothing written - it was a 500. Any other IntegrityError
+  is raised.
+  « Écrire un motif » lists the groups and three worked examples on invented
+  labels (`views.PATTERN_EXAMPLES`, each run by a test - one of them a
+  terminal printing no gross). « Entrées d'argent »'s rules card is
+  generated from the till rules its credits were read with
+  (`report.till_rules`) - no word of them in the template - with « Modifier
+  les règles ».
+- **« Données »** carries the rules (`operation_rules` in banque.json,
+  « règles de reconnaissance » in the counts): configuration, merged like the
+  payers. The key is the name as `name_key` reads it; every field but the
+  moment is compared - the name as spelt (spelt otherwise, it was renamed)
+  and the position (the order is part of what a rule says) included.
+  Different here: a conflict kept under « Fusionner », replaced under
+  « Remplacer », whose prune deletes the rules the archive does not name.
+  Every pattern written, created or replaced, goes through the model's
+  own `clean` (`sections/bank._check_recognition`: « motif refusé —
+  <raison> », the record skipped), and a position past `MAX_POSITION` is
+  refused as a format's is (« The statement's layout », above): a new rule
+  is saved at the highest plus one too. Always exported, an empty list
+  included; **absent is « not said »** (an archive written before 0006):
+  no rule merged, none pruned - never « forget every rule ». A line keeps
+  the kind, payee and card date it comes with: an import reads nothing
+  again.
+  « Effacer » takes the rules, the seeded ones too, and says so before (the
+  section's `clear_note`) and after (`RECOGNITION_CLEAR_NOTE`): with none,
+  every line imported reads « Autre », no payee, no card date - the safety
+  archive brings them back. An upload that wrote lines while no rule of the
+  first question was active (`rules.kinds` empty: after « Effacer », or
+  before another bank's rules are written) says so beside its count
+  (`views.NO_KIND_RULE`, « Aucune règle de nature d'opération n'est active
+  … », then add rules and « Relire »): written, not refused - « Autre » is a
+  reading, and « Relire » rewrites it once rules are back.
+- **What stays one bank's, on purpose - said plainly**:
+  `matching.GENERIC_WORDS` alone, which holds the bank's own vocabulary a
+  payee may still carry (« VIR SEPA … »). The CSV LAYOUT stayed BNP's in
+  `statements.py` too (`;`, the six columns in their order, dd/mm/yyyy, the
+  header line's masked account `ACCOUNT_RE`, French decimals) until the
+  owner asked for it the same day: it is a `StatementFormat` now (« The
+  statement's layout », above), so another bank's statement reads by a
+  format typed on « Format du relevé » and rules typed here - no code.
+  `IgnoreRule` (« Dépenses sans facture attendue ») is untouched: another
+  question, applied on draw.
+- **Costs**: each caller reads the rules ONCE (`recognition.load()`, one
+  query, the active rules in their order) and hands them down -
+  `parse_statement(content, rules, fmt)`,
+  `reconcile.import_statement(content, rules, fmt)` (the upload's rules and
+  format, read once for every file of the POST; called with none, it loads
+  them, once a file), `income.entry_for(line, payers, rules)`,
+  `reading_of`, `source_of`, `follows_its_payer`. `rules=None` is NO
+  rules - nothing recognised -, never a hidden query: an N+1 here is one
+  query per line of the statement. « Entrées d'argent » draws its rules card
+  from the rules it read its credits with (`report.till_rules`, the
+  `Rules.till` of `income_for`'s one `load`): no query of its own, and no
+  rule named that did not read the page.
+
 ### « Dépenses par catégorie » (`/banque/depenses/`, `bank/spending.py`)
 
 **What left the account**, over a period, by category, with a pie chart.
@@ -3313,18 +3955,37 @@ of the three says which it is and links to the other two.
 `income.QUERIES` queries whatever the history holds (pinned by a test).
 
 **What each credit is, said on the page** (a recognition nobody can see is
-one nobody can correct) and read the same way by Banque's « Entrées » tab
-(`income.entry_for`, pure, no query per row):
+one nobody can correct: the page's rules card is generated from the till
+rules the credits were read with, in their order - `report.till_rules`, no
+query of its own - with « Modifier les règles ») and read the same way by
+Banque's « Entrées » tab (`income.entry_for`, pure, no query per row, the
+rules handed in). **A till rule that recognised nothing is said on both**,
+above the credits, with « Corriger sur « Reconnaissance des opérations » »:
+invalid, or found too slow while they were read (`IncomeReport.rule_problems`;
+the tab's `rule_problems`, from rules it names `till_rules` - `rules` there
+holds the `IgnoreRule`s -, `[]` when it shows no credit). Both are read
+after the last credit, since a rule turns out slow only once it has read
+lines, and cost no query. The tab said nothing before: with the payout rule
+broken it drew every payout « Autre entrée … à classer », and the reader was
+asked to file by hand what a rule had stopped reading (review, 01/10/2026).
 
-- **A card payout** carries the provider's gross in its label (`PAYOUT_RE`);
-  the line's amount is the net, and the commission is the difference **as it
+- **What a till rule recognises** (`OperationRule`, the till layer of
+  « Reconnaissance des opérations », above;
+  `income.automatic_source` → `recognition.till_reading`): a card terminal's
+  payout, cash or cheques deposited, meal vouchers, an « Avoir », no sale -
+  whatever the first active rule of that layer finding its pattern says. The
+  seeded rules read exactly what the code read before: a payout by « TOTAL
+  ENCAISSE <gross> EURO(S) » in its label, cash and cheques by the bank's
+  operation type, case and accents aside.
+- **A card payout**'s gross is what its rule reads (`(?P<encaisse>…)`); the
+  line's amount is the net, and the commission is the difference **as it
   comes** - a net above the gross prints a negative commission, never
   corrected. Recognised by the WORDS, **never by the provider's name**: a
-  name is the one thing a new contract changes. A number the pattern cannot
-  read whole is **no payout at all**, not a payout with a wrong gross: it
-  lands in « Autres entrées », in sight.
-- **Cash deposited** and **cheques** are read off the bank's operation type,
-  accent- and case-blind (`common.search_key`).
+  name is the one thing a new contract changes. A gross the rule cannot read
+  whole is **no payout of that rule**, not a payout with a wrong gross: the
+  next rule is asked, and with none the credit lands in « Autres entrées »,
+  in sight. A payout rule reading no gross (a terminal that prints none)
+  counts the amount received - below.
 - **Everything else is « Autres entrées »**, named with the same
   `BankTransaction.category` and « Classer » form as « Dépenses », « Sans
   catégorie » first. Each page's datalist offers only what was typed on its
@@ -3334,23 +3995,28 @@ one nobody can correct) and read the same way by Banque's « Entrées » tab
 
 **« En caisse »: a person says what a credit is** (the owner, 01/10/2026:
 another payment terminal will not print « TOTAL ENCAISSE », and its payouts
-landed in « Autres entrées », out of the card balance, for good). Every credit
+landed in « Autres entrées », out of the card balance, for good - a till rule
+on « Reconnaissance des opérations » is the other answer since). Every credit
 of the window carries the menu - Automatique, Carte, Espèces, Chèque, Avoir,
 Titres-restaurant, Pas une vente (`models.IncomeSource`, the ONE vocabulary:
 `income.CARD`… are its values) - and sits in exactly one of three lists
 (`payouts`, `others`, `other_means`), the row's id `entree-<pk>` being where
 the choice answers (`views.income_source`), whichever list it moved to.
-- **Order, and nothing else** (`income.reading_of`): the LINE's own choice
-  (`BankTransaction.income_source`), else the rules above WHERE THEY
-  RECOGNISE the line (a gross printed, a deposit type: data about that
-  line), else its PAYER's (`IncomePayer`), else « Autres entrées ». A payer
+- **Order, and nothing else** (`income.reading_of`, a `Reading(source, how,
+  till)`): the LINE's own choice (`BankTransaction.income_source`), else the
+  first till RULE that RECOGNISES the line - « recognised » is « a till rule
+  matched », « Pas une vente » included: what the line prints is data about
+  it -, else its PAYER's (`IncomePayer`), else « Autres entrées ». A payer
   never un-recognises a line: the provider prints the bar's own name as the
   payee of its payouts, so « Pas une vente » retained for a transfer from
   the bar's other account under that name moved every payout out of the card
   figures when the payer came before the rules (review, 01/10/2026). A stored
   value that is no source is passed over, never raised on. `entry.how`
   (`BY_LINE`, `BY_PAYER`, `BY_RULE`) is printed on the row, and on Banque's
-  tab where a person decided - who decided is part of the answer.
+  tab where a person decided - who decided is part of the answer. A rule is
+  named (`Entry.rule`; `Entry.how_label` « règle « <nom> » »), « non
+  reconnue » where none matched - no longer « libellé « TOTAL ENCAISSE » » or
+  « type d'opération », words of the code that were one bank's.
 - **The payer** is `income.payer_key`: `matching.alias_key(payee_of(...))`,
   the counterparty the bank prints, else the label's words without their
   digits, cut to the column - asked the same way everywhere, and an empty
@@ -3365,15 +4031,23 @@ the choice answers (`views.income_source`), whichever list it moved to.
   ticked only where the payer decides or nothing was recognised
   (`Entry.remember_by_default`). Measured on a scratch copy (read-only,
   01/10): every card payout of the statement shares one payer key, the
-  other credits one each.
+  other credits one each. The key is read off the payee, so « Relire »
+  rewriting a payee moves it: its preview counts the credits that will stop
+  following their payer (« Recognising the operations », above), and
+  nothing re-keys a payer.
 - **Read when the page is drawn, never written onto the lines**, like
-  `IgnoreRule`: the payers are ONE query (`income.QUERIES` went to 6;
-  Banque's tab reads them once, `income.known_payers`), and a statement
+  `IgnoreRule`: the payers are ONE query and the till rules another
+  (`income.QUERIES` is 7; Banque's tab reads both once, `income.known_payers`
+  and `recognition.load`, and only when it shows a credit), and a statement
   imported again never touches `income_source` (`import_statement` only
   adds lines). A choice settles nothing - `settled_by_hand` is untouched.
 - **A card credit printing no gross counts the amount received as its gross**
   (`Entry.gross_from_amount`; the owner's choice - a bank's own terminal pays
-  the gross and takes its fee apart). Its commission is **None, never 0**:
+  the gross and takes its fee apart): one a payout rule WITHOUT
+  `(?P<encaisse>…)` recognises (the owner, 01/10/2026: a terminal's payout
+  whose label does not say what it collected), and a card said by the line
+  or its payer on which no payout rule reads a gross
+  (`recognition.printed_gross`). Its commission is **None, never 0**:
   left out of `card_commission`, of its rate (`card_printed_gross`) and of a
   month's, said as « commission inconnue », and the card stat and the
   balance say how many payouts are counted that way (`card_from_amount`).

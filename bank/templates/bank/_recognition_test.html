@@ -1,0 +1,63 @@
+{% load assets %}
+{% comment %}
+What « Tester » found with the rule as typed (views.RuleTest) - nothing
+saved. Context: `test`, None when nothing was tried.
+{% endcomment %}
+{% if test %}
+    <div class="message" id="essai">
+        {% comment %}
+        A till rule reads credits only: their total means something. A rule of
+        what the operation is finds money in and out alike, said apart - their
+        sum is neither.
+        {% endcomment %}
+        <p>
+            <strong>{{ test.count }} opération{{ test.count|pluralize }}</strong>
+            sur {{ test.scanned }} {% if test.till %}entrée{{ test.scanned|pluralize }} d'argent, {{ test.total|money }} €{% else %}opération{{ test.scanned|pluralize }} importée{{ test.scanned|pluralize }}{% if test.received %}, {{ test.received|money }} € reçus{% endif %}{% if test.paid %}, {{ test.paid|money }} € payés{% endif %}{% endif %} :
+            rien n'est enregistré.
+        </p>
+        {% if test.earlier %}
+            <p>Dont {{ test.earlier }} déjà décidée{{ test.earlier|pluralize }} par une règle placée avant{% if test.till %} ou à la main{% endif %} : celle-ci ne les lira pas.</p>
+        {% endif %}
+        {% if test.slow %}
+            <p class="field-error">Motif trop lent : il a été arrêté en route, le décompte est incomplet. Simplifiez-le.</p>
+        {% endif %}
+    </div>
+    {% if test.examples %}
+        <div class="table-wrap">
+            <table data-table data-table-label="opérations trouvées">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Opération</th>
+                        <th class="num">Montant</th>
+                        <th>Lu</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for found in test.examples %}
+                        <tr>
+                            <td data-sort="{{ found.line.operation_date|date:'Y-m-d' }}">{{ found.line.operation_date|date:"d/m/Y" }}</td>
+                            <td>
+                                {{ found.line.label|truncatechars:90 }}
+                                {% if found.line.bank_type %}<span class="read-as">{{ found.line.bank_type }}</span>{% endif %}
+                            </td>
+                            <td class="num" data-sort="{{ found.line.amount|stringformat:'s' }}">{{ found.line.amount|money }} €</td>
+                            <td>
+                                {% if found.no_gross %}
+                                    brut non imprimé (montant reçu)
+                                {% elif found.gross is not None %}
+                                    encaissé : {{ found.gross|money }} €
+                                {% elif found.payee or found.card_date %}
+                                    {% if found.payee %}tiers : {{ found.payee }}{% endif %}{% if found.payee and found.card_date %} ; {% endif %}{% if found.card_date %}carte du {{ found.card_date|date:"d/m/Y" }}{% endif %}
+                                {% else %}
+                                    —
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% if test.more %}<p class="muted">… et {{ test.more }} de plus.</p>{% endif %}
+    {% endif %}
+{% endif %}

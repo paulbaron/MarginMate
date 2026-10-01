@@ -17,11 +17,12 @@ class IncomeSource(models.TextChoices):
     one vocabulary of `BankTransaction.income_source`, `IncomePayer.source`,
     bank/income.py and the page's « En caisse » menu.
 
-    AUTOMATIC is « nobody said » on the line: the page's rules decide where
-    they recognise it (the label's « TOTAL ENCAISSE … EUROS », the bank's
-    deposit types), else its payer retained (`IncomePayer`). It is a member,
-    not just a blank, because the « Données » archive checks every value it
-    reads against the choices, and a blank line would be refused there.
+    AUTOMATIC is « nobody said » on the line: the first active till rule of
+    « Reconnaissance des opérations » that recognises the credit decides
+    (`OperationRule`, `bank.recognition.till_reading`), else its payer
+    retained (`IncomePayer`). It is a member, not just a blank, because the
+    « Données » archive checks every value it reads against the choices, and
+    a blank line would be refused there.
     """
 
     AUTOMATIC = "", "Automatique"
@@ -69,11 +70,12 @@ class BankTransaction(models.Model):
     # counts and lists first, never folds into « Autres ».
     category = models.CharField(max_length=255, blank=True)
     # What this CREDIT is in the till, said by a person on « Entrées d'argent »
-    # for this line alone - a card payout from a terminal whose label the
-    # page does not recognise, a deposit for a private event the till took
-    # as an « Avoir ». Blank: the page's rules where they recognise the line,
-    # else its payer (`IncomePayer`), decide. Never set on a debit; a statement imported again
-    # never touches it (`reconcile.import_statement` only adds lines).
+    # for this line alone - a card payout from a terminal whose label no till
+    # rule recognises, a deposit for a private event the till took as an
+    # « Avoir ». Blank: the first active till rule of « Reconnaissance des
+    # opérations » that recognises the line (`OperationRule`), else its payer
+    # (`IncomePayer`), decides. Never set on a debit; a statement imported
+    # again never touches it (`reconcile.import_statement` only adds lines).
     income_source = models.CharField(max_length=10, blank=True, default="", choices=IncomeSource.choices)
     # A person decided this line - linked it, unlinked it, or said there is
     # no invoice - so the automatic pass never touches it again.
@@ -148,13 +150,14 @@ class IncomePayer(models.Model):
     person says what one of them is on « Entrées d'argent » and leaves
     « retenir pour ce payeur » ticked.
 
-    A payment terminal is recognised by its provider's transfers, and a new
-    terminal is a new label the page's rules do not know: one choice on one
-    of its transfers is then enough for every transfer it ever sent and will
-    send. Read when the page is drawn, never written onto the lines, so
-    « Oublier » puts them straight back. It decides only what the rules do
-    not recognise, and a line a person chose on its own
-    (`BankTransaction.income_source`) beats it (`bank.income.reading_of`).
+    A payment terminal pays out by its provider's transfers, and a new
+    terminal is a new label no till rule of « Reconnaissance des opérations »
+    knows: one choice on one of its transfers is then enough for every
+    transfer it ever sent and will send. Read when the page is drawn, never
+    written onto the lines, so « Oublier » puts them straight back. It
+    decides only what no till rule recognises (« Pas une vente » included),
+    and a line a person chose on its own (`BankTransaction.income_source`)
+    beats it (`bank.income.reading_of`).
     """
 
     #: `bank.income.payer_key` of a line: `matching.alias_key` of who the
@@ -168,6 +171,154 @@ class IncomePayer(models.Model):
 
     def __str__(self):
         return f"{self.key} = {self.get_source_display()}"
+
+
+class OperationRule(models.Model):
+    """How an operation of the statement is recognised: a pattern searched in
+    its label or its operation type, and what the operation is when found.
+
+    Nothing about a bank's words is written in the code: the owner's bank
+    is seeded (migration 0006) as rules like any other, and another bank's
+    statement is read by editing them on « Reconnaissance des opérations ».
+    Two questions, each answered by the first active rule of its kind in
+    their order - `bank.recognition` has the rules of reading:
+
+    * what the operation IS (`KIND_MEANINGS`): decided at import and stored on
+      the line (`BankTransaction.kind`, `counterparty`, `card_date`);
+    * what a credit is in the TILL (`TILL_MEANINGS`): read whenever « Entrées
+      d'argent » is drawn, never stored - a card terminal's payout, with or
+      without the gross it collected printed in its label, a deposit...
+    """
+
+    class Meaning(models.TextChoices):
+        # What the operation is - stored at import.
+        CARD_PAYMENT = "card_payment", "Paiement par carte"
+        DEBIT = "debit", "Prélèvement"
+        TRANSFER = "transfer", "Virement"
+        OTHER_OPERATION = "other_operation", "Autre opération"
+        # What a credit is in the till - read when « Entrées d'argent » is drawn.
+        PAYOUT = "payout", "Versement de carte (TPE)"
+        CASH = "cash", "Dépôt d'espèces"
+        CHEQUE = "cheque", "Remise de chèques"
+        VOUCHER = "voucher", "Titres-restaurant"
+        CREDIT = "credit", "Avoir"
+        NOT_A_SALE = "not_a_sale", "Pas une vente"
+
+    class Searched(models.TextChoices):
+        LABEL = "label", "Libellé"
+        BANK_TYPE = "bank_type", "Type d'opération"
+
+    #: Unique whatever its case and accents (`bank.recognition.name_key`, the
+    #: form's check): the « Données » archive keys a rule by it, and the
+    #: pages name a rule by it.
+    name = models.CharField("nom", max_length=100, unique=True)
+    meaning = models.CharField("signifie", max_length=20, choices=Meaning.choices)
+    searched = models.CharField("cherché dans", max_length=10, choices=Searched.choices, default=Searched.LABEL)
+    pattern = models.CharField("motif", max_length=300)
+    #: The first rule of its kind that finds its pattern decides: the order is
+    #: part of what a rule says. Rules of one position are asked by name, never
+    #: by id: an id is this database's, and a « Données » import gives new ones.
+    position = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField("active", default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["position", "name"]
+
+    def __str__(self):
+        return self.name
+
+    def clean(self):
+        # Imported here: bank.recognition reads this module's choices.
+        from returnables.patterns import PatternError
+
+        from .recognition import check
+
+        try:
+            check(self.meaning, self.searched, self.pattern)
+        except PatternError as error:
+            raise ValidationError({"pattern": error.message}) from None
+
+
+class StatementFormat(models.Model):
+    """How one bank lays out its CSV export: the encoding, the separator,
+    which column holds what, how dates and amounts are printed, where the
+    account number is (`bank.statements.parse_statement` reads a file with
+    one; « Format du relevé »).
+
+    The owner's bank is seeded (migration 0007) exactly as the code read it
+    before, so every fingerprint already stored is the one the same file
+    gives again; another bank's export is read by a format of its own. The
+    columns are counted from 1, as a person reads them off the file.
+    """
+
+    class Encoding(models.TextChoices):
+        AUTO = "auto", "Automatique (UTF-8, sinon Windows-1252)"
+        UTF8 = "utf-8", "UTF-8"
+        CP1252 = "cp1252", "Windows-1252"
+        LATIN1 = "iso-8859-1", "ISO-8859-1"
+        UTF16 = "utf-16", "UTF-16"
+
+    class Delimiter(models.TextChoices):
+        SEMICOLON = ";", "Point-virgule ( ; )"
+        COMMA = ",", "Virgule ( , )"
+        TAB = "\t", "Tabulation"
+        PIPE = "|", "Barre verticale ( | )"
+
+    class DateFormat(models.TextChoices):
+        DAY_MONTH_YEAR = "dd/mm/yyyy", "jj/mm/aaaa"
+        DAY_MONTH_SHORT_YEAR = "dd/mm/yy", "jj/mm/aa"
+        DAY_MONTH_YEAR_DASHES = "dd-mm-yyyy", "jj-mm-aaaa"
+        DAY_MONTH_YEAR_DOTS = "dd.mm.yyyy", "jj.mm.aaaa"
+        ISO = "yyyy-mm-dd", "aaaa-mm-jj"
+        MONTH_DAY_YEAR = "mm/dd/yyyy", "mm/jj/aaaa"
+
+    class DecimalMark(models.TextChoices):
+        COMMA = ",", "Virgule (1 234,56)"
+        POINT = ".", "Point (1,234.56)"
+
+    #: Unique whatever its case and accents (`bank.recognition.name_key`):
+    #: the import form and the « Données » archive name a format by it.
+    name = models.CharField("nom", max_length=100, unique=True)
+    #: The first format is the one an import uses when nobody chooses.
+    position = models.PositiveIntegerField(default=0)
+    encoding = models.CharField("encodage", max_length=12, choices=Encoding.choices, default=Encoding.AUTO)
+    delimiter = models.CharField("séparateur", max_length=2, choices=Delimiter.choices, default=Delimiter.SEMICOLON)
+    date_format = models.CharField(
+        "format des dates", max_length=12, choices=DateFormat.choices, default=DateFormat.DAY_MONTH_YEAR
+    )
+    decimal_mark = models.CharField(
+        "séparateur décimal", max_length=1, choices=DecimalMark.choices, default=DecimalMark.COMMA
+    )
+    date_column = models.PositiveSmallIntegerField("colonne de la date")
+    #: One column or several, joined by a space: « 4 » or « 3, 4 ».
+    label_columns = models.CharField("colonnes du libellé", max_length=50)
+    #: The amount is ONE signed column, or a column of debits and one of
+    #: credits (either may be missing) - `bank.statements.check_format`.
+    amount_column = models.PositiveSmallIntegerField("colonne du montant", null=True, blank=True)
+    debit_column = models.PositiveSmallIntegerField("colonne des débits", null=True, blank=True)
+    credit_column = models.PositiveSmallIntegerField("colonne des crédits", null=True, blank=True)
+    value_date_column = models.PositiveSmallIntegerField("colonne de la date de valeur", null=True, blank=True)
+    bank_type_column = models.PositiveSmallIntegerField("colonne du type d'opération", null=True, blank=True)
+    #: Searched in the lines above the first operation; the whole match, or
+    #: its `(?P<compte>…)`, is the account - part of every fingerprint.
+    account_pattern = models.CharField("motif du numéro de compte", max_length=300, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["position", "name"]
+
+    def __str__(self):
+        return self.name
+
+    def clean(self):
+        # Imported here: bank.statements reads this module's choices.
+        from .statements import FormatError, check_format
+
+        try:
+            check_format(self)
+        except FormatError as error:
+            raise ValidationError({error.field: error.message}) from None
 
 
 class IgnoreRule(models.Model):

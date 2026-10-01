@@ -14,6 +14,7 @@ from accounts import paths, provisioning
 from accounts.models import Tenant
 from accounts.tenancy import bound_tenant
 from accounts.tests.support import TenancyTestCase
+from bank.models import StatementFormat
 from invoices.models import InvoiceType, Supplier
 
 LEAF = ("invoices", "0035_supplier_typed_identifiers")
@@ -46,8 +47,11 @@ class CreateTenantTests(TenancyTestCase):
         self.assertEqual(sorted(p.name for p in folder.iterdir()), sorted(["db.sqlite3", *paths.FOLDERS]))
         with bound_tenant(tenant):
             self.assertEqual(pending_migrations(), [])
-            # What the seed migrations put in every database is there.
+            # What the seed migrations put in every database is there - the
+            # format a statement is read with included: without one, an
+            # espace's first import would be refused.
             self.assertTrue(Supplier.objects.filter(code="METRO").exists())
+            self.assertTrue(StatementFormat.objects.filter(name="BNP Paribas (CSV)").exists())
 
     def test_two_tenants_never_share_a_folder(self):
         one, other = provisioning.create_tenant("Bar Un"), provisioning.create_tenant("Bar Deux")

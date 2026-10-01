@@ -14,21 +14,25 @@ bank/income.py for the money that came in.
 from __future__ import annotations
 
 import calendar
+import copy
 import math
 import re
 import tempfile
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
 from urllib.parse import parse_qs, urlparse
 
 from django.contrib import messages
+from django.core.exceptions import FieldDoesNotExist
+from django.db import IntegrityError, transaction
 from django.db.models import Prefetch
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.html import escape
 from django.utils.http import urlencode
+from django.utils.text import capfirst
 from django.views.decorators.http import require_GET
 
 from accounts.views import file_response
@@ -48,10 +52,20 @@ from common import (
 from invoices.models import Invoice
 from invoices.workspace import documents_matching
 from recipes.integration import TILL_TO_CONFIGURE, till_allowed
+from returnables.patterns import PatternError
 
-from . import income, invoice_files, matching, reconcile, spending
-from .forms import IgnoreRuleForm
-from .models import BankTransaction, IgnoreRule, IncomePayer, IncomeSource, InvoicePayment
+from . import income, invoice_files, matching, recognition, reconcile, spending, statements
+from .forms import FORMAT_NAME_TAKEN, NAME_TAKEN, IgnoreRuleForm, OperationRuleForm, StatementFormatForm
+from .models import (
+    BankTransaction,
+    CounterpartyAlias,
+    IgnoreRule,
+    IncomePayer,
+    IncomeSource,
+    InvoicePayment,
+    OperationRule,
+    StatementFormat,
+)
 from .rules import ignoring_rule
 
 TODO, LINKED, NO_INVOICE, INCOME = "todo", "linked", "no_invoice", "income"
@@ -311,14 +325,20 @@ def bank_home(request):
     _fill(shown)
     _search(shown, request)
     # What each credit is, rather than « Entrée d'argent » for all of them:
-    # the same reading « Entrées d'argent » makes - the payers retained
-    # included, read once - so the tab and that page cannot call one line
-    # two things. No query per row.
+    # the same reading « Entrées d'argent » makes - the payers retained and
+    # the till rules included, each read once - so the tab and that page
+    # cannot call one line two things. No query per row, and none at all
+    # where no credit is shown.
+    rule_problems = []
     if any(row.status == INCOME for row in shown):
         payers = income.known_payers()
+        till_rules = recognition.load()
         for row in shown:
             if row.status == INCOME:
-                row.entry = income.entry_for(row.line, payers)
+                row.entry = income.entry_for(row.line, payers, till_rules)
+        # Said as « Entrées d'argent » says them, and read after the last
+        # credit: a rule is found too slow only once it has read lines.
+        rule_problems = till_rules.problems
     # « Télécharger les factures »: what the zip will hold, counted off the
     # rows already read (their payments are prefetched) - no query.
     paid = {
@@ -346,6 +366,8 @@ def bank_home(request):
             "tabs": tabs,
             "view": view,
             "stats": stats,
+            # A till rule that recognised nothing while the credits were read.
+            "rule_problems": rule_problems,
             "months": months,
             "month": month,
             "date_window": window,
@@ -375,6 +397,9 @@ def bank_home(request):
             # period with nothing in it would show « Aucun relevé importé »
             # and read as an empty database rather than as empty dates.
             "has_lines": BankTransaction.objects.exists(),
+            # The import card's formats, in their order: a choice when there
+            # are several, the first being the import's default.
+            "formats": list(StatementFormat.objects.order_by("position", "name").only("pk", "name")),
         },
     )
 
@@ -545,6 +570,9 @@ def income_home(request):
             "known_categories": income.known_categories(),
             "no_category": spending.NO_CATEGORY,
             "sources": income.SOURCES,
+            # What the page recognises, said on it: the active till rules in
+            # their order, each with what it means - one query.
+            "till_rules": [(rule, recognition.meaning_label(rule.meaning)) for rule in report.till_rules],
             # « En caisse », on every credit: the values the view accepts,
             # « Automatique » first.
             "source_choices": IncomeSource.choices,
@@ -991,6 +1019,838 @@ def rule_action(request, pk):
     return redirect("bank:rule_list")
 
 
+# -- « Reconnaissance des opérations » ----------------------------------------------------------------------------------
+#
+# The rules that say what an operation of the statement is (read at import,
+# stored on the line) and what a credit is in the till (read whenever
+# « Entrées d'argent » is drawn) - bank/recognition.py. A sub-page of Banque,
+# like « Dépenses sans facture attendue »: no period, so no tabs.
+
+#: What a button of these pages posts, under `action`.
+RULE_ACTION = "action"
+TEST, SAVE = "tester", "enregistrer"
+SUSPEND, REACTIVATE, DELETE, UP, DOWN = "suspendre", "reactiver", "supprimer", "monter", "descendre"
+UNKNOWN_RULE_ACTION = "Action inconnue : rien n'a été modifié."
+#: Where a rule's row is, on the list, and where the new rule's card is.
+RULE_ANCHOR = "regle-{pk}"
+NEW_RULE_ANCHOR = "nouvelle-regle"
+#: The two parts of the list, by the question their rules answer.
+KIND_SECTION, TILL_SECTION = "nature", "en-caisse"
+#: « Relire les opérations »: the digest the preview was drawn with, posted
+#: back - what the writing is held to - and how many changed lines it draws.
+DIGEST_PARAM = "empreinte"
+MAX_CHANGES_SHOWN = 100
+CHANGED_MEANWHILE = (
+    "Rien n'a changé : les règles ou les opérations ont changé depuis l'aperçu. Vérifiez le nouvel aperçu."
+)
+#: The name a rule being tried is read under - it is never stored.
+TRIED = "(essai)"
+#: Said after an import read by no rule of the first kind: every line it
+#: brought is « Autre », with no payee - after « Données »' « Effacer », or
+#: before another bank's rules are written.
+NO_KIND_RULE = (
+    "Aucune règle de nature d'opération n'est active : les opérations importées sont toutes « Autre », sans tiers. "
+    "Ajoutez des règles sur « Reconnaissance des opérations », puis relisez les opérations."
+)
+
+
+@dataclass(frozen=True)
+class PatternExample:
+    """A worked example of « Écrire un motif »: an invented label, a pattern
+    and what it reads (bank/tests/test_recognition_views.py runs each)."""
+
+    meaning: str
+    label: str
+    pattern: str
+    reads: str
+    searched: str = OperationRule.Searched.LABEL
+
+    @property
+    def meaning_label(self) -> str:
+        return recognition.meaning_label(self.meaning)
+
+
+PATTERN_EXAMPLES = (
+    PatternExample(
+        OperationRule.Meaning.CARD_PAYMENT,
+        "CB 14/07 BOULANGERIE EXEMPLE",
+        r"^CB (?P<jour>[0-9]{2})/(?P<mois>[0-9]{2}) (?P<tiers>.+)$",
+        "tiers « BOULANGERIE EXEMPLE », carte utilisée le 14/07 (année : celle de l'opération, ou la précédente)",
+    ),
+    PatternExample(
+        OperationRule.Meaning.PAYOUT,
+        "REMISE TPE 0001234 BAR EXEMPLE",
+        r"REMISE TPE",
+        "le brut n'est pas imprimé : le montant reçu compte comme brut, commission inconnue",
+    ),
+    PatternExample(
+        OperationRule.Meaning.PAYOUT,
+        "REMISE CB BRUT 1 234,56 COM 12,34",
+        r"REMISE CB BRUT (?P<encaisse>[0-9 ]+,[0-9]{2})",
+        "brut 1 234,56 € ; la commission est le brut moins le montant reçu",
+    ),
+)
+
+
+def _group_help() -> list[tuple[str, str, str]]:
+    """(group, what it reads, the meanings reading it) for « Écrire un motif »."""
+    return [
+        (
+            group,
+            said,
+            ", ".join(
+                recognition.meaning_label(meaning) for meaning, read in recognition.GROUPS.items() if group in read
+            ),
+        )
+        for group, said in recognition.GROUP_LABELS.items()
+    ]
+
+
+def _layer_of(meaning) -> frozenset:
+    """The meanings a rule meaning `meaning` is ordered among: its question."""
+    return recognition.KIND_MEANINGS if meaning in recognition.KIND_MEANINGS else recognition.TILL_MEANINGS
+
+
+@dataclass
+class RuleRow:
+    """One stored rule, as the list draws it."""
+
+    rule: OperationRule
+    #: Its place among the rules of its question, from 1.
+    order: int
+    first: bool = False
+    last: bool = False
+    #: Why its pattern no longer passes the check, in French - « » when it does.
+    problem: str = ""
+    #: It ran past the time limit while the page read the lines.
+    slow: bool = False
+    #: A payout rule: whether it reads the gross printed in the label.
+    reads_gross: bool = False
+    #: How many lines it decides now; None while it decides nothing (suspended,
+    #: invalid).
+    decided: int | None = None
+
+
+def _rule_rows() -> tuple[list[RuleRow], list[RuleRow], int, recognition.Rules]:
+    """The rules of both questions in their order, what each decides now, and
+    how many stored lines the active rules would read otherwise - the rules
+    read once, the lines in one pass."""
+    stored = list(OperationRule.objects.order_by("position", "name"))
+    rules = recognition.compile_rules(stored)
+    decided = Counter()
+    pending = 0
+    lines = BankTransaction.objects.only(
+        "pk", "operation_date", "label", "bank_type", "kind", "counterparty", "card_date", "amount", "income_source"
+    )
+    for line in lines:
+        now = recognition.describe(rules, line.label, line.bank_type, line.operation_date)
+        if now.rule:
+            decided[now.rule] += 1
+        if now.stored != (line.kind, line.counterparty, line.card_date):
+            pending += 1
+        # A credit's own « En caisse » choice beats every rule (`income.reading_of`).
+        if line.amount > 0 and line.income_source not in income.CHOSEN:
+            till = recognition.till_reading(rules, line.label, line.bank_type)
+            if till is not None:
+                decided[till.rule] += 1
+    kind_rows, till_rows = [], []
+    for rule in stored:
+        try:
+            compiled = recognition.check(rule.meaning, rule.searched, rule.pattern)
+            problem = ""
+        except PatternError as error:
+            compiled, problem = None, error.message.removeprefix(f"{recognition.PATTERN_LABEL} : ")
+        rows = kind_rows if rule.meaning in recognition.KIND_MEANINGS else till_rows
+        rows.append(
+            RuleRow(
+                rule,
+                len(rows) + 1,
+                problem=problem,
+                slow=rule.name in rules.slow,
+                reads_gross=(
+                    compiled is not None
+                    and rule.meaning == OperationRule.Meaning.PAYOUT
+                    and recognition.GROSS in compiled.groupindex
+                ),
+                decided=decided[rule.name] if rule.is_active and compiled is not None else None,
+            )
+        )
+    for rows in (kind_rows, till_rows):
+        if rows:
+            rows[0].first = rows[-1].last = True
+    return kind_rows, till_rows, pending, rules
+
+
+@dataclass(frozen=True)
+class TriedLine:
+    """A line the rule being tried finds, and what it reads on it."""
+
+    line: BankTransaction
+    payee: str = ""
+    card_date: date | None = None
+    gross: Decimal | None = None
+    #: A payout whose label prints no gross: the amount received counts.
+    no_gross: bool = False
+
+
+@dataclass
+class RuleTest:
+    """What « Tester » found: the lines the unsaved rule finds, how many of
+    them something else already decides, and the newest of them."""
+
+    till: bool
+    scanned: int = 0
+    count: int = 0
+    #: What the credits found add up to - a till rule's, which reads credits only.
+    total: Decimal = Decimal("0")
+    #: A rule of what the operation is finds both ways: what came in and
+    #: what went out, apart - their sum is neither (a transfer each way
+    #: nets 0).
+    received: Decimal = Decimal("0")
+    paid: Decimal = Decimal("0")
+    #: Found, and decided by a rule placed before it - or, a credit, by its
+    #: own « En caisse » choice: this rule will never read them.
+    earlier: int = 0
+    examples: list = field(default_factory=list)
+    #: It ran past the time limit: what it found after is not counted.
+    slow: bool = False
+
+    @property
+    def more(self) -> int:
+        return self.count - len(self.examples)
+
+
+def _test_rule(form: OperationRuleForm, rule: OperationRule | None = None) -> RuleTest | None:
+    """The posted rule tried over the stored lines - every line for a rule of
+    what the operation is, the credits for one of the till - and nothing
+    saved. None while what is tried is refused (its errors are on the form):
+    the name alone may still be wrong, since it decides nothing. `rule` is
+    the stored rule being edited: only the rules before it count as earlier
+    - every active rule of the other question when it is moved there, since
+    it is saved last of it. A credit chosen by hand counts as decided too:
+    its own choice beats every rule (`income.reading_of`)."""
+    if form.compiled is None:
+        return None
+    meaning, searched = form.cleaned_data["meaning"], form.cleaned_data["searched"]
+    tried = recognition.Rule(TRIED, meaning, searched, form.compiled)
+    till = meaning in recognition.TILL_MEANINGS
+    alone = recognition.Rules(till=(tried,)) if till else recognition.Rules(kinds=(tried,))
+    before = OperationRule.objects.filter(is_active=True, meaning__in=_layer_of(meaning)).order_by("position", "name")
+    if rule is not None and _layer_of(rule.meaning) == _layer_of(meaning):
+        before = [one for one in before if (one.position, one.name) < (rule.position, rule.name)]
+    earlier = recognition.compile_rules(before)
+    lines = BankTransaction.objects.only(
+        "pk", "operation_date", "card_date", "label", "bank_type", "counterparty", "amount", "kind", "income_source"
+    ).order_by("-operation_date", "-pk")
+    if till:
+        lines = lines.filter(amount__gt=0)
+    test = RuleTest(till)
+    for line in lines:
+        test.scanned += 1
+        if till:
+            read = recognition.till_reading(alone, line.label, line.bank_type)
+            if read is None:
+                continue
+            decided = (
+                line.income_source in income.CHOSEN
+                or recognition.till_reading(earlier, line.label, line.bank_type) is not None
+            )
+            found = TriedLine(line, gross=read.gross, no_gross=read.source == IncomeSource.CARD and read.gross is None)
+            test.total += line.amount
+        else:
+            read = recognition.describe(alone, line.label, line.bank_type, line.operation_date)
+            if not read.rule:
+                continue
+            decided = bool(recognition.describe(earlier, line.label, line.bank_type, line.operation_date).rule)
+            found = TriedLine(line, payee=read.counterparty, card_date=read.card_date)
+            if line.amount > 0:
+                test.received += line.amount
+            else:
+                test.paid -= line.amount
+        test.count += 1
+        test.earlier += decided
+        if len(test.examples) < MAX_EXAMPLES:
+            test.examples.append(found)
+    test.slow = bool(alone.slow)
+    return test
+
+
+def _stored_problem(rule: OperationRule) -> str:
+    """Why a stored rule's pattern no longer passes the check - « parenthèse
+    non fermée (position 6) » -, or « »."""
+    try:
+        recognition.check(rule.meaning, rule.searched, rule.pattern)
+    except PatternError as error:
+        return error.message.removeprefix(f"{recognition.PATTERN_LABEL} : ").rstrip(".")
+    return ""
+
+
+def _rule_url(rule: OperationRule) -> str:
+    return f"{reverse('bank:recognition')}#{RULE_ANCHOR.format(pk=rule.pk)}"
+
+
+def _rule_saved(rule: OperationRule, verb: str) -> str:
+    said = f"Règle « {rule.name} » {verb}"
+    if rule.meaning in recognition.KIND_MEANINGS:
+        return f"{said} : elle vaut pour les relevés importés ensuite."
+    return f"{said}."
+
+
+def _saved(form, *, last: bool, model=OperationRule, taken: str = NAME_TAKEN):
+    """The form's rule (or format, `model`), saved - after every one when
+    `last` (a new rule, or one moved to the other question: its number would
+    otherwise put it wherever it falls among the rules there) - or None when
+    another took its name between the form's check and the write (two tabs,
+    a double click): said on the name, as the form says it (`taken`),
+    nothing written."""
+    try:
+        with transaction.atomic():
+            saved = form.save(commit=False)
+            if last:
+                highest = model.objects.order_by("-position").values_list("position", flat=True).first()
+                saved.position = (highest or 0) + 1
+            saved.save()
+    except IntegrityError:
+        if not model.objects.filter(name=form.instance.name).exclude(pk=form.instance.pk).exists():
+            raise
+        form.add_error("name", taken)
+        return None
+    return saved
+
+
+def _import_refused(rules: recognition.Rules) -> bool:
+    """Whether an import refuses to run with these rules: one that fails the
+    check, or one of what the operation is found too slow. A till rule never
+    runs at import, so one found slow on this page stops nothing."""
+    kinds = {rule.name for rule in rules.kinds}
+    return bool(rules.invalid) or any(name in kinds for name in rules.slow)
+
+
+def recognition_page(request):
+    """« Reconnaissance des opérations »: the rules of both questions, what
+    each decides now, and a new rule - « Tester » tries it on the stored
+    lines and saves nothing; « Enregistrer la règle » puts it last of its
+    question."""
+    form = OperationRuleForm(request.POST or None)
+    test = None
+    if request.method == "POST":
+        action = request.POST.get(RULE_ACTION)
+        if action not in (TEST, SAVE):
+            messages.error(request, UNKNOWN_RULE_ACTION)
+            return redirect("bank:recognition")
+        valid = form.is_valid()
+        if action == SAVE and valid:
+            rule = _saved(form, last=True)
+            if rule is not None:
+                messages.success(request, _rule_saved(rule, "ajoutée"))
+                return redirect(_rule_url(rule))
+        if action == TEST:
+            test = _test_rule(form)
+    kind_rows, till_rows, pending, rules = _rule_rows()
+    return render(
+        request,
+        "bank/recognition.html",
+        {
+            "form": form,
+            "test": test,
+            "kind_rows": kind_rows,
+            "till_rows": till_rows,
+            # The stored lines the active rules of the first question would
+            # read otherwise - what « Relire » would write.
+            "pending": pending,
+            # An import refuses to run past a rule that cannot be applied.
+            "blocked": _import_refused(rules),
+            "examples": PATTERN_EXAMPLES,
+            "groups": _group_help(),
+        },
+    )
+
+
+def recognition_rule(request, pk):
+    """One rule: its form on a GET (which writes nothing), « Tester » and
+    « Enregistrer » on it, and the list's buttons - suspend, reactivate,
+    delete, move up or down among the rules of its question."""
+    rule = get_object_or_404(OperationRule, pk=pk)
+    action = request.POST.get(RULE_ACTION) if request.method == "POST" else None
+    if request.method != "POST" or action in (TEST, SAVE):
+        test = None
+        if request.method != "POST":
+            form = OperationRuleForm(instance=rule)
+        else:
+            # Bound to a copy: validating writes what was typed onto the
+            # instance, and the page's title would name a refused name.
+            form = OperationRuleForm(request.POST, instance=OperationRule.objects.get(pk=rule.pk))
+            valid = form.is_valid()
+            if action == SAVE and valid:
+                # Moved to the other question, it goes last there, as a new
+                # rule does.
+                moved = _layer_of(form.cleaned_data["meaning"]) != _layer_of(rule.meaning)
+                saved = _saved(form, last=moved)
+                if saved is not None:
+                    verb = "enregistrée, dernière de sa nouvelle partie" if moved else "enregistrée"
+                    messages.success(request, _rule_saved(saved, verb))
+                    return redirect(_rule_url(saved))
+            if action == TEST:
+                test = _test_rule(form, rule)
+        return render(
+            request,
+            "bank/recognition_rule.html",
+            {
+                "rule": rule,
+                "form": form,
+                "test": test,
+                "problem": _stored_problem(rule),
+                "is_kind": rule.meaning in recognition.KIND_MEANINGS,
+                "examples": PATTERN_EXAMPLES,
+                "groups": _group_help(),
+            },
+        )
+    if action == DELETE:
+        name = rule.name
+        rule.delete()
+        messages.success(request, f"Règle « {name} » supprimée.")
+        section = KIND_SECTION if rule.meaning in recognition.KIND_MEANINGS else TILL_SECTION
+        return redirect(f"{reverse('bank:recognition')}#{section}")
+    if action in (SUSPEND, REACTIVATE):
+        rule.is_active = action == REACTIVATE
+        rule.save(update_fields=["is_active"])
+        messages.success(request, f"Règle « {rule.name} » {'réactivée' if rule.is_active else 'suspendue'}.")
+    elif action in (UP, DOWN):
+        if _move(rule, -1 if action == UP else 1):
+            messages.success(request, f"Règle « {rule.name} » {'montée' if action == UP else 'descendue'}.")
+        else:
+            messages.info(
+                request, f"Règle « {rule.name} » déjà {'la première' if action == UP else 'la dernière'} de sa partie."
+            )
+    else:
+        messages.error(request, UNKNOWN_RULE_ACTION)
+    return redirect(_rule_url(rule))
+
+
+def _swapped(ordered: list, pk, step: int) -> list | None:
+    """`ordered` (as a list orders it: position, then name) with the row `pk`
+    swapped with its neighbour `step` away: the rows whose position changed,
+    or None at either end. Positions two rows share are made distinct first,
+    each kept or raised by the least, so a swap always moves something and
+    nothing else changes place."""
+    here = next(index for index, one in enumerate(ordered) if one.pk == pk)
+    there = here + step
+    if not 0 <= there < len(ordered):
+        return None
+    positions = []
+    for one in ordered:
+        positions.append(max(one.position, positions[-1] + 1) if positions else one.position)
+    ordered[here], ordered[there] = ordered[there], ordered[here]
+    moved = []
+    for one, position in zip(ordered, positions, strict=True):
+        if one.position != position:
+            one.position = position
+            moved.append(one)
+    return moved
+
+
+def _move(rule: OperationRule, step: int) -> bool:
+    """Swap `rule` with its neighbour among the rules of its question, as the
+    list orders them (position, then name) - False at either end."""
+    with transaction.atomic():
+        layer = list(OperationRule.objects.filter(meaning__in=_layer_of(rule.meaning)).order_by("position", "name"))
+        moved = _swapped(layer, rule.pk, step)
+        if moved is None:
+            return False
+        OperationRule.objects.bulk_update(moved, ["position"])
+    return True
+
+
+@dataclass(frozen=True)
+class ChangeRow:
+    """A stored line the active rules read otherwise: what it says now, and
+    what « Relire » would write."""
+
+    change: recognition.Change
+    kind_before: str
+    kind_after: str
+
+
+def _detached(pending: recognition.Changes) -> tuple[int, int]:
+    """What « Relire » unties without writing it: (the credits that follow a
+    retained payer and whose payer key moves with their payee - they stop
+    following it -, the debits whose payee key a learnt alias names and
+    moves with it). Nothing stored on them changes, but both keys are read
+    off the payee (`income.payer_key`, `reconcile.payee_of`). Three queries,
+    none when no payee changes."""
+    moving = [one for one in pending.changes if one.payee_changes]
+    if not moving:
+        return 0, 0
+    retained = set(IncomePayer.objects.values_list("key", flat=True))
+    learnt = set(CounterpartyAlias.objects.values_list("name", flat=True))
+    # `stored_changes` read the lines without their « En caisse » choice:
+    # the credits holding one, in one query rather than one a line.
+    chosen = dict(
+        BankTransaction.objects.filter(amount__gt=0, income_source__in=income.CHOSEN).values_list("pk", "income_source")
+    )
+    payers = aliases = 0
+    for one in moving:
+        line = one.line
+        after = copy.copy(line)
+        after.counterparty = one.now.counterparty
+        if line.amount > 0:
+            key = income.payer_key(line)
+            if key in retained and income.payer_key(after) != key:
+                line.income_source = chosen.get(line.pk, income.AUTOMATIC)
+                payers += income.follows_its_payer(line, pending.rules)
+        elif line.amount < 0:
+            key = matching.alias_key(reconcile.payee_of(line))
+            if key in learnt and matching.alias_key(reconcile.payee_of(after)) != key:
+                aliases += 1
+    return payers, aliases
+
+
+def recognition_reapply(request):
+    """« Relire les opérations déjà importées »: a GET shows what the active
+    rules now read otherwise on the stored lines, and writes nothing; the
+    POST writes exactly that - held to the digest the preview was drawn
+    with (`recognition.apply_changes`), so what was shown is what is
+    written, or nothing is."""
+    if request.method == "POST":
+        try:
+            changed = recognition.apply_changes(request.POST.get(DIGEST_PARAM, ""))
+        except recognition.ChangedMeanwhile:
+            messages.warning(request, CHANGED_MEANWHILE)
+            return redirect("bank:recognition_reapply")
+        except ValueError as refusal:
+            messages.error(request, str(refusal))
+            return redirect("bank:recognition")
+        if changed:
+            plural = "s" if changed > 1 else ""
+            messages.success(request, f"{changed} opération{plural} relue{plural}.")
+        else:
+            messages.info(request, "Rien à relire : les opérations importées sont déjà lues ainsi.")
+        return redirect(f"{reverse('bank:recognition')}#{KIND_SECTION}")
+    pending = recognition.stored_changes()
+    kinds = dict(BankTransaction.Kind.choices)
+    rows = [
+        ChangeRow(one, kinds.get(one.line.kind, one.line.kind), kinds.get(one.now.kind, one.now.kind))
+        for one in pending.changes[:MAX_CHANGES_SHOWN]
+    ]
+    detached_payers, detached_aliases = _detached(pending)
+    return render(
+        request,
+        "bank/recognition_reapply.html",
+        {
+            "rows": rows,
+            "count": len(pending.changes),
+            "more": len(pending.changes) - len(rows),
+            "digest": pending.digest,
+            "digest_param": DIGEST_PARAM,
+            "detached_payers": detached_payers,
+            "detached_aliases": detached_aliases,
+            "problems": pending.rules.problems,
+            # What `apply_changes` refuses: the till rules read above for
+            # the payers never run there.
+            "blocked": _import_refused(pending.rules),
+        },
+    )
+
+
+# -- « Format du relevé » ----------------------------------------------------------------------------------------
+# How a bank's CSV export is laid out (`StatementFormat`, read by
+# bank/statements.py): the formats in their order - the first is the one an
+# import reads with when nobody chooses -, a new one, and one format's page.
+# Both forms carry « Tester »: a file picked on the page read with the format
+# as typed, nothing saved, the file never kept. A sub-page of Banque, like
+# « Reconnaissance des opérations »; the buttons post `action` as there.
+
+#: The file « Tester » reads, posted with the form.
+TEST_FILE = "fichier_essai"
+#: The import card's choice of format, drawn when there are several.
+FORMAT_PARAM = "format"
+#: Where a format's row is, on the list, and where the new format's card is.
+FORMAT_ANCHOR = "format-{pk}"
+NEW_FORMAT_ANCHOR = "nouveau-format"
+#: What « Tester » shows: the file's first rows, split into numbered columns,
+#: and the first operations the format reads in it.
+TEST_ROWS_SHOWN = 15
+TEST_LINES_SHOWN = 30
+NO_TEST_FILE = "Choisissez un fichier pour voir ce que le format en lit."
+CSV_ONLY = "seuls les fichiers CSV sont acceptés."
+KEEP_ONE_FORMAT = "Gardez au moins un format : modifiez-le plutôt."
+UNKNOWN_FORMAT = "Format de relevé inconnu."
+
+
+@dataclass(frozen=True)
+class FormatExample:
+    """« Lire un format »'s worked example: an invented export, the format
+    that reads it, and what it reads (bank/tests/test_statement_format_views.py
+    reads it so)."""
+
+    rows: tuple
+    #: The fields of the format, as `statements.check_format` reads them.
+    settings: dict
+    said: str
+    reads: str
+
+
+FORMAT_EXAMPLE = FormatExample(
+    rows=(
+        "Date,Libellé,Débit,Crédit",
+        "2026-07-03,CB EPICERIE EXEMPLE,12.30,",
+        "2026-07-05,VIR CLIENT EXEMPLE,,250.00",
+    ),
+    settings={
+        "delimiter": ",",
+        "date_format": "yyyy-mm-dd",
+        "decimal_mark": ".",
+        "date_column": 1,
+        "label_columns": "2",
+        "debit_column": 3,
+        "credit_column": 4,
+    },
+    said="Séparateur « , », dates aaaa-mm-jj, décimales au point ; date 1, libellé 2, débits 3, crédits 4",
+    reads="deux opérations, -12.30 € et 250.00 € ; la première ligne n'a pas de date, elle est passée",
+)
+
+
+@dataclass
+class FormatRow:
+    """One stored format, as the list draws it."""
+
+    fmt: StatementFormat
+    #: Its place, from 1: the first is the import's default.
+    order: int
+    #: Which column holds what: « date 1 · libellé 4 · montant 6 ».
+    columns: str
+    #: Why the format no longer passes the check, in French - « » when it does.
+    problem: str = ""
+    first: bool = False
+    last: bool = False
+
+
+def _columns_said(fmt: StatementFormat) -> str:
+    """« date 1 · libellé 4 · montant 6 »: which column holds what."""
+    try:
+        labels = ", ".join(str(number) for number in statements.label_columns(fmt.label_columns))
+    except statements.FormatError:
+        labels = fmt.label_columns
+    said = (
+        ("date", fmt.date_column),
+        ("libellé", labels),
+        ("montant", fmt.amount_column),
+        ("débits", fmt.debit_column),
+        ("crédits", fmt.credit_column),
+        ("valeur", fmt.value_date_column),
+        ("type", fmt.bank_type_column),
+    )
+    return " · ".join(f"{word} {number}" for word, number in said if number not in (None, ""))
+
+
+def _format_problem(fmt: StatementFormat) -> str:
+    """Why a stored format no longer passes `check_format` - « Colonne du
+    montant : indiquez … » -, or « ». A stored format is never trusted: an
+    import refuses to read with one the check refuses."""
+    try:
+        statements.check_format(fmt)
+    except statements.FormatError as error:
+        said = error.message.rstrip(".")
+        try:
+            label = str(capfirst(StatementFormat._meta.get_field(error.field).verbose_name))
+        except FieldDoesNotExist:
+            return said
+        # The pattern's own sentences name their field already.
+        return said if said.startswith(label) else f"{label} : {said[:1].lower()}{said[1:]}"
+    return ""
+
+
+def _format_rows() -> list[FormatRow]:
+    stored = list(StatementFormat.objects.order_by("position", "name"))
+    rows = [
+        FormatRow(fmt, order, _columns_said(fmt), _format_problem(fmt)) for order, fmt in enumerate(stored, start=1)
+    ]
+    if rows:
+        rows[0].first = rows[-1].last = True
+    return rows
+
+
+def _format_url(pk) -> str:
+    return f"{reverse('bank:statement_formats')}#{FORMAT_ANCHOR.format(pk=pk)}"
+
+
+@dataclass
+class FormatTest:
+    """What « Tester » read in a file with the format as typed: its first
+    rows in numbered columns - what a person picks the numbers from - and
+    the operations the format reads there, or why it reads none."""
+
+    file_name: str = ""
+    #: Why the file was not read at all: none chosen, too heavy, no CSV.
+    problem: str = ""
+    #: The first rows, each as wide as the widest (`width` cells).
+    rows: list = field(default_factory=list)
+    width: int = 0
+    #: A row had more columns than a format may name: those are not shown.
+    wider: bool = False
+    column_limit: int = statements.MAX_COLUMN
+    #: Why the format reads no statement in the file - the import's own
+    #: sentence.
+    refusal: str = ""
+    account: str = ""
+    count: int = 0
+    #: Read, and already imported: the same fingerprint is stored.
+    known: int = 0
+    #: (StatementLine, its kind as the page says it) - the first ones.
+    lines: list = field(default_factory=list)
+
+    @property
+    def columns(self) -> range:
+        return range(1, self.width + 1)
+
+    @property
+    def more(self) -> int:
+        return self.count - len(self.lines)
+
+
+def _test_format(request, form: StatementFormatForm) -> FormatTest | None:
+    """The file posted as `TEST_FILE` read with the format as typed - nothing
+    saved, the file never kept. None while the format is refused (its errors
+    are on the form): the name alone may still be wrong, since it reads
+    nothing."""
+    if form.layout is None:
+        return None
+    upload = request.FILES.get(TEST_FILE)
+    if upload is None:
+        return FormatTest(problem=NO_TEST_FILE)
+    test = FormatTest(upload.name)
+    if not upload.name.lower().endswith(".csv"):
+        test.problem = f"{upload.name} : {CSV_ONLY}"
+        return test
+    too_heavy = file_too_big(upload)
+    if too_heavy:
+        test.problem = too_heavy
+        return test
+    content = upload.read()
+    try:
+        # The rows as the reader splits them - decoded, the blank ones left
+        # out - so a column numbered here is the column the format names.
+        rows = statements.rows(content, form.layout)
+    except ValueError as refusal:
+        test.refusal = str(refusal)
+        return test
+    shown = rows[:TEST_ROWS_SHOWN]
+    widest = max((len(row) for row in shown), default=0)
+    test.width = min(widest, statements.MAX_COLUMN)
+    test.wider = widest > statements.MAX_COLUMN
+    test.rows = [(row + [""] * test.width)[: test.width] for row in shown]
+    try:
+        statement = statements.parse_statement(content, recognition.load(), form.layout)
+    except ValueError as refusal:
+        test.refusal = str(refusal)
+        return test
+    kinds = dict(BankTransaction.Kind.choices)
+    test.account = statement.account
+    test.count = len(statement.lines)
+    # In chunks, as the import asks: one `__in` of every fingerprint was
+    # past SQLite's bound variables on a long statement - a 500.
+    test.known = len(reconcile.known_fingerprints(line.fingerprint for line in statement.lines))
+    test.lines = [(line, kinds.get(line.kind, line.kind)) for line in statement.lines[:TEST_LINES_SHOWN]]
+    return test
+
+
+def statement_formats(request):
+    """« Format du relevé »: the formats in their order, and a new one -
+    « Tester » reads a file with it and saves nothing; « Enregistrer le
+    format » puts it last."""
+    form = StatementFormatForm(request.POST or None)
+    test = None
+    if request.method == "POST":
+        action = request.POST.get(RULE_ACTION)
+        if action not in (TEST, SAVE):
+            messages.error(request, UNKNOWN_RULE_ACTION)
+            return redirect("bank:statement_formats")
+        valid = form.is_valid()
+        if action == SAVE and valid:
+            fmt = _saved(form, last=True, model=StatementFormat, taken=FORMAT_NAME_TAKEN)
+            if fmt is not None:
+                messages.success(request, f"Format « {fmt.name} » ajouté.")
+                return redirect(_format_url(fmt.pk))
+        if action == TEST:
+            test = _test_format(request, form)
+    return render(
+        request,
+        "bank/statement_formats.html",
+        {"form": form, "test": test, "rows": _format_rows(), "example": FORMAT_EXAMPLE},
+    )
+
+
+def statement_format(request, pk):
+    """One format: its form on a GET (which writes nothing), « Tester » and
+    « Enregistrer » on it, and the list's buttons - delete (never the last
+    one: an import needs one), move up or down."""
+    fmt = get_object_or_404(StatementFormat, pk=pk)
+    action = request.POST.get(RULE_ACTION) if request.method == "POST" else None
+    if request.method != "POST" or action in (TEST, SAVE):
+        test = None
+        if request.method != "POST":
+            form = StatementFormatForm(instance=fmt)
+        else:
+            # Bound to a copy: validating writes what was typed onto the
+            # instance, and the page's title would name a refused name.
+            form = StatementFormatForm(request.POST, instance=StatementFormat.objects.get(pk=fmt.pk))
+            valid = form.is_valid()
+            if action == SAVE and valid:
+                saved = _saved(form, last=False, model=StatementFormat, taken=FORMAT_NAME_TAKEN)
+                if saved is not None:
+                    messages.success(request, f"Format « {saved.name} » enregistré.")
+                    return redirect(_format_url(saved.pk))
+            if action == TEST:
+                test = _test_format(request, form)
+        return render(
+            request,
+            "bank/statement_format.html",
+            {"fmt": fmt, "form": form, "test": test, "problem": _format_problem(fmt), "example": FORMAT_EXAMPLE},
+        )
+    if action == DELETE:
+        # Deleted, then counted, in one transaction: two tabs deleting the
+        # last two formats at once leave one, never none.
+        with transaction.atomic():
+            fmt.delete()
+            kept = StatementFormat.objects.exists()
+            if not kept:
+                transaction.set_rollback(True)
+        if not kept:
+            messages.error(request, KEEP_ONE_FORMAT)
+            return redirect(_format_url(pk))
+        messages.success(request, f"Format « {fmt.name} » supprimé.")
+        return redirect("bank:statement_formats")
+    if action in (UP, DOWN):
+        with transaction.atomic():
+            ordered = list(StatementFormat.objects.order_by("position", "name"))
+            moved = _swapped(ordered, fmt.pk, -1 if action == UP else 1)
+            if moved is not None:
+                StatementFormat.objects.bulk_update(moved, ["position"])
+        if moved is None:
+            messages.info(request, f"Format « {fmt.name} » déjà {'le premier' if action == UP else 'le dernier'}.")
+        elif ordered[0].pk == fmt.pk:
+            # The first is what every import reads with, nobody choosing.
+            messages.success(request, f"Format « {fmt.name} » monté : c'est maintenant celui de l'import.")
+        else:
+            messages.success(request, f"Format « {fmt.name} » {'monté' if action == UP else 'descendu'}.")
+    else:
+        messages.error(request, UNKNOWN_RULE_ACTION)
+    return redirect(_format_url(fmt.pk))
+
+
+def _import_format(request) -> tuple[StatementFormat | None, str]:
+    """The format an upload is read with - the one chosen on the import card
+    when it offers a choice (`FORMAT_PARAM`), the first otherwise - and, when
+    there is none, why: no format at all, or one chosen that is not there
+    (deleted since the page was drawn, a tampered id)."""
+    chosen = request.POST.get(FORMAT_PARAM)
+    if chosen is None:
+        fmt = reconcile.default_format()
+        return fmt, "" if fmt is not None else reconcile.NO_FORMAT
+    fmt = StatementFormat.objects.filter(pk=int(chosen)).first() if is_id(chosen) else None
+    return fmt, "" if fmt is not None else UNKNOWN_FORMAT
+
+
 def _import_statements(request):
     # Comes back to the page as it was being read - its tab, its month, its
     # window - rather than to the bare list: an import made to check a given
@@ -1006,16 +1866,23 @@ def _import_statements(request):
     if too_heavy:
         messages.error(request, f"{too_heavy} Aucun relevé n'a été importé.")
         return redirect(back)
+    fmt, refused = _import_format(request)
+    if fmt is None:
+        messages.error(request, f"{refused} Aucun relevé n'a été importé.")
+        return redirect(back)
     created = known = 0
+    # Read once for every file, as the format is: a rule found too slow on
+    # one refuses the others too, rather than being tried afresh on each.
+    rules = recognition.load()
     for upload in uploads:
         if not upload.name.lower().endswith(".csv"):
-            messages.error(request, f"{upload.name} : seuls les fichiers CSV sont acceptés.")
+            messages.error(request, f"{upload.name} : {CSV_ONLY}")
             continue
         if file_too_big(upload):
             messages.error(request, f"{file_too_big(upload)} Ce relevé n'a pas été importé.")
             continue
         try:
-            summary = reconcile.import_statement(upload.read())
+            summary = reconcile.import_statement(upload.read(), rules, fmt)
         except ValueError as exc:
             messages.error(request, f"{upload.name} : {exc}")
             continue
@@ -1028,6 +1895,8 @@ def _import_statements(request):
             f"{created} opération(s) importée(s), {known} déjà connue(s) ; "
             f"{linked} paiement(s) rattaché(s) automatiquement à leur facture.",
         )
+    if created and not rules.kinds:
+        messages.warning(request, NO_KIND_RULE)
     return redirect(back)
 
 

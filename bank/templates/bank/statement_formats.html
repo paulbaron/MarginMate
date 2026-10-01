@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Format du relevé - Banque - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <p class="breadcrumb"><a href="{% url 'bank:bank_home' %}">← Banque</a></p>
+            <h1>Format du relevé</h1>
+            <p class="page-subtitle">Comment se lit l'export CSV de la banque : colonnes, dates, montants, numéro de compte.</p>
+            <p class="muted">Ce qu'est chaque opération se règle sur <a href="{% url 'bank:recognition' %}">Reconnaissance des opérations</a>.</p>
+        </div>
+    </div>
+
+    {% if rows %}
+        <div class="table-wrap">
+            <table data-table data-table-label="formats">
+                <thead>
+                    <tr>
+                        <th class="num">Ordre</th>
+                        <th>Nom</th>
+                        <th>Colonnes</th>
+                        <th>Séparateur</th>
+                        <th>Dates</th>
+                        <th>Décimales</th>
+                        <th data-no-sort></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in rows %}
+                        <tr id="format-{{ row.fmt.pk }}">
+                            <td class="num row-actions" data-sort="{{ row.order }}">
+                                {{ row.order }}
+                                <form method="post" action="{% url 'bank:statement_format' row.fmt.pk %}">
+                                    {% csrf_token %}
+                                    <button class="btn btn-small btn-secondary" type="submit" name="action" value="monter"
+                                            aria-label="Monter « {{ row.fmt.name }} »"{% if row.first %} disabled{% endif %}>↑</button>
+                                    <button class="btn btn-small btn-secondary" type="submit" name="action" value="descendre"
+                                            aria-label="Descendre « {{ row.fmt.name }} »"{% if row.last %} disabled{% endif %}>↓</button>
+                                </form>
+                            </td>
+                            <td>
+                                <strong>{{ row.fmt.name }}</strong>
+                                {% if row.first %}<span class="status-pill status-IMPORTED">par défaut</span>{% endif %}
+                                {% if row.problem %}
+                                    <span class="status-pill status-ERROR">à corriger</span>
+                                    <p class="field-error">{{ row.problem }}</p>
+                                {% endif %}
+                            </td>
+                            <td>{{ row.columns }}</td>
+                            <td>{{ row.fmt.get_delimiter_display }}</td>
+                            <td>{{ row.fmt.get_date_format_display }}</td>
+                            <td>{{ row.fmt.get_decimal_mark_display }}</td>
+                            <td class="row-actions">
+                                <a href="{% url 'bank:statement_format' row.fmt.pk %}" aria-label="Modifier « {{ row.fmt.name }} »">Modifier</a>
+                                <form method="post" action="{% url 'bank:statement_format' row.fmt.pk %}"
+                                      data-confirm="Supprimer le format « {{ row.fmt.name }} » ?">
+                                    {% csrf_token %}
+                                    <button class="btn btn-small btn-danger" type="submit" name="action" value="supprimer"
+                                            aria-label="Supprimer « {{ row.fmt.name }} »">Supprimer</button>
+                                </form>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <p class="muted">Le premier sert à l'import ; avec plusieurs formats, l'import propose de choisir.</p>
+    {% else %}
+        <div class="empty-state">
+            <p>Aucun format : aucun relevé ne s'importe. Ajoutez-en un ci-dessous.</p>
+        </div>
+    {% endif %}
+
+    <div class="card" id="nouveau-format">
+        <h2>Nouveau format</h2>
+        <form method="post" action="{% url 'bank:statement_formats' %}#nouveau-format" enctype="multipart/form-data">
+            {% csrf_token %}
+            {% include "_form_fields.html" with form=form %}
+            {% include "bank/_statement_format_file.html" %}
+            {% comment %}
+            « Tester » first: Enter in a field presses the form's first submit
+            button, and it reads the file - it never saves the format.
+            {% endcomment %}
+            <div class="form-actions">
+                <button class="btn btn-secondary" type="submit" name="action" value="tester">Tester</button>
+                <button class="btn" type="submit" name="action" value="enregistrer">Enregistrer le format</button>
+            </div>
+        </form>
+        {% include "bank/_statement_format_test.html" %}
+    </div>
+
+    {% include "bank/_statement_format_help.html" %}
+{% endblock %}

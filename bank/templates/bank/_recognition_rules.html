@@ -1,0 +1,88 @@
+{% comment %}
+The rules of one question of « Reconnaissance des opérations », in their
+order: the first active rule finding its pattern decides. Context: `rows`
+(views.RuleRow), `table_label`.
+{% endcomment %}
+{% if rows %}
+    <div class="table-wrap">
+        <table data-table data-table-label="{{ table_label }}">
+            <thead>
+                <tr>
+                    <th class="num">Ordre</th>
+                    <th>Nom</th>
+                    <th>Signifie</th>
+                    <th>Cherché dans</th>
+                    <th>Motif</th>
+                    <th class="num">Opérations</th>
+                    <th>État</th>
+                    <th data-no-sort></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                    <tr id="regle-{{ row.rule.pk }}">
+                        <td class="num row-actions" data-sort="{{ row.order }}">
+                            {{ row.order }}
+                            <form method="post" action="{% url 'bank:recognition_rule' row.rule.pk %}">
+                                {% csrf_token %}
+                                <button class="btn btn-small btn-secondary" type="submit" name="action" value="monter"
+                                        aria-label="Monter « {{ row.rule.name }} »"{% if row.first %} disabled{% endif %}>↑</button>
+                                <button class="btn btn-small btn-secondary" type="submit" name="action" value="descendre"
+                                        aria-label="Descendre « {{ row.rule.name }} »"{% if row.last %} disabled{% endif %}>↓</button>
+                            </form>
+                        </td>
+                        <td><strong>{{ row.rule.name }}</strong></td>
+                        <td>
+                            {{ row.rule.get_meaning_display }}
+                            {% if row.rule.meaning == "payout" and not row.problem %}
+                                <span class="read-as">{% if row.reads_gross %}brut lu{% else %}brut non imprimé : montant reçu{% endif %}</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ row.rule.get_searched_display }}</td>
+                        <td class="pattern-cell">
+                            <code class="pattern-example">{{ row.rule.pattern }}</code>
+                            {% if row.problem %}
+                                <span class="status-pill status-ERROR">motif invalide</span>
+                                <p class="field-error">{{ row.problem }}</p>
+                            {% elif row.slow %}
+                                <span class="status-pill status-ERROR">trop lent</span>
+                                <p class="field-error">Ignoré : simplifiez-le.</p>
+                            {% endif %}
+                        </td>
+                        <td class="num" data-sort="{{ row.decided|default_if_none:'-1' }}">{% if row.decided is None %}—{% else %}{{ row.decided }}{% endif %}</td>
+                        <td>
+                            {% if row.rule.is_active %}
+                                <span class="status-pill status-linked">Active</span>
+                            {% else %}
+                                <span class="status-pill status-ignored">Suspendue</span>
+                            {% endif %}
+                        </td>
+                        <td class="row-actions">
+                            <a href="{% url 'bank:recognition_rule' row.rule.pk %}" aria-label="Modifier « {{ row.rule.name }} »">Modifier</a>
+                            <form method="post" action="{% url 'bank:recognition_rule' row.rule.pk %}">
+                                {% csrf_token %}
+                                {% if row.rule.is_active %}
+                                    <button class="btn btn-small btn-secondary" type="submit" name="action" value="suspendre"
+                                            aria-label="Suspendre « {{ row.rule.name }} »">Suspendre</button>
+                                {% else %}
+                                    <button class="btn btn-small btn-secondary" type="submit" name="action" value="reactiver"
+                                            aria-label="Réactiver « {{ row.rule.name }} »">Réactiver</button>
+                                {% endif %}
+                            </form>
+                            <form method="post" action="{% url 'bank:recognition_rule' row.rule.pk %}"
+                                  data-confirm="Supprimer la règle « {{ row.rule.name }} » ?">
+                                {% csrf_token %}
+                                <button class="btn btn-small btn-danger" type="submit" name="action" value="supprimer"
+                                        aria-label="Supprimer « {{ row.rule.name }} »">Supprimer</button>
+                            </form>
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+{% else %}
+    <div class="empty-state">
+        <p>Aucune règle : rien n'est reconnu ici. Ajoutez-en une ci-dessous.</p>
+    </div>
+{% endif %}

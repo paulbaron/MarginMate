@@ -18,12 +18,19 @@ from django.db.models import Min, Q
 
 from invoices.models import Invoice, Supplier
 
-from . import matching
-from .models import BankTransaction, CounterpartyAlias, IgnoreRule, InvoicePayment
+from . import matching, recognition
+from .models import BankTransaction, CounterpartyAlias, IgnoreRule, InvoicePayment, StatementFormat
 from .rules import compile_rules, ignoring_rule
-from .statements import parse_statement
+from .statements import FormatError, Layout, check_format, parse_statement
 
 CENTS = Decimal("0.01")
+#: Why an import does not run in an espace with no format left.
+NO_FORMAT = "Aucun format de relevé : ajoutez-en un sur « Format du relevé »."
+#: How many fingerprints one query asks about. Django never splits an
+#: `__in` list on SQLite, whose bound variables are capped (32 766 in the
+#: bundled build, 999 in older ones): a statement of more operations than
+#: that was an OperationalError - a 500 on the import and on « Tester ».
+FINGERPRINT_CHUNK = 900
 
 
 @dataclass
@@ -43,14 +50,45 @@ def invoice_label(invoice: Invoice) -> str:
     return label
 
 
+def default_format() -> StatementFormat | None:
+    """The format an import reads with when nobody chose one: the first by
+    position, then name - None when the espace has none (one query)."""
+    return StatementFormat.objects.order_by("position", "name").first()
+
+
+def _layout(fmt) -> Layout:
+    """`fmt` checked - a stored format the check refuses now (a pattern
+    the guard of returnables.patterns has since learnt to refuse) says
+    which format to correct, rather than a field's sentence out of context."""
+    if isinstance(fmt, Layout):
+        return fmt
+    try:
+        return check_format(fmt)
+    except FormatError as error:
+        raise ValueError(
+            f"Import annulé : le format « {getattr(fmt, 'name', '')} » est à corriger sur « Format du relevé » - "
+            f"{error.message}"
+        ) from None
+
+
 @transaction.atomic
-def import_statement(content: bytes) -> ImportSummary:
-    statement = parse_statement(content)
-    known = set(
-        BankTransaction.objects.filter(fingerprint__in=[line.fingerprint for line in statement.lines]).values_list(
-            "fingerprint", flat=True
-        )
-    )
+def import_statement(
+    content: bytes, rules: recognition.Rules | None = None, fmt: StatementFormat | Layout | None = None
+) -> ImportSummary:
+    """The statement's new lines, written - laid out as `fmt` says (the
+    default format, `default_format()`, when not given) and described by
+    `rules` (the active rules, `recognition.load()`, when not given): one
+    query each, so a caller importing several files reads both once and
+    hands them in. Refused whole (ValueError, the sentence to show) before
+    anything is written: one file refused never leaves half its lines, and
+    with no format at all nothing is read."""
+    if fmt is None:
+        fmt = default_format()
+        if fmt is None:
+            raise ValueError(NO_FORMAT)
+    layout = _layout(fmt)
+    statement = parse_statement(content, recognition.load() if rules is None else rules, layout)
+    known = known_fingerprints(line.fingerprint for line in statement.lines)
     new = [
         BankTransaction(
             account=statement.account,
@@ -69,6 +107,18 @@ def import_statement(content: bytes) -> ImportSummary:
     ]
     BankTransaction.objects.bulk_create(new)
     return ImportSummary(lines=len(statement.lines), created=len(new))
+
+
+def known_fingerprints(fingerprints) -> set[str]:
+    """Those of `fingerprints` already stored - asked `FINGERPRINT_CHUNK`
+    at a time, so a statement of any length is a few queries, never one
+    past what SQLite binds."""
+    fingerprints = list(dict.fromkeys(fingerprints))
+    known: set[str] = set()
+    for start in range(0, len(fingerprints), FINGERPRINT_CHUNK):
+        chunk = fingerprints[start : start + FINGERPRINT_CHUNK]
+        known.update(BankTransaction.objects.filter(fingerprint__in=chunk).values_list("fingerprint", flat=True))
+    return known
 
 
 def open_lines():

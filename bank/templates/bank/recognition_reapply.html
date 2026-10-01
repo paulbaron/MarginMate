@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% load assets %}
+{% block title %}Relire les opérations - Reconnaissance des opérations - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <p class="breadcrumb"><a href="{% url 'bank:recognition' %}">← Reconnaissance des opérations</a></p>
+            <h1>Relire les opérations déjà importées</h1>
+            <p class="page-subtitle">
+                Ce que les règles actives lisent autrement sur les opérations déjà importées : nature, tiers, date de carte.
+            </p>
+        </div>
+    </div>
+
+    {% if blocked %}
+        <div class="message message-warning">
+            {% for problem in problems %}<p>{{ problem }}</p>{% endfor %}
+            <p>Rien ne peut être relu tant qu'une règle active ne peut pas être appliquée : <a href="{% url 'bank:recognition' %}">corrigez-la ou suspendez-la</a>.</p>
+        </div>
+    {% endif %}
+
+    {% if count %}
+        <p class="lead">
+            <strong>{{ count }} opération{{ count|pluralize }}</strong> {{ count|pluralize:"change,changent" }}.
+            Les rapprochements, les catégories et le choix « En caisse » propre à chaque opération restent tels quels.
+        </p>
+        {% comment %}
+        What a new payee unties without a field being written: a retained
+        payer and a learnt alias are both keyed on the payee
+        (views._detached).
+        {% endcomment %}
+        {% if detached_payers or detached_aliases %}
+            <div class="message message-warning">
+                {% if detached_payers %}
+                    <p>{{ detached_payers }} entrée{{ detached_payers|pluralize }} ne {{ detached_payers|pluralize:"suivra,suivront" }} plus {{ detached_payers|pluralize:"son,leur" }} payeur retenu : à reclasser sur <a href="{% url 'bank:income_home' %}">« Entrées d'argent »</a>.</p>
+                {% endif %}
+                {% if detached_aliases %}
+                    <p>{{ detached_aliases }} dépense{{ detached_aliases|pluralize }} ne {{ detached_aliases|pluralize:"correspondra,correspondront" }} plus au libellé bancaire appris pour {{ detached_aliases|pluralize:"son,leur" }} fournisseur.</p>
+                {% endif %}
+            </div>
+        {% endif %}
+        <div class="table-wrap">
+            <table data-table data-table-label="opérations relues">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Opération</th>
+                        <th class="num">Montant</th>
+                        <th>Nature</th>
+                        <th>Tiers</th>
+                        <th>Date de carte</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in rows %}
+                        <tr>
+                            <td data-sort="{{ row.change.line.operation_date|date:'Y-m-d' }}">{{ row.change.line.operation_date|date:"d/m/Y" }}</td>
+                            <td>{{ row.change.line.label|truncatechars:90 }}</td>
+                            <td class="num" data-sort="{{ row.change.line.amount|stringformat:'s' }}">{{ row.change.line.amount|money }} €</td>
+                            <td>{% if row.change.kind_changes %}{{ row.kind_before }} → <strong>{{ row.kind_after }}</strong>{% else %}{{ row.kind_after }}{% endif %}</td>
+                            <td>{% if row.change.payee_changes %}{{ row.change.line.counterparty|default:"—" }} → <strong>{{ row.change.now.counterparty|default:"—" }}</strong>{% else %}{{ row.change.now.counterparty|default:"—" }}{% endif %}</td>
+                            <td data-sort="{{ row.change.now.card_date|date:'Y-m-d' }}">
+                                {% if row.change.date_changes %}{{ row.change.line.card_date|date:"d/m/Y"|default:"—" }} → <strong>{{ row.change.now.card_date|date:"d/m/Y"|default:"—" }}</strong>{% else %}{{ row.change.now.card_date|date:"d/m/Y"|default:"—" }}{% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% if more %}<p class="muted">… et {{ more }} de plus.</p>{% endif %}
+        {% if not blocked %}
+            <form method="post" action="{% url 'bank:recognition_reapply' %}">
+                {% csrf_token %}
+                <input type="hidden" name="{{ digest_param }}" value="{{ digest }}">
+                <div class="form-actions">
+                    <button class="btn" type="submit">Relire {{ count }} opération{{ count|pluralize }}</button>
+                    <a class="btn btn-secondary" href="{% url 'bank:recognition' %}">Annuler</a>
+                </div>
+            </form>
+        {% endif %}
+    {% else %}
+        <div class="empty-state">
+            <p>Rien à relire : les opérations importées sont déjà lues ainsi par les règles actives.</p>
+        </div>
+    {% endif %}
+{% endblock %}

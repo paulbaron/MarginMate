@@ -5,9 +5,9 @@ is, so what fails here is what fails there: a link or a form dropping the
 period, the figures widening with nothing on screen to say why. And three
 things of its own:
 
-* **what it recognises is said on the page** - the payout rule, the two
-  deposit types - and so is what it could not read, with the command that
-  fills it;
+* **what it recognises is said on the page** - the active till rules, as
+  « Reconnaissance des opérations » holds them, with the way there - and so
+  is what it could not read, with the command that fills it;
 * **a credit is named with the same field and the same form as a
   spending**, the message saying it is an entry, the datalist offering what
   was typed on credits only;
@@ -39,7 +39,8 @@ from django.urls import reverse
 from django.utils import timezone
 
 from bank import income
-from bank.models import BankTransaction, IncomePayer
+from bank.models import BankTransaction, IncomePayer, OperationRule
+from bank.tests.support import SEED, make_rule
 from bank.tests.test_income import (
     MERCHANT,
     TERMINAL,
@@ -49,6 +50,7 @@ from bank.tests.test_income import (
     TillBeforeTheStatement,
     euros,
 )
+from bank.tests.test_recognition import too_slow
 from bank.views import _build_balance_svg
 from common import last_twelve_months
 from staff.tests.page_forms import as_post, form_posting_to, forms_of
@@ -101,9 +103,29 @@ def text_of(html: str) -> str:
     return " ".join(unescape(re.sub(r"<[^>]+>", " ", html)).split())
 
 
+def rules_said(html: str) -> list[str]:
+    """The till rules the page states, one item each - the list above
+    « Modifier les règles », less its two items on what a person decides."""
+    end = html.index("Modifier les règles")
+    start = html.rindex('<ul class="muted small">', 0, end)
+    items = [text_of(item) for item in re.findall(r"<li>(.*?)</li>", html[start:end], re.DOTALL)]
+    return [item for item in items if not item.startswith(("En caisse ,", "Autres entrées :"))]
+
+
 #: Every value the « En caisse » menu posts, « Automatique » first - the
 #: values `BankTransaction.income_source` and `IncomePayer.source` store.
 OFFERED = ["", "card", "cash", "cheque", "credit", "voucher", "other"]
+#: Who decided a credit the seeded till rules recognise, as the row says it.
+BY_PAYOUT_RULE = "règle « Versement carte (TOTAL ENCAISSE) »"
+BY_CASH_RULE = "règle « Dépôt d'espèces (VERSEMENT ESPECES) »"
+BY_CHEQUE_RULE = "règle « Remise de chèques (REMISE CHEQUE) »"
+#: The seeded till rules, as « Entrées d'argent » states them.
+PAYOUT_SAID = (
+    "Versement carte (TOTAL ENCAISSE) : Versement de carte (TPE), brut lu dans le libellé (la ligne est le net, la "
+    "commission la différence)."
+)
+CASH_SAID = "Dépôt d'espèces (VERSEMENT ESPECES) : Dépôt d'espèces."
+CHEQUE_SAID = "Remise de chèques (REMISE CHEQUE) : Remise de chèques."
 
 
 class Page(Fixtures):
@@ -158,10 +180,58 @@ class IncomePageTests(Page, TestCase):
         self.assertContains(response, 'data-table-label="versements carte"')
 
     def test_what_the_page_recognises_is_said_on_it(self):
-        response = self.page(**JUNE_PARAMS)
-        self.assertContains(response, "TOTAL ENCAISSE &lt;montant&gt; EUROS")
-        self.assertContains(response, "VERSEMENT ESPECES")
-        self.assertContains(response, "REMISE CHEQUES")
+        """The active till rules in their order, each by its name and what
+        it means, and where they are changed."""
+        html = self.page(**JUNE_PARAMS).content.decode()
+        self.assertEqual(rules_said(html), [PAYOUT_SAID, CASH_SAID, CHEQUE_SAID])
+        self.assertIn(f'<a href="{reverse("bank:recognition")}">Modifier les règles</a>', html)
+        # No terminal's words written in the page itself any more.
+        self.assertNotIn("&lt;montant&gt;", html)
+
+    def test_the_rules_the_page_states_are_the_ones_it_read_the_credits_with(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        with CaptureQueriesContext(connection) as queries:
+            self.page(**JUNE_PARAMS)
+        read = [query["sql"] for query in queries.captured_queries if "bank_operationrule" in query["sql"]]
+        self.assertEqual(len(read), 1)
+
+    def test_a_rule_added_or_suspended_changes_what_the_page_says(self):
+        make_rule("Versement TPE (REMISE TPE)", OperationRule.Meaning.PAYOUT, "REMISE TPE")
+        OperationRule.objects.filter(name="Dépôt d'espèces (VERSEMENT ESPECES)").update(is_active=False)
+        html = self.page(**JUNE_PARAMS).content.decode()
+        self.assertEqual(
+            rules_said(html),
+            [
+                PAYOUT_SAID,
+                CHEQUE_SAID,
+                (
+                    "Versement TPE (REMISE TPE) : Versement de carte (TPE), brut non imprimé : compté au montant "
+                    "reçu, commission inconnue."
+                ),
+            ],
+        )
+        OperationRule.objects.filter(meaning__in=["payout", "cheque"]).update(is_active=False)
+        html = self.page(**JUNE_PARAMS).content.decode()
+        self.assertEqual(rules_said(html), ["Aucune règle « En caisse » active : rien n'est reconnu."])
+
+    def test_a_rule_that_cannot_be_applied_is_said_with_where_to_fix_it(self):
+        OperationRule.objects.filter(name="Dépôt d'espèces (VERSEMENT ESPECES)").update(pattern="ESPECES|")
+        html = self.page(**JUNE_PARAMS).content.decode()
+        warning = html[: html.index(f'<a href="{reverse("bank:recognition")}">Corriger')]
+        warning = text_of(warning[warning.rindex('<div class="message message-warning">') :])
+        self.assertEqual(
+            warning,
+            "Règle « Dépôt d'espèces (VERSEMENT ESPECES) » : le motif accepte une ligne vide : il trouverait quelque "
+            "chose sur n'importe quelle ligne - elle ne reconnaît rien.",
+        )
+        self.assertIn("Corriger sur « Reconnaissance des opérations »", text_of(html))
+        # It recognises nothing, so it is not said to.
+        self.assertEqual(rules_said(html), [PAYOUT_SAID, CHEQUE_SAID])
+        with self.subTest("nothing wrong, nothing said"):
+            OperationRule.objects.filter(name="Dépôt d'espèces (VERSEMENT ESPECES)").update(pattern="ESPECES")
+            self.assertNotContains(self.page(**JUNE_PARAMS), "Corriger sur « Reconnaissance des opérations »")
 
     def test_an_exact_run_is_worded_as_two_equal_amounts(self):
         response = self.page(**JUNE_PARAMS)
@@ -458,8 +528,8 @@ class TheMenusTests(InTheTill, TestCase):
             self.unnamed: (True, "non reconnue"),
             self.later: (True, "non reconnue"),
             self.party: (True, "non reconnue"),
-            self.cash: (False, "type d'opération"),
-            self.cheque: (False, "type d'opération"),
+            self.cash: (False, BY_CASH_RULE),
+            self.cheque: (False, BY_CHEQUE_RULE),
         }
         for line, (ticked, who) in cases.items():
             with self.subTest(line=line.label):
@@ -701,7 +771,7 @@ class HandingALineBackTests(InTheTill, TestCase):
         self.assertEqual(self.written()[1], [])
         _payouts, _others, other_means = self.listed(response)
         self.assertIn(self.cash.pk, other_means)
-        self.assertIn("type d'opération", text_of(row_of(response.content.decode(), self.cash)))
+        self.assertIn(BY_CASH_RULE, text_of(row_of(response.content.decode(), self.cash)))
 
 
 class TheBarsOwnNameTests(InTheTill, TestCase):
@@ -855,12 +925,14 @@ class ForgettingAPayerTests(InTheTill, TestCase):
 
     def test_the_payers_retained_are_listed_under_the_balance_with_oublier(self):
         html = self.june()
-        # The reminder is there before any payer is.
+        # The reminder is there before any payer is: a rule, or « Carte » here.
         self.assertIn(
-            "Un versement carte non reconnu (autre terminal) ? Choisissez « Carte » sur son virement dans Autres "
-            "entrées : « retenir pour ce payeur » compte aussi tous ses autres virements.",
+            "Un versement carte non reconnu ? Ajoutez une règle sur Reconnaissance des opérations , ou choisissez "
+            "« Carte » sur son virement dans Autres entrées .",
             text_of(html),
         )
+        hint = html[html.index("Un versement carte non reconnu") :]
+        self.assertIn(f'<a href="{reverse("bank:recognition")}">Reconnaissance des opérations</a>', hint[:400])
         self.assertNotIn('id="payeurs-retenus"', html)
         html = self.retain()
         self.assertLess(html.index('id="card-balance"'), html.index('<h3 id="payeurs-retenus">'))
@@ -1136,23 +1208,57 @@ class BankHomeTests(Page, TestCase):
         )
         self.assertIn("Versement carte : 200.00 € encaissés, 1.40 € de commission", html)
         self.assertNotIn("35.00 € encaissés", html)
-        for by_rule in ("libellé « TOTAL ENCAISSE »", "type d'opération", "non reconnue"):
+        for by_rule in (BY_PAYOUT_RULE, BY_CASH_RULE, BY_CHEQUE_RULE, "non reconnue"):
             with self.subTest(how=by_rule):
                 self.assertNotIn(f'<span class="read-as">{by_rule}</span>', html)
 
-    def test_the_payers_are_read_once_and_only_where_entries_are_shown(self):
+    def test_a_till_rule_that_recognises_nothing_is_said_on_the_tab(self):
+        """Its payouts read « Autre entrée … à classer » there: without a word
+        on the tab, they read as credits nobody named."""
+        OperationRule.objects.filter(name="Versement carte (TOTAL ENCAISSE)").update(pattern="ENCAISSE|")
+        response = self.bank(vue="entrees", **JUNE_PARAMS)
+        warning = said(response)
+        self.assertIn("Règle « Versement carte (TOTAL ENCAISSE) » : le motif accepte une ligne vide", warning)
+        self.assertIn("elle ne reconnaît rien.", warning)
+        self.assertContains(
+            response, f'<a href="{reverse("bank:recognition")}">Corriger sur « Reconnaissance des opérations »</a>'
+        )
+        # The tab is where it is said: the others read no credit.
+        self.assertEqual(self.bank(vue="a-traiter", **JUNE_PARAMS).context["rule_problems"], [])
+
+    def test_a_till_rule_found_too_slow_while_the_tab_reads_is_said(self):
+        """Found slow only once it has read credits: said after them."""
+        with too_slow(SEED.RULES[5][4]):
+            response = self.bank(vue="entrees", **JUNE_PARAMS)
+        self.assertEqual(
+            response.context["rule_problems"],
+            ["Règle « Versement carte (TOTAL ENCAISSE) » : motif trop lent, ignoré - simplifiez-le."],
+        )
+        self.assertIn("Règle « Versement carte (TOTAL ENCAISSE) » : motif trop lent, ignoré", said(response))
+
+    def test_sound_rules_say_nothing(self):
+        response = self.bank(vue="entrees", **JUNE_PARAMS)
+        self.assertEqual(response.context["rule_problems"], [])
+        self.assertNotContains(response, "Corriger sur « Reconnaissance des opérations »")
+
+    def test_the_payers_and_the_rules_are_read_once_and_only_where_entries_are_shown(self):
         from django.db import connection
         from django.test.utils import CaptureQueriesContext
 
         IncomePayer.objects.create(key=income.payer_key(self.unnamed), source=income.CARD)
         IncomePayer.objects.create(key="PAYEUR SANS ENTREE", source=income.VOUCHER)
 
-        def payer_queries(**parameters) -> int:
+        def queries_of(**parameters) -> tuple[int, int]:
+            """(payers' queries, rules' queries) drawing the page."""
             with CaptureQueriesContext(connection) as queries:
                 self.bank(**parameters)
-            return sum(1 for query in queries.captured_queries if "bank_incomepayer" in query["sql"])
+            sql = [query["sql"] for query in queries.captured_queries]
+            return (
+                sum(1 for one in sql if "bank_incomepayer" in one),
+                sum(1 for one in sql if "bank_operationrule" in one),
+            )
 
-        self.assertEqual(payer_queries(vue="entrees", **JUNE_PARAMS), 1)
+        self.assertEqual(queries_of(vue="entrees", **JUNE_PARAMS), (1, 1))
         for parameters in (
             {"vue": "a-traiter", **JUNE_PARAMS},
             {"vue": "toutes", **JUNE_PARAMS},
@@ -1160,7 +1266,7 @@ class BankHomeTests(Page, TestCase):
             {"vue": "entrees", "du": "2026-08-01", "au": "2026-08-31"},
         ):
             with self.subTest(parameters=parameters):
-                self.assertEqual(payer_queries(**parameters), 0)
+                self.assertEqual(queries_of(**parameters), (0, 0))
 
     def test_the_entries_are_read_without_a_query_per_row(self):
         """Payouts, payers retained and credits chosen one by one: the payers
