@@ -13,6 +13,13 @@ recognised an invoice already imported. This reads each such document's
 number again from its stored text. A number that is one is never touched,
 nor one another document of the supplier already holds (said), nor a
 document read by a supplier's own reader.
+
+A till's count of the day filed bare - Wing Seng's « 000172 », from before
+its padding zeros stopped counting (generic_receipt.DAILY_COUNT_DIGITS) -
+takes its date the same way (« 000172-20251119 »): bare, a second photo of
+that ticket would no longer be recognised, since it now reads dated. Only
+when the text prints that very number after « Ticket »: a short number read
+any other way is the document's own.
 """
 
 import re
@@ -23,7 +30,7 @@ from django.db import transaction
 
 from invoices.models import Invoice
 from invoices.parsers import LLM_PARSER_KEY
-from invoices.parsers.generic_receipt import _ticket_number
+from invoices.parsers.generic_receipt import DAILY_COUNT_DIGITS, _ticket_number
 from invoices.receipts import has_own_reader
 
 MADE_UP_RE = re.compile(r"\d{8}-\d+\.\d{2}")
@@ -35,8 +42,16 @@ def stands_in(number: str) -> bool:
     return not number or bool(MADE_UP_RE.fullmatch(number) or DIGIT_RUN_RE.fullmatch(number))
 
 
+def bare_count(number: str) -> bool:
+    """A number short enough to be a till's count of the day, undated."""
+    return number.isdigit() and len(number.lstrip("0")) <= DAILY_COUNT_DIGITS
+
+
 class Command(BaseCommand):
-    help = "Remplace les numéros de documents inventés (date-total, référence de paiement) par le numéro imprimé."
+    help = (
+        "Remplace les numéros de documents inventés (date-total, référence de paiement) par le numéro imprimé, "
+        "et date les numéros de ticket du jour."
+    )
 
     def add_arguments(self, parser):
         parser.add_argument("--dry-run", action="store_true", help="Montrer sans rien enregistrer.")
@@ -50,10 +65,13 @@ class Command(BaseCommand):
             )
             for invoice in documents:
                 text = invoice.document_text
-                if not text or not stands_in(invoice.invoice_number) or has_own_reader(invoice.supplier):
+                number = invoice.invoice_number
+                if not text or not (stands_in(number) or bare_count(number)) or has_own_reader(invoice.supplier):
                     continue
                 printed = _ticket_number(text, invoice.invoice_date)
-                if not printed or stands_in(printed) or printed == invoice.invoice_number:
+                if not printed or stands_in(printed) or printed == number:
+                    continue
+                if not stands_in(number) and printed != f"{number}-{invoice.invoice_date:%Y%m%d}":
                     continue
                 if (
                     Invoice.objects.filter(supplier=invoice.supplier, invoice_number=printed)

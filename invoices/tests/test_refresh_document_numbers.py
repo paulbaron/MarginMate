@@ -65,6 +65,29 @@ class RefreshDocumentNumbersTests(TestCase):
         self.assertEqual(stand_in.invoice_number, "20260410-327.20")
         self.assertIn("déjà", said)
 
+    def test_a_count_of_the_day_filed_bare_takes_its_date(self):
+        """Wing Seng's « 000172 », filed bare before its zeros stopped
+        counting: dated now, the same ticket photographed again is still
+        recognised, and another day's « 000172 » is not refused for it."""
+        shop = make_supplier(code="WINGSENG_X", name="Épicerie Exemple", parser_key="WINGSENG")
+        ticket = make_invoice(
+            supplier=shop,
+            invoice_number="000172",
+            invoice_date=date(2025, 11, 19),
+            ocr_text="EPICERIE EXEMPLE\nTicket:000172 19/11/2025 10H02\nTOTAL EUR: 3.60",
+        )
+        said = self.run_command()
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.invoice_number, "000172-20251119")
+        self.assertIn("Épicerie Exemple : 1", said)
+
+    def test_a_short_number_read_some_other_way_is_the_document_s_own(self):
+        """« Facture n° 0042 » is that document's number, not a count."""
+        invoice = self.bill("0042", text="EXEMPLE\nFacture n° 0042\nTotal 12,00")
+        self.run_command()
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.invoice_number, "0042")
+
     def test_a_supplier_with_a_reader_of_its_own_is_left_alone(self):
         wholesaler = make_supplier(code="UBA_X", name="Grossiste Exemple", parser_key="UBA")
         own = self.bill("20260410-327.20", supplier=wholesaler)

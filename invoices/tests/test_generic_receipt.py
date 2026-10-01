@@ -6,6 +6,7 @@ name and amount is invented, and each fixture's arithmetic holds, since that
 is what the reader checks itself against.
 """
 
+from datetime import date
 from decimal import Decimal
 from typing import cast
 
@@ -21,6 +22,7 @@ from invoices.parsers.generic_receipt import (
     _split_by_buckets,
     _spread,
     _taxed_row,
+    _ticket_number,
 )
 from invoices.parsers.receipt_base import VatSummary
 
@@ -638,6 +640,20 @@ class LineShapeTests(SimpleTestCase):
     def test_a_long_ticket_number_is_the_ticket(self):
         self.assertEqual(parse("SABBH", SABBH_HEAD + "Numero de ticket:6800001\n").invoice_number, "6800001")
 
+    def test_a_count_of_the_day_padded_with_zeros_is_one_too(self):
+        """Wing Seng prints « Ticket:000172 »: six digits, three of them the
+        till's padding. Its tickets run from 000035 to 000473 on every day
+        of the year - and, bare, the 18/09/2026 ticket was refused as the
+        19/11/2025 one, « Déjà dans MarginMate : Wing Seng n° 000172 » (the
+        owner, 01/10/2026). Counted without the zeros, it is dated."""
+        self.assertEqual(parse("WINGSENG", WING_SENG_TICKET).invoice_number, "000172-20260918")
+        self.assertEqual(_ticket_number("Ticket:000172", date(2026, 9, 18)), "000172-20260918")
+        self.assertEqual(_ticket_number("Ticket:0004278", date(2026, 1, 24)), "0004278-20260124")
+
+    def test_zeros_never_make_a_long_number_short(self):
+        self.assertEqual(_ticket_number("Ticket:0012345", date(2026, 9, 18)), "0012345")
+        self.assertEqual(_ticket_number("Ticket:160074", date(2026, 9, 18)), "160074")
+
     def test_lines_set_aside_are_said(self):
         """A header or a total read among the items is left out when the rest
         adds up - and said, in case it was an item after all."""
@@ -649,6 +665,29 @@ class LineShapeTests(SimpleTestCase):
     def test_nothing_set_aside_says_nothing(self):
         invoice = parse("FRANPRIX", CancelledItemTests.TEXT)
         self.assertNotIn("Lignes écartées", {item.label for item in invoice.checks})
+
+
+# The structure of the ticket the owner sent (01/10/2026), as OCR reads it;
+# the address, the SIREN and the signature are invented.
+WING_SENG_TICKET = (
+    "WING SENG\n"
+    "1 RUE EXEMPLE\n"
+    "75000 PARIS\n"
+    "WING SENG\n"
+    "Siren:000000000\n"
+    "Ticket:000172 18/09/2026 14H17\n"
+    "Caisse N:03 Vendeur N:03\n"
+    "EUR\n"
+    "MENTHE 1.00\n"
+    "2 x 0.50EUR\n"
+    "#CITRON VERT 10.76\n"
+    "MAN 3.600kg x 2.99EUR/kg\n"
+    "S TOTAL EUR: 11.76\n"
+    "Recu CARTE BLEUE: 11.76\n"
+    "TOTAL EUR: 11.76\n"
+    "TVA 5.50 %: 0.61 EUR\n"
+    "Merci de votre visite\n"
+)
 
 
 def reading(name, total, index=0, count=None, code=""):
