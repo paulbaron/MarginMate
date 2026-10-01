@@ -23,8 +23,8 @@ rem   5. backs up the data (manage.py backup_data). If that fails: the server is
 rem      restarted as it was, nothing has changed;
 rem   6. git merge --ff-only origin/main. If that fails: back to the previous
 rem      code, the server is restarted;
-rem   7. uv sync --locked --no-dev, manage.py migrate_tenants, manage.py serve
-rem      --verifier. If a step fails: the server is NOT restarted, the mark of
+rem   7. uv sync --locked --no-dev --python 3.11, manage.py migrate_tenants,
+rem      manage.py serve --verifier. If a step fails: the server is NOT restarted, the mark of
 rem      step 0 stays, and the window says how to go back;
 rem   8. restarts the server and waits until it listens on 127.0.0.1:8765.
 rem Before step 0 it refuses, touching nothing, a folder without .venv, a folder
@@ -189,12 +189,16 @@ if errorlevel 1 goto :merge_failure
 for /f "delims=" %%h in ('git rev-parse --short HEAD') do set "MM_NEW_SHORT=%%h"
 
 rem 7. What the new code asks for, then its checks. uv installs what uv.lock
-rem lists and removes the rest, the development tools included.
+rem lists and removes the rest, the development tools included. --python
+rem names what .python-version names: an explicit request beats whatever mise
+rem hands uv, and a mise.toml with python.uv_venv_auto on (every version up to
+rem 01/10/2026) asked for the exact Python mise installed, so uv replaced a
+rem .venv made on another 3.11 - the OCR models with it.
 set "MM_STEP=l'installation des dependances (uv sync --locked --no-dev)"
 >>"%MM_STATE%" echo etape=%MM_STEP%
 echo(
 echo Dependances (uv sync --locked --no-dev)...
-call uv sync --locked --no-dev
+call uv sync --locked --no-dev --python 3.11
 if errorlevel 1 goto :failure_after_merge
 set "MM_STEP=les migrations (manage.py migrate_tenants)"
 >>"%MM_STATE%" echo etape=%MM_STEP%
@@ -353,7 +357,7 @@ echo (DEPLOY.md, section 10.4), dans une invite de commandes :
 echo(
 echo   cd /d "%MM_APP%"
 echo   git reset --hard VERSION-D-AVANT
-echo   uv sync --locked --no-dev
+echo   uv sync --locked --no-dev --python 3.11
 echo(
 echo Puis verifiez ce dossier et relancez le serveur :
 echo(
@@ -456,7 +460,7 @@ echo Pour revenir a la version d'avant, ouvrez une invite de commandes et tapez 
 echo(
 echo   cd /d "%MM_APP%"
 echo   git reset --hard %MM_PREVIOUS%
-echo   uv sync --locked --no-dev
+echo   uv sync --locked --no-dev --python 3.11
 echo(
 if not defined MM_BACKUP goto :rollback_without_backup
 echo Si l'echec a eu lieu aux migrations ou apres, remettez aussi les donnees de la

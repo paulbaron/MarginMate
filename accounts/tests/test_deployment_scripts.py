@@ -52,6 +52,10 @@ POWERSHELL = (
 STATE_KEYS = {"PREVIOUS": "ancien", "DATA": "donnees", "BACKUP": "sauvegarde", "STEP": "etape"}
 #: pip or its file, named anywhere: the way back installs with uv alone.
 PIP = re.compile(r"\bpip\b|requirements\.txt", flags=re.IGNORECASE)
+#: What every production uv sync asks for by --python: .python-version's.
+PYTHON_VERSION = (BASE / ".python-version").read_text(encoding="utf-8").strip()
+#: The command each of them is, in the scripts and in DEPLOY.md.
+SYNC = f"uv sync --locked --no-dev --python {PYTHON_VERSION}"
 
 
 class Script:
@@ -250,7 +254,8 @@ class CmdHygieneMixin:
     def test_the_project_s_python_quoted(self):
         self.assertIn('set "MM_PYTHON=.venv\\Scripts\\python.exe"', self.script.text)
         for _, line in self.script.commands():
-            if "python" in line.lower() and not line.lower().startswith(("set ", "echo", "if ")):
+            # uv's --python names a version, it runs no Python of its own.
+            if "python" in line.lower() and not line.lower().startswith(("set ", "echo", "if ", "call uv ")):
                 self.assertTrue(line.startswith('"%MM_PYTHON%"') or "MM_PYTHON" in line, line)
 
     def test_the_settings_are_asked_through_the_helper(self):
@@ -366,7 +371,7 @@ class DeployScriptTests(CmdHygieneMixin, SimpleTestCase):
         merge and before the migrations, and a failure there is a failure
         past the merge. uv is only ever run through call."""
         sync = self.script.line_of("call uv sync")
-        self.assertEqual(self.script.lines[sync], "call uv sync --locked --no-dev")
+        self.assertEqual(self.script.lines[sync], f"call uv sync --locked --no-dev --python {PYTHON_VERSION}")
         self.assertEqual(self.script.after(sync), "if errorlevel 1 goto :failure_after_merge")
         self.assertLess(self.script.line_of("call git merge --ff-only origin/main"), sync)
         self.assertLess(sync, self.script.line_of('"%MM_PYTHON%" manage.py migrate_tenants'))
@@ -375,8 +380,25 @@ class DeployScriptTests(CmdHygieneMixin, SimpleTestCase):
         self.assertIn("echo Dependances (uv sync --locked --no-dev)...", commands)
         self.assertEqual(
             [line for line in commands if re.match(r"(call\s+)?uv\b", line, flags=re.IGNORECASE)],
-            ["call uv --version >nul", "call uv sync --locked --no-dev"],
+            ["call uv --version >nul", f"call uv sync --locked --no-dev --python {PYTHON_VERSION}"],
         )
+
+    def test_every_uv_sync_names_the_python_of_python_version(self):
+        """Run or printed, every uv sync says --python, the version
+        .python-version names: an explicit request beats whatever mise hands
+        uv, and the mise.toml of every version up to 01/10/2026 handed it the
+        exact Python mise installed (python.uv_venv_auto) - uv then replaced
+        a .venv made on another 3.11, OCR models included. The way back puts
+        such a mise.toml back on disk before its uv sync runs."""
+        # The step's own name (« l'installation des dependances (uv sync
+        # --locked --no-dev) ») is words in etat.txt and on screen, no command.
+        syncs = [
+            line
+            for _, line in self.script.commands()
+            if re.search(r"\buv sync\b", line) and not line.startswith(("set ", "echo Dependances"))
+        ]
+        # Step 7 runs it; « offline » and the way back print it.
+        self.assertEqual(syncs, [f"call {SYNC}", f"echo   {SYNC}", f"echo   {SYNC}"])
 
     def test_pip_is_neither_run_nor_named(self):
         """uv sync takes pip out of .venv, and nothing here runs it - nor
@@ -387,7 +409,7 @@ class DeployScriptTests(CmdHygieneMixin, SimpleTestCase):
         self.assertEqual([line for line in self.script.lines if PIP.search(line)], [])
         for label in ("offline", "rollback_instructions"):
             with self.subTest(label=label):
-                self.assertIn("echo   uv sync --locked --no-dev", self.script.section(label))
+                self.assertIn(f"echo   uv sync --locked --no-dev --python {PYTHON_VERSION}", self.script.section(label))
 
     def test_the_wait_is_for_free_or_listening_only(self):
         """:wait_for_port compares its second argument with « listening »:
@@ -1062,7 +1084,7 @@ class OneLineOfTheScriptsRunAloneTests(SimpleTestCase):
             MM_BACKUP="",
         )
         self.assertIn("REFUS", said)
-        self.assertIn(f"git reset --hard {commit}\r\n  uv sync --locked --no-dev\r\n", said)
+        self.assertIn(f"git reset --hard {commit}\r\n  {SYNC}\r\n", said)
         self.assertIsNone(PIP.search(said))
         self.assertIn("pendant\r\nl'installation des dependances (uv sync --locked --no-dev), apres", said)
         self.assertIn('move "C:\\MarginMate\\data" "C:\\MarginMate\\data.echec"', said)
@@ -1155,7 +1177,7 @@ class OneLineOfTheScriptsRunAloneTests(SimpleTestCase):
     def test_the_other_branches_that_only_speak(self):
         said = self.spoken(("offline",), MM_APP="C:\\MarginMate\\app\\", MM_PORT="8765", MM_PREVIOUS_SHORT="abc1234")
         self.assertIn("ATTENTION : rien n'ecoute sur 127.0.0.1:8765, le site est hors ligne.", said)
-        self.assertIn("  git reset --hard VERSION-D-AVANT\r\n  uv sync --locked --no-dev\r\n", said)
+        self.assertIn(f"  git reset --hard VERSION-D-AVANT\r\n  {SYNC}\r\n", said)
         self.assertIsNone(PIP.search(said))
         said = self.spoken(("git_unreadable",), MM_APP="C:\\MarginMate\\app\\")
         self.assertIn('git config --global --add safe.directory "C:/MarginMate/app"', said)
@@ -1506,11 +1528,9 @@ class DeployDocumentTests(SimpleTestCase):
         back = tenth.split("### 10.4 ", 1)[1].split("\n### ", 1)[0]
         made = [" ".join(block.split()) for block in code_blocks(setup) if "git clone" in block]
         self.assertEqual(len(made), 1)
-        self.assertTrue(made[0].endswith("cd /d C:\\MarginMate\\app mise install uv sync --locked --no-dev"), made[0])
+        self.assertTrue(made[0].endswith(f"cd /d C:\\MarginMate\\app mise install {SYNC}"), made[0])
         reset = [" ".join(block.split()) for block in code_blocks(back) if "git reset" in block]
-        self.assertEqual(
-            reset, ["cd /d C:\\MarginMate\\app git reset --hard <version d'avant> uv sync --locked --no-dev"]
-        )
+        self.assertEqual(reset, [f"cd /d C:\\MarginMate\\app git reset --hard <version d'avant> {SYNC}"])
         self.assertEqual([block for block in code_blocks(self.deploy) if PIP.search(block) or "ensurepip" in block], [])
         self.assertNotIn("ensurepip", self.deploy)
         self.assertIsNone(PIP.search(back))
@@ -1535,7 +1555,7 @@ class DeployDocumentTests(SimpleTestCase):
             "cd /d C:\\MarginMate\\app mise install uv --version",
             "« trust »",
             "**À partir de la deuxième mise en ligne**",
-            "`uv sync --locked --no-dev`",
+            f"`{SYNC}`",
             "« REFUS : uv ne repond pas »",
             "`requirements.txt` a disparu du code après `05a80b4`",
             "On ne revient donc pas à une version d'avant le passage à uv (section 10.4)",
@@ -1568,7 +1588,7 @@ class DeployDocumentTests(SimpleTestCase):
         self.assertEqual(
             commands,
             [
-                "uv sync --locked --no-dev",
+                SYNC,
                 ".venv\\Scripts\\python.exe manage.py migrate_tenants",
                 ".venv\\Scripts\\python.exe manage.py serve --verifier",
                 "rmdir /s /q .git\\marginmate-deploy",
