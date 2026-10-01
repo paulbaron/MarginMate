@@ -1,17 +1,21 @@
 """The admin (accounts/admin_site.py, accounts/admin.py): superusers only, on
-their own tenant."""
+their own tenant - their MarginMate password confirmed, which every test here
+that opens an admin page writes (`tests.runner.confirm_password`; the gate
+itself: test_admin_sudo.py)."""
 
 from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.core.checks import run_checks
 from django.test import TestCase
 from django.urls import reverse
+from django.utils.html import escape
 
 from accounts.admin_site import MarginMateAdminSite
 from accounts.models import Invitation, Membership, Tenant
 from accounts.tenancy import bound_tenant
 from accounts.tests.support import TenancyTestCase, TwoTenantsTestCase
 from tests.factories import make_supplier
+from tests.runner import confirm_password
 
 
 class AdminSiteTests(TestCase):
@@ -40,7 +44,7 @@ class MultiModeAdminTests(TwoTenantsTestCase):
 
     def test_a_superuser_works_on_his_own_tenant(self):
         get_user_model().objects.filter(pk=self.user_a.pk).update(is_staff=True, is_superuser=True)
-        self.client.force_login(self.user_a)
+        confirm_password(self.client, self.user_a)
         self.assertEqual(self.client.get(reverse("admin:index")).status_code, 200)
         suppliers = self.client.get(reverse("admin:invoices_supplier_changelist"))
         self.assertContains(suppliers, "Grossiste Alpha")
@@ -51,7 +55,7 @@ class MultiModeAdminTests(TwoTenantsTestCase):
 
     def test_a_tenant_is_never_added_here_nor_its_owner_s_accounts_handed_out(self):
         get_user_model().objects.filter(pk=self.user_a.pk).update(is_staff=True, is_superuser=True)
-        self.client.force_login(self.user_a)
+        confirm_password(self.client, self.user_a)
         self.assertEqual(self.client.get(reverse("admin:accounts_tenant_add")).status_code, 403)
         self.assertEqual(self.client.get(reverse("admin:accounts_invitation_add")).status_code, 403)
         page = self.client.get(reverse("admin:accounts_tenant_change", args=[self.bar_b.pk]))
@@ -74,7 +78,7 @@ class MultiModeAdminTests(TwoTenantsTestCase):
         one click away shut it on him (« Aucun espace »), and the admin is
         where a tenant is reopened. Another bar's « actif » stays his."""
         get_user_model().objects.filter(pk=self.user_a.pk).update(is_staff=True, is_superuser=True)
-        self.client.force_login(self.user_a)
+        confirm_password(self.client, self.user_a)
         change = reverse("admin:accounts_tenant_change", args=[self.bar_a.pk])
         self.assertNotContains(self.client.get(change), 'name="is_active"')
         # « actif » left out of the POST is « actif » unticked, were it editable.
@@ -89,6 +93,88 @@ class MultiModeAdminTests(TwoTenantsTestCase):
         self.client.post(other, {"name": "Bar Beta", "_save": "Enregistrer"})
         self.bar_b.refresh_from_db()
         self.assertFalse(self.bar_b.is_active)
+
+
+class MembershipAdminTests(TwoTenantsTestCase):
+    """An owner sees and changes the espace's third-party passwords
+    (« Identifiants ») and its customer portals: a login added to an espace
+    in the admin is a MEMBER unless the superuser chooses otherwise, and a
+    second owner of one espace is said. The model's default stays OWNER -
+    the signup's, made with its espace; changing it is a migration."""
+
+    def setUp(self):
+        super().setUp()
+        get_user_model().objects.filter(pk=self.user_a.pk).update(is_staff=True, is_superuser=True)
+        confirm_password(self.client, self.user_a)
+        self.newcomer = get_user_model().objects.create_user(
+            username="serveur@example.invalid", email="serveur@example.invalid", password="mot-de-passe-essai"
+        )
+
+    def add(self, role, tenant=None):
+        return self.client.post(
+            reverse("admin:accounts_membership_add"),
+            {
+                "user": self.newcomer.pk,
+                "tenant": (tenant or self.bar_a).pk,
+                "role": role,
+                "created_at_0": "2026-10-01",
+                "created_at_1": "10:00:00",
+                "_save": "Enregistrer",
+            },
+            follow=True,
+        )
+
+    @staticmethod
+    def warnings(response) -> list[str]:
+        return [str(message) for message in response.context["messages"] if message.level_tag == "warning"]
+
+    def test_a_new_membership_starts_as_a_member_and_says_what_an_owner_is(self):
+        from accounts.admin import ROLE_HELP
+
+        page = self.client.get(reverse("admin:accounts_membership_add"))
+        self.assertEqual(page.context["adminform"].form.initial["role"], Membership.Role.MEMBER)
+        self.assertContains(page, '<option value="member" selected>Membre</option>', html=True)
+        self.assertContains(page, escape(ROLE_HELP))
+        # The model is untouched: no migration for a default.
+        self.assertEqual(Membership._meta.get_field("role").default, Membership.Role.OWNER)
+
+    def test_a_member_added_says_nothing_more(self):
+        response = self.add(Membership.Role.MEMBER)
+        self.assertEqual(response.status_code, 200)
+        membership = Membership.objects.get(user=self.newcomer)
+        self.assertEqual((membership.tenant, membership.role), (self.bar_a, Membership.Role.MEMBER))
+        self.assertEqual(self.warnings(response), [])
+
+    def test_a_second_owner_of_one_espace_is_said(self):
+        response = self.add(Membership.Role.OWNER)
+        self.assertEqual(Membership.objects.get(user=self.newcomer).role, Membership.Role.OWNER)
+        warnings = self.warnings(response)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("L'espace « Bar Alpha » a maintenant 2 propriétaires", warnings[0])
+        self.assertIn("alpha@example.invalid", warnings[0])
+        self.assertIn("serveur@example.invalid", warnings[0])
+
+    def test_the_first_owner_of_an_espace_is_not_a_warning(self):
+        Membership.objects.filter(user=self.user_b).delete()
+        response = self.add(Membership.Role.OWNER, tenant=self.bar_b)
+        self.assertEqual(self.warnings(response), [])
+
+    def test_a_member_made_owner_on_its_page_is_said_too(self):
+        self.add(Membership.Role.MEMBER)
+        membership = Membership.objects.get(user=self.newcomer)
+        response = self.client.post(
+            reverse("admin:accounts_membership_change", args=[membership.pk]),
+            {
+                "user": self.newcomer.pk,
+                "tenant": self.bar_a.pk,
+                "role": Membership.Role.OWNER,
+                "created_at_0": "2026-10-01",
+                "created_at_1": "10:00:00",
+                "_save": "Enregistrer",
+            },
+            follow=True,
+        )
+        self.assertEqual(len(self.warnings(response)), 1)
 
 
 class SuperuserWithNoTenantTests(TenancyTestCase):
@@ -121,7 +207,7 @@ class OneOwnerTenantInTheAdminTests(TenancyTestCase):
         self.mine = self.make_tenant("Bar de l'Exploitant")
         operator = self.make_member(self.mine, "exploitant@example.invalid")
         get_user_model().objects.filter(pk=operator.pk).update(is_staff=True, is_superuser=True)
-        self.client.force_login(operator)
+        confirm_password(self.client, operator)
         self.old = self.make_tenant("Bar Proprio Ancien", owner=True)
         Tenant.objects.filter(pk=self.old.pk).update(is_active=False)
 

@@ -19,11 +19,13 @@ import os
 import tempfile
 import threading
 import time
+import types
 from datetime import date
 from unittest import mock
 
 from django.test import SimpleTestCase, tag
 
+from accounts import paths, vault
 from invoices.scrapers import website
 from invoices.scrapers.website import (
     NeedsAPerson,
@@ -280,9 +282,13 @@ class WebsiteScraperInBrowserTests(SimpleTestCase):
 
     def setUp(self):
         self.site = tempfile.TemporaryDirectory()
-        self.downloads = tempfile.TemporaryDirectory()
         self.addCleanup(self.site.cleanup)
-        self.addCleanup(self.downloads.cleanup)
+        # A source's folder inside a downloads folder of the test's own: a
+        # visit prunes the folders beside its own.
+        root = tempfile.TemporaryDirectory()
+        self.addCleanup(root.cleanup)
+        self.downloads = types.SimpleNamespace(name=os.path.join(root.name, "type-1"))
+        os.makedirs(self.downloads.name)
         handler = functools.partial(_Quiet, directory=self.site.name)
         self.server = _Server(("127.0.0.1", 0), handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -303,16 +309,31 @@ class WebsiteScraperInBrowserTests(SimpleTestCase):
         env = mock.patch.dict(os.environ, {"PORTAIL_LOGIN": "jean@exemple.fr", "PORTAIL_PASSWORD": "secret"})
         env.start()
         self.addCleanup(env.stop)
+        # The .env's values go to the site the owner confirmed for them on
+        # « Identifiants »: this portal's. The test espace's private folder
+        # is the whole run's - emptied before and after.
+        self.forget_the_store()
+        self.addCleanup(self.forget_the_store)
+        vault.save({}, env_bindings={"PORTAIL_LOGIN": "127.0.0.1", "PORTAIL_PASSWORD": "127.0.0.1"})
         self.logged = []
 
+    @staticmethod
+    def forget_the_store():
+        folder = paths.private_dir()
+        for name in vault.FILE_NAMES:
+            (folder / name).unlink(missing_ok=True)
+        for leftover in folder.glob(vault.TEMPORARY_PREFIX + "*"):
+            leftover.unlink()
+
     def recipe(self, **kwargs):
-        return WebsiteRecipe(
-            name="Portail Exemple",
-            login_url=f"{self.base}/login.html",
-            username_env="PORTAIL_LOGIN",
-            password_env="PORTAIL_PASSWORD",
-            **kwargs,
-        )
+        settings = {
+            "name": "Portail Exemple",
+            "login_url": f"{self.base}/login.html",
+            "username_env": "PORTAIL_LOGIN",
+            "password_env": "PORTAIL_PASSWORD",
+        }
+        settings.update(kwargs)
+        return WebsiteRecipe(**settings)
 
     def fetch(self, recipe, known=()):
         return fetch_website_invoices(
@@ -461,15 +482,140 @@ class WebsiteScraperInBrowserTests(SimpleTestCase):
         with self.assertRaises(RefusedByTheSite):
             self.fetch(self.recipe())
 
-    def test_a_wrong_password_names_the_variables_to_check(self):
+    def test_a_wrong_password_says_where_to_check_it(self):
         portal(self.site.name)
         with mock.patch.dict(os.environ, {"PORTAIL_PASSWORD": "faux"}):
             with self.assertRaises(WebsiteError) as raised:
                 self.fetch(self.recipe())
         self.assertIn("Identifiants incorrects", str(raised.exception))
-        self.assertIn("PORTAIL_PASSWORD", str(raised.exception))
+        self.assertIn("page Identifiants", str(raised.exception))
         # What the page looked like is kept, for whoever fixes the settings.
         self.assertTrue(os.listdir(os.path.join(self.downloads.name, website.DEBUG_DIR)))
+
+    # Where a password may be typed (security audit of 01/10/2026).
+
+    def kept_pages(self):
+        folder = os.path.join(self.downloads.name, website.DEBUG_DIR)
+        pages = []
+        for name in os.listdir(folder):
+            if name.endswith(".html"):
+                with open(os.path.join(folder, name), encoding="utf-8") as handle:
+                    pages.append(handle.read())
+        return pages
+
+    def test_the_page_kept_after_a_failure_holds_nothing_typed(self):
+        """A page copying what is typed into its attributes (as controlled
+        inputs do), as it is and inside a JSON string: the HTML kept says
+        neither the login nor the password typed."""
+        portal(
+            self.site.name,
+            login_page=LOGIN.replace(
+                "</script>",
+                """document.querySelectorAll('input').forEach(function (field) {
+  field.addEventListener('input', function () {
+    field.setAttribute('value', field.value);
+    document.body.setAttribute('data-copie-' + field.name, JSON.stringify({valeur: field.value}));
+  });
+});
+</script>""",
+            ),
+        )
+        with mock.patch.dict(os.environ, {"PORTAIL_PASSWORD": "Faux&mot<de>passe"}):
+            with self.assertRaises(WebsiteError) as raised:
+                self.fetch(self.recipe())
+        self.assertIn("Identifiants incorrects", str(raised.exception))
+        (page,) = self.kept_pages()
+        self.assertIn("Identifiants incorrects", page)
+        for typed in ("jean@exemple.fr", "Faux&mot<de>passe", "Faux&amp;mot&lt;de&gt;passe", "Faux&amp;mot<de>passe"):
+            self.assertNotIn(typed, page)
+        # The body's attribute still held the login, as it is: no screenshot.
+        kept = os.listdir(os.path.join(self.downloads.name, website.DEBUG_DIR))
+        self.assertEqual([name.rsplit(".", 1)[1] for name in kept], ["html"])
+        self.assertTrue(any("capture non enregistrée : elle contenait un identifiant" in line for line in self.logged))
+
+    def test_a_page_echoing_the_login_is_scrubbed_before_its_screenshot(self):
+        """« Aucun compte pour … » on screen: rewritten before the
+        screenshot, which is then kept beside the HTML."""
+        portal(
+            self.site.name,
+            login_page=LOGIN.replace(
+                "document.getElementById('msg').innerHTML = '<p role=\"alert\">Identifiants incorrects</p>';",
+                "document.getElementById('msg').textContent = 'Aucun compte pour ' + this.u1.value;",
+            ),
+        )
+        with mock.patch.dict(os.environ, {"PORTAIL_PASSWORD": "faux"}):
+            with self.assertRaises(WebsiteError):
+                self.fetch(self.recipe())
+        kept = os.listdir(os.path.join(self.downloads.name, website.DEBUG_DIR))
+        self.assertEqual(sorted(name.rsplit(".", 1)[1] for name in kept), ["html", "png"], self.logged)
+        (page,) = self.kept_pages()
+        self.assertIn(f"Aucun compte pour {website.MASK}", page)
+        self.assertNotIn("jean@exemple.fr", page)
+
+    def scrub(self, body, values=("jean@exemple.fr",)):
+        """SCRUB_SCREEN_JS run in Chrome on a page served from here."""
+        self.page("echo.html", body)
+        driver = website.build_chrome(self.downloads.name, True)
+        self.addCleanup(driver.quit)
+        driver.get(f"{self.base}/echo.html")
+        return driver, driver.execute_script(website.SCRUB_SCREEN_JS, list(values), website.MASK)
+
+    def test_the_screen_scrub_rewrites_the_page_its_open_shadow_roots_and_its_frames(self):
+        self.page("cadre.html", "<p>Compte jean@exemple.fr</p>")
+        driver, clean = self.scrub(
+            '<p>Aucun compte pour jean@exemple.fr.</p><div id="hote"></div><iframe id="cadre" src="cadre.html"></iframe>'
+            "<script>document.getElementById('hote').attachShadow({mode: 'open'}).innerHTML ="
+            " '<span>Bonjour jean@exemple.fr</span>';</script>"
+        )
+        self.assertIs(clean, True)
+        texts = driver.execute_script(
+            "return [document.body.innerText, document.getElementById('hote').shadowRoot.textContent,"
+            " document.getElementById('cadre').contentDocument.body.textContent, document.title];"
+        )
+        for text in texts[:3]:
+            self.assertNotIn("jean@exemple.fr", text)
+            self.assertIn(website.MASK, text)
+
+    def test_the_screen_scrub_says_what_it_could_not_rewrite(self):
+        for body in (
+            '<p title="Connecté : jean@exemple.fr">Bonjour</p>',
+            '<img alt="jean@exemple.fr" src="absente.png">',
+            (
+                "<div id=\"hote\"></div><script>document.getElementById('hote').attachShadow({mode: 'open'}).innerHTML ="
+                " '<abbr title=\"jean@exemple.fr\">moi</abbr>';</script>"
+            ),
+        ):
+            with self.subTest(body=body):
+                _driver, clean = self.scrub(body)
+                self.assertIs(clean, False)
+
+    def test_the_screen_scrub_takes_the_longest_value_first(self):
+        """A value holding another goes whole."""
+        driver, clean = self.scrub("<p>jean@exemple.fr</p>", values=("jean", "jean@exemple.fr"))
+        self.assertIs(clean, True)
+        self.assertEqual(driver.execute_script("return document.body.innerText.trim();"), website.MASK)
+
+    def test_a_password_selector_naming_the_text_field_types_nothing(self):
+        portal(self.site.name)
+        with self.assertRaises(WebsiteError) as raised:
+            self.fetch(self.recipe(password_selector="input[name=u1]"))
+        self.assertIn("le sélecteur du mot de passe ne désigne pas un champ mot de passe", str(raised.exception))
+
+    def test_a_login_selector_naming_the_password_field_types_nothing(self):
+        portal(self.site.name)
+        with self.assertRaises(WebsiteError) as raised:
+            self.fetch(self.recipe(username_selector="input[name=p1]"))
+        self.assertIn("le champ de l'identifiant est un champ mot de passe", str(raised.exception))
+
+    def test_a_login_page_sending_the_browser_to_another_site_gets_nothing_typed(self):
+        """127.0.0.1 then localhost: two sites, the second the test
+        settings' too (PORTAL_PLAIN_HTTP_HOSTS)."""
+        portal(self.site.name)
+        elsewhere = self.base.replace("127.0.0.1", "localhost")
+        self.page("ailleurs.html", f"<script>location.replace('{elsewhere}/login.html');</script>")
+        with self.assertRaises(WebsiteError) as raised:
+            self.fetch(self.recipe(login_url=f"{self.base}/ailleurs.html"))
+        self.assertIn("est sur localhost, hors du site de la page de connexion (127.0.0.1)", str(raised.exception))
 
     def contents(self, files):
         return sorted(open(path, "rb").read()[len(PDF) :].decode() for path in files)

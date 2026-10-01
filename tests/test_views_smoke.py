@@ -225,6 +225,19 @@ class PageSmokeTests(TestCase):
             with self.subTest(page=name):
                 self.assertPageOK(name)
 
+    def test_credentials_pages(self):
+        import time
+
+        from accounts import sudo
+        from tests.runner import test_user
+
+        self.assertPageOK("accounts:confirm_password")
+        self.client.force_login(test_user())
+        session = self.client.session
+        session[sudo.SESSION_KEY] = {"user": test_user().pk, "until": time.time() + 600}
+        session.save()
+        self.assertPageOK("accounts:credentials")
+
     def test_data_post_only_actions(self):
         self.assertRedirectsOnGet("transfer:data_export")
         self.assertRedirectsOnGet("transfer:data_import_backup")

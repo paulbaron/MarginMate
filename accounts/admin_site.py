@@ -12,7 +12,20 @@ Its login page, Django's and public, counts its attempts on the login
 page's counters (accounts/limiter.py), and a login that succeeds there
 leaves the « appareil connu » cookie as the login page's does. Its logout is
 Django's own.
+
+**Every page but the login and the logout asks for the MarginMate password
+again** (accounts/sudo.py, security review of 01/10/2026): the admin changes
+any login's password and any membership's role, and edits raw rows - a
+superuser's session left open on the bar's PC, or a copied cookie, reached
+all of it. `admin_view` wraps every view Django's site and every
+ModelAdmin route through it (the user's password page included); the
+login is not one of them, and the logout is let through. A request with no
+confirmation is sent to « Confirmez votre mot de passe », coming back to the
+admin page asked for (a POST is not replayed: nothing it posted is saved);
+a page in use keeps the confirmation alive.
 """
+
+import functools
 
 from django.contrib import admin
 from django.contrib.admin.apps import AdminConfig
@@ -25,6 +38,16 @@ class MarginMateAdminSite(admin.AdminSite):
     def has_permission(self, request):
         user = request.user
         return bool(user.is_active and user.is_superuser)
+
+    def admin_view(self, view, cacheable=False):
+        """Django's, the view behind the password confirmation. Django's
+        wrapper checks `has_permission` first (a login without it still goes
+        to the admin's login page) and CSRF; this one runs inside it, so
+        only a superuser is asked to confirm. The logout is let through: a
+        session ending needs no password."""
+        if view == self.logout:
+            return super().admin_view(view, cacheable)
+        return super().admin_view(_behind_the_confirmation(view), cacheable)
 
     @property
     def login_form(self):
@@ -44,9 +67,32 @@ class MarginMateAdminSite(admin.AdminSite):
         succeeded, and only that one gets the cookie (review of the
         LIMITER-LOCKOUT fix: this door honoured the cookie and never issued
         it). Public and never cached, as Django's own is."""
-        from . import limiter
+        from . import limiter, sudo
 
-        return limiter.remember_device(request, super().login(request, extra_context))
+        response = limiter.remember_device(request, super().login(request, extra_context))
+        if request.method == "POST" and request.user.is_authenticated:
+            # The password was just checked: not asked again at the next page.
+            sudo.stamp(request)
+        return response
+
+
+def _behind_the_confirmation(view):
+    """`view` run only with the password confirmed, the confirmation then
+    kept alive; otherwise the confirmation page, back to this admin page.
+    Wrapped with the view's own attributes (`csrf_exempt` among them, which
+    Django's wrapper reads)."""
+
+    @functools.wraps(view)
+    def confirmed_view(request, *args, **kwargs):
+        # Imported here: this module loads with the apps (see login_form).
+        from . import sudo
+
+        if not sudo.confirmed(request):
+            return sudo.ask(request)
+        sudo.refresh(request)
+        return view(request, *args, **kwargs)
+
+    return confirmed_view
 
 
 class MarginMateAdminConfig(AdminConfig):

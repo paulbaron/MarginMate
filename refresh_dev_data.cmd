@@ -11,7 +11,13 @@ rem server runs (something listens on port 8000). The development data folder is
 rem the one this folder's .env names (MARGINMATE_TENANTS_ROOT), read by Python
 rem with the settings. It is never deleted: it is renamed name.ancien-date, then
 rem the backup's data folder is copied in its place.
-rem The backup's .env is never copied: this folder keeps its own.
+rem The backup's .env is never copied: this folder keeps its own. Nor are the
+rem passwords of the Identifiants page, the scrapers' debug pages or a copy of
+rem a .env put in the data folder (.env, .env.anything), and the login sessions
+rem an older backup still holds are deleted from every database of the copy.
+rem The folder set aside keeps the old copy's: the closing message says to
+rem delete it. Step 3 refuses while data-dev or the backup's data holds a copy
+rem of a .env, naming it.
 rem No accent in this file: cmd.exe reads it in the console's code page.
 setlocal EnableExtensions DisableDelayedExpansion
 cd /d "%~dp0"
@@ -23,6 +29,7 @@ set "MM_ANSWERS=%TEMP%\marginmate-refresh-answers-%RANDOM%%RANDOM%.txt"
 set "MM_DATA="
 set "MM_BACKUP="
 set "MM_PREVIOUS="
+set "MM_SESSIONS="
 for /f "tokens=2 delims=:." %%c in ('chcp') do set "MM_CODE_PAGE=%%c"
 chcp 65001 >nul
 set "PYTHONIOENCODING=utf-8"
@@ -70,15 +77,35 @@ move "%MM_DATA%" "%MM_PREVIOUS%" >nul
 if errorlevel 1 goto :rename_failed
 
 :copy_data
-rem 5. The copy: the backup's data folder, and it alone (not its .env).
+rem 5. The copy: the backup's data folder, and it alone (not its .env). Never
+rem the Identifiants page's store (accounts/vault.py: its two files and the
+rem temporary one a cut write leaves), the scrapers' failure dumps, which can
+rem show an account's identifiers, nor a copy of a .env left in the data
+rem folder (the secret key, passwords): backup_data leaves them out, and a
+rem backup made before it did still holds them.
 echo Copie en cours...
-robocopy "%MM_BACKUP%\data" "%MM_DATA%" /E /R:1 /W:1 /NP /NFL /NDL /NJH
+echo Les copies de fichiers .env, .env.* ne sont pas recopiees.
+robocopy "%MM_BACKUP%\data" "%MM_DATA%" /E /R:1 /W:1 /NP /NFL /NDL /NJH /XF credentials.bin credentials.key .credentials-*.tmp .env .env.* /XD _debug
 if errorlevel 8 goto :copy_failed
+
+rem 6. The login sessions a backup made before backup_data emptied them still
+rem holds: production's, a login on the public site each. Deleted from every
+rem database of the copy (the accounts one, a copy of it made by hand, the one
+rem kept from before an adoption...), behind the same refusals as step 3. The
+rem answer: MM_SESSIONS, how many went.
+"%MM_PYTHON%" -c "import sys; from accounts import deployment; sys.exit(deployment.main())" purge-sessions "%MM_BACKUP%" > "%MM_ANSWERS%"
+if errorlevel 1 goto :sessions_left
+for /f "usebackq tokens=1,* delims==" %%a in ("%MM_ANSWERS%") do set "MM_%%a=%%b"
+del "%MM_ANSWERS%" >nul 2>&1
 
 echo(
 echo Fait :
-if defined MM_PREVIOUS echo - les anciennes donnees de developpement sont dans "%MM_PREVIOUS%" : rien n'a ete efface, supprimez ce dossier vous-meme quand il ne sert plus ;
+if defined MM_PREVIOUS echo - les anciennes donnees de developpement sont dans "%MM_PREVIOUS%" : rien n'a ete efface ;
+if defined MM_PREVIOUS echo   ATTENTION, ce dossier garde les sessions de connexion et les pages de debug de l'ancienne copie : supprimez-le vous-meme des qu'il ne sert plus ;
 echo - "%MM_DATA%" est maintenant une copie de "%MM_BACKUP%\data" ;
+echo - les mots de passe de la page Identifiants et les pages de debug des recuperations n'ont pas ete recopies dans la copie de developpement ;
+echo - aucune copie d'un fichier .env (.env, .env.*) n'a ete recopiee depuis les donnees de la sauvegarde ;
+echo - sessions de connexion copiees, puis effacees de chaque base de la copie : %MM_SESSIONS% ;
 echo - le .env de la sauvegarde n'a pas ete recopie : ce dossier garde le sien.
 echo(
 echo ATTENTION : ce sont les VRAIES donnees du bar (factures, banque, personnel), copiees.
@@ -128,6 +155,14 @@ echo ECHEC de la copie (lignes ci-dessus) : "%MM_DATA%" est incomplet.
 if defined MM_PREVIOUS echo Les donnees d'avant sont intactes dans "%MM_PREVIOUS%".
 echo Relancez ce fichier une fois le probleme regle : il mettra ce dossier incomplet
 echo de cote a son tour, sans rien effacer.
+goto :finish
+
+:sessions_left
+echo(
+echo ATTENTION : "%MM_DATA%" est copie, mais les sessions de connexion qu'il contient
+echo n'ont pas pu etre effacees (la raison est ci-dessus) : ce sont celles du site.
+echo Reglez le probleme, puis relancez ce fichier, et supprimez vous-meme le dossier
+echo qu'il aura mis de cote.
 goto :finish
 
 :finish

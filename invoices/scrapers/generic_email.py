@@ -33,12 +33,48 @@ import email.utils
 import imaplib
 import os
 import re
+import ssl
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
-from django.conf import settings
-
 from ..models import INVOICE_ATTACHMENT_PATTERN
+
+DEFAULT_IMAP_HOST = "imap.gmail.com"
+MAILBOX_MISSING = (
+    "L'adresse ou le mot de passe d'application de la boîte mail manque : renseignez-les sur la page Identifiants."
+)
+MAILBOX_UNBOUND = (
+    "Le mot de passe d'application de la boîte mail n'est rattaché à aucun serveur : ressaisissez-le sur la page "
+    "Identifiants."
+)
+
+
+def mailbox_credentials() -> tuple[str, str, str]:
+    """(address, app password, IMAP server) - the server is the one the
+    password was typed for. A password typed on « Identifiants » goes to the
+    server recorded with it (accounts/vault.py bindings), whatever the page's
+    host field says now; one from the .env goes to the .env's server, never
+    to a host typed on the page: changing the server on the page must not
+    send the .env's password elsewhere."""
+    from django.conf import settings
+
+    from accounts import vault
+
+    state = vault.load()
+    stored = state.values
+    address = stored.get("INVOICE_EMAIL_ADDRESS") or getattr(settings, "INVOICE_EMAIL_ADDRESS", "")
+    if stored.get("INVOICE_EMAIL_APP_PASSWORD"):
+        app_password = stored["INVOICE_EMAIL_APP_PASSWORD"]
+        host = state.bindings.get("INVOICE_EMAIL_APP_PASSWORD", "")
+        if not host:
+            raise RuntimeError(MAILBOX_UNBOUND)
+    else:
+        app_password = getattr(settings, "INVOICE_EMAIL_APP_PASSWORD", "")
+        host = getattr(settings, "INVOICE_IMAP_HOST", "") or DEFAULT_IMAP_HOST
+    if not address or not app_password:
+        raise RuntimeError(MAILBOX_MISSING)
+    return address, app_password, host
+
 
 FETCH_TIMEOUT_SECONDS = 45  # per IMAP operation - independent of how many emails there are in total
 BATCH_SIZE = 150  # messages per FETCH round trip - comfortably under IMAP servers' command-length limits
@@ -214,10 +250,7 @@ def find_matching_emails(
 
     if not integrations_allowed():
         raise RuntimeError(integrations.MAILBOX)
-    address = getattr(settings, "INVOICE_EMAIL_ADDRESS", "")
-    app_password = getattr(settings, "INVOICE_EMAIL_APP_PASSWORD", "")
-    if not address or not app_password:
-        raise RuntimeError("INVOICE_EMAIL_ADDRESS / INVOICE_EMAIL_APP_PASSWORD are not configured in .env")
+    address, app_password, host = mailbox_credentials()
 
     sender_regex = compile(sender_pattern)
     subject_regex = compile(subject_pattern) if subject_pattern else None
@@ -226,8 +259,10 @@ def find_matching_emails(
 
     matches: list[EmailMatch] = []
 
-    host = getattr(settings, "INVOICE_IMAP_HOST", "") or "imap.gmail.com"
-    imap = imaplib.IMAP4_SSL(host, timeout=FETCH_TIMEOUT_SECONDS)
+    # A verifying context: imaplib's default (ssl._create_stdlib_context)
+    # checks neither the certificate nor the host name, and the app password
+    # went to whoever answered the TLS handshake (security review 01/10/2026).
+    imap = imaplib.IMAP4_SSL(host, ssl_context=ssl.create_default_context(), timeout=FETCH_TIMEOUT_SECONDS)
     imap.login(address, app_password)
     try:
         imap.select("inbox")

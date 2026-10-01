@@ -13,6 +13,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from invoices.models import InvoiceType, Supplier, SupplierChange
+from invoices.tests.test_sources_protection import confirm_password
 from tests.factories import make_supplier
 
 CREATE = reverse("invoices:invoice_type_create")
@@ -184,6 +185,8 @@ class TamperedTypeFormTests(TestCase):
             "site-username_env": "X_LOGIN",
             "site-password_env": "X_PASSWORD",
         }
+        # « Tester » on a portal is the owner's, his password confirmed.
+        confirm_password(self.client)
         with mock.patch("invoices.views.threading.Thread"):
             response = self.client.post(CREATE, {**email_type(supplier="²", action="test"), **site})
         self.assertEqual(response.status_code, 200)

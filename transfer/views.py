@@ -14,6 +14,17 @@ staging), the session's entries are keyed by the tenant (`session_key`), and
 the page names no folder of the server - a hosted bar can neither read a
 server path nor stop the server to put a database copy back, which the page
 asks the administrator to do instead.
+
+**Importing and clearing are the owner's, his password confirmed**
+(security review of 01/10/2026; `_refused`): an import replaces the
+espace's invoices, bank, prices and portals - a portal decides where a
+stored password is typed - and a clear deletes them. Every POST that
+stages an archive (sent, or a backup), previews, confirms or cancels a
+staged one, or previews or confirms a clear, requires
+`accounts.tenancy.is_owner` (a member: 403, `OWNER_ONLY`) and
+`accounts.sudo.confirmed` (else the confirmation page, back to the tab it
+was posted from - what was posted is not replayed), and keeps the
+confirmation alive. The export and every tab stay open.
 """
 
 from __future__ import annotations
@@ -30,7 +41,8 @@ from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils import timezone
 
-from accounts.tenancy import tenant_key
+from accounts import sudo
+from accounts.tenancy import is_owner, tenant_key
 from transfer import registry, safety, staging
 from transfer.archive import ArchiveError, DeleteOnClose, shown_moment
 from transfer.registry import GROUP_LABELS, INFO
@@ -92,6 +104,8 @@ OLD_PAGE_CLEAR = (
     "Vérifiez l'aperçu à jour et confirmez de nouveau."
 )
 GONE = "Cette archive n'est plus en attente : envoyez-la de nouveau."
+#: A member's import or clear (`_refused`).
+OWNER_ONLY = "Seul le propriétaire de l'espace peut importer ou effacer des données."
 TYPE_TO_CONFIRM = "Tapez EFFACER pour confirmer."
 #: Installed by the migrations into every database: a database holding only
 #: these (and no invoice) is new, and « Remplacer » is what gives them the
@@ -339,6 +353,21 @@ def _render(request, tab: str, *, status: int = 200, **context):
     return render(request, "transfer/page.html", context, status=status)
 
 
+def _refused(request, page_url: str, refused_page):
+    """None when this POST may import or clear: the espace's owner, his
+    MarginMate password confirmed - the confirmation is then kept alive.
+    Otherwise the answer: `refused_page()` (the tab, drawn again with
+    `OWNER_ONLY`, 403) for a member, the confirmation page coming back to
+    `page_url` (the tab it was posted from) for an owner not confirmed."""
+    if not is_owner(request):
+        messages.error(request, OWNER_ONLY)
+        return refused_page()
+    if not sudo.confirmed(request):
+        return sudo.ask(request, next_path=page_url)
+    sudo.refresh(request)
+    return None
+
+
 def _pop_report(request, mode: str) -> RunReport | None:
     """The final report, shown once after the redirect."""
     if not request.GET.get("rapport"):
@@ -442,6 +471,9 @@ def data_export(request):
 
 def data_import(request):
     if request.method == "POST":
+        refused = _refused(request, reverse("transfer:data_import"), lambda: _import_page(request, status=403))
+        if refused:
+            return refused
         busy = busy_reason()
         if busy:
             messages.error(request, busy)
@@ -460,12 +492,18 @@ def data_import(request):
             messages.error(request, f"L'archive n'a pas pu être préparée : {safety.error_text(exc, logged=True)}")
             return redirect("transfer:data_import")
         return redirect("transfer:data_import_stage", token=stage.token)
+    return _import_page(request)
 
+
+def _import_page(request, *, status=200):
+    """The Importer tab: the report of the last import, the archives
+    waiting and the backups."""
     staging.sweep()
     backups = safety.list_backups()
     return _render(
         request,
         "import",
+        status=status,
         report=_pop_report(request, "import"),
         pending=_pending_stages(),
         zip_backups=[backup for backup in backups if backup.kind == "zip"],
@@ -499,6 +537,9 @@ def _pending_stages() -> list[dict]:
 def data_import_backup(request):
     if request.method != "POST":
         return redirect("transfer:data_import")
+    refused = _refused(request, reverse("transfer:data_import"), lambda: _import_page(request, status=403))
+    if refused:
+        return refused
     busy = busy_reason()
     if busy:
         messages.error(request, busy)
@@ -579,6 +620,16 @@ def _preview_import(stage, strategies: dict[str, Strategy]) -> RunReport:
 
 def data_import_stage(request, token):
     stage = staging.get(token)
+    if request.method == "POST":
+        # Before anything posted is read, an archive gone included: nothing
+        # a member posts, nor an owner before his password, is acted on.
+        refused = _refused(
+            request,
+            reverse("transfer:data_import_stage", args=[token]),
+            lambda: _stage_page(request, stage, status=403) if stage else _import_page(request, status=403),
+        )
+        if refused:
+            return refused
     if stage is None:
         messages.error(request, GONE)
         return redirect("transfer:data_import")
@@ -714,6 +765,9 @@ def data_clear(request):
             return _clear_page(request, set(pending["sections"]), preview=RunReport.from_json(pending["report"]))
         return _clear_page(request, set(), report=report)
 
+    refused = _refused(request, reverse("transfer:data_clear"), lambda: _clear_page(request, set(), status=403))
+    if refused:
+        return refused
     action = request.POST.get("action", "")
     selected = _posted_selection(request, usable_keys("clear"))
     if not selected:

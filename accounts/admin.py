@@ -15,11 +15,13 @@ What is not done here, on purpose:
   tenant like every page, and it would shut the admin on him - the very
   place a tenant is reopened;
 - an invitation is never added here - its code would never be shown
-  (`manage.py create_invitation`); one can be deleted, which revokes it.
+  (`manage.py create_invitation`); one can be deleted, which revokes it;
+- a membership is never made an owner by default here (`MembershipAdmin`):
+  an owner reaches the espace's third-party passwords.
 """
 
 from django import forms
-from django.contrib import admin
+from django.contrib import admin, messages
 from django.core.exceptions import ValidationError
 
 from .models import Invitation, Membership, Tenant
@@ -66,12 +68,52 @@ class TenantAdmin(admin.ModelAdmin):
         return False
 
 
+#: What being the espace's owner gives, under the role field: the
+#: « Identifiants » page and a customer portal's source are the owner's
+#: alone (accounts/credentials.py, invoices/views.py).
+ROLE_HELP = "Propriétaire : voit et modifie les identifiants des comptes (boîte mail, Metro, caisse, espaces clients)."
+
+
 @admin.register(Membership)
 class MembershipAdmin(admin.ModelAdmin):
+    """A login's place in an espace. A membership added here starts as a
+    MEMBER: the model's default is OWNER (the signup's, made with its espace
+    - changing it is a migration), and an owner reaches every third-party
+    password the espace keeps. Making a second owner of one espace is
+    allowed - a bar may have two managers - and said."""
+
     list_display = ("user", "tenant", "role", "created_at")
     list_filter = ("role",)
     search_fields = ("user__username", "user__email", "tenant__name")
     list_select_related = ("user", "tenant")
+
+    def get_changeform_initial_data(self, request):
+        initial = super().get_changeform_initial_data(request)
+        initial.setdefault("role", Membership.Role.MEMBER)
+        return initial
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        if db_field.name == "role":
+            kwargs["help_text"] = ROLE_HELP
+        return super().formfield_for_dbfield(db_field, request, **kwargs)
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        if obj.role != Membership.Role.OWNER:
+            return
+        owners = list(
+            Membership.objects.filter(tenant_id=obj.tenant_id, role=Membership.Role.OWNER)
+            .select_related("user")
+            .order_by("pk")
+        )
+        if len(owners) > 1:
+            named = ", ".join(str(owner.user) for owner in owners)
+            messages.warning(
+                request,
+                f"L'espace « {obj.tenant} » a maintenant {len(owners)} propriétaires ({named}) : chacun voit et "
+                "modifie les identifiants des comptes et les espaces clients. Si ce n'est pas voulu, passez ce "
+                "membre en « Membre ».",
+            )
 
 
 @admin.register(Invitation)

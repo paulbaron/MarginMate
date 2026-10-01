@@ -320,6 +320,32 @@ DEPLOY.md, section 10, has the owner's steps (the one-off move included).
   fixture, a test, a docstring or git - « Fixture privacy » applies to it
   exactly as to the site's data. A session may run runserver on it, never a
   gather.
+- **What no copy carries** (01/10/2026, the « Identifiants » review): a
+  backup leaves out the credential store (`credentials.bin`, `.key`,
+  `.credentials-*.tmp` directly in a tenant's `private/`), every `_debug`
+  folder (the scrapers' kept pages) and `downloads/test-<n>/`, listed in the
+  manifest's `left_out`; and NO database copy has sessions - the accounts
+  database, the tenants', and every other file of the data folder whose
+  header says SQLite (a `.bak_*` copy, « Données »'s safety copies), each
+  through the backup API: deleted, VACUUM (the API copies free pages too),
+  checked again; a failed purge deletes its copy before the folder is
+  renamed -INCOMPLET. A file with the SQLite header that does not open fails
+  the backup (and so a deploy): its message says to move it out.
+  refresh_dev_data.cmd excludes the same files (robocopy /XF /XD), runs
+  `deployment.py purge-sessions` over every SQLite file of data-dev
+  (realpath-guarded: a junction out is skipped), and says to delete a
+  data-dev folder it set aside; `development` and `purge-sessions` refuse a
+  backup whose .env has THIS folder's SECRET_KEY (dev must have its own: it
+  would open production's sessions and half the store's key). **A copy of a
+  .env** (`.env`, `.env.*`, any case, anywhere in the data folder -
+  `deployment.is_env_copy`) is never opened,
+  never backed up (`left_out.env_copies`, a warning naming it), never copied
+  into data-dev (robocopy /XF), and makes `development`/`purge-sessions`
+  refuse. Paths are compared written AND resolved (`deployment.inside`
+  permissive for refusals, `really_inside` strict for what is opened), and a
+  data folder named through an alias (junction, short name, `\\?\`) is
+  refused: purge-sessions could otherwise have reached production's live
+  data.
 
 ## Going online / production
 
@@ -2528,11 +2554,14 @@ breaks** too.
 
 **A customer portal is data, not code** (`models.WebsiteInvoiceSource`,
 `scrapers/website.py`, set up on Achats → Sources → « + Nouvelle source »,
-« Canal : Espace client »). The rent's, the water's, the phone's: a login page, the NAMES of
-the two .env variables holding the credentials (never the values - the
-database is copied and shown on screen, a .env is not; they are read from
-the .env file at each run, so a line added counts without a restart), and
-nothing else required. The scraper does what a person does: refuses the
+« Canal : Espace client »). The rent's, the water's, the phone's: a login page, the NAMES
+the credentials are kept under (never the values - the database is copied
+and shown on screen; left blank, the form derives them from the site's
+host, `forms.portal_env_names`: PORTAL_<HOST>_<6 hex of the exact host>_LOGIN
+/ _PASSWORD, so two hosts never share), and
+nothing else required. The values are typed on « Identifiants » (below),
+else read from the .env file at each run, so either counts without a
+restart. The scraper does what a person does: refuses the
 cookie banner (only a refusing button is ever clicked, shadow roots
 included), finds the login form - the visible password field, the text
 field in front of it, the button that submits them, identifier and password
@@ -2654,6 +2683,134 @@ supplier only. Its channel reads « Canal », « E-mail » / « Espace client »
 from the form (`forms.CHANNELS`), not from `InvoiceType.SourceKind`, whose
 labels stay « Email » / « Site web » (admin only): a label changed on the
 model is a migration to apply to the real database, for a word.
+
+**« Identifiants »** (`/identifiants/`, `accounts/credentials.py`, the
+store `accounts/vault.py`; 01/10/2026, the owner: « renseigner les logins et
+mots de passe des différents sites et de mon email sur une page »): the
+mailbox, Metro, L'Addition and every portal (one account per pair of names,
+two sources of one site share it), typed on a page reached from « Données »'s
+header and the Sources tab - no topbar link (the bar's rows are measured).
+**Third-party passwords: what protects them** (security review of 01/10/2026,
+the owner: « users will enter passwords from sensitive websites »; five
+auditors and their skeptics, 25 confirmed findings - each rule below is one):
+- **Two files, not the database**: `private/credentials.bin` (Fernet) and
+  `private/credentials.key`, a random key sealed by **Windows DPAPI**
+  (`CryptProtectData`, current account, the folder name as entropy, via
+  ctypes - no dependency). The Fernet key is HKDF over that random key AND
+  the SECRET_KEY: copied to another PC or account, or opened by a
+  development copy with its own SECRET_KEY, nothing opens. **Neither file is
+  in any backup nor in data-dev** (`data_backup`, refresh_dev_data.cmd): the
+  page says to keep the passwords elsewhere and retype them after a restore.
+  A key anybody can read (the development fallback) refuses every save.
+- **A file that does not open is never written over** (`problem`
+  UNREADABLE, or BUSY while Windows holds it during a replace - retried,
+  never taken for unreadable): only the page's « Tout ressaisir » box starts
+  again (`save(start_over=True)`). One writer at a time (`_LOCK`), fsync,
+  then `os.replace`. `VaultState.values` has `repr=False`.
+- **Owner, and the MarginMate password asked again** (`accounts/sudo.py`,
+  `/identifiants/confirmer/`): 15 minutes from the last protected request,
+  for that login and session only, checked through the LOGIN limiter (a
+  guess here counts there), the session key cycled and the password's hash
+  stored again (`update_session_auth_hash`: a hash upgraded by the check
+  logged the session out). A login - the login page's, the admin's -
+  confirms too (`sudo.stamp`). A POST refused for want of it says nothing
+  was saved. Behind it: the page; every POST saving or testing
+  a WEBSITE source (`invoices/views.py`, owner too); every « Données » POST
+  that imports, stages or clears (`transfer/views.py _refused`, owner too;
+  export stays open); and the whole Django admin but its login and logout
+  (`MarginMateAdminSite.admin_view`) - from the admin a superuser's session
+  switched a repointed portal on. `InvoiceTypeAdmin` makes a portal's
+  channel and « actif » read-only. A new membership in the admin starts as
+  MEMBER (the model's default stays OWNER: no migration). **The test
+  client's implicit first login writes a confirmation** (`tests.runner`),
+  an explicit `force_login`/`login` does not: `confirm_password(client,
+  user)`, `forget_the_confirmation(client)`, `TenantClient(confirms_password=False)`.
+- **A password goes where it was typed for** (`VaultState.bindings`):
+  - a portal's values are bound to `invoices.models.portal_host` (the https
+    host of its login page) when typed; `website.credentials` gives a stored
+    value to no other host, and the scraper types nothing on a page of
+    another registrable domain, nor a password into anything but an
+    `input[type=password]`. https on port 443 only (`PORTAL_PLAIN_HTTP_HOSTS`
+    is the test settings' local portal, nowhere else). A portal's value read
+    from the .env goes only to a site the owner confirmed on the page
+    (`env_bindings`, the box « Le fichier .env contient ces identifiants :
+    les envoyer à … »); until then its gather stops and says so. The page
+    flags a value stored here AND still in the .env, to delete there. While
+    the store exists but does not open (or is busy), no portal gets
+    anything. Each portal card posts the host it was drawn with: a site
+    changed while the page was open saves nothing (`SITE_CHANGED`); and the
+    form posts a keyed digest of the state it was drawn from
+    (`state_digest`): drawn before another tab's save, or while the store did
+    not open (every login then read blank), it saves nothing
+    (`STATE_CHANGED`). Busy, the page draws no form. A portal's password
+    typed while its login is the .env's binds that login to the site too.
+    « Fichier .env » and « encore en clair » read the .env FILE (not the
+    settings, which keep a deleted line until a restart, nor a default), and
+    name the old `UBA_EMAIL_*` lines the settings still read. « Tout
+    ressaisir » alone clears an unreadable store;
+  - "same site" fails closed (`website.same_site`): under a multi-tenant
+    suffix (`SHARED_SUFFIXES`: azurewebsites.net, github.io, auth0.com,
+    sharepoint.com, atlassian.net…) and on free.fr / pagesperso-orange.fr
+    (users' personal pages) only the exact host is the site - but Free's
+    own service hosts (`FREE_OWN_HOSTS`: subscribe, adsl, mobile…) are one
+    site, the Freebox signing in on subscribe.free.fr and listing its
+    invoices on adsl.free.fr. A missing suffix is fixed by adding it: reading
+    two sites as one is the dangerous direction. `_fetch` (downloads with the browser's cookies) goes
+    to https on the portal's site only, hop by hop, each cookie with its
+    domain, path and secure flag;
+  - the mailbox's app password is bound to its IMAP server: changing the
+    server or the address asks for the app password in the same save, the
+    server is a plain DNS name, and `generic_email.mailbox_credentials`
+    sends a stored password only to its recorded server, the .env's only to
+    the .env's. **IMAP4_SSL gets `ssl.create_default_context()`**: Python's
+    default (`_create_stdlib_context`) checks NO certificate - the app
+    password went to whoever answered the TLS handshake;
+  - names: a source may not use one name as login and password, nor a name
+    another source uses in the other role, nor names another site's source
+    uses; such sources are listed « à corriger » and offered no field. Any
+    name that is a password anywhere is drawn as a password field (a source
+    naming the bank's password as its LOGIN printed it in clear). Derived
+    names carry a digest of the exact host (`portal_env_names`).
+- **Nothing written in clear**: the scraper's `_debug` dumps blank every
+  field, rewrite the text on screen (`SCRUB_SCREEN_JS`) and scrub what was
+  typed (raw, HTML, JSON, URL forms; the LOGIN whatever its case - a site
+  echoes it in lower case -, a password in its own case only) - a page whose
+  text (`SCREEN_TEXT_JS`, or the HTML with its tags stripped) still holds it,
+  split across elements included, is neither photographed nor written; URLs lose their query in logs; every visit
+  starts by pruning every source's old dumps; they stay out of backups and
+  data-dev. Metro's log goes through `_MaskedLog` and takes no screenshot. Values no source uses any more are listed by name to
+  be removed. Password managers are told to keep away (`data-1p-ignore`…),
+  `sensitive_post_parameters` on both views.
+- **Not done, the owner's** (DEPLOY.md): restricting `C:\MarginMate`'s ACL to
+  his account, and better, running production under a Windows account of its
+  own - coding sessions run as the same account as the server today, so only
+  this file's rule keeps them out of production's key and store.
+- Metro and L'Addition read their pair in ONE reading (`vault.settings_of`,
+  busy = nothing, not the .env's either): read one at a time, a save between
+  the two sent a new login with an old password - a refused sign-in Metro's
+  firewall counts. Metro reads it once a run (`metro_credentials`).
+- **Keyed by the .env's own names**, so every connector asks one question:
+  `vault.setting(name)` (the page's value, else `settings.<name>`) for Metro,
+  the mailbox and L'Addition, and `website.credentials` reads the store
+  before the .env for a portal - read at every call, never cached. It also
+  refuses a portal naming an application variable (`app_env_name`) at run
+  time, whatever the form and the import let through.
+- **A password is never shown back**: always an empty `new-password` field,
+  a placeholder saying one is stored, blank keeps it, « Effacer » removes it;
+  a login is shown. A value only in the .env is said (« Fichier .env »),
+  never printed. A posted name no account offers is ignored.
+- Only where `integrations_allowed()` (anywhere else: the refusal sentence,
+  a POST 403). `never_cache`.
+- Tests: `accounts/tests/test_credentials.py` - every test removes both
+  files before and after (the test espace's folder is the whole run's),
+  patches `credentials._env_file` off the real .env, confirms the password
+  by writing `sudo.SESSION_KEY`, and posts the page's hidden host fields as
+  a browser does. A test changing SECRET_KEY logs the client out: patch
+  `config.security.secret_key_problem` instead. A test giving a portal .env
+  values confirms their site: `vault.save({}, env_bindings={...})`.
+  `invoices/tests/test_website_protection.py` (the scraper's guards, fake
+  drivers), `test_sources_protection.py`, `accounts/tests/test_admin_sudo.py`,
+  `transfer/tests/test_protection.py`.
 
 The mailbox search asks for BEFORE the day **after** the end date: IMAP's
 BEFORE is exclusive (RFC 3501), and the form's end date is today - this
@@ -3582,7 +3739,10 @@ imports (`transfer/legacy.py`).
   they were, .env note included. Left inactive, the owner's five portals sat
   out the next gather, which searched the mailbox only, and nothing on the
   page said why (20/09). From any other archive, a portal it creates, or
-  whose address or variables it changes, arrives inactive, and the report
+  whose sign-in settings it changes (`SIGN_IN_FIELDS`: every portal field
+  but « Navigateur visible » - the address, the variables, the links to
+  follow and every selector, since each decides where or how a password is
+  typed), arrives inactive, and the report
   names its address and variables so the owner can tick « Active » after a
   look (`as_restored` in the tests is that case).
   Merged or replaced, a portal the archive has active and this database has
@@ -3932,8 +4092,9 @@ Two things carried over rather than rediscovered:
 records sales. Add `--dry-run` first: it reports which till products match a
 recipe and which don't, without writing. `--file x.xlsx` skips the download.
 
-Credentials live in `.env` (`LADDITION_EMAIL` / `LADDITION_PASSWORD`) and are
-typed by the browser at run time, same as the Metro scraper.
+Credentials come from « Identifiants » (`accounts/vault.py`), else `.env`
+(`LADDITION_EMAIL` / `LADDITION_PASSWORD`), and are typed by the browser at
+run time, same as the Metro scraper.
 
 Four things that cost real debugging time:
 

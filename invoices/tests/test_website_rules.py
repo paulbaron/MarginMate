@@ -12,6 +12,7 @@ from unittest import mock
 
 from django.test import SimpleTestCase
 
+from accounts import paths, vault
 from invoices.scrapers.website import (
     Candidate,
     WebsiteError,
@@ -272,9 +273,28 @@ class ChooseTests(SimpleTestCase):
 
 
 class CredentialsTests(SimpleTestCase):
+    """The .env's values, for the site the owner confirmed for them on
+    « Identifiants » (test_website_protection.py has the refusals)."""
+
     recipe = WebsiteRecipe(
         name="Box Exemple", login_url="https://x.fr/login", username_env="BOX_LOGIN", password_env="BOX_PASSWORD"
     )
+
+    def setUp(self):
+        super().setUp()
+        # The test espace's private folder is the whole run's: what is
+        # stored here goes after the test (accounts/tests/test_credentials.py).
+        self.forget()
+        self.addCleanup(self.forget)
+        vault.save({}, env_bindings={"BOX_LOGIN": "x.fr", "BOX_PASSWORD": "x.fr"})
+
+    @staticmethod
+    def forget():
+        folder = paths.private_dir()
+        for name in vault.FILE_NAMES:
+            (folder / name).unlink(missing_ok=True)
+        for leftover in folder.glob(vault.TEMPORARY_PREFIX + "*"):
+            leftover.unlink()
 
     def test_they_are_read_from_the_env_file_at_each_run(self):
         """A line added to .env counts without restarting the server."""
@@ -299,7 +319,9 @@ class CredentialsTests(SimpleTestCase):
         with tempfile.TemporaryDirectory() as folder, credentials_set, self.assertRaises(WebsiteError) as raised:
             fetch_website_invoices(
                 self.recipe,
-                folder,
+                # A source's folder in a downloads folder of the test's own:
+                # a visit prunes the folders beside its own.
+                os.path.join(folder, "type-1"),
                 date(2026, 5, 1),
                 date(2026, 5, 31),
                 log=lambda message: None,
@@ -311,7 +333,8 @@ class CredentialsTests(SimpleTestCase):
     def test_a_missing_one_is_named(self):
         with self.assertRaises(WebsiteError) as raised:
             credentials(self.recipe, env_file=None, environ={"BOX_LOGIN": "jean"})
-        self.assertIn("BOX_PASSWORD est absente du fichier .env", str(raised.exception))
+        self.assertIn("le mot de passe manque", str(raised.exception))
+        self.assertIn("BOX_PASSWORD dans le fichier .env", str(raised.exception))
 
 
 class CancelWhileWaitingTests(SimpleTestCase):

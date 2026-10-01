@@ -103,6 +103,20 @@ def integrations_allowed() -> bool:
     return bool(tenant is not None and tenant.uses_server_integrations)
 
 
+def is_owner(request) -> bool:
+    """Whether the request's login is an OWNER of the espace it is bound to
+    (`Membership.Role.OWNER`): the one who may see the accounts' logins,
+    type their passwords and choose where they are sent (« Identifiants »,
+    a customer portal's source and its « Tester »)."""
+    from .models import Membership
+
+    tenant = getattr(request, "tenant", None) or current_tenant()
+    user = getattr(request, "user", None)
+    if tenant is None or user is None or not user.is_authenticated:
+        return False
+    return Membership.objects.filter(user=user, tenant_id=tenant.pk, role=Membership.Role.OWNER).exists()
+
+
 def _same(one, other) -> bool:
     return one is other or (getattr(one, "pk", None) is not None and one.pk == getattr(other, "pk", None))
 

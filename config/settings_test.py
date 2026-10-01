@@ -87,6 +87,10 @@ METRO_EMAIL = ""
 LADDITION_EMAIL = ""
 LADDITION_PASSWORD = ""
 METRO_PASSWORD = ""
+# A browser test's customer portal is served from this machine over plain
+# http (invoices/tests/test_website_scraper_browser.py): only there may a
+# portal's password go to an http page (invoices.models.portal_host).
+PORTAL_PLAIN_HTTP_HOSTS = frozenset({"127.0.0.1", "localhost"})
 ANTHROPIC_API_KEY = ""
 
 # Pinned so a test's result never depends on the developer's own .env.

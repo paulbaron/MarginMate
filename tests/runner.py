@@ -28,6 +28,15 @@ gate. Django's own `Client()` stays anonymous: the employee's signing pages
 are fetched by nobody logged in. A browser test logs its Chrome in with
 `log_in_the_browser`.
 
+**That implicit login also confirms his MarginMate password**
+(accounts/sudo.py, as the confirmation page records it), so a test posts to
+« Identifiants », a portal's source, « Données »'s import and clear and the
+admin as freely as it reads a page. Only that one: a test that logs in
+itself (`force_login`, `login`) gets the session production gives a login -
+none - and writes one with `confirm_password` where it wants it; a client
+built with `confirms_password=False` logs in unconfirmed, and
+`forget_the_confirmation` takes one back - for a test about the gate.
+
 **`TenancyTestCase`** (accounts/tests/support.py) takes all of that away for
 its classes: nothing bound by default, no test tenant rows, an anonymous
 client - production's starting point, for real tenants in real files.
@@ -41,6 +50,7 @@ read only by tests. tests/test_runner.py pins the contract.
 
 from __future__ import annotations
 
+import time
 import traceback
 from contextvars import ContextVar
 
@@ -97,20 +107,66 @@ def member_of_the_test_tenant(user):
     return user
 
 
-class TenantClient(Client):
-    """Logged in as the test tenant's owner from its first request - unless
-    the test logs in, forces a login or logs out first, or the client already
-    carries a session."""
+def confirm_password(client, user=None, seconds=None):
+    """`user`'s MarginMate password confirmed in `client`'s session, as
+    accounts/sudo.py records it once typed (a time and the login's pk) -
+    `user` the test tenant's owner unless given, logged in first when the
+    session is not his: a session made before a TenantClient's first request
+    would otherwise leave it anonymous. For `seconds` from now
+    (`sudo.WINDOW_SECONDS` by default; negative: a confirmation that has
+    ended). Returns `user`."""
+    from django.contrib.auth import SESSION_KEY as LOGIN_SESSION_KEY
 
-    def __init__(self, *args, **kwargs):
+    user = user or test_user()
+    if client.session.get(LOGIN_SESSION_KEY) != str(user.pk):
+        client.force_login(user)
+    _write_confirmation(client, user, seconds)
+    return user
+
+
+def forget_the_confirmation(client) -> None:
+    """No confirmation left in `client`'s session: the next protected
+    request asks for the password again."""
+    from accounts import sudo
+
+    session = client.session
+    session.pop(sudo.SESSION_KEY, None)
+    session.save()
+
+
+def _write_confirmation(client, user, seconds=None) -> None:
+    from accounts import sudo
+
+    window = sudo.WINDOW_SECONDS if seconds is None else seconds
+    session = client.session
+    session[sudo.SESSION_KEY] = {"user": user.pk, "until": time.time() + window}
+    session.save()
+
+
+class TenantClient(Client):
+    """Logged in as the test tenant's owner from its first request, his
+    MarginMate password confirmed (`confirms_password`, True unless the
+    client is built with False) - unless the test logs in, forces a login or
+    logs out first, or the client already carries a session. A login the test
+    makes itself confirms nothing (`confirm_password` does)."""
+
+    def __init__(self, *args, confirms_password=True, **kwargs):
         super().__init__(*args, **kwargs)
         self._log_in_first = True
+        #: Whether the implicit first login also confirms the password;
+        #: may be set on the client until its first request.
+        self.confirms_password = confirms_password
 
     def request(self, **request):
         if self._log_in_first:
             self._log_in_first = False
             if settings.SESSION_COOKIE_NAME not in self.cookies:
-                self.force_login(test_user())
+                owner = test_user()
+                # Django's own login, not this class's: the implicit one alone
+                # confirms.
+                super().force_login(owner)
+                if self.confirms_password:
+                    _write_confirmation(self, owner)
         return super().request(**request)
 
     def login(self, **credentials):

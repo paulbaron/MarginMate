@@ -12,6 +12,7 @@ Chrome or its driver is missing. Data invented.
 """
 
 import tempfile
+import time
 from unittest import mock
 
 from django.contrib.staticfiles.testing import StaticLiveServerTestCase
@@ -24,6 +25,23 @@ from tests.factories import make_supplier
 from tests.runner import log_in_the_browser
 
 WAIT_SECONDS = 10
+
+
+def confirm_in_the_browser(driver, seconds=600) -> None:
+    """The MarginMate password confirmed in the session `log_in_the_browser`
+    gave the browser, as accounts/sudo.py records it - for the test
+    espace's owner."""
+    from importlib import import_module
+
+    from django.conf import settings
+
+    from accounts import sudo
+    from tests.runner import test_user
+
+    key = driver.get_cookie(settings.SESSION_COOKIE_NAME)["value"]
+    session = import_module(settings.SESSION_ENGINE).SessionStore(session_key=key)
+    session[sudo.SESSION_KEY] = {"user": test_user().pk, "until": time.time() + seconds}
+    session.save()
 
 
 @tag("browser")
@@ -52,6 +70,10 @@ class InvoiceTypeFormInBrowserTests(StaticLiveServerTestCase):
         self.supplier = make_supplier(code="BOX_X", name="Box Exemple", parser_key="", expenses_only=True)
         # Every page wants a login: the test tenant's owner.
         log_in_the_browser(self.driver, self.live_server_url)
+        # And a portal is saved or tested by him with his MarginMate password
+        # confirmed (accounts/sudo.py; test_sources_protection.py holds the
+        # refusals): written into the browser's own session.
+        confirm_in_the_browser(self.driver)
 
     def open(self, url):
         self.driver.get(self.live_server_url + url)

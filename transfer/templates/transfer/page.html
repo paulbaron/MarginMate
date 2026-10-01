@@ -54,6 +54,9 @@
                 effacement.
             </p>
         </div>
+        <div class="actions">
+            <a class="btn btn-secondary" href="{% url 'accounts:credentials' %}">Identifiants des comptes</a>
+        </div>
     </div>
 
     {% if busy %}<div class="message message-warning">{{ busy }}</div>{% endif %}

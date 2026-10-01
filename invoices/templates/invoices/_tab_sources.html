@@ -11,7 +11,12 @@ the reader for what it brings. The suppliers have their own tab
             Boîte mail ou espace client : chaque source récupère les factures d'un seul fournisseur.
         </p>
     </div>
-    {% if not sources_refused %}<a class="btn" href="{% url 'invoices:invoice_type_create' %}">+ Nouvelle source</a>{% endif %}
+    {% if not sources_refused %}
+        <div class="actions">
+            <a class="btn btn-secondary" href="{% url 'accounts:credentials' %}">Identifiants</a>
+            <a class="btn" href="{% url 'invoices:invoice_type_create' %}">+ Nouvelle source</a>
+        </div>
+    {% endif %}
 </div>
 
 {% if sources_refused %}

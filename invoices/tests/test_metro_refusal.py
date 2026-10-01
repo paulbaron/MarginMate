@@ -23,7 +23,24 @@ from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 from selenium.common.exceptions import InvalidSessionIdException, NoSuchWindowException, StaleElementReferenceException
 
+from accounts import vault
 from invoices.scrapers import metro
+
+# Metro's login and password as a test types them: each needing an escape
+# in a page (a quote, angle brackets, an ampersand) or an address (a plus,
+# an at sign, an accent). Invented.
+EMAIL = "acheteur+essai@exemple.invalid"
+PASSWORD = 'Mé"tro<&>1'
+# The forms a page or an address writes them in, written out by hand - not
+# worked out by the code under test.
+TYPED_FORMS = (
+    EMAIL,
+    "acheteur%2Bessai%40exemple.invalid",
+    PASSWORD,
+    "Mé&quot;tro&lt;&amp;&gt;1",
+    'Mé"tro&lt;&amp;&gt;1',
+    "M%C3%A9%22tro%3C%26%3E1",
+)
 
 BANNER = (
     "×\nVous avez été bloqué par notre pare-feu. Veuillez contacter notre assistance Metro et communiquer cet "
@@ -114,7 +131,245 @@ class SignInOutcomeTests(SimpleTestCase):
             with self.assertRaises(metro.MetroLoginFailed) as raised:
                 metro._await_sign_in(browser, self.dir, lambda message: None)
         self.assertNotIsInstance(raised.exception, metro.MetroBlocked)
-        self.assertIn("METRO_PASSWORD", str(raised.exception))
+        self.assertIn("page Identifiants", str(raised.exception))
+
+
+class CredentialsReadTests(SimpleTestCase):
+    """Metro's login and password come from ONE reading of the store:
+    read one at a time, a save between the two sent a new login with an
+    old password - a refused sign-in Metro's firewall counts."""
+
+    def test_both_come_from_one_reading(self):
+        state = vault.VaultState(values={"METRO_EMAIL": EMAIL, "METRO_PASSWORD": PASSWORD})
+        with mock.patch.object(vault, "load", return_value=state) as load:
+            self.assertEqual(metro.metro_credentials(), (EMAIL, PASSWORD))
+        self.assertEqual(load.call_count, 1)
+
+    @override_settings(METRO_EMAIL=EMAIL, METRO_PASSWORD=PASSWORD)
+    def test_a_store_being_rewritten_gives_nothing_not_even_the_env(self):
+        with mock.patch.object(vault, "load", return_value=vault.VaultState(problem=vault.BUSY)):
+            with self.assertRaises(metro.MetroError) as raised:
+                metro.metro_credentials()
+        self.assertEqual(str(raised.exception), vault.BUSY_MESSAGE)
+
+
+class DiagnosticsTests(TestCase):
+    """What a run says about a page that did not come - the job's log, the
+    error on the progress table - never holds the login or the password
+    typed, in any form a page or an address writes them, nor an address's
+    query: Metro's sign-in page echoes the address typed, and a form sent
+    by GET carries both in its address."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.logged = []
+        for name, value in (("PAGE_WAIT_SECONDS", 0.2), ("POLL_SECONDS", 0.05)):
+            patcher = mock.patch.object(metro, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def echoing_page(self, login_form=False, echoed=EMAIL):
+        """A page printing back what was typed - the login as `echoed`
+        spells it (Metro's prints it back as it stores it)."""
+        browser = FakeBrowser(
+            [
+                Page(
+                    f"Aucun compte pour {echoed}. Mot de passe « {PASSWORD} » refusé "
+                    "(Mé&quot;tro&lt;&amp;&gt;1). Mes Factures METRO",
+                    login_form=login_form,
+                )
+            ]
+        )
+        browser.current_url = (
+            "https://idam.metro.fr/web/Signin?client_id=EINVOICE&login=acheteur%2Bessai%40exemple.invalid"
+            f"&pwd=M%C3%A9%22tro%3C%26%3E1#{echoed}"
+        )
+        browser.title = f"Connexion - {echoed}"
+        return browser
+
+    def assert_nothing_typed_in(self, *texts):
+        said = "\n".join([*self.logged, *texts])
+        for form in TYPED_FORMS:
+            with self.subTest(form=form):
+                self.assertNotIn(form, said)
+        # The login, whatever its case.
+        for form in (EMAIL, "acheteur%2bessai%40exemple.invalid"):
+            with self.subTest(form=form):
+                self.assertNotIn(form, said.casefold())
+        self.assertNotIn("client_id", said)
+        self.assertNotIn("pwd=", said)
+
+    def test_a_page_that_did_not_come_is_said_without_what_was_typed(self):
+        browser = self.echoing_page()
+
+        def page_never_came(driver, wait, download_dir, log, *args, **kwargs):
+            metro._fail_with_diagnostics(driver, download_dir, log, "attente du filtre de dates")
+
+        with (
+            override_settings(METRO_EMAIL=EMAIL, METRO_PASSWORD=PASSWORD),
+            mock.patch.object(metro, "_build_driver", return_value=browser),
+            mock.patch.object(metro, "_login", side_effect=page_never_came),
+            self.assertRaises(metro.MetroError) as raised,
+        ):
+            metro.scrape_metro_invoices(self.dir, date(2026, 9, 1), date(2026, 9, 18), log=self.logged.append)
+        self.assert_nothing_typed_in(str(raised.exception))
+        said = "\n".join(self.logged)
+        # What is not typed stays, for whoever reads the log.
+        self.assertIn("Aucun compte pour", said)
+        self.assertIn("https://idam.metro.fr/web/Signin", said)
+        self.assertIn("https://idam.metro.fr/web/Signin", str(raised.exception))
+
+    def test_an_error_quoting_what_was_typed_is_said_without_it(self):
+        """Masked before it is cut: half a password no longer reads as one."""
+        from selenium.common.exceptions import WebDriverException
+
+        def straddling(before: str) -> str:
+            # The password begins three characters before the 200 the
+            # message is cut to (`before` comes first in str(exc)).
+            return "x" * (197 - len(before) - 1) + f" {PASSWORD} pour {EMAIL}"
+
+        for error in (
+            WebDriverException("unknown error: " + straddling("Message: unknown error: ")),
+            RuntimeError(straddling("")),
+        ):
+            with self.subTest(error=type(error).__name__):
+                self.logged = []
+                with (
+                    override_settings(METRO_EMAIL=EMAIL, METRO_PASSWORD=PASSWORD),
+                    mock.patch.object(metro, "_build_driver", return_value=self.echoing_page()),
+                    mock.patch.object(metro, "_login"),
+                    mock.patch.object(metro, "_apply_date_filter", side_effect=error),
+                    self.assertRaises(metro.MetroError) as raised,
+                ):
+                    metro.scrape_metro_invoices(self.dir, date(2026, 9, 1), date(2026, 9, 18), log=self.logged.append)
+                self.assert_nothing_typed_in(str(raised.exception))
+                self.assertNotIn(PASSWORD[:3], "\n".join([*self.logged, str(raised.exception)]))
+
+    def test_a_refused_sign_in_logs_the_page_without_what_was_typed(self):
+        """Signed in from `_login` itself: Metro kept its sign-in page."""
+
+        class Field:
+            def send_keys(self, *keys):
+                pass
+
+            def click(self):
+                pass
+
+        browser = self.echoing_page(login_form=True)
+        fields = {"user_id": Field(), "password": Field(), "submit": Field()}
+
+        def find_element(by, value):
+            if value == "cms-cookie-disclaimer":
+                raise LookupError("no cookie banner on this page")
+            return fields.get(value) or browser.page
+
+        browser.get = lambda url: None
+        browser.find_element = find_element
+
+        class Wait:
+            def until(self, condition):
+                from selenium.common.exceptions import TimeoutException
+
+                try:
+                    found = condition(browser)
+                except Exception:  # noqa: BLE001 - as WebDriverWait ignores a missing element
+                    found = None
+                if not found:
+                    raise TimeoutException("fake")
+                return found
+
+        with self.assertRaises(metro.MetroLoginFailed) as raised:
+            metro._login(browser, Wait(), self.dir, self.logged.append, credentials=(EMAIL, PASSWORD))
+        self.assert_nothing_typed_in(str(raised.exception))
+        self.assertTrue(any("Aucun compte pour" in line for line in self.logged), self.logged)
+
+    def test_the_login_printed_back_in_another_case_is_said_without_it(self):
+        """The run's log (`scrape_metro_invoices`) masks the login whatever
+        its case, through `website.mask_secrets`: a page printing
+        « ACHETEUR+ESSAI@… » for « acheteur+essai@… » typed."""
+        for echoed in (EMAIL.upper(), "Acheteur+Essai@Exemple.Invalid"):
+            with self.subTest(echoed=echoed):
+                self.logged = []
+                browser = self.echoing_page(echoed=echoed)
+
+                def page_never_came(driver, wait, download_dir, log, *args, **kwargs):
+                    metro._fail_with_diagnostics(driver, download_dir, log, "attente du filtre de dates")
+
+                with (
+                    override_settings(METRO_EMAIL=EMAIL, METRO_PASSWORD=PASSWORD),
+                    mock.patch.object(metro, "_build_driver", return_value=browser),
+                    mock.patch.object(metro, "_login", side_effect=page_never_came),
+                    self.assertRaises(metro.MetroError) as raised,
+                ):
+                    metro.scrape_metro_invoices(self.dir, date(2026, 9, 1), date(2026, 9, 18), log=self.logged.append)
+                self.assert_nothing_typed_in(str(raised.exception))
+                self.assertIn("Aucun compte pour", "\n".join(self.logged))
+
+    def test_a_refused_sign_in_printing_the_login_in_capitals_is_logged_without_it(self):
+        """The sign-in's own log (`_login`) too."""
+
+        class Field:
+            def send_keys(self, *keys):
+                pass
+
+            def click(self):
+                pass
+
+        browser = self.echoing_page(login_form=True, echoed=EMAIL.upper())
+        fields = {"user_id": Field(), "password": Field(), "submit": Field()}
+
+        def find_element(by, value):
+            if value == "cms-cookie-disclaimer":
+                raise LookupError("no cookie banner on this page")
+            return fields.get(value) or browser.page
+
+        browser.get = lambda url: None
+        browser.find_element = find_element
+
+        class Wait:
+            def until(self, condition):
+                from selenium.common.exceptions import TimeoutException
+
+                try:
+                    found = condition(browser)
+                except Exception:  # noqa: BLE001 - as WebDriverWait ignores a missing element
+                    found = None
+                if not found:
+                    raise TimeoutException("fake")
+                return found
+
+        with self.assertRaises(metro.MetroLoginFailed) as raised:
+            metro._login(browser, Wait(), self.dir, self.logged.append, credentials=(EMAIL, PASSWORD))
+        self.assert_nothing_typed_in(str(raised.exception))
+        self.assertTrue(any("Aucun compte pour" in line for line in self.logged), self.logged)
+
+    def test_a_log_wrapped_again_still_masks_the_login_whatever_its_case(self):
+        log = metro._MaskedLog(metro._MaskedLog(self.logged.append, (EMAIL, PASSWORD), logins=(EMAIL,)), ("autre",))
+        log(f"Compte {EMAIL.upper()} - autre")
+        self.assertEqual(self.logged, ["Compte [masqué] - [masqué]"])
+
+    def test_the_password_is_masked_in_its_own_case_only(self):
+        """Its case is part of it (`website.mask_secrets`)."""
+        log = metro._MaskedLog(self.logged.append, (EMAIL, PASSWORD), logins=(EMAIL,))
+        log(f"{PASSWORD} {PASSWORD.upper()}")
+        self.assertEqual(self.logged, [f"[masqué] {PASSWORD.upper()}"])
+
+    def test_an_address_said_loses_its_query_and_fragment(self):
+        browser = self.echoing_page()
+        metro._capture_diagnostics(browser, self.dir, self.logged.append, "attente de la page")
+        said = "\n".join(self.logged)
+        self.assertIn("Adresse : https://idam.metro.fr/web/Signin\n", said)
+        self.assertNotIn("client_id", said)
+        self.assertNotIn("Signin#", said)
+
+    def test_no_screenshot_is_taken(self):
+        """A picture of the sign-in page shows the login typed in its field:
+        it told the log only its size, and was deleted at once."""
+        browser = self.echoing_page()
+        browser.save_screenshot = mock.Mock(side_effect=AssertionError("a screenshot was taken"))
+        metro._capture_diagnostics(browser, self.dir, self.logged.append, "attente de la page")
+        self.assertEqual(os.listdir(self.dir), [])
 
 
 class LoginTests(TestCase):
@@ -352,6 +607,13 @@ class RunTests(TestCase):
                 self.dir, date(2026, 9, 1), date(2026, 9, 18), log=lambda message: None, should_cancel=lambda: True
             )
         self.assertEqual((self.drivers, login.call_count), ([], 0))
+
+    def test_a_store_being_rewritten_starts_no_browser(self):
+        with mock.patch.object(vault, "load", return_value=vault.VaultState(problem=vault.BUSY)):
+            with self.assertRaises(metro.MetroError) as raised:
+                self.scrape()
+        self.assertEqual(str(raised.exception), vault.BUSY_MESSAGE)
+        self.assertEqual(self.drivers, [])
 
     def test_a_refusal_is_said_even_if_its_pause_cannot_be_written(self):
         def refused(*args, **kwargs):

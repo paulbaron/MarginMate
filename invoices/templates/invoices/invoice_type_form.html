@@ -59,8 +59,10 @@
             <fieldset class="source-kind" data-source-kind="EMAIL"{% if is_website %} hidden disabled{% endif %}>
                 <h3>Réglages : boîte mail</h3>
                 <p class="muted">
-                    Recherche dans la boîte mail partagée. Chaque champ est une expression régulière (pièce jointe :
-                    sur le nom du fichier) ; objet et contenu vides = tous. « Tester » n'importe ni ne modifie rien.
+                    Recherche dans la boîte mail partagée (son adresse et son mot de passe : page
+                    <a href="{% url 'accounts:credentials' %}">Identifiants</a>). Chaque champ est une expression
+                    régulière (pièce jointe : sur le nom du fichier) ; objet et contenu vides = tous. « Tester »
+                    n'importe ni ne modifie rien.
                 </p>
                 {% include "_form_fields.html" with form=source_form exclude=test_date_fields %}
             </fieldset>
@@ -68,9 +70,10 @@
             <fieldset class="source-kind" data-source-kind="WEBSITE"{% if not is_website %} hidden disabled{% endif %}>
                 <h3>Réglages : espace client</h3>
                 <p class="muted">
-                    L'identifiant et le mot de passe restent dans le fichier .env : indiquez ici le <strong>nom</strong>
-                    des deux variables (ex. FREEBOX_LOGIN), jamais leur valeur. « Tester » se connecte et liste les
-                    factures sans les télécharger.
+                    L'identifiant et le mot de passe se saisissent sur la page
+                    <a href="{% url 'accounts:credentials' %}">Identifiants</a>, une fois la source enregistrée ; les
+                    deux noms ci-dessous les y rangent (vides : tirés de l'adresse du site). « Tester » se connecte et
+                    liste les factures sans les télécharger.
                 </p>
                 {% include "_form_fields.html" with form=website_form exclude=website_form.advanced %}
                 <details>
