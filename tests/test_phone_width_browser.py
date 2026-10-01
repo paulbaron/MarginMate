@@ -369,7 +369,7 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
             "une recette": reverse("recipes:recipe_detail", args=[self.recipe.pk]),
             "Produits & charges": stock,
             "Produits & charges entre deux inventaires": f"{stock}?inventaire={self.take.pk}",
-            "Achats": reverse("invoices:invoice_list"),
+            "Factures": reverse("invoices:invoice_list"),
             "les recettes": reverse("recipes:recipe_list"),
             "les écarts d'un inventaire": reverse("inventory:stock_take_variance", args=[self.take.pk]),
         }

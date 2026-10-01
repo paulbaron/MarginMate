@@ -349,10 +349,10 @@ class ChargeSwitchedBackToGoodsTests(TestCase):
         return self.invoice.lines.get(vat_rate=D("0.055"))
 
     def test_the_confirmation_says_what_becomes_of_it(self):
-        self.assertContains(self.client.get(self.toggle), "1 avoir (une quantité positive à un montant négatif")
+        self.assertContains(self.client.get(self.toggle), "1 avoir devient un retour")
         other = make_supplier(code="EAU_Y", name="Eau Exemple", parser_key="", expenses_only=True)
         self.assertNotContains(
-            self.client.get(reverse("invoices:supplier_expenses", args=[other.pk])), "un montant négatif"
+            self.client.get(reverse("invoices:supplier_expenses", args=[other.pk])), "devient un retour"
         )
 
     def test_the_credit_becomes_a_return(self):

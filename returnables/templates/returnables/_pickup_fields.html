@@ -54,7 +54,7 @@ them - without JavaScript the field is typed.
                 <input type="file" name="photos" accept="image/*" multiple data-photo-gallery>
             </label>
         </div>
-        <p class="help">{% if photo_room < max_photos %}Encore {{ photo_room }} photo{{ photo_room|pluralize }} au plus ({{ max_photos }} par reprise).{% else %}{{ max_photos }} photos au plus.{% endif %} Elles sont réduites et enregistrées sans leur position GPS.</p>
+        <p class="help">{% if photo_room < max_photos %}Encore {{ photo_room }} photo{{ photo_room|pluralize }} au plus ({{ max_photos }} par reprise).{% else %}{{ max_photos }} photos au plus.{% endif %}</p>
     {% else %}
         <p class="muted">{{ max_photos }} photos : retirez-en une pour en ajouter une autre.</p>
     {% endif %}

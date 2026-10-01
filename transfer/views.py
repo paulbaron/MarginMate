@@ -84,12 +84,12 @@ OTHER_TAB_CLEAR = (
 #: so they went looking for a change nobody had made. The page a redirect
 #: draws carries the field, so confirming again from it works.
 OLD_PAGE_IMPORT = (
-    "Rien n'a été importé : cette page avait été ouverte avant une mise à jour de l'application. "
-    "Voici l'aperçu à jour : vérifiez-le et confirmez de nouveau."
+    "Rien n'a été importé : la page datait d'avant une mise à jour de l'application. "
+    "Vérifiez l'aperçu à jour et confirmez de nouveau."
 )
 OLD_PAGE_CLEAR = (
-    "Rien n'a été effacé : cette page avait été ouverte avant une mise à jour de l'application. "
-    "Voici l'aperçu à jour : vérifiez-le et confirmez de nouveau."
+    "Rien n'a été effacé : la page datait d'avant une mise à jour de l'application. "
+    "Vérifiez l'aperçu à jour et confirmez de nouveau."
 )
 GONE = "Cette archive n'est plus en attente : envoyez-la de nouveau."
 TYPE_TO_CONFIRM = "Tapez EFFACER pour confirmer."

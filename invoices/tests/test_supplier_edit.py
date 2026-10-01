@@ -148,7 +148,7 @@ class EditTests(TestCase):
         with mock.patch("invoices.receipt_batches.requeue_everywhere") as requeue:
             checked = self.verify(name="Eau Exemple Paris", header="EAU EXEMPLE SERVICES")
         self.assertEqual(checked.status_code, 200)
-        self.assertContains(checked, "rien n'est encore enregistré")
+        self.assertContains(checked, "Rien n'est encore enregistré")
         self.assertContains(checked, "2 lignes de charge")
         self.assertContains(checked, "imprimé sur 2 de ses 2 documents")
         self.supplier.refresh_from_db()
@@ -325,7 +325,7 @@ class ReviewFindingsTests(TestCase):
         supplier_page = self.client.get(reverse("invoices:supplier_detail", args=[self.supplier.pk]))
         self.assertNotContains(supplier_page, "Rétablir « Eau Exemple Paris »")
         response = self.client.post(reverse("invoices:supplier_change_undo", args=[self.supplier.pk, back.pk]))
-        self.assertIn("il ne s'annule pas lui-même", " ".join(messages_of(response)))
+        self.assertIn("Ce changement est une annulation", " ".join(messages_of(response)))
         self.supplier.refresh_from_db()
         self.assertEqual(self.supplier.name, "Eau Exemple")
 

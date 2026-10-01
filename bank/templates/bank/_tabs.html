@@ -1,0 +1,12 @@
+{% comment %}
+Banque's three pages, one tab each (the owner, 01/10/2026: the category
+pages had buttons in several places; they are sub-pages of Banque now, and
+reached from here alone). Each page hands the other two's addresses over
+the period it is showing: `bank_url`, `spending_url`, `income_url`, and
+`bank_tab` for the one that is lit.
+{% endcomment %}
+<nav class="tabs" aria-label="Banque">
+    <a href="{{ bank_url }}" class="tab{% if bank_tab == 'operations' %} active{% endif %}"{% if bank_tab == 'operations' %} aria-current="page"{% endif %}>Opérations</a>
+    <a href="{{ spending_url }}" class="tab{% if bank_tab == 'spending' %} active{% endif %}"{% if bank_tab == 'spending' %} aria-current="page"{% endif %}>Dépenses par catégorie</a>
+    <a href="{{ income_url }}" class="tab{% if bank_tab == 'income' %} active{% endif %}"{% if bank_tab == 'income' %} aria-current="page"{% endif %}>Entrées d'argent</a>
+</nav>

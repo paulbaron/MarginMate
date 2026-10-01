@@ -9,7 +9,7 @@
             <h1>Reprise du {{ pickup.date|date:"d/m/Y" }}</h1>
             <p class="page-subtitle">
                 Les vides repris {% if pickup.supplier %}par {{ pickup.supplier.name }}{% else %}sans fournisseur précisé{% endif %},
-                comparés aux bons livrés le même jour. Des photos s'ajoutent ici, une à une ou plusieurs à la fois.
+                comparés aux bons du même jour.
             </p>
         </div>
     </div>
@@ -40,7 +40,7 @@
             {% csrf_token %}
             <p>
                 La reprise et {% if view.photos %}ses {{ view.photos|length }} photo{{ view.photos|length|pluralize }}{% else %}ses nombres{% endif %}
-                seront supprimées. Les bons reçus restent : ils attendront une autre reprise de ce jour-là.
+                seront supprimées ; les bons reçus restent.
             </p>
             <button class="btn btn-danger" type="submit">Supprimer la reprise</button>
         </form>

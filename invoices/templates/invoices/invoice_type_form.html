@@ -59,10 +59,8 @@
             <fieldset class="source-kind" data-source-kind="EMAIL"{% if is_website %} hidden disabled{% endif %}>
                 <h3>Réglages : boîte mail</h3>
                 <p class="muted">
-                    L'email est recherché dans la boîte mail partagée (voir INVOICE_EMAIL_ADDRESS dans .env). Chaque
-                    champ est une expression régulière ; expéditeur/objet/contenu sont testés sur l'email, pièce jointe
-                    sur le nom de fichier. Objet et contenu vides = tous. Utilisez "Tester" pour vérifier un motif
-                    avant de l'enregistrer - aucun email ni facture n'est modifié ou importé par un test.
+                    Recherche dans la boîte mail partagée. Chaque champ est une expression régulière (pièce jointe :
+                    sur le nom du fichier) ; objet et contenu vides = tous. « Tester » n'importe ni ne modifie rien.
                 </p>
                 {% include "_form_fields.html" with form=source_form exclude=test_date_fields %}
             </fieldset>
@@ -70,12 +68,9 @@
             <fieldset class="source-kind" data-source-kind="WEBSITE"{% if not is_website %} hidden disabled{% endif %}>
                 <h3>Réglages : espace client</h3>
                 <p class="muted">
-                    La récupération se connecte à l'espace client, suit le lien des factures et télécharge celles de
-                    la période, une à une. L'identifiant et le mot de passe restent dans le fichier .env : indiquez ici
-                    le <strong>nom</strong> des deux variables (ex. FREEBOX_LOGIN), jamais leur valeur. Le formulaire de
-                    connexion, le lien « Factures » et les liens de téléchargement sont trouvés seuls ; les sélecteurs
-                    ne servent qu'à un site qui y échappe. « Tester » se connecte et liste ce qui serait téléchargé,
-                    sans rien télécharger ni importer.
+                    L'identifiant et le mot de passe restent dans le fichier .env : indiquez ici le <strong>nom</strong>
+                    des deux variables (ex. FREEBOX_LOGIN), jamais leur valeur. « Tester » se connecte et liste les
+                    factures sans les télécharger.
                 </p>
                 {% include "_form_fields.html" with form=website_form exclude=website_form.advanced %}
                 <details>

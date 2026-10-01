@@ -27,7 +27,7 @@ timesheet.js keeps it up to date while typing.
 </div>
 <fieldset class="week-fields" data-week>
     <legend>Semaine type</legend>
-    <p class="help">Les heures de chaque jour : 7, 7,5, 7h30 ou 7:30. Un jour laissé vide est un jour de repos.</p>
+    <p class="help">Heures par jour : 7, 7,5, 7h30 ou 7:30. Vide : jour de repos.</p>
     <div class="week-days">
         {% for field in form.week_fields %}
             <div class="form-field{% if field.errors %} has-error{% endif %}">
@@ -37,5 +37,5 @@ timesheet.js keeps it up to date while typing.
             </div>
         {% endfor %}
     </div>
-    <p class="week-sum">Total de la semaine : <output data-week-total>{{ form.week_total_text|default:"—" }}</output> h / semaine</p>
+    <p class="week-sum">Total : <output data-week-total>{{ form.week_total_text|default:"—" }}</output> h / semaine</p>
 </fieldset>

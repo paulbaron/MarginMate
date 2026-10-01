@@ -13,7 +13,7 @@ charges - **and the global one still in sight**. So:
   leaves it out. The form is a GET, so what it sends is what a browser
   sends: an unticked box sends nothing at all, and the view reads « left
   out » as « shown on the form and not sent back », never as « not sent »;
-* **the revenue never moves**, and the page says why where the question is
+* **the revenue never moves**, and the page says so where the question is
   asked;
 * **the selection is part of the address**, like the period: every link and
   form of the page carries `sans` as it carries `du`/`au`, and a key the
@@ -144,7 +144,8 @@ class TwoMarginsTests(SelectionFixture, TestCase):
 
         self.assertIn("Matériel 150.00 € HT", text)
         self.assertIn("Charges 300.00 € HT", text)
-        self.assertIn("450.00 € HT laissés de côté sur 725.00 € facturés", text)
+        self.assertIn("Laissé de côté dans la seconde marge", text)
+        self.assertIn("450.00 € HT sur 725.00 € facturés", text)
 
     def test_putting_everything_back_is_the_same_period_with_nothing_left_out(self):
         response = self.get(MATERIAL)
@@ -163,13 +164,13 @@ class TwoMarginsTests(SelectionFixture, TestCase):
             self.assertEqual(query_of(url)["du"], MARCH["du"])
             self.assertContains(response, escape(url))
 
-    def test_the_revenue_does_not_move_and_the_page_says_why(self):
+    def test_the_revenue_does_not_move_and_the_page_says_so(self):
         everything = self.html()
         without = self.html(MATERIAL, CHARGES_KEY, TO_CLASSIFY_KEY)
 
         self.assertEqual(value_of(stat_of(without, "Encaissé (HT)")), value_of(stat_of(everything, "Encaissé (HT)")))
         self.assertEqual(value_of(stat_of(without, "Encaissé (HT)")), "1000.00 €")
-        self.assertIn("on retire une dépense, pas une vente", text_of(everything))
+        self.assertIn("L'encaissé ne change pas.", text_of(everything))
 
     def test_something_left_out_with_nothing_in_the_window_is_named_as_such(self):
         """The Consignes were only bought in April: over March the question
@@ -245,11 +246,12 @@ class TheBreakdownIsTheSelectorTests(SelectionFixture, TestCase):
         self.assertIn('<details class="spend-unfold" open>', group_body(html, category_key("Spiritueux")))
         self.assertIn('<details class="spend-unfold">', group_body(html, MATERIAL))
 
-    def test_it_says_nothing_is_saved_and_where_the_selection_lives(self):
+    def test_it_says_nothing_is_saved(self):
         """Two tables of boxes by article category on one page: this one is a
         view, the panel's is saved. The column says « Garder », not
-        « Compter », and the page says the selection lives in the address -
-        the menu brings back the margin of everything."""
+        « Compter », and the page says nothing is saved - the selection
+        lives in the address, and the menu brings back the margin of
+        everything."""
         html = self.html()
         form = html[html.index('class="spend-selection"') :]
         form = form[: form.index("</form>")]
@@ -257,7 +259,7 @@ class TheBreakdownIsTheSelectorTests(SelectionFixture, TestCase):
         self.assertIn(">Garder</th>", form)
         self.assertIn(">Dépense</th>", form)
         self.assertNotIn(">Compter</th>", form)
-        self.assertIn("Rien n'est enregistré : la sélection vit dans l'adresse de la page", text_of(form))
+        self.assertIn("Rien n'est enregistré.", text_of(form))
 
     def test_recalculate_is_a_get_form_carrying_the_period(self):
         html = self.html(tout="1")

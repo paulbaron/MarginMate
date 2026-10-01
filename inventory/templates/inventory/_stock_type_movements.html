@@ -102,7 +102,7 @@ column's header word for word (inventory/tests/test_products_phone.py).
                 {% if entry.line %}
                 <form method="post" action="{% url 'inventory:edit_product_conversion' entry.line.product.id %}"
                       class="conversion-form"
-                      title="Facteur = quantité de l'article (dans son unité) contenue dans un produit acheté (ex. 0,7 pour une bouteille de 70 cl). Si la « Quantité achetée » affichée est déjà mesurée dans l'unité de l'article (volume ou poids), laissez 1 - un facteur ≠ 1 la multiplierait une deuxième fois.">
+                      title="Quantité de l'article dans un produit acheté (ex. 0,7 pour une bouteille de 70 cl). Laissez 1 si la « Quantité achetée » est déjà en volume ou en poids.">
                     {% csrf_token %}
                     <span class="muted">1 produit =</span>
                     <input type="text" name="stock_equivalent" inputmode="decimal" value="{{ entry.stock_equivalent_display }}">

@@ -8,8 +8,7 @@ nor stop the server.
 <div class="card">
     <h2>Ou reprendre une sauvegarde</h2>
     <p class="muted">
-        Gardées sur le serveur, dans le dossier des sauvegardes de votre espace. L'application ne supprime jamais
-        une sauvegarde : pour en retirer une, demandez-le à l'administrateur.
+        L'application ne supprime jamais une sauvegarde : pour en retirer une, demandez à l'administrateur.
     </p>
     {% if zip_backups %}
         <div class="table-wrap">
@@ -43,7 +42,7 @@ nor stop the server.
             a server stopped hard is read back into whatever file is named
             db.sqlite3, and the copy put back came out holding the newer rows.
         {% endcomment %}
-        <p class="muted">Revenir à une de ces copies se fait serveur arrêté, et remplace toute la base de votre espace : faites-la faire par l'administrateur, en lui donnant le nom du fichier.</p>
+        <p class="muted">Seul l'administrateur peut revenir à une copie, qui remplace toute la base de votre espace : donnez-lui le nom du fichier.</p>
         <div class="table-wrap">
             <table class="summary-table">
                 <thead><tr><th>Fichier</th><th>Faite le</th><th class="num">Taille</th></tr></thead>

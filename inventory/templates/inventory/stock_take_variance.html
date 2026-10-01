@@ -15,10 +15,10 @@
             {{ report.sales_counted }} ventes enregistrées sur {{ report.recipes_sold }} recette{{ report.recipes_sold|pluralize }}
         </p>
         <div class="message">
-            Un seul inventaire : tout ce qui a été acheté depuis le début est comparé à ce comptage.
-            Cela suppose que <strong>les factures remontent à l'ouverture du bar</strong> — sinon,
-            les bouteilles achetées avant vos premières factures apparaîtront comme manquantes.
-            Un deuxième inventaire supprimera cette hypothèse.
+            Un seul inventaire : tous les achats depuis le début sont comparés à ce comptage.
+            Si <strong>les factures ne remontent pas à l'ouverture du bar</strong>, les bouteilles
+            achetées avant vos premières factures apparaîtront comme manquantes ; un deuxième inventaire
+            lève ce doute.
         </div>
     {% else %}
         <p class="muted">
@@ -30,7 +30,7 @@
     {% if report.sales_counted == 0 %}
             <div class="message message-error">
                 Aucune vente enregistrée sur cette période : tout ce qui est sorti du stock
-                apparaît donc comme manquant.
+                apparaît comme manquant.
             </div>
         {% endif %}
 
@@ -54,10 +54,8 @@
             together from filters produced "n'sont".
             {% endcomment %}
             {% if unlinked_count == 1 %}1 article n'est utilisé{% else %}{{ unlinked_count }} articles ne sont utilisés{% endif %} par aucune recette :
-            la caisse les vend, mais rien ne dit ce qu'il y a dedans, donc tout ce qui sort
-            apparaît comme manquant. Leur écrire une recette — ou les rattacher depuis
-            les produits caisse <a href="{% url 'recipes:pos_product_list' %}">à lier</a> — vaut mieux que
-            de les compter comme des pertes.
+            tout ce qui en sort apparaît comme manquant. À corriger par une recette, ou depuis
+            les produits caisse <a href="{% url 'recipes:pos_product_list' %}">à lier</a>.
         </p>
         {% endif %}
 
@@ -67,12 +65,9 @@
                 {% if only_recipes %}<span class="muted" style="font-weight:400; font-size:0.8em;">— articles liés à une recette</span>{% endif %}
             </h3>
             <p class="muted">
-                Les alternatives d'une recette (« vodka OU gin ») sont regroupées : impossible de
-                savoir quelle bouteille a servi, donc le manque est compté sur le groupe entier et
-                valorisé au moins cher — c'est le minimum que les chiffres permettent d'affirmer.
-                La <strong>perte estimée</strong> de chaque article (débordement, fonds de bouteille —
-                <a href="{% url 'inventory:stock_list' %}">modifiable par article</a>, 10 % par défaut)
-                est déduite avant de parler de manquant.
+                Les alternatives d'une recette (« vodka OU gin ») forment un groupe, valorisé au
+                moins cher. La <strong>perte estimée</strong> de chaque article (10 % par défaut,
+                <a href="{% url 'inventory:stock_list' %}">modifiable par article</a>) est déduite du manquant.
             </p>
             {% if report.missing %}
             <div class="table-wrap">
@@ -108,7 +103,7 @@
                             {{ pool.unit }}
                         </td>
                         <td class="num">{{ pool.known_losses|floatformat:2 }} {{ pool.unit }}</td>
-                        <td class="num muted" title="Part des {{ pool.actual_usage|floatformat:2 }} {{ pool.unit }} sortis qui n'était jamais destinée à être vendue, au taux propre à chaque article.">
+                        <td class="num muted" title="Perte estimée sur les {{ pool.actual_usage|floatformat:2 }} {{ pool.unit }} sortis, au taux de chaque article.">
                             −{{ pool.loss_allowance|floatformat:2 }} {{ pool.unit }}
                         </td>
                         <td class="num">{{ pool.shortfall|floatformat:2 }} {{ pool.unit }}</td>
@@ -140,10 +135,8 @@
         <div class="card">
             <h3>Non comptés ({{ report.incomplete|length }})</h3>
             <p class="muted">
-                Ces articles ont bougé pendant la période mais ne figurent pas dans
-                {% if report.since_beginning %}l'inventaire{% else %}les deux inventaires{% endif %},
-                donc aucun écart ne peut être calculé pour eux — les compter la prochaine fois
-                les fera apparaître ci-dessus.
+                Absents {% if report.since_beginning %}de l'inventaire{% else %}d'un des deux inventaires{% endif %} :
+                aucun écart calculable. Comptez-les la prochaine fois.
             </p>
             <p>
                 {% for pool in report.incomplete %}
@@ -157,9 +150,8 @@
         <div class="card">
             <h3>Incohérences</h3>
             <p class="muted">
-                Les ventes consomment plus de stock qu'il n'en est réellement sorti — ce qui est
-                impossible. C'est une erreur de données : comptage inexact, livraison non importée,
-                ou recette qui ne correspond pas à ce qui est réellement servi.
+                Les ventes consomment plus que ce qui est sorti du stock : comptage inexact,
+                livraison non importée ou recette fausse.
             </p>
             <div class="table-scroll">
             <table class="sub-table">

@@ -2933,8 +2933,13 @@ is Django's problem on every later read.
 (`spending.QUERIES`, pinned by a test): the lines, their payments, those
 payments' invoice lines, the rules. An invoice on two lines is read once.
 
-No new navigation link: « Dépenses par catégorie » is reached from Banque's
-own header. Another entry in the topbar moves where the links wrap, which is
+No new navigation link: « Dépenses par catégorie » is one of **Banque's
+three tabs** (`bank/_tabs.html`: « Opérations », « Dépenses par catégorie »,
+« Entrées d'argent », each page passing `bank_url`, `spending_url`,
+`income_url` over its period and `bank_tab` for the lit one). The owner,
+01/10/2026: a button to it in several places (Banque's header, Marges'
+header, each page's own) was one too many - the tabs are the only buttons
+now, and Marges no longer links there. Another entry in the topbar moves where the links wrap, which is
 measured width by width by `accounts/tests/test_topbar_browser.py` (the bar
 without its script, under 860 px) and `TopbarRoomInBrowserTests`.
 
@@ -3096,8 +3101,48 @@ it received - a payout of the 1st pays the month before, and the page says
 so. « Versements carte », a row a day, comes last: earlier, it pushed the
 rest of the page out of reach.
 
-Reached from Banque's header button and its « Entrées » stat, both over
+Reached from Banque's tab and its « Entrées » stat, both over
 Banque's period (`_bank_income_url`), and from « Dépenses ». No topbar link.
+
+### A document's file: its download name, and Banque's zip
+
+**Every door out names the file « Darty 11€55 01_10_2026.pdf »** (the owner,
+01/10/2026): the supplier, the total TTC with « € » for the decimal point,
+the date with underscores, « sans date » when there is none, the stored
+file's own extension (a ticket's photo stays « .jpg »; a file stored with
+none gets none - named « .pdf » it would be shown as one). One definition,
+`invoices/filenames.py::download_name`; the stored file keeps its name.
+
+**Every door opens the stored file through `accounts.views.open_stored`**:
+the file under the bound tenant's media folder, resolved, a file - or None
+(a name climbing out with « ../ », a link pointing out, a folder, a NUL: each
+was a 500 or worse when the route opened `source_file` itself). The
+`/fichiers/` view, the document's file route and the zip all use it.
+
+- `invoices:invoice_file` (`/invoices/<pk>/fichier/`) serves a document's
+  file under that name - inline for a PDF or a photo, so the frame and
+  « Voir le PDF » show it and the browser's own « save » takes the name from
+  the header; `?telecharger=1` saves it. The document's two pages link here,
+  never to `source_file.url` (`/fichiers/…`, which still serves the stored
+  name). Its headers are `accounts.views.file_response`, shared with that
+  view: nosniff, no-store, sandboxed when not inline, SAMEORIGIN.
+- **« Factures de la période »** on Banque (`bank:invoice_zip`,
+  `/banque/factures/`, `bank/invoice_files.py`, a GET only - a HEAD would
+  build it for nothing): every document a DEBIT of Banque's period paid,
+  once each, in one zip. The period is read by `views._period` /
+  `_in_period`, the same as the page, so the zip holds what the operations
+  on screen are linked to; its name says the period (« Factures juin
+  2026.zip »), and the tab rides along so « rien à télécharger » answers
+  where it was asked. Two files of one name are numbered (`UniqueNames`,
+  case-blind as Windows is). A document with no file, or whose file is gone
+  from the disk, is listed in « Factures sans fichier.txt » inside the zip,
+  and the page says how many - never dropped in silence. No document with a
+  file at all: no button, and the route goes back to the page with a
+  message. Served by `file_response` (nosniff, no-store), `application/zip`
+  set by hand (Windows' registry says `x-zip-compressed`). The count beside
+  the button is taken off the rows the page already read (no query).
+
+Tests: `invoices/tests/test_filenames.py`, `bank/tests/test_invoice_files.py`.
 
 ### Export, import and clear (`transfer/`, « Données »)
 
@@ -4179,9 +4224,15 @@ counts, because a number nobody can explain is a number nobody will trust.
 The view does no arithmetic: `margins_for` answers and the page says what the
 figures are worth.
 
-**The page says which base it counts, in its first sentence, and links to the
-other one.** « Ce qui a été **facturé** … à la date des factures », beside a
-link to « Dépenses par catégorie » carrying the window. It used to open on
+**Short sentences** (the owner, 01/10/2026: « trop verbose »): each section
+says in one line what it counts, and the warnings say what is wrong with a
+figure and nothing more. The long explanations were cut from the page and
+live here; the figures, the coverage beside every margin and every warning
+stayed. A sentence added back to this page has to earn its line.
+
+**The page says which base it counts, in its first sentence.** « Ce qui a
+été **facturé** … à la date des factures ». It no longer links to
+« Dépenses par catégorie » (one of Banque's tabs now). It used to open on
 « ce qui est sorti » - the words « Dépenses » uses for the statement - and
 said « facturé » a hundred lines down, where a reader arriving from the
 topbar never sees it: the confusion the rule was written against, live in
@@ -4446,7 +4497,9 @@ is an id**: a link handing garbage back makes a stale bookmark permanent.
 
 The navigation is **Produits & charges** (what was bought, by article, the
 charges, and the products to classify),
-**Achats** (invoices, tickets, their sources and suppliers) and **Recettes & ventes**
+**Factures** (invoices, tickets, their sources and suppliers - « Achats »
+until 01/10/2026, renamed on screen only: the section key stays
+`purchases`) and **Recettes & ventes**
 (recipes, till products, sales), each with the count of what waits there
 (`config/navigation.py` decides which link a page lights up), and **Données**
 (export, import, clear). They were
@@ -5520,6 +5573,16 @@ a 375 × 667 phone in Chrome (`test_phone_browser.py`, logged in with
 owner's real bons carry his account, his driver and his deliveries.
 
 ### UI conventions
+
+**Short texts** (the owner, 01/10/2026: « je trouve les textes du site trop
+verbose en général »; every template and user-facing message was shortened
+that day). A page subtitle is one sentence; a help text is one sentence or
+nothing when the label says it; a warning says what is wrong and what to do,
+and stops. Justifications, history and « why the page works this way »
+belong in these notes, not on the screen - so many passages here that quote
+a longer on-screen sentence describe what the page used to say; the rule
+behind it still holds, the words are shorter. A test pins the fact a page
+must show, not a paragraph around it.
 
 `static/css/marginmate.css` holds the design tokens - colours, a 4px spacing
 scale (`--s1`..`--s6`), radii. Use the tokens, not literals, and prefer an

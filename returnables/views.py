@@ -129,10 +129,7 @@ GATHER_JOBS_SEARCHED = 20
 #: The gather's codes for a format's slips (invoices/tasks.py).
 SLIP_SOURCE_PREFIX = "bons-"
 
-ALREADY_GATHERING = (
-    "Une récupération est déjà en cours : elle récupère aussi les bons quand « Bons de consignes » est coché "
-    "sur Achats."
-)
+ALREADY_GATHERING = "Une récupération est déjà en cours sur Factures."
 
 
 def _is_htmx(request) -> bool:
@@ -465,9 +462,8 @@ def _save_pickup(request, form: PickupForm, pickup: Pickup | None = None) -> Pic
         several = dropped > 1
         messages.warning(
             request,
-            f"{MAX_PHOTOS} photos au plus par reprise : {dropped} photo{'s' if several else ''} "
-            f"envoyée{'s' if several else ''} en trop n'{'ont' if several else 'a'} pas été "
-            f"gardée{'s' if several else ''}.",
+            f"{MAX_PHOTOS} photos au plus par reprise : {dropped} photo{'s' if several else ''} en trop "
+            f"n'{'ont' if several else 'a'} pas été gardée{'s' if several else ''}.",
         )
     for sentence in refused:
         messages.warning(request, sentence)
@@ -801,7 +797,7 @@ def slip_reread(request, pk):
     result = slips.reread(slip)
     label = slip_label(slip.number, slip.delivery_date, with_date=True, capital=True)
     (messages.warning if result.error or result.failed_checks else messages.success)(
-        request, f"{label} relu avec les motifs actuels : {_reading_said(result)}."
+        request, f"{label} relu : {_reading_said(result)}."
     )
     return redirect("returnables:slip_detail", pk=slip.pk)
 
@@ -840,7 +836,7 @@ def line_classify(request, pk):
             "avant lui, reconnaît déjà cette ligne : changez l'ordre des types.",
         )
     else:
-        messages.success(request, f"Motif « {pattern} » ajouté au type « {kind.name} » : la ligne est de ce type.")
+        messages.success(request, f"Motif « {pattern} » ajouté au type « {kind.name} ».")
     return redirect(detail)
 
 
@@ -966,9 +962,9 @@ def _format_page(request, fmt):
                 count = saved.slips.count()
                 said = f"Format « {saved.name} » enregistré."
                 if count == 1:
-                    said += " Son bon n'a pas été relu : « Relire » le lit avec ces motifs."
+                    said += " Son bon n'a pas été relu : utilisez « Relire »."
                 elif count:
-                    said += f" Ses {count} bons n'ont pas été relus : « Relire » les lit avec ces motifs."
+                    said += f" Ses {count} bons n'ont pas été relus : utilisez « Relire »."
                 messages.success(request, said)
                 return redirect("returnables:format_edit", pk=saved.pk)
         else:
@@ -1046,11 +1042,10 @@ def format_reread(request, pk):
     if left:
         messages.warning(
             request,
-            f"{_plural(done, 'bon relu', 'bons relus')} avec les motifs actuels ; il en reste {left} : "
-            "« Relire » à nouveau pour les lire.",
+            f"{_plural(done, 'bon relu', 'bons relus')} ; il en reste {left} : relancez « Relire ».",
         )
     else:
-        messages.success(request, f"{_plural(done, 'bon relu', 'bons relus')} avec les motifs actuels.")
+        messages.success(request, f"{_plural(done, 'bon relu', 'bons relus')}.")
     return redirect("returnables:format_edit", pk=fmt.pk)
 
 

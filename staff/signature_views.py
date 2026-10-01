@@ -75,10 +75,7 @@ SEND_WITHOUT_MAIL = (
 )
 NO_MAIL_SERVER = "aucun serveur d'e-mail n'est configuré"
 #: What timesheet.js asks before « Envoyer » leaves a grid changed and not saved.
-SEND_WARNING = (
-    "Des modifications de la grille ne sont pas enregistrées : c'est le mois enregistré, sans elles, qui serait "
-    "envoyé pour signature. Continuer quand même ?"
-)
+SEND_WARNING = "Modifications non enregistrées : le mois serait envoyé sans elles. Continuer quand même ?"
 REASON = "motif"
 #: The pad's hidden field: the employer's drawing, a PNG data URL.
 DRAWING = "signature"
@@ -86,16 +83,14 @@ NOTHING_TO_REOPEN = "Ce mois n'est pas en cours de signature : il se modifie dé
 #: Said once in the section: what the employee's page promises him, and that
 #: keeping the promise is a command to run (staff_purge_signatures).
 RETENTION_NOTE = (
-    "Les signatures sont conservées {years} ans après la fin du mois, comme la page de signature l'annonce ; les "
-    "effacer ensuite est à faire : manage.py staff_purge_signatures (--dry-run d'abord), rien ne le lance "
-    "automatiquement."
+    "Les signatures sont conservées {years} ans après la fin du mois, puis à effacer : manage.py "
+    "staff_purge_signatures (--dry-run d'abord) ; rien ne le lance automatiquement."
 )
 #: RETENTION_NOTE in a tenant that runs no command on the server (a hosted
 #: bar, accounts.tenancy.integrations_allowed): the words every other page
 #: uses for what it cannot do yet (invoices/integrations.py).
 RETENTION_NOTE_TO_CONFIGURE = (
-    "Les signatures sont conservées {years} ans après la fin du mois, comme la page de signature l'annonce ; leur "
-    f"effacement ensuite est {TO_CONFIGURE}."
+    f"Les signatures sont conservées {{years}} ans après la fin du mois ; leur effacement ensuite est {TO_CONFIGURE}."
 )
 
 #: A request's state as a pill: the colours the rest of the application gives them.
@@ -546,8 +541,7 @@ def _link_shown(request, person: Employee, sign_request: SignatureRequest, token
     if not _mail_to(person) or status == Status.EMPLOYEE_SIGNED:
         return {
             "new_link": link,
-            "link_note": f"Transmettez ce lien à {person.display_name} vous-même (SMS, messagerie, en main propre) : "
-            "il ne s'affichera plus.",
+            "link_note": f"Transmettez ce lien à {person.display_name} vous-même.",
             "link_level": "info",
         }
     try:
@@ -562,7 +556,7 @@ def _link_shown(request, person: Employee, sign_request: SignatureRequest, token
             "link_level": "warning",
         }
     if outcome.sent:
-        note = f"{outcome.message} Vous pouvez aussi le copier pour l'envoyer autrement (SMS, messagerie)."
+        note = f"{outcome.message} Vous pouvez aussi le copier."
     else:
         note = outcome.message
     return {"new_link": link, "link_note": note, "link_level": "success" if outcome.sent else "warning"}
@@ -589,7 +583,7 @@ def signature_send(request, pk, month):
     messages.success(
         request,
         f"{month_title(month)} envoyé pour signature (version {sign_request.version}, document n° "
-        f"{sign_request.document_id}) : il ne se modifie plus tant que la demande est en cours.",
+        f"{sign_request.document_id}) : il ne se modifie plus pendant la demande.",
     )
     shown = _link_shown(request, person, sign_request, token)
     return _render(request, person, month, version=sign_request.version, **shown)
@@ -737,7 +731,7 @@ def month_reopen(request, pk, month):
     elif reopened.status == Status.SUPERSEDED:
         messages.success(
             request,
-            f"Mois rouvert : la version {reopened.version}, signée et contresignée, est remplacée et conservée. "
+            f"Mois rouvert : la version {reopened.version}, signée et contresignée, est conservée. "
             "Corrigez le mois, puis envoyez la nouvelle version.",
         )
     else:
@@ -979,7 +973,7 @@ def _said_deleted(outcome: deletion.Deleted) -> str:
         after = " ; le mois se modifie de nouveau"
     return (
         f"Version {outcome.version} {_of(outcome.month)} supprimée, avec son journal ({events}) et {files}{after}. "
-        "Une trace en est gardée dans deletions.log, dans le dossier privé."
+        "Une trace est gardée dans deletions.log."
     )
 
 

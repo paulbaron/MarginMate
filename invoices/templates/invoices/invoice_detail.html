@@ -4,7 +4,7 @@
 {% block content %}
     <div class="page-header">
         <div>
-            <p class="breadcrumb"><a href="{% url 'invoices:invoice_list' %}">← Achats</a></p>
+            <p class="breadcrumb"><a href="{% url 'invoices:invoice_list' %}">← Factures</a></p>
             <h1>{{ invoice.supplier.name }} — {{ invoice.invoice_number|default:"sans numéro" }}</h1>
             <p class="muted">
                 {% if invoice.invoice_date %}Datée du {{ invoice.invoice_date|date:"d/m/Y" }}{% else %}Sans date{% endif %}
@@ -35,7 +35,9 @@
             <span class="status-pill status-{{ invoice.review_state.css }}">{{ invoice.review_state.label }}</span>
             {% if invoice.source_file %}
                 {# The file received is the legal invoice: an XML opens as it is. #}
-                <a class="btn btn-secondary" href="{{ invoice.source_file.url }}" target="_blank" rel="noopener">{% if invoice.is_einvoice %}Voir le fichier reçu{% else %}Voir le PDF{% endif %}</a>
+                <a class="btn btn-secondary" href="{% url 'invoices:invoice_file' invoice.pk %}" target="_blank" rel="noopener">{% if invoice.is_einvoice %}Voir le fichier reçu{% else %}Voir le PDF{% endif %}</a>
+                {# Saved as « Darty 11€55 01_10_2026.pdf » (invoices/filenames.py), wherever it is saved from. #}
+                <a class="btn btn-secondary" href="{% url 'invoices:invoice_file' invoice.pk %}?telecharger=1">Télécharger</a>
             {% endif %}
             <a class="btn {% if not lines %}btn{% else %}btn-secondary{% endif %}"
                href="{% if invoice.is_receipt %}{% url 'invoices:receipt_review' invoice.pk %}{% else %}{% url 'invoices:invoice_edit_lines' invoice.pk %}{% endif %}">
@@ -107,9 +109,8 @@
 
     {% if invoice.reconciliation_adjustment and invoice.is_receipt %}
         <div class="message">
-            Arrondi : les lignes, chacune ramenée au centime en HT, font
-            <strong>{{ invoice.reconciliation_adjustment|floatformat:2 }} €</strong> d'écart avec la base HT
-            imprimée sur le ticket. L'écart est compté dans le total HT, jamais dans le coût d'un produit.
+            Arrondi : <strong>{{ invoice.reconciliation_adjustment|floatformat:2 }} €</strong> d'écart entre les
+            lignes arrondies en HT et la base HT du ticket, compté dans le total HT, jamais dans le coût d'un produit.
         </div>
     {% elif invoice.reconciliation_adjustment and invoice.is_einvoice %}
         {% comment %}
@@ -117,18 +118,14 @@
         facture » in the checks): nothing is deduced from a gap.
         {% endcomment %}
         <div class="message">
-            Cette facture électronique facture <strong>{{ invoice.reconciliation_adjustment|floatformat:2 }} €</strong> HT
-            en dehors de ses lignes — droits, éco-participation, remise sur l'ensemble. Comptés dans le total et
-            dans la base de TVA, comme le fournisseur les déclare, mais imputés à aucun produit : rien ne dit
-            auquel ils reviennent.
+            <strong>{{ invoice.reconciliation_adjustment|floatformat:2 }} €</strong> HT facturés hors lignes
+            (droits, éco-participation, remise globale) : comptés dans le total, sans être imputés à un produit.
         </div>
     {% elif invoice.reconciliation_adjustment %}
         <div class="message">
-            Le total imprimé par le fournisseur dépasse la somme des lignes de
-            <strong>{{ invoice.reconciliation_adjustment|floatformat:2 }} €</strong> : des droits (accise, régie,
-            vignette sécu) facturés globalement, sans colonne par produit. Ajouté au total, avec sa TVA — les
-            droits entrent dans la base de la TVA — pour qu'il corresponde au centime près à ce qui a été
-            facturé et prélevé, mais jamais imputé à un produit — rien ne dit auquel il revient.
+            Le total imprimé dépasse la somme des lignes de
+            <strong>{{ invoice.reconciliation_adjustment|floatformat:2 }} €</strong> : des droits facturés
+            globalement (accise, vignette sécu), ajoutés au total avec leur TVA sans être imputés à un produit.
         </div>
     {% endif %}
 
@@ -139,10 +136,9 @@
         article the supplier itself corresponds to.
         {% endcomment %}
         <div class="message">
-            Cette {% if einvoice_is_credit %}avoir{% else %}facture{% endif %} électronique
-            <strong>ne détaille aucune ligne</strong> : son profil ne transporte que les totaux et la TVA.
-            La ligne ci-dessous a été reconstituée depuis sa table de TVA pour que son total entre dans les
-            comptes — c'est le total de la facture, pas un article, et il n'y a rien à classer derrière.
+            {% if einvoice_is_credit %}Cet avoir{% else %}Cette facture{% endif %} électronique
+            <strong>ne détaille aucune ligne</strong> : celle ci-dessous, reconstituée depuis sa table de TVA,
+            est son total, pas un article à classer.
         </div>
     {% endif %}
 
@@ -204,7 +200,7 @@
             <tr>
                 <td colspan="8" class="muted" style="text-align:center; padding:2rem 0;">
                     {% if has_parser %}
-                        Aucune ligne : le parseur de ce fournisseur n'a rien trouvé dans ce document — saisissez-les à la main.
+                        Aucune ligne lue dans ce document : saisissez-les à la main.
                     {% else %}
                         Aucune ligne. Ce fournisseur n'a pas de parseur — saisissez-les à la main.
                     {% endif %}

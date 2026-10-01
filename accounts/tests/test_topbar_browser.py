@@ -471,7 +471,7 @@ class TopbarOfATenantInBrowserTests(TopbarInChrome, TenancyTestCase, StaticLiveS
                 section = m["section"]
                 if width >= SECTION_FROM and (
                     section is None
-                    or section["text"] != "Achats"
+                    or section["text"] != "Factures"
                     or section["width"] < 30
                     or section["left"] < m["brand"]["right"]
                     or section["right"] > toggle["left"]

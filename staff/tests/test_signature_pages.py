@@ -244,8 +244,8 @@ class SendTests(OwnerCase):
         form = self.form(response, "staff:signature_send")
         self.assertNotIn("transmettre", form.names)
         # timesheet.js asks first when the grid holds changes not saved: it is
-        # the SAVED month that is frozen.
-        self.assertIn("le mois enregistré", form.attrs["data-leaves-grid"])
+        # the SAVED month that is frozen, sent without them.
+        self.assertIn("le mois serait envoyé sans elles", form.attrs["data-leaves-grid"])
 
         answer = self.client.post(form.action, as_post(form.submission()))
         # Drawn in the answer itself: the link is stored nowhere, not even in the session.
@@ -263,7 +263,7 @@ class SendTests(OwnerCase):
             [
                 (
                     f"Mois de juin 2026 envoyé pour signature (version 1, document n° {request.uuid}) : il ne se "
-                    "modifie plus tant que la demande est en cours."
+                    "modifie plus pendant la demande."
                 )
             ],
         )
@@ -705,8 +705,8 @@ class CancelAndCorrectTests(OwnerCase):
             self.messages_of(answer),
             [
                 (
-                    "Mois rouvert : la version 1, signée et contresignée, est remplacée et conservée. Corrigez le mois, "
-                    "puis envoyez la nouvelle version."
+                    "Mois rouvert : la version 1, signée et contresignée, est conservée. Corrigez le mois, puis "
+                    "envoyez la nouvelle version."
                 )
             ],
         )

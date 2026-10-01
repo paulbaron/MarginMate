@@ -46,6 +46,9 @@ urlpatterns = [
     path("supprimer/", views.invoice_bulk_delete, name="invoice_bulk_delete"),
     path("<int:pk>/", views.InvoiceDetailView.as_view(), name="invoice_detail"),
     path("<int:pk>/apercu/", views.invoice_preview, name="invoice_preview"),
+    # The document's file under the name it is downloaded as
+    # (invoices/filenames.py).
+    path("<int:pk>/fichier/", views.invoice_file, name="invoice_file"),
     path("<int:pk>/supprimer/", views.invoice_delete, name="invoice_delete"),
     path("<int:pk>/lignes/", views.edit_invoice_lines, name="invoice_edit_lines"),
 ]

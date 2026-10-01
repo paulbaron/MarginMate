@@ -33,7 +33,7 @@ leave no way to say so.
             <button class="btn btn-small" type="submit">Rattacher les factures choisies</button>
             {% if more_found %}
                 {# A list cut in silence reads as « the invoice is not there ». #}
-                <p class="read-as">{{ more_found }} document{{ more_found|pluralize }} de plus répond{{ more_found|pluralize:"ent" }} à « {{ search }} » : précisez le numéro, la date ou le fournisseur.</p>
+                <p class="read-as">{{ more_found }} document{{ more_found|pluralize }} de plus répond{{ more_found|pluralize:"ent" }} à « {{ search }} » : précisez la recherche.</p>
             {% endif %}
         </form>
     {% else %}

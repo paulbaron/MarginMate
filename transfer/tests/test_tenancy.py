@@ -46,7 +46,7 @@ from transfer.tests.test_views import shown_preview
 
 GONE_SAID = [views.GONE]
 NO_SUCH_BACKUP = ["Cette sauvegarde n'existe pas (ou plus)."]
-ADMINISTRATOR = "faites-la faire par l'administrateur"
+ADMINISTRATOR = "Seul l'administrateur peut revenir à une copie"
 
 
 def said(response) -> list[str]:
@@ -277,7 +277,9 @@ class ThroughThePagesTests(TenantTestCase):
         self.assertNotContains(page, "c'est à vous de faire le ménage dans ce dossier")
         no_folder_named(self, page, self.bar_a)
         home = self.page(self.user_a, reverse("transfer:data_home"))
-        self.assertContains(home, "le dossier des sauvegardes de votre espace")
+        # The header says a backup is made, not where: the place (never a
+        # path) is said where it happens, on the previews checked below.
+        self.assertContains(home, "une sauvegarde est faite avant tout remplacement ou")
         no_folder_named(self, home, self.bar_a)
 
         self.client.post(reverse("transfer:data_clear"), {"sections": ["banque"], "action": "previsualiser"})

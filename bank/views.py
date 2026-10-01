@@ -3,9 +3,10 @@ invoice, settle the rest by hand - the rules for payments that never have
 one - and, on « Dépenses », where everything that left the account went;
 on « Entrées d'argent », what came in, beside what the till was paid.
 
-« Dépenses » is deliberately a page of its own rather than a seventh tab:
-the tabs are about a line's invoice, and that page is about the money, over
-a period, whether or not there is an invoice at all. See bank/spending.py
+« Dépenses » is deliberately a page of its own rather than a seventh filter
+of the operations: those are about a line's invoice, and that page is about
+the money, over a period, whether or not there is an invoice at all. The
+three pages are Banque's tabs (bank/_tabs.html). See bank/spending.py
 for what it counts and what it refuses to blend with « Marges », and
 bank/income.py for the money that came in.
 """
@@ -15,6 +16,7 @@ from __future__ import annotations
 import calendar
 import math
 import re
+import tempfile
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -24,10 +26,12 @@ from urllib.parse import parse_qs, urlparse
 from django.contrib import messages
 from django.db.models import Prefetch
 from django.shortcuts import get_object_or_404, redirect, render
-from django.urls import NoReverseMatch, reverse
+from django.urls import reverse
 from django.utils.html import escape
 from django.utils.http import urlencode
+from django.views.decorators.http import require_GET
 
+from accounts.views import file_response
 from common import (
     LEFT_OUT_PARAM,
     SHOWN_PARAM,
@@ -44,7 +48,7 @@ from invoices.models import Invoice
 from invoices.workspace import documents_matching
 from recipes.integration import TILL_TO_CONFIGURE, till_allowed
 
-from . import income, matching, reconcile, spending
+from . import income, invoice_files, matching, reconcile, spending
 from .forms import IgnoreRuleForm
 from .models import BankTransaction, IgnoreRule, InvoicePayment
 from .rules import ignoring_rule
@@ -262,16 +266,7 @@ def bank_home(request):
     if view not in VIEWS:
         view = DEFAULT_VIEW
     months = _months()
-    month = request.GET.get("mois", "")
-    if month not in dict(months):
-        month = ""
-    # A month chosen is the answer to the question the free dates ask, so it
-    # takes it whole rather than being crossed with them: two windows on one
-    # page, one of them invisible, is how a figure comes out narrower than
-    # the period the page says it is counting. The inputs are drawn disabled
-    # and no link carries « du »/« au » while a month is on, so the dates
-    # cannot come back on the next click either.
-    window = DateRange() if month else date_range(request)
+    month, window = _period(request, months)
 
     lines = BankTransaction.objects.prefetch_related(
         Prefetch(
@@ -285,15 +280,9 @@ def bank_home(request):
             ),
         )
     )
-    if month:
-        year, number = (int(part) for part in month.split("-"))
-        lines = lines.filter(operation_date__year=year, operation_date__month=number)
-    # On the date the bank booked the operation, which is what « Mois »
-    # filters on too: windowed on the card's own date instead, the two
-    # pickers would disagree about which period a card payment belongs to.
     # Everything below - the stats, the tab counts, the payee groups - is
     # built from these rows, so it all follows the window by construction.
-    lines = window.limit(lines, "operation_date")
+    lines = _in_period(lines, month, window)
     rules = reconcile.active_rules()
     rows = [Row(line, *classify(line, rules)) for line in lines]
     by_status = defaultdict(list)
@@ -318,6 +307,14 @@ def bank_home(request):
     for row in shown:
         if row.status == INCOME:
             row.entry = income.entry_for(row.line)
+    # « Télécharger les factures »: what the zip will hold, counted off the
+    # rows already read (their payments are prefetched) - no query.
+    paid = {
+        payment.invoice.pk: payment.invoice
+        for row in rows
+        if row.line.amount < 0
+        for payment in row.line.payments.all()
+    }
     tabs = [
         {
             "key": key,
@@ -356,12 +353,42 @@ def bank_home(request):
             # those pages read dates and not months.
             "income_url": _bank_income_url(month, window),
             "spending_url": _spending_url(*_bank_period(month, window)),
+            # Banque's tabs (bank/_tabs.html): this one is the operations.
+            "bank_url": _page_url(view, month, window),
+            "bank_tab": "operations",
+            "invoice_zip_url": _invoice_zip_url(view, month, window),
+            "invoice_zip_count": sum(1 for invoice in paid.values() if invoice.source_file),
+            "invoice_zip_missing": sum(1 for invoice in paid.values() if not invoice.source_file),
             # Deliberately the whole statement, window or not: windowed, a
             # period with nothing in it would show « Aucun relevé importé »
             # and read as an empty database rather than as empty dates.
             "has_lines": BankTransaction.objects.exists(),
         },
     )
+
+
+@require_GET
+def invoice_zip(request):
+    """Every document the spending of Banque's period paid, in one zip,
+    each file under its download name (bank/invoice_files.py). A GET only:
+    a HEAD would build the whole zip for nothing."""
+    view = request.GET.get("vue", DEFAULT_VIEW)
+    month, window = _period(request, _months())
+    invoices = invoice_files.paid_by(_in_period(BankTransaction.objects.all(), month, window))
+    if not any(invoice.source_file for invoice in invoices):
+        messages.info(request, "Aucune facture à télécharger sur cette période.")
+        return redirect(_page_url(view if view in VIEWS else DEFAULT_VIEW, month, window))
+    handle = tempfile.TemporaryFile()  # noqa: SIM115 - the FileResponse closes it
+    try:
+        invoice_files.write_zip(invoices, handle)
+    except BaseException:
+        handle.close()
+        raise
+    handle.seek(0)
+    response = file_response(handle, invoice_files.zip_name(_period_label(month, window)), download=True)
+    # Windows' registry says « application/x-zip-compressed ».
+    response["Content-Type"] = "application/zip"
+    return response
 
 
 def spending_home(request):
@@ -453,6 +480,8 @@ def spending_home(request):
             # Money that came IN, and what the till says it sold - the page
             # this one is not. Empty where it does not exist (yet).
             "income_url": _income_url(window),
+            "spending_url": here,
+            "bank_tab": "spending",
             "has_lines": BankTransaction.objects.exists(),
         },
     )
@@ -501,9 +530,12 @@ def income_home(request):
             "no_category": spending.NO_CATEGORY,
             "sources": income.SOURCES,
             # The other pages over the same period - the window alone.
-            "bank_url": _page_url("entrees", "", window),
+            "bank_url": _page_url(DEFAULT_VIEW, "", window),
             "spending_url": _other_page_url("bank:spending_home", window),
             "margins_url": _other_page_url("margins:margins_home", window),
+            # Banque's tabs (bank/_tabs.html): this one is the money in.
+            "income_url": here,
+            "bank_tab": "income",
             "has_lines": BankTransaction.objects.exists(),
         },
     )
@@ -515,9 +547,7 @@ def bank_reconcile(request):
         if linked:
             messages.success(request, f"{linked} paiement(s) rattaché(s) automatiquement à leur facture.")
         else:
-            messages.info(
-                request, "Aucun nouveau rapprochement certain. Les suggestions restent à confirmer ligne par ligne."
-            )
+            messages.info(request, "Aucun nouveau rapprochement certain : les suggestions restent à confirmer.")
     return redirect(_back(request))
 
 
@@ -705,14 +735,13 @@ GROUP_NOTES = {
     matching.SURE: (
         "Le rapprochement n'a pas été relancé depuis le dernier import : cochées d'avance, sauf celles déliées à "
         f"la main, celles dont la facture est datée au-delà de {matching.RECURRING_DAYS_BEFORE.days} jours avant "
-        f"{matching.NOT_BY_CARD}, et celles dont la facture est aussi proposée à une opération servie avant elles "
-        "- la ligne le dit à chaque fois."
+        f"{matching.NOT_BY_CARD}, et celles dont la facture est aussi proposée à une opération servie avant elles."
     ),
     matching.NEAR_SURE: (
-        "Cochées d'avance : une seule meilleure option, avec une marge nette - sauf celles déliées à la main et "
-        "celles dont la facture est aussi proposée à une opération servie avant elles ; la ligne le dit."
+        "Cochées d'avance, sauf celles déliées à la main et celles dont la facture est aussi proposée à une "
+        "opération servie avant elles."
     ),
-    matching.TO_CONFIRM: "Rien de coché d'avance : lisez la raison, puis cochez celles que vous reconnaissez.",
+    matching.TO_CONFIRM: "Rien de coché d'avance : cochez celles que vous reconnaissez.",
 }
 
 #: What « Propositions » says about a proposal it did not link, by
@@ -895,7 +924,7 @@ def _import_statements(request):
     created = known = 0
     for upload in uploads:
         if not upload.name.lower().endswith(".csv"):
-            messages.error(request, f"{upload.name} : seuls les relevés exportés en CSV sont acceptés.")
+            messages.error(request, f"{upload.name} : seuls les fichiers CSV sont acceptés.")
             continue
         if file_too_big(upload):
             messages.error(request, f"{file_too_big(upload)} Ce relevé n'a pas été importé.")
@@ -915,6 +944,53 @@ def _import_statements(request):
             f"{linked} paiement(s) rattaché(s) automatiquement à leur facture.",
         )
     return redirect(back)
+
+
+def _period(request, months) -> tuple[str, DateRange]:
+    """The month and the free dates Banque is read through - one reading for
+    the page and for its zip, so the zip holds what the page shows.
+
+    A month chosen is the answer to the question the free dates ask, so it
+    takes it whole rather than being crossed with them: two windows on one
+    page, one of them invisible, is how a figure comes out narrower than the
+    period the page says it is counting. The inputs are drawn disabled and
+    no link carries « du »/« au » while a month is on, so the dates cannot
+    come back on the next click either."""
+    month = request.GET.get("mois", "")
+    if month not in dict(months):
+        month = ""
+    return month, DateRange() if month else date_range(request)
+
+
+def _in_period(lines, month: str, window: DateRange):
+    """`lines` booked in that month (as its first and last day) or window.
+    On the date the bank booked the operation, which is what « Mois »
+    filters on too: windowed on the card's own date instead, the two
+    pickers would disagree about which period a card payment belongs to."""
+    return _bank_period(month, window)[0].limit(lines, "operation_date")
+
+
+def _invoice_zip_url(view: str, month: str, window: DateRange) -> str:
+    """The zip over the period the page is showing; its tab rides along, so
+    « rien à télécharger » comes back to it."""
+    return f"{reverse('bank:invoice_zip')}?{urlencode(_page_parameters(view, month, window))}"
+
+
+def _period_label(month: str, window: DateRange) -> str:
+    """« juin 2026 », « du 01_06_2026 au 30_06_2026 », « tout l'historique »:
+    what the zip's name says it holds, dated the way its files are."""
+    if month:
+        year, number = (int(part) for part in month.split("-"))
+        return f"{MONTH_NAMES[number - 1]} {year}"
+    start = window.start.strftime("%d_%m_%Y") if window.start else ""
+    end = window.end.strftime("%d_%m_%Y") if window.end else ""
+    if start and end:
+        return f"du {start} au {end}"
+    if start:
+        return f"depuis le {start}"
+    if end:
+        return f"jusqu'au {end}"
+    return "tout l'historique"
 
 
 def _page_url(view: str, month: str, window: DateRange) -> str:
@@ -1037,12 +1113,8 @@ def _other_page_url(url_name: str, window: DateRange) -> str:
 
 
 def _income_url(window: DateRange) -> str:
-    """« Entrées d'argent » over the same period, or "" where that page does
-    not exist - the template draws the link only when there is one."""
-    try:
-        return _other_page_url("bank:income_home", window)
-    except NoReverseMatch:
-        return ""
+    """« Entrées d'argent » over the same period."""
+    return _other_page_url("bank:income_home", window)
 
 
 def _income_page_url(window: DateRange, showing_all: bool) -> str:

@@ -1,26 +1,18 @@
 {% extends "base.html" %}
-{% block title %}Entrées d'argent - MarginMate{% endblock %}
+{% block title %}Entrées d'argent - Banque - MarginMate{% endblock %}
 {% block content %}
     <div class="page-header">
         <div>
-            <h1>Entrées d'argent</h1>
+            <h1>Banque</h1>
             <p class="page-subtitle">
-                Tout ce qui est <strong>arrivé sur le compte</strong> sur la période, à côté de ce que la caisse dit
-                avoir <strong>encaissé</strong> les mêmes jours : carte, espèces, chèques. D'un côté ce qui a été
-                vendu, de l'autre l'argent reçu.
+                Ce qui est <strong>arrivé sur le compte</strong>, face à ce que la caisse a <strong>encaissé</strong>
+                les mêmes jours.
             </p>
-            <p class="muted">
-                Ce n'est ni <a href="{{ spending_url }}">Dépenses</a>, qui compte ce qui est sorti du compte, ni
-                <a href="{{ margins_url }}">Marges</a>, qui met les ventes face à ce qui a été facturé. Ici le relevé
-                fait foi pour l'argent reçu, à la date où la banque l'a reçu, et la caisse pour ce qu'elle a
-                encaissé, au jour de la vente.
-            </p>
-        </div>
-        <div class="actions">
-            <a class="btn btn-secondary" href="{{ bank_url }}">Banque</a>
-            <a class="btn btn-secondary" href="{{ spending_url }}">Dépenses par catégorie</a>
+            <p class="muted">Ce qui a été facturé : <a href="{{ margins_url }}">Marges</a>.</p>
         </div>
     </div>
+
+    {% include "bank/_tabs.html" %}
 
     {% if has_lines %}
         <form method="get" class="date-range">
@@ -43,8 +35,7 @@
             {% if showing_all %}
                 Tout l'historique du relevé et de la caisse.
             {% elif is_default %}
-                Les douze derniers mois, du {{ window.start|date:"d/m/Y" }} au {{ window.end|date:"d/m/Y" }} :
-                la période par défaut, faute de dates choisies.
+                Les douze derniers mois (par défaut), du {{ window.start|date:"d/m/Y" }} au {{ window.end|date:"d/m/Y" }}
             {% elif window.start and window.end %}
                 Du {{ window.start|date:"d/m/Y" }} au {{ window.end|date:"d/m/Y" }}
             {% elif window.start %}
@@ -52,7 +43,7 @@
             {% else %}
                 Jusqu'au {{ window.end|date:"d/m/Y" }}
             {% endif %}
-            (dates de passage en banque, et jours de caisse ; les deux bornes incluses).
+            (dates de passage en banque et jours de caisse, bornes incluses).
         </p>
 
         {% comment %}
@@ -64,13 +55,12 @@
         {% if report.days_without_payments %}
             <div class="message message-warning">
                 <strong>{{ report.days_without_payments|length }} jour{{ report.days_without_payments|length|pluralize }}</strong>
-                de caisse de cette période {{ report.days_without_payments|length|pluralize:"a,ont" }} des ventes mais
+                de caisse {{ report.days_without_payments|length|pluralize:"a,ont" }} des ventes mais
                 aucun moyen de paiement lu (du {{ report.days_without_payments.0|date:"d/m/Y" }} au
-                {{ report.days_without_payments|last|date:"d/m/Y" }}) : ce que la caisse a encaissé est trop bas
-                d'autant.
+                {{ report.days_without_payments|last|date:"d/m/Y" }}) : « Encaissé en caisse » est trop bas.
                 {% if till_allowed %}
-                Pour le combler : <code>manage.py laddition_backfill_payments</code>, qui relit les exports
-                déjà sur le disque et ne va rien chercher en ligne.
+                Pour le combler : <code>manage.py laddition_backfill_payments</code> (relit les exports déjà
+                téléchargés).
                 {% else %}
                 Pour le combler : {{ till_to_configure }}.
                 {% endif %}
@@ -79,11 +69,10 @@
         {% if report.unread_revenue_days %}
             <div class="message message-warning">
                 Les ventes de <strong>{{ report.unread_revenue_days|length }} jour{{ report.unread_revenue_days|length|pluralize }}</strong>
-                de cette période n'ont pas encore de prix : « Vendu en caisse » ne les compte pas, et les pourboires
-                ne se calculent que sur les jours lus des deux côtés.
+                n'ont pas encore de prix : « Vendu en caisse » ne les compte pas.
                 {% if till_allowed %}
-                Pour le combler : <code>manage.py laddition_backfill_revenue</code>, qui relit les exports déjà
-                sur le disque.
+                Pour le combler : <code>manage.py laddition_backfill_revenue</code> (relit les exports déjà
+                téléchargés).
                 {% else %}
                 Pour le combler : {{ till_to_configure }}.
                 {% endif %}
@@ -98,7 +87,6 @@
             Caisse importée jusqu'au {{ report.last_till_day|date:"d/m/Y"|default:"— (aucune vente)" }} ;
             {% if report.first_payment_day %}moyens de paiement de la caisse lus du {{ report.first_payment_day|date:"d/m/Y" }} au {{ report.last_payment_day|date:"d/m/Y" }}{% else %}aucun moyen de paiement de la caisse lu{% endif %} ;
             relevé importé du {{ report.first_statement_day|date:"d/m/Y"|default:"—" }} au {{ report.last_statement_day|date:"d/m/Y"|default:"—" }}.
-            Un côté en avance sur l'autre compte des jours que l'autre ne voit pas encore.
         </p>
         {% if report.till_before_statement or report.bank_before_till %}
             <div class="message message-warning">
@@ -107,15 +95,14 @@
                         Du {{ report.till_before_from|date:"d/m/Y" }} au {{ report.till_before_to|date:"d/m/Y" }}, la caisse a encaissé
                         {{ report.till_before_statement_total|floatformat:2 }} €{% if report.till_card_before_statement %} (dont {{ report.till_card_before_statement|floatformat:2 }} € par carte){% endif %}
                         sur des jours que le relevé ne couvre pas : il commence le {{ report.first_statement_day|date:"d/m/Y" }}.
-                        L'écart ci-dessous ne les compte pas ; « Vendu en caisse », « Encaissé en caisse » et la colonne de
-                        la caisse, eux, les comptent.
+                        L'écart ci-dessous ne les compte pas ; les chiffres de la caisse, si.
                     </p>
                 {% endif %}
                 {% if report.bank_before_till %}
                     <p>
                         Du {{ report.bank_before_from|date:"d/m/Y" }} au {{ report.bank_before_to|date:"d/m/Y" }},
-                        {{ report.bank_before_till_total|floatformat:2 }} € sont arrivés sur le compte (versements carte comptés au brut,
-                        espèces et chèques déposés) avant le premier jour où la caisse a des moyens de paiement lus, le
+                        {{ report.bank_before_till_total|floatformat:2 }} € sont arrivés sur le compte (carte au brut, espèces,
+                        chèques) avant le premier jour de paiements lus en caisse, le
                         {{ report.first_payment_day|date:"d/m/Y" }} : l'écart ci-dessous ne les compte pas.
                     </p>
                 {% endif %}
@@ -179,13 +166,11 @@
         a rule nobody can know was wrong.
         {% endcomment %}
         <ul class="muted small">
-            <li><strong>Versement carte</strong> : une entrée dont le libellé porte « TOTAL ENCAISSE &lt;montant&gt; EUROS ».
-                Ce montant est ce que le prestataire des paiements carte a encaissé (brut) ; la ligne du relevé est ce qui
-                est arrivé (net) ; la commission est la différence, telle quelle.</li>
+            <li><strong>Versement carte</strong> : libellé portant « TOTAL ENCAISSE &lt;montant&gt; EUROS » (le brut) ;
+                la ligne du relevé est le net, la commission la différence.</li>
             <li><strong>Dépôt d'espèces</strong> : le type d'opération « VERSEMENT ESPECES ».
                 <strong>Remise de chèques</strong> : « REMISE CHEQUES ».</li>
-            <li><strong>Autres entrées</strong> : tout le reste (un virement pour une privatisation, un apport, un
-                remboursement…), à classer ci-dessous comme sur « Dépenses ».</li>
+            <li><strong>Autres entrées</strong> : tout le reste, à classer ci-dessous.</li>
         </ul>
 
         <h2>Ce que la caisse a encaissé, et ce qui est arrivé sur le compte</h2>
@@ -253,11 +238,9 @@
         (income.NOTES): repeated here word for word, it read twice in a row.
         {% endcomment %}
         <p class="muted">
-            L'écart est ce qui est arrivé moins ce que la caisse a encaissé, dit sans jugement : la page ne voit ni
-            le tiroir-caisse ni ce qui a été payé en liquide. L'écart est pris sur les jours que les deux côtés couvrent :
-            ce que la caisse a encaissé avant la première ligne du relevé, ou ce qui est arrivé avant le premier jour de
-            caisse lu, reste dans sa colonne et n'y compte pas. La carte se compare au <strong>brut</strong>, ce que le
-            prestataire dit avoir encaissé ; le total, lui, est ce qui est arrivé, commission déduite.
+            L'écart est pris sur les jours que les deux côtés couvrent :
+            « Arrivé sur le compte » moins « Encaissé en caisse ».
+            La carte s'y compare au <strong>brut</strong> ; le total, lui, est net de commission.
         </p>
 
         <h2 id="card-balance">Ventes carte pas encore versées</h2>
@@ -267,10 +250,10 @@
             </div>
         {% else %}
             <p class="lead">
-                Ce que la caisse a encaissé par carte, moins ce que les versements carte ont apporté,
-                <strong>compté à partir du {{ report.balance.anchor|date:"d/m/Y" }}</strong> : ce que paie le premier
-                versement du relevé ({{ report.balance.first_payout|date:"d/m/Y" }}). Calculé sur tout l'historique, la
-                période ne fait que choisir ce qui s'affiche.
+                Carte encaissée en caisse moins versements carte,
+                <strong>compté à partir du {{ report.balance.anchor|date:"d/m/Y" }}</strong> (premier jour payé par le
+                premier versement du relevé, le {{ report.balance.first_payout|date:"d/m/Y" }}). Calculé sur tout
+                l'historique.
             </p>
             {% if report.last_payout %}
                 <div class="stat-row">
@@ -287,10 +270,9 @@
                 {{ chart_svg|safe }}
             {% endif %}
             <p class="muted">
-                Le solde reste d'habitude autour d'un niveau : les ventes des derniers jours, pas encore versées.
-                Une <strong>marche</strong> qui ne redescend jamais est une vente carte que le relevé ne montre pas :
-                un ticket réglé en vrai par virement, ou un versement qui n'est pas arrivé. Les chiffres sont dans le
-                <a href="#versements">tableau des versements</a>, en bas de la page.
+                Le solde reste d'ordinaire au niveau des ventes des derniers jours. Une <strong>marche</strong> qui
+                ne redescend pas est une vente carte absente du relevé (ticket en fait réglé par virement, versement
+                manquant). Chiffres : <a href="#versements">tableau des versements</a>.
             </p>
         {% endif %}
 
@@ -327,17 +309,15 @@
                 </table>
             </div>
             <p class="muted">
-                La caisse au jour de la vente, la banque au jour où elle a reçu : un versement du 1er paie souvent
-                des ventes du mois d'avant. Le premier et le dernier mois ne comptent que les jours de la période.
+                Caisse au jour de la vente, banque au jour de réception : un versement du 1er paie souvent le mois
+                d'avant. Le premier et le dernier mois ne comptent que les jours de la période.
             </p>
         {% endif %}
 
         <h2 id="autres-entrees">Autres entrées</h2>
         {% if report.others %}
             <p class="muted">
-                Ce que la caisse ne voit pas : un virement pour une privatisation, un apport, le remboursement d'un
-                fournisseur, un prélèvement retourné. Donnez-leur un nom comme sur « Dépenses » (le même champ,
-                une liste des noms déjà donnés à des entrées) ; les non classées d'abord.
+                Ce que la caisse ne voit pas : virement, apport, remboursement… Classez-les ; les non classées d'abord.
             </p>
             {% if report.other_categories %}
                 <div class="table-wrap">
@@ -409,7 +389,7 @@
             </datalist>
         {% else %}
             <div class="empty-state">
-                <p>Aucune autre entrée sur cette période : tout ce qui est arrivé vient de la carte, des espèces ou des chèques.</p>
+                <p>Aucune autre entrée sur cette période.</p>
             </div>
         {% endif %}
 
@@ -455,9 +435,9 @@
                                     <td data-sort="{{ row.run.0|date:'Y-m-d' }}">
                                         {% if row.run %}
                                             {% if row.run.0 == row.run.1 %}
-                                                même montant au centime que les ventes carte du {{ row.run.0|date:"d/m/Y" }}
+                                                du {{ row.run.0|date:"d/m/Y" }}
                                             {% else %}
-                                                même montant au centime que les ventes carte du {{ row.run.0|date:"d/m/Y" }} au {{ row.run.1|date:"d/m/Y" }}
+                                                du {{ row.run.0|date:"d/m/Y" }} au {{ row.run.1|date:"d/m/Y" }}
                                             {% endif %}
                                         {% else %}—{% endif %}
                                     </td>
@@ -471,11 +451,9 @@
                 </table>
             </div>
             <p class="muted">
-                « Même montant au centime » : des jours de ventes carte qui se suivent, dans les huit jours avant le
-                versement, pas déjà pris par un versement précédent, dont le total est exactement le montant encaissé
-                - les plus récents d'abord, puis le moins de jours. Le prestataire ne regroupe pas les ventes par
-                journée de caisse, et un paiement après minuit change de jour : beaucoup de versements n'ont donc pas
-                de correspondance exacte, sans que rien ne manque. C'est le solde qui le dit.
+                « Ventes carte au même montant » : des jours qui se suivent, dans les huit jours avant le versement,
+                dont le total égale au centime le montant encaissé. Beaucoup de versements n'en ont pas, sans que
+                rien ne manque : c'est le solde qui le dit.
             </p>
         {% else %}
             <div class="empty-state">
@@ -485,8 +463,8 @@
     {% else %}
         <div class="empty-state">
             <p>
-                Aucun relevé importé pour l'instant : exportez le compte en CSV depuis le site de la banque, puis
-                importez-le depuis <a href="{{ bank_url }}">Banque</a>.
+                Aucun relevé importé : exportez le compte en CSV depuis le site de la banque, puis importez-le sur
+                <a href="{{ bank_url }}">Banque</a>.
             </p>
         </div>
     {% endif %}

@@ -289,8 +289,7 @@ class NoSplitAnyMoreTests(Subscriptions):
         page = self.client.get(reverse("invoices:supplier_delete", args=[self.operator.pk]))
         shown = " ".join(page.content.decode().split())
         self.assertIn(
-            "Changez ses documents de fournisseur depuis la page de chacun et rattachez ses sources de factures à un "
-            "autre fournisseur, puis revenez ici.",
+            "Rattachez d'abord ses documents (depuis la page de chacun) et ses sources à un autre fournisseur.",
             shown,
         )
         self.assertNotIn("sépar", shown.lower())

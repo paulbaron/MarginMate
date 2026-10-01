@@ -46,5 +46,5 @@ class TillUnitsTests(TestCase):
     def test_the_backlog_counts_units_sold(self):
         PosProduct.objects.create(name="Pinte Exemple", total_quantity=512)
         response = self.client.get(reverse("recipes:pos_product_list"))
-        self.assertContains(response, "512 unités vendues ne sont rattachées à aucune recette.")
+        self.assertContains(response, "512 unités vendues sans recette.")
         self.assertNotContains(response, "articles vendus ne sont")

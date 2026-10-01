@@ -1,7 +1,6 @@
 {% load assets %}
 <p class="muted">
-    Les alternatives « OU » donnent une fourchette plutôt qu'un chiffre unique. Une recette que la caisse ne vend
-    sous aucun nom n'explique aucune sortie de stock : liez-la depuis « À lier » ou dans sa fiche.
+    Une recette que la caisse ne vend sous aucun nom n'a aucune vente comptée : liez-la depuis « À lier ».
 </p>
 
 {% if article_choices %}
@@ -44,14 +43,13 @@ decision would be taken on something that may never be served.
             says where. « quelque part » is true in both shapes.
             {% endcomment %}
             {{ article_count }} recette{{ article_count|pluralize }} peu{{ article_count|pluralize:"t,vent" }} utiliser
-            « {{ chosen_article.name }} », chacune par un choix « OU » quelque part : rien ne dit laquelle sera servie.
+            « {{ chosen_article.name }} », chacune par un choix « OU » quelque part.
         {% else %}
             {{ article_count }} recette{{ article_count|pluralize }} utilise{{ article_count|pluralize:"nt" }} « {{ chosen_article.name }} ».
             {% if article_maybe_count %}
-                Dont {{ article_maybe_count }} qui peu{{ article_maybe_count|pluralize:"t,vent" }} seulement l'utiliser, en alternative « OU ».
+                Dont {{ article_maybe_count }} qui peu{{ article_maybe_count|pluralize:"t,vent" }} seulement l'utiliser (choix « OU »).
             {% endif %}
         {% endif %}
-        Les sous-recettes comptent : la colonne « Utilisé » dit par laquelle.
     </p>
 {% elif unused_article %}
     <p class="muted">
@@ -151,7 +149,7 @@ decision would be taken on something that may never be served.
     </div>
 {% else %}
     <div class="empty-state">
-        <p>Aucune recette pour le moment.</p>
+        <p>Aucune recette.</p>
         <a class="btn" href="{% url 'recipes:recipe_create' %}">+ Nouvelle recette</a>
     </div>
 {% endif %}

@@ -13,8 +13,8 @@
             <p class="breadcrumb"><a href="{{ supplier_page }}">← {{ supplier.name }}</a></p>
             <h1>Modifier {{ supplier.name }}</h1>
             <p class="page-subtitle">
-                {% if step == "review" %}Ce qui va changer : rien n'est encore enregistré.
-                {% elif document_count %}Rien n'est enregistré avant que vous ayez vu ce que cela change.
+                {% if step == "review" %}Rien n'est encore enregistré.
+                {% elif document_count %}Vous verrez ce que cela change avant d'enregistrer.
                 {% else %}Aucun document n'y est rangé : rien d'autre ne change.{% endif %}
             </p>
         </div>
@@ -60,7 +60,7 @@
                 <p class="form-field">
                     <label for="supplier-header">En-tête de ses documents</label>
                     <input type="text" id="supplier-header" name="header" maxlength="100" value="{{ header }}" data-header-input>
-                    <span class="muted">Le texte imprimé en haut de ses documents, tel quel. Vide : il n'en a pas. Un en-tête n'ajoute que des documents, il n'en retire aucun.</span>
+                    <span class="muted">Le texte imprimé en haut de ses documents, tel quel ; vide s'il n'en a pas.</span>
                 </p>
                 {% if chips %}
                     <p class="muted">

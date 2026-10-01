@@ -14,9 +14,7 @@ erased the month's hours.
         <div>
             <p class="breadcrumb"><a href="{{ page.back_url }}">← {{ page.month_title }} — {{ page.who }}</a></p>
             <h1>Supprimer la version {{ page.version }} {{ page.of_month }}</h1>
-            <p class="page-subtitle">
-                Étape 1 sur 2 : ce qui serait détruit, et pourquoi c'est dangereux. Rien n'est supprimé sur cette page.
-            </p>
+            <p class="page-subtitle">Étape 1 sur 2 : rien n'est supprimé sur cette page.</p>
         </div>
     </div>
 
@@ -48,13 +46,13 @@ erased the month's hours.
                 </ul>
             {% endif %}
             <p>
-                <strong>Journal : {{ page.events }} événement{{ page.events|pluralize }}</strong>, chaînés par leurs
-                empreintes — tout ce qui est arrivé à cette version, avec les adresses IP et les appareils.
+                <strong>Journal : {{ page.events }} événement{{ page.events|pluralize }}</strong> — tout ce qui est
+                arrivé à cette version, adresses IP et appareils compris.
             </p>
             {% if page.has_proof %}
                 <p>
-                    <strong>Le dossier de preuve</strong> (<code>preuve.pdf</code>) : ce qu'un juge, l'inspection du
-                    travail ou {{ page.who }} lirait pour savoir qui a signé quoi, et quand.
+                    <strong>Le dossier de preuve</strong> (<code>preuve.pdf</code>) : ce qui dirait à un juge, à
+                    l'inspection du travail ou à {{ page.who }} qui a signé quoi, et quand.
                 </p>
             {% endif %}
             {% if page.holds_month %}
@@ -65,16 +63,16 @@ erased the month's hours.
         <section class="message message-error deletion-danger" aria-labelledby="deletion-why">
             <h2 id="deletion-why">Pourquoi c'est dangereux</h2>
             <p>
-                {% if page.signed %}La fiche signée et son dossier de preuve sont la preuve, pour l'employeur, des heures effectuées : sans eux, rien ne montre plus que {{ page.who }} a signé ce relevé.{% else %}Cette version n'est pas signée, mais son document figé et son journal font partie de la preuve, pour l'employeur, des heures effectuées : ce qui a été envoyé, quand, et ce qui s'est passé ensuite.{% endif %}
+                {% if page.signed %}La fiche signée et son dossier de preuve sont la preuve, pour l'employeur, des heures effectuées : sans eux, rien ne montre plus que {{ page.who }} a signé ce relevé.{% else %}Non signée, cette version fait quand même partie de la preuve, pour l'employeur, des heures effectuées : ce qui a été envoyé, et quand.{% endif %}
             </p>
             <p>
-                Les relevés du temps de travail sont à conserver : 1 an pour l'inspection du travail (Code du
-                travail, article D3171-16), 3 ans pour une réclamation de salaire (article L3245-1),
-                {{ page.retention_years }} ans recommandés par cette application.
+                Durées de conservation des relevés : 1 an pour l'inspection du travail (Code du travail, article
+                D3171-16), 3 ans pour une réclamation de salaire (article L3245-1), {{ page.retention_years }} ans
+                recommandés par cette application.
             </p>
             <p>
-                <strong>La suppression est définitive</strong> : l'application ne sait pas la défaire. Seule une
-                sauvegarde faite avant — la base de données et le dossier privé, ensemble — la contiendrait encore.
+                <strong>La suppression est définitive</strong> : seule une sauvegarde antérieure (base de données et
+                dossier privé ensemble) contiendrait encore cette version.
             </p>
         </section>
 
@@ -100,24 +98,21 @@ erased the month's hours.
                         Supprimer aussi les heures enregistrées du mois
                     </label>
                     <p class="help">
-                        Les {{ page.days }} jours enregistrés {{ page.of_month }} seraient effacés : le mois reprendrait la
-                        semaine type, comme s'il n'avait jamais été enregistré. Sans cette case, ils restent, et le mois
+                        Les {{ page.days }} jours enregistrés {{ page.of_month }}, le relevé du temps de travail lui-même
+                        (Code du travail, articles D3171-16 et L3245-1), seraient effacés : plus rien ne dirait ce qui a
+                        été travaillé, et le mois reprendrait la semaine type. Sans cette case, ils restent, et le mois
                         {% if page.holds_month %}redevient{% else %}reste{% endif %} modifiable.
-                        Ces jours sont le relevé du temps de travail lui-même (Code du travail, articles D3171-16 et
-                        L3245-1) : effacés, plus rien ne dit ce qui a été travaillé ce mois-là, et le mois montrera la
-                        semaine type à leur place.
                     </p>
                 </fieldset>
             {% else %}
                 <p class="small">
                     Les heures enregistrées du mois restent : d'autres versions {{ page.of_month }} en dépendent. Elles
-                    ne peuvent partir qu'avec la dernière version du mois.
+                    ne partent qu'avec la dernière.
                 </p>
             {% endif %}
             <p class="muted small">
-                Une trace de la suppression est gardée hors de la base, dans <code>deletions.log</code> du dossier
-                privé : la date, {{ page.who }}, le mois, la version, le document n°, son état, les empreintes SHA-256
-                de ses documents, et l'adresse IP d'où elle est demandée.
+                Une trace est gardée dans <code>deletions.log</code> (dossier privé) : date, {{ page.who }}, mois,
+                version, n° de document, état, empreintes SHA-256 et adresse IP de la demande.
             </p>
             <div class="form-actions">
                 <button class="btn btn-danger" type="submit">Continuer vers la dernière vérification</button>

@@ -3,9 +3,8 @@
 {% block content %}
     <h1>Nouvelle facture manuelle</h1>
     <p class="muted">
-        Pour une facture reçue autrement que par PDF (papier, sur place...). Une fois enregistrée, elle est
-        traitée exactement comme une facture importée : les produits passent par « À classer » (Produits &amp; charges)
-        et rejoignent leur article une fois classés.
+        Pour une facture sans PDF (papier, sur place). Comme pour une facture importée, ses produits
+        rejoignent leur article une fois classés.
     </p>
 
     <div class="card">
@@ -43,9 +42,8 @@
             </div>
             <button type="button" class="btn btn-small btn-secondary" id="add-line-row">+ Ajouter un produit</button>
             <p class="muted small">
-                « Frais à répartir » : une ligne qui n'est pas un produit — port, livraison. Elle reste une ligne de
-                la facture ; ce qu'elle coûte est réparti sur les autres au prorata de leur montant HT, et entre dans
-                le prix de revient des articles.
+                « Frais à répartir » : une ligne qui n'est pas un produit (port, livraison). Son coût est réparti
+                sur les autres au prorata de leur HT.
             </p>
 
             <p style="margin-top:1rem;">

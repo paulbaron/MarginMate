@@ -12,12 +12,18 @@ from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
+from django.views.decorators.clickjacking import xframe_options_sameorigin
+from django.views.decorators.http import require_safe
 from django.views.generic import DetailView
 
 from accounts.tenancy import bound, integrations_allowed
+from accounts.views import file_response, open_stored
 from common import error_for_page, is_id, local_return, safe_next
 
 logger = logging.getLogger(__name__)
+
+#: `?telecharger=1` on a document's file: saved rather than shown.
+DOWNLOAD_PARAM = "telecharger"
 
 #: What a bank line is compared against: a document's total to the cent,
 #: the way bank/reconcile.py rounds it before matching.
@@ -26,6 +32,7 @@ CENTS = Decimal("0.01")
 from . import integrations, supplier_changes
 from .deletion import InvoiceInUseError, blocking_stock_takes, delete_invoice
 from .einvoice import NO_LINES_CHECK as EINVOICE_NO_LINES
+from .filenames import download_name
 from .forms import (
     DOCUMENT_INVOICE,
     DOCUMENT_RECEIPT,
@@ -199,13 +206,28 @@ def upload_invoice(request):
         if not invoice.is_receipt:
             messages.success(request, f"Facture importée : {invoice}. Ses lignes sont ouvertes dans la liste.")
             return redirect(f"{reverse('invoices:invoice_list')}?surligner={invoice.pk}")
-        messages.success(
-            request, f"Facture {supplier.name} lue sans lecteur dédié : vérifiez ses lignes d'après le document."
-        )
+        messages.success(request, f"Facture {supplier.name} importée : vérifiez ses lignes d'après le document.")
         return redirect("invoices:receipt_review", pk=invoice.pk)
     finally:
         os.unlink(tmp_path)
     return redirect(f"{reverse('invoices:invoice_list')}?ajouter=pdf")
+
+
+@require_safe
+@xframe_options_sameorigin
+def invoice_file(request, pk):
+    """A document's own file, under the name it is downloaded as
+    (invoices/filenames.py): « Darty 11€55 01_10_2026.pdf », whether it is
+    saved from the frame, from the browser's viewer or with « Télécharger »
+    (`?telecharger=1`). Framed by the correction page, hence SAMEORIGIN."""
+    invoice = get_object_or_404(Invoice.objects.select_related("supplier").prefetch_related("lines"), pk=pk)
+    if not invoice.source_file:
+        raise Http404
+    name = download_name(invoice)
+    handle = open_stored(invoice.source_file.name)
+    if handle is None:
+        raise Http404
+    return file_response(handle, name, download=request.GET.get(DOWNLOAD_PARAM) == "1")
 
 
 def invoice_preview(request, pk):
@@ -322,7 +344,7 @@ def trigger_gather(request):
         messages.info(request, "Une récupération est déjà en cours : elle s'affiche ci-dessous.")
     elif not source_codes:
         # It ran, searched nothing and said "Terminé".
-        messages.error(request, "Aucune source cochée : rien à récupérer. Cochez-en au moins une sous « Sources ».")
+        messages.error(request, "Aucune source cochée : rien à récupérer. Cochez-en au moins une.")
     else:
         start_date = _parse_date(request.POST.get("start_date"))
         end_date = _parse_date(request.POST.get("end_date"))
@@ -539,11 +561,7 @@ def _save_invoice_type(request, type_form, invoice_type, source_form, kind, retu
         return None
     messages.success(request, f"Source enregistrée : {saved_type.name}")
     if created:
-        messages.info(
-            request,
-            f"{supplier.name} est créé : cette source range chez lui ce qu'elle récupère, et il apprend ce que "
-            "ses documents impriment dès le premier.",
-        )
+        messages.info(request, f"Fournisseur {supplier.name} créé.")
     if before is not None and before.pk != supplier.pk:
         messages.info(
             request,
@@ -669,8 +687,7 @@ def receipt_batch_resume(request, pk):
         else:
             messages.warning(
                 request,
-                "Rien à reprendre : cet import tourne encore (ou vient à peine de s'arrêter - "
-                "réessayez dans une minute), ou tous ses tickets ont été lus.",
+                "Rien à reprendre : l'import tourne encore (réessayez dans une minute) ou tous ses tickets ont été lus.",
             )
     return redirect("invoices:receipt_batch", pk=batch.pk)
 
@@ -735,8 +752,8 @@ def _say_new_shop(request, supplier) -> None:
     if not supplier.ticket_header:
         messages.info(
             request,
-            f"Enseigne {supplier.name} créée. Sur la page du ticket, d'après la photo, indiquez le texte "
-            "qu'elle imprime en tête : ses prochains documents y seront rangés tout seuls.",
+            f"Enseigne {supplier.name} créée. Sur la page du ticket, indiquez le texte qu'elle imprime en tête : "
+            "ses prochains documents y seront rangés.",
         )
         return
     requeued = requeue_everywhere()
@@ -845,7 +862,7 @@ def receipt_review(request, pk):
         # since: back to the import, saying so, rather than a bare 404.
         lot = _lot_of(request)
         if lot is not None and batch_deleted(lot, pk):
-            messages.warning(request, "Ce ticket a été supprimé depuis l'import : il n'y a plus rien à vérifier.")
+            messages.warning(request, "Ce ticket a été supprimé depuis l'import.")
             return redirect("invoices:receipt_batch", pk=lot.pk)
         raise Http404("No Invoice matches the given query.")
     if not invoice.is_receipt:
@@ -900,7 +917,7 @@ def _correction_page(request, invoice):
         if is_receipt and action == "unverify":
             invoice.reviewed_at = None
             invoice.save(update_fields=["reviewed_at"])
-            messages.success(request, "Ticket remis dans la liste des tickets à vérifier.")
+            messages.success(request, "Ticket remis à vérifier.")
             return here
 
         if is_receipt and action == "rename_product":
@@ -1359,8 +1376,8 @@ def _set_shop_header(request, invoice) -> None:
     if not header:
         messages.success(
             request,
-            f"{shop.name} n'est plus reconnue par un en-tête ; ses documents le seront par ce qu'ils impriment "
-            "d'autre (n° SIREN, téléphone, site), quand ils en portent.",
+            f"{shop.name} n'a plus d'en-tête : ses documents ne seront reconnus que par le n° SIREN, "
+            "le téléphone ou le site qu'ils impriment.",
         )
         return
     elsewhere = [ticket for ticket in tickets_printing(header, [invoice]) if ticket.supplier_id != shop.pk]
@@ -1549,7 +1566,7 @@ def _deletion_message(summaries):
     )
     removed = sum(summary.products_removed for summary in summaries)
     if removed:
-        text += f" {removed} produit(s) non classé(s) qui n'existai(en)t que par elle(s) retiré(s)."
+        text += f" {removed} produit(s) non classé(s) retiré(s) aussi."
     return text
 
 

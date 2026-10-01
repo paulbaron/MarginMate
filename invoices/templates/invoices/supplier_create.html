@@ -7,11 +7,10 @@
     {% endcomment %}
     <div class="page-header">
         <div>
-            <p class="breadcrumb"><a href="{{ back }}">{% if return_to %}← Retour{% else %}← Achats · Enseignes et fournisseurs{% endif %}</a></p>
+            <p class="breadcrumb"><a href="{{ back }}">{% if return_to %}← Retour{% else %}← Factures · Enseignes et fournisseurs{% endif %}</a></p>
             <h1>Nouveau fournisseur</h1>
             <p class="page-subtitle">
-                Avant d'avoir reçu le moindre document de lui. Ce que ses documents impriment (n° SIREN, téléphone,
-                site), il l'apprendra du premier que vous lui rangerez.
+                Ses identifiants (n° SIREN, téléphone, site) seront lus sur son premier document.
             </p>
         </div>
     </div>
@@ -49,7 +48,7 @@
             <ul class="check-list">
                 {% for choice in form.arrivee %}<li>{{ choice.tag }} <label for="{{ choice.id_for_label }}">{{ choice.choice_label }}</label></li>{% endfor %}
             </ul>
-            <p class="muted">Par e-mail ou sur son espace client : la page suivante crée la source qui les récupère pour lui.</p>
+            <p class="muted">E-mail ou espace client : la page suivante crée sa source.</p>
         </fieldset>
 
         <div class="actions">

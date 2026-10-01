@@ -4,19 +4,12 @@
     <div class="page-header">
         <div>
             <h1>Banque</h1>
-            <p class="page-subtitle">
-                Chaque dépense du relevé rattachée à la facture ou au ticket qu'elle a payé. Le rattachement est
-                automatique quand le montant est exact au centime, la date cohérente et le fournisseur nommé par
-                la banque ; le reste est proposé, à confirmer ligne par ligne ici, ou en série sur
-                « Propositions ».
-            </p>
+            <p class="page-subtitle">Chaque dépense du relevé rattachée à la facture ou au ticket qu'elle a payé.</p>
         </div>
         <div class="actions">
             {% if has_lines %}
                 <a class="btn btn-secondary" href="{% url 'bank:proposals' %}">Propositions à valider</a>
             {% endif %}
-            <a class="btn btn-secondary" href="{{ spending_url }}">Dépenses par catégorie</a>
-            <a class="btn btn-secondary" href="{{ income_url }}">Entrées d'argent</a>
             <a class="btn btn-secondary" href="{% url 'bank:rule_list' %}">Dépenses sans facture attendue</a>
             {% if has_lines %}
                 <form method="post" action="{% url 'bank:bank_reconcile' %}">
@@ -28,6 +21,8 @@
         </div>
     </div>
 
+    {% include "bank/_tabs.html" %}
+
     <div class="card">
         <form method="post" enctype="multipart/form-data" class="inline-form">
             {% csrf_token %}
@@ -38,11 +33,7 @@
             </label>
             <button class="btn" type="submit">Importer</button>
         </form>
-        <p class="muted">
-            L'export CSV du compte, un ou plusieurs mois à la fois. Une opération déjà importée est reconnue et
-            sautée : on peut réimporter un mois qui chevauche le précédent. Après avoir importé de nouvelles
-            factures ou de nouveaux tickets, « Relancer le rapprochement » les cherche dans les dépenses restantes.
-        </p>
+        <p class="muted">L'export CSV du compte, sur un ou plusieurs mois ; les opérations déjà importées sont ignorées.</p>
     </div>
 
     {% if has_lines %}
@@ -65,7 +56,15 @@
             </label>
             <button class="btn btn-small btn-secondary" type="submit">Afficher</button>
             {% if date_window %}<a class="btn btn-small btn-secondary" href="{{ clear_window_url }}">Effacer</a>{% endif %}
-            {% if month %}<span class="muted">Le mois choisi l'emporte : « Tous les mois » rend les dates libres.</span>{% endif %}
+            {% if month %}<span class="muted">Choisissez « Tous les mois » pour saisir des dates.</span>{% endif %}
+            {% comment %}
+            Every invoice the period's spending paid, in one zip, each file
+            named « Darty 11€55 01_10_2026.pdf » (bank/invoice_files.py).
+            {% endcomment %}
+            {% if invoice_zip_count %}
+                <a class="btn btn-small" href="{{ invoice_zip_url }}">⬇️ Factures de la période ({{ invoice_zip_count }})</a>
+                {% if invoice_zip_missing %}<span class="muted">+ {{ invoice_zip_missing }} sans fichier (listée{{ invoice_zip_missing|pluralize }} dans le zip)</span>{% endif %}
+            {% endif %}
         </form>
 
         {% if date_window %}
@@ -77,8 +76,7 @@
                 {% else %}
                     Jusqu'au {{ date_window.end|date:"d/m/Y" }}
                 {% endif %}
-                (dates de passage en banque) : les montants, les onglets et les bénéficiaires ci-dessous ne
-                comptent que cette période.
+                (dates de passage en banque).
             </p>
         {% endif %}
 
@@ -349,7 +347,7 @@
         {% endif %}
     {% else %}
         <div class="empty-state">
-            <p>Aucun relevé importé pour l'instant : exportez le compte en CSV depuis le site de la banque, puis importez-le ci-dessus.</p>
+            <p>Aucun relevé importé : importez ci-dessus l'export CSV du compte.</p>
         </div>
     {% endif %}
 {% endblock %}

@@ -8,8 +8,7 @@ exists.
 {% block content %}
     <section class="public-card account-card">
         <h1>Créer votre espace</h1>
-        <p class="public-lead">Un espace, c'est votre bar : ses factures, ses articles, ses recettes, sa banque -
-            rien que les vôtres, dans une base à part. L'inscription se fait sur invitation.</p>
+        <p class="public-lead">Un espace par bar, avec ses propres données, sur invitation.</p>
         {% if refused %}<p class="message message-error">{{ refused }}</p>{% endif %}
         <form method="post" action="{% url 'accounts:signup' %}" class="public-form">
             {% csrf_token %}

@@ -20,7 +20,7 @@
     <div class="page-header">
         <div>
             <h1>Consignes</h1>
-            <p class="page-subtitle">Les vides rendus au livreur : photographiés, comptés ici, puis comparés au bon qu'il envoie.</p>
+            <p class="page-subtitle">Les vides rendus au livreur, comptés ici puis comparés à son bon.</p>
         </div>
     </div>
 
@@ -40,7 +40,7 @@
                 {% include "returnables/_gather_form.html" %}
             {% endif %}
         {% else %}
-            <p class="empty-state pickup-strip-empty">Aucune reprise enregistrée : photographiez les vides et comptez-les avant que le livreur ne les emporte.</p>
+            <p class="empty-state pickup-strip-empty">Aucune reprise enregistrée.</p>
         {% endif %}
         {% if gather_running_sentence %}<p class="muted">{{ gather_running_sentence }}</p>{% endif %}
         {% if gather_job %}{% include "invoices/_gather_status.html" with job=gather_job %}{% endif %}
@@ -66,7 +66,7 @@
             <section class="card pickup-card" id="last-pickup">
                 <h2>Dernière reprise</h2>
                 {% include "returnables/_day.html" with view=latest return_to=home_url removable=False %}
-                <p><a href="{% url 'returnables:pickup_detail' latest.pickup.pk %}">Voir, modifier ou compléter la reprise</a></p>
+                <p><a href="{% url 'returnables:pickup_detail' latest.pickup.pk %}">Modifier ou compléter</a></p>
             </section>
         {% endif %}
 
@@ -142,7 +142,7 @@
                     <p><a href="{% url 'returnables:home' %}?tout=bons#bons-recus">Tout afficher ({{ slip_total }} bons)</a></p>
                 {% endif %}
             {% else %}
-                <p class="muted">Aucun bon reçu pour l'instant : déposez-les ci-dessous, ou récupérez-les depuis la boîte mail.</p>
+                <p class="muted">Aucun bon reçu pour l'instant.</p>
             {% endif %}
         </section>
     </div>
@@ -166,7 +166,7 @@
                 <div class="form-field form-field-clearablefile">
                     <label for="slip-files">Les PDF des bons<span class="required" aria-hidden="true">*</span></label>
                     <input id="slip-files" type="file" name="bons" accept=".pdf,application/pdf" multiple required>
-                    <p class="help">Plusieurs à la fois : un bon déjà reçu est reconnu et n'est pas ajouté deux fois.</p>
+                    <p class="help">Plusieurs à la fois ; un bon déjà reçu n'est pas ajouté deux fois.</p>
                 </div>
                 <div class="form-field form-field-select">
                     <label for="slip-format">Format</label>
@@ -176,7 +176,6 @@
                             <option value="{{ fmt.pk }}">{{ fmt.name }}{% if not fmt.section_start %} (jamais reconnu automatiquement){% endif %}</option>
                         {% endfor %}
                     </select>
-                    <p class="help">Un format sans « début de la partie » n'est jamais choisi automatiquement : choisissez-le ici.</p>
                 </div>
             </div>
             <div class="form-actions">
@@ -191,10 +190,8 @@
             <ul class="gather-rules">
                 {% for fmt in mail_formats %}
                     <li>
-                        Les mails dont l'expéditeur correspond à <code>{{ fmt.sender_pattern }}</code>
-                        et l'objet à <code>{{ fmt.subject_pattern }}</code> : leurs pièces jointes
-                        <code>{{ fmt.attachment_pattern }}</code> sont lues comme des bons « {{ fmt.name }} »
-                        ({{ fmt.supplier.name }}).
+                        « {{ fmt.name }} » ({{ fmt.supplier.name }}) : mails de <code>{{ fmt.sender_pattern }}</code>,
+                        objet <code>{{ fmt.subject_pattern }}</code>, pièces jointes <code>{{ fmt.attachment_pattern }}</code>.
                     </li>
                 {% endfor %}
             </ul>
@@ -204,7 +201,7 @@
             {% endcomment %}
             {% include "returnables/_gather_form.html" %}
         {% else %}
-            <p class="muted">Aucun format de bon n'a de motif d'expéditeur : ses bons se déposent ici, à la main.</p>
+            <p class="muted">Aucun format de bon n'a de motif d'expéditeur : dépôt à la main seulement.</p>
         {% endif %}
     </section>
 
@@ -213,29 +210,11 @@
     </p>
     <details class="explainer">
         <summary>Comment les reprises sont comparées aux bons</summary>
-        <p>
-            Une reprise est comparée aux bons de son fournisseur livrés le même jour. Toutes les reprises de ce
-            fournisseur ce jour-là sont additionnées, et tous les bons qui comptent aussi : oublier un type puis
-            l'enregistrer dans une deuxième reprise ne crée pas d'écart.
-        </p>
-        <p>
-            Un bon reçu deux fois (le livreur le renvoie, imprimé le lendemain) ne compte qu'une fois. Un bon
-            « annule et remplace » compte à la place de celui qu'il remplace, quel que soit l'ordre d'arrivée.
-        </p>
-        <p>
-            Chaque ligne d'un bon prend le premier type de consigne, dans l'ordre des types, dont un motif se trouve
-            dans sa désignation. Une ligne qu'aucun type ne reconnaît se classe depuis la page du bon (« Classer
-            comme ») ; modifier un motif reclasse aussitôt toutes les lignes.
-        </p>
-        <p>
-            La facture du fournisseur est cherchée de 7 jours avant à 45 jours après la livraison, par le numéro de
-            BL imprimé sur le bon ; ses lignes de consigne remboursées sont comparées aux lignes du bon. Rien n'est
-            écrit sur la facture.
-        </p>
-        <p>
-            Les photos sont réduites et enregistrées sans leurs métadonnées (ni position GPS) ; seule leur date de
-            prise de vue est gardée.
-        </p>
+        <p>Les reprises d'un fournisseur le même jour sont additionnées et comparées à ses bons livrés ce jour-là.</p>
+        <p>Un bon reçu deux fois compte une fois ; un bon « annule et remplace » compte à la place de l'autre.</p>
+        <p>Chaque ligne d'un bon prend le premier type de consigne dont un motif se trouve dans sa désignation.</p>
+        <p>La facture est cherchée par le n° de BL, de 7 jours avant à 45 jours après la livraison.</p>
+        <p>Les photos sont réduites et gardées sans métadonnées (ni position GPS), sauf la date de prise de vue.</p>
     </details>
 </div>
 {% endblock %}

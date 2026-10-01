@@ -8,9 +8,8 @@
                 {% if entries|length > 1 %}Supprimer {{ entries|length }} factures{% else %}Supprimer cette facture{% endif %}
             </h1>
             <p class="page-subtitle">
-                Partent avec chaque facture : ses lignes et ce qu'elles avaient ajouté à leurs articles, le fichier
-                d'origine et son aperçu, et les produits pas encore classés qui n'existaient que par elle.
-                Les produits déjà classés sont conservés.
+                Partent avec chaque facture : ses lignes et ce qu'elles avaient ajouté à leurs articles, son fichier
+                et son aperçu, et les produits non classés qu'elle seule avait créés. Les produits classés restent.
             </p>
         </div>
     </div>
@@ -67,9 +66,8 @@
         </form>
     {% else %}
         <div class="message message-error" style="margin-top:1rem;">
-            Rien ne peut être supprimé ici : un inventaire déjà enregistré a été valorisé avec
-            {% if entries|length > 1 %}ces factures{% else %}cette facture{% endif %}. La supprimer changerait,
-            après coup, ce que cet inventaire valait.
+            Suppression impossible : {% if entries|length > 1 %}ces factures ont{% else %}cette facture a{% endif %}
+            servi à valoriser un inventaire enregistré.
         </div>
         <a class="btn btn-secondary" href="{{ next }}">Retour</a>
     {% endif %}

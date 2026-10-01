@@ -72,7 +72,6 @@
         <form method="post" action="{% url 'returnables:slip_reread' slip.pk %}" class="inline-form slip-reread">
             {% csrf_token %}
             <button class="btn btn-secondary" type="submit">Relire avec les motifs actuels</button>
-            <span class="muted small">Relit le texte gardé du bon avec le format tel qu'il est maintenant.</span>
         </form>
     </section>
 
@@ -124,14 +123,11 @@
                     </tbody>
                 </table>
             </div>
-            <p class="muted small">
-                « Classer » ajoute le début de la désignation aux motifs du type choisi : toutes les lignes pareilles, sur
-                tous les bons, sont aussitôt de ce type.
-            </p>
+            <p class="muted small">« Classer » ajoute le début de la désignation aux motifs du type choisi : les lignes pareilles des autres bons sont aussi classées.</p>
         {% elif slip.read_error %}
             <p class="muted">Aucune ligne : le bon n'a pas pu être lu. Corrigez le format, puis « Relire ».</p>
         {% else %}
-            <p class="muted">Aucune ligne de consigne sur ce bon : rien n'a été repris selon lui.</p>
+            <p class="muted">Aucune ligne de consigne sur ce bon.</p>
         {% endif %}
         {% if slip.remarks %}
             <h3>Remarques du bon</h3>
@@ -149,7 +145,7 @@
         <summary>Supprimer le bon…</summary>
         <form method="post" action="{% url 'returnables:slip_delete' slip.pk %}">
             {% csrf_token %}
-            <p>Le bon, son PDF et ses lignes seront supprimés. Récupéré à nouveau par mail ou déposé, il reviendrait.</p>
+            <p>Le bon, son PDF et ses lignes seront supprimés.</p>
             <button class="btn btn-danger" type="submit">Supprimer le bon</button>
         </form>
     </details>

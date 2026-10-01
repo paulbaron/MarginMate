@@ -322,7 +322,7 @@ class EmployeePageTests(PageTestCase):
             [
                 (
                     "Semaine type enregistrée : Lu 7 · Ma 7,5 · Me 6 · Je–Ve 7,5 · 35,5 h / semaine. Le mois déjà "
-                    "enregistré garde ses heures et sa semaine type ; les autres suivent la nouvelle semaine type."
+                    "enregistré ne change pas."
                 )
             ],
         )
@@ -337,8 +337,7 @@ class EmployeePageTests(PageTestCase):
         text = self.text(june_page)
         self.assertIn("Semaine type : 36 h.", text)
         self.assertIn(
-            "Cette fiche garde la semaine type avec laquelle elle a été enregistrée, 36 h ; celle de DUPONT Jeanne "
-            "est aujourd'hui de 35,5 h.",
+            "Semaine type de cette fiche : 36 h ; celle de DUPONT Jeanne est aujourd'hui de 35,5 h.",
             " ".join(text.split()),
         )
         self.assertNotIn("is-changed", june_page.content.decode())
@@ -400,7 +399,7 @@ class EmployeePageTests(PageTestCase):
         self.assertEqual(self.person.email, "")
         self.assertEqual(
             self.messages_of(answer),
-            ["E-mail effacé : le lien de signature et le code se transmettront sans e-mail."],
+            ["E-mail effacé : vous transmettrez vous-même le lien et le code."],
         )
 
     def test_an_address_that_is_no_address_is_refused_in_french(self):
@@ -434,12 +433,7 @@ class EmployeePageTests(PageTestCase):
         self.assertFalse(self.person.is_active)
         self.assertEqual(
             self.messages_of(answer),
-            [
-                (
-                    "DUPONT Jeanne n'est plus parmi les salariés actifs. Ses fiches de temps sont conservées et restent "
-                    "consultables ici."
-                )
-            ],
+            ["DUPONT Jeanne n'est plus parmi les salariés actifs ; ses fiches restent ici."],
         )
         self.assertTrue(Timesheet.objects.filter(employee=self.person).exists())
         self.assertIn("Inactif", self.text(answer))
@@ -536,12 +530,9 @@ class MonthPageTests(PageTestCase):
         self.assertIn("151,5 h", text)
         # « ← mai », « juillet → », the PDF - each asking before it leaves a
         # grid changed and not saved (timesheet.js reads data-leaves-grid).
-        self.assertRegex(
-            text, f'href="{month_url(self.person, MAY)}" data-leaves-grid="Des modifications[^"]*">← mai</a>'
-        )
-        self.assertRegex(
-            text, f'href="{month_url(self.person, JULY)}" data-leaves-grid="Des modifications[^"]*">juillet →</a>'
-        )
+        leaves = 'data-leaves-grid="Modifications non enregistrées[^"]*"'
+        self.assertRegex(text, f'href="{month_url(self.person, MAY)}" {leaves}>← mai</a>')
+        self.assertRegex(text, f'href="{month_url(self.person, JULY)}" {leaves}>juillet →</a>')
         self.assertIn(f'href="{reverse("staff:month_pdf", args=[self.person.pk, JUNE])}"', text)
         self.assertIn("Télécharger la fiche (PDF)", text)
         # No holiday in June, nothing saved to go back from.
@@ -582,7 +573,7 @@ class MonthPageTests(PageTestCase):
         self.assertEqual(days[6], ("travail", Decimal("7.50"), ""))
         text = self.text(answer)
         self.assertNotIn("Pas encore enregistrée", text)
-        self.assertIn("Enregistrée, modifiée pour la dernière fois le", text)
+        self.assertIn("Dernier enregistrement le", text)
         # Saved, the month can now go back to the typical week.
         self.assertIn(reverse("staff:month_reset", args=[self.person.pk, JUNE]), answer.content.decode())
 
@@ -759,7 +750,7 @@ class MonthShortcutTests(PageTestCase):
         self.assertIn("required", form.control("debut").attrs)
         # The page says the rule before it is used, not only after.
         page = " ".join(self.text(self.get(self.url)).split())
-        self.assertIn("Les jours de repos de la période restent des jours de repos", page)
+        self.assertIn("Les jours de repos restent des jours de repos", page)
         self.assertNotIn("jours de repos compris", page)
         answer = self.send(form, values={"debut": "2026-06-11", "fin": "2026-06-18"})
         self.assertLandedOn(answer, self.url)
@@ -906,7 +897,9 @@ class MonthShortcutTests(PageTestCase):
         self.assertIn('25 mai — Lundi de Pentecôte <span class="muted">— Repos</span>', text)
         self.assertIn("Férié : Ascension", text)
         self.assertIn("Mettre les fériés du mois en Férié chômé", text)
-        self.assertIn("celui qui tombe un jour de repos le reste", " ".join(text.split()))
+        # Never off by itself: the button does it, and what it leaves alone
+        # (a holiday on a day off) is said in its answer.
+        self.assertIn("Un jour férié n'est jamais chômé d'office ; un jour de repos le reste.", " ".join(text.split()))
 
     def test_the_holidays_off_in_one_click(self):
         form, _response = self.holidays_form()
@@ -1035,7 +1028,7 @@ class MonthPdfTests(PageTestCase):
         url = reverse("staff:month_pdf", args=[(person or self.person).pk, month])
         self.assertEqual([href for href, _rest in links], [url])
         # timesheet.js asks before it prints the SAVED month over a grid changed on screen.
-        self.assertIn("le PDF imprime la fiche telle qu&#x27;elle est enregistrée", links[0][1])
+        self.assertIn("le PDF ne les contiendra pas", links[0][1])
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response["Content-Type"], "application/pdf")

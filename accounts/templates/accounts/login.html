@@ -14,7 +14,7 @@ URL of this site, or blank), `refused` (too many failures). The link to the sign
             {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
             <button type="submit" class="btn public-submit">Se connecter</button>
         </form>
-        <p class="muted small">Pas encore de compte ? L'inscription se fait avec un code d'invitation :
+        <p class="muted small">Pas encore de compte ? Avec un code d'invitation :
             <a href="{% url 'accounts:signup' %}">créer votre espace</a>.</p>
     </section>
 {% endblock %}

@@ -1013,8 +1013,7 @@ class StockTypeUpdateView(CategoryAutocompleteMixin, UpdateView):
             if products:
                 messages.info(
                     self.request,
-                    f'Unité changée : {len(products)} produit(s) lié(s) à "{self.object.name}" '
-                    "recalculé(s) en conséquence.",
+                    f'Unité changée : {len(products)} produit(s) de "{self.object.name}" recalculé(s).',
                 )
         return response
 
@@ -1385,15 +1384,15 @@ def approve_all_suggestions(request):
     skipped = sum(skip_reasons.values())
     remade_note = ""
     if remade:
-        remade_note = f" {remade} suggestion(s) refaite(s) d'abord : les classements avaient changé depuis l'affichage."
+        remade_note = f" {remade} suggestion(s) refaite(s) d'abord : les classements avaient changé."
     if no_longer_sure:
         remade_note += f" {no_longer_sure} laissé(s) à classer, leur suggestion refaite n'étant plus sûre."
     if skipped:
         detail = ", ".join(f"{count} ({reason})" for reason, count in skip_reasons.most_common())
         messages.warning(
             request,
-            f"{approved} produit(s) rattaché(s) d'après {which}. {skipped} ignoré(s) : {detail}. "
-            "Ces produits sont repassés sans suggestion - une nouvelle sera générée automatiquement." + remade_note,
+            f"{approved} produit(s) rattaché(s) d'après {which}. {skipped} ignoré(s) : {detail} ; "
+            "leur suggestion sera refaite." + remade_note,
         )
     elif approved:
         messages.success(request, f"{approved} produit(s) rattaché(s) automatiquement d'après {which}.{remade_note}")

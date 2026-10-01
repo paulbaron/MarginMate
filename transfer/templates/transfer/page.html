@@ -50,9 +50,8 @@
         <div>
             <h1>Données</h1>
             <p class="page-subtitle">
-                Exportez la configuration et les données de MarginMate dans une archive (.zip), importez-en une, ou
-                effacez ce que vous cochez. Avant tout remplacement ou effacement, une sauvegarde est faite dans
-                le dossier des sauvegardes de votre espace, sur le serveur.
+                Exportez, importez ou effacez vos données ; une sauvegarde est faite avant tout remplacement ou
+                effacement.
             </p>
         </div>
     </div>
@@ -88,9 +87,8 @@
                 </p>
                 {% if stage.legacy %}
                     <p class="muted">
-                        Ancien fichier « marginmate-associations.json » : il ne contient que les associations produits → articles.
-                        Un produit qui manque ici est maintenant créé (l'ancien import le laissait de côté).
-                        Les pertes (%) n'y figurent pas : un article créé prend 10 %.
+                        Ancien fichier « marginmate-associations.json » : les associations produits → articles seulement.
+                        Un produit absent de la base est créé ; un article créé prend 10 % de pertes.
                     </p>
                 {% endif %}
                 {% for note in stage.notes %}<p class="muted">{{ note }}</p>{% endfor %}
@@ -148,7 +146,7 @@
                 {% endcomment %}
                 <div class="card">
                     <h2>Archives en attente</h2>
-                    <p class="muted">Envoyées mais pas encore importées. Elles sont retirées au bout de 24 h.</p>
+                    <p class="muted">Envoyées, pas encore importées ; retirées au bout de 24 h.</p>
                     <ul class="pending-list">
                         {% for entry in pending %}
                             <li>
@@ -179,8 +177,8 @@
                     <button class="btn" type="submit">Envoyer l'archive</button>
                 </form>
                 <p class="muted">
-                    Rien n'est importé à l'envoi : vous choisissez ensuite les parties, voyez ce qui changera, puis
-                    confirmez. Un ancien fichier « marginmate-associations.json » est accepté aussi.
+                    Rien n'est importé avant votre confirmation. L'ancien fichier « marginmate-associations.json » est
+                    aussi accepté.
                 </p>
             </div>
             {% include "transfer/_backups.html" %}

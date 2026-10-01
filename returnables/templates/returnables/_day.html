@@ -54,14 +54,13 @@ invoice_check.py as plain text - escaped here, never |safe.
 {% endif %}
 
 {% if day.status == "no_supplier" %}
-    <p class="muted">Sans « Repris par », la reprise n'est comparée à aucun bon : précisez qui a repris les vides.</p>
+    <p class="muted">Précisez « Repris par » pour comparer la reprise aux bons.</p>
 {% elif day.status == "no_format" %}
     <p class="muted">
-        {{ day.supplier.name }} n'a pas de format de bon : <a href="{% url 'returnables:format_create' %}">créez-le</a>
-        pour comparer ses bons à cette reprise.
+        {{ day.supplier.name }} n'a pas de format de bon : <a href="{% url 'returnables:format_create' %}">créez-le</a>.
     </p>
 {% elif day.status == "waiting" %}
-    <p class="muted">Aucun bon de {{ day.supplier.name }} livré le {{ day.date|date:"d/m/Y" }} n'est encore arrivé.</p>
+    <p class="muted">Pas encore de bon de {{ day.supplier.name }} pour le {{ day.date|date:"d/m/Y" }}.</p>
     {% for hint in day.hints %}
         <div class="pickup-hint">
             <p>{{ hint.sentence }} La reprise est-elle bien datée ?</p>

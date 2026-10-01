@@ -6,10 +6,7 @@
     <div class="page-header">
         <div>
             <h1>Types de consigne</h1>
-            <p class="page-subtitle">
-                Ce que l'on compte à chaque reprise (Fûts, Caisses verre…), dans l'ordre du formulaire, et les motifs qui
-                disent de quel type est chaque ligne d'un bon.
-            </p>
+            <p class="page-subtitle">Ce que l'on compte à chaque reprise, et les motifs qui classent les lignes des bons.</p>
         </div>
     </div>
 
@@ -24,7 +21,6 @@
             <h2>{{ kind.name }}{% if not kind.is_active %} <span class="status-pill status-ignored">inactif</span>{% endif %}</h2>
             <p class="muted small">
                 {% if kind.count_rows %}Compté dans {{ kind.count_rows }} reprise{{ kind.count_rows|pluralize }}.{% else %}Compté dans aucune reprise.{% endif %}
-                {% if forloop.first and kind.is_active %}Le premier : son compteur est le grand.{% endif %}
             </p>
             {% if problem %}
                 <p class="message message-error">Motif invalide : {{ problem }} — corrigez-le ci-dessous.</p>
@@ -41,7 +37,7 @@
                 <form method="post" action="{% url 'returnables:type_delete' kind.pk %}">
                     {% csrf_token %}
                     {% if kind.count_rows %}
-                        <p>Compté dans des reprises, il ne peut pas être supprimé : décochez « Proposé dans le formulaire de reprise » plutôt.</p>
+                        <p>Compté dans des reprises, il ne peut pas être supprimé : décochez plutôt « Proposé dans le formulaire de reprise ».</p>
                         <button class="btn btn-danger" type="submit" disabled>Supprimer le type</button>
                     {% else %}
                         <p>Le type et ses motifs seront supprimés ; les lignes de bons qu'il reconnaissait seront « sans type de consigne ».</p>
@@ -52,7 +48,7 @@
         </section>
     {% empty %}
         <div class="empty-state">
-            <p>Aucun type de consigne : ajoutez-en un ci-dessous (« Fûts » d'abord, c'est lui qui aura le grand compteur).</p>
+            <p>Aucun type de consigne : ajoutez-en un ci-dessous.</p>
         </div>
     {% endfor %}
 
@@ -69,15 +65,8 @@
 
     <details class="explainer">
         <summary>Comment une ligne de bon prend son type</summary>
-        <p>
-            Chaque ligne d'un bon prend le premier type, dans l'ordre ci-dessus, dont un motif se trouve dans sa
-            désignation - actif ou non : désactiver un type l'ôte seulement du formulaire de reprise. Modifier un motif
-            reclasse aussitôt toutes les lignes de tous les bons.
-        </p>
-        <p>
-            Un motif est une expression régulière : <code>F[ÛU]TS?\b</code> reconnaît « FÛT » et « FUTS ». Une ligne qu'aucun
-            type ne reconnaît se classe depuis la page de son bon (« Classer comme »).
-        </p>
+        <p>Chaque ligne d'un bon prend le premier type (dans l'ordre ci-dessus, actif ou non) dont un motif se trouve dans sa désignation. Modifier un motif reclasse aussitôt les lignes de tous les bons.</p>
+        <p>Un motif est une expression régulière : <code>F[ÛU]TS?\b</code> reconnaît « FÛT » et « FUTS ».</p>
     </details>
 </div>
 {% endblock %}

@@ -245,12 +245,14 @@ class OneSellingDayTests(TestCase):
         self.assertEqual(cells_of(row_of(extra, "Essuie-tout")), ["Essuie-tout", "12.00 €", "14.40 €"])
 
     def test_it_says_in_a_sentence_what_the_products_margin_counts(self):
-        response = self.page()
-        self.assertContains(response, "ce que les recettes vendues ont consommé")
-        self.assertContains(response, "compter dans la marge produits")
+        text = text_of(self.html())
+        self.assertIn("ce que les recettes vendues ont consommé", text)
+        self.assertIn("plus les achats des articles cochés", text)
 
     def test_the_products_margin_has_no_ttc_because_a_recipe_cost_has_none(self):
-        self.assertContains(self.page(), "Le coût d'une recette n'existe qu'en HT")
+        html = self.html()
+        self.assertIn("plus les achats des articles cochés, en HT.", text_of(html))
+        self.assertNotIn("TTC", stat_of(html, "Marge produits (HT)"))
 
     # -- the coverage -----------------------------------------------------
 
@@ -259,7 +261,7 @@ class OneSellingDayTests(TestCase):
         coffees - and in units beside it."""
         stat = stat_of(self.html(), "Part chiffrée")
         self.assertEqual(value_of(stat), "75 %")
-        self.assertIn("20 unités sur 25 (80 %)", text_of(stat))
+        self.assertIn("20 unités chiffrées sur 25 (80 %)", text_of(stat))
 
     def test_a_margin_that_is_not_fully_costed_says_so_in_words(self):
         response = self.page()
@@ -341,23 +343,18 @@ class OneSellingDayTests(TestCase):
     def test_the_page_says_what_it_is_for(self):
         self.assertContains(self.page(), "page-subtitle")
 
-    def test_the_page_says_it_counts_what_was_invoiced_and_points_at_spending(self):
-        """Two bases, two figures, and each page has to say which it is and
-        link to the other. « Dépenses » does; this one said « ce qui est
-        sorti » in its first sentence - the words the OTHER page uses for the
-        statement - and named « facturé » a hundred lines further down, where
-        a reader arriving from the topbar never sees it.
-        """
-        page = self.page()
-        self.assertContains(page, "facturé")
-        self.assertContains(page, reverse("bank:spending_home"))
-        self.assertContains(page, "sorti du compte")
+    def test_the_page_says_it_counts_what_was_invoiced_in_its_first_sentence(self):
+        """Two bases, two figures: this page said « ce qui est sorti » in its
+        first sentence - the words « Dépenses » uses for the statement - and
+        named « facturé » a hundred lines further down."""
+        subtitle = re.search(r'<p class="page-subtitle">(.*?)</p>', self.page().content.decode(), re.DOTALL).group(1)
+        self.assertIn("<strong>facturé</strong>", subtitle)
+        self.assertNotIn("sorti", subtitle)
 
-    def test_the_link_to_spending_carries_the_period_being_read(self):
-        """The two pages are compared over the same dates or they are not
-        compared at all."""
-        page = self.client.get(reverse("margins:margins_home"), {"du": "2026-06-01", "au": "2026-06-30"})
-        self.assertContains(page, f"{reverse('bank:spending_home')}?du=2026-06-01&amp;au=2026-06-30")
+    def test_spending_is_reached_from_banque_alone(self):
+        """« Dépenses par catégorie » is one of Banque's tabs, and has no
+        button here any more (the owner, 01/10/2026)."""
+        self.assertNotContains(self.page(), reverse("bank:spending_home"))
 
 
 class NothingCostedTests(TestCase):
@@ -380,7 +377,9 @@ class NothingCostedTests(TestCase):
         self.assertNotIn("36.36", stat)
 
     def test_and_the_page_says_why(self):
-        self.assertContains(self.client.get(reverse(PAGE)), "aucune vente chiffrée")
+        self.assertContains(
+            self.client.get(reverse(PAGE)), "aucun produit vendu sur cette période n'a de recette chiffrée"
+        )
 
 
 class CostRangeTests(TestCase):
@@ -536,7 +535,7 @@ class WindowTests(TestCase):
     def test_and_it_shows_everything_ever_sold(self):
         html = self.html(tout="1")
         self.assertIn("550.00", stat_of(html, "Encaissé (HT)"))
-        self.assertIn("depuis le début", html)
+        self.assertIn("Tout l'historique", html)
 
     def test_two_dates_are_the_window(self):
         html = self.html(du=self.recent.isoformat(), au=self.recent.isoformat())
@@ -906,7 +905,7 @@ class TickedArticlesTests(TestCase):
         text = text_of(self.html())
 
         self.assertIn("1 article coché", text)
-        self.assertIn("rien n'en a été acheté sur cette période", text)
+        self.assertIn("rien acheté sur cette période", text)
 
     def test_with_nothing_ticked_the_page_says_where_the_box_is(self):
         text = text_of(self.html())

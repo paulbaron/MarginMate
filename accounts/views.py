@@ -35,18 +35,41 @@ INLINE_TYPES = frozenset(
 @require_safe
 @xframe_options_sameorigin
 def media(request, name):
+    handle = open_stored(name)
+    if handle is None:
+        raise Http404
+    return file_response(handle, Path(handle.name).name)
+
+
+def open_stored(name: str):
+    """The bound tenant's stored file `name`, open for reading - or None when
+    it is not there, is not a file, or lies outside the tenant's media folder
+    (a name climbing out with « ../ », a link pointing out of it). Every door
+    serving a stored file opens it here: this view, a document's own file
+    (invoices.views.invoice_file) and Banque's zip (bank/invoice_files.py)."""
     root = Path(paths.media_root()).resolve()
     try:
         full = Path(safe_join(os.fspath(root), name)).resolve()
+        # safe_join works on the text; a link inside media pointing out of
+        # it is caught once resolved.
+        if root not in full.parents or not full.is_file():
+            return None
+        return open(full, "rb")
     except (SuspiciousFileOperation, ValueError, OSError):
-        raise Http404
-    # safe_join works on the text; a link inside media pointing out of it is
-    # caught once resolved.
-    if root not in full.parents or not full.is_file():
-        raise Http404
-    content_type, encoding = mimetypes.guess_type(full.name)
-    inline = content_type in INLINE_TYPES and encoding is None
-    response = FileResponse(open(full, "rb"), as_attachment=not inline, filename=full.name)  # noqa: SIM115 - the FileResponse closes it
+        return None
+
+
+def file_response(handle, filename: str, *, download: bool = False) -> FileResponse:
+    """A stored file, under `filename`: shown in the page when it is a PDF or
+    a photo and no download was asked, saved otherwise - and sandboxed, since
+    a file a user put there must not run script on this site's origin.
+
+    Shared with a document's own file route (invoices.views.invoice_file),
+    which serves the same files under the name they are downloaded as, and
+    with Banque's zip."""
+    content_type, encoding = mimetypes.guess_type(filename)
+    inline = not download and content_type in INLINE_TYPES and encoding is None
+    response = FileResponse(handle, as_attachment=not inline, filename=filename)
     response["X-Content-Type-Options"] = "nosniff"
     response["Cache-Control"] = "private, no-store"
     if not inline:

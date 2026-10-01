@@ -1,13 +1,11 @@
 {% extends "base.html" %}
-{% block title %}Achats - MarginMate{% endblock %}
+{% block title %}Factures - MarginMate{% endblock %}
 {% block content %}
     <div class="page-header">
         <div>
-            <h1>Achats</h1>
+            <h1>Factures</h1>
             <p class="page-subtitle">
-                Factures des fournisseurs et tickets de caisse : les ajouter, vérifier ce qui a été lu,
-                les retrouver — et régler d'où elles arrivent (Sources) et chez qui elles sont rangées
-                (Enseignes et fournisseurs).
+                Factures des fournisseurs et tickets de caisse : les ajouter, les vérifier, les retrouver.
             </p>
         </div>
         <div class="actions">
@@ -29,7 +27,7 @@
     row and « N changements à voir » landed under it.
     {% endcomment %}
     <div id="workspace" class="workspace">
-        <nav class="tabs" aria-label="Achats" hx-boost="true" hx-target="#workspace" hx-select="#workspace" hx-swap="outerHTML">
+        <nav class="tabs" aria-label="Factures" hx-boost="true" hx-target="#workspace" hx-select="#workspace" hx-swap="outerHTML">
             {% for entry in tabs %}
                 <a href="{{ entry.url }}" class="tab{% if entry.active %} active{% endif %}"{% if entry.active %} aria-current="page"{% endif %}>
                     {{ entry.label }}

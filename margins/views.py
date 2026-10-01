@@ -315,12 +315,6 @@ def margins_home(request):
             "undated_url": f"{reverse('invoices:invoice_list')}?sans_date=1",
             "purchases_url": _elsewhere("inventory:stock_list", window),
             "sales_url": _elsewhere("recipes:sales_list", window),
-            # The other base, named and reachable: this page counts what was
-            # INVOICED and « Dépenses » counts what the bank took, and each
-            # of the two has to say which it is and point at the other or a
-            # reader takes one figure for the other. The window travels, so
-            # the two are read over the same dates.
-            "spending_url": _elsewhere("bank:spending_home", window),
             "to_link_url": reverse("recipes:pos_product_list"),
             "sales_import_url": reverse("recipes:sales_import"),
         },
@@ -402,8 +396,7 @@ def count_articles(request):
     if not in_category:
         messages.error(
             request,
-            f"Aucun article n'est dans la catégorie « {category or NO_CATEGORY} » : rien n'a été modifié. "
-            "Ses articles ont peut-être changé de catégorie depuis que la page a été affichée.",
+            f"Plus aucun article dans la catégorie « {category or NO_CATEGORY} » : rien n'a été modifié.",
             extra_tags=PANEL,
         )
         return redirect(back)
@@ -475,11 +468,9 @@ def _read_the_boxes(request, category: str, in_category: set[int]) -> tuple[set[
         messages.warning(
             request,
             (
-                f"1 case ignorée : l'article n'existe plus, ou n'est plus {_in(category)} depuis que la page "
-                "a été affichée. Rien n'a été changé pour lui."
+                f"1 case ignorée : l'article n'existe plus ou n'est plus {_in(category)}."
                 if count == 1
-                else f"{count} cases ignorées : ces articles n'existent plus, ou ne sont plus {_in(category)} "
-                "depuis que la page a été affichée. Rien n'a été changé pour eux."
+                else f"{count} cases ignorées : ces articles n'existent plus ou ne sont plus {_in(category)}."
             ),
             extra_tags=PANEL,
         )
@@ -517,13 +508,13 @@ def _warn_counted_twice(request, ticked_now: list[int]) -> None:
         listed += f" et {len(names) - NAMED_AT_MOST} autres"
     if len(names) == 1:
         text = (
-            f"Compté deux fois désormais : {listed} sert dans une recette, qui compte déjà ce qu'elle en "
-            "consomme. Décochez-le, ou retirez-le de la recette."
+            f"Compté deux fois désormais : {listed} sert aussi dans une recette. "
+            "Décochez-le ou retirez-le de la recette."
         )
     else:
         text = (
-            f"Comptés deux fois désormais : {listed} servent dans des recettes, qui comptent déjà ce "
-            "qu'elles en consomment. Décochez-les, ou retirez-les de leurs recettes."
+            f"Comptés deux fois désormais : {listed} servent aussi dans des recettes. "
+            "Décochez-les ou retirez-les de leurs recettes."
         )
     messages.warning(request, text, extra_tags=PANEL)
 

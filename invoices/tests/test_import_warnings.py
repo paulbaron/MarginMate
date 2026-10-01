@@ -96,10 +96,10 @@ class EmptyInvoicePageTests(TestCase):
         supplier = make_supplier(code="GROSSISTE", name="Grossiste Exemple", parser_key="METRO")
         invoice = make_invoice(supplier=supplier)
         response = self.client.get(reverse("invoices:invoice_detail", args=[invoice.pk]))
-        self.assertContains(response, "n'a rien trouvé dans ce document")
+        self.assertContains(response, "Aucune ligne lue dans ce document")
         self.assertNotContains(response, "n'a pas de parseur")
         edit = self.client.get(reverse("invoices:invoice_edit_lines", args=[invoice.pk]))
-        self.assertContains(edit, "Corrigez ce que le parseur a mal lu")
+        self.assertContains(edit, "Corrigez ce qui a été mal lu")
 
     def test_a_supplier_without_one_is(self):
         invoice = make_invoice(supplier=make_supplier(code="NOPARSER", parser_key=""))
