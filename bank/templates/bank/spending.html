@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load assets %}
 {% block title %}Dépenses par catégorie - Banque - MarginMate{% endblock %}
 {% block content %}
     <div class="page-header">
@@ -55,22 +56,22 @@
         <div class="stat-row">
             <div class="stat">
                 <span class="stat-label">Sorti du compte</span>
-                <span class="stat-value">{{ report.total|floatformat:2 }} €</span>
+                <span class="stat-value">{{ report.total|money }} €</span>
                 <span class="stat-note">{{ report.operations }} opération{{ report.operations|pluralize }}</span>
             </div>
             <div class="stat{% if report.uncategorised %} stat-warn{% endif %}">
                 <span class="stat-label">{{ no_category }}</span>
-                <span class="stat-value">{{ report.unsaid_total|floatformat:2 }} €</span>
+                <span class="stat-value">{{ report.unsaid_total|money }} €</span>
                 <span class="stat-note">
                     {{ report.uncategorised|length }} opération{{ report.uncategorised|pluralize }} sans facture
                     à classer{% if report.unsaid_beyond_the_list %}, plus
-                    {{ report.unsaid_beyond_the_list|floatformat:2 }} € débités au-delà des factures rattachées{% endif %}
+                    {{ report.unsaid_beyond_the_list|money }} € débités au-delà des factures rattachées{% endif %}
                 </span>
             </div>
             {% if report.uninvoiced %}
                 <div class="stat">
                     <span class="stat-label">Débité au-delà des factures</span>
-                    <span class="stat-value">{{ report.uninvoiced|floatformat:2 }} €</span>
+                    <span class="stat-value">{{ report.uninvoiced|money }} €</span>
                     <span class="stat-note">
                         une facture manque : à chercher sur <a href="{{ bank_url }}">Banque</a>
                     </span>
@@ -87,7 +88,7 @@
                 {% endcomment %}
                 <div class="stat">
                     <span class="stat-label">Déduit par les factures</span>
-                    <span class="stat-value">{{ report.deducted|floatformat:2 }} €</span>
+                    <span class="stat-value">{{ report.deducted|money }} €</span>
                     <span class="stat-note">
                         avoirs et consignes des factures rattachées, hors camembert. Un remboursement reçu sur le
                         compte n'est pas compté ici.
@@ -106,9 +107,9 @@
             {% endcomment %}
             <p class="small spend-left-out">
                 <strong>Camembert sans :</strong>
-                {% for row in left_out_rows %}{% if row.category %}{{ row.name }} {{ row.category.amount|floatformat:2 }} €{% else %}{{ row.name }} : rien sur cette période{% endif %} (<a href="{{ row.put_back_url }}">remettre</a>){% if not forloop.last %}, {% endif %}{% endfor %}
-                — {{ report.left_out_total|floatformat:2 }} € hors du camembert sur
-                {{ report.total|floatformat:2 }} € sortis du compte. Seul le dessin change.
+                {% for row in left_out_rows %}{% if row.category %}{{ row.name }} {{ row.category.amount|money }} €{% else %}{{ row.name }} : rien sur cette période{% endif %} (<a href="{{ row.put_back_url }}">remettre</a>){% if not forloop.last %}, {% endif %}{% endfor %}
+                — {{ report.left_out_total|money }} € hors du camembert sur
+                {{ report.total|money }} € sortis du compte. Seul le dessin change.
                 <a href="{{ reset_url }}">tout remettre</a>
             </p>
         {% endif %}
@@ -177,7 +178,7 @@
                                                 </span>
                                             {% endif %}
                                         </td>
-                                        <td class="num" data-sort="{{ category.amount|stringformat:'s' }}">{{ category.amount|floatformat:2 }} €</td>
+                                        <td class="num" data-sort="{{ category.amount|stringformat:'s' }}">{{ category.amount|money }} €</td>
                                         {% comment %}
                                         data-sort: « 12.3 % » sorts as text, and 9 % would come after 80 %.
                                         {% endcomment %}
@@ -192,7 +193,7 @@
                                 <tr>
                                     <th></th>
                                     <th>Total sorti du compte</th>
-                                    <th class="num">{{ report.total|floatformat:2 }} €</th>
+                                    <th class="num">{{ report.total|money }} €</th>
                                     <th class="num"></th>
                                     <th class="num">{{ report.operations }} au relevé</th>
                                 </tr>
@@ -215,7 +216,7 @@
                     a negative slice is not drawn, nor is a category left
                     out, and the three amounts add back up to what left the account.
                     {% endcomment %}
-                    {% if left_out_in_table %}Le camembert dessine {{ report.drawn_total|floatformat:2 }} € des {{ report.total|floatformat:2 }} € sortis du compte : les {{ report.left_out_total|floatformat:2 }} € des catégories laissées hors du camembert{% if report.given_back %} et les {{ report.given_back|floatformat:2 }} € déduits par les factures rattachées (avoirs, consignes){% endif %} restent dans le tableau. {% elif report.given_back %}Le camembert dessine {{ report.drawn_total|floatformat:2 }} € : les {{ report.given_back|floatformat:2 }} € déduits par les factures rattachées (avoirs, consignes) restent dans le tableau. {% endif %}Une facture réglée en plusieurs fois compte pour ce que chaque opération a payé. « Opérations concernées » ne s'additionne pas : une opération peut toucher plusieurs catégories.
+                    {% if left_out_in_table %}Le camembert dessine {{ report.drawn_total|money }} € des {{ report.total|money }} € sortis du compte : les {{ report.left_out_total|money }} € des catégories laissées hors du camembert{% if report.given_back %} et les {{ report.given_back|money }} € déduits par les factures rattachées (avoirs, consignes){% endif %} restent dans le tableau. {% elif report.given_back %}Le camembert dessine {{ report.drawn_total|money }} € : les {{ report.given_back|money }} € déduits par les factures rattachées (avoirs, consignes) restent dans le tableau. {% endif %}Une facture réglée en plusieurs fois compte pour ce que chaque opération a payé. « Opérations concernées » ne s'additionne pas : une opération peut toucher plusieurs catégories.
                 </p>
             </div>
         {% endif %}
@@ -276,7 +277,7 @@
                                         <strong>{{ line.counterparty|default:line.bank_type }}</strong>
                                         <span class="read-as">{{ line.label|truncatechars:90 }}</span>
                                     </td>
-                                    <td class="num" data-sort="{{ line.amount|stringformat:'s' }}">{{ line.amount_due|floatformat:2 }} €</td>
+                                    <td class="num" data-sort="{{ line.amount|stringformat:'s' }}">{{ line.amount_due|money }} €</td>
                                     {% comment %}
                                     data-sort: the value of an <input> is text neither for the table's search nor
                                     for its sort (static/js/datatable.js reads textContent). Without it,

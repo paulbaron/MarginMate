@@ -30,8 +30,8 @@ import read what it should, and where each product went.
                     <tr>
                         <td>{{ line.raw_name }}</td>
                         <td class="num">{{ line.quantity|quantity }}</td>
-                        <td class="num">{{ line.total_ht|floatformat:2 }} €</td>
-                        <td class="num">{{ line.total_ttc|floatformat:2 }} €</td>
+                        <td class="num">{{ line.total_ht|money }} €</td>
+                        <td class="num">{{ line.total_ttc|money }} €</td>
                         <td>
                             {% if line.is_spread_charge %}
                                 <span class="muted" title="Réparti sur les autres lignes au prorata de leur montant HT">frais répartis</span>

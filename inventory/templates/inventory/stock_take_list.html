@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load assets %}
 {% block title %}Inventaires - MarginMate{% endblock %}
 {% block content %}
     <div class="page-header">
@@ -30,7 +31,7 @@
                     <td><a href="{% url 'inventory:stock_take_detail' stock_take.pk %}">{{ stock_take.taken_at|date:"d/m/Y H:i" }}</a></td>
                     <td class="muted">{{ stock_take.note|default:"—" }}</td>
                     <td class="num">{{ stock_take.lines.count }}</td>
-                    <td class="num">{{ stock_take.total_value_ht|floatformat:2 }} €</td>
+                    <td class="num">{{ stock_take.total_value_ht|money }} €</td>
                     <td>{% if stock_take.has_shortfall %}<span class="muted" title="Au moins un produit compté dépasse son historique d'achats">⚠️</span>{% endif %}</td>
                 </tr>
                 {% endfor %}

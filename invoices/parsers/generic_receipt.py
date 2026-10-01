@@ -49,6 +49,8 @@ from itertools import permutations, product
 from rapidfuzz import fuzz
 from rapidfuzz.utils import default_process
 
+from common import format_money, group_thousands
+
 from .base import ParseCheck, ParsedInvoice, ParsedLine, PdfPage
 from .layout import AMOUNT, QUANTITY, RATE, UNIT_PRICE, ItemRow, Table, find_table
 from .receipt_base import (
@@ -811,8 +813,9 @@ class GenericReceiptParser(ReceiptParser):
                 ParseCheck(
                     label="Taux déduit",
                     passed=True,
-                    detail=f"aucun taux imprimé : {format_rate(summary.rate)} %, la TVA {summary.vat_amount:.2f} € "
-                    f"étant ce taux de {summary.base:.2f} € HT, et les deux faisant le total",
+                    detail=f"aucun taux imprimé : {format_rate(summary.rate)} %, "
+                    f"la TVA {format_money(summary.vat_amount)} € étant ce taux de {format_money(summary.base)} € HT, "
+                    "et les deux faisant le total",
                 )
             )
         if weight_problems:
@@ -845,7 +848,7 @@ class GenericReceiptParser(ReceiptParser):
                     label="Lignes écartées",
                     passed=True,
                     detail="lues mais hors des articles (en-tête, total mal lu) : "
-                    + "; ".join(f"{item.name or UNREAD_NAME} {item.total:.2f} €" for item in set_aside),
+                    + "; ".join(f"{item.name or UNREAD_NAME} {format_money(item.total)} €" for item in set_aside),
                 )
             )
 
@@ -1114,7 +1117,8 @@ class GenericReceiptParser(ReceiptParser):
                     reading.name, reading.total, reading.computed = pending.name, reading.explained, True
                     reading.category = pending.category
                     notes.append(
-                        f"{reading.name} {reading.total:.2f} € ({reading.count or reading.weight} x {reading.unit} €)"
+                        f"{reading.name} {format_money(reading.total)} € "
+                        f"({reading.count or reading.weight} x {group_thousands(reading.unit)} €)"
                     )
                     items.append(reading)
                     pending = None
@@ -1152,7 +1156,8 @@ class GenericReceiptParser(ReceiptParser):
             reading.read_total = amount
             if reading.computed:
                 notes.append(
-                    f"{reading.name or UNREAD_NAME} {amount:.2f} € (HT {reading.ht:.2f} € + TVA {format_rate(reading.rate)} %)"
+                    f"{reading.name or UNREAD_NAME} {format_money(amount)} € "
+                    f"(HT {format_money(reading.ht)} € + TVA {format_rate(reading.rate)} %)"
                 )
             items.append(reading)
             pending = None
@@ -1260,7 +1265,8 @@ class GenericReceiptParser(ReceiptParser):
                     continue
                 if expected is not None:
                     weight_problems.append(
-                        f"{detail.weight} kg x {detail.unit} €/kg = {expected} € : aucun article voisin à ce prix"
+                        f"{detail.weight} kg x {group_thousands(detail.unit)} €/kg = {group_thousands(expected)} € "
+                        ": aucun article voisin à ce prix"
                     )
                 target.weight = detail.weight
             elif detail.count is not None and above is not None and above.index == detail.index - 1:
@@ -1367,7 +1373,7 @@ class GenericReceiptParser(ReceiptParser):
             return ParseCheck(
                 label="Remise attribuée",
                 passed=True,
-                detail=f"remise {under:.2f} € imputée à l'article sous lequel elle est imprimée",
+                detail=f"remise {format_money(under)} € imputée à l'article sous lequel elle est imprimée",
             )
         discount = gross - under - total
         gross_line = amount_printed(lines, gross, items[-1].index + 1)
@@ -1380,9 +1386,11 @@ class GenericReceiptParser(ReceiptParser):
         _spread(targets or [item for item in items if item.net > 0], discount)
         if attributed:
             products = ", ".join(sorted({item.name or UNREAD_NAME for item in targets}))
-            detail = f"remise {discount:.2f} € répartie sur : {products}"
+            detail = f"remise {format_money(discount)} € répartie sur : {products}"
         else:
-            detail = f"remise {discount:.2f} € répartie au prorata : le produit concerné n'a pas été identifié"
+            detail = (
+                f"remise {format_money(discount)} € répartie au prorata : le produit concerné n'a pas été identifié"
+            )
         return ParseCheck(label="Remise attribuée", passed=attributed, detail=detail)
 
     def _rates(self, items, totals: ReceiptTotals):
@@ -1756,7 +1764,11 @@ def _repair(items: list[Reading], target: Decimal) -> str | None:
                 continue
             if other.total - item.total == gap and _similar(item.name, other.name) >= VOID_NAME_MATCH:
                 fixes.append(
-                    (item, other.total, f"{item.name} lu {item.total:.2f} €, {other.total:.2f} € comme {other.name}")
+                    (
+                        item,
+                        other.total,
+                        f"{item.name} lu {format_money(item.total)} €, {format_money(other.total)} € comme {other.name}",
+                    )
                 )
                 break
         text = f"{item.total:.2f}"
@@ -1768,7 +1780,10 @@ def _repair(items: list[Reading], target: Decimal) -> str | None:
                         (
                             item,
                             shorter,
-                            f"{item.name or UNREAD_NAME} lu {item.total:.2f} €, {shorter:.2f} € (code TVA lu comme un chiffre)",
+                            (
+                                f"{item.name or UNREAD_NAME} lu {format_money(item.total)} €, "
+                                f"{format_money(shorter)} € (code TVA lu comme un chiffre)"
+                            ),
                         )
                     )
     candidates = {(id(item), value) for item, value, _note in fixes}

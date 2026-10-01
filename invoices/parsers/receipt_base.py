@@ -54,6 +54,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
+from common import format_money, group_thousands
+
 from .base import InvoiceParser, ParseCheck, ParsedInvoice, PdfPage
 
 CENTS = Decimal("0.01")
@@ -410,8 +412,8 @@ def missing_item_check(gross: Decimal, promotion: tuple[Decimal, Decimal] | None
         label="Articles = total avant remise",
         passed=False,
         detail=(
-            f"les articles lus font {gross:.2f} €, le ticket imprime {before:.2f} € avant une remise de "
-            f"{discount:.2f} € : un article manque ou est mal lu"
+            f"les articles lus font {format_money(gross)} €, le ticket imprime {format_money(before)} € "
+            f"avant une remise de {format_money(discount)} € : un article manque ou est mal lu"
         ),
     )
 
@@ -667,7 +669,10 @@ def build_checks(
             ParseCheck(
                 label="Somme des lignes = total imprimé",
                 passed=within_rounding,
-                detail=f"lignes {lines_total_ttc:.2f} € / ticket {printed:.2f} € (écart {drift:+.2f} €)",
+                detail=(
+                    f"lignes {format_money(lines_total_ttc)} € / ticket {format_money(printed)} € "
+                    f"(écart {format_money(drift, '+.2f')} €)"
+                ),
             )
         )
         if within_rounding:
@@ -694,8 +699,8 @@ def build_checks(
                     label=f"Table TVA {rate_percent}%",
                     passed=False,
                     detail=(
-                        f"taux lu, montants illisibles : HT {resolved.base:.2f} € et TVA "
-                        f"{resolved.vat_amount:.2f} € calculés depuis le total imprimé"
+                        f"taux lu, montants illisibles : HT {format_money(resolved.base)} € et TVA "
+                        f"{format_money(resolved.vat_amount)} € calculés depuis le total imprimé"
                     ),
                 )
             )
@@ -706,8 +711,8 @@ def build_checks(
                 label=f"TVA {rate_percent}% cohérente",
                 passed=resolved.is_consistent,
                 detail=(
-                    f"HT {resolved.base:.2f} € x {rate_percent}% = {expected_vat:.2f} € "
-                    f"/ ticket {resolved.vat_amount:.2f} €"
+                    f"HT {format_money(resolved.base)} € x {rate_percent}% = {format_money(expected_vat)} € "
+                    f"/ ticket {format_money(resolved.vat_amount)} €"
                 ),
             )
         )
@@ -728,7 +733,10 @@ def build_checks(
             ParseCheck(
                 label="Somme HT des lignes = base HT du ticket",
                 passed=within_rounding,
-                detail=(f"lignes {lines_total_ht:.2f} € HT / ticket {printed_ht:.2f} € HT (écart {ht_drift:+.2f} €)"),
+                detail=(
+                    f"lignes {format_money(lines_total_ht)} € HT / ticket {format_money(printed_ht)} € HT "
+                    f"(écart {format_money(ht_drift, '+.2f')} €)"
+                ),
             )
         )
         # The HT base is the figure the invoice total should land on, so it
@@ -1198,13 +1206,15 @@ def reconcile_quantity(
         return quantity
     if quantity != int(quantity):
         # A measure (0,35 m²) is not recounted into a whole number.
-        problems.append(f"{name} : {quantity} x {unit_price} € ≠ {amount} €")
+        problems.append(f"{name} : {quantity} x {group_thousands(unit_price)} € ≠ {group_thousands(amount)} €")
         return quantity
     implied = (amount / unit_price).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
     if implied >= 1 and abs(implied * unit_price - amount) <= CENTS:
-        fixes.append(f"{name} : {quantity} lu, {implied} d'après {amount} € / {unit_price} €")
+        fixes.append(
+            f"{name} : {quantity} lu, {implied} d'après {group_thousands(amount)} € / {group_thousands(unit_price)} €"
+        )
         return int(implied)
-    problems.append(f"{name} : {quantity} x {unit_price} € ≠ {amount} €")
+    problems.append(f"{name} : {quantity} x {group_thousands(unit_price)} € ≠ {group_thousands(amount)} €")
     return quantity
 
 

@@ -15,6 +15,7 @@ from django.db.models import Sum
 from django.utils import timezone
 
 from accounts.paths import downloads_dir
+from common import format_money
 
 from .integration import refusal, till_allowed
 from .models import PosDailyPayment, PosProduct, PosProductDailyQuantity, SalesImportJob
@@ -29,7 +30,9 @@ class _Cancelled(Exception):
 
 
 def _euros(value) -> str:
-    return f"{value:.2f}".replace(".", ",") + " €"
+    """1234.5 -> « 1 234,50 € », grouped by a no-break space: the job's log
+    is read on the sales page."""
+    return format_money(value).replace(".", ",") + " €"
 
 
 def money_log(export) -> list[str]:

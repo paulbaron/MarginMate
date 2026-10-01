@@ -1,4 +1,4 @@
-{% comment %}
+{% load assets %}{% comment %}
 What waits for a person: the tickets whose reading has to be compared with the
 photo, oldest first, and the documents that cannot be used as they are.
 {% endcomment %}
@@ -65,7 +65,7 @@ photo, oldest first, and the documents that cannot be used as they are.
                             {% if invoice.is_einvoice and invoice.error_message %}<span class="status-pill status-NEEDS_REVIEW">totaux du fournisseur</span>{% endif %}
                             {% if invoice.error_message %}<span class="muted">{{ invoice.error_message|truncatechars:90 }}</span>{% endif %}
                         </td>
-                        <td class="num" data-label="Total HT">{{ invoice.total_ht|floatformat:2 }} €</td>
+                        <td class="num" data-label="Total HT">{{ invoice.total_ht|money }} €</td>
                         {% comment %}
                         « Corriger » on an electronic invoice whose
                         supplier's arithmetic does not hold: nobody here
@@ -105,7 +105,7 @@ photo, oldest first, and the documents that cannot be used as they are.
                 </div>
                 <div class="receipt-card-body">
                     <strong>{{ receipt.supplier.name }}</strong>
-                    <span class="amount">{{ receipt.total_ttc|floatformat:2 }} €</span>
+                    <span class="amount">{{ receipt.total_ttc|money }} €</span>
                     <span class="muted">{{ receipt.invoice_date|date:"d/m/Y"|default:"date inconnue" }}</span>
                     {% if receipt.failed_checks %}
                         <span class="status-pill status-NEEDS_REVIEW" title="{% for check in receipt.failed_checks %}{{ check.label }}{% if not forloop.last %} · {% endif %}{% endfor %}">

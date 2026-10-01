@@ -27,12 +27,25 @@
     // silently mangled into literal accented characters by an editor/tool.
     var COMBINING_MARKS = new RegExp("[" + String.fromCharCode(0x0300) + "-" + String.fromCharCode(0x036f) + "]", "g");
 
+    // A space between a digit and a group of three: an amount's thousands
+    // (« 1 234.56 € », common.THOUSANDS_SEPARATOR), whatever space it is -
+    // \s matches the no-break ones. Folded out of the box's text AND the
+    // row's, so « 1234.56 », « 1 234.56 » and a figure pasted off the page
+    // (a no-break space copies out as an ordinary one) all find it.
+    var SPACED_THOUSANDS = /(\d)\s(?=\d{3}(?!\d))/g;
+
+    // The spaces that group thousands on a page - the no-break one the server
+    // prints and the narrow one Intl's fr-FR writes - and nothing else, so a
+    // name keeps its own spaces. Taken out before the collator, which reads
+    // « 1 234 » as 1 and 234.
+    var GROUPING_SPACE = new RegExp("(\\d)[" + String.fromCharCode(0x00a0, 0x202f) + "](?=\\d)", "g");
+
     /** Case- AND accent-insensitive: "biere" has to find "Bière", since
      *  nobody reaches for the compose key while typing fast at a bar.
      *  NFD decomposition splits "è" into "e" + a combining grave accent,
      *  which is then stripped - so accented and plain text compare equal. */
     function normalize(text) {
-        return text.toLowerCase().normalize("NFD").replace(COMBINING_MARKS, "");
+        return text.toLowerCase().normalize("NFD").replace(COMBINING_MARKS, "").replace(SPACED_THOUSANDS, "$1");
     }
 
     /** An element's text for SEARCH purposes - textContent, but with any
@@ -55,7 +68,7 @@
         if (!cell) return "";
         var explicit = cell.getAttribute("data-sort");
         if (explicit !== null) return explicit.trim();
-        return (cell.textContent || "").replace(/\s+/g, " ").trim();
+        return (cell.textContent || "").replace(GROUPING_SPACE, "$1").replace(/\s+/g, " ").trim();
     }
 
     /**

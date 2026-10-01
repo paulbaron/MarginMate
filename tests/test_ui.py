@@ -319,6 +319,60 @@ class SortKeyTests(TestCase):
                 self.assertContains(response, shown)
 
 
+class GroupedAmountSortTests(SimpleTestCase):
+    """An amount a page prints has its thousands grouped by a no-break space
+    (« 1 234.56 € », common.THOUSANDS_SEPARATOR). datatable.js sorts a cell
+    by its own text, so its number parser must take every white space out
+    before it parses - `\\s`, which in JavaScript matches U+00A0 and U+202F
+    as well. Kept to plain spaces, every amount over a thousand would sort
+    as text."""
+
+    def test_the_number_parser_takes_every_white_space_out_first(self):
+        source = (pathlib.Path(__file__).resolve().parent.parent / "static/js/datatable.js").read_text(encoding="utf-8")
+        body = source[source.index("function asNumber(text)") : source.index("function asDate(text)")]
+        stripped = re.search(r'\.replace\(/\[([^\]]*)\]/g, ""\)', body)
+        self.assertIsNotNone(stripped, "asNumber no longer strips a class of spaces")
+        self.assertIn(r"\s", stripped.group(1))
+        self.assertLess(stripped.start(), body.index("parseFloat"))
+
+    def source(self):
+        return (pathlib.Path(__file__).resolve().parent.parent / "static/js/datatable.js").read_text(encoding="utf-8")
+
+    def test_the_search_finds_a_grouped_amount_typed_either_way(self):
+        """« 1 234.56 € » was found by typing « 1234.56 » before amounts were
+        grouped. normalize(), which the box's text and the row's both go
+        through, takes the space between a digit and a group of three out -
+        whichever space, since a no-break one copies out as an ordinary one."""
+        source = self.source()
+        body = source[source.index("function normalize(text)") : source.index("function searchableText")]
+        self.assertIn('.replace(SPACED_THOUSANDS, "$1")', body)
+        # The JavaScript literal reads the same under Python's re (\s takes
+        # the no-break spaces in both).
+        pattern = re.search(r"var SPACED_THOUSANDS = /(.+)/g;", source).group(1)
+        nbsp = "\N{NO-BREAK SPACE}"
+        for text, folded in (
+            (f"16{nbsp}568{nbsp}684.50 €", "16568684.50 €"),
+            ("1 408.18", "1408.18"),
+            (f"1{nbsp}408", "1408"),
+            ("pack 6 33cl", "pack 6 33cl"),
+            ("1 40", "1 40"),
+            ("1 4000", "1 4000"),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(re.sub(pattern, r"\1", text), folded)
+
+    def test_the_collator_never_reads_a_grouped_amount_as_two_numbers(self):
+        """A cell that is not a bare number (« 999.00 – 1 000.00 € ») is
+        compared by the numeric collator, which reads « 1 000 » as 1 and 0:
+        the grouping spaces - and only those - go before it."""
+        source = self.source()
+        declaration = re.search(r"var GROUPING_SPACE = [^\n]*", source).group(0)
+        self.assertIn("0x00a0", declaration)
+        self.assertIn("0x202f", declaration)
+        body = source[source.index("function cellText(cell)") : source.index("function asNumber(text)")]
+        self.assertLess(body.index('.replace(GROUPING_SPACE, "$1")'), body.index(r".replace(/\s+/g"))
+
+
 class ChildRowTests(TestCase):
     """Rows that explain the row above them have to travel with it."""
 

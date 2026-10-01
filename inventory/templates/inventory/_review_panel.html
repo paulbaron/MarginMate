@@ -114,7 +114,7 @@ Confiance : {{ confidence_counts.high|default:0 }} haute, {{ confidence_counts.m
                     <li>
                         <a href="{% url 'invoices:invoice_detail' line.invoice_id %}">{{ line.invoice.invoice_date|date:"d/m/Y"|default:"date ?" }}</a> :
                         {{ line.quantity|quantity }} acheté{% if line.quantity > 1 %}s{% endif %}{% if line.colisage > 1 %} (colis de {{ line.colisage }}){% endif %}{% if line.total_volume %}, {{ line.total_volume|floatformat:"-3" }} L/kg{% endif %},
-                        {{ line.total_ht|floatformat:2 }} € HT
+                        {{ line.total_ht|money }} € HT
                     </li>
                 {% endfor %}
                 {% if lines|length > 3 %}<li class="muted">et {{ lines|length|add:"-3" }} autre{{ lines|length|add:"-3"|pluralize }} achat{{ lines|length|add:"-3"|pluralize }}</li>{% endif %}

@@ -19,6 +19,7 @@ import shutil
 import zipfile
 
 from accounts.views import open_stored
+from common import format_money
 from invoices.filenames import UniqueNames, clean, download_name
 from invoices.models import Invoice
 
@@ -66,7 +67,7 @@ def missing_text(invoices) -> str:
     for invoice in invoices:
         number = f" n° {invoice.invoice_number}" if invoice.invoice_number else ""
         day = invoice.invoice_date.strftime("%d/%m/%Y") if invoice.invoice_date else "sans date"
-        lines.append(f"- {invoice.supplier.name}{number}, {day}, {invoice.total_ttc:.2f} € TTC")
+        lines.append(f"- {invoice.supplier.name}{number}, {day}, {format_money(invoice.total_ttc)} € TTC")
     return "\r\n".join(lines) + "\r\n"
 
 

@@ -5,6 +5,7 @@ and what was read. htmx puts it in #format-test-result and, out of band, the
 sources with the text tested (`oob`); without JavaScript the same post
 redraws the whole page with it.
 {% endcomment %}
+{% load assets %}
 {% if oob %}{% include "returnables/_tester_sources.html" %}{% endif %}
 {% if result.problem %}
     <p class="message message-error">{{ result.problem }}</p>
@@ -29,7 +30,7 @@ redraws the whole page with it.
             <dt>Numéro</dt><dd>{{ reading.number|default:"—" }}</dd>
             <dt>Références</dt><dd>{% for reference in reading.references %}{{ reference }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}</dd>
             <dt>Annule et remplace</dt><dd>{% if reading.replaces %}oui{% else %}non{% endif %}</dd>
-            <dt>Total imprimé</dt><dd>{% if reading.printed_total is not None %}{{ reading.printed_total|floatformat:2 }} €{% else %}—{% endif %}</dd>
+            <dt>Total imprimé</dt><dd>{% if reading.printed_total is not None %}{{ reading.printed_total|money }} €{% else %}—{% endif %}</dd>
             <dt>Remarques</dt><dd>{{ reading.remarks|default:"—" }}</dd>
         </dl>
         {% if reading.lines %}
@@ -41,8 +42,8 @@ redraws the whole page with it.
                             <tr>
                                 <td>{{ line.designation }}</td>
                                 <td class="num">{{ line.quantity }}</td>
-                                <td class="num">{% if line.unit_amount is not None %}{{ line.unit_amount|floatformat:2 }} €{% else %}—{% endif %}</td>
-                                <td class="num">{% if line.amount is not None %}{{ line.amount|floatformat:2 }} €{% else %}—{% endif %}</td>
+                                <td class="num">{% if line.unit_amount is not None %}{{ line.unit_amount|money }} €{% else %}—{% endif %}</td>
+                                <td class="num">{% if line.amount is not None %}{{ line.amount|money }} €{% else %}—{% endif %}</td>
                             </tr>
                         {% endfor %}
                     </tbody>

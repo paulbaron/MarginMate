@@ -62,6 +62,7 @@ from invoices.tests.einvoice_files import (
 )
 
 D = Decimal
+NBSP = "\N{NO-BREAK SPACE}"
 
 
 def read(fixture: str):
@@ -89,7 +90,8 @@ class FiguresWiderThanTheirColumnTests(SimpleTestCase):
 
     def test_a_line_amount_too_wide_is_refused_naming_itself(self):
         said = self.refusal(CII_AMOUNT_TOO_WIDE)
-        self.assertIn("10000000000.00", said)
+        # Named as every amount a person reads: its thousands grouped.
+        self.assertIn(f"10{NBSP}000{NBSP}000{NBSP}000.00", said)
         self.assertIn("n'est pas importée", said)
 
     def test_a_rate_too_wide_is_refused(self):

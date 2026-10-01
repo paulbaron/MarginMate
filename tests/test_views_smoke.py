@@ -860,8 +860,8 @@ class StockGapFillerParameterSmokeTests(TestCase):
         "1e999": "Montant illisible",
         "1" * 41: "Montant illisible",
         "12,345": "Montant illisible",
-        "10000,01": "10000 € au plus.",
-        "9999999999.99": "10000 € au plus.",
+        "10000,01": "10\N{NO-BREAK SPACE}000 € au plus.",
+        "9999999999.99": "10\N{NO-BREAK SPACE}000 € au plus.",
         '"><i>montant</i>': "Montant illisible",
     }
     #: depuis -> whether the page says the count was not found.

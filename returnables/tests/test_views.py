@@ -71,6 +71,7 @@ from tests.factories import make_invoice, make_invoice_line
 TEMPLATES = Path(__file__).resolve().parent.parent / "templates" / "returnables"
 
 HOME = "/consignes/"
+NBSP = "\N{NO-BREAK SPACE}"
 PALLET_LINE = ("PALETTE EXEMPLE", 1, Decimal("12.0000"), Decimal("12.00"))
 #: The shapes of the freeze (29/09): refused by the guard, never compiled.
 FREEZE_TOKENS = ("65535", "6 5 5 3 5", "{100,}", "{1 0 0")
@@ -819,6 +820,13 @@ class SlipPageTests(PageTestCase):
         self.assertIn("Aucune ligne ignorée", text)
         self.assertContains(response, f'<iframe class="slip-pdf" src="{slip.file.url}" title="Le bon en PDF"></iframe>')
 
+    def test_amounts_of_a_thousand_euros_or_more_are_grouped_and_their_sort_keys_are_not(self):
+        slip = make_slip(lines=(("FÛT INOX 30 L", 40, Decimal("30.0000"), Decimal("1200.00")),))
+        html = self.html(self.url(slip))
+        self.assertIn(f"<dd>-1{NBSP}200.00 €</dd>", html)
+        self.assertIn(f'<td class="num" data-sort="1200.00">1{NBSP}200.00 €</td>', html)
+        self.assertIn('<td class="num" data-sort="30.0000">30.00 €</td>', html)
+
     def test_a_replaced_slip_says_which_counts(self):
         original = make_slip(references=["800301"])
         replacement = make_slip(references=["800301"], replaces=True)
@@ -1165,6 +1173,20 @@ class FormatPageTests(PageTestCase):
         self.assertIn("800401", text)
         self.assertEqual(self.stored_patterns(fmt), before)
         self.assertEqual(Slip.objects.count(), 0)
+
+    def test_tester_groups_the_thousands_of_what_it_read_never_of_the_text_tested(self):
+        fmt = seeded_format()
+        tested = slip_text(number="4305", lines=(("FÛT INOX 30 L", 40, Decimal("30.0000"), Decimal("1200.00")),))
+        response = self.send(self.form(fmt), press=self.TEST, values={"texte_essai": tested})
+        html = unescape(response.content.decode())
+        self.assertIn(f"<dd>-1{NBSP}200.00 €</dd>", html)
+        self.assertIn(f'<td class="num">1{NBSP}200.00 €</td>', html)
+        self.assertIn(f"lignes : 1{NBSP}200,00 · total imprimé : -1{NBSP}200,00", html)
+        self.assertIn(f"quantité 40 · prix 30,00 · montant 1{NBSP}200,00", html)
+        # The text tested goes back into its box as it was typed.
+        again = form_posting_to(response.content.decode(), self.url(fmt))
+        self.assertIn("FÛT INOX 30 L 40 x 30.00 = 1200.00", again.control("texte_essai").value)
+        self.assertIn("Deconsigne : -1200.00", again.control("texte_essai").value)
 
     def test_tester_answers_htmx_in_place_with_the_sources_out_of_band(self):
         fmt = seeded_format()

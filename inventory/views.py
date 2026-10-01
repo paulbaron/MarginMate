@@ -18,7 +18,16 @@ from django.utils.html import escape
 from django.utils.http import urlencode
 from django.views.generic import CreateView, ListView, TemplateView, UpdateView
 
-from common import DateRange, date_range, is_id, read_amount, read_number, search_key
+from common import (
+    DateRange,
+    date_range,
+    format_money,
+    group_thousands,
+    is_id,
+    read_amount,
+    read_number,
+    search_key,
+)
 
 from .forms import (
     OLD_STOCK_TYPE_ENTRY_SUFFIXES,
@@ -727,7 +736,7 @@ def _build_price_history_svg(points: list[tuple], label: str = "Évolution du pr
     polyline_points = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords)
     dots = "".join(
         f'<circle class="chart-point" cx="{x:.1f}" cy="{y:.1f}" r="3" fill="var(--amber)" '
-        f'data-x="{x:.1f}" data-y="{y:.1f}" data-label="{d:%d/%m/%Y}" data-value="{p:.4f} €" />'
+        f'data-x="{x:.1f}" data-y="{y:.1f}" data-label="{d:%d/%m/%Y}" data-value="{format_money(p, ".4f")} €" />'
         for (x, y), d, p in zip(coords, dates, prices)
     )
     # A faint fill under the line makes the shape readable at a glance, which
@@ -744,8 +753,8 @@ def _build_price_history_svg(points: list[tuple], label: str = "Évolution du pr
         f'stroke="var(--border)" />'
         f'<line x1="{pad_left}" y1="{height - pad_bottom}" x2="{width - pad_right}" y2="{height - pad_bottom}" '
         f'stroke="var(--border)" />'
-        f'<text x="4" y="{pad_top + 4}" font-size="11" fill="var(--muted)">{max_price:.2f} €</text>'
-        f'<text x="4" y="{height - pad_bottom}" font-size="11" fill="var(--muted)">{min_price:.2f} €</text>'
+        f'<text x="4" y="{pad_top + 4}" font-size="11" fill="var(--muted)">{format_money(max_price)} €</text>'
+        f'<text x="4" y="{height - pad_bottom}" font-size="11" fill="var(--muted)">{format_money(min_price)} €</text>'
         f'<text x="{pad_left}" y="{height - 8}" font-size="11" fill="var(--muted)">{date_min:%d/%m/%Y}</text>'
         f'<text x="{width - pad_right}" y="{height - 8}" font-size="11" fill="var(--muted)" '
         f'text-anchor="end">{date_max:%d/%m/%Y}</text>'
@@ -1562,7 +1571,7 @@ NOTHING_FOR = {
 AMOUNT_ERRORS = {
     "unreadable": "Montant illisible : tapez par exemple 150,50.",
     "not_positive": "Le montant doit être supérieur à zéro.",
-    "too_big": f"{MAX_AMOUNT:.0f} € au plus.",
+    "too_big": f"{format_money(MAX_AMOUNT, '.0f')} € au plus.",
 }
 
 
@@ -1665,7 +1674,7 @@ def stock_gap_filler_add(request):
     result = fill_gaps(report, amount, list_counts(entries))
     if not result.lines:
         why = NOTHING_FOR.get(result.plan.reason, "plus aucune vente ne tient dans les écarts")
-        messages.warning(request, f"Rien pour {amount} € : {why}.")
+        messages.warning(request, f"Rien pour {group_thousands(amount)} € : {why}.")
         return redirect(_gap_filler_url(take))
     watched_from = sales_watched_from(timezone.localdate())
     with transaction.atomic():

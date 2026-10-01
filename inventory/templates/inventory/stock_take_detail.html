@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load assets %}
 {% block title %}Inventaire du {{ stock_take.taken_at|date:"d/m/Y" }} - MarginMate{% endblock %}
 {% block content %}
     <div class="page-header">
@@ -25,7 +26,7 @@
     <div class="stat-row">
         <div class="stat">
             <span class="stat-label">Valeur comptée (HT)</span>
-            <span class="stat-value">{{ stock_take.total_value_ht|floatformat:2 }} €</span>
+            <span class="stat-value">{{ stock_take.total_value_ht|money }} €</span>
             <span class="stat-note">au prix réellement payé, achat par achat</span>
         </div>
         <div class="stat">
@@ -69,10 +70,10 @@
                     </td>
                     <td class="muted">{{ line.product.supplier.name|default:"—" }}</td>
                     <td class="num">{{ line.counted_quantity|floatformat:"-4" }} {{ line.get_unit_display }}</td>
-                    <td class="num">{{ line.value_ht|floatformat:2 }} €</td>
+                    <td class="num">{{ line.value_ht|money }} €</td>
                     <td class="muted" style="font-size:0.9em;">
                         {% for source in line.sources.all %}
-                            {{ source.quantity_used|floatformat:"-4" }} {{ line.get_unit_display }} à {{ source.unit_cost_ht|floatformat:4 }} €
+                            {{ source.quantity_used|floatformat:"-4" }} {{ line.get_unit_display }} à {{ source.unit_cost_ht|money:4 }} €
                             (<a href="{% url 'invoices:invoice_detail' source.invoice_line.invoice_id %}">facture du {{ source.invoice_line.invoice.invoice_date|date:"d/m/Y" }}</a>)<br>
                         {% empty %}
                             —

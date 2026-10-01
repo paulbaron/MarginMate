@@ -1,3 +1,4 @@
+{% load assets %}
 {% comment %}
 An amount that is a range as soon as a recipe has an « OU »: both
 ends, or one only when they are equal. Rendered here rather than in each column
@@ -6,4 +7,4 @@ somewhere, and a margin read as a single figure is no longer the same
 information. « — » when there is nothing to say: an unknown cost is not
 zero.
 {% endcomment %}
-{% if low is None or high is None %}—{% elif low == high %}{{ high|floatformat:2 }} €{% else %}{{ low|floatformat:2 }} à {{ high|floatformat:2 }} €{% endif %}
+{% if low is None or high is None %}—{% elif low == high %}{{ high|money }} €{% else %}{{ low|money }} à {{ high|money }} €{% endif %}

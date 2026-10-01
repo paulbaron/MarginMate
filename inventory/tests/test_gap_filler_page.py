@@ -80,7 +80,9 @@ TAKE_NOT_FOUND = "Inventaire introuvable : les écarts partent du dernier."
 TAKE_UNKNOWN = "Inventaire introuvable."
 UNREADABLE = "Montant illisible : tapez par exemple 150,50."
 NOT_POSITIVE = "Le montant doit être supérieur à zéro."
-TOO_BIG = "10000 € au plus."
+#: Between an amount's thousands, on the page as in its messages.
+NBSP = "\N{NO-BREAK SPACE}"
+TOO_BIG = f"10{NBSP}000 € au plus."
 UNDONE = "Dernière saisie retirée."
 CLEARED = "Liste effacée."
 #: What a post from a page the list has moved since is told, by action.
@@ -371,7 +373,7 @@ class OnePintBarTests(PageTestCase):
         html = self.html()
         self.assertEqual(
             self.gaps_row(html),
-            ["Blonde exemple litre", "100", "200", "0", "20", "280", "30", "250", "1000.00 €"],
+            ["Blonde exemple litre", "100", "200", "0", "20", "280", "30", "250", f"1{NBSP}000.00 €"],
         )
         self.assertNotIn(PROPOSED, html)
         self.assertNotIn(ENTERED, html)
@@ -465,7 +467,7 @@ class OnePintBarTests(PageTestCase):
         self.assertEqual(note_of(shares), "en moyenne, de 2.4 % à 2.4 % selon l'article")
         self.assertEqual(
             self.gaps_row(html),
-            ["Blonde exemple litre", "100", "200", "0", "20", "280", "30", "250", "1000.00 €", "6", "2.4 %"],
+            ["Blonde exemple litre", "100", "200", "0", "20", "280", "30", "250", f"1{NBSP}000.00 €", "6", "2.4 %"],
         )
 
     def test_a_second_amount_adds_to_the_figures_of_the_whole_list(self):
@@ -491,9 +493,9 @@ class OnePintBarTests(PageTestCase):
             ("50", "50.00 €", "35.00 €", "15.00", "1", "non proposés"),
             ("420,50", "420.50 €", "420.00 €", "0.50", "12", "non proposé"),
             ("420.50", "420.50 €", "420.00 €", "0.50", "12", "non proposé"),
-            ("1 234,50", "1234.50 €", "1225.00 €", "9.50", "35", "non proposés"),
-            ("1\N{NO-BREAK SPACE}234,50", "1234.50 €", "1225.00 €", "9.50", "35", "non proposés"),
-            ("10000", "10000.00 €", "9975.00 €", "25.00", "285", "non proposés"),
+            ("1 234,50", f"1{NBSP}234.50 €", f"1{NBSP}225.00 €", "9.50", "35", "non proposés"),
+            (f"1{NBSP}234,50", f"1{NBSP}234.50 €", f"1{NBSP}225.00 €", "9.50", "35", "non proposés"),
+            ("10000", f"10{NBSP}000.00 €", f"9{NBSP}975.00 €", "25.00", "285", "non proposés"),
         ):
             with self.subTest(typed=typed):
                 GapFillEntry.objects.all().delete()
@@ -513,10 +515,10 @@ class OnePintBarTests(PageTestCase):
 
     def test_amounts_spelled_every_way_a_person_types_them(self):
         for typed, entered, total, rest, count in (
-            ("10 000", "10000.00 €", "9975.00 €", "25.00", "285"),
-            ("10.000,00", "10000.00 €", "9975.00 €", "25.00", "285"),
-            ("1 500,00", "1500.00 €", "1470.00 €", "30.00", "42"),
-            ("1'234,50", "1234.50 €", "1225.00 €", "9.50", "35"),
+            ("10 000", f"10{NBSP}000.00 €", f"9{NBSP}975.00 €", "25.00", "285"),
+            ("10.000,00", f"10{NBSP}000.00 €", f"9{NBSP}975.00 €", "25.00", "285"),
+            ("1 500,00", f"1{NBSP}500.00 €", f"1{NBSP}470.00 €", "30.00", "42"),
+            ("1'234,50", f"1{NBSP}234.50 €", f"1{NBSP}225.00 €", "9.50", "35"),
             ("150,50", "150.50 €", "140.00 €", "10.50", "4"),
             ("150.50", "150.50 €", "140.00 €", "10.50", "4"),
         ):
@@ -574,11 +576,18 @@ class OnePintBarTests(PageTestCase):
                 self.assertEqual(notices_of(html, "error"), [UNREADABLE])
                 self.assertNothingKept(html)
 
+    def test_amounts_are_grouped_and_their_sort_keys_are_not(self):
+        html = self.add("1400")
+        self.assertEqual(heading_of(html), f"À encaisser : 1{NBSP}400.00 €")
+        self.assertEqual(value_of(stat_of(html, ENTERED)), f"1{NBSP}400.00 €")
+        # datatable.js sorts by the bare figure.
+        self.assertIn(f'data-sort="1400.00">1{NBSP}400.00 €</td>', html)
+
     def test_the_field_is_empty_for_the_next_amount(self):
         # What was typed is in the list now, not in the field: the next
         # amount is typed on a blank one.
         html = self.add("1 234,50")
-        self.assertEqual(heading_of(html), "À encaisser : 1234.50 €")
+        self.assertEqual(heading_of(html), f"À encaisser : 1{NBSP}234.50 €")
         field = re.search(r'<input type="text"[^>]*name="montant"[^>]*>', html)
         self.assertIsNotNone(field)
         self.assertNotIn("value=", field.group(0) if field else "value=")

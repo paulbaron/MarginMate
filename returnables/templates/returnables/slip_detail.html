@@ -55,7 +55,7 @@
             <dt>Numéro</dt><dd>{{ slip.number|default:"—" }}</dd>
             <dt>Références</dt><dd>{% for reference in info.references %}{{ reference }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}</dd>
             <dt>Annule et remplace</dt><dd>{% if slip.replaces %}oui{% else %}non{% endif %}</dd>
-            <dt>Total imprimé</dt><dd>{% if slip.printed_total is not None %}{{ slip.printed_total|floatformat:2 }} €{% else %}—{% endif %}</dd>
+            <dt>Total imprimé</dt><dd>{% if slip.printed_total is not None %}{{ slip.printed_total|money }} €{% else %}—{% endif %}</dd>
             <dt>Lu le</dt><dd>{% if slip.read_at %}{{ slip.read_at|date:"d/m/Y à H:i" }}{% else %}—{% endif %}</dd>
         </dl>
         {% if slip.checks %}
@@ -97,8 +97,8 @@
                                 <td class="num">{{ line.position }}</td>
                                 <td>{{ line.designation }}</td>
                                 <td class="num">{{ line.quantity }}</td>
-                                <td class="num" data-sort="{{ line.unit_amount|default_if_none:'' }}">{% if line.unit_amount is not None %}{{ line.unit_amount|floatformat:2 }} €{% else %}—{% endif %}</td>
-                                <td class="num" data-sort="{{ line.amount|default_if_none:'' }}">{% if line.amount is not None %}{{ line.amount|floatformat:2 }} €{% else %}—{% endif %}</td>
+                                <td class="num" data-sort="{{ line.unit_amount|default_if_none:'' }}">{% if line.unit_amount is not None %}{{ line.unit_amount|money }} €{% else %}—{% endif %}</td>
+                                <td class="num" data-sort="{{ line.amount|default_if_none:'' }}">{% if line.amount is not None %}{{ line.amount|money }} €{% else %}—{% endif %}</td>
                                 <td>
                                     {% if found.returnable_type %}
                                         {{ found.returnable_type.name }} <span class="muted small">(motif <code>{{ found.pattern }}</code>)</span>

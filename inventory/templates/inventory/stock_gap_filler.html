@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load assets %}
 {% block title %}Combler les écarts - MarginMate{% endblock %}
 {% block container_class %} container-wide{% endblock %}
 {% block content %}
@@ -69,13 +70,13 @@
     <div class="stat-row">
         <div class="stat">
             <div class="stat-label">Saisi (TTC)</div>
-            <div class="stat-value">{{ entered|floatformat:2 }} €</div>
+            <div class="stat-value">{{ entered|money }} €</div>
             <div class="stat-note">{{ entries|length }} montant{{ entries|length|pluralize }}</div>
         </div>
         <div class="stat">
             <div class="stat-label">Proposé (TTC)</div>
-            <div class="stat-value">{{ proposed|floatformat:2 }} €</div>
-            <div class="stat-note">{% if proposed == entered %}le montant exact, au prix de la carte{% elif left < 2 %}{{ left|floatformat:2 }} € non proposé{% else %}{{ left|floatformat:2 }} € non proposés{% endif %}</div>
+            <div class="stat-value">{{ proposed|money }} €</div>
+            <div class="stat-note">{% if proposed == entered %}le montant exact, au prix de la carte{% elif left < 2 %}{{ left|money }} € non proposé{% else %}{{ left|money }} € non proposés{% endif %}</div>
         </div>
         {% if shares %}
         <div class="stat">
@@ -91,10 +92,10 @@
         </div>
     </div>
 
-    <h2 id="a-encaisser">À encaisser : {{ latest.entry.amount|floatformat:2 }} €</h2>
+    <h2 id="a-encaisser">À encaisser : {{ latest.entry.amount|money }} €</h2>
     <p class="muted">
         Saisi à {{ latest.entry.created_at|date:"H:i" }} le {{ latest.entry.created_at|date:"d/m/Y" }} ·
-        {% if latest.entry.reason == "" %}le montant exact{% elif latest.entry.reason == "below_cheapest" %}reste {{ latest.entry.remainder|floatformat:2 }} € : moins que la recette la moins chère{% elif latest.entry.reason == "gaps_full" %}reste {{ latest.entry.remainder|floatformat:2 }} € : plus aucune vente ne tient dans les écarts{% else %}reste {{ latest.entry.remainder|floatformat:2 }} € : aucune combinaison de prix ne tombe juste{% endif %}{% if latest.till_differs %} · {% if latest.till_differs == 1 %}1 ligne a{% else %}{{ latest.till_differs }} lignes ont{% endif %} un autre prix en caisse{% endif %}
+        {% if latest.entry.reason == "" %}le montant exact{% elif latest.entry.reason == "below_cheapest" %}reste {{ latest.entry.remainder|money }} € : moins que la recette la moins chère{% elif latest.entry.reason == "gaps_full" %}reste {{ latest.entry.remainder|money }} € : plus aucune vente ne tient dans les écarts{% else %}reste {{ latest.entry.remainder|money }} € : aucune combinaison de prix ne tombe juste{% endif %}{% if latest.till_differs %} · {% if latest.till_differs == 1 %}1 ligne a{% else %}{{ latest.till_differs }} lignes ont{% endif %} un autre prix en caisse{% endif %}
     </p>
     <div class="table-wrap">
     <table data-table data-table-label="recettes à encaisser" class="phone-cards">
@@ -112,10 +113,10 @@
             {% for line in latest.lines %}
             <tr>
                 <td>{% if line.recipe_id %}<a href="{% url 'recipes:recipe_detail' line.recipe_id %}">{{ line.name }}</a>{% else %}{{ line.name }}{% endif %}</td>
-                <td data-label="Bouton de caisse">{{ line.till }}{% if line.till_differs %}<br><span class="muted small">en caisse {{ line.till_price|floatformat:2 }} €</span>{% endif %}</td>
+                <td data-label="Bouton de caisse">{{ line.till }}{% if line.till_differs %}<br><span class="muted small">en caisse {{ line.till_price|money }} €</span>{% endif %}</td>
                 <td class="num" data-label="Nombre">{{ line.count }}</td>
-                <td class="num" data-label="Prix (TTC)" data-sort="{{ line.price }}">{{ line.price|floatformat:2 }} €</td>
-                <td class="num" data-label="Total (TTC)" data-sort="{{ line.total }}">{{ line.total|floatformat:2 }} €</td>
+                <td class="num" data-label="Prix (TTC)" data-sort="{{ line.price }}">{{ line.price|money }} €</td>
+                <td class="num" data-label="Total (TTC)" data-sort="{{ line.total }}">{{ line.total|money }} €</td>
                 <td data-label="Comble surtout">{% for name in line.fills %}{{ name }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}</td>
             </tr>
             {% endfor %}
@@ -140,8 +141,8 @@
                 {% for shown in earlier %}
                 <tr>
                     <td data-sort="{{ shown.entry.created_at|date:'Y-m-d H:i:s' }}">{{ shown.entry.created_at|date:"d/m/Y H:i" }}</td>
-                    <td class="num" data-label="Montant (TTC)" data-sort="{{ shown.entry.amount }}">{{ shown.entry.amount|floatformat:2 }} €</td>
-                    <td class="num" data-label="Proposé (TTC)" data-sort="{{ shown.entry.total }}">{{ shown.entry.total|floatformat:2 }} €</td>
+                    <td class="num" data-label="Montant (TTC)" data-sort="{{ shown.entry.amount }}">{{ shown.entry.amount|money }} €</td>
+                    <td class="num" data-label="Proposé (TTC)" data-sort="{{ shown.entry.total }}">{{ shown.entry.total|money }} €</td>
                     <td data-label="Recettes">{% for line in shown.lines %}{{ line.name }} × {{ line.count }}{% if not forloop.last %}, {% endif %}{% endfor %}</td>
                 </tr>
                 {% endfor %}
@@ -203,7 +204,7 @@
                 <td class="num" data-label="Écart" data-sort="{{ row.gap }}">{{ row.gap|floatformat:"-2" }}</td>
                 <td class="num" data-label="Perte tolérée" data-sort="{{ row.allowance }}">{{ row.allowance|floatformat:"-2" }}</td>
                 <td class="num" data-label="À combler" data-sort="{{ row.room }}">{% if row.room > 0 %}{{ row.room|floatformat:"-2" }}{% else %}—{% endif %}</td>
-                <td class="num" data-label="Valeur (HT)" data-sort="{{ row.room_value|default:0 }}">{% if row.room_value %}{{ row.room_value|floatformat:2 }} €{% else %}—{% endif %}</td>
+                <td class="num" data-label="Valeur (HT)" data-sort="{{ row.room_value|default:0 }}">{% if row.room_value %}{{ row.room_value|money }} €{% else %}—{% endif %}</td>
                 {% if entries %}
                 <td class="num" data-label="Proposé" data-sort="{{ row.proposed }}">{% if row.proposed %}{{ row.proposed|floatformat:"-2" }}{% else %}—{% endif %}</td>
                 <td class="num" data-label="Comblé" data-sort="{{ row.filled_percent|default:0 }}">{% if row.filled_percent is not None %}{{ row.filled_percent|floatformat:1 }} %{% else %}—{% endif %}</td>
@@ -236,7 +237,7 @@
         </p>
         {% endif %}
         {% if report.unreached %}
-        <p class="muted">{% if report.unreached|length == 1 %}Aucune recette proposée ne l'utilise{% else %}Aucune recette proposée ne les utilise{% endif %} ({{ report.unreached_value|floatformat:2 }} € HT à combler) :
+        <p class="muted">{% if report.unreached|length == 1 %}Aucune recette proposée ne l'utilise{% else %}Aucune recette proposée ne les utilise{% endif %} ({{ report.unreached_value|money }} € HT à combler) :
             {% for row in report.unreached %}{{ row.stock_type.name }}{% if not forloop.last %} · {% endif %}{% endfor %}
         </p>
         {% endif %}

@@ -5857,7 +5857,8 @@ read « Fûts 15 · Bouteilles CO2 1 » - no grammar to get wrong. Comparison
 rows need no agreement either: « Fûts — compté : 15 · sur le bon : 14 → il
 en manque 1 sur le bon (30,00 €) »; never « Le bon compte … », which reads as
 the idiom first. Sentences built in Python write money with ONE helper,
-`comparison.euros`; templates print `|floatformat:2 €` like every page.
+`comparison.euros`; templates print `|money €` like every page (« Amounts
+are grouped by thousands », UI conventions).
 
 **The motif guard (`patterns.py`) - why it comes first.** `regex` is what
 runs a motif, for its `timeout`. But `regex.compile` has NO timeout and
@@ -6306,6 +6307,24 @@ layout - a test about the desktop pins its window.
 
 **Dates are always `|date:"d/m/Y"`.** `LANGUAGE_CODE` is `en-us`, so an
 unformatted date renders "March 31, 2026" in an otherwise French interface.
+
+**Amounts are grouped by thousands** (the owner, 01/10/2026: « 10000€ ->
+10 000€ »): every euro amount a person reads - a page, a message, a check's
+detail, a job log, a chart's label or tooltip, a PDF, a command's report -
+has its whole part in groups of three, a no-break space between them
+(`common.THOUSANDS_SEPARATOR`). A template prints `{{ x|money }} €` (the
+`assets` library: `floatformat` with the same argument and rounding, then
+grouped - `money:4` for four places), Python `common.format_money(x)` (a
+`format` spec, `"+.2f"` for a signed gap) or `group_thousands` on a figure
+already formatted. Only the grouping is shared: the pages keep their point
+(« 1 408.18 € », en-us), the sentences that wrote a comma keep it. **Never
+on a value read back**: an input's value, a `data-*` a script computes or
+sorts with (a chart point's `data-value` is its tooltip, and is grouped),
+an export, the « Données » archive, a file name (« Darty 11€55 … »), a
+parser. datatable.js sorts a grouped amount as the number it is (`\s`
+matches the no-break space). A script writing a sentence the server also
+writes (`document_review.html`'s live checks) groups the same way, the
+space written `String.fromCharCode(0xa0)`.
 
 ### Django's `{# … #}` comment is SINGLE-LINE ONLY
 

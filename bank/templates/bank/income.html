@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load assets %}
 {% block title %}Entrées d'argent - Banque - MarginMate{% endblock %}
 {% block content %}
     <div class="page-header">
@@ -93,7 +94,7 @@
                 {% if report.till_before_statement %}
                     <p>
                         Du {{ report.till_before_from|date:"d/m/Y" }} au {{ report.till_before_to|date:"d/m/Y" }}, la caisse a encaissé
-                        {{ report.till_before_statement_total|floatformat:2 }} €{% if report.till_card_before_statement %} (dont {{ report.till_card_before_statement|floatformat:2 }} € par carte){% endif %}
+                        {{ report.till_before_statement_total|money }} €{% if report.till_card_before_statement %} (dont {{ report.till_card_before_statement|money }} € par carte){% endif %}
                         sur des jours que le relevé ne couvre pas : il commence le {{ report.first_statement_day|date:"d/m/Y" }}.
                         L'écart ci-dessous ne les compte pas ; les chiffres de la caisse, si.
                     </p>
@@ -101,7 +102,7 @@
                 {% if report.bank_before_till %}
                     <p>
                         Du {{ report.bank_before_from|date:"d/m/Y" }} au {{ report.bank_before_to|date:"d/m/Y" }},
-                        {{ report.bank_before_till_total|floatformat:2 }} € sont arrivés sur le compte (carte au brut, espèces,
+                        {{ report.bank_before_till_total|money }} € sont arrivés sur le compte (carte au brut, espèces,
                         chèques, titres-restaurant, avoirs) avant le premier jour de paiements lus en caisse, le
                         {{ report.first_payment_day|date:"d/m/Y" }} : l'écart ci-dessous ne les compte pas.
                     </p>
@@ -115,23 +116,23 @@
         <div class="stat-row">
             <div class="stat">
                 <span class="stat-label">Arrivé sur le compte</span>
-                <span class="stat-value">{{ report.received_total|floatformat:2 }} €</span>
+                <span class="stat-value">{{ report.received_total|money }} €</span>
                 <span class="stat-note">{{ report.received_count }} opération{{ report.received_count|pluralize }}</span>
             </div>
             <div class="stat">
                 <span class="stat-label">{{ sources.card }}</span>
-                <span class="stat-value">{{ report.card_net|floatformat:2 }} €</span>
+                <span class="stat-value">{{ report.card_net|money }} €</span>
                 <span class="stat-note">
                     {{ report.card_count }} versement{{ report.card_count|pluralize }} :
-                    {{ report.card_gross|floatformat:2 }} € encaissés,
-                    {% if report.card_commission is None %}commission inconnue (brut non imprimé){% else %}{{ report.card_commission|floatformat:2 }} € de
+                    {{ report.card_gross|money }} € encaissés,
+                    {% if report.card_commission is None %}commission inconnue (brut non imprimé){% else %}{{ report.card_commission|money }} € de
                     commission{% if report.card_commission_rate is not None %} ({{ report.card_commission_rate|floatformat:2 }} %){% endif %}{% if report.card_from_amount %},
                     dont {{ report.card_from_amount }} sans brut imprimé (commission inconnue){% endif %}{% endif %}
                 </span>
             </div>
             <div class="stat">
                 <span class="stat-label">{{ sources.cash }}</span>
-                <span class="stat-value">{{ report.cash_total|floatformat:2 }} €</span>
+                <span class="stat-value">{{ report.cash_total|money }} €</span>
                 <span class="stat-note">{{ report.cash_count }} dépôt{{ report.cash_count|pluralize }}</span>
             </div>
             {% comment %}
@@ -141,7 +142,7 @@
             {% endcomment %}
             <div class="stat{% if report.unnamed_others %} stat-warn{% endif %}">
                 <span class="stat-label">{{ sources.other }}</span>
-                <span class="stat-value">{{ report.others_total|floatformat:2 }} €</span>
+                <span class="stat-value">{{ report.others_total|money }} €</span>
                 <span class="stat-note">
                     {{ report.others|length }} opération{{ report.others|length|pluralize }}{% if report.unnamed_others %},
                     dont <a href="#autres-entrees">{{ report.unnamed_others }} à classer</a>{% endif %}
@@ -149,14 +150,14 @@
             </div>
             <div class="stat">
                 <span class="stat-label">Vendu en caisse</span>
-                <span class="stat-value">{{ report.takings|floatformat:2 }} €</span>
+                <span class="stat-value">{{ report.takings|money }} €</span>
                 <span class="stat-note">le chiffre d'affaires TTC des jours lus</span>
             </div>
             <div class="stat">
                 <span class="stat-label">Encaissé en caisse</span>
-                <span class="stat-value">{{ report.till_total|floatformat:2 }} €</span>
+                <span class="stat-value">{{ report.till_total|money }} €</span>
                 <span class="stat-note">
-                    tous moyens de paiement{% if report.tips_days %}, dont {{ report.tips|floatformat:2 }} € de
+                    tous moyens de paiement{% if report.tips_days %}, dont {{ report.tips|money }} € de
                     pourboires et trop-perçus sur les {{ report.tips_days }} jour{{ report.tips_days|pluralize }} lu{{ report.tips_days|pluralize }}
                     des deux côtés{% endif %}
                 </span>
@@ -202,19 +203,19 @@
                         <tr>
                             <td><strong>{{ row.label }}</strong></td>
                             <td class="num" data-sort="{{ row.till|default_if_none:''|stringformat:'s' }}">
-                                {% if row.till is not None %}{{ row.till|floatformat:2 }} €{% else %}—{% endif %}
+                                {% if row.till is not None %}{{ row.till|money }} €{% else %}—{% endif %}
                             </td>
                             <td class="num">{% if row.till is not None %}{{ row.till_payments }}{% else %}—{% endif %}</td>
                             <td class="num" data-sort="{{ row.bank|default_if_none:''|stringformat:'s' }}">
-                                {% if row.bank is not None %}{{ row.bank|floatformat:2 }} €{% if row.net is not None %} brut{% endif %}{% else %}—{% endif %}
+                                {% if row.bank is not None %}{{ row.bank|money }} €{% if row.net is not None %} brut{% endif %}{% else %}—{% endif %}
                                 {% if row.from_amount %}<span class="read-as">dont {{ row.from_amount }} au montant reçu</span>{% endif %}
                             </td>
                             <td class="num">{% if row.bank is not None %}{{ row.bank_count }}{% else %}—{% endif %}</td>
                             <td class="num" data-sort="{{ row.difference|default_if_none:''|stringformat:'s' }}">
-                                {% if row.difference is not None %}{{ row.difference|floatformat:2 }} €{% else %}—{% endif %}
+                                {% if row.difference is not None %}{{ row.difference|money }} €{% else %}—{% endif %}
                             </td>
                             <td class="num" data-sort="{{ row.commission|default_if_none:''|stringformat:'s' }}">
-                                {% if row.commission is not None %}{{ row.commission|floatformat:2 }} €{% if row.from_amount %}<span class="read-as">hors {{ row.from_amount }} au montant reçu</span>{% endif %}{% elif row.from_amount %}<span class="muted">inconnue</span>{% else %}—{% endif %}
+                                {% if row.commission is not None %}{{ row.commission|money }} €{% if row.from_amount %}<span class="read-as">hors {{ row.from_amount }} au montant reçu</span>{% endif %}{% elif row.from_amount %}<span class="muted">inconnue</span>{% else %}—{% endif %}
                             </td>
                         </tr>
                     {% endfor %}
@@ -222,12 +223,12 @@
                 <tfoot>
                     <tr>
                         <th>Total</th>
-                        <th class="num">{{ report.till_total|floatformat:2 }} €</th>
+                        <th class="num">{{ report.till_total|money }} €</th>
                         <th></th>
-                        <th class="num">{{ report.received_total|floatformat:2 }} € net</th>
+                        <th class="num">{{ report.received_total|money }} € net</th>
                         <th class="num">{{ report.received_count }}</th>
                         <th></th>
-                        <th class="num">{% if report.card_commission is not None %}{{ report.card_commission|floatformat:2 }} €{% else %}inconnue{% endif %}</th>
+                        <th class="num">{% if report.card_commission is not None %}{{ report.card_commission|money }} €{% else %}inconnue{% endif %}</th>
                     </tr>
                 </tfoot>
             </table>
@@ -265,7 +266,7 @@
                 <div class="stat-row">
                     <div class="stat">
                         <span class="stat-label">Pas encore versé au {{ report.last_payout.entry.day|date:"d/m/Y" }}</span>
-                        <span class="stat-value">{{ report.last_payout.pending|floatformat:2 }} €</span>
+                        <span class="stat-value">{{ report.last_payout.pending|money }} €</span>
                         <span class="stat-note">après le dernier versement carte de la période</span>
                     </div>
                 </div>
@@ -319,7 +320,7 @@
                                 <td class="num" data-sort="{{ row.count }}">
                                     {{ row.count }}{% if row.count_all != row.count %} <span class="muted">sur {{ row.count_all }}</span>{% endif %}
                                 </td>
-                                <td class="num" data-sort="{{ row.total|stringformat:'s' }}">{{ row.total|floatformat:2 }} €</td>
+                                <td class="num" data-sort="{{ row.total|stringformat:'s' }}">{{ row.total|money }} €</td>
                                 <td class="row-actions">
                                     <form method="post" action="{% url 'bank:income_payer_forget' row.payer.pk %}"
                                           data-confirm="Oublier « {{ row.payer.key }} » ? Ses entrées reviennent à la reconnaissance automatique.">
@@ -355,20 +356,20 @@
                         {% for month in report.months %}
                             <tr>
                                 <td data-sort="{{ month.first_day|date:'Y-m-d' }}">{{ month.label }}</td>
-                                <td class="num" data-sort="{{ month.takings|stringformat:'s' }}">{{ month.takings|floatformat:2 }} €</td>
-                                <td class="num" data-sort="{{ month.card_sold|stringformat:'s' }}">{{ month.card_sold|floatformat:2 }} €</td>
-                                <td class="num" data-sort="{{ month.payouts_gross|stringformat:'s' }}">{{ month.payouts_gross|floatformat:2 }} €</td>
+                                <td class="num" data-sort="{{ month.takings|stringformat:'s' }}">{{ month.takings|money }} €</td>
+                                <td class="num" data-sort="{{ month.card_sold|stringformat:'s' }}">{{ month.card_sold|money }} €</td>
+                                <td class="num" data-sort="{{ month.payouts_gross|stringformat:'s' }}">{{ month.payouts_gross|money }} €</td>
                                 {% if month.from_amount and month.from_amount == month.payouts %}
                                     <td class="num" data-sort=""><span class="muted">inconnue</span></td>
                                 {% else %}
                                     <td class="num" data-sort="{{ month.commission|stringformat:'s' }}">
-                                        {{ month.commission|floatformat:2 }} €
+                                        {{ month.commission|money }} €
                                         {% if month.from_amount %}<span class="read-as">hors {{ month.from_amount }} au montant reçu</span>{% endif %}
                                     </td>
                                 {% endif %}
-                                <td class="num" data-sort="{{ month.net|stringformat:'s' }}">{{ month.net|floatformat:2 }} €</td>
-                                <td class="num" data-sort="{{ month.cash_sold|stringformat:'s' }}">{{ month.cash_sold|floatformat:2 }} €</td>
-                                <td class="num" data-sort="{{ month.cash_deposited|stringformat:'s' }}">{{ month.cash_deposited|floatformat:2 }} €</td>
+                                <td class="num" data-sort="{{ month.net|stringformat:'s' }}">{{ month.net|money }} €</td>
+                                <td class="num" data-sort="{{ month.cash_sold|stringformat:'s' }}">{{ month.cash_sold|money }} €</td>
+                                <td class="num" data-sort="{{ month.cash_deposited|stringformat:'s' }}">{{ month.cash_deposited|money }} €</td>
                             </tr>
                         {% endfor %}
                     </tbody>
@@ -399,7 +400,7 @@
                             {% for category in report.other_categories %}
                                 <tr>
                                     <td><strong>{{ category.name }}</strong></td>
-                                    <td class="num" data-sort="{{ category.amount|stringformat:'s' }}">{{ category.amount|floatformat:2 }} €</td>
+                                    <td class="num" data-sort="{{ category.amount|stringformat:'s' }}">{{ category.amount|money }} €</td>
                                     <td class="num">{{ category.count }}</td>
                                 </tr>
                             {% endfor %}
@@ -427,7 +428,7 @@
                                         <strong>{{ line.counterparty|default:line.bank_type }}</strong>
                                         <span class="read-as">{{ line.label|truncatechars:90 }}</span>
                                     </td>
-                                    <td class="num" data-sort="{{ line.amount|stringformat:'s' }}">{{ line.amount|floatformat:2 }} €</td>
+                                    <td class="num" data-sort="{{ line.amount|stringformat:'s' }}">{{ line.amount|money }} €</td>
                                     {% comment %}
                                     data-sort and the name as text beside the field: the value of an <input>
                                     is neither searched nor sorted by static/js/datatable.js, which reads textContent.
@@ -489,7 +490,7 @@
                                         <strong>{{ line.counterparty|default:line.bank_type }}</strong>
                                         <span class="read-as">{{ line.label|truncatechars:90 }}</span>
                                     </td>
-                                    <td class="num" data-sort="{{ line.amount|stringformat:'s' }}">{{ line.amount|floatformat:2 }} €</td>
+                                    <td class="num" data-sort="{{ line.amount|stringformat:'s' }}">{{ line.amount|money }} €</td>
                                     <td>{{ entry.name }}</td>
                                     <td data-sort="{{ entry.how_label }}">{% include "bank/_income_source.html" %}</td>
                                 </tr>
@@ -535,18 +536,18 @@
                                 <tr id="entree-{{ entry.line.pk }}">
                                     <td data-sort="{{ entry.day|date:'Y-m-d' }}">{{ entry.day|date:"d/m/Y" }}</td>
                                     <td class="num" data-sort="{{ entry.gross|stringformat:'s' }}">
-                                        {{ entry.gross|floatformat:2 }} €
+                                        {{ entry.gross|money }} €
                                         {% if entry.gross_from_amount %}<span class="read-as">montant reçu</span>{% endif %}
                                     </td>
                                     <td class="num" data-sort="{{ entry.commission|default_if_none:''|stringformat:'s' }}">
                                         {% if entry.commission is not None %}
-                                            {{ entry.commission|floatformat:2 }} €
+                                            {{ entry.commission|money }} €
                                             {% if entry.commission_rate is not None %}<span class="read-as">{{ entry.commission_rate|floatformat:2 }} %</span>{% endif %}
                                         {% else %}
                                             <span class="muted">inconnue</span>
                                         {% endif %}
                                     </td>
-                                    <td class="num" data-sort="{{ entry.net|stringformat:'s' }}">{{ entry.net|floatformat:2 }} €</td>
+                                    <td class="num" data-sort="{{ entry.net|stringformat:'s' }}">{{ entry.net|money }} €</td>
                                     <td data-sort="{{ row.run.0|date:'Y-m-d' }}">
                                         {% if row.run %}
                                             {% if row.run.0 == row.run.1 %}
@@ -557,7 +558,7 @@
                                         {% else %}—{% endif %}
                                     </td>
                                     <td class="num" data-sort="{{ row.pending|default_if_none:''|stringformat:'s' }}">
-                                        {% if row.pending is not None %}{{ row.pending|floatformat:2 }} €{% else %}<span class="muted">avant la caisse</span>{% endif %}
+                                        {% if row.pending is not None %}{{ row.pending|money }} €{% else %}<span class="muted">avant la caisse</span>{% endif %}
                                     </td>
                                     {% comment %}
                                     The menu on the row asked for only (`changer`): a payout a day is

@@ -45,6 +45,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from accounts import paths
+from common import format_money
 from recipes.integration import require_tenant_for_command
 from recipes.models import PosProduct, PosProductDailyQuantity
 from recipes.pos.laddition_xlsx import LadditionExportError, parse_sales_export
@@ -58,9 +59,10 @@ REVENUE_FIELDS = ["revenue_ttc", "revenue_ht", "revenue_without_rate_ttc", "reve
 
 
 def euros(value) -> str:
-    """1234.5 -> « 1 234,50 € »."""
-    text = f"{Decimal(value):,.2f}".replace(",", " ").replace(".", ",")
-    return f"{text} €"
+    """1234.5 -> « 1 234,50 € », grouped by the no-break space every amount
+    a person reads takes (common.format_money) - this report alone used a
+    plain one."""
+    return f"{format_money(Decimal(value)).replace('.', ',')} €"
 
 
 def _day(value: date) -> str:

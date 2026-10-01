@@ -23,6 +23,7 @@ from decimal import Decimal
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
+from common import group_thousands
 from invoices import einvoice
 from invoices.importing import InvoiceLinesInUseError
 from invoices.models import Invoice
@@ -63,7 +64,7 @@ class Command(BaseCommand):
                 except (RereadError, InvoiceLinesInUseError) as exc:
                     self.stdout.write(f"Laissé : {described} - {exc}")
                     continue
-                self.stdout.write(f"{described} : {stored} € -> {stated} €")
+                self.stdout.write(f"{described} : {group_thousands(stored)} € -> {group_thousands(stated)} €")
                 reread += 1
             if dry_run:
                 transaction.set_rollback(True)

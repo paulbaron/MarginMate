@@ -38,6 +38,17 @@ from returnables.tests import texts
 from returnables.tests.test_patterns import NeverCompile, SlowPattern
 
 U_HAT = texts.U_HAT
+NBSP = "\N{NO-BREAK SPACE}"
+#: A ticket whose amounts pass a thousand euros: 1000 kegs at 1.25 printed
+#: 1300.00 (not 1250.00), and a Deconsigne of -1350.00 (not -1300.00).
+BIG_AMOUNTS = texts.ticket(
+    number="0000001099",
+    printed="16/06/2025 08:00:00",
+    rows=[texts.row(texts.KEG, 1000, "1.25", "1300.00")],
+    delivery_note_lines=["BL No: 610099 du 16/06/2025"],
+    deposit_refund="-1350.00",
+    total_net="-1350.00",
+)
 
 
 def read(text, rules=None, **kwargs) -> SlipReading:
@@ -209,6 +220,28 @@ class QuirksTests(SimpleTestCase):
         failed = check(read(texts.WRONG_TOTAL.text), "Total des lignes = total imprimé")
         self.assertFalse(failed.passed)
         self.assertEqual(failed.detail, "lignes : 90,00 · total imprimé : -120,00")
+
+    def test_amounts_of_a_thousand_or_more_are_said_with_their_thousands_grouped(self):
+        """What a check says is read on the slip's page: « 1 250,00 », a
+        no-break space between the thousands - never in the count (« 1000 »)."""
+        result = read(BIG_AMOUNTS)
+        self.assertEqual(
+            check(result, "quantité × prix = montant").detail,
+            f"« {texts.KEG} » : 1000 × 1,25 = 1{NBSP}250,00, le bon imprime 1{NBSP}300,00",
+        )
+        self.assertEqual(
+            check(result, "Total des lignes = total imprimé").detail,
+            f"lignes : 1{NBSP}300,00 · total imprimé : -1{NBSP}350,00",
+        )
+        # The amounts read stay numbers: only what is said is grouped.
+        self.assertEqual(result.lines[0].amount, Decimal("1300.00"))
+        self.assertEqual(result.printed_total, Decimal("-1350.00"))
+
+    def test_french_number_groups_the_thousands_never_the_decimals(self):
+        self.assertEqual(reading.french_number(Decimal("999.99")), "999,99")
+        self.assertEqual(reading.french_number(Decimal("16568684.00")), f"16{NBSP}568{NBSP}684,00")
+        self.assertEqual(reading.french_number(Decimal("1234.5678")), f"1{NBSP}234,5678")
+        self.assertEqual(reading.french_number(Decimal("-1234.5")), f"-1{NBSP}234,50")
 
     def test_no_section(self):
         result = read(texts.NO_SECTION.text)
@@ -535,6 +568,14 @@ class TraceTests(SimpleTestCase):
         self.assertEqual([[tag.label for tag in line.tags] for line in separators], [[], ["séparateur"], [], []])
         (read_line,) = [line for line in traced if line.read is not None and line.read.quantity == 3]
         self.assertEqual(read_line.read.as_tuple(), texts.NORMAL.lines[0])
+
+    def test_what_a_line_was_read_as_groups_the_thousands_of_its_amounts(self):
+        traced = trace(BIG_AMOUNTS, texts.UBA_RULES)
+        self.assertEqual(
+            self.tags_of(traced, texts.row(texts.KEG, 1000, "1.25", "1300.00")),
+            [("ligne lue", f"{texts.KEG} · quantité 1000 · prix 1,25 · montant 1{NBSP}300,00")],
+        )
+        self.assertEqual(self.tags_of(traced, "Deconsigne : -1350.00"), [("total", f"-1{NBSP}350,00")])
 
     def test_replaces_remarks_and_unread_lines(self):
         self.assertEqual(

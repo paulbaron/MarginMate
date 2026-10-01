@@ -649,6 +649,25 @@ class PaymentsLogTests(SimpleTestCase):
         )
         self.assertIn("Paiements lus : 14,00 € sur 2 jour(s), 2 ticket(s) (Carte 12,00 €, Espèces 2,00 €).", said)
 
+    def test_the_amounts_are_grouped_by_thousands(self):
+        """The log is read on the sales page: « 2 600,00 € », a no-break
+        space between the thousands, the comma decimals kept."""
+        nbsp = "\N{NO-BREAK SPACE}"
+        said = " ".join(
+            payments_log(
+                parse_payment_rows(
+                    [
+                        TICKET_HEADER,
+                        ticket("2026-06-01", 1, "1250", "CB(1250,00)"),
+                        ticket("2026-06-02", 2, "1350", "Avoir(1 350,00)"),
+                    ]
+                )
+            )
+        )
+        self.assertIn(f"Paiements lus : 2{nbsp}600,00 € sur 2 jour(s)", said)
+        self.assertIn(f"Carte 1{nbsp}250,00 €", said)
+        self.assertIn(f"Avoir 1{nbsp}350,00 €", said)
+
     def test_everything_unusual_is_named(self):
         said = " ".join(
             payments_log(

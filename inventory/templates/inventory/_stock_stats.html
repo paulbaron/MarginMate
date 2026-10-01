@@ -1,4 +1,4 @@
-<div class="stat-row stat-row-compact" id="stock-stats"{% if oob %} hx-swap-oob="true"{% endif %}>
+{% load assets %}<div class="stat-row stat-row-compact" id="stock-stats"{% if oob %} hx-swap-oob="true"{% endif %}>
     {% comment %}
     « If there are categories » meant « if the database is not new » until
     two dates could empty them. A window over which nothing was bought but
@@ -12,7 +12,7 @@
         {% if categories %}
             <div class="stat">
                 <div class="stat-label">Manquant (HT)</div>
-                <div class="stat-value {% if total_missing_value %}bad{% endif %}">{{ total_missing_value|floatformat:2 }} €</div>
+                <div class="stat-value {% if total_missing_value %}bad{% endif %}">{{ total_missing_value|money }} €</div>
                 <div class="stat-note">sorti du stock, non expliqué par les ventes</div>
             </div>
             {% if over_stock_count %}
@@ -40,17 +40,17 @@
     {% elif categories or date_window %}
         <div class="stat">
             <div class="stat-label">Total acheté (HT)</div>
-            <div class="stat-value">{{ total_value_ht|floatformat:2 }} €</div>
+            <div class="stat-value">{{ total_value_ht|money }} €</div>
             <div class="stat-note">produits, {% if date_window %}{{ date_window_label }}{% else %}depuis le début{% endif %} — hors charges</div>
         </div>
         <div class="stat">
             <div class="stat-label">Total acheté (TTC)</div>
-            <div class="stat-value">{{ total_value_ttc|floatformat:2 }} €</div>
+            <div class="stat-value">{{ total_value_ttc|money }} €</div>
         </div>
         {% if charge_suppliers %}
             <div class="stat">
                 <div class="stat-label">Charges (TTC)</div>
-                <div class="stat-value">{{ charge_total_ttc|floatformat:2 }} €</div>
+                <div class="stat-value">{{ charge_total_ttc|money }} €</div>
                 <div class="stat-note">{% if date_window %}{{ date_window_label }}{% else %}sur les douze derniers mois{% endif %}</div>
             </div>
         {% endif %}
