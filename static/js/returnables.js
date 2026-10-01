@@ -9,12 +9,14 @@
  *   blank taken as 0, kept within 0..9 999, the field's text selected when it
  *   is focused so a new number replaces the old; Enter in a count (the
  *   keypad's key on Android) moves to the next one and never sends the form;
- * - the photos: after each shot the filled input is moved into a hidden box
- *   of the same form and a fresh one takes its place - a camera input holds
- *   ONE photo, and every input named `photos` is posted - with a preview
- *   and « Retirer » for each photo (a multiple input's files are rebuilt
- *   without it), and no more than the pickup may take (its 11th is refused
- *   with a line of text; the server keeps the first ten all the same);
+ * - the photos are static/js/photos.js's (loaded before this file, and
+ *   shared with Achats' import card): after each shot the filled input is
+ *   moved into a hidden box of the same form and a fresh one takes its
+ *   place - a camera input holds ONE photo, and every input named `photos`
+ *   is posted - with a preview and « Retirer » for each photo (a multiple
+ *   input's files are rebuilt without it), and no more than the pickup may
+ *   take (data-max-photos: its 11th is refused with a line of text; the
+ *   server keeps the first ten all the same);
  * - the draft (new pickup only): what was typed, kept in the browser for 12
  *   hours under a key of the tenant (<body data-tenant>, base.html - storage
  *   belongs to the origin, not to the login), offered back into a blank
@@ -98,114 +100,13 @@
 
     // --------------------------------------------------------------- photos
 
+    // static/js/photos.js, loaded before this file (defer keeps the order):
+    // the picking, the previews, « Retirer » and the pickup's cap
+    // (data-max-photos). Missing, the inputs stay the browser's own and the
+    // draft counts no photo.
     function setUpPhotos(form) {
-        var box = form.querySelector("[data-photos]");
-        if (!box) return function () { return 0; };
-        var max = parseInt(box.getAttribute("data-max-photos"), 10) || 0;
-        var store = box.querySelector("[data-photo-inputs]");
-        var list = box.querySelector("[data-photo-previews]");
-        var refusal = box.querySelector("[data-photo-refused]");
-        var entries = [];
-
-        box.querySelectorAll("[data-photo-slot] input[type=file]").forEach(function (input) {
-            input.classList.add("visually-hidden");
-        });
-
-        function say(text) {
-            refusal.textContent = text;
-            refusal.hidden = !text;
-        }
-
-        function changed() {
-            fire(form, "photos-changed");
-        }
-
-        function forget(entry) {
-            try { URL.revokeObjectURL(entry.url); } catch (error) { /* already gone */ }
-            if (entry.item && entry.item.parentNode) entry.item.parentNode.removeChild(entry.item);
-        }
-
-        function rebuild(input, kept) {
-            try {
-                var transfer = new DataTransfer();
-                kept.forEach(function (other) { transfer.items.add(other.file); });
-                input.files = transfer.files;
-                return true;
-            } catch (error) {
-                return false;
-            }
-        }
-
-        function remove(entry) {
-            forget(entry);
-            entries = entries.filter(function (other) { return other !== entry; });
-            var siblings = entries.filter(function (other) { return other.input === entry.input; });
-            if (siblings.length && !rebuild(entry.input, siblings)) {
-                // No DataTransfer here: the photos picked with it go together.
-                siblings.forEach(forget);
-                entries = entries.filter(function (other) { return other.input !== entry.input; });
-                siblings = [];
-            }
-            if (!siblings.length && entry.input.parentNode) entry.input.parentNode.removeChild(entry.input);
-            say("");
-            changed();
-        }
-
-        function preview(entry) {
-            var item = document.createElement("li");
-            item.className = "photo-preview";
-            var image = document.createElement("img");
-            entry.url = URL.createObjectURL(entry.file);
-            image.src = entry.url;
-            image.alt = entry.file.name;
-            var name = document.createElement("span");
-            name.className = "small muted";
-            name.textContent = entry.file.name;
-            var button = document.createElement("button");
-            button.type = "button";
-            button.className = "btn btn-small btn-secondary";
-            button.textContent = "Retirer";
-            button.addEventListener("click", function () { remove(entry); });
-            item.appendChild(image);
-            item.appendChild(name);
-            item.appendChild(button);
-            list.appendChild(item);
-            entry.item = item;
-        }
-
-        box.addEventListener("change", function (event) {
-            var input = event.target;
-            if (!input.matches || !input.matches("[data-photo-slot] input[type=file]")) return;
-            var files = Array.prototype.slice.call(input.files || []);
-            if (!files.length) return;
-            var room = Math.max(0, max - entries.length);
-            var kept = files.slice(0, room);
-            if (kept.length < files.length) {
-                var refused = files.length - kept.length;
-                say(max + " photos au plus : " + refused + (refused > 1 ? " photos n'ont pas été ajoutées." : " photo n'a pas été ajoutée."));
-                if (!kept.length || !rebuild(input, kept.map(function (file) { return { file: file }; }))) {
-                    input.value = "";
-                    changed();
-                    return;
-                }
-            } else {
-                say("");
-            }
-            // The filled input keeps its photos in the hidden box; a fresh one,
-            // empty, takes its place under the same label.
-            var fresh = input.cloneNode(false);
-            fresh.value = "";
-            input.parentNode.insertBefore(fresh, input);
-            store.appendChild(input);
-            kept.forEach(function (file) {
-                var entry = { input: input, file: file };
-                entries.push(entry);
-                preview(entry);
-            });
-            changed();
-        });
-
-        return function () { return entries.length; };
+        if (!window.MarginMatePhotos) return function () { return 0; };
+        return window.MarginMatePhotos.setUp(form);
     }
 
     // ----------------------------------------------------- the folded line

@@ -28,7 +28,7 @@ from django.core.files.storage import default_storage
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
 from django.template.loader import get_template
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
@@ -261,6 +261,23 @@ class HomePageTests(PageTestCase):
         self.assertIn("Choisir des photos", html)
         self.assertIn(f'data-max-photos="{MAX_PHOTOS}"', html)
 
+    def test_the_photos_script_runs_before_the_page_s(self):
+        """The photos are static/js/photos.js's since Achats takes them too
+        (01/10): returnables.js asks it for them as the page loads. Both are
+        deferred, so the order they are written in is the order they run -
+        written after, the photos stayed the browser's own and the draft
+        counted none."""
+        html = self.html(HOME)
+        scripts = re.findall(r"<script\b[^>]*>", html)
+        (photos,) = [index for index, tag in enumerate(scripts) if "js/photos.js?v=" in tag]
+        (page,) = [index for index, tag in enumerate(scripts) if "js/returnables.js?v=" in tag]
+        self.assertLess(photos, page)
+        self.assertIn(" defer", scripts[photos])
+        # Consignes' own box: a count, no byte cap, no renaming - as before.
+        box = re.search(r"<fieldset [^>]*data-photos[^>]*>", html).group(0)
+        self.assertNotIn("data-max-bytes", box)
+        self.assertNotIn("data-photo-rename", box)
+
     def test_one_count_per_active_type_the_kegs_first_and_bigger(self):
         make_type("Casiers jus", position=4, is_active=False)
         html = self.html(HOME)
@@ -348,6 +365,29 @@ class HomePageTests(PageTestCase):
         self.assertIn(f'<a href="{reverse("returnables:format_list")}">Formats de bons</a>', html)
         self.assertIn(f'<a href="{reverse("returnables:type_list")}">Types de consigne</a>', html)
         self.assertIn('<details class="explainer">', html)
+
+
+class EveryPageOfTheScriptLoadsThePhotosFirstTests(SimpleTestCase):
+    def test_every_template_loading_returnables_js_loads_photos_js_before_it(self):
+        """Read on the templates themselves: a page loading returnables.js
+        without photos.js before it draws its photo inputs bare."""
+        root = Path(__file__).resolve().parents[2]
+        paths_found = sorted({*root.glob("templates/**/*.html"), *root.glob("*/templates/**/*.html")})
+        loading = []
+        for path in paths_found:
+            if ".venv" in path.parts:
+                continue
+            scripts = re.findall(r"<script\b[^>]*>", path.read_text(encoding="utf-8"))
+            pages = [index for index, tag in enumerate(scripts) if "js/returnables.js" in tag]
+            if not pages:
+                continue
+            loading.append(path.name)
+            with self.subTest(template=path.name):
+                photos = [index for index, tag in enumerate(scripts) if "'js/photos.js'" in tag]
+                self.assertEqual(len(photos), 1)
+                self.assertLess(photos[0], pages[0])
+                self.assertIn(" defer", scripts[photos[0]])
+        self.assertEqual(sorted(loading), ["home.html", "pickup_detail.html", "slip_detail.html"])
 
 
 # -- A new pickup --------------------------------------------------------------------------------------------------------

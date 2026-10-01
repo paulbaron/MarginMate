@@ -334,6 +334,7 @@ KEPT_AT_LOGOUT = {
     "stock:rows": "which articles are opened on Produits & charges - ids, no figure",
     "stock:panel-closed": "the side panel folded",
     "achats:import-tab": "the way of adding purchases chosen last",
+    "achats:pending-photos": "how many camera shots wait on Achats' import card, in this tab - a count, no photo",
 }
 #: `"marginmate:" + TENANT_SCOPE + "<what>` in a page's script.
 BUILT_KEY = re.compile(r"""["']marginmate:["']\s*\+\s*TENANT_SCOPE\s*\+\s*["']([^"'{]+)""")

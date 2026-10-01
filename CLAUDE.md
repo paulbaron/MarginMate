@@ -480,7 +480,10 @@ handlers render them.
   folder (`invoices.forms.RECEIPT_BATCH_MAX_BYTES`) - counting only the
   files it STAGES: an ignored video or a refused file is listed and weighs
   nothing (UPLOAD-TOTAL-IGNORED) -, « Données » its own 4 GB and free-disk
-  check. `invoices/ocr.page_images` weighs a document BEFORE rendering:
+  check. `common.ONLINE_SEND_MAX_BYTES` (90 MiB) is no server cap: it is
+  what Achats' « Prendre une photo » lets one post carry, short of
+  Cloudflare's 100 MB (« A folder is a background job » and below).
+  `invoices/ocr.page_images` weighs a document BEFORE rendering:
   `MAX_PAGES` 30, `RENDER_MAX_PIXELS` 40 Mpx from `page.get_size()` (a lower
   resolution down to 100 dpi, then `DocumentTooBig`), `IMAGE_MAX_PIXELS`
   read from the header. **Tests patch the caps down and use tiny files -
@@ -1671,6 +1674,86 @@ phone photo's rotation lives in its EXIF tag, so `ocr.page_images` applies it
 or the receipt is read sideways; and scanning the same folder again has to be
 cheap, so `import_receipt` checks the file's SHA-256
 (`Invoice.source_sha256`, backfilled by migration 0014) before any OCR.
+
+**« Prendre une photo » on the import card** (the owner, 01/10/2026: « comme
+pour les consignes »). A third choice, the first of « Tickets et factures »:
+a camera input (`capture="environment"`) posting as `files` like the other
+two, inside a `[data-photos]` box set up by `static/js/photos.js` - the
+photo picking Consignes had in returnables.js, moved out and shared
+(purchases.html calls `MarginMatePhotos.setUp(form)` on DOMContentLoaded:
+the script is deferred, the page's inline one is not). After each shot the
+filled input moves into the box's hidden store, still in the form, and a
+fresh one takes its place, with a preview and « Retirer ». « Des fichiers »
+and « Un dossier entier » are no photo slots: native inputs, as before.
+- **Touch screens only** (`.upload-choice-camera`: hidden at the top level,
+  drawn in the « touch » section, with its gap): a desktop browser ignores
+  `capture`, and the tile would only open a file dialog beside « Des
+  fichiers ». A touch screen is `(pointer: coarse)`, never a width.
+- **What a shot says sits right under its tile**: the tile, then the
+  store, the refusal (`role="status"`, `aria-live`) and the previews, then
+  the grid of the two other choices - as on Consignes. After the whole grid,
+  a phone drew a refused shot's sentence a screen below the tile tapped
+  (review of 01/10), and the paper ticket could be thrown away on the
+  belief it was taken.
+- **One photo is one document.** Each shot is a file of the batch, read on
+  its own: a paper invoice of several pages photographed page by page
+  becomes several documents. A PDF (a scan of every page) stays the way
+  for those; the tile says « un ticket ou une facture par photo ».
+- **Each shot is renamed** `photo-YYYYMMDD-HHMMSS` + its extension, from
+  its `lastModified` in local time (`data-photo-rename`; `-2`, `-3`… for a
+  name a photo of the box already has; the extension lower-cased, else
+  taken from the type: `image/jpeg` is `.jpg`). iOS names every camera shot
+  `image.jpg` and Android a bare number - which, with no extension,
+  `ReceiptBatchUploadForm` lists as ignored - and the import names each
+  file by its name (the batch page, the document's source file). Where
+  DataTransfer is missing the names stay as they came: two `image.jpg`
+  still stage apart (`stage_batch` stores by index, duplicates are found by
+  content).
+- **No post with a shot in it passes the cap, whatever the order**
+  (`data-max-bytes`, `common.ONLINE_SEND_MAX_BYTES`, 90 MiB, read when the
+  page is drawn). Online, a body over 100 MB is refused by Cloudflare's free
+  plan with its own English page before the server sees it, and a browser
+  never gives the photos of a refused post back - nor, usually, are they
+  in the phone's gallery. Three checks, each said in one sentence, the weight said
+  by `MarginMatePhotos.weight`, `common.weight`'s twin:
+  - a shot that would take what the FORM posts (every file input of it, the
+    other choices' files included) past the cap is refused as it is taken
+    (« Photo non ajoutée : l'envoi dépasserait 90 Mo. Importez d'abord ce
+    qui est déjà choisi, puis reprenez-la. »);
+  - while a shot waits, a pick in « Des fichiers » or « Un dossier entier »
+    that would pass it is emptied (« Fichier non ajouté : … puis
+    choisissez-le à nouveau. »). Weighed only at the next shot, shots first
+    and a big PDF next went past Cloudflare and lost the shots (review of
+    01/10);
+  - and while a shot waits, a submit past it is held (« Envoi arrêté : … »),
+    before ui.js's busy label, which leaves a held submit alone - the last
+    line, for a selection that changed with no `change` event.
+  The last two sentences are scrolled into view (the finger is on another
+  choice, or on « Importer »). **With no shot waiting nothing is checked,
+  and the server does not enforce it**: a refused post then loses nothing,
+  and a folder imported on the PC itself never meets Cloudflare and goes to
+  500 MB. No count cap (`data-max-photos` absent; Consignes' box keeps its
+  own, and none of the above runs there: it has no `data-max-bytes`).
+- **The busy label**: while a shot waits, « Importer » sends as « Envoi des
+  photos… gardez la page ouverte » (Consignes' words), else « Envoi… ».
+- **A shot is not lost without a word** (purchases.html): leaving the page
+  with one waiting asks first (`beforeunload`, as the timesheet's grid; an
+  Achats tab is an htmx swap and keeps them), and how many wait is noted
+  for the TAB (`sessionStorage`, `achats:pending-photos`, kept at logout:
+  a count, no photo - another tab of Achats has photos of its own). A page
+  drawn again with none says once that they were lost (« 2 photos prises
+  n'ont pas été importées : la page a été quittée ou rechargée avant
+  « Importer ». Reprenez-les. ») - Android may drop the tab while its camera
+  app is in front, and it came back empty with nothing saying so. Consignes'
+  draft says the same (« N photos à reprendre »).
+Tests: `invoices/tests/test_purchases_page.py` (`CameraOnTheImportCardTests`:
+the markup and its order, the cap followed), `test_upload_limits.py` (two
+`image.jpg`), `tests/test_ui.py` (the tile's CSS, photos.js writes no
+markup), `returnables/tests/test_views.py` (photos.js before returnables.js),
+`accounts/tests/test_sessions.py` (the key classified), and in Chrome
+`invoices/tests/test_receipt_camera_browser.py` (a phone and a desktop -
+every check above, and no hold with no shot - `start_batch` patched: no OCR
+runs).
 
 **An unrecognised ticket is not a dead end - the reader works for any shop.**
 A torn or faded header, or a shop nothing was set up for, is enough for
@@ -5408,11 +5491,15 @@ at least):
   refusal the page cannot make first, and it has no photo to lose.
 - **`static/js/returnables.js`** (nodes built with textContent only): the
   − / + steppers (drawn `hidden`, `type="button"`, `touch-action:
-  manipulation` so fast taps never zoom); after each shot the filled photo
-  input moves into a hidden box of the form and a fresh one takes its place
-  (a camera input holds ONE photo), with previews and « Retirer » (a
-  multiple input's files rebuilt through DataTransfer) and the 11th refused;
-  the draft of the new reprise in localStorage under the espace (12 h,
+  manipulation` so fast taps never zoom); the photos, which are
+  **`static/js/photos.js`**'s since 01/10 - shared with Achats' « Prendre
+  une photo » (« A folder is a background job » and below), and
+  loaded BEFORE returnables.js on every page that loads it, both deferred
+  (`returnables/tests/test_views.py` checks the order): after each shot the
+  filled photo input moves into a hidden box of the form and a fresh one
+  takes its place (a camera input holds ONE photo), with previews and
+  « Retirer » (a multiple input's files rebuilt through DataTransfer) and
+  the 11th refused (`data-max-photos`); the draft of the new reprise in localStorage under the espace (12 h,
   offered back into a blank form - a restored note is named and its folded
   part opened -, « Effacer » puts back today and the offered « Repris par »,
   forgotten on `?enregistree=1`); the stale tab (a tab opened yesterday moves
