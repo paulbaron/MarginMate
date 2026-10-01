@@ -2449,9 +2449,7 @@ class DeployDocumentTests(SimpleTestCase):
             with self.subTest(said=said):
                 self.assertIn(said, words)
         # The key is compared before the copy goes, and the copy before the backups.
-        self.assertLess(
-            words.index("comparez leurs lignes"), words.index("Supprimez chaque copie du `.env`")
-        )
+        self.assertLess(words.index("comparez leurs lignes"), words.index("Supprimez chaque copie du `.env`"))
         self.assertLess(words.index("Faites une nouvelle sauvegarde"), words.index("supprimez les sauvegardes plus"))
         # What backup_data and the refresh now do about it, where the owner reads them.
         eighth = " ".join(section(self.deploy, "## 8. Sauvegardes").split())
