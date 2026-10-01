@@ -1,4 +1,4 @@
-{% comment %}
+{% load assets %}{% comment %}
 The documents behind a charge, opened under its row - a rent month after
 month, a subscription, a water bill. One line per document, each linking to
 the document it came from, exactly as a stock item's purchases do.
@@ -43,14 +43,14 @@ the panel would be swapped inside itself.
                         <td class="nowrap" data-label="Date" data-sort="{{ row.invoice.invoice_date|date:'Y-m-d' }}">
                             {{ row.invoice.invoice_date|date:"d/m/Y"|default:"—" }}
                         </td>
-                        <td class="num" data-label="HT">{{ row.total_ht|floatformat:2 }} €</td>
+                        <td class="num" data-label="HT">{{ row.total_ht|money }} €</td>
                         {% comment %}
                         The tax as an amount, not as a rate: a water bill prints
                         two of them on one document, and printing one would be a
                         lie about the other while "—" says nothing at all.
                         {% endcomment %}
-                        <td class="num" data-label="TVA">{{ row.total_vat|floatformat:2 }} €</td>
-                        <td class="num" data-label="TTC">{{ row.total_ttc|floatformat:2 }} €</td>
+                        <td class="num" data-label="TVA">{{ row.total_vat|money }} €</td>
+                        <td class="num" data-label="TTC">{{ row.total_ttc|money }} €</td>
                         <td class="num phone-card-end">
                             <a class="btn btn-small btn-secondary" href="{% url 'invoices:invoice_edit_lines' row.invoice.pk %}">Corriger</a>
                         </td>
@@ -74,7 +74,7 @@ the panel would be swapped inside itself.
                         <a href="{{ back_url }}" hx-get="{{ back_url }}" hx-target="closest .row-panel" hx-swap="outerHTML">revenir {{ back_label }}</a>
                         {% else %} — tout l'historique{% endif %}
                     </td>
-                    <td class="num" data-label="TTC">{{ total_ttc|floatformat:2 }} €</td>
+                    <td class="num" data-label="TTC">{{ total_ttc|money }} €</td>
                     <td></td>
                 </tr>
             </tfoot>

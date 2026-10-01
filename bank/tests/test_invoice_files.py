@@ -15,6 +15,9 @@ from bank.models import BankTransaction, InvoicePayment
 from bank.tests.test_reconcile import Fixtures, debit_row
 from invoices.models import Supplier
 
+#: What separates an amount's thousands in the list (common.THOUSANDS_SEPARATOR).
+NBSP = "\N{NO-BREAK SPACE}"
+
 
 def credit_row(day, label, amount):
     return f"{day:%d/%m/%Y};VIREMENT RECU;VIR SEPA RECU;VIR SEPA RECU DE {label};{day:%d/%m/%Y};{amount}"
@@ -73,6 +76,20 @@ class InvoiceFilesTests(Fixtures, TestCase):
         _, archive = self.download(mois="2026-07")
         missing = archive.read("Factures sans fichier.txt").decode()
         self.assertIn(f"{Supplier.objects.get(code='UBA').name} n° UBA-7, 01/07/2026, 12.00 € TTC", missing)
+
+    def test_the_list_groups_a_total_s_thousands_and_the_file_names_do_not(self):
+        """« Factures sans fichier.txt » is read by the accountant: its
+        totals group their thousands, as every page does. A file's name is
+        the owner's « Metro 1800€00 … », never grouped."""
+        typed = self.invoice("METRO", date(2026, 7, 2), "1000.00", invoice_number="M-1200")
+        kept = self.invoice("METRO", date(2026, 7, 3), "1500.00")
+        kept.source_file.save("metro-gros.pdf", ContentFile(b"%PDF big"))
+        self.load(debit_row(date(2026, 7, 21), "METRO FRANCE", "3 000,00"))
+        reconcile.link(BankTransaction.objects.get(operation_date=date(2026, 7, 21)), [typed, kept])
+        _, archive = self.download(mois="2026-07")
+        self.assertIn("Metro 1800€00 03_07_2026.pdf", archive.namelist())
+        missing = archive.read("Factures sans fichier.txt").decode()
+        self.assertIn(f"{typed.supplier.name} n° M-1200, 02/07/2026, 1{NBSP}200.00 € TTC", missing)
 
     def test_the_free_dates_are_the_window(self):
         response, archive = self.download(du="2026-08-01", au="2026-08-31")

@@ -1,3 +1,4 @@
+{% load assets %}
 {% comment %}
 What was sold: fetched from the till, typed by hand, or invoiced - the other
 half of the stock variance.
@@ -145,7 +146,7 @@ nothing saying the period had been dropped.
                         {{ line.quantity|floatformat:"-2" }} × {{ line.source_name }}{% if not forloop.last %}<br>{% endif %}
                     {% endfor %}
                 </td>
-                <td class="num">{{ document.total_ttc|floatformat:2 }} €</td>
+                <td class="num">{{ document.total_ttc|money }} €</td>
                 <td class="num row-actions">
                     <a class="btn btn-small btn-secondary" href="{% url 'recipes:sale_document_update' document.pk %}{% querystring %}">Modifier</a>
                     <form method="post" action="{% url 'recipes:sale_document_delete' document.pk %}{% querystring %}"

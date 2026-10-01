@@ -8,7 +8,7 @@ from django.db.models import Q, Value
 from django.db.models.functions import Concat
 from django.utils import timezone
 
-from common import JobLogMixin
+from common import JobLogMixin, group_thousands
 
 #: Which attachment of an e-mail is the invoice, by default. Since the
 #: electronic invoicing reform an invoice arrives as a Factur-X PDF **or as
@@ -822,7 +822,7 @@ class ShopItemPrice(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.supplier} {self.unit_price_ttc} EUR -> {self.label}"
+        return f"{self.supplier} {group_thousands(self.unit_price_ttc)} EUR -> {self.label}"
 
 
 def label_for_unit_price(supplier, unit_price_ttc, on_date=None):

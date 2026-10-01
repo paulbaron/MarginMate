@@ -52,6 +52,9 @@ from tests.factories import (
 )
 
 PAGE = "margins:margins_home"
+#: What groups an amount's thousands on the page (common.THOUSANDS_SEPARATOR):
+#: « 1 000.00 € ».
+NBSP = "\N{NO-BREAK SPACE}"
 
 
 def till_product(name, recipe=None, category="", typology="") -> PosProduct:
@@ -114,8 +117,12 @@ def row_of(html: str, name: str) -> str:
 def text_of(fragment: str) -> str:
     """A fragment as it reads on screen: no tags, and the template's own line
     breaks collapsed. A sentence asserted against raw HTML passes or fails on
-    where the indentation happens to fall."""
-    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", fragment)).strip()
+    where the indentation happens to fall.
+
+    The no-break space grouping an amount's thousands is kept: it is no
+    indentation, and collapsed into a plain space « 1 000.00 € » would pass
+    whatever separator the page printed."""
+    return re.sub(rf"[^\S{NBSP}]+", " ", re.sub(r"<[^>]+>", " ", fragment)).strip()
 
 
 def cells_of(row: str) -> list[str]:
@@ -961,3 +968,69 @@ class TheCostNoteTests(TestCase):
 
         self.assertIn("10 unités de caisse", text_of(stat))
         self.assertNotIn("hors caisse", text_of(stat))
+
+
+class AmountsAreGroupedByThousandsTests(TestCase):
+    """Every amount the page prints has its thousands grouped by a no-break
+    space (the owner, 01/10/2026: « 10000€ -> 10 000€ ») - a headline, a
+    category's cells, both ends of a range, the sentence a row says. The
+    unit counts beside them and the `data-sort` datatable.js sorts by stay
+    as they were.
+
+    2 000 punches costed 0,50 € or 1,00 € (an « OU »), 12 000,00 € HT taken;
+    2 500,00 € of wine taken with no VAT rate; 4 321,00 € invoiced."""
+
+    @classmethod
+    def setUpTestData(cls):
+        day = timezone.localdate() - timedelta(days=5)
+        cheap = priced_article("Rhum blanc", unit_cost="10.00", quantity="1000")
+        dear = priced_article("Rhum ambré", unit_cost="20.00", quantity="1000")
+        recipe = make_recipe(name="Punch du comptoir", selling_price_ttc="7.20", vat_rate="0.20")
+        make_ingredient(recipe, stock_type=cheap, quantity="0.05", group=1)
+        make_ingredient(recipe, stock_type=dear, quantity="0.05", group=1)
+        punch = till_product("Punch du comptoir", recipe=recipe, category="Cocktails")
+        rang_up(punch, day, 2000, ttc="14400.00", ht="12000.00")
+        wine = till_product("Vin nature", category="Vins")
+        rang_up(wine, day, 300, ttc="2500.00", ht="0", without_rate="2500.00")
+        invoiced(day, total_ht="4321.00")
+
+    def html(self) -> str:
+        response = self.client.get(reverse(PAGE))
+        self.assertEqual(response.status_code, 200)
+        return response.content.decode()
+
+    def test_the_headline_figures_are_grouped(self):
+        html = self.html()
+
+        income = stat_of(html, "Encaissé (HT)")
+        self.assertEqual(value_of(income), f"12{NBSP}000.00 €")
+        self.assertIn(f"16{NBSP}900.00 € TTC", text_of(income))
+        self.assertEqual(value_of(stat_of(html, "Facturé (HT)")), f"4{NBSP}321.00 €")
+        self.assertEqual(value_of(stat_of(html, "Marge réelle (HT)")), f"7{NBSP}679.00 €")
+
+    def test_both_ends_of_a_range_are_grouped(self):
+        self.assertEqual(value_of(stat_of(self.html(), "Marge produits (HT)")), f"10{NBSP}000.00 à 11{NBSP}000.00 €")
+
+    def test_a_category_row_groups_its_money_and_leaves_its_units_alone(self):
+        cells = cells_of(row_of(self.html(), "Cocktails"))
+
+        self.assertEqual(
+            cells[1:5],
+            [f"12{NBSP}000.00 €", "2000", f"1{NBSP}000.00 à 2{NBSP}000.00 €", f"10{NBSP}000.00 à 11{NBSP}000.00 €"],
+        )
+
+    def test_the_figures_a_column_sorts_by_stay_raw(self):
+        """datatable.js reads `data-sort` as a number: grouped, « 2 000 »
+        would sort as text again."""
+        sorts = re.findall(r'data-sort="([^"]*)"', row_of(self.html(), "Cocktails"))
+
+        self.assertTrue(sorts)
+        self.assertFalse([value for value in sorts if NBSP in value])
+        self.assertEqual(Decimal(sorts[0]), Decimal("2000"))
+
+    def test_the_sentence_beside_a_margin_groups_its_amount(self):
+        """SliceRow.note builds it in Python, not in the template."""
+        self.assertIn(f"2{NBSP}500.00 € encaissés sans taux de TVA", cells_of(row_of(self.html(), "Vins"))[6])
+
+    def test_the_gap_named_at_the_foot_is_grouped(self):
+        self.assertIn(f"— 2{NBSP}500.00 € sans taux de TVA", text_of(self.html()))

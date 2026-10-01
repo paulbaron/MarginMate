@@ -86,8 +86,14 @@ class WordsTests(SimpleTestCase):
     def test_euros_writes_a_comma_and_a_no_break_space(self):
         self.assertEqual(euros(D("30")), f"30,00{NBSP}€")
         self.assertEqual(euros(30), f"30,00{NBSP}€")
-        self.assertEqual(euros(D("1234.5")), f"1234,50{NBSP}€")
         self.assertEqual(euros(D("-12.30")), f"-12,30{NBSP}€")
+
+    def test_euros_groups_the_thousands_by_a_no_break_space(self):
+        self.assertEqual(euros(D("999.99")), f"999,99{NBSP}€")
+        self.assertEqual(euros(D("1234.5")), f"1{NBSP}234,50{NBSP}€")
+        self.assertEqual(euros(10000), f"10{NBSP}000,00{NBSP}€")
+        self.assertEqual(euros(D("16568684")), f"16{NBSP}568{NBSP}684,00{NBSP}€")
+        self.assertEqual(euros(D("-1234.567")), f"-1{NBSP}234,57{NBSP}€")
 
     def test_euros_rounds_half_away_from_zero_and_never_prints_minus_zero(self):
         self.assertEqual(euros(D("0.125")), f"0,13{NBSP}€")
@@ -198,6 +204,13 @@ class CompareTests(SimpleTestCase):
         )
         self.assertEqual(
             self.rows({1: 15}, [keg_line(15)]).rows[0].sentence, f"Fûts — compté : 15 {DOT} sur le bon : 15 {CHECK}"
+        )
+
+    def test_a_gap_of_a_thousand_euros_or_more_has_its_thousands_grouped(self):
+        """The counts are not money: « 1500 » stays whole."""
+        self.assertEqual(
+            self.rows({1: 1500}, [keg_line(1460)]).rows[0].sentence,
+            f"Fûts — compté : 1500 {DOT} sur le bon : 1460 {ARROW} il en manque 40 sur le bon (1{NBSP}200,00{NBSP}€)",
         )
 
     def test_one_row_per_type_on_either_side_in_the_types_order(self):

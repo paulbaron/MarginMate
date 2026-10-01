@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load assets %}
 {% block title %}Dépenses sans facture attendue - MarginMate{% endblock %}
 {% block content %}
     <div class="page-header">
@@ -31,7 +32,7 @@
 
         {% if test %}
             <div class="message">
-                <strong>{{ test.count }} dépense{{ test.count|pluralize }}</strong>, {{ test.total|floatformat:2 }} €,
+                <strong>{{ test.count }} dépense{{ test.count|pluralize }}</strong>, {{ test.total|money }} €,
                 correspond{{ test.count|pluralize:"ent" }} à ce motif.
                 {% if test.linked %}
                     <br>Dont {{ test.linked }} déjà rattachée{{ test.linked|pluralize }} à une facture : le motif est
@@ -56,7 +57,7 @@
                                         <strong>{{ line.counterparty|default:line.bank_type }}</strong>
                                         <span class="read-as">{{ line.label|truncatechars:90 }}</span>
                                     </td>
-                                    <td class="num" data-sort="{{ line.amount|stringformat:'s' }}">{{ line.amount|floatformat:2 }} €</td>
+                                    <td class="num" data-sort="{{ line.amount|stringformat:'s' }}">{{ line.amount|money }} €</td>
                                 </tr>
                             {% endfor %}
                         </tbody>
@@ -106,7 +107,7 @@
                             </td>
                             <td class="num">{{ found.count|default:"0" }}</td>
                             <td class="num" data-sort="{{ found.total|stringformat:'s' }}">
-                                {{ found.total|floatformat:2 }} €
+                                {{ found.total|money }} €
                                 {% if found.linked %}
                                     <span class="status-pill status-NEEDS_REVIEW">dont {{ found.linked }} rattachée{{ found.linked|pluralize }}</span>
                                 {% endif %}

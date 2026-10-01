@@ -44,7 +44,7 @@ from django.db.models.functions import Length
 from django.utils import timezone
 
 from accounts.tenancy import integrations_allowed, tenant_key
-from common import error_for_page
+from common import error_for_page, format_money
 
 from . import einvoice
 from .identifiers import describe as describe_identifier
@@ -1811,14 +1811,22 @@ def lines_check(invoice: Invoice, prefix: str = "") -> dict:
     discounts = sum((line.discount_ttc for line in lines if line.printed_ttc is not None), start=Decimal("0"))
     # The promotions apart, as the page shows them: the articles are what the
     # ticket prints as its total before promotions.
-    promotions = f" - articles {lines_total + discounts:.2f} € moins {discounts:.2f} € de remises" if discounts else ""
+    promotions = (
+        f" - articles {format_money(lines_total + discounts)} € moins {format_money(discounts)} € de remises"
+        if discounts
+        else ""
+    )
     # Duty, an eco-participation, a document-level charge: money the lines do
     # not carry, which the total does. "lignes" has to mean the LINES, so the
     # adjustment is added in front of the eye rather than folded into the
     # figure it is then announced beside - written that way the sentence read
     # « lignes 134,40 € + 14,40 € de frais / ticket 134,40 € », which does
     # not add up on any invoice.
-    counted = f" + {adjustment:.2f} € de frais facturés globalement = {lines_total:.2f} €" if adjustment else ""
+    counted = (
+        f" + {format_money(adjustment)} € de frais facturés globalement = {format_money(lines_total)} €"
+        if adjustment
+        else ""
+    )
     # « ticket » on a document nobody photographed: an electronic invoice and
     # a supplier's PDF were both being checked against a till receipt that
     # does not exist, on the first line of the page.
@@ -1828,14 +1836,17 @@ def lines_check(invoice: Invoice, prefix: str = "") -> dict:
         return {
             "label": SUM_CHECK,
             "passed": False,
-            "detail": f"{prefix}lignes {lines_only:.2f} €{counted} : saisissez le total pour les vérifier{promotions}",
+            "detail": (
+                f"{prefix}lignes {format_money(lines_only)} €{counted} : saisissez le total pour les vérifier{promotions}"
+            ),
         }
     gap = paid - lines_total
     return {
         "label": SUM_CHECK,
         "passed": abs(gap) <= RECONCILIATION_TOLERANCE,
         "detail": (
-            f"{prefix}lignes {lines_only:.2f} €{counted} / {printed} {paid:.2f} € (écart {gap:+.2f} €){promotions}"
+            f"{prefix}lignes {format_money(lines_only)} €{counted} / {printed} {format_money(paid)} € "
+            f"(écart {format_money(gap, '+.2f')} €){promotions}"
         ),
     }
 
@@ -1910,7 +1921,10 @@ def vat_table_checks(invoice: Invoice, table: list[dict] | None = None) -> list[
             {
                 "label": f"TVA {percent}% cohérente",
                 "passed": abs(expected - row["vat"]) <= VAT_IDENTITY_TOLERANCE,
-                "detail": (f"HT {row['base']:.2f} € x {percent}% = {expected:.2f} € / document {row['vat']:.2f} €"),
+                "detail": (
+                    f"HT {format_money(row['base'])} € x {percent}% = {format_money(expected)} € "
+                    f"/ document {format_money(row['vat'])} €"
+                ),
             }
         )
     base_total = sum((row["base"] for row in table), start=Decimal("0"))
@@ -1921,7 +1935,10 @@ def vat_table_checks(invoice: Invoice, table: list[dict] | None = None) -> list[
         {
             "label": HT_CHECK,
             "passed": abs(drift) <= slack,
-            "detail": f"lignes {lines_ht:.2f} € HT / document {base_total:.2f} € HT (écart {drift:+.2f} €)",
+            "detail": (
+                f"lignes {format_money(lines_ht)} € HT / document {format_money(base_total)} € HT "
+                f"(écart {format_money(drift, '+.2f')} €)"
+            ),
         }
     )
     return checks
@@ -2588,7 +2605,7 @@ def einvoice_checks(kind: str, facts, parsed: ParsedInvoice) -> list[dict]:
                 "label": ADJUSTMENT_CHECK,
                 "passed": True,
                 "detail": (
-                    f"{parsed.reconciliation_adjustment:+.2f} € HT facturés globalement ({why}) : "
+                    f"{format_money(parsed.reconciliation_adjustment, '+.2f')} € HT facturés globalement ({why}) : "
                     "comptés dans le total et dans la base de TVA, imputés à aucune ligne."
                 ),
             }

@@ -516,6 +516,21 @@ class BackfillCommandTests(TestCase):
 
         self.assertIn("2026 : 26,00 € TTC / 21,93 € HT", output)
 
+    def test_the_amounts_it_reports_are_grouped_by_thousands(self):
+        """By a no-break space, as every amount a person reads (`euros`): it
+        was a plain space here, alone in the application."""
+        nbsp = "\N{NO-BREAK SPACE}"
+        write_workbook(
+            [HEADER, line("2026-06-04", "Pinte Exemple", "1234.50", "20%")],
+            folder=self.folder,
+            name="export-03.xlsx",
+        )
+
+        output = self.run_command("--dry-run")
+
+        self.assertIn(f"1{nbsp}234,50 € TTC / 1{nbsp}028,75 € HT.", output)
+        self.assertIn(f"2026 : 1{nbsp}260,50 € TTC / 1{nbsp}050,68 € HT", output)
+
     def test_two_files_that_disagree_about_a_day_say_so_and_the_last_one_wins(self):
         """No two stored exports disagree today, which is exactly why this is
         pinned: a day quietly taking the first reading, or the second, or the

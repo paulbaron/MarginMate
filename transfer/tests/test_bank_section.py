@@ -62,6 +62,8 @@ TILL_CHEQUE, TILL_CREDIT, VOUCHER, NOT_A_SALE = (
     IncomeSource.OTHER,
 )
 PAYER_MOMENT = datetime(2026, 7, 28, 11, 5, 30, 125000, tzinfo=UTC)
+#: What separates an amount's thousands in the report (common.THOUSANDS_SEPARATOR).
+NBSP = "\N{NO-BREAK SPACE}"
 
 _counter = itertools.count(1)
 
@@ -542,6 +544,35 @@ class MergeAndReplaceTests(BankData, TestCase):
         preview = import_archive(self.reader, MERGE, preview=True)
         self.assertEqual(db_fingerprint(), before)
         self.assertEqual(preview.outcome(), import_archive(self.reader, MERGE).outcome())
+
+
+class GroupedAmountTests(TestCase):
+    """The report names a line by its amount as Banque shows it, its
+    thousands grouped by a no-break space (the owner, 01/10/2026); the
+    archive keeps the figure as the statement gave it."""
+
+    def test_the_report_groups_the_thousands_and_the_archive_does_not(self):
+        line = make_line(date(2026, 7, 5), "BAILLEUR", "-12345.67", kind=DEBIT, settled=True, no_invoice=True)
+        reader = export_archive({"banque"})
+        self.addCleanup(reader.close)
+        payload = reader.section("banque").payload()
+        record = next(item for item in payload["transactions"] if item["fingerprint"] == line.fingerprint)
+        self.assertEqual(record["amount"], "-12345.67")
+        BankTransaction.objects.filter(pk=line.pk).update(counterparty="BAILLEUR PARIS")
+        run = import_archive(reader, MERGE)
+        self.assertEqual(
+            bank_report(run).conflicts,
+            [
+                (
+                    f"Opération du 05/07/2026 (BAILLEUR PARIS, -12{NBSP}345,67 €) : différente dans l'archive "
+                    "(bénéficiaire) — gardée telle quelle"
+                )
+            ],
+        )
+
+    def test_below_a_thousand_nothing_is_added(self):
+        self.assertEqual(section._euros(Decimal("-12.30")), "-12,30 €")
+        self.assertEqual(section._euros(Decimal("1000")), f"1{NBSP}000,00 €")
 
 
 class CategoryTests(BankData, TestCase):

@@ -35,6 +35,8 @@ NAMING = {
     MONOPRIX: Naming(supplier_words("Monoprix", "MONOPRIX")),
 }
 JULY_15 = date(2026, 7, 15)
+#: What separates an amount's thousands in a sentence (common.THOUSANDS_SEPARATOR).
+NBSP = "\N{NO-BREAK SPACE}"
 
 
 def invoice(pk, supplier, day, total):
@@ -435,6 +437,14 @@ class TierTests(SimpleTestCase):
         self.assertEqual(found.tier, TO_CONFIRM)
         self.assertIn("4.10 €", found.tier_reason)
         self.assertEqual(found.options, [(other,)])
+
+    def test_a_gap_of_thousands_is_said_with_its_thousands_grouped(self):
+        """The reason is read on Banque and « Propositions »: its amount
+        groups its thousands with a no-break space, as the page's do."""
+        other = invoice(1, METRO, date(2026, 6, 1), "18500.00")
+        found = match(debit(date(2026, 6, 15), "METRO FRANCE", "20000.00"), [other], NAMING)
+        self.assertEqual(found.tier, TO_CONFIRM)
+        self.assertIn(f"L'écart le plus faible est de 1{NBSP}500.00 €", found.tier_reason)
 
     def test_a_gap_exactly_at_the_threshold_is_still_near_sure(self):
         found = match(

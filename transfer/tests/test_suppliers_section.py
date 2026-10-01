@@ -39,6 +39,8 @@ from transfer.tests.support import (
 )
 
 MERGE, REPLACE = Strategy.MERGE, Strategy.REPLACE
+#: What separates an amount's thousands in the report (common.THOUSANDS_SEPARATOR).
+NBSP = "\N{NO-BREAK SPACE}"
 SEEDS = {"METRO", "UBA", "OTHER", "FRANPRIX", "MONOPRIX", "SABBH", "WINGSENG"}
 BOUND = SEEDS | {"CECINA"}
 PAUSE = {
@@ -83,6 +85,27 @@ def build_suppliers():
     price(bakery, "1.10", "Baguette")
     make_supplier(code="EAU_ESSAI", name="Eau Essai", expenses_only=True)
     return bakery
+
+
+class GroupedPriceTests(TestCase):
+    """A known price is named in the report as the pages print an amount,
+    its thousands grouped by a no-break space (the owner, 01/10/2026)."""
+
+    def test_a_price_over_a_thousand_reads_grouped_in_a_conflict(self):
+        sabbh = Supplier.objects.get(code="SABBH")
+        price(sabbh, "1234.50", "Fût inventé", valid_from=date(2026, 7, 1))
+        reader = export_archive({"fournisseurs"})
+        self.addCleanup(reader.close)
+        ShopItemPrice.objects.filter(label="Fût inventé").update(label="Fût inventé 30 L")
+        report = import_archive(reader, MERGE).section("fournisseurs")
+        self.assertIn(
+            f"Prix 1{NBSP}234,50 € de {sabbh.name} (depuis le 01/07/2026) : « Fût inventé 30 L » ici, "
+            "« Fût inventé » dans l'archive — gardé tel quel",
+            report.conflicts,
+        )
+
+    def test_below_a_thousand_nothing_is_added(self):
+        self.assertEqual(section.money("1.2"), "1,20 €")
 
 
 class GuardTests(TestCase):

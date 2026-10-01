@@ -1,4 +1,4 @@
-<div class="card job-status" id="receipt-batch-status"
+{% load assets %}<div class="card job-status" id="receipt-batch-status"
     {% if batch.is_active %}
     hx-get="{% url 'invoices:receipt_batch_status' batch.pk %}"
     hx-trigger="every 1s [!shopChoiceInUse()]"
@@ -131,7 +131,7 @@ what was typed in them across swaps (hx-preserve, stable ids).
                         {% elif entry.status == "ok" %}
                             <td data-label="Enseigne">{{ entry.invoice.supplier.name|default:entry.shop }}</td>
                             <td data-label="Date">{% if entry.invoice %}{{ entry.invoice.invoice_date|date:"d/m/Y"|default:"—" }}{% else %}{{ entry.date|default:"—" }}{% endif %}</td>
-                            <td class="num" data-label="Total TTC">{% if entry.invoice %}{{ entry.invoice.total_ttc|floatformat:2 }}{% else %}{{ entry.total }}{% endif %} €</td>
+                            <td class="num" data-label="Total TTC">{% if entry.invoice %}{{ entry.invoice.total_ttc|money }}{% else %}{{ entry.total|money }}{% endif %} €</td>
                             <td data-label="Résultat">
                                 {% if entry.invoice %}
                                     <span class="status-pill status-{{ entry.invoice.review_state.css }}">{{ entry.invoice.review_state.label }}</span>
@@ -157,7 +157,7 @@ what was typed in them across swaps (hx-preserve, stable ids).
                         {% elif entry.status == "unrecognised" %}
                             <td class="muted" data-label="Enseigne">{% if entry.header %}« {{ entry.header }} »{% else %}{{ entry.message }}{% endif %}</td>
                             <td data-label="Date">{{ entry.read_date|default:"—" }}</td>
-                            <td class="num" data-label="Total TTC">{% if entry.read_total %}{{ entry.read_total }} €{% else %}—{% endif %}</td>
+                            <td class="num" data-label="Total TTC">{% if entry.read_total %}{{ entry.read_total|money }} €{% else %}—{% endif %}</td>
                             <td data-label="Résultat">
                                 <span class="status-pill status-ERROR">Enseigne inconnue</span>
                                 {% if not entry.kept %}<span class="muted">réimportez ce fichier pour choisir son enseigne</span>{% endif %}

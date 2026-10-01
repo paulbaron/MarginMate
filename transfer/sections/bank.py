@@ -44,6 +44,7 @@ from bank.income import payer_key
 from bank.matching import alias_key
 from bank.models import BankTransaction, CounterpartyAlias, IgnoreRule, IncomePayer, IncomeSource, InvoicePayment
 from bank.reconcile import invoice_label
+from common import format_money
 from invoices.models import Invoice, Supplier
 from transfer import codec, keys, registry
 from transfer.archive import ArchiveError
@@ -166,7 +167,7 @@ def _fields(names) -> str:
 
 
 def _euros(amount) -> str:
-    return f"{amount:.2f}".replace(".", ",") + " €"
+    return format_money(amount).replace(".", ",") + " €"
 
 
 def _operation(line: BankTransaction) -> str:

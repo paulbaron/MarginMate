@@ -68,6 +68,8 @@ from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal, DecimalException, InvalidOperation
 from xml.etree import ElementTree
 
+from common import format_money, group_thousands
+
 from .parsers.base import EInvoiceFacts, ParseCheck, ParsedInvoice, ParsedLine
 
 ZERO = Decimal("0")
@@ -974,7 +976,7 @@ def _line(raw: _RawLine, sign: Decimal) -> ParsedLine:
         raw_name=_short(raw.name),
         quantity=quantity,
         total_volume=ZERO,
-        unit_cost_ht=_fits(unit.quantize(UNIT, rounding=ROUND_HALF_UP), MAX_UNIT, "un prix unitaire"),
+        unit_cost_ht=_fits(unit.quantize(UNIT, rounding=ROUND_HALF_UP), MAX_UNIT, "un prix unitaire", money=True),
         total_ht=_money(total, what="un montant de ligne"),
         vat_rate=_rate(raw.rate),
         ean=raw.ean,
@@ -996,17 +998,19 @@ def _short(text: str) -> str:
     return text if len(text) <= MAX_NAME else text[: MAX_NAME - 1].rstrip() + "…"
 
 
-def _fits(value: Decimal, limit: Decimal, what: str) -> Decimal:
+def _fits(value: Decimal, limit: Decimal, what: str, money: bool = False) -> Decimal:
     """`value`, or a refusal naming the figure that does not fit its column.
 
     Refused rather than truncated: the figure is the supplier's, which this
     module reports and never rewrites. See MAX_AMOUNT for what a figure too
-    wide does to the database it is written to.
+    wide does to the database it is written to. An amount (`money`) is named
+    with its thousands grouped, as every amount a person reads; a rate or a
+    count is not one.
     """
     if not -limit <= value <= limit:
         raise EInvoiceError(
             f"Cette facture électronique déclare {what} que MarginMate ne peut pas "
-            f"enregistrer ({value}) : elle n'est pas importée."
+            f"enregistrer ({group_thousands(value) if money else value}) : elle n'est pas importée."
         )
     return value
 
@@ -1023,7 +1027,7 @@ def _money(value: Decimal, limit: Decimal = MAX_AMOUNT, what: str = "un montant"
     """To the cent, half away from zero - the rule the rest of this codebase
     converts money with. `InvoiceLine.total_ht` holds two decimals, and an
     invoice stating 12.345 has to land somewhere."""
-    return _fits(value.quantize(CENTS, rounding=ROUND_HALF_UP), limit, what)
+    return _fits(value.quantize(CENTS, rounding=ROUND_HALF_UP), limit, what, money=True)
 
 
 def _adjustment_rate(adjustments, adjustment: Decimal) -> Decimal | None:
@@ -1081,14 +1085,15 @@ def _checks(document, totals: _Totals, raw_lines, adjustment: Decimal, sign, fac
         # in « Documents à corriger » where nobody can do anything about it.
         rounding = totals.rounding or ZERO
         expected = totals.taxable + totals.tax + rounding
-        said = f" + arrondi {rounding:+.2f} €" if rounding else ""
+        said = f" + arrondi {format_money(rounding, '+.2f')} €" if rounding else ""
         checks.append(
             ParseCheck(
                 label=TOTAL_CHECK,
                 passed=abs(expected - totals.grand) <= TOLERANCE,
                 detail=(
-                    f"HT {totals.taxable:.2f} € + TVA {totals.tax:.2f} €{said} = {expected:.2f} € "
-                    f"/ facture {totals.grand:.2f} € (écart {totals.grand - expected:+.2f} €)"
+                    f"HT {format_money(totals.taxable)} € + TVA {format_money(totals.tax)} €{said} "
+                    f"= {format_money(expected)} € / facture {format_money(totals.grand)} € "
+                    f"(écart {format_money(totals.grand - expected, '+.2f')} €)"
                 ),
             )
         )
@@ -1124,7 +1129,8 @@ def _checks(document, totals: _Totals, raw_lines, adjustment: Decimal, sign, fac
     ]
     if crooked:
         said = ", ".join(
-            f"{raw.name or 'ligne sans nom'} ({raw.quantity} × pour {raw.total:+.2f} €)" for raw in crooked[:3]
+            f"{raw.name or 'ligne sans nom'} ({raw.quantity} × pour {format_money(raw.total, '+.2f')} €)"
+            for raw in crooked[:3]
         )
         checks.append(
             ParseCheck(
@@ -1145,9 +1151,10 @@ def _checks(document, totals: _Totals, raw_lines, adjustment: Decimal, sign, fac
                 label=LINES_CHECK,
                 passed=abs(summed - totals.taxable) <= TOLERANCE,
                 detail=(
-                    f"lignes {sum(stated, start=ZERO):.2f} € + frais et remises {adjustment:+.2f} € "
-                    f"= {summed:.2f} € / base HT {totals.taxable:.2f} € "
-                    f"(écart {totals.taxable - summed:+.2f} €)"
+                    f"lignes {format_money(sum(stated, start=ZERO))} € "
+                    f"+ frais et remises {format_money(adjustment, '+.2f')} € "
+                    f"= {format_money(summed)} € / base HT {format_money(totals.taxable)} € "
+                    f"(écart {format_money(totals.taxable - summed, '+.2f')} €)"
                 ),
             )
         )
@@ -1161,8 +1168,8 @@ def _checks(document, totals: _Totals, raw_lines, adjustment: Decimal, sign, fac
                 label=VAT_CHECK,
                 passed=(abs(bases - totals.taxable) <= TOLERANCE and abs(taxes - totals.tax) <= TOLERANCE),
                 detail=(
-                    f"table {bases:.2f} € HT / {taxes:.2f} € de TVA "
-                    f"- facture {totals.taxable:.2f} € HT / {totals.tax:.2f} € de TVA"
+                    f"table {format_money(bases)} € HT / {format_money(taxes)} € de TVA "
+                    f"- facture {format_money(totals.taxable)} € HT / {format_money(totals.tax)} € de TVA"
                 ),
             )
         )

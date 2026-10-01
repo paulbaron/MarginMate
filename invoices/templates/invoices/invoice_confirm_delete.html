@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load assets %}
 {% block title %}Supprimer {% if entries|length > 1 %}des factures{% else %}une facture{% endif %} - MarginMate{% endblock %}
 {% block content %}
     <div class="page-header">
@@ -33,7 +34,7 @@
                         <td>{{ entry.invoice.invoice_number|default:"—" }}</td>
                         <td>{{ entry.invoice.invoice_date|date:"d/m/Y"|default:"—" }}</td>
                         <td class="num">{{ entry.line_count }}</td>
-                        <td class="num">{{ entry.invoice.total_ttc|floatformat:2 }} €</td>
+                        <td class="num">{{ entry.invoice.total_ttc|money }} €</td>
                         <td>
                             {% if entry.blockers %}
                                 <span class="status-pill status-ERROR">Conservée</span>

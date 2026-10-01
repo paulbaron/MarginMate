@@ -1,3 +1,4 @@
+{% load assets %}
 {% comment %}
 The list of the invoices unpaid at these dates, for an open line as
 for a line already linked: a debit settling two deliveries is
@@ -12,7 +13,7 @@ A cut list says so: kept quiet, it reads as « the invoice is not there ».
         <select name="invoice" aria-label="Facture réglée par ce paiement">
             <option value="">{% if row.status == "linked" %}Rattacher une facture de plus…{% else %}Choisir une facture…{% endif %}</option>
             {% for invoice, total in row.choices %}
-                <option value="{{ invoice.pk }}">{{ invoice.supplier.name }} n° {{ invoice.invoice_number|default:invoice.pk }} · {{ invoice.invoice_date|date:"d/m/Y"|default:"sans date" }} · {{ total|floatformat:2 }} €</option>
+                <option value="{{ invoice.pk }}">{{ invoice.supplier.name }} n° {{ invoice.invoice_number|default:invoice.pk }} · {{ invoice.invoice_date|date:"d/m/Y"|default:"sans date" }} · {{ total|money }} €</option>
             {% endfor %}
         </select>
         <button class="btn btn-small btn-secondary" type="submit">Rattacher</button>

@@ -57,6 +57,7 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from django.db.models import Q
 
+from common import format_money
 from returnables import patterns
 from returnables.models import Pickup, ReturnableType, Slip, SlipFormat, SlipLine
 from returnables.patterns import Budget, PatternError
@@ -77,13 +78,13 @@ UNREAD_CHECK = "Aucune ligne ignorée"
 
 
 def euros(value) -> str:
-    """30,00 € - the one way a sentence built in Python writes money (a
-    template prints `{{ x|floatformat:2 }} €`). Half away from zero, never
-    « -0,00 »; "" for None."""
+    """30,00 €, 1 234,50 € - the one way a sentence built in Python writes
+    money (a template prints `{{ x|money }} €`): thousands grouped by a
+    no-break space. Half away from zero, never « -0,00 »; "" for None."""
     if value is None:
         return ""
     amount = Decimal(value).quantize(CENT, rounding=ROUND_HALF_UP) + 0
-    return f"{amount:.2f}".replace(".", ",") + "\N{NO-BREAK SPACE}€"
+    return format_money(amount).replace(".", ",") + "\N{NO-BREAK SPACE}€"
 
 
 def slip_label(number, delivery_date=None, *, with_date: bool = False, capital: bool = False) -> str:

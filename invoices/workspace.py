@@ -397,6 +397,11 @@ _A_MONTH = re.compile(r"(\d{1,2})[/.-](\d{4})")
 #: four digits somebody typed.
 _A_YEAR = re.compile(r"(?:19|20)\d{2}")
 _AN_AMOUNT = re.compile(r"-?\d{1,6}(?:[.,]\d{1,2})?")
+#: An amount as the pages print it, its thousands grouped by a space of any
+#: kind (« 1 234.56 », common.group_thousands): copied off the page it is one
+#: amount, never « 1 » and « 234.56 ». With its decimals only, so a year and
+#: a number typed side by side (« 2025 123 ») stay two words.
+_A_GROUPED_AMOUNT = re.compile(r"(?<![\d.,/-])-?\d{1,3}(?:\s\d{3})+[.,]\d{1,2}(?![\d.,])")
 
 
 def _a_date(term: str) -> dict | None:
@@ -458,6 +463,7 @@ def documents_matching(invoices, query: str):
     The database answers, because the page holds only its first rows - a box
     that searches what is rendered cannot find a document from last year.
     """
+    query = _A_GROUPED_AMOUNT.sub(lambda amount: "".join(amount.group().split()), query)
     terms = query.split()[:MAX_TERMS]
     for term in terms:
         matches = Q(invoice_number__icontains=term)

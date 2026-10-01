@@ -5,7 +5,7 @@ from django import forms
 from django.utils import timezone
 
 from accounts.tenancy import integrations_allowed
-from common import MEGABYTE, BlankRowTolerantForm, file_too_big, is_id, selection_too_big
+from common import MEGABYTE, BlankRowTolerantForm, file_too_big, group_thousands, is_id, selection_too_big
 
 from . import integrations
 from .models import EmailInvoiceSource, Invoice, InvoiceType, ShopItemPrice, Supplier, WebsiteInvoiceSource
@@ -373,9 +373,9 @@ class LineCorrectionForm(SpreadChargeRowMixin, BlankRowTolerantForm):
         each = (amount / quantity).quantize(CENTS, rounding=ROUND_HALF_UP)
         discount = self._shown("discount_ttc") or Decimal("0")
         if not discount:
-            return f"soit {each} € {basis.upper()} l'unité"
+            return f"soit {group_thousands(each)} € {basis.upper()} l'unité"
         net = ((amount - discount) / quantity).quantize(CENTS, rounding=ROUND_HALF_UP)
-        return f"soit {net} € TTC l'unité après remise ({each} € avant)"
+        return f"soit {group_thousands(net)} € TTC l'unité après remise ({group_thousands(each)} € avant)"
 
     def _source(self) -> str:
         source = self.cleaned_data.get("amount_source") or self.default_source
@@ -1058,7 +1058,7 @@ class ShopItemPriceForm(forms.ModelForm):
             if known is not None:
                 since = f" à partir du {valid_from:%d/%m/%Y}" if valid_from else ""
                 raise forms.ValidationError(
-                    f"{price} € est déjà retenu chez {self.supplier.name}{since} : « {known.label} ». "
+                    f"{group_thousands(price)} € est déjà retenu chez {self.supplier.name}{since} : « {known.label} ». "
                     "Pour le changer, oubliez-le dans la liste des prix connus, puis retenez le bon."
                 )
         return cleaned

@@ -33,6 +33,20 @@ def quantity(value) -> str:
         return str(value)
 
 
+@register.filter
+def money(value, places=2) -> str:
+    """An amount as a page prints it: `floatformat` (same rounding, same
+    `places` argument) with its thousands grouped - 16568684.5 is
+    « 16 568 684.50 ». The « € » stays in the template. Never for a form
+    field's value or a `data-*` figure a script reads: see
+    common.group_thousands."""
+    from django.template.defaultfilters import floatformat
+
+    from common import group_thousands
+
+    return group_thousands(floatformat(value, places))
+
+
 @register.simple_tag
 def asset(path: str) -> str:
     url = static(path)

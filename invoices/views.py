@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import tempfile
 import threading
 from datetime import date, timedelta
@@ -18,7 +19,7 @@ from django.views.generic import DetailView
 
 from accounts.tenancy import bound, integrations_allowed
 from accounts.views import file_response, open_stored
-from common import error_for_page, is_id, local_return, safe_next
+from common import error_for_page, group_thousands, is_id, local_return, safe_next
 
 logger = logging.getLogger(__name__)
 
@@ -947,7 +948,7 @@ def _correction_page(request, invoice):
                 applied = apply_known_prices(invoice)
                 messages.success(
                     request,
-                    f"Prix retenu : {price.unit_price_ttc} € = {price.label}"
+                    f"Prix retenu : {group_thousands(price.unit_price_ttc)} € = {price.label}"
                     + (
                         f" ({applied.lines} ligne(s) renommée(s) sur {applied.receipts} ticket(s))."
                         if applied.lines
@@ -1074,11 +1075,29 @@ def _correction_page(request, invoice):
                 invoice.is_einvoice and invoice.printed_total_ttc is not None and invoice.printed_total_ttc < 0
             ),
             "source_is_pdf": bool(invoice.source_file) and invoice.source_file.name.lower().endswith(".pdf"),
-            "source_lines": invoice.source_text.split("\n") if invoice.is_einvoice else [],
+            "source_lines": _stated_lines(invoice),
             "ocr_lines": invoice.ocr_text.split("\n") if invoice.ocr_text else [],
             **shop_context,
         },
     )
+
+
+#: What an e-invoice's text states as money (einvoice._as_text_document): a
+#: figure before « € », or a line's unit price (« 10 x 1500.0000 = »). Never
+#: its SIREN, its number, a count or a rate.
+_STATED_AMOUNT = re.compile(r"(?<![\d.,])[-+]?\d+(?:\.\d+)?(?= €)|(?<= x )\d+(?:\.\d+)?(?= = )")
+
+
+def _stated_lines(invoice) -> list[str]:
+    """An e-invoice as it states itself, its amounts grouped by thousands for
+    the page - here and never in `source_text`, which identifiers.py and the
+    charge reading parse back."""
+    if not invoice.is_einvoice:
+        return []
+    return [
+        _STATED_AMOUNT.sub(lambda match: group_thousands(match.group()), line)
+        for line in invoice.source_text.split("\n")
+    ]
 
 
 def _filing_report(invoice):
@@ -1435,7 +1454,7 @@ def _forget_price(request, invoice) -> None:
     since = f" (depuis le {price.valid_from:%d/%m/%Y})" if price.valid_from else ""
     messages.success(
         request,
-        f"Prix oublié : {price.unit_price_ttc} € = {price.label}{since}. "
+        f"Prix oublié : {group_thousands(price.unit_price_ttc)} € = {price.label}{since}. "
         "Les lignes déjà nommées ainsi gardent leur nom.",
     )
 

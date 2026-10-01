@@ -228,6 +228,42 @@ def plain_number(value) -> str:
     return format(number.normalize(), "f")
 
 
+#: What separates an amount's thousands on a screen, a PDF or a message:
+#: « 16 568 684.50 € ». A no-break space, so a figure never wraps across two
+#: lines (the owner, 01/10/2026: « des espaces tous les 3 chiffres »).
+THOUSANDS_SEPARATOR = "\N{NO-BREAK SPACE}"
+
+_DIGITS = re.compile(r"[0-9]+")
+
+
+def group_thousands(text) -> str:
+    """« 16568684.50 » -> « 16 568 684.50 », « -1234,5 » -> « -1 234,5 »:
+    an amount ALREADY formatted, its whole part in groups of three, whatever
+    its sign or its decimal separator. The first run of digits is the whole
+    part, so the decimals are never grouped; text holding no digit (« », a
+    « — ») comes back as it was.
+
+    Only for what a person reads: never a form field's value, a `data-*`
+    figure a script computes with, an export or a file name."""
+    text = str(text)
+    match = _DIGITS.search(text)
+    if match is None or len(match.group()) <= 3:
+        return text
+    digits = match.group()
+    head = len(digits) % 3 or 3
+    groups = [digits[:head]] + [digits[i : i + 3] for i in range(head, len(digits), 3)]
+    return text[: match.start()] + THOUSANDS_SEPARATOR.join(groups) + text[match.end() :]
+
+
+def format_money(value, spec: str = ".2f") -> str:
+    """`format(value, spec)` with its thousands grouped - the one way a
+    sentence built in Python writes an amount: format_money(16568684.5) is
+    « 16 568 684.50 », format_money(gap, "+.2f") « +1 234.00 ». Its « € » and
+    its decimal separator stay the caller's (`.replace(".", ",")` still
+    works: the separator is no point)."""
+    return group_thousands(format(value, spec))
+
+
 #: The colours the inline SVG charts give their slices, in order. There is
 #: no charting library here (see recipes/views.py::_build_ingredient_pie_svg),
 #: so the palette is data, and it lives in ONE place: two pies in one app

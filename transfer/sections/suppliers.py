@@ -28,6 +28,7 @@ from decimal import Decimal
 from django.db import transaction
 from django.db.models import ProtectedError, RestrictedError
 
+from common import format_money
 from transfer import codec, registry
 from transfer.archive import ArchiveError
 from transfer.keys import fold
@@ -107,7 +108,7 @@ def plural(count: int, singular: str, several: str | None = None) -> str:
 
 
 def money(value) -> str:
-    return f"{Decimal(value):.2f}".replace(".", ",") + " €"
+    return format_money(Decimal(value)).replace(".", ",") + " €"
 
 
 def day(value) -> str:
