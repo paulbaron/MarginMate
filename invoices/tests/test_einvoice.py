@@ -27,6 +27,7 @@ from invoices.identifiers import document_identifiers
 from invoices.tests.einvoice_files import (
     CII_CHARGE_TOTAL_ONLY,
     CII_CREDIT_NOTE,
+    CII_CREDIT_NOTE_STATED_NEGATIVE,
     CII_DOCUMENT_ALLOWANCE,
     CII_DOCUMENT_CHARGE,
     CII_IN_POUNDS,
@@ -233,6 +234,18 @@ class CreditNoteTests(SimpleTestCase):
 
     def test_its_own_arithmetic_still_has_to_hold(self):
         parsed = read(CII_CREDIT_NOTE)
+        self.assertTrue(all(item.passed for item in parsed.checks), parsed.checks)
+
+    def test_a_credit_note_stating_its_amounts_negative_is_signed_once(self):
+        """OVH states its credit notes negative (AFR1176742, -3,92 €): signed
+        again, it was filed at +3,27 €, a refund read as a purchase. The
+        stated total says which way the document already points."""
+        parsed = read(CII_CREDIT_NOTE_STATED_NEGATIVE)
+        self.assertTrue(parsed.einvoice.is_credit_note)
+        self.assertEqual(parsed.printed_total_ttc, D("-101.40"))
+        self.assertEqual(parsed.vat_breakdown, [(D("0.20"), D("-84.50"), D("-16.90"))])
+        (line,) = parsed.lines
+        self.assertEqual(line.total_ht, D("-84.50"))
         self.assertTrue(all(item.passed for item in parsed.checks), parsed.checks)
 
     def test_a_plain_invoice_is_not_one(self):

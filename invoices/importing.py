@@ -384,9 +384,16 @@ def _as_parsed(invoice: Invoice, stored) -> ParsedInvoice:
 
 def _read_again(invoice: Invoice) -> ParsedInvoice | None:
     """The document read from the text it kept, or None - not a PDF any
-    more, or a supplier whose reader needs the file itself."""
+    more, or a supplier whose reader needs the file itself.
+
+    An electronic invoice is read from its own XML, never from that text:
+    the text is a summary of the XML, and handed to the ticket reader it
+    took « (20.00 %) » for a total - OVH's FR80644402, 22,62 €, refiled at
+    20,00 € at 0 % when OVH was ticked « charges » (01/10/2026)."""
     from .receipts import parser_for  # here: receipts imports this module
 
+    if invoice.is_einvoice:
+        return _einvoice_again(invoice)
     text = invoice.document_text
     reader = parser_for(invoice.supplier) if text else None
     if reader is None or not hasattr(reader, "parse_text"):
@@ -397,6 +404,25 @@ def _read_again(invoice: Invoice) -> ParsedInvoice | None:
         return None
     parsed.invoice_number = invoice.invoice_number
     parsed.invoice_date = invoice.invoice_date
+    return parsed
+
+
+def _einvoice_again(invoice: Invoice) -> ParsedInvoice | None:
+    """An electronic invoice's XML read again from its stored file, or None
+    when the file or its XML is gone - the stored lines are then what is
+    left, and they are the XML's own."""
+    from . import einvoice
+
+    if not invoice.source_file:
+        return None
+    try:
+        data = einvoice.document_xml(invoice.source_file.path)
+        parsed = einvoice.read(data, invoice.supplier.code) if data else None
+    except (OSError, ValueError):  # EInvoiceError is a ValueError
+        return None
+    if parsed is not None:
+        parsed.invoice_number = invoice.invoice_number
+        parsed.invoice_date = parsed.invoice_date or invoice.invoice_date
     return parsed
 
 
