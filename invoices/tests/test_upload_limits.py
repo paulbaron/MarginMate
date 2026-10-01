@@ -167,6 +167,37 @@ class ReceiptUploadPageTests(TestCase):
         self.assertContains(page, "gros.jpg")
         self.assertContains(page, "au plus par fichier")
 
+    def test_two_shots_of_one_name_are_two_files(self):
+        """What arrives when a browser could not rename the camera's shots
+        (static/js/photos.js keeps the names where DataTransfer is missing):
+        iOS names every one image.jpg. Staged by their place in the post,
+        neither writes over the other, and both keep the name they came
+        with - the duplicates are found by content, not by name."""
+        first, second = b"premier ticket", b"second ticket, autre contenu"
+        with mock.patch("invoices.receipt_batches.start_batch") as started:
+            response = self.client.post(
+                reverse("invoices:receipt_upload"),
+                {"files": [upload("image.jpg", first), upload("image.jpg", second)]},
+            )
+        batch = ReceiptBatch.objects.get()
+        folder = os.path.join(paths.imports_dir(), "receipt_batches", str(batch.pk))
+        self.addCleanup(shutil.rmtree, folder, True)
+        self.assertRedirects(
+            response, reverse("invoices:receipt_batch", args=[batch.pk]), fetch_redirect_response=False
+        )
+        started.assert_called_once()
+        self.assertEqual(
+            [(entry["name"], entry["status"]) for entry in batch.results],
+            [("image.jpg", "pending"), ("image.jpg", "pending")],
+        )
+        stored = [entry["stored"] for entry in batch.results]
+        self.assertEqual(len(set(stored)), 2)
+        self.assertEqual(sorted(os.listdir(folder)), ["0000.jpg", "0001.jpg"])
+        with open(os.path.join(folder, "0000.jpg"), "rb") as handle:
+            self.assertEqual(handle.read(), first)
+        with open(os.path.join(folder, "0001.jpg"), "rb") as handle:
+            self.assertEqual(handle.read(), second)
+
     def test_a_folder_over_its_total_stages_nothing(self):
         with (
             mock.patch("invoices.forms.RECEIPT_BATCH_MAX_BYTES", 40),

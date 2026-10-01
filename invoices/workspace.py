@@ -23,6 +23,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.http import urlencode
 
+import common
 from accounts.tenancy import integrations_allowed
 from common import RANGE_END, RANGE_START, DateRange, date_range, is_id, search_key
 
@@ -319,6 +320,10 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
         "batch": shown,
         "gather_refused": None if allowed else integrations.GATHER,
         "ai_refused": None if allowed else integrations.AI_READING,
+        # « Prendre une photo » stops what the form would post short of
+        # Cloudflare's limit (photos.js, data-max-bytes). Read at the call,
+        # as common's caps are, so a test can patch it.
+        "camera_max_bytes": common.ONLINE_SEND_MAX_BYTES,
     }
     if shown is not None:
         card.update(batch_status_context(shown))

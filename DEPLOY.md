@@ -634,7 +634,11 @@ Quelques problèmes se voient seulement dans le navigateur :
 - **Taille des envois.** Cloudflare, dans son offre gratuite, refuse les envois de plus de 100 Mo,
   avec sa propre page en anglais. Importez une grosse archive « Données » (jusqu'à 4 Go) depuis le
   PC, à l'adresse `http://127.0.0.1:8765`. Un dossier de tickets de plus de 100 Mo passe en
-  plusieurs fois.
+  plusieurs fois. « Prendre une photo » (Factures, sur le téléphone) s'arrête avant 90 Mo : tant
+  qu'une photo attend, ce qui ferait dépasser 90 Mo à l'envoi (une photo de plus, des fichiers
+  choisis ensuite) est refusé sur la page, qui demande d'importer d'abord ce qui est déjà choisi.
+  Les photos prises ne vont en général pas dans la galerie du téléphone : quitter la page avant
+  « Importer » les perd, et le navigateur demande d'abord.
 - **La déconnexion efface les brouillons.** « Se déconnecter » efface les brouillons que le site
   gardait dans le navigateur : un inventaire commencé et jamais enregistré est perdu, comme une
   reprise de consignes pas encore enregistrée. Vos préférences restent, comme les sources cochées
