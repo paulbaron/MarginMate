@@ -98,9 +98,10 @@ was removed on 29/09/2026, and `MARGINMATE_TENANCY` set to anything but
 `manage.py serve` (Waitress on 127.0.0.1, behind a Cloudflare Tunnel, started
 by `start_production.cmd`): [DEPLOY.md](DEPLOY.md), in French, lists the steps
 and the `.env` lines. The site runs from a production copy of this repository
-(`C:\MarginMate\app`, its data in `C:\MarginMate\data`); changes are made here,
-committed, and put online with `deploy.cmd` (DEPLOY.md, section 10), which backs
-the data up first (`manage.py backup_data`).
+(`C:\MarginMate\app`, its data in `C:\MarginMate\data`); changes are made in a
+development copy, committed, pushed to GitHub's `main`, and put online with
+`deploy.cmd` (DEPLOY.md, section 10), which takes GitHub's `main` and backs the
+data up first (`manage.py backup_data`).
 
 ## Development
 
@@ -116,8 +117,8 @@ the data up first (`manage.py backup_data`).
   and a few file checks (merge markers, big files, private keys). Before a
   push, the continuous integration: ruff and ty over the whole repository,
   Django's system checks, no model change without its migration, and the
-  fast test suite. Run it by hand - a deploy pulls the development folder and
-  never pushes, so nothing runs it for you:
+  fast test suite. Run it by hand where the hooks are not installed - a deploy
+  takes GitHub's `main`, so the push before it is the CI's moment:
   ```bash
   prek run --hook-stage pre-push --all-files
   ```

@@ -4,7 +4,8 @@
 # pre-commit: quick checks of the files being committed.
 # pre-push:   the continuous integration - the whole repository linted and
 #             type-checked, Django's checks, and the fast test suite.
-# Run the CI by hand (before a deploy, which pulls without pushing):
+# Run the CI by hand where the hooks are not installed (a deploy takes GitHub's
+# main, so before the push):
 #   prek run --hook-stage pre-push --all-files
 #:schema https://www.schemastore.org/prek.json
 

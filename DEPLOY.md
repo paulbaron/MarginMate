@@ -13,8 +13,8 @@ ses vérifications. Le reste vous revient : le compte Cloudflare, les DNS, le tu
 `.env` et les sauvegardes. Ce document le décrit étape par étape.
 
 Le site tourne depuis une copie du code réservée à la production, **`C:\MarginMate\app`**, sur les
-données de **`C:\MarginMate\data`**. Le code se modifie ailleurs, dans le dossier de développement,
-et se met en ligne par `deploy.cmd` : section 10.
+données de **`C:\MarginMate\data`**. Le code se modifie ailleurs, dans un dossier de développement,
+s'envoie sur GitHub (branche `main`), et se met en ligne par `deploy.cmd` : section 10.
 
 ## Avant de commencer
 
@@ -23,8 +23,8 @@ et se met en ligne par `deploy.cmd` : section 10.
 - **Deux serveurs, deux ports.** Le serveur de production écoute sur `http://127.0.0.1:8765` :
   c'est l'adresse que vise le tunnel. `runserver`, le serveur de développement, garde son port
   habituel, 8000 : il n'est pas fait pour Internet et le tunnel ne le vise jamais.
-- **Deux copies, deux `.env`.** Les sections 5 à 9 et 11 parlent de la copie de production,
-  `C:\MarginMate\app`, et de son `.env`. Le dossier de développement a le sien (section 10).
+- **Chaque copie a son `.env`.** Les sections 5 à 9 et 11 parlent de la copie de production,
+  `C:\MarginMate\app`, et de son `.env`. Chaque dossier de développement a le sien (section 10).
 - **Sur le PC lui-même**, l'adresse `http://127.0.0.1:8765` reste utilisable. Chrome, Edge et
   Firefox acceptent les cookies sécurisés sur cette adresse locale. Si la connexion n'y tient pas,
   passez par `https://gestion.<votre-domaine>`.
@@ -294,20 +294,25 @@ français sans chemin, sans réglage et sans trace.
 
 ## 10. Développer et mettre en ligne une modification
 
-MarginMate existe en **deux copies** sur ce PC, chacune avec son code, son `.env` et ses données :
+MarginMate existe en **plusieurs copies** sur ce PC, chacune avec son code, son `.env` et ses données :
+la copie de production, et un ou plusieurs dossiers de développement.
 
 | | Production : le site en ligne | Développement : les modifications |
 |---|---|---|
-| Code | `C:\MarginMate\app` | `C:\Users\<vous>\Desktop\Bar application gestion\AdminMate` |
-| Données | `C:\MarginMate\data` | `C:\Users\<vous>\Desktop\Bar application gestion\data-dev`, une copie |
+| Code | `C:\MarginMate\app` | `C:\Users\<vous>\Desktop\Bar application gestion\AdminMate` (ou dans `Bar application gestion 2`, `… 3`) |
+| Données | `C:\MarginMate\data` | le dossier `data-dev` à côté de `AdminMate`, une copie |
 | Sauvegardes | `C:\MarginMate\backups` | aucune : ses données sont une copie |
 | Serveur | `start_production.cmd` (la tâche `MarginMate`), port 8765, celui du tunnel | `runserver`, `http://localhost:8000` |
 | `.env` | `DJANGO_DEBUG=False`, `MARGINMATE_HTTPS=1` (section 5) | `DJANGO_DEBUG=True`, sans `MARGINMATE_HTTPS`, sans identifiants |
 
 - **On ne modifie jamais `C:\MarginMate\app` à la main.** Il ne change que par `deploy.cmd`, qui y
-  apporte ce qui a été enregistré (`git commit`) sur la branche `main` du dossier de développement :
-  un fichier modifié mais pas enregistré ne part pas. Pas besoin de GitHub : la copie de production
-  va chercher le code directement dans le dossier de développement.
+  apporte la branche `main` **de GitHub** (`https://github.com/paulbaron/MarginMate`) : un travail
+  part en ligne une fois enregistré (`git commit`), fusionné dans `main` et envoyé (`git push`). Un
+  fichier modifié mais pas enregistré, ou un commit pas envoyé, ne part pas.
+- **GitHub est la seule source** depuis le 01/10/2026, quel que soit le dossier de développement
+  qui a envoyé le code : il faut donc Internet pour mettre en ligne.
+- **Le dépôt GitHub est public** : avant chaque envoi, vérifiez qu'aucun commit ne contient de
+  vraies données (factures, banque, personnel, noms et montants de `data-dev`).
 - **Une session Claude Code s'ouvre toujours dans le dossier de développement**, jamais dans
   `C:\MarginMate` : elle y modifie le code, lance les tests et, pour un aperçu, `runserver` sur
   `data-dev`.
@@ -319,9 +324,9 @@ MarginMate existe en **deux copies** sur ce PC, chacune avec son code, son `.env
 Jusqu'ici le site tournait depuis le dossier de développement, sur
 `C:\Users\<vous>\Desktop\Bar application gestion\data`. Pour passer aux deux copies :
 
-1. Dans le dossier de développement, enregistrez tout le travail en cours sur la branche `main` :
-   `git status` doit dire qu'il ne reste rien à enregistrer. La copie de production ne recevra que
-   ce qui est enregistré. Rien n'est envoyé sur GitHub.
+1. Dans le dossier de développement, enregistrez tout le travail en cours sur la branche `main`
+   (`git status` doit dire qu'il ne reste rien à enregistrer), puis envoyez-le sur GitHub :
+   `git push origin main`. La copie de production ne recevra que ce qui y est.
 2. Arrêtez le serveur : Ctrl+C dans la fenêtre de `start_production.cmd` (et `runserver`, s'il
    tourne).
 3. Dans une invite de commandes, créez la copie de production du code et son Python (mise doit
@@ -329,7 +334,7 @@ Jusqu'ici le site tournait depuis le dossier de développement, sur
 
    ```
    mkdir C:\MarginMate
-   git clone -b main "C:\Users\<vous>\Desktop\Bar application gestion\AdminMate" C:\MarginMate\app
+   git clone -b main https://github.com/paulbaron/MarginMate.git C:\MarginMate\app
    cd /d C:\MarginMate\app
    mise install
    uv sync --locked --no-dev --python 3.11
@@ -419,9 +424,13 @@ Jusqu'ici le site tournait depuis le dossier de développement, sur
    ```
 
    puis `http://localhost:8000`. Ctrl+C pour arrêter.
-3. **Enregistrer** : `git add` puis `git commit`, sur `main`. Seul ce qui est enregistré part en
-   ligne.
-4. **Mettre en ligne** : double-cliquez sur `C:\MarginMate\app\deploy.cmd`.
+3. **Enregistrer** : `git add` puis `git commit`, sur `main` (ou sur une branche, puis fusionnée
+   dans `main`).
+4. **Envoyer sur GitHub** : `git push origin main`. Seul ce qui y est part en ligne. Si git refuse
+   l'envoi (« rejected »), un autre dossier de développement a envoyé entre-temps : récupérez son
+   travail (`git pull --no-rebase origin main`), relancez les tests, puis renvoyez. Jamais
+   `git push --force`.
+5. **Mettre en ligne** : double-cliquez sur `C:\MarginMate\app\deploy.cmd`.
 
 ### 10.3 Ce que fait `deploy.cmd`
 
@@ -438,10 +447,12 @@ a réussi :
    de production modifiée à la main, qui n'est pas sur `main`, dont la base des comptes n'est pas
    dans `C:\MarginMate\data`, ou que git ne lit pas (« dubious ownership » : la fenêtre donne la
    commande `git config --global --add safe.directory …` à taper).
-3. **Cherche les changements** enregistrés dans le dossier de développement (`git fetch origin`) et
-   les liste. S'il n'y en a pas, il dit « Rien de nouveau » et s'arrête sans toucher au serveur -
+3. **Cherche les changements** envoyés sur GitHub (`git fetch origin` : il faut Internet) et les
+   liste ; sa fenêtre parle encore du « dossier de developpement » : c'est GitHub qu'elle lit.
+   S'il n'y en a pas, il dit « Rien de nouveau » et s'arrête sans toucher au serveur -
    sauf si rien n'écoute sur le port 8765 : il dit alors que le site est hors ligne, et comment
-   le relancer.
+   le relancer. « Rien de nouveau » après un `git commit` : le travail n'a pas été envoyé sur
+   GitHub (section 10.2, étape 4).
 4. **Demande** « Déployer ces changements ? (O/N) ».
 5. **Vérifie que rien ne tourne** (`manage.py running_jobs`) : une récupération de factures, un
    import de tickets ou un import des ventes en cours serait coupé net. Si quelque chose tourne, il
@@ -521,8 +532,9 @@ et relancez `deploy.cmd`. Pour revenir plus tard sur une version mise en ligne :
 4. Relancez le serveur : `schtasks /run /tn MarginMate`, ou double-cliquez sur
    `start_production.cmd`.
 
-Le prochain `deploy.cmd` proposera de nouveau les mêmes changements, tant que le dossier de
-développement les a : corrigez-les d'abord là-bas, dans un nouveau commit.
+Le prochain `deploy.cmd` proposera de nouveau les mêmes changements, tant que `main` sur GitHub
+les a : corrigez-les d'abord dans un dossier de développement, dans un nouveau commit envoyé sur
+GitHub.
 
 ### 10.5 Rafraîchir les données de développement
 
