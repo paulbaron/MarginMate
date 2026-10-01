@@ -240,6 +240,87 @@ class OperationRule(models.Model):
             raise ValidationError({"pattern": error.message}) from None
 
 
+class StatementFormat(models.Model):
+    """How one bank lays out its CSV export: the encoding, the separator,
+    which column holds what, how dates and amounts are printed, where the
+    account number is (`bank.statements.parse_statement` reads a file with
+    one; « Format du relevé »).
+
+    The owner's bank is seeded (migration 0007) exactly as the code read it
+    before, so every fingerprint already stored is the one the same file
+    gives again; another bank's export is read by a format of its own. The
+    columns are counted from 1, as a person reads them off the file.
+    """
+
+    class Encoding(models.TextChoices):
+        AUTO = "auto", "Automatique (UTF-8, sinon Windows-1252)"
+        UTF8 = "utf-8", "UTF-8"
+        CP1252 = "cp1252", "Windows-1252"
+        LATIN1 = "iso-8859-1", "ISO-8859-1"
+        UTF16 = "utf-16", "UTF-16"
+
+    class Delimiter(models.TextChoices):
+        SEMICOLON = ";", "Point-virgule ( ; )"
+        COMMA = ",", "Virgule ( , )"
+        TAB = "\t", "Tabulation"
+        PIPE = "|", "Barre verticale ( | )"
+
+    class DateFormat(models.TextChoices):
+        DAY_MONTH_YEAR = "dd/mm/yyyy", "jj/mm/aaaa"
+        DAY_MONTH_SHORT_YEAR = "dd/mm/yy", "jj/mm/aa"
+        DAY_MONTH_YEAR_DASHES = "dd-mm-yyyy", "jj-mm-aaaa"
+        DAY_MONTH_YEAR_DOTS = "dd.mm.yyyy", "jj.mm.aaaa"
+        ISO = "yyyy-mm-dd", "aaaa-mm-jj"
+        MONTH_DAY_YEAR = "mm/dd/yyyy", "mm/jj/aaaa"
+
+    class DecimalMark(models.TextChoices):
+        COMMA = ",", "Virgule (1 234,56)"
+        POINT = ".", "Point (1,234.56)"
+
+    #: Unique whatever its case and accents (`bank.recognition.name_key`):
+    #: the import form and the « Données » archive name a format by it.
+    name = models.CharField("nom", max_length=100, unique=True)
+    #: The first format is the one an import uses when nobody chooses.
+    position = models.PositiveIntegerField(default=0)
+    encoding = models.CharField("encodage", max_length=12, choices=Encoding.choices, default=Encoding.AUTO)
+    delimiter = models.CharField("séparateur", max_length=2, choices=Delimiter.choices, default=Delimiter.SEMICOLON)
+    date_format = models.CharField(
+        "format des dates", max_length=12, choices=DateFormat.choices, default=DateFormat.DAY_MONTH_YEAR
+    )
+    decimal_mark = models.CharField(
+        "séparateur décimal", max_length=1, choices=DecimalMark.choices, default=DecimalMark.COMMA
+    )
+    date_column = models.PositiveSmallIntegerField("colonne de la date")
+    #: One column or several, joined by a space: « 4 » or « 3, 4 ».
+    label_columns = models.CharField("colonnes du libellé", max_length=50)
+    #: The amount is ONE signed column, or a column of debits and one of
+    #: credits (either may be missing) - `bank.statements.check_format`.
+    amount_column = models.PositiveSmallIntegerField("colonne du montant", null=True, blank=True)
+    debit_column = models.PositiveSmallIntegerField("colonne des débits", null=True, blank=True)
+    credit_column = models.PositiveSmallIntegerField("colonne des crédits", null=True, blank=True)
+    value_date_column = models.PositiveSmallIntegerField("colonne de la date de valeur", null=True, blank=True)
+    bank_type_column = models.PositiveSmallIntegerField("colonne du type d'opération", null=True, blank=True)
+    #: Searched in the lines above the first operation; the whole match, or
+    #: its `(?P<compte>…)`, is the account - part of every fingerprint.
+    account_pattern = models.CharField("motif du numéro de compte", max_length=300, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["position", "name"]
+
+    def __str__(self):
+        return self.name
+
+    def clean(self):
+        # Imported here: bank.statements reads this module's choices.
+        from .statements import FormatError, check_format
+
+        try:
+            check_format(self)
+        except FormatError as error:
+            raise ValidationError({error.field: error.message}) from None
+
+
 class IgnoreRule(models.Model):
     """Payments that never have an invoice - a loan, URSSAF, salaries - by a
     pattern on their label.

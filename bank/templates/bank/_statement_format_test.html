@@ -1,0 +1,73 @@
+{% comment %}
+What « Tester » read in a file with the format as typed (views.FormatTest):
+its first rows in numbered columns, then the operations the format reads
+there or why it reads none - nothing saved, the file not kept. Context:
+`test`, None when nothing was tried.
+{% endcomment %}
+{% if test %}
+    {% if test.problem %}
+        <div class="message message-warning" id="essai">{{ test.problem }}</div>
+    {% else %}
+        <div class="message" id="essai">
+            <p>Fichier « {{ test.file_name|truncatechars:80 }} » : rien n'est enregistré.</p>
+        </div>
+        {% if test.rows %}
+            <h3>Premières lignes, colonnes numérotées</h3>
+            <div class="table-wrap">
+                <table data-table data-table-label="premières lignes du fichier">
+                    <thead>
+                        <tr>
+                            {% for number in test.columns %}<th>{{ number }}</th>{% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in test.rows %}
+                            <tr>
+                                {% for cell in row %}<td>{{ cell|truncatechars:40 }}</td>{% endfor %}
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% if test.wider %}<p class="muted">Les colonnes au-delà de la {{ test.column_limit }}e ne sont pas affichées.</p>{% endif %}
+        {% endif %}
+        {% if test.refusal %}
+            <div class="message message-error">{{ test.refusal }}</div>
+        {% else %}
+            <h3>Ce que le format lit</h3>
+            <p>
+                <strong>{{ test.count }} opération{{ test.count|pluralize }}</strong> lue{{ test.count|pluralize }},
+                {% if test.account %}compte {{ test.account }}{% else %}sans numéro de compte{% endif %}{% if test.known %} ; dont {{ test.known }} déjà importée{{ test.known|pluralize }}{% endif %}.
+            </p>
+            <div class="table-wrap">
+                <table data-table data-table-label="opérations lues">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Type</th>
+                            <th>Libellé</th>
+                            <th>Valeur</th>
+                            <th class="num">Montant</th>
+                            <th>Nature</th>
+                            <th>Tiers</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for line, kind in test.lines %}
+                            <tr>
+                                <td data-sort="{{ line.operation_date|date:'Y-m-d' }}">{{ line.operation_date|date:"d/m/Y" }}</td>
+                                <td>{{ line.bank_type|default:"—" }}</td>
+                                <td>{{ line.label|truncatechars:90 }}</td>
+                                <td data-sort="{{ line.value_date|date:'Y-m-d' }}">{% if line.value_date %}{{ line.value_date|date:"d/m/Y" }}{% else %}—{% endif %}</td>
+                                <td class="num" data-sort="{{ line.amount|stringformat:'s' }}">{{ line.amount|floatformat:2 }} €</td>
+                                <td>{{ kind }}</td>
+                                <td>{{ line.counterparty|default:"—" }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% if test.more %}<p class="muted">… et {{ test.more }} de plus.</p>{% endif %}
+        {% endif %}
+    {% endif %}
+{% endif %}

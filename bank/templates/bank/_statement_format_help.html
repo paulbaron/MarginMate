@@ -1,0 +1,19 @@
+{% comment %}
+How a format reads a file, under its form. Context: `example`
+(views.FORMAT_EXAMPLE, read by the tests as it says).
+{% endcomment %}
+<details class="explainer pattern-help">
+    <summary>Lire un format</summary>
+    <ul class="pattern-cheatsheet">
+        <li>Les colonnes se comptent à partir de 1, de gauche à droite : « Tester » les numérote.</li>
+        <li>Une ligne est une opération quand sa colonne de date contient une date du format ; les autres (en-tête, solde) sont passées.</li>
+        <li>Le montant : une colonne signée, négative quand l'argent sort, ou une colonne des débits et une des crédits.</li>
+        <li>Le numéro de compte est cherché au-dessus de la première opération ; <code>(?P&lt;compte&gt;…)</code> n'en garde qu'une partie.</li>
+        <li>Compte, dates, libellé et montant identifient une opération : lus autrement, les opérations déjà importées le seraient une seconde fois.</li>
+    </ul>
+    <p>Exemple, sur un export inventé :</p>
+    <ul class="pattern-cheatsheet">
+        {% for row in example.rows %}<li><code>{{ row }}</code></li>{% endfor %}
+    </ul>
+    <p>{{ example.said }} → {{ example.reads }}.</p>
+</details>

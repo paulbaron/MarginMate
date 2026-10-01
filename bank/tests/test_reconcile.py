@@ -1,10 +1,15 @@
 """Bank lines in the database: importing statements, the automatic pass, and
 what a person decides on the page."""
 
+import sqlite3
+from contextlib import contextmanager
 from datetime import date, timedelta
 from decimal import Decimal
+from unittest import mock
 
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 
 from bank import matching, reconcile
 from bank.models import BankTransaction, CounterpartyAlias, IgnoreRule, InvoicePayment
@@ -34,6 +39,20 @@ def debit_row(day, creditor, amount):
         f"{day:%d/%m/%Y};PRELEVEMENT;PRLV SEPA;PRLV SEPA {creditor} ECH/{day:%d%m%y} "
         f"ID EMETTEUR/FR00ZZZ000000 REF/0000;{day:%d/%m/%Y};-{amount}"
     )
+
+
+@contextmanager
+def bound_variables(limit: int):
+    """SQLite's cap on the variables one query binds, lowered to `limit`:
+    999 is the builds' default before 3.32, 32 766 the bundled one's - a
+    long statement crosses either the same way."""
+    connection.ensure_connection()
+    raw = connection.connection
+    before = raw.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, limit)
+    try:
+        yield
+    finally:
+        raw.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, before)
 
 
 class Fixtures:
@@ -74,6 +93,37 @@ class ImportTests(Fixtures, TestCase):
         self.load(first)
         summary = self.load(first, card_row(date(2026, 8, 1), "FRANPRIX 5333 PARIS", "3,92"))
         self.assertEqual((summary.created, summary.known), (1, 1))
+
+    def test_what_is_already_stored_is_asked_a_chunk_at_a_time(self):
+        rows = [debit_row(date(2026, 7, day), "U.B.A.", f"{day},00") for day in range(1, 6)]
+        self.load(*rows[:3])
+        with mock.patch.object(reconcile, "FINGERPRINT_CHUNK", 2), CaptureQueriesContext(connection) as queries:
+            summary = self.load(*rows)
+        self.assertEqual((summary.lines, summary.created, summary.known), (5, 2, 3))
+        self.assertEqual(BankTransaction.objects.count(), 5)
+        asked = [query["sql"] for query in queries if '"fingerprint" IN (' in query["sql"]]
+        self.assertEqual(len(asked), 3)
+        # Across chunks nothing is lost and nothing counted twice.
+        stored = list(BankTransaction.objects.values_list("fingerprint", flat=True))
+        with mock.patch.object(reconcile, "FINGERPRINT_CHUNK", 2):
+            self.assertEqual(reconcile.known_fingerprints([*stored, "0" * 64, stored[0]]), set(stored))
+        self.assertEqual(reconcile.known_fingerprints([]), set())
+        self.assertGreater(reconcile.FINGERPRINT_CHUNK, 1)
+        self.assertLess(reconcile.FINGERPRINT_CHUNK, 999)
+
+    def test_a_statement_of_more_operations_than_sqlite_binds_is_imported(self):
+        """Django never splits an `__in` list on SQLite: asked in one query,
+        the fingerprints of a long export were past SQLite's cap on bound
+        variables - an OperationalError, a 500 on the upload."""
+        rows = [
+            debit_row(date(2026, 7, 1) + timedelta(days=number % 28), "U.B.A.", f"{number},00")
+            for number in range(1, 1001)
+        ]
+        with bound_variables(999):
+            first = self.load(*rows)
+            again = self.load(*rows)
+        self.assertEqual((first.lines, first.created), (1000, 1000))
+        self.assertEqual((again.created, again.known), (0, 1000))
 
 
 class AutomaticPassTests(Fixtures, TestCase):

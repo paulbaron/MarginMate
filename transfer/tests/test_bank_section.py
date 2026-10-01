@@ -1,16 +1,18 @@
 """« Banque » (§7.7, §10.2): the bank's lines, their links to invoices, the
 ignore rules, the recognition rules (« Reconnaissance des opérations »), the
-payee names learnt and the payers retained on « Entrées d'argent ».
+statement formats (« Format du relevé »), the payee names learnt and the
+payers retained on « Entrées d'argent ».
 
 What these guard is the owner's decisions: a link made by hand, a line
 unlinked, a line declared « pas de facture », what a credit is in the till
 (« En caisse », on the line or for its payer), how his bank's operations are
-recognised. Nothing rebuilds them, so a round trip must bring every one back
-exactly, a merge must never overwrite one, and a link whose invoice is not
-here must be said, never guessed.
+recognised and how its export is laid out. Nothing rebuilds them, so a round
+trip must bring every one back exactly, a merge must never overwrite one,
+and a link whose invoice is not here must be said, never guessed.
 
-Every test database holds the recognition rules bank/0006 seeds (`SEEDED`):
-an « empty » bank still recognises the owner's bank.
+Every test database holds the recognition rules bank/0006 seeds (`SEEDED`)
+and the format bank/0007 seeds (`SEEDED_FORMAT`): an « empty » bank still
+reads and recognises the owner's bank.
 
 Every name, amount and label below is invented.
 """
@@ -24,6 +26,7 @@ from unittest import mock
 
 import regex
 from django.test import TestCase
+from django.urls import reverse
 
 from bank import recognition, reconcile
 from bank.income import income_for
@@ -35,6 +38,7 @@ from bank.models import (
     IncomeSource,
     InvoicePayment,
     OperationRule,
+    StatementFormat,
 )
 from common import DateRange
 from invoices.deletion import delete_invoice
@@ -48,6 +52,8 @@ from transfer.sections import bank as section
 from transfer.sections.bank import (
     ALIASES,
     ENTITIES,
+    FORMAT_CLEAR_NOTE,
+    FORMATS,
     OPERATIONS,
     PAYERS,
     PAYMENTS,
@@ -86,6 +92,28 @@ SEEDED = importlib.import_module("bank.migrations.0006_operation_rules").RULES
 #: A rule a person typed for another bank's payment terminal, which prints
 #: no gross (BankData).
 TERMINAL_RULE = "Versement TPE (EXEMPLE PAY)"
+FORMAT_MOMENT = datetime(2026, 7, 22, 16, 40, 5, 750000, tzinfo=UTC)
+#: The name and the layout of the format bank/0007 seeds into every
+#: database, this test's included.
+_SEEDED_FORMATS = importlib.import_module("bank.migrations.0007_statement_formats")
+SEEDED_FORMAT, SEEDED_LAYOUT = _SEEDED_FORMATS.NAME, _SEEDED_FORMATS.FORMAT
+#: A format a person typed for another bank's export (BankData): cells
+#: split by tabulations, ISO dates, decimal points, the label over two
+#: columns, the debits and the credits apart, the account in a header line.
+TAB_FORMAT = "Banque exemple (tabulations)"
+TAB_LAYOUT = {
+    "position": 2,
+    "encoding": "utf-8",
+    "delimiter": "\t",
+    "date_format": "yyyy-mm-dd",
+    "decimal_mark": ".",
+    "date_column": 1,
+    "value_date_column": 2,
+    "label_columns": "3, 4",
+    "debit_column": 5,
+    "credit_column": 6,
+    "account_pattern": r"COMPTE (?P<compte>[0-9]{5,})",
+}
 
 _counter = itertools.count(1)
 
@@ -158,16 +186,35 @@ def make_operation_rule(name, meaning, pattern, *, searched="label", position=9,
     return rule
 
 
+def make_statement_format(name, **layout) -> StatementFormat:
+    """A statement format as « Format du relevé » saves it (checked by the
+    model as the form is), made at a moment in the past: a round trip that
+    forgot to restore it would show today's instead."""
+    fmt = StatementFormat(name=name, **layout)
+    fmt.full_clean()
+    fmt.save()
+    StatementFormat.objects.filter(pk=fmt.pk).update(created_at=FORMAT_MOMENT)
+    fmt.refresh_from_db()
+    return fmt
+
+
 def wipe_bank() -> None:
     """Everything the section holds, as its clear leaves it - the seeded
-    recognition rules included: an archive importing into it has to bring
-    them back."""
+    recognition rules and statement format included: an archive importing
+    into it has to bring them back."""
     InvoicePayment.objects.all().delete()
     BankTransaction.objects.all().delete()
     CounterpartyAlias.objects.all().delete()
     IgnoreRule.objects.all().delete()
     OperationRule.objects.all().delete()
+    StatementFormat.objects.all().delete()
     IncomePayer.objects.all().delete()
+
+
+def statement_formats() -> list[tuple]:
+    """Every field of every statement format, its moment included, in the
+    order an import offers them (the first is the default)."""
+    return list(StatementFormat.objects.order_by("position", "name").values_list(*section.FORMAT_FIELDS))
 
 
 def recognition_rules() -> list[tuple]:
@@ -241,6 +288,10 @@ class BankData:
         # whose payouts print no gross. It recognises none of the lines
         # above: what they are was decided when they were imported.
         self.terminal_rule = make_operation_rule(TERMINAL_RULE, "payout", r"EXEMPLE PAY REMISE")
+        # Beside the seeded format, one typed for another bank's export. None
+        # of the lines above is read again with it: their fingerprints are
+        # what their statements gave when they were imported.
+        self.tab_format = make_statement_format(TAB_FORMAT, **TAB_LAYOUT)
 
     def export(self) -> ArchiveReader:
         reader = export_archive({"banque"})
@@ -271,22 +322,64 @@ class ContractTests(TestCase):
         self.assertIsInstance(registry.get("banque"), BankSection)
 
     def test_count_of_an_empty_bank(self):
-        # Nothing imported, nothing decided - and the owner's bank recognised
-        # all the same, by the rules bank/0006 seeds.
-        self.assertEqual(BankSection().count(), {**dict.fromkeys(ENTITIES, 0), RECOGNITION: len(SEEDED)})
+        # Nothing imported, nothing decided - and the owner's bank read and
+        # recognised all the same, by the format bank/0007 and the rules
+        # bank/0006 seed.
+        self.assertEqual(BankSection().count(), {**dict.fromkeys(ENTITIES, 0), RECOGNITION: len(SEEDED), FORMATS: 1})
 
     def test_the_recognition_rules_have_a_count_of_their_own(self):
         # « règles » are the « sans facture » ones: one word for two lists
         # read as one on the page.
-        self.assertEqual(ENTITIES, (OPERATIONS, PAYMENTS, RULES, RECOGNITION, ALIASES, PAYERS))
+        self.assertEqual(ENTITIES, (OPERATIONS, PAYMENTS, RULES, RECOGNITION, FORMATS, ALIASES, PAYERS))
         self.assertNotEqual(RECOGNITION, RULES)
+        self.assertEqual(len(set(ENTITIES)), len(ENTITIES))
 
 
 class ExportTests(BankData, TestCase):
     def test_counts(self):
-        expected = {OPERATIONS: 6, PAYMENTS: 4, RULES: 2, RECOGNITION: len(SEEDED) + 1, ALIASES: 1, PAYERS: 2}
+        expected = {
+            OPERATIONS: 6,
+            PAYMENTS: 4,
+            RULES: 2,
+            RECOGNITION: len(SEEDED) + 1,
+            FORMATS: 2,
+            ALIASES: 1,
+            PAYERS: 2,
+        }
         self.assertEqual(BankSection().count(), expected)
         self.assertEqual(self.export().section("banque").counts, expected)
+
+    def test_the_statement_formats_are_exported_in_the_order_an_import_offers_them(self):
+        # Every field but the id, the first the default - and the tab comes
+        # out of the JSON as the tab it was.
+        payload = self.export().section("banque").payload()
+        formats = payload["statement_formats"]
+        self.assertEqual([item["name"] for item in formats], [SEEDED_FORMAT, TAB_FORMAT])
+        for item in formats:
+            self.assertEqual(set(item), set(section.FORMAT_FIELDS))
+        seeded = formats[0]
+        self.assertEqual({name: seeded[name] for name in SEEDED_LAYOUT}, SEEDED_LAYOUT)
+        self.assertEqual((seeded["debit_column"], seeded["credit_column"]), (None, None))
+        self.assertEqual(
+            formats[1],
+            {
+                "name": TAB_FORMAT,
+                **TAB_LAYOUT,
+                "amount_column": None,
+                "bank_type_column": None,
+                "created_at": "2026-07-22T16:40:05.750000+00:00",
+            },
+        )
+        self.assertEqual(formats[1]["delimiter"], "\t")
+
+    def test_no_statement_format_is_an_empty_list_never_a_missing_one(self):
+        # Absent, the list reads as an archive written before the formats
+        # existed (« not said »), and « Remplacer » would keep this
+        # database's.
+        StatementFormat.objects.all().delete()
+        reader = self.export()
+        self.assertEqual(reader.section("banque").payload()["statement_formats"], [])
+        self.assertEqual(reader.section("banque").counts[FORMATS], 0)
 
     def test_the_recognition_rules_are_exported_in_the_order_they_are_asked(self):
         payload = self.export().section("banque").payload()
@@ -474,19 +567,40 @@ class RoundTripTests(BankData, TestCase):
         self.assertEqual(recognition_rules(), rules)
         self.assertEqual(OperationRule.objects.get(name=TERMINAL_RULE).created_at, RECOGNITION_MOMENT)
 
+    def assert_formats_back(self, formats):
+        # Every field, in their order, each with the moment it was made, the
+        # tab a tab.
+        self.assertEqual(statement_formats(), formats)
+        tab = StatementFormat.objects.get(name=TAB_FORMAT)
+        self.assertEqual((tab.delimiter, tab.created_at), ("\t", FORMAT_MOMENT))
+        self.assertEqual(StatementFormat.objects.first().name, SEEDED_FORMAT)
+
     def test_merge(self):
-        rules = recognition_rules()
+        rules, formats = recognition_rules(), statement_formats()
         before, after = round_trip({"banque"}, MERGE, after_clear=self.assert_empty)
         self.assertEqual(after, before)
         self.assert_decisions_back()
         self.assert_recognition_back(rules)
+        self.assert_formats_back(formats)
 
     def test_replace(self):
-        rules = recognition_rules()
+        rules, formats = recognition_rules(), statement_formats()
         before, after = round_trip({"banque"}, REPLACE, after_clear=self.assert_empty)
         self.assertEqual(after, before)
         self.assert_decisions_back()
         self.assert_recognition_back(rules)
+        self.assert_formats_back(formats)
+
+    def test_formats_of_one_position_keep_their_order(self):
+        # The first by (position, name) is the one an import uses when
+        # nobody chooses - never the first by id, which an import gives anew.
+        make_statement_format("Banque exemple B", position=0, date_column=1, label_columns="2", amount_column=3)
+        make_statement_format("Banque exemple A", position=0, date_column=1, label_columns="2", amount_column=3)
+        formats = statement_formats()
+        self.assertEqual(StatementFormat.objects.first().name, "Banque exemple A")
+        round_trip({"banque"}, REPLACE)
+        self.assertEqual(statement_formats(), formats)
+        self.assertEqual(StatementFormat.objects.first().name, "Banque exemple A")
 
     def test_rules_of_one_position_keep_their_order(self):
         # Rules at one position are asked by name - never by id, which an
@@ -531,7 +645,15 @@ class RoundTripTests(BankData, TestCase):
 class IdempotenceTests(BankData, TestCase):
     def assert_nothing_moves(self, run):
         report = bank_report(run)
-        expected = {OPERATIONS: 6, PAYMENTS: 4, RULES: 2, RECOGNITION: len(SEEDED) + 1, ALIASES: 1, PAYERS: 2}
+        expected = {
+            OPERATIONS: 6,
+            PAYMENTS: 4,
+            RULES: 2,
+            RECOGNITION: len(SEEDED) + 1,
+            FORMATS: 2,
+            ALIASES: 1,
+            PAYERS: 2,
+        }
         for entity, number in expected.items():
             with self.subTest(entity=entity):
                 counted = report.tallies[entity]
@@ -562,6 +684,7 @@ class IdempotenceTests(BankData, TestCase):
         IgnoreRule.objects.update(created_at=datetime(2026, 9, 1, 12, 2, tzinfo=UTC))
         IncomePayer.objects.update(created_at=datetime(2026, 9, 1, 12, 3, tzinfo=UTC))
         OperationRule.objects.update(created_at=datetime(2026, 9, 1, 12, 4, tzinfo=UTC))
+        StatementFormat.objects.update(created_at=datetime(2026, 9, 1, 12, 5, tzinfo=UTC))
         for strategy in (MERGE, REPLACE):
             with self.subTest(strategy=strategy):
                 before = db_fingerprint()
@@ -1011,6 +1134,139 @@ class RecognitionOrderAndNameTests(BankData, TestCase):
         self.assertEqual(recognition_rules(), self.rules)
 
 
+#: A format valid on its own, which the archive's records below change.
+ONE_COLUMN_LAYOUT = {
+    "encoding": "auto",
+    "delimiter": ";",
+    "date_format": "dd/mm/yyyy",
+    "decimal_mark": ",",
+    "date_column": 1,
+    "label_columns": "2",
+    "amount_column": 3,
+}
+
+
+class StatementFormatTests(BankData, TestCase):
+    """The statement formats moved on after the export: one said otherwise
+    here, one only here, one only in the archive. Merged like the
+    recognition rules: one changed here is a conflict, kept."""
+
+    LOCAL = "Banque locale (CSV)"
+
+    def setUp(self):
+        super().setUp()
+        self.before = BankSection().snapshot()
+        self.formats = statement_formats()
+        self.reader = self.export()
+        StatementFormat.objects.filter(pk=self.tab_format.pk).update(decimal_mark=",")
+        make_statement_format(self.LOCAL, position=3, **ONE_COLUMN_LAYOUT)
+        self.seeded = StatementFormat.objects.get(name=SEEDED_FORMAT)
+        self.seeded.delete()
+
+    def test_merge_adds_what_is_missing_and_keeps_what_differs(self):
+        run = import_archive(self.reader, MERGE)
+        counted = tally(run, FORMATS)
+        self.assertEqual((counted.created, counted.updated, counted.deleted, counted.unchanged), (1, 0, 0, 0))
+        self.assertEqual(
+            bank_report(run).conflicts,
+            [f"Format de relevé « {TAB_FORMAT} » : différent dans l'archive (séparateur décimal) — gardé tel quel"],
+        )
+        self.assertEqual(StatementFormat.objects.get(pk=self.tab_format.pk).decimal_mark, ",")
+        self.assertTrue(StatementFormat.objects.filter(name=self.LOCAL).exists())
+        # Only in the archive: created as it was, in its place, with its moment.
+        seeded = StatementFormat.objects.get(name=SEEDED_FORMAT)
+        self.assertEqual({name: getattr(seeded, name) for name in SEEDED_LAYOUT}, SEEDED_LAYOUT)
+        self.assertEqual(seeded.created_at, self.seeded.created_at)
+        self.assertEqual(StatementFormat.objects.first(), seeded)
+        # Nothing else of the bank moved, and a merge that only creates needs
+        # no safety export.
+        self.assertEqual(tally(run, OPERATIONS).unchanged, 6)
+        self.assertFalse(run.affected())
+
+    def test_replace_makes_the_formats_exactly_the_archives(self):
+        run = import_archive(self.reader, REPLACE)
+        counted = tally(run, FORMATS)
+        self.assertEqual((counted.created, counted.updated, counted.deleted, counted.unchanged), (1, 1, 1, 0))
+        self.assertEqual(bank_report(run).conflicts, [])
+        self.assertEqual(statement_formats(), self.formats)
+        self.assertEqual(BankSection().snapshot(), self.before)
+        self.assertEqual(run.affected(), {"banque"})
+
+    def test_a_preview_changes_nothing_and_says_what_the_confirm_does(self):
+        for strategy in (MERGE, REPLACE):
+            with self.subTest(strategy=strategy):
+                before = db_fingerprint()
+                preview = import_archive(self.reader, strategy, preview=True)
+                self.assertEqual(db_fingerprint(), before)
+                confirmed = import_archive(self.reader, strategy)
+                self.assertEqual(preview.outcome(), confirmed.outcome())
+
+    def test_an_empty_list_forgets_every_format_under_replace_only(self):
+        # Said empty, the archive reads no statement: « Remplacer » forgets
+        # every format, « Fusionner » adds nothing and forgets nothing.
+        def change(payload):
+            payload["statement_formats"] = []
+            return payload
+
+        reader = self.forged(change)
+        here = StatementFormat.objects.count()
+        run = import_archive(reader, MERGE)
+        self.assertEqual(tally(run, FORMATS).deleted, 0)
+        self.assertEqual(StatementFormat.objects.count(), here)
+        run = import_archive(reader, REPLACE)
+        self.assertEqual(tally(run, FORMATS).deleted, here)
+        self.assertFalse(StatementFormat.objects.exists())
+
+
+class FormatOrderAndNameTests(BankData, TestCase):
+    """The order is part of what a format says (the first is the one an
+    import uses when nobody chooses), and a format is its name whatever its
+    case and accents (`bank.recognition.name_key`)."""
+
+    def setUp(self):
+        super().setUp()
+        self.formats = statement_formats()
+        self.reader = self.export()
+
+    def test_a_format_moved_here_is_a_conflict_and_replace_puts_it_back(self):
+        # First here, the tab format is what an import reads a file with.
+        StatementFormat.objects.filter(pk=self.tab_format.pk).update(position=0)
+        run = import_archive(self.reader, MERGE)
+        self.assertEqual(
+            bank_report(run).conflicts,
+            [f"Format de relevé « {TAB_FORMAT} » : différent dans l'archive (ordre) — gardé tel quel"],
+        )
+        self.assertEqual(StatementFormat.objects.first().name, TAB_FORMAT)
+        import_archive(self.reader, REPLACE)
+        self.assertEqual(statement_formats(), self.formats)
+        self.assertEqual(StatementFormat.objects.first().name, SEEDED_FORMAT)
+
+    def test_a_format_spelt_otherwise_here_is_the_same_format(self):
+        StatementFormat.objects.filter(name=SEEDED_FORMAT).update(name="bnp  PARIBAS (csv)")
+        run = import_archive(self.reader, MERGE)
+        self.assertEqual(
+            bank_report(run).conflicts,
+            [f"Format de relevé « {SEEDED_FORMAT} » : différent dans l'archive (nom) — gardé tel quel"],
+        )
+        self.assertEqual((tally(run, FORMATS).created, StatementFormat.objects.count()), (0, 2))
+        run = import_archive(self.reader, REPLACE)
+        counted = tally(run, FORMATS)
+        self.assertEqual((counted.created, counted.updated, counted.deleted), (0, 1, 0))
+        self.assertEqual(statement_formats(), self.formats)
+
+    def test_a_second_format_of_one_name_here_is_one_too_many_under_replace(self):
+        # The page refuses it; made some other way, the archive's format is
+        # the first of that name, and « Remplacer » leaves one.
+        StatementFormat.objects.create(name="BNP PARIBAS (CSV)", position=20, **ONE_COLUMN_LAYOUT)
+        run = import_archive(self.reader, MERGE)
+        self.assertEqual(tally(run, FORMATS).deleted, 0)
+        self.assertEqual(StatementFormat.objects.count(), 3)
+        run = import_archive(self.reader, REPLACE)
+        counted = tally(run, FORMATS)
+        self.assertEqual((counted.created, counted.updated, counted.deleted), (0, 0, 1))
+        self.assertEqual(statement_formats(), self.formats)
+
+
 class PayerCreatedByTheRunTests(BankData, TestCase):
     """A payer a merge creates brings the choices its lines held beside it in
     the archive (`_took_its_payers_choice`): there they were one decision -
@@ -1108,11 +1364,18 @@ class PayerCreatedByTheRunTests(BankData, TestCase):
         )
 
 
+def written_before_formats(payload) -> dict:
+    """banque.json as an archive written before bank/0007 holds it: no
+    statement formats."""
+    del payload["statement_formats"]
+    return payload
+
+
 def written_before_recognition(payload) -> dict:
     """banque.json as an archive written before bank/0006 holds it: no
-    recognition rules."""
+    recognition rules - nor the statement formats, which came after them."""
     del payload["operation_rules"]
-    return payload
+    return written_before_formats(payload)
 
 
 def written_before_payers(payload) -> dict:
@@ -1141,8 +1404,12 @@ class OldArchiveTests(BankData, TestCase):
         self.assertEqual(payers(), {})
         counted = tally(run, PAYERS)
         self.assertEqual((counted.created, counted.updated, counted.deleted, counted.unchanged), (0, 0, 0, 0))
-        # Nor any recognition rule: nothing said, nothing made.
+        # Nor any recognition rule or statement format: nothing said,
+        # nothing made.
         self.assertFalse(OperationRule.objects.exists())
+        self.assertFalse(StatementFormat.objects.exists())
+        counted = tally(run, FORMATS)
+        self.assertEqual((counted.created, counted.updated, counted.deleted, counted.unchanged), (0, 0, 0, 0))
 
     def test_replace_keeps_this_databases_payers_and_marks(self):
         reader = self.forged(written_before_payers)
@@ -1194,6 +1461,45 @@ class OldRecognitionArchiveTests(BankData, TestCase):
                 self.assertEqual((counted.created, counted.updated, counted.deleted, counted.unchanged), (0, 0, 0, 0))
                 self.assertEqual(db_fingerprint(), before)
                 self.assertFalse(run.affected())
+
+
+class OldFormatArchiveTests(BankData, TestCase):
+    """An archive written before bank/0007 says nothing of the statement
+    formats - which is not « read no statement »: whatever this database's
+    formats say, merged or replaced, they stay as they are, and nothing is
+    said about them."""
+
+    def setUp(self):
+        super().setUp()
+        self.reader = self.forged(written_before_formats)
+        # Moved on since: one changed, one added, one deleted.
+        StatementFormat.objects.filter(pk=self.tab_format.pk).update(date_format="dd.mm.yyyy")
+        make_statement_format("Banque locale (CSV)", position=3, **ONE_COLUMN_LAYOUT)
+        StatementFormat.objects.filter(name=SEEDED_FORMAT).delete()
+
+    def test_neither_strategy_touches_the_formats_here(self):
+        for strategy in (MERGE, REPLACE):
+            with self.subTest(strategy=strategy):
+                before = db_fingerprint()
+                preview = import_archive(self.reader, strategy, preview=True)
+                run = import_archive(self.reader, strategy)
+                self.assertEqual(preview.outcome(), run.outcome())
+                report = bank_report(run)
+                self.assertEqual((report.conflicts, report.skipped), ([], []))
+                self.assertEqual([note for note in report.notes if "champ inconnu" in note], [])
+                counted = tally(run, FORMATS)
+                self.assertEqual((counted.created, counted.updated, counted.deleted, counted.unchanged), (0, 0, 0, 0))
+                self.assertEqual(db_fingerprint(), before)
+                self.assertFalse(run.affected())
+
+    def test_the_formats_after_a_wipe_stay_none(self):
+        # Nothing said is nothing made: the page then refuses an import until
+        # a format is typed - never a format guessed for an archive.
+        wipe_bank()
+        run = import_archive(self.reader, MERGE)
+        self.assertFalse(StatementFormat.objects.exists())
+        self.assertEqual(tally(run, FORMATS).created, 0)
+        self.assertEqual(tally(run, OPERATIONS).created, 6)
 
 
 class RecognitionCheckTests(BankData, TestCase):
@@ -1270,6 +1576,12 @@ class RecognitionCheckTests(BankData, TestCase):
             # Past what SQLite holds: Django's own validator, said in French.
             (
                 {"name": "Ordre énorme", "meaning": "debit", "pattern": "ENORME", "position": 2**63},
+                "« position » : valeur refusée",
+            ),
+            # What SQLite still holds, and Django's validator lets through, but
+            # past `MAX_POSITION`: the page's « last + 1 » would overflow.
+            (
+                {"name": "Ordre presque énorme", "meaning": "debit", "pattern": "PRESQUE", "position": 2**63 - 1},
                 "« position » : valeur refusée",
             ),
             (
@@ -1365,6 +1677,290 @@ class RecognitionCheckTests(BankData, TestCase):
         run = import_archive(self.forged(change), MERGE)
         self.assertEqual(bank_report(run).notes.count("champ inconnu ignoré : règles de reconnaissance › humeur"), 1)
         self.assertEqual(bank_report(run).skipped, [])
+
+    def test_a_position_past_the_bound_is_refused_and_the_page_still_saves_after_one_at_it(self):
+        """As for the formats: a new rule comes at the highest + 1, rules
+        sharing a position are made distinct by + 1 (`views._saved`,
+        `_move`), so a position the page cannot put another after is
+        refused. One at `MAX_POSITION` is taken, and the page still saves
+        and moves."""
+
+        def made(name, position):
+            return {"name": name, "meaning": "debit", "pattern": name.upper(), "position": position}
+
+        reader = self.adding(
+            made("Ordre presque énorme", 2**63 - 1),
+            made("Ordre au plus haut A", section.MAX_POSITION),
+            made("Ordre au plus haut B", section.MAX_POSITION),
+        )
+        run = import_archive(reader, MERGE)
+        self.assertEqual(
+            bank_report(run).skipped,
+            ["Règle de reconnaissance « Ordre presque énorme » : « position » : valeur refusée"],
+        )
+        response = self.client.post(
+            reverse("bank:recognition"),
+            {
+                "action": "enregistrer",
+                "name": "Règle après",
+                "meaning": "debit",
+                "searched": "label",
+                "pattern": "APRES",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(OperationRule.objects.get(name="Règle après").position, section.MAX_POSITION + 1)
+        first = OperationRule.objects.get(name="Ordre au plus haut A")
+        response = self.client.post(reverse("bank:recognition_rule", args=[first.pk]), {"action": "descendre"})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            list(OperationRule.objects.filter(position__gte=section.MAX_POSITION).values_list("name", flat=True)),
+            ["Ordre au plus haut B", "Ordre au plus haut A", "Règle après"],
+        )
+
+
+#: What Django's own validators say, in English: never on a report.
+DJANGO_ENGLISH = r"Ensure this value|This field|is not a valid|already exists"
+
+
+class FormatCheckTests(BankData, TestCase):
+    """What the archive says of the statement formats, read before it is
+    trusted: the model's own check (`bank.statements.check_format`) runs on
+    every format written - created, or replaced - its refusal said in
+    French after the field it names, and an account pattern the guard of
+    `returnables.patterns` refuses is never compiled."""
+
+    TRAP = "Format piégé"
+
+    def change_record(self, name, **fields):
+        """This database's export with the format `name` said otherwise."""
+
+        def change(payload):
+            next(item for item in payload["statement_formats"] if item["name"] == name).update(fields)
+            return payload
+
+        return self.forged(change)
+
+    def adding(self, *records) -> ArchiveReader:
+        def change(payload):
+            payload["statement_formats"] += list(records)
+            return payload
+
+        return self.forged(change)
+
+    def test_formats_that_are_no_list_of_objects_refuse_the_archive_before_anything_is_written(self):
+        for value in ({}, "BNP", [TAB_FORMAT], [{"name": "Banque exemple"}, 3]):
+            with self.subTest(value=value):
+
+                def change(payload, value=value):
+                    payload["statement_formats"] = value
+                    return payload
+
+                reader = self.forged(change)
+                before = db_fingerprint()
+                with self.assertRaisesMessage(ArchiveError, "« statement_formats » n'est pas une liste d'objets"):
+                    import_archive(reader, REPLACE)
+                self.assertEqual(db_fingerprint(), before)
+
+    def test_a_format_it_cannot_read_is_skipped_with_its_reason_and_the_others_come(self):
+        def made(name, **fields):
+            return {"name": name, **ONE_COLUMN_LAYOUT, **fields}
+
+        refused = "format refusé — "
+        without_labels = {name: value for name, value in made("Sans libellé").items() if name != "label_columns"}
+        cases = [
+            (dict(ONE_COLUMN_LAYOUT), "sans nom"),
+            (made("  "), "sans nom"),
+            (made(7), "sans nom"),
+            # The same name whatever its case, accents and spaces.
+            (made("bnp  PARIBAS (csv)"), "en double dans l'archive"),
+            (made("Encodage exemple", encoding="latin-9"), "« encoding » : valeur inconnue (« latin-9 »)"),
+            (made("Séparateur exemple", delimiter=":"), "« delimiter » : valeur inconnue (« : »)"),
+            (made("Dates exemple", date_format="jj/mm/aaaa"), "« date_format » : valeur inconnue (« jj/mm/aaaa »)"),
+            (made("Décimales exemple", decimal_mark=";"), "« decimal_mark » : valeur inconnue (« ; »)"),
+            (made("Sans date", date_column=None), "« date_column » : valeur manquante"),
+            (without_labels, "« label_columns » : valeur manquante"),
+            (made("Date en texte", date_column="1"), "« date_column » : nombre entier attendu (« 1 »)"),
+            (made("Date oui", date_column=True), "« date_column » : nombre entier attendu (« True »)"),
+            (made("Montant négatif", amount_column=-3), "« amount_column » : nombre positif attendu (« -3 »)"),
+            (made("Colonne zéro", date_column=0), f"{refused}colonne de la date : un numéro de colonne de 1 à 50"),
+            # Past what SQLite holds, where Django's own validator refuses it
+            # too: the check's own French, never Django's « Ensure this value
+            # is less than or equal to … » beside it.
+            (
+                made("Colonne énorme", date_column=2**63),
+                f"{refused}colonne de la date : un numéro de colonne de 1 à 50",
+            ),
+            (
+                made("Libellé vide", label_columns=" "),
+                f"{refused}colonnes du libellé : indiquez au moins une colonne pour le libellé",
+            ),
+            (
+                made("Libellé illisible", label_columns="2, x"),
+                f"{refused}colonnes du libellé : « x » n'est pas un numéro de colonne (de 1 à 50)",
+            ),
+            (
+                made("Colonne deux fois", label_columns="1"),
+                f"{refused}colonnes du libellé : la colonne 1 sert deux fois : pour la date et pour le libellé",
+            ),
+            (
+                made("Sans montant", amount_column=None),
+                f"{refused}colonne du montant : indiquez la colonne du montant, ou celles des débits et des crédits",
+            ),
+            (
+                made("Montant deux fois", debit_column=4),
+                (
+                    f"{refused}colonne du montant : un montant signé OU des débits et des crédits : pas les deux "
+                    "(laissez l'un vide)"
+                ),
+            ),
+            (
+                made("Compte exemple", account_pattern=r"COMPTE (?P<numero>[0-9]+)"),
+                (
+                    f"{refused}motif du numéro de compte : le groupe (?P<numero>…) ne sert à rien ; seul "
+                    "(?P<compte>…) est lu"
+                ),
+            ),
+            (made("Ordre négatif", position=-1), "« position » : nombre positif attendu (« -1 »)"),
+            # Past what SQLite holds: Django's own validator, said in French.
+            (made("Ordre énorme", position=2**63), "« position » : valeur refusée"),
+            # What SQLite still holds, and Django's validator lets through, but
+            # past `MAX_POSITION`: the page's « last + 1 » would overflow.
+            (made("Ordre presque énorme", position=2**63 - 1), "« position » : valeur refusée"),
+            (made("N" * 101), "« name » : plus de 100 caractères"),
+            (made("Libellé long", label_columns="1" * 51), "« label_columns » : plus de 50 caractères"),
+            (made("Motif long", account_pattern="C" * 301), "« account_pattern » : plus de 300 caractères"),
+            # Debits alone, no credit column: a format the check takes.
+            (made("Débits seuls", amount_column=None, debit_column=3), None),
+        ]
+        reader = self.adding(*(record for record, _reason in cases))
+        wipe_bank()
+        run = import_archive(reader, MERGE)
+        skipped = bank_report(run).skipped
+        self.assertEqual(
+            skipped,
+            [
+                "Format de relevé sans nom"
+                if reason == "sans nom"
+                else f"Format de relevé « {record['name']} » : {reason}"
+                for record, reason in cases
+                if reason is not None
+            ],
+        )
+        for reason in skipped:
+            self.assertNotRegex(reason, DJANGO_ENGLISH)
+        # Every format it could read came, the first of two of one name kept.
+        self.assertEqual(tally(run, FORMATS).created, 3)
+        seeded = StatementFormat.objects.get(name=SEEDED_FORMAT)
+        self.assertEqual({name: getattr(seeded, name) for name in SEEDED_LAYOUT}, SEEDED_LAYOUT)
+        self.assertEqual(StatementFormat.objects.get(name="Débits seuls").debit_column, 3)
+
+    def test_an_account_pattern_that_is_no_regular_expression_is_refused(self):
+        reader = self.adding({"name": "Banque exemple", **ONE_COLUMN_LAYOUT, "account_pattern": "COMPTE ("})
+        run = import_archive(reader, MERGE)
+        (skipped,) = bank_report(run).skipped
+        self.assertTrue(
+            skipped.startswith("Format de relevé « Banque exemple » : format refusé — motif du numéro de compte : "),
+            skipped,
+        )
+        self.assertNotRegex(skipped, DJANGO_ENGLISH)
+        self.assertFalse(StatementFormat.objects.filter(name="Banque exemple").exists())
+
+    def test_an_account_pattern_the_guard_refuses_is_never_compiled(self):
+        # Created, or replacing this database's: refused before `regex`
+        # could freeze the machine compiling it (returnables/patterns.py).
+        for pattern, reason in (
+            (r"(?:x{65535}){65535}", "répétition trop grande"),
+            (r"(?x)(?:x{6 5 5 3 5}){6 5 5 3 5}", "le mode (?x) n'est pas accepté"),
+            (r"a{e<=1}", "accolade"),
+        ):
+            for strategy, reader in (
+                (MERGE, self.adding({"name": self.TRAP, **ONE_COLUMN_LAYOUT, "account_pattern": pattern})),
+                (REPLACE, self.change_record(TAB_FORMAT, account_pattern=pattern)),
+            ):
+                with self.subTest(pattern=pattern, strategy=strategy):
+                    never = NeverCompile()
+                    with mock.patch.object(regex, "compile", new=never):
+                        run = import_archive(reader, strategy)
+                    self.assertEqual(never.calls, [])
+                    (skipped,) = bank_report(run).skipped
+                    self.assertIn(" : format refusé — motif du numéro de compte : ", skipped)
+                    self.assertIn(reason, skipped)
+                    self.assertFalse(StatementFormat.objects.filter(name=self.TRAP).exists())
+                    self.assertEqual(
+                        StatementFormat.objects.get(pk=self.tab_format.pk).account_pattern,
+                        TAB_LAYOUT["account_pattern"],
+                    )
+
+    def test_replace_checks_the_format_it_writes_and_keeps_it_when_refused(self):
+        # The columns are no key: « Remplacer » writes the archive's over this
+        # database's, and checks them as a format it creates.
+        reader = self.change_record(TAB_FORMAT, amount_column=7, position=12)
+        before = db_fingerprint()
+        preview = import_archive(reader, REPLACE, preview=True)
+        run = import_archive(reader, REPLACE)
+        self.assertEqual(preview.outcome(), run.outcome())
+        self.assertEqual(
+            bank_report(run).skipped,
+            [
+                (
+                    f"Format de relevé « {TAB_FORMAT} » : format refusé — colonne du montant : un montant signé OU "
+                    "des débits et des crédits : pas les deux (laissez l'un vide)"
+                )
+            ],
+        )
+        self.assertEqual(db_fingerprint(), before)
+        counted = tally(run, FORMATS)
+        self.assertEqual((counted.updated, counted.deleted, counted.unchanged), (0, 0, 1))
+
+    def test_replace_keeps_a_format_whose_record_it_cannot_read(self):
+        reader = self.change_record(TAB_FORMAT, encoding="latin-9")
+        run = import_archive(reader, REPLACE)
+        self.assertEqual(
+            bank_report(run).skipped,
+            [f"Format de relevé « {TAB_FORMAT} » : « encoding » : valeur inconnue (« latin-9 »)"],
+        )
+        self.assertEqual(StatementFormat.objects.get(pk=self.tab_format.pk).encoding, "utf-8")
+        counted = tally(run, FORMATS)
+        self.assertEqual((counted.updated, counted.deleted, counted.unchanged), (0, 0, 1))
+
+    def test_an_unknown_field_of_a_format_is_said_once(self):
+        def change(payload):
+            for item in payload["statement_formats"]:
+                item["humeur"] = "calme"
+            return payload
+
+        run = import_archive(self.forged(change), MERGE)
+        self.assertEqual(bank_report(run).notes.count("champ inconnu ignoré : formats de relevé › humeur"), 1)
+        self.assertEqual(bank_report(run).skipped, [])
+
+    def test_a_position_past_the_bound_is_refused_and_the_page_still_saves_after_one_at_it(self):
+        """A position SQLite holds that the page cannot put another after -
+        a new format comes at the highest + 1, and formats sharing one are
+        made distinct by + 1 (`views._saved`, `_swapped`) - is refused: taken,
+        every « Nouveau format » after it was a 500 (OverflowError). One at
+        `MAX_POSITION` is taken, and the page still saves and moves."""
+        reader = self.adding(
+            {"name": "Ordre presque énorme", **ONE_COLUMN_LAYOUT, "position": 2**63 - 1},
+            {"name": "Ordre au plus haut A", **ONE_COLUMN_LAYOUT, "position": section.MAX_POSITION},
+            {"name": "Ordre au plus haut B", **ONE_COLUMN_LAYOUT, "position": section.MAX_POSITION},
+        )
+        run = import_archive(reader, MERGE)
+        self.assertEqual(
+            bank_report(run).skipped, ["Format de relevé « Ordre presque énorme » : « position » : valeur refusée"]
+        )
+        response = self.client.post(
+            reverse("bank:statement_formats"), {"action": "enregistrer", "name": "Banque après", **ONE_COLUMN_LAYOUT}
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(StatementFormat.objects.get(name="Banque après").position, section.MAX_POSITION + 1)
+        first = StatementFormat.objects.get(name="Ordre au plus haut A")
+        response = self.client.post(reverse("bank:statement_format", args=[first.pk]), {"action": "descendre"})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            list(StatementFormat.objects.filter(position__gte=section.MAX_POSITION).values_list("name", flat=True)),
+            ["Ordre au plus haut B", "Ordre au plus haut A", "Banque après"],
+        )
 
 
 class PayerCheckTests(BankData, TestCase):
@@ -2096,6 +2692,23 @@ class UnreadableMomentTests(BankData, TestCase):
                     (counted.created, counted.updated, counted.deleted, counted.unchanged), (0, 0, 0, len(SEEDED))
                 )
 
+    def test_a_statement_format_whose_moment_cannot_be_read_is_kept_as_it_was(self):
+        for moment, reason in self.MOMENTS.items():
+            with self.subTest(moment=moment):
+
+                def change(payload, moment=moment):
+                    tab = next(item for item in payload["statement_formats"] if item["name"] == TAB_FORMAT)
+                    tab.update(decimal_mark=",", created_at=moment)
+                    return payload
+
+                run = self.assert_skipped_as_previewed(
+                    change, f"Format de relevé « {TAB_FORMAT} » : « created_at » : {reason}"
+                )
+                fmt = StatementFormat.objects.get(pk=self.tab_format.pk)
+                self.assertEqual((fmt.decimal_mark, fmt.created_at), (".", FORMAT_MOMENT))
+                counted = tally(run, FORMATS)
+                self.assertEqual((counted.created, counted.updated, counted.deleted, counted.unchanged), (0, 0, 0, 1))
+
     def test_a_line_whose_import_moment_cannot_be_read_is_kept_with_its_links(self):
         # The archive also says the line pays nothing: written, it would lose
         # its link. The field is compared whatever the line's sign.
@@ -2172,7 +2785,15 @@ class ClearTests(BankData, TestCase):
         deleted = {entity: tally(run, entity).deleted for entity in ENTITIES}
         self.assertEqual(
             deleted,
-            {OPERATIONS: 6, PAYMENTS: 4, RULES: 2, RECOGNITION: len(SEEDED) + 1, ALIASES: 1, PAYERS: 2},
+            {
+                OPERATIONS: 6,
+                PAYMENTS: 4,
+                RULES: 2,
+                RECOGNITION: len(SEEDED) + 1,
+                FORMATS: 2,
+                ALIASES: 1,
+                PAYERS: 2,
+            },
         )
         self.assertIn(section.CLEAR_NOTE, bank_report(run).notes)
         self.assertEqual(run.affected(), {"banque"})
@@ -2192,6 +2813,31 @@ class ClearTests(BankData, TestCase):
         # Nothing to take, nothing said.
         run = run_clear({"banque"}, preview=False)
         self.assertNotIn(RECOGNITION_CLEAR_NOTE, bank_report(run).notes)
+
+    def test_the_statement_formats_go_and_the_report_says_what_that_costs(self):
+        # The seeded one too: until one is back, an import is refused. The
+        # Effacer tab says it before the clear.
+        run = run_clear({"banque"}, preview=False)
+        self.assertFalse(StatementFormat.objects.exists())
+        self.assertEqual(tally(run, FORMATS).deleted, 2)
+        self.assertIn(FORMAT_CLEAR_NOTE, bank_report(run).notes)
+        self.assertIn("Format du relevé", FORMAT_CLEAR_NOTE)
+        self.assertIn("sauvegarde", FORMAT_CLEAR_NOTE)
+        self.assertIn("formats de relevé", registry.INFO["banque"].clear_note)
+        self.assertIn("formats de relevé", registry.INFO["banque"].description)
+        # Nothing to take, nothing said.
+        run = run_clear({"banque"}, preview=False)
+        self.assertNotIn(FORMAT_CLEAR_NOTE, bank_report(run).notes)
+
+    def test_the_formats_alone_say_their_note(self):
+        # Every line and rule already gone: the formats' note is the one said.
+        OperationRule.objects.all().delete()
+        BankTransaction.objects.all().delete()
+        run = run_clear({"banque"}, preview=False)
+        notes = bank_report(run).notes
+        self.assertIn(FORMAT_CLEAR_NOTE, notes)
+        self.assertNotIn(RECOGNITION_CLEAR_NOTE, notes)
+        self.assertNotIn(section.CLEAR_NOTE, notes)
 
     def test_clearing_the_bank_clears_only_the_bank(self):
         self.assertEqual(registry.closure({"banque"}, "clear"), {"banque"})

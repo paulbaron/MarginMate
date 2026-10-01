@@ -17,7 +17,7 @@ from decimal import Decimal
 from django.test import Client, TestCase
 from django.urls import reverse
 
-from bank.models import BankTransaction, OperationRule
+from bank.models import BankTransaction, OperationRule, StatementFormat
 from inventory.models import StockMovement, StockType, UnitChoices
 from invoices.models import Invoice, ReceiptBatch, ShopItemPrice
 from recipes.models import PosProduct, PosProductDailyQuantity, Recipe, RecipeSale
@@ -503,6 +503,7 @@ class EmptyDatabasePageSmokeTests(TestCase):
             "bank:proposals",
             "bank:recognition",
             "bank:recognition_reapply",
+            "bank:statement_formats",
         ):
             with self.subTest(page=name):
                 self.assertPageOK(name)
@@ -517,6 +518,21 @@ class EmptyDatabasePageSmokeTests(TestCase):
             with self.subTest(page=name):
                 self.assertPageOK(name)
         self.assertEqual(self.client.get(reverse("bank:recognition_rule", args=[999999])).status_code, 404)
+
+    def test_the_statement_format_pages(self):
+        """The seeded format's own page, and the list and Banque with no
+        format at all - an espace whose « Données » were cleared, where no
+        statement imports. A format that is not there is a 404."""
+        url = reverse("bank:statement_format", args=[StatementFormat.objects.first().pk])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        assertNoUnrenderedTemplateSyntax(self, response, url)
+        StatementFormat.objects.all().delete()
+        for name in ("bank:statement_formats", "bank:bank_home"):
+            with self.subTest(page=name):
+                self.assertPageOK(name)
+                assertNoUnrenderedTemplateSyntax(self, self.client.get(reverse(name)), name)
+        self.assertEqual(self.client.get(reverse("bank:statement_format", args=[999999])).status_code, 404)
 
     def test_the_invoice_files(self):
         """The zip of the period's invoices goes back to Banque when nothing

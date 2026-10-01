@@ -1,15 +1,22 @@
 """The bank page and the actions on each of its lines."""
 
 from datetime import date
+from decimal import Decimal
 from unittest import mock
 
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
 from bank import recognition, reconcile
-from bank.models import BankTransaction, InvoicePayment, OperationRule
+from bank.models import BankTransaction, InvoicePayment, OperationRule, StatementFormat
+from bank.tests.support import FORMAT_SEED, make_format
+from bank.tests.test_recognition_views import text_of
 from bank.tests.test_reconcile import FIVE_FIVE, Fixtures, card_row, debit_row, statement
+from bank.tests.test_statement_format_views import OTHER_BANK, OTHER_FIELDS, bnp_file
+from staff.tests.page_forms import as_post, forms_of
 from tests.test_views_smoke import assertNoUnrenderedTemplateSyntax
 
 
@@ -160,3 +167,131 @@ class UndatedReceiptPageTests(Fixtures, TestCase):
         response = self.client.get(reverse("bank:bank_home"))
         self.assertContains(response, "sa date n")
         self.assertContains(response, "sans date")
+
+
+class ImportFormatTests(TestCase):
+    """The import card says which format reads the files and, with several,
+    lets the person choose (bank/views.py `_import_format`) - read off the
+    page and posted as a browser posts it, its CSRF token checked. Every
+    statement here is invented."""
+
+    def setUp(self):
+        super().setUp()
+        self.client = self.client_class(enforce_csrf_checks=True)
+        self.url = reverse("bank:bank_home")
+        self.formats_url = reverse("bank:statement_formats")
+
+    def html(self) -> str:
+        response = self.client.get(self.url)
+        assertNoUnrenderedTemplateSyntax(self, response, self.url)
+        return response.content.decode()
+
+    def card(self, html=None):
+        (form,) = [form for form in forms_of(html or self.html()) if "files" in form.names]
+        return form
+
+    def card_text(self, html) -> str:
+        at = html.index('name="files"')
+        start = html.rindex('<div class="card">', 0, at)
+        return text_of(html[start : html.index("</div>", at)])
+
+    def data(self, *files, form=None, **values) -> dict:
+        data = as_post((form or self.card()).submission(values=values))
+        data["files"] = [SimpleUploadedFile(name, content) for name, content in files]
+        return data
+
+    def upload(self, *files, **values):
+        return self.client.post(self.url, self.data(*files, **values), follow=True)
+
+    def messages_of(self, response) -> list[str]:
+        return [str(message) for message in response.context["messages"]]
+
+    def test_one_format_there_is_nothing_to_choose_and_the_card_names_it(self):
+        html = self.html()
+        self.assertNotIn("format", self.card(html).names)
+        self.assertIn(f"Format : {FORMAT_SEED.NAME} · modifier", self.card_text(html))
+        self.assertIn(f'<a href="{self.formats_url}">modifier</a>', html)
+
+    def test_several_formats_the_card_offers_them_the_first_chosen(self):
+        other = make_format("Banque Exemple (CSV)", **OTHER_FIELDS)
+        html = self.html()
+        seeded = StatementFormat.objects.get(name=FORMAT_SEED.NAME)
+        self.assertEqual(self.card(html).control("format").options, [(str(seeded.pk), True), (str(other.pk), False)])
+        self.assertIn("Formats : 2 · modifier", self.card_text(html))
+        # In their order: moved first, the other bank's is chosen.
+        StatementFormat.objects.filter(pk=other.pk).update(position=0)
+        self.assertEqual(self.card().control("format").value, str(other.pk))
+
+    def test_the_card_as_drawn_reads_with_the_first_format(self):
+        make_format("Banque Exemple (CSV)", **OTHER_FIELDS)
+        response = self.upload(("Juillet.csv", bnp_file()))
+        self.assertIn("2 opération(s) importée(s)", " ".join(self.messages_of(response)))
+        self.assertEqual(set(BankTransaction.objects.values_list("account", flat=True)), {"****0042"})
+
+    def test_the_format_chosen_reads_the_files(self):
+        other = make_format("Banque Exemple (CSV)", **OTHER_FIELDS)
+        response = self.upload(("export.csv", OTHER_BANK), format=str(other.pk))
+        self.assertIn("2 opération(s) importée(s)", " ".join(self.messages_of(response)))
+        self.assertEqual(
+            list(BankTransaction.objects.order_by("operation_date").values_list("account", "label", "amount")),
+            [
+                ("000123456789", "CB EPICERIE EXEMPLE ref 0001", Decimal("-12.30")),
+                ("000123456789", "VIR CLIENT EXEMPLE ref 0002", Decimal("1250.00")),
+            ],
+        )
+
+    def test_a_format_that_is_not_there_imports_nothing(self):
+        other = make_format("Banque Exemple (CSV)", **OTHER_FIELDS)
+        form = self.card()
+        refused = ["Format de relevé inconnu. Aucun relevé n'a été importé."]
+        for chosen in ("999999", "abc", "", "²", "-1", "1" * 19):
+            with self.subTest(chosen=chosen):
+                data = self.data(("Juillet.csv", bnp_file()), form=form)
+                data["format"] = [chosen]
+                response = self.client.post(self.url, data, follow=True)
+                self.assertEqual(self.messages_of(response), refused)
+        # Deleted since the card was drawn.
+        data = self.data(("export.csv", OTHER_BANK), form=form, format=str(other.pk))
+        other.delete()
+        response = self.client.post(self.url, data, follow=True)
+        self.assertEqual(self.messages_of(response), refused)
+        self.assertFalse(BankTransaction.objects.exists())
+
+    def test_with_no_format_the_card_says_so_and_no_statement_is_imported(self):
+        StatementFormat.objects.all().delete()
+        html = self.html()
+        self.assertIn("Aucun format de relevé — en ajouter un", self.card_text(html))
+        self.assertIn(f'<a href="{self.formats_url}">en ajouter un</a>', html)
+        response = self.upload(("Juillet.csv", bnp_file()))
+        self.assertEqual(self.messages_of(response), [f"{reconcile.NO_FORMAT} Aucun relevé n'a été importé."])
+        self.assertFalse(BankTransaction.objects.exists())
+
+    def test_the_format_is_read_once_for_every_file_of_an_upload(self):
+        files = [
+            (f"Compte {month}.csv", statement(debit_row(date(2026, month, 9), "METRO FRANCE", "1,00")))
+            for month in (7, 8, 9)
+        ]
+        for chosen in (False, True):
+            with self.subTest(chosen=chosen):
+                BankTransaction.objects.all().delete()
+                if chosen:
+                    make_format("Banque Exemple (CSV)", **OTHER_FIELDS)
+                values = {"format": str(StatementFormat.objects.get(name=FORMAT_SEED.NAME).pk)} if chosen else {}
+                data = self.data(*files, **values)
+                with CaptureQueriesContext(connection) as queries:
+                    self.client.post(self.url, data)
+                read = [query["sql"] for query in queries.captured_queries if "bank_statementformat" in query["sql"]]
+                self.assertEqual(len(read), 1)
+                self.assertEqual(BankTransaction.objects.count(), 3)
+
+    def test_a_stored_format_the_check_refuses_stops_the_import_and_says_which(self):
+        StatementFormat.objects.filter(name=FORMAT_SEED.NAME).update(amount_column=None)
+        response = self.upload(("Juillet.csv", bnp_file()))
+        (said,) = self.messages_of(response)
+        self.assertTrue(
+            said.startswith(
+                f"Juillet.csv : Import annulé : le format « {FORMAT_SEED.NAME} » est à corriger sur « Format du relevé »"
+            ),
+            said,
+        )
+        self.assertFalse(BankTransaction.objects.exists())

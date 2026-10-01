@@ -1,11 +1,13 @@
-"""What the bank tests share about recognising operations (bank/recognition.py).
+"""What the bank tests share about recognising operations (bank/recognition.py)
+and reading a statement's layout (bank/statements.py).
 
-The rules of migration 0006 are in every test database, the _template every
-new espace is copied from included: a test reading through the database
-(`reconcile.import_statement`, `income.income_for`, the pages) is read by
-them with nothing to set up. A pure test - `statements.parse_statement`,
-`income.entry_for` and their kin, on unsaved rows - is handed them instead:
-`SEEDED`, compiled from the migration's own list, no database.
+The rules of migration 0006 and the format of migration 0007 are in every
+test database, the _template every new espace is copied from included: a
+test reading through the database (`reconcile.import_statement`,
+`income.income_for`, the pages) is read by them with nothing to set up. A
+pure test - `statements.parse_statement`, `income.entry_for` and their kin,
+on unsaved rows - is handed them instead: `SEEDED` and `SEEDED_FORMAT`, made
+from the migrations' own data, no database.
 
 Every label, payee and amount the tests read with them is invented.
 """
@@ -16,13 +18,16 @@ import importlib
 from types import SimpleNamespace
 
 from bank import recognition
-from bank.models import OperationRule
+from bank.models import OperationRule, StatementFormat
 
 #: The seed migration itself, read for its data (test_recognition pins it
 #: apart, with literals, so a slip in the migration is caught rather than
 #: copied here).
 SEED = importlib.import_module("bank.migrations.0006_operation_rules")
 SEEDED_NAMES = tuple(name for _position, name, _meaning, _searched, _pattern in SEED.RULES)
+#: The format's seed migration, read for its data (test_statement_formats
+#: pins it apart, with literals).
+FORMAT_SEED = importlib.import_module("bank.migrations.0007_statement_formats")
 
 
 def rule(name, meaning, pattern, searched=OperationRule.Searched.LABEL, *, position=0, is_active=True):
@@ -73,3 +78,25 @@ def make_rule(name, meaning, pattern, searched=OperationRule.Searched.LABEL, *, 
 def pause_seeded_rules() -> None:
     """The seeded rules turned off: an espace at another bank."""
     OperationRule.objects.filter(name__in=SEEDED_NAMES).update(is_active=False)
+
+
+def seeded_format(**changes) -> SimpleNamespace:
+    """The seeded format as an unsaved row, `changes` made - no database."""
+    return SimpleNamespace(name=FORMAT_SEED.NAME, **{**FORMAT_SEED.FORMAT, **changes})
+
+
+#: The owner's bank's layout, as every database holds it: what a pure test
+#: reads a statement with.
+SEEDED_FORMAT = seeded_format()
+
+
+def make_format(name, **fields) -> StatementFormat:
+    """A format in the database, checked like the form checks it, after
+    every format already there unless `position` says otherwise."""
+    if "position" not in fields:
+        last = StatementFormat.objects.order_by("-position").values_list("position", flat=True).first()
+        fields["position"] = (last or 0) + 1
+    made = StatementFormat(name=name, **fields)
+    made.full_clean()
+    made.save()
+    return made

@@ -29,6 +29,7 @@ from decimal import Decimal
 from html import unescape
 from unittest import mock
 
+from django import forms
 from django.db import connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
@@ -61,6 +62,8 @@ TILL_RULES = [PAYOUT_RULE, CASH_RULE, CHEQUE_RULE]
 #: A terminal no seeded rule recognises: its payouts print no gross.
 TERMINAL_LABEL = "REMISE TPE {number:06d} BAR EXEMPLE"
 TPE_RULE = "Versement TPE (REMISE TPE)"
+#: What a NUL typed in a text field is told, in French.
+NUL_SAID = "Caractère interdit (NUL) : retapez ce champ."
 
 
 def text_of(html: str) -> str:
@@ -501,6 +504,30 @@ class NewRuleTests(Page):
             self.add(pattern="TPE|"),
             "Motif : le motif accepte une ligne vide : il trouverait quelque chose sur n'importe quelle ligne.",
         )
+
+    def test_a_nul_in_the_name_or_the_pattern_is_refused_in_french(self):
+        # Pasted or posted by hand: Django's own « Null characters are not
+        # allowed. » is English.
+        for field, values in (("name", {"name": "Versement\x00TPE"}), ("pattern", {"pattern": "REMISE\x00TPE"})):
+            with self.subTest(values=values):
+                response = self.add(**values)
+                self.assertRefused(response, NUL_SAID)
+                html = response.content.decode()
+                self.assertNotIn("Null characters", html)
+                # Said under the field it is about.
+                at = html.index(f'name="{field}"', html.index('id="nouvelle-regle"'))
+                block = html[html.rindex('<div class="form-field', 0, at) : html.index("</div>", at)]
+                self.assertIn(NUL_SAID, text_of(block))
+
+    def test_every_text_field_says_a_nul_in_french(self):
+        """Every field of the form Django checks for a NUL (its CharFields)
+        carries the French sentence - a text field added later included."""
+        form = OperationRuleForm()
+        texts = [name for name, field in form.fields.items() if isinstance(field, forms.CharField)]
+        self.assertEqual(texts, ["name", "pattern"])
+        for name in texts:
+            with self.subTest(field=name):
+                self.assertEqual(form.fields[name].error_messages["null_characters_not_allowed"], NUL_SAID)
 
     def test_what_is_missing_is_said_once_and_only_that(self):
         response = self.add(name="", meaning="", pattern="")

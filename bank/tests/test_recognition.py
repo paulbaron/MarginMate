@@ -55,6 +55,7 @@ from bank.statements import parse_statement
 from bank.tests.support import (
     SEED,
     SEEDED,
+    SEEDED_FORMAT,
     SEEDED_NAMES,
     make_rule,
     pause_seeded_rules,
@@ -393,7 +394,7 @@ class DescribeTests(SimpleTestCase):
             with self.subTest(label=label):
                 self.assertEqual(described(rules, label)[:3], (CARD, "BOUTIQUE", None))
         parsed = parse_statement(
-            statement("03/07/2026;PAIEMENT CB;CB;CB 20260715123456/2 BOUTIQUE;03/07/2026;-4,10"), rules
+            statement("03/07/2026;PAIEMENT CB;CB;CB 20260715123456/2 BOUTIQUE;03/07/2026;-4,10"), rules, SEEDED_FORMAT
         )
         self.assertEqual(
             [(line.kind, line.counterparty, line.card_date) for line in parsed.lines], [(CARD, "BOUTIQUE", None)]
@@ -782,7 +783,7 @@ class SlowRuleTests(SimpleTestCase):
             debit_row(date(2026, 7, 9), "U.B.A.", "120,35"),
         )
         with too_slow(SEED.RULES[1][4]), self.assertRaises(ValueError) as refused:
-            parse_statement(statement(*rows), seeded())
+            parse_statement(statement(*rows), seeded(), SEEDED_FORMAT)
         self.assertIn(f"« {DEBIT_RULE} » ne peut pas être appliquée", str(refused.exception))
 
 

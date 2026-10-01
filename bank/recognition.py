@@ -203,11 +203,11 @@ class Rules:
         # for the GIL behind them is not a slow pattern (review, 01/10/2026).
         started = thread_time()
         try:
-            found = _search(rule.pattern, text)
+            found = search(rule.pattern, text)
             if found is None:
                 folded = search_key(text)
                 if folded != text.lower():
-                    found = _search(rule.pattern, folded)
+                    found = search(rule.pattern, folded)
                     if found is not None and _aligned(text):
                         found = _AsPrinted(found, text)
         except PatternError:
@@ -254,10 +254,12 @@ class Rules:
         return f"{outcome} : {said}. {fix} sur « Reconnaissance des opérations », puis {then}."
 
 
-def _search(pattern, text: str):
+def search(pattern, text: str):
     """`pattern.search(text)` under the per-match time limit, asked twice
     before it is taken for too slow (PatternError): the limit is the clock's,
-    and one match can lose it to a busy server rather than to its pattern."""
+    and one match can lose it to a busy server rather than to its pattern.
+    Every per-match search of a statement goes through it - the rules' and
+    the account pattern's (`statements._AccountSearch`)."""
     try:
         return patterns.search(pattern, text, patterns.Budget(patterns.PATTERN_TIMEOUT))
     except PatternError:

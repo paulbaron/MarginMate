@@ -32,9 +32,33 @@
                 <span class="upload-choice-title">Relevés bancaires (CSV)</span>
                 <input type="file" name="files" multiple accept=".csv,text/csv">
             </label>
+            {% comment %}
+            The format the files are read with: a choice only when there are
+            several (views.FORMAT_PARAM), the first chosen - it is the one an
+            import reads with when nobody chooses.
+            {% endcomment %}
+            {% if formats|length > 1 %}
+                <label>
+                    <span class="upload-choice-title">Format</span>
+                    <select name="format">
+                        {% for fmt in formats %}
+                            <option value="{{ fmt.pk }}"{% if forloop.first %} selected{% endif %}>{{ fmt.name }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+            {% endif %}
             <button class="btn" type="submit">Importer</button>
         </form>
         <p class="muted">L'export CSV du compte, sur un ou plusieurs mois ; les opérations déjà importées sont ignorées.</p>
+        <p class="muted">
+            {% if not formats %}
+                Aucun format de relevé — <a href="{% url 'bank:statement_formats' %}">en ajouter un</a>
+            {% elif formats|length == 1 %}
+                Format : {{ formats.0.name }} · <a href="{% url 'bank:statement_formats' %}">modifier</a>
+            {% else %}
+                Formats : {{ formats|length }} · <a href="{% url 'bank:statement_formats' %}">modifier</a>
+            {% endif %}
+        </p>
     </div>
 
     {% if has_lines %}

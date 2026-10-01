@@ -367,6 +367,7 @@ class PageChromeTests(TestCase):
             "margins:margins_home",
             "bank:income_home",
             "bank:recognition",
+            "bank:statement_formats",
             "staff:home",
             "returnables:home",
             "returnables:format_list",
