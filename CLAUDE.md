@@ -647,7 +647,12 @@ Six rules, each of them somebody's money:
   it is on. The **unit price stays positive**: it is what one of them costs,
   and negative beside a negative count it would price the return twice. A
   charge supplier needs nothing extra - `charge_reading` rebuilds its
-  count-of-1 negative-amount lines from the negative VAT table.
+  count-of-1 negative-amount lines from the negative VAT table. **Some
+  senders state a credit note negative already** (OVH's AFR1176742,
+  29/09/2026: a 381 whose GrandTotalAmount is -3.92): signed again it was
+  filed at +3,27 €, a refund read as a purchase. The sign is taken from the
+  stated total (BT-112, else the HT bases): a credit note always ends as
+  money going back.
 - **Document-level allowances and charges** (BG-20/BG-21) are duty,
   eco-participation and discounts, and they become
   `Invoice.reconciliation_adjustment` - charges positive, allowances
@@ -779,7 +784,16 @@ never came.
   the legal invoice, and `source_sha256` still answers for a folder scanned
   again. « Relire le document » reads that file's XML again
   (`_reread_einvoice_file`) and never a parser, which would be handed an XML
-  to open as a PDF.
+  to open as a PDF. **So does every other path that reads a document
+  again**: a supplier ticked « charges » (`redo_as_expenses`) and a document
+  moved to one (`move_documents`) go through `importing._read_again`, which
+  handed the ticket reader the summary `source_text` - OVH's FR80644402,
+  22,62 €, came out at 20,00 € at 0 % (« 20.00 % » read as the total), and
+  Total Energie's 114005409336, 228,07 €, at 0,05 € (01/10/2026). It reads
+  the XML of the stored file now (`_einvoice_again`).
+  `manage.py tenant <espace> reread_einvoices` reads again every e-invoice
+  filed at a total its XML does not state (`--dry-run` first); one whose
+  lines a person corrected kept the stated total and is left alone.
 - **`Invoice.total_ttc` is the total the invoice states** (BT-112) while the
   lines are within a cent a line of it: they are stated in HT, and 169,00 at
   20 % beside 25,20 at 5,5 % works back out to 229,386 where the invoice

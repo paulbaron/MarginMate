@@ -319,6 +319,33 @@ CII_CREDIT_NOTE = """<?xml version="1.0" encoding="UTF-8"?>
 </rsm:CrossIndustryInvoice>
 """
 
+# The same credit note with every amount stated NEGATIVE, the way OVH states
+# its own (« AFR1176742 », 29/09/2026: a 381 whose GrandTotalAmount is -3.92).
+# EN 16931 wants them positive; signed again, the money given back read as
+# money spent.
+CII_CREDIT_NOTE_STATED_NEGATIVE = (
+    CII_CREDIT_NOTE.replace("<ram:ID>AV-2026-0007</ram:ID>", "<ram:ID>AV-2026-0008</ram:ID>")
+    .replace("<ram:LineTotalAmount>84.50</ram:LineTotalAmount>", "<ram:LineTotalAmount>-84.50</ram:LineTotalAmount>")
+    .replace("<ram:BasisAmount>84.50</ram:BasisAmount>", "<ram:BasisAmount>-84.50</ram:BasisAmount>")
+    .replace(
+        "<ram:CalculatedAmount>16.90</ram:CalculatedAmount>", "<ram:CalculatedAmount>-16.90</ram:CalculatedAmount>"
+    )
+    .replace(
+        "<ram:TaxBasisTotalAmount>84.50</ram:TaxBasisTotalAmount>",
+        "<ram:TaxBasisTotalAmount>-84.50</ram:TaxBasisTotalAmount>",
+    )
+    .replace(
+        '<ram:TaxTotalAmount currencyID="EUR">16.90</ram:TaxTotalAmount>',
+        '<ram:TaxTotalAmount currencyID="EUR">-16.90</ram:TaxTotalAmount>',
+    )
+    .replace(
+        "<ram:GrandTotalAmount>101.40</ram:GrandTotalAmount>", "<ram:GrandTotalAmount>-101.40</ram:GrandTotalAmount>"
+    )
+    .replace(
+        "<ram:DuePayableAmount>101.40</ram:DuePayableAmount>", "<ram:DuePayableAmount>-101.40</ram:DuePayableAmount>"
+    )
+)
+
 # The same credit note in UBL, where the document type is the ROOT element
 # and the quantity element is named differently (cbc:CreditedQuantity).
 UBL_CREDIT_NOTE = """<?xml version="1.0" encoding="UTF-8"?>

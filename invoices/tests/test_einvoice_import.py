@@ -42,15 +42,16 @@ from django.urls import reverse
 from accounts import paths
 from invoices import einvoice
 from invoices.forms import ReceiptBatchUploadForm
-from invoices.importing import DuplicateInvoiceError
+from invoices.importing import DuplicateInvoiceError, redo_as_expenses
 from invoices.models import INVOICE_ATTACHMENT_PATTERN, Invoice, Supplier
 from invoices.receipt_batches import STAGING_DIR, run_receipt_batch, stage_batch
-from invoices.receipts import UnrecognisedShopError, import_document, pending_receipts
+from invoices.receipts import UnrecognisedShopError, import_document, move_documents, pending_receipts
 from invoices.scrapers.generic_email import _extract_attachments
 from invoices.tests.einvoice_files import (
     CII_ALLOWANCE_AT_ITS_OWN_RATE,
     CII_CHARGE_AT_ITS_OWN_RATE,
     CII_CREDIT_NOTE,
+    CII_CREDIT_NOTE_STATED_NEGATIVE,
     CII_DATE_FAR_FUTURE,
     CII_DATE_YEAR_ONE,
     CII_DISCOUNT_LINE,
@@ -416,6 +417,56 @@ class WhatItIsWorthTests(TestCase):
         (line,) = invoice.lines.all()
         self.assertTrue(line.product.is_expense)
         self.assertEqual(invoice.total_ttc, D("144.00"))
+
+    def test_a_credit_note_stated_negative_is_a_return_too(self):
+        """Signed once, whatever sign the sender chose: a negative count and
+        a negative amount, like any return."""
+        invoice = import_document(write_xml(self, "avoir-negatif.xml", CII_CREDIT_NOTE_STATED_NEGATIVE))
+        (line,) = invoice.lines.all()
+        self.assertEqual((line.quantity, line.total_ht), (D("-1.000"), D("-84.50")))
+        self.assertEqual(invoice.total_ttc, D("-101.40"))
+
+    def test_a_credit_note_stated_negative_from_a_supplier_of_charges(self):
+        """OVH's AFR1176742: a charge given back, -3,92 € and not +3,92 €."""
+        Supplier.objects.filter(pk=self.supplier.pk).update(expenses_only=True)
+        invoice = import_document(write_xml(self, "avoir-charge.xml", CII_CREDIT_NOTE_STATED_NEGATIVE))
+        (line,) = invoice.lines.all()
+        self.assertEqual((line.total_ht, line.vat_rate), (D("-84.50"), D("0.2000")))
+        self.assertEqual(invoice.total_ttc, D("-101.40"))
+
+    def test_turned_into_a_supplier_of_charges_it_keeps_what_it_states(self):
+        """OVH's FR80644402, 22,62 €: filed as goods, then OVH was ticked
+        « charges » and every document was read again - an electronic one
+        handed to the ticket reader through the text it keeps, which took a
+        « 20.00 % » for its total. 20,00 € at 0 %: refiled from its own XML,
+        it is what it states, one line per rate."""
+        invoice = import_document(write_factur_x(self, "abonnement.pdf"), display_filename="abonnement.pdf")
+        self.assertEqual(invoice.total_ttc, D("229.39"))
+        Supplier.objects.filter(pk=self.supplier.pk).update(expenses_only=True)
+        redo_as_expenses(Supplier.objects.get(pk=self.supplier.pk))
+        invoice.refresh_from_db()
+        self.assertEqual(
+            sorted((line.total_ht, line.vat_rate) for line in invoice.lines.all()),
+            [(D("25.20"), D("0.0550")), (D("169.00"), D("0.2000"))],
+        )
+        self.assertEqual(invoice.printed_total_ttc, D("229.39"))
+        self.assertEqual(invoice.total_ttc, D("229.39"))
+
+    def test_moved_to_a_supplier_of_charges_it_keeps_what_it_states(self):
+        """Total Energie's 114005409336, 228,07 €: filed under OVH, moved to
+        Total Energie, a supplier of charges - and read again by the ticket
+        reader from its summary, at 0,05 €."""
+        invoice = import_document(write_factur_x(self, "electricite.pdf"), display_filename="electricite.pdf")
+        energy = make_supplier(code="ENERGIE_X", name="Énergie Exemple", parser_key="", expenses_only=True)
+        move_documents(Invoice.objects.filter(pk=invoice.pk), energy)
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.supplier, energy)
+        self.assertEqual(
+            sorted((line.total_ht, line.vat_rate) for line in invoice.lines.all()),
+            [(D("25.20"), D("0.0550")), (D("169.00"), D("0.2000"))],
+        )
+        self.assertEqual(invoice.printed_total_ttc, D("229.39"))
+        self.assertEqual(invoice.total_ttc, D("229.39"))
 
     def test_a_credit_note_with_no_lines_is_still_a_return(self):
         """Its one rebuilt line comes from a negative VAT table: at a count

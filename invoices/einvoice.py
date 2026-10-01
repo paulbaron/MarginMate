@@ -896,12 +896,17 @@ def _assemble(document, syntax: str, supplier_code: str) -> ParsedInvoice:
 
     type_code = document.type_code()
     credit = type_code in CREDIT_NOTE_TYPE_CODES or getattr(document, "is_credit_root", False)
+    totals = document.totals()
     # A credit note states its amounts positive and means the other
     # direction. Everything below is signed once, here, so no reading
-    # further down has to remember which kind of document it is on.
-    sign = Decimal("-1") if credit else Decimal("1")
+    # further down has to remember which kind of document it is on. Some
+    # senders state them negative already (OVH's AFR1176742, 29/09/2026:
+    # GrandTotalAmount -3.92 on a 381): signed again, a refund was filed as
+    # a purchase. The stated total says which way the document points, and
+    # a credit note always ends as money going back.
+    stated = next((value for value in (totals.grand, totals.taxable, totals.lines) if value), None)
+    sign = Decimal("-1") if credit and not (stated is not None and stated < 0) else Decimal("1")
 
-    totals = document.totals()
     raw_lines = list(document.lines())
     adjustments = [item for item in document.allowances_and_charges() if item.amount is not None]
     adjustment = sum((item.signed for item in adjustments), start=ZERO)
