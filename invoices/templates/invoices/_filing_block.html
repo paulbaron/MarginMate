@@ -17,7 +17,7 @@ held of another's on 24/09 with no page able to say so.
         {% elif filing.text %}
             <p>
                 <strong>Rangé chez {{ invoice.supplier.name }}</strong> —
-                <span class="muted">rien de ce que ce document imprime ne le nomme : il a été rangé ici par une source, par son lecteur, ou à la main.</span>
+                <span class="muted">rien de ce qu'il imprime ne le nomme : rangé par une source, par son lecteur ou à la main.</span>
             </p>
         {% endif %}
         {% for row in filing.names_another %}
@@ -25,7 +25,7 @@ held of another's on 24/09 with no page able to say so.
                 {% if row.shared %}
                     Son {{ row.label }} est retenu par {{ invoice.supplier.name }} <em>et</em> par
                     {% for holder in row.holders %}<a href="{% url 'invoices:supplier_detail' holder.pk %}">{{ holder.name }}</a>{% if not forloop.last %}, {% endif %}{% endfor %} :
-                    retenu des deux côtés, il n'en reconnaît aucun.
+                    il ne nomme donc personne.
                 {% else %}
                     Il imprime le {{ row.label }}, qui reconnaît
                     {% for holder in row.holders %}<a href="{% url 'invoices:supplier_detail' holder.pk %}">{{ holder.name }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}.

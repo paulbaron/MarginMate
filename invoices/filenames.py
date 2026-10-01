@@ -42,12 +42,13 @@ def amount_words(total: Decimal) -> str:
 
 
 def download_name(invoice) -> str:
-    """« Darty 11€55 01_10_2026.pdf »: the file's own extension, lower case -
-    a ticket's photo stays a « .jpg »."""
+    """« Darty 11€55 01_10_2026.pdf »: the stored file's own extension, lower
+    case - a ticket's photo stays a « .jpg », and a file stored without one
+    gets none (named « .pdf », it would be shown as one)."""
     supplier = clean(invoice.supplier.name) or NO_SUPPLIER
     day = invoice.invoice_date.strftime("%d_%m_%Y") if invoice.invoice_date else NO_DATE
-    extension = PurePosixPath(invoice.source_file.name).suffix.lower() if invoice.source_file else ""
-    return f"{supplier} {amount_words(invoice.total_ttc)} {day}{extension or '.pdf'}"
+    extension = PurePosixPath(invoice.source_file.name).suffix.lower()
+    return f"{supplier} {amount_words(invoice.total_ttc)} {day}{extension}"
 
 
 class UniqueNames:

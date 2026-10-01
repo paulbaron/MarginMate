@@ -4,15 +4,10 @@
     <div class="page-header">
         <div>
             <h1>Inventaires physiques</h1>
-            <p class="page-subtitle">Chaque comptage fige la valeur du stock à sa date. Ouvrez-en un pour voir les écarts entre ce qui est sorti du stock et ce que les ventes expliquent.</p>
+            <p class="page-subtitle">Chaque comptage fige la valeur du stock à sa date, au prix des derniers achats.</p>
         </div>
         <a class="btn" href="{% url 'inventory:stock_take_create' %}">+ Nouvel inventaire</a>
     </div>
-    <p class="muted">
-        Un inventaire compare ce que vous avez réellement en stock (compté à la main) à sa valeur
-        d'achat réelle : chaque produit compté est valorisé au prix des derniers achats couvrant la
-        quantité comptée (le lot le plus récent d'abord).
-    </p>
 
     {% if stock_takes %}
         <div class="table-wrap">

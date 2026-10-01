@@ -400,7 +400,7 @@ Jusqu'ici le site tournait depuis le dossier de développement, sur
    Puis **videz les identifiants** : `METRO_EMAIL`, `METRO_PASSWORD`, `INVOICE_EMAIL_ADDRESS`,
    `INVOICE_EMAIL_APP_PASSWORD`, `LADDITION_EMAIL`, `LADDITION_PASSWORD`, `ANTHROPIC_API_KEY`,
    `EMAIL_HOST`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`, et les variables des espaces clients
-   (leurs noms sont dans Achats > Sources). Sans eux, une récupération lancée depuis la copie
+   (leurs noms sont dans Factures > Sources). Sans eux, une récupération lancée depuis la copie
    refuse ; avec eux, elle se connecterait pour de vrai à Metro et aux portails. Donnez aussi à la
    copie sa propre `DJANGO_SECRET_KEY` (la section 5 dit comment en tirer une). Gardez
    `MARGINMATE_SIGNING_PASSPHRASE` : les clés de signature copiées en ont besoin pour s'ouvrir.

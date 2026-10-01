@@ -245,12 +245,14 @@ class OneSellingDayTests(TestCase):
         self.assertEqual(cells_of(row_of(extra, "Essuie-tout")), ["Essuie-tout", "12.00 €", "14.40 €"])
 
     def test_it_says_in_a_sentence_what_the_products_margin_counts(self):
-        response = self.page()
-        self.assertContains(response, "ce que les recettes vendues ont consommé")
-        self.assertContains(response, "compter dans la marge produits")
+        text = text_of(self.html())
+        self.assertIn("ce que les recettes vendues ont consommé", text)
+        self.assertIn("plus les achats des articles cochés", text)
 
     def test_the_products_margin_has_no_ttc_because_a_recipe_cost_has_none(self):
-        self.assertContains(self.page(), "En HT seulement")
+        html = self.html()
+        self.assertIn("plus les achats des articles cochés, en HT.", text_of(html))
+        self.assertNotIn("TTC", stat_of(html, "Marge produits (HT)"))
 
     # -- the coverage -----------------------------------------------------
 
@@ -259,7 +261,7 @@ class OneSellingDayTests(TestCase):
         coffees - and in units beside it."""
         stat = stat_of(self.html(), "Part chiffrée")
         self.assertEqual(value_of(stat), "75 %")
-        self.assertIn("20 unités sur 25 (80 %)", text_of(stat))
+        self.assertIn("20 unités chiffrées sur 25 (80 %)", text_of(stat))
 
     def test_a_margin_that_is_not_fully_costed_says_so_in_words(self):
         response = self.page()
@@ -375,7 +377,9 @@ class NothingCostedTests(TestCase):
         self.assertNotIn("36.36", stat)
 
     def test_and_the_page_says_why(self):
-        self.assertContains(self.client.get(reverse(PAGE)), "aucun des produits vendus")
+        self.assertContains(
+            self.client.get(reverse(PAGE)), "aucun produit vendu sur cette période n'a de recette chiffrée"
+        )
 
 
 class CostRangeTests(TestCase):

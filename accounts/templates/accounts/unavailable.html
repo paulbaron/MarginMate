@@ -10,8 +10,8 @@ name: the cause is in the server's log.
 {% block content %}
     <section class="public-card account-card">
         <h1>Votre espace est momentanément indisponible</h1>
-        <p>Ses données ne peuvent pas être ouvertes pour l'instant. Rien n'a été modifié.</p>
-        <p class="muted small">Réessayez dans quelques minutes. Si cela dure, prévenez l'administrateur du service.</p>
+        <p>Rien n'a été modifié.</p>
+        <p class="muted small">Réessayez dans quelques minutes. Si cela dure, prévenez l'administrateur.</p>
         {% url 'accounts:logout' as logout_url %}
         {% if logout_url %}
             <form method="post" action="{{ logout_url }}" class="topbar-logout">

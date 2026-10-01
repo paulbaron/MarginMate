@@ -42,10 +42,10 @@ what was typed in them across swaps (hx-preserve, stable ids).
 
     {% if batch.can_resume %}
         <div class="message message-error">
-            Import interrompu avant la fin — le serveur a probablement redémarré pendant qu'il tournait.
+            Import interrompu, sans doute par un redémarrage du serveur.
             {{ batch.pending_count }} ticket{{ batch.pending_count|pluralize }}
-            n'{{ batch.pending_count|pluralize:"a,ont" }} pas encore été lu{{ batch.pending_count|pluralize }} ;
-            ils sont gardés, rien n'est à réimporter.
+            n'{{ batch.pending_count|pluralize:"a,ont" }} pas encore été lu{{ batch.pending_count|pluralize }} :
+            ils sont gardés, rien à réimporter.
             <form method="post" action="{% url 'invoices:receipt_batch_resume' batch.pk %}" class="inline-form">
                 {% csrf_token %}
                 <button class="btn btn-small" type="submit">Reprendre l'import</button>
@@ -56,10 +56,8 @@ what was typed in them across swaps (hx-preserve, stable ids).
     {% if batch.awaiting_shop_count %}
         <div class="message message-warning">
             {{ batch.awaiting_shop_count }} document{{ batch.awaiting_shop_count|pluralize }}
-            dont l'enseigne n'a pas été reconnue : pour chacun, choisissez-la - ou créez-la, en la nommant. Le
-            document est lu quelle que soit l'enseigne, puis s'ouvre pour vérification, où vous pourrez dire
-            ce qu'elle imprime en tête pour que les suivants soient reconnus{% if batch.is_active %} ; l'import
-            continue pendant ce temps{% endif %}.
+            dont l'enseigne n'a pas été reconnue : choisissez-la ou créez-la pour chacun{% if batch.is_active %} ;
+            l'import continue pendant ce temps{% endif %}.
         </div>
     {% endif %}
 

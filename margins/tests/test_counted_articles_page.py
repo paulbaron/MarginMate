@@ -343,8 +343,8 @@ class TickingTheWholeCategoryTests(PanelFixture, TestCase):
             [
                 "1 article de Spiritueux compté dans la marge produits.",
                 (
-                    "Compté deux fois désormais : Rhum ambré sert dans une recette, qui compte déjà ce qu'elle "
-                    "en consomme. Décochez-le, ou retirez-le de la recette."
+                    "Compté deux fois désormais : Rhum ambré sert aussi dans une recette. "
+                    "Décochez-le ou retirez-le de la recette."
                 ),
             ],
         )
@@ -425,8 +425,7 @@ class TheArticleBoxesTests(PanelFixture, TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(ticked(self.drill), [True])
         self.assertIn(
-            "1 case ignorée : l'article n'existe plus, ou n'est plus dans Matériel depuis que la page a été "
-            "affichée. Rien n'a été changé pour lui.",
+            "1 case ignorée : l'article n'existe plus ou n'est plus dans Matériel.",
             said(response),
         )
 
@@ -513,12 +512,7 @@ class WhatCannotBeUnderstoodTests(PanelFixture, TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
             said(response),
-            [
-                (
-                    "Aucun article n'est dans la catégorie « Catégorie inventée » : rien n'a été modifié. "
-                    "Ses articles ont peut-être changé de catégorie depuis que la page a été affichée."
-                )
-            ],
+            ["Plus aucun article dans la catégorie « Catégorie inventée » : rien n'a été modifié."],
         )
         self.assertEqual(StockType.objects.filter(count_in_products_margin=True).count(), 1)
 

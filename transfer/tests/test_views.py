@@ -351,7 +351,7 @@ class ImportTests(FakeSectionsMixin, TestCase):
         self.assertContains(page, "Ancien fichier « marginmate-associations.json »")
         # The old file never carried an article's losses: one it creates
         # takes the default, and an article at 0 % would come back at 10 %.
-        self.assertContains(page, "Les pertes (%) n'y figurent pas : un article créé prend 10 %.")
+        self.assertContains(page, "un article créé prend 10 % de pertes.")
 
     def test_preview_then_import(self):
         StockType.objects.filter(name="Recette A").update(loss_percent="12.00")
@@ -709,7 +709,8 @@ class BackupImportTests(FakeSectionsMixin, TestCase):
         # Putting a database copy back is done with the server stopped: what
         # only the server's operator can do is asked of him, and no path of
         # the server is shown.
-        self.assertContains(response, "faites-la faire par l'administrateur, en lui donnant le nom du fichier")
+        self.assertContains(response, "Seul l'administrateur peut revenir à une copie")
+        self.assertContains(response, "donnez-lui le nom du fichier")
         self.assertNotContains(response, str(safety.backup_path()))
         self.assertContains(response, 'name="nom" value="2026-09-19_143012_avant-effacement.zip"')
         self.assertNotContains(response, 'name="nom" value="2026-09-19_143012_avant-effacement.sqlite3"')

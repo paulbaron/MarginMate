@@ -169,7 +169,7 @@ class MovedTypeTests(TestCase):
             if (row.data or {}).get("undoes")
         )
         response = self.client.post(reverse("invoices:supplier_change_undo", args=[self.box.pk, given.pk]))
-        self.assertIn("il ne s'annule pas lui-même", " ".join(messages_of(response)))
+        self.assertIn("Ce changement est une annulation", " ".join(messages_of(response)))
         self.invoice_type.refresh_from_db()
         self.assertEqual(self.invoice_type.supplier, self.box)
 

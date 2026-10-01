@@ -12,15 +12,13 @@
                         ce qui est sorti du stock, ce que les ventes expliquent, et ce qui manque.
                     {% else %}
                         Du {{ period.start|date:"d/m/Y" }} au {{ period.end|date:"d/m/Y" }} :
-                        ce qui est sorti du stock entre les deux inventaires, ce que les ventes
-                        expliquent, et ce qui manque.
+                        ce qui est sorti du stock, ce que les ventes expliquent, et ce qui manque.
                     {% endif %}
                 </p>
             {% elif date_window %}
                 <p class="page-subtitle">
-                    {{ date_window_label|capfirst }} : les produits achetés sur cette période, avec ce qu'ils
-                    ont coûté{% if charge_suppliers %}, et plus bas les charges de la même période{% endif %}.
-                    Les articles dont rien n'a été acheté entre ces dates ne sont pas listés.
+                    {{ date_window_label|capfirst }} : les produits achetés et ce qu'ils ont
+                    coûté{% if charge_suppliers %}, puis les charges{% endif %}.
                     {% comment %}
                     What a row opens is said once, in the note inside
                     #catalogue: it is the block that reloads itself after a
@@ -31,10 +29,8 @@
                 </p>
             {% else %}
                 <p class="page-subtitle">
-                    Tout ce que disent les factures et les tickets : les produits achetés, rangés par article, avec
-                    ce qu'ils ont coûté{% if charge_suppliers %}, et plus bas les charges (loyer, abonnements…){% endif %}.
-                    Cliquez une ligne pour voir ses achats{% if review_total %} ; les produits pas encore
-                    rangés attendent dans le panneau « À classer »{% endif %}.
+                    Les produits achetés, par article, et ce qu'ils ont coûté{% if charge_suppliers %},
+                    puis les charges (loyer, abonnements…){% endif %}.
                 </p>
             {% endif %}
         </div>
@@ -95,7 +91,7 @@
                     </label>
                     <button class="btn btn-small btn-secondary" type="submit"{% if period %} disabled{% endif %}>Afficher</button>
                     {% if period %}
-                        <span class="muted">Les dates viennent de l'inventaire choisi ; repassez à « Depuis le début » pour en choisir deux.</span>
+                        <span class="muted">Dates fixées par l'inventaire : repassez à « Depuis le début » pour les changer.</span>
                     {% elif date_window %}
                         <a class="btn btn-small btn-secondary" href="{% url 'inventory:stock_list' %}">Effacer</a>
                     {% endif %}
@@ -119,10 +115,9 @@
 
             {% if period and period.since_beginning %}
             <div class="message">
-                Aucun inventaire antérieur à celui-ci : tout ce qui a été acheté depuis le début est
-                comparé à ce comptage. Cela suppose que <strong>les factures remontent à l'ouverture
-                du bar</strong> — sinon, les bouteilles achetées avant vos premières factures
-                apparaîtront comme manquantes.
+                Premier inventaire : tous les achats depuis le début sont comparés à ce comptage.
+                Si <strong>les factures ne remontent pas à l'ouverture du bar</strong>, les bouteilles
+                achetées avant vos premières factures apparaîtront comme manquantes.
             </div>
             {% endif %}
 

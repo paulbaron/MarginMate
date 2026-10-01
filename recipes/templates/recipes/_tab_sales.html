@@ -19,8 +19,7 @@ nothing saying the period had been dropped.
         <div>
             <h3>Importer les ventes de L'Addition</h3>
             <p class="muted">
-                Le rapport « Lignes de ventes » de la période, enregistré jour par jour ; les nouveaux produits de la
-                caisse arrivent dans « À lier ».
+                Les nouveaux produits de la caisse arrivent dans « À lier ».
                 {% if last_sale %}Dernière vente enregistrée : {{ last_sale.sold_on|date:"d/m/Y" }}.{% endif %}
             </p>
         </div>
@@ -39,7 +38,7 @@ nothing saying the period had been dropped.
     </form>
     <p class="muted small">
         Nécessite <code>LADDITION_EMAIL</code> et <code>LADDITION_PASSWORD</code> dans le fichier <code>.env</code>.
-        La récupération ouvre un navigateur en arrière-plan et peut prendre quelques minutes par tranche de deux ans.
+        Comptez quelques minutes par tranche de deux ans.
     </p>
     {% else %}
     <p class="muted">{{ till_to_configure|capfirst }}.</p>
@@ -52,9 +51,8 @@ nothing saying the period had been dropped.
 <div class="card">
     <h3>Ajouter une vente à la main</h3>
     <p class="muted">
-        Pour ce que la caisse n'a pas enregistré. Ces lignes ont leur propre origine
-        « {{ manual_source }} » : un import L'Addition corrige ses propres chiffres sans jamais
-        les écraser. Ressaisir la même recette au même jour met à jour la quantité.
+        Pour les ventes que la caisse n'a pas enregistrées (origine « {{ manual_source }} ») : un import ne les
+        écrase jamais. Ressaisir une recette le même jour met à jour sa quantité.
     </p>
     <form method="post" action="{% url 'recipes:sales_list' %}{% querystring %}" class="inline-form manual-sale">
         {% csrf_token %}
@@ -74,7 +72,7 @@ nothing saying the period had been dropped.
     <h3>Par origine</h3>
     {% if date_window %}
         <p class="muted date-range-note">
-            {{ date_window_label }} : les totaux de cette période seulement (dates choisies plus bas, dans « Dernières ventes »).
+            {{ date_window_label }} (période choisie dans « Dernières ventes »).
         </p>
     {% endif %}
     {% comment %}
@@ -85,8 +83,7 @@ nothing saying the period had been dropped.
     {% endcomment %}
     {% if sales_query %}
         <p class="muted small">
-            La recherche « {{ sales_query }} » ne s'applique qu'à la liste « Dernières ventes » : ces totaux
-            comptent toutes les ventes{% if date_window %} de la période{% endif %}.
+            Ces totaux ignorent la recherche « {{ sales_query }} »{% if date_window %}, pas la période{% endif %}.
         </p>
     {% endif %}
     {% if totals %}
@@ -114,10 +111,7 @@ nothing saying the period had been dropped.
     <div class="section-head">
         <div>
             <h3>Factures de vente</h3>
-            <p class="muted">
-                Ce que vous avez vendu hors caisse — recettes ou articles vendus tels quels.
-                Comptées dans les écarts d'inventaire au même titre que les ventes de la caisse.
-            </p>
+            <p class="muted">Ventes hors caisse : recettes ou articles vendus tels quels.</p>
         </div>
         <a class="btn btn-secondary" href="{% url 'recipes:sale_document_create' %}{% querystring %}">+ Facture de vente</a>
     </div>
@@ -129,7 +123,7 @@ nothing saying the period had been dropped.
     {% if date_window %}
         <p class="muted date-range-note">
             {{ date_window_label }} : {{ documents_found }} facture{{ documents_found|pluralize }} de vente
-            (période choisie plus bas, dans « Dernières ventes »).
+            (période choisie dans « Dernières ventes »).
             {% if documents_hidden %}Seules les {{ documents|length }} plus récentes sont affichées.{% endif %}
         </p>
     {% elif documents_hidden %}
@@ -201,9 +195,7 @@ nothing saying the period had been dropped.
         {% if date_window %}<a class="btn btn-small btn-secondary" href="{% querystring du=None au=None %}">Effacer les dates</a>{% endif %}
     </form>
     <p class="muted small">
-        Une date seule suffit : « Du » sans « au » affiche tout depuis ce jour-là. Ces dates n'affichent que
-        ce qui est déjà enregistré ; pour aller chercher une période dans la caisse, c'est
-        « Importer les ventes de L'Addition », tout en haut.
+        Ces dates filtrent les ventes déjà enregistrées ; l'import est tout en haut.
     </p>
     {% if date_window %}
         <p class="muted date-range-note">
@@ -216,7 +208,7 @@ nothing saying the period had been dropped.
         <p class="muted">
             Les {{ sales|length }} plus récentes{% if date_window %} de la période{% endif %}. {{ sales_hidden }} de plus :
             <a href="{% querystring ventes='toutes' %}">tout afficher</a>
-            (la recherche et le tri ne portent que sur ce qui est affiché).
+            (le tri ne porte que sur ce qui est affiché).
         </p>
     {% endif %}
     {% if sales %}

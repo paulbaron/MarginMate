@@ -83,8 +83,7 @@ photo, oldest first, and the documents that cannot be used as they are.
 <h2>Tickets à vérifier</h2>
 {% if receipts %}
     <p class="muted">
-        Les plus anciens d'abord. Un ticket sort d'ici quand quelqu'un a comparé ses lignes à la photo et validé ;
-        « Valider et passer au suivant » enchaîne les tickets.
+        Les plus anciens d'abord. Un ticket sort de la liste une fois validé.
     </p>
     <form id="receipt-bulk-form" method="post" action="{% url 'invoices:invoice_bulk_delete' %}" class="bulk-bar" data-bulk-select>
         {% csrf_token %}
@@ -123,7 +122,7 @@ photo, oldest first, and the documents that cannot be used as they are.
     </div>
 {% else %}
     <div class="empty-state">
-        Aucun ticket à vérifier : tous les tickets importés ont été validés.
+        Aucun ticket à vérifier.
         <a href="{% url 'invoices:receipt_upload' %}">Importer des tickets</a>
     </div>
 {% endif %}

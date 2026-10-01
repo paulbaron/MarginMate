@@ -56,6 +56,9 @@ from tests.factories import (
 
 D = Decimal
 
+#: What the charges fold says a row opens on when no dates are asked for.
+ALL_HISTORY_NOTE = "Ouvrez une ligne pour voir ses documents, 📈 pour son évolution, sur tout l'historique."
+
 
 class ChargePanelEdgesTests(PurchaseWindowTestCase):
     """The rows of the charges fold are narrowed in SQL, so `__gte`/`__lte`
@@ -265,18 +268,22 @@ class WhatTheListPrintsIsWhatThePanelsAnswerTests(PurchaseWindowTestCase):
         self.assertContains(self.page(**FEBRUARY), "ses achats sont ceux de ces dates", count=1)
 
     def test_the_charges_fold_no_longer_promises_an_all_history_panel(self):
-        """« Ce qu'une ligne ouvre couvre tout l'historique » was true until
-        the panels followed the dates, and a house note left standing after
-        the behaviour moved is worse than no note at all."""
+        """« Ouvrez une ligne pour voir ses documents, 📈 pour son évolution,
+        sur tout l'historique » was true until the panels followed the
+        dates, and a house note left standing after the behaviour moved is
+        worse than no note at all."""
         windowed = self.page(**FEBRUARY)
         self.assertContains(windowed, "ses documents sont ceux de ces dates")
-        self.assertNotContains(windowed, "Ce qu'une ligne ouvre couvre tout l'historique")
+        # The template wraps its sentences: read them as a browser does.
+        prose = " ".join(windowed.content.decode().split())
+        self.assertNotIn(ALL_HISTORY_NOTE, prose)
 
     def test_and_says_it_again_when_no_window_is_asked_for(self):
         """Unasked, the panels ARE the whole history - the sentence is true
         again and has to come back, or the page says nothing at all about
         the one thing the row and the panel do not share."""
-        self.assertContains(self.page(), "Ce qu'une ligne ouvre couvre tout l'historique")
+        prose = " ".join(self.page().content.decode().split())
+        self.assertIn(ALL_HISTORY_NOTE, prose)
 
     def test_the_documents_column_names_the_window_it_counts(self):
         """« Documents (12 mois) » over counts made of two chosen dates is

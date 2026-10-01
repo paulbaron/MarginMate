@@ -283,8 +283,8 @@ def _say_created(request, supplier) -> None:
     if not supplier.ticket_header:
         messages.success(
             request,
-            f"{supplier.name} est créé. Rien ne le reconnaît encore : une source qui récupère pour lui, "
-            "ou l'import où vous le choisissez, lui apprendra ce que ses documents impriment.",
+            f"{supplier.name} est créé. Rien ne le reconnaît encore : il apprendra ce que ses documents impriment "
+            "dès le premier.",
         )
         return
     from .receipt_batches import requeue_everywhere
@@ -331,9 +331,7 @@ def _edit_plan(supplier, name, header, header_editable) -> dict:
                     f" {renamed.lines} ligne{'s' if renamed.lines > 1 else ''} de charge « {renamed.before} »"
                     f" et son poste prennent le nouveau nom."
                 )
-            said.append(
-                sentence + " Son code interne ne change pas ; le rapprochement bancaire garde les libellés déjà appris."
-            )
+            said.append(sentence + " Les libellés bancaires déjà appris restent.")
     changing_header = header_editable and header != supplier.ticket_header
     if changing_header and header:
         try:
@@ -354,8 +352,8 @@ def _edit_plan(supplier, name, header, header_editable) -> dict:
                 else "sur aucun document d'un autre fournisseur."
             )
             said.append(
-                sentence + " Un en-tête n'ajoute que les prochains documents : aucun document rangé ne bouge. "
-                "Les fichiers sans enseigne des derniers imports seront relus."
+                sentence + " Aucun document déjà rangé ne bouge ; les fichiers sans enseigne des derniers imports "
+                "seront relus."
             )
     elif changing_header:
         still = [describe(identifier) for identifier in supplier.ticket_identifiers or ()]
@@ -653,8 +651,7 @@ def supplier_identifiers(request, pk):
             elif typed in refused:
                 messages.error(
                     request,
-                    f"{describe(typed)} a été écarté de {supplier.name} : rendez-le avec "
-                    "« Ne plus l'écarter » plutôt que de le retaper.",
+                    f"{describe(typed)} a été écarté de {supplier.name} : rendez-le avec « Ne plus l'écarter ».",
                 )
             else:
                 holder = _holder_of(typed, supplier)
@@ -662,11 +659,7 @@ def supplier_identifiers(request, pk):
                     set_identifiers(supplier, known | {typed}, asked=True)
                     supplier.typed_identifiers = sorted(set(supplier.typed_identifiers or ()) | {typed})
                     supplier.save(update_fields=["typed_identifiers"])
-                    messages.success(
-                        request,
-                        f"{describe(typed)} reconnaît désormais {supplier.name}. "
-                        "Saisi à la main, il ne sera pas oublié tout seul.",
-                    )
+                    messages.success(request, f"{describe(typed)} reconnaît désormais {supplier.name}.")
                 elif action == "deplacer":
                     _move_identifier(request, supplier, typed, holder)
                 else:
@@ -677,15 +670,12 @@ def supplier_identifiers(request, pk):
                     # whose it is, with one button to move it.
                     messages.warning(
                         request,
-                        f"{describe(typed)} reconnaît {holder.name} aujourd'hui. "
-                        "Deux fournisseurs qui le retiennent n'en font reconnaître aucun : "
-                        f"déplacez-le si ce n'est pas {holder.name}.",
+                        f"{describe(typed)} reconnaît déjà {holder.name} : déplacez-le ci-dessous "
+                        f"s'il est à {supplier.name}.",
                     )
                     return redirect(f"{supplier_page}?{urlencode({'deplacer': typed})}")
         else:
-            messages.error(
-                request, "Cette action ne vaut plus pour cet identifiant (la fiche a changé) : voici la fiche à jour."
-            )
+            messages.error(request, "La fiche a changé entre-temps : rien n'a été fait.")
     return redirect(supplier_page)
 
 
@@ -860,9 +850,7 @@ def supplier_change_undo(request, pk, change_pk):
         messages.info(request, "Ce changement est déjà annulé.")
         return redirect(back)
     if (change.data or {}).get("undoes"):
-        messages.error(
-            request, "Ce changement en annulait un autre : il ne s'annule pas lui-même. Refaites le changement voulu."
-        )
+        messages.error(request, "Ce changement est une annulation : refaites plutôt le changement voulu.")
         return redirect(back)
     if change.kind == SupplierChange.Kind.CREATED:
         # A creation is undone by deleting it, from the page that says

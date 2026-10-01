@@ -396,8 +396,7 @@ def count_articles(request):
     if not in_category:
         messages.error(
             request,
-            f"Aucun article n'est dans la catégorie « {category or NO_CATEGORY} » : rien n'a été modifié. "
-            "Ses articles ont peut-être changé de catégorie depuis que la page a été affichée.",
+            f"Plus aucun article dans la catégorie « {category or NO_CATEGORY} » : rien n'a été modifié.",
             extra_tags=PANEL,
         )
         return redirect(back)
@@ -469,11 +468,9 @@ def _read_the_boxes(request, category: str, in_category: set[int]) -> tuple[set[
         messages.warning(
             request,
             (
-                f"1 case ignorée : l'article n'existe plus, ou n'est plus {_in(category)} depuis que la page "
-                "a été affichée. Rien n'a été changé pour lui."
+                f"1 case ignorée : l'article n'existe plus ou n'est plus {_in(category)}."
                 if count == 1
-                else f"{count} cases ignorées : ces articles n'existent plus, ou ne sont plus {_in(category)} "
-                "depuis que la page a été affichée. Rien n'a été changé pour eux."
+                else f"{count} cases ignorées : ces articles n'existent plus ou ne sont plus {_in(category)}."
             ),
             extra_tags=PANEL,
         )
@@ -511,13 +508,13 @@ def _warn_counted_twice(request, ticked_now: list[int]) -> None:
         listed += f" et {len(names) - NAMED_AT_MOST} autres"
     if len(names) == 1:
         text = (
-            f"Compté deux fois désormais : {listed} sert dans une recette, qui compte déjà ce qu'elle en "
-            "consomme. Décochez-le, ou retirez-le de la recette."
+            f"Compté deux fois désormais : {listed} sert aussi dans une recette. "
+            "Décochez-le ou retirez-le de la recette."
         )
     else:
         text = (
-            f"Comptés deux fois désormais : {listed} servent dans des recettes, qui comptent déjà ce "
-            "qu'elles en consomment. Décochez-les, ou retirez-les de leurs recettes."
+            f"Comptés deux fois désormais : {listed} servent aussi dans des recettes. "
+            "Décochez-les ou retirez-les de leurs recettes."
         )
     messages.warning(request, text, extra_tags=PANEL)
 

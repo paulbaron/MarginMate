@@ -18,8 +18,8 @@
         {% else %}
             {% if wanted %}
                 <p>
-                    Abonnement, loyer, eau, électricité… : ses factures seront enregistrées par poste quand elles en
-                    nomment, sinon en une ligne par taux de TVA — jamais en produits à classer.
+                    Abonnement, loyer, eau, électricité… : ses factures seront enregistrées par poste ou par taux de
+                    TVA, jamais en produits à classer.
                 </p>
                 <ul>
                     <li>Ses {{ document_count }} document{{ document_count|pluralize }} déjà enregistré{{ document_count|pluralize }} {{ document_count|pluralize:"est,sont" }} relu{{ document_count|pluralize }} ainsi.</li>
@@ -33,7 +33,7 @@
                 <ul>
                     <li>Ses {{ document_count }} document{{ document_count|pluralize }} déjà enregistré{{ document_count|pluralize }} garde{{ document_count|pluralize:"nt" }} leurs lignes : corrigez-les un par un si besoin.</li>
                     {% if charge_items %}<li>{{ charge_items }} poste{{ charge_items|pluralize }} de charge repasse{{ charge_items|pluralize:"nt" }} « à classer ».</li>{% endif %}
-                    {% if credits %}<li>{{ credits }} avoir{{ credits|pluralize }} (une quantité positive à un montant négatif, comme sur une charge) {{ credits|pluralize:"devient un retour,deviennent des retours" }}, comme sur des produits : {{ credits|pluralize:"sa,leur" }} quantité passe en négatif, {{ credits|pluralize:"son,leur" }} montant ne change pas.</li>{% endif %}
+                    {% if credits %}<li>{{ credits }} avoir{{ credits|pluralize }} {{ credits|pluralize:"devient un retour,deviennent des retours" }} : {{ credits|pluralize:"sa,leur" }} quantité passe en négatif, {{ credits|pluralize:"son,leur" }} montant ne change pas.</li>{% endif %}
                 </ul>
             {% endif %}
             <form method="post" action="{% url 'invoices:supplier_expenses' supplier.pk %}" class="actions">

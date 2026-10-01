@@ -461,7 +461,7 @@ class IdentificationTests(PublicCase):
         page = self.get()
         # Not offered while the employer's code waits - and refused when posted all the same.
         self.assertNotIn(self.route("staff:sign_send_code"), self.html(page))
-        self.assertIn("Votre employeur vient de vous donner un code", self.text(page))
+        self.assertIn("Le code que votre employeur vous a donné", self.text(page))
         visitor = Client(enforce_csrf_checks=True, REMOTE_ADDR="198.51.100.4", HTTP_USER_AGENT="Autre/1.0")
         for _ in range(2):
             html = visitor.get(self.url).content.decode()

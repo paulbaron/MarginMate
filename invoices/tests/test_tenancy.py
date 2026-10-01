@@ -230,12 +230,12 @@ class GateTests(TwoTenantsTestCase):
         self.assertEqual(page.status_code, 200)
         self.assertNotContains(page, "+ Nouvelle source pour")
         self.assertNotContains(page, reverse("invoices:invoice_type_create"))
-        self.assertNotContains(page, "Par une source qui le récupère pour lui")
+        self.assertNotContains(page, "ajoutez-en une (e-mail, espace client)")
         self.assertContains(page, TO_CONFIGURE)
         self.client.force_login(self.user_a)
         page = self.client.get(reverse("invoices:supplier_detail", args=[shop_a.pk]))
         self.assertContains(page, "+ Nouvelle source pour Epicerie Alpha")
-        self.assertContains(page, "Par une source qui le récupère pour lui")
+        self.assertContains(page, "ajoutez-en une (e-mail, espace client)")
         self.assertNotContains(page, TO_CONFIGURE)
 
     # ------------------------------------------------------- the task bodies

@@ -25,25 +25,20 @@ parts trigger `documents-changed` when they end).
             <div class="upload-choices">
                 <label class="upload-choice">
                     <span class="upload-choice-title">Des fichiers</span>
-                    <span class="muted">Photos de tickets, scans, factures PDF ou XML : ensemble, dans le désordre.</span>
+                    <span class="muted">Photos de tickets, scans, factures PDF ou XML, mélangés.</span>
                     {# .xml: an electronic invoice (Factur-X, UBL, CII) can arrive on its own, with no PDF around it. #}
                     <input type="file" name="files" multiple
                            accept=".pdf,.xml,.jpg,.jpeg,.png,.webp,.tif,.tiff,.bmp,application/pdf,text/xml,application/xml,image/*">
                 </label>
                 <label class="upload-choice">
                     <span class="upload-choice-title">Un dossier entier</span>
-                    <span class="muted">Ce qui n'est ni PDF, ni XML, ni photo est ignoré ; un document déjà importé est sauté.</span>
+                    <span class="muted">Seuls les PDF, XML et photos sont lus ; les documents déjà importés sont sautés.</span>
                     <input type="file" name="files" webkitdirectory directory multiple>
                 </label>
             </div>
             <div class="import-actions">
                 <button class="btn" type="submit" data-busy-label="Envoi…">Importer</button>
                 <span class="muted">
-                    Chaque fichier est lu selon ce qu'il contient : une <strong>facture électronique</strong>
-                    (Factur-X, UBL, CII) est lue dans ses propres données — ses montants sont ceux qu'elle
-                    déclare, pas une lecture ; une facture PDF passe par le lecteur de son fournisseur quand il
-                    en a un, tout le reste par la lecture de ticket. Son enseigne ou son fournisseur est reconnu
-                    sur le document, et chacun est vérifié contre ses propres totaux.
                     {% comment %}
                     Said here too, because this is where the sentence reads
                     as « the e-invoicing side is handled »: the invoices are
@@ -98,8 +93,7 @@ parts trigger `documents-changed` when they end).
         <details class="explainer pdf-import-by-hand" data-persist="pdf-by-hand">
             <summary>Choisir le fournisseur d'une facture PDF soi-même</summary>
             <p class="muted">
-                Utile quand le document ne dit pas de qui il vient{% if not ai_refused %}, ou pour le confier à l'analyse IA{% endif %}.
-                D'ordinaire, laissez l'import ci-dessus le reconnaître.
+                Pour un document qui ne dit pas de qui il vient{% if not ai_refused %}, ou pour le confier à l'analyse IA{% endif %}.
                 {% if ai_refused %}{{ ai_refused }}{% endif %}
             </p>
             <form method="post" action="{% url 'invoices:invoice_upload' %}" enctype="multipart/form-data" class="pdf-import">
@@ -112,8 +106,7 @@ parts trigger `documents-changed` when they end).
                             {% include "invoices/_shop_choice_fields.html" with shop_groups=invoice_supplier_groups for_invoice=True label="Fournisseur de la facture" select_id="pdf-supplier" selected=pdf_form.data.supplier typed_name=pdf_form.data.new_name typed_header=pdf_form.data.new_header suggested="" current=None ask_expenses=True expenses=pdf_form.data.new_expenses %}
                         </div>
                         <p class="help">
-                            Sans lecteur dédié - ou nouveau -, sa facture est lue comme un ticket : lignes, taux et
-                            totaux vérifiés contre ce qu'elle imprime, puis elle s'ouvre à côté du PDF pour vérification.
+                            Sans lecteur dédié, la facture est lue comme un ticket, puis s'ouvre à côté du PDF pour vérification.
                         </p>
                         {% for error in supplier_field.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
                         {% for error in pdf_form.new_name.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
@@ -129,7 +122,7 @@ parts trigger `documents-changed` when they end).
                 <div class="import-actions">
                     <button class="btn" type="submit" data-busy-label="Lecture de la facture…">Importer la facture</button>
                     <span class="muted">
-                        Avec un lecteur dédié (Metro, UBA…), la facture s'ouvre ensuite dans la liste, sur ses lignes.
+                        Avec un lecteur dédié (Metro, UBA…), la facture s'ouvre dans la liste.
                     </span>
                 </div>
             </form>

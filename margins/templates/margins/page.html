@@ -62,7 +62,7 @@ that is where it says what changed (views._messages_by_place).
 
     <p class="muted date-range-note">
         {% if showing_all %}
-            Tout l'historique, quelles que soient les dates.
+            Tout l'historique.
         {% elif is_default %}
             Période par défaut : les <strong>12 derniers mois</strong>, {{ window_dates }}.
         {% else %}
@@ -96,8 +96,7 @@ that is where it says what changed (views._messages_by_place).
 
     <h2>Marge réelle</h2>
     <p class="lead">
-        L'encaissé face à <strong>tout ce qui a été facturé</strong>, charges comprises : « est-ce que
-        j'ai gagné de l'argent ». Calculée sur le HT.
+        L'encaissé face à <strong>tout ce qui a été facturé</strong>, charges comprises, en HT.
     </p>
 
     <div class="stat-row">
@@ -144,7 +143,7 @@ that is where it says what changed (views._messages_by_place).
         <p class="small spend-left-out">
             <strong>Laissé de côté</strong> dans la seconde marge :
             {% for row in exclusions %}{% if row.exclusion.invoiced %}{{ row.exclusion.name }} {{ row.exclusion.money.ht|floatformat:2 }} € HT{% else %}{{ row.exclusion.name }} : rien de facturé sur cette période{% endif %} (<a href="{{ row.put_back_url }}">remettre</a>){% if not forloop.last %}, {% endif %}{% endfor %}
-            — {{ report.spend_left_out.ht|floatformat:2 }} € HT laissés de côté sur {{ report.spend.ht|floatformat:2 }} € facturés.
+            — {{ report.spend_left_out.ht|floatformat:2 }} € HT sur {{ report.spend.ht|floatformat:2 }} € facturés.
             <a href="{{ reset_url }}">tout remettre</a>
         </p>
     {% endif %}
@@ -168,8 +167,7 @@ that is where it says what changed (views._messages_by_place).
     {% endcomment %}
     {% if not report.invoice_count and report.revenue.ht > 0 %}
         <p class="message message-warning">
-            <strong>Aucune facture sur cette période</strong> : les factures ne sont sans doute pas encore
-            rentrées, la marge réelle ci-dessus n'en tient pas compte.
+            <strong>Aucune facture sur cette période</strong> : la marge réelle ci-dessus ne déduit aucune dépense.
             <a href="{{ documents_url }}">Les factures de la période</a>.
         </p>
     {% endif %}
@@ -185,9 +183,8 @@ that is where it says what changed (views._messages_by_place).
     {% endcomment %}
     <h3 id="invoiced-breakdown">Ce qui a été facturé</h3>
     <p class="muted small">
-        Décochez ce que la marge réelle doit laisser de côté puis « Recalculer » : une seconde marge
-        s'affiche à côté de la première. L'encaissé ne change pas : <strong>on retire une dépense, pas une
-        vente</strong>.
+        Décochez des lignes puis « Recalculer » : une seconde marge réelle s'affiche, sans elles.
+        L'encaissé ne change pas.
     </p>
     {% if report.spend_groups %}
         <form method="get" class="spend-selection" action="{{ page_path }}">
@@ -196,7 +193,7 @@ that is where it says what changed (views._messages_by_place).
                 <table class="spend-table">
                     <thead>
                         <tr>
-                            <th class="spend-tick" title="Décochée, la ligne est laissée de côté par la seconde marge réelle. Rien n'est enregistré.">Garder</th>
+                            <th class="spend-tick" title="Décochée, la ligne est laissée de côté par la seconde marge.">Garder</th>
                             <th>Dépense</th>
                             <th class="num">Facturé (HT)</th>
                             <th class="num">Part du facturé</th>
@@ -255,7 +252,7 @@ that is where it says what changed (views._messages_by_place).
                 <button class="btn btn-small" type="submit">Recalculer</button>
                 {% if report.exclusions %}<a class="btn btn-small btn-secondary" href="{{ reset_url }}">Tout remettre</a>{% endif %}
                 <span class="muted small">
-                    <strong>Rien n'est enregistré</strong> : la sélection vit dans l'adresse de la page.
+                    <strong>Rien n'est enregistré.</strong>
                 </span>
             </div>
         </form>
@@ -266,8 +263,7 @@ that is where it says what changed (views._messages_by_place).
     <h2>Marge produits</h2>
     <p class="lead">
         L'encaissé face à <strong>ce que les recettes vendues ont consommé</strong>, plus les achats des
-        articles cochés « compter dans la marge produits » : « est-ce que je vends assez cher ».
-        En HT seulement.
+        articles cochés, en HT.
     </p>
 
     <div class="stat-row">
@@ -288,7 +284,7 @@ that is where it says what changed (views._messages_by_place).
                 <div class="stat-label">Achats des articles cochés (HT)</div>
                 <div class="stat-value">{{ report.extra_products_ht|floatformat:2 }} €</div>
                 <div class="stat-note">
-                    {{ report.extra_products|length }} article{{ report.extra_products|length|pluralize }} — ce qui en a été acheté sur la période{% if report.extra_products_ht < 0 %}, négatif parce qu'il en a été rendu plus qu'acheté (une consigne){% endif %}
+                    {{ report.extra_products|length }} article{{ report.extra_products|length|pluralize }} — achats de la période{% if report.extra_products_ht < 0 %}, négatifs : plus rendu qu'acheté{% endif %}
                 </div>
             </div>
         {% endif %}
@@ -303,8 +299,8 @@ that is where it says what changed (views._messages_by_place).
             <div class="stat-label">Part chiffrée</div>
             <div class="stat-value">{% if revenue_coverage_percent is not None %}{{ revenue_coverage_percent|floatformat:0 }} %{% else %}—{% endif %}</div>
             <div class="stat-note">
-                du chiffre d'affaires — {{ report.costed_units }} unité{{ report.costed_units|pluralize }} sur
-                {{ report.units }} {% if coverage_percent is not None %}({{ coverage_percent|floatformat:0 }} %) {% endif %}ont une recette dont le coût est connu
+                du chiffre d'affaires — {{ report.costed_units }} unité{{ report.costed_units|pluralize }} chiffrée{{ report.costed_units|pluralize }} sur
+                {{ report.units }}{% if coverage_percent is not None %} ({{ coverage_percent|floatformat:0 }} %){% endif %}
             </div>
         </div>
     </div>
@@ -318,7 +314,7 @@ that is where it says what changed (views._messages_by_place).
     {% if report.flagged_in_recipes %}
         <p class="message message-warning">
             <strong>Compté deux fois :</strong> {% for name in report.flagged_in_recipes %}{{ name }}{% if not forloop.last %}, {% endif %}{% endfor %} —
-            coché{{ report.flagged_in_recipes|pluralize }} « compter dans la marge produits » <em>et</em> utilisé{{ report.flagged_in_recipes|pluralize }} dans une recette :
+            coché{{ report.flagged_in_recipes|pluralize }} <em>et</em> utilisé{{ report.flagged_in_recipes|pluralize }} dans une recette :
             la marge produits est <strong>trop basse</strong>.
             Décochez-le dans <a href="#{{ panel }}">les articles comptés</a> ou retirez-le de la recette.
         </p>
@@ -326,12 +322,11 @@ that is where it says what changed (views._messages_by_place).
 
     {% if not report.units and not report.revenue.ttc %}
         <p class="message message-warning">
-            Pas de marge produits : aucune vente sur cette période, donc rien à comparer à un coût.
+            Pas de marge produits : aucune vente sur cette période.
         </p>
     {% elif not report.is_costed %}
         <p class="message message-warning">
-            Pas de marge produits : aucun des produits vendus sur cette période n'a de recette dont le coût
-            soit connu.
+            Pas de marge produits : aucun produit vendu sur cette période n'a de recette chiffrée.
         </p>
     {% elif revenue_coverage_percent is not None and revenue_coverage_percent < 100 %}
         <p class="message message-warning">
@@ -360,8 +355,7 @@ that is where it says what changed (views._messages_by_place).
         <h3>Articles comptés en plus</h3>
         <p class="muted small">
             {{ report.extra_products|length }} article{{ report.extra_products|length|pluralize }} acheté{{ report.extra_products|length|pluralize }} sur cette période{% if report.flagged_articles > report.extra_products|length %},
-            sur {{ report.flagged_articles }} coché{{ report.flagged_articles|pluralize }}{% endif %} : c'est ce qui en a été
-            <strong>acheté</strong> qui compte.
+            sur {{ report.flagged_articles }} coché{{ report.flagged_articles|pluralize }}{% endif %}.
         </p>
         <div class="table-wrap">
             <table data-table data-table-label="articles">
@@ -399,8 +393,8 @@ that is where it says what changed (views._messages_by_place).
         <p class="message message-{{ message.level_tag }}">{{ message }}</p>
     {% endfor %}
     <p class="muted small">
-        Pour ce qu'aucune recette ne consomme (essuie-tout, gobelets) : coché, ce qui en a été
-        <strong>acheté</strong> sur la période s'ajoute au coût de la marge produits.
+        Cochez un article qu'aucune recette ne consomme (essuie-tout, gobelets) : ses <strong>achats</strong>
+        de la période s'ajoutent au coût.
     </p>
     {% if report.countable %}
         <div class="table-wrap">
@@ -409,7 +403,7 @@ that is where it says what changed (views._messages_by_place).
                     <tr>
                         <th>Catégorie, article</th>
                         <th>Cochés</th>
-                        <th class="num" title="Acheté sur la période : ce que cocher l'article ajoute au coût">Acheté (HT)</th>
+                        <th class="num" title="Ce que cocher l'article ajoute au coût">Acheté (HT)</th>
                         <th class="flag-actions">Toute la catégorie</th>
                     </tr>
                 </thead>
@@ -430,7 +424,7 @@ that is where it says what changed (views._messages_by_place).
                                     {% csrf_token %}
                                     <input type="hidden" name="next" value="{{ articles_next }}">
                                     <input type="hidden" name="categorie" value="{{ category.name }}">
-                                    <button class="btn btn-small btn-secondary" type="submit" name="action" value="cocher" aria-label="Tout cocher : {{ category.label }}" title="Coche les articles que la catégorie contient aujourd'hui ({{ category.articles|length }}) : un article classé dedans plus tard arrivera décoché."{% if category.all_ticked %} disabled{% endif %}>Tout cocher</button>
+                                    <button class="btn btn-small btn-secondary" type="submit" name="action" value="cocher" aria-label="Tout cocher : {{ category.label }}" title="Coche les articles actuels de la catégorie ({{ category.articles|length }}) : un article classé dedans plus tard arrivera décoché."{% if category.all_ticked %} disabled{% endif %}>Tout cocher</button>
                                     <button class="btn btn-small btn-secondary" type="submit" name="action" value="decocher" aria-label="Tout décocher : {{ category.label }}"{% if category.none_ticked %} disabled{% endif %}>Tout décocher</button>
                                 </form>
                             </td>
@@ -458,7 +452,7 @@ that is where it says what changed (views._messages_by_place).
         </div>
     {% else %}
         <p class="table-empty">
-            Aucun article pour l'instant : ils naissent des factures, quand leurs produits sont classés dans
+            Aucun article pour l'instant : classez les produits des factures dans
             <a href="{{ purchases_url }}">Produits &amp; charges</a>.
         </p>
     {% endif %}
@@ -475,8 +469,7 @@ that is where it says what changed (views._messages_by_place).
                 Les <strong>{{ report.top_uncosted|length }} plus gros sur {{ report.uncosted_products }}</strong> —
                 {{ report.uncosted_revenue.ht|floatformat:2 }} € HT en tout.
             {% endif %}
-            Vendus sans recette : leur en écrire une depuis <a href="{{ to_link_url }}">« À lier »</a> les
-            fait entrer dans le calcul.
+            Liez-les à une recette dans <a href="{{ to_link_url }}">« À lier »</a> pour les chiffrer.
         </p>
         <div class="table-wrap">
             <table data-table data-table-label="produits">
@@ -522,7 +515,7 @@ that is where it says what changed (views._messages_by_place).
             articles cochés{% if report.extra_products_ht %} ({{ report.extra_products_ht|floatformat:2 }} € HT){% endif %}{% if report.revenue_documents.ttc %} et les ventes hors caisse ({{ report.revenue_documents.ht|floatformat:2 }} € HT){% endif %}.
         </p>
     {% else %}
-        <p class="table-empty">Aucune vente de caisse sur cette période : il n'y a rien à répartir.</p>
+        <p class="table-empty">Aucune vente de caisse sur cette période.</p>
     {% endif %}
 
     {% if report.revenue_without_rate_ttc or report.undated_invoices or report.hand_typed_units %}

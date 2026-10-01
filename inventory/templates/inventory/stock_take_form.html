@@ -24,10 +24,8 @@
 
             <h3>Produits / articles comptés</h3>
             <p class="muted">
-                Entrez soit un produit tel qu'il apparaît sur les factures, soit directement un article
-                si vous ne savez pas exactement quel produit c'est. Pour un produit, choisissez
-                ensuite l'unité dans laquelle vous avez compté : en bouteilles/unités, ou mesuré
-                directement (ex. un fond de bouteille en litres).
+                Entrez un produit tel qu'il figure sur les factures (à défaut, un article), puis l'unité
+                comptée : unités, ou litres pour un fond de bouteille.
             </p>
             {{ formset.management_form }}
             {% if formset.non_form_errors %}
@@ -63,9 +61,8 @@
 
             <div class="message message-warning" id="draft-offer" hidden>
                 <p>
-                    Un comptage non enregistré traîne dans ce navigateur
+                    Un comptage non enregistré est resté dans ce navigateur
                     (<span id="draft-when"></span>, <span id="draft-count"></span>).
-                    Il vient probablement d'un onglet fermé ou d'une page perdue avant l'enregistrement.
                 </p>
                 <p>
                     <button type="button" class="btn btn-small" id="draft-restore">Restaurer ce comptage</button>

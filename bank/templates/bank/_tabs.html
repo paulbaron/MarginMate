@@ -8,5 +8,5 @@ the period it is showing: `bank_url`, `spending_url`, `income_url`, and
 <nav class="tabs" aria-label="Banque">
     <a href="{{ bank_url }}" class="tab{% if bank_tab == 'operations' %} active{% endif %}"{% if bank_tab == 'operations' %} aria-current="page"{% endif %}>Opérations</a>
     <a href="{{ spending_url }}" class="tab{% if bank_tab == 'spending' %} active{% endif %}"{% if bank_tab == 'spending' %} aria-current="page"{% endif %}>Dépenses par catégorie</a>
-    {% if income_url %}<a href="{{ income_url }}" class="tab{% if bank_tab == 'income' %} active{% endif %}"{% if bank_tab == 'income' %} aria-current="page"{% endif %}>Entrées d'argent</a>{% endif %}
+    <a href="{{ income_url }}" class="tab{% if bank_tab == 'income' %} active{% endif %}"{% if bank_tab == 'income' %} aria-current="page"{% endif %}>Entrées d'argent</a>
 </nav>

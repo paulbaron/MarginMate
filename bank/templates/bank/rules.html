@@ -6,15 +6,12 @@
             <p class="breadcrumb"><a href="{% url 'bank:bank_home' %}">← Banque</a></p>
             <h1>Dépenses sans facture attendue</h1>
             <p class="page-subtitle">
-                Un prêt, l'URSSAF, les salaires : des dépenses qui n'auront jamais de facture. Une opération dont le
-                libellé correspond à une règle compte comme « pas de facture attendue » plutôt que comme une facture
-                manquante, et le rapprochement automatique la laisse de côté. Une dépense déjà rattachée à sa facture
-                n'est jamais cachée.
+                Un prêt, l'URSSAF, les salaires : les opérations dont le libellé correspond à une règle n'attendent
+                pas de facture.
             </p>
             <p class="muted">
-                Une règle peut aussi porter une <strong>catégorie</strong> : ces dépenses se classent alors toutes
-                seules sur <a href="{% url 'bank:spending_home' %}">Dépenses par catégorie</a>, au lieu d'être
-                nommées une par une tous les mois. Ce qu'une personne a tapé sur une opération l'emporte.
+                Une règle peut aussi porter une <strong>catégorie</strong> : ses dépenses y sont alors rangées sur
+                <a href="{% url 'bank:spending_home' %}">Dépenses par catégorie</a>, sauf celles classées à la main.
             </p>
         </div>
     </div>
@@ -137,10 +134,7 @@
         </div>
     {% else %}
         <div class="empty-state">
-            <p>
-                Aucune règle pour l'instant. Sur la page Banque, l'onglet « Sans facture, par bénéficiaire » propose
-                « Ignorer… » à côté de chaque bénéficiaire.
-            </p>
+            <p>Aucune règle pour l'instant : créez-en une avec « Ignorer… » à côté d'un bénéficiaire.</p>
             <a class="btn btn-secondary" href="{% url 'bank:bank_home' %}?vue=par-beneficiaire">Voir les dépenses par bénéficiaire</a>
         </div>
     {% endif %}

@@ -17,8 +17,8 @@ from __future__ import annotations
 
 import shutil
 import zipfile
-from dataclasses import dataclass, field
 
+from accounts.views import open_stored
 from invoices.filenames import UniqueNames, clean, download_name
 from invoices.models import Invoice
 
@@ -40,43 +40,29 @@ def paid_by(lines) -> list[Invoice]:
     )
 
 
-@dataclass
-class Written:
-    """What went into the zip, and what could not."""
-
-    names: list[str] = field(default_factory=list)
-    missing: list[Invoice] = field(default_factory=list)
-
-
-def write_zip(invoices, handle) -> Written:
+def write_zip(invoices, handle) -> list[Invoice]:
     """Every file of `invoices` into a zip written to `handle`, under its
-    download name, one file in memory at a time."""
-    written = Written()
+    download name, one file at a time; returns the documents it could not
+    hold (no file, or the file gone from the disk)."""
+    missing = []
     names = UniqueNames()
     with zipfile.ZipFile(handle, "w", zipfile.ZIP_DEFLATED) as archive:
         for invoice in invoices:
-            if not invoice.source_file:
-                written.missing.append(invoice)
+            source = open_stored(invoice.source_file.name) if invoice.source_file else None
+            if source is None:
+                missing.append(invoice)
                 continue
-            try:
-                source = invoice.source_file.open("rb")
-            except OSError:
-                written.missing.append(invoice)
-                continue
-            with source:
-                name = names.take(download_name(invoice))
-                with archive.open(name, "w") as target:
-                    shutil.copyfileobj(source, target)
-            written.names.append(name)
-        if written.missing:
-            archive.writestr(MISSING_LIST, missing_text(written.missing))
-    return written
+            with source, archive.open(names.take(download_name(invoice)), "w") as target:
+                shutil.copyfileobj(source, target)
+        if missing:
+            archive.writestr(MISSING_LIST, missing_text(missing))
+    return missing
 
 
 def missing_text(invoices) -> str:
     """One line per document the zip could not hold: its supplier, number,
     date and total, and why - the accountant has to ask for it."""
-    lines = ["Ces factures sont rattachées à une dépense de la période, mais leur fichier n'est pas enregistré :", ""]
+    lines = ["Factures rattachées à une dépense de la période, sans fichier enregistré :", ""]
     for invoice in invoices:
         number = f" n° {invoice.invoice_number}" if invoice.invoice_number else ""
         day = invoice.invoice_date.strftime("%d/%m/%Y") if invoice.invoice_date else "sans date"

@@ -1583,7 +1583,9 @@ body:has(.container-wide) .topbar-inner { max-width: calc(var(--content-width) +
        of three widths wrapped into ragged rows under the title. Written
        under .page-header: `.page-header .actions` weighs more than a lone
        class and would win. */
-    .page-header .actions-compact { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s2); width: 100%; }
+    /* align-items: stretch - a button whose words take two lines beside
+       one that takes one: centred, the two sat at two heights. */
+    .page-header .actions-compact { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: stretch; gap: var(--s2); width: 100%; }
     .page-header .actions-compact > form { display: flex; margin: 0; }
     .page-header .actions-compact .btn { width: 100%; min-height: 44px; justify-content: center; text-align: center; white-space: normal; }
     /* The headline figures two to a row: one to a row, the cards of some

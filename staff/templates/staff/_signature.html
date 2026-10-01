@@ -19,14 +19,13 @@ journal.
         <form method="post" action="{{ signature.send_url }}" class="signature-send" data-leaves-grid="{{ signature.send_warning }}">
             {% csrf_token %}
             <p class="small">
-                Le mois tel qu'il est enregistré est figé — un PDF et son relevé — et ne se modifie plus tant que la
-                demande est en cours. {{ signature.person.display_name }} le lit et le signe depuis son téléphone,
-                avec un code à usage unique ; vous le contresignez ensuite.
+                Le mois enregistré est figé et ne se modifie plus pendant la demande. {{ signature.person.display_name }}
+                le signe sur son téléphone avec un code à usage unique ; vous contresignez ensuite.
             </p>
             {% if signature.mail_to %}
-                <p class="small">Le lien partira par e-mail à {{ signature.address }} ; il s'affichera aussi ici, avec « Copier », pour l'envoyer autrement.</p>
+                <p class="small">Le lien partira par e-mail à {{ signature.address }} et s'affichera aussi ici.</p>
             {% else %}
-                <p class="small">{{ signature.why_no_mail|capfirst }} : vous transmettrez le lien vous-même (SMS, messagerie, en main propre), et le code par un autre moyen que le lien.</p>
+                <p class="small">{{ signature.why_no_mail|capfirst }} : vous transmettrez vous-même le lien, et le code séparément.</p>
                 <label class="checkbox-label">
                     <input type="checkbox" name="{{ signature.hand_over }}" value="1" required>
                     Je transmettrai le lien moi-même

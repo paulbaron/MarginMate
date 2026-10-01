@@ -276,11 +276,11 @@ class SalesByOriginWindowTests(TestCase):
             {"laddition": 4, "manual": 6},
         )
         page = response.content.decode()
-        self.assertIn("ne s'applique qu'à la liste", page)
+        self.assertIn("Ces totaux ignorent la recherche « Mule », pas la période.", page)
 
     def test_it_says_nothing_about_a_search_nobody_typed(self):
         page = self.client.get(reverse("recipes:sales_list"), WINDOW).content.decode()
-        self.assertNotIn("ne s'applique qu'à la liste", page)
+        self.assertNotIn("ignorent la recherche", page)
 
 
 class ImportCardIsNotTheWindowTests(TestCase):

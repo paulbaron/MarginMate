@@ -121,8 +121,13 @@ class IncomePageTests(Page, TestCase):
 
     def test_an_exact_run_is_worded_as_two_equal_amounts(self):
         response = self.page(**JUNE_PARAMS)
-        # 120 + 80 on the 1st and 2nd are the 200 of the 3rd, to the cent.
-        self.assertContains(response, "même montant au centime que les ventes carte du 01/06/2026 au 02/06/2026")
+        # 120 + 80 on the 1st and 2nd are the 200 of the 3rd, to the cent:
+        # the days are given under « Ventes carte au même montant ».
+        text = said(response)
+        table = text[text.index('data-table-label="versements carte"') :]
+        table = table[: table.index("</table>")]
+        self.assertIn("<th>Ventes carte au même montant</th>", table)
+        self.assertIn("du 01/06/2026 au 02/06/2026", table)
         self.assertEqual(
             [row.run for row in response.context["report"].payouts],
             [(date(2026, 6, 1), date(2026, 6, 2)), (date(2026, 6, 4), date(2026, 6, 4))],
@@ -237,8 +242,12 @@ class TheWindowTravelsTests(Page, TestCase):
             with self.subTest(link=name):
                 query = query_of(response.context[name])
                 self.assertEqual((query["du"], query["au"]), ("2026-06-01", "2026-06-30"))
-        self.assertEqual(query_of(response.context["bank_url"])["vue"], "entrees")
-        self.assertContains(response, response.context["spending_url"].replace("&", "&amp;"))
+        # « Opérations » opens Banque on its default view, as from « Dépenses ».
+        self.assertEqual(query_of(response.context["bank_url"])["vue"], "a-traiter")
+        # « Dépenses » is reached through its tab (bank/_tabs.html).
+        self.assertContains(
+            response, f'<a href="{response.context["spending_url"].replace("&", "&amp;")}" class="tab">'
+        )
 
     def test_under_all_history_the_other_pages_are_opened_on_everything_too(self):
         """Bare, they would open on THEIR default - a year - while this page
@@ -458,12 +467,11 @@ class WhereTheTillStartsTests(CoveragePage, StatementBeforeTheTill, TestCase):
         response = self.page(tout="1")
         text = said(response)
         self.assertIn(
-            "Du 05/06/2026 au 06/06/2026, 110.00 € sont arrivés sur le compte (versements carte comptés au brut, "
-            "espèces et chèques déposés) avant le premier jour où la caisse a des moyens de paiement lus, le "
-            "10/06/2026 : l'écart ci-dessous ne les compte pas.",
+            "Du 05/06/2026 au 06/06/2026, 110.00 € sont arrivés sur le compte (carte au brut, espèces, chèques) "
+            "avant le premier jour de paiements lus en caisse, le 10/06/2026 : l'écart ci-dessous ne les compte pas.",
             text,
         )
-        self.assertLess(text.index("sont arrivés sur le compte (versements"), text.index(COMPARISON))
+        self.assertLess(text.index("sont arrivés sur le compte (carte"), text.index(COMPARISON))
         self.assertEqual(dict(query_of(response.context["covered_url"]).items()), {"du": "2026-06-10"})
 
 

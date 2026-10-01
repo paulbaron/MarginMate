@@ -11,10 +11,9 @@ to link again.
         <td colspan="2">
             {% if outcome == "linked" %}
                 <span class="pos-outcome">✓ lié à
-                    <a href="{% url 'recipes:recipe_detail' product.recipe.pk %}">{{ product.recipe.name }}</a>{% if product.recipe.happy_hour_name|lower == product.name|lower %} (happy hour){% endif %}
-                    — ses ventes y sont comptées.</span>
+                    <a href="{% url 'recipes:recipe_detail' product.recipe.pk %}">{{ product.recipe.name }}</a>{% if product.recipe.happy_hour_name|lower == product.name|lower %} (happy hour){% endif %}</span>
             {% else %}
-                <span class="pos-outcome muted">✓ ignoré : ne consomme aucun stock suivi.</span>
+                <span class="pos-outcome muted">✓ ignoré</span>
             {% endif %}
             <form method="post" action="{% url 'recipes:pos_product_assign' product.pk %}"
                   hx-post="{% url 'recipes:pos_product_assign' product.pk %}" hx-target="closest tr" hx-swap="outerHTML"
@@ -58,7 +57,7 @@ to link again.
                         <option value="{{ recipe.pk }}"{% if recipe.pk == product.suggested_recipe.pk %} selected{% endif %}>{{ recipe.name }}</option>
                     {% endfor %}
                 </select>
-                <label class="pos-hh" title="Mêmes ingrédients que la recette choisie, ventes cumulées avec elle.">
+                <label class="pos-hh" title="Ventes cumulées avec la recette choisie.">
                     <input type="checkbox" name="as_happy_hour" value="1"{% if product.suggested_happy_hour %} checked{% endif %}> happy hour
                 </label>
                 <button type="submit" name="action" value="link" class="btn btn-small">Lier</button>
@@ -66,7 +65,7 @@ to link again.
                     <a href="{% url 'recipes:recipe_create' %}?caisse={{ product.pk }}">Créer la recette</a>
                     ·
                     <button type="submit" name="action" value="ignore" class="link-button"
-                            title="Pour ce qui ne consomme aucun stock suivi : café, cuisine, divers.">
+                            title="Aucun stock suivi : café, cuisine, divers.">
                         Ignorer
                     </button>
                 </span>

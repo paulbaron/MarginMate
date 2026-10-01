@@ -5,15 +5,9 @@
         <div>
             <h1>Banque</h1>
             <p class="page-subtitle">
-                Tout ce qui est <strong>sorti du compte</strong> sur la période, avec ou sans facture. Une dépense
-                que sa facture explique compte dans les catégories de ce que cette facture a acheté ; les autres
-                se classent ici, à la main ou par une règle. Les entrées d'argent n'en font pas partie.
+                Ce qui est <strong>sorti du compte</strong>, par catégorie, avec ou sans facture.
             </p>
-            <p class="muted">
-                Ce n'est pas la même question que <a href="{{ margins_url }}">Marges</a>, qui compte ce qui a été
-                <strong>facturé</strong>, à la date des factures. Ici c'est le relevé qui fait foi, à la date où la
-                banque a pris l'argent.
-            </p>
+            <p class="muted">Ce qui a été facturé : <a href="{{ margins_url }}">Marges</a>.</p>
         </div>
     </div>
 
@@ -47,8 +41,7 @@
             {% if showing_all %}
                 Tout l'historique du relevé.
             {% elif is_default %}
-                Les douze derniers mois, du {{ window.start|date:"d/m/Y" }} au {{ window.end|date:"d/m/Y" }} :
-                la période par défaut, faute de dates choisies.
+                Les douze derniers mois (par défaut), du {{ window.start|date:"d/m/Y" }} au {{ window.end|date:"d/m/Y" }}
             {% elif window.start and window.end %}
                 Du {{ window.start|date:"d/m/Y" }} au {{ window.end|date:"d/m/Y" }}
             {% elif window.start %}
@@ -96,8 +89,8 @@
                     <span class="stat-label">Déduit par les factures</span>
                     <span class="stat-value">{{ report.deducted|floatformat:2 }} €</span>
                     <span class="stat-note">
-                        avoirs et consignes portés par les factures rattachées : hors camembert.
-                        Un remboursement reçu sur le relevé est une entrée d'argent et n'est pas compté ici.
+                        avoirs et consignes des factures rattachées, hors camembert. Un remboursement reçu sur le
+                        compte n'est pas compté ici.
                     </span>
                 </div>
             {% endif %}
@@ -115,8 +108,7 @@
                 <strong>Camembert sans :</strong>
                 {% for row in left_out_rows %}{% if row.category %}{{ row.name }} {{ row.category.amount|floatformat:2 }} €{% else %}{{ row.name }} : rien sur cette période{% endif %} (<a href="{{ row.put_back_url }}">remettre</a>){% if not forloop.last %}, {% endif %}{% endfor %}
                 — {{ report.left_out_total|floatformat:2 }} € hors du camembert sur
-                {{ report.total|floatformat:2 }} € sortis du compte. Le tableau, le total et les chiffres
-                ci-dessus ne changent pas : on retire une part du dessin, pas une dépense.
+                {{ report.total|floatformat:2 }} € sortis du compte. Seul le dessin change.
                 <a href="{{ reset_url }}">tout remettre</a>
             </p>
         {% endif %}
@@ -128,7 +120,7 @@
                         {{ pie_svg|safe }}
                     {% elif report.nothing_left_to_draw %}
                         <p class="muted" style="max-width:260px;">
-                            Toutes les catégories de la période sont hors du camembert : il ne reste rien à dessiner.
+                            Toutes les catégories de la période sont hors du camembert.
                             <a href="{{ reset_url }}">Tout remettre</a>.
                         </p>
                     {% endif %}
@@ -146,7 +138,7 @@
                         <table data-table data-table-label="catégories" class="spend-table">
                             <thead>
                                 <tr>
-                                    <th class="spend-tick" title="Décochée, la catégorie reste dans le tableau et dans le total, mais pas dans le camembert. Rien n'est enregistré.">Dans le camembert</th>
+                                    <th class="spend-tick" title="Décochée, la catégorie ne sort que du camembert. Rien n'est enregistré.">Dans le camembert</th>
                                     <th>Catégorie</th>
                                     <th class="num">Montant</th>
                                     <th class="num">Part</th>
@@ -213,11 +205,8 @@
                     <button class="btn btn-small" type="submit">Recalculer le camembert</button>
                     {% if left_out %}<a class="btn btn-small btn-secondary" href="{{ reset_url }}">Tout remettre</a>{% endif %}
                     <span class="muted small">
-                        Décochez ce que le camembert doit laisser de côté (la TVA, par exemple) puis « Recalculer le
-                        camembert » : les parts des autres dépenses se calculent sans elle. La catégorie reste dans
-                        le tableau et dans le total, qui refont toujours ce qui est sorti du compte.
-                        <strong>Rien n'est enregistré</strong> : la sélection vit dans l'adresse de la page — gardez
-                        le lien en favori pour la retrouver, le menu ramène au camembert de tout.
+                        Décochez ce que le camembert doit laisser de côté (la TVA, par exemple), puis « Recalculer le
+                        camembert ». <strong>Rien n'est enregistré</strong> : la sélection vit dans l'adresse de la page.
                     </span>
                 </form>
                 <p class="muted">
@@ -226,7 +215,7 @@
                     a negative slice is not drawn, nor is a category left
                     out, and the three amounts add back up to what left the account.
                     {% endcomment %}
-                    {% if left_out_in_table %}Le camembert dessine {{ report.drawn_total|floatformat:2 }} € des {{ report.total|floatformat:2 }} € sortis du compte : les {{ report.left_out_total|floatformat:2 }} € des catégories laissées hors du camembert{% if report.given_back %} et les {{ report.given_back|floatformat:2 }} € déduits par les factures rattachées (avoirs, consignes), qui ne sont la part de rien,{% endif %} restent dans le tableau. {% elif report.given_back %}Le camembert dessine {{ report.drawn_total|floatformat:2 }} € : les {{ report.given_back|floatformat:2 }} € déduits par les factures rattachées (avoirs, consignes) ne sont la part de rien et restent dans le tableau. {% endif %}Une dépense réglée en plusieurs fois compte sur chaque opération pour ce que cette opération a payé : comptée en entier sur les deux, la facture serait achetée deux fois. Une même opération peut concerner plusieurs catégories, donc la colonne « Opérations concernées » ne fait pas son pied.
+                    {% if left_out_in_table %}Le camembert dessine {{ report.drawn_total|floatformat:2 }} € des {{ report.total|floatformat:2 }} € sortis du compte : les {{ report.left_out_total|floatformat:2 }} € des catégories laissées hors du camembert{% if report.given_back %} et les {{ report.given_back|floatformat:2 }} € déduits par les factures rattachées (avoirs, consignes){% endif %} restent dans le tableau. {% elif report.given_back %}Le camembert dessine {{ report.drawn_total|floatformat:2 }} € : les {{ report.given_back|floatformat:2 }} € déduits par les factures rattachées (avoirs, consignes) restent dans le tableau. {% endif %}Une facture réglée en plusieurs fois compte pour ce que chaque opération a payé. « Opérations concernées » ne s'additionne pas : une opération peut toucher plusieurs catégories.
                 </p>
             </div>
         {% endif %}
@@ -234,11 +223,9 @@
         <h2 id="a-classer">Dépenses sans facture</h2>
         {% if report.without_invoice %}
             <p class="muted">
-                Aucune facture ne dit ce qu'étaient ces dépenses : elles se classent ici, les non classées d'abord.
-                Une dépense qui revient tous les mois (un prêt, l'URSSAF, les salaires) se classe toute seule en
-                donnant une catégorie à sa <a href="{% url 'bank:rule_list' %}">règle</a> ; ce qui est tapé ici
-                l'emporte sur la règle. Classer une dépense ne dit rien de sa facture : la ligne reste proposée au
-                rapprochement automatique.
+                Classez-les ici, les non classées d'abord. Une dépense qui revient tous les mois (prêt, URSSAF,
+                salaires) se classe toute seule si sa <a href="{% url 'bank:rule_list' %}">règle</a> a une
+                catégorie ; ce qui est tapé ici l'emporte. Une dépense classée reste proposée au rapprochement.
             </p>
             {% comment %}
             The three ways a debit with no invoice gets a name, each
@@ -261,8 +248,7 @@
             </div>
             {% if kind %}
                 <p class="muted">
-                    Les chiffres et le camembert ci-dessus ne bougent pas : ils comptent toute la période.
-                    Ce choix ne resserre que cette liste.
+                    Ce choix ne resserre que cette liste : les chiffres et le camembert ci-dessus comptent toute la période.
                 </p>
             {% endif %}
             {% if not report.listed %}
@@ -342,8 +328,8 @@
                 <p class="muted">
                     {{ report.not_listed }} dépense{{ report.not_listed|pluralize }} sans facture de plus
                     {% if kind %}dans ce choix{% endif %} sur cette période,
-                    non affichée{{ report.not_listed|pluralize }} ici : resserrez les dates pour les
-                    classer. Les chiffres ci-dessus les comptent toutes.
+                    non affichée{{ report.not_listed|pluralize }} : resserrez les dates pour les classer.
+                    Les chiffres ci-dessus les comptent.
                 </p>
             {% endif %}
             {% endif %}
@@ -365,8 +351,8 @@
     {% else %}
         <div class="empty-state">
             <p>
-                Aucun relevé importé pour l'instant : exportez le compte en CSV depuis le site de la banque, puis
-                importez-le depuis <a href="{{ bank_url }}">Banque</a>.
+                Aucun relevé importé : exportez le compte en CSV depuis le site de la banque, puis importez-le sur
+                <a href="{{ bank_url }}">Banque</a>.
             </p>
         </div>
     {% endif %}

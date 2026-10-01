@@ -10,7 +10,7 @@ redraws the whole page with it.
     <p class="message message-error">{{ result.problem }}</p>
 {% elif result.trace %}
     {% with reading=result.trace.reading %}
-        <p class="muted">Testé sur {{ result.source }}, avec les motifs de la page - rien n'est enregistré.</p>
+        <p class="muted">Testé sur {{ result.source }} ; rien n'est enregistré.</p>
         {% if reading.error %}
             <p class="message message-error">Lecture impossible : {{ reading.error }}</p>
         {% endif %}

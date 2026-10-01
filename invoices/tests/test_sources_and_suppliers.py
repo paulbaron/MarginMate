@@ -272,11 +272,7 @@ class SourceFormTests(TestCase):
         )
         said_now = messages_of(response)
         self.assertIn("Source enregistrée : Traiteur Exemple - Factures", said_now)
-        self.assertIn(
-            "Traiteur Exemple est créé : cette source range chez lui ce qu'elle récupère, et il apprend ce que ses "
-            "documents impriment dès le premier.",
-            said_now,
-        )
+        self.assertIn("Fournisseur Traiteur Exemple créé.", said_now)
         created = SupplierChange.objects.get(supplier__name="Traiteur Exemple", kind=SupplierChange.Kind.CREATED)
         self.assertEqual(created.cause, "source « Traiteur Exemple - Factures »")
 
@@ -316,7 +312,7 @@ class SupplierPagesTests(TestCase):
         self.assertContains(page, "+ Nouvelle source pour Epicerie Exemple")
         refused = self.client.get(reverse("invoices:supplier_delete", args=[self.shop.pk]))
         self.assertContains(refused, "ne peut pas être supprimé : 2 sources récupèrent pour lui.")
-        self.assertIn("rattachez ses sources de factures à un autre fournisseur", said(refused))
+        self.assertIn("et ses sources à un autre fournisseur", said(refused))
 
     def test_one_fetched_by_its_own_module_says_so(self):
         """Metro has no source: « Récupérer les nouvelles factures » fetches it
@@ -338,13 +334,16 @@ class SupplierPagesTests(TestCase):
 
     def test_one_with_nothing_yet_is_told_how_its_first_document_comes(self):
         page = self.client.get(self.supplier_page)
-        self.assertIn("par une source qui le récupère pour lui (e-mail, espace client)", said(page))
+        # A source (e-mail, customer portal) or the import: both ways are said.
+        self.assertIn("ajoutez-en une (e-mail, espace client), ou choisissez-le à l'import", said(page))
         self.assertContains(page, "sauf si une source le récupère pour lui.")
         created = self.client.post(
             reverse("invoices:supplier_create"),
             {"name": "Cave Exemple", "nature": "produits", "header": "", "arrivee": "import"},
         )
-        self.assertIn("Rien ne le reconnaît encore : une source qui récupère pour lui", " ".join(messages_of(created)))
+        # The message says nothing recognises it yet; the supplier's page it
+        # lands on (asserted above) says how its first document comes.
+        self.assertIn("Cave Exemple est créé. Rien ne le reconnaît encore", " ".join(messages_of(created)))
 
 
 class GatherWordsTests(TestCase):
@@ -364,8 +363,6 @@ class GatherWordsTests(TestCase):
         self.assertContains(page, ">Récupérer les nouvelles factures</button>")
         self.assertContains(page, 'hx-confirm="Annuler cette récupération ?"')
         self.assertContains(page, "<th>Source</th>", html=True)
-        # The import beside it: a document's shop or supplier, not only a shop.
-        self.assertIn("son enseigne ou son fournisseur est reconnu sur le document", said(page))
 
     def post(self, sources):
         with mock.patch("invoices.views.threading.Thread"):

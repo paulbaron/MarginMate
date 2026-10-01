@@ -73,17 +73,16 @@
     <section class="card" aria-labelledby="recognition">
         <h2 id="recognition">Reconnaissance</h2>
         {% if is_till %}
-            <p>Reconnue par sa caisse, réglée dans l'application : ses tickets n'ont besoin ni d'en-tête ni d'identifiant.</p>
+            <p>Reconnue par sa caisse, réglée dans l'application : ni en-tête ni identifiant nécessaire.</p>
         {% else %}
             <p>
                 {% if own_reader %}
                     Reconnu par son lecteur et ce que ses factures impriment.
                 {% elif supplier.ticket_header %}
                     En-tête « {{ supplier.ticket_header }} »{% if report.total %} — imprimé sur {{ report.with_header }} de ses {{ report.total }} documents{% endif %}.
-                    Un en-tête n'ajoute que des documents : il n'en retire aucun.
                     <a href="{% url 'invoices:supplier_edit' supplier.pk %}">Modifier</a>
                 {% else %}
-                    Aucun en-tête : ses documents sont reconnus par les identifiants ci-dessous, ou vous sont demandés à l'import.
+                    Aucun en-tête.
                     <a href="{% url 'invoices:supplier_edit' supplier.pk %}">Lui en donner un</a>
                 {% endif %}
             </p>
@@ -149,10 +148,9 @@
                 <div class="message message-warning">
                     <strong>{{ move_offer.label }}</strong> reconnaît <a href="{% url 'invoices:supplier_detail' move_offer.holder.pk %}">{{ move_offer.holder.name }}</a> aujourd'hui.
                     <p class="muted">
-                        Un identifiant que deux fournisseurs retiennent n'en fait reconnaître aucun : il faut
-                        qu'il soit à l'un ou à l'autre. Le déplacer le retire à {{ move_offer.holder.name }} et
-                        le donne à {{ supplier.name }} — les deux fiches le gardent dans leur historique, et
-                        l'une ou l'autre l'annule.
+                        Retenu par deux fournisseurs, il n'en reconnaîtrait aucun. Le déplacer le retire à
+                        {{ move_offer.holder.name }} pour le donner à {{ supplier.name }} ; l'une ou l'autre fiche
+                        peut l'annuler.
                     </p>
                     <form method="post" action="{% url 'invoices:supplier_identifiers' supplier.pk %}" class="inline-form">
                         {% csrf_token %}
@@ -180,9 +178,7 @@
                 <button class="btn btn-small" type="submit">Ajouter</button>
             </form>
             <p class="muted small" id="identifier-help">
-                Un n° SIREN, un n° SIRET, un n° de TVA, un numéro de téléphone ou un site, tel qu'il est
-                imprimé sur ses documents. Saisi ici, il ne sera pas oublié tout seul : l'apprentissage ne
-                retire que ce qu'il a appris lui-même.
+                N° SIREN, SIRET ou de TVA, téléphone ou site, tel qu'imprimé sur ses documents.
             </p>
 
             {% if report.printed %}
@@ -239,7 +235,7 @@
         <h2 id="types">Sources de ses factures</h2>
         {% if own_module %}
             <p class="muted">
-                Récupérées par son propre module, avec « Récupérer les nouvelles factures » en haut de Factures{% if not invoice_types %} : il n'a besoin d'aucune source{% endif %}.
+                Récupérées par son propre module, avec « Récupérer les nouvelles factures » en haut de Factures{% if not invoice_types %} : aucune source nécessaire{% endif %}.
             </p>
         {% endif %}
         {% if invoice_types %}
@@ -255,10 +251,9 @@
         {% elif not document_count %}
             <p class="muted">
                 {% if sources_refused %}
-                Comment arrivera son premier document ? Par « Importer », en le choisissant sur la ligne du fichier.
+                Aucune : choisissez-le à l'import, sur la ligne du fichier.
                 {% else %}
-                Comment arrivera son premier document ? Par une source qui le récupère pour lui (e-mail, espace
-                client), ou par « Importer » en le choisissant sur la ligne du fichier.
+                Aucune : ajoutez-en une (e-mail, espace client), ou choisissez-le à l'import, sur la ligne du fichier.
                 {% endif %}
             </p>
         {% else %}
@@ -315,7 +310,7 @@
             </table>
             </div>
         {% else %}
-            <p class="muted">Rien encore : chaque changement de ce qui le reconnaît s'inscrit ici, avec sa cause et son annulation.</p>
+            <p class="muted">Aucun changement pour l'instant.</p>
         {% endif %}
     </section>
 {% endblock %}

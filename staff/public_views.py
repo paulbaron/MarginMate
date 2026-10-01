@@ -90,12 +90,9 @@ STATEMENT_FIELD = "certification"
 RESERVED_FIELD = "avec_reserves"
 RESERVATION_FIELD = "reserves"
 
-IDENTIFY_FIRST = "Validez d'abord votre code (étape 1) : c'est lui qui montre que c'est bien vous qui signez."
+IDENTIFY_FIRST = "Validez d'abord votre code (étape 1)."
 RESERVATION_EMPTY = "Écrivez vos réserves, ou décochez « Je signe avec des réserves »."
-RESERVATION_UNTICKED = (
-    "Vous avez écrit des réserves sans cocher « Je signe avec des réserves » : cochez-la pour les joindre à votre "
-    "signature, ou effacez le texte."
-)
+RESERVATION_UNTICKED = "Cochez « Je signe avec des réserves » pour joindre vos réserves, ou effacez le texte."
 ALREADY_SIGNED = "Ce relevé est déjà signé."
 NO_CODE_BY_MAIL = "Le code ne peut pas vous être envoyé par e-mail : demandez-le à votre employeur."
 MAIL_FAILED = "L'e-mail n'a pas pu partir. Réessayez dans quelques minutes, ou demandez le code à votre employeur."
@@ -103,14 +100,14 @@ CODE_VERIFIED = "Code vérifié : vous pouvez signer."
 #: Asking again cancels the code on its way: said where it is asked, and in
 #: the mail carrying it (signature_mail.send_code).
 CODE_REPLACES = "Il remplace tout code demandé avant."
-NOT_SIGNED_YET = "Ce relevé n'est pas encore signé : il n'y a pas encore d'exemplaire signé à télécharger."
+NOT_SIGNED_YET = "Ce relevé n'est pas encore signé."
 ALTERED_DOCUMENT = (
     "Le document enregistré ne correspond plus à celui qui a été figé : il ne peut pas être affiché. Prévenez "
     "votre employeur."
 )
 PAGE_EXPIRED = (
     "La page a expiré, ou votre navigateur refuse les cookies de ce site. Rouvrez le lien et recommencez ; si cela "
-    "se reproduit, autorisez les cookies pour ce site : ils ne servent qu'à la sécurité de la signature."
+    "se reproduit, autorisez les cookies pour ce site."
 )
 HEADINGS = {
     403: "La page a expiré",

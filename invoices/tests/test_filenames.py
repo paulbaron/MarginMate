@@ -111,3 +111,29 @@ class InvoiceFileRouteTests(TestCase):
 
     def test_a_post_is_refused(self):
         self.assertEqual(self.client.post(self.url).status_code, 405)
+
+    def test_a_download_is_sandboxed_like_any_attachment(self):
+        response = self.client.get(self.url, {"telecharger": "1"})
+        self.assertEqual(response["Content-Security-Policy"], "sandbox")
+        self.assertEqual(response["X-Content-Type-Options"], "nosniff")
+        self.assertIn("no-store", response["Cache-Control"])
+
+    def test_an_xml_invoice_is_a_sandboxed_download_named_the_same_way(self):
+        xml = make_invoice(supplier=make_supplier(name="Grossiste"), invoice_date=date(2026, 9, 3))
+        make_invoice_line(invoice=xml, total_ht="10.00", vat_rate=Decimal("0.20"))
+        xml.source_file.save("facture.xml", ContentFile(b"<Invoice/>"))
+        response = self.client.get(reverse("invoices:invoice_file", args=[xml.pk]))
+        self.assertTrue(response["Content-Disposition"].startswith("attachment"))
+        self.assertIn("Grossiste%2012%E2%82%AC00%2003_09_2026.xml", response["Content-Disposition"])
+        self.assertEqual(response["Content-Security-Policy"], "sandbox")
+
+    def test_a_stored_name_climbing_out_of_media_is_a_404(self):
+        self.invoice.source_file.name = "../../accounts.sqlite3"
+        self.invoice.save(update_fields=["source_file"])
+        self.assertEqual(self.client.get(self.url).status_code, 404)
+
+    def test_the_correction_page_frames_and_offers_it(self):
+        page = self.client.get(reverse("invoices:invoice_edit_lines", args=[self.invoice.pk]))
+        self.assertContains(page, f'<iframe src="{self.url}"')
+        self.assertContains(page, f'href="{self.url}?telecharger=1">Télécharger</a>')
+        self.assertNotContains(page, "stocke-sous-un-autre-nom")

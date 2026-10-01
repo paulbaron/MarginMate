@@ -6,10 +6,7 @@
     <div class="page-header">
         <div>
             <h1>{% if fmt %}Format « {{ fmt.name }} »{% else %}Nouveau format de bon{% endif %}</h1>
-            <p class="page-subtitle">
-                Des motifs (des expressions régulières) disent où sont les consignes dans le bon, comment en lire
-                chaque ligne, sa date et son numéro. « Tester » les essaie sur un bon avant de les enregistrer.
-            </p>
+            <p class="page-subtitle">Des motifs (expressions régulières) lisent le bon ; « Tester » les essaie avant de les enregistrer.</p>
         </div>
         {% if fmt %}
             <div class="actions">
@@ -22,10 +19,7 @@
         <p class="message message-error">Motif invalide : {{ format_problem }} — corrigez-le ci-dessous, puis « Relire ».</p>
     {% endif %}
     {% if source %}
-        <p class="message">
-            Copie du format « {{ source.name }} » : choisissez son fournisseur, puis testez ses motifs sur un bon de ce
-            fournisseur avant de l'enregistrer.
-        </p>
+        <p class="message">Copie du format « {{ source.name }} » : choisissez son fournisseur et testez ses motifs avant d'enregistrer.</p>
     {% endif %}
 
     <form method="post" action="{{ request.path }}" enctype="multipart/form-data" hx-encoding="multipart/form-data" class="card format-form">
@@ -82,7 +76,7 @@
         {% if slip_count %}
             <section class="card">
                 <h2>Les bons de ce format</h2>
-                <p class="muted">Enregistrer ne relit pas les bons déjà reçus : « Relire » les lit avec les motifs enregistrés.</p>
+                <p class="muted">Enregistrer ne relit pas les bons déjà reçus.</p>
                 <form method="post" action="{% url 'returnables:format_reread' fmt.pk %}">
                     {% csrf_token %}
                     <button class="btn btn-secondary" type="submit" data-busy-label="Lecture des bons…">{% if slip_count == 1 %}Relire le bon de ce format{% else %}Relire les {{ slip_count }} bons de ce format{% endif %}</button>
@@ -95,7 +89,7 @@
                 {% csrf_token %}
                 <p>
                     {% if slip_count %}Ce format a {{ slip_count }} bon{{ slip_count|pluralize }} : il ne peut pas être supprimé, désactivez-le plutôt.
-                    {% else %}Le format sera supprimé. Aucun bon n'a été lu avec lui.{% endif %}
+                    {% else %}Le format sera supprimé.{% endif %}
                 </p>
                 <button class="btn btn-danger" type="submit"{% if slip_count %} disabled{% endif %}>Supprimer le format</button>
             </form>

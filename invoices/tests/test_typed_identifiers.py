@@ -122,8 +122,10 @@ class HeldByAnotherTests(TestCase):
         self.assertEqual(self.mine.ticket_identifiers, [])
         self.assertEqual(self.squatter.ticket_identifiers, [f"siren:{SIREN}"])
         said = " ".join(messages_of(page))
-        self.assertIn("reconnaît Superette Exemple aujourd'hui", said)
-        self.assertIn("n'en font reconnaître aucun", said)
+        self.assertIn("reconnaît déjà Superette Exemple", said)
+        # Why it is not simply added: said on the page the message lands on,
+        # beside « Le déplacer ici ».
+        self.assertContains(page, "Retenu par deux fournisseurs, il n'en reconnaîtrait aucun")
 
     def test_the_page_comes_back_offering_to_move_it(self):
         page = self.add()

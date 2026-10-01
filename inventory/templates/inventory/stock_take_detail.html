@@ -35,7 +35,7 @@
         <div class="stat stat-warn">
             <span class="stat-label">Au-delà de l'historique</span>
             <span class="stat-value">{{ shortfall_count }}</span>
-            <span class="stat-note">comptés en plus grande quantité que ce qui a été acheté</span>
+            <span class="stat-note">comptés au-delà des achats connus</span>
         </div>
         {% endif %}
     </div>
@@ -43,9 +43,8 @@
     {% if shortfall_count %}
         <div class="message">
             {{ shortfall_count }} ligne{{ shortfall_count|pluralize }} comptée{{ shortfall_count|pluralize }} au-delà
-            de ce que l'historique d'achats peut expliquer. La part en trop est quand même valorisée, au plus
-            ancien prix connu, pour ne pas sous-estimer le total — mais c'est le signe d'un comptage inexact
-            ou d'un stock acheté avant le suivi des factures.
+            des achats connus : comptage inexact, ou stock acheté avant les premières factures ?
+            L'excédent est valorisé au plus ancien prix connu.
         </div>
     {% endif %}
 

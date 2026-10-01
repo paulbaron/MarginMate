@@ -67,13 +67,12 @@
     <section class="card" id="semaine-type">
         <h2>Nom et semaine type</h2>
         <p class="muted">
-            Changer la semaine type ne modifie <strong>jamais</strong> un mois déjà enregistré : il garde ses
-            heures et la semaine type avec laquelle il a été enregistré, ce que le salarié a signé.
+            Changer la semaine type ne modifie <strong>jamais</strong> un mois déjà enregistré
             {% if saved_count %}
-                {% if saved_count == 1 %}Le mois enregistré ci-dessus reste tel quel ;{% else %}Les {{ saved_count }} mois enregistrés ci-dessus restent tels quels ;{% endif %}
-                les autres suivent la nouvelle semaine type.
+                ({% if saved_count == 1 %}le mois ci-dessus{% else %}les {{ saved_count }} mois ci-dessus{% endif %}) :
+                les autres suivent la nouvelle.
             {% else %}
-                Aucun mois n'est encore enregistré : tous suivront la nouvelle semaine type.
+                : aucun ne l'est encore.
             {% endif %}
         </p>
         <form method="post" action="{% url 'staff:employee' employee.pk %}#semaine-type">
@@ -94,8 +93,7 @@
         {% if employee.is_active %}
             <h2>Départ du salarié</h2>
             <p class="muted">
-                Un salarié qui part n'est pas supprimé : ses fiches signées sont des documents que l'employeur
-                conserve. Désactivé, il passe sous les salariés actifs dans la liste, et ses fiches restent ici.
+                Un salarié qui part n'est pas supprimé : désactivé, il passe en bas de la liste et ses fiches restent ici.
             </p>
             <form method="post" action="{% url 'staff:employee_active' employee.pk %}">
                 {% csrf_token %}
@@ -103,7 +101,7 @@
             </form>
         {% else %}
             <h2>Salarié inactif</h2>
-            <p class="muted">Ses fiches restent consultables et modifiables ici. Réactivé, il revient parmi les salariés actifs.</p>
+            <p class="muted">Ses fiches restent consultables et modifiables ici.</p>
             <form method="post" action="{% url 'staff:employee_active' employee.pk %}">
                 {% csrf_token %}
                 <button class="btn btn-secondary" type="submit" name="actif" value="1">Réactiver</button>

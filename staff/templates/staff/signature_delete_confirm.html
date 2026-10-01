@@ -28,7 +28,7 @@ page deletes nothing.
                     {% if page.files %}ses {{ page.files|length }} fichier{{ page.files|length|pluralize }}&nbsp;:
                         {% for file in page.files %}<code class="deletion-file">{{ file.name }}</code>{% if not forloop.last %}, {% endif %}{% endfor %}
                         {% if page.signed %}— dont le relevé signé{% endif %}{% if page.has_proof %}{% if page.signed %} et{% else %} — dont{% endif %} le dossier de preuve{% endif %}
-                    {% else %}aucun fichier : le dossier privé n'en a pas pour elle{% endif %}
+                    {% else %}aucun fichier{% endif %}
                 </li>
                 <li>son journal de {{ page.events }} événement{{ page.events|pluralize }}</li>
             </ul>
@@ -40,17 +40,14 @@ page deletes nothing.
             {% endif %}
             {% if not page.with_hours %}<p class="small">Les heures enregistrées du mois restent.</p>{% endif %}
             {% if page.holds_month %}<p class="small">Son lien de signature ne mènera plus à rien ; le mois {% if page.with_hours %}repartira de la semaine type{% else %}redeviendra modifiable{% endif %}.</p>{% endif %}
-            <p class="small">
-                L'application ne pourra pas la défaire. Une trace en sera gardée dans <code>deletions.log</code>, dans
-                le dossier privé.
-            </p>
+            <p class="small">Une trace sera gardée dans <code>deletions.log</code>, dans le dossier privé.</p>
             <form method="post" action="{{ page.step2_url }}" class="form-actions deletion-confirm">
                 {% csrf_token %}
                 <input type="hidden" name="{{ page.token_field }}" value="{{ page.token }}">
                 <button class="btn btn-destroy" type="submit">Supprimer définitivement</button>
                 <a class="btn btn-secondary" href="{{ page.back_url }}">Ne rien supprimer</a>
             </form>
-            <p class="muted small">Cette vérification vaut {{ page.minutes }} minutes : passé ce délai, il faudra recommencer depuis la première étape.</p>
+            <p class="muted small">Cette vérification vaut {{ page.minutes }} minutes ; passé ce délai, recommencez à l'étape 1.</p>
         </section>
     </div>
 {% endblock %}

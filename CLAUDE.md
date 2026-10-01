@@ -3105,8 +3105,15 @@ Banque's period (`_bank_income_url`), and from « Dépenses ». No topbar link.
 **Every door out names the file « Darty 11€55 01_10_2026.pdf »** (the owner,
 01/10/2026): the supplier, the total TTC with « € » for the decimal point,
 the date with underscores, « sans date » when there is none, the stored
-file's own extension (a ticket's photo stays « .jpg »). One definition,
+file's own extension (a ticket's photo stays « .jpg »; a file stored with
+none gets none - named « .pdf » it would be shown as one). One definition,
 `invoices/filenames.py::download_name`; the stored file keeps its name.
+
+**Every door opens the stored file through `accounts.views.open_stored`**:
+the file under the bound tenant's media folder, resolved, a file - or None
+(a name climbing out with « ../ », a link pointing out, a folder, a NUL: each
+was a 500 or worse when the route opened `source_file` itself). The
+`/fichiers/` view, the document's file route and the zip all use it.
 
 - `invoices:invoice_file` (`/invoices/<pk>/fichier/`) serves a document's
   file under that name - inline for a PDF or a photo, so the frame and
@@ -3115,17 +3122,21 @@ file's own extension (a ticket's photo stays « .jpg »). One definition,
   never to `source_file.url` (`/fichiers/…`, which still serves the stored
   name). Its headers are `accounts.views.file_response`, shared with that
   view: nosniff, no-store, sandboxed when not inline, SAMEORIGIN.
-- **« Télécharger les factures de la période »** on Banque
-  (`bank:invoice_files`, `/banque/factures/`, `bank/invoice_files.py`): every
-  document a DEBIT of Banque's period paid, once each, in one zip. The
-  period is read by `views._period` / `_in_period`, the same as the page, so
-  the zip holds what the operations on screen are linked to; its name says
-  the period (« Factures juin 2026.zip »). Two files of one name are numbered
-  (`UniqueNames`, case-blind as Windows is). A document with no file is
-  listed in « Factures sans fichier.txt » inside the zip, and the page says
-  how many - never dropped in silence. Nothing paid: back to the page with a
-  message. The count beside the button is taken off the rows the page
-  already read (no query).
+- **« Factures de la période »** on Banque (`bank:invoice_zip`,
+  `/banque/factures/`, `bank/invoice_files.py`, a GET only - a HEAD would
+  build it for nothing): every document a DEBIT of Banque's period paid,
+  once each, in one zip. The period is read by `views._period` /
+  `_in_period`, the same as the page, so the zip holds what the operations
+  on screen are linked to; its name says the period (« Factures juin
+  2026.zip »), and the tab rides along so « rien à télécharger » answers
+  where it was asked. Two files of one name are numbered (`UniqueNames`,
+  case-blind as Windows is). A document with no file, or whose file is gone
+  from the disk, is listed in « Factures sans fichier.txt » inside the zip,
+  and the page says how many - never dropped in silence. No document with a
+  file at all: no button, and the route goes back to the page with a
+  message. Served by `file_response` (nosniff, no-store), `application/zip`
+  set by hand (Windows' registry says `x-zip-compressed`). The count beside
+  the button is taken off the rows the page already read (no query).
 
 Tests: `invoices/tests/test_filenames.py`, `bank/tests/test_invoice_files.py`.
 
@@ -5558,6 +5569,16 @@ a 375 × 667 phone in Chrome (`test_phone_browser.py`, logged in with
 owner's real bons carry his account, his driver and his deliveries.
 
 ### UI conventions
+
+**Short texts** (the owner, 01/10/2026: « je trouve les textes du site trop
+verbose en général »; every template and user-facing message was shortened
+that day). A page subtitle is one sentence; a help text is one sentence or
+nothing when the label says it; a warning says what is wrong and what to do,
+and stops. Justifications, history and « why the page works this way »
+belong in these notes, not on the screen - so many passages here that quote
+a longer on-screen sentence describe what the page used to say; the rule
+behind it still holds, the words are shorter. A test pins the fact a page
+must show, not a paragraph around it.
 
 `static/css/marginmate.css` holds the design tokens - colours, a 4px spacing
 scale (`--s1`..`--s6`), radii. Use the tokens, not literals, and prefer an

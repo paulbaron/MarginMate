@@ -203,17 +203,16 @@ class HomePageTests(PageTestCase):
     def test_the_page_says_what_it_is_for(self):
         response = self.get(HOME)
         self.assertContains(response, "<h1>Consignes</h1>", html=False)
-        self.assertContains(
-            response, "Les vides rendus au livreur : photographiés, comptés ici, puis comparés au bon qu'il envoie."
-        )
+        self.assertContains(response, "Les vides rendus au livreur, comptés ici puis comparés à son bon.")
         self.assertContains(response, 'class="returnables-page returnables-home"')
         self.assertContains(response, "js/returnables.js?v=")
 
     def test_nothing_yet_says_what_to_do(self):
-        self.assertContains(
-            self.get(HOME),
-            "Aucune reprise enregistrée : photographiez les vides et comptez-les avant que le livreur ne les emporte.",
-        )
+        # The empty state is one short sentence now; what to do is the
+        # « Nouvelle reprise » form drawn right under it.
+        response = self.get(HOME)
+        self.assertContains(response, "Aucune reprise enregistrée.")
+        self.assertContains(response, "<h2>Nouvelle reprise</h2>", html=False)
 
     def test_the_strip_names_the_latest_pickup(self):
         make_pickup(date=DELIVERY_DAY - timedelta(days=7), counts={"Fûts": 4})
@@ -468,9 +467,7 @@ class NewPickupTests(PageTestCase):
         uploads = [photo(f"IMG_{number:04d}.jpg") for number in range(MAX_PHOTOS + 1)]
         response = self.send(self.pickup_form(), values=self.values(), files={"photos": uploads})
         self.assertEqual(PickupPhoto.objects.count(), MAX_PHOTOS)
-        self.assertIn(
-            "10 photos au plus par reprise : 1 photo envoyée en trop n'a pas été gardée.", self.messages_of(response)
-        )
+        self.assertIn("10 photos au plus par reprise : 1 photo en trop n'a pas été gardée.", self.messages_of(response))
 
     def test_a_failure_while_saving_leaves_no_row_and_no_file(self):
         before = media_files()
@@ -564,9 +561,7 @@ class PickupPageTests(PageTestCase):
         pickup = make_pickup(photos=MAX_PHOTOS - 1)
         response = self.send(self.pickup_form(self.url(pickup)), files={"photos": [photo(), photo("IMG_0009.jpg")]})
         self.assertEqual(pickup.photos.count(), MAX_PHOTOS)
-        self.assertIn(
-            "10 photos au plus par reprise : 1 photo envoyée en trop n'a pas été gardée.", self.messages_of(response)
-        )
+        self.assertIn("10 photos au plus par reprise : 1 photo en trop n'a pas été gardée.", self.messages_of(response))
         html = self.html(self.url(pickup))
         self.assertIn("10 photos : retirez-en une pour en ajouter une autre.", html)
         self.assertNotIn('name="photos"', html)
@@ -803,7 +798,7 @@ class SlipPageTests(PageTestCase):
         response = self.send(form)
         self.assertEqual(
             self.messages_of(response),
-            [f"Bon n° {slip.number} du 10/02/2026 relu avec les motifs actuels : 1 ligne lue."],
+            [f"Bon n° {slip.number} du 10/02/2026 relu : 1 ligne lue."],
         )
         slip.refresh_from_db()
         self.assertEqual(slip.read_error, "")
@@ -823,7 +818,7 @@ class SlipPageTests(PageTestCase):
         self.assertEqual(crates.slip_patterns.splitlines()[-1], pattern)
         self.assertEqual(
             self.messages_of(response),
-            [f"Motif « {pattern} » ajouté au type « Caisses verre » : la ligne est de ce type."],
+            [f"Motif « {pattern} » ajouté au type « Caisses verre »."],
         )
         self.assertIn("PALETTE (ESSAI) 1.5/2 1 12.00 € 12.00 € Caisses verre", self.text(response))
 
@@ -1040,20 +1035,13 @@ class FormatPageTests(PageTestCase):
         one = self.send(self.form(fmt), press=self.SAVE)
         self.assertEqual(
             self.messages_of(one),
-            [
-                "Format « UBA — bon du livreur » enregistré. Son bon n'a pas été relu : « Relire » le lit avec ces motifs."
-            ],
+            ["Format « UBA — bon du livreur » enregistré. Son bon n'a pas été relu : utilisez « Relire »."],
         )
         make_slip()
         two = self.send(self.form(fmt), press=self.SAVE)
         self.assertEqual(
             self.messages_of(two),
-            [
-                (
-                    "Format « UBA — bon du livreur » enregistré. Ses 2 bons n'ont pas été relus : « Relire » les lit avec ces "
-                    "motifs."
-                )
-            ],
+            ["Format « UBA — bon du livreur » enregistré. Ses 2 bons n'ont pas été relus : utilisez « Relire »."],
         )
 
     def test_enter_tests_and_never_saves(self):
@@ -1130,7 +1118,7 @@ class FormatPageTests(PageTestCase):
         )
         self.assertEqual(response.redirect_chain, [])
         text = self.text(response)
-        self.assertIn("Testé sur le texte collé, avec les motifs de la page - rien n'est enregistré.", text)
+        self.assertIn("Testé sur le texte collé ; rien n'est enregistré.", text)
         self.assertIn("REPRISE VIDE début", text)
         self.assertIn("ligne lue", text)
         self.assertIn("1 ligne lue", text)
@@ -1206,7 +1194,7 @@ class FormatPageTests(PageTestCase):
         html = self.html(self.url(fmt))
         self.assertIn("Relire les 2 bons de ce format", html)
         response = self.send(form_posting_to(html, reverse("returnables:format_reread", args=[fmt.pk])))
-        self.assertEqual(self.messages_of(response), ["2 bons relus avec les motifs actuels."])
+        self.assertEqual(self.messages_of(response), ["2 bons relus."])
         self.assertEqual(sorted(SlipLine.objects.values_list("slip_id", flat=True)), sorted(slip.pk for slip in slips))
 
     def test_reread_stops_when_its_time_is_spent(self):
@@ -1216,10 +1204,7 @@ class FormatPageTests(PageTestCase):
         form = form_posting_to(self.html(self.url(fmt)), reverse("returnables:format_reread", args=[fmt.pk]))
         with mock.patch("returnables.views.slips.reread_format", return_value=(1, 1)):
             response = self.send(form)
-        self.assertEqual(
-            self.messages_of(response),
-            ["1 bon relu avec les motifs actuels ; il en reste 1 : « Relire » à nouveau pour les lire."],
-        )
+        self.assertEqual(self.messages_of(response), ["1 bon relu ; il en reste 1 : relancez « Relire »."])
 
     def test_a_format_with_slips_is_not_deleted(self):
         fmt = seeded_format()
@@ -1418,7 +1403,10 @@ class GatherTests(PageTestCase):
         # No end: a tab opened yesterday would post yesterday and miss
         # today's slip - the gather ends at ITS today (tasks: localdate).
         self.assertNotIn("end_date", [name for name, _value in pairs])
-        self.assertIn("Les mails dont l'expéditeur correspond à", self.text(self.get(HOME)))
+        fmt = seeded_format()
+        self.assertIn(
+            f"« {fmt.name} » ({fmt.supplier.name}) : mails de {fmt.sender_pattern}", self.text(self.get(HOME))
+        )
 
     def test_no_mail_format_no_fetch(self):
         SlipFormat.objects.update(sender_pattern="")

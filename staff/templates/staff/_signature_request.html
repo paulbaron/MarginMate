@@ -21,8 +21,7 @@ The link and the code are shown only once, in the answer that made them: they ar
             </div>
             <p class="small">{{ block.link_note }}</p>
             <p class="small">
-                Ce lien ne s'affiche qu'une fois : il n'est conservé nulle part, seule son empreinte l'est. Perdu,
-                « Nouveau lien » en crée un autre — l'ancien cesse alors de fonctionner.
+                Ce lien ne s'affiche qu'une fois. Perdu, « Nouveau lien » en crée un autre (l'ancien cesse de fonctionner).
             </p>
         </div>
     {% endif %}
@@ -31,8 +30,8 @@ The link and the code are shown only once, in the answer that made them: they ar
         <div class="signature-code message message-warning">
             <p>Code à transmettre à {{ signature.person.display_name }} : <strong class="handed-code" data-handed-code>{{ block.handed_code }}</strong></p>
             <p class="small">
-                Valable 15 minutes, une seule fois. Donnez-le de vive voix, par SMS ou en main propre — jamais dans le
-                même message que le lien. Notez-le maintenant : il ne s'affichera plus.
+                Valable 15 minutes, une seule fois ; il ne s'affichera plus. Ne le donnez jamais dans le même message
+                que le lien.
             </p>
         </div>
     {% endif %}
@@ -69,14 +68,14 @@ The link and the code are shown only once, in the answer that made them: they ar
             <p class="small">Le code à usage unique se demande par e-mail, sur la page du lien.</p>
             <details class="staff-disclosure">
                 <summary>L'e-mail du code n'arrive pas ?</summary>
-                <p class="small">Donnez vous-même un code à {{ signature.person.display_name }}, par un autre canal que le lien. Le dossier de preuve dira alors que le code vous a été affiché.</p>
+                <p class="small">Donnez vous-même un code à {{ signature.person.display_name }}, par un autre canal que le lien. Le dossier de preuve le mentionnera.</p>
                 <form method="post" action="{{ block.code_url }}">
                     {% csrf_token %}
                     <button class="btn btn-secondary" type="submit">Code à transmettre par un autre canal que le lien</button>
                 </form>
             </details>
         {% else %}
-            <p class="small">Sans e-mail, son code se transmet par un autre canal que le lien : ce bouton l'affiche ici, une seule fois, et le dossier de preuve le dira.</p>
+            <p class="small">Sans e-mail, c'est vous qui donnez le code : ce bouton l'affiche ici, une seule fois.</p>
             <form method="post" action="{{ block.code_url }}">
                 {% csrf_token %}
                 <button class="btn btn-secondary" type="submit">Code à transmettre par un autre canal que le lien</button>
@@ -96,8 +95,7 @@ The link and the code are shown only once, in the answer that made them: they ar
             <form method="post" action="{{ block.countersign_url }}#contresigner" class="signature-countersign-form" data-signature-form>
                 {% csrf_token %}
                 <p class="small">
-                    Dessinez votre signature : elle s'ajoute à celle de {{ signature.person.display_name }} dans la case
-                    «&nbsp;L'employeur&nbsp;», horodatée par un service tiers ;
+                    Votre signature s'ajoute à celle de {{ signature.person.display_name }}, horodatée par un service tiers ;
                     {% if block.mail_to %}son exemplaire final lui part par e-mail{% else %}son lien lui donne ensuite son exemplaire final{% endif %}.
                 </p>
                 <p class="field-label" id="countersign-label-v{{ block.version }}">Votre signature, avec la souris ou le doigt</p>
@@ -112,9 +110,7 @@ The link and the code are shown only once, in the answer that made them: they ar
                 {% if block.countersign_error %}<p class="field-error" role="alert" data-countersign-error>{{ block.countersign_error }}</p>{% endif %}
                 <p class="field-error" data-signature-missing hidden>Dessinez votre signature dans le cadre avant de contresigner.</p>
                 <noscript>
-                    <p class="message message-warning">
-                        La signature se dessine avec JavaScript, désactivé sur ce navigateur : activez-le pour contresigner.
-                    </p>
+                    <p class="message message-warning">Activez JavaScript pour dessiner votre signature.</p>
                 </noscript>
                 <div class="form-actions">
                     <button class="btn" type="submit">Contresigner le relevé</button>
@@ -162,8 +158,7 @@ The link and the code are shown only once, in the answer that made them: they ar
                 <details class="staff-disclosure">
                     <summary>Annuler la demande…</summary>
                     <p class="small">
-                        Son lien cessera de fonctionner et le mois redeviendra modifiable. Les fichiers et le journal de
-                        cette version sont conservés.
+                        Le lien cessera de fonctionner et le mois redeviendra modifiable ; fichiers et journal sont conservés.
                     </p>
                     <form method="post" action="{{ block.cancel_url }}">
                         {% csrf_token %}
@@ -180,11 +175,10 @@ The link and the code are shown only once, in the answer that made them: they ar
                 <summary>Corriger ce mois…</summary>
                 <p class="small">
                     {% if block.complete %}
-                        La version signée et contresignée est conservée, remplacée par la suivante : le mois redevient
-                        modifiable, et une nouvelle version sera à signer.
+                        La version signée est conservée ; le mois redevient modifiable, et une nouvelle version sera à signer.
                     {% else %}
-                        La demande est annulée — son lien ne fonctionne plus — et le mois redevient modifiable : corrigez-le,
-                        puis envoyez la nouvelle version. Les fichiers de celle-ci sont conservés.
+                        La demande est annulée (son lien ne fonctionne plus) et le mois redevient modifiable ; ses fichiers
+                        sont conservés.
                     {% endif %}
                 </p>
                 <form method="post" action="{{ signature.reopen_url }}">

@@ -11,7 +11,7 @@ urlpatterns = [
     path("entrees/", views.income_home, name="income_home"),
     path("rapprocher/", views.bank_reconcile, name="bank_reconcile"),
     # Every invoice the period's spending paid, in one zip.
-    path("factures/", views.invoice_files, name="invoice_files"),
+    path("factures/", views.invoice_zip, name="invoice_zip"),
     # Every proposal still open, on one screen, by certainty tier, to
     # accept in bulk; the POST links them one by one.
     path("propositions/", views.proposals, name="proposals"),

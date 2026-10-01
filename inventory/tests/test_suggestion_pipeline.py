@@ -612,16 +612,13 @@ class PanelSaysWhereSuggestionsComeFromTests(TestCase):
         self.assertLess(page.index("Règle</strong>"), page.index("Nom brut</strong>"))
         # The template wraps its sentences: read them as a browser does.
         prose = " ".join(page.split())
-        self.assertIn("mêmes tailles pour un article compté à l'unité", prose)
-        # The actual rules, as the code applies them.
-        self.assertIn("sauf quand vos noms impriment les deux mots en entier sous des articles différents", prose)
-        self.assertIn("Confiance haute seulement quand les mots sont identiques", prose)
-        self.assertIn("reprise du voisin sans que la ligne de facture la contredise", prose)
-        self.assertIn("pour un article suivi au litre ou au kilo", prose)
-        self.assertIn("Quand aucun nombre n'est imprimé, rien ne dit que c'est le même conditionnement", prose)
-        self.assertIn("Un autre colisage d'un article compté à l'unité reste moyenne", prose)
-        self.assertIn("reste moyenne aussi : le bon article neuf fois sur dix", prose)
-        self.assertIn("Une proposition est refaite dès que vos classements changent", prose)
+        # The actual rules, as the code applies them - the conditions for
+        # « haute », in the explainer's short form (the owner cut the
+        # detailed cases on 01/10/2026; CLAUDE.md keeps them).
+        self.assertIn("Confiance haute seulement quand les mots sont identiques (au pluriel près)", prose)
+        self.assertIn("la conversion sûre", prose)
+        self.assertIn("pour un article compté à l'unité, la taille et le colisage identiques", prose)
+        self.assertIn("sinon moyenne ou basse", prose)
         self.assertIn("la plus faible", prose)
         self.assertIn(
             "« Approuver les sûres » ne prend que les hautes ; « Approuver les suggestions » prend tout", prose

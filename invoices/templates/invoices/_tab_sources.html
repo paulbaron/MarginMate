@@ -8,10 +8,7 @@ the reader for what it brings. The suppliers have their own tab
     <div>
         <h2>Sources de factures</h2>
         <p class="muted">
-            D'où arrivent les factures : la boîte mail partagée (les e-mails d'un fournisseur, reconnus à leur
-            expéditeur, objet ou contenu) ou l'espace client d'un fournisseur. Chaque source récupère pour un seul
-            fournisseur et range chez lui ce qu'elle trouve, lu par le lecteur choisi. « Récupérer » parcourt
-            toutes les sources actives.
+            Boîte mail ou espace client : chaque source récupère les factures d'un seul fournisseur.
         </p>
     </div>
     {% if not sources_refused %}<a class="btn" href="{% url 'invoices:invoice_type_create' %}">+ Nouvelle source</a>{% endif %}
@@ -37,11 +34,10 @@ not exist and a margin that is wrong.
 {% endcomment %}
 <div class="message">
     <strong>Votre plateforme de facturation électronique n'est pas connectée.</strong>
-    Depuis le 1<sup>er</sup> septembre 2026 vos fournisseurs vous adressent leurs factures par une
-    plateforme agréée, et la vôtre est tenue par votre comptable. MarginMate ne va pas la chercher :
-    téléchargez-y vos factures (Factur-X, UBL ou CII) et déposez-les dans « Tickets et factures »
-    ci-dessus. Elles seront lues dans leurs propres données, au centime, sans relecture.
-    {% if not sources_refused %}Les sources ci-dessous — boîte mail et espaces clients — continuent de fonctionner pour tout le reste.{% endif %}
+    Depuis le 1<sup>er</sup> septembre 2026, vos fournisseurs vous facturent par la plateforme agréée que
+    tient votre comptable : téléchargez-y vos factures (Factur-X, UBL ou CII) et déposez-les dans
+    « Tickets et factures » ci-dessus, où elles sont lues au centime.
+    {% if not sources_refused %}Les sources ci-dessous servent pour le reste.{% endif %}
 </div>
 
 {% if invoice_types %}

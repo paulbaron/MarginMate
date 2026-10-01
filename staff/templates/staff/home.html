@@ -6,9 +6,7 @@
         <div>
             <h1>Personnel</h1>
             <p class="page-subtitle">
-                Les fiches de temps des salariés, une par mois. Chaque salarié a une semaine type (7 h le lundi,
-                8 h le mardi…) : son mois part de là, et il ne reste qu'à corriger les jours qui n'y ressemblent
-                pas — des heures en plus ou en moins, des congés, un arrêt maladie, un jour férié.
+                Une fiche de temps par salarié et par mois, tirée de sa semaine type : corrigez les jours qui diffèrent.
             </p>
         </div>
     </div>
@@ -52,9 +50,8 @@
     {% else %}
         <div class="empty-state">
             <p>
-                Aucun salarié pour l'instant. Commencez par l'<strong>en-tête des fiches</strong> (le nom et
-                l'adresse de l'établissement, imprimés en haut de chaque fiche), puis <strong>ajoutez un
-                salarié</strong> avec sa semaine type : chacun de ses mois partira de là.
+                Aucun salarié pour l'instant. Remplissez l'<strong>en-tête des fiches</strong>, puis
+                <strong>ajoutez un salarié</strong> avec sa semaine type.
             </p>
         </div>
     {% endif %}
@@ -78,7 +75,7 @@
             Filled in once and for all: when the name is typed, the card shows what will print and
             folds the form away. Empty, or refused, it stays open.
             {% endcomment %}
-            <p class="muted">Ce qui s'imprime en haut de chaque fiche de temps. Sans nom, les fiches s'impriment sans en-tête.</p>
+            <p class="muted">Imprimé en haut de chaque fiche. Sans nom, les fiches s'impriment sans en-tête.</p>
             {% if establishment.name %}
                 <div class="establishment-preview">
                     <strong>{{ establishment.name }}</strong>

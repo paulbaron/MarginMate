@@ -422,9 +422,14 @@ class ChargesFollowTheWindowTests(PurchaseWindowTestCase):
         self.assertEqual(row["total_ttc"], D("650.00"))
 
     def test_the_wording_says_the_window_rather_than_twelve_months(self):
+        """The fold's total and its documents column both name the dates,
+        never the twelve months they replace."""
         response = self.page(**FEBRUARY)
-        self.assertContains(response, "Documents et totaux du 01/02/2026 au 28/02/2026")
-        self.assertNotContains(response, "Documents et totaux sur les douze derniers mois")
+        self.assertContains(response, "€ TTC du 01/02/2026 au 28/02/2026")
+        self.assertContains(response, "Documents (ces dates)")
+        self.assertNotContains(response, "€ TTC sur 12 mois")
+        self.assertNotContains(response, "Documents (12 mois)")
+        self.assertNotContains(response, "sur les douze derniers mois")
 
     def test_without_a_window_the_charges_are_the_last_twelve_months(self):
         """Unasked, the fold is what it always was - an all-time total of a
@@ -552,7 +557,7 @@ class AStockTakeBeatsTheDatesTests(PurchaseWindowTestCase):
         response = self.page(inventaire=self.take.pk, **FEBRUARY)
         self.assertContains(response, 'name="du" value="2026-02-01" disabled')
         self.assertContains(response, 'name="au" value="2026-02-28" disabled')
-        self.assertContains(response, "Les dates viennent de l'inventaire choisi")
+        self.assertContains(response, "Dates fixées par l'inventaire")
 
     def test_all_time_gives_the_dates_back(self):
         """The select carries the window as hidden fields, so the click that

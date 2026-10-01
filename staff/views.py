@@ -112,11 +112,8 @@ PICK_YEAR = "annee"
 NAMED_AT_MOST = 6
 
 #: The month's page, before its grid's unsaved changes are lost.
-LEAVE_WARNING = "Des modifications de la grille ne sont pas enregistrées : elles seront perdues. Continuer quand même ?"
-PDF_WARNING = (
-    "Des modifications de la grille ne sont pas enregistrées : le PDF imprime la fiche telle qu'elle est "
-    "enregistrée, sans elles. Télécharger quand même ?"
-)
+LEAVE_WARNING = "Modifications non enregistrées : elles seront perdues. Continuer quand même ?"
+PDF_WARNING = "Modifications non enregistrées : le PDF ne les contiendra pas. Télécharger quand même ?"
 
 _ISO_DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
@@ -328,21 +325,15 @@ def _say_employee_saved(request, form: EmployeeForm) -> None:
         if person.email:
             messages.success(request, f"E-mail enregistré : {person.email}.")
         else:
-            messages.success(request, "E-mail effacé : le lien de signature et le code se transmettront sans e-mail.")
+            messages.success(request, "E-mail effacé : vous transmettrez vous-même le lien et le code.")
     if changed & set(WEEKDAY_FIELDS):
         saved = person.timesheets.count()
         if saved == 0:
             after = "Les mois suivent la nouvelle semaine type."
         elif saved == 1:
-            after = (
-                "Le mois déjà enregistré garde ses heures et sa semaine type ; les autres suivent la nouvelle "
-                "semaine type."
-            )
+            after = "Le mois déjà enregistré ne change pas."
         else:
-            after = (
-                f"Les {saved} mois déjà enregistrés gardent leurs heures et leur semaine type ; les autres suivent "
-                "la nouvelle semaine type."
-            )
+            after = f"Les {saved} mois déjà enregistrés ne changent pas."
         messages.success(request, f"Semaine type enregistrée : {week_summary(person)}. {after}")
 
 
@@ -367,9 +358,7 @@ def employee_active(request, pk):
             messages.success(request, f"{person.display_name} est de nouveau parmi les salariés actifs.")
         else:
             messages.success(
-                request,
-                f"{person.display_name} n'est plus parmi les salariés actifs. Ses fiches de temps sont conservées "
-                "et restent consultables ici.",
+                request, f"{person.display_name} n'est plus parmi les salariés actifs ; ses fiches restent ici."
             )
     return redirect("staff:employee", pk=person.pk)
 

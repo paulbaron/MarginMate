@@ -1,14 +1,11 @@
 <p class="muted">
-    Chaque produit de la caisse doit correspondre à une recette, sinon ses ventes ne sont pas comptées : le stock
-    qu'il consomme apparaît alors comme manquant dans les écarts d'inventaire. Les plus vendus sont en haut — c'est
-    là que se cache l'essentiel. Une recette au nom proche est déjà choisie ; « Créer la recette » l'écrit et la
-    lie en une fois.
+    Liez chaque produit de la caisse à sa recette : sans recette, ses ventes ne sont pas comptées.
 </p>
 
 {% if pending %}
     <div class="card">
         <h3>À lier ({{ pending|length }})</h3>
-        <p class="muted">{{ pending_quantity }} unités vendues ne sont rattachées à aucune recette.</p>
+        <p class="muted">{{ pending_quantity }} unités vendues sans recette.</p>
         {% comment %}Deliberately NOT wrapping the table: every row already contains
            its own <form>, and nested forms are invalid HTML - the browser
            silently drops the inner one, which would break every per-row
@@ -44,9 +41,9 @@
 {% else %}
     <div class="empty-state">
         {% if linked or ignored %}
-            Tout est traité — chaque produit de la caisse a sa recette.
+            Tout est traité.
         {% else %}
-            Aucun produit de caisse pour le moment. Importez les ventes depuis l'onglet « Ventes » pour commencer.
+            Aucun produit de caisse : importez les ventes depuis l'onglet « Ventes ».
         {% endif %}
     </div>
 {% endif %}

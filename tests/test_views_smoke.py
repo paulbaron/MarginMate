@@ -489,8 +489,8 @@ class EmptyDatabasePageSmokeTests(TestCase):
     def test_the_invoice_files(self):
         """The zip of the period's invoices goes back to Banque when nothing
         was paid; a document's file 404s when it has none, or is not there."""
-        self.assertEqual(self.client.get(reverse("bank:invoice_files")).status_code, 302)
-        self.assertEqual(self.client.get(reverse("bank:invoice_files"), {"du": "2026-02-30"}).status_code, 302)
+        self.assertEqual(self.client.get(reverse("bank:invoice_zip")).status_code, 302)
+        self.assertEqual(self.client.get(reverse("bank:invoice_zip"), {"du": "2026-02-30"}).status_code, 302)
         self.assertEqual(self.client.get(reverse("invoices:invoice_file", args=[999999])).status_code, 404)
         self.assertEqual(self.client.get(reverse("invoices:invoice_file", args=[make_invoice().pk])).status_code, 404)
 

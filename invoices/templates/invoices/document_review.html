@@ -69,7 +69,7 @@
                                        value="{{ invoice.supplier.ticket_header }}" placeholder="{{ suggested_header }}">
                             </label>
                             <button class="btn btn-small btn-secondary" type="submit">Enregistrer</button>
-                            <span class="muted">d'après le document, pour que ses prochains soient reconnus.</span>
+                            <span class="muted">pour que ses prochains soient reconnus.</span>
                             {% if header_choices %}
                                 <span class="header-choices">
                                     {% for choice in header_choices %}
@@ -92,7 +92,7 @@
             {% endif %}
             {% if can_reread %}
                 <form method="post" data-leaves-lines
-                      data-confirm="Relire le document remplace sa date, son total et toutes ses lignes par {% if is_einvoice %}ce que la facture déclare{% else %}ce qui sera lu{% endif %}, corrections comprises.{% if is_receipt %} Le ticket repassera dans la liste à vérifier.{% endif %} Continuer ?">
+                      data-confirm="Relire le document remplace sa date, son total et toutes ses lignes par {% if is_einvoice %}ce que la facture déclare{% else %}ce qui sera lu{% endif %}, corrections comprises.{% if is_receipt %} Le ticket repassera à vérifier.{% endif %} Continuer ?">
                     {% csrf_token %}
                     <input type="hidden" name="action" value="reread">
                     <button class="btn btn-secondary" type="submit">Relire le document</button>
@@ -206,10 +206,9 @@
             <h2>Lignes</h2>
             <p class="lead">
                 {% if is_receipt %}
-                    Corrigez ce qui ne correspond pas {% if source_is_pdf %}au document{% else %}à la photo{% endif %}, puis validez. Chaque montant se lit
-                    <strong>avant remise</strong>, tel qu'imprimé : tapez-le en TTC ou en HT, l'autre suit.
-                    La remise d'une promotion se met à côté. Un nom corrigé dans une ligne ne vaut que pour
-                    ce ticket : pour corriger le nom d'un produit partout, ouvrez « Renommer … » sous sa ligne.
+                    Corrigez ce qui ne correspond pas {% if source_is_pdf %}au document{% else %}à la photo{% endif %}, puis validez.
+                    Chaque montant se tape tel qu'imprimé, <strong>avant remise</strong>, en TTC ou en HT : l'autre suit.
+                    Un nom corrigé dans une ligne ne change que ce ticket.
                 {% elif einvoice_no_lines %}
                     {% comment %}
                     The MINIMUM profile carries no line: the one below was
@@ -219,11 +218,9 @@
                     lines above a check announcing that the invoice has no
                     line.
                     {% endcomment %}
-                    Cette {% if einvoice_is_credit %}avoir{% else %}facture{% endif %} électronique
-                    ({{ invoice.einvoice_format }}) <strong>ne détaille aucune ligne</strong> : son profil
-                    n'en transporte pas. La ligne ci-dessous a été reconstituée depuis sa table de TVA pour
-                    que son total entre dans les comptes — ce n'est pas un article, c'est le total de la
-                    facture. Ses montants, eux, sont les données de la facture.
+                    {% if einvoice_is_credit %}Cet avoir{% else %}Cette facture{% endif %} électronique
+                    ({{ invoice.einvoice_format }}) <strong>ne détaille aucune ligne</strong> : celle ci-dessous,
+                    reconstituée depuis sa table de TVA, est son total, pas un article.
                 {% elif is_einvoice %}
                     {% comment %}
                     Nothing was read here: these lines are the ones the
@@ -232,13 +229,11 @@
                     suggest that a parser guessed them.
                     {% endcomment %}
                     Ces lignes sont les <strong>données de {% if einvoice_is_credit %}l'avoir{% else %}la facture{% endif %}</strong>
-                    ({{ invoice.einvoice_format }}) :
-                    son numéro, sa date, ses lignes, sa TVA et ses totaux tels que le fournisseur les déclare,
-                    et non une lecture de la page. Vous pouvez les corriger si vous n'êtes pas d'accord avec
-                    lui ; tapez chaque montant en HT ou en TTC, l'autre suit.
+                    ({{ invoice.einvoice_format }}) telles que le fournisseur les déclare, pas une lecture du document.
+                    Corrigez-les si besoin : tapez chaque montant en HT ou en TTC, l'autre suit.
                 {% else %}
-                    Corrigez ce que le parseur a mal lu, ou saisissez ce qu'il n'a pas trouvé. Tapez chaque
-                    montant en HT ou en TTC, l'autre suit ; le coût unitaire réel en est déduit.
+                    Corrigez ce qui a été mal lu, ajoutez ce qui manque. Tapez chaque montant en HT ou en TTC :
+                    l'autre suit.
                 {% endif %}
             </p>
 
@@ -283,13 +278,11 @@
                         <summary>{% if is_einvoice %}TVA déclarée par la facture{% else %}TVA imprimée sur le document{% endif %} ({{ vat_form.initial_form_count }} taux)</summary>
                         <p class="muted">
                             {% if is_einvoice %}
-                                Cette table est celle que la facture déclare : rien n'est à recopier.
-                                Corrigez-la seulement si vous n'êtes pas d'accord avec le fournisseur.
+                                Déjà remplie : rien n'est à recopier.
                             {% else %}
-                                Recopiez la table de TVA du document : chaque taux avec sa base HT et son montant.
+                                Facultatif : recopiez chaque taux avec sa base HT et sa TVA pour vérifier les lignes.
                             {% endif %}
                             Une remise ou un avoir s'écrit en négatif (base et TVA).
-                            Elle sert à vérifier les lignes ; laissée vide, elle ne demande rien.
                         </p>
                         {{ vat_form.management_form }}
                         {% comment %}
@@ -352,7 +345,7 @@
                                 </div>
                                 <p class="unit-price" data-unit-price{% if not line_form.unit_price_hint %} hidden{% endif %}>{{ line_form.unit_price_hint }}</p>
                                 {% if line_form.spread_share %}
-                                    <p class="spread-share">+ {{ line_form.spread_share|floatformat:2 }} € HT de frais répartis : cette ligne revient à {{ line_form.spread_cost|floatformat:2 }} € HT</p>
+                                    <p class="spread-share">+ {{ line_form.spread_share|floatformat:2 }} € HT de frais répartis : revient à {{ line_form.spread_cost|floatformat:2 }} € HT</p>
                                 {% endif %}
                                 {% if line_form.read_hint %}
                                     <p class="read-as">lu sur le ticket : « {{ line_form.read_hint }} » — rattaché au produit ci-dessus</p>
@@ -366,7 +359,7 @@
                                                        form="rename-product-{{ forloop.counter0 }}" aria-label="Nouveau nom du produit">
                                                 <button class="btn btn-small btn-secondary" type="submit" form="rename-product-{{ forloop.counter0 }}">Renommer partout</button>
                                             </div>
-                                            <p class="muted">Corriger le nom dans la ligne ci-dessus ne change que ce ticket ; ici, le produit est renommé sur tous ses tickets, et l'orthographe lue reste reconnue.</p>
+                                            <p class="muted">L'orthographe lue reste reconnue.</p>
                                         </details>
                                     {% endwith %}
                                 {% endif %}
@@ -384,11 +377,8 @@
                         <span class="muted" id="line-count" aria-live="polite"></span>
                     </div>
                     <p class="muted small">
-                        <strong>Frais</strong> : cochez-la sur une ligne qui n'est pas un produit — des frais de port,
-                        de livraison, de préparation. La ligne reste telle que le document l'imprime, dans le total et
-                        dans les contrôles ci-dessus ; ce qu'elle coûte est réparti sur les autres lignes, au prorata
-                        de leur montant HT, et c'est ce prix-là — livraison comprise — qui sert à valoriser le stock
-                        et à calculer les marges. Elle ne compte plus comme un article à classer.
+                        <strong>Frais</strong> : à cocher sur une ligne qui n'est pas un produit (port, livraison).
+                        Elle reste dans le total ; son coût est réparti sur les autres lignes au prorata de leur HT.
                     </p>
 
                     <div class="form-actions" style="margin-top:1rem;">
@@ -425,10 +415,8 @@
                 <details class="known-prices"{% if prices_open or price_form.errors %} open{% endif %}>
                 <summary><h2>Prix connus chez {{ invoice.supplier.name }}{% if known_prices %} <span class="muted">({{ known_prices|length }})</span>{% endif %}</h2></summary>
                 <p class="lead">
-                    Certaines caisses n'impriment pas les noms de produits, seulement
-                    « Article divers » et un prix. Retenez ici ce que chaque prix désigne :
-                    les lignes à ce prix sont renommées sur tous les tickets de cette enseigne
-                    qui restent à vérifier, et les prochains tickets seront nommés tout seuls.
+                    La caisse imprime « Article divers » au lieu du nom ? Retenez ce que désigne chaque prix :
+                    les lignes à ce prix seront nommées sur les tickets à vérifier et sur les prochains.
                 </p>
 
                 <div class="card">
@@ -478,7 +466,7 @@
 
                 <h2>Texte lu {% if source_is_pdf %}sur le document{% else %}sur la photo{% endif %}</h2>
                 <details>
-                    <summary class="muted">Afficher ce que la reconnaissance a lu</summary>
+                    <summary class="muted">Afficher le texte</summary>
                     <div class="ocr-dump">{% for line in ocr_lines %}{{ line }}
 {% endfor %}</div>
                 </details>

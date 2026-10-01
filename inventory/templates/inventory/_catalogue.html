@@ -124,7 +124,7 @@ next classification.
                     <td>
                         <span class="chevron">▸</span> {{ row.stock_type.name }}
                         {% if period and row.in_period and not row.reliable %}
-                            <span class="uncounted" title="Absent de {% if period.since_beginning %}l'inventaire{% else %}l'un des deux inventaires{% endif %} : sans comptage, tout ce qui a été acheté ressemble à du stock disparu. Comptez-le la prochaine fois.">non compté</span>
+                            <span class="uncounted" title="Absent de {% if period.since_beginning %}l'inventaire{% else %}l'un des deux inventaires{% endif %} : aucun écart calculable. Comptez-le la prochaine fois.">non compté</span>
                         {% endif %}
                     </td>
                     {% if period %}
@@ -135,7 +135,7 @@ next classification.
                     <td class="num" data-label="Sorti" data-sort="{{ row.period.sellable }}">
                         {{ row.period.sellable|floatformat:2 }}
                         {% if row.period.known_losses %}
-                            <span class="sold-shared" title="{{ row.period.left_the_shelf|floatformat:2 }} sont sortis du stock, dont {{ row.period.known_losses|floatformat:2 }} de pertes déjà déclarées — celles-ci ne peuvent pas avoir été vendues.">*</span>
+                            <span class="sold-shared" title="{{ row.period.left_the_shelf|floatformat:2 }} sortis du stock, moins {{ row.period.known_losses|floatformat:2 }} de pertes déclarées.">*</span>
                         {% endif %}
                     </td>
                     {% else %}
@@ -153,7 +153,7 @@ next classification.
                                   title="Vendu plus qu'il n'en {% if period %}est sorti du stock sur la période{% else %}a été acheté, pertes déclarées déduites{% endif %} : il manque {{ row.sold.missing|floatformat:2 }} {{ row.stock_type.get_unit_display }}. Facture manquante, recette erronée, ou produit caisse mal rattaché."{% endif %}>{{ row.sold.headline|floatformat:2 }}</span>
                             {% if row.sold.is_ambiguous %}
                                 <span class="sold-shared"
-                                      title="{% if row.sold.headline_is_estimate %}Estimation{% else %}Dont {{ row.sold.shared|floatformat:2 }} estimé{% endif %} : cet article est proposé en alternative de {{ row.sold.pool_partners }} autre{{ row.sold.pool_partners|pluralize }}, alors les ventes leur sont réparties du plus cher au moins cher, dans la limite de ce qui {% if period %}est sorti du stock{% else %}a été acheté, pertes déclarées déduites{% endif %} (moins {{ row.stock_type.loss_percent|floatformat:"-2" }} % de perte).">
+                                      title="{% if row.sold.headline_is_estimate %}Estimation{% else %}Dont {{ row.sold.shared|floatformat:2 }} estimé{% endif %} : proposé en alternative de {{ row.sold.pool_partners }} autre{{ row.sold.pool_partners|pluralize }} dans une recette ; ventes réparties du plus cher au moins cher, dans la limite de ce qui {% if period %}est sorti du stock{% else %}a été acheté, pertes déclarées déduites{% endif %} (moins {{ row.stock_type.loss_percent|floatformat:"-2" }} % de perte).">
                                     ?
                                 </span>
                             {% endif %}
@@ -221,10 +221,9 @@ next classification.
 {% else %}
     <div class="empty-state">
         {% if date_window and not period %}
-            Aucun produit acheté {{ date_window_label }} : ces dates sont vides. Choisissez-en d'autres,
-            ou effacez la période pour revoir tous les achats.
+            Aucun produit acheté {{ date_window_label }}.
         {% else %}
-            Aucun article pour le moment. Classez un produit dans le panneau, créez un article, ou importez une facture pour démarrer.
+            Aucun article pour le moment : classez un produit, créez un article ou importez une facture.
         {% endif %}
     </div>
 {% endif %}
@@ -244,18 +243,15 @@ underneath where its documents name several.
             <span class="muted">— {{ charge_suppliers|length }} fournisseur{{ charge_suppliers|length|pluralize }}, {{ charge_total_ttc|floatformat:2 }} € TTC {% if period %}sur la période{% elif date_window %}{{ date_window_label }}{% else %}sur 12 mois{% endif %}</span>
         </summary>
         <p class="muted">
-            Ces fournisseurs n'ont pas de produits : leurs factures sont enregistrées par poste quand elles
-            en nomment (loyer, provisions), sinon en une ligne par taux de TVA. Ouvrez une ligne pour voir ses
-            documents, 📈 pour son évolution.
-            Documents et totaux {% if period %}sur la période choisie{% elif date_window %}{{ date_window_label }}{% else %}sur les douze derniers mois{% endif %} ;
-            « Dernier » est le dernier document reçu, même hors de cette fenêtre.
             {% comment %}
             Under two dates a row opens on the documents it was counted
             over; under a stock take, and with nothing asked for, it opens
             on everything. The curve is whole in all three cases.
             {% endcomment %}
             {% if date_window and not period %}Ouvrez une ligne : ses documents sont ceux de ces dates,
-            📈 couvre tout l'historique.{% else %}Ce qu'une ligne ouvre couvre tout l'historique.{% endif %}
+            📈 couvre tout l'historique.{% else %}Ouvrez une ligne pour voir ses documents, 📈 pour son évolution,
+            sur tout l'historique.{% endif %}
+            « Dernier » : le dernier document reçu, toutes dates confondues.
         </p>
         <div class="table-wrap">
             <table class="sub-table charges-table phone-cards" data-table data-table-sort-only data-table-label="charges">
@@ -281,7 +277,7 @@ underneath where its documents name several.
                         on all 33. The column names its window, and the cell says what the
                         count is out of when the supplier has older documents.
                         {% endcomment %}
-                        <th class="num" title="{% if date_window and not period %}Les documents de ces dates ; la ligne s'ouvre sur les mêmes, 📈 sur tout l'historique{% else %}Les documents de la fenêtre des totaux ; la ligne s'ouvre sur tout l'historique{% endif %}">
+                        <th class="num" title="{% if date_window and not period %}Les documents de ces dates ; la ligne s'ouvre sur les mêmes{% else %}Les documents de la fenêtre des totaux ; la ligne s'ouvre sur tout l'historique{% endif %}">
                         {% comment %}
                         « période » is this page's word for two physical
                         counts; the free dates are not one, and a column

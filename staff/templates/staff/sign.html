@@ -37,8 +37,8 @@ the link reaches: no other data of the application is here. Written for a phone.
         <p class="public-actions"><a class="btn" href="{{ urls.copy }}">Télécharger l'exemplaire final (PDF)</a></p>
     {% else %}
         <p class="public-lead">
-            Vérifiez vos heures ci-dessous. Si tout est juste, signez en bas de la page ; sinon, signez avec des
-            réserves et écrivez ce qui ne va pas. Ce lien est valable jusqu'au {{ expires }}.
+            Vérifiez vos heures, puis signez en bas de la page — avec des réserves si quelque chose ne va pas.
+            Lien valable jusqu'au {{ expires }}.
         </p>
     {% endif %}
     {% if signed_statement %}
@@ -85,24 +85,24 @@ the link reaches: no other data of the application is here. Written for a phone.
                     </div>
                 </form>
                 {% if code_waiting == "code_remis" %}
-                    <p class="muted small">Votre employeur vient de vous donner un code : tapez-le ci-dessus. Il vaut 15 minutes.</p>
+                    <p class="muted small">Ce code vaut 15 minutes.</p>
                 {% elif can_email %}
                     <form method="post" action="{{ urls.send_code }}" class="public-form">
                         {% csrf_token %}
                         <button class="btn btn-secondary" type="submit">Renvoyer un code (le précédent ne vaudra plus)</button>
-                        <p class="muted small">Seulement si le premier e-mail n'arrive pas : un nouveau code remplace le précédent.</p>
+                        <p class="muted small">Seulement si le premier e-mail n'arrive pas.</p>
                     </form>
                 {% endif %}
             {% else %}
-                <p>Pour signer, confirmez que c'est bien vous avec un code à usage unique : 6 chiffres, valable 15 minutes.</p>
+                <p>Pour signer, il faut un code à usage unique (6 chiffres, valable 15 minutes).</p>
                 {% if can_email %}
                     <form method="post" action="{{ urls.send_code }}" class="public-form">
                         {% csrf_token %}
                         <button class="btn" type="submit">Recevoir un code par e-mail</button>
-                        <p class="muted small">Il sera envoyé à {{ masked_address }}. Votre employeur peut aussi vous le donner lui-même.</p>
+                        <p class="muted small">Envoyé à {{ masked_address }}. Votre employeur peut aussi vous le donner.</p>
                     </form>
                 {% else %}
-                    <p class="muted small">Votre employeur vous donne ce code par un autre moyen que ce lien : de vive voix, par SMS…</p>
+                    <p class="muted small">Votre employeur vous donne ce code (de vive voix, par SMS…).</p>
                 {% endif %}
                 <form method="post" action="{{ urls.check_code }}" class="public-form">
                     {% csrf_token %}
@@ -141,8 +141,7 @@ the link reaches: no other data of the application is here. Written for a phone.
                     <p class="field-error" data-signature-missing hidden>Dessinez votre signature dans le cadre.</p>
                     <noscript>
                         <p class="message message-warning">
-                            La signature se dessine avec JavaScript, désactivé sur ce navigateur : activez-le, ou ouvrez
-                            ce lien dans un autre navigateur.
+                            Activez JavaScript pour dessiner votre signature, ou ouvrez ce lien dans un autre navigateur.
                         </p>
                     </noscript>
 
@@ -162,21 +161,17 @@ the link reaches: no other data of the application is here. Written for a phone.
                     <div class="public-notice">
                         <h3>Ce qui est enregistré, et pourquoi</h3>
                         <p>
-                            Quand vous signez, l'application enregistre la date et l'heure, votre adresse IP, votre
-                            appareil (le navigateur utilisé), le dessin de votre signature et vos éventuelles réserves ;
-                            un service d'horodatage indépendant certifie l'heure. C'est la preuve que vous avez signé ce
-                            relevé, s'il était un jour contesté : l'employeur doit décompter le temps de travail, et
-                            pouvoir le prouver.
+                            À la signature sont enregistrés la date et l'heure (certifiées par un service d'horodatage
+                            indépendant), votre adresse IP, votre appareil (navigateur), le dessin de votre signature et
+                            vos réserves éventuelles. Ils prouvent que vous avez signé ce relevé en cas de contestation :
+                            l'employeur doit pouvoir prouver le temps de travail.
                         </p>
                         <p>
-                            Ces informations sont conservées {{ retention_years }} ans après la fin du mois, puis
-                            effacées. Votre employeur y a accès, et si besoin l'inspection du travail ou un juge. Vous
-                            pouvez lui demander d'y accéder ou de corriger une erreur (RGPD).
+                            Ces informations sont conservées {{ retention_years }} ans après la fin du mois, puis effacées. Votre employeur y a
+                            accès, et si besoin l'inspection du travail ou un juge. Vous pouvez lui demander d'y accéder
+                            ou de corriger une erreur (RGPD).
                         </p>
-                        <p>
-                            C'est une signature électronique simple : le relevé signé et son dossier de preuve portent le
-                            même numéro de document.
-                        </p>
+                        <p>C'est une signature électronique simple.</p>
                     </div>
                     <button class="btn public-submit" type="submit">Signer le relevé</button>
                 </form>

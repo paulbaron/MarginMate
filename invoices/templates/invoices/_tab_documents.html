@@ -24,7 +24,7 @@ Every invoice and ticket. Reloads itself when an import ends
         <span class="table-search">
             <input type="search" name="q" value="{{ query }}" autocomplete="off"
                    aria-label="Rechercher un document"
-                   placeholder="Un fournisseur, un numéro, une date, un montant — ou plusieurs à la fois (fournisseur 09/2025)…">
+                   placeholder="Fournisseur, numéro, date ou montant (ex. : fournisseur 09/2025)">
         </span>
         <button class="btn btn-small btn-secondary" type="submit">Rechercher</button>
         {% if query %}
@@ -59,7 +59,7 @@ Every invoice and ticket. Reloads itself when an import ends
     {% if query %}
         <p class="muted">
             {{ found_count }} document{{ found_count|pluralize }} pour « {{ query }} »
-            {% if not found_count %}— les mots se complètent&nbsp;: « fournisseur 2025 », « fournisseur 09/2025 », un numéro, un montant.{% endif %}
+            {% if not found_count %}— essayez «&nbsp;fournisseur 09/2025&nbsp;», un numéro ou un montant.{% endif %}
         </p>
     {% endif %}
 
@@ -101,15 +101,14 @@ Every invoice and ticket. Reloads itself when an import ends
 
     {% if active_filter == "sans-date" %}
         <div class="message">
-            Factures et tickets <strong>sans date</strong> : hors de toute valorisation du stock et du rapprochement
-            bancaire. Ouvrez chacun et donnez-lui la sienne.
+            Factures et tickets <strong>sans date</strong> : hors valorisation du stock et hors rapprochement
+            bancaire. Ouvrez chacun pour lui donner sa date.
             {# The period form is not drawn here: this is the one list two dates cannot narrow. #}
-            Cette liste ignore la période « du … au … » — un document sans date n'est dans aucune.
         </div>
     {% elif undated_count and not active_filter and not lot %}
         <div class="message message-error">
             {{ undated_count }} facture{{ undated_count|pluralize }} ou ticket{{ undated_count|pluralize }} sans date :
-            hors de toute valorisation du stock et du rapprochement bancaire.
+            hors valorisation du stock et hors rapprochement bancaire.
             <a href="{% url 'invoices:invoice_list' %}?filtre=sans-date">Les afficher</a>
         </div>
     {% elif active_filter == "non-rapprochees" %}
@@ -120,22 +119,20 @@ Every invoice and ticket. Reloads itself when an import ends
         without saying so reads as a bug.
         {% endcomment %}
         <p class="muted">
-            Les documents qu'aucune opération bancaire ne règle, depuis le
-            {{ reconciled_from|date:"d/m/Y" }} — le premier jour couvert par les relevés importés.
-            Ce qui est antérieur n'en est pas : les relevés ne remontent pas jusque-là.
-            Un document sans date y figure aussi, le rapprochement ne fait que le proposer.
+            Documents qu'aucune opération bancaire ne règle, depuis le
+            {{ reconciled_from|date:"d/m/Y" }} (début des relevés importés).
         </p>
     {% elif active_filter == "verifies" %}
-        <p class="muted">Les tickets vérifiés ces deux derniers jours, le dernier en haut.</p>
+        <p class="muted">Tickets vérifiés ces deux derniers jours.</p>
     {% elif active_filter == "recents" %}
-        <p class="muted">Ce qui a été importé ces deux derniers jours.</p>
+        <p class="muted">Documents importés ces deux derniers jours.</p>
     {% endif %}
 
     {% if hidden_count %}
         <p class="muted">
             Les {{ invoices|length }} documents les plus récents. {{ hidden_count }} de plus dans cette liste :
             <a href="{{ show_all_url }}" hx-boost="true" hx-target="#workspace" hx-select="#workspace"
-               hx-swap="outerHTML">tout afficher</a> (la recherche et le tri ne portent que sur ce qui est affiché).
+               hx-swap="outerHTML">tout afficher</a> (le tri ne porte que sur ce qui est affiché).
         </p>
     {% endif %}
     {% if invoices %}
@@ -247,7 +244,7 @@ Every invoice and ticket. Reloads itself when an import ends
         </div>
     {% else %}
         <div class="empty-state">
-            <p>Aucun achat pour le moment : ajoutez des tickets ou une facture avec la carte ci-dessus.</p>
+            <p>Aucun achat pour le moment : ajoutez-en avec la carte ci-dessus.</p>
             <a class="btn" href="{% url 'invoices:invoice_upload' %}">Importer une facture PDF</a>
         </div>
     {% endif %}

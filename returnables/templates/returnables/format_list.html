@@ -6,10 +6,7 @@
     <div class="page-header">
         <div>
             <h1>Formats de bons</h1>
-            <p class="page-subtitle">
-                Comment le bon de chaque fournisseur est lu : des motifs qui trouvent la partie des consignes, ses
-                lignes, sa date et son numéro - et, s'il arrive par mail, qui l'envoie.
-            </p>
+            <p class="page-subtitle">Comment le bon de chaque fournisseur est lu, et d'où il arrive.</p>
         </div>
         <div class="actions">
             <a class="btn" href="{% url 'returnables:format_create' %}">Nouveau format</a>
@@ -56,10 +53,7 @@
         {% endif %}{% endfor %}
     {% else %}
         <div class="empty-state">
-            <p>
-                Aucun format de bon : sans lui, aucun bon ne peut être lu. <strong>Créez-en un</strong> et essayez-le
-                sur le PDF d'un bon avec « Tester sur un PDF ».
-            </p>
+            <p>Aucun format de bon : aucun bon ne peut être lu.</p>
             <a class="btn" href="{% url 'returnables:format_create' %}">Nouveau format</a>
         </div>
     {% endif %}

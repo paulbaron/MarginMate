@@ -5,10 +5,8 @@
         <div>
             <h1>Propositions de rattachement</h1>
             <p class="page-subtitle">
-                Toutes les dépenses encore sans facture pour lesquelles le rapprochement a une proposition, par degré
-                de certitude. Les certaines et les quasi-sûres sont cochées d'avance ; cochez celles à confirmer que
-                vous reconnaissez, choisissez la facture quand plusieurs sont possibles, puis rattachez le tout en une
-                fois.
+                Les dépenses sans facture qui ont une proposition, par degré de certitude : cochez celles que vous
+                reconnaissez, puis rattachez-les en une fois.
             </p>
         </div>
         <div class="actions">
@@ -28,31 +26,27 @@
             {% endfor %}
         </ol>
         <p class="muted">
-            Une facture proposée à plusieurs opérations est signalée sur chacune de leurs options, et n'est cochée
-            d'avance que pour la première dans l'ordre du rapprochement (paiements par carte d'abord, puis par
-            date) : c'est à celle-là que le rattachement groupé la donnerait, les autres seraient laissées de côté
-            et dites.
+            Une facture proposée à plusieurs opérations n'est cochée d'avance que pour la première (paiements par
+            carte d'abord, puis par date).
         </p>
         <p class="muted">
-            Une ligne rattachée ici l'est « à la main » : elle ne sera plus touchée par le rapprochement
-            automatique, et si le bénéficiaire imprimé par la banque ne nommait pas le fournisseur, il sera
-            reconnu le mois prochain - seulement quand les factures font exactement le montant débité.
+            Une ligne rattachée ici n'est plus touchée par le rapprochement automatique. Si ses factures font
+            exactement le montant débité, son bénéficiaire sera ensuite reconnu comme leur fournisseur.
         </p>
     </div>
 
     {% if not has_lines %}
         <div class="empty-state">
-            <p>Aucun relevé importé pour l'instant : importez-en un depuis <a href="{{ bank_url }}">Banque</a>.</p>
+            <p>Aucun relevé importé : importez-en un depuis <a href="{{ bank_url }}">Banque</a>.</p>
         </div>
     {% elif not proposed_count %}
         <div class="empty-state">
             <p>
                 Aucune proposition en attente.
                 {% if without_count %}
-                    {{ without_count }} dépense{{ without_count|pluralize }} reste{{ without_count|pluralize:"nt" }} sans facture et
-                    sans proposition : le rapprochement n'a rien trouvé à ces dates - importez les tickets ou factures
-                    manquants, puis « Relancer le rapprochement » sur <a href="{{ bank_url }}">Banque</a>, où chaque
-                    ligne a aussi sa liste et sa recherche.
+                    {{ without_count }} dépense{{ without_count|pluralize }} reste{{ without_count|pluralize:"nt" }} sans facture :
+                    importez les tickets ou factures manquants, puis « Relancer le rapprochement » sur
+                    <a href="{{ bank_url }}">Banque</a>.
                 {% endif %}
             </p>
         </div>

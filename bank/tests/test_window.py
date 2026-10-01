@@ -162,7 +162,7 @@ class WindowTests(Fixtures, TestCase):
         # Said and shown: the inputs are given back empty and disabled, and
         # no link carries the dates on, so they cannot come back silently.
         self.assertContains(response, '<input type="date" name="du" value="" disabled>')
-        self.assertContains(response, "rend les dates libres")
+        self.assertContains(response, "Choisissez « Tous les mois » pour saisir des dates.")
         # Nothing the page draws carries them on: neither a tab link nor the
         # `next` every form posts (which is why that one is built from what
         # the view read, not from the URL the browser happens to be on).
