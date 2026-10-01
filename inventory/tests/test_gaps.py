@@ -12,7 +12,10 @@ What the page promises, pinned on worked examples with round numbers:
   it - checked here by actually ringing the plan up and reading the stock
   page's own figure back (`quantities_sold`);
 * an amount is planned on top of the list's earlier entries, and every gap
-  shows what the WHOLE list adds (`fill_gaps(..., already)`, `show_list`).
+  shows what the WHOLE list adds (`fill_gaps(..., already)`, `show_list`);
+* an article the owner left out (`GapExclusion`, alone or with its
+  category) is no gap to fill and no limit, out of the table and the lists,
+  while every figure the stock page shows stays as it was.
 
 The window is the stock pages' half-open one: a purchase or a sale ON the
 take's day is in the count already, one on the end day is in the window.
@@ -47,7 +50,7 @@ from inventory.gaps import (
     share_summary,
     show_list,
 )
-from inventory.models import GapFillEntry, MovementKind, UnitChoices
+from inventory.models import GapExclusion, GapFillEntry, MovementKind, StockType, UnitChoices
 from inventory.variance import (
     _quantities_sold,
     attribute_sales,
@@ -91,9 +94,9 @@ def at(day: int) -> datetime:
     return timezone.make_aware(datetime(2026, 3, day, 12, 0))
 
 
-def article(name: str, loss_percent=None, unit=UnitChoices.LITRE):
+def article(name: str, loss_percent=None, unit=UnitChoices.LITRE, category=""):
     extra = {} if loss_percent is None else {"loss_percent": Decimal(loss_percent)}
-    return make_stock_type(name=name, unit=unit, **extra)
+    return make_stock_type(name=name, unit=unit, category=category, **extra)
 
 
 def counted(take, stock_type, quantity):
@@ -1626,6 +1629,497 @@ class AttributeSalesRegressionTests(TestCase):
         self.assertEqual(self.attributed(), predicted)
 
 
+# ---------------------------------------------------------------------------
+# Articles and categories left out
+# ---------------------------------------------------------------------------
+
+
+def figures(row):
+    """What the stock page's engine says of an article, and what follows."""
+    return (
+        row.opening,
+        row.purchases,
+        row.known_losses,
+        row.counted,
+        row.sold,
+        row.gap,
+        row.allowance,
+        row.room,
+        row.unit_cost,
+        row.status,
+    )
+
+
+class ExclusionTests(TestCase):
+    """What the owner left out (`GapExclusion`): an article alone, or every
+    article filed under a category name. A small bar:
+
+    * Blonde (« Bières exemple »): 30 L counted, 60 L bought at 4,00 €, 40
+      pints of 0,5 L sold - gap 70 L, allowance 9, room 61 L (244,00 €).
+    * Ambrée (« Bières exemple »): 20 L counted, 10 pints - gap 15 L,
+      allowance 2, room 13 L (65,00 € at 5,00 €).
+    * Rum (« Spiritueux exemple »): 2 L counted, 3 L bought at 20,00 €, 25
+      shots of 4 cl and 10 mojitos of 5 cl - gap 3,5 L, allowance 0,5,
+      room 3 L (60,00 €).
+    * Mint (no category): 0,1 kg counted, the mojitos took 0,2 - « vendu
+      plus qu'acheté »: the mojito is held back by it.
+    * Gin (« Spiritueux exemple »): 2 L counted, poured only by a gin tonic
+      nobody ordered since the take - unreached, room 1,8 L.
+    * Tablecloths (no category): 10 bought, in no recipe - room 9.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.take = make_stock_take(taken_at=at(1))
+        cls.blonde = article("Blonde exemple", category="Bières exemple")
+        counted(cls.take, cls.blonde, "30")
+        bought(cls.blonde, "60", date(2026, 3, 10))
+        cls.pint = recipe("Pinte exemple", "35.00", (cls.blonde, "0.5"))
+        sold(cls.pint, 40)
+
+        cls.amber = article("Ambrée exemple", category="Bières exemple")
+        bought(cls.amber, "1", BEFORE_THE_TAKE, unit_cost="5.00")
+        counted(cls.take, cls.amber, "20")
+        cls.amber_pint = recipe("Pinte ambrée exemple", "36.00", (cls.amber, "0.5"))
+        sold(cls.amber_pint, 10)
+
+        cls.rum = article("Rhum exemple", category="Spiritueux exemple")
+        counted(cls.take, cls.rum, "2")
+        bought(cls.rum, "3", date(2026, 3, 12), unit_cost="20.00")
+        cls.shot = recipe("Shot exemple", "32.00", (cls.rum, "0.04"))
+        sold(cls.shot, 25)
+
+        cls.mint = article("Menthe exemple", unit=UnitChoices.KILOGRAM)
+        counted(cls.take, cls.mint, "0.1")
+        cls.mojito = recipe("Mojito exemple", "38.00", (cls.rum, "0.05"), (cls.mint, "0.02"))
+        sold(cls.mojito, 10)
+
+        cls.gin = article("Gin exemple", category="Spiritueux exemple")
+        bought(cls.gin, "1", BEFORE_THE_TAKE, unit_cost="30.00")
+        counted(cls.take, cls.gin, "2")
+        cls.gin_tonic = recipe("Gin tonic exemple", "34.00", (cls.gin, "0.05"))
+
+        cls.cloth = article("Nappe exemple", unit=UnitChoices.UNIT)
+        bought(cls.cloth, "10", date(2026, 3, 12), unit_cost="2.00")
+
+    def report(self):
+        return gaps_since(self.take, end=END)
+
+    def names(self, rows):
+        return [row.stock_type.name for row in rows]
+
+    def offered(self, report):
+        return {offer.recipe_id for offer in report.offers}
+
+    def held_back(self, report):
+        return {row.recipe.name: self.names(row.articles) for row in report.blocked}
+
+    def test_with_nothing_left_out(self):
+        report = self.report()
+        self.assertEqual((report.ignored, report.exclusions), (frozenset(), []))
+        self.assertFalse(any(row.excluded for row in report.articles.values()))
+        rooms = {row.stock_type.name: row.room for row in report.articles.values()}
+        self.assertEqual(
+            rooms,
+            {
+                "Blonde exemple": Decimal("61"),
+                "Ambrée exemple": Decimal("13"),
+                "Rhum exemple": Decimal("3"),
+                "Menthe exemple": Decimal("-0.11"),
+                "Gin exemple": Decimal("1.8"),
+                "Nappe exemple": Decimal("9"),
+            },
+        )
+        self.assertEqual(report.articles[self.mint.pk].status, OVER)
+        self.assertEqual(self.offered(report), {self.pint.pk, self.amber_pint.pk, self.shot.pk})
+        self.assertEqual(self.held_back(report), {"Mojito exemple": ["Menthe exemple"]})
+        self.assertEqual(
+            self.names(report.rows), ["Blonde exemple", "Ambrée exemple", "Rhum exemple", "Menthe exemple"]
+        )
+        self.assertEqual(self.names(report.unreached), ["Gin exemple"])
+        self.assertEqual(report.outside_recipes, 1)
+        self.assertEqual((report.excluded_rows, report.excluded_categories, report.excluded_articles), ([], [], []))
+        self.assertEqual(report.categories_to_exclude, [("Bières exemple", 2), ("Spiritueux exemple", 2), ("", 2)])
+
+    def test_an_article_left_out_alone(self):
+        exclusion = GapExclusion.objects.create(stock_type=self.rum)
+        report = self.report()
+        rum = report.articles[self.rum.pk]
+        self.assertTrue(rum.excluded)
+        self.assertEqual(report.ignored, frozenset({self.rum.pk}))
+        # Its figures stay the stock page's...
+        self.assertEqual((rum.sold, rum.room, rum.status), (Decimal("1.5"), Decimal("3"), FILLABLE))
+        # ...but it is no gap to fill: no target, off the table, and not
+        # « unreached » either, though a recipe pours it and none fills it.
+        self.assertFalse(rum.target)
+        self.assertFalse(rum.secondary)
+        self.assertNotIn(rum, report.targets)
+        self.assertEqual(self.names(report.rows), ["Blonde exemple", "Ambrée exemple", "Menthe exemple"])
+        self.assertEqual(self.names(report.unreached), ["Gin exemple"])
+        self.assertEqual(report.outside_recipes, 1)
+        self.assertEqual(report.excluded_rows, [rum])
+        self.assertEqual(report.excluded_articles, [exclusion])
+        self.assertEqual(report.excluded_categories, [])
+        # The other spirit, under the same category, is not touched.
+        self.assertFalse(report.articles[self.gin.pk].excluded)
+        self.assertEqual(report.categories_to_exclude, [("Bières exemple", 2), ("Spiritueux exemple", 2), ("", 2)])
+
+    def test_a_recipe_filling_only_an_article_left_out_is_never_proposed(self):
+        GapExclusion.objects.create(stock_type=self.rum)
+        report = self.report()
+        # Nothing holds the shot back - it is offered - but it fills no gap:
+        # at 32,00 € the cheapest recipe left is the 35,00 € pint.
+        self.assertIn(self.shot.pk, self.offered(report))
+        result = fill_gaps(report, Decimal("32.00"))
+        self.assertEqual(result.plan.reason, BELOW_CHEAPEST)
+        self.assertEqual(result.lines, [])
+        for amount in ("64.00", "96.00", "500.00"):
+            with self.subTest(amount=amount):
+                result = fill_gaps(self.report(), Decimal(amount))
+                self.assertNotIn(self.shot.pk, result.plan.counts)
+
+    def test_the_average_leaves_an_article_left_out_out(self):
+        GapExclusion.objects.create(stock_type=self.amber)
+        report = self.report()
+        # 67,00 € is a pint and a shot, and nothing else.
+        result = fill_gaps(report, Decimal("67.00"))
+        self.assertEqual(result.plan.counts, {self.pint.pk: 1, self.shot.pk: 1})
+        amber = report.articles[self.amber.pk]
+        self.assertEqual(amber.proposed, ZERO)
+        self.assertIsNone(amber.filled_percent)
+        # Counted, the amber would read 0 % as the lowest share.
+        blonde = Decimal("0.5") / Decimal("61") * 100
+        rum = Decimal("0.04") / Decimal("3") * 100
+        self.assertEqual(share_summary(report), ((blonde + rum) / 2, blonde, rum))
+
+    def test_a_category_left_out_takes_every_article_filed_under_it(self):
+        exclusion = GapExclusion.objects.create(category="Spiritueux exemple")
+        report = self.report()
+        rum, gin = report.articles[self.rum.pk], report.articles[self.gin.pk]
+        self.assertTrue(rum.excluded)
+        self.assertTrue(gin.excluded)
+        self.assertEqual(report.ignored, frozenset({self.rum.pk, self.gin.pk}))
+        self.assertFalse(rum.target)
+        self.assertEqual(self.names(report.rows), ["Blonde exemple", "Ambrée exemple", "Menthe exemple"])
+        # The gin was the one gap left unreached.
+        self.assertEqual(report.unreached, [])
+        self.assertEqual(report.unreached_value, ZERO)
+        self.assertEqual(report.excluded_rows, [gin, rum])
+        self.assertEqual(report.excluded_categories, [exclusion])
+        self.assertEqual(report.excluded_categories[0].covers, 2)
+        self.assertEqual(report.excluded_articles, [])
+        self.assertEqual(report.categories_to_exclude, [("Bières exemple", 2), ("", 2)])
+        # The mint still holds the mojito back.
+        self.assertEqual(self.held_back(report), {"Mojito exemple": ["Menthe exemple"]})
+
+    def test_a_recipe_held_back_only_by_an_article_left_out_is_proposed_again(self):
+        report = self.report()
+        self.assertNotIn(self.mojito.pk, self.offered(report))
+        self.assertNotIn(self.mojito.pk, fill_gaps(report, Decimal("38.00")).plan.counts)
+
+        GapExclusion.objects.create(stock_type=self.mint)
+        report = self.report()
+        mint = report.articles[self.mint.pk]
+        self.assertEqual(mint.status, OVER)  # what the stock page says, still
+        self.assertEqual(report.blocked, [])
+        self.assertIn(self.mojito.pk, self.offered(report))
+        self.assertEqual(self.names(report.rows), ["Blonde exemple", "Ambrée exemple", "Rhum exemple"])
+        self.assertEqual(self.names(report.excluded_rows), ["Menthe exemple"])
+        # 38,00 € is one mojito and nothing else.
+        with self.assertNumQueries(0):
+            result = fill_gaps(report, Decimal("38.00"))
+        self.assertEqual((result.plan.counts, result.plan.reason), ({self.mojito.pk: 1}, EXACT))
+        (line,) = result.lines
+        self.assertEqual([row.stock_type for row in line.fills], [self.rum])
+        # What it adds to the mint is still shown: past a room the mint no
+        # longer has, and filling nothing.
+        self.assertEqual(mint.proposed, Decimal("0.02"))
+        self.assertIsNone(mint.filled_percent)
+        self.assertEqual(report.articles[self.rum.pk].proposed, Decimal("0.05"))
+
+    def test_a_recipe_held_back_by_two_articles_names_the_one_still_counted(self):
+        lime = article("Citron vert exemple", unit=UnitChoices.KILOGRAM, category="Fruits exemple")
+        counted(self.take, lime, "0.1")
+        caipi = recipe("Caïpi exemple", "37.00", (self.mint, "0.01"), (lime, "0.02"))
+        sold(caipi, 10)  # 0,2 kg of the lime's 0,1, and the mint further over
+        self.assertEqual(
+            self.held_back(self.report()),
+            {"Caïpi exemple": ["Citron vert exemple", "Menthe exemple"], "Mojito exemple": ["Menthe exemple"]},
+        )
+        GapExclusion.objects.create(stock_type=self.mint)
+        report = self.report()
+        self.assertEqual(self.held_back(report), {"Caïpi exemple": ["Citron vert exemple"]})
+        self.assertNotIn(caipi.pk, self.offered(report))
+        self.assertIn(self.mojito.pk, self.offered(report))
+        # Both left out: nothing holds it back, and it fills no gap.
+        GapExclusion.objects.create(category="Fruits exemple")
+        report = self.report()
+        self.assertEqual(report.blocked, [])
+        self.assertIn(caipi.pk, self.offered(report))
+        for amount in ("37.00", "74.00", "111.00"):
+            with self.subTest(amount=amount):
+                self.assertNotIn(caipi.pk, fill_gaps(report, Decimal(amount)).plan.counts)
+
+    def test_with_every_article_left_out_there_is_nothing_to_fill(self):
+        for category in ("Bières exemple", "Spiritueux exemple", ""):
+            GapExclusion.objects.create(category=category)
+        report = self.report()
+        self.assertEqual(report.ignored, frozenset(report.articles))
+        self.assertEqual((report.targets, report.rows, report.unreached, report.outside_recipes), ([], [], [], 0))
+        self.assertEqual(len(report.excluded_rows), 6)
+        self.assertEqual(report.categories_to_exclude, [])
+        # Nothing is held back any more, and nothing fills a gap.
+        self.assertEqual(report.blocked, [])
+        self.assertEqual(self.offered(report), {self.pint.pk, self.amber_pint.pk, self.shot.pk, self.mojito.pk})
+        result = fill_gaps(report, Decimal("100.00"))
+        self.assertEqual(result.plan.reason, NOTHING_TO_FILL)
+        self.assertEqual((result.lines, result.total, result.remainder), ([], ZERO, Decimal("100")))
+        self.assertIsNone(share_summary(report))
+
+    def test_rows_left_out_counts_the_gaps_of_the_table_left_out(self):
+        """What an empty table says rests on this: how many of the gaps a
+        recipe of the menu touches - poured by a recipe offered, or holding
+        one back - are left out. Not every article left out: the gin (its gin
+        tonic not sold since) and the tablecloths (in no recipe) would be no
+        row anyway."""
+        report = self.report()
+        with self.assertNumQueries(0):
+            self.assertEqual(report.rows_left_out, 0)
+        cases = (
+            ([{"stock_type": self.rum}], 1),
+            # The rum and the gin: the gin is no row.
+            ([{"category": "Spiritueux exemple"}], 1),
+            # The mint, holding the mojito back, and the tablecloths.
+            ([{"category": ""}], 1),
+            ([{"stock_type": self.gin}, {"stock_type": self.cloth}], 0),
+            ([{"category": "Bières exemple"}, {"stock_type": self.mint}], 3),
+        )
+        for exclusions, left_out in cases:
+            with self.subTest(exclusions=exclusions):
+                GapExclusion.objects.all().delete()
+                for fields in exclusions:
+                    GapExclusion.objects.create(**fields)
+                report = self.report()
+                self.assertEqual(report.rows_left_out, left_out)
+                self.assertTrue(report.rows)
+
+    def test_with_every_article_left_out_rows_left_out_is_every_row(self):
+        report = self.report()
+        rows = len(report.rows)
+        self.assertEqual(rows, 4)
+        for category in ("Bières exemple", "Spiritueux exemple", ""):
+            GapExclusion.objects.create(category=category)
+        report = self.report()
+        # Six articles left out; four of them the table's: the blonde, the
+        # amber, the rum, and the mint - the mojito it held back offered now.
+        self.assertEqual(len(report.ignored), 6)
+        self.assertEqual((report.rows, report.rows_left_out), ([], rows))
+
+    def test_a_category_left_out_covers_an_article_classified_into_it_later(self):
+        exclusion = GapExclusion.objects.create(category="Herbes exemple")
+        report = self.report()
+        self.assertFalse(report.articles[self.mint.pk].excluded)
+        self.assertEqual(report.excluded_categories[0].covers, 0)
+        # The mint classified into it, and an article created since under it.
+        StockType.objects.filter(pk=self.mint.pk).update(category="Herbes exemple")
+        basil = article("Basilic exemple", unit=UnitChoices.KILOGRAM, category="Herbes exemple")
+        counted(self.take, basil, "0.5")
+        report = self.report()
+        self.assertTrue(report.articles[self.mint.pk].excluded)
+        self.assertTrue(report.articles[basil.pk].excluded)
+        self.assertEqual(report.excluded_categories, [exclusion])
+        self.assertEqual(report.excluded_categories[0].covers, 2)
+        self.assertEqual(report.blocked, [])
+        self.assertIn(self.mojito.pk, self.offered(report))
+        # The basil, in no recipe, is not counted among what no sale fills.
+        self.assertEqual(report.outside_recipes, 1)
+
+    def test_a_category_is_matched_as_written_case_and_accents_included(self):
+        for written in ("bières exemple", "Bieres exemple", "BIÈRES EXEMPLE"):
+            GapExclusion.objects.create(category=written)
+        report = self.report()
+        self.assertFalse(report.articles[self.blonde.pk].excluded)
+        self.assertFalse(report.articles[self.amber.pk].excluded)
+        self.assertEqual(report.ignored, frozenset())
+        self.assertEqual(
+            {exclusion.category: exclusion.covers for exclusion in report.excluded_categories},
+            {"bières exemple": 0, "Bieres exemple": 0, "BIÈRES EXEMPLE": 0},
+        )
+        self.assertIn(("Bières exemple", 2), report.categories_to_exclude)
+        GapExclusion.objects.create(category="Bières exemple")
+        report = self.report()
+        self.assertTrue(report.articles[self.blonde.pk].excluded)
+        self.assertTrue(report.articles[self.amber.pk].excluded)
+        self.assertEqual(
+            {exclusion.category: exclusion.covers for exclusion in report.excluded_categories},
+            {"bières exemple": 0, "Bieres exemple": 0, "BIÈRES EXEMPLE": 0, "Bières exemple": 2},
+        )
+        self.assertNotIn("Bières exemple", dict(report.categories_to_exclude))
+
+    def test_the_blank_category_left_out_covers_the_articles_with_none(self):
+        exclusion = GapExclusion.objects.create(category="")
+        report = self.report()
+        self.assertEqual(report.ignored, frozenset({self.mint.pk, self.cloth.pk}))
+        # The tablecloths were what no sale fills; the mint held the mojito.
+        self.assertEqual(report.outside_recipes, 0)
+        self.assertEqual(report.blocked, [])
+        self.assertEqual(report.excluded_categories, [exclusion])
+        self.assertEqual(report.excluded_categories[0].covers, 2)
+        self.assertEqual(report.categories_to_exclude, [("Bières exemple", 2), ("Spiritueux exemple", 2)])
+        for stock_type in (self.blonde, self.amber, self.rum, self.gin):
+            self.assertFalse(report.articles[stock_type.pk].excluded, stock_type.name)
+
+    def test_what_is_left_out_is_listed_in_order_with_what_it_covers(self):
+        # Articles nothing moved since the take: in no report.
+        absent = make_stock_type(name="Sirop absent exemple", category="Sirops exemple")
+        liqueur = make_stock_type(name="Liqueur exemple", category="Spiritueux exemple")
+        GapExclusion.objects.create(category="")
+        GapExclusion.objects.create(category="Spiritueux exemple")
+        GapExclusion.objects.create(category="Absente exemple")
+        GapExclusion.objects.create(stock_type=self.rum)  # under « Spiritueux exemple » too
+        GapExclusion.objects.create(stock_type=absent)
+        GapExclusion.objects.create(stock_type=self.amber)
+        report = self.report()
+        self.assertNotIn(absent.pk, report.articles)
+        self.assertNotIn(liqueur.pk, report.articles)
+        with self.assertNumQueries(0):
+            categories = [(exclusion.category, exclusion.covers) for exclusion in report.excluded_categories]
+            articles = [exclusion.stock_type.name for exclusion in report.excluded_articles]
+            rows = self.names(report.excluded_rows)
+            to_exclude = report.categories_to_exclude
+        # By name, case aside, the blank one last; what each covers is the
+        # report's articles - not the liqueur, which nothing moved.
+        self.assertEqual(categories, [("Absente exemple", 0), ("Spiritueux exemple", 2), ("", 2)])
+        self.assertEqual(articles, ["Ambrée exemple", "Rhum exemple", "Sirop absent exemple"])
+        self.assertEqual(rows, ["Ambrée exemple", "Gin exemple", "Menthe exemple", "Nappe exemple", "Rhum exemple"])
+        # The amber, left out alone, still counts under its category.
+        self.assertEqual(to_exclude, [("Bières exemple", 2)])
+
+    def test_an_article_left_out_alone_says_whether_its_category_is_out_too(self):
+        """`.covered`: taking such an article back alone changes nothing, and
+        the fold says so on its line. The blank category covers the articles
+        with none, as it leaves them out."""
+        GapExclusion.objects.create(stock_type=self.rum)
+        GapExclusion.objects.create(stock_type=self.amber)
+        GapExclusion.objects.create(stock_type=self.mint)
+        report = self.report()
+        self.assertEqual([exclusion.covered for exclusion in report.excluded_articles], [False, False, False])
+        GapExclusion.objects.create(category="Spiritueux exemple")
+        GapExclusion.objects.create(category="")
+        report = self.report()
+        with self.assertNumQueries(0):
+            covered = {exclusion.stock_type.name: exclusion.covered for exclusion in report.excluded_articles}
+        self.assertEqual(covered, {"Ambrée exemple": False, "Menthe exemple": True, "Rhum exemple": True})
+        # A category written otherwise covers nothing.
+        GapExclusion.objects.create(category="bières exemple")
+        report = self.report()
+        self.assertFalse(next(e.covered for e in report.excluded_articles if e.stock_type_id == self.amber.pk))
+
+    def test_categories_to_exclude_go_by_name_case_aside_the_blank_one_last(self):
+        cider = article("Cidre exemple", category="cidres exemple")
+        counted(self.take, cider, "5")
+        self.assertEqual(
+            self.report().categories_to_exclude,
+            [("Bières exemple", 2), ("cidres exemple", 1), ("Spiritueux exemple", 2), ("", 2)],
+        )
+
+    def test_the_stock_page_s_figures_do_not_move(self):
+        before = self.report()
+        available = window_available(before)
+        stock_page = quantities_sold(START, END, available=available)
+        GapExclusion.objects.create(stock_type=self.rum)
+        for category in ("Bières exemple", ""):
+            GapExclusion.objects.create(category=category)
+        after = self.report()
+        self.assertEqual(
+            after.ignored, frozenset({self.rum.pk, self.blonde.pk, self.amber.pk, self.mint.pk, self.cloth.pk})
+        )
+        self.assertEqual(set(after.articles), set(before.articles))
+        for article_id, row in before.articles.items():
+            self.assertEqual(figures(after.articles[article_id]), figures(row), row.stock_type.name)
+        for extra in ({}, {self.pint.pk: 3, self.mojito.pk: 2}, {self.shot.pk: 7}):
+            with self.subTest(extra=extra):
+                self.assertEqual(after.consumption(extra), before.consumption(extra))
+        # The stock page itself, which knows nothing of what is left out.
+        self.assertEqual(quantities_sold(START, END, available=available), stock_page)
+        for article_id, row in after.articles.items():
+            on_the_page = stock_page[article_id].headline if article_id in stock_page else ZERO
+            self.assertEqual(on_the_page, row.sold, row.stock_type.name)
+
+    def test_a_list_made_before_an_article_was_left_out_still_adds_to_it(self):
+        GapExclusion.objects.create(stock_type=self.rum)
+        report = self.report()
+        the_list = {self.shot.pk: 3, self.pint.pk: 1}
+        show_list(report, the_list)
+        rum = report.articles[self.rum.pk]
+        self.assertEqual(rum.proposed, Decimal("0.12"))
+        self.assertIsNone(rum.filled_percent)
+        self.assertEqual(report.articles[self.blonde.pk].proposed, Decimal("0.5"))
+        # A new amount on top of it never adds a shot: 70,00 € is two pints.
+        result = fill_gaps(report, Decimal("70.00"), the_list)
+        self.assertEqual((result.plan.counts, result.plan.reason), ({self.pint.pk: 2}, EXACT))
+        self.assertEqual(rum.proposed, Decimal("0.12"))
+        self.assertEqual(report.articles[self.blonde.pk].proposed, Decimal("1.5"))
+
+
+class ChoiceWithASideLeftOutTests(TestCase):
+    """An « OU » one side of which is left out. Only the planner looks away:
+    the engine still books a shot « au choix » on the dearer rum while it has
+    what was bought less its allowance, so leaving the dearer rum out does
+    NOT send the shots onto the cheaper one - proposed, a shot would fill no
+    gap as the stock page counts it, and none is. The cheaper rum stays a
+    target no sale reaches (secondary), and the plan says no sale fits.
+
+    SecondaryArticleTests' rums: 2 L of the dear one, 1 L of the cheaper,
+    10 shots sold - all on the dear rum (room 1,4 L), the cheaper's room
+    0,9 L."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.take = make_stock_take(taken_at=at(1))
+        cls.premium, cls.standard, cls.shot = ou_rums(cls.take, "2", "1")
+        sold(cls.shot, 10)
+
+    def test_the_dearer_side_left_out_the_shot_fills_no_gap(self):
+        GapExclusion.objects.create(stock_type=self.premium)
+        report = gaps_since(self.take, end=END)
+        premium, standard = report.articles[self.premium.pk], report.articles[self.standard.pk]
+        self.assertTrue(premium.excluded)
+        self.assertFalse(premium.target)
+        self.assertEqual((premium.sold, premium.room), (Decimal("0.4"), Decimal("1.4")))
+        self.assertTrue(standard.target)
+        self.assertTrue(standard.secondary)
+        self.assertEqual([row.stock_type for row in report.rows], [self.standard])
+        self.assertEqual(report.unreached, [])
+        # Nothing holds the shot back; as the engine books it, it pours the
+        # dear rum only.
+        self.assertEqual(report.blocked, [])
+        self.assertEqual([offer.recipe_id for offer in report.offers], [self.shot.pk])
+        added = report.consumption({self.shot.pk: 1})
+        base = report.consumption({})
+        self.assertEqual(added[self.premium.pk] - base[self.premium.pk], Decimal("0.04"))
+        self.assertEqual(added.get(self.standard.pk, ZERO) - base.get(self.standard.pk, ZERO), ZERO)
+        result = fill_gaps(report, Decimal("99.00"))
+        self.assertEqual(result.plan.counts, {})
+        self.assertEqual(result.plan.reason, GAPS_FULL)
+        self.assertEqual(standard.proposed, ZERO)
+        self.assertIsNone(share_summary(report))
+
+    def test_the_cheaper_side_left_out_the_shots_fill_the_dearer_one(self):
+        GapExclusion.objects.create(stock_type=self.standard)
+        report = gaps_since(self.take, end=END)
+        premium, standard = report.articles[self.premium.pk], report.articles[self.standard.pk]
+        self.assertTrue(premium.target)
+        self.assertFalse(premium.secondary)
+        self.assertFalse(standard.target)
+        self.assertFalse(standard.secondary)
+        result = fill_gaps(report, Decimal("99.00"))
+        self.assertEqual((result.plan.counts, result.plan.reason), ({self.shot.pk: 3}, EXACT))
+        self.assertEqual(premium.proposed, Decimal("0.12"))
+        share = Decimal("0.12") / Decimal("1.4") * 100
+        self.assertEqual(share_summary(report), (share, share, share))
+
+
 class QueryCountTests(TestCase):
     """`gaps_since` reads like the « Écarts » page: what it costs must not
     grow with the sales, the purchases or the counted lines, and grows by at
@@ -1667,3 +2161,16 @@ class QueryCountTests(TestCase):
             self.independent_recipe(index)
         many = self.queries()
         self.assertLessEqual(many - few, 2 * 6, "more than choice_groups' two queries a recipe")
+
+    def test_what_is_left_out_costs_one_query_however_much_there_is(self):
+        for index in range(3):
+            self.independent_recipe(index)
+        none = self.queries()
+        GapExclusion.objects.create(stock_type=self.made[0][1])
+        one = self.queries()
+        for _made, stock_type in self.made[1:]:
+            GapExclusion.objects.create(stock_type=stock_type)
+        for index in range(4):
+            GapExclusion.objects.create(category=f"Catégorie exemple {index}")
+        many = self.queries()
+        self.assertEqual((one, many), (none, none))

@@ -1,6 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Combler les écarts - MarginMate{% endblock %}
 {% block container_class %} container-wide{% endblock %}
+{% block messages %}
+    {% if top_messages %}
+        <ul class="messages">
+            {% for message in top_messages %}<li class="message message-{{ message.level_tag }}">{{ message }}</li>{% endfor %}
+        </ul>
+    {% endif %}
+{% endblock %}
 {% block content %}
     <div class="page-header">
         <div>
@@ -167,7 +174,12 @@
     </div>
     {% endif %}
 
-    <h2>Écarts</h2>
+    <h2 id="ecarts">Écarts</h2>
+    {% if gap_messages %}
+        <ul class="messages">
+            {% for message in gap_messages %}<li class="message message-{{ message.level_tag }}">{{ message }}</li>{% endfor %}
+        </ul>
+    {% endif %}
     {% if report.rows %}
     <div class="table-wrap">
     <table data-table data-table-label="écarts" class="phone-cards">
@@ -184,6 +196,7 @@
                 <th class="num">Valeur (HT)</th>
                 {% if entries %}<th class="num">Proposé</th>
                 <th class="num">Comblé</th>{% endif %}
+                <th></th>
             </tr>
         </thead>
         <tbody>
@@ -208,14 +221,74 @@
                 <td class="num" data-label="Proposé" data-sort="{{ row.proposed }}">{% if row.proposed %}{{ row.proposed|floatformat:"-2" }}{% else %}—{% endif %}</td>
                 <td class="num" data-label="Comblé" data-sort="{{ row.filled_percent|default:0 }}">{% if row.filled_percent is not None %}{{ row.filled_percent|floatformat:1 }} %{% else %}—{% endif %}</td>
                 {% endif %}
+                <td class="row-actions">
+                    <form method="post" action="{% url 'inventory:stock_gap_filler_exclude' %}">
+                        {% csrf_token %}
+                        <input type="hidden" name="{{ since_param }}" value="{{ take.pk }}">
+                        <input type="hidden" name="article" value="{{ row.stock_type.pk }}">
+                        <button class="btn btn-small btn-secondary" type="submit" title="Ne plus compter cet article dans les écarts">Exclure</button>
+                    </form>
+                </td>
             </tr>
             {% endfor %}
         </tbody>
     </table>
     </div>
+    {% elif report.rows_left_out %}
+        <p class="muted">Tous les articles de ces écarts sont exclus.</p>
     {% else %}
         <p class="muted">Aucune recette vendue depuis cet inventaire n'utilise un article compté ou acheté.</p>
     {% endif %}
+
+    <details class="explainer" id="exclusions"{% if report.exclusions or exclusion_messages %} open{% endif %}>
+        <summary>Exclus des écarts{% if report.excluded_categories %} · {{ report.excluded_categories|length }} catégorie{{ report.excluded_categories|length|pluralize }}{% endif %}{% if report.excluded_articles %} · {{ report.excluded_articles|length }} article{{ report.excluded_articles|length|pluralize }}{% endif %}</summary>
+        {% if exclusion_messages %}
+        <ul class="messages">
+            {% for message in exclusion_messages %}<li class="message message-{{ message.level_tag }}">{{ message }}</li>{% endfor %}
+        </ul>
+        {% endif %}
+        <p class="muted">Une catégorie exclue vaut aussi pour les articles classés plus tard.</p>
+        {% if report.categories_to_exclude %}
+        <form method="post" action="{% url 'inventory:stock_gap_filler_exclude' %}" class="inline-form">
+            {% csrf_token %}
+            <input type="hidden" name="{{ since_param }}" value="{{ take.pk }}">
+            <label class="inline-label">Catégorie
+                <select name="categorie">
+                    {% for category, count in report.categories_to_exclude %}
+                    <option value="{{ category }}">{% if category %}{{ category }}{% else %}Catégorie non renseignée{% endif %} ({{ count }})</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <button class="btn btn-secondary" type="submit">Exclure la catégorie</button>
+        </form>
+        {% endif %}
+        {% if report.excluded_categories or report.excluded_articles %}
+        <ul class="exclusion-list">
+            {% for exclusion in report.excluded_categories %}
+            <li>Catégorie {% if exclusion.category %}« {{ exclusion.category }} »{% else %}non renseignée{% endif %} · {% if exclusion.covers == 1 %}1 article{% else %}{{ exclusion.covers }} articles{% endif %}
+                <form method="post" action="{% url 'inventory:stock_gap_filler_include' %}">
+                    {% csrf_token %}
+                    <input type="hidden" name="{{ since_param }}" value="{{ take.pk }}">
+                    <input type="hidden" name="exclusion" value="{{ exclusion.pk }}">
+                    <button class="btn btn-small btn-secondary" type="submit">Réinclure</button>
+                </form>
+            </li>
+            {% endfor %}
+            {% for exclusion in report.excluded_articles %}
+            <li>{{ exclusion.stock_type.name }}{% if exclusion.stock_type.category or exclusion.covered %} <span class="muted small">{% if exclusion.stock_type.category %}{{ exclusion.stock_type.category }}{% if exclusion.covered %} · {% endif %}{% endif %}{% if exclusion.covered %}catégorie exclue aussi{% endif %}</span>{% endif %}
+                <form method="post" action="{% url 'inventory:stock_gap_filler_include' %}">
+                    {% csrf_token %}
+                    <input type="hidden" name="{{ since_param }}" value="{{ take.pk }}">
+                    <input type="hidden" name="exclusion" value="{{ exclusion.pk }}">
+                    <button class="btn btn-small btn-secondary" type="submit">Réinclure</button>
+                </form>
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p class="muted">Rien d'exclu : tous les articles comptent.</p>
+        {% endif %}
+    </details>
 
     {% if report.blocked or report.not_sold_since or report.unreached or report.outside_recipes %}
     <details class="explainer">
@@ -251,7 +324,7 @@
         <ul>
             <li>Écart = inventaire + achats − pertes − vendu : il compte aussi ce qui reste en rayon.</li>
             <li>La perte tolérée de chaque article (10 % par défaut) n'est pas à combler.</li>
-            <li>Chaque vente proposée est comptée comme la page Produits la comptera : aucune ne fait dépasser un écart.</li>
+            <li>Chaque vente proposée est comptée comme la page Produits la comptera : aucune ne fait dépasser un écart, hors articles exclus.</li>
             <li>Une recette « au choix » est comptée sur l'option la plus chère qui a encore de la place, comme une vente réelle.</li>
             <li>Chaque vente va aux recettes dont les écarts, pesés en valeur, sont le moins comblés ; à égalité, au mélange des ventes réelles.</li>
             <li>Chaque montant ajouté part de la liste déjà saisie : ses ventes comblent ce qui reste. Effacez la liste une fois les ventes importées.</li>

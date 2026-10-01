@@ -10,6 +10,8 @@ combler »). A room can be negative (sold more than was ever there). The one
 promise kept below is that **the plan never adds more to an article than its
 room** - and nothing at all to an article whose room is not positive -
 measured the way the stock page will measure it once the sales are rung up.
+The articles the owner left out (`ignored`) are the exception: no gap to
+fill, no room to keep to.
 
 **Measured by the engine itself, not by a model of it.** The till records a
 recipe, never which side of an « OU » was poured: once imported, a choice is
@@ -17,7 +19,7 @@ attributed by `variance.allocate_choices`, priciest option first, and a fixed
 ingredient pushes a choice off a bottle it was attributed to and onto
 another. So what one more sale of a recipe ADDS - its effect - is asked of
 `consumption`, the stock page's own attribution with the plan's sales added;
-a sale is kept only if no article goes past its room. Ranked on a model
+a sale is kept only if no article (left out ones aside) goes past its room. Ranked on a model
 instead (« this cocktail pours that spirit »), a cocktail with a fixed spirit
 kept coming back: each one pushed a « shot au choix » off that spirit onto
 another one the ranking never saw, which ended far past every other gap. The
@@ -168,17 +170,25 @@ class _Run:
         consumption: Consumption,
         values: dict[int, Decimal] | None = None,
         already: dict[int, int] | None = None,
+        ignored=(),
     ):
         self.offers = offers
         self.rooms = rooms
         self.consumption = consumption
         self.values = values or {}
+        # Articles left out by the owner: no gap to fill, no limit on a sale.
+        self.ignored = frozenset(ignored)
         self.base = consumption({})
         # Sales proposed before (the list's earlier entries) count as added
         # already: what they fill is no longer behind.
         self.already = {recipe_id: count for recipe_id, count in (already or {}).items() if count}
         self.total = consumption(dict(self.already)) if self.already else dict(self.base)
-        self.targets = {article for offer in offers for article in offer.reach() if rooms.get(article, ZERO) > 0}
+        self.targets = {
+            article
+            for offer in offers
+            for article in offer.reach()
+            if rooms.get(article, ZERO) > 0 and article not in self.ignored
+        }
         self.servings = usual_servings(offers, self.targets)
         self.price = {offer.recipe_id: offer.price_cents for offer in offers}
         self.counts: dict[int, int] = dict(self.already)
@@ -241,11 +251,12 @@ class _Run:
         return offer.independent or (known is not None and known[0] == self.version)
 
     def past(self, effect: dict[int, Decimal]) -> set[int]:
-        """The articles `effect` would take past their room."""
+        """The articles `effect` would take past their room (an ignored one
+        has none to go past)."""
         return {
             article
             for article, amount in effect.items()
-            if amount > 0 and self.added(article) + amount > limit(self.rooms, article)
+            if amount > 0 and article not in self.ignored and self.added(article) + amount > limit(self.rooms, article)
         }
 
     def level(self, effect: dict[int, Decimal]) -> Decimal | None:
@@ -359,18 +370,20 @@ class _Run:
         past = {
             article
             for article in set(after) | set(self.base)
-            if after.get(article, ZERO) - self.base.get(article, ZERO) > limit(self.rooms, article)
+            if article not in self.ignored
+            and after.get(article, ZERO) - self.base.get(article, ZERO) > limit(self.rooms, article)
         }
         return after, past
 
 
 def first_sales(
-    offers: list[Offer], rooms: dict[int, Decimal], consumption: Consumption
+    offers: list[Offer], rooms: dict[int, Decimal], consumption: Consumption, ignored=()
 ) -> dict[int, tuple[dict[int, Decimal], set[int]]]:
     """{recipe_id: (what ONE sale of it, on its own, adds to each article as
     the engine attributes it, the articles that sale would take past their
-    room)} - what is known of a recipe before any plan."""
-    run = _Run(offers, rooms, consumption)
+    room)} - what is known of a recipe before any plan. `ignored` articles
+    have no room to go past."""
+    run = _Run(offers, rooms, consumption, ignored=ignored)
     found = {}
     for offer in offers:
         effect = run.effect(offer)
@@ -378,10 +391,16 @@ def first_sales(
     return found
 
 
-def blocked(offers: list[Offer], rooms: dict[int, Decimal], consumption: Consumption) -> dict[int, set[int]]:
+def blocked(
+    offers: list[Offer], rooms: dict[int, Decimal], consumption: Consumption, ignored=()
+) -> dict[int, set[int]]:
     """{recipe_id: the articles ONE sale of it, on its own, would take past
     their room} for every offer that cannot be proposed at all."""
-    return {recipe_id: past for recipe_id, (_effect, past) in first_sales(offers, rooms, consumption).items() if past}
+    return {
+        recipe_id: past
+        for recipe_id, (_effect, past) in first_sales(offers, rooms, consumption, ignored).items()
+        if past
+    }
 
 
 class _Makeable:
@@ -426,6 +445,7 @@ def plan_sales(
     consumption: Consumption,
     values: dict[int, Decimal] | None = None,
     already: dict[int, int] | None = None,
+    ignored=(),
 ) -> Plan:
     """The sales to ring up for `amount_cents`, filling every room by about
     the same share. `offers` are the recipes that may be proposed (each
@@ -434,11 +454,17 @@ def plan_sales(
     per unit, which weighs the articles one sale fills against each other;
     `already` the sales proposed before ({recipe_id: count}), which the plan
     builds on - `Plan.counts` and `poured` are the new sales only, `used`
-    what the old and the new add together."""
+    what the old and the new add together; `ignored` the articles the owner
+    left out, neither a gap to fill nor a limit."""
     if amount_cents < 0:
         raise ValueError("amount_cents must not be negative")
-    run = _Run([offer for offer in offers if offer.price_cents > 0], rooms, consumption, values, already)
+    run = _Run([offer for offer in offers if offer.price_cents > 0], rooms, consumption, values, already, ignored)
     live = [offer for offer in run.offers if offer.reach() & run.targets]
+    # An offer reaching no gap - every article it pours left out, say - is
+    # never proposed, and must not count among the prices the rest of the
+    # amount can be made of: its price made a rest look makeable that no
+    # proposed sale could then make. Targets never grow, so it never would.
+    run.offers = live
     if not live or amount_cents == 0:
         reason = EXACT if amount_cents == 0 else NOTHING_TO_FILL
         return Plan({}, 0, amount_cents, reason, used=run.added_all())
