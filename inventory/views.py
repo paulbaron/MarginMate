@@ -42,6 +42,7 @@ from .forms import (
 )
 from .gaps import (
     MAX_AMOUNT,
+    duration_words,
     entry_lines,
     entry_rows,
     fill_gaps,
@@ -56,6 +57,7 @@ from .gaps import (
 from .models import (
     GapExclusion,
     GapFillEntry,
+    GapFillSetting,
     MovementKind,
     Product,
     StockMovement,
@@ -1622,6 +1624,9 @@ def stock_gap_filler(request):
         "since_param": SINCE_PARAM,
         "amount_param": AMOUNT_PARAM,
         "last_shown_param": LAST_SHOWN_PARAM,
+        "duration_param": DURATION_PARAM,
+        "duration_unit_param": DURATION_UNIT_PARAM,
+        "since_take_param": SINCE_TAKE_PARAM,
     }
     if not takes:
         # No table and no fold to say them in: every message at the top.
@@ -1642,10 +1647,13 @@ def stock_gap_filler(request):
         shown.append({"entry": entry, "lines": rows, "till_differs": sum(1 for row in rows if row.till_differs)})
     entered = sum((entry.amount for entry in entries), start=Decimal("0"))
     proposed = sum((entry.total for entry in entries), start=Decimal("0"))
+    duration, duration_unit = duration_fields(report.sold_within_months)
     context.update(
         {
             "take": take,
             "report": report,
+            "duration": duration,
+            "duration_unit": duration_unit,
             "entries": shown,
             "latest": shown[-1] if shown else None,
             "earlier": shown[-2::-1],
@@ -1681,7 +1689,15 @@ def stock_gap_filler_add(request):
     report = gaps_since(take)
     result = fill_gaps(report, amount, list_counts(entries))
     if not result.lines:
-        why = NOTHING_FOR.get(result.plan.reason, "plus aucune vente ne tient dans les écarts")
+        if not report.offers and not report.blocked:
+            # No recipe to propose at all: none sold over the menu's window,
+            # or those sold pour nothing.
+            since = f"depuis le {report.menu_since:%d/%m/%Y}" if report.sold_within_months else "depuis l'inventaire"
+            why = f"aucune recette vendue {since}"
+            if report.on_menu:
+                why += " n'utilise un article"
+        else:
+            why = NOTHING_FOR.get(result.plan.reason, "plus aucune vente ne tient dans les écarts")
         messages.warning(request, f"Rien pour {group_thousands(amount)} € : {why}.")
         return redirect(_gap_filler_url(take))
     watched_from = sales_watched_from(timezone.localdate())
@@ -1762,12 +1778,12 @@ def _messages_by_place(request) -> dict[str, list]:
     return places
 
 
-def _back_to_the_gaps(request, anchor: str):
-    """The page of the count the form came from, at `anchor`."""
+def _back_to_the_gaps(request, anchor: str = ""):
+    """The page of the count the form came from, at `anchor` if any."""
     take = _chosen_take(request.POST.get(SINCE_PARAM, ""), StockTake.objects.order_by("-taken_at"))
     if take is None:
         return redirect("inventory:stock_gap_filler")
-    return redirect(f"{_gap_filler_url(take)}#{anchor}")
+    return redirect(f"{_gap_filler_url(take)}#{anchor}" if anchor else _gap_filler_url(take))
 
 
 def _category_words(category: str) -> str:
@@ -1831,6 +1847,68 @@ def stock_gap_filler_include(request):
     exclusion.delete()
     (messages.warning if still_covered else messages.success)(request, said, extra_tags=EXCLUSION_MESSAGES)
     return _back_to_the_gaps(request, "exclusions")
+
+
+#: « Recettes vendues il y a moins de … »: how many (`duree`), of which
+#: unit (`unite`), or (`depuis_inventaire`, a button of its own) back to the
+#: recipes sold since the count - see GapFillSetting.
+DURATION_PARAM = "duree"
+DURATION_UNIT_PARAM = "unite"
+SINCE_TAKE_PARAM = "depuis_inventaire"
+#: The units offered, as the form posts them, and the months in one.
+DURATION_UNITS = {"mois": 1, "ans": 12}
+#: What a refused duration is told, by why it was refused.
+DURATION_ERRORS = {
+    "unreadable": "Durée illisible : tapez un nombre entier, par exemple 3 mois.",
+    "out_of_range": "La durée va d'un mois à 10 ans.",
+}
+
+
+def read_typed_duration(typed: str | None, unit: str) -> tuple[int | None, str]:
+    """(the months, "") or (None, why it is refused - a key of
+    DURATION_ERRORS). ASCII digits only: « ٣ » is a digit to Python."""
+    typed = (typed or "").strip()
+    if unit not in DURATION_UNITS or not re.fullmatch(r"[0-9]+", typed):
+        return None, "unreadable"
+    digits = typed.lstrip("0")
+    # Past six digits, out of range whatever they say - and never handed to
+    # int(), which refuses a few thousand of them.
+    if len(digits) > 6:
+        return None, "out_of_range"
+    months = int(digits or "0") * DURATION_UNITS[unit]
+    if not 1 <= months <= GapFillSetting.MAX_MONTHS:
+        return None, "out_of_range"
+    return months, ""
+
+
+def duration_fields(months: int | None) -> tuple[str, str]:
+    """What the form shows for a stored duration: whole years in years."""
+    if not months:
+        return "", "mois"
+    if months % 12 == 0:
+        return str(months // 12), "ans"
+    return str(months), "mois"
+
+
+def stock_gap_filler_recent(request):
+    """Which recipes « Combler les écarts » proposes: those sold over the
+    months or years typed (`duree`, `unite`), or those sold since the count
+    (`depuis_inventaire`). Kept for the espace - see GapFillSetting."""
+    if request.method != "POST":
+        return redirect("inventory:stock_gap_filler")
+    if request.POST.get(SINCE_TAKE_PARAM):
+        months = None
+    else:
+        months, error = read_typed_duration(
+            request.POST.get(DURATION_PARAM, ""), request.POST.get(DURATION_UNIT_PARAM, "")
+        )
+        if error:
+            messages.error(request, DURATION_ERRORS[error])
+            return _back_to_the_gaps(request)
+    GapFillSetting.objects.update_or_create(pk=GapFillSetting.SINGLETON_PK, defaults={"sold_within_months": months})
+    said = "depuis l'inventaire" if months is None else f"il y a {duration_words(months)}"
+    messages.success(request, f"Recettes proposées : celles vendues {said}.")
+    return _back_to_the_gaps(request)
 
 
 class StockTakeListView(ListView):

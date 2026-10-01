@@ -40,6 +40,20 @@
         <div class="message message-warning">Inventaire introuvable : les écarts partent du dernier.</div>
     {% endif %}
 
+    <form method="post" action="{% url 'inventory:stock_gap_filler_recent' %}" class="filter-row recent-sales" id="recettes-vendues">
+        {% csrf_token %}
+        <input type="hidden" name="{{ since_param }}" value="{{ take.pk }}">
+        <label for="recettes-duree">Recettes vendues il y a moins de</label>
+        <input type="number" id="recettes-duree" name="{{ duration_param }}" value="{{ duration }}" min="1" max="120" step="1" inputmode="numeric" required>
+        <select name="{{ duration_unit_param }}" aria-label="Unité de la durée">
+            <option value="mois"{% if duration_unit == "mois" %} selected{% endif %}>mois</option>
+            <option value="ans"{% if duration_unit == "ans" %} selected{% endif %}>an(s)</option>
+        </select>
+        <button class="btn btn-secondary" type="submit">Appliquer</button>
+        {% if report.sold_within_months %}<button class="btn btn-secondary" type="submit" name="{{ since_take_param }}" value="1" formnovalidate>Depuis l'inventaire</button>{% endif %}
+    </form>
+    <p class="muted">Proposées : les recettes vendues {% if report.sold_within_months %}il y a {{ report.sold_within_words }} (depuis le {{ report.menu_since|date:"d/m/Y" }}){% else %}depuis l'inventaire du {{ take.taken_at|date:"d/m/Y" }}{% endif %}.</p>
+
     <form method="post" action="{% url 'inventory:stock_gap_filler_add' %}" class="inline-form">
         {% csrf_token %}
         <input type="hidden" name="{{ since_param }}" value="{{ take.pk }}">
@@ -238,7 +252,7 @@
     {% elif report.rows_left_out %}
         <p class="muted">Tous les articles de ces écarts sont exclus.</p>
     {% else %}
-        <p class="muted">Aucune recette vendue depuis cet inventaire n'utilise un article compté ou acheté.</p>
+        <p class="muted">Aucune recette proposée n'utilise un article compté ou acheté.</p>
     {% endif %}
 
     <details class="explainer" id="exclusions"{% if report.exclusions or exclusion_messages %} open{% endif %}>
@@ -293,7 +307,7 @@
 
     {% if report.blocked or report.not_sold_since or report.unreached or report.outside_recipes %}
     <details class="explainer">
-        <summary>Ce qui ne peut pas être comblé{% if report.blocked %} · {{ report.blocked|length }} recette{{ report.blocked|length|pluralize }} bloquée{{ report.blocked|length|pluralize }}{% endif %}{% if report.unreached %} · {{ report.unreached|length }} article{{ report.unreached|length|pluralize }} sans recette proposée{% endif %}</summary>
+        <summary>Ce qui ne peut pas être comblé{% if report.blocked %} · {{ report.blocked|length }} recette{{ report.blocked|length|pluralize }} bloquée{{ report.blocked|length|pluralize }}{% endif %}{% if report.not_sold_since %} · {{ report.not_sold_since|length }} recette{{ report.not_sold_since|length|pluralize }} pas vendue{{ report.not_sold_since|length|pluralize }}{% endif %}{% if report.unreached %} · {{ report.unreached|length }} article{{ report.unreached|length|pluralize }} sans recette proposée{% endif %}</summary>
         {% if report.blocked %}
         <p class="muted">Une seule vente ferait dépasser un écart :</p>
         <ul>
@@ -305,8 +319,8 @@
         </ul>
         {% endif %}
         {% if report.not_sold_since %}
-        <p class="muted">{% if report.not_sold_since|length == 1 %}Pas vendue depuis l'inventaire, donc pas proposée{% else %}Pas vendues depuis l'inventaire, donc pas proposées{% endif %} :
-            {% for recipe in report.not_sold_since %}{{ recipe.name }}{% if not forloop.last %} · {% endif %}{% endfor %}
+        <p class="muted">{% if report.not_sold_since|length == 1 %}Pas vendue{% else %}Pas vendues{% endif %} {% if report.sold_within_months %}depuis le {{ report.menu_since|date:"d/m/Y" }}{% else %}depuis l'inventaire{% endif %}, donc pas proposée{{ report.not_sold_since|length|pluralize }} :
+            {% for unsold in report.not_sold_since %}<a href="{% url 'recipes:recipe_detail' unsold.recipe.pk %}">{{ unsold.recipe.name }}</a> ({% if unsold.last_sold %}dernière vente {{ unsold.last_sold|date:"d/m/Y" }}{% else %}jamais vendue{% endif %}){% if not forloop.last %} · {% endif %}{% endfor %}
         </p>
         {% endif %}
         {% if report.unreached %}
@@ -325,6 +339,7 @@
         <ul>
             <li>Écart = inventaire + achats − pertes − vendu : il compte aussi ce qui reste en rayon.</li>
             <li>La perte tolérée de chaque article (10 % par défaut) n'est pas à combler.</li>
+            <li>Seules les recettes vendues depuis l'inventaire, ou sur la durée choisie, sont proposées.</li>
             <li>Chaque vente proposée est comptée comme la page Produits la comptera : aucune ne fait dépasser un écart, hors articles exclus.</li>
             <li>Une recette « au choix » est comptée sur l'option la plus chère qui a encore de la place, comme une vente réelle.</li>
             <li>Chaque vente va aux recettes dont les écarts, pesés en valeur, sont le moins comblés ; à égalité, au mélange des ventes réelles.</li>

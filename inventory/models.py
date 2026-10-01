@@ -368,6 +368,43 @@ class GapExclusion(models.Model):
         return f"Catégorie « {self.category} »" if self.stock_type_id is None else str(self.stock_type)
 
 
+class GapFillSetting(models.Model):
+    """« Combler les écarts »' own settings for the espace: one row (pk 1),
+    absent until the owner changes something.
+
+    `sold_within_months`: only the recipes sold over the last that many
+    months are proposed (the owner, 01/10/2026: « ne proposer que des
+    recettes ayant été vendues il y a moins de X temps » - some recipes are
+    off the menu). Counted back from today, whatever the count the gaps run
+    from: right after a count nothing has been sold since it, yet the menu
+    has not changed. None, the default, is the recipes sold since that count.
+    Never exported by « Données »: like the exclusions, it belongs to this
+    page (gaps.gaps_since)."""
+
+    SINGLETON_PK = 1
+    #: Ten years: a typed duration is refused past it.
+    MAX_MONTHS = 120
+
+    sold_within_months = models.PositiveSmallIntegerField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=models.Q(id=1), name="gap_fill_setting_one_row"),
+            models.CheckConstraint(
+                condition=models.Q(sold_within_months__isnull=True)
+                | models.Q(sold_within_months__gte=1, sold_within_months__lte=120),
+                name="gap_fill_setting_months_in_range",
+            ),
+        ]
+
+    @classmethod
+    def current(cls) -> "GapFillSetting":
+        """The stored row, else the defaults unsaved: a page drawn writes
+        nothing."""
+        return cls.objects.filter(pk=cls.SINGLETON_PK).first() or cls(pk=cls.SINGLETON_PK)
+
+
 class StockTakeLine(models.Model):
     """One counted product OR stock type within a StockTake - exactly one of
     the two (see the CheckConstraint below): a specific product when you

@@ -42,6 +42,7 @@ from inventory.gaps import (
     OVER,
     WITHIN_ALLOWANCE,
     TillButton,
+    UnsoldRecipe,
     entry_lines,
     fill_gaps,
     gaps_since,
@@ -499,15 +500,18 @@ class PricedAndSoldTests(TestCase):
         self.assertNotIn(self.unpriced.pk, offered)
         self.assertNotIn(self.comped.pk, self.report.recipes)
         self.assertNotIn(self.unpriced.pk, self.report.recipes)
-        self.assertNotIn(self.comped, self.report.not_sold_since)
-        self.assertNotIn(self.unpriced, self.report.not_sold_since)
+        unsold = [row.recipe for row in self.report.not_sold_since]
+        self.assertNotIn(self.comped, unsold)
+        self.assertNotIn(self.unpriced, unsold)
 
     def test_their_sales_still_count_in_what_was_sold(self):
         # 10 pints + 4 comped + 2 unpriced, half a litre each.
         self.assertEqual(self.report.articles[self.blonde.pk].sold, Decimal("8"))
 
     def test_a_priced_recipe_not_sold_since_the_take_is_said_not_offered(self):
-        self.assertEqual(self.report.not_sold_since, [self.half, self.galopin])
+        # Each with its last sale: the half on the take's day, the galopin
+        # never.
+        self.assertEqual(self.report.not_sold_since, [UnsoldRecipe(self.half, START), UnsoldRecipe(self.galopin, None)])
         offered = {offer.recipe_id for offer in self.report.offers}
         self.assertEqual(offered, {self.pint.pk})
 

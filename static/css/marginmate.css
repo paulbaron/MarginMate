@@ -1445,6 +1445,8 @@ tr.is-new > td:first-child { box-shadow: inset 3px 0 0 var(--amber); }
 .row-actions form { display: inline; }
 /* « Exclus des écarts »: each exclusion with its « Réinclure » on its line. */
 .exclusion-list form { display: inline; margin-left: var(--s2); }
+/* « Recettes vendues il y a moins de [3] [mois] »: a count of three digits. */
+.recent-sales input[type="number"] { width: 5rem; }
 .sub-table-wrap { overflow-x: auto; }
 
 /* A charge item is a row under its supplier's, and sorting keeps the two

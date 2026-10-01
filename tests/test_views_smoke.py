@@ -19,7 +19,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from bank.models import BankTransaction
-from inventory.models import GapExclusion, GapFillEntry, StockMovement, StockType, UnitChoices
+from inventory.models import GapExclusion, GapFillEntry, GapFillSetting, StockMovement, StockType, UnitChoices
 from invoices.models import Invoice, ReceiptBatch, ShopItemPrice
 from recipes.models import PosProduct, PosProductDailyQuantity, Recipe, RecipeSale
 from staff.tests.signing_support import SigningTestMixin
@@ -378,6 +378,34 @@ class PageSmokeTests(TestCase):
         self.assertContains(self.assertPageOK("inventory:stock_take_list"), url)
         self.assertContains(self.assertPageOK("inventory:stock_take_detail", pk=take.pk), f"{url}?depuis={take.pk}")
 
+    def test_stock_gap_filler_recent_sales(self):
+        """« Recettes vendues il y a moins de … »: a duration chosen, then
+        the recipes sold since the count again - each POST a redirect to the
+        count's page, drawn whole, saying which recipes it proposes. A GET to the route goes to the
+        page and writes nothing; a duration refused is a message."""
+        url = reverse("inventory:stock_gap_filler")
+        recent = reverse("inventory:stock_gap_filler_recent")
+        take = make_gaps_to_fill()
+        page = f"{url}?depuis={take.pk}"
+        self.assertRedirectsOnGet("inventory:stock_gap_filler_recent")
+        self.assertFalse(GapFillSetting.objects.exists())
+        for data, months in (
+            ({"duree": "3", "unite": "mois"}, 3),
+            ({"duree": "2", "unite": "ans"}, 24),
+            ({"duree": "abc", "unite": "mois"}, 24),
+            ({"depuis_inventaire": "1"}, None),
+        ):
+            with self.subTest(data=data):
+                response = self.client.post(recent, {"depuis": take.pk, **data})
+                self.assertEqual(response.status_code, 302)
+                self.assertEqual(response["Location"], page)
+                self.assertEqual(GapFillSetting.current().sold_within_months, months)
+                response = self.client.get(url, {"depuis": take.pk})
+                self.assertEqual(response.status_code, 200)
+                assertNoUnrenderedTemplateSyntax(self, response, f"{page} after {data}")
+                self.assertContains(response, 'id="recettes-vendues"')
+                self.assertContains(response, "Proposées : les recettes vendues")
+
     def test_stock_gap_filler_exclusions(self):
         """« Exclus des écarts »: an article left out from its row, a
         category and the articles with none from the fold - each POST a
@@ -627,6 +655,7 @@ class EmptyDatabasePageSmokeTests(TestCase):
             "inventory:stock_gap_filler_clear",
             "inventory:stock_gap_filler_exclude",
             "inventory:stock_gap_filler_include",
+            "inventory:stock_gap_filler_recent",
         ):
             with self.subTest(action=name):
                 for response in (
