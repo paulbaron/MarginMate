@@ -27,6 +27,23 @@ class ToolchainFilesTests(SimpleTestCase):
         self.assertEqual(toml("mise.toml")["tools"]["python"], asked)
         self.assertEqual(toml("pyproject.toml")["project"]["requires-python"], ">=3.11,<3.12")
 
+    def test_mise_never_hands_uv_its_own_patch_version(self):
+        """mise's python.uv_venv_auto exports UV_PYTHON as the exact Python it
+        installed (3.11.16), into every uv a shim runs - deploy.cmd's `call uv
+        sync`, prek's `uv run`. An explicit request beats .python-version, and
+        a .venv on any other 3.11 no longer satisfies it: uv replaces it. On
+        01/10/2026 a `uv run` in the development folder started deleting its
+        pip-made .venv (3.11.9) and took two packages before a file the
+        servers held stopped it; production's, its OCR models included, would
+        have gone at the next deploy. Off, uv reads .python-version (« 3.11 »)
+        and keeps the .venv. What it did that is worth keeping - the python
+        shim running .venv's here - is mise's own venv directive, which hands
+        uv nothing."""
+        config = toml("mise.toml")
+        self.assertIs(config.get("settings", {}).get("python", {}).get("uv_venv_auto"), False)
+        self.assertNotIn("UV_PYTHON", config.get("env", {}))
+        self.assertEqual(config["env"]["_"]["python"]["venv"], {"path": ".venv"})
+
     def test_mise_pins_uv_and_prek_exactly(self):
         tools = toml("mise.toml")["tools"]
         for tool in ("uv", "prek"):

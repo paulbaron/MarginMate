@@ -49,6 +49,9 @@ packages in `pyproject.toml`, every version locked in `uv.lock`.
    prek install     # the git hooks of prek.toml
    copy .env.example .env
    ```
+   Until `uv sync` has made `.venv`, mise warns « no venv found » and offers
+   `python -m venv`: ignore it, `uv sync` makes it. From then on, `python` in
+   this folder is `.venv`'s (`mise.toml`, `_.python.venv`).
 
 Edit `.env`:
 - `DJANGO_SECRET_KEY` - required unless `DJANGO_DEBUG=True`: at least 50

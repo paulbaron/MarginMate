@@ -332,7 +332,7 @@ Jusqu'ici le site tournait depuis le dossier de développement, sur
    git clone -b main "C:\Users\<vous>\Desktop\Bar application gestion\AdminMate" C:\MarginMate\app
    cd /d C:\MarginMate\app
    mise install
-   uv sync --locked --no-dev
+   uv sync --locked --no-dev --python 3.11
    ```
 
    `uv` crée le dossier `.venv`, avec Python 3.11, et y installe les dépendances : exactement
@@ -457,8 +457,8 @@ a réussi :
    sauvegarde échoue, il relance le serveur tel qu'il était et s'arrête : rien n'a changé.
 8. **Met le code à jour** (`git merge --ff-only origin/main` : le code avance, rien n'est
    réécrit). Si cela échoue, il remet le code d'avant et relance le serveur.
-9. **Installe les dépendances** (`uv sync --locked --no-dev` : exactement celles de `uv.lock`, sans
-   les outils de développement), **applique les migrations**
+9. **Installe les dépendances** (`uv sync --locked --no-dev --python 3.11` : exactement celles de
+   `uv.lock`, sans les outils de développement, dans le `.venv` existant), **applique les migrations**
    (`manage.py migrate_tenants`, juste après la sauvegarde) et **vérifie** le serveur
    (`manage.py serve --verifier`). Si l'une de ces étapes échoue, il **ne relance pas** le serveur :
    le nouveau code et les données ne vont peut-être plus ensemble. La fenêtre affiche alors les
@@ -500,9 +500,11 @@ et relancez `deploy.cmd`. Pour revenir plus tard sur une version mise en ligne :
    ```
    cd /d C:\MarginMate\app
    git reset --hard <version d'avant>
-   uv sync --locked --no-dev
+   uv sync --locked --no-dev --python 3.11
    ```
 
+   Gardez `--python 3.11` : sans lui, une version d'avant le 01/10/2026 fait demander à `uv` un
+   autre Python exact, et `uv` refait alors `.venv` en entier.
    La version d'avant est le premier numéro de « Déployé : ancien..nouveau » ;
    `git log --oneline` les liste toutes. On ne revient pas avant le passage à uv (section 10.6) :
    une version d'avant n'a pas de fichier `uv.lock`, et son `deploy.cmd`, remis en place par le
@@ -576,7 +578,7 @@ ligne :
    l'étape 3, puis finissez la mise en ligne à la main, dans la même invite de commandes :
 
    ```
-   uv sync --locked --no-dev
+   uv sync --locked --no-dev --python 3.11
    .venv\Scripts\python.exe manage.py migrate_tenants
    .venv\Scripts\python.exe manage.py serve --verifier
    rmdir /s /q .git\marginmate-deploy
@@ -597,7 +599,7 @@ ligne :
    celui du code. Ces commandes ne marchent qu'après la première mise en ligne, qui apporte
    `mise.toml` dans `C:\MarginMate\app`.
 4. **À partir de la deuxième mise en ligne**, `deploy.cmd` installe les dépendances avec
-   `uv sync --locked --no-dev` : exactement celles de `uv.lock`, sans les outils de développement,
+   `uv sync --locked --no-dev --python 3.11` : exactement celles de `uv.lock`, sans les outils de développement,
    et il retire de `.venv` ce que `uv.lock` ne liste pas (pip compris). Si `uv` ne répond pas, il
    refuse avant de toucher à quoi que ce soit, avec « REFUS : uv ne repond pas » : reprenez
    l'étape 3. Si `uv --version` répond dans une nouvelle invite de commandes et que `deploy.cmd`

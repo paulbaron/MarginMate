@@ -12,5 +12,14 @@ uv = "0.12.20"
 prek = "0.5.4"
 
 [settings]
-# A shell where mise is activated also activates the project's .venv.
-python.uv_venv_auto = true
+# Off, and said so (a user's global config could turn it on): it exports
+# UV_PYTHON as the exact Python mise installed (3.11.16) into every uv a shim
+# runs - deploy.cmd's `uv sync`, prek's `uv run` - which beats .python-version,
+# and uv then replaces a .venv made on any other 3.11. On 01/10/2026 a `uv run`
+# began deleting the development folder's .venv that way.
+python.uv_venv_auto = false
+
+[env]
+# What uv_venv_auto did that is worth keeping, without its UV_PYTHON: the
+# `python` and `pip` shims run .venv's in this folder (`python manage.py …`).
+_.python.venv = { path = ".venv" }

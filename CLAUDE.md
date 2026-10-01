@@ -90,6 +90,27 @@ Set up 30/09/2026 at the owner's request; README.md, « First-time setup » and
   pip-made `.venv` away and rebuilt it on the first Python it found (mise's)
   - measured 30/09, and production's `.venv`, its downloaded OCR models with
   it, would have gone at the next deploy (`tests/test_toolchain.py`).
+  **And mise's `python.uv_venv_auto` stays OFF** (`mise.toml` says `false`):
+  on, it exports `UV_PYTHON` as the exact Python mise installed (3.11.16)
+  into every `uv` a shim runs - deploy.cmd's step 7, prek's `uv run` - an
+  explicit request that beats `.python-version`, and uv then replaces a
+  `.venv` made on any other 3.11. On 01/10/2026 a `uv run ty` in this folder
+  began deleting its pip-made `.venv` (3.11.9) that way and took
+  `aiohappyeyeballs` and most of `aiohttp` before a file the dev servers held
+  stopped it (put back from uv's cache, byte for byte against RECORD). Check
+  with `uv sync --locked --dry-run -v` through the shim: « Using Python
+  request `3.11` from version file » and no « Would replace ». What it did
+  that is worth keeping, the `python` and `pip` shims running `.venv`'s in
+  this folder, is `[env] _.python.venv` (no `UV_PYTHON`; « no venv found »
+  until `uv sync` has made one). **Every production `uv sync` also says
+  `--python 3.11`** (deploy.cmd's step 7, the way back it prints, DEPLOY.md's
+  commands; `test_every_uv_sync_names_the_python_of_python_version`): the
+  way back puts an older `mise.toml` back on disk, every one of them with
+  the setting on, and an explicit `--python` beats whatever mise hands uv. The
+  deploy that SHIPS this runs the previous deploy.cmd (from its copy), whose
+  printed way back has no `--python`: add it by hand there. A `.venv`
+  whose dev group is not installed (`ty`, the stubs) is that folder's state,
+  not this rule's: `uv sync` with the servers stopped completes it.
   VS Code's Ruff extension runs `.venv\Scripts\ruff.exe server`, and Windows
   will not let `uv sync` delete that file (« Accès refusé »); it can be
   renamed while it runs (`ruff.exe.held-by-vscode`), then synced, and the old
@@ -236,7 +257,7 @@ DEPLOY.md, section 10, has the owner's steps (the one-off move included).
   `main` (nothing uncommitted travels; no GitHub push is needed - the public
   repository is pushed only after the owner's privacy audit), refuses while
   a job runs (`manage.py running_jobs`, exit 1), stops the server, backs up,
-  fast-forwards, `uv sync --locked --no-dev`, `migrate_tenants`, `serve --verifier`,
+  fast-forwards, `uv sync --locked --no-dev --python 3.11`, `migrate_tenants`, `serve --verifier`,
   restarts; a failure before the merge restarts the server as it was, a
   failure after it restarts NOTHING and prints the rollback. A migration
   shipped therefore reaches production at the next deploy, backed up first.
@@ -260,7 +281,7 @@ DEPLOY.md, section 10, has the owner's steps (the one-off move included).
   mid-copy go (listed in the manifest, `vanished`), and
   refresh_dev_data.cmd takes the newest backup with a manifest.json and a
   data\ folder.
-- **deploy.cmd installs with uv** (step 7, `call uv sync --locked --no-dev`;
+- **deploy.cmd installs with uv** (step 7, `call uv sync --locked --no-dev --python 3.11`;
   `call` because a mise shim may be a batch file) and, before its mark,
   refuses touching nothing when `call uv --version` fails - a shim on the
   PATH answers « mise-shim: failed to execute mise », exit 1, when mise
