@@ -39,11 +39,11 @@ serving is what its most-sold recipe pours, so a pint and a half of the same
 keg rank alike. A sale's level is the levels of the gaps it fills averaged by
 what it pours of each IN VALUE (`values`, the cost per unit), and each sale
 goes to the recipe whose level is the lowest. Weighted by value, a garnish
-worth a few centimes neither drives a cocktail (« the citric acid is far
-behind » sold the rum past every other gap) nor holds one back for good (the
-cocktail ranked by its most advanced article was never chosen while a
-lemonade the best-sellers also pour kept ahead, and its own syrup stayed at
-0 % at any amount). Recipes tie when they fill the same gaps alike (pint or
+worth a few centimes neither drives a cocktail (keyed on its least advanced
+article, a garnish far behind sells the spirit past every other gap) nor
+holds one back for good (keyed on its most advanced, a cocktail is never
+chosen while a lemonade the best-sellers also pour keeps ahead, and its own
+syrup is never filled). Recipes tie when they fill the same gaps alike (pint or
 half, the same spirit neat or in a long drink); the tie goes to the recipe
 furthest behind its share of what was really sold since the count (Webster
 again: (planned + ½) / (sold + 1)), so the list reads like the bar's own

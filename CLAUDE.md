@@ -4181,7 +4181,7 @@ reach (`Offer.independent`) adds exactly its terms and is never measured. A
 recipe set aside (its next sale would go past a room, or fill no gap) is
 measured again once the plan has moved on (`_Run.revive`): a fixed pour taking
 a bottle to its cap sends the next « au choix » onto another bottle with
-plenty - set aside for good, the plan stopped at a quarter of the amount and
+plenty - set aside for good, the plan stopped far short of the amount and
 said the gaps were full. The one promise: **nothing goes past max(0, room) as
 the engine counts it**, so what the page predicts is what the stock page
 shows once the sales are in.
@@ -4191,11 +4191,11 @@ level is (added + half its usual serving) / room - the usual serving being
 what its most-sold recipe pours, so a pint and a half of one keg rank alike.
 A sale's level is the levels of the gaps it fills averaged by what it pours
 of each IN VALUE (the cost per unit, `values`), and the next sale goes to the
-lowest. Both simpler keys failed on the real menu: by its most advanced
-article, a cocktail sharing a lemonade with the best-sellers was never chosen
-and its own syrup stayed at 0 % at any amount; by its least advanced, a
-garnish weighing a few grams a glass (far behind, being huge beside what one
-glass pours) drove its cocktail and sold the rum past every other gap.
+lowest. Both simpler keys fail: by its most advanced article, a cocktail
+sharing a lemonade with the best-sellers is never chosen and its own syrup is
+never filled, whatever the amount; by its least advanced, a garnish weighing
+a few grams a glass (far behind, being huge beside what one glass pours)
+drives its cocktail and sells the spirit past every other gap.
 Weighted by value, a garnish neither drives nor blocks; it may run ahead of
 the common level, within its room. Ties - recipes filling the same gaps alike
 - go to the recipe furthest behind its share of what the till really sold

@@ -628,7 +628,7 @@ class TillButtonByPriceTests(TestCase):
         cls.ti_punch.save(update_fields=["happy_hour_name"])
         sold(cls.ti_punch, 2)
         cls.ti_button = till_button("Ti punch caisse exemple", cls.ti_punch, rung=5)
-        rung_up(cls.ti_button, date(2026, 3, 10), 5, "150.00")
+        rung_up(cls.ti_button, date(2026, 3, 10), 5, "150.50")
         happy_hour = till_button("TI PUNCH HH EXEMPLE", cls.ti_punch, rung=90)
         rung_up(happy_hour, date(2026, 3, 10), 9, "279.00")
         ignored = till_button("Ti punch ancien exemple", cls.ti_punch, rung=90, ignored=True)
@@ -674,7 +674,7 @@ class TillButtonByPriceTests(TestCase):
 
     def test_never_the_happy_hour_nor_an_ignored_button_even_at_the_recipe_s_price(self):
         self.assertEqual(
-            self.report.till_buttons[self.ti_punch.pk], TillButton("Ti punch caisse exemple", Decimal("30.00"))
+            self.report.till_buttons[self.ti_punch.pk], TillButton("Ti punch caisse exemple", Decimal("30.10"))
         )
 
     def test_two_lines_at_another_price_are_counted(self):

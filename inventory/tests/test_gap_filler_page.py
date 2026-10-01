@@ -1174,7 +1174,7 @@ class TillPriceTests(PageTestCase):
     A pint at 35,00 € and a bowl of cider at 32,00 €, sold since a count 20
     days ago. The pint has its own button at 35,00 € (rung little) and a
     glass button at 13,30 € (rung a lot); the bowl's one button rings
-    30,00 €. 67,00 € is one of each and nothing else."""
+    30,10 €. 67,00 € is one of each and nothing else."""
 
     @classmethod
     def setUpTestData(cls):
@@ -1193,9 +1193,9 @@ class TillPriceTests(PageTestCase):
         glass = PosProduct.objects.create(name="Verre exemple", recipe=cls.pint, total_quantity=40)
         rung_up(glass, sale_day, 40, "532.00")
         cls.bowl_button = PosProduct.objects.create(name="Bolée caisse exemple", recipe=cls.bowl, total_quantity=10)
-        rung_up(cls.bowl_button, sale_day, 9, "270.00")
+        rung_up(cls.bowl_button, sale_day, 9, "270.90")
         # One bowl comped: the day's average is no price.
-        rung_up(cls.bowl_button, today - timedelta(days=2), 2, "30.00")
+        rung_up(cls.bowl_button, today - timedelta(days=2), 2, "30.10")
 
     def plan_row(self, html, name):
         return cells_of(row_of(table_of(html, PLAN_TABLE), name))
@@ -1213,7 +1213,7 @@ class TillPriceTests(PageTestCase):
         html = self.add("32")
         self.assertEqual(
             self.plan_row(html, "Bolée exemple"),
-            ["Bolée exemple", "Bolée caisse exemple en caisse 30.00 €", "1", "32.00 €", "32.00 €", "Cidre exemple"],
+            ["Bolée exemple", "Bolée caisse exemple en caisse 30.10 €", "1", "32.00 €", "32.00 €", "Cidre exemple"],
         )
         self.assertEqual(note_of(stat_of(html, PROPOSED)), EXACT)
 
@@ -1230,7 +1230,7 @@ class TillPriceTests(PageTestCase):
         )
         self.assertEqual(
             self.plan_row(html, "Bolée exemple"),
-            ["Bolée exemple", "Bolée caisse exemple en caisse 30.00 €", "1", "32.00 €", "32.00 €", "Cidre exemple"],
+            ["Bolée exemple", "Bolée caisse exemple en caisse 30.10 €", "1", "32.00 €", "32.00 €", "Cidre exemple"],
         )
         self.assertEqual(note_of(stat_of(html, PROPOSED)), EXACT)
 
@@ -1252,7 +1252,7 @@ class TillPriceTests(PageTestCase):
         html = self.html(depuis=str(self.take.pk))
         self.assertEqual(
             self.plan_row(html, "Bolée exemple"),
-            ["Bolée exemple", "Bolée caisse exemple en caisse 30.00 €", "1", "32.00 €", "32.00 €", "Cidre exemple"],
+            ["Bolée exemple", "Bolée caisse exemple en caisse 30.10 €", "1", "32.00 €", "32.00 €", "Cidre exemple"],
         )
         html = self.add("32")
         self.assertEqual(
@@ -1299,7 +1299,7 @@ class TillPriceTests(PageTestCase):
         self.assertNotIn("en caisse", table_of(html, PLAN_TABLE))
 
     def test_the_note_is_the_last_entry_s_alone(self):
-        # The bowl rung at 30,00 € was in the first amount, not the last.
+        # The bowl rung at 30,10 € was in the first amount, not the last.
         self.add("32")
         html = self.add("35")
         _first, last = entries_of(self.take)
