@@ -2,8 +2,8 @@
 rem MarginMate: puts the latest version of the code online (DEPLOY.md, section 10).
 rem
 rem Started with a double-click in the PRODUCTION copy, C:\MarginMate\app: a git
-rem clone whose "origin" remote is the development folder. It takes what was
-rem committed (git commit) on the main branch there, in this order:
+rem clone whose "origin" remote is GitHub (since 01/10/2026; the development
+rem folder before). It takes what was pushed to GitHub's main, in this order:
 rem   0. one deployment at a time: it creates the folder
 rem      .git\marginmate-deploy (mkdir, which fails when it already exists), notes
 rem      there how far it got (etat.txt), and removes it only once finished, or after
@@ -110,7 +110,8 @@ call git diff --quiet HEAD --
 if errorlevel 2 goto :git_unreadable
 if errorlevel 1 goto :code_modified
 
-rem 2. The changes committed in the development folder.
+rem 2. The changes pushed to GitHub's main. The words on screen still say the
+rem development folder: another version's deploy.cmd prints its own.
 echo Recherche des changements dans le dossier de developpement (git fetch origin)...
 call git fetch origin
 if errorlevel 1 goto :fetch_failed

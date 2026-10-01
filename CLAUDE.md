@@ -123,8 +123,9 @@ Set up 30/09/2026 at the owner's request; README.md, « First-time setup » and
   **pre-push is the CI**: `uv lock --check`, ruff check and
   format check and ty over the whole repository, `manage.py check`,
   `makemigrations --check`, and the fast suite with `--parallel 6` (about two
-  minutes). A deploy pulls the development folder without pushing: run
-  `prek run --hook-stage pre-push --all-files` before one. The browser tests
+  minutes). A deploy takes GitHub's `main` (« Two copies », below), so the
+  push it takes is the CI's moment: run `prek run --hook-stage pre-push
+  --all-files` before it - the hooks are not installed in every copy. The browser tests
   stay manual (« Running the tests »).
 - **ruff** (`[tool.ruff]`): line length 120, ruff's default rule set less
   FURB157 (`Decimal("0")` stays: money is built from strings), RUF012
@@ -229,18 +230,26 @@ LOAD-1, LOAD-2, LOAD-3, LB-6; `accounts/tests/test_sessions.py`).**
 ## Two copies: development and production
 
 Since 30/09/2026 (the owner's decision) the site and the code being edited
-are two copies on the owner's PC, each with its own code, .env and data.
-DEPLOY.md, section 10, has the owner's steps (the one-off move included).
+are separate copies on the owner's PC, each with its own code, .env and data
+- production, and SEVERAL development copies (« Bar application gestion »,
+« … 2 », « … 3 », a session in each). DEPLOY.md, section 10, has the owner's
+steps (the one-off move included).
 
 - **PRODUCTION**: code `C:\MarginMate\app`, a git clone whose `origin` is
-  THIS folder (branch `main`); data `C:\MarginMate\data` (`tenants\`,
+  **GitHub** (`https://github.com/paulbaron/MarginMate.git`, branch `main`)
+  since 01/10/2026 - the owner's choice, one source whatever copy pushed
+  (`git remote set-url origin https://github.com/paulbaron/MarginMate.git`).
+  It was cloned from the first development copy and followed it: that
+  copy's `main` was already live, and deploy.cmd said « Rien de nouveau »
+  while the day's work sat in « … 2 ». Data `C:\MarginMate\data` (`tenants\`,
   `accounts.sqlite3`, `logs\`); backups `C:\MarginMate\backups\<AAAA-MM-JJ_HHMMSS>\`
   (`manage.py backup_data`, `accounts/data_backup.py`: every SQLite database
   through the backup API, checked, the rest as files, the .env, a manifest;
   a failure is renamed `-INCOMPLET`); its own .env (`DJANGO_DEBUG=False`,
   `MARGINMATE_HTTPS=1`, absolute paths into `C:\MarginMate\data`). Its
   `start_production.cmd`, the logon task « MarginMate », `serve` on 8765.
-- **DEVELOPMENT**: this folder, where the owner and coding sessions edit.
+- **DEVELOPMENT**: this folder - one of the copies where the owner and
+  coding sessions edit; each pushes its `main` to GitHub.
   Its .env says `DJANGO_DEBUG=True`, local hosts only, no `MARGINMATE_HTTPS`,
   **no integration credentials** (Metro, the mailbox, L'Addition, the AI,
   the mail server, the portals' variables: blank, so a gather from here
@@ -253,9 +262,17 @@ DEPLOY.md, section 10, has the owner's steps (the one-off move included).
 - **A coding session edits this folder only and never touches `C:\MarginMate`**:
   not its code, not its data, not its .env, no command run there, no
   backup read. Production changes only through `deploy.cmd`, double-clicked
-  by the owner in `C:\MarginMate\app`: it takes this folder's COMMITTED
-  `main` (nothing uncommitted travels; no GitHub push is needed - the public
-  repository is pushed only after the owner's privacy audit), refuses while
+  by the owner in `C:\MarginMate\app`: it takes GitHub's `main` (`git fetch
+  origin`, so the network; its window still says « dossier de developpement »),
+  so a change goes live once committed, merged into `main` AND pushed.
+  **The repository is public**: before a push, `git fetch origin`, then
+  every outgoing commit, message and patch (`git log -p origin/main..main`
+  - a diff of the two ends misses data a later commit removed) is read for
+  real data: the names, payers and amounts of data-dev (« Privacy », at the
+  end). A push refused because another copy pushed first is fetched and
+  merged (`git fetch origin`, `git merge origin/main`; never a bare `git
+  pull`, which REBASES on this PC: `pull.rebase=true` in Git's system
+  config), tested, then pushed - never forced. deploy.cmd refuses while
   a job runs (`manage.py running_jobs`, exit 1), stops the server, backs up,
   fast-forwards, `uv sync --locked --no-dev --python 3.11`, `migrate_tenants`, `serve --verifier`,
   restarts; a failure before the merge restarts the server as it was, a
