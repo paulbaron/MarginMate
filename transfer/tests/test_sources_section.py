@@ -434,11 +434,43 @@ class PortalReplaceTests(TestCase):
         self.assertFalse(self.portal.is_active)
         self.assertEqual(report.notes[0], portal_note("désactivée"))
 
-    def test_the_same_address_and_variables_keep_it_on(self):
-        report = self._replace(navigation="Autre chemin")
-        self.assertEqual(self.portal.website_source.navigation, "Mon espace\nMes factures")
+    def test_only_the_window_changed_keeps_it_on(self):
+        """« Navigateur visible » neither types nor clicks: the one portal
+        setting an archive may change and leave a portal on."""
+        report = self._replace(show_browser=False)
+        self.assertTrue(self.portal.website_source.show_browser)
         self.assertTrue(self.portal.is_active)
         self.assertEqual(report.notes, [ENV_NOTE])
+
+    def test_every_other_setting_changed_switches_it_off_and_is_named(self):
+        """The selectors say which field gets which secret and what sends
+        them; the invoices page and the links to follow where the open
+        session goes; the invoice-link and next-page selectors what is
+        clicked on the account. Changed by an archive, each leaves the
+        portal off - and the note names it, since « vérifiez l'adresse et
+        les variables » alone sent the owner to check what had not changed."""
+        here = {
+            "invoices_url": ("https://portail.eau.example/autres-factures", "page des factures"),
+            "navigation": ("Autre chemin", "navigation"),
+            "username_selector": ("#identifiant", "sélecteur de l'identifiant"),
+            "password_selector": ("#recherche", "sélecteur du mot de passe"),
+            "submit_selector": ("#envoyer", "sélecteur du bouton"),
+            "link_selector": ("a.autre", "sélecteur des liens"),
+            "next_selector": ("button.resilier", "sélecteur de la page suivante"),
+        }
+        for name, (value, label) in here.items():
+            with self.subTest(setting=name):
+                InvoiceType.objects.filter(pk=self.portal.pk).update(is_active=True)
+                archived = getattr(WebsiteInvoiceSource.objects.get(invoice_type=self.portal), name)
+                report = self._replace(**{name: value})
+                self.assertEqual(getattr(self.portal.website_source, name), archived)
+                self.assertFalse(self.portal.is_active)
+                self.assertEqual(report.notes, [portal_note(f"désactivée (changé par l'archive : {label})"), ENV_NOTE])
+
+    def test_the_sign_in_settings_are_every_portal_setting_but_the_window(self):
+        """A setting added to the portal is classified here, on purpose."""
+        self.assertEqual(set(section.SIGN_IN_FIELDS), set(section.WEBSITE_FIELDS) - {"show_browser"})
+        self.assertLessEqual(set(section.NOTE_FIELDS), set(section.SIGN_IN_FIELDS))
 
     def test_an_import_never_switches_a_portal_on(self):
         """Imported once, a forged portal is inactive; the same archive
@@ -611,6 +643,70 @@ class RefusalTests(TestCase):
         report = self._import(self._edit("Eau Essai", website={"password_env": "hunter2"}))
         self.assertFalse(InvoiceType.objects.filter(name="Eau Essai").exists())
         self.assertIn("variable du mot de passe : Le nom d'une variable du fichier .env", report.skipped[0])
+
+    def test_a_login_page_in_clear_is_skipped_with_the_forms_message(self):
+        """The import runs the model's clean() as the source form does: a
+        password is never typed on a page that is not https."""
+        from invoices.models import LOGIN_URL_NOT_HTTPS
+
+        report = self._import(self._edit("Eau Essai", website={"login_url": "http://portail.eau.example/connexion"}))
+        self.assertFalse(InvoiceType.objects.filter(name="Eau Essai").exists())
+        self.assertEqual(
+            report.skipped, [f"Source « Eau Essai » (Eau Essai) : page de connexion : {LOGIN_URL_NOT_HTTPS}"]
+        )
+        self.assertEqual(report.tallies["sources"].created, 3)
+
+    def test_an_invoices_page_in_clear_is_skipped(self):
+        report = self._import(self._edit("Eau Essai", website={"invoices_url": "http://portail.eau.example/factures"}))
+        self.assertFalse(InvoiceType.objects.filter(name="Eau Essai").exists())
+        self.assertEqual(len(report.skipped), 1)
+        self.assertIn(
+            "Source « Eau Essai » (Eau Essai) : page des factures : Une adresse en https://", report.skipped[0]
+        )
+
+    def test_the_names_of_another_sites_portal_are_skipped(self):
+        """Their password, typed on « Identifiants » for the site here, would
+        be typed into the archive's page."""
+        here = make_supplier(code="BOX_ESSAI", name="Box Essai", expenses_only=True)
+        box = InvoiceType.objects.create(supplier=here, name="Box Essai", source_kind=InvoiceType.SourceKind.WEBSITE)
+        WebsiteInvoiceSource.objects.create(
+            invoice_type=box,
+            login_url="https://box.essai.example/connexion",
+            username_env="EAU_ESSAI_LOGIN",
+            password_env="EAU_ESSAI_PASSWORD",
+        )
+        report = self._import(lambda payload: payload)
+        self.assertFalse(InvoiceType.objects.filter(name="Eau Essai").exists())
+        self.assertEqual(
+            report.skipped,
+            [
+                (
+                    "Source « Eau Essai » (Eau Essai) : variable du mot de passe : Ces noms sont déjà ceux de "
+                    "« Box Essai » (site box.essai.example) : son mot de passe serait tapé sur ce site."
+                )
+            ],
+        )
+
+    def test_a_portal_naming_another_ones_password_as_its_login_is_skipped(self):
+        """« Identifiants » shows a login in clear - same site or not."""
+        here = make_supplier(code="BOX_ESSAI", name="Box Essai", expenses_only=True)
+        box = InvoiceType.objects.create(supplier=here, name="Box Essai", source_kind=InvoiceType.SourceKind.WEBSITE)
+        WebsiteInvoiceSource.objects.create(
+            invoice_type=box,
+            login_url="https://portail.eau.example/connexion",
+            username_env="BOX_ESSAI_LOGIN",
+            password_env="BOX_ESSAI_PASSWORD",
+        )
+        report = self._import(
+            self._edit(
+                "Eau Essai", website={"username_env": "BOX_ESSAI_PASSWORD", "password_env": "EAU_ESSAI_PASSWORD"}
+            )
+        )
+        self.assertFalse(InvoiceType.objects.filter(name="Eau Essai").exists())
+        self.assertEqual(len(report.skipped), 1)
+        self.assertIn(
+            "variable de l'identifiant : Ce nom est celui du mot de passe de « Box Essai »", report.skipped[0]
+        )
 
     def test_settings_of_the_wrong_kind_are_skipped(self):
         report = self._import(self._edit("Eau Essai", website=None))

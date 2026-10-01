@@ -25,7 +25,12 @@ Every touch test first asserts that `(pointer: coarse)` matches: without the
 DevTools touch emulation it does not, and a test measuring nothing would
 pass for the wrong reason. On « Produits & charges » the article's category
 and its purchases are unfolded first: folded, as the page is drawn, the
-catalogue's rows are not drawn and would be measured on nothing.
+catalogue's rows are not drawn and would be measured on nothing. On
+« Entrées d'argent » (01/10) every credit of « Autres entrées » and of the
+deposits carries its « En caisse » form - a menu, « retenir pour ce payeur »,
+« Enregistrer » - and a payer retained its « Oublier », each measured by
+name so the sweep is known to have seen them; a payout's « changer », a
+link the sweep does not count, is measured on its own.
 
 Tagged "browser": `--exclude-tag=browser` for the fast loop; run with the
 cached chromedriver (webdriver-manager looks the latest one up online).
@@ -34,15 +39,18 @@ Skipped where Chrome or its driver is missing. Data invented.
 
 import tempfile
 from datetime import date
+from decimal import Decimal
 
 from django.contrib.staticfiles.testing import StaticLiveServerTestCase
 from django.test import tag
 from django.urls import reverse
 
-from bank import reconcile
+from bank import income, reconcile
+from bank.models import BankTransaction, IncomePayer, IncomeSource
 from bank.tests.test_reconcile import debit_row, statement
 from inventory.models import UnitChoices
 from invoices.scrapers import website
+from recipes.models import PosDailyPayment
 from tests.factories import (
     make_invoice,
     make_invoice_line,
@@ -60,6 +68,20 @@ PHONE = (375, 812)
 SIDEWAYS = (932, 430)
 TABLET = (1024, 768)
 DESKTOP = (1400, 900)
+
+#: « Entrées d'argent » over the month the fixture's statement covers - not
+#: the page's default twelve months, which move with the day it runs.
+JANUARY = "?du=2026-01-01&au=2026-01-31"
+#: A payment terminal whose payouts print no gross, its payer retained as
+#: « Carte »; and a payer the bank prints as one word, in « Autres entrées ».
+TERMINAL = "TERMINAL EXEMPLE ENCAISSEMENTS"
+LONG_PAYER = "COMITEDESFETESDUQUARTIEREXEMPLEASSOCIATION"
+
+
+def credit_row(day, bank_type, label, amount):
+    """A credit as the bank's CSV export prints it (bank/statements.py)."""
+    return f"{day:%d/%m/%Y};{bank_type};{bank_type};{label};{day:%d/%m/%Y};{amount}"
+
 
 #: Every field a finger types in: not a hidden one, and not a box or a file
 #: picker, which draw no text to zoom in on. datatable.js marks the search
@@ -165,7 +187,26 @@ class TouchScreenInBrowserTests(StaticLiveServerTestCase):
         waiting = make_product(supplier=supplier, raw_name="GIN EXEMPLE 1L")
         make_invoice_line(invoice=invoice, product=waiting, quantity=6, total_ht="90")
         # Banque: one debit of a statement, its table and its search box.
-        reconcile.import_statement(statement(debit_row(date(2026, 1, 12), "GROSSISTE EXEMPLE", "150,00")))
+        # « Entrées d'argent »: a till card day, then the payout of a terminal
+        # printing no gross - its payer retained as « Carte » -, a cash
+        # deposit and a payer printed as one word in « Autres entrées ».
+        PosDailyPayment.objects.create(
+            sold_on=date(2026, 1, 13), method=PosDailyPayment.CARD, amount=Decimal("60.00"), payments=3
+        )
+        reconcile.import_statement(
+            statement(
+                debit_row(date(2026, 1, 12), "GROSSISTE EXEMPLE", "150,00"),
+                credit_row(
+                    date(2026, 1, 15), "VIREMENT", f"VIR SEPA RECU /FRM {TERMINAL} /EID /RNF VERSEMENT 0000001", "60,00"
+                ),
+                credit_row(date(2026, 1, 16), "VERSEMENT ESPECES", "VERSEMENT ESPECES 0000002", "40,00"),
+                credit_row(
+                    date(2026, 1, 20), "VIREMENT", f"VIR SEPA RECU /FRM {LONG_PAYER} /EID /RNF PRIVATISATION", "450,00"
+                ),
+            )
+        )
+        terminal = BankTransaction.objects.get(counterparty=TERMINAL)
+        IncomePayer.objects.create(key=income.payer_key(terminal), source=IncomeSource.CARD)
         log_in_the_browser(self.driver, self.live_server_url)
         # What is open is remembered per browser, shared by the class.
         self.open(reverse("inventory:stock_list"))
@@ -176,6 +217,7 @@ class TouchScreenInBrowserTests(StaticLiveServerTestCase):
             ("Produits & charges", reverse("inventory:stock_list")),
             ("Factures", reverse("invoices:invoice_list")),
             ("Banque", reverse("bank:bank_home")),
+            ("Entrées d'argent", reverse("bank:income_home") + JANUARY),
         )
 
     # -- helpers ------------------------------------------------------------------------------------
@@ -335,6 +377,67 @@ class TouchScreenInBrowserTests(StaticLiveServerTestCase):
         self.assertFalse(self.coarse())
         self.wait_for(lambda: len(self.script(CONTROLS, chips)) == 2)
         self.assertTrue(all(chip["height"] < 30 for chip in self.script(CONTROLS, chips)))
+
+    def test_a_credit_s_en_caisse_is_thumb_sized(self):
+        """« En caisse » on « Entrées d'argent » (bank/_income_source.html):
+        on each credit of « Autres entrées » and of the deposits, a menu,
+        « retenir pour ce payeur » and « Enregistrer » in a table's row; a
+        payer retained has its « Oublier ». Measured by name, so the sweep
+        above is known to have seen them: the menus 16 px, the boxes 20 px a
+        side, the buttons 36 in their row."""
+        self.device(*PHONE, touch=True)
+        self.visit(reverse("bank:income_home") + JANUARY)
+        self.assert_a_touch_screen()
+        menus = [field for field in self.script(FIELDS) if "[name=en_caisse]" in field["what"]]
+        boxes = [box for box in self.script(BOXES) if box["name"] == "retenir"]
+        buttons = self.script(CONTROLS, "main form.income-source .btn, main form[action*='/payeurs/'] .btn")
+        # Drawn: the one-word payer's form and the deposit's, the terminal's
+        # payer « Oublier ».
+        self.assertEqual(
+            (len(menus), len(boxes), sorted(button["text"] for button in buttons)),
+            (2, 2, ["Enregistrer", "Enregistrer", "Oublier"]),
+        )
+        self.assertEqual(self.small_fields(menus), [])
+        self.assertEqual(
+            [
+                f"case : {box['width']:.1f} × {box['height']:.1f} px"
+                for box in boxes
+                if min(box["width"], box["height"]) < 19.5
+            ],
+            [],
+        )
+        self.assertEqual(
+            [
+                f"{button['text']} : {button['height']:.1f} px{' (cellule)' if button['inCell'] else ''}"
+                for button in buttons
+                if not button["inCell"] or button["height"] < 35.5
+            ],
+            [],
+        )
+
+    def test_a_payout_s_changer_is_thumb_sized(self):
+        """A payout's row draws no « En caisse » menu - a payout a day would
+        be a form a day - but « changer », a link drawing it on that row
+        (`?changer=`): the only way to say on a phone that a payout is not
+        what its label says. It is a row's action, as « Modifier » is in
+        `.row-actions`, which the touch section makes 36 px: measured 18 px
+        on 01/10, a line of 0.85rem text. A mouse keeps it a line of text."""
+        changer = "main table[data-table-label='versements carte'] a.income-change"
+        path = reverse("bank:income_home") + JANUARY
+
+        self.device(*PHONE, touch=True)
+        self.visit(path)
+        self.assert_a_touch_screen()
+        drawn = self.script(CONTROLS, changer)
+        self.assertEqual([(link["text"], link["inCell"]) for link in drawn], [("changer", True)])
+        self.assertEqual([f"changer : {link['height']:.1f} px" for link in drawn if link["height"] < 35.5], [])
+
+        self.device(*DESKTOP, touch=False)
+        self.open(path)
+        self.assertFalse(self.coarse())
+        drawn = self.script(CONTROLS, changer)
+        self.assertEqual(len(drawn), 1)
+        self.assertLess(drawn[0]["height"], 30)
 
     def test_a_mouse_keeps_the_small_buttons(self):
         """A desktop's .btn-small stays small, at a desktop's width and at a

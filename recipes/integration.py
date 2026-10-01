@@ -1,8 +1,8 @@
 """Whether this tenant may use the server's L'Addition account, and what it
 reads where it may not.
 
-The credentials in .env (LADDITION_EMAIL / LADDITION_PASSWORD) are the
-owner's own till. With one database per bar, they work in the owner's tenant
+The credentials (the « Identifiants » page, else LADDITION_EMAIL /
+LADDITION_PASSWORD in .env) are the owner's own till. With one database per bar, they work in the owner's tenant
 only (`accounts.tenancy.integrations_allowed`). Everywhere else the import is « à configurer », a later
 step giving each tenant settings of its own.
 

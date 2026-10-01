@@ -753,12 +753,14 @@ class RequestModelTests(RequestCase):
         from django.contrib.auth.models import User
         from django.urls import reverse
 
-        from tests.runner import member_of_the_test_tenant
+        from tests.runner import confirm_password, member_of_the_test_tenant
 
         request, _token = self.create()
         # The admin is a superuser's who works in a tenant.
-        self.client.force_login(
-            member_of_the_test_tenant(User.objects.create_superuser("proprio", "proprio@example.invalid", "x"))
+        # The admin asks for the password again (accounts/admin_site.py).
+        confirm_password(
+            self.client,
+            member_of_the_test_tenant(User.objects.create_superuser("proprio", "proprio@example.invalid", "x")),
         )
         event = request.events.first()
         for name, obj in (("signaturerequest", request), ("signatureevent", event)):

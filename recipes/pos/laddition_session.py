@@ -1,9 +1,10 @@
 """Signing in to L'Addition Reporting and getting to a page.
 
-Credentials come from the environment (LADDITION_EMAIL / LADDITION_PASSWORD
-in .env) and are typed by the browser at run time - the same arrangement the
-Metro invoice scraper uses. They are never stored in the database, never
-logged, and never committed. They are the owner's own till, so in multi mode
+Credentials come from the espace's « Identifiants » page (accounts/vault.py),
+else the environment (LADDITION_EMAIL / LADDITION_PASSWORD in .env), and are
+typed by the browser at run time - the same arrangement the Metro invoice
+scraper uses. They are never stored in the database, never logged, and
+never committed. They are the owner's own till, so in multi mode
 only the owner's tenant may open a session (recipes/integration.py): the
 refusal comes before a browser starts or a password is read.
 
@@ -137,10 +138,21 @@ def build_driver(download_dir: str) -> webdriver.Chrome:
 
 
 def log_in(driver, log=print) -> None:
-    """Sign in, unless the session is already authenticated."""
+    """Sign in, unless the session is already authenticated. The login and
+    the password come from ONE reading of the store: read one at a time, a
+    save between the two typed a new login with an old password. While the
+    store cannot be read at all, nothing is typed (not the .env's either)."""
     _refuse_unless_allowed()
-    if not settings.LADDITION_EMAIL or not settings.LADDITION_PASSWORD:
-        raise LadditionAuthError("LADDITION_EMAIL / LADDITION_PASSWORD are not configured in .env")
+    from accounts import vault
+
+    try:
+        email, password = vault.settings_of("LADDITION_EMAIL", "LADDITION_PASSWORD")
+    except vault.VaultError as exc:
+        raise LadditionAuthError(str(exc)) from None
+    if not email or not password:
+        raise LadditionAuthError(
+            "L'identifiant ou le mot de passe de L'Addition manque : renseignez-les sur la page Identifiants."
+        )
 
     wait = WebDriverWait(driver, PAGE_WAIT_SECONDS)
     navigate(driver, AUTH_URL, log=log)
@@ -154,8 +166,8 @@ def log_in(driver, log=print) -> None:
             return
         raise LadditionAuthError(f"The L'Addition login form never appeared (still at {driver.current_url}).") from None
 
-    driver.find_element(*IDENTIFIER_FIELD).send_keys(settings.LADDITION_EMAIL)
-    driver.find_element(*PASSWORD_FIELD).send_keys(settings.LADDITION_PASSWORD)
+    driver.find_element(*IDENTIFIER_FIELD).send_keys(email)
+    driver.find_element(*PASSWORD_FIELD).send_keys(password)
     # "Valider" starts disabled and only enables once the form considers
     # itself complete. Clicking it before then is silently a no-op, and the
     # run then fails much later with a confusing "still on the auth page".
@@ -173,7 +185,7 @@ def log_in(driver, log=print) -> None:
         # Still on the auth host after submitting - almost always wrong
         # credentials. Deliberately says nothing about what was sent.
         raise LadditionAuthError(
-            "L'Addition rejected the sign-in - check LADDITION_EMAIL / LADDITION_PASSWORD in .env."
+            "L'Addition a refusé la connexion : vérifiez l'identifiant et le mot de passe sur la page Identifiants."
         ) from None
     log("Signed in to L'Addition.")
 

@@ -224,45 +224,82 @@ def _raise_if_blocked(driver) -> None:
         raise MetroBlocked(blocked_message(reference), reference=reference)
 
 
-def _capture_diagnostics(driver, download_dir: str, log, context: str, screenshot_suffix: str = ""):
+class _MaskedLog:
+    """A run's log, each line rid of Metro's login and password as typed -
+    in every form a page or an address writes them (raw, HTML, JSON,
+    percent-encoded: `website.mask_secrets`), the login (`logins`) whatever
+    its case: Metro's sign-in page prints the address back as it stores it.
+    The password in its own case only (`website.mask_secrets` says why).
+    The diagnostics below mask with it before they cut a page's text: half
+    a password cut off is no longer recognised as one. Wrapping one again
+    adds the values to it."""
+
+    def __init__(self, log, typed, logins=()):
+        if isinstance(log, _MaskedLog):
+            typed = [*log.typed, *typed]
+            logins = [*log.logins, *logins]
+            log = log.log
+        self.log = log
+        self.typed = [value for value in typed if value]
+        self.logins = [value for value in logins if value]
+
+    def mask(self, text) -> str:
+        from .website import mask_secrets
+
+        return mask_secrets(str(text), self.typed, self.logins)
+
+    def __call__(self, message) -> None:
+        self.log(self.mask(message))
+
+
+def _mask_of(log):
+    """How `log` masks what was typed - nothing, for a log of no run."""
+    return getattr(log, "mask", str)
+
+
+def _masked(exc: MetroError, mask) -> MetroError:
+    """`exc` with its message masked, in place: its kind, its files and its
+    reference stay what they are."""
+    if exc.args and isinstance(exc.args[0], str):
+        said = mask(exc.args[0])
+        if said != exc.args[0]:
+            exc.args = (said, *exc.args[1:])
+    return exc
+
+
+def _capture_diagnostics(driver, download_dir: str, log, context: str):
     """Called when a wait times out. Headless mode means nobody can just look
-    at the browser, so instead we grab whatever we can (URL, title, visible
-    text, a screenshot) and put it in the job log to make the failure
-    diagnosable without needing to reproduce it with a visible browser. The
-    screenshot is deleted right after logging it - useful for one failed run,
-    not worth leaving behind permanently once the log has already captured
-    the same information as text.
-    """
+    at the browser, so instead we grab whatever we can (the address, the
+    title, the visible text) and put it in the job log to make the failure
+    diagnosable without needing to reproduce it with a visible browser.
+
+    The address loses its query and fragment (`website.bare_url`: a form
+    sent by GET carries the login and the password in it), and what the
+    page shows is masked (`_MaskedLog`) before it is cut. No screenshot:
+    the sign-in page shows the login typed in its field, and the picture
+    only ever told the log its size before it was deleted."""
+    from .website import bare_url
+
+    mask = _mask_of(log)
     current_url = title = "?"
     try:
-        current_url = driver.current_url
+        current_url = bare_url(driver.current_url or "") or "?"
         title = driver.title
     except Exception:  # noqa: BLE001, S110 - a diagnostic never hides the timeout it reports
         pass
 
     body_text = ""
     try:
-        body_text = driver.find_element(By.TAG_NAME, "body").text.strip()[:800]
+        body_text = mask(driver.find_element(By.TAG_NAME, "body").text.strip())[:800]
     except Exception:  # noqa: BLE001, S110 - a diagnostic never hides the timeout it reports
         pass
 
-    log(f"Timed out {context}.")
-    log(f"  Current URL: {current_url}")
-    log(f"  Page title: {title}")
+    log(f"Page au moment de l'échec ({context}) :")
+    log(f"  Adresse : {current_url}")
+    log(f"  Titre de la page : {title}")
     if body_text:
-        log(f"  Visible page text (first 800 chars):\n{body_text}")
-
-    screenshot_path = os.path.join(os.path.abspath(download_dir), f"metro_debug_screenshot{screenshot_suffix}.png")
-    try:
-        driver.save_screenshot(screenshot_path)
-        with open(screenshot_path, "rb") as f:
-            # Removed right after (the text above stands for it): the path
-            # was said as if it could still be opened.
-            log(f"  (screenshot captured, {len(f.read())} bytes, not kept)")
-    except Exception:  # noqa: BLE001 - no screenshot is a diagnostic without one
-        screenshot_path = None
-
-    return current_url, title, body_text, screenshot_path
+        log(f"  Texte visible de la page (800 premiers caractères) :\n{body_text}")
+    return current_url, title, body_text
 
 
 def _fail_with_diagnostics(driver, download_dir: str, log, context: str):
@@ -270,21 +307,18 @@ def _fail_with_diagnostics(driver, download_dir: str, log, context: str):
     left to do afterwards (e.g. login itself never succeeded) - logs the same
     detail and then aborts the whole scrape.
     """
-    current_url, title, _body_text, screenshot_path = _capture_diagnostics(driver, download_dir, log, context)
-    if screenshot_path and os.path.exists(screenshot_path):
-        os.remove(screenshot_path)
+    current_url, title, _body_text = _capture_diagnostics(driver, download_dir, log, context)
     # The firewall's page is the first thing a page that never came can be.
     _raise_if_blocked(driver)
+    mask = _mask_of(log)
     raise MetroError(
-        f"Metro : la page attendue n'est pas venue ({context}) - page « {title} » sur "
-        f"{str(current_url).split('?')[0]}. Le texte de la page est dans le journal."
+        f"Metro : la page attendue n'est pas venue ({context}) - page « {mask(title)} » sur "
+        f"{mask(current_url)}. Le texte de la page est dans le journal."
     )
 
 
 def _log_page_state(driver, download_dir: str, log, context: str) -> None:
-    _url, _title, _body, screenshot_path = _capture_diagnostics(driver, download_dir, log, context)
-    if screenshot_path and os.path.exists(screenshot_path):
-        os.remove(screenshot_path)
+    _capture_diagnostics(driver, download_dir, log, context)
 
 
 CHECKBOX_ID_REGEX = re.compile(r"^FRA_(\d+)_(\d+)_(\d+)_\d+$")
@@ -352,29 +386,52 @@ def _date_windows(start_date: date, end_date: date):
         window_start = window_end + timedelta(days=1)
 
 
-def _login(driver, wait, download_dir, log, should_cancel=lambda: False):
-    driver.get("https://docs.metro.fr/")
-    # Refused before anything is typed: the credentials are not sent into it.
-    _raise_if_blocked(driver)
-    try:
-        cookie_banner = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "cms-cookie-disclaimer")))
-        shadow_root = driver.execute_script("return arguments[0].shadowRoot", cookie_banner)
-        shadow_root.find_element(By.CSS_SELECTOR, "button.accept-btn.btn-primary").click()
-    except TimeoutException:
-        log("No cookie banner appeared (or it didn't match the expected selector) - continuing.")
+def metro_credentials() -> tuple[str, str]:
+    """Metro's login and password, read ONCE a run and from ONE reading of
+    the store (the page's, else the .env's): read again at the sign-in, or
+    one at a time, a store being rewritten that moment sent another value
+    to Metro - a refused sign-in its firewall counts. While the store
+    cannot be read at all, nothing: MetroError, its sentence."""
+    from accounts import vault
 
     try:
-        wait.until(EC.presence_of_element_located((By.ID, "user_id")))
-    except TimeoutException:
-        _fail_with_diagnostics(driver, download_dir, log, "waiting for the login form to appear")
-    _raise_if_blocked(driver)
-    driver.find_element(By.ID, "user_id").send_keys(settings.METRO_EMAIL)
-    driver.find_element(By.ID, "password").send_keys(settings.METRO_PASSWORD)
-    if should_cancel():
-        raise _MetroCancelled()
-    record_login()
-    driver.find_element(By.ID, "submit").click()
-    _await_sign_in(driver, download_dir, log)
+        email, password = vault.settings_of("METRO_EMAIL", "METRO_PASSWORD")
+    except vault.VaultError as exc:
+        raise MetroError(str(exc)) from None
+    return email, password
+
+
+def _login(driver, wait, download_dir, log, should_cancel=lambda: False, credentials=None):
+    email, password = credentials or metro_credentials()
+    # What is said about the page from here on never holds them, nor does
+    # an error raised: Metro's sign-in page echoes the address typed.
+    log = _MaskedLog(log, (email, password), logins=(email,))
+    try:
+        driver.get("https://docs.metro.fr/")
+        # Refused before anything is typed: the credentials are not sent into it.
+        _raise_if_blocked(driver)
+        try:
+            cookie_banner = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "cms-cookie-disclaimer")))
+            shadow_root = driver.execute_script("return arguments[0].shadowRoot", cookie_banner)
+            shadow_root.find_element(By.CSS_SELECTOR, "button.accept-btn.btn-primary").click()
+        except TimeoutException:
+            log("Pas de bandeau de cookies (ou pas celui attendu) : la connexion continue.")
+
+        try:
+            wait.until(EC.presence_of_element_located((By.ID, "user_id")))
+        except TimeoutException:
+            _fail_with_diagnostics(driver, download_dir, log, "attente du formulaire de connexion")
+        _raise_if_blocked(driver)
+        driver.find_element(By.ID, "user_id").send_keys(email)
+        driver.find_element(By.ID, "password").send_keys(password)
+        if should_cancel():
+            raise _MetroCancelled()
+        record_login()
+        driver.find_element(By.ID, "submit").click()
+        _await_sign_in(driver, download_dir, log)
+    except MetroError as exc:
+        _masked(exc, log.mask)
+        raise
 
 
 def _await_sign_in(driver, download_dir, log, sleep=time.sleep, clock=time.monotonic):
@@ -394,12 +451,12 @@ def _await_sign_in(driver, download_dir, log, sleep=time.sleep, clock=time.monot
     except WebDriverException:
         still_asked = False
     if still_asked:
-        _log_page_state(driver, download_dir, log, "waiting for the sign-in to finish")
+        _log_page_state(driver, download_dir, log, "attente de la fin de la connexion")
         raise MetroLoginFailed(
-            "Metro a gardé la page de connexion : identifiant ou mot de passe refusé (METRO_EMAIL / METRO_PASSWORD "
-            "dans le fichier .env). Le message de Metro est dans le journal."
+            "Metro a gardé la page de connexion : identifiant ou mot de passe refusé (vérifiez-les sur la page "
+            "Identifiants). Le message de Metro est dans le journal."
         )
-    _fail_with_diagnostics(driver, download_dir, log, "waiting for the sign-in to finish")
+    _fail_with_diagnostics(driver, download_dir, log, "attente de la fin de la connexion")
 
 
 def _js_click(driver, element):
@@ -442,7 +499,7 @@ def _apply_date_filter(driver, wait, download_dir, log, start_date: date, end_da
         date_from = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, DATE_FROM_SELECTOR)))
         date_to = driver.find_element(By.CSS_SELECTOR, "input[data-testid='DateInputFieldInputÀ']")
     except TimeoutException:
-        _fail_with_diagnostics(driver, download_dir, log, "waiting for the invoice date filters")
+        _fail_with_diagnostics(driver, download_dir, log, "attente des filtres de dates des factures")
 
     # Confirmed live (see the investigation that found this bug): the widget
     # silently reverts any edit that would leave it in a transient from > to
@@ -479,7 +536,7 @@ def _apply_date_filter(driver, wait, download_dir, log, start_date: date, end_da
     try:
         dropdown = wait.until(EC.presence_of_element_located((By.ID, "invoiceLimit")))
     except TimeoutException:
-        _fail_with_diagnostics(driver, download_dir, log, "waiting for the invoice list page limit dropdown")
+        _fail_with_diagnostics(driver, download_dir, log, "attente du choix du nombre de factures par page")
     Select(dropdown).select_by_value("100")
 
     # Typing into the fields - even when the value visibly sticks - doesn't
@@ -603,7 +660,7 @@ def _settle(driver, downloads: _PendingDownloads, download_dir, log, failures: i
             log(f"Invoice {label} did not finish downloading within {DOWNLOAD_TIMEOUT_SECONDS}s - skipped.")
             _raise_if_blocked(driver)
             if failures == 1:
-                _log_page_state(driver, download_dir, log, f"waiting for invoice {label} to download")
+                _log_page_state(driver, download_dir, log, f"attente du téléchargement de la facture {label}")
         if not downloads.pending:
             return failures
         if not until_empty and (len(downloads.pending) < MAX_IN_FLIGHT or failures >= MAX_CONSECUTIVE_TIMEOUTS):
@@ -829,8 +886,13 @@ def scrape_metro_invoices(
 
     if not integrations_allowed():
         raise MetroError(integrations.METRO)
-    if not settings.METRO_EMAIL or not settings.METRO_PASSWORD:
-        raise MetroError("METRO_EMAIL / METRO_PASSWORD manquent dans le fichier .env.")
+    credentials = metro_credentials()
+    if not all(credentials):
+        raise MetroError("L'identifiant ou le mot de passe Metro manque : renseignez-les sur la page Identifiants.")
+    # Every line the run logs, and every error it raises, rid of them: a
+    # page's text, its title or its address may echo what was typed.
+    log = _MaskedLog(log, credentials, logins=credentials[:1])
+    mask = log.mask
     paused = None if ignore_pause else metro_pause()
     if paused is not None:
         raise paused
@@ -847,8 +909,8 @@ def scrape_metro_invoices(
     # A multi-MB "downloads.htm" sometimes appears beside the PDFs: Chrome's
     # own component download (it starts "Cr24", a CRX package - seen with no
     # Metro run at all), not Metro's. It never finishes and is no PDF: junk.
-    # Debug screenshots are deleted right after being logged now, but this
-    # also mops up any left over from before that change.
+    # No debug screenshot is taken any more (_capture_diagnostics): this also
+    # mops up any an older version left.
     for stale in os.listdir(download_dir):
         if (
             stale.endswith(".crdownload")
@@ -888,7 +950,7 @@ def scrape_metro_invoices(
             try:
                 driver = _build_driver(download_dir)
                 wait = WebDriverWait(driver, PAGE_WAIT_SECONDS)
-                _login(driver, wait, download_dir, log, should_cancel)
+                _login(driver, wait, download_dir, log, should_cancel, credentials)
 
                 while window_idx < len(windows):
                     if should_cancel():
@@ -941,16 +1003,20 @@ def scrape_metro_invoices(
                 # A person closed the window: that is a stop, not a crash.
                 raise MetroError("La fenêtre du navigateur a été fermée : récupération Metro arrêtée.") from exc
             except WebDriverException as exc:
-                log(f"Le navigateur a rencontré une erreur : {exc.__class__.__name__} - {str(exc).strip()[:200]}")
+                # Masked before it is cut: half a password is no longer one.
+                said = mask(str(exc).strip())
+                log(f"Le navigateur a rencontré une erreur : {exc.__class__.__name__} - {said[:200]}")
+                # An error quoting what was typed is not carried along.
+                cause = exc if said == str(exc).strip() else None
                 if not _session_died(exc):
                     # The page, not the browser: said, never answered with a
                     # new browser and a new sign-in.
                     _raise_if_blocked(driver)
-                    _log_page_state(driver, download_dir, log, "after a browser error")
+                    _log_page_state(driver, download_dir, log, "après une erreur du navigateur")
                     raise MetroError(
                         f"Metro : la page n'a pas répondu comme prévu ({exc.__class__.__name__}) - récupération "
                         "Metro arrêtée. Le détail est dans le journal."
-                    ) from exc
+                    ) from cause
                 # A browser that died (seen in practice) gets one fresh
                 # browser, after a pause, to go on from the window it was on
                 # - quietly giving up lost the rest of a long range.
@@ -960,7 +1026,7 @@ def scrape_metro_invoices(
                     raise MetroError(
                         f"Le navigateur s'est arrêté {session_restarts} fois : récupération Metro arrêtée. "
                         f"Période(s) non cherchée(s) : {remaining}."
-                    ) from exc
+                    ) from cause
                 log(
                     f"Le navigateur s'est arrêté : nouvelle session dans {RESTART_PAUSE_SECONDS} s pour les "
                     f"fenêtres restantes ({remaining})."
@@ -980,6 +1046,7 @@ def scrape_metro_invoices(
                 + ") - récupération Metro incomplète."
             )
     except MetroError as exc:
+        _masked(exc, mask)
         exc.files = exc.files or landed()
         if isinstance(exc, MetroBlocked):
             try:
@@ -990,10 +1057,10 @@ def scrape_metro_invoices(
                 if until is not None:
                     log(f"Metro ne sera plus contacté avant le {_said(until)}.")
         raise
-    except Exception as exc:
-        raise MetroError(
-            f"Metro : erreur inattendue ({exc.__class__.__name__} - {str(exc).strip()[:200]}).", files=landed()
-        ) from exc
+    except Exception as exc:  # noqa: BLE001 - said as Metro's failure, its source line
+        said = mask(str(exc).strip())
+        error = MetroError(f"Metro : erreur inattendue ({exc.__class__.__name__} - {said[:200]}).", files=landed())
+        raise error from (exc if said == str(exc).strip() else None)
     finally:
         if driver is not None:
             try:

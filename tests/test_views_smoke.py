@@ -284,6 +284,19 @@ class PageSmokeTests(TestCase):
             with self.subTest(page=name):
                 self.assertPageOK(name)
 
+    def test_credentials_pages(self):
+        import time
+
+        from accounts import sudo
+        from tests.runner import test_user
+
+        self.assertPageOK("accounts:confirm_password")
+        self.client.force_login(test_user())
+        session = self.client.session
+        session[sudo.SESSION_KEY] = {"user": test_user().pk, "until": time.time() + 600}
+        session.save()
+        self.assertPageOK("accounts:credentials")
+
     def test_data_post_only_actions(self):
         self.assertRedirectsOnGet("transfer:data_export")
         self.assertRedirectsOnGet("transfer:data_import_backup")
@@ -993,6 +1006,104 @@ class StockGapFillerParameterSmokeTests(TestCase):
         content = self.add({"depuis": pk, "montant": "70"}).content.decode()
         self.assertIn("Inventaire introuvable.", content)
         self.assertEqual(GapFillEntry.objects.count(), 1)
+
+
+class IncomeSmokeTests(TestCase):
+    """« Entrées d'argent » with everything « En caisse » puts on it: a payout
+    printing its gross, a terminal's transfer counted as card through its
+    payer retained (no gross printed), a cash deposit, a party's deposit said
+    to be an « Avoir » on its own, a transfer nobody named - and its two
+    POST-only actions. Every payer and amount INVENTED."""
+
+    JUNE = {"du": "2026-06-01", "au": "2026-06-30"}
+
+    @classmethod
+    def setUpTestData(cls):
+        from bank import income
+        from bank.models import IncomePayer
+        from recipes.models import PosDailyPayment
+
+        for day, card in ((date(2026, 6, 1), "120.00"), (date(2026, 6, 2), "80.00")):
+            PosDailyPayment.objects.create(sold_on=day, method=PosDailyPayment.CARD, amount=Decimal(card), payments=3)
+        PosDailyPayment.objects.create(
+            sold_on=date(2026, 6, 2), method=PosDailyPayment.CREDIT, amount=Decimal("150.00"), payments=1
+        )
+
+        def credit(number, day, amount, label, counterparty="", bank_type="VIREMENT", income_source=""):
+            return BankTransaction.objects.create(
+                operation_date=day,
+                bank_type=bank_type,
+                label=label,
+                counterparty=counterparty,
+                amount=Decimal(amount),
+                kind=BankTransaction.Kind.TRANSFER,
+                income_source=income_source,
+                fingerprint=f"smoke-entree-{number}",
+            )
+
+        cls.payout = credit(
+            1, date(2026, 6, 3), "198.60", "VIR SEPA RECU /FRM PRESTATAIRE EXEMPLE TOTAL ENCAISSE 200.00 EUROS"
+        )
+        cls.terminal = credit(
+            2, date(2026, 6, 4), "79.50", "VIR SEPA RECU /FRM TERMINAL EXEMPLE REMISE", "TERMINAL EXEMPLE"
+        )
+        credit(3, date(2026, 6, 5), "40.00", "VERSEMENT ESPECES", bank_type="VERSEMENT ESPECES")
+        credit(4, date(2026, 6, 6), "300.00", "VIR SEPA RECU /FRM ASSOCIATION EXEMPLE", income_source=income.CREDIT)
+        credit(5, date(2026, 6, 7), "25.00", "VIR SEPA RECU /FRM CLIENT EXEMPLE", "CLIENT EXEMPLE")
+        cls.payer = IncomePayer.objects.create(key=income.payer_key(cls.terminal), source=income.CARD)
+
+    def assertPageOK(self, url, params):
+        response = self.client.get(url, params)
+        self.assertEqual(response.status_code, 200, f"{url} {params} returned {response.status_code}")
+        assertNoUnrenderedTemplateSyntax(self, response, f"{url} {params}")
+        return response
+
+    def test_the_page_over_every_period_and_with_a_payout_s_menu_open(self):
+        url = reverse("bank:income_home")
+        response = self.assertPageOK(url, self.JUNE)
+        for text in (
+            "Payeurs retenus",
+            "Oublier",
+            "Dépôts et autres moyens de paiement",
+            "commission inconnue",
+            "Acompte (avoir en caisse)",
+            "payeur retenu",
+            "choisi pour cette entrée",
+        ):
+            with self.subTest(text=text):
+                self.assertContains(response, text)
+        for params in (
+            {},
+            {"tout": "1"},
+            {**self.JUNE, "changer": str(self.terminal.pk)},
+            {**self.JUNE, "changer": str(self.payout.pk)},
+            {**self.JUNE, "changer": "abc"},
+        ):
+            with self.subTest(params=params):
+                self.assertPageOK(url, params)
+
+    def test_banque_s_entries_tab(self):
+        response = self.assertPageOK(reverse("bank:bank_home"), {"vue": "entrees", **self.JUNE})
+        self.assertContains(response, "brut non imprimé, commission inconnue")
+        self.assertContains(response, "payeur retenu")
+
+    def test_the_post_only_actions_redirect_on_get(self):
+        """A GET on one goes back to the page and writes nothing - still worth
+        hitting, since a broken one raises before it gets to the redirect."""
+        from bank.models import IncomePayer
+
+        def written():
+            return (
+                list(BankTransaction.objects.order_by("pk").values_list("pk", "income_source")),
+                list(IncomePayer.objects.values_list("key", "source")),
+            )
+
+        before = written()
+        for name, pk in (("bank:income_source", self.terminal.pk), ("bank:income_payer_forget", self.payer.pk)):
+            with self.subTest(name=name):
+                url = reverse(name, kwargs={"pk": pk})
+                self.assertEqual(self.client.get(url, {"en_caisse": "other", "retenir": "1"}).status_code, 302)
+        self.assertEqual(written(), before)
 
 
 class StaffPageSmokeTests(TestCase):

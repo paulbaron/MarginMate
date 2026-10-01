@@ -1,0 +1,17 @@
+{% comment %}
+« En caisse »: what one credit is in the till (bank/income.py, set_source) -
+under « Autres entrées », « Dépôts et autres moyens de paiement », and on a
+payout's row once « changer » was clicked. The view answers on the line's
+row, in whichever list it then sits. Who decided is printed as text beside
+the menu: datatable.js searches and sorts by text, never by a <select>.
+{% endcomment %}
+<form method="post" action="{% url 'bank:income_source' entry.line.pk %}" class="inline-form income-source">
+{% csrf_token %}
+<input type="hidden" name="next" value="{{ page_url }}">
+<select name="en_caisse" aria-label="Ce que cette entrée est en caisse">
+{% for value, label in source_choices %}<option value="{{ value }}"{% if value == entry.choice %} selected{% endif %}>{{ label }}</option>{% endfor %}
+</select>
+{% if entry.payer %}<label class="inline-label" title="{{ entry.payer }}"><input type="checkbox" name="retenir" value="1"{% if entry.remember_by_default %} checked{% endif %}> retenir pour ce payeur</label>{% endif %}
+<button class="btn btn-small btn-secondary" type="submit">Enregistrer</button>
+</form>
+<span class="read-as">{{ entry.how_label }}</span>

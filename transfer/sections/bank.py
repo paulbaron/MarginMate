@@ -1,11 +1,13 @@
 """« Banque » (§7.7): the bank's lines, which invoice each one paid, the
-rules for the payments that never have one, and the payee names learnt for
-suppliers.
+rules for the payments that never have one, the payee names learnt for
+suppliers, and the payers retained on « Entrées d'argent ».
 
 What is worth keeping here is not the lines - the next statement import
 brings them back - but the decisions a person took on them: a link made by
 hand, a line unlinked, a line declared « pas de facture »
-(`settled_by_hand`, `no_invoice`). Nothing can rebuild those, so:
+(`settled_by_hand`, `no_invoice`), what a credit is in the till
+(`income_source`, and `IncomePayer` for every credit of one payer). Nothing
+can rebuild those, so:
 
 * a line is its `fingerprint`, computed from the statement's own content
   (`bank.statements._fingerprint`): the same line has the same key in every
@@ -38,7 +40,9 @@ from collections import defaultdict
 from django.core.exceptions import ValidationError
 from django.db.models import Prefetch
 
-from bank.models import BankTransaction, CounterpartyAlias, IgnoreRule, InvoicePayment
+from bank.income import payer_key
+from bank.matching import alias_key
+from bank.models import BankTransaction, CounterpartyAlias, IgnoreRule, IncomePayer, IncomeSource, InvoicePayment
 from bank.reconcile import invoice_label
 from invoices.models import Invoice, Supplier
 from transfer import codec, keys, registry
@@ -52,7 +56,9 @@ KEY = "banque"
 # added to a model later cannot be left out in silence.
 # `category` is a decision too - what a person said a spending was for -
 # and nothing rebuilds it: a statement re-imported brings back the line and
-# not one word of it.
+# not one word of it. So is `income_source`, what a person said a credit is
+# in the till; an archive written before it says nothing of it, and a line
+# keeps what it has (`codec` reads a key left out as « not said »).
 TRANSACTION_FIELDS = (
     "account",
     "operation_date",
@@ -66,6 +72,7 @@ TRANSACTION_FIELDS = (
     "no_invoice",
     "settled_by_hand",
     "category",
+    "income_source",
     "imported_at",
 )
 # Never the import date (§6.4): merging an archive of the same statement taken
@@ -77,25 +84,30 @@ TRANSACTION_REQUIRED = ("operation_date", "label", "amount")
 PAYMENT_FIELDS = ("method", "created_at")
 RULE_FIELDS = ("description", "is_active", "category", "created_at")
 RULE_COMPARED = ("description", "is_active", "category")
+PAYER_FIELDS = ("source", "created_at")
+PAYER_COMPARED = ("source",)
 
 EXPORTED = {
     BankTransaction: ("fingerprint", *TRANSACTION_FIELDS),
     InvoicePayment: PAYMENT_FIELDS,
     CounterpartyAlias: ("name",),
     IgnoreRule: ("pattern", *RULE_FIELDS),
+    IncomePayer: ("key", *PAYER_FIELDS),
 }
 NOT_EXPORTED = {
     BankTransaction: {"id": "pk"},
     InvoicePayment: {"id": "pk", "transaction": "parent", "invoice": "by key"},
     CounterpartyAlias: {"id": "pk", "supplier": "by key"},
     IgnoreRule: {"id": "pk"},
+    IncomePayer: {"id": "pk"},
 }
 
-TOP_LEVEL = ("supplier_names", "transactions", "aliases", "rules")
+TOP_LEVEL = ("supplier_names", "transactions", "aliases", "rules", "income_payers")
 TRANSACTION_KEYS = ("fingerprint", *TRANSACTION_FIELDS, "payments")
 PAYMENT_KEYS = ("invoice", *PAYMENT_FIELDS)
 ALIAS_KEYS = ("supplier", "name")
 RULE_KEYS = ("pattern", *RULE_FIELDS)
+PAYER_KEYS = ("key", *PAYER_FIELDS)
 
 # Report rows, in the order of count(): the page's table and the picker's
 # counts say the same words.
@@ -103,7 +115,9 @@ OPERATIONS = "opérations"
 PAYMENTS = "paiements"
 RULES = "règles"
 ALIASES = "noms de payeurs appris"
-ENTITIES = (OPERATIONS, PAYMENTS, RULES, ALIASES)
+# Not « payeurs » alone: « noms de payeurs appris » are the suppliers'.
+PAYERS = "payeurs retenus (entrées d'argent)"
+ENTITIES = (OPERATIONS, PAYMENTS, RULES, ALIASES, PAYERS)
 
 FIELD_LABELS = {
     "account": "compte",
@@ -118,8 +132,10 @@ FIELD_LABELS = {
     "no_invoice": "« pas de facture »",
     "settled_by_hand": "« réglée à la main »",
     "category": "catégorie",
+    "income_source": "« en caisse »",
     "description": "nom",
     "is_active": "active",
+    "source": "« en caisse »",
 }
 
 # The page's own button, which links what bank.matching is sure of.
@@ -225,6 +241,7 @@ class BankSection(Section):
             PAYMENTS: InvoicePayment.objects.count(),
             RULES: IgnoreRule.objects.count(),
             ALIASES: CounterpartyAlias.objects.count(),
+            PAYERS: IncomePayer.objects.count(),
         }
 
     def snapshot(self):
@@ -251,6 +268,9 @@ class BankSection(Section):
             "rules": sorted(
                 [rule.pattern, *codec.record(rule, RULE_FIELDS).values()] for rule in IgnoreRule.objects.all()
             ),
+            "income_payers": sorted(
+                [payer.key, *codec.record(payer, PAYER_FIELDS).values()] for payer in IncomePayer.objects.all()
+            ),
         }
 
     # -- export ----------------------------------------------------------------
@@ -266,6 +286,7 @@ class BankSection(Section):
         invoice_keys = keys.invoice_keys(paid)
         aliases = list(CounterpartyAlias.objects.select_related("supplier").order_by("supplier__code", "name"))
         rules = list(IgnoreRule.objects.order_by("id"))
+        payers = list(IncomePayer.objects.order_by("key"))
         codes = {key["supplier"] for key in invoice_keys.values()} | {alias.supplier.code for alias in aliases}
         payload = {
             # A code may differ in the database this is imported into (LIDL
@@ -287,8 +308,18 @@ class BankSection(Section):
             ],
             "aliases": [{"supplier": alias.supplier.code, "name": alias.name} for alias in aliases],
             "rules": [{"pattern": rule.pattern, **codec.record(rule, RULE_FIELDS)} for rule in rules],
+            "income_payers": [{"key": payer.key, **codec.record(payer, PAYER_FIELDS)} for payer in payers],
         }
-        out.write(payload, {OPERATIONS: len(lines), PAYMENTS: len(paid), RULES: len(rules), ALIASES: len(aliases)})
+        out.write(
+            payload,
+            {
+                OPERATIONS: len(lines),
+                PAYMENTS: len(paid),
+                RULES: len(rules),
+                ALIASES: len(aliases),
+                PAYERS: len(payers),
+            },
+        )
 
     # -- import ----------------------------------------------------------------
     def load(self, src) -> None:
@@ -309,6 +340,13 @@ class BankSection(Section):
                 raise ArchiveError(
                     "Archive refusée : dans banque.json, les liens d'une opération ne sont pas une liste."
                 )
+        # The payers retained came after the format: an archive written
+        # before them says nothing of them - None, never an empty list, which
+        # « Remplacer » would read as « forget every payer here ».
+        payers = payload.get("income_payers")
+        if payers is not None and (not isinstance(payers, list) or not all(isinstance(item, dict) for item in payers)):
+            raise ArchiveError("Archive refusée : dans banque.json, « income_payers » n'est pas une liste d'objets.")
+        self._payers: list | None = payers
         self.payload = payload
         # What the file names, whatever becomes of its records: prune never
         # deletes a line, rule or name the archive holds, even one it could
@@ -317,6 +355,10 @@ class BankSection(Section):
         self._patterns: set[str] = set()
         self._rule_ids: dict[str, int] = {}
         self._alias_keys: set[tuple[int, str]] = set()
+        self._payer_keys: set[str] = set()
+        # The payers this run creates: their lines' own choices travel with
+        # them (`_apply_transactions`).
+        self._created_payers: set[str] = set()
         # The invoices here before the run: the runner loads every section
         # before the first apply, and by this section's turn the invoices
         # section has created its own. An invoice absent from this set came
@@ -330,6 +372,7 @@ class BankSection(Section):
         replacing = ctx.replacing(self.key)
         self._apply_rules(report, replacing)
         self._apply_aliases(ctx, report)
+        self._apply_payers(report, replacing)
         self._apply_transactions(ctx, report, replacing)
 
     # rules -------------------------------------------------------------------
@@ -374,7 +417,13 @@ class BankSection(Section):
             if not different:
                 report.unchanged(RULES)
             elif replacing:
-                changed = codec.assign(rule, record, RULE_FIELDS)
+                # Every field, not just the compared ones: a moment that
+                # cannot be read is that record's reason, never a 500.
+                try:
+                    changed = codec.assign(rule, record, RULE_FIELDS)
+                except codec.FieldValueError as exc:
+                    report.skip(f"Règle « {pattern} » : {exc}")
+                    continue
                 rule.save(update_fields=changed)
                 report.updated(RULES)
             else:
@@ -411,6 +460,68 @@ class BankSection(Section):
                 continue
             CounterpartyAlias.objects.create(supplier=supplier, name=name)
             report.created(ALIASES)
+
+    # payers retained ---------------------------------------------------------
+    def _apply_payers(self, report, replacing: bool) -> None:
+        """What every credit of one payer is in the till: a decision, merged
+        like a rule's - one changed here is a conflict, kept. An archive
+        saying nothing of payers (written before them) leaves them alone."""
+        if self._payers is None:
+            return
+        existing = {payer.key: payer for payer in IncomePayer.objects.all()}
+        created = []
+        for record in self._payers:
+            codec.note_unknown(report, record, PAYER_KEYS, where="payeurs retenus › ")
+            key = record.get("key")
+            if not isinstance(key, str) or not key.strip():
+                report.skip("Payeur retenu sans nom")
+                continue
+            if key in self._payer_keys:
+                report.skip(f"Payeur retenu « {key} » : en double dans l'archive")
+                continue
+            # Named before its record is read: the prune never deletes a payer
+            # the archive holds, even one it could not read.
+            self._payer_keys.add(key)
+            if alias_key(key) != key:
+                # Not a key `bank.income.payer_key` makes: it could never
+                # name a credit, here or anywhere.
+                report.skip(f"Payeur retenu « {key} » : nom illisible")
+                continue
+            payer = existing.get(key)
+            try:
+                codec.load(IncomePayer, "key", key)
+                if payer is None:
+                    codec.load(IncomePayer, "source", record.get("source"))
+                    payer = IncomePayer(key=key)
+                    codec.assign(payer, record, PAYER_FIELDS)
+                    moment = payer.created_at
+                    payer.save()
+                    created.append((payer, moment))
+                    self._created_payers.add(key)
+                    report.created(PAYERS)
+                    continue
+                different = codec.differences(payer, record, PAYER_COMPARED)
+            except codec.FieldValueError as exc:
+                report.skip(f"Payeur retenu « {key} » : {exc}")
+                continue
+            if not different:
+                report.unchanged(PAYERS)
+            elif replacing:
+                try:
+                    changed = codec.assign(payer, record, PAYER_FIELDS)
+                except codec.FieldValueError as exc:
+                    report.skip(f"Payeur retenu « {key} » : {exc}")
+                    continue
+                payer.save(update_fields=changed)
+                report.updated(PAYERS)
+            else:
+                # `source` is all that is compared, and `differences` read it.
+                there = IncomeSource(record["source"]).label
+                report.conflict(
+                    f"Payeur retenu « {key} » : « {payer.get_source_display()} » ici, « {there} » dans l'archive "
+                    f"— gardé tel quel"
+                )
+        _restore(created, "created_at")
 
     # lines and their payments ------------------------------------------------
     def _apply_transactions(self, ctx, report, replacing: bool) -> None:
@@ -451,10 +562,25 @@ class BankSection(Section):
                 # says nothing about this line.
                 report.skip(f"{_operation(line)} : {exc}")
                 continue
+            took_choice = False
+            if not replacing and self._took_its_payers_choice(line, record, different):
+                different = [name for name in different if name != "income_source"]
+                took_choice = True
+                if not different:
+                    report.updated(OPERATIONS)
+                    decided.append((line, record, False))
+                    continue
             if not different:
                 report.unchanged(OPERATIONS)
             elif replacing:
-                changed = codec.assign(line, record, TRANSACTION_FIELDS)
+                # Every field, not just the compared ones: an import date that
+                # cannot be read is that line's reason, never a 500 - and the
+                # line keeps its links, as one whose record cannot be read.
+                try:
+                    changed = codec.assign(line, record, TRANSACTION_FIELDS)
+                except codec.FieldValueError as exc:
+                    report.skip(f"{_operation(line)} : {exc}")
+                    continue
                 line.save(update_fields=changed)
                 report.updated(OPERATIONS)
             else:
@@ -466,6 +592,7 @@ class BankSection(Section):
                 # held, with nothing said.
                 report.conflict(
                     f"{_operation(line)} : différente dans l'archive ({_fields(different)}) — gardée telle quelle"
+                    + (", son choix « en caisse » repris avec son payeur" if took_choice else "")
                     + self._links_left_out(ctx, line, record)
                 )
                 continue
@@ -492,6 +619,23 @@ class BankSection(Section):
             self._replace_payments(report, listed, managed)
         else:
             self._merge_payments(report, listed)
+
+    def _took_its_payers_choice(self, line, record, different) -> bool:
+        """A merge creating a payer brings the choices its lines held beside
+        it in the archive: there they were one decision - « tous ses
+        virements sont des versements carte, sauf celui-ci » - and the payer
+        alone would decide a line the archive kept apart from it, a state
+        neither database held under « gardée telle quelle » (review,
+        01/10/2026). Only onto a line saying nothing here: a choice made here
+        is a decision, and stays a conflict."""
+        if "income_source" not in different or line.income_source != IncomeSource.AUTOMATIC:
+            return False
+        if not self._created_payers or payer_key(line) not in self._created_payers:
+            return False
+        # `differences` has read it already.
+        line.income_source = codec.load(BankTransaction, "income_source", record["income_source"])
+        line.save(update_fields=["income_source"])
+        return True
 
     def _links_left_out(self, ctx, line, record) -> str:
         """The archive's links a line kept as it is does not get, named in
@@ -687,6 +831,11 @@ class BankSection(Section):
         ]
         if aliases:
             report.deleted(ALIASES, _delete_ids(CounterpartyAlias, aliases))
+        # An archive saying nothing of payers prunes none of them.
+        if self._payers is not None:
+            payers = [pk for pk, key in IncomePayer.objects.values_list("pk", "key") if key not in self._payer_keys]
+            if payers:
+                report.deleted(PAYERS, _delete_ids(IncomePayer, payers))
 
     # -- clear -----------------------------------------------------------------
     def clear(self, ctx, report) -> None:
@@ -695,6 +844,7 @@ class BankSection(Section):
             OPERATIONS: BankTransaction.objects.all().delete()[1].get(BankTransaction._meta.label, 0),
             RULES: IgnoreRule.objects.all().delete()[1].get(IgnoreRule._meta.label, 0),
             ALIASES: CounterpartyAlias.objects.all().delete()[1].get(CounterpartyAlias._meta.label, 0),
+            PAYERS: IncomePayer.objects.all().delete()[1].get(IncomePayer._meta.label, 0),
         }
         for entity in ENTITIES:
             report.deleted(entity, counts[entity])

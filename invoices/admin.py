@@ -1,4 +1,6 @@
 from django.contrib import admin
+from django.urls import reverse
+from django.utils.html import format_html
 
 from .models import (
     EmailInvoiceSource,
@@ -43,11 +45,46 @@ class SupplierChangeAdmin(admin.ModelAdmin):
         return False
 
 
+#: Said on a portal source's admin page, above its read-only fields.
+PORTAL_IN_SOURCES = (
+    "Source d'un espace client : son canal et « Actif » se changent dans Achats → Sources, "
+    "par le propriétaire de l'espace, son mot de passe confirmé."
+)
+
+
 @admin.register(InvoiceType)
 class InvoiceTypeAdmin(admin.ModelAdmin):
+    """A source fetching from a customer portal decides where a stored
+    password is typed (its WebsiteInvoiceSource, which the admin does not
+    show): it is created and switched on from Achats → Sources, by the
+    espace's owner, his MarginMate password confirmed (invoices/views.py).
+    Here its channel and « actif » are read-only - a superuser is not the
+    owner, and turning it into a mailbox source or back on, behind the
+    page's checks, is exactly what that page guards."""
+
     list_display = ["name", "supplier", "source_kind", "parser_key", "is_active"]
     list_filter = ["source_kind", "is_active", "supplier"]
     inlines = [EmailInvoiceSourceInline]
+
+    @staticmethod
+    def _is_a_portal(obj) -> bool:
+        return obj is not None and hasattr(obj, "website_source")
+
+    def get_readonly_fields(self, request, obj=None):
+        fields = tuple(super().get_readonly_fields(request, obj))
+        if self._is_a_portal(obj):
+            fields += ("source_kind", "is_active")
+        return fields
+
+    def get_fieldsets(self, request, obj=None):
+        fieldsets = super().get_fieldsets(request, obj)
+        if not self._is_a_portal(obj):
+            return fieldsets
+        where = reverse("invoices:invoice_type_update", args=[obj.pk])
+        description = format_html(
+            '{} <a href="{}">Ouvrir cette source dans Achats → Sources</a>', PORTAL_IN_SOURCES, where
+        )
+        return [(name, {**options, "description": description}) for name, options in fieldsets]
 
 
 @admin.register(Invoice)

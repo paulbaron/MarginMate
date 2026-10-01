@@ -316,6 +316,11 @@ class GateTests(TwoTenantsTestCase):
         self.assertEqual(str(refused.exception), integrations.PORTALS)
         self.assertNotIn("BOX_", str(refused.exception))
         with bound_tenant(self.bar_a):
+            # The owner's espace: the .env's values, once their site is
+            # confirmed on « Identifiants » (accounts/vault.py env_bindings).
+            from accounts import vault
+
+            vault.save({}, env_bindings={"BOX_LOGIN": "box.exemple.invalid", "BOX_PASSWORD": "box.exemple.invalid"})
             self.assertEqual(
                 credentials(portal_recipe(), env_file=None, environ=environ),
                 ("gerant@exemple.invalid", "secret-essai"),

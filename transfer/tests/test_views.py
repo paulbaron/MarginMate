@@ -957,6 +957,8 @@ class CountsTextTests(SimpleTestCase):
             "produits caisse liés": "1 produit caisse lié",
             "jours de vente (caisse)": "1 jour de vente (caisse)",
             "noms de payeurs appris": "1 nom de payeurs appris",
+            # The bank's « Entrées d'argent »: the parenthesis is a complement.
+            "payeurs retenus (entrées d'argent)": "1 payeur retenu (entrées d'argent)",
             "mouvements d'achat": "1 mouvement d'achat",
             "ventes saisies à la main": "1 vente saisie à la main",
             "règles « sans facture »": "1 règle « sans facture »",

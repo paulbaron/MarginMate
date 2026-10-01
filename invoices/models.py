@@ -242,10 +242,50 @@ APP_ENV_REFUSED = (
 )
 
 
+def portal_host(url) -> str:
+    """The host a customer portal's password is bound to: its login page's
+    host, lower-case - "" for an address that is not https (a password is
+    never sent to one). The « Identifiants » page records it with the
+    password typed (accounts/vault.py `bindings`), and the scraper types that
+    password on that host's site only (scrapers/website.py)."""
+    from urllib.parse import urlsplit
+
+    from django.conf import settings
+
+    try:
+        parts = urlsplit(url or "")
+        host = (parts.hostname or "").lower().rstrip(".")
+        port = parts.port
+    except ValueError:
+        return ""
+    if not host:
+        return ""
+    if host in getattr(settings, "PORTAL_PLAIN_HTTP_HOSTS", ()):
+        # The test settings' local portal, on whatever port the test chose:
+        # no production setting names one.
+        return host if parts.scheme in ("http", "https") else ""
+    if parts.scheme == "https" and port in (None, 443):
+        # Another port is another server: https://site:8443 is not the site.
+        return host
+    return ""
+
+
 def app_env_name(name) -> bool:
     """Whether the application reads this .env variable for itself: never
     one a portal may type into its page."""
     return isinstance(name, str) and name.startswith(APP_ENV_PREFIXES)
+
+
+#: A portal's addresses (WebsiteInvoiceSource.clean): an address without a
+#: `portal_host` is one no stored password is ever bound to, so a source
+#: naming one could never sign in - or would sign in in clear.
+LOGIN_URL_NOT_HTTPS = "Une adresse en https:// : un mot de passe n'est jamais tapé sur une page qui n'est pas chiffrée."
+INVOICES_URL_NOT_HTTPS = (
+    "Une adresse en https:// : une fois connecté, le navigateur ne va jamais sur une page qui n'est pas chiffrée."
+)
+SAME_NAME_TWICE = (
+    "Un autre nom que celui de l'identifiant : sous un même nom, le mot de passe serait affiché comme un identifiant."
+)
 
 
 class WebsiteInvoiceSource(models.Model):
@@ -310,6 +350,11 @@ class WebsiteInvoiceSource(models.Model):
         return f"Site web de {self.invoice_type}"
 
     def clean(self):
+        """The rules the source form and the « Données » import both apply
+        (transfer/sections/sources.py runs full_clean): the gather types
+        what « Identifiants » holds under these two names into the page at
+        `login_url`, so both the page and the names decide where a stored
+        password goes."""
         errors = {}
         for field_name in ("username_env", "password_env"):
             value = getattr(self, field_name)
@@ -320,8 +365,85 @@ class WebsiteInvoiceSource(models.Model):
                 )
             elif app_env_name(value):
                 errors[field_name] = APP_ENV_REFUSED.format(name=value)
+        # Blank is the field's own « required » error, said already.
+        if self.login_url and not portal_host(self.login_url):
+            errors["login_url"] = LOGIN_URL_NOT_HTTPS
+        if self.invoices_url and not portal_host(self.invoices_url):
+            errors["invoices_url"] = INVOICES_URL_NOT_HTTPS
+        if "username_env" not in errors and "password_env" not in errors:
+            if self.username_env and self.username_env == self.password_env:
+                errors["password_env"] = SAME_NAME_TWICE
+            else:
+                errors.update(self._names_taken())
         if errors:
             raise ValidationError(errors)
+
+    def _names_taken(self) -> dict[str, str]:
+        """This source's names, held against every other portal's (by field).
+
+        - A name that is a password elsewhere is never a login here, nor the
+          reverse: « Identifiants » shows a login in clear, and one name
+          holds one value.
+        - A name another site's source uses is refused: the store binds a
+          password to the site it was typed for, and two sites sharing one
+          name would have one site's password typed into the other's page
+          (or the owner told to type it again for each in turn). One site's
+          sources share their names - one account, typed once.
+
+        Every other row counts, a paused source's or a mailbox source's
+        unused portal row included: switched back on, it would sign in with
+        those names again. This source itself - by its row and by its type,
+        the row an import is about to rewrite - never counts. Without a site
+        of its own (an address refused, or one the form could not read) the
+        names are not held against other sites: the address is what to
+        correct first, and nothing is saved meanwhile."""
+        names = [name for name in (self.username_env, self.password_env) if name]
+        if not names:
+            return {}
+        others = WebsiteInvoiceSource.objects.filter(
+            Q(username_env__in=names) | Q(password_env__in=names)
+        ).select_related("invoice_type")
+        if self.pk is not None:
+            others = others.exclude(pk=self.pk)
+        if self.invoice_type_id is not None:
+            others = others.exclude(invoice_type_id=self.invoice_type_id)
+        host = portal_host(self.login_url)
+        errors: dict[str, str] = {}
+        for other in others.order_by("invoice_type__name", "pk"):
+            named = f"« {other.invoice_type.name} »"
+            if other.password_env == self.username_env:
+                errors.setdefault(
+                    "username_env",
+                    f"Ce nom est celui du mot de passe de {named} : un identifiant s'affiche en clair sur la page "
+                    "Identifiants, un mot de passe jamais.",
+                )
+            if other.username_env == self.password_env:
+                errors.setdefault(
+                    "password_env",
+                    f"Ce nom est celui de l'identifiant de {named} : un mot de passe ne se range pas sous le nom "
+                    "d'un identifiant, affiché en clair sur la page Identifiants.",
+                )
+            other_host = portal_host(other.login_url)
+            if not host or other_host == host:
+                continue
+            site = f"{named} (site {other_host or other.login_url})"
+            same_login = other.username_env == self.username_env
+            same_password = other.password_env == self.password_env
+            if same_login and same_password:
+                errors.setdefault(
+                    "password_env", f"Ces noms sont déjà ceux de {site} : son mot de passe serait tapé sur ce site."
+                )
+            elif same_password:
+                errors.setdefault(
+                    "password_env",
+                    f"Ce nom est déjà celui du mot de passe de {site} : son mot de passe serait tapé sur ce site.",
+                )
+            elif same_login:
+                errors.setdefault(
+                    "username_env",
+                    f"Ce nom est déjà celui de l'identifiant de {site} : son identifiant serait tapé sur ce site.",
+                )
+        return errors
 
 
 class Invoice(models.Model):

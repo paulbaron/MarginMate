@@ -9,7 +9,8 @@ What every other test file takes for granted, pinned here:
   never swaps `default`, so a TestCase's transaction holds the rows the
   request reads and writes;
 * every test client is logged in as the test tenant's owner from its first
-  request, unless the test logs in, forces a login or logs out itself;
+  request, unless the test logs in, forces a login or logs out itself - his
+  MarginMate password confirmed by that implicit login only;
 * the central rows (logins, sessions, the tenant itself) live in the
   runner's own `accounts` test database, never in `default`;
 * `TenancyTestCase` (accounts/tests/support.py) takes all of that away for
@@ -25,6 +26,7 @@ says so before the thousands that would fail around it.
 from __future__ import annotations
 
 import threading
+import time
 from contextvars import ContextVar
 from unittest import mock
 
@@ -34,7 +36,7 @@ from django.db import connections, router
 from django.test import Client, SimpleTestCase, TestCase, TransactionTestCase
 from django.urls import reverse
 
-from accounts import paths, tenancy
+from accounts import paths, sudo, tenancy
 from accounts.models import Membership, Tenant
 from accounts.tests.support import TenancyTestCase
 from invoices.models import Supplier
@@ -178,6 +180,69 @@ class TheClientTests(TestCase):
         """For the pages nobody logs in to (the employee's signing link)."""
         response = Client().get(reverse("invoices:supplier_list"))
         self.assertEqual(response.status_code, 302)
+
+
+class TheClientsConfirmationTests(TestCase):
+    """The implicit login also confirms the owner's MarginMate password
+    (accounts/sudo.py), so the suite posts to the protected pages - and only
+    that login: a test logging in itself gets what production gives a login,
+    no confirmation."""
+
+    def stamp(self, client):
+        return client.session.get(sudo.SESSION_KEY)
+
+    def assertConfirmedFor(self, client, user):
+        stamp = self.stamp(client)
+        self.assertIsNotNone(stamp)
+        self.assertEqual(stamp["user"], user.pk)
+        self.assertGreater(stamp["until"], time.time() + sudo.WINDOW_SECONDS - 60)
+
+    def test_the_implicit_login_confirms_the_owner_s_password(self):
+        response = self.client.get(reverse("invoices:supplier_list"))
+        self.assertEqual(response.wsgi_request.user.username, runner.TEST_EMAIL)
+        self.assertConfirmedFor(self.client, runner.test_user())
+        self.assertTrue(sudo.confirmed(response.wsgi_request))
+
+    def test_a_client_built_by_hand_confirms_too(self):
+        client = self.client_class(enforce_csrf_checks=True)
+        client.get(reverse("invoices:supplier_list"))
+        self.assertConfirmedFor(client, runner.test_user())
+
+    def test_a_login_the_test_makes_itself_confirms_nothing(self):
+        self.client.force_login(runner.test_user())
+        response = self.client.get(reverse("invoices:supplier_list"))
+        self.assertEqual(response.wsgi_request.user.username, runner.TEST_EMAIL)
+        self.assertIsNone(self.stamp(self.client))
+        self.assertFalse(sudo.confirmed(response.wsgi_request))
+
+    def test_a_client_may_log_in_unconfirmed(self):
+        for client in (self.client_class(confirms_password=False), self.client_class()):
+            with self.subTest(client=client):
+                client.confirms_password = False
+                response = client.get(reverse("invoices:supplier_list"))
+                self.assertEqual(response.wsgi_request.user.username, runner.TEST_EMAIL)
+                self.assertIsNone(self.stamp(client))
+
+    def test_confirm_password_logs_in_first_and_writes_the_stamp(self):
+        other = runner.member_of_the_test_tenant(
+            get_user_model().objects.create_user(username="serveur@example.invalid", email="serveur@example.invalid")
+        )
+        self.assertEqual(runner.confirm_password(self.client, other), other)
+        response = self.client.get(reverse("invoices:supplier_list"))
+        self.assertEqual(response.wsgi_request.user.username, "serveur@example.invalid")
+        self.assertConfirmedFor(self.client, other)
+        # The owner by default, and an ended one on demand.
+        runner.confirm_password(self.client, seconds=-1)
+        response = self.client.get(reverse("invoices:supplier_list"))
+        self.assertEqual(response.wsgi_request.user.username, runner.TEST_EMAIL)
+        self.assertFalse(sudo.confirmed(response.wsgi_request))
+
+    def test_forget_the_confirmation_takes_it_back(self):
+        self.client.get(reverse("invoices:supplier_list"))
+        runner.forget_the_confirmation(self.client)
+        response = self.client.get(reverse("invoices:supplier_list"))
+        self.assertEqual(response.wsgi_request.user.username, runner.TEST_EMAIL)
+        self.assertIsNone(self.stamp(self.client))
 
 
 class NothingBoundInTenancyTestCaseTests(TenancyTestCase):

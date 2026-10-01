@@ -91,8 +91,14 @@ class LoginPage(LoginView):
         return super().post(request, *args, **kwargs)
 
     def form_valid(self, form):
+        from . import sudo
+
         limiter.succeeded(limiter.LOGIN, self.request, self.request.POST.get("username"))
-        return limiter.remember_device(self.request, super().form_valid(form))
+        response = limiter.remember_device(self.request, super().form_valid(form))
+        # The password was just checked: « Identifiants » does not ask it
+        # again for its window (accounts/sudo.py).
+        sudo.stamp(self.request)
+        return response
 
 
 class LogoutPage(LogoutView):

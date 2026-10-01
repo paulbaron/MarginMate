@@ -1,3 +1,5 @@
+import hashlib
+import re
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
@@ -601,9 +603,37 @@ class InvoiceTypeForm(forms.ModelForm):
         ), True
 
 
+def portal_env_names(login_url: str) -> tuple[str, str]:
+    """The two names a portal's credentials are kept under when none was
+    typed, from its site: « https://espace-client.free.fr/login » is
+    PORTAL_ESPACE_CLIENT_FREE_FR_9532CE_LOGIN / _PASSWORD. Two sources of one
+    site share them - one account, typed once on « Identifiants ».
+
+    The readable part folds the host (punctuation to « _ », « www. »
+    dropped, cut at 40 characters), so two sites could fold alike -
+    mon-espace.fr and mon.espace.fr - and would share one account: one
+    site's password typed into the other's page. The six hex characters
+    are the EXACT host's (sha256, the host as `models.portal_host` binds a
+    password to it), added to every derived name, folded or not: one rule,
+    and no derived name was in use anywhere before it (01/10/2026). At most
+    63 characters, the column's 64 and the store's limit."""
+    from urllib.parse import urlsplit
+
+    try:
+        host = (urlsplit(login_url or "").hostname or "").lower().rstrip(".")
+    except ValueError:
+        host = ""
+    slug = re.sub(r"[^A-Z0-9]+", "_", host.removeprefix("www.").upper()).strip("_")[:40].rstrip("_") or "SITE"
+    digest = hashlib.sha256(host.encode()).hexdigest()[:6].upper()
+    return f"PORTAL_{slug}_{digest}_LOGIN", f"PORTAL_{slug}_{digest}_PASSWORD"
+
+
 class WebsiteInvoiceSourceForm(forms.ModelForm):
-    """A customer portal's settings. The credentials are the NAMES of .env
-    variables, never the values (models.WebsiteInvoiceSource)."""
+    """A customer portal's settings. The credentials are kept under two
+    NAMES (models.WebsiteInvoiceSource), never in the database: their values
+    are typed on « Identifiants » (accounts/credentials.py), else read from
+    the .env. Left blank, the names come from the site's address
+    (`portal_env_names`)."""
 
     class Meta:
         model = WebsiteInvoiceSource
@@ -622,8 +652,8 @@ class WebsiteInvoiceSourceForm(forms.ModelForm):
         ]
         labels = {
             "login_url": "Page de connexion",
-            "username_env": "Variable .env de l'identifiant",
-            "password_env": "Variable .env du mot de passe",
+            "username_env": "Nom de l'identifiant",
+            "password_env": "Nom du mot de passe",
             "invoices_url": "Page des factures",
             "navigation": "Liens à suivre",
             "show_browser": "Navigateur visible",
@@ -639,11 +669,32 @@ class WebsiteInvoiceSourceForm(forms.ModelForm):
     # away in the page (invoice_type_form.html).
     advanced = ["username_selector", "password_selector", "submit_selector", "link_selector", "next_selector"]
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for name in ("username_env", "password_env"):
+            self.fields[name].required = False
+            self.fields[name].help_text = (
+                "Le nom sous lequel la page Identifiants range "
+                + ("l'identifiant" if name == "username_env" else "le mot de passe")
+                + " de ce site. Vide : tiré de l'adresse du site."
+            )
+
     def clean_username_env(self):
         return self.cleaned_data["username_env"].strip().upper()
 
     def clean_password_env(self):
         return self.cleaned_data["password_env"].strip().upper()
+
+    def clean(self):
+        cleaned = super().clean()
+        login_url = cleaned.get("login_url")
+        if login_url:
+            login_name, password_name = portal_env_names(login_url)
+            if not cleaned.get("username_env"):
+                cleaned["username_env"] = login_name
+            if not cleaned.get("password_env"):
+                cleaned["password_env"] = password_name
+        return cleaned
 
 
 class EmailInvoiceSourceForm(forms.ModelForm):

@@ -13,8 +13,8 @@ ses vérifications. Le reste vous revient : le compte Cloudflare, les DNS, le tu
 `.env` et les sauvegardes. Ce document le décrit étape par étape.
 
 Le site tourne depuis une copie du code réservée à la production, **`C:\MarginMate\app`**, sur les
-données de **`C:\MarginMate\data`**. Le code se modifie ailleurs, dans le dossier de développement,
-et se met en ligne par `deploy.cmd` : section 10.
+données de **`C:\MarginMate\data`**. Le code se modifie ailleurs, dans un dossier de développement,
+s'envoie sur GitHub (branche `main`), et se met en ligne par `deploy.cmd` : section 10.
 
 ## Avant de commencer
 
@@ -23,8 +23,8 @@ et se met en ligne par `deploy.cmd` : section 10.
 - **Deux serveurs, deux ports.** Le serveur de production écoute sur `http://127.0.0.1:8765` :
   c'est l'adresse que vise le tunnel. `runserver`, le serveur de développement, garde son port
   habituel, 8000 : il n'est pas fait pour Internet et le tunnel ne le vise jamais.
-- **Deux copies, deux `.env`.** Les sections 5 à 9 et 11 parlent de la copie de production,
-  `C:\MarginMate\app`, et de son `.env`. Le dossier de développement a le sien (section 10).
+- **Chaque copie a son `.env`.** Les sections 5 à 9, 11 et 12 parlent de la copie de production,
+  `C:\MarginMate\app`, et de son `.env`. Chaque dossier de développement a le sien (section 10).
 - **Sur le PC lui-même**, l'adresse `http://127.0.0.1:8765` reste utilisable. Chrome, Edge et
   Firefox acceptent les cookies sécurisés sur cette adresse locale. Si la connexion n'y tient pas,
   passez par `https://gestion.<votre-domaine>`.
@@ -117,7 +117,8 @@ Ces lignes sont déjà dans votre `.env`. Gardez-les telles quelles :
 - `DJANGO_SECRET_KEY` : au moins 50 caractères tirés au hasard. Le serveur refuse de démarrer
   avec une clé trop courte, celle de l'exemple ou une clé « django-insecure ». Pour en générer une :
   `.venv\Scripts\python.exe -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"`.
-  En changer déconnecte tout le monde et annule les codes de signature en cours.
+  En changer déconnecte tout le monde, annule les codes de signature en cours et rend illisibles les
+  identifiants tapés sur la page « Identifiants » : il faut alors les retaper (section 12).
 - `MARGINMATE_SIGNING_PASSPHRASE` : elle chiffre les clés de signature. Sans elle, le serveur
   refuse de démarrer.
 - `MARGINMATE_TENANTS_ROOT` et `MARGINMATE_ACCOUNTS_DB` : le dossier des espaces et la base des
@@ -133,6 +134,10 @@ Deux lignes sont facultatives :
   `31536000` (un an).
 
 Enfin, supprimez la ligne `MARGINMATE_TENANCY` si elle y est encore : elle ne sert plus à rien.
+
+Les identifiants des comptes (la boîte mail des factures, Metro, L'Addition, les espaces clients)
+se tapent sur la page « Identifiants » du site. Une fois qu'ils y sont, leurs lignes n'ont plus rien
+à faire dans ce fichier : section 12.
 
 `DJANGO_DEBUG=False` est obligatoire dès que `DJANGO_ALLOWED_HOSTS` nomme le site public. Avec le
 mode debug, n'importe qui pourrait voir les réglages du serveur, et `manage.py check`, `runserver`
@@ -214,7 +219,7 @@ Tout ce qui compte tient dans deux choses :
 - le dossier **`C:\MarginMate\data`** : les espaces (leurs bases, leurs fichiers, leurs clés de
   signature), la base des comptes et le journal ;
 - le fichier **`C:\MarginMate\app\.env`**, qui contient la clé secrète, la phrase de passe et les
-  mots de passe.
+  mots de passe pas encore tapés sur la page « Identifiants » (section 12).
 
 Une commande sauvegarde les deux. Dans une invite de commandes :
 
@@ -240,6 +245,40 @@ le dit et renomme le dossier commencé `…-INCOMPLET` : ce n'est pas une sauveg
 fois le problème réglé. Une sauvegarde coupée (fenêtre fermée, panne de courant) garde son nom mais
 n'a pas de `manifest.json`, écrit en dernier : elle non plus n'est pas une sauvegarde.
 
+Quatre choses ne sont **jamais** dans une sauvegarde, exprès, et la commande le dit :
+
+- les mots de passe tapés sur la page « Identifiants » : à retaper après une restauration
+  (section 12) ;
+- les sessions de connexion : une session ouvre le site à qui la détient. Elles sont retirées de
+  chaque base copiée, y compris des copies de base rangées dans `C:\MarginMate\data` (une copie
+  faite à la main comme `accounts.sqlite3.bak_…`, celle gardée d'avant l'adoption, les copies de
+  sécurité de la page « Données »). Après une restauration, chacun se reconnecte ;
+- les pages que gardent les récupérations en échec et les « Tester » (les dossiers `_debug`) : elles
+  peuvent montrer un identifiant ;
+- une copie du fichier `.env` rangée dans `C:\MarginMate\data` (un fichier `.env` ou `.env.…`,
+  comme `.env.bak_…`) : elle contient la clé secrète et des mots de passe. La commande la nomme,
+  dans une ligne « ATTENTION », sans jamais l'ouvrir : supprimez-la (section 12). Le vrai `.env`,
+  celui de `C:\MarginMate\app`, est copié à côté de `data\`, comme avant.
+
+**Une fois, après la mise en ligne de cette version.** Les sauvegardes faites avant elle, et les
+dossiers `data-dev.ancien-<date>` mis de côté avant elle, gardent encore des sessions de connexion
+du site (et des pages `_debug`). Changez une fois votre mot de passe MarginMate : un nouveau mot de
+passe ferme toutes les sessions ouvertes avec l'ancien, celles copiées dans ces dossiers
+comprises. Dans une invite de commandes :
+
+```
+cd /d C:\MarginMate\app
+.venv\Scripts\python.exe manage.py changepassword --database accounts <votre adresse e-mail>
+```
+
+La commande demande deux fois le nouveau mot de passe. Faites de même pour chaque autre compte de
+vos espaces, avec son adresse, et donnez-lui son nouveau mot de passe : chacun se reconnecte
+ensuite. Puis supprimez ces anciennes sauvegardes et ces dossiers `data-dev.ancien-<date>` dès
+qu'ils ne servent plus, ou acceptez qu'ils gardent ces anciennes sessions, désormais fermées, et ces
+pages. La copie du `.env` rangée dans le dossier des données, les anciennes pages `_debug` et les
+mots de passe encore dans le `.env` demandent eux aussi un passage, une fois : section 12, « Une
+fois, après la mise en ligne de cette version ».
+
 La routine, une fois par semaine au moins :
 
 1. `manage.py backup_data`, comme ci-dessus ;
@@ -262,6 +301,8 @@ effacé), recopiez celui de la sauvegarde, puis relancez le serveur :
 move C:\MarginMate\data C:\MarginMate\data.avant-restauration
 robocopy "C:\MarginMate\backups\2026-10-01_101500\data" C:\MarginMate\data /E
 ```
+
+Retapez ensuite les mots de passe sur la page « Identifiants » (section 12).
 
 La page « Données » de chaque espace permet aussi d'en exporter une archive.
 
@@ -294,20 +335,25 @@ français sans chemin, sans réglage et sans trace.
 
 ## 10. Développer et mettre en ligne une modification
 
-MarginMate existe en **deux copies** sur ce PC, chacune avec son code, son `.env` et ses données :
+MarginMate existe en **plusieurs copies** sur ce PC, chacune avec son code, son `.env` et ses données :
+la copie de production, et un ou plusieurs dossiers de développement.
 
 | | Production : le site en ligne | Développement : les modifications |
 |---|---|---|
-| Code | `C:\MarginMate\app` | `C:\Users\<vous>\Desktop\Bar application gestion\AdminMate` |
-| Données | `C:\MarginMate\data` | `C:\Users\<vous>\Desktop\Bar application gestion\data-dev`, une copie |
+| Code | `C:\MarginMate\app` | `C:\Users\<vous>\Desktop\Bar application gestion\AdminMate` (ou dans `Bar application gestion 2`, `… 3`) |
+| Données | `C:\MarginMate\data` | le dossier `data-dev` à côté de `AdminMate`, une copie |
 | Sauvegardes | `C:\MarginMate\backups` | aucune : ses données sont une copie |
 | Serveur | `start_production.cmd` (la tâche `MarginMate`), port 8765, celui du tunnel | `runserver`, `http://localhost:8000` |
 | `.env` | `DJANGO_DEBUG=False`, `MARGINMATE_HTTPS=1` (section 5) | `DJANGO_DEBUG=True`, sans `MARGINMATE_HTTPS`, sans identifiants |
 
 - **On ne modifie jamais `C:\MarginMate\app` à la main.** Il ne change que par `deploy.cmd`, qui y
-  apporte ce qui a été enregistré (`git commit`) sur la branche `main` du dossier de développement :
-  un fichier modifié mais pas enregistré ne part pas. Pas besoin de GitHub : la copie de production
-  va chercher le code directement dans le dossier de développement.
+  apporte la branche `main` **de GitHub** (`https://github.com/paulbaron/MarginMate`) : un travail
+  part en ligne une fois enregistré (`git commit`), fusionné dans `main` et envoyé (`git push`). Un
+  fichier modifié mais pas enregistré, ou un commit pas envoyé, ne part pas.
+- **GitHub est la seule source** depuis le 01/10/2026, quel que soit le dossier de développement
+  qui a envoyé le code : il faut donc Internet pour mettre en ligne.
+- **Le dépôt GitHub est public** : avant chaque envoi, vérifiez qu'aucun commit ne contient de
+  vraies données (factures, banque, personnel, noms et montants de `data-dev`).
 - **Une session Claude Code s'ouvre toujours dans le dossier de développement**, jamais dans
   `C:\MarginMate` : elle y modifie le code, lance les tests et, pour un aperçu, `runserver` sur
   `data-dev`.
@@ -319,9 +365,9 @@ MarginMate existe en **deux copies** sur ce PC, chacune avec son code, son `.env
 Jusqu'ici le site tournait depuis le dossier de développement, sur
 `C:\Users\<vous>\Desktop\Bar application gestion\data`. Pour passer aux deux copies :
 
-1. Dans le dossier de développement, enregistrez tout le travail en cours sur la branche `main` :
-   `git status` doit dire qu'il ne reste rien à enregistrer. La copie de production ne recevra que
-   ce qui est enregistré. Rien n'est envoyé sur GitHub.
+1. Dans le dossier de développement, enregistrez tout le travail en cours sur la branche `main`
+   (`git status` doit dire qu'il ne reste rien à enregistrer), puis envoyez-le sur GitHub :
+   `git push origin main`. La copie de production ne recevra que ce qui y est.
 2. Arrêtez le serveur : Ctrl+C dans la fenêtre de `start_production.cmd` (et `runserver`, s'il
    tourne).
 3. Dans une invite de commandes, créez la copie de production du code et son Python (mise doit
@@ -329,10 +375,10 @@ Jusqu'ici le site tournait depuis le dossier de développement, sur
 
    ```
    mkdir C:\MarginMate
-   git clone -b main "C:\Users\<vous>\Desktop\Bar application gestion\AdminMate" C:\MarginMate\app
+   git clone -b main https://github.com/paulbaron/MarginMate.git C:\MarginMate\app
    cd /d C:\MarginMate\app
    mise install
-   uv sync --locked --no-dev
+   uv sync --locked --no-dev --python 3.11
    ```
 
    `uv` crée le dossier `.venv`, avec Python 3.11, et y installe les dépendances : exactement
@@ -402,8 +448,9 @@ Jusqu'ici le site tournait depuis le dossier de développement, sur
    `EMAIL_HOST`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`, et les variables des espaces clients
    (leurs noms sont dans Factures > Sources). Sans eux, une récupération lancée depuis la copie
    refuse ; avec eux, elle se connecterait pour de vrai à Metro et aux portails. Donnez aussi à la
-   copie sa propre `DJANGO_SECRET_KEY` (la section 5 dit comment en tirer une). Gardez
-   `MARGINMATE_SIGNING_PASSPHRASE` : les clés de signature copiées en ont besoin pour s'ouvrir.
+   copie sa propre `DJANGO_SECRET_KEY` (la section 5 dit comment en tirer une) : avec celle du site,
+   `refresh_dev_data.cmd` refuse. Gardez `MARGINMATE_SIGNING_PASSPHRASE` : les clés de signature
+   copiées en ont besoin pour s'ouvrir.
 10. Créez la copie des données : double-cliquez sur `refresh_dev_data.cmd`, dans le dossier de
     développement (section 10.5).
 
@@ -419,9 +466,13 @@ Jusqu'ici le site tournait depuis le dossier de développement, sur
    ```
 
    puis `http://localhost:8000`. Ctrl+C pour arrêter.
-3. **Enregistrer** : `git add` puis `git commit`, sur `main`. Seul ce qui est enregistré part en
-   ligne.
-4. **Mettre en ligne** : double-cliquez sur `C:\MarginMate\app\deploy.cmd`.
+3. **Enregistrer** : `git add` puis `git commit`, sur `main` (ou sur une branche, puis fusionnée
+   dans `main`).
+4. **Envoyer sur GitHub** : `git push origin main`. Seul ce qui y est part en ligne. Si git refuse
+   l'envoi (« rejected »), un autre dossier de développement a envoyé entre-temps : récupérez son
+   travail (`git pull --no-rebase origin main`), relancez les tests, puis renvoyez. Jamais
+   `git push --force`.
+5. **Mettre en ligne** : double-cliquez sur `C:\MarginMate\app\deploy.cmd`.
 
 ### 10.3 Ce que fait `deploy.cmd`
 
@@ -436,12 +487,16 @@ a réussi :
 2. **Refuse de tourner ailleurs qu'en production** : un `.env` qui dit `DJANGO_DEBUG=True`, ou qui
    ne dit pas `MARGINMATE_HTTPS=1`, est celui du dossier de développement. Il refuse aussi une copie
    de production modifiée à la main, qui n'est pas sur `main`, dont la base des comptes n'est pas
-   dans `C:\MarginMate\data`, ou que git ne lit pas (« dubious ownership » : la fenêtre donne la
+   dans `C:\MarginMate\data`, dont le `.env` désigne le dossier des données par un autre chemin
+   que le vrai (une jonction, un lien, un lecteur substitué, un nom court comme `MARGIN~1` : la
+   fenêtre donne le vrai), ou que git ne lit pas (« dubious ownership » : la fenêtre donne la
    commande `git config --global --add safe.directory …` à taper).
-3. **Cherche les changements** enregistrés dans le dossier de développement (`git fetch origin`) et
-   les liste. S'il n'y en a pas, il dit « Rien de nouveau » et s'arrête sans toucher au serveur -
+3. **Cherche les changements** envoyés sur GitHub (`git fetch origin` : il faut Internet) et les
+   liste ; sa fenêtre parle encore du « dossier de developpement » : c'est GitHub qu'elle lit.
+   S'il n'y en a pas, il dit « Rien de nouveau » et s'arrête sans toucher au serveur -
    sauf si rien n'écoute sur le port 8765 : il dit alors que le site est hors ligne, et comment
-   le relancer.
+   le relancer. « Rien de nouveau » après un `git commit` : le travail n'a pas été envoyé sur
+   GitHub (section 10.2, étape 4).
 4. **Demande** « Déployer ces changements ? (O/N) ».
 5. **Vérifie que rien ne tourne** (`manage.py running_jobs`) : une récupération de factures, un
    import de tickets ou un import des ventes en cours serait coupé net. Si quelque chose tourne, il
@@ -457,8 +512,8 @@ a réussi :
    sauvegarde échoue, il relance le serveur tel qu'il était et s'arrête : rien n'a changé.
 8. **Met le code à jour** (`git merge --ff-only origin/main` : le code avance, rien n'est
    réécrit). Si cela échoue, il remet le code d'avant et relance le serveur.
-9. **Installe les dépendances** (`uv sync --locked --no-dev` : exactement celles de `uv.lock`, sans
-   les outils de développement), **applique les migrations**
+9. **Installe les dépendances** (`uv sync --locked --no-dev --python 3.11` : exactement celles de
+   `uv.lock`, sans les outils de développement, dans le `.venv` existant), **applique les migrations**
    (`manage.py migrate_tenants`, juste après la sauvegarde) et **vérifie** le serveur
    (`manage.py serve --verifier`). Si l'une de ces étapes échoue, il **ne relance pas** le serveur :
    le nouveau code et les données ne vont peut-être plus ensemble. La fenêtre affiche alors les
@@ -500,9 +555,11 @@ et relancez `deploy.cmd`. Pour revenir plus tard sur une version mise en ligne :
    ```
    cd /d C:\MarginMate\app
    git reset --hard <version d'avant>
-   uv sync --locked --no-dev
+   uv sync --locked --no-dev --python 3.11
    ```
 
+   Gardez `--python 3.11` : sans lui, une version d'avant le 01/10/2026 fait demander à `uv` un
+   autre Python exact, et `uv` refait alors `.venv` en entier.
    La version d'avant est le premier numéro de « Déployé : ancien..nouveau » ;
    `git log --oneline` les liste toutes. On ne revient pas avant le passage à uv (section 10.6) :
    une version d'avant n'a pas de fichier `uv.lock`, et son `deploy.cmd`, remis en place par le
@@ -519,8 +576,9 @@ et relancez `deploy.cmd`. Pour revenir plus tard sur une version mise en ligne :
 4. Relancez le serveur : `schtasks /run /tn MarginMate`, ou double-cliquez sur
    `start_production.cmd`.
 
-Le prochain `deploy.cmd` proposera de nouveau les mêmes changements, tant que le dossier de
-développement les a : corrigez-les d'abord là-bas, dans un nouveau commit.
+Le prochain `deploy.cmd` proposera de nouveau les mêmes changements, tant que `main` sur GitHub
+les a : corrigez-les d'abord dans un dossier de développement, dans un nouveau commit envoyé sur
+GitHub.
 
 ### 10.5 Rafraîchir les données de développement
 
@@ -532,14 +590,35 @@ une copie d'une sauvegarde de la production :
 - il refuse aussi quand le `.env` de développement pointe vers les données du site, n'a pas de
   dossier de données à lui, ou garde une base des comptes hors de `data-dev`
   (`MARGINMATE_ACCOUNTS_DB` doit être `…\data-dev\accounts.sqlite3` : sinon `runserver` écrirait
-  dans les comptes du site, et `migrate_tenants` les migrerait) ;
+  dans les comptes du site, et `migrate_tenants` les migrerait). Il regarde ce que chaque chemin est
+  vraiment : une jonction, un lien, un lecteur substitué ou un nom court (`MARGIN~1`) qui mène à
+  `C:\MarginMate\data` est refusé comme `C:\MarginMate\data` lui-même, et le `.env` de
+  développement doit désigner `data-dev` par son vrai chemin (la fenêtre le donne) ;
+- il refuse une sauvegarde faite avec la même `DJANGO_SECRET_KEY` que le `.env` de développement :
+  la copie doit avoir la sienne (section 10.1, étape 9), sinon elle ouvrirait les sessions du site
+  et ce qui est scellé avec cette clé ;
+- il refuse tant que `data-dev`, ou les données de la sauvegarde, contiennent une copie du fichier
+  `.env` (un fichier `.env` ou `.env.…`, comme `.env.bak_…`) : la fenêtre la nomme, sans l'ouvrir.
+  Supprimez-la (section 12, « Une fois, après la mise en ligne de cette version »), puis
+  relancez-le. Il ne recopie de toute façon jamais un tel fichier ;
 - il prend la sauvegarde terminée la plus récente de `C:\MarginMate\backups` (un `manifest.json` et
   un dossier `data` : une sauvegarde coupée est passée), ou celle qu'on lui donne
   (`refresh_dev_data.cmd "C:\MarginMate\backups\2026-10-01_101500"`), jamais une `-INCOMPLET` ;
 - il renomme le dossier actuel `data-dev.ancien-<date>` : **rien n'est effacé**, supprimez
   vous-même ces anciens dossiers quand ils ne servent plus ;
 - il recopie le dossier `data` de la sauvegarde à sa place (robocopy). Le `.env` de la sauvegarde
-  n'est jamais recopié : le dossier de développement garde le sien, sans identifiants.
+  n'est jamais recopié : le dossier de développement garde le sien, sans identifiants. Les mots de
+  passe de la page « Identifiants » et les pages des récupérations en échec (dossiers `_debug`) ne
+  le sont pas non plus, même d'une sauvegarde plus ancienne qui les contient encore ;
+- il efface les sessions de connexion qu'une sauvegarde plus ancienne contient encore, dans chaque
+  base de la copie (la base des comptes, une copie faite à la main comme `accounts.sqlite3.bak_…`,
+  celle gardée d'avant l'adoption…) : ce sont celles du site. S'il n'y arrive pas, la fenêtre le
+  dit (« ATTENTION ») : réglez le problème et relancez-le.
+
+Le dossier `data-dev.ancien-<date>` mis de côté n'est ni effacé ni nettoyé : il garde les sessions
+de connexion et les pages `_debug` de l'ancienne copie, et la fenêtre le rappelle à la fin.
+Supprimez-le dès qu'il ne sert plus. Pour ceux mis de côté avant cette version : section 8, « Une
+fois, après la mise en ligne de cette version ».
 
 Pour une copie toute fraîche, faites d'abord une sauvegarde en production (section 8). Si le code de
 développement a des migrations que la production n'a pas encore, lancez ensuite, dans le dossier de
@@ -576,7 +655,7 @@ ligne :
    l'étape 3, puis finissez la mise en ligne à la main, dans la même invite de commandes :
 
    ```
-   uv sync --locked --no-dev
+   uv sync --locked --no-dev --python 3.11
    .venv\Scripts\python.exe manage.py migrate_tenants
    .venv\Scripts\python.exe manage.py serve --verifier
    rmdir /s /q .git\marginmate-deploy
@@ -597,7 +676,7 @@ ligne :
    celui du code. Ces commandes ne marchent qu'après la première mise en ligne, qui apporte
    `mise.toml` dans `C:\MarginMate\app`.
 4. **À partir de la deuxième mise en ligne**, `deploy.cmd` installe les dépendances avec
-   `uv sync --locked --no-dev` : exactement celles de `uv.lock`, sans les outils de développement,
+   `uv sync --locked --no-dev --python 3.11` : exactement celles de `uv.lock`, sans les outils de développement,
    et il retire de `.venv` ce que `uv.lock` ne liste pas (pip compris). Si `uv` ne répond pas, il
    refuse avant de toucher à quoi que ce soit, avec « REFUS : uv ne repond pas » : reprenez
    l'étape 3. Si `uv --version` répond dans une nouvelle invite de commandes et que `deploy.cmd`
@@ -628,6 +707,157 @@ Quelques problèmes se voient seulement dans le navigateur :
   tunnel est `http://127.0.0.1:8765`, arrêtez ce serveur et lancez `start_production.cmd`.
 - **« Demande incorrecte » (400) sur toutes les pages.** Le nom public manque dans
   `DJANGO_ALLOWED_HOSTS`.
+
+## 12. Les identifiants des comptes et la protection du dossier
+
+Les identifiants avec lesquels MarginMate va chercher les factures et les ventes (la boîte mail des
+factures, Metro, L'Addition, les espaces clients des fournisseurs) se tapent sur la page
+« Identifiants » du site, plutôt que dans le `.env`. On l'ouvre depuis l'en-tête de la page
+« Données », ou depuis Achats > Sources. Seul le propriétaire de l'espace y a accès.
+
+**Le site vous redemande votre mot de passe MarginMate** avant chacune de ces actions. Une fois
+tapé, il vaut pour ce navigateur, jusqu'à un quart d'heure après la dernière d'entre elles :
+
+- ouvrir la page « Identifiants », et y enregistrer ;
+- enregistrer ou « Tester » une source « Espace client » (Achats > Sources) ;
+- sur la page « Données », importer une archive et effacer (exporter ne le demande pas) ;
+- l'administration du site (`/admin/`), toutes ses pages après celle de connexion.
+
+Sur la page « Identifiants » elle-même :
+
+- Un mot de passe n'est **jamais réaffiché** : laissé vide, son champ garde celui qui est
+  enregistré, et « Effacer » le retire.
+- Ils sont **chiffrés, sur ce PC**, dans le dossier `private` de l'espace, avec une clé que Windows
+  réserve à ce PC et à ce compte Windows, et la `DJANGO_SECRET_KEY`. Ils ne vont ni dans la base, ni
+  dans une archive « Données ».
+- Ils **ne sont dans aucune sauvegarde** (section 8), ni dans la copie de développement (section
+  10.5). Après une restauration, sur un autre PC, sous un autre compte Windows ou après un
+  changement de `DJANGO_SECRET_KEY`, la page dit qu'ils ne peuvent pas être lus : retapez-les.
+  Gardez-les donc aussi ailleurs, dans un gestionnaire de mots de passe par exemple.
+- **Les espaces clients dont le mot de passe est encore dans le `.env`** ne le reçoivent plus
+  d'office depuis cette version : sur la page, chacun dit « Fichier .env : site à confirmer ». Une
+  fois, pour chacun, vérifiez que l'adresse indiquée est bien celle du site de ce compte, puis
+  **au choix** : cochez sa case « Le fichier .env contient ces identifiants : les envoyer à … » (une
+  case par espace client) et enregistrez, **ou** tapez sur la page son identifiant **et** son mot
+  de passe, les deux (le mot de passe seul ne suffit pas), et enregistrez. Sinon, la récupération
+  de cet espace client s'arrête, avec un message qui le dit. Une fois les deux tapés sur la page,
+  retirez ses lignes du `.env` (ci-dessous).
+- Votre navigateur peut proposer d'enregistrer les mots de passe tapés sur cette page :
+  **refusez** (« Jamais » pour ce site). Ce sont ceux de vos fournisseurs et de votre boîte mail,
+  pas celui de MarginMate : le navigateur en garderait une copie de plus, hors de MarginMate, et
+  les proposerait sur d'autres pages.
+
+### Une fois, après la mise en ligne de cette version
+
+Trois choses à faire une seule fois, dans cet ordre, quand aucune récupération ne tourne.
+
+**1. Une copie du `.env` rangée dans le dossier des données.** Une copie du `.env` de production
+laissée dans `C:\MarginMate\data` (par exemple `C:\MarginMate\data\.env.bak_…`) part avec les
+données dans chaque sauvegarde, puis dans `data-dev`, que lisent les sessions de
+programmation : elle contient la clé secrète, la phrase de passe et des mots de passe.
+`backup_data` ne copie plus aucun fichier `.env` ou `.env.…` du dossier des données et nomme
+chacun (« ATTENTION ») ; `refresh_dev_data.cmd` refuse tant qu'il en trouve un dans `data-dev` ou
+dans la sauvegarde qu'il prend. Cette commande les liste ; si elle ne trouve rien, passez au
+point 2 :
+
+```
+dir /s /b /a-d C:\MarginMate\data\.env*
+```
+
+1. Ouvrez chaque copie et `C:\MarginMate\app\.env` dans le Bloc-notes, et comparez leurs lignes
+   `DJANGO_SECRET_KEY`. **Si c'est la même clé**, changez celle de `C:\MarginMate\app\.env` (la
+   section 5 dit comment en tirer une), puis relancez le serveur : tout le monde est déconnecté, et
+   la page « Identifiants » redemande les identifiants, qu'elle ne peut plus lire. Retapez-les. Si
+   la copie contient aussi des mots de passe encore valables (la boîte mail, Metro, L'Addition, un
+   espace client), changez-les chez le fournisseur, puis sur la page.
+2. Supprimez chaque copie du `.env` rangée dans `C:\MarginMate\data` : une fois fini, la commande
+   ci-dessus ne doit plus rien trouver.
+
+3. Supprimez ses copies dans les données de développement, `data-dev\.env.…` (le dossier
+   `data-dev` est à côté du dossier de développement : section 10), et celles des dossiers
+   `data-dev.ancien-<date>`.
+4. Faites une nouvelle sauvegarde (section 8) : elle ne contient pas la copie. Puis supprimez les
+   sauvegardes plus anciennes qui la contiennent (`C:\MarginMate\backups\<date>\data\.env.…`),
+   leurs copies hors du PC comprises. Pour en garder une, supprimez-y au moins ce fichier.
+
+**2. Les pages gardées par les récupérations avant cette version.** Les récupérations en échec et
+les « Tester » gardaient les pages des espaces clients telles quelles, sans rien masquer : elles
+peuvent montrer un identifiant. Celles gardées désormais sont masquées. Supprimez les anciennes :
+dans les dossiers `downloads` de chaque espace, les dossiers `_debug` de chaque source et les
+dossiers `test-…`. Dans PowerShell :
+
+```powershell
+Remove-Item C:\MarginMate\data\tenants\*\downloads\*\_debug -Recurse -Force
+Remove-Item C:\MarginMate\data\tenants\*\downloads\test-* -Recurse -Force
+```
+
+Rien d'autre n'est effacé : les factures téléchargées restent. Les sauvegardes et les dossiers
+`data-dev.ancien-<date>` faits avant cette version en gardent aussi (section 8, « Une fois, après la
+mise en ligne de cette version »).
+
+**3. Les identifiants encore dans le `.env`.** Pour chaque espace client, la case « Le fichier .env
+contient ces identifiants : les envoyer à … », ou son identifiant et son mot de passe tapés sur la
+page (ci-dessus) ; puis les lignes du `.env` à retirer (ci-dessous).
+
+### Retirer les mots de passe du `.env`
+
+Une fois un compte tapé sur la page, et la page indiquant « Enregistré ici » pour lui,
+**supprimez du `.env` de production** (`C:\MarginMate\app\.env`) ses lignes : tant qu'elles y sont,
+le mot de passe reste en clair dans ce fichier, et dans chaque sauvegarde, qui le copie. Les
+récupérations lisent d'abord la page : rien ne change pour elles. Les lignes concernées :
+
+- la boîte mail : `INVOICE_EMAIL_ADDRESS` et `INVOICE_EMAIL_APP_PASSWORD` (et `INVOICE_IMAP_HOST`,
+  si elle y est). Un `.env` plus ancien peut les nommer `UBA_EMAIL_ADDRESS` et
+  `UBA_EMAIL_APP_PASSWORD` : supprimez-les aussi ;
+- Metro : `METRO_EMAIL` et `METRO_PASSWORD` ;
+- L'Addition : `LADDITION_EMAIL` et `LADDITION_PASSWORD` ;
+- chaque espace client : ses deux variables, dont les noms sont sur la fiche de sa source (Achats >
+  Sources).
+
+Le reste du `.env` reste en place : la clé secrète, la phrase de passe, les lignes de la section 5,
+`ANTHROPIC_API_KEY` et le serveur d'e-mails (`EMAIL_HOST`…), que la page ne prend pas.
+
+Puis relancez le serveur (Ctrl+C dans sa fenêtre, puis `schtasks /run /tn MarginMate`) : tant qu'il
+n'a pas redémarré, la page continue de signaler ces mots de passe « encore en clair » dans le
+`.env`. L'avertissement disparaît au redémarrage.
+
+### Réserver `C:\MarginMate` à votre compte
+
+Un dossier créé à la racine de `C:` est ouvert à tous les comptes du PC : chacun peut y lire les
+bases, les fichiers et le `.env`, et même les modifier. Réservez-le à votre compte, à Windows
+lui-même et aux administrateurs. Dans une invite de commandes **en administrateur** (section 3,
+étape 4) :
+
+```
+icacls C:\MarginMate /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F"
+```
+
+Si Windows a demandé le mot de passe d'un autre compte pour passer administrateur, remplacez
+`%USERNAME%` par le nom de votre compte. Pour vérifier :
+
+```
+icacls C:\MarginMate\data
+```
+
+ne doit lister que votre compte, `AUTORITE NT\Système` et `BUILTIN\Administrateurs`, chacun suivi
+de `(I)` : tout ce que contient le dossier suit. Le serveur, la tâche `MarginMate`, `deploy.cmd` et
+les sauvegardes tournent sous votre compte : rien ne change pour eux. Une copie sur un disque externe
+n'emporte pas ces droits : rangez le disque à l'abri.
+
+Ces droits ne protègent rien de ce qui tourne sous votre propre compte Windows. Aujourd'hui, tout
+programme lancé dans votre session peut lire le `.env` de production et les identifiants de la page
+« Identifiants » : Windows ouvre leur clé pour votre compte, et la `DJANGO_SECRET_KEY` est dans le
+`.env`. C'est le cas de **Claude Code et des sessions de programmation** que vous ouvrez dans le
+dossier de développement : seule leur consigne (ne jamais toucher à `C:\MarginMate`) les en tient
+à l'écart, rien ne les en empêche.
+
+**Mieux encore : un compte Windows réservé au serveur.** Un compte local standard, avec lequel
+personne n'ouvre de session, à qui seul `C:\MarginMate` appartient et sous lequel tourne la tâche
+`MarginMate` : ce qui s'ouvre dans votre session (une pièce jointe piégée, un programme installé,
+Claude Code) ne peut plus lire les données ni le `.env`. C'est un changement à préparer : la tâche
+ne montre plus de fenêtre (ses messages restent dans le journal, section 9), `deploy.cmd` se lance
+sous ce compte et doit pouvoir lire le dossier de développement, et les identifiants, réservés au
+compte qui fait tourner le serveur, sont à retaper une fois le changement fait.
 
 ## Limites connues
 

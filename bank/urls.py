@@ -9,6 +9,9 @@ urlpatterns = [
     path("depenses/", views.spending_home, name="spending_home"),
     # What came in on the account, beside what the till took.
     path("entrees/", views.income_home, name="income_home"),
+    # « En caisse » on one credit, and « Oublier » on a payer retained.
+    path("entrees/operations/<int:pk>/", views.income_source, name="income_source"),
+    path("entrees/payeurs/<int:pk>/oublier/", views.income_payer_forget, name="income_payer_forget"),
     path("rapprocher/", views.bank_reconcile, name="bank_reconcile"),
     # Every invoice the period's spending paid, in one zip.
     path("factures/", views.invoice_zip, name="invoice_zip"),

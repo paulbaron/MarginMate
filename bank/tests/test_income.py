@@ -18,7 +18,14 @@ What the page promises, and what each test below holds it to:
   latest first then shortest, each day claimed once, never further back
   than eight days;
 * the till side says what it could not read rather than counting it as a
-  quiet day.
+  quiet day;
+* « En caisse »: the line's own choice beats everything, then the rules
+  where they recognise the line, then its payer's - a payer never
+  un-recognises a payout, and a choice retained from one stays on it - a
+  card credit printing no gross counts its amount as the gross and its
+  commission as unknown (never 0), « Avoir » and meal vouchers get a bank
+  side once a credit is said to be one, and every credit of the window lands
+  in exactly one list.
 
 Every payee, provider, amount and date below is invented.
 """
@@ -30,7 +37,7 @@ from decimal import Decimal
 from django.test import SimpleTestCase, TestCase
 
 from bank import income
-from bank.models import BankTransaction
+from bank.models import BankTransaction, IncomePayer
 from bank.spending import NO_CATEGORY
 from common import DateRange
 from recipes.models import PosDailyPayment, PosProduct, PosProductDailyQuantity
@@ -41,8 +48,16 @@ _PKS = itertools.count(1)
 #: business in a public repository, and the rule reads neither.
 MERCHANT = "BAR EXEMPLE"
 PROVIDER = "PRESTATAIRE INVENTE"
+#: An invented terminal whose payouts print no « TOTAL ENCAISSE »: the rules
+#: file them under « Autres entrées » until a person says what they are.
+TERMINAL = "TERMINAL EXEMPLE"
+TERMINAL_LABEL = f"VIR SEPA RECU /FRM {TERMINAL} REMISE CARTES"
+#: An invented meal-voucher issuer, refunding the vouchers the till took.
+ISSUER = "EMETTEUR TITRES EXEMPLE"
+ISSUER_LABEL = f"VIR SEPA RECU /FRM {ISSUER} REMBOURSEMENT"
 
 JUNE = DateRange(date(2026, 6, 1), date(2026, 6, 30))
+DAY = date(2026, 6, 2)
 
 
 def euros(value) -> Decimal:
@@ -58,15 +73,26 @@ def payout_label(gross: str, number: int = 1) -> str:
     )
 
 
-def unsaved(day, amount, label="VIR SEPA RECU /FRM CLIENT EXEMPLE", bank_type="VIREMENT", category=""):
-    """A credit as the pure functions see it - no database."""
+def unsaved(
+    day,
+    amount,
+    label="VIR SEPA RECU /FRM CLIENT EXEMPLE",
+    bank_type="VIREMENT",
+    category="",
+    income_source="",
+    counterparty="",
+):
+    """A credit as the pure functions see it - no database. No counterparty
+    by default: the payer is then read off the label's words."""
     return BankTransaction(
         pk=next(_PKS),
         operation_date=day,
         bank_type=bank_type,
         label=label,
+        counterparty=counterparty,
         amount=euros(amount),
         category=category,
+        income_source=income_source,
     )
 
 
@@ -142,6 +168,220 @@ class SourceTests(SimpleTestCase):
     def test_a_category_typed_on_a_payout_does_not_rename_it(self):
         entry = income.entry_for(unsaved(date(2026, 6, 2), "10", payout_label("10.00"), category="Divers"))
         self.assertEqual((entry.source, entry.name, entry.unnamed), (income.CARD, "Versement carte", False))
+
+
+class ReadingTests(SimpleTestCase):
+    """What a credit is, and who said so: the line's own choice, else the
+    rules where they recognise it, else its payer's - pure, a payers dict
+    in."""
+
+    def test_the_lines_own_choice_beats_its_payer_and_the_rules(self):
+        line = unsaved(DAY, "198.00", payout_label("200.00"), income_source=income.CASH)
+        payers = {income.payer_key(line): income.VOUCHER}
+        self.assertEqual(income.reading_of(line, payers), (income.CASH, income.BY_LINE))
+
+    def test_a_payer_never_unrecognises_a_line_the_rules_recognise(self):
+        """The provider prints the bar's own name as the payee of its
+        payouts: « Pas une vente » retained for a transfer from the bar's
+        other account, under that name, moved every payout out of the card
+        figures when the payer came before the rules."""
+        payout_line = unsaved(DAY, "198.00", payout_label("200.00"), counterparty=MERCHANT)
+        deposit = unsaved(DAY, "100.00", "VERSEMENT 0042", "VERSEMENT ESPECES", counterparty=MERCHANT)
+        payers = {MERCHANT: income.OTHER}
+        self.assertEqual(income.reading_of(payout_line, payers), (income.CARD, income.BY_RULE))
+        self.assertEqual(income.reading_of(deposit, payers), (income.CASH, income.BY_RULE))
+
+    def test_the_payers_choice_decides_what_the_rules_do_not_recognise(self):
+        line = unsaved(DAY, "198.00", TERMINAL_LABEL)
+        payers = {income.payer_key(line): income.CARD}
+        self.assertEqual(income.reading_of(line, payers), (income.CARD, income.BY_PAYER))
+        self.assertTrue(income.follows_its_payer(line))
+        self.assertFalse(income.follows_its_payer(unsaved(DAY, "198.00", payout_label("200.00"))))
+        self.assertFalse(income.follows_its_payer(unsaved(DAY, "198.00", TERMINAL_LABEL, income_source=income.CASH)))
+
+    def test_the_rules_decide_where_nobody_said(self):
+        line = unsaved(DAY, "198.00", payout_label("200.00"))
+        for payers in (None, {}, {"UN AUTRE PAYEUR": income.CASH}):
+            with self.subTest(payers=payers):
+                self.assertEqual(income.reading_of(line, payers), (income.CARD, income.BY_RULE))
+
+    def test_automatic_on_the_line_hands_it_to_its_payer(self):
+        line = unsaved(DAY, "120.00", TERMINAL_LABEL, income_source=income.AUTOMATIC)
+        self.assertEqual(income.reading_of(line, {income.payer_key(line): income.CARD}), (income.CARD, income.BY_PAYER))
+        self.assertEqual(income.reading_of(line), (income.OTHER, income.BY_RULE))
+
+    def test_a_payer_key_handed_over_is_the_one_read(self):
+        line = unsaved(DAY, "50.00")
+        own = income.payer_key(line)
+        given = {"CLE DONNEE": income.CREDIT}
+        self.assertEqual(income.reading_of(line, given, payer="CLE DONNEE"), (income.CREDIT, income.BY_PAYER))
+        # Handed over, the line's own key is not worked out again.
+        self.assertEqual(
+            income.reading_of(line, {own: income.CREDIT}, payer="CLE DONNEE"), (income.OTHER, income.BY_RULE)
+        )
+
+    def test_an_entry_carries_the_reading_and_its_payer(self):
+        line = unsaved(DAY, "42.00", ISSUER_LABEL, counterparty=ISSUER)
+        entry = income.entry_for(line, {ISSUER: income.VOUCHER})
+        self.assertEqual(
+            (entry.source, entry.how, entry.payer, entry.name, entry.gross),
+            (income.VOUCHER, income.BY_PAYER, ISSUER, "Remboursement de titres-restaurant", None),
+        )
+        self.assertEqual(income.source_of(line, {ISSUER: income.VOUCHER}), income.VOUCHER)
+
+    def test_a_stored_value_that_is_no_source_falls_back_without_raising(self):
+        """Written by hand in the database, on the line or the payer: passed
+        over, never raised on."""
+        for stored in ("bitcoin", "CARD", " card", "<script>", None):
+            with self.subTest(stored=stored):
+                line = unsaved(DAY, "198.00", payout_label("200.00"), income_source=stored)
+                key = income.payer_key(line)
+                self.assertEqual(income.reading_of(line, {key: stored}), (income.CARD, income.BY_RULE))
+                entry = income.entry_for(line, {key: stored})
+                self.assertEqual(
+                    (entry.source, entry.how, entry.choice, entry.gross),
+                    (income.CARD, income.BY_RULE, "", euros("200")),
+                )
+                # Unrecognised, the line goes on to its payer, and a payer
+                # holding no source to « Autres entrées ».
+                unread = unsaved(DAY, "198.00", TERMINAL_LABEL, income_source=stored)
+                key = income.payer_key(unread)
+                self.assertEqual(income.reading_of(unread, {key: income.CASH}), (income.CASH, income.BY_PAYER))
+                self.assertEqual(income.reading_of(unread, {key: stored}), (income.OTHER, income.BY_RULE))
+
+
+class PayerKeyTests(SimpleTestCase):
+    """Who paid a credit, as `IncomePayer.key` holds it."""
+
+    def test_the_counterparty_the_bank_prints_is_the_payer(self):
+        line = unsaved(DAY, "50.00", "VIR SEPA RECU /FRM AUTRE NOM 000123", counterparty="Société Exemple")
+        self.assertEqual(income.payer_key(line), "SOCIETE EXEMPLE")
+
+    def test_accents_and_case_are_folded(self):
+        names = ("Café Exemple", "CAFE EXEMPLE", "café  exemple")
+        self.assertEqual({income.payer_key(unsaved(DAY, "1", counterparty=name)) for name in names}, {"CAFE EXEMPLE"})
+
+    def test_with_no_counterparty_the_labels_words_without_their_digits(self):
+        first = unsaved(DAY, "1", "VIR SEPA RECU /FRM CLIENT EXEMPLE N° 000123 DU 05/06/26")
+        next_month = unsaved(DAY, "1", "VIR SEPA RECU /FRM CLIENT EXEMPLE N° 000987 DU 05/07/26")
+        self.assertEqual(income.payer_key(first), "VIR SEPA RECU FRM CLIENT EXEMPLE N DU")
+        self.assertEqual(income.payer_key(next_month), income.payer_key(first))
+
+    def test_every_payout_of_one_provider_is_one_payer(self):
+        """Its number and its gross change every time; its words do not."""
+        labels = (payout_label("10.00", 1), payout_label("987.65", 2), payout_label("1 234.50", 3))
+        self.assertEqual(len({income.payer_key(unsaved(DAY, "1", label)) for label in labels}), 1)
+
+    def test_cut_to_the_column_never_ending_on_a_space(self):
+        self.assertEqual(income.PAYER_KEY_MAX, 255)
+        # « AB » 120 times: the 255th character is the space after the 85th.
+        key = income.payer_key(unsaved(DAY, "1", "AB " * 120))
+        self.assertEqual((key, len(key)), (("AB " * 85).rstrip(), 254))
+        self.assertEqual(income.payer_key(unsaved(DAY, "1", counterparty="X" * 300)), "X" * 255)
+
+    def test_nothing_naming_anybody_is_an_empty_key(self):
+        for label in ("000123 456", "0001 / 2026-06-05", ""):
+            with self.subTest(label=label):
+                self.assertEqual(income.payer_key(unsaved(DAY, "1", label)), "")
+
+
+class MarkedEntryTests(SimpleTestCase):
+    """A credit a person said is a card payout, or said is not one."""
+
+    def test_marked_card_with_no_printed_gross_counts_its_amount_and_an_unknown_commission(self):
+        entry = income.entry_for(unsaved(DAY, "150.00", TERMINAL_LABEL, income_source=income.CARD))
+        self.assertEqual(
+            (entry.source, entry.how, entry.gross, entry.gross_from_amount, entry.name),
+            (income.CARD, income.BY_LINE, euros("150.00"), True, "Versement carte"),
+        )
+        self.assertIsNone(entry.commission)
+        self.assertIsNone(entry.commission_rate)
+
+    def test_the_same_through_its_payer(self):
+        line = unsaved(DAY, "150.00", TERMINAL_LABEL, counterparty=TERMINAL)
+        entry = income.entry_for(line, {TERMINAL: income.CARD})
+        self.assertEqual(
+            (entry.how, entry.gross, entry.gross_from_amount, entry.commission),
+            (income.BY_PAYER, euros("150.00"), True, None),
+        )
+
+    def test_zero_and_negative_amounts_marked_card_raise_nothing(self):
+        for amount in ("0.00", "-10.00"):
+            with self.subTest(amount=amount):
+                entry = income.entry_for(unsaved(DAY, amount, TERMINAL_LABEL, income_source=income.CARD))
+                self.assertEqual((entry.gross, entry.commission, entry.commission_rate), (euros(amount), None, None))
+
+    def test_marked_card_keeps_the_gross_its_label_prints(self):
+        entry = income.entry_for(unsaved(DAY, "198.00", payout_label("200.00"), income_source=income.CARD))
+        self.assertEqual(
+            (entry.how, entry.gross, entry.gross_from_amount, entry.commission, entry.commission_rate),
+            (income.BY_LINE, euros("200.00"), False, euros("2.00"), euros("1.00")),
+        )
+
+    def test_a_payout_marked_as_no_sale_is_no_payout(self):
+        entry = income.entry_for(unsaved(DAY, "198.00", payout_label("200.00"), income_source=income.OTHER))
+        self.assertEqual(
+            (entry.source, entry.how, entry.gross, entry.gross_from_amount, entry.commission),
+            (income.OTHER, income.BY_LINE, None, False, None),
+        )
+        self.assertEqual((entry.name, entry.unnamed), (NO_CATEGORY, True))
+
+
+class ChoiceTests(SimpleTestCase):
+    """What the « En caisse » menu shows chosen, whether « retenir pour ce
+    payeur » is drawn ticked, and who the row says decided."""
+
+    def entry(self, line, payers=None):
+        return income.entry_for(line, payers)
+
+    def test_each_way_of_deciding(self):
+        printed = payout_label("200.00")
+        unnamed = unsaved(DAY, "120.00", TERMINAL_LABEL)
+        cases = [
+            # (entry, choice, remember_by_default, how_label)
+            (
+                self.entry(unsaved(DAY, "198.00", printed, income_source=income.CASH)),
+                income.CASH,
+                False,
+                "choisi pour cette entrée",
+            ),
+            (
+                self.entry(unsaved(DAY, "120.00", TERMINAL_LABEL, income_source=income.OTHER)),
+                income.OTHER,
+                False,
+                "choisi pour cette entrée",
+            ),
+            (
+                self.entry(unnamed, {income.payer_key(unnamed): income.VOUCHER}),
+                income.VOUCHER,
+                True,
+                "payeur retenu",
+            ),
+            (self.entry(unsaved(DAY, "198.00", printed)), income.AUTOMATIC, False, "libellé « TOTAL ENCAISSE »"),
+            (
+                self.entry(unsaved(DAY, "40.00", "VERSEMENT", "VERSEMENT ESPECES")),
+                income.AUTOMATIC,
+                False,
+                "type d'opération",
+            ),
+            (
+                self.entry(unsaved(DAY, "80.00", "REMISE", "REMISE CHEQUES")),
+                income.AUTOMATIC,
+                False,
+                "type d'opération",
+            ),
+            # Nothing recognised: the transfer of a terminal the rules do
+            # not know, where retaining its payer is the point.
+            (self.entry(unnamed), income.AUTOMATIC, True, "non reconnue"),
+        ]
+        for entry, choice, remember, said in cases:
+            with self.subTest(line=entry.line.label, how=entry.how):
+                self.assertEqual((entry.choice, entry.remember_by_default, entry.how_label), (choice, remember, said))
+
+    def test_no_payer_key_is_never_ticked(self):
+        entry = self.entry(unsaved(DAY, "120.00", "000123 / 2026"))
+        self.assertEqual((entry.payer, entry.source, entry.how), ("", income.OTHER, income.BY_RULE))
+        self.assertFalse(entry.remember_by_default)
 
 
 class RateTests(SimpleTestCase):
@@ -323,19 +563,20 @@ class Fixtures:
             **kwargs,
         )
 
-    def payout(self, day, gross, net):
+    def payout(self, day, gross, net, **kwargs):
         self.counter += 1
         return BankTransaction.objects.create(
             operation_date=day,
             bank_type="VIREMENT",
             label=payout_label(gross, self.counter),
-            counterparty=MERCHANT,
+            counterparty=kwargs.pop("counterparty", MERCHANT),
             amount=euros(net),
             kind=BankTransaction.Kind.TRANSFER,
             fingerprint=f"payout-{self.counter}",
+            **kwargs,
         )
 
-    def debit(self, day, amount):
+    def debit(self, day, amount, **kwargs):
         self.counter += 1
         return BankTransaction.objects.create(
             operation_date=day,
@@ -343,6 +584,7 @@ class Fixtures:
             amount=-euros(amount),
             kind=BankTransaction.Kind.DEBIT,
             fingerprint=f"debit-{self.counter}",
+            **kwargs,
         )
 
     def paid(self, day, **methods):
@@ -466,9 +708,16 @@ class TillSideTests(Fixtures, TestCase):
         )
         self.assertEqual(card.difference, euros("-5.00"))
         self.assertEqual(rows["Espèces"].difference, euros("-5.00"))
-        # The till alone knows an « Avoir » - paid days before, by another way.
-        self.assertEqual((rows["Avoir"].till, rows["Avoir"].bank, rows["Avoir"].difference), (euros("500"), None, None))
-        self.assertIn("Autres entrées", rows["Avoir"].note)
+        # The till alone knows an « Avoir » while no credit is said to be
+        # one: its bank side is « — », never 0 - an Écart of the whole till
+        # figure would accuse the transfer still in « Autres entrées »
+        # (MarkedMeansTests fills it).
+        credit = rows["Avoir"]
+        self.assertEqual(
+            (credit.key, credit.till, credit.bank, credit.bank_count, credit.difference),
+            (income.CREDIT, euros("500"), None, 0, None),
+        )
+        self.assertEqual(credit.note, income.NOTES[income.CREDIT])
         self.assertEqual((rows["Autres entrées"].till, rows["Autres entrées"].bank), (None, euros("500")))
 
     def test_cheques_have_a_row_only_where_there_are_any(self):
@@ -696,6 +945,597 @@ class TheStatementBeforeTheTillTests(StatementBeforeTheTill, TestCase):
         self.assertEqual((report.first_payment_day, report.bank_before_till), (None, {}))
 
 
+def stored(line) -> BankTransaction:
+    """The line as the database holds it now."""
+    return BankTransaction.objects.get(pk=line.pk)
+
+
+def payers() -> list[tuple[str, str]]:
+    return list(IncomePayer.objects.values_list("key", "source"))
+
+
+class SetSourceTests(Fixtures, TestCase):
+    """« En caisse », as the page posts it: a value of the menu and the
+    « retenir pour ce payeur » box."""
+
+    def setUp(self):
+        super().setUp()
+        self.line = self.credit(date(2026, 6, 10), "120.00", TERMINAL_LABEL, counterparty=TERMINAL)
+
+    def test_for_this_line_only(self):
+        change = income.set_source(self.line, income.CARD, remember=False)
+        self.assertEqual(stored(self.line).income_source, income.CARD)
+        self.assertEqual(payers(), [])
+        self.assertEqual(
+            (change.payer, change.remembered, change.forgotten, change.followers, change.kept),
+            (TERMINAL, False, False, 0, 0),
+        )
+        self.assertEqual(
+            (change.entry.source, change.entry.how, change.entry.gross_from_amount),
+            (income.CARD, income.BY_LINE, True),
+        )
+
+    def test_automatic_for_this_line_hands_it_back_to_its_payer(self):
+        IncomePayer.objects.create(key=TERMINAL, source=income.VOUCHER)
+        BankTransaction.objects.filter(pk=self.line.pk).update(income_source=income.CASH)
+        change = income.set_source(stored(self.line), income.AUTOMATIC, remember=False)
+        self.assertEqual(stored(self.line).income_source, "")
+        self.assertEqual(payers(), [(TERMINAL, income.VOUCHER)])
+        self.assertEqual((change.entry.source, change.entry.how), (income.VOUCHER, income.BY_PAYER))
+
+    def test_remembering_retains_the_payer_and_the_line_follows_it(self):
+        BankTransaction.objects.filter(pk=self.line.pk).update(income_source=income.CHEQUE)
+        change = income.set_source(stored(self.line), income.CARD, remember=True)
+        # Its own choice cleared: « Oublier » then undoes it whole.
+        self.assertEqual(stored(self.line).income_source, "")
+        self.assertEqual(payers(), [(TERMINAL, income.CARD)])
+        self.assertEqual((change.remembered, change.forgotten), (True, False))
+        self.assertEqual((change.entry.source, change.entry.how), (income.CARD, income.BY_PAYER))
+
+    def test_remembering_again_replaces_the_payers_choice(self):
+        IncomePayer.objects.create(key=TERMINAL, source=income.CASH)
+        income.set_source(self.line, income.VOUCHER, remember=True)
+        self.assertEqual(payers(), [(TERMINAL, income.VOUCHER)])
+
+    def test_remembering_automatic_forgets_the_payer(self):
+        IncomePayer.objects.create(key=TERMINAL, source=income.CARD)
+        BankTransaction.objects.filter(pk=self.line.pk).update(income_source=income.CASH)
+        change = income.set_source(stored(self.line), income.AUTOMATIC, remember=True)
+        self.assertEqual((payers(), stored(self.line).income_source), ([], ""))
+        self.assertEqual((change.remembered, change.forgotten), (False, True))
+        self.assertEqual((change.entry.source, change.entry.how), (income.OTHER, income.BY_RULE))
+        # Nothing left to forget is no forgetting.
+        self.assertFalse(income.set_source(stored(self.line), income.AUTOMATIC, remember=True).forgotten)
+
+    def test_followers_and_kept_count_the_payers_other_credits(self):
+        self.credit(date(2026, 6, 1), "80.00", TERMINAL_LABEL, counterparty=TERMINAL)
+        self.credit(date(2026, 5, 3), "60.00", TERMINAL_LABEL, counterparty=TERMINAL)
+        self.credit(date(2026, 6, 2), "70.00", TERMINAL_LABEL, counterparty=TERMINAL, income_source=income.CASH)
+        self.credit(date(2026, 6, 3), "90.00", counterparty="AUTRE CLIENT EXEMPLE")
+        self.debit(date(2026, 6, 4), "30.00", counterparty=TERMINAL)
+        retained = income.set_source(self.line, income.CARD, remember=True)
+        self.assertEqual((retained.followers, retained.kept), (2, 1))
+        forgotten = income.set_source(stored(self.line), income.AUTOMATIC, remember=True)
+        self.assertEqual((forgotten.forgotten, forgotten.followers, forgotten.kept), (True, 2, 1))
+        # For this line alone the payer is not touched, and nothing counted.
+        alone = income.set_source(stored(self.line), income.CARD, remember=False)
+        self.assertEqual((alone.followers, alone.kept), (0, 0))
+
+    def test_remembering_where_nothing_names_a_payer_is_for_this_line_only(self):
+        BankTransaction.objects.filter(pk=self.line.pk).update(label="000123 / 2026", counterparty="")
+        line = stored(self.line)
+        self.assertEqual(income.payer_key(line), "")
+        change = income.set_source(line, income.CREDIT, remember=True)
+        self.assertEqual((stored(self.line).income_source, payers()), (income.CREDIT, []))
+        self.assertEqual((change.payer, change.remembered, change.entry.how), ("", False, income.BY_LINE))
+
+    def test_a_debit_and_a_zero_amount_are_refused_and_nothing_is_written(self):
+        debit = self.debit(date(2026, 6, 5), "30.00", counterparty=TERMINAL)
+        zero = self.credit(date(2026, 6, 5), "0.00", TERMINAL_LABEL, counterparty=TERMINAL)
+        for line in (debit, zero):
+            for remember in (False, True):
+                with (
+                    self.subTest(amount=line.amount, remember=remember),
+                    self.assertRaisesMessage(income.SourceRefused, income.NOT_A_CREDIT),
+                ):
+                    income.set_source(line, income.CARD, remember=remember)
+            self.assertEqual(stored(line).income_source, "")
+        self.assertEqual(payers(), [])
+
+    def test_a_value_the_menu_does_not_offer_is_refused_and_nothing_is_written(self):
+        """The menu posts exact values: nothing is trimmed, folded or guessed."""
+        BankTransaction.objects.filter(pk=self.line.pk).update(income_source=income.CASH)
+        line = stored(self.line)
+        for value in (None, " card", "card ", "CARD", "Carte", "<script>", "bitcoin", 1, ["card"], b"card"):
+            for remember in (False, True):
+                with (
+                    self.subTest(value=value, remember=remember),
+                    self.assertRaisesMessage(income.SourceRefused, income.UNKNOWN_CHOICE),
+                ):
+                    income.set_source(line, value, remember=remember)
+        self.assertEqual((stored(self.line).income_source, payers()), (income.CASH, []))
+
+    def test_a_choice_settles_nothing(self):
+        """`settled_by_hand` is never written, whatever the copy in hand
+        says: a credit pays no invoice."""
+        stale = stored(self.line)
+        BankTransaction.objects.filter(pk=self.line.pk).update(settled_by_hand=True)
+        income.set_source(stale, income.CARD, remember=True)
+        income.set_source(stale, income.AUTOMATIC, remember=True)
+        income.set_source(stale, income.OTHER, remember=False)
+        self.assertTrue(stored(self.line).settled_by_hand)
+        other = self.credit(date(2026, 6, 11), "42.00", ISSUER_LABEL, counterparty=ISSUER)
+        income.set_source(other, income.VOUCHER, remember=False)
+        self.assertFalse(stored(other).settled_by_hand)
+
+
+class RetainingFromARecognisedLineTests(Fixtures, TestCase):
+    """« retenir pour ce payeur » sent from a line the rules recognise. The
+    provider prints the bar's own name as the payee of its payouts, and the
+    bar's other account pays in under that same name: one payer, whose
+    payouts the label recognises, whose deposit the bank type names, and
+    whose transfers nothing recognises (review, 01/10/2026). No payer
+    reaches a recognised line, so a choice sent from one stays on it."""
+
+    def setUp(self):
+        super().setUp()
+        self.first = self.payout(date(2026, 6, 2), "200.00", "198.00")
+        self.siblings = [
+            self.payout(date(2026, 6, 3), "100.00", "99.30"),
+            self.payout(date(2026, 6, 4), "50.00", "49.65"),
+        ]
+        self.deposit = self.credit(
+            date(2026, 6, 5), "80.00", "VERSEMENT 0042", "VERSEMENT ESPECES", counterparty=MERCHANT
+        )
+        self.transfer = self.credit(
+            date(2026, 6, 6), "500.00", f"VIR SEPA RECU /FRM {MERCHANT} VIREMENT INTERNE", counterparty=MERCHANT
+        )
+        self.own = self.credit(
+            date(2026, 6, 7),
+            "30.00",
+            f"VIR SEPA RECU /FRM {MERCHANT} ACOMPTE",
+            counterparty=MERCHANT,
+            income_source=income.CREDIT,
+        )
+        self.debit(date(2026, 6, 8), "20.00", counterparty=MERCHANT)
+
+    def test_they_all_share_one_payer(self):
+        lines = [self.first, *self.siblings, self.deposit, self.transfer, self.own]
+        self.assertEqual({income.payer_key(line) for line in lines}, {MERCHANT})
+
+    def test_no_sale_retained_from_a_payout_stays_on_that_payout(self):
+        change = income.set_source(self.first, income.OTHER, remember=True)
+        self.assertEqual(stored(self.first).income_source, income.OTHER)
+        self.assertEqual(payers(), [(MERCHANT, income.OTHER)])
+        self.assertEqual((change.payer, change.remembered, change.forgotten), (MERCHANT, True, False))
+        self.assertEqual((change.entry.source, change.entry.how), (income.OTHER, income.BY_LINE))
+        # The transfer nothing recognises follows the payer; the payouts and
+        # the deposit are no payer's, and the credit chosen alone keeps it.
+        self.assertEqual((change.followers, change.kept), (1, 1))
+
+        report = income.income_for(JUNE)
+        self.assertEqual(
+            [(row.entry.line.pk, row.entry.source, row.entry.how) for row in report.payouts],
+            [(line.pk, income.CARD, income.BY_RULE) for line in self.siblings],
+        )
+        self.assertEqual(
+            (report.card_count, report.card_gross, report.card_net, report.card_commission),
+            (2, euros("150.00"), euros("148.95"), euros("1.05")),
+        )
+        self.assertEqual(
+            {one.line.pk: one.how for one in report.others},
+            {self.first.pk: income.BY_LINE, self.transfer.pk: income.BY_PAYER},
+        )
+        self.assertEqual(
+            {one.line.pk: (one.source, one.how) for one in report.other_means},
+            {self.deposit.pk: (income.CASH, income.BY_RULE), self.own.pk: (income.CREDIT, income.BY_LINE)},
+        )
+        # The payer decides the transfer, and nothing else.
+        self.assertEqual(
+            [(row.payer.key, row.count, row.total, row.count_all) for row in report.payers],
+            [(MERCHANT, 1, euros("500.00"), 1)],
+        )
+
+    def test_another_source_retained_from_a_deposit_stays_on_that_deposit(self):
+        change = income.set_source(self.deposit, income.CHEQUE, remember=True)
+        self.assertEqual(stored(self.deposit).income_source, income.CHEQUE)
+        self.assertEqual(payers(), [(MERCHANT, income.CHEQUE)])
+        self.assertEqual((change.entry.source, change.entry.how), (income.CHEQUE, income.BY_LINE))
+        self.assertEqual((change.followers, change.kept), (1, 1))
+        report = income.income_for(JUNE)
+        self.assertEqual([row.entry.line.pk for row in report.payouts], [self.first.pk, *(o.pk for o in self.siblings)])
+
+    def test_forgetting_it_counts_only_the_credits_it_decided(self):
+        """The payouts and the deposit never followed it, and the payout it
+        was retained from, like the credit chosen alone, keeps the choice of
+        its own: one credit goes back to the rules - the transfer."""
+        income.set_source(self.first, income.OTHER, remember=True)
+        self.assertEqual(income.forget_payer(IncomePayer.objects.get()), 1)
+        self.assertEqual(payers(), [])
+        self.assertEqual(stored(self.first).income_source, income.OTHER)
+        known = income.known_payers()
+        self.assertEqual(income.reading_of(stored(self.transfer), known), (income.OTHER, income.BY_RULE))
+        self.assertEqual(income.reading_of(stored(self.own), known), (income.CREDIT, income.BY_LINE))
+        self.assertEqual(
+            [income.reading_of(stored(line), known) for line in self.siblings], [(income.CARD, income.BY_RULE)] * 2
+        )
+
+    def test_retaining_what_the_rules_read_clears_the_lines_own_choice(self):
+        """« Carte » retained from a payout the label recognises as card: the
+        line goes back to its rules - nothing of its own left to beat them -
+        and so does « Automatique » with the box ticked."""
+        BankTransaction.objects.filter(pk=self.first.pk).update(income_source=income.OTHER)
+        change = income.set_source(stored(self.first), income.CARD, remember=True)
+        self.assertEqual(stored(self.first).income_source, "")
+        self.assertEqual(payers(), [(MERCHANT, income.CARD)])
+        self.assertEqual(
+            (change.entry.source, change.entry.how, change.entry.gross, change.entry.gross_from_amount),
+            (income.CARD, income.BY_RULE, euros("200.00"), False),
+        )
+        self.assertEqual((change.followers, change.kept), (1, 1))
+
+        BankTransaction.objects.filter(pk=self.first.pk).update(income_source=income.OTHER)
+        change = income.set_source(stored(self.first), income.AUTOMATIC, remember=True)
+        self.assertEqual((stored(self.first).income_source, payers()), ("", []))
+        self.assertEqual((change.forgotten, change.entry.source, change.entry.how), (True, income.CARD, income.BY_RULE))
+
+    def test_a_recognised_sibling_with_a_choice_of_its_own_is_not_kept(self):
+        """`kept` counts the credits whose own choice beats the payer: a
+        payout the label recognises is no payer's to begin with
+        (`SourceChange`: « Those the rules recognise are neither »), whatever
+        it was chosen as, and the message must not say it kept a choice
+        against a payer that never reached it."""
+        BankTransaction.objects.filter(pk=self.siblings[0].pk).update(income_source=income.OTHER)
+        change = income.set_source(self.transfer, income.OTHER, remember=True)
+        self.assertEqual(stored(self.transfer).income_source, "")
+        # Only the credit chosen alone that the payer would otherwise decide.
+        self.assertEqual((change.followers, change.kept), (0, 1))
+
+
+class ForgetPayerTests(Fixtures, TestCase):
+    def setUp(self):
+        super().setUp()
+        self.payer = IncomePayer.objects.create(key=TERMINAL, source=income.CARD)
+        self.followers = [
+            self.credit(date(2026, 6, 1), "80.00", TERMINAL_LABEL, counterparty=TERMINAL),
+            self.credit(date(2026, 5, 3), "60.00", TERMINAL_LABEL, counterparty=TERMINAL),
+        ]
+        self.own = self.credit(
+            date(2026, 6, 2), "70.00", TERMINAL_LABEL, counterparty=TERMINAL, income_source=income.CASH
+        )
+        self.credit(date(2026, 6, 3), "90.00", counterparty="AUTRE CLIENT EXEMPLE")
+        self.debit(date(2026, 6, 4), "30.00", counterparty=TERMINAL)
+
+    def test_its_credits_go_back_to_the_rules_and_a_choice_of_their_own_stays(self):
+        self.assertEqual(income.forget_payer(self.payer), 2)
+        self.assertEqual(payers(), [])
+        known = income.known_payers()
+        self.assertEqual(
+            [income.reading_of(stored(line), known) for line in self.followers],
+            [(income.OTHER, income.BY_RULE)] * 2,
+        )
+        self.assertEqual(income.reading_of(stored(self.own), known), (income.CASH, income.BY_LINE))
+
+    def test_a_payer_nothing_follows_any_more_goes_too(self):
+        nobody = IncomePayer.objects.create(key="PAYEUR DISPARU EXEMPLE", source=income.VOUCHER)
+        self.assertEqual(income.forget_payer(nobody), 0)
+        self.assertEqual(payers(), [(TERMINAL, income.CARD)])
+
+
+class MarkedCardTests(Fixtures, TestCase):
+    """A terminal printing no gross: one of its payouts said to be card, beside
+    a payout the rules recognise. The till sold 100, 150 and 80 by card on
+    1-3 June; the printed payout of the 2nd pays the 1st, the marked one of
+    the 4th pays the 2nd, and the 3rd is not paid yet."""
+
+    def setUp(self):
+        super().setUp()
+        self.debit(date(2026, 6, 1), "1.00")  # the statement covers the till's first day
+        self.paid(date(2026, 6, 1), CB=("100.00", 2))
+        self.paid(date(2026, 6, 2), CB=("150.00", 3))
+        self.paid(date(2026, 6, 3), CB=("80.00", 1))
+        self.printed = self.payout(date(2026, 6, 2), "100.00", "99.00")
+        self.marked = self.credit(
+            date(2026, 6, 4), "150.00", TERMINAL_LABEL, counterparty=TERMINAL, income_source=income.CARD
+        )
+
+    def test_its_amount_counts_in_the_gross_and_the_net_never_in_the_commission(self):
+        report = income.income_for(JUNE)
+        self.assertEqual(
+            (report.card_count, report.card_gross, report.card_net, report.card_printed_gross),
+            (2, euros("250.00"), euros("249.00"), euros("100.00")),
+        )
+        # Counted as 0 it would read as « no fee » and halve the rate.
+        self.assertEqual(
+            (report.card_commission, report.card_commission_rate, report.card_from_amount),
+            (euros("1.00"), euros("1.00"), 1),
+        )
+        card = report.rows[0]
+        self.assertEqual(
+            (card.key, card.till, card.bank, card.net, card.commission, card.from_amount, card.difference),
+            (income.CARD, euros("330"), euros("250"), euros("249"), euros("1.00"), 1, euros("-80.00")),
+        )
+        self.assertEqual((report.others, report.other_means), ([], []))
+
+    def test_it_counts_in_the_running_balance(self):
+        report = income.income_for(JUNE)
+        self.assertEqual(
+            [(row.entry.line.pk, row.pending) for row in report.payouts],
+            [(self.printed.pk, euros("0")), (self.marked.pk, euros("80"))],
+        )
+        self.assertEqual((report.balance.anchor, report.last_payout.entry.line.pk), (date(2026, 6, 1), self.marked.pk))
+        # Unmarked, it is a transfer the balance knows nothing of.
+        BankTransaction.objects.filter(pk=self.marked.pk).update(income_source="")
+        report = income.income_for(JUNE)
+        self.assertEqual([row.entry.line.pk for row in report.payouts], [self.printed.pk])
+        self.assertEqual([one.line.pk for one in report.others], [self.marked.pk])
+
+    def test_its_month_adds_the_known_commission_only(self):
+        (june,) = income.income_for(JUNE).months
+        self.assertEqual(
+            (june.card_sold, june.payouts_gross, june.net, june.commission, june.payouts, june.from_amount),
+            (euros("330"), euros("250"), euros("249"), euros("1.00"), 2, 1),
+        )
+
+    def test_a_month_of_such_payouts_alone_has_its_commission_unknown(self):
+        """Not 0,00 €, which reads as « no fee »: the month says every one of
+        its payouts printed no gross, and the window's commission is None."""
+        self.credit(date(2026, 7, 3), "40.00", TERMINAL_LABEL, counterparty=TERMINAL, income_source=income.CARD)
+        report = income.income_for(DateRange(date(2026, 7, 1), date(2026, 7, 31)))
+        (july,) = report.months
+        self.assertEqual(
+            (july.payouts_gross, july.net, july.commission, july.payouts, july.from_amount),
+            (euros("40"), euros("40"), euros("0"), 1, 1),
+        )
+        self.assertEqual((report.card_commission, report.card_from_amount), (None, 1))
+        self.assertIsNone(report.card_commission_rate)
+        (card,) = [row for row in report.rows if row.key == income.CARD]
+        self.assertEqual((card.commission, card.from_amount), (None, 1))
+
+
+class MarkedMeansTests(Fixtures, TestCase):
+    """« Avoir » and meal vouchers: the till's alone until a credit is said
+    to be one."""
+
+    def setUp(self):
+        super().setUp()
+        self.debit(date(2026, 6, 1), "1.00")
+
+    def rows(self):
+        return {row.key: row for row in income.income_for(JUNE).rows}
+
+    def test_credits_said_to_be_avoir_and_vouchers_fill_their_rows(self):
+        self.paid(date(2026, 6, 2), CB=("50.00", 1), Avoir=("300.00", 1), TR=("45.00", 3))
+        deposit = self.credit(date(2026, 6, 5), "300.00", category="Acompte", income_source=income.CREDIT)
+        IncomePayer.objects.create(key=ISSUER, source=income.VOUCHER)
+        refund = self.credit(date(2026, 6, 20), "42.00", ISSUER_LABEL, counterparty=ISSUER)
+        report = income.income_for(JUNE)
+        rows = {row.key: row for row in report.rows}
+        self.assertEqual(list(rows), [income.CARD, income.CASH, income.VOUCHER, income.CREDIT])
+        vouchers, credit = rows[income.VOUCHER], rows[income.CREDIT]
+        self.assertEqual(
+            (vouchers.label, vouchers.till, vouchers.till_payments, vouchers.bank, vouchers.bank_count),
+            ("Titres-restaurant", euros("45"), 3, euros("42"), 1),
+        )
+        self.assertEqual((vouchers.difference, vouchers.note), (euros("-3.00"), income.NOTES[income.VOUCHER]))
+        self.assertEqual(
+            (credit.label, credit.till, credit.bank, credit.bank_count, credit.difference),
+            ("Avoir", euros("300"), euros("300"), 1, euros("0.00")),
+        )
+        self.assertEqual(credit.note, income.NOTES[income.CREDIT])
+        self.assertEqual([one.line.pk for one in report.other_means], [deposit.pk, refund.pk])
+        self.assertEqual(report.others, [])
+
+    def test_a_row_is_drawn_when_the_till_has_none(self):
+        self.paid(date(2026, 6, 2), CB=("50.00", 1))
+        self.credit(date(2026, 6, 5), "300.00", category="Acompte", income_source=income.CREDIT)
+        self.credit(date(2026, 6, 20), "42.00", ISSUER_LABEL, counterparty=ISSUER, income_source=income.VOUCHER)
+        rows = self.rows()
+        self.assertEqual(list(rows), [income.CARD, income.CASH, income.VOUCHER, income.CREDIT])
+        self.assertEqual(
+            [
+                (one.till, one.till_payments, one.bank, one.difference)
+                for one in (rows[income.VOUCHER], rows[income.CREDIT])
+            ],
+            [(euros("0"), 0, euros("42"), euros("42.00")), (euros("0"), 0, euros("300"), euros("300.00"))],
+        )
+
+    def test_nothing_said_and_nothing_in_the_till_is_no_row(self):
+        self.paid(date(2026, 6, 2), CB=("50.00", 1))
+        self.credit(date(2026, 6, 5), "300.00", category="Acompte")
+        self.assertEqual(list(self.rows()), [income.CARD, income.CASH, income.OTHER])
+
+
+class PayoutMarkedAsNoSaleTests(Fixtures, TestCase):
+    def test_it_leaves_the_card_figures_and_the_balance_and_joins_the_other_entries(self):
+        self.debit(date(2026, 6, 1), "1.00")
+        self.paid(date(2026, 6, 1), CB=("100.00", 2))
+        self.paid(date(2026, 6, 4), CB=("80.00", 1))
+        first = self.payout(date(2026, 6, 2), "100.00", "99.00")
+        no_sale = self.payout(date(2026, 6, 5), "80.00", "79.20", income_source=income.OTHER)
+        report = income.income_for(JUNE)
+        self.assertEqual(
+            (report.card_count, report.card_gross, report.card_net, report.card_commission),
+            (1, euros("100"), euros("99"), euros("1.00")),
+        )
+        self.assertEqual([row.entry.line.pk for row in report.payouts], [first.pk])
+        self.assertEqual(report.balance.pending, {first.pk: euros("0")})
+        self.assertEqual([one.line.pk for one in report.others], [no_sale.pk])
+        self.assertEqual(
+            [(one.name, one.amount, one.count) for one in report.other_categories], [(NO_CATEGORY, euros("79.20"), 1)]
+        )
+        rows = {row.key: row for row in report.rows}
+        self.assertEqual((rows[income.CARD].bank, rows[income.CARD].difference), (euros("100"), euros("-80.00")))
+        self.assertEqual(rows[income.OTHER].bank, euros("79.20"))
+
+
+class EveryCreditOnceTests(Fixtures, TestCase):
+    def test_every_credit_of_the_window_is_in_exactly_one_list(self):
+        IncomePayer.objects.create(key=ISSUER, source=income.VOUCHER)
+        payouts = [
+            self.payout(date(2026, 6, 2), "100.00", "99.00"),
+            self.credit(date(2026, 6, 3), "60.00", TERMINAL_LABEL, counterparty=TERMINAL, income_source=income.CARD),
+        ]
+        others = [
+            self.credit(date(2026, 6, 8), "500.00", category="Privatisation"),
+            self.payout(date(2026, 6, 9), "50.00", "49.50", income_source=income.OTHER),
+        ]
+        other_means = [
+            self.credit(date(2026, 6, 4), "40.00", "VERSEMENT ESPECES", "VERSEMENT ESPECES"),
+            self.credit(date(2026, 6, 5), "80.00", "REMISE CHEQUES", "REMISE CHEQUES"),
+            self.credit(date(2026, 6, 6), "42.00", ISSUER_LABEL, counterparty=ISSUER),
+            self.credit(date(2026, 6, 7), "300.00", category="Acompte", income_source=income.CREDIT),
+            self.credit(
+                date(2026, 6, 10), "20.00", "VERSEMENT ESPECES", "VERSEMENT ESPECES", income_source=income.CHEQUE
+            ),
+        ]
+        self.credit(date(2026, 5, 31), "10.00")
+        self.credit(date(2026, 7, 1), "10.00", TERMINAL_LABEL, counterparty=TERMINAL, income_source=income.CARD)
+        self.debit(date(2026, 6, 15), "75.00", income_source=income.CARD)
+        report = income.income_for(JUNE)
+        found = (
+            [row.entry.line.pk for row in report.payouts],
+            [one.line.pk for one in report.others],
+            [one.line.pk for one in report.other_means],
+        )
+        expected = ([line.pk for line in payouts], [line.pk for line in others], [line.pk for line in other_means])
+        self.assertEqual([sorted(one) for one in found], [sorted(one) for one in expected])
+        june = payouts + others + other_means
+        self.assertEqual(sorted(pk for one in found for pk in one), sorted(line.pk for line in june))
+        self.assertEqual(
+            (report.received_count, report.received_total), (len(june), sum((line.amount for line in june), euros(0)))
+        )
+        self.assertEqual(sum(count for _total, count in report.by_source.values()), len(june))
+
+
+class PayerFollowedTests(Fixtures, TestCase):
+    def test_a_payer_remembered_moves_its_past_and_future_credits(self):
+        past = self.credit(date(2026, 5, 20), "70.00", TERMINAL_LABEL, counterparty=TERMINAL)
+        chosen = self.credit(date(2026, 6, 10), "120.00", TERMINAL_LABEL, counterparty=TERMINAL)
+        self.assertEqual(income.income_for(DateRange()).payouts, [])
+        income.set_source(chosen, income.CARD, remember=True)
+        future = self.credit(date(2026, 6, 20), "90.00", TERMINAL_LABEL, counterparty=TERMINAL)
+        report = income.income_for(DateRange())
+        self.assertEqual(
+            [(row.entry.line.pk, row.entry.how, row.entry.gross_from_amount) for row in report.payouts],
+            [(line.pk, income.BY_PAYER, True) for line in (past, chosen, future)],
+        )
+        self.assertEqual((report.others, report.card_from_amount, report.card_gross), ([], 3, euros("280")))
+
+    def test_a_debit_sharing_the_payers_key_stays_out_of_everything(self):
+        IncomePayer.objects.create(key=TERMINAL, source=income.CARD)
+        credit = self.credit(date(2026, 6, 10), "120.00", TERMINAL_LABEL, counterparty=TERMINAL)
+        # Its choice written by hand in the database: a debit is no entry.
+        self.debit(date(2026, 6, 11), "45.00", counterparty=TERMINAL, income_source=income.CARD)
+        report = income.income_for(JUNE)
+        self.assertEqual(
+            (report.received_count, report.received_total, report.card_count, report.card_net),
+            (1, euros("120"), 1, euros("120")),
+        )
+        self.assertEqual([row.entry.line.pk for row in report.payouts], [credit.pk])
+        self.assertEqual((report.others, report.other_means), ([], []))
+        self.assertEqual(
+            [(row.payer.key, row.count, row.total, row.count_all) for row in report.payers],
+            [(TERMINAL, 1, euros("120"), 1)],
+        )
+        # Nor does a choice or « Oublier » count it.
+        change = income.set_source(credit, income.CARD, remember=True)
+        self.assertEqual((change.followers, change.kept), (0, 0))
+        self.assertEqual(income.forget_payer(IncomePayer.objects.get()), 1)
+
+
+class MarkedBeforeTheTillTests(Fixtures, TestCase):
+    #: The rows read, in the page's order.
+    ROWS = (income.CARD, income.VOUCHER, income.CREDIT)
+
+    def test_marked_credits_before_the_first_till_day_are_counted_apart(self):
+        """Card at its gross - the amount, where none is printed - « Avoir »
+        and vouchers at what arrived; « Pas une vente » compared with
+        nothing."""
+        self.credit(date(2026, 6, 5), "70.00", TERMINAL_LABEL, counterparty=TERMINAL, income_source=income.CARD)
+        self.credit(date(2026, 6, 6), "200.00", category="Acompte", income_source=income.CREDIT)
+        self.credit(date(2026, 6, 7), "30.00", ISSUER_LABEL, counterparty=ISSUER, income_source=income.VOUCHER)
+        self.payout(date(2026, 6, 8), "60.00", "59.40", income_source=income.OTHER)
+        self.credit(date(2026, 6, 9), "500.00", category="Privatisation")
+        self.paid(date(2026, 6, 10), CB=("100.00", 2), Avoir=("150.00", 1), TR=("45.00", 3))
+        self.payout(date(2026, 6, 12), "100.00", "99.00")
+        self.credit(date(2026, 6, 12), "150.00", category="Acompte", income_source=income.CREDIT)
+        report = income.income_for(JUNE)
+        self.assertEqual(
+            report.bank_before_till,
+            {income.CARD: euros("70"), income.CREDIT: euros("200"), income.VOUCHER: euros("30")},
+        )
+        self.assertEqual((report.bank_before_from, report.bank_before_to), (date(2026, 6, 5), date(2026, 6, 7)))
+        rows = {row.key: row for row in report.rows}
+        self.assertEqual(
+            [(rows[key].bank, rows[key].bank_uncovered, rows[key].till, rows[key].difference) for key in self.ROWS],
+            [
+                (euros("170"), euros("70"), euros("100"), euros("0.00")),
+                (euros("30"), euros("30"), euros("45"), euros("-45.00")),
+                (euros("350"), euros("200"), euros("150"), euros("0.00")),
+            ],
+        )
+
+
+class TheBalanceWithMarkedPayoutsTests(Fixtures, TestCase):
+    """Two weeks of card sales, 50 € a day. The provider printing its gross
+    pays 2-9 June; from the 10th a new terminal, retained for its payer,
+    pays the day before - but the payout for the 10th never came."""
+
+    NEW_TERMINAL = "NOUVEAU TERMINAL EXEMPLE"
+
+    def setUp(self):
+        super().setUp()
+        for offset in range(14):
+            self.paid(date(2026, 6, 1) + timedelta(days=offset), CB=("50.00", 2))
+        for day in range(2, 10):
+            self.payout(date(2026, 6, day), "50.00", "49.70")
+        IncomePayer.objects.create(key=self.NEW_TERMINAL, source=income.CARD)
+        for day in (10, 12, 13, 14):
+            label = f"VIR SEPA RECU /FRM {self.NEW_TERMINAL}"
+            self.credit(date(2026, 6, day), "50.00", label, counterparty=self.NEW_TERMINAL)
+
+    def pending(self, window):
+        return {row.entry.day.day: row.pending for row in income.income_for(window).payouts}
+
+    def test_a_window_does_not_change_the_balance(self):
+        whole = self.pending(DateRange())
+        late = self.pending(DateRange(date(2026, 6, 12), None))
+        self.assertEqual(whole[10], euros("0"))
+        # The marked payout of the 10th, outside the window, still counts.
+        self.assertEqual(late, {12: euros("50"), 13: euros("50"), 14: euros("50")})
+        self.assertEqual(late, {day: whole[day] for day in (12, 13, 14)})
+
+
+class PayerRowsTests(Fixtures, TestCase):
+    def test_each_payer_counts_what_it_decides_over_the_window_and_the_history(self):
+        IncomePayer.objects.create(key=TERMINAL, source=income.CARD)
+        IncomePayer.objects.create(key=ISSUER, source=income.VOUCHER)
+        # Written by hand: no source - listed as it is, deciding nothing.
+        IncomePayer.objects.create(key="PAYEUR ILLISIBLE EXEMPLE", source="bitcoin")
+        for day, amount in ((date(2026, 5, 20), "40.00"), (date(2026, 6, 10), "60.00"), (date(2026, 6, 15), "25.00")):
+            self.credit(day, amount, TERMINAL_LABEL, counterparty=TERMINAL)
+        self.credit(date(2026, 7, 2), "10.00", TERMINAL_LABEL, counterparty=TERMINAL)
+        # A choice of its own beats its payer: not the payer's to count.
+        self.credit(date(2026, 6, 20), "30.00", TERMINAL_LABEL, counterparty=TERMINAL, income_source=income.CASH)
+        self.debit(date(2026, 6, 21), "5.00", counterparty=TERMINAL)
+        unread = self.credit(date(2026, 6, 22), "12.00", counterparty="PAYEUR ILLISIBLE EXEMPLE")
+        report = income.income_for(JUNE)
+        self.assertEqual(
+            [(row.payer.key, row.source_label, row.count, row.total, row.count_all) for row in report.payers],
+            [
+                (ISSUER, "Titres-restaurant", 0, euros("0"), 0),
+                ("PAYEUR ILLISIBLE EXEMPLE", "bitcoin", 0, euros("0"), 0),
+                (TERMINAL, "Carte", 2, euros("85.00"), 4),
+            ],
+        )
+        self.assertEqual([one.line.pk for one in report.others], [unread.pk])
+
+    def test_no_payer_retained_is_no_row(self):
+        self.credit(date(2026, 6, 10), "60.00", TERMINAL_LABEL, counterparty=TERMINAL)
+        self.assertEqual(income.income_for(JUNE).payers, [])
+
+
 class QueryCountTests(Fixtures, TestCase):
     def build(self, weeks):
         start = date(2026, 1, 5) + timedelta(weeks=self.built)
@@ -705,6 +1545,14 @@ class QueryCountTests(Fixtures, TestCase):
             self.paid(day, CB=("25.00", 2), Cash=("5.00", 1))
             self.payout(day + timedelta(days=1), "25.00", "24.80")
         self.credit(start, "200.00")
+        # A payer every payout shares (the rules recognise them first, so it
+        # decides none), a payer a credit follows, and a line chosen on its
+        # own: read against the payers in Python, never one query a line.
+        IncomePayer.objects.update_or_create(key=MERCHANT, defaults={"source": income.CARD})
+        issuer = f"EMETTEUR {chr(ord('A') + self.built)} EXEMPLE"
+        IncomePayer.objects.create(key=issuer, source=income.VOUCHER)
+        self.credit(start + timedelta(days=2), "45.00", ISSUER_LABEL, counterparty=issuer)
+        self.credit(start + timedelta(days=3), "300.00", category="Acompte", income_source=income.CREDIT)
         self.built += weeks
 
     def test_three_times_the_history_costs_no_more_queries(self):
@@ -716,3 +1564,8 @@ class QueryCountTests(Fixtures, TestCase):
         with self.assertNumQueries(income.QUERIES):
             report = income.income_for(DateRange())
         self.assertEqual(report.card_count, 28)
+        self.assertEqual((report.source_count(income.VOUCHER), report.source_count(income.CREDIT)), (2, 2))
+        self.assertEqual(
+            [(row.payer.key, row.count_all) for row in report.payers],
+            [(MERCHANT, 0), ("EMETTEUR A EXEMPLE", 1), ("EMETTEUR B EXEMPLE", 1)],
+        )

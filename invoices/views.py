@@ -16,7 +16,8 @@ from django.views.decorators.clickjacking import xframe_options_sameorigin
 from django.views.decorators.http import require_safe
 from django.views.generic import DetailView
 
-from accounts.tenancy import bound, integrations_allowed
+from accounts import sudo
+from accounts.tenancy import bound, integrations_allowed, is_owner
 from accounts.views import file_response, open_stored
 from common import error_for_page, is_id, local_return, safe_next
 
@@ -28,6 +29,13 @@ DOWNLOAD_PARAM = "telecharger"
 #: What a bank line is compared against: a document's total to the cent,
 #: the way bank/reconcile.py rounds it before matching.
 CENTS = Decimal("0.01")
+
+#: Said, with a 403, to a login of the espace that is not its owner and
+#: posts a customer portal's source (invoice_type_form).
+PORTAL_OWNER_ONLY = (
+    "Seul le propriétaire de l'espace peut modifier ou tester un espace client : il décide où ses mots de passe "
+    "sont envoyés."
+)
 
 from . import integrations, supplier_changes
 from .deletion import InvoiceInUseError, blocking_stock_takes, delete_invoice
@@ -394,13 +402,22 @@ def invoice_type_list(request):
 def invoice_type_form(request, pk=None):
     """A kind of invoice to gather: from the shared mailbox (patterns on
     the emails) or from the supplier's customer portal (a login page and
-    the names of the .env variables holding the credentials). Only the
+    the two names its credentials are kept under). Only the
     chosen kind's settings are validated and saved; "Tester" runs either
     without saving and without importing anything.
 
     Its supplier can be a new one, made in the same save (and not at all if
     the type is refused). `?fournisseur=` and `?source=` fill the page in
-    from a supplier's page, and `?retour=` is where it goes back after."""
+    from a supplier's page, and `?retour=` is where it goes back after.
+
+    A customer portal's POST - saved or « Tester », new, edited, or a
+    mailbox source turned into one - is the espace owner's alone, with his
+    MarginMate password confirmed (accounts/sudo.py): its address and its
+    two names decide where the password stored on « Identifiants » is typed,
+    and « Tester » types it there at once. A member gets the page back
+    with a 403. The page itself shows no secret and stays open, and a
+    mailbox source is not held back: its server and its account are
+    fixed on « Identifiants », whatever its patterns say."""
     from .receipts import invoice_supplier_choices
     from .supplier_views import _local_return
 
@@ -410,13 +427,24 @@ def invoice_type_form(request, pk=None):
     test_job = None
     return_to = _local_return(request)
     sources_refused = None if integrations_allowed() else integrations.SOURCES
+    status = 200
 
     if request.method == "POST" and sources_refused:
         # Both channels are the server's own accounts (integrations.py): no
         # « Tester », no source saved - the page says « à configurer ».
         messages.error(request, sources_refused)
         return redirect(request.get_full_path())
-    if request.method == "POST":
+    if request.method == "POST" and request.POST.get("source_kind") == InvoiceType.SourceKind.WEBSITE:
+        if not is_owner(request):
+            messages.error(request, PORTAL_OWNER_ONLY)
+            status = 403
+        elif not sudo.confirmed(request):
+            # Back to this page once confirmed; what was posted is not
+            # replayed.
+            return sudo.ask(request, next_path=request.get_full_path())
+        else:
+            sudo.refresh(request)
+    if request.method == "POST" and status == 200:
         type_form = InvoiceTypeForm(request.POST, instance=invoice_type)
         is_website = request.POST.get("source_kind") == InvoiceType.SourceKind.WEBSITE
         # Only the chosen kind's fields are sent (the other's are disabled in
@@ -468,6 +496,8 @@ def invoice_type_form(request, pk=None):
                 if saved is not None:
                     return saved
     else:
+        # A GET - or a member's portal POST, refused above: the page as
+        # saved, beside the reason.
         prefill = {}
         if invoice_type is None and is_id(request.GET.get("fournisseur", "")):
             prefill["supplier"] = request.GET["fournisseur"]
@@ -507,6 +537,7 @@ def invoice_type_form(request, pk=None):
             "supplier_was": _supplier_was(request, type_form, invoice_type),
             "sources_refused": sources_refused,
         },
+        status=status,
     )
 
 

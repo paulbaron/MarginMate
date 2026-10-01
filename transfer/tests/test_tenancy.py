@@ -2,7 +2,10 @@
 and files are its own (accounts.paths), and nothing on the page names a
 folder of the server.
 
-Two tenants in temporary files (accounts.tests.support.TwoTenantsTestCase).
+Two tenants in temporary files (accounts.tests.support.TwoTenantsTestCase),
+each login its espace's owner, logged in with his MarginMate password
+confirmed (`TenantTestCase.log_in`): importing and clearing ask for both
+(test_protection.py).
 With one backups folder and one staging folder for the whole server, bar B
 listed bar A's safety copies on its Importer tab and could stage and import
 them - A's invoices, bank and prices - and resume or cancel the archive A
@@ -34,6 +37,7 @@ from invoices.models import Invoice, InvoiceType, Supplier
 from recipes.integration import TILL_TO_CONFIGURE
 from recipes.models import PosDailyPayment
 from tests.factories import make_invoice
+from tests.runner import confirm_password
 from transfer import archive, registry, safety, staging, views
 from transfer.archive import ArchiveError, ArchiveReader
 from transfer.runner import run_clear, run_export
@@ -80,8 +84,12 @@ class TenantTestCase(TwoTenantsTestCase):
             path.unlink()
         return stage
 
+    def log_in(self, user):
+        """`user` logged in, his password confirmed: he imports and clears."""
+        confirm_password(self.client, user)
+
     def page(self, user, url):
-        self.client.force_login(user)
+        self.log_in(user)
         return self.client.get(url)
 
 
@@ -235,12 +243,12 @@ class ThroughThePagesTests(TenantTestCase):
             )
             make_invoice(Supplier.objects.get(code="METRO"), invoice_number="ALPHA-ESSAI-0001", source_file=name)
         keys = sorted(registry.closure({"factures"}, "export"))
-        self.client.force_login(self.user_a)
+        self.log_in(self.user_a)
         export = self.client.post(reverse("transfer:data_export"), {"sections": keys})
         data = b"".join(export.streaming_content)
         export.close()
 
-        self.client.force_login(self.user_b)
+        self.log_in(self.user_b)
         response = self.client.post(reverse("transfer:data_import"), {"archive": SimpleUploadedFile("a.zip", data)})
         url = response["Location"]
         posted = {"sections": keys, **{f"strategie-{key}": "fusionner" for key in keys}}
@@ -322,7 +330,7 @@ class ThroughThePagesTests(TenantTestCase):
         """A person who works for two tenants carries nothing of one into the
         other: the session is the platform's, one per login."""
         url = reverse("transfer:data_clear")
-        self.client.force_login(self.user_a)
+        self.log_in(self.user_a)
         self.client.post(url, {"sections": ["banque"], "action": "previsualiser"})
         self.assertContains(self.client.get(url), "Ce qui sera effacé")
 

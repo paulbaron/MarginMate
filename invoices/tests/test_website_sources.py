@@ -8,16 +8,20 @@ Data invented.
 """
 
 import os
+import time
 from datetime import date
 from unittest import mock
 
 from django.test import TestCase
 from django.urls import reverse
 
+from accounts import sudo
 from invoices.models import EmailInvoiceSource, InvoiceType, ScrapeJob, WebsiteInvoiceSource
 from invoices.scrapers.website import NeedsAPerson, WebsiteRecipe
 from invoices.tasks import gather_invoices_task, test_website_task
+from invoices.tests.test_sources_protection import confirm_password
 from tests.factories import make_invoice, make_invoice_type, make_supplier
+from tests.runner import test_user
 
 
 def website_type(supplier, name="Box Exemple - Factures", **settings):
@@ -36,6 +40,17 @@ class TypeFormTests(TestCase):
     def setUp(self):
         self.supplier = make_supplier(code="BOX_X", name="Box Exemple", parser_key="", expenses_only=True)
         self.url = reverse("invoices:invoice_type_create")
+        # A portal is saved and tested by the espace's owner, his password
+        # confirmed (test_sources_protection.py holds who else may not).
+        confirm_password(self.client)
+        # A portal's source is saved and tested by the espace's owner, his
+        # MarginMate password confirmed (accounts/sudo.py; who may, and the
+        # refusals: test_sources_protection.py).
+        owner = test_user()
+        self.client.force_login(owner)
+        session = self.client.session
+        session[sudo.SESSION_KEY] = {"user": owner.pk, "until": time.time() + 600}
+        session.save()
 
     def post(self, url=None, **fields):
         data = {

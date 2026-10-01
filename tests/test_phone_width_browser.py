@@ -14,7 +14,11 @@ up at the bar, were tables two to three times as wide as the screen.
   makes a page wide: a shop's name printed as one word of 40 letters, a
   known price's long label, an ingredient's cost to four decimals, an
   inventory's note in a select, a product's raw name with no space. A page
-  too wide is named with the element the overflow starts from.
+  too wide is named with the element the overflow starts from. « Entrées
+  d'argent » (01/10) is measured with every list it draws: a payer the bank
+  prints as one word in « Autres entrées », a card payout printing no gross,
+  a cash deposit and a payer retained - each credit's « En caisse » menu
+  beside it - and the card balance's chart.
 * **A table's search box sits before the box it scrolls in**, never inside
   it, where it scrolled away with the columns (static/js/datatable.js).
 * **A ticket's photo is part of the page** once stacked above its lines:
@@ -79,6 +83,18 @@ CHECKED = [{"label": "Somme des lignes = total imprimé", "passed": True, "detai
 ONE_WORD = "EPICERIEDUQUARTIEREXEMPLEDISTRIBUTIONSAS"
 #: The period's select is as wide as its longest option, which names the take.
 LONG_NOTE = "Inventaire de fin de saison, cave et réserve comprises, compté à deux"
+#: A payer the bank prints as one word, 42 letters: a credit of « Autres
+#: entrées », its name above its label and its « En caisse » menu beside it.
+LONG_PAYER = "COMITEDESFETESDUQUARTIEREXEMPLEASSOCIATION"
+#: A payment terminal whose payouts print no gross, its payer retained as
+#: « Carte » on « Entrées d'argent ».
+TERMINAL = "TERMINAL EXEMPLE ENCAISSEMENTS"
+
+
+def credit_row(day, bank_type, label, amount):
+    """A credit as the bank's CSV export prints it (bank/statements.py)."""
+    return f"{day:%d/%m/%Y};{bank_type};{bank_type};{label};{day:%d/%m/%Y};{amount}"
+
 
 #: Where a page too wide starts to be: each element past the screen's right
 #: edge (arguments[0] px) whose parent is not, and that no box scrolling or
@@ -302,7 +318,11 @@ class PhoneBrowserTestCase(StaticLiveServerTestCase):
 class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
     def setUp(self):
         super().setUp()
+        from bank import income, reconcile
+        from bank.models import BankTransaction, IncomePayer, IncomeSource
+        from bank.tests.test_reconcile import statement
         from invoices.models import ShopItemPrice
+        from recipes.models import PosDailyPayment
         from recipes.sales import record_sales
 
         # A ticket to check, from a shop printing its name as one word, whose
@@ -362,6 +382,37 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
             )
             self.assertEqual(added.status_code, 302)
         self.assertEqual(GapFillEntry.objects.filter(stock_take=self.opening).count(), 2)
+        # « Entrées d'argent » over June: the till's card days, then a payout
+        # printing its gross and one from a terminal printing none - its
+        # payer retained as « Carte » -, a cash deposit, and a payer printed
+        # as one word in « Autres entrées ». Every list of the page is drawn,
+        # each credit's « En caisse » menu beside it, and the card balance
+        # with its chart (two payout days).
+        for day, card in ((1, "120.00"), (2, "80.00"), (4, "60.00")):
+            PosDailyPayment.objects.create(
+                sold_on=date(2026, 6, day), method=PosDailyPayment.CARD, amount=Decimal(card), payments=3
+            )
+        reconcile.import_statement(
+            statement(
+                credit_row(
+                    date(2026, 6, 3),
+                    "VIREMENT",
+                    "VIR SEPA RECU /FRM BAR EXEMPLE /EID /RNF TRANSFERT PRESTATAIRE INVENTE 0000001 "
+                    "TOTAL ENCAISSE 200.00 EUROS BAR EXEMPLE",
+                    "198,60",
+                ),
+                credit_row(
+                    date(2026, 6, 5), "VIREMENT", f"VIR SEPA RECU /FRM {TERMINAL} /EID /RNF VERSEMENT 0000002", "60,00"
+                ),
+                credit_row(date(2026, 6, 10), "VERSEMENT ESPECES", "VERSEMENT ESPECES 0000003", "40,00"),
+                credit_row(
+                    date(2026, 6, 20), "VIREMENT", f"VIR SEPA RECU /FRM {LONG_PAYER} /EID /RNF PRIVATISATION", "450,00"
+                ),
+            )
+        )
+        terminal = BankTransaction.objects.get(counterparty=TERMINAL)
+        IncomePayer.objects.create(key=income.payer_key(terminal), source=IncomeSource.CARD)
+        self.income = f"{reverse('bank:income_home')}?du=2026-06-01&au=2026-06-30"
 
     def test_no_page_is_wider_than_the_phone(self):
         """Measured on the code of 29/09 with this data, every page but
@@ -370,7 +421,9 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
         « + Nouvelle source pour » it), a recipe 505 (its ingredients),
         Produits & charges 743 either way (the period's select), the
         recipes 459 (the article picker), « Écarts » 439 (« Incohérences »)
-        - and Achats 341 at 320 (its two file fields)."""
+        - and Achats 341 at 320 (its two file fields). « Entrées d'argent »,
+        added on 01/10 with its one-word payer and every « En caisse » form,
+        fitted every width that day: its lists scroll in their own boxes."""
         stock = reverse("inventory:stock_list")
         pages = {
             "le contrôle d'un ticket": reverse("invoices:receipt_review", args=[self.ticket.pk]),
@@ -385,6 +438,7 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
             # since are sales to draw, and the select names the second count
             # by its long note.
             "Combler les écarts": f"{reverse('inventory:stock_gap_filler')}?depuis={self.opening.pk}",
+            "les entrées d'argent": self.income,
         }
         problems = []
         for width in WIDTHS:
@@ -403,7 +457,10 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
         recipe's ingredients, the period's select holding the note, the
         product waiting in « À classer » with no space in its name, and the
         « Incohérences » - not the other table of « Écarts » - are on the
-        page (on the code of 29/09 too: it is the data that is checked here)."""
+        page (on the code of 29/09 too: it is the data that is checked here).
+        And on « Entrées d'argent »: the one-word payer, the « En caisse »
+        menu of « Autres entrées » and of the deposits, the payout printing
+        no gross, the payer retained and the balance's chart."""
         self.as_a_phone(375)
         ticket = reverse("invoices:receipt_review", args=[self.ticket.pk])
         supplier = reverse("invoices:supplier_detail", args=[self.shop.pk])
@@ -429,6 +486,20 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
                 ".card .table-scroll > table.sub-table, .card > table.sub-table",
                 "Exigé par les ventes",
             ),
+            (self.income, "table[data-table-label='autres entrées']", LONG_PAYER),
+            (
+                self.income,
+                "table[data-table-label='autres entrées'] form.income-source",
+                "retenir pour ce payeur",
+            ),
+            (
+                self.income,
+                "table[data-table-label='dépôts et autres moyens de paiement'] form.income-source",
+                "retenir pour ce payeur",
+            ),
+            (self.income, "table[data-table-label='versements carte']", "montant reçu"),
+            (self.income, "table[data-table-label='payeurs retenus']", TERMINAL),
+            (self.income, ".chart[data-chart='line']", "05/06/2026"),
         ):
             with self.subTest(page=path, css=css):
                 self.open(path)

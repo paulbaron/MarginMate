@@ -23,6 +23,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -32,12 +33,14 @@ from pathlib import Path
 from unittest import mock, skipUnless
 
 from django.conf import settings
+from django.contrib.sessions.models import Session
 from django.core.exceptions import ImproperlyConfigured
 from django.test import SimpleTestCase, override_settings
 
-from accounts import deployment
+from accounts import data_backup, deployment, vault
 from accounts.management.commands import serve
 from accounts.tests.test_production_settings import child_environment, deploy_md_lines
+from invoices.scrapers import website
 
 BASE = Path(settings.BASE_DIR)
 #: What both scripts run to ask the settings (the helper's docstring).
@@ -52,6 +55,10 @@ POWERSHELL = (
 STATE_KEYS = {"PREVIOUS": "ancien", "DATA": "donnees", "BACKUP": "sauvegarde", "STEP": "etape"}
 #: pip or its file, named anywhere: the way back installs with uv alone.
 PIP = re.compile(r"\bpip\b|requirements\.txt", flags=re.IGNORECASE)
+#: What every production uv sync asks for by --python: .python-version's.
+PYTHON_VERSION = (BASE / ".python-version").read_text(encoding="utf-8").strip()
+#: The command each of them is, in the scripts and in DEPLOY.md.
+SYNC = f"uv sync --locked --no-dev --python {PYTHON_VERSION}"
 
 
 class Script:
@@ -152,6 +159,44 @@ def task_check_command(script: Script) -> str:
     return line.split(' -Command "', 1)[1].rsplit('"', 1)[0]
 
 
+def make_junction(test, link: Path, target: Path) -> Path:
+    """`link`, a directory junction to `target`, made by « mklink /J » as
+    the owner would make one - between two temporary folders only, never
+    towards the code or C:\\MarginMate. Removed at the test's end, the
+    junction alone (os.rmdir never goes into it), before the temporary
+    folder is. The test is skipped where mklink makes none."""
+    link.parent.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        ["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(target)],
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+    if result.returncode != 0 or not link.is_dir():
+        test.skipTest(f"mklink /J n'a pas fait de jonction (code {result.returncode})")
+    test.addCleanup(os.rmdir, link)
+    return link
+
+
+def short_name(path: Path) -> str | None:
+    """The 8.3 short name Windows gives `path` (an existing one), None where
+    the volume makes none - or where it is the long name itself."""
+    if os.name != "nt":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    get = ctypes.windll.kernel32.GetShortPathNameW
+    get.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+    get.restype = wintypes.DWORD
+    buffer = ctypes.create_unicode_buffer(1024)
+    length = get(str(path), buffer, len(buffer))
+    if not length or length >= len(buffer):
+        return None
+    short = buffer.value
+    return short if os.path.normcase(short) != os.path.normcase(str(path)) else None
+
+
 class CmdHygieneMixin:
     """cmd.exe's traps, for any script of the repository."""
 
@@ -250,7 +295,8 @@ class CmdHygieneMixin:
     def test_the_project_s_python_quoted(self):
         self.assertIn('set "MM_PYTHON=.venv\\Scripts\\python.exe"', self.script.text)
         for _, line in self.script.commands():
-            if "python" in line.lower() and not line.lower().startswith(("set ", "echo", "if ")):
+            # uv's --python names a version, it runs no Python of its own.
+            if "python" in line.lower() and not line.lower().startswith(("set ", "echo", "if ", "call uv ")):
                 self.assertTrue(line.startswith('"%MM_PYTHON%"') or "MM_PYTHON" in line, line)
 
     def test_the_settings_are_asked_through_the_helper(self):
@@ -366,7 +412,7 @@ class DeployScriptTests(CmdHygieneMixin, SimpleTestCase):
         merge and before the migrations, and a failure there is a failure
         past the merge. uv is only ever run through call."""
         sync = self.script.line_of("call uv sync")
-        self.assertEqual(self.script.lines[sync], "call uv sync --locked --no-dev")
+        self.assertEqual(self.script.lines[sync], f"call uv sync --locked --no-dev --python {PYTHON_VERSION}")
         self.assertEqual(self.script.after(sync), "if errorlevel 1 goto :failure_after_merge")
         self.assertLess(self.script.line_of("call git merge --ff-only origin/main"), sync)
         self.assertLess(sync, self.script.line_of('"%MM_PYTHON%" manage.py migrate_tenants'))
@@ -375,8 +421,25 @@ class DeployScriptTests(CmdHygieneMixin, SimpleTestCase):
         self.assertIn("echo Dependances (uv sync --locked --no-dev)...", commands)
         self.assertEqual(
             [line for line in commands if re.match(r"(call\s+)?uv\b", line, flags=re.IGNORECASE)],
-            ["call uv --version >nul", "call uv sync --locked --no-dev"],
+            ["call uv --version >nul", f"call uv sync --locked --no-dev --python {PYTHON_VERSION}"],
         )
+
+    def test_every_uv_sync_names_the_python_of_python_version(self):
+        """Run or printed, every uv sync says --python, the version
+        .python-version names: an explicit request beats whatever mise hands
+        uv, and the mise.toml of every version up to 01/10/2026 handed it the
+        exact Python mise installed (python.uv_venv_auto) - uv then replaced
+        a .venv made on another 3.11, OCR models included. The way back puts
+        such a mise.toml back on disk before its uv sync runs."""
+        # The step's own name (« l'installation des dependances (uv sync
+        # --locked --no-dev) ») is words in etat.txt and on screen, no command.
+        syncs = [
+            line
+            for _, line in self.script.commands()
+            if re.search(r"\buv sync\b", line) and not line.startswith(("set ", "echo Dependances"))
+        ]
+        # Step 7 runs it; « offline » and the way back print it.
+        self.assertEqual(syncs, [f"call {SYNC}", f"echo   {SYNC}", f"echo   {SYNC}"])
 
     def test_pip_is_neither_run_nor_named(self):
         """uv sync takes pip out of .venv, and nothing here runs it - nor
@@ -387,7 +450,7 @@ class DeployScriptTests(CmdHygieneMixin, SimpleTestCase):
         self.assertEqual([line for line in self.script.lines if PIP.search(line)], [])
         for label in ("offline", "rollback_instructions"):
             with self.subTest(label=label):
-                self.assertIn("echo   uv sync --locked --no-dev", self.script.section(label))
+                self.assertIn(f"echo   uv sync --locked --no-dev --python {PYTHON_VERSION}", self.script.section(label))
 
     def test_the_wait_is_for_free_or_listening_only(self):
         """:wait_for_port compares its second argument with « listening »:
@@ -842,6 +905,7 @@ class RefreshDevDataScriptTests(CmdHygieneMixin, SimpleTestCase):
         self.assertNotRegex("2026-10-01_101500-INCOMPLET", stamp)
 
     def test_it_never_deletes_and_never_copies_the_env(self):
+        """robocopy names .env only among the files it leaves out (/XF)."""
         for _, line in self.script.commands():
             lowered = line.lower()
             if lowered.startswith("echo"):
@@ -853,7 +917,7 @@ class RefreshDevDataScriptTests(CmdHygieneMixin, SimpleTestCase):
                 if lowered.startswith("del "):
                     self.assertIn("%MM_ANSWERS%", line)
                 if lowered.startswith(("copy", "robocopy", "move")):
-                    self.assertNotIn(".env", lowered)
+                    self.assertNotIn(".env", re.sub(r" /xf [^/]*", " ", lowered))
         move = self.script.line_of('move "%MM_DATA%" "%MM_PREVIOUS%"')
         self.assertEqual(self.script.after(move), "if errorlevel 1 goto :rename_failed")
 
@@ -861,6 +925,91 @@ class RefreshDevDataScriptTests(CmdHygieneMixin, SimpleTestCase):
         """robocopy says 1 when it copied files: only 8 and above fail."""
         copy = self.script.line_of('robocopy "%MM_BACKUP%\\data" "%MM_DATA%" /E')
         self.assertEqual(self.script.after(copy), "if errorlevel 8 goto :copy_failed")
+
+    def test_the_passwords_and_the_debug_pages_are_not_copied(self):
+        """The « Identifiants » store is in no development copy
+        (accounts/vault.py) - and a backup made before backup_data left it
+        out still holds it - nor are the scrapers' failure dumps, which can
+        print an account's identifiers: the same names backup_data leaves
+        out, and the window says so."""
+        copy = self.script.lines[self.script.line_of('robocopy "%MM_BACKUP%\\data" "%MM_DATA%" /E')]
+        files = copy.split(" /XF ", 1)[1].split(" /", 1)[0].split()
+        self.assertEqual(files, [*vault.FILE_NAMES, f"{vault.TEMPORARY_PREFIX}*.tmp", *deployment.ENV_COPY_PATTERNS])
+        self.assertEqual(files[:2], list(data_backup.LEFT_OUT_FILES))
+        folders = copy.split(" /XD ", 1)[1].split(" /", 1)[0].split()
+        self.assertEqual(folders, [website.DEBUG_DIR])
+        self.assertEqual(data_backup.DEBUG_FOLDER, website.DEBUG_DIR)
+        said = [line for _, line in self.script.commands() if line.startswith("echo") and "Identifiants" in line]
+        self.assertEqual(len(said), 1)
+        self.assertIn("mots de passe", said[0])
+        self.assertIn("pages de debug", said[0])
+        self.assertIn("pas ete recopies", said[0])
+
+    def test_a_copy_of_a_env_is_never_copied_and_the_window_says_so(self):
+        """A copy of a .env (« .env.bak_<date> ») left in the data folder by
+        hand is in every backup, and comes with it into data-dev: robocopy leaves
+        out what backup_data does (`deployment.ENV_COPY_PATTERNS`), the
+        patterns « .env » and « .env.* », and says so - before the copy and
+        in the closing list. Step 3 has refused already while data-dev or
+        the backup's data holds one (`DeploymentHelperTests`)."""
+        self.assertEqual(deployment.ENV_COPY_PATTERNS, (".env", ".env.*"))
+        self.assertIs(data_backup.is_env_copy, deployment.is_env_copy)
+        copy = self.script.line_of('robocopy "%MM_BACKUP%\\data" "%MM_DATA%" /E')
+        files = self.script.lines[copy].split(" /XF ", 1)[1].split(" /", 1)[0].split()
+        self.assertEqual(files[-2:], [".env", ".env.*"])
+        said = [(index, line) for index, line in self.script.commands() if line.startswith("echo") and ".env.*" in line]
+        self.assertEqual(len(said), 2)
+        (before, announced), (after, done) = said
+        self.assertLess(before, copy)
+        self.assertIn("ne sont pas recopiees", announced)
+        self.assertLess(copy, after)
+        self.assertIn(done, self.script.section("copy_data"))
+        self.assertIn("n'a ete recopiee depuis les donnees de la sauvegarde", done)
+
+    def test_the_sessions_the_copy_brought_are_forgotten(self):
+        """A backup made before backup_data emptied them holds production's
+        live sessions - a session key is a login on the public site, and
+        data-dev is read by coding sessions. Once copied, the helper deletes
+        them from data-dev's accounts database, behind the same refusals as
+        `development`; a failure says so, ends in error, and moves nothing."""
+        self.assertIn('set "MM_SESSIONS="', self.script.text)
+        copy = self.script.line_of('robocopy "%MM_BACKUP%\\data" "%MM_DATA%" /E')
+        forget = self.script.line_of(
+            f'"%MM_PYTHON%" -c "{SNIPPET}" {deployment.PURGE_SESSIONS} "%MM_BACKUP%" > "%MM_ANSWERS%"'
+        )
+        self.assertLess(copy, forget)
+        following = [line for _, line in self.script.commands(forget + 1)][:3]
+        self.assertEqual(
+            following,
+            [
+                "if errorlevel 1 goto :sessions_left",
+                'for /f "usebackq tokens=1,* delims==" %%a in ("%MM_ANSWERS%") do set "MM_%%a=%%b"',
+                'del "%MM_ANSWERS%" >nul 2>&1',
+            ],
+        )
+        self.assertLess(forget, self.script.line_of('set "MM_CODE=0"'))
+        self.assertTrue(
+            any("%MM_SESSIONS%" in line for line in self.script.section("copy_data") if line.startswith("echo"))
+        )
+        branch = self.script.reachable("sessions_left")
+        self.assertTrue(any(line.startswith("echo ATTENTION") for line in branch))
+        self.assertNotIn('set "MM_CODE=0"', branch)
+        for danger in ("move", "robocopy", "rd ", "rmdir"):
+            self.assertFalse([line for line in branch if line.startswith(danger)], danger)
+
+    def test_the_folder_set_aside_is_said_to_hold_the_old_copy_s_sessions(self):
+        """The data-dev folder moved aside is neither purged nor deleted: it
+        still holds the old copy's login sessions and the scrapers' debug
+        pages. The closing message says so, and to delete it."""
+        said = [line for line in self.script.section("copy_data") if line.startswith("if defined MM_PREVIOUS echo")]
+        words = " ".join(said)
+        for part in ("%MM_PREVIOUS%", "sessions de connexion", "pages de debug", "ancienne copie", "supprimez"):
+            with self.subTest(part=part):
+                self.assertIn(part, words)
+        self.assertLess(
+            self.script.line_of("if defined MM_PREVIOUS echo - les anciennes donnees"),
+            self.script.line_of('set "MM_CODE=0"'),
+        )
 
     def test_it_asks_first_and_reminds_what_the_copy_holds(self):
         ask = self.script.line_of("choice /C ON /N /M")
@@ -934,6 +1083,74 @@ class OneLineOfTheScriptsRunAloneTests(SimpleTestCase):
     def test_no_finished_backup_picks_none(self):
         self.backup("2026-10-03_101500", manifest=False)
         self.assertEqual(self.picked(), "")
+
+    # -- refresh_dev_data.cmd's copy ---------------------------------------------------------------------------------
+
+    def test_the_copy_leaves_the_passwords_and_the_debug_pages_out(self):
+        """The robocopy line alone, from an invented backup made before
+        backup_data left them out, into an empty folder: robocopy's /XF and
+        /XD match by name at any depth, whatever the case - the copies of a
+        .env exactly as `deployment.is_env_copy` tells them."""
+        written = {
+            "accounts.sqlite3": b"base inventee",
+            ".env.bak_20990101": b"copie inventee d'un .env",
+            "tenants/abc123/.env": b"copie inventee d'un .env",
+            "tenants/abc123/private/.ENV.ANCIEN": b"copie inventee d'un .env",
+            "tenants/abc123/.envoi.txt": b"pas un .env, invente",
+            "tenants/abc123/media/notes.env": b"pas un .env non plus, invente",
+            "tenants/abc123/private/cles/cle.pem": b"cle inventee",
+            "tenants/abc123/private/credentials.bin": b"jeton invente",
+            "tenants/abc123/private/credentials.key": b"cle scellee inventee",
+            "tenants/abc123/private/.credentials-x1y2.tmp": b"ecriture coupee",
+            "tenants/abc123/downloads/type-1/facture.pdf": b"%PDF-1.4 inventee",
+            "tenants/abc123/downloads/type-1/_debug/x.html": b"<p>identifiant invente</p>",
+            "tenants/abc123/downloads/test-12/_debug/y.png": b"capture inventee",
+        }
+        for relative, content in written.items():
+            path = self.folder / "backup" / "data" / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+        script = Script("refresh_dev_data.cmd")
+        line = script.lines[script.line_of('robocopy "%MM_BACKUP%\\data" "%MM_DATA%" /E')]
+        target = self.folder / "data-dev"
+        batch = self.folder / "copy.cmd"
+        batch.write_bytes(
+            "\r\n".join(
+                [
+                    "@echo off",
+                    "setlocal EnableExtensions DisableDelayedExpansion",
+                    f'set "MM_BACKUP={self.folder / "backup"}"',
+                    f'set "MM_DATA={target}"',
+                    line,
+                    "echo CODE=%ERRORLEVEL%",
+                    "",
+                ]
+            ).encode("ascii")
+        )
+        result = subprocess.run(
+            ["cmd.exe", "/d", "/c", str(batch)], cwd=self.folder, capture_output=True, timeout=120, check=False
+        )
+        said = result.stdout.decode("ascii", "replace").strip().splitlines()
+        self.assertTrue(said and said[-1].startswith("CODE="), said[-5:])
+        self.assertLess(int(said[-1].split("=", 1)[1]), 8)
+        copied = sorted(path.relative_to(target).as_posix() for path in target.rglob("*") if path.is_file())
+        self.assertEqual(
+            copied,
+            [
+                "accounts.sqlite3",
+                "tenants/abc123/.envoi.txt",
+                "tenants/abc123/downloads/type-1/facture.pdf",
+                "tenants/abc123/media/notes.env",
+                "tenants/abc123/private/cles/cle.pem",
+            ],
+        )
+        self.assertEqual([path for path in target.rglob("*") if path.name == "_debug"], [])
+        # robocopy and Python agree on what a copy of a .env is.
+        for relative in written:
+            name = relative.rsplit("/", 1)[-1]
+            if "credentials" not in name and "_debug" not in relative:
+                with self.subTest(file=relative):
+                    self.assertIs(deployment.is_env_copy(name), relative not in copied)
 
     # -- deploy.cmd's check of the task's action ---------------------------------------------------------------------
 
@@ -1062,7 +1279,7 @@ class OneLineOfTheScriptsRunAloneTests(SimpleTestCase):
             MM_BACKUP="",
         )
         self.assertIn("REFUS", said)
-        self.assertIn(f"git reset --hard {commit}\r\n  uv sync --locked --no-dev\r\n", said)
+        self.assertIn(f"git reset --hard {commit}\r\n  {SYNC}\r\n", said)
         self.assertIsNone(PIP.search(said))
         self.assertIn("pendant\r\nl'installation des dependances (uv sync --locked --no-dev), apres", said)
         self.assertIn('move "C:\\MarginMate\\data" "C:\\MarginMate\\data.echec"', said)
@@ -1155,7 +1372,7 @@ class OneLineOfTheScriptsRunAloneTests(SimpleTestCase):
     def test_the_other_branches_that_only_speak(self):
         said = self.spoken(("offline",), MM_APP="C:\\MarginMate\\app\\", MM_PORT="8765", MM_PREVIOUS_SHORT="abc1234")
         self.assertIn("ATTENTION : rien n'ecoute sur 127.0.0.1:8765, le site est hors ligne.", said)
-        self.assertIn("  git reset --hard VERSION-D-AVANT\r\n  uv sync --locked --no-dev\r\n", said)
+        self.assertIn(f"  git reset --hard VERSION-D-AVANT\r\n  {SYNC}\r\n", said)
         self.assertIsNone(PIP.search(said))
         said = self.spoken(("git_unreadable",), MM_APP="C:\\MarginMate\\app\\")
         self.assertIn('git config --global --add safe.directory "C:/MarginMate/app"', said)
@@ -1185,13 +1402,17 @@ class OneLineOfTheScriptsRunAloneTests(SimpleTestCase):
 
 
 class DeploymentHelperTests(SimpleTestCase):
-    """accounts/deployment.py, as the scripts call it."""
+    """accounts/deployment.py, as the scripts call it. Every folder is a
+    temporary one - production's data folder included (`production`), never
+    C:\\MarginMate: the helper now asks the disk what a path really is."""
 
     def setUp(self):
         super().setUp()
-        self.folder = Path(tempfile.mkdtemp(prefix="marginmate-tests-deployment-"))
+        # Its real path: the data folder must be named by it.
+        self.folder = Path(os.path.realpath(tempfile.mkdtemp(prefix="marginmate-tests-deployment-")))
         self.addCleanup(shutil.rmtree, self.folder, True)
         self.data = self.folder / "data-dev"
+        self.production = self.folder / "production" / "data"
 
     @contextlib.contextmanager
     def settings_as(self, accounts=None, **overrides):
@@ -1214,10 +1435,13 @@ class DeploymentHelperTests(SimpleTestCase):
         answers = dict(line.split("=", 1) for line in out.getvalue().splitlines())
         return code, answers, err.getvalue()
 
-    def backup(self, name="2026-10-01_101500", source="C:\\MarginMate\\data", manifest=True) -> Path:
+    def backup(self, name="2026-10-01_101500", source=None, manifest=True) -> Path:
+        """A finished backup, taken from `source` (production's data folder
+        by default)."""
         folder = self.folder / "backups" / name
         (folder / "data" / "tenants").mkdir(parents=True)
         if manifest:
+            source = str(self.production) if source is None else source
             (folder / "manifest.json").write_text(json.dumps({"source": source}), encoding="utf-8")
         return folder
 
@@ -1323,7 +1547,7 @@ class DeploymentHelperTests(SimpleTestCase):
     def test_a_backup_inside_the_data_folder_is_refused(self):
         backup = self.data / "sauvegarde"
         (backup / "data").mkdir(parents=True)
-        (backup / "manifest.json").write_text(json.dumps({"source": "C:\\MarginMate\\data"}), encoding="utf-8")
+        (backup / "manifest.json").write_text(json.dumps({"source": str(self.production)}), encoding="utf-8")
         code, _, said = self.ask("development", str(backup), DEBUG=True, HTTPS=False)
         self.assertEqual(code, deployment.REFUSED)
         self.assertIn("l'un dans l'autre", said)
@@ -1346,13 +1570,500 @@ class DeploymentHelperTests(SimpleTestCase):
             answers = deployment.development(settings, str(backup), now=moment)
         self.assertEqual(answers["PREVIOUS"], str(self.folder / "data-dev.ancien-2026-10-02_093005-2"))
 
+    #: This folder's key in the tests below - invented.
+    OWN_KEY = "cle-inventee-du-dossier-de-developpement-" + "k7Qz" * 10
+
+    def test_a_backup_made_with_this_folder_s_secret_key_is_refused(self):
+        """The development copy must have its own DJANGO_SECRET_KEY: with
+        production's it opens production's sessions (an older backup holds
+        them) and whatever is sealed with it - half of the « Identifiants »
+        store's key, the signed cookies, the browsers' storage scopes. The
+        backup's .env is read as the settings read one (python-dotenv), the
+        keys compared in constant time and never printed."""
+        written = (
+            f"DJANGO_SECRET_KEY={self.OWN_KEY}\n",
+            f'DJANGO_DEBUG=False\nDJANGO_SECRET_KEY="{self.OWN_KEY}"\nMARGINMATE_HTTPS=1\n',
+            f"export DJANGO_SECRET_KEY='{self.OWN_KEY}'\n",
+            f"DJANGO_SECRET_KEY = {self.OWN_KEY}  # la cle\n",
+        )
+        for number, text in enumerate(written):
+            with self.subTest(env=text.splitlines()[0][:24]):
+                backup = self.backup(name=f"2026-10-01_10150{number}")
+                (backup / ".env").write_text(text, encoding="utf-8")
+                for mode in ("development", deployment.PURGE_SESSIONS):
+                    code, answers, said = self.ask(mode, str(backup), DEBUG=True, HTTPS=False, SECRET_KEY=self.OWN_KEY)
+                    self.assertEqual((code, answers), (deployment.REFUSED, {}))
+                    self.assertIn("la même clé secrète", said)
+                    self.assertIn("DJANGO_SECRET_KEY", said)
+                    self.assertNotIn(self.OWN_KEY, said)
+                    self.assertNotIn("k7Qz", said)
+        # Another key, no .env (--sans-env), no key or an empty one in it: taken.
+        for number, text in enumerate(
+            (f"DJANGO_SECRET_KEY={self.OWN_KEY}x\n", None, "DJANGO_DEBUG=False\n", "DJANGO_SECRET_KEY=\n")
+        ):
+            with self.subTest(env=str(text)[:24]):
+                backup = self.backup(name=f"2026-10-02_10150{number}")
+                if text is not None:
+                    (backup / ".env").write_text(text, encoding="utf-8")
+                code, _, said = self.ask("development", str(backup), DEBUG=True, HTTPS=False, SECRET_KEY=self.OWN_KEY)
+                self.assertEqual((code, said), (0, ""))
+
+    def test_a_backup_s_env_that_does_not_read_is_refused(self):
+        """Nothing then says whose key it holds."""
+        backup = self.backup()
+        (backup / ".env").write_bytes(b"DJANGO_SECRET_KEY=\xff\xfe pas de l'UTF-8\n")
+        code, answers, said = self.ask("development", str(backup), DEBUG=True, HTTPS=False)
+        self.assertEqual((code, answers), (deployment.REFUSED, {}))
+        self.assertIn("ne se lit pas", said)
+
+    def accounts_copy(self, database: Path | None = None) -> Path:
+        """An accounts database as robocopy leaves one in data-dev (WAL, as
+        production writes it): a login table and Django's session table,
+        two sessions - every value invented."""
+        database = database or self.data / "accounts.sqlite3"
+        database.parent.mkdir(parents=True, exist_ok=True)
+        table = Session._meta.db_table
+        connection = sqlite3.connect(database)
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("CREATE TABLE comptes (email TEXT)")
+        connection.execute("INSERT INTO comptes VALUES ('alpha@example.invalid')")
+        connection.execute(
+            f'CREATE TABLE "{table}" (session_key varchar(40) NOT NULL PRIMARY KEY, '
+            "session_data text NOT NULL, expire_date datetime NOT NULL)"
+        )
+        connection.executemany(
+            f'INSERT INTO "{table}" VALUES (?, ?, ?)',
+            [(f"cle-de-session-inventee-{n}", "donnees-inventees-" * 30, "2026-10-15 08:00:00") for n in (1, 2)],
+        )
+        connection.commit()
+        connection.close()
+        return database
+
+    @staticmethod
+    def sessions_in(database: Path) -> int:
+        connection = sqlite3.connect(database)
+        try:
+            return connection.execute(f'SELECT COUNT(*) FROM "{Session._meta.db_table}"').fetchone()[0]
+        finally:
+            connection.close()
+
+    def test_the_sessions_a_copy_brought_are_forgotten(self):
+        self.assertEqual(deployment.SESSION_TABLE, Session._meta.db_table)
+        self.assertEqual(deployment.SESSION_TABLE, data_backup.SESSION_TABLE)
+        self.assertEqual(deployment.ACCOUNTS_ROLE, data_backup.ACCOUNTS_ROLE)
+        backup = self.backup()
+        database = self.accounts_copy()
+        code, answers, said = self.ask(deployment.PURGE_SESSIONS, str(backup), DEBUG=True, HTTPS=False)
+        self.assertEqual((code, said), (0, ""))
+        self.assertEqual(answers, {"SESSIONS": "2"})
+        self.assertEqual(self.sessions_in(database), 0)
+        connection = sqlite3.connect(database)
+        try:
+            self.assertEqual(connection.execute("SELECT email FROM comptes").fetchall(), [("alpha@example.invalid",)])
+        finally:
+            connection.close()
+        # Rewritten without them, and nothing left beside it.
+        self.assertNotIn(b"cle-de-session-inventee", database.read_bytes())
+        self.assertEqual(sorted(path.name for path in self.data.iterdir()), ["accounts.sqlite3"])
+        # Again: nothing left to forget.
+        code, answers, _ = self.ask(deployment.PURGE_SESSIONS, str(backup), DEBUG=True, HTTPS=False)
+        self.assertEqual((code, answers), (0, {"SESSIONS": "0"}))
+
+    def test_the_copy_s_accounts_database_is_the_one_its_manifest_names_never_outside(self):
+        """A development .env may name another file inside data-dev: the one
+        the copy brought is emptied all the same. A path of the manifest
+        leading out of data-dev is never opened, and no database is made."""
+        backup = self.backup()
+        outside = self.accounts_copy(self.folder / "dehors.sqlite3")
+        databases = [
+            {"path": "accounts.sqlite3", "role": data_backup.ACCOUNTS_ROLE},
+            {"path": "../dehors.sqlite3", "role": data_backup.ACCOUNTS_ROLE},
+            {"path": str(outside), "role": data_backup.ACCOUNTS_ROLE},
+            {"path": "tenants/x/db.sqlite3", "role": data_backup.TENANT_ROLE},
+        ]
+        manifest = {"source": str(self.production), "databases": databases}
+        (backup / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        copied = self.accounts_copy()
+        own = self.data / "comptes" / "base.sqlite3"
+        code, answers, said = self.ask(deployment.PURGE_SESSIONS, str(backup), DEBUG=True, HTTPS=False, accounts=own)
+        self.assertEqual((code, said), (0, ""))
+        self.assertEqual(answers, {"SESSIONS": "2"})
+        self.assertEqual((self.sessions_in(copied), self.sessions_in(outside)), (0, 2))
+        self.assertFalse(own.exists())
+        self.assertFalse((self.data / "tenants").exists())
+
+    def test_forgetting_sessions_is_refused_where_development_is(self):
+        """Never production's logins: the refusals of `development`, before
+        any database is opened."""
+        backup = self.backup()
+        database = self.accounts_copy()
+        production = self.folder / "production" / "data"
+        live = self.accounts_copy(production / "accounts.sqlite3")
+        cases = {
+            "c'est la copie de production": {"DEBUG": False, "HTTPS": True},
+            "n'est pas dans le dossier des données": {
+                "DEBUG": True,
+                "HTTPS": False,
+                "accounts": production / "accounts.sqlite3",
+            },
+        }
+        for said_part, overrides in cases.items():
+            with self.subTest(said=said_part):
+                code, answers, said = self.ask(deployment.PURGE_SESSIONS, str(backup), **overrides)
+                self.assertEqual((code, answers), (deployment.REFUSED, {}))
+                self.assertIn(said_part, said)
+        taken_from_here = self.backup(name="2026-10-02_101500", source=str(self.data))
+        code, _, said = self.ask(deployment.PURGE_SESSIONS, str(taken_from_here), DEBUG=True, HTTPS=False)
+        self.assertEqual(code, deployment.REFUSED)
+        self.assertIn("ce sont les données du site", said)
+        self.assertEqual((self.sessions_in(database), self.sessions_in(live)), (2, 2))
+
+    def test_no_accounts_database_forgets_nothing_and_a_broken_one_is_said(self):
+        backup = self.backup()
+        code, answers, said = self.ask(deployment.PURGE_SESSIONS, str(backup), DEBUG=True, HTTPS=False)
+        self.assertEqual((code, answers, said), (0, {"SESSIONS": "0"}, ""))
+        self.assertFalse((self.data / "accounts.sqlite3").exists())
+        self.data.mkdir()
+        (self.data / "accounts.sqlite3").write_bytes(b"pas une base SQLite, un texte invente " * 40)
+        code, answers, said = self.ask(deployment.PURGE_SESSIONS, str(backup), DEBUG=True, HTTPS=False)
+        self.assertEqual((code, answers), (1, {}))
+        self.assertIn("ÉCHEC : les sessions de connexion de", said)
+        self.assertIn("n'ont pas pu être effacées", said)
+
+    def test_every_database_of_the_copy_is_purged(self):
+        """A backup made before backup_data copied every database through
+        SQLite holds, beside the accounts database, a copy of it made by hand
+        (accounts.sqlite3.bak_…) and the database kept from before an
+        adoption, sessions included. Every file of data-dev that starts like
+        an SQLite database and holds Django's session table is emptied and
+        rewritten, whatever its name; nothing else is written."""
+        backup = self.backup()
+        tenant = self.data / "tenants" / "abc123"
+        purged = [
+            self.accounts_copy(),
+            self.accounts_copy(self.data / "accounts.sqlite3.bak_20990101_pre_x"),
+            self.accounts_copy(tenant / "db.sqlite3.bak_20260928_pre_adoption"),
+        ]
+        safety = tenant / "backups" / "2026-09-19_143012_avant-import.sqlite3"
+        safety.parent.mkdir()
+        connection = sqlite3.connect(safety)
+        connection.execute("CREATE TABLE fournisseurs (nom TEXT)")
+        connection.execute("INSERT INTO fournisseurs VALUES ('Grossiste Alpha')")
+        connection.commit()
+        connection.close()
+        named = tenant / "media" / "notes.sqlite3"
+        named.parent.mkdir(parents=True)
+        named.write_bytes(b"cle-de-session-inventee-9, un texte invente\n")
+        untouched = {path: path.read_bytes() for path in (safety, named)}
+
+        code, answers, said = self.ask(deployment.PURGE_SESSIONS, str(backup), DEBUG=True, HTTPS=False)
+        self.assertEqual((code, said), (0, ""))
+        self.assertEqual(answers, {"SESSIONS": "6"})
+        for database in purged:
+            with self.subTest(database=database.name):
+                self.assertEqual(self.sessions_in(database), 0)
+                self.assertNotIn(b"cle-de-session-inventee", database.read_bytes())
+                connection = sqlite3.connect(database)
+                try:
+                    emails = connection.execute("SELECT email FROM comptes").fetchall()
+                finally:
+                    connection.close()
+                self.assertEqual(emails, [("alpha@example.invalid",)])
+        for path, content in untouched.items():
+            with self.subTest(untouched=path.name):
+                self.assertEqual(path.read_bytes(), content)
+        sides = [path.name for path in self.data.rglob("*") if path.name.endswith(("-wal", "-shm", "-journal"))]
+        self.assertEqual(sides, [])
+        code, answers, _ = self.ask(deployment.PURGE_SESSIONS, str(backup), DEBUG=True, HTTPS=False)
+        self.assertEqual((code, answers), (0, {"SESSIONS": "0"}))
+
+    def test_one_database_that_will_not_purge_holds_back_none_of_the_others(self):
+        """Said, the step failed (exit 1: the script says « ATTENTION ») -
+        and every other database emptied all the same."""
+        backup = self.backup()
+        accounts = self.accounts_copy()
+        broken = self.data / "tenants" / "abc123" / "backups" / "abimee.sqlite3"
+        broken.parent.mkdir(parents=True)
+        broken.write_bytes(deployment.SQLITE_HEADER + b"pas la suite d'une base, un texte invente " * 100)
+        later = self.accounts_copy(self.data / "tenants" / "abc123" / "db.sqlite3.bak_20260928_pre_adoption")
+        code, answers, said = self.ask(deployment.PURGE_SESSIONS, str(backup), DEBUG=True, HTTPS=False)
+        self.assertEqual((code, answers), (1, {}))
+        self.assertIn(f"ÉCHEC : les sessions de connexion de {broken} n'ont pas pu être effacées", said)
+        self.assertEqual((self.sessions_in(accounts), self.sessions_in(later)), (0, 0))
+
+    @skipUnless(os.name == "nt", "a directory junction")
+    def test_a_junction_out_of_the_copy_is_never_followed(self):
+        """os.walk goes down a directory junction (Python 3.11 takes it for
+        a folder): a database it reaches outside data-dev is never opened."""
+        import _winapi
+
+        backup = self.backup()
+        outside = self.accounts_copy(self.folder / "ailleurs" / "accounts.sqlite3")
+        junction = self.data / "tenants" / "lien"
+        junction.parent.mkdir(parents=True)
+        _winapi.CreateJunction(str(outside.parent), str(junction))
+        self.addCleanup(os.rmdir, junction)
+        self.assertTrue((junction / "accounts.sqlite3").is_file())
+        code, answers, said = self.ask(deployment.PURGE_SESSIONS, str(backup), DEBUG=True, HTTPS=False)
+        self.assertEqual((code, answers, said), (0, {"SESSIONS": "0"}, ""))
+        self.assertEqual(self.sessions_in(outside), 2)
+
+    # -- A folder by another name ----------------------------------------------------------------------------------
+
+    MODES = ("development", deployment.PURGE_SESSIONS)
+
+    @skipUnless(os.name == "nt", "mklink /J")
+    def test_a_junction_to_the_production_s_data_is_refused(self):
+        """A development .env naming a junction that leads to production's
+        data folder: as abspath strings, « …\\data-lien » and
+        « C:\\MarginMate\\data » are two folders, and the refresh went on
+        towards the site's data. Resolved, they are one. Nothing is opened:
+        production's sessions stay."""
+        live = self.accounts_copy(self.production / "accounts.sqlite3")
+        backup = self.backup()
+        junction = make_junction(self, self.folder / "data-lien", self.production)
+        for mode in self.MODES:
+            with self.subTest(mode=mode):
+                code, answers, said = self.ask(
+                    mode, str(backup), DEBUG=True, HTTPS=False, TENANTS_ROOT=junction / "tenants"
+                )
+                self.assertEqual((code, answers), (deployment.REFUSED, {}))
+                self.assertIn(f"le dossier des données de ce dossier ({junction}) est celui dont la sauvegarde", said)
+                self.assertIn("ce sont les données du site", said)
+        self.assertEqual(self.sessions_in(live), 2)
+        # In the production copy too: DATA= must name the real folder.
+        code, answers, said = self.ask("production", DEBUG=False, HTTPS=True, TENANTS_ROOT=junction / "tenants")
+        self.assertEqual((code, answers), (deployment.REFUSED, {}))
+        self.assertIn(f"le dossier des données de ce dossier ({junction}) n'est pas nommé par son vrai chemin", said)
+        self.assertIn(f"il mène à {self.production}", said)
+
+    def test_the_source_by_another_name_is_still_this_folder(self):
+        """The manifest names the folder the backup was taken from as the
+        production's .env named it. Another name of data-dev there - a
+        junction, the \\\\?\\ prefix, another case, its 8.3 short name - is
+        data-dev all the same, in both directions."""
+        self.data.mkdir()
+        aliases = {
+            "préfixe": "\\\\?\\" + str(self.data),
+            "casse": str(self.data).upper(),
+            "dossier au-dessus, préfixé": "\\\\?\\" + str(self.folder),
+        }
+        if os.name == "nt":
+            aliases["jonction"] = str(make_junction(self, self.folder / "lien-vers-data-dev", self.data))
+        short = short_name(self.data)
+        if short:
+            aliases["nom court"] = short
+        for number, (alias, source) in enumerate(aliases.items()):
+            with self.subTest(alias=alias):
+                backup = self.backup(name=f"2026-10-01_1015{number:02d}", source=source)
+                for mode in self.MODES:
+                    code, answers, said = self.ask(mode, str(backup), DEBUG=True, HTTPS=False)
+                    self.assertEqual((code, answers), (deployment.REFUSED, {}), mode)
+                    self.assertIn("ce sont les données du site", said)
+
+    def test_the_data_folder_must_be_named_by_its_real_path(self):
+        """DATA= is what refresh_dev_data.cmd moves aside and copies into, and
+        what every comparison is made from: named through a junction, a
+        symbolic link, its 8.3 short name or the \\\\?\\ prefix, it is
+        refused, its real path said."""
+        self.data.mkdir()
+        backup = self.backup()
+        names = {"préfixe": Path("\\\\?\\" + str(self.data))}
+        if os.name == "nt":
+            names["jonction"] = make_junction(self, self.folder / "autre-nom", self.data)
+        try:
+            os.symlink(self.data, self.folder / "lien-symbolique", target_is_directory=True)
+        except OSError:
+            pass  # Windows makes symbolic links for an administrator or in developer mode only.
+        else:
+            self.addCleanup(os.unlink, self.folder / "lien-symbolique")
+            names["lien symbolique"] = self.folder / "lien-symbolique"
+        short = short_name(self.data)
+        if short:
+            names["nom court"] = Path(short)
+        for name, data in names.items():
+            with self.subTest(name=name):
+                for mode in self.MODES:
+                    code, answers, said = self.ask(
+                        mode, str(backup), DEBUG=True, HTTPS=False, TENANTS_ROOT=data / "tenants"
+                    )
+                    self.assertEqual((code, answers), (deployment.REFUSED, {}), mode)
+                    self.assertIn("n'est pas nommé par son vrai chemin", said)
+                    self.assertIn(f"il mène à {self.data}", said)
+                    self.assertIn("MARGINMATE_TENANTS_ROOT", said)
+
+    @skipUnless(os.name == "nt", "mklink /J")
+    def test_the_tenants_folder_by_another_name_is_refused(self):
+        """data-dev itself real, its tenants\\ a junction to production's: the
+        pages would serve the site's espaces."""
+        (self.production / "tenants").mkdir(parents=True)
+        self.data.mkdir()
+        tenants = make_junction(self, self.data / "tenants", self.production / "tenants")
+        code, answers, said = self.ask("development", str(self.backup()), DEBUG=True, HTTPS=False)
+        self.assertEqual((code, answers), (deployment.REFUSED, {}))
+        self.assertIn(f"le dossier des espaces de ce dossier ({tenants}) n'est pas nommé par son vrai chemin", said)
+        self.assertIn(f"il mène à {self.production / 'tenants'}", said)
+
+    @skipUnless(os.name == "nt", "mklink /J")
+    def test_an_accounts_database_through_a_junction_out_of_the_data_folder_is_refused(self):
+        """« …\\data-dev\\lien\\accounts.sqlite3 » reads as inside data-dev; the
+        file is production's. The accounts database must be inside the data
+        folder as written AND as resolved."""
+        live = self.accounts_copy(self.production / "accounts.sqlite3")
+        backup = self.backup()
+        link = make_junction(self, self.data / "lien", self.production)
+        for mode in self.MODES:
+            with self.subTest(mode=mode):
+                code, answers, said = self.ask(
+                    mode, str(backup), DEBUG=True, HTTPS=False, accounts=link / "accounts.sqlite3"
+                )
+                self.assertEqual((code, answers), (deployment.REFUSED, {}))
+                self.assertIn(
+                    f"la base des comptes ({link / 'accounts.sqlite3'}), qui mène à {live}, n'est pas dans le dossier",
+                    said,
+                )
+        self.assertEqual(self.sessions_in(live), 2)
+
+    @skipUnless(os.name == "nt", "mklink /J")
+    def test_a_backup_by_another_name_inside_the_data_folder_is_refused(self):
+        inner = self.data / "sauvegarde"
+        (inner / "data").mkdir(parents=True)
+        (inner / "manifest.json").write_text(json.dumps({"source": str(self.production)}), encoding="utf-8")
+        link = make_junction(self, self.folder / "lien-sauvegarde", inner)
+        code, _, said = self.ask("development", str(link), DEBUG=True, HTTPS=False)
+        self.assertEqual(code, deployment.REFUSED)
+        self.assertIn("l'un dans l'autre", said)
+
+    @skipUnless(os.name == "nt", "mklink /J")
+    def test_the_code_s_folder_by_another_name_is_refused(self):
+        """A stand-in for the code's folder (never the real one: a junction
+        towards it would put the code under a temporary folder)."""
+        code_folder = self.folder / "code"
+        code_folder.mkdir()
+        junction = make_junction(self, self.folder / "lien-code", code_folder)
+        for number, root in enumerate((junction / "tenants", junction / "data-dev" / "tenants")):
+            with self.subTest(root=str(root)):
+                backup = self.backup(name=f"2026-10-01_10150{number}")
+                code, answers, said = self.ask(
+                    "development", str(backup), DEBUG=True, HTTPS=False, TENANTS_ROOT=root, BASE_DIR=code_folder
+                )
+                self.assertEqual((code, answers), (deployment.REFUSED, {}))
+                self.assertIn("est le dossier du code ou le contient", said)
+
+    @skipUnless(os.name == "nt", "a directory junction")
+    def test_inside_by_every_name(self):
+        outer = self.folder / "dehors"
+        (outer / "tenants").mkdir(parents=True)
+        junction = make_junction(self, self.folder / "lien", outer)
+        cases = {
+            (junction / "tenants", outer): True,
+            (outer / "tenants", junction): True,
+            (junction, outer): True,
+            (Path("\\\\?\\" + str(outer)) / "x", outer): True,
+            (Path(str(outer).upper()) / "x", outer): True,
+            (outer.with_name("dehors-aussi"), outer): False,
+            (outer, outer / "tenants"): False,
+        }
+        for (inner, around), expected in cases.items():
+            with self.subTest(inner=str(inner), outer=str(around)):
+                self.assertIs(deployment.inside(inner, around), expected)
+        # Opened, or relied upon, as inside: as written AND as resolved.
+        self.assertTrue(deployment.really_inside(outer / "tenants", outer))
+        self.assertFalse(deployment.really_inside(junction / "tenants", outer))
+        self.assertFalse(deployment.really_inside(outer / "tenants", junction))
+        (self.folder / "ailleurs").mkdir()
+        inner_link = make_junction(self, outer / "vers-ailleurs", self.folder / "ailleurs")
+        self.assertTrue(deployment.inside(inner_link / "accounts.sqlite3", outer))
+        self.assertFalse(deployment.really_inside(inner_link / "accounts.sqlite3", outer))
+
+    # -- A copy of a .env --------------------------------------------------------------------------------------------
+
+    def test_a_copy_of_a_env_in_data_dev_or_in_the_backup_is_refused(self):
+        """A copy of a .env in the data folder comes into data-dev with the
+        rest: the site's secret key and passwords, where coding sessions
+        read. development and purge-sessions refuse while
+        data-dev, or the data the backup brings, holds a copy of a .env -
+        named, never opened - and say to delete it."""
+        backup = self.backup()
+        self.data.mkdir()
+        copied = self.data / ".env.bak_20990101"
+        copied.write_text("DJANGO_SECRET_KEY=cle-inventee-copiee-par-le-test\n", encoding="utf-8")
+        for mode in self.MODES:
+            with self.subTest(mode=mode, where="data-dev"):
+                code, answers, said = self.ask(mode, str(backup), DEBUG=True, HTTPS=False)
+                self.assertEqual((code, answers), (deployment.REFUSED, {}))
+                self.assertIn(
+                    f"le dossier des données de ce dossier ({self.data}) contient une copie d'un fichier .env : "
+                    f"{copied}.",
+                    said,
+                )
+                self.assertIn(
+                    "la clé secrète et des mots de passe du site : supprimez-la (DEPLOY.md, section 12)", said
+                )
+                self.assertNotIn("cle-inventee-copiee", said)
+        copied.unlink()
+
+        in_backup = [backup / "data" / ".env", backup / "data" / "tenants" / "abc123" / ".ENV.ancien"]
+        for path in in_backup:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("DJANGO_SECRET_KEY=cle-inventee-copiee-par-le-test\n", encoding="utf-8")
+        for mode in self.MODES:
+            with self.subTest(mode=mode, where="sauvegarde"):
+                code, answers, said = self.ask(mode, str(backup), DEBUG=True, HTTPS=False)
+                self.assertEqual((code, answers), (deployment.REFUSED, {}))
+                self.assertIn(
+                    f"les données de la sauvegarde {backup} contiennent 2 copies de fichiers .env : "
+                    f"{in_backup[0]}, {in_backup[1]}.",
+                    said,
+                )
+                self.assertIn(f"supprimez-les (et, dans {self.production}, les fichiers d'origine", said)
+                self.assertNotIn("cle-inventee-copiee", said)
+        for path in in_backup:
+            path.unlink()
+
+        # What is no copy of a .env is taken: names that only look like one,
+        # and the backup's own .env, beside its data (read for its key only).
+        for path in (self.data / ".envoi.txt", self.data / "notes.env", backup / "data" / "environnement.txt"):
+            path.write_text("un texte invente\n", encoding="utf-8")
+        (backup / ".env").write_text("DJANGO_SECRET_KEY=une-autre-cle-inventee-pour-ce-test\n", encoding="utf-8")
+        code, _, said = self.ask("development", str(backup), DEBUG=True, HTTPS=False)
+        self.assertEqual((code, said), (0, ""))
+
+    @skipUnless(os.name == "nt", "mklink /J")
+    def test_a_env_reached_through_a_junction_is_not_data_dev_s(self):
+        """Nothing outside data-dev is data-dev's: the code's own .env,
+        reached through a junction (here a stand-in), does not refuse."""
+        elsewhere = self.folder / "ailleurs"
+        elsewhere.mkdir()
+        (elsewhere / ".env").write_text("DJANGO_DEBUG=True\n", encoding="utf-8")
+        make_junction(self, self.data / "lien", elsewhere)
+        code, _, said = self.ask("development", str(self.backup()), DEBUG=True, HTTPS=False)
+        self.assertEqual((code, said), (0, ""))
+
+    def test_what_a_copy_of_a_env_is(self):
+        cases = {
+            ".env": True,
+            ".env.bak_20990101": True,
+            ".ENV.OLD": True,
+            ".env.": True,
+            ".env.example": True,
+            ".envoi.txt": False,
+            "notes.env": False,
+            "env.bak": False,
+            "environnement.txt": False,
+            "": False,
+        }
+        for name, expected in cases.items():
+            with self.subTest(name=name):
+                self.assertIs(deployment.is_env_copy(name), expected)
+
     def test_settings_that_do_not_load_and_a_wrong_usage(self):
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.object(deployment, "_settings", side_effect=ImproperlyConfigured("clé secrète trop courte")):
             self.assertEqual(deployment.main(["production"], stdout=out, stderr=err), 1)
         self.assertIn("ne se chargent pas : clé secrète trop courte", err.getvalue())
         self.assertEqual(out.getvalue(), "")
-        for argv in ([], ["n-importe-quoi"], ["development"]):
+        for argv in ([], ["n-importe-quoi"], ["development"], [deployment.PURGE_SESSIONS]):
             with self.subTest(argv=argv):
                 self.assertEqual(deployment.main(argv, stdout=io.StringIO(), stderr=io.StringIO()), 1)
 
@@ -1506,11 +2217,9 @@ class DeployDocumentTests(SimpleTestCase):
         back = tenth.split("### 10.4 ", 1)[1].split("\n### ", 1)[0]
         made = [" ".join(block.split()) for block in code_blocks(setup) if "git clone" in block]
         self.assertEqual(len(made), 1)
-        self.assertTrue(made[0].endswith("cd /d C:\\MarginMate\\app mise install uv sync --locked --no-dev"), made[0])
+        self.assertTrue(made[0].endswith(f"cd /d C:\\MarginMate\\app mise install {SYNC}"), made[0])
         reset = [" ".join(block.split()) for block in code_blocks(back) if "git reset" in block]
-        self.assertEqual(
-            reset, ["cd /d C:\\MarginMate\\app git reset --hard <version d'avant> uv sync --locked --no-dev"]
-        )
+        self.assertEqual(reset, [f"cd /d C:\\MarginMate\\app git reset --hard <version d'avant> {SYNC}"])
         self.assertEqual([block for block in code_blocks(self.deploy) if PIP.search(block) or "ensurepip" in block], [])
         self.assertNotIn("ensurepip", self.deploy)
         self.assertIsNone(PIP.search(back))
@@ -1535,7 +2244,7 @@ class DeployDocumentTests(SimpleTestCase):
             "cd /d C:\\MarginMate\\app mise install uv --version",
             "« trust »",
             "**À partir de la deuxième mise en ligne**",
-            "`uv sync --locked --no-dev`",
+            f"`{SYNC}`",
             "« REFUS : uv ne repond pas »",
             "`requirements.txt` a disparu du code après `05a80b4`",
             "On ne revient donc pas à une version d'avant le passage à uv (section 10.4)",
@@ -1568,7 +2277,7 @@ class DeployDocumentTests(SimpleTestCase):
         self.assertEqual(
             commands,
             [
-                "uv sync --locked --no-dev",
+                SYNC,
                 ".venv\\Scripts\\python.exe manage.py migrate_tenants",
                 ".venv\\Scripts\\python.exe manage.py serve --verifier",
                 "rmdir /s /q .git\\marginmate-deploy",
@@ -1627,6 +2336,186 @@ class DeployDocumentTests(SimpleTestCase):
         eleventh = section(self.deploy, "## 11. Quand le serveur refuse de démarrer")
         self.assertIn("« fermé, sans base - ignoré »", eleventh)
 
+    def test_the_credentials_page_and_what_no_backup_holds_are_told_to_the_owner(self):
+        """Security review of 01/10/2026: the passwords typed on
+        « Identifiants » are in no backup and no development copy, sealed
+        for this PC's Windows account; the .env lines go once typed; the
+        folder is kept to the owner's account."""
+        twelfth = " ".join(section(self.deploy, "## 12. Les identifiants des comptes").split())
+        for said in (
+            "page « Identifiants »",
+            "**ne sont dans aucune sauvegarde**",
+            "près une restauration",
+            "autre PC",
+            "autre compte Windows",
+            "DJANGO_SECRET_KEY",
+            "supprimez du `.env` de production",
+            "`METRO_PASSWORD`",
+            "`INVOICE_EMAIL_APP_PASSWORD`",
+            "`LADDITION_PASSWORD`",
+            (
+                'icacls C:\\MarginMate /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" '
+                '"*S-1-5-32-544:(OI)(CI)F"'
+            ),
+            "icacls C:\\MarginMate\\data",
+            "compte Windows réservé",
+        ):
+            with self.subTest(said=said):
+                self.assertIn(said, twelfth)
+        eighth = " ".join(section(self.deploy, "## 8. Sauvegardes").split())
+        for said in ("page « Identifiants »", "sessions de connexion", "`_debug`", "section 12"):
+            with self.subTest(said=said):
+                self.assertIn(said, eighth)
+        refresh = self.deploy.split("### 10.5 Rafraîchir les données de développement", 1)[1].split("\n### ", 1)[0]
+        refresh = " ".join(refresh.split())
+        for said in ("page « Identifiants »", "sessions de connexion", "`_debug`", "même `DJANGO_SECRET_KEY`"):
+            with self.subTest(said=said):
+                self.assertIn(said, refresh)
+
+    def test_what_to_do_once_after_this_version_is_told_to_the_owner(self):
+        """Second review of « Identifiants » (01/10/2026): the backups and the
+        data-dev folders made before this version still hold the site's
+        sessions - a password changed once closes them; the portals' .env
+        passwords go nowhere until their site is confirmed; the browser's
+        offer to keep a password is refused; and whatever runs under the
+        owner's Windows account, Claude Code included, reads the .env and
+        the store today."""
+        from accounts import credentials
+
+        eighth = " ".join(section(self.deploy, "## 8. Sauvegardes").split())
+        for said in (
+            "**Une fois, après la mise en ligne de cette version.**",
+            "`data-dev.ancien-<date>`",
+            "Changez une fois votre mot de passe MarginMate",
+            "ferme toutes les sessions ouvertes avec l'ancien",
+            "manage.py changepassword --database accounts <votre adresse e-mail>",
+            "chaque autre compte de vos espaces",
+            "`accounts.sqlite3.bak_…`",
+        ):
+            with self.subTest(section=8, said=said):
+                self.assertIn(said, eighth)
+        self.assertIn(
+            "cd /d C:\\MarginMate\\app\n.venv\\Scripts\\python.exe manage.py changepassword --database accounts",
+            section(self.deploy, "## 8. Sauvegardes"),
+        )
+        refresh = self.deploy.split("### 10.5 Rafraîchir les données de développement", 1)[1].split("\n### ", 1)[0]
+        refresh = " ".join(refresh.split())
+        for said in ("chaque base de la copie", "ni effacé ni nettoyé", "Supprimez-le dès qu'il ne sert plus"):
+            with self.subTest(section="10.5", said=said):
+                self.assertIn(said, refresh)
+        twelfth = " ".join(section(self.deploy, "## 12. Les identifiants des comptes").split())
+        for said in (
+            f"« {credentials.STATUS_LABELS[credentials.ENV_UNCONFIRMED]} »",
+            "« Le fichier .env contient ces identifiants : les envoyer à … »",
+            "une case par espace client",
+            "s'arrête, avec un message qui le dit",
+            "Votre navigateur peut proposer d'enregistrer les mots de passe",
+            "**refusez**",
+            "**Claude Code et des sessions de programmation**",
+            "peut lire le `.env` de production et les identifiants",
+            "**Mieux encore : un compte Windows réservé au serveur.**",
+        ):
+            with self.subTest(section=12, said=said):
+                self.assertIn(said, twelfth)
+        self.assertLess(twelfth.index("Claude Code et des sessions"), twelfth.index("**Mieux encore"))
+
+    def test_the_env_copy_and_the_old_kept_pages_are_told_once(self):
+        """A copy of a .env left in production's data folder went into every
+        backup and into data-dev; the scrapers' pages kept before this
+        version were not masked. How to find a copy, what to delete - and
+        the key to change when the copy has it - is said once, in section
+        12, which section 8 and 10.5 point at."""
+        twelfth = section(self.deploy, "## 12. Les identifiants des comptes")
+        once = twelfth.split("\n### Une fois, après la mise en ligne de cette version\n", 1)[1].split("\n### ", 1)[0]
+        words = " ".join(once.split())
+        for said in (
+            "`C:\\MarginMate\\data\\.env.bak_…`",
+            "Supprimez chaque copie du `.env` rangée dans `C:\\MarginMate\\data`",
+            "dir /s /b /a-d C:\\MarginMate\\data\\.env*",
+            "si elle ne trouve rien, passez au point 2",
+            "`data-dev\\.env.…`",
+            "`data-dev.ancien-<date>`",
+            "supprimez les sauvegardes plus anciennes qui la contiennent",
+            "`C:\\MarginMate\\backups\\<date>\\data\\.env.…`",
+            "comparez leurs lignes `DJANGO_SECRET_KEY`",
+            "**Si c'est la même clé**, changez celle de `C:\\MarginMate\\app\\.env`",
+            "tout le monde est déconnecté",
+            "la page « Identifiants » redemande les identifiants",
+            "Remove-Item C:\\MarginMate\\data\\tenants\\*\\downloads\\*\\_debug -Recurse -Force",
+            "Remove-Item C:\\MarginMate\\data\\tenants\\*\\downloads\\test-* -Recurse -Force",
+            "sans rien masquer",
+            "« Le fichier .env contient ces identifiants : les envoyer à … »",
+        ):
+            with self.subTest(said=said):
+                self.assertIn(said, words)
+        # The key is compared before the copy goes, and the copy before the backups.
+        self.assertLess(words.index("comparez leurs lignes"), words.index("Supprimez chaque copie du `.env`"))
+        self.assertLess(words.index("Faites une nouvelle sauvegarde"), words.index("supprimez les sauvegardes plus"))
+        # What backup_data and the refresh now do about it, where the owner reads them.
+        eighth = " ".join(section(self.deploy, "## 8. Sauvegardes").split())
+        for said in ("Quatre choses ne sont **jamais** dans une sauvegarde", "`.env.bak_…`", "« ATTENTION »"):
+            with self.subTest(section=8, said=said):
+                self.assertIn(said, eighth)
+        self.assertIn("section 12, « Une fois, après la mise en ligne de cette version »", eighth)
+        refresh = self.deploy.split("### 10.5 Rafraîchir les données de développement", 1)[1].split("\n### ", 1)[0]
+        refresh = " ".join(refresh.split())
+        for said in (
+            "contiennent une copie du fichier `.env`",
+            "Il ne recopie de toute façon jamais un tel fichier",
+            "une jonction, un lien, un lecteur substitué ou un nom court",
+        ):
+            with self.subTest(section="10.5", said=said):
+                self.assertIn(said, refresh)
+        # The words backup_data prints are the ones the owner is told to look for.
+        self.assertTrue(data_backup.ENV_COPY_WARNING.startswith("ATTENTION : "))
+        self.assertIn("DEPLOY.md, section 12", data_backup.ENV_COPY_WARNING)
+
+    def test_where_the_marginmate_password_is_asked_again(self):
+        """accounts/sudo.py: the owner's password asked again before the
+        page, a portal source saved or tested, a « Données » import or
+        clear, the admin. Said in one list, in section 12."""
+        twelfth = " ".join(section(self.deploy, "## 12. Les identifiants des comptes").split())
+        asked = twelfth.split("**Le site vous redemande votre mot de passe MarginMate**", 1)[1].split(
+            "Sur la page « Identifiants » elle-même", 1
+        )[0]
+        for said in (
+            "un quart d'heure",
+            "la page « Identifiants »",
+            "enregistrer ou « Tester » une source « Espace client »",
+            "sur la page « Données », importer une archive et effacer (exporter ne le demande pas)",
+            "l'administration du site (`/admin/`)",
+        ):
+            with self.subTest(said=said):
+                self.assertIn(said, asked)
+
+    def test_the_portals_and_the_mailbox_still_in_the_env(self):
+        """A portal's .env values go nowhere until its site is confirmed: the
+        box, or BOTH its login and its password typed on the page - the
+        password alone is not enough. Then its lines leave the .env, with the
+        mailbox's under their older names too; « encore en clair » goes once
+        the server has restarted."""
+        from accounts import credentials
+
+        twelfth = " ".join(section(self.deploy, "## 12. Les identifiants des comptes").split())
+        self.assertIn(f"« {credentials.STATUS_LABELS[credentials.ENV_UNCONFIRMED]} »", twelfth)
+        for said in (
+            "**au choix** : cochez sa case « Le fichier .env contient ces identifiants : les envoyer à … »",
+            (
+                "**ou** tapez sur la page son identifiant **et** son mot de passe, les deux (le mot de passe seul "
+                "ne suffit pas)"
+            ),
+            "`UBA_EMAIL_ADDRESS` et `UBA_EMAIL_APP_PASSWORD` : supprimez-les aussi",
+            "« encore en clair »",
+            "L'avertissement disparaît au redémarrage.",
+        ):
+            with self.subTest(said=said):
+                self.assertIn(said, twelfth)
+        # The mailbox's older names are the ones the settings still read.
+        settings_text = (BASE / "config" / "settings.py").read_text(encoding="utf-8")
+        for name in ("UBA_EMAIL_ADDRESS", "UBA_EMAIL_APP_PASSWORD"):
+            with self.subTest(name=name):
+                self.assertIn(f'os.environ.get("{name}"', settings_text)
+
     def test_production_is_never_the_desktop_folder(self):
         """The Desktop folder is the development copy's: a section about the
         running site naming it sends the owner to edit the wrong .env."""
@@ -1637,6 +2526,7 @@ class DeployDocumentTests(SimpleTestCase):
             "## 8. Sauvegardes",
             "## 9. Le journal",
             "## 11. Quand le serveur refuse de démarrer",
+            "## 12. Les identifiants des comptes",
         ):
             with self.subTest(section=title):
                 self.assertNotIn("Desktop", section(self.deploy, title))

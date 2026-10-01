@@ -37,6 +37,9 @@ SECTION_BY_APP = {
     "transfer": "data",
     "staff": "staff",
     "returnables": "returnables",
+    # « Identifiants » (accounts/credentials.py), the one page of the accounts
+    # app with the navigation: a setting of the espace, beside « Données ».
+    "accounts": "data",
 }
 
 #: What the folded topbar says under 860 px (base.html's .topbar-section):

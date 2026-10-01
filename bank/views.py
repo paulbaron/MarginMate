@@ -50,7 +50,7 @@ from recipes.integration import TILL_TO_CONFIGURE, till_allowed
 
 from . import income, invoice_files, matching, reconcile, spending
 from .forms import IgnoreRuleForm
-from .models import BankTransaction, IgnoreRule, InvoicePayment
+from .models import BankTransaction, IgnoreRule, IncomePayer, IncomeSource, InvoicePayment
 from .rules import ignoring_rule
 
 TODO, LINKED, NO_INVOICE, INCOME = "todo", "linked", "no_invoice", "income"
@@ -84,6 +84,14 @@ UNDATED_LAST = 10**6
 #: page's panels spell it: everything, and keep the dates that were asked so
 #: they can be offered back on the next click.
 ALL_PARAM = "tout"
+#: « Entrées d'argent »: the payout whose « En caisse » menu is drawn.
+CHANGE_PARAM = "changer"
+#: The ids of a credit's row there, which an « En caisse » choice answers on
+#: - in whichever list the line now sits.
+ENTRY_ANCHOR = "entree-{pk}"
+#: Its list of payers retained, and the section that holds it.
+PAYERS_ANCHOR = "payeurs-retenus"
+BALANCE_ANCHOR = "card-balance"
 MAX_EXAMPLES = 15
 #: How many documents a search shows. Raised from 20 once the box stopped
 #: reloading the page: a long list was then a long page to scroll back
@@ -302,11 +310,14 @@ def bank_home(request):
     _fill(shown)
     _search(shown, request)
     # What each credit is, rather than « Entrée d'argent » for all of them:
-    # the same reading « Entrées d'argent » makes, so the tab and that page
-    # cannot call one line two things. Pure, no query.
-    for row in shown:
-        if row.status == INCOME:
-            row.entry = income.entry_for(row.line)
+    # the same reading « Entrées d'argent » makes - the payers retained
+    # included, read once - so the tab and that page cannot call one line
+    # two things. No query per row.
+    if any(row.status == INCOME for row in shown):
+        payers = income.known_payers()
+        for row in shown:
+            if row.status == INCOME:
+                row.entry = income.entry_for(row.line, payers)
     # « Télécharger les factures »: what the zip will hold, counted off the
     # rows already read (their payments are prefetched) - no query.
     paid = {
@@ -500,6 +511,10 @@ def income_home(request):
     for month in report.months:
         month.label = _month_label(month.first_day)
     here = _income_page_url(asked, showing_all)
+    # « Changer » on a payout: its « En caisse » menu is drawn on that row
+    # only. A payout a day is a form a day otherwise, on a list nobody
+    # changes but by exception.
+    changing = request.GET.get(CHANGE_PARAM, "")
     return render(
         request,
         "bank/income.html",
@@ -529,6 +544,11 @@ def income_home(request):
             "known_categories": income.known_categories(),
             "no_category": spending.NO_CATEGORY,
             "sources": income.SOURCES,
+            # « En caisse », on every credit: the values the view accepts,
+            # « Automatique » first.
+            "source_choices": IncomeSource.choices,
+            "changing": int(changing) if is_id(changing) else None,
+            "change_url": f"{here}{'&' if '?' in here else '?'}{CHANGE_PARAM}=",
             # The other pages over the same period - the window alone.
             "bank_url": _page_url(DEFAULT_VIEW, "", window),
             "spending_url": _other_page_url("bank:spending_home", window),
@@ -539,6 +559,69 @@ def income_home(request):
             "has_lines": BankTransaction.objects.exists(),
         },
     )
+
+
+def income_source(request, pk):
+    """« En caisse » on one credit of « Entrées d'argent »: what it is in the
+    till, for this line or - « retenir pour ce payeur » - for every credit of
+    its payer (bank/income.py, `set_source`). Answers on the line's row, in
+    whichever list it now sits; a GET writes nothing."""
+    line = get_object_or_404(BankTransaction, pk=pk)
+    back = _back(request, "bank:income_home").split("#")[0]
+    if request.method != "POST":
+        return redirect(back)
+    try:
+        change = income.set_source(line, request.POST.get("en_caisse"), remember=request.POST.get("retenir") == "1")
+    except income.SourceRefused as refusal:
+        messages.error(request, str(refusal))
+        return redirect(back)
+    messages.success(request, _source_said(change))
+    return redirect(f"{back}#{ENTRY_ANCHOR.format(pk=line.pk)}")
+
+
+def income_payer_forget(request, pk):
+    """« Oublier » a payer retained: its credits go back to the rules - those
+    chosen one by one keep their choice. A GET writes nothing; a second click
+    is said, never a 404."""
+    back = _back(request, "bank:income_home").split("#")[0]
+    if request.method != "POST":
+        return redirect(back)
+    payer = IncomePayer.objects.filter(pk=pk).first()
+    if payer is None:
+        messages.error(request, "Ce payeur n'est plus retenu.")
+    else:
+        back_to_rules = income.forget_payer(payer)
+        messages.success(
+            request,
+            f"« {payer.key} » oublié : {back_to_rules} entrée(s) reviennent à la reconnaissance automatique.",
+        )
+    # The list is drawn only while it holds a payer: the last one forgotten,
+    # the section it sat in.
+    return redirect(f"{back}#{PAYERS_ANCHOR if IncomePayer.objects.exists() else BALANCE_ANCHOR}")
+
+
+def _source_said(change: income.SourceChange) -> str:
+    """The message after an « En caisse » choice: what the line counts as
+    now, and what happened to its payer."""
+    entry = change.entry
+    counted = f"« {IncomeSource(entry.source).label} »"
+    if change.remembered:
+        said = f"« {change.payer} » retenu : ses entrées non reconnues comptent comme {counted}"
+        said += f", cette entrée et {change.followers} autre(s)." if change.followers else ", à commencer par celle-ci."
+    elif change.forgotten:
+        said = (
+            f"« {change.payer} » oublié : cette entrée et {change.followers} autre(s) reviennent à la "
+            f"reconnaissance automatique. Celle-ci compte comme {counted}."
+        )
+    elif entry.how == income.BY_LINE:
+        said = f"Entrée comptée comme {counted}, elle seule."
+    elif entry.how == income.BY_PAYER:
+        said = f"Entrée rendue à son payeur retenu « {entry.payer} » : elle compte comme {counted}."
+    else:
+        said = f"Entrée rendue à la reconnaissance automatique : elle compte comme {counted}."
+    if change.kept:
+        said += f" {change.kept} entrée(s) de ce payeur gardent le choix fait pour elles seules."
+    return said
 
 
 def bank_reconcile(request):

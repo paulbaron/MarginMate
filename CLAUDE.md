@@ -90,6 +90,27 @@ Set up 30/09/2026 at the owner's request; README.md, « First-time setup » and
   pip-made `.venv` away and rebuilt it on the first Python it found (mise's)
   - measured 30/09, and production's `.venv`, its downloaded OCR models with
   it, would have gone at the next deploy (`tests/test_toolchain.py`).
+  **And mise's `python.uv_venv_auto` stays OFF** (`mise.toml` says `false`):
+  on, it exports `UV_PYTHON` as the exact Python mise installed (3.11.16)
+  into every `uv` a shim runs - deploy.cmd's step 7, prek's `uv run` - an
+  explicit request that beats `.python-version`, and uv then replaces a
+  `.venv` made on any other 3.11. On 01/10/2026 a `uv run ty` in this folder
+  began deleting its pip-made `.venv` (3.11.9) that way and took
+  `aiohappyeyeballs` and most of `aiohttp` before a file the dev servers held
+  stopped it (put back from uv's cache, byte for byte against RECORD). Check
+  with `uv sync --locked --dry-run -v` through the shim: « Using Python
+  request `3.11` from version file » and no « Would replace ». What it did
+  that is worth keeping, the `python` and `pip` shims running `.venv`'s in
+  this folder, is `[env] _.python.venv` (no `UV_PYTHON`; « no venv found »
+  until `uv sync` has made one). **Every production `uv sync` also says
+  `--python 3.11`** (deploy.cmd's step 7, the way back it prints, DEPLOY.md's
+  commands; `test_every_uv_sync_names_the_python_of_python_version`): the
+  way back puts an older `mise.toml` back on disk, every one of them with
+  the setting on, and an explicit `--python` beats whatever mise hands uv. The
+  deploy that SHIPS this runs the previous deploy.cmd (from its copy), whose
+  printed way back has no `--python`: add it by hand there. A `.venv`
+  whose dev group is not installed (`ty`, the stubs) is that folder's state,
+  not this rule's: `uv sync` with the servers stopped completes it.
   VS Code's Ruff extension runs `.venv\Scripts\ruff.exe server`, and Windows
   will not let `uv sync` delete that file (« Accès refusé »); it can be
   renamed while it runs (`ruff.exe.held-by-vscode`), then synced, and the old
@@ -102,8 +123,9 @@ Set up 30/09/2026 at the owner's request; README.md, « First-time setup » and
   **pre-push is the CI**: `uv lock --check`, ruff check and
   format check and ty over the whole repository, `manage.py check`,
   `makemigrations --check`, and the fast suite with `--parallel 6` (about two
-  minutes). A deploy pulls the development folder without pushing: run
-  `prek run --hook-stage pre-push --all-files` before one. The browser tests
+  minutes). A deploy takes GitHub's `main` (« Two copies », below), so the
+  push it takes is the CI's moment: run `prek run --hook-stage pre-push
+  --all-files` before it - the hooks are not installed in every copy. The browser tests
   stay manual (« Running the tests »).
 - **ruff** (`[tool.ruff]`): line length 120, ruff's default rule set less
   FURB157 (`Decimal("0")` stays: money is built from strings), RUF012
@@ -208,18 +230,26 @@ LOAD-1, LOAD-2, LOAD-3, LB-6; `accounts/tests/test_sessions.py`).**
 ## Two copies: development and production
 
 Since 30/09/2026 (the owner's decision) the site and the code being edited
-are two copies on the owner's PC, each with its own code, .env and data.
-DEPLOY.md, section 10, has the owner's steps (the one-off move included).
+are separate copies on the owner's PC, each with its own code, .env and data
+- production, and SEVERAL development copies (« Bar application gestion »,
+« … 2 », « … 3 », a session in each). DEPLOY.md, section 10, has the owner's
+steps (the one-off move included).
 
 - **PRODUCTION**: code `C:\MarginMate\app`, a git clone whose `origin` is
-  THIS folder (branch `main`); data `C:\MarginMate\data` (`tenants\`,
+  **GitHub** (`https://github.com/paulbaron/MarginMate.git`, branch `main`)
+  since 01/10/2026 - the owner's choice, one source whatever copy pushed
+  (`git remote set-url origin https://github.com/paulbaron/MarginMate.git`).
+  It was cloned from the first development copy and followed it: that
+  copy's `main` was already live, and deploy.cmd said « Rien de nouveau »
+  while the day's work sat in « … 2 ». Data `C:\MarginMate\data` (`tenants\`,
   `accounts.sqlite3`, `logs\`); backups `C:\MarginMate\backups\<AAAA-MM-JJ_HHMMSS>\`
   (`manage.py backup_data`, `accounts/data_backup.py`: every SQLite database
   through the backup API, checked, the rest as files, the .env, a manifest;
   a failure is renamed `-INCOMPLET`); its own .env (`DJANGO_DEBUG=False`,
   `MARGINMATE_HTTPS=1`, absolute paths into `C:\MarginMate\data`). Its
   `start_production.cmd`, the logon task « MarginMate », `serve` on 8765.
-- **DEVELOPMENT**: this folder, where the owner and coding sessions edit.
+- **DEVELOPMENT**: this folder - one of the copies where the owner and
+  coding sessions edit; each pushes its `main` to GitHub.
   Its .env says `DJANGO_DEBUG=True`, local hosts only, no `MARGINMATE_HTTPS`,
   **no integration credentials** (Metro, the mailbox, L'Addition, the AI,
   the mail server, the portals' variables: blank, so a gather from here
@@ -232,11 +262,19 @@ DEPLOY.md, section 10, has the owner's steps (the one-off move included).
 - **A coding session edits this folder only and never touches `C:\MarginMate`**:
   not its code, not its data, not its .env, no command run there, no
   backup read. Production changes only through `deploy.cmd`, double-clicked
-  by the owner in `C:\MarginMate\app`: it takes this folder's COMMITTED
-  `main` (nothing uncommitted travels; no GitHub push is needed - the public
-  repository is pushed only after the owner's privacy audit), refuses while
+  by the owner in `C:\MarginMate\app`: it takes GitHub's `main` (`git fetch
+  origin`, so the network; its window still says « dossier de developpement »),
+  so a change goes live once committed, merged into `main` AND pushed.
+  **The repository is public**: before a push, `git fetch origin`, then
+  every outgoing commit, message and patch (`git log -p origin/main..main`
+  - a diff of the two ends misses data a later commit removed) is read for
+  real data: the names, payers and amounts of data-dev (« Privacy », at the
+  end). A push refused because another copy pushed first is fetched and
+  merged (`git fetch origin`, `git merge origin/main`; never a bare `git
+  pull`, which REBASES on this PC: `pull.rebase=true` in Git's system
+  config), tested, then pushed - never forced. deploy.cmd refuses while
   a job runs (`manage.py running_jobs`, exit 1), stops the server, backs up,
-  fast-forwards, `uv sync --locked --no-dev`, `migrate_tenants`, `serve --verifier`,
+  fast-forwards, `uv sync --locked --no-dev --python 3.11`, `migrate_tenants`, `serve --verifier`,
   restarts; a failure before the merge restarts the server as it was, a
   failure after it restarts NOTHING and prints the rollback. A migration
   shipped therefore reaches production at the next deploy, backed up first.
@@ -260,7 +298,7 @@ DEPLOY.md, section 10, has the owner's steps (the one-off move included).
   mid-copy go (listed in the manifest, `vanished`), and
   refresh_dev_data.cmd takes the newest backup with a manifest.json and a
   data\ folder.
-- **deploy.cmd installs with uv** (step 7, `call uv sync --locked --no-dev`;
+- **deploy.cmd installs with uv** (step 7, `call uv sync --locked --no-dev --python 3.11`;
   `call` because a mise shim may be a batch file) and, before its mark,
   refuses touching nothing when `call uv --version` fails - a shim on the
   PATH answers « mise-shim: failed to execute mise », exit 1, when mise
@@ -299,6 +337,32 @@ DEPLOY.md, section 10, has the owner's steps (the one-off move included).
   fixture, a test, a docstring or git - « Fixture privacy » applies to it
   exactly as to the site's data. A session may run runserver on it, never a
   gather.
+- **What no copy carries** (01/10/2026, the « Identifiants » review): a
+  backup leaves out the credential store (`credentials.bin`, `.key`,
+  `.credentials-*.tmp` directly in a tenant's `private/`), every `_debug`
+  folder (the scrapers' kept pages) and `downloads/test-<n>/`, listed in the
+  manifest's `left_out`; and NO database copy has sessions - the accounts
+  database, the tenants', and every other file of the data folder whose
+  header says SQLite (a `.bak_*` copy, « Données »'s safety copies), each
+  through the backup API: deleted, VACUUM (the API copies free pages too),
+  checked again; a failed purge deletes its copy before the folder is
+  renamed -INCOMPLET. A file with the SQLite header that does not open fails
+  the backup (and so a deploy): its message says to move it out.
+  refresh_dev_data.cmd excludes the same files (robocopy /XF /XD), runs
+  `deployment.py purge-sessions` over every SQLite file of data-dev
+  (realpath-guarded: a junction out is skipped), and says to delete a
+  data-dev folder it set aside; `development` and `purge-sessions` refuse a
+  backup whose .env has THIS folder's SECRET_KEY (dev must have its own: it
+  would open production's sessions and half the store's key). **A copy of a
+  .env** (`.env`, `.env.*`, any case, anywhere in the data folder -
+  `deployment.is_env_copy`) is never opened,
+  never backed up (`left_out.env_copies`, a warning naming it), never copied
+  into data-dev (robocopy /XF), and makes `development`/`purge-sessions`
+  refuse. Paths are compared written AND resolved (`deployment.inside`
+  permissive for refusals, `really_inside` strict for what is opened), and a
+  data folder named through an alias (junction, short name, `\\?\`) is
+  refused: purge-sessions could otherwise have reached production's live
+  data.
 
 ## Going online / production
 
@@ -2507,11 +2571,14 @@ breaks** too.
 
 **A customer portal is data, not code** (`models.WebsiteInvoiceSource`,
 `scrapers/website.py`, set up on Achats → Sources → « + Nouvelle source »,
-« Canal : Espace client »). The rent's, the water's, the phone's: a login page, the NAMES of
-the two .env variables holding the credentials (never the values - the
-database is copied and shown on screen, a .env is not; they are read from
-the .env file at each run, so a line added counts without a restart), and
-nothing else required. The scraper does what a person does: refuses the
+« Canal : Espace client »). The rent's, the water's, the phone's: a login page, the NAMES
+the credentials are kept under (never the values - the database is copied
+and shown on screen; left blank, the form derives them from the site's
+host, `forms.portal_env_names`: PORTAL_<HOST>_<6 hex of the exact host>_LOGIN
+/ _PASSWORD, so two hosts never share), and
+nothing else required. The values are typed on « Identifiants » (below),
+else read from the .env file at each run, so either counts without a
+restart. The scraper does what a person does: refuses the
 cookie banner (only a refusing button is ever clicked, shadow roots
 included), finds the login form - the visible password field, the text
 field in front of it, the button that submits them, identifier and password
@@ -2633,6 +2700,134 @@ supplier only. Its channel reads « Canal », « E-mail » / « Espace client »
 from the form (`forms.CHANNELS`), not from `InvoiceType.SourceKind`, whose
 labels stay « Email » / « Site web » (admin only): a label changed on the
 model is a migration to apply to the real database, for a word.
+
+**« Identifiants »** (`/identifiants/`, `accounts/credentials.py`, the
+store `accounts/vault.py`; 01/10/2026, the owner: « renseigner les logins et
+mots de passe des différents sites et de mon email sur une page »): the
+mailbox, Metro, L'Addition and every portal (one account per pair of names,
+two sources of one site share it), typed on a page reached from « Données »'s
+header and the Sources tab - no topbar link (the bar's rows are measured).
+**Third-party passwords: what protects them** (security review of 01/10/2026,
+the owner: « users will enter passwords from sensitive websites »; five
+auditors and their skeptics, 25 confirmed findings - each rule below is one):
+- **Two files, not the database**: `private/credentials.bin` (Fernet) and
+  `private/credentials.key`, a random key sealed by **Windows DPAPI**
+  (`CryptProtectData`, current account, the folder name as entropy, via
+  ctypes - no dependency). The Fernet key is HKDF over that random key AND
+  the SECRET_KEY: copied to another PC or account, or opened by a
+  development copy with its own SECRET_KEY, nothing opens. **Neither file is
+  in any backup nor in data-dev** (`data_backup`, refresh_dev_data.cmd): the
+  page says to keep the passwords elsewhere and retype them after a restore.
+  A key anybody can read (the development fallback) refuses every save.
+- **A file that does not open is never written over** (`problem`
+  UNREADABLE, or BUSY while Windows holds it during a replace - retried,
+  never taken for unreadable): only the page's « Tout ressaisir » box starts
+  again (`save(start_over=True)`). One writer at a time (`_LOCK`), fsync,
+  then `os.replace`. `VaultState.values` has `repr=False`.
+- **Owner, and the MarginMate password asked again** (`accounts/sudo.py`,
+  `/identifiants/confirmer/`): 15 minutes from the last protected request,
+  for that login and session only, checked through the LOGIN limiter (a
+  guess here counts there), the session key cycled and the password's hash
+  stored again (`update_session_auth_hash`: a hash upgraded by the check
+  logged the session out). A login - the login page's, the admin's -
+  confirms too (`sudo.stamp`). A POST refused for want of it says nothing
+  was saved. Behind it: the page; every POST saving or testing
+  a WEBSITE source (`invoices/views.py`, owner too); every « Données » POST
+  that imports, stages or clears (`transfer/views.py _refused`, owner too;
+  export stays open); and the whole Django admin but its login and logout
+  (`MarginMateAdminSite.admin_view`) - from the admin a superuser's session
+  switched a repointed portal on. `InvoiceTypeAdmin` makes a portal's
+  channel and « actif » read-only. A new membership in the admin starts as
+  MEMBER (the model's default stays OWNER: no migration). **The test
+  client's implicit first login writes a confirmation** (`tests.runner`),
+  an explicit `force_login`/`login` does not: `confirm_password(client,
+  user)`, `forget_the_confirmation(client)`, `TenantClient(confirms_password=False)`.
+- **A password goes where it was typed for** (`VaultState.bindings`):
+  - a portal's values are bound to `invoices.models.portal_host` (the https
+    host of its login page) when typed; `website.credentials` gives a stored
+    value to no other host, and the scraper types nothing on a page of
+    another registrable domain, nor a password into anything but an
+    `input[type=password]`. https on port 443 only (`PORTAL_PLAIN_HTTP_HOSTS`
+    is the test settings' local portal, nowhere else). A portal's value read
+    from the .env goes only to a site the owner confirmed on the page
+    (`env_bindings`, the box « Le fichier .env contient ces identifiants :
+    les envoyer à … »); until then its gather stops and says so. The page
+    flags a value stored here AND still in the .env, to delete there. While
+    the store exists but does not open (or is busy), no portal gets
+    anything. Each portal card posts the host it was drawn with: a site
+    changed while the page was open saves nothing (`SITE_CHANGED`); and the
+    form posts a keyed digest of the state it was drawn from
+    (`state_digest`): drawn before another tab's save, or while the store did
+    not open (every login then read blank), it saves nothing
+    (`STATE_CHANGED`). Busy, the page draws no form. A portal's password
+    typed while its login is the .env's binds that login to the site too.
+    « Fichier .env » and « encore en clair » read the .env FILE (not the
+    settings, which keep a deleted line until a restart, nor a default), and
+    name the old `UBA_EMAIL_*` lines the settings still read. « Tout
+    ressaisir » alone clears an unreadable store;
+  - "same site" fails closed (`website.same_site`): under a multi-tenant
+    suffix (`SHARED_SUFFIXES`: azurewebsites.net, github.io, auth0.com,
+    sharepoint.com, atlassian.net…) and on free.fr / pagesperso-orange.fr
+    (users' personal pages) only the exact host is the site - but Free's
+    own service hosts (`FREE_OWN_HOSTS`: subscribe, adsl, mobile…) are one
+    site, the Freebox signing in on subscribe.free.fr and listing its
+    invoices on adsl.free.fr. A missing suffix is fixed by adding it: reading
+    two sites as one is the dangerous direction. `_fetch` (downloads with the browser's cookies) goes
+    to https on the portal's site only, hop by hop, each cookie with its
+    domain, path and secure flag;
+  - the mailbox's app password is bound to its IMAP server: changing the
+    server or the address asks for the app password in the same save, the
+    server is a plain DNS name, and `generic_email.mailbox_credentials`
+    sends a stored password only to its recorded server, the .env's only to
+    the .env's. **IMAP4_SSL gets `ssl.create_default_context()`**: Python's
+    default (`_create_stdlib_context`) checks NO certificate - the app
+    password went to whoever answered the TLS handshake;
+  - names: a source may not use one name as login and password, nor a name
+    another source uses in the other role, nor names another site's source
+    uses; such sources are listed « à corriger » and offered no field. Any
+    name that is a password anywhere is drawn as a password field (a source
+    naming the bank's password as its LOGIN printed it in clear). Derived
+    names carry a digest of the exact host (`portal_env_names`).
+- **Nothing written in clear**: the scraper's `_debug` dumps blank every
+  field, rewrite the text on screen (`SCRUB_SCREEN_JS`) and scrub what was
+  typed (raw, HTML, JSON, URL forms; the LOGIN whatever its case - a site
+  echoes it in lower case -, a password in its own case only) - a page whose
+  text (`SCREEN_TEXT_JS`, or the HTML with its tags stripped) still holds it,
+  split across elements included, is neither photographed nor written; URLs lose their query in logs; every visit
+  starts by pruning every source's old dumps; they stay out of backups and
+  data-dev. Metro's log goes through `_MaskedLog` and takes no screenshot. Values no source uses any more are listed by name to
+  be removed. Password managers are told to keep away (`data-1p-ignore`…),
+  `sensitive_post_parameters` on both views.
+- **Not done, the owner's** (DEPLOY.md): restricting `C:\MarginMate`'s ACL to
+  his account, and better, running production under a Windows account of its
+  own - coding sessions run as the same account as the server today, so only
+  this file's rule keeps them out of production's key and store.
+- Metro and L'Addition read their pair in ONE reading (`vault.settings_of`,
+  busy = nothing, not the .env's either): read one at a time, a save between
+  the two sent a new login with an old password - a refused sign-in Metro's
+  firewall counts. Metro reads it once a run (`metro_credentials`).
+- **Keyed by the .env's own names**, so every connector asks one question:
+  `vault.setting(name)` (the page's value, else `settings.<name>`) for Metro,
+  the mailbox and L'Addition, and `website.credentials` reads the store
+  before the .env for a portal - read at every call, never cached. It also
+  refuses a portal naming an application variable (`app_env_name`) at run
+  time, whatever the form and the import let through.
+- **A password is never shown back**: always an empty `new-password` field,
+  a placeholder saying one is stored, blank keeps it, « Effacer » removes it;
+  a login is shown. A value only in the .env is said (« Fichier .env »),
+  never printed. A posted name no account offers is ignored.
+- Only where `integrations_allowed()` (anywhere else: the refusal sentence,
+  a POST 403). `never_cache`.
+- Tests: `accounts/tests/test_credentials.py` - every test removes both
+  files before and after (the test espace's folder is the whole run's),
+  patches `credentials._env_file` off the real .env, confirms the password
+  by writing `sudo.SESSION_KEY`, and posts the page's hidden host fields as
+  a browser does. A test changing SECRET_KEY logs the client out: patch
+  `config.security.secret_key_problem` instead. A test giving a portal .env
+  values confirms their site: `vault.save({}, env_bindings={...})`.
+  `invoices/tests/test_website_protection.py` (the scraper's guards, fake
+  drivers), `test_sources_protection.py`, `accounts/tests/test_admin_sudo.py`,
+  `transfer/tests/test_protection.py`.
 
 The mailbox search asks for BEFORE the day **after** the end date: IMAP's
 BEFORE is exclusive (RFC 3501), and the form's end date is today - this
@@ -3137,6 +3332,80 @@ one nobody can correct) and read the same way by Banque's « Entrées » tab
   debits), and `_moved_out_of_view` runs for debits only. A category typed
   on a payout or a deposit renames nothing: the rules above name them.
 
+**« En caisse »: a person says what a credit is** (the owner, 01/10/2026:
+another payment terminal will not print « TOTAL ENCAISSE », and its payouts
+landed in « Autres entrées », out of the card balance, for good). Every credit
+of the window carries the menu - Automatique, Carte, Espèces, Chèque, Avoir,
+Titres-restaurant, Pas une vente (`models.IncomeSource`, the ONE vocabulary:
+`income.CARD`… are its values) - and sits in exactly one of three lists
+(`payouts`, `others`, `other_means`), the row's id `entree-<pk>` being where
+the choice answers (`views.income_source`), whichever list it moved to.
+- **Order, and nothing else** (`income.reading_of`): the LINE's own choice
+  (`BankTransaction.income_source`), else the rules above WHERE THEY
+  RECOGNISE the line (a gross printed, a deposit type: data about that
+  line), else its PAYER's (`IncomePayer`), else « Autres entrées ». A payer
+  never un-recognises a line: the provider prints the bar's own name as the
+  payee of its payouts, so « Pas une vente » retained for a transfer from
+  the bar's other account under that name moved every payout out of the card
+  figures when the payer came before the rules (review, 01/10/2026). A stored
+  value that is no source is passed over, never raised on. `entry.how`
+  (`BY_LINE`, `BY_PAYER`, `BY_RULE`) is printed on the row, and on Banque's
+  tab where a person decided - who decided is part of the answer.
+- **The payer** is `income.payer_key`: `matching.alias_key(payee_of(...))`,
+  the counterparty the bank prints, else the label's words without their
+  digits, cut to the column - asked the same way everywhere, and an empty
+  key is never retained. « retenir pour ce payeur » (the owner's choice: one
+  click teaches a new terminal) makes the PAYER hold the choice and the line
+  follow it like its siblings, so « Oublier » (`income.forget_payer`)
+  undoes it whole - except a line the rules recognise, which no payer
+  reaches: it keeps the choice as its own (`set_source`). AUTOMATIC with the
+  box ticked forgets the payer. Unticked, the choice is the line's alone and
+  beats everything. The counts said after a choice and on « Oublier » are of
+  the credits a payer really decides (`follows_its_payer`). The box is drawn
+  ticked only where the payer decides or nothing was recognised
+  (`Entry.remember_by_default`). Measured on a scratch copy (read-only,
+  01/10): every card payout of the statement shares one payer key, the
+  other credits one each.
+- **Read when the page is drawn, never written onto the lines**, like
+  `IgnoreRule`: the payers are ONE query (`income.QUERIES` went to 6;
+  Banque's tab reads them once, `income.known_payers`), and a statement
+  imported again never touches `income_source` (`import_statement` only
+  adds lines). A choice settles nothing - `settled_by_hand` is untouched.
+- **A card credit printing no gross counts the amount received as its gross**
+  (`Entry.gross_from_amount`; the owner's choice - a bank's own terminal pays
+  the gross and takes its fee apart). Its commission is **None, never 0**:
+  left out of `card_commission`, of its rate (`card_printed_gross`) and of a
+  month's, said as « commission inconnue », and the card stat and the
+  balance say how many payouts are counted that way (`card_from_amount`).
+  Summed as 0 it read as « no fee » and lowered the rate; `month.commission
+  += None` was a TypeError. **Every commission figure says what it leaves
+  out**: `card_commission` is None when no payout of the window printed its
+  gross, a month whose payouts all printed none reads « inconnue »
+  (`Month.payouts`, `Month.from_amount`), and a partial figure - the card
+  row's, a month's - carries « hors N au montant reçu ». 0,00 € printed for
+  a month of such payouts read as « no fee » (review, 01/10/2026).
+- **Meal vouchers and « Avoir » have a bank side** once a credit is said to
+  be one (`BANK_SIDE`, `COMPARED`): their rows draw « — » while none is, never
+  0 - an Écart of the whole till figure would accuse a transfer still filed
+  under « Autres entrées ».
+- **The payouts' menu is drawn on the row asked for only** (`?changer=<pk>`,
+  « changer »): a payout a day is a form a day otherwise.
+- **« Données »**: `income_source` rides with the line (compared, a conflict
+  kept whole like `category`), the payers as `income_payers` (merged like
+  rules). `IncomeSource.AUTOMATIC` is a member, not just a blank: `codec.load`
+  checks every value against the choices, and a blank line was refused. An
+  archive written before them says nothing of either: a line keeps its
+  choice, and `income_payers` absent is « not said » - never an empty list,
+  which « Remplacer » would read as « forget every payer ». **A payer a merge
+  creates brings its lines' own choices** onto lines saying nothing here
+  (`_took_its_payers_choice`): there they were one decision, and the payer
+  alone turned a fee refund kept « Pas une vente » beside it into a card
+  payout neither database counted, under « gardée telle quelle ». A
+  « Remplacer » reads every field of a record inside its try (the moments
+  included) - one it could not read was a 500 on the preview.
+- Migration `bank/0005`, **WRITTEN and left to be applied** (the owner, after
+  a backup, `migrate_tenants`; `serve` refuses to start until then).
+
 **The till beside it** (`recipes.PosDailyPayment`, under « L'Addition »):
 payments per method over the same days, and the takings (`revenue_ttc` of
 the rows whose money was read, the rule « Marges » follows). `tips` is
@@ -3150,7 +3419,8 @@ over the days both cover.** The till's payments can reach back long before the
 statement's first line; compared over « tout » - where Banque's « Entrées »
 stat lands - most card takings read as never arrived, with no warning.
 `till_before_statement` and `bank_before_till` (card at the gross, cash,
-cheques; never « Autres entrées », compared with nothing) are counted apart
+cheques, meal vouchers, « Avoir »; never « Autres entrées », compared with
+nothing) are counted apart
 and left out of `MethodRow.difference`, while the two columns still show the
 whole window; a warning names what the other side cannot see, and
 « Comparer sur les jours couverts des deux côtés » opens the page from
@@ -3161,8 +3431,9 @@ whole window; a warning names what the other side cannot see, and
 payouts' **gross** - the figure the till can equal - the commission in a
 column of its own. Cash: the difference is « gardé en caisse ou payé en
 liquide », said, never judged - the page sees neither the drawer nor what
-was paid in notes. « Avoir » is the till's alone (paid before, usually by
-transfer, an « Autre entrée »); « Autres entrées » the bank's alone.
+was paid in notes. « Avoir » (paid before, usually by transfer) and meal
+vouchers are the till's alone until a person says which credits they are
+(« En caisse », above); « Autres entrées » is the bank's alone.
 
 **A payout is tied to the sales by a RUNNING BALANCE**, « ventes carte pas
 encore versées » (`running_balance`), **never by a claim that it paid given
@@ -3434,9 +3705,9 @@ imports (`transfer/legacy.py`).
   restore resetting it would let the next gather sign in), `SupplierChange`
   (its undo data holds pks), job history, `ai_suggestion` (the review panel
   fills it again when it is drawn), « Combler les écarts »' list
-  (`GapFillEntry`, a scratch list that goes with its stock take). Suppliers with a reader or a till of their
-  own are never deleted by a clear or a replace; a clear only forgets what
-  they learned.
+  (`GapFillEntry`, a scratch list that goes with its stock take). Suppliers
+  with a reader or a till of their own are never deleted by a clear or a
+  replace; a clear only forgets what they learned.
 - **Nor the till's money and payments.** « Ventes » carries the quantities
   only; the day's money and `PosDailyPayment` are read again from the files
   on disk (`laddition_backfill_revenue`, then `laddition_backfill_payments`),
@@ -3486,7 +3757,10 @@ imports (`transfer/legacy.py`).
   they were, .env note included. Left inactive, the owner's five portals sat
   out the next gather, which searched the mailbox only, and nothing on the
   page said why (20/09). From any other archive, a portal it creates, or
-  whose address or variables it changes, arrives inactive, and the report
+  whose sign-in settings it changes (`SIGN_IN_FIELDS`: every portal field
+  but « Navigateur visible » - the address, the variables, the links to
+  follow and every selector, since each decides where or how a password is
+  typed), arrives inactive, and the report
   names its address and variables so the owner can tick « Active » after a
   look (`as_restored` in the tests is that case).
   Merged or replaced, a portal the archive has active and this database has
@@ -3992,8 +4266,9 @@ independent - which is what `MAX_AMOUNT` bounds.
 records sales. Add `--dry-run` first: it reports which till products match a
 recipe and which don't, without writing. `--file x.xlsx` skips the download.
 
-Credentials live in `.env` (`LADDITION_EMAIL` / `LADDITION_PASSWORD`) and are
-typed by the browser at run time, same as the Metro scraper.
+Credentials come from « Identifiants » (`accounts/vault.py`), else `.env`
+(`LADDITION_EMAIL` / `LADDITION_PASSWORD`), and are typed by the browser at
+run time, same as the Metro scraper.
 
 Four things that cost real debugging time:
 

@@ -33,10 +33,59 @@ empty file), and never ``ro`` (accounts.provisioning.copy_database says why).
 
 The databases are the accounts database and every ``db.sqlite3`` one level
 under TENANTS_ROOT: the _template, every tenant, and a tenant's folder the
-accounts database no longer names (backed up all the same, and said). Every
+accounts database no longer names (backed up all the same, and said) - and
+EVERY OTHER SQLite file of the data folder, told by its first 16 bytes
+(`SQLITE_HEADER`), whatever its name: a copy made by hand beside a database
+(``accounts.sqlite3.bak_<date>_<why>``), the database kept from before an
+adoption (``db.sqlite3.bak_*``), « Données »'s own safety copies in a
+tenant's backups\\ (role `OTHER_ROLE`, « une autre base SQLite »). Copied as
+files, they carried every session they held into the backup (security review
+of 01/10/2026). They are copied, not left out: the safety copies are what
+undoes a « Données » import. Such a file that goes away before its copy is
+let go as any other file (``vanished``); one that will not open or fails its
+checks fails the backup, the message saying to take it out of the data folder
+if it is of no use - nothing else then says what sessions it holds. Every
 other file - media, private (the signing keys), downloads, backups, staging,
-imports, the log - is copied as a file; an SQLite file among them (« Données »'s
-own safety copies in a tenant's backups\\) is one nobody writes.
+imports, the log - is copied as a file.
+
+**What a backup never holds** (security review of 01/10/2026), each left
+out on purpose, listed in the manifest (``left_out``) and said:
+
+- the « Identifiants » store (accounts/vault.py, `LEFT_OUT_FILES`): its two
+  files and the temporary file a write cut short leaves, directly in a
+  tenant's private\\. The backup holds the .env, the SECRET_KEY half of the
+  store's key: a password copied here is one more place it lies, and
+  restored elsewhere the store would not open anyway (DPAPI). The owner
+  types them again after a restore (DEPLOY.md, section 12);
+- the scrapers' failure dumps, every ``_debug`` folder (a portal's page as
+  it was shown, which can print the account's identifiers), and a
+  « Tester » run's own folder, ``test-<job>`` in a tenant's downloads\\
+  (it downloads nothing but those pages);
+- the live sessions: a session key IS a login, and whoever holds a backup
+  could replay one against the public site. Every database's copy holding a
+  ``django_session`` table - the accounts database's, and any other's - is
+  checked whole, then its sessions are deleted and the file rewritten
+  (VACUUM: a deleted row's bytes stay in the file, beside those of every
+  session the source deleted before - the backup API copies its free pages
+  too), then checked again: intact, and every table as the first check
+  counted it, the sessions at 0. The live databases are never written.
+  After a restore, everybody logs in again. A copy that failed any of this
+  is deleted before the folder is set aside (it may hold every session):
+  when it cannot be, the message says so;
+- a COPY of a .env put in the data folder (a ``.env.bak_<date>`` left there
+  by hand would travel with the data into data-dev, which coding sessions
+  read): every file named ``.env`` or ``.env.<anything>``,
+  anywhere in it (`deployment.is_env_copy`, the patterns
+  refresh_dev_data.cmd's robocopy excludes). Told by its name, never opened
+  - not even for its first bytes -, and named in a warning telling the owner
+  to delete it (« ATTENTION : … »). The .env the settings were read from is
+  the code's, beside manage.py, and is copied beside ``data\\`` as ever.
+
+``left_out`` = {"credentials": [files], "debug_folders": [folders],
+"env_copies": [files], "files": every file not copied for those reasons},
+paths relative to the data folder, sorted; ``sessions`` = "non
+sauvegardées". A file left out is never counted in ``files``, nor missing,
+nor vanished.
 
 **Refused before anything is written**, each in French: a data folder that
 is missing, IS the code's folder or holds it (TENANTS_ROOT left at its
@@ -45,6 +94,9 @@ database missing, or outside the data folder (the backup would not hold it);
 a destination inside the data folder (the copy would copy itself) or inside
 the code's folder (a folder under git, and the backup holds the .env); a
 target folder that already exists; less free space than the copy takes.
+« Inside » is asked by every name of a folder (`inside`, which is
+`deployment.inside`): a destination reached through a junction or an 8.3
+short name of the data folder is inside it.
 
 **Any failure once the folder exists** - a database that will not open or
 fails its checks, a file that cannot be read - renames the folder
@@ -58,7 +110,8 @@ staged, the staging sweep runs, the log rotates. Such a file is not a
 failure: it is left out, listed in the manifest (``vanished``) and said
 (« N fichier(s) disparu(s) pendant la copie »). Only a file that is really
 GONE: a FileNotFoundError for a file still there (a path Windows finds too
-long) is a copy that failed. A database is never let go that way. The size
+long) is a copy that failed. The accounts database, the template's and a
+tenant's are never let go that way (another SQLite file is). The size
 pre-scan counts a vanished file as 0, and any other error reading the data
 folder there is a French refusal, never a traceback.
 
@@ -74,7 +127,7 @@ import re
 import shutil
 import sqlite3
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC
 from pathlib import Path
@@ -83,7 +136,7 @@ from django.conf import settings
 from django.db import DatabaseError
 from django.utils import timezone
 
-from . import paths
+from . import deployment, paths, vault
 from .router import ACCOUNTS_ALIAS
 
 #: The backup's folder: local time, sortable by name (refresh_dev_data.cmd
@@ -108,6 +161,39 @@ ACCOUNTS_ROLE = "comptes"
 TEMPLATE_ROLE = "modele"
 TENANT_ROLE = "espace"
 ORPHAN_ROLE = "dossier sans espace"
+#: Any other SQLite file of the data folder (the module's docstring).
+OTHER_ROLE = "autre base"
+#: What every SQLite database file starts with (SQLite's file format, 1.3.1).
+SQLITE_HEADER = b"SQLite format 3\x00"
+#: Said after the failure of another SQLite file's copy.
+OTHER_HINT = " Si ce fichier ne sert plus, sortez-le du dossier des données, puis relancez la sauvegarde."
+
+#: The « Identifiants » store's files, never copied (accounts/vault.py):
+#: directly in a tenant's private folder, with the temporary files a write
+#: cut short leaves there (their names start with `LEFT_OUT_PREFIX`).
+LEFT_OUT_FILES = vault.FILE_NAMES
+LEFT_OUT_PREFIX = vault.TEMPORARY_PREFIX
+#: The scrapers' failure dumps (invoices.scrapers.website.DEBUG_DIR - not
+#: imported: the backup does not load the scrapers), never copied wherever
+#: they are.
+DEBUG_FOLDER = "_debug"
+#: A « Tester » run's own folder in a tenant's downloads (invoices.tasks:
+#: ``test-<job id>``), never copied.
+TEST_RUN_FOLDER = re.compile(r"test-[0-9]+")
+#: Django's sessions, emptied in every database's copy that has the table.
+SESSION_TABLE = "django_session"
+SESSIONS_LEFT_OUT = "non sauvegardées"
+#: A copy of a .env in the data folder, never copied (the module's
+#: docstring): one definition for the backup, the refresh's robocopy and
+#: its refusals.
+is_env_copy = deployment.is_env_copy
+ENV_COPY_PATTERNS = deployment.ENV_COPY_PATTERNS
+ENV_COPY_WARNING = (
+    "ATTENTION : {path} est une copie d'un fichier .env, rangée dans le dossier des données. Elle peut contenir "
+    "la clé secrète et des mots de passe du site : elle n'est pas sauvegardée, et elle n'a rien à faire là. "
+    "Supprimez-la, ainsi que ses copies dans le dossier de développement et dans les sauvegardes plus anciennes "
+    "(DEPLOY.md, section 12)."
+)
 
 
 class BackupError(Exception):
@@ -127,6 +213,26 @@ class Database:
     label: str
     tenant_name: str | None = None
     tables: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass
+class LeftOut:
+    """What the copy leaves out on purpose (the module's docstring), by
+    path relative to the data folder; `files` counts every file not copied,
+    the folders' included."""
+
+    credentials: list[str] = field(default_factory=list)
+    debug_folders: list[str] = field(default_factory=list)
+    env_copies: list[str] = field(default_factory=list)
+    files: int = 0
+
+    def as_manifest(self) -> dict:
+        return {
+            "credentials": sorted(self.credentials),
+            "debug_folders": sorted(self.debug_folders),
+            "env_copies": sorted(self.env_copies),
+            "files": self.files,
+        }
 
 
 # -- Where things are (the settings, read at call time) --------------------------------------------------------------
@@ -189,11 +295,10 @@ def _key(path: Path) -> str:
 
 
 def inside(inner: Path, outer: Path) -> bool:
-    """`inner` is `outer` or somewhere under it (Windows: whatever the case)."""
-    inner_key, outer_key = _key(inner), _key(outer)
-    if inner_key == outer_key:
-        return True
-    return inner_key.startswith(outer_key.rstrip("\\/") + os.sep)
+    """`inner` is `outer` or somewhere under it, by any of their names
+    (Windows: whatever the case; a junction, a link, an 8.3 short name, a
+    subst drive resolved): `deployment.inside`."""
+    return deployment.inside(inner, outer)
 
 
 def _existing_ancestor(path: Path) -> Path:
@@ -219,6 +324,10 @@ def _bytes_of(path: Path) -> int:
 # -- The databases ----------------------------------------------------------------------------------------------------
 
 
+def _quoted(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
 def table_counts(connection: sqlite3.Connection) -> dict[str, int]:
     """Rows per table (SQLite's own tables left out), by name."""
     names = [
@@ -227,11 +336,7 @@ def table_counts(connection: sqlite3.Connection) -> dict[str, int]:
             "SELECT name FROM sqlite_master WHERE type = 'table' AND substr(name, 1, 7) != 'sqlite_' ORDER BY name"
         )
     ]
-    counts = {}
-    for name in names:
-        quoted = '"' + name.replace('"', '""') + '"'
-        counts[name] = connection.execute(f"SELECT COUNT(*) FROM {quoted}").fetchone()[0]
-    return counts
+    return {name: connection.execute(f"SELECT COUNT(*) FROM {_quoted(name)}").fetchone()[0] for name in names}
 
 
 def integrity(connection: sqlite3.Connection) -> list[str]:
@@ -239,9 +344,57 @@ def integrity(connection: sqlite3.Connection) -> list[str]:
     return [str(row[0]) for row in connection.execute("PRAGMA integrity_check")]
 
 
-def copy_database(source: Path, target: Path) -> dict[str, int]:
-    """Copy `source` to `target` through the backup API, check the copy, and
-    return its rows per table. Raises BackupError (French) otherwise."""
+def _unsound(answer: list[str], when: str = "") -> BackupError:
+    shown = " ; ".join(answer[:3]) + (" ; …" if len(answer) > 3 else "")
+    return BackupError(f"{when}la copie ne passe pas la vérification d'intégrité ({shown}).")
+
+
+def _differing(expected: dict[str, int], copied: dict[str, int]) -> list[str]:
+    return sorted(set(copied) ^ set(expected) | {name for name in copied if copied.get(name) != expected.get(name)})
+
+
+def is_sqlite_database(path: Path) -> bool:
+    """`path` starts as every SQLite database does. A file that cannot be
+    read says no: its copy as a file then fails, or finds it gone."""
+    try:
+        with open(path, "rb") as file:
+            return file.read(len(SQLITE_HEADER)) == SQLITE_HEADER
+    except OSError:
+        return False
+
+
+def copy_database(source: Path, target: Path, *, forget_sessions: bool = False) -> dict[str, int]:
+    """Copy `source` to `target`, a new file, through the backup API, check
+    the copy, and return its rows per table. Raises BackupError (French)
+    otherwise, the half-made copy deleted first: it may hold every session
+    of the source. `forget_sessions`: once the copy is checked, its sessions
+    (when it has Django's session table) are deleted - in the copy alone -
+    and the copy checked again."""
+    try:
+        return _copy_and_check(source, target, forget_sessions)
+    except BackupError as exc:
+        why = _discard(target)
+        if why:
+            raise BackupError(
+                f"{exc} De plus, la copie commencée n'a pas pu être effacée ({why}) et elle peut contenir des "
+                "sessions de connexion : supprimez-la vous-même."
+            ) from exc
+        raise
+
+
+def _discard(target: Path) -> str:
+    """Delete a failed copy and what SQLite may have left beside it: why one
+    of them could not be, else ""."""
+    why = ""
+    for path in (target, *(target.with_name(target.name + suffix) for suffix in SIDE_SUFFIXES)):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            why = why or exc.strerror or str(exc)
+    return why
+
+
+def _copy_and_check(source: Path, target: Path, forget_sessions: bool) -> dict[str, int]:
     uri = Path(os.path.abspath(str(source))).as_uri() + "?mode=rw"
     try:
         reader = sqlite3.connect(uri, uri=True, isolation_level=None, timeout=60)
@@ -264,18 +417,51 @@ def copy_database(source: Path, target: Path) -> dict[str, int]:
     finally:
         reader.close()
     if answer != ["ok"]:
-        shown = " ; ".join(answer[:3]) + (" ; …" if len(answer) > 3 else "")
-        raise BackupError(f"la copie ne passe pas la vérification d'intégrité ({shown}).")
+        raise _unsound(answer)
     if copied != expected:
-        differing = sorted(
-            set(copied) ^ set(expected) | {name for name in copied if copied.get(name) != expected.get(name)}
-        )
         shown = ", ".join(
             f"{name} : {expected.get(name, 'absente')} dans la base, {copied.get(name, 'absente')} dans la copie"
-            for name in differing[:3]
+            for name in _differing(expected, copied)[:3]
         )
         raise BackupError(f"la copie n'a pas le même nombre de lignes que la base ({shown}).")
+    if forget_sessions and SESSION_TABLE in copied:
+        return _forget_sessions(target, copied)
     return copied
+
+
+def _forget_sessions(target: Path, checked: dict[str, int]) -> dict[str, int]:
+    """Delete every session of the copy `target`, already checked with the
+    counts `checked`, and check it again: intact, and every table as
+    `checked` says but the sessions, at 0 - a row of another table gone with
+    them, or a session left, is a failure."""
+    try:
+        writer = sqlite3.connect(str(target), isolation_level=None)
+        try:
+            writer.execute("BEGIN IMMEDIATE")
+            writer.execute(f"DELETE FROM {_quoted(SESSION_TABLE)}")
+            writer.execute("COMMIT")
+            # A DELETE only frees the rows' room: their bytes - the session
+            # keys - stay in the file, beside those of every session the
+            # source deleted before (the backup API copies its free pages
+            # too). VACUUM rewrites the copy without them, as
+            # accounts.adoption does for the tables it drops.
+            writer.execute("VACUUM")
+            answer = integrity(writer)
+            emptied = table_counts(writer)
+        finally:
+            writer.close()
+    except sqlite3.Error as exc:
+        raise BackupError(f"les sessions de connexion n'ont pas pu être retirées de la copie ({exc}).") from exc
+    if answer != ["ok"]:
+        raise _unsound(answer, when="une fois les sessions de connexion retirées, ")
+    expected = {**checked, SESSION_TABLE: 0}
+    if emptied != expected:
+        shown = ", ".join(
+            f"{name} : {expected.get(name, 'absente')} attendues, {emptied.get(name, 'absente')} dans la copie"
+            for name in _differing(expected, emptied)[:3]
+        )
+        raise BackupError(f"une fois les sessions de connexion retirées, la copie n'est plus celle vérifiée ({shown}).")
+    return emptied
 
 
 def _tenant_names() -> dict[str, str]:
@@ -321,22 +507,90 @@ def find_databases(data: Path, accounts: Path) -> tuple[list[Database], list[str
     return databases, missing
 
 
-def other_files(data: Path, databases: list[Database]) -> list[Path]:
-    """Every file of the data folder but the databases and what SQLite
-    keeps beside them."""
+def _directly_in(path: Path, kind: str, root: Path) -> bool:
+    """`path` sits directly in a tenant's `kind` folder: TENANTS_ROOT/<folder>/<kind>/<path's name>
+    (Windows: whatever the case)."""
+    folder = path.parent
+    return os.path.normcase(folder.name) == os.path.normcase(kind) and _key(folder.parent.parent) == _key(root)
+
+
+def _a_store_file(path: Path, root: Path) -> bool:
+    name = os.path.normcase(path.name)
+    return _directly_in(path, paths.PRIVATE, root) and (
+        name in {os.path.normcase(left_out) for left_out in LEFT_OUT_FILES}
+        or name.startswith(os.path.normcase(LEFT_OUT_PREFIX))
+    )
+
+
+def _a_debug_folder(path: Path, root: Path) -> bool:
+    return os.path.normcase(path.name) == os.path.normcase(DEBUG_FOLDER) or (
+        _directly_in(path, paths.DOWNLOADS, root) and TEST_RUN_FOLDER.fullmatch(path.name.lower()) is not None
+    )
+
+
+def _walk(data: Path, left_out: LeftOut | None = None) -> Iterator[tuple[Path, list[str], list[str]]]:
+    """os.walk over the data folder, sorted, without the folders a backup
+    leaves out - noted in `left_out` with the files they hold."""
+    root = paths.tenants_root()
+    for folder, subfolders, names in os.walk(data):
+        here = Path(folder)
+        kept = []
+        for name in sorted(subfolders):
+            if not _a_debug_folder(here / name, root):
+                kept.append(name)
+            elif left_out is not None:
+                left_out.debug_folders.append(_relative(here / name, data))
+                left_out.files += sum(len(inside) for _, _, inside in os.walk(here / name))
+        # In place: os.walk goes down the folders kept only.
+        subfolders[:] = kept
+        yield here, subfolders, sorted(names)
+
+
+def other_files(data: Path, databases: list[Database], left_out: LeftOut | None = None) -> list[Path]:
+    """Every file of the data folder but the databases, what SQLite keeps
+    beside them and what a backup never holds (noted in `left_out`) - the
+    other SQLite files among them included (`other_databases` picks them
+    out)."""
     skipped = set()
     for database in databases:
         key = _key(database.source)
         skipped.add(key)
         skipped.update(key + suffix for suffix in SIDE_SUFFIXES)
+    root = paths.tenants_root()
     files = []
-    for folder, subfolders, names in os.walk(data):
-        subfolders.sort()
-        for name in sorted(names):
-            path = Path(folder) / name
-            if _key(path) not in skipped:
-                files.append(path)
+    for folder, _subfolders, names in _walk(data, left_out):
+        for name in names:
+            path = folder / name
+            if _key(path) in skipped:
+                continue
+            if is_env_copy(name):
+                # Told by its name: never opened, not even for its first bytes.
+                if left_out is not None:
+                    left_out.env_copies.append(_relative(path, data))
+                    left_out.files += 1
+                continue
+            if _a_store_file(path, root):
+                if left_out is not None:
+                    left_out.credentials.append(_relative(path, data))
+                    left_out.files += 1
+                continue
+            files.append(path)
     return files
+
+
+def other_databases(data: Path, files: list[Path]) -> tuple[list[Database], list[Path]]:
+    """Among `files` (`other_files`'), the SQLite databases - told by their
+    first bytes, whatever their name -, to be copied through the API as the
+    others are, and the files left, without what SQLite keeps beside those
+    databases (their copy holds it)."""
+    found = [path for path in files if is_sqlite_database(path)]
+    skipped = set()
+    for path in found:
+        key = _key(path)
+        skipped.add(key)
+        skipped.update(key + suffix for suffix in SIDE_SUFFIXES)
+    databases = [Database(path, _relative(path, data), OTHER_ROLE, "une autre base SQLite") for path in found]
+    return databases, [path for path in files if _key(path) not in skipped]
 
 
 # -- The backup -------------------------------------------------------------------------------------------------------
@@ -406,9 +660,12 @@ def make_backup(dest=None, *, with_env: bool = True, say: Callable[[str], None] 
         if taken.exists():
             raise BackupError(f"le dossier {taken} existe déjà : rien n'a été écrit. Relancez dans une seconde.")
 
+    left_out = LeftOut()
     try:
         databases, missing = find_databases(data, accounts)
-        files = other_files(data, databases)
+        files = other_files(data, databases, left_out)
+        others, files = other_databases(data, files)
+        databases += others
         env = env_file() if with_env else None
         if env is not None and not env.is_file():
             env = None
@@ -426,20 +683,35 @@ def make_backup(dest=None, *, with_env: bool = True, say: Callable[[str], None] 
     say(f"Sauvegarde de {data}")
     say(f"  vers {folder}")
     target_data = folder / DATA
-    doing = "la création du dossier"
+    doing, hint = "la création du dossier", ""
     try:
         target_data.mkdir(parents=True)
         say("Bases SQLite (copiées par SQLite, puis vérifiées) :")
+        copied_databases, vanished = [], []
         for database in databases:
             doing = f"{database.label} ({database.relative})"
+            hint = OTHER_HINT if database.role == OTHER_ROLE else ""
             target = target_data / database.relative
             target.parent.mkdir(parents=True, exist_ok=True)
-            database.tables = copy_database(database.source, target)
+            try:
+                database.tables = copy_database(database.source, target, forget_sessions=True)
+            except BackupError:
+                if database.role == OTHER_ROLE and not os.path.lexists(database.source):
+                    # Gone since it was listed, as any other file may be.
+                    vanished.append(database.relative)
+                    continue
+                raise
+            hint = ""
+            copied_databases.append(database)
             say(
                 f"  {database.label} ({database.relative}) : {len(database.tables)} tables, "
                 f"{_count(sum(database.tables.values()))} lignes - intègre"
             )
-        copied_bytes, vanished = 0, []
+            if database.role == ACCOUNTS_ROLE:
+                say("    sessions de connexion : non sauvegardées (après une restauration, chacun se reconnecte)")
+            elif SESSION_TABLE in database.tables:
+                say("    sessions de connexion : retirées de la copie")
+        copied_files, copied_bytes = 0, 0
         for path in files:
             doing = f"le fichier « {_relative(path, data)} »"
             target = target_data / _relative(path, data)
@@ -454,15 +726,24 @@ def make_backup(dest=None, *, with_env: bool = True, say: Callable[[str], None] 
                 target.unlink(missing_ok=True)
                 vanished.append(_relative(path, data))
                 continue
+            copied_files += 1
             copied_bytes += target.stat().st_size
-        # The data folder's empty folders too (a tenant's downloads/...).
-        for source_folder, subfolders, _names in os.walk(data):
+        # The data folder's empty folders too (a tenant's downloads/...),
+        # never one a backup leaves out.
+        for source_folder, subfolders, _names in _walk(data):
             for name in subfolders:
-                (target_data / _relative(Path(source_folder) / name, data)).mkdir(parents=True, exist_ok=True)
-        say(f"Autres fichiers : {_count(len(files) - len(vanished))} ({_size(copied_bytes)})")
+                (target_data / _relative(source_folder / name, data)).mkdir(parents=True, exist_ok=True)
+        say(f"Autres fichiers : {_count(copied_files)} ({_size(copied_bytes)})")
         if vanished:
             shown = ", ".join(vanished[:5]) + (", …" if len(vanished) > 5 else "")
             say(f"{len(vanished)} fichier(s) disparu(s) pendant la copie (le serveur tournait) : {shown}")
+        if left_out.credentials:
+            say("Identifiants (page Identifiants) : non sauvegardés, à ressaisir après une restauration.")
+        if left_out.debug_folders:
+            say(
+                "Pages gardées par les récupérations en échec et les « Tester » : non sauvegardées "
+                f"({_count(len(left_out.debug_folders))} dossier(s))."
+            )
         if env is not None:
             doing = "le fichier .env"
             shutil.copy2(env, folder / ENV)
@@ -491,19 +772,26 @@ def make_backup(dest=None, *, with_env: bool = True, say: Callable[[str], None] 
                     "rows": sum(database.tables.values()),
                     "bytes": (target_data / database.relative).stat().st_size,
                 }
-                for database in databases
+                for database in copied_databases
             ],
-            "files": {"count": len(files) - len(vanished), "bytes": copied_bytes},
+            "files": {"count": copied_files, "bytes": copied_bytes},
             "vanished": vanished,
             "missing": missing,
+            "left_out": left_out.as_manifest(),
+            "sessions": SESSIONS_LEFT_OUT,
         }
         (folder / MANIFEST).write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     except (BackupError, OSError, sqlite3.Error, ValueError) as exc:
         reason = str(exc) if isinstance(exc, BackupError) else (getattr(exc, "strerror", None) or str(exc))
         incomplete = _set_aside(folder) if folder.exists() else None
-        raise BackupError(f"{doing} : {reason}", folder=incomplete or (folder if folder.exists() else None)) from exc
+        raise BackupError(
+            f"{doing} : {reason}{hint}", folder=incomplete or (folder if folder.exists() else None)
+        ) from exc
 
     for line in missing:
         say(f"À savoir : {line}")
+    # Just before the end, where the window's reader looks: named, never read.
+    for relative in sorted(left_out.env_copies):
+        say(ENV_COPY_WARNING.format(path=data / relative))
     say(f"Sauvegarde terminée : {folder}")
     return folder

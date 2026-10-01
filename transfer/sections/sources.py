@@ -12,9 +12,12 @@ that instead (`accounts.tenancy.integrations_allowed`).
 **A portal from an archive is never trusted.** The next gather reads the
 variables it names and types them into the page it names, so an archive
 from anywhere could have Metro's password typed into a site of its
-choosing. Hence a portal naming a variable the application reads for
-itself (`app_env_name`) is refused, and an import never switches a portal
-on: one it creates, or whose address or variables it changes, stays
+choosing. Hence a portal is refused as the source form refuses it
+(`WebsiteInvoiceSource.clean`: a variable the application reads for
+itself, `app_env_name`; a login page that is not https; the names of a
+source of another site), and an import never switches a portal on: one it
+creates, or whose sign-in settings it changes (`SIGN_IN_FIELDS`: the
+address, the names, the selectors, where it goes once signed in), stays
 inactive - said, with the address and the variables - until the owner has
 looked and ticked « Active ». Merged or replaced, a portal the archive has
 active and this database has not is said the same way (`LEFT_OFF`), never
@@ -64,9 +67,33 @@ WEBSITE_FIELDS = (
 )
 ROW_NOT_EXPORTED = {"id": "pk", "invoice_type": "parent"}
 KNOWN = ("supplier", *TYPE_FIELDS, "email", "website")
-#: Where a portal signs in and what it types there: an archive changing
-#: one of them hands this computer's secrets to a page nobody here chose.
-SIGN_IN_FIELDS = ("login_url", "username_env", "password_env")
+#: Where a portal signs in, what it types there and what the signed-in
+#: browser does: an archive changing one of them hands this computer's
+#: secrets, or the account they open, to a page nobody here chose. The
+#: address and the two names say where and which password; the field
+#: selectors say which field gets which secret (a password typed into a
+#: search box that sends it on) and the button what sends them; the
+#: invoices page and the links to follow say where the session goes once
+#: open; the invoice-link and next-page selectors are clicked on the
+#: account, as a person clicks (scrapers/website.py `_press`,
+#: `next_page`) - aimed at « Résilier », they act on it. Every portal
+#: setting but the window's visibility, then: the only one that neither
+#: types nor clicks (test_sources_section holds the two lists together).
+SIGN_IN_FIELDS = (
+    "login_url",
+    "username_env",
+    "password_env",
+    "invoices_url",
+    "navigation",
+    "username_selector",
+    "password_selector",
+    "submit_selector",
+    "link_selector",
+    "next_selector",
+)
+#: The sign-in fields the portal's note names with their values (where it
+#: signs in, with which names): a change to any other is said by its label.
+NOTE_FIELDS = ("login_url", "username_env", "password_env")
 #: A portal the archive has active and this database inactive, merged or
 #: replaced: why it stays off is said, with what to do (_inactive_note).
 LEFT_OFF = "laissée inactive (un import n'active jamais un portail)"
@@ -298,26 +325,40 @@ class SourcesSection(Section):
         """Where the portal signs in and with which variables, once written:
         what the archive says, this database's value for what it does not."""
         current = _row(existing) if existing is not None and existing.source_kind == kind else None
-        return {name: row_data.get(name, getattr(current, name, "")) for name in SIGN_IN_FIELDS}
+        return {name: row_data.get(name, getattr(current, name, "")) for name in NOTE_FIELDS}
 
     @staticmethod
-    def _signs_in_elsewhere(existing, kind, row_data: dict) -> bool:
-        """Whether the archive changes where this source signs in or what it
-        types there - a mailbox search turned into a portal included."""
+    def _sign_in_changes(existing, kind, row_data: dict) -> list[str] | None:
+        """The sign-in settings the archive changes on this source ([] when
+        none) - None when it has no portal row of this kind to compare, a
+        mailbox search turned into a portal included: all of it is new."""
         if existing.source_kind != kind:
-            return True
+            return None
         current = _row(existing)
-        return current is None or bool(codec.differences(current, row_data, SIGN_IN_FIELDS))
+        return None if current is None else codec.differences(current, row_data, SIGN_IN_FIELDS)
+
+    def _signs_in_elsewhere(self, existing, kind, row_data: dict) -> bool:
+        """Whether the archive changes where this source signs in, what it
+        types there or what it clicks once signed in (SIGN_IN_FIELDS)."""
+        return self._sign_in_changes(existing, kind, row_data) != []
+
+    def _switched_off(self, existing, kind, row_data: dict) -> str:
+        """« désactivée », with the changed settings the note does not show
+        by their value: a changed selector said only as « vérifiez l'adresse
+        et les variables » would send the owner to check what has not
+        changed, and to tick « Active » on what has."""
+        hidden = [name for name in self._sign_in_changes(existing, kind, row_data) or [] if name not in NOTE_FIELDS]
+        return f"désactivée (changé par l'archive : {said(hidden, LABELS)})" if hidden else "désactivée"
 
     def _trusted(self, record: dict, kind: str, existing, row_data: dict, *, own: bool = False) -> tuple[dict, str]:
         """The record as an import may write it, and how a portal it leaves
         inactive against the archive is said ("" when it is not). An import
         never switches a portal on: one it creates stays inactive, one whose
-        address or variables it changes is switched off, one inactive here
-        stays so - replaced twice, a forged archive would otherwise have
-        switched on the portal its first import had left off. Only a portal
-        already on here, still signing in where it did with what it did,
-        takes the archive's word."""
+        sign-in settings it changes (SIGN_IN_FIELDS) is switched off, one
+        inactive here stays so - replaced twice, a forged archive would
+        otherwise have switched on the portal its first import had left off.
+        Only a portal already on here, still signing in where it did with
+        what it did and clicking what it did, takes the archive's word."""
         if kind != WEBSITE or own:
             # `own`: an archive this installation wrote (ImportContext.own_backup).
             # Restoring one's own backup is putting back what was there,
@@ -328,7 +369,7 @@ class SourcesSection(Section):
         if existing is None:
             how = "créée inactive"
         elif self._signs_in_elsewhere(existing, kind, row_data):
-            how = "désactivée" if existing.is_active else LEFT_OFF
+            how = self._switched_off(existing, kind, row_data) if existing.is_active else LEFT_OFF
         elif not existing.is_active:
             how = LEFT_OFF
         else:
@@ -376,10 +417,20 @@ class SourcesSection(Section):
             current = _row(existing)
             if current is not None:
                 row = model(**{**{name: getattr(current, name) for name in fields}, **row_values})
+        if existing is not None:
+            # The row this import rewrites is this source's own, never
+            # « another source » whose names it would be refused for
+            # (WebsiteInvoiceSource._names_taken, which sets aside every row
+            # of the probe's type) - nor is the unused row of the kind it
+            # was. The type, not the pk: a probe given a pk is checked as a
+            # new row claiming it.
+            row.invoice_type_id = existing.pk
         # A portal's clean() refuses a variable the application reads for
         # itself (models.app_env_name): the next gather reads it and types it
         # into the archive's page, so Metro's, the mailbox's and the till's
-        # secrets never go there.
+        # secrets never go there. It also refuses a login page that is not
+        # https, and the names of a source of another site - whose password
+        # would be typed into the archive's page.
         row.full_clean(exclude=["invoice_type"])
         return kind, row_data
 

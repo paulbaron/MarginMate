@@ -14,6 +14,7 @@ from unittest import mock
 
 from django.test import SimpleTestCase, override_settings
 
+from accounts import vault
 from recipes.pos import laddition_session
 from recipes.pos.laddition_session import (
     IDENTIFIER_FIELD,
@@ -124,14 +125,14 @@ class LogInTests(SimpleTestCase):
             driver = FakeDriver()
             with self.assertRaises(LadditionAuthError) as caught:
                 log_in(driver, log=lambda *a: None)
-        self.assertIn(".env", str(caught.exception))
+        self.assertIn("page Identifiants", str(caught.exception))
         self.assertEqual(driver.visited, [])
 
     def test_staying_on_the_auth_host_is_reported_as_a_rejected_sign_in(self):
         driver = FakeDriver(urls=["https://auth.laddition.com/"])
         with self.assertRaises(LadditionAuthError) as caught:
             log_in(driver, log=lambda *a: None)
-        self.assertIn("rejected", str(caught.exception).lower())
+        self.assertIn("a refusé la connexion", str(caught.exception))
 
     def test_the_error_never_repeats_the_credentials(self):
         """An exception ends up in a log or a job record."""
@@ -140,6 +141,26 @@ class LogInTests(SimpleTestCase):
             log_in(driver, log=lambda *a: None)
         self.assertNotIn("hunter2", str(caught.exception))
         self.assertNotIn("bar@example.com", str(caught.exception))
+
+    def test_both_come_from_one_reading_of_the_store(self):
+        """Read one at a time, a save between the two typed a new login
+        with an old password."""
+        state = vault.VaultState(values={"LADDITION_EMAIL": "caisse@example.com", "LADDITION_PASSWORD": "page-pw"})
+        driver = FakeDriver(urls=["https://auth.laddition.com/", "https://reporting.laddition.com/v2/x"])
+        with mock.patch.object(vault, "load", return_value=state) as load:
+            log_in(driver, log=lambda *a: None)
+        self.assertEqual(load.call_count, 1)
+        self.assertEqual(driver.elements[IDENTIFIER_FIELD].typed, ["caisse@example.com"])
+        self.assertEqual(driver.elements[PASSWORD_FIELD].typed, ["page-pw"])
+
+    def test_a_store_being_rewritten_types_nothing_not_even_the_env(self):
+        driver = FakeDriver()
+        with mock.patch.object(vault, "load", return_value=vault.VaultState(problem=vault.BUSY)):
+            with self.assertRaises(LadditionAuthError) as caught:
+                log_in(driver, log=lambda *a: None)
+        self.assertEqual(str(caught.exception), vault.BUSY_MESSAGE)
+        self.assertEqual(driver.visited, [])
+        self.assertNotIn(IDENTIFIER_FIELD, driver.elements)
 
     def test_an_already_valid_session_does_not_sign_in_again(self):
         driver = FakeDriver(
