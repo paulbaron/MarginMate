@@ -49,6 +49,7 @@ from common import (
     SHOWN_PARAM,
     DateRange,
     date_range,
+    format_money,
     is_id,
     last_twelve_months,
     left_out_from,
@@ -161,7 +162,7 @@ class SliceRow:
         # against a revenue of 0,00 € - a loss, and under the unit counts it
         # read « tout est chiffré ». This is the only thing that says why.
         if self.slice.revenue_without_rate_ttc:
-            amount = f"{self.slice.revenue_without_rate_ttc:.2f}"
+            amount = format_money(self.slice.revenue_without_rate_ttc)
             return f"{amount} € encaissés sans taux de TVA : pas de HT, marge faussée"
         if not self.slice.is_costed:
             return "aucune recette : pas de marge calculable"

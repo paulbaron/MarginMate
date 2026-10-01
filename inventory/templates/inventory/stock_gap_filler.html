@@ -1,0 +1,335 @@
+{% extends "base.html" %}
+{% load assets %}
+{% block title %}Combler les écarts - MarginMate{% endblock %}
+{% block container_class %} container-wide{% endblock %}
+{% block messages %}
+    {% if top_messages %}
+        <ul class="messages">
+            {% for message in top_messages %}<li class="message message-{{ message.level_tag }}">{{ message }}</li>{% endfor %}
+        </ul>
+    {% endif %}
+{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <p class="breadcrumb"><a href="{% url 'inventory:stock_take_list' %}">← Inventaires</a></p>
+            <h1>Combler les écarts</h1>
+            <p class="page-subtitle">Les ventes à encaisser pour réduire chaque écart de stock dans la même proportion, montant après montant.</p>
+        </div>
+    </div>
+
+    {% if not takes %}
+        <div class="empty-state">
+            <p>Aucun inventaire : les écarts partent du dernier comptage.</p>
+            <a class="btn" href="{% url 'inventory:stock_take_create' %}">+ Nouvel inventaire</a>
+        </div>
+    {% else %}
+
+    <form method="get" class="filter-row">
+        <label class="inline-label">Depuis
+            <select name="{{ since_param }}">
+                {% for option in takes %}
+                <option value="{{ option.pk }}"{% if option.pk == take.pk %} selected{% endif %}>Inventaire du {{ option.taken_at|date:"d/m/Y" }}{% if option.note %} — {{ option.note }}{% endif %}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <button class="btn btn-secondary" type="submit">Afficher</button>
+    </form>
+
+    {% if take_not_found %}
+        <div class="message message-warning">Inventaire introuvable : les écarts partent du dernier.</div>
+    {% endif %}
+
+    <form method="post" action="{% url 'inventory:stock_gap_filler_add' %}" class="inline-form">
+        {% csrf_token %}
+        <input type="hidden" name="{{ since_param }}" value="{{ take.pk }}">
+        <input type="hidden" name="{{ last_shown_param }}" value="{% if latest %}{{ latest.entry.pk }}{% endif %}">
+        <label class="inline-label">Montant à encaisser (TTC)
+            <input type="text" inputmode="decimal" name="{{ amount_param }}" autocomplete="off" placeholder="150,00" required>
+        </label>
+        <button class="btn" type="submit" data-busy-label="Calcul…">Ajouter</button>
+    </form>
+
+    <p class="muted">
+        Du {{ report.start|date:"d/m/Y" }} au {{ report.end|date:"d/m/Y" }} ·
+        ventes importées jusqu'au {% if report.last_sale_day %}{{ report.last_sale_day|date:"d/m/Y" }}{% else %}—{% endif %} ·
+        achats jusqu'au {% if report.last_purchase_day %}{{ report.last_purchase_day|date:"d/m/Y" }}{% else %}—{% endif %}
+    </p>
+    {% if report.sales_behind %}
+        <div class="message message-warning">
+            {% if report.purchases_after_sales %}Des achats sont plus récents que les dernières ventes importées{% else %}Les ventes ne sont pas importées jusqu'à hier{% endif %} : les ventes pas encore importées comptent comme écart. Importez-les avant de calculer.
+            <a href="{% url 'recipes:sales_import' %}">Importer les ventes</a>
+        </div>
+    {% endif %}
+    {% if pos_pending_count_nav %}
+        <div class="message message-warning">
+            {% if pos_pending_count_nav == 1 %}1 produit de caisse n'est lié{% else %}{{ pos_pending_count_nav }} produits de caisse ne sont liés{% endif %} à aucune recette : ce qu'il{{ pos_pending_count_nav|pluralize:"s" }} vend{{ pos_pending_count_nav|pluralize:"ent" }} compte comme écart.
+            <a href="{% url 'recipes:pos_product_list' %}">À lier</a>
+        </div>
+    {% endif %}
+
+    {% if entries %}
+    {% if stale %}
+        <div class="message message-warning">
+            Des ventes ont été importées depuis cette liste : si elle a été encaissée, ses ventes comptent maintenant deux fois. Effacez-la.
+        </div>
+    {% endif %}
+    <div class="stat-row">
+        <div class="stat">
+            <div class="stat-label">Saisi (TTC)</div>
+            <div class="stat-value">{{ entered|money }} €</div>
+            <div class="stat-note">{{ entries|length }} montant{{ entries|length|pluralize }}</div>
+        </div>
+        <div class="stat">
+            <div class="stat-label">Proposé (TTC)</div>
+            <div class="stat-value">{{ proposed|money }} €</div>
+            <div class="stat-note">{% if proposed == entered %}le montant exact, au prix de la carte{% elif left < 2 %}{{ left|money }} € non proposé{% else %}{{ left|money }} € non proposés{% endif %}</div>
+        </div>
+        {% if shares %}
+        <div class="stat">
+            <div class="stat-label">Écarts réduits de</div>
+            <div class="stat-value">{{ shares.0|floatformat:1 }} %</div>
+            <div class="stat-note">en moyenne, de {{ shares.1|floatformat:1 }} % à {{ shares.2|floatformat:1 }} % selon l'article</div>
+        </div>
+        {% endif %}
+        <div class="stat">
+            <div class="stat-label">Ventes</div>
+            <div class="stat-value">{{ sales }}</div>
+            <div class="stat-note">sur toute la liste</div>
+        </div>
+    </div>
+
+    <h2 id="a-encaisser">À encaisser : {{ latest.entry.amount|money }} €</h2>
+    <p class="muted">
+        Saisi à {{ latest.entry.created_at|date:"H:i" }} le {{ latest.entry.created_at|date:"d/m/Y" }} ·
+        {% if latest.entry.reason == "" %}le montant exact{% elif latest.entry.reason == "below_cheapest" %}reste {{ latest.entry.remainder|money }} € : moins que la recette la moins chère{% elif latest.entry.reason == "gaps_full" %}reste {{ latest.entry.remainder|money }} € : plus aucune vente ne tient dans les écarts{% else %}reste {{ latest.entry.remainder|money }} € : aucune combinaison de prix ne tombe juste{% endif %}{% if latest.till_differs %} · {% if latest.till_differs == 1 %}1 ligne a{% else %}{{ latest.till_differs }} lignes ont{% endif %} un autre prix en caisse{% endif %}
+    </p>
+    <div class="table-wrap">
+    <table data-table data-table-label="recettes à encaisser" class="phone-cards">
+        <thead>
+            <tr>
+                <th>Recette</th>
+                <th>Bouton de caisse</th>
+                <th class="num">Nombre</th>
+                <th class="num">Prix (TTC)</th>
+                <th class="num">Total (TTC)</th>
+                <th>Comble surtout</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for line in latest.lines %}
+            <tr>
+                <td>{% if line.recipe_id %}<a href="{% url 'recipes:recipe_detail' line.recipe_id %}">{{ line.name }}</a>{% else %}{{ line.name }}{% endif %}</td>
+                <td data-label="Bouton de caisse">{{ line.till }}{% if line.till_differs %}<br><span class="muted small">en caisse {{ line.till_price|money }} €</span>{% endif %}</td>
+                <td class="num" data-label="Nombre">{{ line.count }}</td>
+                <td class="num" data-label="Prix (TTC)" data-sort="{{ line.price }}">{{ line.price|money }} €</td>
+                <td class="num" data-label="Total (TTC)" data-sort="{{ line.total }}">{{ line.total|money }} €</td>
+                <td data-label="Comble surtout">{% for name in line.fills %}{{ name }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+
+    {% if earlier %}
+    <details class="explainer">
+        <summary>Montants déjà saisis · {{ earlier|length }}</summary>
+        <div class="table-wrap">
+        <table data-table data-table-label="montants déjà saisis" class="phone-cards">
+            <thead>
+                <tr>
+                    <th>Saisi</th>
+                    <th class="num">Montant (TTC)</th>
+                    <th class="num">Proposé (TTC)</th>
+                    <th>Recettes</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for shown in earlier %}
+                <tr>
+                    <td data-sort="{{ shown.entry.created_at|date:'Y-m-d H:i:s' }}">{{ shown.entry.created_at|date:"d/m/Y H:i" }}</td>
+                    <td class="num" data-label="Montant (TTC)" data-sort="{{ shown.entry.amount }}">{{ shown.entry.amount|money }} €</td>
+                    <td class="num" data-label="Proposé (TTC)" data-sort="{{ shown.entry.total }}">{{ shown.entry.total|money }} €</td>
+                    <td data-label="Recettes">{% for line in shown.lines %}{{ line.name }} × {{ line.count }}{% if not forloop.last %}, {% endif %}{% endfor %}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </details>
+    {% endif %}
+
+    <div class="form-actions">
+        <form method="post" action="{% url 'inventory:stock_gap_filler_undo' %}">
+            {% csrf_token %}
+            <input type="hidden" name="{{ since_param }}" value="{{ take.pk }}">
+            <input type="hidden" name="{{ last_shown_param }}" value="{{ latest.entry.pk }}">
+            <button class="btn btn-secondary" type="submit" data-busy-label="Annulation…">Annuler la dernière saisie</button>
+        </form>
+        <form method="post" action="{% url 'inventory:stock_gap_filler_clear' %}" data-confirm="{% if entries|length == 1 %}Effacer le montant de la liste ?{% else %}Effacer les {{ entries|length }} montants de la liste ?{% endif %}">
+            {% csrf_token %}
+            <input type="hidden" name="{{ since_param }}" value="{{ take.pk }}">
+            <input type="hidden" name="{{ last_shown_param }}" value="{{ latest.entry.pk }}">
+            <button class="btn btn-secondary" type="submit">Effacer la liste</button>
+        </form>
+    </div>
+    {% endif %}
+
+    <h2 id="ecarts">Écarts</h2>
+    {% if gap_messages %}
+        <ul class="messages">
+            {% for message in gap_messages %}<li class="message message-{{ message.level_tag }}">{{ message }}</li>{% endfor %}
+        </ul>
+    {% endif %}
+    {% if report.rows %}
+    <div class="table-wrap">
+    <table data-table data-table-label="écarts" class="phone-cards">
+        <thead>
+            <tr>
+                <th>Article</th>
+                <th class="num">Inventaire</th>
+                <th class="num">Achats</th>
+                <th class="num">Pertes</th>
+                <th class="num">Vendu</th>
+                <th class="num">Écart</th>
+                <th class="num">Perte tolérée</th>
+                <th class="num">À combler</th>
+                <th class="num">Valeur (HT)</th>
+                {% if entries %}<th class="num">Proposé</th>
+                <th class="num">Comblé</th>{% endif %}
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in report.rows %}
+            <tr>
+                <td>
+                    {{ row.stock_type.name }} <span class="muted small">{{ row.stock_type.get_unit_display|lower }}</span>
+                    {% if not row.counted %}<span class="uncounted" title="Absent de l'inventaire : compté à 0, l'écart est peut-être plus grand.">non compté</span>{% endif %}
+                    {% if row.status == "over" %}<br><span class="muted small">vendu plus qu'acheté</span>
+                    {% elif row.status == "within_allowance" %}<br><span class="muted small">dans la perte tolérée</span>
+                    {% elif row.secondary %}<br><span class="muted small">aucune vente ne l'atteint encore</span>{% endif %}
+                </td>
+                <td class="num" data-label="Inventaire" data-sort="{{ row.opening }}">{{ row.opening|floatformat:"-2" }}</td>
+                <td class="num" data-label="Achats" data-sort="{{ row.purchases }}">{{ row.purchases|floatformat:"-2" }}</td>
+                <td class="num" data-label="Pertes" data-sort="{{ row.known_losses }}">{{ row.known_losses|floatformat:"-2" }}</td>
+                <td class="num" data-label="Vendu" data-sort="{{ row.sold }}">{{ row.sold|floatformat:"-2" }}</td>
+                <td class="num" data-label="Écart" data-sort="{{ row.gap }}">{{ row.gap|floatformat:"-2" }}</td>
+                <td class="num" data-label="Perte tolérée" data-sort="{{ row.allowance }}">{{ row.allowance|floatformat:"-2" }}</td>
+                <td class="num" data-label="À combler" data-sort="{{ row.room }}">{% if row.room > 0 %}{{ row.room|floatformat:"-2" }}{% else %}—{% endif %}</td>
+                <td class="num" data-label="Valeur (HT)" data-sort="{{ row.room_value|default:0 }}">{% if row.room_value %}{{ row.room_value|money }} €{% else %}—{% endif %}</td>
+                {% if entries %}
+                <td class="num" data-label="Proposé" data-sort="{{ row.proposed }}">{% if row.proposed %}{{ row.proposed|floatformat:"-2" }}{% else %}—{% endif %}</td>
+                <td class="num" data-label="Comblé" data-sort="{{ row.filled_percent|default:0 }}">{% if row.filled_percent is not None %}{{ row.filled_percent|floatformat:1 }} %{% else %}—{% endif %}</td>
+                {% endif %}
+                <td class="row-actions">
+                    <form method="post" action="{% url 'inventory:stock_gap_filler_exclude' %}">
+                        {% csrf_token %}
+                        <input type="hidden" name="{{ since_param }}" value="{{ take.pk }}">
+                        <input type="hidden" name="article" value="{{ row.stock_type.pk }}">
+                        <button class="btn btn-small btn-secondary" type="submit" title="Ne plus compter cet article dans les écarts">Exclure</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% elif report.rows_left_out %}
+        <p class="muted">Tous les articles de ces écarts sont exclus.</p>
+    {% else %}
+        <p class="muted">Aucune recette vendue depuis cet inventaire n'utilise un article compté ou acheté.</p>
+    {% endif %}
+
+    <details class="explainer" id="exclusions"{% if report.exclusions or exclusion_messages %} open{% endif %}>
+        <summary>Exclus des écarts{% if report.excluded_categories %} · {{ report.excluded_categories|length }} catégorie{{ report.excluded_categories|length|pluralize }}{% endif %}{% if report.excluded_articles %} · {{ report.excluded_articles|length }} article{{ report.excluded_articles|length|pluralize }}{% endif %}</summary>
+        {% if exclusion_messages %}
+        <ul class="messages">
+            {% for message in exclusion_messages %}<li class="message message-{{ message.level_tag }}">{{ message }}</li>{% endfor %}
+        </ul>
+        {% endif %}
+        <p class="muted">Une catégorie exclue vaut aussi pour les articles classés plus tard.</p>
+        {% if report.categories_to_exclude %}
+        <form method="post" action="{% url 'inventory:stock_gap_filler_exclude' %}" class="inline-form">
+            {% csrf_token %}
+            <input type="hidden" name="{{ since_param }}" value="{{ take.pk }}">
+            <label class="inline-label">Catégorie
+                <select name="categorie">
+                    {% for category, count in report.categories_to_exclude %}
+                    <option value="{{ category }}">{% if category %}{{ category }}{% else %}Catégorie non renseignée{% endif %} ({{ count }})</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <button class="btn btn-secondary" type="submit">Exclure la catégorie</button>
+        </form>
+        {% endif %}
+        {% if report.excluded_categories or report.excluded_articles %}
+        <ul class="exclusion-list">
+            {% for exclusion in report.excluded_categories %}
+            <li>Catégorie {% if exclusion.category %}« {{ exclusion.category }} »{% else %}non renseignée{% endif %} · {% if exclusion.covers == 1 %}1 article{% else %}{{ exclusion.covers }} articles{% endif %}
+                <form method="post" action="{% url 'inventory:stock_gap_filler_include' %}">
+                    {% csrf_token %}
+                    <input type="hidden" name="{{ since_param }}" value="{{ take.pk }}">
+                    <input type="hidden" name="exclusion" value="{{ exclusion.pk }}">
+                    <button class="btn btn-small btn-secondary" type="submit">Réinclure</button>
+                </form>
+            </li>
+            {% endfor %}
+            {% for exclusion in report.excluded_articles %}
+            <li>{{ exclusion.stock_type.name }}{% if exclusion.stock_type.category or exclusion.covered %} <span class="muted small">{% if exclusion.stock_type.category %}{{ exclusion.stock_type.category }}{% if exclusion.covered %} · {% endif %}{% endif %}{% if exclusion.covered %}catégorie exclue aussi{% endif %}</span>{% endif %}
+                <form method="post" action="{% url 'inventory:stock_gap_filler_include' %}">
+                    {% csrf_token %}
+                    <input type="hidden" name="{{ since_param }}" value="{{ take.pk }}">
+                    <input type="hidden" name="exclusion" value="{{ exclusion.pk }}">
+                    <button class="btn btn-small btn-secondary" type="submit">Réinclure</button>
+                </form>
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p class="muted">Rien d'exclu : tous les articles comptent.</p>
+        {% endif %}
+    </details>
+
+    {% if report.blocked or report.not_sold_since or report.unreached or report.outside_recipes %}
+    <details class="explainer">
+        <summary>Ce qui ne peut pas être comblé{% if report.blocked %} · {{ report.blocked|length }} recette{{ report.blocked|length|pluralize }} bloquée{{ report.blocked|length|pluralize }}{% endif %}{% if report.unreached %} · {{ report.unreached|length }} article{{ report.unreached|length|pluralize }} sans recette proposée{% endif %}</summary>
+        {% if report.blocked %}
+        <p class="muted">Une seule vente ferait dépasser un écart :</p>
+        <ul>
+            {% for blocked in report.blocked %}
+            <li><a href="{% url 'recipes:recipe_detail' blocked.recipe.pk %}">{{ blocked.recipe.name }}</a> —
+                {% for article in blocked.articles %}{{ article.stock_type.name }} ({% if not article.counted and article.status == "over" %}non compté à l'inventaire{% elif article.status == "over" %}vendu plus qu'acheté{% elif article.status == "within_allowance" %}dans la perte tolérée{% else %}moins d'une vente à combler{% endif %}){% if not forloop.last %}, {% endif %}{% endfor %}
+            </li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+        {% if report.not_sold_since %}
+        <p class="muted">{% if report.not_sold_since|length == 1 %}Pas vendue depuis l'inventaire, donc pas proposée{% else %}Pas vendues depuis l'inventaire, donc pas proposées{% endif %} :
+            {% for recipe in report.not_sold_since %}{{ recipe.name }}{% if not forloop.last %} · {% endif %}{% endfor %}
+        </p>
+        {% endif %}
+        {% if report.unreached %}
+        <p class="muted">{% if report.unreached|length == 1 %}Aucune recette proposée ne l'utilise{% else %}Aucune recette proposée ne les utilise{% endif %} ({{ report.unreached_value|money }} € HT à combler) :
+            {% for row in report.unreached %}{{ row.stock_type.name }}{% if not forloop.last %} · {% endif %}{% endfor %}
+        </p>
+        {% endif %}
+        {% if report.outside_recipes %}
+        <p class="muted">{% if report.outside_recipes == 1 %}1 autre article acheté n'est dans aucune recette (matériel, consommables…) : aucune vente ne le comble.{% else %}{{ report.outside_recipes }} autres articles achetés ne sont dans aucune recette (matériel, consommables…) : aucune vente ne les comble.{% endif %}</p>
+        {% endif %}
+    </details>
+    {% endif %}
+
+    <details class="explainer">
+        <summary>Comment c'est calculé</summary>
+        <ul>
+            <li>Écart = inventaire + achats − pertes − vendu : il compte aussi ce qui reste en rayon.</li>
+            <li>La perte tolérée de chaque article (10 % par défaut) n'est pas à combler.</li>
+            <li>Chaque vente proposée est comptée comme la page Produits la comptera : aucune ne fait dépasser un écart, hors articles exclus.</li>
+            <li>Une recette « au choix » est comptée sur l'option la plus chère qui a encore de la place, comme une vente réelle.</li>
+            <li>Chaque vente va aux recettes dont les écarts, pesés en valeur, sont le moins comblés ; à égalité, au mélange des ventes réelles.</li>
+            <li>Chaque montant ajouté part de la liste déjà saisie : ses ventes comblent ce qui reste. Effacez la liste une fois les ventes importées.</li>
+        </ul>
+    </details>
+    {% endif %}
+{% endblock %}

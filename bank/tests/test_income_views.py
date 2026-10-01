@@ -57,6 +57,8 @@ from staff.tests.page_forms import as_post, form_posting_to, forms_of
 from tests.test_views_smoke import assertNoUnrenderedTemplateSyntax
 
 JUNE_PARAMS = {"du": "2026-06-01", "au": "2026-06-30"}
+#: What separates an amount's thousands on the page (common.THOUSANDS_SEPARATOR).
+NBSP = "\N{NO-BREAK SPACE}"
 HIDDEN = re.compile(r'<input type="hidden" name="([^"]+)" value="([^"]*)">')
 #: The comparison's own heading - what the coverage warnings sit above.
 COMPARISON = "Ce que la caisse a encaissé, et ce qui est arrivé sur le compte"
@@ -904,7 +906,10 @@ class UnknownCommissionTests(Page, TestCase):
             comparison,
         )
         self.assertNotIn("inconnue", comparison)
-        self.assertTrue(comparison.endswith("Total 305.00 € 1408.18 € net 7 1.82 €"), comparison)
+        # Folded as a reader reads it, the no-break space between the
+        # thousands is a space; the markup holds the no-break one.
+        self.assertTrue(comparison.endswith("Total 305.00 € 1 408.18 € net 7 1.82 €"), comparison)
+        self.assertIn(f"1{NBSP}408.18 € net", table_of(html, "moyens de paiement"))
         self.assertIn(
             "3 versements : 285.00 € encaissés, 1.82 € de commission (0.70 %), dont 1 sans brut imprimé "
             "(commission inconnue)",
@@ -1428,10 +1433,22 @@ class BalanceChartTests(SimpleTestCase):
         bottom's label and zero's sat on the same line."""
         html = _build_balance_svg([(date(2026, 6, 3), Decimal("-1.00")), (date(2026, 6, 4), Decimal("1000.00"))])
         self.assertEqual(html.count(">0.00 €</text>"), 1)
-        self.assertIn(">1000.00 €</text>", html)
+        self.assertIn(f">1{NBSP}000.00 €</text>", html)
         self.assertNotIn(">-1.00 €</text>", html)
         # The point itself still says it.
         self.assertIn('data-value="-1.00 €"', html)
+
+    def test_a_figure_over_a_thousand_groups_its_thousands(self):
+        """The axis's label and the tooltip charts.js reads off `data-value`
+        say the figure the way the table under the chart does; the point's
+        position is geometry, never grouped."""
+        html = _build_balance_svg([(date(2026, 6, 3), Decimal("-5432.10")), (date(2026, 6, 4), Decimal("12345.67"))])
+        self.assertIn(f">12{NBSP}345.67 €</text>", html)
+        self.assertIn(f">-5{NBSP}432.10 €</text>", html)
+        self.assertIn(f'data-label="03/06/2026" data-value="-5{NBSP}432.10 €"', html)
+        self.assertIn(f'data-label="04/06/2026" data-value="12{NBSP}345.67 €"', html)
+        self.assertNotIn("12345.67", html)
+        self.assertNotIn(NBSP, "".join(re.findall(r'(?:cx|cy|data-x|data-y|points)="[^"]*"', html)))
 
     def test_a_flat_line_at_zero_still_draws(self):
         html = _build_balance_svg([(date(2026, 6, 3), Decimal("0")), (date(2026, 6, 4), Decimal("0"))])

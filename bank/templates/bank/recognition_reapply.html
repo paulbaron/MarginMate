@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load assets %}
 {% block title %}Relire les opérations - Reconnaissance des opérations - MarginMate{% endblock %}
 {% block content %}
     <div class="page-header">
@@ -55,7 +56,7 @@
                         <tr>
                             <td data-sort="{{ row.change.line.operation_date|date:'Y-m-d' }}">{{ row.change.line.operation_date|date:"d/m/Y" }}</td>
                             <td>{{ row.change.line.label|truncatechars:90 }}</td>
-                            <td class="num" data-sort="{{ row.change.line.amount|stringformat:'s' }}">{{ row.change.line.amount|floatformat:2 }} €</td>
+                            <td class="num" data-sort="{{ row.change.line.amount|stringformat:'s' }}">{{ row.change.line.amount|money }} €</td>
                             <td>{% if row.change.kind_changes %}{{ row.kind_before }} → <strong>{{ row.kind_after }}</strong>{% else %}{{ row.kind_after }}{% endif %}</td>
                             <td>{% if row.change.payee_changes %}{{ row.change.line.counterparty|default:"—" }} → <strong>{{ row.change.now.counterparty|default:"—" }}</strong>{% else %}{{ row.change.now.counterparty|default:"—" }}{% endif %}</td>
                             <td data-sort="{{ row.change.now.card_date|date:'Y-m-d' }}">

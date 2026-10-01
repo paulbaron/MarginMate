@@ -20,6 +20,7 @@ import tempfile
 from collections import namedtuple
 from datetime import date, datetime
 from decimal import Decimal
+from html import unescape
 from html.parser import HTMLParser
 
 from django.contrib.staticfiles.testing import StaticLiveServerTestCase
@@ -27,7 +28,7 @@ from django.test import SimpleTestCase, TestCase, tag
 from django.urls import reverse
 from django.utils import timezone
 
-from inventory.models import UnitChoices
+from inventory.models import StockType, UnitChoices
 from recipes.sales import record_sales
 from tests.factories import (
     make_ingredient,
@@ -40,6 +41,7 @@ from tests.factories import (
     make_stock_take_line,
     make_supplier,
 )
+from tests.test_views_smoke import make_gaps_to_fill
 
 
 class BaseTemplateTests(TestCase):
@@ -211,6 +213,39 @@ class SearchableSortableTableTests(TestCase):
     def test_stock_take_detail(self):
         self.assertEnhancedTable("inventory:stock_take_detail", pk=self.take.pk)
 
+    def test_stock_gap_filler(self):
+        """« Combler les écarts »: the sales to ring up, the amounts typed
+        before them and the gaps are three lists like any other - their
+        money sorts by a bare number, not by « 36.00 € » read as text, and
+        when an amount was typed by a date that sorts as one."""
+        take = make_gaps_to_fill()
+        url = reverse("inventory:stock_gap_filler")
+
+        def table(html, label):
+            found = re.search(
+                r'<table data-table data-table-label="' + label + r'"[^>]*>.*?</table>', html, flags=re.DOTALL
+            )
+            return found.group(0) if found else ""
+
+        # Without a list, the gaps alone, still a list like any other.
+        response = self.client.get(url, {"depuis": take.pk})
+        self.assertContains(response, '<table data-table data-table-label="écarts"')
+        self.assertNotContains(response, 'data-table-label="recettes à encaisser"')
+        self.assertNotContains(response, 'data-table-label="montants déjà saisis"')
+        # 70 € is a bottle of each wine; 36 €, on top of it, the red again.
+        for amount in ("70", "36"):
+            added = self.client.post(reverse("inventory:stock_gap_filler_add"), {"depuis": take.pk, "montant": amount})
+            self.assertEqual(added.status_code, 302)
+        response = self.client.get(url, {"depuis": take.pk})
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode()
+        self.assertContains(response, '<table data-table data-table-label="écarts"')
+        latest = table(html, "recettes à encaisser")
+        self.assertIn('data-sort="36.00"', latest)
+        earlier = table(html, "montants déjà saisis")
+        self.assertIn('data-sort="70.00"', earlier)
+        self.assertRegex(earlier, r'<td data-sort="\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}">')
+
     def test_stock_list_sorts_without_a_second_search_box(self):
         """It already has a server-backed fuzzy search; a second box filtering
         the same rows by a different rule would be worse than none."""
@@ -283,6 +318,60 @@ class SortKeyTests(TestCase):
             with self.subTest(day=key):
                 self.assertContains(response, f'data-sort="{key}"')
                 self.assertContains(response, shown)
+
+
+class GroupedAmountSortTests(SimpleTestCase):
+    """An amount a page prints has its thousands grouped by a no-break space
+    (« 1 234.56 € », common.THOUSANDS_SEPARATOR). datatable.js sorts a cell
+    by its own text, so its number parser must take every white space out
+    before it parses - `\\s`, which in JavaScript matches U+00A0 and U+202F
+    as well. Kept to plain spaces, every amount over a thousand would sort
+    as text."""
+
+    def test_the_number_parser_takes_every_white_space_out_first(self):
+        source = (pathlib.Path(__file__).resolve().parent.parent / "static/js/datatable.js").read_text(encoding="utf-8")
+        body = source[source.index("function asNumber(text)") : source.index("function asDate(text)")]
+        stripped = re.search(r'\.replace\(/\[([^\]]*)\]/g, ""\)', body)
+        self.assertIsNotNone(stripped, "asNumber no longer strips a class of spaces")
+        self.assertIn(r"\s", stripped.group(1))
+        self.assertLess(stripped.start(), body.index("parseFloat"))
+
+    def source(self):
+        return (pathlib.Path(__file__).resolve().parent.parent / "static/js/datatable.js").read_text(encoding="utf-8")
+
+    def test_the_search_finds_a_grouped_amount_typed_either_way(self):
+        """« 1 234.56 € » was found by typing « 1234.56 » before amounts were
+        grouped. normalize(), which the box's text and the row's both go
+        through, takes the space between a digit and a group of three out -
+        whichever space, since a no-break one copies out as an ordinary one."""
+        source = self.source()
+        body = source[source.index("function normalize(text)") : source.index("function searchableText")]
+        self.assertIn('.replace(SPACED_THOUSANDS, "$1")', body)
+        # The JavaScript literal reads the same under Python's re (\s takes
+        # the no-break spaces in both).
+        pattern = re.search(r"var SPACED_THOUSANDS = /(.+)/g;", source).group(1)
+        nbsp = "\N{NO-BREAK SPACE}"
+        for text, folded in (
+            (f"16{nbsp}568{nbsp}684.50 €", "16568684.50 €"),
+            ("1 408.18", "1408.18"),
+            (f"1{nbsp}408", "1408"),
+            ("pack 6 33cl", "pack 6 33cl"),
+            ("1 40", "1 40"),
+            ("1 4000", "1 4000"),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(re.sub(pattern, r"\1", text), folded)
+
+    def test_the_collator_never_reads_a_grouped_amount_as_two_numbers(self):
+        """A cell that is not a bare number (« 999.00 – 1 000.00 € ») is
+        compared by the numeric collator, which reads « 1 000 » as 1 and 0:
+        the grouping spaces - and only those - go before it."""
+        source = self.source()
+        declaration = re.search(r"var GROUPING_SPACE = [^\n]*", source).group(0)
+        self.assertIn("0x00a0", declaration)
+        self.assertIn("0x202f", declaration)
+        body = source[source.index("function cellText(cell)") : source.index("function asNumber(text)")]
+        self.assertLess(body.index('.replace(GROUPING_SPACE, "$1")'), body.index(r".replace(/\s+/g"))
 
 
 class ChildRowTests(TestCase):
@@ -364,6 +453,8 @@ class PageChromeTests(TestCase):
             "recipes:recipe_list",
             "recipes:sales_list",
             "inventory:stock_take_list",
+            # No count in this database: its empty state still says it.
+            "inventory:stock_gap_filler",
             "margins:margins_home",
             "bank:income_home",
             "bank:recognition",
@@ -375,6 +466,21 @@ class PageChromeTests(TestCase):
         ):
             with self.subTest(page=url_name):
                 self.assertContains(self.client.get(reverse(url_name)), "page-subtitle")
+
+    def test_the_gap_filler_explains_itself_with_a_list(self):
+        """With a count and a list, not only in its empty state: the
+        subtitle says what the page is for, amount after amount."""
+        take = make_gaps_to_fill()
+        added = self.client.post(reverse("inventory:stock_gap_filler_add"), {"depuis": take.pk, "montant": "70"})
+        self.assertEqual(added.status_code, 302)
+        response = self.client.get(reverse("inventory:stock_gap_filler"), {"depuis": take.pk})
+        self.assertContains(response, 'id="a-encaisser"')
+        self.assertContains(
+            response,
+            '<p class="page-subtitle">Les ventes à encaisser pour réduire chaque écart de stock dans la même '
+            "proportion, montant après montant.</p>",
+            count=1,
+        )
 
     def test_the_stock_page_leads_with_its_headline_figures(self):
         make_priced_stock_type(name="Vodka", unit_cost_ht="12", quantity="10")
@@ -1681,6 +1787,161 @@ class PhoneCardsLabelTests(TestCase):
         chosen = self.cards(f"{reverse('recipes:recipe_list')}?article={rum.pk}", "data-table-label", "recettes")
         self.assertIn("Utilisé", [cell["text"].strip() for cell in chosen["head"]])
         self.assertLabelled(chosen, 1)
+
+    def test_the_gaps_to_fill_with_and_without_a_list(self):
+        """« Combler les écarts »: the gaps on every kind of row (to fill,
+        never counted, sold past what it had), the sales to ring up and the
+        amounts typed before them. The gaps grow « Proposé » and « Comblé »
+        once the list holds an amount: both states, each cell under its own
+        header's words."""
+        take = make_gaps_to_fill()
+        page = f"{reverse('inventory:stock_gap_filler')}?depuis={take.pk}"
+
+        def headers(table):
+            return [" ".join(cell["text"].split()) for cell in table["head"]]
+
+        gaps = self.cards(page, "data-table-label", "écarts")
+        self.assertNotIn("Proposé", headers(gaps))
+        self.assertNotIn("Comblé", headers(gaps))
+        self.assertEqual(headers(gaps)[-2:], ["Valeur (HT)", ""])
+        self.assertLabelled(gaps, 3)
+        self.assertExcludeCellLast(gaps)
+
+        # 70 € is one bottle at 36 € and one at 34 €; then 36 €, the red
+        # alone; then 34 €, the rosé alone.
+        for amount in ("70", "36", "34"):
+            added = self.client.post(reverse("inventory:stock_gap_filler_add"), {"depuis": take.pk, "montant": amount})
+            self.assertEqual(added.status_code, 302)
+        gaps = self.cards(page, "data-table-label", "écarts")
+        # The list's two columns come before the row's « Exclure », whose
+        # header says nothing.
+        self.assertEqual(headers(gaps)[-3:], ["Proposé", "Comblé", ""])
+        self.assertLabelled(gaps, 3)
+        self.assertExcludeCellLast(gaps)
+        # The last amount, one recipe; the two typed before it, one row each.
+        self.assertLabelled(self.cards(page, "data-table-label", "recettes à encaisser"), 1)
+        earlier = self.cards(page, "data-table-label", "montants déjà saisis")
+        self.assertEqual(headers(earlier), ["Saisi", "Montant (TTC)", "Proposé (TTC)", "Recettes"])
+        self.assertLabelled(earlier, 2)
+
+    def assertExcludeCellLast(self, table):
+        """Every gaps row ends on its « Exclure »: a .row-actions cell, which
+        a card draws across at its foot, under no label - its header has no
+        words, and « EXCLURE » printed over a button saying « Exclure » is
+        noise."""
+        for number, row in enumerate(table["rows"]):
+            last = row[-1]
+            self.assertEqual(last["classes"], ["row-actions"], f"row {number}")
+            self.assertIsNone(last["label"], f"row {number}")
+            self.assertEqual(last["text"].strip(), "Exclure", f"row {number}")
+            # One action cell a row: the figures keep their labels.
+            self.assertEqual(sum("row-actions" in cell["classes"] for cell in row), 1, f"row {number}")
+
+    def test_the_gaps_with_something_excluded(self):
+        """An article left out of the gaps - alone, or with its category -
+        leaves the table: what remains is still one card a row, each figure
+        under its words. The fixture's red is left out alone, the amber's
+        category with it (both invented)."""
+        take = make_gaps_to_fill()
+        page = f"{reverse('inventory:stock_gap_filler')}?depuis={take.pk}"
+        StockType.objects.filter(name="Ambrée exemple").update(category="Bières exemple")
+        red = StockType.objects.get(name="Rouge exemple")
+        for data in ({"article": red.pk}, {"categorie": "Bières exemple"}):
+            excluded = self.client.post(reverse("inventory:stock_gap_filler_exclude"), {"depuis": take.pk, **data})
+            self.assertEqual(excluded.status_code, 302)
+        gaps = self.cards(page, "data-table-label", "écarts")
+        self.assertLabelled(gaps, 1)
+        self.assertExcludeCellLast(gaps)
+        self.assertIn("Rosé exemple", gaps["rows"][0][0]["text"])
+
+
+class GapExclusionListTests(TestCase):
+    """« Exclus des écarts » on « Combler les écarts » (#exclusions): a list,
+    not a table - nothing in it to search or sort - each line its words and
+    its own « Réinclure », a button of the page's kind (the touch rules size
+    `main .btn` to a thumb), and the category picked like any other form
+    of the page. Data invented."""
+
+    def setUp(self):
+        self.take = make_gaps_to_fill()
+        self.page = f"{reverse('inventory:stock_gap_filler')}?depuis={self.take.pk}"
+        StockType.objects.filter(name="Ambrée exemple").update(category="Bières exemple")
+
+    def fold(self) -> str:
+        html = self.client.get(self.page).content.decode()
+        found = re.search(r'<details class="explainer" id="exclusions"[^>]*>.*?</details>', html, flags=re.DOTALL)
+        self.assertIsNotNone(found)
+        return found.group(0) if found else ""
+
+    def test_each_line_its_words_and_its_button(self):
+        red = StockType.objects.get(name="Rouge exemple")
+        for data in ({"article": red.pk}, {"categorie": "Bières exemple"}):
+            excluded = self.client.post(reverse("inventory:stock_gap_filler_exclude"), {"depuis": self.take.pk, **data})
+            self.assertEqual(excluded.status_code, 302)
+        fold = self.fold()
+        self.assertNotIn("<table", fold)
+        lists = re.findall(r'<ul class="exclusion-list">(.*?)</ul>', fold, flags=re.DOTALL)
+        self.assertEqual(len(lists), 1)
+        items = re.findall(r"<li>(.*?)</li>", lists[0], flags=re.DOTALL)
+        self.assertEqual(len(items), 2)
+        include = reverse("inventory:stock_gap_filler_include")
+        for item in items:
+            with self.subTest(item=item[:40]):
+                forms = re.findall(r"<form\b[^>]*>.*?</form>", item, flags=re.DOTALL)
+                self.assertEqual(len(forms), 1)
+                self.assertIn(f'<form method="post" action="{include}">', forms[0])
+                self.assertIn('<button class="btn btn-small btn-secondary" type="submit">Réinclure</button>', forms[0])
+                # Its words come first, the button after them on the line.
+                self.assertTrue(item.lstrip().startswith(("Catégorie", "Rouge exemple")), item)
+
+    def test_the_category_is_picked_like_any_other_form(self):
+        form = re.search(r'<form method="post" action="[^"]*" class="inline-form">.*?</form>', self.fold(), re.DOTALL)
+        self.assertIsNotNone(form)
+        markup = form.group(0) if form else ""
+        self.assertIn('<label class="inline-label">Catégorie', markup)
+        self.assertIn('<select name="categorie">', markup)
+        self.assertIn('<button class="btn btn-secondary" type="submit">Exclure la catégorie</button>', markup)
+
+    def test_nothing_excluded_is_said_and_folded(self):
+        fold = self.fold()
+        self.assertTrue(fold.startswith('<details class="explainer" id="exclusions">'), fold[:80])
+        self.assertNotIn("exclusion-list", fold)
+        self.assertIn("Rien d'exclu : tous les articles comptent.", unescape(fold))
+
+    def test_a_message_said_in_place_is_drawn_like_any_other(self):
+        """The messages said under « Écarts » and in the fold are the page's
+        own `ul.messages`, each `message message-<level>` - the level alone,
+        never the tag that placed it: base.html's `message.tags` would draw
+        « message-ecarts success », a class no rule colours."""
+        exclude = reverse("inventory:stock_gap_filler_exclude")
+        red = StockType.objects.get(name="Rouge exemple")
+        for data in ({"article": red.pk}, {"categorie": "Bières exemple"}, {"categorie": "Inconnue exemple"}):
+            self.assertEqual(self.client.post(exclude, {"depuis": self.take.pk, **data}).status_code, 302)
+        html = self.client.get(self.page).content.decode()
+        # One list right under the gaps' heading, one first in the fold, open
+        # for it - none at the top.
+        lists = re.findall(r'<ul class="messages">(.*?)</ul>', html, flags=re.DOTALL)
+        self.assertEqual(len(lists), 2)
+        self.assertRegex(html, r'<h2 id="ecarts">Écarts</h2>\s*<ul class="messages">')
+        self.assertRegex(html, r'id="exclusions" open>\s*<summary>[^<]*</summary>\s*<ul class="messages">')
+        classes = [re.findall(r'<li class="([^"]*)">', found) for found in lists]
+        self.assertEqual(classes, [["message message-success"], ["message message-success", "message message-error"]])
+
+
+class GapExclusionListStylesheetTests(StylesheetTestCase):
+    def test_each_button_stays_on_the_line_it_takes_back(self):
+        """A form is a block: without this, each « Réinclure » would fall on
+        a line of its own under the words it takes back, and a list of five
+        would read as ten lines, every other one a button."""
+        self.assertDeclares(".exclusion-list form", None, {"display": "inline"})
+
+    def test_a_list_of_messages_said_in_place_is_unbulleted(self):
+        """Under « Écarts » and in the fold, as at the top: no bullet in
+        front of a message, nor the list's indent."""
+        self.assertDeclares(".messages", None, {"list-style": "none", "padding": "0"})
+        for level in ("success", "warning", "error"):
+            with self.subTest(level=level):
+                self.assertTrue(self.declared(f".message-{level}").get("background"))
 
 
 class ReviewPanelStylesheetTests(StylesheetTestCase):

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load assets %}
 {% block title %}Banque - MarginMate{% endblock %}
 {% block content %}
     <div class="page-header">
@@ -108,22 +109,22 @@
         <div class="stat-row">
             <div class="stat">
                 <span class="stat-label">Dépenses</span>
-                <span class="stat-value">{{ stats.spending_total|floatformat:2 }} €</span>
+                <span class="stat-value">{{ stats.spending_total|money }} €</span>
                 <span class="stat-note">{{ stats.spending_count }} opération{{ stats.spending_count|pluralize }}</span>
             </div>
             <div class="stat">
                 <span class="stat-label">Rattachées à une facture</span>
-                <span class="stat-value">{{ stats.linked_total|floatformat:2 }} €</span>
+                <span class="stat-value">{{ stats.linked_total|money }} €</span>
                 <span class="stat-note">{{ stats.linked_count }} opération{{ stats.linked_count|pluralize }}</span>
             </div>
             <div class="stat{% if stats.todo_count %} stat-warn{% endif %}">
                 <span class="stat-label">Sans facture</span>
-                <span class="stat-value">{{ stats.todo_total|floatformat:2 }} €</span>
+                <span class="stat-value">{{ stats.todo_total|money }} €</span>
                 <span class="stat-note">{{ stats.todo_count }} opération{{ stats.todo_count|pluralize }}</span>
             </div>
             <div class="stat">
                 <span class="stat-label">Pas de facture attendue</span>
-                <span class="stat-value">{{ stats.no_invoice_total|floatformat:2 }} €</span>
+                <span class="stat-value">{{ stats.no_invoice_total|money }} €</span>
                 <span class="stat-note">
                     {{ stats.no_invoice_count }} opération{{ stats.no_invoice_count|pluralize }}, dont {{ stats.by_rule_count }} par
                     <a href="{% url 'bank:rule_list' %}">règle</a>
@@ -136,7 +137,7 @@
             {% endcomment %}
             <div class="stat">
                 <span class="stat-label">Entrées</span>
-                <span class="stat-value">{{ stats.income_total|floatformat:2 }} €</span>
+                <span class="stat-value">{{ stats.income_total|money }} €</span>
                 <span class="stat-note">
                     {{ stats.income_count }} opération{{ stats.income_count|pluralize }} ·
                     <a href="{{ income_url }}">face aux ventes</a>
@@ -179,7 +180,7 @@
                                 <tr>
                                     <td><strong>{{ group.name }}</strong></td>
                                     <td class="num">{{ group.count }}</td>
-                                    <td class="num" data-sort="{{ group.total|stringformat:'s' }}">{{ group.total|floatformat:2 }} €</td>
+                                    <td class="num" data-sort="{{ group.total|stringformat:'s' }}">{{ group.total|money }} €</td>
                                     <td data-sort="{{ group.last|date:'Y-m-d' }}">{{ group.last|date:"d/m/Y" }}</td>
                                     <td>
                                         <a class="btn btn-small btn-secondary"
@@ -222,13 +223,13 @@
                                         <strong>{{ line.counterparty|default:line.bank_type }}</strong>
                                         <span class="read-as">{{ line.get_kind_display }} · {{ line.label|truncatechars:90 }}</span>
                                     </td>
-                                    <td class="num" data-sort="{{ line.amount|stringformat:'s' }}">{{ line.amount|floatformat:2 }} €</td>
+                                    <td class="num" data-sort="{{ line.amount|stringformat:'s' }}">{{ line.amount|money }} €</td>
                                     <td>
                                         {% if row.status == "linked" %}
                                             {% for link in row.links %}
                                                 <div>
                                                     <a href="{% url 'invoices:invoice_detail' link.invoice.pk %}">{{ link.invoice.supplier.name }} n° {{ link.invoice.invoice_number|default:link.invoice.pk }}</a>
-                                                    <span class="muted">· {{ link.invoice.invoice_date|date:"d/m/Y"|default:"sans date" }} · {{ link.total|floatformat:2 }} €</span>
+                                                    <span class="muted">· {{ link.invoice.invoice_date|date:"d/m/Y"|default:"sans date" }} · {{ link.total|money }} €</span>
                                                     <span class="status-pill status-linked">{{ link.payment.get_method_display }}</span>
                                                     {# One invoice at a time: « Délier » alone took all three off. #}
                                                     {% if row.payments|length > 1 %}
@@ -241,14 +242,14 @@
                                                         </form>
                                                     {% endif %}
                                                     {% for other in link.others %}
-                                                        <span class="read-as">Aussi réglée par l'opération du {{ other.paid_on|date:"d/m/Y" }} ({{ other.counterparty|default:other.bank_type }}, {{ other.amount_due|floatformat:2 }} €)</span>
+                                                        <span class="read-as">Aussi réglée par l'opération du {{ other.paid_on|date:"d/m/Y" }} ({{ other.counterparty|default:other.bank_type }}, {{ other.amount_due|money }} €)</span>
                                                     {% endfor %}
                                                 </div>
                                             {% endfor %}
                                             {% if row.gap %}
                                                 {# The gap is said, never corrected: the line stays linked, and the two figures say the rest. #}
                                                 <p class="read-as">
-                                                    Factures {{ row.gap.invoiced|floatformat:2 }} € pour {{ row.gap.due|floatformat:2 }} € débités — {{ row.gap.difference|floatformat:2 }} € de {% if row.gap.over %}plus{% else %}moins{% endif %} que la dépense.
+                                                    Factures {{ row.gap.invoiced|money }} € pour {{ row.gap.due|money }} € débités — {{ row.gap.difference|money }} € de {% if row.gap.over %}plus{% else %}moins{% endif %} que la dépense.
                                                     {% if row.gap.shared %}Une facture est aussi réglée par une autre opération.{% endif %}
                                                 </p>
                                             {% endif %}
@@ -275,7 +276,7 @@
                                             {% endcomment %}
                                             {% with entry=row.entry %}
                                                 {% if entry.commission is not None %}
-                                                    <span>{{ entry.name }} : {{ entry.gross|floatformat:2 }} € encaissés, {{ entry.commission|floatformat:2 }} € de commission</span>
+                                                    <span>{{ entry.name }} : {{ entry.gross|money }} € encaissés, {{ entry.commission|money }} € de commission</span>
                                                 {% elif entry.gross_from_amount %}
                                                     <span>{{ entry.name }} : brut non imprimé, commission inconnue</span>
                                                 {% elif entry.unnamed %}
@@ -303,8 +304,8 @@
                                                         {% for invoice in option.invoices %}<input type="hidden" name="invoice" value="{{ invoice.pk }}">{% endfor %}
                                                         <span>
                                                             {% for invoice in option.invoices %}{{ invoice.supplier.name }} n° {{ invoice.invoice_number|default:invoice.pk }} {% if invoice.invoice_date %}du {{ invoice.invoice_date|date:"d/m/Y" }}{% else %}sans date{% endif %}{% if not forloop.last %} + {% endif %}{% endfor %}
-                                                            · {{ option.total|floatformat:2 }} €
-                                                            {% if option.gap %}<span class="status-pill status-NEEDS_REVIEW">écart {{ option.gap|floatformat:2 }} €</span>{% endif %}
+                                                            · {{ option.total|money }} €
+                                                            {% if option.gap %}<span class="status-pill status-NEEDS_REVIEW">écart {{ option.gap|money }} €</span>{% endif %}
                                                         </span>
                                                         <button class="btn btn-small" type="submit">Rattacher</button>
                                                     </form>

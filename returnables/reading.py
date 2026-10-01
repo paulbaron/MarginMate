@@ -63,6 +63,7 @@ from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from types import SimpleNamespace
 
+from common import group_thousands
 from returnables import patterns
 from returnables.patterns import (
     Budget,
@@ -490,12 +491,13 @@ def _alnums(value: str) -> int:
 
 
 def french_number(value: Decimal) -> str:
-    """30,00 - or 0,3333 when it has more decimals than cents."""
+    """30,00 - or 0,3333 when it has more decimals than cents; 1 234,50, its
+    thousands grouped by a no-break space (an amount a page shows)."""
     if value == value.quantize(Decimal("0.01")):
         text = f"{value:.2f}"
     else:
         text = f"{value.normalize():f}"
-    return text.replace(".", ",")
+    return group_thousands(text).replace(".", ",")
 
 
 def line_amount(line: ReadLine) -> Decimal | None:

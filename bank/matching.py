@@ -58,6 +58,8 @@ from decimal import Decimal
 
 from rapidfuzz.distance import Levenshtein
 
+from common import format_money
+
 # The bank books a card payment a day or three after the card was used.
 CARD_DAYS_BEFORE = timedelta(days=3)
 CARD_DAYS_AFTER = timedelta(days=1)
@@ -137,8 +139,8 @@ TIER_RULES = (
             f"factures de ce fournisseur ont exactement ce montant, la plus proche est datée dans les "
             f"{RECURRING_DAYS_BEFORE.days} jours avant le paiement et chacune des autres en est éloignée d'au moins "
             f"{RECURRING_MARGIN.days} jours de plus (une facture mensuelle : la bonne est celle du mois). Soit une "
-            f"seule facture est à {NEAR_SURE_GAP:.2f} € au plus du montant, aucune autre aussi près (un total lu à "
-            f"un centime près) - et, pour {NOT_BY_CARD}, datée elle aussi dans les "
+            f"seule facture est à {format_money(NEAR_SURE_GAP)} € au plus du montant, aucune autre aussi près (un "
+            f"total lu à un centime près) - et, pour {NOT_BY_CARD}, datée elle aussi dans les "
             f"{RECURRING_DAYS_BEFORE.days} jours : à quelques centimes près et un mois plus loin, c'est la facture "
             "du mois précédent. Cochée d'avance ; à décocher si le doute existe."
         ),
@@ -561,19 +563,21 @@ def _close_tier(close, payment: Payment) -> tuple[str, str]:
         days = _days_apart(within[0], payment)
         if payment.kind not in PAID_ON_THE_SPOT and days > RECURRING_DAYS_BEFORE.days:
             return TO_CONFIRM, (
-                f"La seule facture à {gap:.2f} € du montant est datée {days} jours avant le paiement, au-delà de "
-                f"{RECURRING_DAYS_BEFORE.days} : la facture du mois n'est peut-être pas importée."
+                f"La seule facture à {format_money(gap)} € du montant est datée {days} jours avant le paiement, "
+                f"au-delà de {RECURRING_DAYS_BEFORE.days} : la facture du mois n'est peut-être pas importée."
             )
         return NEAR_SURE, (
-            f"Une seule facture du fournisseur nommé à {gap:.2f} € du montant, aucune autre à moins de "
-            f"{NEAR_SURE_GAP:.2f} € : un total lu à un centime près."
+            f"Une seule facture du fournisseur nommé à {format_money(gap)} € du montant, aucune autre à moins de "
+            f"{format_money(NEAR_SURE_GAP)} € : un total lu à un centime près."
         )
     if within:
-        return TO_CONFIRM, f"{len(within)} factures à moins de {NEAR_SURE_GAP:.2f} € du montant : laquelle ?"
+        return TO_CONFIRM, (
+            f"{len(within)} factures à moins de {format_money(NEAR_SURE_GAP)} € du montant : laquelle ?"
+        )
     gap = abs(close[0].total - due)
     return TO_CONFIRM, (
-        f"L'écart le plus faible est de {gap:.2f} €, plus que les {NEAR_SURE_GAP:.2f} € d'une erreur de "
-        "lecture : c'est peut-être une autre facture."
+        f"L'écart le plus faible est de {format_money(gap)} €, plus que les {format_money(NEAR_SURE_GAP)} € "
+        "d'une erreur de lecture : c'est peut-être une autre facture."
     )
 
 

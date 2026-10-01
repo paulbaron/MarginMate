@@ -116,13 +116,13 @@ decision would be taken on something that may never be served.
                 <td class="num" data-label="Coût (HT)">
                     {% with range=recipe.summary_data.cost_range %}
                         {% if range %}
-                            {% if range.0 == range.1 %}{{ range.0|floatformat:2 }} €{% else %}{{ range.0|floatformat:2 }} – {{ range.1|floatformat:2 }} €{% endif %}
+                            {% if range.0 == range.1 %}{{ range.0|money }} €{% else %}{{ range.0|money }} – {{ range.1|money }} €{% endif %}
                         {% else %}—{% endif %}
                     {% endwith %}
                 </td>
                 <td class="num" data-label="Prix (TTC)" data-sort="{{ recipe.selling_price_ttc|default_if_none:'' }}">
                     {% if recipe.is_sold_directly %}
-                        {{ recipe.selling_price_ttc|floatformat:2 }} €
+                        {{ recipe.selling_price_ttc|money }} €
                     {% else %}
                         {# A blank price says « pas vendue directement »: the column spells it out. #}
                         <span class="read-as">Pas vendue directement</span>

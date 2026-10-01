@@ -24,6 +24,8 @@ import re
 from datetime import date, datetime
 from decimal import Decimal
 
+from common import format_money
+
 from .base import InvoiceParser, ParsedInvoice, ParsedLine, PdfPage
 from .registry import register
 
@@ -115,8 +117,9 @@ def _to_int(text: str | None, default: int = 0) -> int:
 
 def _fr(value: Decimal) -> str:
     """An amount the way the invoice prints it, for a message a person reads
-    next to the document itself."""
-    return f"{value:.2f}".replace(".", ",")
+    next to the document itself, its thousands grouped like every amount on a
+    screen."""
+    return format_money(value).replace(".", ",")
 
 
 def _read_printed_totals(full_text: str):

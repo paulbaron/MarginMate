@@ -61,14 +61,14 @@
     <div class="stat-row">
         <div class="stat">
             <span class="stat-label">Total HT</span>
-            <span class="stat-value">{{ invoice.total_ht|floatformat:2 }} €</span>
+            <span class="stat-value">{{ invoice.total_ht|money }} €</span>
             {% if invoice.reconciliation_adjustment %}
-                <span class="stat-note">dont {{ invoice.reconciliation_adjustment|floatformat:2 }} € {% if invoice.is_receipt %}d'arrondi{% else %}de régularisation{% endif %}</span>
+                <span class="stat-note">dont {{ invoice.reconciliation_adjustment|money }} € {% if invoice.is_receipt %}d'arrondi{% else %}de régularisation{% endif %}</span>
             {% endif %}
         </div>
         <div class="stat">
             <span class="stat-label">Total TTC</span>
-            <span class="stat-value">{{ invoice.total_ttc|floatformat:2 }} €</span>
+            <span class="stat-value">{{ invoice.total_ttc|money }} €</span>
         </div>
         {% with payments=invoice.payments.all %}
         {% if payments %}
@@ -85,10 +85,10 @@
             <span class="stat-value">{% if payments|length > 1 %}{{ payments|length }} opérations{% else %}{{ payments.0.transaction.paid_on|date:"d/m/Y" }}{% endif %}</span>
             <span class="stat-note">
                 {% if paid_gap %}
-                    {{ paid_total|floatformat:2 }} € réglés sur {{ invoice.total_ttc|floatformat:2 }} €.<br>
+                    {{ paid_total|money }} € réglés sur {{ invoice.total_ttc|money }} €.<br>
                 {% endif %}
                 {% for payment in payments %}
-                    <a href="{% url 'bank:bank_home' %}?vue=rapprochees">{% if payments|length > 1 %}{{ payment.transaction.paid_on|date:"d/m/Y" }} · {% endif %}{{ payment.transaction.counterparty|default:payment.transaction.bank_type }} · {{ payment.transaction.amount_due|floatformat:2 }} €</a>{% if not forloop.last %}<br>{% endif %}
+                    <a href="{% url 'bank:bank_home' %}?vue=rapprochees">{% if payments|length > 1 %}{{ payment.transaction.paid_on|date:"d/m/Y" }} · {% endif %}{{ payment.transaction.counterparty|default:payment.transaction.bank_type }} · {{ payment.transaction.amount_due|money }} €</a>{% if not forloop.last %}<br>{% endif %}
                 {% endfor %}
             </span>
         </div>
@@ -109,7 +109,7 @@
 
     {% if invoice.reconciliation_adjustment and invoice.is_receipt %}
         <div class="message">
-            Arrondi : <strong>{{ invoice.reconciliation_adjustment|floatformat:2 }} €</strong> d'écart entre les
+            Arrondi : <strong>{{ invoice.reconciliation_adjustment|money }} €</strong> d'écart entre les
             lignes arrondies en HT et la base HT du ticket, compté dans le total HT, jamais dans le coût d'un produit.
         </div>
     {% elif invoice.reconciliation_adjustment and invoice.is_einvoice %}
@@ -118,13 +118,13 @@
         facture » in the checks): nothing is deduced from a gap.
         {% endcomment %}
         <div class="message">
-            <strong>{{ invoice.reconciliation_adjustment|floatformat:2 }} €</strong> HT facturés hors lignes
+            <strong>{{ invoice.reconciliation_adjustment|money }} €</strong> HT facturés hors lignes
             (droits, éco-participation, remise globale) : comptés dans le total, sans être imputés à un produit.
         </div>
     {% elif invoice.reconciliation_adjustment %}
         <div class="message">
             Le total imprimé dépasse la somme des lignes de
-            <strong>{{ invoice.reconciliation_adjustment|floatformat:2 }} €</strong> : des droits facturés
+            <strong>{{ invoice.reconciliation_adjustment|money }} €</strong> : des droits facturés
             globalement (accise, vignette sécu), ajoutés au total avec leur TVA sans être imputés à un produit.
         </div>
     {% endif %}
@@ -166,15 +166,15 @@
                     {% endif %}
                     {% if line.taxes or line.discount_ttc or line.discount and line.printed_ttc is None %}
                         <br><span class="muted" style="font-size:0.8em;">
-                            {% if line.taxes %}+ {{ line.taxes|floatformat:2 }} € de taxes{% endif %}
+                            {% if line.taxes %}+ {{ line.taxes|money }} € de taxes{% endif %}
                             {% if line.taxes and line.discount %} · {% endif %}
-                            {% if line.discount_ttc and line.printed_ttc is not None %}{{ line.printed_ttc|floatformat:2 }} € TTC imprimé, − {{ line.discount_ttc|floatformat:2 }} € de remise
-                            {% elif line.discount %}− {{ line.discount|floatformat:2 }} € HT de remise{% endif %}
+                            {% if line.discount_ttc and line.printed_ttc is not None %}{{ line.printed_ttc|money }} € TTC imprimé, − {{ line.discount_ttc|money }} € de remise
+                            {% elif line.discount %}− {{ line.discount|money }} € HT de remise{% endif %}
                         </span>
                     {% endif %}
                     {% if line.spread_ht %}
                         <br><span class="muted" style="font-size:0.8em;">
-                            + {{ line.spread_ht|floatformat:2 }} € HT de frais répartis : revient à {{ line.cost_ht|floatformat:2 }} € HT
+                            + {{ line.spread_ht|money }} € HT de frais répartis : revient à {{ line.cost_ht|money }} € HT
                         </span>
                     {% endif %}
                 </td>
@@ -191,10 +191,10 @@
                 </td>
                 <td class="num">{{ line.quantity|quantity }}</td>
                 <td class="num">{% if line.total_volume %}{{ line.total_volume|floatformat:3 }}{% else %}<span class="muted">—</span>{% endif %}</td>
-                <td class="num">{{ line.unit_cost_ht|floatformat:4 }} €</td>
-                <td class="num">{{ line.total_ht|floatformat:2 }} €</td>
+                <td class="num">{{ line.unit_cost_ht|money:4 }} €</td>
+                <td class="num">{{ line.total_ht|money }} €</td>
                 <td class="num">{{ line.vat_percent|floatformat:"-1" }} %</td>
-                <td class="num">{{ line.total_ttc|floatformat:2 }} €</td>
+                <td class="num">{{ line.total_ttc|money }} €</td>
             </tr>
             {% empty %}
             <tr>
@@ -211,24 +211,24 @@
         <tfoot>
             <tr>
                 <td colspan="5">Somme des lignes</td>
-                <td class="num">{{ invoice.lines_total_ht|floatformat:2 }} €</td>
+                <td class="num">{{ invoice.lines_total_ht|money }} €</td>
                 <td colspan="2"></td>
             </tr>
             {% if invoice.reconciliation_adjustment %}
             <tr>
                 <td colspan="5">Régularisation</td>
-                <td class="num">{{ invoice.reconciliation_adjustment|floatformat:2 }} €</td>
+                <td class="num">{{ invoice.reconciliation_adjustment|money }} €</td>
                 <td colspan="2"></td>
             </tr>
             <tr>
                 <td colspan="5"><strong>Total HT</strong></td>
-                <td class="num"><strong>{{ invoice.total_ht|floatformat:2 }} €</strong></td>
+                <td class="num"><strong>{{ invoice.total_ht|money }} €</strong></td>
                 <td colspan="2"></td>
             </tr>
             {% endif %}
             <tr>
                 <td colspan="7"><strong>Total TTC</strong></td>
-                <td class="num"><strong>{{ invoice.total_ttc|floatformat:2 }} €</strong></td>
+                <td class="num"><strong>{{ invoice.total_ttc|money }} €</strong></td>
             </tr>
         </tfoot>
     </table>

@@ -1,10 +1,12 @@
 import json
+import re
 from collections import Counter
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from itertools import groupby
 
 from django.contrib import messages
+from django.contrib.messages import get_messages
 from django.core import signing
 from django.db import transaction
 from django.db.models import ProtectedError
@@ -17,7 +19,16 @@ from django.utils.html import escape
 from django.utils.http import urlencode
 from django.views.generic import CreateView, ListView, TemplateView, UpdateView
 
-from common import DateRange, date_range, is_id, search_key
+from common import (
+    DateRange,
+    date_range,
+    format_money,
+    group_thousands,
+    is_id,
+    read_amount,
+    read_number,
+    search_key,
+)
 
 from .forms import (
     OLD_STOCK_TYPE_ENTRY_SUFFIXES,
@@ -29,7 +40,22 @@ from .forms import (
     is_stock_type_entry,
     stock_take_entry_lookup,
 )
+from .gaps import (
+    MAX_AMOUNT,
+    entry_lines,
+    entry_rows,
+    fill_gaps,
+    gaps_since,
+    list_counts,
+    list_is_stale,
+    sales_watched_from,
+    servings_from,
+    share_summary,
+    show_list,
+)
 from .models import (
+    GapExclusion,
+    GapFillEntry,
     MovementKind,
     Product,
     StockMovement,
@@ -712,7 +738,7 @@ def _build_price_history_svg(points: list[tuple], label: str = "Évolution du pr
     polyline_points = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords)
     dots = "".join(
         f'<circle class="chart-point" cx="{x:.1f}" cy="{y:.1f}" r="3" fill="var(--amber)" '
-        f'data-x="{x:.1f}" data-y="{y:.1f}" data-label="{d:%d/%m/%Y}" data-value="{p:.4f} €" />'
+        f'data-x="{x:.1f}" data-y="{y:.1f}" data-label="{d:%d/%m/%Y}" data-value="{format_money(p, ".4f")} €" />'
         for (x, y), d, p in zip(coords, dates, prices)
     )
     # A faint fill under the line makes the shape readable at a glance, which
@@ -729,8 +755,8 @@ def _build_price_history_svg(points: list[tuple], label: str = "Évolution du pr
         f'stroke="var(--border)" />'
         f'<line x1="{pad_left}" y1="{height - pad_bottom}" x2="{width - pad_right}" y2="{height - pad_bottom}" '
         f'stroke="var(--border)" />'
-        f'<text x="4" y="{pad_top + 4}" font-size="11" fill="var(--muted)">{max_price:.2f} €</text>'
-        f'<text x="4" y="{height - pad_bottom}" font-size="11" fill="var(--muted)">{min_price:.2f} €</text>'
+        f'<text x="4" y="{pad_top + 4}" font-size="11" fill="var(--muted)">{format_money(max_price)} €</text>'
+        f'<text x="4" y="{height - pad_bottom}" font-size="11" fill="var(--muted)">{format_money(min_price)} €</text>'
         f'<text x="{pad_left}" y="{height - 8}" font-size="11" fill="var(--muted)">{date_min:%d/%m/%Y}</text>'
         f'<text x="{width - pad_right}" y="{height - 8}" font-size="11" fill="var(--muted)" '
         f'text-anchor="end">{date_max:%d/%m/%Y}</text>'
@@ -1500,6 +1526,311 @@ def stock_take_variance(request, pk):
             "unlinked_count": full.unlinked_count,
         },
     )
+
+
+#: « Combler les écarts »: `depuis` is the count the gaps run from - in the
+#: address, and posted by the list's forms (not `inventaire`: on « Produits &
+#: charges » that names the CLOSING count of a window); `montant` the amount
+#: to ring up (TTC), a field the add form posts, never read from an address.
+SINCE_PARAM = "depuis"
+AMOUNT_PARAM = "montant"
+#: « 10.000 » or « 1,500 »: one separator and three digits after it. A slip
+#: prints cents (read_number takes « 4,000 » for 4), but a person typing an
+#: amount may well mean ten thousand - read as 10,00 €, the page planned for
+#: that. Asked again rather than guessed.
+AMBIGUOUS_THOUSANDS = re.compile(r"-?[0-9]+[.,][0-9]{3}")
+
+
+#: The form field carrying the last entry the page showed ("" for none): a
+#: second click on « Ajouter » or « Annuler la dernière saisie », or « Effacer
+#: la liste » from a tab left open, posts what the list no longer is, and is
+#: refused. Checked again inside the transaction that acts (SQLite's
+#: IMMEDIATE mode takes the write lock as it opens), so two clicks a second
+#: of planning apart cannot both pass.
+LAST_SHOWN_PARAM = "derniere"
+
+
+def _list_moved(request, take) -> bool:
+    """Whether the list changed since the page that posted was drawn. A post
+    without the field (an old page) is not checked."""
+    shown = request.POST.get(LAST_SHOWN_PARAM)
+    if shown is None:
+        return False
+    last = take.gap_fill_entries.order_by("-created_at", "-pk").first()
+    return shown != (str(last.pk) if last is not None else "")
+
+
+#: What a list that moved is told, by what was asked.
+LIST_MOVED = "La liste a changé entre-temps : rien n'a été {}, vérifiez-la."
+#: Why an amount got no sale, by Plan.reason.
+NOTHING_FOR = {
+    "below_cheapest": "moins que la recette la moins chère",
+    "no_combination": "aucune combinaison de prix ne tombe juste",
+}
+
+
+#: What a refused amount is told, by why it was refused.
+AMOUNT_ERRORS = {
+    "unreadable": "Montant illisible : tapez par exemple 150,50.",
+    "not_positive": "Le montant doit être supérieur à zéro.",
+    "too_big": f"{format_money(MAX_AMOUNT, '.0f')} € au plus.",
+}
+
+
+def read_typed_amount(typed: str) -> tuple[Decimal | None, str]:
+    """(the amount, "") or (None, why it is refused - a key of AMOUNT_ERRORS)."""
+    typed = (typed or "").strip()
+    # Its size first, from the unbounded reading: 20 000 000 000 € is too
+    # big, not unreadable - read_amount stops at a column's width.
+    number = read_number(typed)
+    if number is None or AMBIGUOUS_THOUSANDS.fullmatch("".join(typed.split())):
+        return None, "unreadable"
+    if number <= 0:
+        return None, "not_positive"
+    if number > MAX_AMOUNT:
+        return None, "too_big"
+    amount = read_amount(typed)
+    if amount is None:
+        return None, "unreadable"  # more than two decimals
+    return amount, ""
+
+
+def _gap_filler_url(take) -> str:
+    return f"{reverse('inventory:stock_gap_filler')}?{urlencode({SINCE_PARAM: take.pk})}"
+
+
+def _chosen_take(asked: str, takes) -> StockTake | None:
+    return next((take for take in takes if is_id(asked) and take.pk == int(asked)), None)
+
+
+def stock_gap_filler(request):
+    """« Combler les écarts »: the sales to ring up so that every stock gap
+    since a count shrinks by about the same share - see inventory/gaps.py and
+    inventory/gap_planner.py.
+
+    Amounts are added one after the other (`stock_gap_filler_add`), each
+    planned on top of the ones before, until the list is cleared; this page
+    shows the list, the last entry to ring up first. A count that cannot be
+    read falls back to the latest, never a 500: it arrives from an address."""
+    takes = list(StockTake.objects.order_by("-taken_at"))
+    said = _messages_by_place(request)
+    context = {
+        "top_messages": said[""],
+        "gap_messages": said[GAPS_MESSAGES],
+        "exclusion_messages": said[EXCLUSION_MESSAGES],
+        "takes": takes,
+        "since_param": SINCE_PARAM,
+        "amount_param": AMOUNT_PARAM,
+        "last_shown_param": LAST_SHOWN_PARAM,
+    }
+    if not takes:
+        # No table and no fold to say them in: every message at the top.
+        context["top_messages"] = said[""] + said[GAPS_MESSAGES] + said[EXCLUSION_MESSAGES]
+        return render(request, "inventory/stock_gap_filler.html", context)
+
+    asked = request.GET.get(SINCE_PARAM, "")
+    take = _chosen_take(asked, takes)
+    context["take_not_found"] = bool(asked) and take is None
+    take = take or takes[0]
+
+    entries = list(take.gap_fill_entries.all())
+    report = gaps_since(take)
+    show_list(report, list_counts(entries))
+    shown = []
+    for entry in entries:
+        rows = entry_rows(entry)
+        shown.append({"entry": entry, "lines": rows, "till_differs": sum(1 for row in rows if row.till_differs)})
+    entered = sum((entry.amount for entry in entries), start=Decimal("0"))
+    proposed = sum((entry.total for entry in entries), start=Decimal("0"))
+    context.update(
+        {
+            "take": take,
+            "report": report,
+            "entries": shown,
+            "latest": shown[-1] if shown else None,
+            "earlier": shown[-2::-1],
+            "entered": entered,
+            "proposed": proposed,
+            "left": entered - proposed,
+            "sales": sum(entry.sales for entry in entries),
+            "shares": share_summary(report) if entries else None,
+            "stale": list_is_stale(report, entries),
+        }
+    )
+    return render(request, "inventory/stock_gap_filler.html", context)
+
+
+def stock_gap_filler_add(request):
+    """Add an amount to the list: its sales are planned on top of the
+    entries already there, and kept as proposed."""
+    if request.method != "POST":
+        return redirect("inventory:stock_gap_filler")
+    take = _chosen_take(request.POST.get(SINCE_PARAM, ""), StockTake.objects.order_by("-taken_at"))
+    if take is None:
+        messages.error(request, "Inventaire introuvable.")
+        return redirect("inventory:stock_gap_filler")
+    if _list_moved(request, take):
+        messages.warning(request, LIST_MOVED.format("ajouté"))
+        return redirect(_gap_filler_url(take))
+    amount, error = read_typed_amount(request.POST.get(AMOUNT_PARAM, ""))
+    if error:
+        messages.error(request, AMOUNT_ERRORS[error])
+        return redirect(_gap_filler_url(take))
+
+    entries = list(take.gap_fill_entries.all())
+    report = gaps_since(take)
+    result = fill_gaps(report, amount, list_counts(entries))
+    if not result.lines:
+        why = NOTHING_FOR.get(result.plan.reason, "plus aucune vente ne tient dans les écarts")
+        messages.warning(request, f"Rien pour {group_thousands(amount)} € : {why}.")
+        return redirect(_gap_filler_url(take))
+    watched_from = sales_watched_from(timezone.localdate())
+    with transaction.atomic():
+        # A click a second of planning ago, waiting here for this one's write
+        # lock, then sees the entry it added.
+        if _list_moved(request, take):
+            messages.warning(request, LIST_MOVED.format("ajouté"))
+            return redirect(_gap_filler_url(take))
+        GapFillEntry.objects.create(
+            stock_take=take,
+            amount=amount,
+            total=result.total,
+            reason="" if result.plan.reason == "exact" else result.plan.reason,
+            lines=entry_lines(result),
+            sales_up_to=report.last_sale_day,
+            sales_from=watched_from,
+            sales_seen=servings_from(watched_from, report.end),
+        )
+    return redirect(f"{_gap_filler_url(take)}#a-encaisser")
+
+
+def stock_gap_filler_undo(request):
+    """Take the list's last entry back (a mistyped amount)."""
+    if request.method != "POST":
+        return redirect("inventory:stock_gap_filler")
+    take = _chosen_take(request.POST.get(SINCE_PARAM, ""), StockTake.objects.order_by("-taken_at"))
+    if take is None:
+        return redirect("inventory:stock_gap_filler")
+    with transaction.atomic():
+        if _list_moved(request, take):
+            messages.warning(request, LIST_MOVED.format("retiré"))
+            return redirect(_gap_filler_url(take))
+        last = take.gap_fill_entries.order_by("-created_at", "-pk").first()
+        if last is not None:
+            last.delete()
+            messages.success(request, "Dernière saisie retirée.")
+    return redirect(_gap_filler_url(take))
+
+
+def stock_gap_filler_clear(request):
+    """Empty the list, to start again."""
+    if request.method != "POST":
+        return redirect("inventory:stock_gap_filler")
+    take = _chosen_take(request.POST.get(SINCE_PARAM, ""), StockTake.objects.order_by("-taken_at"))
+    if take is None:
+        return redirect("inventory:stock_gap_filler")
+    with transaction.atomic():
+        if _list_moved(request, take):
+            messages.warning(request, LIST_MOVED.format("effacé"))
+            return redirect(_gap_filler_url(take))
+        deleted, _per_model = take.gap_fill_entries.all().delete()
+    if deleted:
+        messages.success(request, "Liste effacée.")
+    return redirect(_gap_filler_url(take))
+
+
+#: The fields the exclusion forms post: an article, a category, an exclusion.
+EXCLUDED_ARTICLE_PARAM = "article"
+EXCLUDED_CATEGORY_PARAM = "categorie"
+EXCLUSION_PARAM = "exclusion"
+#: Where an exclusion's message is said: its redirect lands on the gaps table
+#: (an article's « Exclure ») or on « Exclus des écarts », screens under the
+#: top of the page - so the message is said there, as Marges does.
+GAPS_MESSAGES = "ecarts"
+EXCLUSION_MESSAGES = "exclusions"
+
+
+def _messages_by_place(request) -> dict[str, list]:
+    """{place: messages} - "" the top of the page, GAPS_MESSAGES above the
+    gaps, EXCLUSION_MESSAGES in « Exclus des écarts ». Read once, which also
+    marks them said."""
+    places: dict[str, list] = {"": [], GAPS_MESSAGES: [], EXCLUSION_MESSAGES: []}
+    for message in get_messages(request):
+        tags = (message.extra_tags or "").split()
+        place = next((tag for tag in (GAPS_MESSAGES, EXCLUSION_MESSAGES) if tag in tags), "")
+        places[place].append(message)
+    return places
+
+
+def _back_to_the_gaps(request, anchor: str):
+    """The page of the count the form came from, at `anchor`."""
+    take = _chosen_take(request.POST.get(SINCE_PARAM, ""), StockTake.objects.order_by("-taken_at"))
+    if take is None:
+        return redirect("inventory:stock_gap_filler")
+    return redirect(f"{_gap_filler_url(take)}#{anchor}")
+
+
+def _category_words(category: str) -> str:
+    return f"« {category} »" if category else "non renseignée"
+
+
+def stock_gap_filler_exclude(request):
+    """Leave an article (`article`, from its row) or a whole category
+    (`categorie`, a category some article carries) out of « Combler les
+    écarts », for the espace - see GapExclusion."""
+    if request.method != "POST":
+        return redirect("inventory:stock_gap_filler")
+    article = request.POST.get(EXCLUDED_ARTICLE_PARAM, "")
+    category = request.POST.get(EXCLUDED_CATEGORY_PARAM)
+    if article:
+        stock_type = StockType.objects.filter(pk=int(article)).first() if is_id(article) else None
+        if stock_type is None:
+            messages.error(request, "Article introuvable : rien n'a été exclu.", extra_tags=GAPS_MESSAGES)
+        else:
+            GapExclusion.objects.get_or_create(stock_type=stock_type)
+            messages.success(
+                request, f"« {stock_type.name} » ne compte plus dans les écarts.", extra_tags=GAPS_MESSAGES
+            )
+        return _back_to_the_gaps(request, "ecarts")
+    if category is not None and StockType.objects.filter(category=category).exists():
+        GapExclusion.objects.get_or_create(category=category)
+        messages.success(
+            request, f"Catégorie {_category_words(category)} exclue des écarts.", extra_tags=EXCLUSION_MESSAGES
+        )
+    else:
+        messages.error(request, "Catégorie introuvable : rien n'a été exclu.", extra_tags=EXCLUSION_MESSAGES)
+    return _back_to_the_gaps(request, "exclusions")
+
+
+def stock_gap_filler_include(request):
+    """Take an exclusion back (`exclusion`, its id): the category, or the
+    article, counts in the gaps again - unless the article's category is
+    left out too, which the message then says."""
+    if request.method != "POST":
+        return redirect("inventory:stock_gap_filler")
+    asked = request.POST.get(EXCLUSION_PARAM, "")
+    exclusion = (
+        GapExclusion.objects.select_related("stock_type").filter(pk=int(asked)).first() if is_id(asked) else None
+    )
+    if exclusion is None:
+        messages.warning(request, "Cette exclusion n'existe plus : rien n'a changé.", extra_tags=EXCLUSION_MESSAGES)
+        return _back_to_the_gaps(request, "exclusions")
+    still_covered = (
+        exclusion.stock_type_id is not None
+        and GapExclusion.objects.filter(category=exclusion.stock_type.category).exists()
+    )
+    if exclusion.stock_type_id is None:
+        said = f"La catégorie {_category_words(exclusion.category)} compte de nouveau dans les écarts."
+    elif still_covered:
+        said = (
+            f"« {exclusion.stock_type.name} » reste exclu : "
+            f"sa catégorie {_category_words(exclusion.stock_type.category)} l'est aussi."
+        )
+    else:
+        said = f"« {exclusion.stock_type.name} » compte de nouveau dans les écarts."
+    exclusion.delete()
+    (messages.warning if still_covered else messages.success)(request, said, extra_tags=EXCLUSION_MESSAGES)
+    return _back_to_the_gaps(request, "exclusions")
 
 
 class StockTakeListView(ListView):

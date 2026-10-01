@@ -1,3 +1,4 @@
+{% load assets %}
 {% comment %}
 What « Tester » read in a file with the format as typed (views.FormatTest):
 its first rows in numbered columns, then the operations the format reads
@@ -59,7 +60,7 @@ there or why it reads none - nothing saved, the file not kept. Context:
                                 <td>{{ line.bank_type|default:"—" }}</td>
                                 <td>{{ line.label|truncatechars:90 }}</td>
                                 <td data-sort="{{ line.value_date|date:'Y-m-d' }}">{% if line.value_date %}{{ line.value_date|date:"d/m/Y" }}{% else %}—{% endif %}</td>
-                                <td class="num" data-sort="{{ line.amount|stringformat:'s' }}">{{ line.amount|floatformat:2 }} €</td>
+                                <td class="num" data-sort="{{ line.amount|stringformat:'s' }}">{{ line.amount|money }} €</td>
                                 <td>{{ kind }}</td>
                                 <td>{{ line.counterparty|default:"—" }}</td>
                             </tr>

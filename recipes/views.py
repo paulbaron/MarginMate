@@ -11,7 +11,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.html import escape
 
 from accounts.tenancy import bound
-from common import PIE_COLORS, is_id
+from common import PIE_COLORS, format_money, is_id
 
 from .forms import (
     MANUAL_SALE_SOURCE,
@@ -70,7 +70,9 @@ def _build_ingredient_pie_svg(breakdown: list[dict]) -> str:
         fraction = float(entry["cost_ht"] / total)
         color = PIE_COLORS[index % len(PIE_COLORS)]
         name = escape(entry.get("name") or entry["ingredient"].source_name)
-        value = f"{entry['cost_ht']:.2f} € · {fraction * 100:.1f} %"
+        # The tooltip's text (static/js/charts.js shows it as it is), so its
+        # amount is grouped like every other one a person reads.
+        value = f"{format_money(entry['cost_ht'])} € · {fraction * 100:.1f} %"
         common = f'data-index="{index}" data-label="{name}" data-value="{value}" data-color="{color}"'
 
         if len(non_zero) == 1:

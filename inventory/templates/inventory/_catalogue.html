@@ -1,4 +1,4 @@
-{% comment %}
+{% load assets %}{% comment %}
 The list of stock items. The page reloads it in place (stock_catalogue) when
 a product is classified in the side panel or sent back: `catalogue-changed`
 is what those answers trigger. `catalogue_url` carries the stock take AND
@@ -17,8 +17,8 @@ next classification.
     {% endcomment %}
     <p class="muted date-range-note">
         {{ date_window_label|capfirst }} : {{ stock_type_count }} article{{ stock_type_count|pluralize }}
-        acheté{{ stock_type_count|pluralize }}{% if categories %}, {{ total_value_ht|floatformat:2 }} € HT
-        / {{ total_value_ttc|floatformat:2 }} € TTC{% endif %}.
+        acheté{{ stock_type_count|pluralize }}{% if categories %}, {{ total_value_ht|money }} € HT
+        / {{ total_value_ttc|money }} € TTC{% endif %}.
         {% comment %}
         What a row opens now follows the same dates as the row - « Acheté
         12 » over forty purchases was the panel arguing with the figure it
@@ -38,9 +38,9 @@ next classification.
             <strong>{{ category.name }}</strong>
             <span class="muted">({{ category.rows|length }})</span>
             {% if period %}
-                <span class="muted">— manquant : {{ category.total_missing_value|floatformat:2 }} € HT</span>
+                <span class="muted">— manquant : {{ category.total_missing_value|money }} € HT</span>
             {% else %}
-                <span class="muted">— {{ category.total_value_ht|floatformat:2 }} € HT / {{ category.total_value_ttc|floatformat:2 }} € TTC</span>
+                <span class="muted">— {{ category.total_value_ht|money }} € HT / {{ category.total_value_ttc|money }} € TTC</span>
             {% endif %}
         </div>
         {% comment %}
@@ -168,7 +168,7 @@ next classification.
                     </td>
                     <td class="num" data-label="Manquant (HT)" data-sort="{{ row.missing_value_ht|default:0 }}">
                         {% if row.missing_value_ht %}
-                            <span class="stock-missing">{{ row.missing_value_ht|floatformat:2 }} €</span>
+                            <span class="stock-missing">{{ row.missing_value_ht|money }} €</span>
                         {% else %}<span class="muted">—</span>{% endif %}
                     </td>
                     {% else %}
@@ -178,8 +178,8 @@ next classification.
                     <td data-label="Unité">{{ row.stock_type.get_unit_display }}</td>
                     {% else %}
                     <td data-label="Unité">{{ row.stock_type.get_unit_display }}</td>
-                    <td class="num" data-label="Total HT">{{ row.value_ht|floatformat:2 }} €</td>
-                    <td class="num" data-label="Total TTC">{{ row.value_ttc|floatformat:2 }} €</td>
+                    <td class="num" data-label="Total HT">{{ row.value_ht|money }} €</td>
+                    <td class="num" data-label="Total TTC">{{ row.value_ttc|money }} €</td>
                     {% endif %}
                     <td class="row-actions">
                         <a href="{% url 'inventory:stock_type_update' row.stock_type.pk %}">Modifier</a>
@@ -240,7 +240,7 @@ underneath where its documents name several.
     <details class="explainer charges" data-persist="charges">
         <summary>
             Charges et abonnements
-            <span class="muted">— {{ charge_suppliers|length }} fournisseur{{ charge_suppliers|length|pluralize }}, {{ charge_total_ttc|floatformat:2 }} € TTC {% if period %}sur la période{% elif date_window %}{{ date_window_label }}{% else %}sur 12 mois{% endif %}</span>
+            <span class="muted">— {{ charge_suppliers|length }} fournisseur{{ charge_suppliers|length|pluralize }}, {{ charge_total_ttc|money }} € TTC {% if period %}sur la période{% elif date_window %}{{ date_window_label }}{% else %}sur 12 mois{% endif %}</span>
         </summary>
         <p class="muted">
             {% comment %}
@@ -301,7 +301,7 @@ underneath where its documents name several.
                             <td class="num" data-label="{{ charge_documents_heading }}" data-sort="{{ row.documents }}">
                                 {{ row.documents }}{% if row.documents_all != row.documents %} <span class="muted">sur {{ row.documents_all }}</span>{% endif %}
                             </td>
-                            <td class="num" data-label="Total TTC">{{ row.total_ttc|floatformat:2 }} €</td>
+                            <td class="num" data-label="Total TTC">{{ row.total_ttc|money }} €</td>
                             <td data-label="Dernier" data-sort="{{ row.last|date:'Y-m-d' }}">{{ row.last|date:"d/m/Y"|default:"—" }}</td>
                             <td class="row-actions phone-card-end">
                                 <button type="button" class="btn btn-small btn-secondary js-price-history-toggle"
@@ -324,7 +324,7 @@ underneath where its documents name several.
                                 data-movements-url="{% url 'inventory:charge_documents' charge_item.product.pk %}{{ panel_window_query }}">
                                 <td class="muted"><span class="chevron">▸</span>{{ charge_item.name }}</td>
                                 <td class="num muted" data-label="{{ charge_documents_heading }}">{{ charge_item.documents }}</td>
-                                <td class="num muted" data-label="Total TTC">{{ charge_item.total_ttc|floatformat:2 }} €</td>
+                                <td class="num muted" data-label="Total TTC">{{ charge_item.total_ttc|money }} €</td>
                                 <td></td>
                                 <td class="row-actions phone-card-end">
                                     <button type="button" class="btn btn-small btn-secondary js-price-history-toggle"

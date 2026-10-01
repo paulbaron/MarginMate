@@ -16,6 +16,7 @@ from invoices.tests.einvoice_files import CII_TWO_RATES
 from invoices.tests.test_einvoice_import import seller, write_xml
 
 D = Decimal
+NBSP = "\N{NO-BREAK SPACE}"
 
 
 class RereadEInvoicesTests(TestCase):
@@ -41,6 +42,14 @@ class RereadEInvoicesTests(TestCase):
         self.assertEqual(self.invoice.printed_total_ttc, D("229.39"))
         self.assertEqual(self.invoice.total_ttc, D("229.39"))
         self.assertIn("Brasserie du Canal n° FA-2026-0042 : 20.00 € -> 229.39 €", said)
+
+    def test_its_report_groups_the_amounts(self):
+        """A console report is read by a person: its amounts grouped like
+        every other (the owner, 01/10/2026)."""
+        self.filed_wrong()
+        Invoice.objects.filter(pk=self.invoice.pk).update(printed_total_ttc=D("1234.56"))
+        said = self.run_command()
+        self.assertIn(f"Brasserie du Canal n° FA-2026-0042 : 1{NBSP}234.56 € -> 229.39 €", said)
 
     def test_the_dry_run_changes_nothing(self):
         self.filed_wrong()

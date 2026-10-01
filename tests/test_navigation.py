@@ -17,13 +17,22 @@ import re
 from types import SimpleNamespace
 
 from django.test import TestCase
-from django.urls import reverse
+from django.urls import resolve, reverse
 from django.utils.html import escape
 
 from config import navigation
+from inventory.models import GapExclusion, GapFillEntry, StockType
 from recipes.models import PosProduct
 from staff.models import Employee
-from tests.factories import make_invoice, make_product, make_recipe, make_stock_type, make_supplier
+from tests.factories import (
+    make_invoice,
+    make_product,
+    make_recipe,
+    make_stock_take,
+    make_stock_type,
+    make_supplier,
+)
+from tests.test_views_smoke import make_gaps_to_fill
 
 LABELS = [
     "Produits &amp; charges",
@@ -101,6 +110,16 @@ class NavigationTests(TestCase):
 
         pickup = make_pickup()
         slip = make_slip()
+        # A count, so « Combler les écarts » draws its form rather than its
+        # empty state - and an amount typed, so it draws its list too.
+        take = make_gaps_to_fill()
+        gap_filler = reverse("inventory:stock_gap_filler")
+        added = self.client.post(reverse("inventory:stock_gap_filler_add"), {"depuis": take.pk, "montant": "70"})
+        self.assertEqual(added.status_code, 302)
+        self.assertTrue(GapFillEntry.objects.filter(stock_take=take).exists())
+        self.assertContains(self.client.get(gap_filler, {"depuis": take.pk}), 'id="a-encaisser"')
+        # And one count with no list: the latest, so the page with none.
+        make_stock_take()
         pages = {
             "Produits &amp; charges": [
                 reverse("inventory:stock_list"),
@@ -126,7 +145,16 @@ class NavigationTests(TestCase):
                 reverse("recipes:sales_list"),
                 reverse("recipes:sale_document_create"),
             ],
-            "Inventaires": [reverse("inventory:stock_take_list"), reverse("inventory:stock_take_create")],
+            "Inventaires": [
+                reverse("inventory:stock_take_list"),
+                reverse("inventory:stock_take_create"),
+                gap_filler,
+                # The page with a list.
+                f"{gap_filler}?depuis={take.pk}",
+                # An address from before the list, its amount now read as none.
+                f"{gap_filler}?montant=50",
+                f"{gap_filler}?depuis={take.pk}&montant=50",
+            ],
             "Banque": [reverse("bank:bank_home")],
             "Marges": [reverse("margins:margins_home")],
             "Personnel": [
@@ -155,6 +183,41 @@ class NavigationTests(TestCase):
                     # own words: the one place left saying where the page is
                     # once its title has scrolled away.
                     self.assertEqual(section_shown(response), label)
+
+    def test_the_gap_filler_with_exclusions_lights_inventaires(self):
+        """« Combler les écarts » with articles and a category left out, on
+        every page its exclusion forms land on: still « Inventaires », the
+        folded bar saying so. Both routes are of that section too."""
+        take = make_gaps_to_fill()
+        StockType.objects.filter(name="Ambrée exemple").update(category="Bières exemple")
+        red = StockType.objects.get(name="Rouge exemple")
+        exclude = reverse("inventory:stock_gap_filler_exclude")
+        include = reverse("inventory:stock_gap_filler_include")
+        landed = [
+            self.client.post(exclude, {"depuis": take.pk, "article": red.pk}, follow=True),
+            self.client.post(exclude, {"depuis": take.pk, "categorie": "Bières exemple"}, follow=True),
+            # Refused, the page it lands on all the same.
+            self.client.post(exclude, {"depuis": take.pk, "article": "abc"}, follow=True),
+        ]
+        self.assertEqual(GapExclusion.objects.count(), 2)
+        landed.append(self.client.get(reverse("inventory:stock_gap_filler"), {"depuis": take.pk}))
+        landed.append(self.client.get(reverse("inventory:stock_gap_filler")))
+        landed.append(
+            self.client.post(
+                include,
+                {"depuis": take.pk, "exclusion": GapExclusion.objects.get(category="Bières exemple").pk},
+                follow=True,
+            )
+        )
+        for number, response in enumerate(landed):
+            with self.subTest(page=number):
+                self.assertEqual(response.status_code, 200)
+                self.assertContains(response, 'id="exclusions"')
+                self.assertEqual(active_labels(response), ["Inventaires"])
+                self.assertEqual(section_shown(response), "Inventaires")
+        for url in (exclude, include):
+            with self.subTest(url=url):
+                self.assertEqual(navigation.section_of(resolve(url)), "stock_takes")
 
     def test_every_section_has_its_words(self):
         """A section navigation can light with no words in SECTION_LABELS

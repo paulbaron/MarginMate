@@ -57,7 +57,7 @@ from django.test import tag
 from django.urls import reverse
 from django.utils import timezone
 
-from inventory.models import UnitChoices
+from inventory.models import GapFillEntry, UnitChoices
 from invoices.scrapers import website
 from tests.factories import (
     make_ingredient,
@@ -368,11 +368,20 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
         make_product(supplier=wholesaler, raw_name="REMBOURSEMENTDEPOTGARANTIEEXEMPLEFUT30L")
         punch = make_recipe(name="Punch exemple de la maison", selling_price_ttc="7.00")
         make_ingredient(punch, stock_type=rum, quantity="0.04", group=0)
-        opening = make_stock_take(taken_at=timezone.make_aware(datetime(2026, 6, 1, 23, 0)))
+        self.opening = opening = make_stock_take(taken_at=timezone.make_aware(datetime(2026, 6, 1, 23, 0)))
         make_stock_take_line(stock_take=opening, stock_type=rum, counted_quantity="1", unit=UnitChoices.LITRE)
         self.take = make_stock_take(taken_at=timezone.make_aware(datetime(2026, 6, 30, 23, 0)), note=LONG_NOTE)
         make_stock_take_line(stock_take=self.take, stock_type=rum, counted_quantity="9", unit=UnitChoices.LITRE)
         record_sales([("Punch exemple de la maison", date(2026, 6, 10), 40)])
+        # « Combler les écarts » from the first count, with a list of two
+        # amounts (ten punches each): the last one's sales to ring up, the
+        # one before folded under it, the gaps with the list's columns.
+        for amount in ("70", "70"):
+            added = self.client.post(
+                reverse("inventory:stock_gap_filler_add"), {"depuis": self.opening.pk, "montant": amount}
+            )
+            self.assertEqual(added.status_code, 302)
+        self.assertEqual(GapFillEntry.objects.filter(stock_take=self.opening).count(), 2)
         # « Entrées d'argent » over June: the till's card days, then a payout
         # printing its gross and one from a terminal printing none - its
         # payer retained as « Carte » -, a cash deposit, and a payer printed
@@ -425,6 +434,10 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
             "Factures": reverse("invoices:invoice_list"),
             "les recettes": reverse("recipes:recipe_list"),
             "les écarts d'un inventaire": reverse("inventory:stock_take_variance", args=[self.take.pk]),
+            # From the first count, with its list (setUp): the punches sold
+            # since are sales to draw, and the select names the second count
+            # by its long note.
+            "Combler les écarts": f"{reverse('inventory:stock_gap_filler')}?depuis={self.opening.pk}",
             "les entrées d'argent": self.income,
         }
         problems = []

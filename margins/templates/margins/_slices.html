@@ -1,3 +1,4 @@
+{% load assets %}
 {% comment %}
 A table of slices - the categories, the typologies. Both read the
 same money, so they are rendered by the same block: written twice, a
@@ -34,7 +35,7 @@ first column).
             {% for row in rows %}
                 <tr>
                     <td>{{ row.name }}</td>
-                    <td class="num">{{ row.slice.revenue.ht|floatformat:2 }} €</td>
+                    <td class="num">{{ row.slice.revenue.ht|money }} €</td>
                     <td class="num">{{ row.slice.units }}</td>
                     <td class="num" data-sort="{% if row.slice.is_costed %}{{ row.slice.cost_ht_high }}{% endif %}">
                         {% if row.slice.is_costed %}{% include "margins/_money_range.html" with low=row.slice.cost_ht_low high=row.slice.cost_ht_high %}{% else %}—{% endif %}
@@ -55,7 +56,7 @@ first column).
             <tfoot>
                 <tr class="total">
                     <td>{{ total.name }}</td>
-                    <td class="num">{{ total.slice.revenue.ht|floatformat:2 }} €</td>
+                    <td class="num">{{ total.slice.revenue.ht|money }} €</td>
                     <td class="num">{{ total.slice.units }}</td>
                     <td class="num">
                         {% if total.slice.is_costed %}{% include "margins/_money_range.html" with low=total.slice.cost_ht_low high=total.slice.cost_ht_high %}{% else %}—{% endif %}

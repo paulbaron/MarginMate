@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load assets %}
 {% block title %}{% if is_receipt %}Vérifier{% else %}Corriger{% endif %} {{ invoice.supplier.name }} - MarginMate{% endblock %}
 {% block content %}
     <div class="page-header">
@@ -15,7 +16,7 @@
             <h1>{{ invoice.supplier.name }}{% if not is_receipt and invoice.invoice_number %} — {{ invoice.invoice_number }}{% endif %}</h1>
             <p class="page-subtitle">
                 {{ invoice.invoice_date|date:"d/m/Y"|default:"Sans date" }}
-                · <span id="document-total">{{ invoice.total_ttc|floatformat:2 }}</span> € TTC
+                · <span id="document-total">{{ invoice.total_ttc|money }}</span> € TTC
                 {% if invoice.ocr_confidence %} · lecture la moins sûre : {{ invoice.ocr_confidence_percent|floatformat:0 }}%{% endif %}
                 {% if is_receipt %}
                     {% if invoice.reviewed_at %} · vérifié le {{ invoice.reviewed_at|date:"d/m/Y" }}{% endif %}
@@ -345,7 +346,7 @@
                                 </div>
                                 <p class="unit-price" data-unit-price{% if not line_form.unit_price_hint %} hidden{% endif %}>{{ line_form.unit_price_hint }}</p>
                                 {% if line_form.spread_share %}
-                                    <p class="spread-share">+ {{ line_form.spread_share|floatformat:2 }} € HT de frais répartis : revient à {{ line_form.spread_cost|floatformat:2 }} € HT</p>
+                                    <p class="spread-share">+ {{ line_form.spread_share|money }} € HT de frais répartis : revient à {{ line_form.spread_cost|money }} € HT</p>
                                 {% endif %}
                                 {% if line_form.read_hint %}
                                     <p class="read-as">lu sur le ticket : « {{ line_form.read_hint }} » — rattaché au produit ci-dessus</p>
@@ -441,14 +442,14 @@
                                 <tbody>
                                     {% for price in known_prices %}
                                         <tr>
-                                            <td class="num">{{ price.unit_price_ttc|floatformat:2 }} €</td>
+                                            <td class="num">{{ price.unit_price_ttc|money }} €</td>
                                             <td>{{ price.label }}</td>
                                             <td {% if price.valid_from %}data-sort="{{ price.valid_from|date:'Y-m-d' }}"{% endif %}>
                                                 {{ price.valid_from|date:"d/m/Y"|default:"toujours" }}
                                             </td>
                                             <td class="num">
                                                 <form method="post" data-leaves-lines
-                                                      data-confirm="Oublier que {{ price.unit_price_ttc|floatformat:2 }} € désigne « {{ price.label }} » ? Les lignes déjà nommées ainsi gardent leur nom.">
+                                                      data-confirm="Oublier que {{ price.unit_price_ttc|money }} € désigne « {{ price.label }} » ? Les lignes déjà nommées ainsi gardent leur nom.">
                                                     {% csrf_token %}
                                                     <input type="hidden" name="action" value="forget_price">
                                                     <input type="hidden" name="price" value="{{ price.pk }}">
@@ -525,8 +526,19 @@
         var value = parseFloat(String(input.value).replace(",", "."));
         return isNaN(value) ? null : Math.round(value * 100);
     }
+    // A figure written into a box: as the server parses it back, never
+    // grouped.
     function euros(amount) {
         return (amount / 100).toFixed(2);
+    }
+    // A figure written into a sentence: its thousands grouped by a no-break
+    // space, as the server writes them (common.format_money), so the page
+    // and the check saved on validation say the same words.
+    var THOUSANDS_SEPARATOR = String.fromCharCode(0xa0);
+    function money(amount) {
+        return euros(amount).replace(/[0-9]+/, function (digits) {
+            return digits.replace(/\B(?=(?:[0-9]{3})+$)/g, THOUSANDS_SEPARATOR);
+        });
     }
 
     // HT and TTC follow each other through the line's rate; the one typed
@@ -550,7 +562,8 @@
     }
 
     // "soit 0.39 € TTC l'unité" under a row of several, as typed: the same
-    // rule as LineCorrectionForm.unit_price_hint, which draws the first one.
+    // rule as LineCorrectionForm.unit_price_hint, which draws the first one -
+    // a sentence, so grouped.
     function number(input) {
         if (!input || String(input.value).trim() === "") return null;
         var value = Number(String(input.value).trim().replace(",", "."));
@@ -559,7 +572,7 @@
     function each(amountCents, quantity) {
         // Half away from zero, like ROUND_HALF_UP on the server.
         var value = amountCents / quantity;
-        return euros(Math.sign(value) * Math.round(Math.abs(value)));
+        return money(Math.sign(value) * Math.round(Math.abs(value)));
     }
     function unitHint(row) {
         var hint = row.querySelector("[data-unit-price]");
@@ -629,8 +642,8 @@
         htCheck.classList.toggle("check-pass", passed);
         htCheck.classList.toggle("check-fail", !passed);
         htCheck.querySelector(".check-mark").textContent = passed ? "✓" : "✕";
-        htCheck.querySelector(".check-detail").textContent = "lignes " + euros(sum) + " € HT / document " + euros(base)
-            + " € HT (écart " + (gap < 0 ? "-" : "+") + euros(Math.abs(gap)) + " €)";
+        htCheck.querySelector(".check-detail").textContent = "lignes " + money(sum) + " € HT / document " + money(base)
+            + " € HT (écart " + (gap < 0 ? "-" : "+") + money(Math.abs(gap)) + " €)";
     }
 
     // The lines against the total, as they are typed: the same sum (each
@@ -660,7 +673,7 @@
         var adjustment = check ? Math.round(parseFloat(check.dataset.adjustment || "0") * 100) : 0;
         if (isNaN(adjustment)) adjustment = 0;
         sum += adjustment;
-        if (shownTotal) shownTotal.textContent = euros(sum);
+        if (shownTotal) shownTotal.textContent = money(sum);
         var count = document.getElementById("line-count");
         if (count) {
             count.textContent = kept + " ligne" + (kept > 1 ? "s" : "")
@@ -676,20 +689,20 @@
         // sentence said 134,40 € + 14,40 € / 134,40 €, which adds up nowhere.
         var linesOnly = sum - adjustment;
         var counted = adjustment
-            ? " + " + euros(adjustment) + " € de frais facturés globalement = " + euros(sum) + " €" : "";
+            ? " + " + money(adjustment) + " € de frais facturés globalement = " + money(sum) + " €" : "";
         // Nothing was printed and there is no ticket on a document nobody
         // photographed (receipts.lines_check says the same).
         var printed = lines.dataset.document === "receipt" ? "ticket" : "total de la facture";
         if (paid === null) {
-            detail = "lignes " + euros(linesOnly) + " €" + counted + " : saisissez le total pour les vérifier";
+            detail = "lignes " + money(linesOnly) + " €" + counted + " : saisissez le total pour les vérifier";
         } else {
             var gap = paid - sum;
             passed = Math.abs(gap) <= Math.round(parseFloat(check.dataset.tolerance) * 100);
-            detail = "lignes " + euros(linesOnly) + " €" + counted + " / " + printed + " "
-                + euros(paid) + " € (écart " + (gap < 0 ? "-" : "+") + euros(Math.abs(gap)) + " €)";
+            detail = "lignes " + money(linesOnly) + " €" + counted + " / " + printed + " "
+                + money(paid) + " € (écart " + (gap < 0 ? "-" : "+") + money(Math.abs(gap)) + " €)";
         }
         if (discounts) {
-            detail += " - articles " + euros(sum + discounts) + " € moins " + euros(discounts) + " € de remises";
+            detail += " - articles " + money(sum + discounts) + " € moins " + money(discounts) + " € de remises";
         }
         var neutral = paid === null && lines.dataset.document === "invoice";
         check.classList.toggle("check-pass", passed);

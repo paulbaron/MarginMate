@@ -104,6 +104,20 @@ class RefundTests(NoNetworkTestCase):
             f"facture : 2 (60,00{NBSP}€)",
         )
 
+    def test_amounts_of_a_thousand_euros_or_more_are_said_with_their_thousands_grouped(self):
+        slip = new_slip(lines=[(texts.KEG, 40, D("30.0000"), D("1200.00"))])
+        invoice("VE-0000000008", ["610001"], [refund(texts.KEG, 38), ("Consigne BIERE EXEMPLE 20L", -25, "-1125.00")])
+        result = self.check(slip)
+        self.assertEqual(
+            result.label,
+            f"écart avec la facture n° VE-0000000008 : {texts.KEG} — bon : 40 (1{NBSP}200,00{NBSP}€) {DOT} "
+            f"facture : 38 (1{NBSP}140,00{NBSP}€)",
+        )
+        self.assertEqual(
+            [other.sentence for other in result.others],
+            [f"Consigne BIERE EXEMPLE 20L : -25 (-1{NBSP}125,00{NBSP}€) — facture n° VE-0000000008"],
+        )
+
     def test_amounts_are_compared_to_the_cent(self):
         slip = new_slip()
         invoice("VE-0000000003", ["610001"], [(texts.KEG, -3, "-90.01")])

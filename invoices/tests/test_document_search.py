@@ -108,6 +108,27 @@ class DocumentSearchTests(TestCase):
             with self.subTest(written=written):
                 self.assertEqual(self.found(written), {priced.pk})
 
+    def test_an_amount_as_the_page_prints_it(self):
+        """The pages group an amount's thousands (« 1 234.56 », the owner,
+        01/10/2026): copied off the page into the box it is one amount, not
+        « 1 » and « 234.56 » - which found nothing."""
+        priced = make_invoice(
+            supplier=self.spring,
+            invoice_number="B-6000",
+            invoice_date=date(2026, 4, 6),
+            printed_total_ttc=Decimal("1234.56"),
+        )
+        for written in (
+            "1\N{NO-BREAK SPACE}234.56",
+            "1\N{NARROW NO-BREAK SPACE}234,56",
+            "1 234.56",
+            "Sources 1 234,56",
+        ):
+            with self.subTest(written=written):
+                self.assertEqual(self.found(written), {priced.pk})
+        # A year and a number typed side by side stay two words.
+        self.assertEqual(self.found("2025 1001"), {self.september.pk})
+
     def test_a_bare_date_in_its_three_shapes(self):
         self.assertEqual(self.found("14/09/2025"), {self.september.pk})
         self.assertEqual(self.found("09/2025"), {self.september.pk, self.other.pk})

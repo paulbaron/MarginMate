@@ -8,6 +8,7 @@ from django.core.files import File
 from django.db import transaction
 from django.utils import timezone
 
+from common import group_thousands
 from inventory.matching import resolve_products
 from inventory.models import Product, StockMovement, StockTake, StockTakeLineSource
 from inventory.services import create_stock_movement_for_line, expense_product
@@ -153,7 +154,11 @@ def charge_checks(invoice: Invoice, printed_total) -> list[dict]:
     without one)."""
     from .receipts import date_check
 
-    total = f"{printed_total} € : le total imprimé sur le document." if printed_total is not None else UNREAD_CHARGE
+    total = (
+        f"{group_thousands(printed_total)} € : le total imprimé sur le document."
+        if printed_total is not None
+        else UNREAD_CHARGE
+    )
     checks = [{"label": "Total de la charge", "passed": printed_total is not None, "detail": total}]
     dated = date_check(invoice.invoice_date)
     if dated is not None:

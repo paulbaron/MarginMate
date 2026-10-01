@@ -94,10 +94,10 @@ column's header word for word (inventory/tests/test_products_phone.py).
             <td class="num" data-label="Quantité achetée">
                 {{ entry.purchased_quantity|quantity }} {{ entry.purchased_quantity_unit }}
             </td>
-            <td class="num" data-label="Prix (HT) / {{ stock_type.get_unit_display }}">{{ entry.movement.unit_cost_ht|floatformat:2 }} €</td>
-            <td class="num" data-label="Total HT">{{ entry.line.total_ht|floatformat:2 }} €</td>
+            <td class="num" data-label="Prix (HT) / {{ stock_type.get_unit_display }}">{{ entry.movement.unit_cost_ht|money }} €</td>
+            <td class="num" data-label="Total HT">{{ entry.line.total_ht|money }} €</td>
             <td class="num" data-label="TVA">{{ entry.vat_percent|floatformat:1 }} %</td>
-            <td class="num" data-label="Total TTC">{{ entry.total_ttc|floatformat:2 }} €</td>
+            <td class="num" data-label="Total TTC">{{ entry.total_ttc|money }} €</td>
             <td class="phone-card-wide">
                 {% if entry.line %}
                 <form method="post" action="{% url 'inventory:edit_product_conversion' entry.line.product.id %}"

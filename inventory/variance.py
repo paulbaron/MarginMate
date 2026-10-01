@@ -525,6 +525,26 @@ class VarianceReport:
         )
 
 
+def loss_allowance(left_the_shelf: Decimal, loss_percent) -> Decimal:
+    """What an item may lose without it reading as missing: its own
+    `loss_percent` (the over-pour, the last centilitres, the keg's foam) of
+    what left the shelf.
+
+    Floored at zero because a negative usage is a miscount, and letting it
+    subtract would hand back a negative allowance - i.e. quietly inflate the
+    shortfall. The « Écarts » page and « Combler les écarts » both take it
+    off a gap, so the two cannot disagree about how much loss is normal.
+    """
+    return max(ZERO, left_the_shelf) * loss_fraction(loss_percent)
+
+
+def unit_costs_ht(stock_type_ids=None) -> dict[int, Decimal]:
+    """{stock_type_id: average cost per stock unit} - _movement_totals'
+    second half, for a caller outside this module that wants the costs
+    quantities_sold() and the stock page price things at."""
+    return _movement_totals(stock_type_ids)[1]
+
+
 def _movement_totals(stock_type_ids=None) -> tuple[dict[int, Decimal], dict[int, Decimal]]:
     """({stock_type_id: quantity on the ledger}, {stock_type_id: average cost
     per stock unit}) - one scan of StockMovement for both.
@@ -767,11 +787,10 @@ def _compute_variance(closing_take: StockTake, opening_take: StockTake | None = 
             variance.purchases += member_purchases
             variance.known_losses += in_movements.get("known_losses", ZERO)
             # Each member's allowance at its OWN rate, on what actually left
-            # the shelf. Floored at zero because a negative usage is a
-            # miscount, and letting it subtract would hand the pool a
-            # negative allowance - i.e. quietly inflate the shortfall.
-            member_usage = max(ZERO, member_opening + member_purchases - member_closing)
-            variance.loss_allowance += member_usage * loss_fraction(member.loss_percent)
+            # the shelf - never averaged across the pool.
+            variance.loss_allowance += loss_allowance(
+                member_opening + member_purchases - member_closing, member.loss_percent
+            )
             # Since the beginning there IS no opening count to be missing
             # from - opening stock is zero by definition - so only the
             # closing count matters.
@@ -1170,19 +1189,75 @@ def quantities_sold(
 def _quantities_sold(start, end, unit_costs, available) -> dict[int, SoldQuantity]:
     from django.utils import timezone
 
-    from recipes.models import Recipe
-    from recipes.sales import sales_between, stock_type_sales_between
-
     if end is None:
         end = timezone.localdate()
     if unit_costs is None or available is None:
         ledger_quantities, ledger_costs = _movement_totals()
         unit_costs = ledger_costs if unit_costs is None else unit_costs
         available = ledger_quantities if available is None else available
+    return attribute_sales(read_sales(start, end), available, unit_costs)
 
-    sold = sales_between(start, end)
+
+@dataclass
+class SalesRead:
+    """Everything attributing a window's sales reads from the database, read
+    once - so the same sales can be attributed again with a few more added
+    (« Combler les écarts » plays each sale it proposes through
+    attribute_sales, which is how the stock page will count it once rung).
+
+    `terms` memoises recipe_usage_terms per recipe pk; fill it inside a
+    variation_scope(), or every recipe asked costs its own queries.
+    """
+
+    sold: dict[int, int]
+    as_itself: dict[int, Decimal]
+    recipes: list
+    pool_of: dict[int, frozenset[int]]
+    loss_fractions: dict[int, Decimal]
+    terms: dict[int, list[list[dict[int, Decimal]]]] = field(default_factory=dict)
+
+    def terms_of(self, recipe) -> list[list[dict[int, Decimal]]]:
+        if recipe.pk not in self.terms:
+            self.terms[recipe.pk] = recipe_usage_terms(recipe)
+        return self.terms[recipe.pk]
+
+
+def read_sales(start: date | None, end: date) -> SalesRead:
+    """The sales of the half-open window (start, end], and what attributing
+    them needs: every recipe in the order the engine serves them, the pools,
+    each item's loss fraction."""
+    from recipes.models import Recipe
+    from recipes.sales import sales_between, stock_type_sales_between
+
     recipes = list(Recipe.objects.prefetch_related("ingredients__stock_type", "ingredients__sub_recipe"))
-    pool_of = build_pools(recipes)
+    return SalesRead(
+        sold=sales_between(start, end),
+        as_itself=stock_type_sales_between(start, end),
+        recipes=recipes,
+        pool_of=build_pools(recipes),
+        loss_fractions={
+            stock_type_id: loss_fraction(percent)
+            for stock_type_id, percent in StockType.objects.values_list("id", "loss_percent")
+        },
+    )
+
+
+def attribute_sales(
+    sales: SalesRead,
+    available: dict[int, Decimal],
+    unit_costs: dict[int, Decimal],
+    extra: dict[int, int] | None = None,
+) -> dict[int, SoldQuantity]:
+    """{stock_type_id: SoldQuantity} for the sales read, plus `extra`
+    ({recipe_id: servings}) as if they had been rung up in the same window.
+
+    No query once `sales.terms` holds every recipe sold (or added): the one
+    place the engine's rules live, whether the sales are real or proposed.
+    """
+    sold = dict(sales.sold)
+    for recipe_id, count in (extra or {}).items():
+        sold[recipe_id] = sold.get(recipe_id, 0) + count
+    pool_of = sales.pool_of
 
     result: dict[int, SoldQuantity] = {}
 
@@ -1204,15 +1279,15 @@ def _quantities_sold(start, end, unit_costs, available) -> dict[int, SoldQuantit
         certain[stock_type_id] = certain.get(stock_type_id, ZERO) + amount
 
     # Sold as itself: no recipe, no alternatives, no doubt.
-    for stock_type_id, quantity in stock_type_sales_between(start, end).items():
+    for stock_type_id, quantity in sales.as_itself.items():
         consume(stock_type_id, quantity)
 
     demands: list[tuple[int, list[dict[int, Decimal]]]] = []
-    for recipe in recipes:
+    for recipe in sales.recipes:
         count = sold.get(recipe.pk, 0)
         if not count:
             continue
-        for options in recipe_usage_terms(recipe):
+        for options in sales.terms_of(recipe):
             if not options:
                 continue
             if len(options) == 1:
@@ -1230,12 +1305,8 @@ def _quantities_sold(start, end, unit_costs, available) -> dict[int, SoldQuantit
             for stock_type_id in {st_id for option in options for st_id in option}:
                 entry(stock_type_id)
 
-    loss_fractions = {
-        stock_type_id: loss_fraction(percent)
-        for stock_type_id, percent in StockType.objects.values_list("id", "loss_percent")
-    }
     for stock_type_id, amount in allocate_choices(
-        demands, available, loss_fractions, unit_costs, already_used=certain
+        demands, available, sales.loss_fractions, unit_costs, already_used=certain
     ).items():
         entry(stock_type_id).shared += amount
 

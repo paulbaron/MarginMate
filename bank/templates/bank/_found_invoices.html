@@ -1,3 +1,4 @@
+{% load assets %}
 {% comment %}
 What a search found for ONE operation, alone: the search box swaps
 it into its own row (bank.views.invoice_search), so this fragment holds
@@ -18,15 +19,15 @@ leave no way to say so.
             {% for item in found %}
                 <div>
                     {% if item.here %}
-                        <span class="muted">{{ item.invoice.supplier.name }} n° {{ item.invoice.invoice_number|default:item.invoice.pk }} · {{ item.invoice.invoice_date|date:"d/m/Y"|default:"sans date" }} · {{ item.total|floatformat:2 }} € — déjà rattachée à cette opération</span>
+                        <span class="muted">{{ item.invoice.supplier.name }} n° {{ item.invoice.invoice_number|default:item.invoice.pk }} · {{ item.invoice.invoice_date|date:"d/m/Y"|default:"sans date" }} · {{ item.total|money }} € — déjà rattachée à cette opération</span>
                     {% else %}
                         <label>
                             <input type="checkbox" name="invoice" value="{{ item.invoice.pk }}">
-                            {{ item.invoice.supplier.name }} n° {{ item.invoice.invoice_number|default:item.invoice.pk }} · {{ item.invoice.invoice_date|date:"d/m/Y"|default:"sans date" }} · {{ item.total|floatformat:2 }} €
+                            {{ item.invoice.supplier.name }} n° {{ item.invoice.invoice_number|default:item.invoice.pk }} · {{ item.invoice.invoice_date|date:"d/m/Y"|default:"sans date" }} · {{ item.total|money }} €
                         </label>
                     {% endif %}
                     {% for other in item.elsewhere %}
-                        <span class="read-as">Déjà réglée par l'opération du {{ other.paid_on|date:"d/m/Y" }} ({{ other.counterparty|default:other.bank_type }}, {{ other.amount_due|floatformat:2 }} €)</span>
+                        <span class="read-as">Déjà réglée par l'opération du {{ other.paid_on|date:"d/m/Y" }} ({{ other.counterparty|default:other.bank_type }}, {{ other.amount_due|money }} €)</span>
                     {% endfor %}
                 </div>
             {% endfor %}

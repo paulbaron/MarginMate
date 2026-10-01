@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load assets %}
 {% block title %}Marges - MarginMate{% endblock %}
 {% comment %}
 The page's messages, except those of the « Articles comptés dans la
@@ -102,24 +103,24 @@ that is where it says what changed (views._messages_by_place).
     <div class="stat-row">
         <div class="stat">
             <div class="stat-label">Encaissé (HT)</div>
-            <div class="stat-value">{{ report.revenue.ht|floatformat:2 }} €</div>
+            <div class="stat-value">{{ report.revenue.ht|money }} €</div>
             <div class="stat-note">
-                {{ report.revenue.ttc|floatformat:2 }} € TTC — caisse {{ report.revenue_till.ht|floatformat:2 }} €{% if report.revenue_documents.ht %}, ventes hors caisse {{ report.revenue_documents.ht|floatformat:2 }} €{% endif %}
+                {{ report.revenue.ttc|money }} € TTC — caisse {{ report.revenue_till.ht|money }} €{% if report.revenue_documents.ht %}, ventes hors caisse {{ report.revenue_documents.ht|money }} €{% endif %}
             </div>
         </div>
         <div class="stat">
             <div class="stat-label">Facturé (HT)</div>
-            <div class="stat-value">{{ report.spend.ht|floatformat:2 }} €</div>
+            <div class="stat-value">{{ report.spend.ht|money }} €</div>
             <div class="stat-note">
-                {% if report.invoice_count %}{{ report.invoice_count }} facture{{ report.invoice_count|pluralize }} — {% else %}aucune facture — {% endif %}{{ report.spend.ttc|floatformat:2 }} € TTC, marchandises {{ report.spend_goods.ht|floatformat:2 }} €,
-                charges {{ report.spend_charges.ht|floatformat:2 }} €
+                {% if report.invoice_count %}{{ report.invoice_count }} facture{{ report.invoice_count|pluralize }} — {% else %}aucune facture — {% endif %}{{ report.spend.ttc|money }} € TTC, marchandises {{ report.spend_goods.ht|money }} €,
+                charges {{ report.spend_charges.ht|money }} €
             </div>
         </div>
         <div class="stat">
             <div class="stat-label">Marge réelle (HT)</div>
-            <div class="stat-value {% if report.real_margin_ht < 0 %}bad{% elif report.real_margin_ht > 0 %}good{% endif %}">{{ report.real_margin_ht|floatformat:2 }} €</div>
+            <div class="stat-value {% if report.real_margin_ht < 0 %}bad{% elif report.real_margin_ht > 0 %}good{% endif %}">{{ report.real_margin_ht|money }} €</div>
             <div class="stat-note">
-                {% if report.real_margin_percent is not None %}{{ report.real_margin_percent|floatformat:1 }} % de l'encaissé — {% endif %}marge TTC {{ report.real_margin_ttc|floatformat:2 }} €
+                {% if report.real_margin_percent is not None %}{{ report.real_margin_percent|floatformat:1 }} % de l'encaissé — {% endif %}marge TTC {{ report.real_margin_ttc|money }} €
             </div>
         </div>
         {% comment %}
@@ -130,9 +131,9 @@ that is where it says what changed (views._messages_by_place).
         {% if report.exclusions %}
             <div class="stat stat-selection">
                 <div class="stat-label">Marge réelle — sans : {{ left_out_names }}</div>
-                <div class="stat-value {% if report.kept_margin_ht < 0 %}bad{% elif report.kept_margin_ht > 0 %}good{% endif %}">{{ report.kept_margin_ht|floatformat:2 }} €</div>
+                <div class="stat-value {% if report.kept_margin_ht < 0 %}bad{% elif report.kept_margin_ht > 0 %}good{% endif %}">{{ report.kept_margin_ht|money }} €</div>
                 <div class="stat-note">
-                    HT{% if report.kept_margin_percent is not None %}, {{ report.kept_margin_percent|floatformat:1 }} % de l'encaissé{% endif %} — marge TTC {{ report.kept_margin_ttc|floatformat:2 }} € —
+                    HT{% if report.kept_margin_percent is not None %}, {{ report.kept_margin_percent|floatformat:1 }} % de l'encaissé{% endif %} — marge TTC {{ report.kept_margin_ttc|money }} € —
                     <a href="{{ reset_url }}">tout remettre</a>
                 </div>
             </div>
@@ -142,8 +143,8 @@ that is where it says what changed (views._messages_by_place).
     {% if exclusions %}
         <p class="small spend-left-out">
             <strong>Laissé de côté</strong> dans la seconde marge :
-            {% for row in exclusions %}{% if row.exclusion.invoiced %}{{ row.exclusion.name }} {{ row.exclusion.money.ht|floatformat:2 }} € HT{% else %}{{ row.exclusion.name }} : rien de facturé sur cette période{% endif %} (<a href="{{ row.put_back_url }}">remettre</a>){% if not forloop.last %}, {% endif %}{% endfor %}
-            — {{ report.spend_left_out.ht|floatformat:2 }} € HT sur {{ report.spend.ht|floatformat:2 }} € facturés.
+            {% for row in exclusions %}{% if row.exclusion.invoiced %}{{ row.exclusion.name }} {{ row.exclusion.money.ht|money }} € HT{% else %}{{ row.exclusion.name }} : rien de facturé sur cette période{% endif %} (<a href="{{ row.put_back_url }}">remettre</a>){% if not forloop.last %}, {% endif %}{% endfor %}
+            — {{ report.spend_left_out.ht|money }} € HT sur {{ report.spend.ht|money }} € facturés.
             <a href="{{ reset_url }}">tout remettre</a>
         </p>
     {% endif %}
@@ -154,8 +155,8 @@ that is where it says what changed (views._messages_by_place).
     {% endcomment %}
     {% if report.revenue_documents.ttc %}
         <p class="muted small">
-            Dont ventes hors caisse {{ report.revenue_documents.ht|floatformat:2 }} € HT
-            ({{ report.revenue_documents.ttc|floatformat:2 }} € TTC), dans aucun tableau par catégorie.
+            Dont ventes hors caisse {{ report.revenue_documents.ht|money }} € HT
+            ({{ report.revenue_documents.ttc|money }} € TTC), dans aucun tableau par catégorie.
         </p>
     {% endif %}
 
@@ -214,7 +215,7 @@ that is where it says what changed (views._messages_by_place).
                                         <span class="spend-name">{{ group.name }}</span>
                                     {% endif %}
                                 </td>
-                                <td class="num">{{ group.money.ht|floatformat:2 }} €</td>
+                                <td class="num">{{ group.money.ht|money }} €</td>
                                 <td class="num">{% if group.share is not None %}{{ group.share|floatformat:1 }} %{% else %}—{% endif %}</td>
                             </tr>
                             {% for part in group.members %}
@@ -224,7 +225,7 @@ that is where it says what changed (views._messages_by_place).
                                         <input type="checkbox" name="garder" value="{{ part.key }}"{% if not part.unticked %} checked{% endif %} aria-label="Garder {{ part.name }}">
                                     </td>
                                     <td class="spend-member-name">{{ part.name }}{% if group.unticked %} <span class="muted small">— laissé de côté avec {{ group.name }}</span>{% endif %}</td>
-                                    <td class="num">{{ part.money.ht|floatformat:2 }} €</td>
+                                    <td class="num">{{ part.money.ht|money }} €</td>
                                     <td class="num">{% if part.share is not None %}{{ part.share|floatformat:1 }} %{% else %}—{% endif %}</td>
                                 </tr>
                             {% endfor %}
@@ -234,14 +235,14 @@ that is where it says what changed (views._messages_by_place).
                         <tr>
                             <td></td>
                             <td>Total facturé</td>
-                            <td class="num">{{ report.spend.ht|floatformat:2 }} €</td>
+                            <td class="num">{{ report.spend.ht|money }} €</td>
                             <td class="num">{% if report.spend.ht > 0 %}100 %{% else %}—{% endif %}</td>
                         </tr>
                         {% if report.exclusions %}
                             <tr>
                                 <td></td>
                                 <td>Compté dans la seconde marge</td>
-                                <td class="num">{{ report.spend_kept.ht|floatformat:2 }} €</td>
+                                <td class="num">{{ report.spend_kept.ht|money }} €</td>
                                 <td></td>
                             </tr>
                         {% endif %}
@@ -282,7 +283,7 @@ that is where it says what changed (views._messages_by_place).
         {% if report.extra_products %}
             <div class="stat">
                 <div class="stat-label">Achats des articles cochés (HT)</div>
-                <div class="stat-value">{{ report.extra_products_ht|floatformat:2 }} €</div>
+                <div class="stat-value">{{ report.extra_products_ht|money }} €</div>
                 <div class="stat-note">
                     {{ report.extra_products|length }} article{{ report.extra_products|length|pluralize }} — achats de la période{% if report.extra_products_ht < 0 %}, négatifs : plus rendu qu'acheté{% endif %}
                 </div>
@@ -366,8 +367,8 @@ that is where it says what changed (views._messages_by_place).
                     {% for article in report.extra_products %}
                         <tr>
                             <td>{{ article.name }}</td>
-                            <td class="num">{{ article.ht|floatformat:2 }} €</td>
-                            <td class="num">{{ article.ttc|floatformat:2 }} €</td>
+                            <td class="num">{{ article.ht|money }} €</td>
+                            <td class="num">{{ article.ttc|money }} €</td>
                         </tr>
                     {% endfor %}
                 </tbody>
@@ -418,7 +419,7 @@ that is where it says what changed (views._messages_by_place).
                                 <span class="flag-state-words">{{ category.state }}</span>
                                 {% if category.counted_twice %}<div class="small flag-twice">{{ category.counted_twice }} compté{{ category.counted_twice|pluralize }} deux fois</div>{% elif category.in_recipes %}<div class="muted small">{{ category.in_recipes }} {{ category.in_recipes|pluralize:"sert,servent" }} dans une recette</div>{% endif %}
                             </td>
-                            <td class="num">{{ category.bought_ht|floatformat:2 }} €{% if category.ticked and not category.all_ticked %}<div class="muted small">dont {{ category.counted_ht|floatformat:2 }} € comptés</div>{% endif %}</td>
+                            <td class="num">{{ category.bought_ht|money }} €{% if category.ticked and not category.all_ticked %}<div class="muted small">dont {{ category.counted_ht|money }} € comptés</div>{% endif %}</td>
                             <td class="flag-actions">
                                 <form id="count-articles-{{ forloop.counter }}" method="post" action="{{ count_articles_url }}">
                                     {% csrf_token %}
@@ -437,7 +438,7 @@ that is where it says what changed (views._messages_by_place).
                                     <label><input type="checkbox" form="count-articles-{{ forloop.parentloop.counter }}" name="coche" value="{{ article.pk }}"{% if article.ticked %} checked{% endif %}> {{ article.name }}</label>
                                     {% if article.counted_twice %}<span class="status-pill status-twice">compté deux fois</span>{% elif article.in_recipe %}<span class="muted small">dans une recette</span>{% endif %}
                                 </td>
-                                <td class="num">{% if article.was_bought %}{{ article.bought.ht|floatformat:2 }} €{% else %}<span class="muted">rien acheté</span>{% endif %}</td>
+                                <td class="num">{% if article.was_bought %}{{ article.bought.ht|money }} €{% else %}<span class="muted">rien acheté</span>{% endif %}</td>
                                 <td></td>
                             </tr>
                         {% endfor %}
@@ -467,7 +468,7 @@ that is where it says what changed (views._messages_by_place).
         <p class="muted small">
             {% if report.uncosted_products > report.top_uncosted|length %}
                 Les <strong>{{ report.top_uncosted|length }} plus gros sur {{ report.uncosted_products }}</strong> —
-                {{ report.uncosted_revenue.ht|floatformat:2 }} € HT en tout.
+                {{ report.uncosted_revenue.ht|money }} € HT en tout.
             {% endif %}
             Liez-les à une recette dans <a href="{{ to_link_url }}">« À lier »</a> pour les chiffrer.
         </p>
@@ -486,7 +487,7 @@ that is where it says what changed (views._messages_by_place).
                         <tr>
                             <td>{{ entry.name }}</td>
                             <td class="num">{{ entry.units }}</td>
-                            <td class="num">{{ entry.revenue.ht|floatformat:2 }} €</td>
+                            <td class="num">{{ entry.revenue.ht|money }} €</td>
                             <td>{{ entry.reason }}{% if entry.ignored %} — produit ignoré{% endif %}</td>
                         </tr>
                     {% endfor %}
@@ -512,7 +513,7 @@ that is where it says what changed (views._messages_by_place).
         {% include "margins/_slices.html" with rows=typologies total=typologies_total label="typologies" heading="Typologie" %}
         <p class="muted small">
             Totaux de la <strong>caisse seule</strong> : la marge produits compte en plus les achats des
-            articles cochés{% if report.extra_products_ht %} ({{ report.extra_products_ht|floatformat:2 }} € HT){% endif %}{% if report.revenue_documents.ttc %} et les ventes hors caisse ({{ report.revenue_documents.ht|floatformat:2 }} € HT){% endif %}.
+            articles cochés{% if report.extra_products_ht %} ({{ report.extra_products_ht|money }} € HT){% endif %}{% if report.revenue_documents.ttc %} et les ventes hors caisse ({{ report.revenue_documents.ht|money }} € HT){% endif %}.
         </p>
     {% else %}
         <p class="table-empty">Aucune vente de caisse sur cette période.</p>
@@ -526,18 +527,18 @@ that is where it says what changed (views._messages_by_place).
             closed fold that does not say what it hides is never read.
             {% endcomment %}
             <summary>
-                Ce que ces chiffres ne disent pas{% if report.revenue_without_rate_ttc %} — {{ report.revenue_without_rate_ttc|floatformat:2 }} € sans taux de TVA{% endif %}{% if report.undated_invoices %} — {{ report.undated_invoices }} facture{{ report.undated_invoices|pluralize }} sans date{% endif %}{% if report.hand_typed_units %} — {{ report.hand_typed_units }} unité{{ report.hand_typed_units|pluralize }} saisie{{ report.hand_typed_units|pluralize }} à la main{% endif %}
+                Ce que ces chiffres ne disent pas{% if report.revenue_without_rate_ttc %} — {{ report.revenue_without_rate_ttc|money }} € sans taux de TVA{% endif %}{% if report.undated_invoices %} — {{ report.undated_invoices }} facture{{ report.undated_invoices|pluralize }} sans date{% endif %}{% if report.hand_typed_units %} — {{ report.hand_typed_units }} unité{{ report.hand_typed_units|pluralize }} saisie{{ report.hand_typed_units|pluralize }} à la main{% endif %}
             </summary>
             {% if report.revenue_without_rate_ttc %}
                 <p>
-                    {{ report.revenue_without_rate_ttc|floatformat:2 }} € encaissés sans taux de TVA connu :
+                    {{ report.revenue_without_rate_ttc|money }} € encaissés sans taux de TVA connu :
                     absents du HT, la marge en HT est trop basse d'autant.
                 </p>
             {% endif %}
             {% if report.undated_invoices %}
                 <p>
                     <a href="{{ undated_url }}">{{ report.undated_invoices }} facture{{ report.undated_invoices|pluralize }} sans date</a>
-                    ({{ report.undated_spend.ht|floatformat:2 }} € HT)
+                    ({{ report.undated_spend.ht|money }} € HT)
                     {% if report.undated_in_spend %}
                         : comptées ci-dessus, faute de période choisie.
                     {% else %}

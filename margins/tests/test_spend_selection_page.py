@@ -38,7 +38,7 @@ from django.utils.html import escape
 from django.utils.http import urlencode
 
 from margins.computation import CHARGES_KEY, TO_CLASSIFY_KEY, article_key, category_key, supplier_key
-from margins.tests.test_page import stat_of, text_of, value_of
+from margins.tests.test_page import NBSP, stat_of, text_of, value_of
 from recipes.models import PosProduct, PosProductDailyQuantity
 from tests.factories import make_invoice, make_invoice_line, make_product, make_stock_type, make_supplier
 
@@ -169,7 +169,7 @@ class TwoMarginsTests(SelectionFixture, TestCase):
         without = self.html(MATERIAL, CHARGES_KEY, TO_CLASSIFY_KEY)
 
         self.assertEqual(value_of(stat_of(without, "Encaissé (HT)")), value_of(stat_of(everything, "Encaissé (HT)")))
-        self.assertEqual(value_of(stat_of(without, "Encaissé (HT)")), "1000.00 €")
+        self.assertEqual(value_of(stat_of(without, "Encaissé (HT)")), f"1{NBSP}000.00 €")
         self.assertIn("L'encaissé ne change pas.", text_of(everything))
 
     def test_something_left_out_with_nothing_in_the_window_is_named_as_such(self):

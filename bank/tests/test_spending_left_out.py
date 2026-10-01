@@ -47,6 +47,8 @@ from tests.factories import make_invoice, make_invoice_line, make_product, make_
 from tests.test_views_smoke import assertNoUnrenderedTemplateSyntax
 
 JUNE = DateRange(date(2026, 6, 1), date(2026, 6, 30))
+#: What separates an amount's thousands on the page (common.THOUSANDS_SEPARATOR).
+NBSP = "\N{NO-BREAK SPACE}"
 JUNE_PARAMS = {"du": "2026-06-01", "au": "2026-06-30"}
 PAGE = "bank:spending_home"
 FORM_ID = "pie-choice"
@@ -427,7 +429,7 @@ class ThePageSaysWhatIsLeftOutTests(Fixtures, TestCase):
         self.assertIn("Camembert sans :", html)
         self.assertIn("TVA 500.00 €", html)
         self.assertIn("500.00 € hors du camembert sur", html)
-        self.assertIn("1000.00 € sortis du compte", html)
+        self.assertIn(f"1{NBSP}000.00 € sortis du compte", html)
         self.assertIn("tout remettre", html)
         self.assertLess(html.index("Camembert sans :"), html.index(PIE))
 
@@ -451,10 +453,12 @@ class ThePageSaysWhatIsLeftOutTests(Fixtures, TestCase):
         html = self.page(VAT).content.decode()
         # 1000 + 60 out; 500 of VAT out of the pie; the keg's -180 given
         # back; 740 drawn (rent, works, and the invoice's 240 of beer).
+        # Folded on the template's own white space only: `\s` would fold the
+        # no-break space between the thousands too.
         self.assertIn(
-            "Le camembert dessine 740.00 € des 1060.00 € sortis du compte : les 500.00 € des catégories "
+            f"Le camembert dessine 740.00 € des 1{NBSP}060.00 € sortis du compte : les 500.00 € des catégories "
             "laissées hors du camembert et les -180.00 € déduits par les factures rattachées",
-            re.sub(r"\s+", " ", html),
+            re.sub(r"[ \t\r\n]+", " ", html),
         )
 
     def test_the_stats_do_not_move(self):

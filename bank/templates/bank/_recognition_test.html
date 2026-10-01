@@ -1,3 +1,4 @@
+{% load assets %}
 {% comment %}
 What « Tester » found with the rule as typed (views.RuleTest) - nothing
 saved. Context: `test`, None when nothing was tried.
@@ -11,7 +12,7 @@ saved. Context: `test`, None when nothing was tried.
         {% endcomment %}
         <p>
             <strong>{{ test.count }} opération{{ test.count|pluralize }}</strong>
-            sur {{ test.scanned }} {% if test.till %}entrée{{ test.scanned|pluralize }} d'argent, {{ test.total|floatformat:2 }} €{% else %}opération{{ test.scanned|pluralize }} importée{{ test.scanned|pluralize }}{% if test.received %}, {{ test.received|floatformat:2 }} € reçus{% endif %}{% if test.paid %}, {{ test.paid|floatformat:2 }} € payés{% endif %}{% endif %} :
+            sur {{ test.scanned }} {% if test.till %}entrée{{ test.scanned|pluralize }} d'argent, {{ test.total|money }} €{% else %}opération{{ test.scanned|pluralize }} importée{{ test.scanned|pluralize }}{% if test.received %}, {{ test.received|money }} € reçus{% endif %}{% if test.paid %}, {{ test.paid|money }} € payés{% endif %}{% endif %} :
             rien n'est enregistré.
         </p>
         {% if test.earlier %}
@@ -40,12 +41,12 @@ saved. Context: `test`, None when nothing was tried.
                                 {{ found.line.label|truncatechars:90 }}
                                 {% if found.line.bank_type %}<span class="read-as">{{ found.line.bank_type }}</span>{% endif %}
                             </td>
-                            <td class="num" data-sort="{{ found.line.amount|stringformat:'s' }}">{{ found.line.amount|floatformat:2 }} €</td>
+                            <td class="num" data-sort="{{ found.line.amount|stringformat:'s' }}">{{ found.line.amount|money }} €</td>
                             <td>
                                 {% if found.no_gross %}
                                     brut non imprimé (montant reçu)
                                 {% elif found.gross is not None %}
-                                    encaissé : {{ found.gross|floatformat:2 }} €
+                                    encaissé : {{ found.gross|money }} €
                                 {% elif found.payee or found.card_date %}
                                     {% if found.payee %}tiers : {{ found.payee }}{% endif %}{% if found.payee and found.card_date %} ; {% endif %}{% if found.card_date %}carte du {{ found.card_date|date:"d/m/Y" }}{% endif %}
                                 {% else %}

@@ -1,4 +1,4 @@
-{% comment %}
+{% load assets %}{% comment %}
 Every invoice and ticket. Reloads itself when an import ends
 (`documents-changed`), keeping its filter. A row opens in place on its lines.
 {% endcomment %}
@@ -212,8 +212,8 @@ Every invoice and ticket. Reloads itself when an import ends
                             <span class="status-pill status-{{ invoice.bank_state.css }}">{{ invoice.bank_state.label }}</span>
                         {% endif %}
                     </td>
-                    <td class="num" data-label="Total HT">{{ invoice.total_ht|floatformat:2 }} €</td>
-                    <td class="num" data-label="Total TTC">{{ invoice.total_ttc|floatformat:2 }} €</td>
+                    <td class="num" data-label="Total HT">{{ invoice.total_ht|money }} €</td>
+                    <td class="num" data-label="Total TTC">{{ invoice.total_ttc|money }} €</td>
                     <td class="num phone-card-end">
                         {% if invoice.waiting_check %}
                             <a class="btn btn-small" href="{% url 'invoices:receipt_review' invoice.pk %}{% if lot %}?lot={{ lot.pk }}{% endif %}">Vérifier</a>

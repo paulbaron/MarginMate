@@ -11,14 +11,15 @@ database, because an empty database is the one case that accidentally works:
 no rows means no loop body, so a broken row template never renders.
 """
 
-from datetime import date
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
 from django.test import Client, TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from bank.models import BankTransaction, OperationRule, StatementFormat
-from inventory.models import StockMovement, StockType, UnitChoices
+from inventory.models import GapExclusion, GapFillEntry, StockMovement, StockType, UnitChoices
 from invoices.models import Invoice, ReceiptBatch, ShopItemPrice
 from recipes.models import PosProduct, PosProductDailyQuantity, Recipe, RecipeSale
 from staff.tests.signing_support import SigningTestMixin
@@ -27,15 +28,73 @@ from tests.factories import (
     make_invoice,
     make_invoice_line,
     make_invoice_type,
+    make_movement,
     make_priced_stock_type,
     make_product,
     make_purchase_history,
     make_recipe,
     make_stock_take,
     make_stock_take_line,
+    make_stock_type,
     make_supplier,
 )
 from tests.support import NoNetworkTestCase
+
+#: What « Combler les écarts » displays the till button of the red wine as.
+GAP_TILL_NAME = "Rouge bouteille exemple"
+#: What that button charged since the count - not the recipe's 36,00 €.
+GAP_TILL_PRICE = "en caisse 35.00 €"
+
+
+def make_gaps_to_fill():
+    """« Combler les écarts » with something to propose, every kind of row
+    its gaps table draws: a count ten days ago, deliveries since and recipes
+    sold since - a gap to fill (red), an article bought since and never
+    counted (rosé), and one sold past everything it had (amber), whose
+    recipe is held back - and a tablecloth bought, which no recipe pours.
+    The red's till button rings 35,00 €, not its recipe's 36,00 €. Dated
+    from today, the page's own end of window. Invented data, prices above
+    30 €. Returns the count.
+
+    Red: 6 L counted + 12 bought - 1,5 sold = 16,5 L, 1,8 L allowed as loss:
+    14,7 L to fill, a bottle at 36 €. Rosé: 6 bought - 0,75 sold, 0,6
+    allowed: 4,65 L, a bottle at 34 €. Amber: 1 L counted, 3 sold: -2 L.
+    70 € is exactly one bottle of each."""
+    today = timezone.localdate()
+    take = make_stock_take(
+        taken_at=timezone.make_aware(datetime.combine(today - timedelta(days=10), time(12, 0))),
+        note="Comptage exemple",
+    )
+    red = make_stock_type(name="Rouge exemple", unit=UnitChoices.LITRE)
+    rose = make_stock_type(name="Rosé exemple", unit=UnitChoices.LITRE)
+    amber = make_stock_type(name="Ambrée exemple", unit=UnitChoices.LITRE)
+    make_stock_take_line(stock_take=take, stock_type=red, counted_quantity="6", unit=UnitChoices.LITRE)
+    make_stock_take_line(stock_take=take, stock_type=amber, counted_quantity="1", unit=UnitChoices.LITRE)
+    for article, litres, cost in ((red, "12", "9"), (rose, "6", "8")):
+        make_movement(stock_type=article, quantity=litres, unit_cost_ht=cost, occurred_on=today - timedelta(days=5))
+    recipes = {}
+    for name, article, litres, price, sold in (
+        ("Bouteille de rouge exemple", red, "0.75", "36.00", 2),
+        ("Bouteille de rosé exemple", rose, "0.75", "34.00", 1),
+        ("Pichet ambrée exemple", amber, "1", "32.00", 3),
+    ):
+        recipe = make_recipe(name=name, selling_price_ttc=price)
+        make_ingredient(recipe, stock_type=article, quantity=litres)
+        RecipeSale.objects.create(recipe=recipe, sold_on=today - timedelta(days=3), quantity=sold, source="caisse")
+        recipes[name] = recipe
+    button = PosProduct.objects.create(
+        name=GAP_TILL_NAME, recipe=recipes["Bouteille de rouge exemple"], total_quantity=2
+    )
+    PosProductDailyQuantity.objects.create(
+        product=button,
+        sold_on=today - timedelta(days=3),
+        quantity=2,
+        revenue_ttc=Decimal("70.00"),
+        revenue_read=True,
+    )
+    cloth = make_stock_type(name="Nappe exemple", unit=UnitChoices.UNIT)
+    make_movement(stock_type=cloth, quantity="10", unit_cost_ht="2", occurred_on=today - timedelta(days=5))
+    return take
 
 
 def assertNoUnrenderedTemplateSyntax(test, response, label=""):
@@ -262,6 +321,119 @@ class PageSmokeTests(TestCase):
         has to say so rather than fall over."""
         self.assertPageOK("inventory:stock_take_variance", pk=self.stock_take.pk)
 
+    def test_stock_gap_filler(self):
+        """« Combler les écarts »: from the latest count (today's, nothing
+        since: no row), then from an older one, without a list and with one
+        - two amounts POSTed, each answered with a redirect: the last
+        entry's rows, the earlier one folded, the gaps' rows with the list's
+        columns, the fixture's own recipes listed as not sold since, its
+        unlinked till product warned about, the sales imported three days
+        ago said to be behind the purchases, the tablecloth no recipe pours
+        counted, the till's other price said under its button. Then the last
+        entry taken back and the list cleared, each a redirect too."""
+        url = reverse("inventory:stock_gap_filler")
+        self.assertPageOK("inventory:stock_gap_filler")
+        take = make_gaps_to_fill()
+        page = f"{url}?depuis={take.pk}"
+
+        def drawn(label):
+            response = self.client.get(url, {"depuis": take.pk})
+            self.assertEqual(response.status_code, 200)
+            assertNoUnrenderedTemplateSyntax(self, response, f"{page} {label}")
+            self.assertContains(response, 'data-table-label="écarts"')
+            self.assertContains(response, "Ambrée exemple")
+            self.assertContains(response, "les ventes pas encore importées comptent comme écart")
+            self.assertContains(response, "1 autre article acheté n'est dans aucune recette")
+            return response
+
+        response = drawn("without a list")
+        self.assertNotContains(response, 'data-table-label="recettes à encaisser"')
+        # 70 € is a bottle of each wine; 36 € on top of it, the red again.
+        for amount in ("70", "36"):
+            response = self.client.post(
+                reverse("inventory:stock_gap_filler_add"), {"depuis": take.pk, "montant": amount}
+            )
+            self.assertEqual(response.status_code, 302)
+            self.assertEqual(response["Location"], f"{page}#a-encaisser")
+        response = drawn("with a list")
+        self.assertContains(response, 'data-table-label="recettes à encaisser"')
+        self.assertContains(response, 'data-table-label="montants déjà saisis"')
+        self.assertContains(response, '<th class="num">Comblé</th>')
+        self.assertContains(response, GAP_TILL_NAME)
+        self.assertContains(response, GAP_TILL_PRICE)
+        self.assertEqual(GapFillEntry.objects.filter(stock_take=take).count(), 2)
+        for name in ("inventory:stock_gap_filler_undo", "inventory:stock_gap_filler_clear"):
+            with self.subTest(action=name):
+                response = self.client.post(reverse(name), {"depuis": take.pk})
+                self.assertEqual(response.status_code, 302)
+                self.assertEqual(response["Location"], page)
+        self.assertFalse(GapFillEntry.objects.exists())
+        for name in (
+            "inventory:stock_gap_filler_add",
+            "inventory:stock_gap_filler_undo",
+            "inventory:stock_gap_filler_clear",
+        ):
+            self.assertRedirectsOnGet(name)
+        # The count list and each count lead there.
+        self.assertContains(self.assertPageOK("inventory:stock_take_list"), url)
+        self.assertContains(self.assertPageOK("inventory:stock_take_detail", pk=take.pk), f"{url}?depuis={take.pk}")
+
+    def test_stock_gap_filler_exclusions(self):
+        """« Exclus des écarts »: an article left out from its row, a
+        category and the articles with none from the fold - each POST a
+        redirect to where it was asked -, the page drawn whole with all three
+        listed, then each taken back, a redirect too. A GET to either route
+        goes to the page and changes nothing."""
+        url = reverse("inventory:stock_gap_filler")
+        exclude = reverse("inventory:stock_gap_filler_exclude")
+        include = reverse("inventory:stock_gap_filler_include")
+        take = make_gaps_to_fill()
+        page = f"{url}?depuis={take.pk}"
+        StockType.objects.filter(name="Ambrée exemple").update(category="Bières exemple")
+        red = StockType.objects.get(name="Rouge exemple")
+        for data, landing in (
+            ({"article": red.pk}, f"{page}#ecarts"),
+            ({"categorie": "Bières exemple"}, f"{page}#exclusions"),
+            ({"categorie": ""}, f"{page}#exclusions"),
+        ):
+            with self.subTest(data=data):
+                response = self.client.post(exclude, {"depuis": take.pk, **data})
+                self.assertEqual(response.status_code, 302)
+                self.assertEqual(response["Location"], landing)
+        self.assertEqual(GapExclusion.objects.count(), 3)
+        response = self.client.get(url, {"depuis": take.pk})
+        self.assertEqual(response.status_code, 200)
+        assertNoUnrenderedTemplateSyntax(self, response, f"{page} with exclusions")
+        self.assertContains(response, '<details class="explainer" id="exclusions" open>')
+        self.assertContains(response, '<ul class="exclusion-list">')
+        self.assertContains(response, "Rouge exemple")
+        self.assertContains(response, "Bières exemple")
+        self.assertContains(response, "Catégorie non renseignée")
+        # Every gap left out: no row, the page whole all the same.
+        self.assertNotContains(response, 'data-table-label="écarts"')
+        for exclusion in GapExclusion.objects.all():
+            with self.subTest(exclusion=str(exclusion)):
+                for name in ("inventory:stock_gap_filler_exclude", "inventory:stock_gap_filler_include"):
+                    self.assertRedirectsOnGet(name)
+                response = self.client.post(include, {"depuis": take.pk, "exclusion": exclusion.pk})
+                self.assertEqual(response.status_code, 302)
+                self.assertEqual(response["Location"], f"{page}#exclusions")
+        self.assertFalse(GapExclusion.objects.exists())
+        # The page the « Réinclure » land on: nothing left out, the fold
+        # drawn open all the same for the three messages it holds.
+        response = self.client.get(url, {"depuis": take.pk})
+        assertNoUnrenderedTemplateSyntax(self, response, f"{page} with nothing excluded and its messages")
+        self.assertContains(response, '<details class="explainer" id="exclusions" open>')
+        self.assertContains(response, "Rien d'exclu : tous les articles comptent.")
+        self.assertContains(response, '<li class="message message-', count=3)
+        self.assertContains(response, 'data-table-label="écarts"')
+        # Said once: the next visit draws it shut, with no message.
+        response = self.client.get(url, {"depuis": take.pk})
+        assertNoUnrenderedTemplateSyntax(self, response, f"{page} with nothing excluded")
+        self.assertContains(response, '<details class="explainer" id="exclusions">')
+        self.assertNotContains(response, '<li class="message')
+        self.assertContains(response, 'data-table-label="écarts"')
+
     # --- invoices --------------------------------------------------------
     def test_invoice_list(self):
         self.assertPageOK("invoices:invoice_list")
@@ -433,6 +605,62 @@ class EmptyDatabasePageSmokeTests(TestCase):
 
     def test_stock_take_create(self):
         self.assertPageOK("inventory:stock_take_create")
+
+    def test_stock_gap_filler(self):
+        """No count yet: the gaps run from one, so the page says so and
+        offers to make it - whatever the address carries."""
+        url = reverse("inventory:stock_gap_filler")
+        for query in ({}, {"depuis": "1", "montant": "50"}, {"montant": "abc"}):
+            with self.subTest(query=query):
+                response = self.client.get(url, query)
+                self.assertEqual(response.status_code, 200)
+                assertNoUnrenderedTemplateSyntax(self, response, f"{url} {query}")
+                self.assertContains(response, "empty-state")
+                self.assertContains(response, "Aucun inventaire")
+                self.assertContains(response, reverse("inventory:stock_take_create"))
+        # The list's actions, with no count to keep a list, and the
+        # exclusions' with no article nor category to leave out: a redirect
+        # to the page, POSTed or not - never a 500.
+        for name in (
+            "inventory:stock_gap_filler_add",
+            "inventory:stock_gap_filler_undo",
+            "inventory:stock_gap_filler_clear",
+            "inventory:stock_gap_filler_exclude",
+            "inventory:stock_gap_filler_include",
+        ):
+            with self.subTest(action=name):
+                for response in (
+                    self.client.post(reverse(name), {"depuis": "1", "montant": "50", "article": "1", "exclusion": "1"}),
+                    self.client.post(reverse(name), {"depuis": "1", "categorie": ""}),
+                    self.client.get(reverse(name)),
+                ):
+                    self.assertEqual(response.status_code, 302)
+                    self.assertEqual(response["Location"], url)
+        self.assertFalse(GapExclusion.objects.exists())
+        for data, said in (
+            ({"article": "1"}, "Article introuvable : rien n&#x27;a été exclu."),
+            ({"categorie": ""}, "Catégorie introuvable : rien n&#x27;a été exclu."),
+        ):
+            with self.subTest(data=data):
+                response = self.client.post(
+                    reverse("inventory:stock_gap_filler_exclude"), {"depuis": "1", **data}, follow=True
+                )
+                self.assertEqual(response.status_code, 200)
+                assertNoUnrenderedTemplateSyntax(self, response, f"an exclusion with no count {data}")
+                self.assertContains(response, said)
+                self.assertContains(response, "empty-state")
+        response = self.client.post(
+            reverse("inventory:stock_gap_filler_include"), {"depuis": "1", "exclusion": "1"}, follow=True
+        )
+        self.assertContains(response, "Cette exclusion n&#x27;existe plus : rien n&#x27;a changé.")
+        response = self.client.post(
+            reverse("inventory:stock_gap_filler_add"), {"depuis": "1", "montant": "50"}, follow=True
+        )
+        self.assertEqual(response.status_code, 200)
+        assertNoUnrenderedTemplateSyntax(self, response, "an amount with no count")
+        self.assertContains(response, "Inventaire introuvable.")
+        self.assertContains(response, "empty-state")
+        self.assertFalse(GapFillEntry.objects.exists())
 
     def test_invoice_list(self):
         self.assertPageOK("invoices:invoice_list")
@@ -710,6 +938,256 @@ class DateWindowSmokeTests(TestCase):
             with self.subTest(page=page):
                 url = f"{reverse(page)}?du=2026-02-01&au=2026-02-28"
                 self.assertEqual(self.client.get(url).status_code, 200, url)
+
+
+class StockGapFillerParameterSmokeTests(TestCase):
+    """« Combler les écarts » under every `depuis` an address can carry and
+    every `montant` a form can POST - a stale bookmark, a hand-typed amount,
+    a number Python's Decimal would read and the page must not (Infinity,
+    NaN, 1e999), a count that was deleted. The page always a 200, its
+    template rendered whole; the list's actions always one redirect to it,
+    which says what was done with the amount - kept only when something was
+    proposed for it. Invented data."""
+
+    #: montant -> what the page says about it ("" : nothing, the amount kept).
+    AMOUNTS = {
+        "50": "",
+        "70": "",
+        "1 234,50": "",
+        "10000": "",
+        "10 000": "",
+        "1 500,00": "",
+        "150,50": "",
+        # The field is required: a blank one POSTed all the same is no amount.
+        "": "Montant illisible",
+        "abc": "Montant illisible",
+        # One separator and three figures: ten thousand, or ten euros?
+        "10.000": "Montant illisible",
+        "1,500": "Montant illisible",
+        "2.000": "Montant illisible",
+        "-5": "Le montant doit être supérieur à zéro.",
+        "0": "Le montant doit être supérieur à zéro.",
+        "Infinity": "Montant illisible",
+        "NaN": "Montant illisible",
+        "1e999": "Montant illisible",
+        "1" * 41: "Montant illisible",
+        "12,345": "Montant illisible",
+        "10000,01": "10\N{NO-BREAK SPACE}000 € au plus.",
+        "9999999999.99": "10\N{NO-BREAK SPACE}000 € au plus.",
+        '"><i>montant</i>': "Montant illisible",
+    }
+    #: depuis -> whether the page says the count was not found.
+    SINCE = {"": False, "999999": True, "abc": True, "\N{SUPERSCRIPT TWO}": True, "-1": True, "1" * 30: True}
+    MESSAGES = (
+        "Montant illisible",
+        "Le montant doit être supérieur à zéro.",
+        "10000 € au plus.",
+    )
+    ACTIONS = (
+        "inventory:stock_gap_filler_add",
+        "inventory:stock_gap_filler_undo",
+        "inventory:stock_gap_filler_clear",
+    )
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.take = make_gaps_to_fill()
+        cls.url = reverse("inventory:stock_gap_filler")
+
+    def get(self, query):
+        response = self.client.get(self.url, query)
+        self.assertEqual(response.status_code, 200, f"{query} returned {response.status_code}")
+        assertNoUnrenderedTemplateSyntax(self, response, f"{self.url} {query}")
+        return response
+
+    def add(self, data):
+        """POST an amount to the list and follow the answer: one redirect,
+        then the page, rendered whole."""
+        response = self.client.post(reverse("inventory:stock_gap_filler_add"), data, follow=True)
+        self.assertEqual(response.status_code, 200, f"{data} ended on {response.status_code}")
+        self.assertEqual([status for _url, status in response.redirect_chain], [302], data)
+        assertNoUnrenderedTemplateSyntax(self, response, f"the page after {data}")
+        return response
+
+    def test_every_amount(self):
+        for typed, said in self.AMOUNTS.items():
+            with self.subTest(montant=typed):
+                GapFillEntry.objects.all().delete()
+                content = self.add({"depuis": self.take.pk, "montant": typed}).content.decode()
+                for message in self.MESSAGES:
+                    if message == said:
+                        self.assertIn(message, content)
+                    else:
+                        self.assertNotIn(message, content)
+                # Never echoed back: a POST is not markup either.
+                self.assertNotIn("<i>montant</i>", content)
+                kept = GapFillEntry.objects.filter(stock_take=self.take).exists()
+                self.assertEqual(kept, not said, "a readable amount is kept, and only it")
+                planned = 'data-table-label="recettes à encaisser"' in content
+                self.assertEqual(planned, kept, "the list is drawn once it holds the amount")
+
+    def test_an_amount_in_the_address_is_no_amount(self):
+        """A bookmark of the page from before the list, ?montant= in its
+        address: whatever it holds, nothing is planned, said or kept."""
+        for typed in self.AMOUNTS:
+            with self.subTest(montant=typed):
+                content = self.get({"depuis": self.take.pk, "montant": typed}).content.decode()
+                for message in self.MESSAGES:
+                    self.assertNotIn(message, content)
+                self.assertNotIn("<i>montant</i>", content)
+                self.assertNotIn('data-table-label="recettes à encaisser"', content)
+        self.assertFalse(GapFillEntry.objects.exists())
+
+    def test_every_count(self):
+        for asked, missing in self.SINCE.items():
+            for typed in ("", "70", "abc"):
+                with self.subTest(depuis=asked, montant=typed):
+                    content = self.get({"depuis": asked, "montant": typed}).content.decode()
+                    self.assertEqual("Inventaire introuvable" in content, missing)
+
+    def test_every_count_an_amount_is_posted_for(self):
+        """Only a count the page knows takes an amount: any other, an empty
+        one included, is « Inventaire introuvable. » and keeps nothing."""
+        for asked in [*self.SINCE, str(self.take.pk)]:
+            with self.subTest(depuis=asked):
+                GapFillEntry.objects.all().delete()
+                content = self.add({"depuis": asked, "montant": "70"}).content.decode()
+                known = asked == str(self.take.pk)
+                self.assertEqual("Inventaire introuvable." in content, not known)
+                self.assertEqual(GapFillEntry.objects.exists(), known)
+
+    def test_the_list_s_actions_answer_with_a_redirect(self):
+        """POSTed, to the count's page; asked for by GET - a link, a
+        bookmark - to the page, and nothing done."""
+        page = f"{self.url}?depuis={self.take.pk}"
+        for name, landing in zip(self.ACTIONS, (f"{page}#a-encaisser", page, page), strict=True):
+            with self.subTest(action=name):
+                response = self.client.post(reverse(name), {"depuis": self.take.pk, "montant": "70"})
+                self.assertEqual(response.status_code, 302)
+                self.assertEqual(response["Location"], landing)
+                for query in ({}, {"depuis": self.take.pk, "montant": "70"}):
+                    response = self.client.get(reverse(name), query)
+                    self.assertEqual(response.status_code, 302)
+                    self.assertEqual(response["Location"], self.url)
+        # Added, undone, cleared: nothing left, and no GET added anything.
+        self.assertFalse(GapFillEntry.objects.exists())
+
+    def test_undo_and_clear_under_every_count(self):
+        self.add({"depuis": self.take.pk, "montant": "70"})
+        for name in self.ACTIONS[1:]:
+            for asked in self.SINCE:
+                with self.subTest(action=name, depuis=asked):
+                    response = self.client.post(reverse(name), {"depuis": asked})
+                    self.assertEqual(response.status_code, 302)
+                    self.assertEqual(response["Location"], self.url)
+                    self.assertEqual(GapFillEntry.objects.count(), 1)
+
+    def test_the_page_with_a_list_under_every_count(self):
+        """A list of two amounts, read back whatever `depuis` holds: an
+        unknown count falls back on the latest, which is the list's."""
+        for amount in ("70", "36"):
+            self.add({"depuis": self.take.pk, "montant": amount})
+        for asked in self.SINCE:
+            with self.subTest(depuis=asked):
+                content = self.get({"depuis": asked, "montant": "abc"}).content.decode()
+                self.assertIn('data-table-label="recettes à encaisser"', content)
+                self.assertIn('data-table-label="montants déjà saisis"', content)
+                self.assertIn(GAP_TILL_NAME, content)
+
+    def test_the_parameters_alone(self):
+        """No `depuis` at all: the latest count, which is this one - and its
+        list."""
+        response = self.get({"montant": "70"})
+        self.assertNotContains(response, "Inventaire introuvable")
+        self.assertContains(response, f'<option value="{self.take.pk}" selected>')
+        self.assertNotContains(response, GAP_TILL_NAME)
+        self.add({"depuis": self.take.pk, "montant": "70"})
+        self.assertContains(self.get({}), GAP_TILL_NAME)
+
+    #: What « Exclure » may carry as its article and find no article by.
+    ARTICLES = ("abc", "\N{SUPERSCRIPT TWO}", "-1", "1.5", " ", "999999", "1" * 30, '"><i>article</i>')
+    #: What « Exclure la catégorie » may carry and find no article filed
+    #: under (every article of the fixture has none: "" is a category).
+    CATEGORIES = ("Inconnue exemple", "c" * 300, '"><i>catégorie</i>', "\x00", " ")
+    #: What « Réinclure » may carry and find no exclusion by.
+    EXCLUSIONS = ("", "abc", "\N{SUPERSCRIPT TWO}", "-1", "999999", "1" * 30, '"><i>exclusion</i>')
+
+    def act(self, name, data) -> str:
+        """POST to an exclusion route and follow the answer: one redirect,
+        then the page, rendered whole."""
+        response = self.client.post(reverse(name), data, follow=True)
+        self.assertEqual(response.status_code, 200, f"{name} {data} ended on {response.status_code}")
+        self.assertEqual([status for _url, status in response.redirect_chain], [302], data)
+        assertNoUnrenderedTemplateSyntax(self, response, f"the page after {name} {data}")
+        content = response.content.decode()
+        # Never echoed back: a POST is not markup.
+        for markup in ("<i>article</i>", "<i>catégorie</i>", "<i>exclusion</i>"):
+            self.assertNotIn(markup, content)
+        return content
+
+    def test_every_article_category_and_exclusion_that_cannot_be_read(self):
+        """Under every `depuis`, the known count's included: a message, the
+        page, nothing left out - never a 500."""
+        exclude = "inventory:stock_gap_filler_exclude"
+        include = "inventory:stock_gap_filler_include"
+        for asked in [*self.SINCE, str(self.take.pk)]:
+            for article in self.ARTICLES:
+                with self.subTest(depuis=asked, article=article):
+                    content = self.act(exclude, {"depuis": asked, "article": article})
+                    self.assertIn("Article introuvable : rien n&#x27;a été exclu.", content)
+            for category in self.CATEGORIES:
+                with self.subTest(depuis=asked, categorie=category):
+                    content = self.act(exclude, {"depuis": asked, "categorie": category})
+                    self.assertIn("Catégorie introuvable : rien n&#x27;a été exclu.", content)
+            for exclusion in self.EXCLUSIONS:
+                with self.subTest(depuis=asked, exclusion=exclusion):
+                    content = self.act(include, {"depuis": asked, "exclusion": exclusion})
+                    self.assertIn("Cette exclusion n&#x27;existe plus : rien n&#x27;a changé.", content)
+            self.assertFalse(GapExclusion.objects.exists())
+
+    def test_the_exclusion_routes_answer_with_a_redirect(self):
+        """POSTed, to the count's page where it was asked - the gaps for an
+        article, the fold for a category and a « Réinclure » -, or to the
+        page for a count it does not know; a GET to the page, and nothing
+        done."""
+        page = f"{self.url}?depuis={self.take.pk}"
+        red = StockType.objects.get(name="Rouge exemple")
+        exclude = reverse("inventory:stock_gap_filler_exclude")
+        include = reverse("inventory:stock_gap_filler_include")
+        for asked, landing in ((str(self.take.pk), page), ("999999", self.url), ("abc", self.url)):
+            with self.subTest(depuis=asked):
+                GapExclusion.objects.all().delete()
+                anchor = "" if landing == self.url else "#ecarts"
+                response = self.client.post(exclude, {"depuis": asked, "article": red.pk})
+                self.assertEqual((response.status_code, response["Location"]), (302, f"{landing}{anchor}"))
+                anchor = "" if landing == self.url else "#exclusions"
+                response = self.client.post(exclude, {"depuis": asked, "categorie": ""})
+                self.assertEqual((response.status_code, response["Location"]), (302, f"{landing}{anchor}"))
+                self.assertEqual(GapExclusion.objects.count(), 2)
+                for exclusion in GapExclusion.objects.all():
+                    for query in ({}, {"depuis": self.take.pk, "exclusion": exclusion.pk, "article": red.pk}):
+                        for name in (exclude, include):
+                            response = self.client.get(name, query)
+                            self.assertEqual((response.status_code, response["Location"]), (302, self.url))
+                    self.assertTrue(GapExclusion.objects.filter(pk=exclusion.pk).exists())
+                    response = self.client.post(include, {"depuis": asked, "exclusion": exclusion.pk})
+                    self.assertEqual((response.status_code, response["Location"]), (302, f"{landing}{anchor}"))
+                self.assertFalse(GapExclusion.objects.exists())
+
+    def test_a_count_deleted_since(self):
+        """A bookmark naming a count since deleted reads as not found, and
+        the page falls back on the latest, its list drawn; an amount POSTed
+        for the deleted count is not kept."""
+        other = make_stock_take(taken_at=timezone.make_aware(datetime(2026, 3, 1, 12, 0)))
+        pk = other.pk
+        self.add({"depuis": self.take.pk, "montant": "70"})
+        other.delete()
+        response = self.get({"depuis": pk, "montant": "70"})
+        self.assertContains(response, "Inventaire introuvable")
+        self.assertContains(response, GAP_TILL_NAME)
+        content = self.add({"depuis": pk, "montant": "70"}).content.decode()
+        self.assertIn("Inventaire introuvable.", content)
+        self.assertEqual(GapFillEntry.objects.count(), 1)
 
 
 class IncomeSmokeTests(TestCase):

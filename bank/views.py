@@ -42,6 +42,7 @@ from common import (
     DateRange,
     date_range,
     file_too_big,
+    format_money,
     is_id,
     last_twelve_months,
     left_out_from,
@@ -938,7 +939,7 @@ def _line_words(outcome: reconcile.Acceptance) -> str:
     if line is None:
         return f"opération n° {outcome.pk}"
     who = line.counterparty or line.bank_type or line.label[:40]
-    return f"{line.paid_on:%d/%m/%Y} {who} {line.amount_due:.2f} €"
+    return f"{line.paid_on:%d/%m/%Y} {who} {format_money(line.amount_due)} €"
 
 
 def rule_list(request):
@@ -957,7 +958,8 @@ def rule_list(request):
             found = _rule_matches(regex, debits)
             messages.success(
                 request,
-                f"Règle ajoutée : {found.count} dépense(s), {found.total:.2f} €, ne comptent plus comme sans facture.",
+                f"Règle ajoutée : {found.count} dépense(s), {format_money(found.total)} €, "
+                "ne comptent plus comme sans facture.",
             )
             return redirect("bank:rule_list")
 
@@ -2181,7 +2183,7 @@ def _build_spending_pie_svg(report) -> str:
         # account for. The table beside the pie still lists each of them.
         held = f" ({piece.held} catégorie{'s' if piece.held > 1 else ''})" if piece.held else ""
         name = escape(f"{piece.name}{held}")
-        value = f"{piece.amount:.2f} € · {piece.share:.1f} %"
+        value = f"{format_money(piece.amount)} € · {piece.share:.1f} %"
         common = f'data-index="{index}" data-label="{name}" data-value="{value}" data-color="{piece.color}"'
         if len(report.slices) == 1:
             # One slice is the whole circle: as an arc its two ends coincide
@@ -2262,11 +2264,12 @@ def _build_balance_svg(points, label: str = "Ventes carte pas encore versées") 
         if all(abs(y - other) >= 12 for other, _value in kept):
             kept.append((y, value))
     ticks = "".join(
-        f'<text x="4" y="{y:.1f}" font-size="11" fill="var(--muted)">{value:.2f} €</text>' for y, value in sorted(kept)
+        f'<text x="4" y="{y:.1f}" font-size="11" fill="var(--muted)">{format_money(value)} €</text>'
+        for y, value in sorted(kept)
     )
     dots = "".join(
         f'<circle class="chart-point" cx="{x:.1f}" cy="{y:.1f}" r="3" fill="var(--amber)" '
-        f'data-x="{x:.1f}" data-y="{y:.1f}" data-label="{day:%d/%m/%Y}" data-value="{value:.2f} €" />'
+        f'data-x="{x:.1f}" data-y="{y:.1f}" data-label="{day:%d/%m/%Y}" data-value="{format_money(value)} €" />'
         for (x, y), (day, value) in zip(coords, points)
     )
     return (

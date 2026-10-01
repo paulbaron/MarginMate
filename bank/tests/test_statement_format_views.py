@@ -545,7 +545,8 @@ class TesterTests(Page):
         )
         read = text_of(table_of(html, "opérations lues"))
         self.assertIn("03/07/2026 — CB EPICERIE EXEMPLE ref 0001 — -12.30 € Autre —", read)
-        self.assertIn("05/07/2026 — VIR CLIENT EXEMPLE ref 0002 — 1250.00 € Virement —", read)
+        # Grouped by thousands (UI conventions) - text_of collapses the no-break space.
+        self.assertIn("05/07/2026 — VIR CLIENT EXEMPLE ref 0002 — 1 250.00 € Virement —", read)
         self.assertIn("2 opérations lues, compte 000123456789.", text_of(html))
         # What was typed is drawn back, to be saved once it reads right.
         form = self.new_form(html)
