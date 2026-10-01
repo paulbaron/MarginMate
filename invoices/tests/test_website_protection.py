@@ -294,7 +294,7 @@ class SameSiteTests(SimpleTestCase):
             ("mobile.free.fr", "jean.free.fr"),
             ("mobile.free.fr", "espace.free.fr"),
             ("free.fr", "jean.free.fr"),
-            ("jean.free.fr", "pierre.free.fr"),
+            ("jean.free.fr", "abonne-b.free.fr"),
             ("jean.pagesperso-orange.fr", "pirate.pagesperso-orange.fr"),
         ):
             with self.subTest(host=host, other=other):
