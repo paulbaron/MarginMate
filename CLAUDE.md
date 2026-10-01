@@ -3705,8 +3705,8 @@ imports (`transfer/legacy.py`).
   restore resetting it would let the next gather sign in), `SupplierChange`
   (its undo data holds pks), job history, `ai_suggestion` (the review panel
   fills it again when it is drawn), « Combler les écarts »' list
-  (`GapFillEntry`, a scratch list that goes with its stock take) and its
-  exclusions (`GapExclusion`). Suppliers
+  (`GapFillEntry`, a scratch list that goes with its stock take), its
+  exclusions (`GapExclusion`) and its duration (`GapFillSetting`). Suppliers
   with a reader or a till of their own are never deleted by a clear or a
   replace; a clear only forgets what they learned.
 - **Nor the till's money and payments.** « Ventes » carries the quantities
@@ -4201,7 +4201,8 @@ drives its cocktail and sells the spirit past every other gap.
 Weighted by value, a garnish neither drives nor blocks; it may run ahead of
 the common level, within its room. Ties - recipes filling the same gaps alike
 - go to the recipe furthest behind its share of what the till really sold
-since the take ((planned + ½) / (sold + 1)), so the list reads like the bar's
+over the menu's window - since the take, or the months chosen (below) -
+((planned + ½) / (sold + 1)), so the list reads like the bar's
 own orders. A gap whose share is under half a serving waits for a bigger
 amount. Then name, then pk: same input, same list.
 
@@ -4221,8 +4222,9 @@ sale fits the gaps, or no combination of prices.
 **What the page sets aside, and says.** A recipe blocked (one sale of it
 alone would take an article past its room: sold more than bought, within the
 loss allowance, not counted, or less than a serving left) is named with the
-article. A priced recipe not sold since the take is not proposed (it is
-probably off the menu). A gap some recipe pours but none proposed is listed
+article. A priced recipe not sold since the take - or over the duration
+chosen, below - is not proposed (it is probably off the menu), and is listed
+with its last sale. A gap some recipe pours but none proposed is listed
 with its value (`GapReport.unreached`); a gap no recipe pours at all - the
 equipment, the paper towels - is only counted (`outside_recipes`): no sale
 fills it. A target no proposed sale reaches as the engine books one
@@ -4235,7 +4237,8 @@ unlike the « Écarts » page, where an uncounted CLOSING would overstate it.
 
 **The till button is the one that rings the recipe's price.** A recipe often
 has several buttons (a plain glass and a dearer cocktail linked to one recipe):
-each button's price is what it charged most often since the take (a day's
+each button's price is what it charged most often since the take, or over
+the months chosen when they are more recent (below) (a day's
 money over its units, weighted by units - a comped glass makes one day odd,
 never the most frequent), the line names the button at the recipe's price,
 then the most rung, never the happy-hour one. Where no button rings the
@@ -4285,6 +4288,55 @@ fell short with « aucune combinaison » where one without it was exact. The eng
 article - only the planner looks away - so the stock page and « Écarts »
 are untouched, and so is a list already made: its entries keep what they
 proposed. Not exported by « Données », like the list.
+
+**Only the recipes sold lately** (the owner, 01/10/2026: « ne proposer que
+des recettes ayant été vendues il y a moins de X temps » - some recipes are
+off the menu). `GapFillSetting` (inventory 0020, one row, pk 1, absent until
+something is chosen - `current()` never writes, a page drawn writes nothing)
+holds `sold_within_months`, 1 to 120 (a check constraint), or None: the
+recipes sold since the take. « Recettes vendues il y a moins de
+[n] [mois / ans] » under « Depuis » posts it to `stock_gap_filler_recent`
+(`duree`, `unite`; `depuis_inventaire`, a button with `formnovalidate`, goes
+back to None), refused in French when it is no whole number of ASCII digits
+or past ten years (`views.read_typed_duration`, never `int()` on thousands of
+digits), and read back with whole years in years (`duration_fields`: 12 mois
+is drawn [1] [an(s)] - the option's value stays `ans`). One redirect to the
+count's page, the message at the top.
+- Migration `inventory/0020`, **WRITTEN and left to be applied** on data-dev
+  (the owner, after a backup, `migrate_tenants`; deploy.cmd applies it in
+  production after its own). Until then the WHOLE page and « Ajouter »
+  answer « no such table »: `gaps_since` reads the setting on every draw.
+- **Counted back from the end of the window (today), not from the take**:
+  right after a count nothing has been sold since it, so « since the take »
+  proposed nothing for days while the menu had not changed. A window
+  reaching before the take brings back a recipe sold only before it; one
+  shorter than the take's age sets aside what stopped selling.
+  `months_before` keeps the day of the month where the month has it (31/03
+  less one month is 28/02), and a sale ON that first day counts
+  (`GapReport.menu_since`, inclusive; the take's default is the day after it).
+- **A recipe is on the menu when its last sale** (`gaps._last_sale_days`:
+  a till day or a sale document, quantity above 0 - a refund is no sale) **is
+  on or after `menu_since`**; the page lists the others with that date, or
+  « jamais vendue » (`UnsoldRecipe`). A refund does not undo a sale either:
+  sold, then refunded another day, a recipe stays on the menu, its mix 0 or
+  below (the planner reads `max(sold, 0)`). Until 01/10/2026 the default
+  asked for net sales above zero since the take; kept, that rule would list
+  such a recipe « pas vendue » beside a last sale inside the window.
+- **Only the menu moves.** The gaps, the allowance, the rooms and every
+  attribution still run from the take (the engine reads the take's sales).
+  The window gives the mix a tie goes to (`Offer.sold`, the window's net
+  sales - `sales_between`, two more queries). The till's prices are read
+  over the MORE RECENT of the take's window and the menu's
+  (`max(start, menu_since - 1 day)`): a few months chosen on an older count
+  name a button by what it rings now, and a year read for the menu does
+  not bring back the price a button charged before the take (it did, review
+  of 01/10: the old price, rung more often, won) - a recipe brought back
+  from before the take is named by its most rung button, with no price. A list already made keeps its lines and
+  still counts; the next amount builds on it with the new menu.
+- An amount with no recipe to propose and none blocked says « aucune
+  recette vendue depuis le … » (or « depuis l'inventaire ») when no priced
+  recipe sold over the window (`GapReport.on_menu` 0), « … n'utilise un
+  article » when those that did pour nothing - never that the gaps are full.
 
 **What is typed.** `montant` goes through `common.read_number` for its size
 (« 20 000 000 000 » is too big, not unreadable) then `read_amount`. A space

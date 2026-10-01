@@ -20,17 +20,27 @@ UNDERSTATE its gap: it stays fillable up to what was bought since, and the
 page flags it « non compté ».
 
 The recipes proposed are those sold as themselves at a price above zero
-(`Recipe.is_sold_directly`) and sold at least once since the take - a
+(`Recipe.is_sold_directly`) and sold at least once since the take - or, when
+the owner chose a duration (`GapFillSetting`, « Recettes vendues il y a
+moins de … »), over that many months back from today, whatever the take: a
 recipe nobody ordered in months is no longer on the menu, and its gap is
-said instead. One is blocked when a single sale of it would take an article
-past its room, as the engine counts it (`gap_planner.first_sales`); the page
-names the article and why.
+said instead, with its last sale. A refund is no sale, and does not undo
+one: a recipe sold, then refunded another day, stays on the menu (until
+01/10/2026 the take's window asked for net sales above zero, and the page
+would have listed it « pas vendue » beside a sale inside it). The same
+window gives the mix of the sales that settles a tie. One is blocked when a
+single sale of it would take an article past its room, as the engine counts
+it (`gap_planner.first_sales`); the page names the article and why. The gaps
+themselves still run from the take: only the menu moves.
 
 The till button named on a line is the one that rings the recipe's price:
-the till's own price for each button is read off what it took since the take
-(the price it charged most often), so a plain glass linked to the same
-recipe as a dearer cocktail is never named for the cocktail's price. A line
-whose best button still rings another price says so.
+the till's own price for each button is read off what it took over the more
+recent of the take's window and the menu's (the price it charged most
+often), so a plain glass linked to the same recipe as a dearer cocktail is
+never named for the cocktail's price. A year of menu does not bring back the
+price a button charged before the take, and a few months chosen on an older
+count name it by what it rings now. A line whose best button still
+rings another price says so.
 
 The owner can leave articles out, one by one or a whole category at a time
 (`GapExclusion`, kept for the espace): an article left out is ignored whole
@@ -45,6 +55,7 @@ it a closure over `attribute_sales`, which no longer touches the database.
 
 from __future__ import annotations
 
+import calendar
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -54,7 +65,7 @@ from django.db.models import Max
 from django.utils import timezone
 
 from .gap_planner import Consumption, Offer, Plan, first_sales, plan_sales
-from .models import GapExclusion, MovementKind, StockMovement, StockTake, StockType
+from .models import GapExclusion, GapFillSetting, MovementKind, StockMovement, StockTake, StockType
 from .variance import (
     PeriodStock,
     attribute_sales,
@@ -141,9 +152,19 @@ class BlockedRecipe:
 
 
 @dataclass(frozen=True)
+class UnsoldRecipe:
+    """A priced recipe not proposed: not sold since the first day the menu
+    counts. `last_sold` is its last sale ever, None if it never sold."""
+
+    recipe: object
+    last_sold: date | None
+
+
+@dataclass(frozen=True)
 class TillButton:
     """The till button to press for a recipe, and what it charged for one
-    most often since the take (None: never rung there, or not read)."""
+    most often over the more recent of the take's window and the menu's
+    (None: never rung there, or not read)."""
 
     name: str
     price: Decimal | None = None
@@ -179,7 +200,7 @@ class GapReport:
     recipes: dict[int, object]
     till_buttons: dict[int, TillButton]
     blocked: list[BlockedRecipe]
-    not_sold_since: list
+    not_sold_since: list[UnsoldRecipe]
     consumption: Consumption
     # Each article's cost per unit: weighs the gaps one sale fills.
     values: dict[int, Decimal] = field(default_factory=dict)
@@ -190,6 +211,17 @@ class GapReport:
     exclusions: list = field(default_factory=list)
     last_sale_day: date | None = None
     last_purchase_day: date | None = None
+    # The recipes proposed are those sold from `menu_since` to `end`: the
+    # day after the take, or `sold_within_months` back from `end`; `on_menu`
+    # how many priced recipes did - those pouring nothing are no offer.
+    menu_since: date | None = None
+    sold_within_months: int | None = None
+    on_menu: int = 0
+
+    @property
+    def sold_within_words(self) -> str:
+        """« moins de 3 mois », or "" when the menu runs from the take."""
+        return duration_words(self.sold_within_months) if self.sold_within_months else ""
 
     @property
     def rooms(self) -> dict[int, Decimal]:
@@ -219,7 +251,7 @@ class GapReport:
     @property
     def unreached(self) -> list[ArticleGap]:
         """Gaps left to fill that a recipe pours, but no recipe proposed:
-        blocked, not sold since the take, or not sold as itself."""
+        blocked, not sold over the menu's window, or not sold as itself."""
         rows = [
             article
             for article in self.articles.values()
@@ -349,10 +381,49 @@ def _last_purchase_day(start: date, end: date) -> date | None:
     return latest
 
 
+def months_before(day: date, months: int) -> date:
+    """`day` moved `months` calendar months back, its day of the month kept
+    where that month has it: 31/03 less one month is February's last day."""
+    year, month = divmod(day.year * 12 + day.month - 1 - months, 12)
+    month += 1
+    return date(year, month, min(day.day, calendar.monthrange(year, month)[1]))
+
+
+def duration_words(months: int) -> str:
+    """How long ago a sale may be, as the page says it: « moins d'un mois »,
+    « moins de 3 mois », « moins d'un an », « moins de 2 ans »."""
+    if months % 12 == 0:
+        years = months // 12
+        return "moins d'un an" if years == 1 else f"moins de {years} ans"
+    return "moins d'un mois" if months == 1 else f"moins de {months} mois"
+
+
+def _last_sale_days(end: date) -> dict[int, date]:
+    """{recipe_id: the last day it sold, up to `end`} - on the till or on a
+    sale document, as `sales_between` counts them; a refund is no sale."""
+    from recipes.models import RecipeSale, SaleDocumentLine
+
+    days = dict(
+        RecipeSale.objects.filter(quantity__gt=0, sold_on__lte=end)
+        .values_list("recipe_id")
+        .annotate(day=Max("sold_on"))
+        .order_by()
+    )
+    for recipe_id, day in (
+        SaleDocumentLine.objects.filter(recipe__isnull=False, quantity__gt=0, document__sold_on__lte=end)
+        .values_list("recipe_id")
+        .annotate(day=Max("document__sold_on"))
+        .order_by()
+    ):
+        if recipe_id not in days or day > days[recipe_id]:
+            days[recipe_id] = day
+    return days
+
+
 def _till_buttons(recipes: dict[int, object], start: date, end: date) -> dict[int, TillButton]:
     """{recipe_id: the till button to press} - among the buttons linked to
     it, never its happy-hour one nor one set aside: first one whose price at
-    the till since the take is the recipe's, then the most rung. A button's
+    the till over (start, end] is the recipe's, then the most rung. A button's
     price is the one it charged most often (a day's money over its units,
     weighted by units - a comped drink or a discount makes a day's average
     odd, never the most frequent). No button: the recipe's own name."""
@@ -403,11 +474,17 @@ def _offer_terms(terms, unit_costs) -> tuple[tuple[dict[int, Decimal], ...], ...
 def gaps_since(take: StockTake, end: date | None = None) -> GapReport:
     """Every article's gap from `take` to `end` (today by default), and the
     recipes that could fill them - the articles the owner left out
-    (GapExclusion) ignored."""
+    (GapExclusion) ignored, the recipes not sold over the menu's window
+    (GapFillSetting) set aside."""
     from recipes.models import RecipeSale, variation_scope
+    from recipes.sales import sales_between
 
     end = end or timezone.localdate()
     start = take.taken_at.date()
+    # The first day a sale puts its recipe on the menu: the day after the
+    # take, or the months chosen back from `end` - before the take or after.
+    sold_within_months = GapFillSetting.current().sold_within_months
+    menu_since = months_before(end, sold_within_months) if sold_within_months else start + timedelta(days=1)
 
     opening = counts_by_stock_type(take)
     movements = movements_between(start, end)
@@ -437,6 +514,9 @@ def gaps_since(take: StockTake, end: date | None = None) -> GapReport:
         # later attribution is arithmetic only.
         for recipe in sales.recipes:
             sales.terms_of(recipe)
+    # What each recipe sold over the menu's window: the mix a tie goes to.
+    menu_sold = sales.sold if sold_within_months is None else sales_between(menu_since - timedelta(days=1), end)
+    last_sold = _last_sale_days(end)
     in_recipes = {
         article
         for terms in sales.terms.values()
@@ -466,11 +546,13 @@ def gaps_since(take: StockTake, end: date | None = None) -> GapReport:
     }
     offers = []
     not_sold_since = []
+    on_menu = 0
     for recipe_id, recipe in priced.items():
-        sold = sales.sold.get(recipe_id, 0)
-        if sold <= 0:
-            not_sold_since.append(recipe)
+        last = last_sold.get(recipe_id)
+        if last is None or last < menu_since:
+            not_sold_since.append(UnsoldRecipe(recipe, last))
             continue
+        on_menu += 1
         terms = _offer_terms(sales.terms[recipe_id], unit_costs)
         if not terms:
             continue
@@ -481,7 +563,7 @@ def gaps_since(take: StockTake, end: date | None = None) -> GapReport:
                 recipe_id=recipe_id,
                 name=recipe.name,
                 price_cents=int(recipe.selling_price_ttc * 100),
-                sold=sold,
+                sold=menu_sold.get(recipe_id, 0),
                 terms=terms,
                 independent=not has_choice and not (poured & in_choices),
             )
@@ -545,9 +627,11 @@ def gaps_since(take: StockTake, end: date | None = None) -> GapReport:
         articles=articles,
         offers=proposable,
         recipes=priced,
-        till_buttons=_till_buttons(priced, start, end),
+        # The more recent window: a year read for the menu must not let a
+        # price raised since the take lose to the old one.
+        till_buttons=_till_buttons(priced, max(start, menu_since - timedelta(days=1)), end),
         blocked=sorted(blocked_recipes, key=lambda row: row.recipe.name.lower()),
-        not_sold_since=sorted(not_sold_since, key=lambda recipe: recipe.name.lower()),
+        not_sold_since=sorted(not_sold_since, key=lambda unsold: (unsold.recipe.name.lower(), unsold.recipe.pk)),
         consumption=consumption,
         values=unit_costs,
         in_recipes=in_recipes,
@@ -555,6 +639,9 @@ def gaps_since(take: StockTake, end: date | None = None) -> GapReport:
         exclusions=exclusions,
         last_sale_day=last_sale,
         last_purchase_day=_last_purchase_day(start, end),
+        menu_since=menu_since,
+        sold_within_months=sold_within_months,
+        on_menu=on_menu,
     )
 
 

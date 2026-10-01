@@ -219,6 +219,25 @@ class NavigationTests(TestCase):
             with self.subTest(url=url):
                 self.assertEqual(navigation.section_of(resolve(url)), "stock_takes")
 
+    def test_the_gap_filler_s_recent_sales_light_inventaires(self):
+        """« Recettes vendues il y a moins de … », chosen, refused and taken
+        back: every page it lands on is « Inventaires », and so is its route."""
+        take = make_gaps_to_fill()
+        recent = reverse("inventory:stock_gap_filler_recent")
+        landed = [
+            self.client.post(recent, {"depuis": take.pk, "duree": "3", "unite": "mois"}, follow=True),
+            self.client.post(recent, {"depuis": take.pk, "duree": "0", "unite": "mois"}, follow=True),
+            self.client.post(recent, {"depuis": take.pk, "depuis_inventaire": "1"}, follow=True),
+            self.client.get(recent, follow=True),
+        ]
+        for number, response in enumerate(landed):
+            with self.subTest(page=number):
+                self.assertEqual(response.status_code, 200)
+                self.assertContains(response, 'id="recettes-vendues"')
+                self.assertEqual(active_labels(response), ["Inventaires"])
+                self.assertEqual(section_shown(response), "Inventaires")
+        self.assertEqual(navigation.section_of(resolve(recent)), "stock_takes")
+
     def test_every_section_has_its_words(self):
         """A section navigation can light with no words in SECTION_LABELS
         draws a folded bar saying nothing (base.html's `{% if %}`): a new

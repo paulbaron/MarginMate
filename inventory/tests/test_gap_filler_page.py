@@ -931,7 +931,8 @@ class WhatCannotBeFilledTests(PageTestCase):
     def test_its_summary_counts_what_it_holds(self):
         self.assertEqual(
             summary_of(self.html()),
-            "Ce qui ne peut pas être comblé · 3 recettes bloquées · 1 article sans recette proposée",
+            "Ce qui ne peut pas être comblé · 3 recettes bloquées · 2 recettes pas vendues"
+            " · 1 article sans recette proposée",
         )
 
     def test_each_blocked_recipe_with_its_article_and_why(self):
@@ -950,7 +951,10 @@ class WhatCannotBeFilledTests(PageTestCase):
             sentences_of(explainer_of(self.html())),
             [
                 "Une seule vente ferait dépasser un écart :",
-                "Pas vendues depuis l'inventaire, donc pas proposées : Galopin exemple · Verre de vin exemple",
+                (
+                    "Pas vendues depuis l'inventaire, donc pas proposées : Galopin exemple (jamais vendue)"
+                    " · Verre de vin exemple (jamais vendue)"
+                ),
                 "Aucune recette proposée ne l'utilise (48.60 € HT à combler) : Vin exemple",
                 OUTSIDE_ONE,
             ],
@@ -1055,7 +1059,7 @@ class OneOfEachCannotBeFilledTests(PageTestCase):
     def test_the_summary(self):
         self.assertEqual(
             summary_of(self.html()),
-            "Ce qui ne peut pas être comblé · 1 recette bloquée · 1 article sans recette proposée",
+            "Ce qui ne peut pas être comblé · 1 recette bloquée · 1 recette pas vendue · 1 article sans recette proposée",
         )
 
     def test_each_sentence(self):
@@ -1063,7 +1067,7 @@ class OneOfEachCannotBeFilledTests(PageTestCase):
             sentences_of(explainer_of(self.html())),
             [
                 "Une seule vente ferait dépasser un écart :",
-                "Pas vendue depuis l'inventaire, donc pas proposée : Verre de vin exemple",
+                "Pas vendue depuis l'inventaire, donc pas proposée : Verre de vin exemple (jamais vendue)",
                 "Aucune recette proposée ne l'utilise (10.80 € HT à combler) : Vin exemple",
                 OUTSIDE_ONE,
             ],
@@ -1081,7 +1085,8 @@ class TwoOfEachCannotBeFilledTests(PageTestCase):
     def test_the_summary(self):
         self.assertEqual(
             summary_of(self.html()),
-            "Ce qui ne peut pas être comblé · 2 recettes bloquées · 2 articles sans recette proposée",
+            "Ce qui ne peut pas être comblé · 2 recettes bloquées · 2 recettes pas vendues"
+            " · 2 articles sans recette proposée",
         )
 
     def test_each_sentence(self):
@@ -1089,7 +1094,10 @@ class TwoOfEachCannotBeFilledTests(PageTestCase):
             sentences_of(explainer_of(self.html())),
             [
                 "Une seule vente ferait dépasser un écart :",
-                "Pas vendues depuis l'inventaire, donc pas proposées : Verre de porto exemple · Verre de vin exemple",
+                (
+                    "Pas vendues depuis l'inventaire, donc pas proposées : Verre de porto exemple (jamais vendue)"
+                    " · Verre de vin exemple (jamais vendue)"
+                ),
                 "Aucune recette proposée ne les utilise (28.80 € HT à combler) : Porto exemple · Vin exemple",
                 OUTSIDE_TWO,
             ],
@@ -2422,7 +2430,7 @@ EXCLUSION_HELP = "Une catégorie exclue vaut aussi pour les articles classés pl
 #: What an empty gaps table says: every gap it would hold left out, or none
 #: at all to hold.
 ALL_LEFT_OUT = "Tous les articles de ces écarts sont exclus."
-NO_RECIPE_USES_ONE = "Aucune recette vendue depuis cet inventaire n'utilise un article compté ou acheté."
+NO_RECIPE_USES_ONE = "Aucune recette proposée n'utilise un article compté ou acheté."
 #: « Comment c'est calculé », on the promise the planner keeps.
 NEVER_PAST_A_GAP = (
     "Chaque vente proposée est comptée comme la page Produits la comptera : "
@@ -2889,8 +2897,8 @@ class ExcludeAnArticleTests(ExclusionTestCase):
         ending = "aucune ne fait dépasser un écart, hors articles exclus."
         for html in (self.html(), self.exclude(article=self.blonde.pk).content.decode()):
             bullets = worked_out_of(html)
-            self.assertEqual(len(bullets), 6)
-            self.assertEqual(bullets[2], NEVER_PAST_A_GAP)
+            self.assertEqual(len(bullets), 7)
+            self.assertEqual(bullets[3], NEVER_PAST_A_GAP)
             self.assertEqual([bullet for bullet in bullets if bullet.endswith(ending)], [NEVER_PAST_A_GAP])
 
     # -- the list ------------------------------------------------------------
@@ -3180,23 +3188,25 @@ class ExcludeACategoryTests(ExclusionTestCase):
         pours at all are no gap left behind once their category is out: the
         fold says only what still is."""
         html = self.html()
-        self.assertEqual(summary_of(html), "Ce qui ne peut pas être comblé · 1 article sans recette proposée")
+        self.assertEqual(
+            summary_of(html), "Ce qui ne peut pas être comblé · 1 recette pas vendue · 1 article sans recette proposée"
+        )
         self.assertEqual(
             sentences_of(explainer_of(html)),
             [
-                "Pas vendue depuis l'inventaire, donc pas proposée : Verre de porto exemple",
+                "Pas vendue depuis l'inventaire, donc pas proposée : Verre de porto exemple (jamais vendue)",
                 "Aucune recette proposée ne l'utilise (18.00 € HT à combler) : Porto exemple",
                 OUTSIDE_ONE,
             ],
         )
         self.exclude(categorie="Matériel exemple")
         html = self.exclude(categorie="Vins exemple").content.decode()
-        self.assertEqual(summary_of(html), "Ce qui ne peut pas être comblé")
+        self.assertEqual(summary_of(html), "Ce qui ne peut pas être comblé · 1 recette pas vendue")
         # The recipe not sold since is still not proposed: that is about the
         # recipe, not the article.
         self.assertEqual(
             sentences_of(explainer_of(html)),
-            ["Pas vendue depuis l'inventaire, donc pas proposée : Verre de porto exemple"],
+            ["Pas vendue depuis l'inventaire, donc pas proposée : Verre de porto exemple (jamais vendue)"],
         )
         self.assertNotIn("Rouge exemple litre", gap_names(html))
 

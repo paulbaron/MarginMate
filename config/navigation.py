@@ -29,6 +29,7 @@ STOCK_TAKE_VIEWS = {
     "stock_gap_filler_clear",
     "stock_gap_filler_exclude",
     "stock_gap_filler_include",
+    "stock_gap_filler_recent",
 }
 
 SECTION_BY_APP = {

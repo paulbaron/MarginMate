@@ -47,9 +47,9 @@ holds one back for good (keyed on its most advanced, a cocktail is never
 chosen while a lemonade the best-sellers also pour keeps ahead, and its own
 syrup is never filled). Recipes tie when they fill the same gaps alike (pint or
 half, the same spirit neat or in a long drink); the tie goes to the recipe
-furthest behind its share of what was really sold since the count (Webster
-again: (planned + ½) / (sold + 1)), so the list reads like the bar's own
-orders. Then name, then id: the same input always gives the same list.
+furthest behind its share of what was really sold over the menu's window -
+since the count, or the months the owner chose (Webster again: (planned + ½)
+/ (sold + 1)), so the list reads like the bar's own orders. Then name, then id: the same input always gives the same list.
 
 **The total is the amount, to the cent, whenever the prices can make it.**
 Every sale is chosen among those that leave a rest the prices of the recipes
@@ -93,8 +93,9 @@ class Offer:
     `terms` are its usage terms (variance.recipe_usage_terms), per sale, each
     a tuple of options {article: amount}; a choice's options in the order the
     engine fills them (variance.order_options), options that pour nothing
-    left out. `sold` is what the till sold of it since the count - the mix a
-    tie follows. `independent` says that it has no choice and that no « OU »
+    left out. `sold` is what the till sold of it over the menu's window (since
+    the count, or the months chosen) - the mix a tie follows, 0 or below for
+    a recipe whose sales there were refunded. `independent` says that it has no choice and that no « OU »
     of any recipe can reach an article it pours, so what it adds is exactly
     its own terms.
     """
