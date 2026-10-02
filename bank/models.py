@@ -6,8 +6,6 @@ invoice that was never imported (money left, nothing to show for it), and a
 receipt the OCR misread (the ticket says 13,02, the bank says 13,06).
 """
 
-import re
-
 from django.core.exceptions import ValidationError
 from django.db import models
 
@@ -359,11 +357,18 @@ class IgnoreRule(models.Model):
         return self.description or self.pattern
 
     def clean(self):
+        # Through the guard of returnables.patterns, as every typed pattern
+        # is: `re.compile` raised OverflowError on « A{4294967296} » (a 500
+        # on the form and on « Données »'s preview), and compiled what could
+        # freeze the machine. ".*", "URSSAF|" or "^" match an empty label,
+        # so every payment, and are refused there: one typo would hide
+        # everything still missing its invoice. Imported here: bank.rules
+        # reads bank.recognition, which reads this module.
+        from returnables.patterns import PatternError
+
+        from .rules import check
+
         try:
-            regex = re.compile(self.pattern, re.IGNORECASE)
-        except re.error as exc:
-            raise ValidationError({"pattern": f"Expression régulière invalide : {exc}."}) from None
-        # ".*", "URSSAF|" or "^" match an empty label, so every payment: one
-        # typo would hide everything still missing its invoice.
-        if regex.search("") is not None:
-            raise ValidationError({"pattern": "Ce motif correspond à n'importe quelle opération : précisez-le."})
+            check(self.pattern)
+        except PatternError as error:
+            raise ValidationError({"pattern": error.message}) from None

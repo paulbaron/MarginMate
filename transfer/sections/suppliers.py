@@ -628,8 +628,8 @@ class SuppliersSection(Section):
 
 def _holders(supplier, ctx=None) -> str:
     """What still names a supplier - its documents, its sources, its
-    classified products, the slip formats and pickups of « Consignes »
-    - or "". With `ctx` (an import), which section left them there by not
+    classified products, the slip formats of « Types et formats de
+    consignes » and the pickups of « Consignes » - or "". With `ctx` (an import), which section left them there by not
     being replaced. Without the last, a supplier only « Consignes » held
     (PROTECT) was kept under « un de ses produits sert encore », which was
     false."""
@@ -655,7 +655,21 @@ def _holders(supplier, ctx=None) -> str:
         return plural(products, "produit classé", "produits classés") + unless("associations", "Associations")
     returnables_reason = returnables_refusal(supplier)
     if returnables_reason:
-        return returnables_reason + unless("consignes", "Consignes")
+        # A slip format is « Types et formats de consignes »' and a pickup
+        # « Consignes »': each is left there by its own section not being
+        # replaced (two sections since 02/10/2026).
+        from returnables.models import Pickup, SlipFormat
+
+        unreplaced = []
+        if (
+            ctx is not None
+            and not ctx.replacing("types_consignes")
+            and SlipFormat.objects.filter(supplier=supplier).exists()
+        ):
+            unreplaced.append("Types et formats de consignes non remplacés")
+        if ctx is not None and not ctx.replacing("consignes") and Pickup.objects.filter(supplier=supplier).exists():
+            unreplaced.append("Consignes non remplacées")
+        return returnables_reason + (f" ({', '.join(unreplaced)})" if unreplaced else "")
     return ""
 
 

@@ -71,11 +71,20 @@
         <form method="post" action="{% url 'transfer:data_export' %}" data-transfer-form>
             {% csrf_token %}
             {% include "transfer/_picker.html" %}
-            <p class="muted">L'archive contient vos documents, votre banque et vos prix : gardez-la pour vous.</p>
+            {% comment %}
+            True of any selection: an archive of configuration alone is made to
+            be handed to another bar, and still carries the prices.
+            {% endcomment %}
+            <p class="muted">L'archive peut contenir vos documents, votre banque et vos prix : ne la confiez qu'à qui peut les voir.</p>
             {% if picker.invoices_mb is not None %}
                 <p class="muted" data-shown-with="factures"{% if "factures" not in picker.checked %} hidden{% endif %}>≈ {{ picker.invoices_mb }} Mo avec les fichiers</p>
             {% endif %}
             <div class="form-actions">
+                {% comment %}
+                The configuration without the data: what another bar on the
+                same bank and suppliers takes (views.configuration_keys).
+                {% endcomment %}
+                <a class="btn btn-secondary" href="{{ configuration_only }}" data-configuration-only>Configuration seule</a>
                 <button type="button" class="btn btn-secondary" data-tick-all data-js-only hidden>Tout cocher</button>
                 <button type="button" class="btn btn-secondary" data-untick-all data-js-only hidden>Tout décocher</button>
                 <button type="submit" class="btn">⬇️ Exporter l'archive</button>
@@ -97,7 +106,7 @@
                 {% for note in stage.notes %}<p class="muted">{{ note }}</p>{% endfor %}
             </div>
             {% if fresh_database %}
-                <div class="message">Base neuve : choisissez « Remplacer » pour que les fournisseurs installés d'office prennent les réglages de l'archive.</div>
+                <div class="message">Base neuve : choisissez « Remplacer » pour {{ fresh_database|join:", " }}, afin que ce qui est installé d'office prenne les réglages de l'archive.</div>
             {% endif %}
             <form method="post" action="{% url 'transfer:data_import_stage' stage.token %}" data-transfer-form{% if preview %} data-previewed{% endif %}>
                 {% csrf_token %}

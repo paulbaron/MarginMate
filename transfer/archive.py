@@ -30,6 +30,7 @@ import re
 import time
 import zipfile
 import zlib
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import IO, Self
@@ -70,6 +71,111 @@ STORED_SUFFIXES = {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".
 STORAGE_FOLDERS = ("invoices/", "receipts/", "consignes/")
 
 ZIP_MAGIC = b"PK\x03\x04"
+
+
+@dataclass(frozen=True)
+class Carved:
+    """A section an archive written before it existed holds inside another
+    section's file: `within`'s top-level `keys` are its own, `shared` ones
+    are read by both, and `counts` pairs each count label it has now with
+    the label `within` gave it then.
+
+    The bank's formats and rules and the returnable types and slip formats
+    were carried by « Banque » and « Consignes » until they became sections
+    of their own, so another bar could take them without the data. An
+    archive from before - every safety backup taken until then included - is
+    read as if it had both: the same JSON keys, read from the old file. A
+    format bump would have refused those backups; reading them as one
+    section would have restored the rules under « Banque », which no longer
+    holds them."""
+
+    within: str
+    keys: tuple[str, ...]
+    shared: tuple[str, ...]
+    counts: tuple[tuple[str, str], ...]
+
+
+#: section key → where an older archive keeps it. The labels are the
+#: sections' own (`sections/bank_rules.py`, `sections/returnable_types.py`),
+#: then as `sections/bank.py` and `sections/returnables.py` counted them -
+#: a test holds both ends.
+CARVED = {
+    "regles_banque": Carved(
+        within="banque",
+        keys=("statement_formats", "operation_rules", "rules"),
+        shared=(),
+        counts=(
+            ("formats de relevé", "formats de relevé"),
+            ("règles de reconnaissance", "règles de reconnaissance"),
+            ("règles « sans facture »", "règles"),
+        ),
+    ),
+    "types_consignes": Carved(
+        within="consignes",
+        keys=("types", "formats"),
+        shared=("supplier_names",),
+        counts=(("types de consigne", "types de consigne"), ("formats de bons", "formats de bons")),
+    ),
+}
+
+
+def carved(sections) -> dict[str, Carved]:
+    """The sections `sections` - a manifest's « sections », whose keys are
+    the ones it declares - holds inside an older section's file: each one it
+    does not declare itself whose `within` it does, unless that file's
+    counts say it was written without them (an archive of this version
+    holding « Banque » alone: its counts name every entity it holds, none of
+    these). Counts that are missing, empty or not a dict say nothing, and
+    the section is offered: its load reads only the keys it finds."""
+    if not isinstance(sections, dict):
+        return {}
+    found = {}
+    for key, carve in CARVED.items():
+        entry = sections.get(carve.within)
+        if key in sections or not isinstance(entry, dict):
+            continue
+        counts = entry.get("counts")
+        if isinstance(counts, dict) and counts and not any(old in counts for _label, old in carve.counts):
+            continue
+        found[key] = carve
+    return found
+
+
+def manifest_sections(manifest) -> frozenset[str]:
+    """The sections an archive holds as this version reads it: the known
+    ones its manifest declares, and those carved out of an older one's file
+    (`carved`)."""
+    from transfer.registry import INFO
+
+    sections = manifest.get("sections") if isinstance(manifest, dict) else None
+    if not isinstance(sections, dict):
+        return frozenset()
+    declared = {key for key, entry in sections.items() if key in INFO and isinstance(entry, dict)}
+    return frozenset(declared | {key for key, carve in carved(sections).items() if carve.within in declared})
+
+
+def manifest_counts(manifest, key: str):
+    """A section's counts as its manifest gives them, for this version's
+    section `key`: a carved one takes its labels out of the older section's,
+    which keeps the rest - so the Importer tab compares like with like. Not
+    checked: whatever is not a number is left to the page's own filter."""
+    sections = manifest.get("sections") if isinstance(manifest, dict) else None
+    if not isinstance(sections, dict):
+        return None
+    taken_out = carved(sections)
+    if key in taken_out:
+        carve = taken_out[key]
+        counts = sections[carve.within].get("counts")
+        if not isinstance(counts, dict):
+            return None
+        return {label: counts[old] for label, old in carve.counts if old in counts}
+    entry = sections.get(key)
+    counts = entry.get("counts") if isinstance(entry, dict) else None
+    if not isinstance(counts, dict):
+        return counts
+    gone = {old for carve in taken_out.values() if carve.within == key for _label, old in carve.counts}
+    return {label: number for label, number in counts.items() if label not in gone}
+
 
 NOT_ZIP_NOR_JSON = "Ce fichier n'est ni une archive MarginMate (.zip) ni un export d'associations (.json)."
 NOT_ARCHIVE = "Ce fichier n'est pas une archive MarginMate."
@@ -483,8 +589,11 @@ class SectionReader:
     def __init__(self, archive: ArchiveReader, key: str):
         self._archive = archive
         self.key = key
-        entry = archive.manifest["sections"][key]
-        counts = entry.get("counts")
+        carve = archive._carved.get(key)
+        #: The archive's file this section is read from: its own, or for a
+        #: section an older archive carried inside another's, that one's.
+        self.member = f"{carve.within if carve else key}.json"
+        counts = manifest_counts(archive.manifest, key)
         self.counts: dict[str, int] = (
             {str(label): number for label, number in counts.items() if isinstance(number, int)}
             if isinstance(counts, dict)
@@ -493,11 +602,29 @@ class SectionReader:
         self._payload = None
 
     def payload(self) -> dict:
-        """Parsed once, size-guarded; a section file is a JSON object."""
+        """Parsed once, size-guarded; a section file is a JSON object. A
+        carved section (`CARVED`) is its keys of the older file; that file's
+        own section reads it without them."""
         if self._payload is None:
-            data = _read_json(self._archive._zip, f"{self.key}.json", f"{self.key}.json")
-            if not isinstance(data, dict):
-                raise ArchiveError(f"Archive refusée : {self.key}.json est illisible.")
+            data = self._archive._parsed(self.member)
+            carve = self._archive._carved.get(self.key)
+            if carve is not None:
+                # A shared value is copied: the older file's own section reads
+                # it too, and neither may see what the other does to it. One
+                # level is enough - `supplier_names` maps a code to a name -
+                # and a deep copy of an archive's value nested a few hundred
+                # levels deep would be a RecursionError, a 500.
+                data = {
+                    name: dict(value) if name in carve.shared and isinstance(value, dict) else value
+                    for name, value in data.items()
+                    if name in (*carve.keys, *carve.shared)
+                }
+            else:
+                gone = {
+                    name for other in self._archive._carved.values() if other.within == self.key for name in other.keys
+                }
+                if gone:
+                    data = {name: value for name, value in data.items() if name not in gone}
             self._payload = data
         return self._payload
 
@@ -515,6 +642,10 @@ class ArchiveReader:
         self.path = Path(path)
         self.notes: list[str] = []
         self._readers: dict[str, SectionReader] = {}
+        self._carved: dict[str, Carved] = {}
+        # Each section file parsed once, whichever sections read it: an older
+        # archive's banque.json is both « Banque » and « Règles de la banque ».
+        self._files_parsed: dict[str, dict] = {}
         try:
             with open(self.path, "rb") as handle:
                 magic = handle.read(len(ZIP_MAGIC))
@@ -586,7 +717,8 @@ class ArchiveReader:
                 raise ArchiveError(f"Archive refusée : {member} est trop gros.")
             declared.add(member)
             known.add(key)
-        self.sections = frozenset(known)
+        self._carved = {key: carve for key, carve in carved(sections).items() if carve.within in known}
+        self.sections = frozenset(known | set(self._carved))
 
         files = manifest.get("files", [])
         if not isinstance(files, list):
@@ -638,6 +770,15 @@ class ArchiveReader:
 
     def counts(self, key: str) -> dict[str, int]:
         return self.section(key).counts
+
+    def _parsed(self, member: str) -> dict:
+        """A section file, parsed once for every section reading it."""
+        if member not in self._files_parsed:
+            data = _read_json(self._zip, member, member)
+            if not isinstance(data, dict):
+                raise ArchiveError(f"Archive refusée : {member} est illisible.")
+            self._files_parsed[member] = data
+        return self._files_parsed[member]
 
     def section(self, key: str) -> SectionReader:
         if key not in self.sections:

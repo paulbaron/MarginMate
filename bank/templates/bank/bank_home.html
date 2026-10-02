@@ -161,6 +161,13 @@
                 <p><a href="{% url 'bank:recognition' %}">Corriger sur « Reconnaissance des opérations »</a></p>
             </div>
         {% endif %}
+        {# An ignore rule that hid nothing on this page: its payments are back among the missing ones, and this says why. #}
+        {% if ignore_problems %}
+            <div class="message message-warning">
+                {% for problem in ignore_problems %}<p>{{ problem }}</p>{% endfor %}
+                <p><a href="{% url 'bank:rule_list' %}">Corriger sur « Dépenses sans facture attendue »</a></p>
+            </div>
+        {% endif %}
 
         {% if view == "par-beneficiaire" %}
             {% if groups %}

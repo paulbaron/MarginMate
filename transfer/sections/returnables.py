@@ -1,27 +1,25 @@
-"""« Consignes » (spec §8): the returnable types, the slip formats with
-their patterns, every pickup with its counts and photos, and every slip with
-its PDF and what its reading found.
+"""« Consignes » (spec §8): every pickup with its counts and photos, and
+every slip with its PDF and what its reading found. The types they count and
+the formats the slips were read with are « Types et formats de consignes »'
+(sections/returnable_types.py), a configuration section this one requires.
 
 What is worth keeping is what nothing rebuilds: how many kegs were handed
 back on which day, and the photos taken before the lorry left. So:
 
-* **Natural keys, never pks.** A type and a format are found by their name,
-  the way their form refuses a twin: `search_key(" ".join(name.split()))`
-  (« Futs » finds « Fûts »). A pickup by its `reference` - random, never
+* **Natural keys, never pks.** A pickup by its `reference` - random, never
   shown, never edited, so a pickup whose date or counts were corrected is
   still the same pickup. A slip by the sha256 of its PDF. A supplier by its
-  code (then its name, from `supplier_names`).
+  code (then its name, from `supplier_names`). A count's type and a slip's
+  format by their name, in THIS database, as « Types et formats de
+  consignes » finds them (`returnable_types.Named`: the exact name, then
+  « Futs » finding « Fûts ») - read once it has applied, when the same run
+  imports it. One this database lacks skips its record, said.
 * **A slip's reading is not compared.** It is a function of its text and its
   format's patterns: compared, one pattern edited here would turn every slip
   into a conflict. It is copied when the slip is created, and under « Remplacer »
   when the text or the format changed - never read again at import (an
   import reads nothing; a 0.25 s timeout could make the confirm differ from
   its preview, and the confirm would be refused).
-* **Every pattern is checked as the forms check it** (`returnables.patterns`):
-  an archive is a file anybody can edit, and a pattern that never went
-  through the guard would be compiled at the first drawing of /consignes/ -
-  the 50 GB compile of 29/09, through an import. A refused pattern skips its
-  record: « motif refusé : <champ> — <raison> ».
 * **Every date is bounded as the form and the reader bound it**
   (`check_date`): a pickup's day and a slip's delivery within [2000-01-01,
   today + 7 days], a mail's date within [2000-01-01, today + 1 day]; past
@@ -36,9 +34,10 @@ back on which day, and the photos taken before the lorry left. So:
   and never compared. `Pickup.updated_at` (« modifiée ici ») and
   `Slip.read_at` (« relue ici ») are this database's own and never travel.
 
-Seeded rows (the three types and the UBA format of returnables/0002) are
-counted, exported and cleared like any other: the safety archive taken
-before « Effacer » brings them back.
+An archive written before « Types et formats de consignes » existed kept the
+types and formats in consignes.json: this section reads that file without
+them (`archive.CARVED`), so they are neither imported twice nor noted as
+« champ inconnu ». « Effacer » here leaves the types and formats alone.
 """
 
 from __future__ import annotations
@@ -51,12 +50,11 @@ from datetime import date, timedelta
 
 from django.core.exceptions import SuspiciousFileOperation
 from django.core.files.storage import default_storage
-from django.db.models import Count, Prefetch
+from django.db.models import Prefetch
 from django.utils import timezone
 
 from accounts import paths
 from accounts.tenancy import tenant_key
-from common import search_key
 from returnables import patterns
 from returnables.models import (
     MAX_COUNT,
@@ -71,15 +69,13 @@ from returnables.models import (
 from transfer import codec, keys, registry
 from transfer.archive import ArchiveError
 from transfer.sections.base import FileRefused, Section
+from transfer.sections.returnable_types import Named, delete_ids, restore_moments
 from transfer.sections.suppliers import day, plural, said
 
 KEY = "consignes"
 
 # -- what travels --------------------------------------------------------------------
 
-TYPE_FIELDS = ("name", "position", "is_active", "slip_patterns", "created_at")
-PATTERN_FIELDS = tuple(pattern_field.attr for pattern_field in patterns.FORMAT_FIELDS)
-FORMAT_FIELDS = ("name", "is_active", *PATTERN_FIELDS, "created_at")
 PICKUP_FIELDS = ("reference", "date", "note", "created_at")
 COUNT_FIELDS = ("quantity",)
 PHOTO_FILES = ("image", "thumb")
@@ -110,18 +106,15 @@ LINE_FIELDS = ("position", "designation", "quantity", "unit_amount", "amount")
 
 # Never the moment a row was made (§6.4): an export of the same data taken a
 # minute later merges as « inchangé ».
-TYPE_COMPARED = ("name", "position", "is_active", "slip_patterns")
-FORMAT_COMPARED = ("name", "is_active", *PATTERN_FIELDS)
 PICKUP_COMPARED = ("date", "note")
 PHOTO_COMPARED = ("taken_at", "width", "height")
 #: A slip compared outside its reading: what was received, and the text read.
 SLIP_COMPARED = ("origin", "original_name", "mail_sender", "mail_subject", "mail_date", "text")
 
-#: Every concrete field of the seven models is exported or said why not - a
+#: Every concrete field of the five models is exported or said why not - a
 #: guard test holds it, so a field added later cannot be left out in silence.
+#: The types and formats are returnable_types'.
 EXPORTED = {
-    ReturnableType: TYPE_FIELDS,
-    SlipFormat: FORMAT_FIELDS,
     Pickup: PICKUP_FIELDS,
     PickupCount: COUNT_FIELDS,
     PickupPhoto: (*PHOTO_FILES, *PHOTO_FIELDS),
@@ -129,8 +122,6 @@ EXPORTED = {
     SlipLine: LINE_FIELDS,
 }
 NOT_EXPORTED = {
-    ReturnableType: {"id": "pk"},
-    SlipFormat: {"id": "pk", "supplier": "par son code"},
     Pickup: {"id": "pk", "supplier": "par son code", "updated_at": "modifiée ici"},
     PickupCount: {"id": "pk", "pickup": "parent", "returnable_type": "par son nom"},
     PickupPhoto: {"id": "pk", "pickup": "parent"},
@@ -138,9 +129,8 @@ NOT_EXPORTED = {
     SlipLine: {"id": "pk", "slip": "parent"},
 }
 
-TOP_LEVEL = ("supplier_names", "types", "formats", "pickups", "slips")
-LISTS = ("types", "formats", "pickups", "slips")
-FORMAT_KEYS = ("supplier", *FORMAT_FIELDS)
+TOP_LEVEL = ("supplier_names", "pickups", "slips")
+LISTS = ("pickups", "slips")
 PICKUP_KEYS = ("supplier", *PICKUP_FIELDS, "counts", "photos")
 COUNT_KEYS = ("type", "quantity")
 PHOTO_KEYS = (*PHOTO_FILES, *PHOTO_FIELDS)
@@ -149,14 +139,12 @@ READING_KEYS = (*READING_FIELDS, "lines")
 
 # -- the words: count(), the archive's counts and the report say the same ------------
 
-TYPES = "types de consigne"
-FORMATS = "formats de bons"
 PICKUPS = "reprises"
 PHOTOS = "photos"
 SLIPS = "bons"
 LINES = "lignes de bons"
 MEGABYTES = "Mo de fichiers"
-ENTITIES = (TYPES, FORMATS, PICKUPS, PHOTOS, SLIPS, LINES)
+ENTITIES = (PICKUPS, PHOTOS, SLIPS, LINES)
 
 #: The stored names this section writes: never another section's folder.
 FOLDER = "consignes/"
@@ -173,15 +161,7 @@ FUTURE_DAYS = patterns.FUTURE_DAYS
 MAIL_FUTURE_DAYS = 1
 
 LABELS = {
-    "name": "nom",
-    "position": "ordre",
-    "is_active": "actif",
-    "slip_patterns": "motifs des bons",
     "supplier": "fournisseur",
-    **{
-        pattern_field.attr: pattern_field.label[0].lower() + pattern_field.label[1:]
-        for pattern_field in patterns.FORMAT_FIELDS
-    },
     "date": "date",
     "note": "note",
     "counts": "nombres",
@@ -196,13 +176,7 @@ LABELS = {
     "text": "texte lu",
 }
 
-CLEAR_NOTE = (
-    "Les types de consigne et le format de bon créés à l'installation sont effacés avec le reste : la sauvegarde "
-    "prise avant l'effacement les ramène."
-)
-
 SIZE_CACHE_SECONDS = 60
-DELETE_BATCH = 500
 
 
 class _NotSaid:
@@ -253,13 +227,6 @@ class _Slip:
 # -- keys and words --------------------------------------------------------------------
 
 
-def name_key(name: str) -> str:
-    """How a type or a format is found: the forms' own rule, case, accents
-    and spaces ignored - an archive's « Futs » is this database's « Fûts »,
-    a pair the type form refuses."""
-    return search_key(" ".join((name or "").split()))
-
-
 def pickup_label(value) -> str:
     return f"Reprise du {day(value)}" if value else "Reprise sans date lisible"
 
@@ -267,50 +234,6 @@ def pickup_label(value) -> str:
 def slip_label(number, delivery_date) -> str:
     label = f"Bon n° {number}" if number else "Bon sans numéro"
     return f"{label} du {day(delivery_date)}" if delivery_date else label
-
-
-def _refused(label: str, error: patterns.PatternError) -> str:
-    """« motif refusé : <champ> — <raison> », from the guard's own sentence
-    (« <champ> : <raison>. »)."""
-    field_label, separator, reason = error.message.partition(" : ")
-    if not separator:
-        field_label, reason = label, error.message
-    return f"motif refusé : {field_label} — {reason.rstrip('.')}"
-
-
-def check_type_patterns(value) -> None:
-    """A type's « motifs des bons », checked as its form checks them."""
-    try:
-        patterns.compile_field(patterns.TYPE_FIELD, value)
-    except patterns.PatternError as error:
-        raise codec.FieldValueError(_refused(patterns.TYPE_FIELD.label, error)) from None
-
-
-def check_format_patterns(values: dict) -> None:
-    """A format's patterns as they would be stored, checked as its form checks
-    them: each by the guard (returnables.patterns), the line and the date
-    patterns required, and a sender pattern naming an address or a domain, with
-    its subject."""
-    for pattern_field in patterns.FORMAT_FIELDS:
-        value = values.get(pattern_field.attr) or ""
-        if pattern_field.required and not value.strip():
-            raise codec.FieldValueError(f"motif refusé : {pattern_field.label} — le motif est vide")
-        try:
-            patterns.compile_field(pattern_field, value)
-        except patterns.PatternError as error:
-            raise codec.FieldValueError(_refused(pattern_field.label, error)) from None
-    sender = (values.get("sender_pattern") or "").strip()
-    if sender:
-        label = patterns.FIELD_BY_ATTR["sender_pattern"].label
-        try:
-            patterns.check_sender_pattern(sender)
-        except patterns.PatternError as error:
-            raise codec.FieldValueError(_refused(label, error)) from None
-        if not (values.get("subject_pattern") or "").strip():
-            raise codec.FieldValueError(
-                f"motif refusé : {patterns.FIELD_BY_ATTR['subject_pattern'].label} — obligatoire quand un motif "
-                "d'expéditeur est donné"
-            )
 
 
 def check_date(name: str, value, *, future_days: int, today: date | None = None):
@@ -349,24 +272,6 @@ def _readable_checks(value) -> bool:
         and isinstance(check.get("detail"), str)
         for check in value
     )
-
-
-def _restore(objects_and_moments, field_name: str) -> None:
-    """auto_now_add wrote "now" over the archive's moment on insert:
-    put back after it (bulk_update calls no pre_save)."""
-    restored = []
-    for obj, moment in objects_and_moments:
-        if moment is not None:
-            setattr(obj, field_name, moment)
-            restored.append(obj)
-    if restored:
-        type(restored[0]).objects.bulk_update(restored, [field_name])
-
-
-def _delete_ids(model, ids) -> None:
-    ids = list(ids)
-    for start in range(0, len(ids), DELETE_BATCH):
-        model.objects.filter(pk__in=ids[start : start + DELETE_BATCH]).delete()
 
 
 def _stored(name: str) -> bool:
@@ -418,8 +323,6 @@ class ReturnablesSection(Section):
     # -- what this database holds ----------------------------------------------------
     def count(self) -> dict[str, int]:
         return {
-            TYPES: ReturnableType.objects.count(),
-            FORMATS: SlipFormat.objects.count(),
             PICKUPS: Pickup.objects.count(),
             PHOTOS: PickupPhoto.objects.count(),
             SLIPS: Slip.objects.count(),
@@ -445,17 +348,6 @@ class ReturnablesSection(Section):
         for line in SlipLine.objects.order_by("position", "id"):
             lines[line.slip_id].append(codec.record(line, LINE_FIELDS))
         return {
-            "types": sorted(
-                (list(codec.record(row, TYPE_FIELDS).values()) for row in ReturnableType.objects.all()),
-                key=lambda values: values[0],
-            ),
-            "formats": sorted(
-                (
-                    {"supplier": row.supplier.code, **codec.record(row, FORMAT_FIELDS)}
-                    for row in SlipFormat.objects.select_related("supplier")
-                ),
-                key=lambda record: record["name"],
-            ),
             "pickups": sorted(
                 (
                     {
@@ -484,8 +376,6 @@ class ReturnablesSection(Section):
 
     # -- export ------------------------------------------------------------------------
     def export(self, out) -> None:
-        types = list(ReturnableType.objects.order_by("position", "id"))
-        formats = list(SlipFormat.objects.select_related("supplier").order_by("name", "id"))
         pickups = list(
             Pickup.objects.select_related("supplier")
             .order_by("date", "id")
@@ -549,23 +439,20 @@ class ReturnablesSection(Section):
                     },
                 }
             )
-        suppliers = {row.supplier for row in formats} | {pickup.supplier for pickup in pickups if pickup.supplier_id}
+        suppliers = {pickup.supplier for pickup in pickups if pickup.supplier_id}
         out.write(
             {
                 # A code may differ in the database this is imported into:
-                # its name lets the formats and pickups still find their
-                # supplier (keys.SupplierResolver).
+                # its name lets the pickups still find their supplier
+                # (keys.SupplierResolver). The formats' suppliers are named
+                # by « Types et formats de consignes ».
                 "supplier_names": {
                     supplier.code: supplier.name for supplier in sorted(suppliers, key=lambda s: s.code)
                 },
-                "types": [codec.record(row, TYPE_FIELDS) for row in types],
-                "formats": [{"supplier": row.supplier.code, **codec.record(row, FORMAT_FIELDS)} for row in formats],
                 "pickups": pickup_records,
                 "slips": slip_records,
             },
             {
-                TYPES: len(types),
-                FORMATS: len(formats),
                 PICKUPS: len(pickups),
                 PHOTOS: photo_count,
                 SLIPS: len(slips),
@@ -582,161 +469,27 @@ class ReturnablesSection(Section):
             # A list left out is refused, not read as empty: under
             # « Remplacer » an empty list deletes everything of it here.
             if not isinstance(items, list):
-                raise ArchiveError(f"Archive refusée : consignes.json n'a pas de liste « {name} ».")
+                raise ArchiveError(f"Archive refusée : {src.member} n'a pas de liste « {name} ».")
             if not all(isinstance(item, dict) for item in items):
-                raise ArchiveError(f"Archive refusée : dans consignes.json, « {name} » ne contient pas que des objets.")
+                raise ArchiveError(f"Archive refusée : dans {src.member}, « {name} » ne contient pas que des objets.")
         self.payload = payload
+        self._member = src.member
         # What the archive names, whatever becomes of its records: prune
         # never deletes a row a record answered to, even one it skipped.
-        self._claimed_types: set[int] = set()
-        self._claimed_formats: set[int] = set()
         self._references: set[str] = set()
         self._shas: set[str] = set()
 
     def apply(self, ctx, report) -> None:
         for entity in ENTITIES:  # one row each, even when nothing moves
             report.unchanged(entity, 0)
-        codec.note_unknown(report, self.payload, TOP_LEVEL, where="consignes.json › ")
+        codec.note_unknown(report, self.payload, TOP_LEVEL, where=f"{self._member} › ")
         self._ctx, self._report = ctx, report
         self._replacing = ctx.replacing(self.key)
-        types = self._apply_types()
-        formats = self._apply_formats()
-        self._apply_pickups(types)
-        self._apply_slips(formats)
-
-    # .. types .......................................................................
-    def _apply_types(self) -> dict:
-        """Returns every type here by key, the archive's own first: what a
-        pickup's counts are resolved against."""
-        report = self._report
-        rows = list(ReturnableType.objects.order_by("position", "id"))
-        by_name = {row.name: row for row in rows}
-        by_key: dict[str, ReturnableType] = {}
-        for row in rows:
-            by_key.setdefault(name_key(row.name), row)
-        resolved: dict[str, ReturnableType] = {}
-        seen: set[str] = set()
-        created = []
-        for record in self.payload["types"]:
-            codec.note_unknown(report, record, TYPE_FIELDS, where="types de consigne › ")
-            name = record.get("name")
-            if not isinstance(name, str) or not name.strip():
-                report.skip("Type de consigne sans nom lisible")
-                continue
-            key = name_key(name)
-            label = f"Type de consigne « {name} »"
-            if key in seen:
-                report.skip(f"{label} : en double dans l'archive")
-                continue
-            seen.add(key)
-            row = by_name.get(name) or by_key.get(key)
-            if row is not None:
-                # Before anything is checked: a type the archive names, even
-                # skipped, is one prune must not remove.
-                self._claimed_types.add(row.pk)
-                resolved[key] = row
-            try:
-                values = {
-                    name_: codec.load(ReturnableType, name_, record[name_]) for name_ in TYPE_FIELDS if name_ in record
-                }
-                if "slip_patterns" in values:
-                    check_type_patterns(values["slip_patterns"])
-                if row is None:
-                    row = ReturnableType(**{name_: value for name_, value in values.items() if name_ != "created_at"})
-                    row.save()
-                    created.append((row, values.get("created_at")))
-                    self._claimed_types.add(row.pk)
-                    resolved[key] = row
-                    report.created(TYPES)
-                    continue
-                different = codec.differences(row, record, TYPE_COMPARED)
-            except codec.FieldValueError as exc:
-                report.skip(f"{label} : {exc}")
-                continue
-            if not different:
-                report.unchanged(TYPES)
-            elif self._replacing:
-                changed = codec.assign(row, record, TYPE_COMPARED)
-                row.save(update_fields=changed)
-                report.updated(TYPES)
-            else:
-                report.conflict(f"{label} : différent dans l'archive ({said(different, LABELS)}) — gardé tel quel")
-        _restore(created, "created_at")
-        return {**by_key, **resolved}
-
-    # .. formats .....................................................................
-    def _apply_formats(self) -> dict:
-        ctx, report = self._ctx, self._report
-        rows = list(SlipFormat.objects.select_related("supplier").order_by("name", "id"))
-        by_name = {row.name: row for row in rows}
-        by_key: dict[str, SlipFormat] = {}
-        for row in rows:
-            by_key.setdefault(name_key(row.name), row)
-        resolved: dict[str, SlipFormat] = {}
-        seen: set[str] = set()
-        created = []
-        for record in self.payload["formats"]:
-            codec.note_unknown(report, record, FORMAT_KEYS, where="formats de bons › ")
-            name = record.get("name")
-            if not isinstance(name, str) or not name.strip():
-                report.skip("Format de bon sans nom lisible")
-                continue
-            key = name_key(name)
-            label = f"Format de bon « {name} »"
-            if key in seen:
-                report.skip(f"{label} : en double dans l'archive")
-                continue
-            seen.add(key)
-            row = by_name.get(name) or by_key.get(key)
-            if row is not None:
-                self._claimed_formats.add(row.pk)
-                resolved[key] = row
-            code = record.get("supplier")
-            supplier = ctx.suppliers.resolve(code) if isinstance(code, str) else None
-            if supplier is None:
-                report.skip(f"{label} : fournisseur inconnu (« {code} »)")
-                continue
-            try:
-                values = {
-                    name_: codec.load(SlipFormat, name_, record[name_]) for name_ in FORMAT_FIELDS if name_ in record
-                }
-                # The patterns as they would be stored: what the record says,
-                # else what is here (or the field's default, for a new one).
-                check_format_patterns(
-                    {
-                        attr: values[attr]
-                        if attr in values
-                        else (getattr(row, attr) if row is not None else SlipFormat._meta.get_field(attr).get_default())
-                        for attr in PATTERN_FIELDS
-                    }
-                )
-                if row is None:
-                    row = SlipFormat(
-                        supplier=supplier, **{name_: value for name_, value in values.items() if name_ != "created_at"}
-                    )
-                    row.save()
-                    created.append((row, values.get("created_at")))
-                    self._claimed_formats.add(row.pk)
-                    resolved[key] = row
-                    report.created(FORMATS)
-                    continue
-                different = (["supplier"] if row.supplier_id != supplier.pk else []) + codec.differences(
-                    row, record, FORMAT_COMPARED
-                )
-            except codec.FieldValueError as exc:
-                report.skip(f"{label} : {exc}")
-                continue
-            if not different:
-                report.unchanged(FORMATS)
-            elif self._replacing:
-                codec.assign(row, record, FORMAT_COMPARED)
-                row.supplier = supplier
-                row.save()
-                report.updated(FORMATS)
-            else:
-                report.conflict(f"{label} : différent dans l'archive ({said(different, LABELS)}) — gardé tel quel")
-        _restore(created, "created_at")
-        return {**by_key, **resolved}
+        # Read now, not at load: « Types et formats de consignes » (order 58)
+        # has applied by now when the run imports it, and a type it created
+        # or renamed is the one a count names.
+        self._apply_pickups(Named(ReturnableType.objects.order_by("position", "id")))
+        self._apply_slips(Named(SlipFormat.objects.order_by("name", "id")))
 
     # .. files .......................................................................
     def _ref(self, ref):
@@ -787,7 +540,7 @@ class ReturnablesSection(Section):
                 self._ctx.stored_files.remove(name)
 
     # .. pickups .....................................................................
-    def _apply_pickups(self, types: dict) -> None:
+    def _apply_pickups(self, types: Named) -> None:
         report = self._report
         existing = {
             pickup.reference: pickup
@@ -826,7 +579,7 @@ class ReturnablesSection(Section):
             else:
                 self._update_pickup(pickup, parsed)
 
-    def _parse_pickup(self, record: dict, label: str, types: dict) -> _Pickup:
+    def _parse_pickup(self, record: dict, label: str, types: Named) -> _Pickup:
         values = {name: codec.load(Pickup, name, record[name]) for name in ("note", "created_at") if name in record}
         values["date"] = check_date("date", codec.load(Pickup, "date", record.get("date")), future_days=FUTURE_DAYS)
         parsed = _Pickup(label=label, values=values, record=record)
@@ -860,7 +613,7 @@ class ReturnablesSection(Section):
                 parsed.photos.append(_Photo(values=photo_values, item=item, refs=refs))
         return parsed
 
-    def _parse_counts(self, items, types: dict) -> dict:
+    def _parse_counts(self, items, types: Named) -> dict:
         if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
             raise codec.FieldValueError("nombres illisibles")
         counts: dict = {}
@@ -869,7 +622,7 @@ class ReturnablesSection(Section):
             type_name = item.get("type")
             if not isinstance(type_name, str) or not type_name.strip():
                 raise codec.FieldValueError("nombres illisibles")
-            row = types.get(name_key(type_name))
+            row = types.find(type_name)
             if row is None:
                 raise codec.FieldValueError(f"type de consigne inconnu « {type_name} »")
             quantity = codec.load(PickupCount, "quantity", item.get("quantity"))
@@ -930,7 +683,7 @@ class ReturnablesSection(Section):
             report.skip(f"{parsed.label} : {exc}")
             return
         pickup.save()
-        _restore([(pickup, parsed.values.get("created_at"))], "created_at")
+        restore_moments([(pickup, parsed.values.get("created_at"))], "created_at")
         PickupCount.objects.bulk_create(
             PickupCount(pickup=pickup, returnable_type=row, quantity=quantity)
             for row, quantity in (parsed.counts or {}).values()
@@ -938,7 +691,7 @@ class ReturnablesSection(Section):
         for row, _moment in photos:
             row.pickup = pickup
             row.save()
-        _restore(photos, "created_at")
+        restore_moments(photos, "created_at")
         report.created(PICKUPS)
         if photos:
             report.created(PHOTOS, len(photos))
@@ -1082,18 +835,18 @@ class ReturnablesSection(Section):
         if extra:
             for row in extra:
                 old_names.extend(name for name in (row.image.name, row.thumb.name) if name)
-            _delete_ids(PickupPhoto, [row.pk for row in extra])
+            delete_ids(PickupPhoto, [row.pk for row in extra])
             report.deleted(PHOTOS, len(extra))
         for row, _moment in new_rows:
             row.save()
-        _restore(new_rows, "created_at")
+        restore_moments(new_rows, "created_at")
         if new_rows:
             report.created(PHOTOS, len(new_rows))
         for name in old_names:
             ctx.delete_file_on_commit(name)
 
     # .. slips .......................................................................
-    def _apply_slips(self, formats: dict) -> None:
+    def _apply_slips(self, formats: Named) -> None:
         report = self._report
         existing = {slip.sha256: slip for slip in Slip.objects.select_related("format")}
         lines_here = defaultdict(list)
@@ -1140,11 +893,11 @@ class ReturnablesSection(Section):
                 return slip_label(number[:40], delivery)
         return f"Bon {record['sha256'][:12]}…"
 
-    def _parse_slip(self, record: dict, label: str, formats: dict) -> _Slip:
+    def _parse_slip(self, record: dict, label: str, formats: Named) -> _Slip:
         format_name = record.get("format")
         if not isinstance(format_name, str) or not format_name.strip():
             raise codec.FieldValueError("format de bon manquant")
-        fmt = formats.get(name_key(format_name))
+        fmt = formats.find(format_name)
         if fmt is None:
             raise codec.FieldValueError(f"format de bon inconnu « {format_name} »")
         values = {
@@ -1221,7 +974,7 @@ class ReturnablesSection(Section):
             **(parsed.reading or {}),
         )
         slip.save()
-        _restore([(slip, parsed.values.get("received_at"))], "received_at")
+        restore_moments([(slip, parsed.values.get("received_at"))], "received_at")
         SlipLine.objects.bulk_create(SlipLine(slip=slip, **line) for line in parsed.lines)
         report.created(SLIPS)
         if parsed.lines:
@@ -1290,7 +1043,7 @@ class ReturnablesSection(Section):
             if lines:
                 report.unchanged(LINES, len(lines))
             return
-        _delete_ids(SlipLine, [line.pk for line in lines])
+        delete_ids(SlipLine, [line.pk for line in lines])
         SlipLine.objects.bulk_create(SlipLine(slip=slip, **line) for line in parsed.lines)
         if lines:
             report.deleted(LINES, len(lines))
@@ -1300,9 +1053,10 @@ class ReturnablesSection(Section):
     # .. prune ......................................................................
     def prune(self, ctx, report) -> None:
         """What the archive does not name goes, in the order the rows hold
-        one another: pickups (their counts and photos), slips (their lines),
-        formats, types. A format or a type something kept still uses stays,
-        said."""
+        one another: pickups (their counts and photos), then slips (their
+        lines). The types and formats they leave are pruned after, by
+        « Types et formats de consignes » (reverse order), and only if it is
+        replaced too."""
         pickups = [
             pk for pk, reference in Pickup.objects.values_list("pk", "reference") if reference not in self._references
         ]
@@ -1311,7 +1065,7 @@ class ReturnablesSection(Section):
             for image, thumb in PickupPhoto.objects.filter(pickup_id__in=pickups).values_list("image", "thumb"):
                 names.extend(name for name in (image, thumb) if name)
                 photos += 1
-            _delete_ids(Pickup, pickups)
+            delete_ids(Pickup, pickups)
             report.deleted(PICKUPS, len(pickups))
             if photos:
                 report.deleted(PHOTOS, photos)
@@ -1322,54 +1076,23 @@ class ReturnablesSection(Section):
         ]
         if slips:
             lines = SlipLine.objects.filter(slip_id__in=[pk for pk, _name in slips]).count()
-            _delete_ids(Slip, [pk for pk, _name in slips])
+            delete_ids(Slip, [pk for pk, _name in slips])
             report.deleted(SLIPS, len(slips))
             if lines:
                 report.deleted(LINES, lines)
             for _pk, name in slips:
                 ctx.delete_file_on_commit(name)
-        self._prune_named(
-            report,
-            SlipFormat,
-            self._claimed_formats,
-            FORMATS,
-            "slips",
-            lambda name, n: f"Format de bon « {name} » : encore utilisé par {plural(n, 'bon')}",
-        )
-        self._prune_named(
-            report,
-            ReturnableType,
-            self._claimed_types,
-            TYPES,
-            "counts",
-            lambda name, n: f"Type de consigne « {name} » : encore compté dans {plural(n, 'reprise')}",
-        )
-
-    @staticmethod
-    def _prune_named(report, model, claimed: set[int], entity: str, related: str, why) -> None:
-        doomed = []
-        for pk, name, used in model.objects.annotate(used=Count(related)).values_list("pk", "name", "used"):
-            if pk in claimed:
-                continue
-            if used:
-                report.keep(why(name, used))
-            else:
-                doomed.append(pk)
-        if doomed:
-            _delete_ids(model, doomed)
-            report.deleted(entity, len(doomed))
 
     # -- clear --------------------------------------------------------------------------
     def clear(self, ctx, report) -> None:
-        """Everything count() counts, seeds included, in the order the rows
-        hold one another; the files once the transaction commits."""
+        """Everything count() counts, in the order the rows hold one
+        another; the files once the transaction commits. The types and the
+        formats stay: they are « Types et formats de consignes »'."""
         names = sorted(named_files())
         deleted = {}
         for entity, model, children in (
             (PICKUPS, Pickup, ((PHOTOS, PickupPhoto),)),
             (SLIPS, Slip, ((LINES, SlipLine),)),
-            (FORMATS, SlipFormat, ()),
-            (TYPES, ReturnableType, ()),
         ):
             _total, per_model = model.objects.all().delete()
             deleted[entity] = per_model.get(model._meta.label, 0)
@@ -1379,5 +1102,3 @@ class ReturnablesSection(Section):
             report.deleted(entity, deleted[entity])
         for name in names:
             ctx.delete_file_on_commit(name)
-        if deleted[TYPES] or deleted[FORMATS]:
-            report.note(CLEAR_NOTE)
