@@ -2,17 +2,20 @@
 (the owner, 01/10/2026: « 10000€ -> 10 000€ »): common.group_thousands,
 common.format_money and the `money` template filter."""
 
+import random
 import re
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from pathlib import Path
 
 from django.conf import settings
 from django.template import Context, Template
+from django.template.defaultfilters import floatformat
 from django.template.loader import get_template
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
 from django.utils import translation
 
 from common import THOUSANDS_SEPARATOR, format_money, group_thousands
+from inventory.templatetags.assets import _floatformat, money
 
 SP = "\N{NO-BREAK SPACE}"
 
@@ -108,6 +111,128 @@ class MoneyFilterTests(SimpleTestCase):
     def test_in_french_too(self):
         with translation.override("fr"):
             self.assertEqual(self.render("{{ x|money }}", x=Decimal("1234.5")), f"1{SP}234,50")
+
+
+def _values():
+    """Every kind of figure `money` is given, and the corners of floatformat:
+    signs, minus zero, half-up ties, carries, exponents both ways, 28-digit
+    context limits, the 200-digit cut-off, non-finite values, and what is
+    not a number at all."""
+    decimals = [
+        "0",
+        "-0",
+        "0.00",
+        "-0.00",
+        "0E-7",
+        "-0E+3",
+        "0.004",
+        "-0.004",
+        "0.005",
+        "-0.005",
+        "0.015",
+        "-0.015",
+        "0.045",
+        "0.125",
+        "-0.125",
+        "0.5",
+        "-0.5",
+        "1.005",
+        "2.675",
+        "-2.675",
+        "9.995",
+        "-9.995",
+        "99.5",
+        "999.995",
+        "-999.995",
+        "999.4999",
+        "1000",
+        "1234.5",
+        "-1234.565",
+        "16568684.5",
+        "10000.00",
+        "0.00001",
+        "1E+2",
+        "-1E+2",
+        "1E-10",
+        "-1E-10",
+        "123E+5",
+        "5E-3",
+        "1.5E+1",
+        "12345678901234567890.125",
+        "-99999999999999999999999999999.995",
+        "1.23456789012345678901234567890123",
+        "0.1234567890123456789012345678901234567890",
+        "1E+150",
+        "-1E+190",
+        "1E-190",
+        "1E+250",
+        "1E-250",
+        "NaN",
+        "-NaN",
+        "sNaN",
+        "Infinity",
+        "-Infinity",
+    ]
+    yield from (Decimal(text) for text in decimals)
+    yield from (0, 1, -1, 7, 999, 1000, -1000, 12345, 10**18, -(10**25), 10**199, 10**250)
+    yield from (0.0, -0.0, 0.5, -0.5, 1.005, 2.675, -2.675, 1234.5, 0.1 + 0.2, 1e16, 1e22, -1e22, 1e-5, 1.23e-7)
+    yield from (123456789.125, 5e-324, 1.7976931348623157e308, float("inf"), float("-inf"), float("nan"))
+    yield from (None, "", "abc", "12.5", "-0", True, False, [], object())
+    # A seeded spread of ordinary amounts, with every number of decimals.
+    rng = random.Random(20261001)
+    for _ in range(500):
+        digits = "".join(rng.choice("0123456789") for _ in range(rng.randint(1, 16)))
+        number = Decimal(digits).scaleb(-rng.randint(0, 8))
+        yield -number if rng.random() < 0.4 else number
+        yield float(number) if rng.random() < 0.5 else int(number)
+
+
+PLACES = (2, 0, 1, 3, 4, -1, -2, -3, 6, "2", "-2", "2g", "2u", "-2gu", "abc")
+
+
+class MoneyFastPathTests(SimpleTestCase):
+    """`money` skips floatformat's general case for a finite Decimal, int or
+    float (assets._floatformat): every figure must come out exactly as
+    floatformat-then-grouped prints it, in either language, whatever the
+    decimal context."""
+
+    def assert_same_as_floatformat(self):
+        for value in _values():
+            for places in PLACES:
+                expected = group_thousands(floatformat(value, places))
+                with self.subTest(value=value, places=places, language=translation.get_language()):
+                    self.assertEqual(money(value, places), expected)
+                    fast = _floatformat(value, places)
+                    if fast is not None:
+                        self.assertEqual(fast, str(floatformat(value, places)))
+
+    def test_the_same_characters_as_floatformat(self):
+        self.assert_same_as_floatformat()
+
+    def test_in_french(self):
+        with translation.override("fr"):
+            self.assert_same_as_floatformat()
+
+    def test_whatever_the_decimal_context(self):
+        for precision in (10, 50):
+            with localcontext(prec=precision):
+                self.assert_same_as_floatformat()
+
+    @override_settings(USE_THOUSAND_SEPARATOR=True)
+    def test_a_grouping_locale_is_floatformat_s(self):
+        self.assertIsNone(_floatformat(Decimal("12345.5"), 2))
+        self.assertEqual(money(Decimal("12345.5")), group_thousands(floatformat(Decimal("12345.5"), 2)))
+
+    def test_the_shortcut_is_taken(self):
+        """What the pages give it: Decimals, ints and floats, places as an int."""
+        self.assertEqual(_floatformat(Decimal("16568684.5"), 2), "16568684.50")
+        self.assertEqual(_floatformat(Decimal("-0.004"), 2), "0.00")
+        self.assertEqual(_floatformat(12345, 0), "12345")
+        self.assertEqual(_floatformat(1234.5, 4), "1234.5000")
+        for unknown in (None, "", "12.5", True, Decimal("NaN"), Decimal("1E+250")):
+            with self.subTest(value=unknown):
+                self.assertIsNone(_floatformat(unknown, 2))
+        self.assertIsNone(_floatformat(Decimal("1.5"), "2"))
 
 
 def app_templates():

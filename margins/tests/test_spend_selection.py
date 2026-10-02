@@ -34,6 +34,7 @@ from django.test.utils import CaptureQueriesContext
 
 from common import DateRange
 from invoices.importing import spread_charges
+from invoices.models import Invoice
 from margins import computation
 from margins.computation import (
     CHARGES_KEY,
@@ -500,6 +501,76 @@ class OneReadingOfTheInvoicesTests(SpendFixture, TestCase):
             margins_for(MARCH, keys)
 
         self.assertEqual(len(large), len(small), "une requête par facture ou par ligne s'est glissée")
+
+
+class TheColumnsReadTests(TestCase):
+    """`with_lines` loads only what `where_it_went` and the invoice's two
+    totals read (`_INVOICE_COLUMNS`, `_LINE_COLUMNS`): a document's text, its
+    checks and its VAT table are most of a row, and nothing here reads them.
+
+    A column read and left out does not fail - it is fetched again, one query
+    per invoice or per line, which is the slowness this was written against.
+    So every shape the two totals and the split branch on is read below with
+    no query at all, and comes out exactly as the whole rows give it."""
+
+    @classmethod
+    def setUpTestData(cls):
+        goods = make_supplier(name="Grossiste Exemple")
+        landlord = make_supplier(name="Bailleur Exemple", expenses_only=True)
+        beer = make_stock_type(name="Bière blonde", category="Bières")
+        towels = make_stock_type(name="Essuie-tout", category="")
+
+        # HT lines and duty on top, its rate deduced from the line carrying duty.
+        plain = make_invoice(supplier=goods, reconciliation_adjustment=Decimal("2.10"))
+        line(plain, beer, "60.00", taxes=Decimal("3.00"))
+        line(plain, towels, "15.00", vat_rate="0.055")
+        line(plain, None, "4.00")
+        # An electronic invoice: its stated total, its duty's rate stated too.
+        stated = make_invoice(
+            supplier=goods,
+            einvoice_format="CII",
+            printed_total_ttc=Decimal("235.39"),
+            reconciliation_adjustment=Decimal("5.00"),
+            adjustment_vat_rate=Decimal("0.2000"),
+        )
+        line(stated, beer, "169.00")
+        line(stated, towels, "25.20", vat_rate="0.055")
+        # A receipt whose every line kept its printed amount, paid at its printed total.
+        receipt = make_invoice(
+            supplier=goods, printed_total_ttc=Decimal("18.25"), reconciliation_adjustment=Decimal("0.01")
+        )
+        line(receipt, towels, "10.00", printed_ttc=Decimal("12.00"))
+        line(receipt, beer, "6.00", vat_rate="0.055", printed_ttc=Decimal("6.33"), discount_ttc=Decimal("0.10"))
+        # A supplier's PDF in HT whose printed total is a cent off its lines.
+        line(make_invoice(supplier=goods, printed_total_ttc=Decimal("120.01")), beer, "100.00")
+        # A delivery spread over the goods it brought.
+        delivered = make_invoice(supplier=goods)
+        line(delivered, beer, "75.00", spread_ht=Decimal("7.50"))
+        line(delivered, towels, "25.00", spread_ht=Decimal("2.50"))
+        line(delivered, None, "10.00", is_spread_charge=True)
+        # A charge, and two documents with no line at all.
+        line(make_invoice(supplier=landlord), None, "500.00")
+        make_invoice(supplier=goods, reconciliation_adjustment=Decimal("15.00"))
+        make_invoice(supplier=landlord, reconciliation_adjustment=Decimal("45.00"))
+
+    def figures(self, invoices) -> dict:
+        return {
+            invoice.pk: (invoice.total_ht, invoice.total_ttc, computation.where_it_went(invoice))
+            for invoice in invoices
+        }
+
+    def test_every_shape_is_read_with_no_query(self):
+        invoices = list(computation.with_lines(Invoice.objects.all()))
+        self.assertEqual(len(invoices), 8)
+        with self.assertNumQueries(0):
+            self.figures(invoices)
+
+    def test_the_columns_read_give_what_the_whole_rows_give(self):
+        whole = Invoice.objects.select_related("supplier").prefetch_related(computation.lines_prefetch())
+        self.assertEqual(
+            self.figures(computation.with_lines(Invoice.objects.all())),
+            self.figures(whole),
+        )
 
 
 class SpreadChargesGoWhereTheGoodsWentTests(TestCase):

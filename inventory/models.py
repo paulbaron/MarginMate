@@ -143,9 +143,32 @@ class StockType(models.Model):
         current_quantity), not a "latest price" or FIFO cost - there's no
         existing concept of ordering movements by "used first" in this app,
         and an average is the simplest thing that's already consistent with
-        every other number already shown for a stock type."""
+        every other number already shown for a stock type.
+
+        Worked out once per PREFETCHED list of movements: costing recipes
+        asks each of their stock items for it some twenty-five times (every
+        bound of every group, recipe and sub-recipe), and each ask added the
+        whole ledger up again - 2 100 sums for 81 stock items to draw the
+        products page. The answer is kept beside the very list it was added
+        up from and served only while that list is still the one prefetched:
+        a new prefetch, a refresh_from_db or a movement added through the
+        manager replaces or drops it, and the sum is done again. Without a
+        prefetch every ask reads the ledger, as it always did."""
+        rows = self._prefetched_movements()
+        memo = self.__dict__.get("_unit_cost_memo")
+        if rows is not None and memo is not None and memo[0] is rows:
+            return memo[1]
         quantity = self.current_quantity
-        return (self.current_value_ht / quantity) if quantity else Decimal("0")
+        cost = (self.current_value_ht / quantity) if quantity else Decimal("0")
+        if rows is not None:
+            self._unit_cost_memo = (rows, cost)
+        return cost
+
+    def _prefetched_movements(self) -> list | None:
+        """The list `self.movements.all()` iterates when a
+        prefetch_related("movements") filled it, else None."""
+        prefetched = getattr(self, "_prefetched_objects_cache", {}).get("movements")
+        return getattr(prefetched, "_result_cache", None)
 
 
 class Product(models.Model):

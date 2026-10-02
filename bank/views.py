@@ -24,9 +24,11 @@ from decimal import Decimal
 from urllib.parse import parse_qs, urlparse
 
 from django.contrib import messages
-from django.db.models import Prefetch
+from django.db.models import Prefetch, prefetch_related_objects
 from django.shortcuts import get_object_or_404, redirect, render
+from django.template.defaultfilters import date as date_filter
 from django.urls import reverse
+from django.utils.formats import localize
 from django.utils.html import escape
 from django.utils.http import urlencode
 from django.views.decorators.http import require_GET
@@ -45,6 +47,7 @@ from common import (
     safe_next,
     selection_too_big,
 )
+from inventory.templatetags.assets import money
 from invoices.models import Invoice
 from invoices.workspace import documents_matching
 from recipes.integration import TILL_TO_CONFIGURE, till_allowed
@@ -52,7 +55,7 @@ from recipes.integration import TILL_TO_CONFIGURE, till_allowed
 from . import income, invoice_files, matching, reconcile, spending
 from .forms import IgnoreRuleForm
 from .models import BankTransaction, IgnoreRule, IncomePayer, IncomeSource, InvoicePayment
-from .rules import ignoring_rule
+from .rules import ignoring_rule, searcher
 
 TODO, LINKED, NO_INVOICE, INCOME = "todo", "linked", "no_invoice", "income"
 DEFAULT_VIEW = "a-traiter"
@@ -131,6 +134,8 @@ class Link:
     payment: InvoicePayment
     total: Decimal
     others: list = field(default_factory=list)
+    #: The invoice's page (`bank_home`, `_by_pk`).
+    url: str = ""
 
     @property
     def invoice(self) -> Invoice:
@@ -185,6 +190,8 @@ class Row:
     gap: Gap | None = None
     suggestion: matching.Match | None = None
     options: list[Option] = field(default_factory=list)
+    #: The pick-list's options: (value, label), the invoice's pk and what
+    #: its option reads, as the template prints them (`_choice_label`).
     choices: list = field(default_factory=list)
     #: Unpaid invoices at these dates that `choices` had no room for, and
     #: documents the search matched beyond `MAX_FOUND`. Both are said on the
@@ -202,6 +209,9 @@ class Row:
     #: reads it (`income.entry_for`) - a card payout and its commission, a
     #: deposit, or the category a person typed.
     entry: income.Entry | None = None
+    #: Where its forms post and its search box asks (`bank_home`, `_by_pk`).
+    action_url: str = ""
+    search_url: str = ""
 
     @property
     def is_open(self) -> bool:
@@ -251,13 +261,14 @@ class RuleMatches:
     examples: list
 
 
-def classify(line: BankTransaction, rules) -> tuple[str, IgnoreRule | None]:
-    """What a line is: money in, paid for, not expected to have an invoice
-    (by hand, or by the first ignore rule that matches), or still missing one.
-    Its invoice beats any rule: a rule never hides a payment that has one."""
+def classify(line: BankTransaction, payments, rules) -> tuple[str, IgnoreRule | None]:
+    """What a line is, `payments` being what it pays: money in, paid for, not
+    expected to have an invoice (by hand, or by the first ignore rule that
+    matches), or still missing one. Its invoice beats any rule: a rule never
+    hides a payment that has one."""
     if line.amount >= 0:
         return INCOME, None
-    if line.payments.all():
+    if payments:
         return LINKED, None
     if line.no_invoice:
         return NO_INVOICE, None
@@ -277,23 +288,20 @@ def bank_home(request):
     months = _months()
     month, window = _period(request, months)
 
-    lines = BankTransaction.objects.prefetch_related(
-        Prefetch(
-            "payments",
-            # `invoice__payments__transaction` is the other lines paying the
-            # same invoice, said on the row: two prefetched queries for the
-            # whole page rather than one per invoice (see « N+1s hide in
-            # per-object properties »).
-            queryset=InvoicePayment.objects.select_related("invoice__supplier").prefetch_related(
-                "invoice__lines", "invoice__payments__transaction"
-            ),
-        )
+    # Every line's payments, for its status and the zip's count: a list on
+    # each line (`paid_by`) rather than a queryset made for each one, which
+    # cost a tenth of the page, and their invoices without their texts.
+    # What a link shows besides - the supplier, the invoice's lines, the
+    # other lines paying it - `_fill` loads for the rows on screen alone.
+    payments = InvoicePayment.objects.select_related("invoice").defer(
+        *(f"invoice__{name}" for name in reconcile.UNREAD_INVOICE_FIELDS)
     )
+    lines = BankTransaction.objects.prefetch_related(Prefetch("payments", queryset=payments, to_attr="paid_by"))
     # Everything below - the stats, the tab counts, the payee groups - is
     # built from these rows, so it all follows the window by construction.
     lines = _in_period(lines, month, window)
     rules = reconcile.active_rules()
-    rows = [Row(line, *classify(line, rules)) for line in lines]
+    rows = [Row(line, *classify(line, line.paid_by, rules), payments=line.paid_by) for line in lines]
     by_status = defaultdict(list)
     for row in rows:
         by_status[row.status].append(row)
@@ -310,6 +318,17 @@ def bank_home(request):
     }[view]
     _fill(shown)
     _search(shown, request)
+    # Each row's addresses, reversed once for the page rather than by a
+    # `{% url %}` per form - several a row, a fifth of a long tab.
+    action, search, detail = (
+        _by_pk("bank:bank_line_action"),
+        _by_pk("bank:invoice_search"),
+        _by_pk("invoices:invoice_detail"),
+    )
+    for row in shown:
+        row.action_url, row.search_url = action(row.line.pk), search(row.line.pk)
+        for link in row.links:
+            link.url = detail(link.invoice.pk)
     # What each credit is, rather than « Entrée d'argent » for all of them:
     # the same reading « Entrées d'argent » makes - the payers retained
     # included, read once - so the tab and that page cannot call one line
@@ -321,12 +340,7 @@ def bank_home(request):
                 row.entry = income.entry_for(row.line, payers)
     # « Télécharger les factures »: what the zip will hold, counted off the
     # rows already read (their payments are prefetched) - no query.
-    paid = {
-        payment.invoice.pk: payment.invoice
-        for row in rows
-        if row.line.amount < 0
-        for payment in row.line.payments.all()
-    }
+    paid = {payment.invoice.pk: payment.invoice for row in rows if row.line.amount < 0 for payment in row.payments}
     tabs = [
         {
             "key": key,
@@ -371,6 +385,10 @@ def bank_home(request):
             "invoice_zip_url": _invoice_zip_url(view, month, window),
             "invoice_zip_count": sum(1 for invoice in paid.values() if invoice.source_file),
             "invoice_zip_missing": sum(1 for invoice in paid.values() if not invoice.source_file),
+            # What every row links to alike, reversed once.
+            "home_path": reverse("bank:bank_home"),
+            "proposals_path": reverse("bank:proposals"),
+            "rules_path": reverse("bank:rule_list"),
             # Deliberately the whole statement, window or not: windowed, a
             # period with nothing in it would show « Aucun relevé importé »
             # and read as an empty database rather than as empty dates.
@@ -435,6 +453,9 @@ def spending_home(request):
     left_out = report.left_out
     here = _spending_url(asked, showing_all, report.kind, left_out)
     left_out_rows = _left_out_rows(report, asked, showing_all)
+    action = _by_pk("bank:bank_line_action")
+    for one in report.listed:
+        one.action_url = action(one.line.pk)
     return render(
         request,
         "bank/spending.html",
@@ -739,11 +760,9 @@ def proposals(request):
     (`_share_invoices`).
     """
     rules = reconcile.active_rules()
-    rows = [
-        Row(line, TODO)
-        for line in reconcile.open_lines().prefetch_related("payments")
-        if ignoring_rule(line.label, rules) is None
-    ]
+    # An open line pays nothing (`open_lines`), so its row's payments stay
+    # the empty list without a query.
+    rows = [Row(line, TODO) for line in reconcile.open_lines() if ignoring_rule(line.label, rules) is None]
     _fill(rows, with_choices=False)
     proposed = [row for row in rows if row.suggestion is not None]
     _share_invoices(proposed)
@@ -919,15 +938,18 @@ def rule_list(request):
         request.POST or None,
         initial={"pattern": request.GET.get("motif", ""), "description": request.GET.get("nom", "")},
     )
-    debits = list(BankTransaction.objects.filter(amount__lt=0).prefetch_related("payments"))
+    debits = list(BankTransaction.objects.filter(amount__lt=0))
+    # Which of them pay an invoice: one query, where a prefetch made a
+    # queryset per debit for a yes or a no.
+    paid = set(InvoicePayment.objects.values_list("transaction_id", flat=True))
     test = None
     if request.method == "POST" and form.is_valid():
-        regex = re.compile(form.cleaned_data["pattern"], re.IGNORECASE)
+        regex = searcher(form.cleaned_data["pattern"])
         if request.POST.get("action") == "test":
-            test = _rule_matches(regex, debits)
+            test = _rule_matches(regex, debits, paid)
         else:
             form.save()
-            found = _rule_matches(regex, debits)
+            found = _rule_matches(regex, debits, paid)
             messages.success(
                 request,
                 f"Règle ajoutée : {found.count} dépense(s), {format_money(found.total)} €, "
@@ -938,7 +960,7 @@ def rule_list(request):
     rules = []
     for rule in IgnoreRule.objects.all():
         try:
-            rules.append((rule, _rule_matches(re.compile(rule.pattern, re.IGNORECASE), debits)))
+            rules.append((rule, _rule_matches(searcher(rule.pattern), debits, paid)))
         except re.error:
             rules.append((rule, None))
     return render(
@@ -1442,6 +1464,37 @@ def _moved_out_of_view(request, line: BankTransaction) -> str:
     return f" Elle passe dans « {spending.KINDS[now]} »."
 
 
+#: A pk no row has, reversed in its place by `_by_pk`.
+URL_PLACEHOLDER = "987654321987654321"
+
+
+def _by_pk(name: str):
+    """`reverse(name, args=[pk])` as a function of `pk`, from one reverse().
+
+    An `<int:pk>` address differs from one pk to the next by its digits
+    alone, so it is reversed once on a placeholder and the pk written in its
+    place - the same characters `reverse` gives. Should the placeholder not
+    be found exactly once, every pk is reversed. Made for one request: the
+    script prefix `reverse` reads is the request's."""
+    before, found, after = reverse(name, args=[int(URL_PLACEHOLDER)]).partition(URL_PLACEHOLDER)
+    if not found or URL_PLACEHOLDER in after:
+        return lambda pk: reverse(name, args=[pk])
+    return lambda pk: f"{before}{pk}{after}"
+
+
+def _choice_label(invoice: Invoice, total: Decimal) -> str:
+    """An invoice as the pick-list's option reads it - « supplier n° number
+    · date · amount € » - in the characters the template printed it in from
+    its five variables (`localize` is what a template applies to each, the
+    filters are the template's own), escaped by it once as a whole.
+
+    One invoice is offered to every line near its date, so it is worded
+    once for the page: a long tab printed thousands of these options."""
+    number = localize(invoice.invoice_number or invoice.pk)
+    day = date_filter(invoice.invoice_date, "d/m/Y") or "sans date"
+    return f"{localize(invoice.supplier.name)} n° {number} · {day} · {money(total)} €"
+
+
 def _back(request, default: str = "bank:bank_home") -> str:
     """The page the action was made from (`next`) when it is a path of this
     site (`common.safe_next`: « abc » was a 500, audit LB-5), `default`
@@ -1509,25 +1562,38 @@ def _payee_groups(rows) -> list[PayeeGroup]:
     return sorted(groups.values(), key=lambda group: (-group.total, group.name))
 
 
-def _rule_matches(regex, spending) -> RuleMatches:
+def _rule_matches(regex, spending, paid: set[int]) -> RuleMatches:
+    """What `regex` catches among `spending`; `paid` holds the pks of the
+    lines that pay an invoice."""
     found = [line for line in spending if regex.search(line.label)]
     return RuleMatches(
         count=len(found),
         total=sum((line.amount_due for line in found), Decimal("0")),
-        linked=sum(1 for line in found if line.payments.all()),
+        linked=sum(1 for line in found if line.pk in paid),
         examples=found[:MAX_EXAMPLES],
     )
 
 
 def _fill(rows, with_choices: bool = True) -> None:
-    """Payments for every row - with what they add up to and what else pays
-    them; for the ones still missing an invoice, the matching's suggestion
-    and the unpaid invoices a person may pick from, all from one load of
-    invoices. « Propositions » wants the suggestions alone
-    (`with_choices=False`): it offers what the matching found, and the
-    pick-list is the bank page's."""
+    """Links for every row with payments (`Row.payments`, set by the caller)
+    - what they add up to and what else pays them; for the ones still
+    missing an invoice, the matching's suggestion and the unpaid invoices a
+    person may pick from, all from one load of invoices. « Propositions »
+    wants the suggestions alone (`with_choices=False`): it offers what the
+    matching found, and the pick-list is the bank page's."""
+    # What the links read - each invoice's supplier, its lines for its
+    # total, and the other lines paying it (`invoice__payments__transaction`)
+    # - in four queries for the whole page rather than per invoice (see
+    # « N+1s hide in per-object properties »), and for these rows only: the
+    # page reads every line's payments for its counts, and draws a tab of
+    # them.
+    prefetch_related_objects(
+        [payment for row in rows for payment in row.payments],
+        "invoice__supplier",
+        "invoice__lines",
+        "invoice__payments__transaction",
+    )
     for row in rows:
-        row.payments = list(row.line.payments.all())
         row.links = [
             Link(
                 payment,
@@ -1570,6 +1636,8 @@ def _fill(rows, with_choices: bool = True) -> None:
         else []
     )
     naming = reconcile.supplier_naming() if open_rows else {}
+    # Each invoice's option, worded once for the page (`_choice_label`).
+    worded: dict[int, tuple[str, str]] = {}
 
     for row in pick_rows:
         due = row.line.amount_due
@@ -1593,7 +1661,10 @@ def _fill(rows, with_choices: bool = True) -> None:
                 abs((invoice.invoice_date - row.line.paid_on).days) if invoice.invoice_date else UNDATED_LAST,
             )
         )
-        row.choices = [(invoice, totals[invoice.pk]) for invoice in near[:MAX_CHOICES]]
+        for invoice in near[:MAX_CHOICES]:
+            if invoice.pk not in worded:
+                worded[invoice.pk] = (localize(invoice.pk), _choice_label(invoice, totals[invoice.pk]))
+            row.choices.append(worded[invoice.pk])
         # A list cut in silence is a document the reader concludes is not
         # there. Said, the answer is « narrow the dates », which is a
         # control the page already has.

@@ -1,5 +1,5 @@
 from django import forms
-from django.forms import inlineformset_factory
+from django.forms import BaseInlineFormSet, inlineformset_factory
 
 from .models import Product, StockTake, StockTakeLine, StockType, UnitChoices
 from .services import first_purchase_dates, product_counting_ratios
@@ -87,16 +87,37 @@ class EntryResolver:
 
     def __init__(self):
         self._products = None
+        self._product_ids = None
         self._stock_types = None
         self._first_purchases = None
 
     def _load(self):
         if self._products is not None:
             return
-        products = list(Product.objects.select_related("supplier", "stock_type").filter(stock_type__isnull=False))
+        # A product's suggestion and its supplier's identifiers are never
+        # read from here: decoded for every product, they were a third of
+        # what loading took - on every row priced live as it is typed.
+        products = list(
+            Product.objects.select_related("supplier", "stock_type")
+            .filter(stock_type__isnull=False)
+            .defer(
+                "ai_suggestion",
+                "supplier__ticket_identifiers",
+                "supplier__refused_identifiers",
+                "supplier__typed_identifiers",
+            )
+        )
         self._products = {product_display_name(product): product for product in products}
+        self._product_ids = [product.id for product in products]
         self._stock_types = {stock_type_entry_name(st): st for st in StockType.objects.all()}
-        self._first_purchases = first_purchase_dates([product.id for product in products])
+
+    def _first_purchase_dates(self) -> dict:
+        """Read the first time a row is judged against a date - a row priced
+        live (value_stock_take_line) never is."""
+        if self._first_purchases is None:
+            self._load()
+            self._first_purchases = first_purchase_dates(self._product_ids)
+        return self._first_purchases
 
     def product(self, name: str) -> Product | None:
         self._load()
@@ -109,18 +130,17 @@ class EntryResolver:
     def first_purchase(self, product: Product):
         """When this product was first delivered, or None if nothing dated
         says - in which case there is no ground to call it too new."""
-        self._load()
-        return self._first_purchases.get(product.id)
+        return self._first_purchase_dates().get(product.id)
 
     def stock_type_first_purchase(self, stock_type: StockType):
         """The earliest delivery of ANY product under this stock item: the
         stock item existed from the moment its first bottle arrived,
         whichever brand that was."""
-        self._load()
+        first_purchases = self._first_purchase_dates()
         dates = [
-            self._first_purchases[product.id]
+            first_purchases[product.id]
             for product in self._products.values()
-            if product.stock_type_id == stock_type.id and product.id in self._first_purchases
+            if product.stock_type_id == stock_type.id and product.id in first_purchases
         ]
         return min(dates) if dates else None
 
@@ -143,7 +163,14 @@ def stock_take_entry_lookup() -> dict[str, dict]:
     exist yet out of the datalist for the date being counted, so the shape of
     the list follows the date field as the user changes it - which is why the
     dates are shipped to the browser rather than filtered here."""
-    products = list(Product.objects.select_related("supplier", "stock_type").filter(stock_type__isnull=False))
+    # Only what an entry is made of: read whole, every product's suggestion
+    # and its supplier's identifiers were decoded for nothing, a third of
+    # what this took.
+    products = list(
+        Product.objects.select_related("supplier", "stock_type")
+        .filter(stock_type__isnull=False)
+        .only("raw_name", "supplier__name", "stock_type__unit")
+    )
     ratios = product_counting_ratios([p.id for p in products])
     first_purchases = first_purchase_dates([product.id for product in products])
     entries = {}
@@ -266,10 +293,25 @@ class StockTakeLineForm(forms.ModelForm):
         )
 
 
+class BaseStockTakeLineFormSet(BaseInlineFormSet):
+    """Every row names its product with its supplier, or its stock item
+    (StockTakeLineForm's `entry_search`): selected with the lines, or each
+    row read them with two queries of its own - 209 of the 220 an inventory
+    of 104 lines took to open. Never the stock take: a save values its lines
+    as of the date it has just written (_save_stock_take_line), not the one
+    read with them."""
+
+    def __init__(self, *args, queryset=None, **kwargs):
+        if queryset is None:
+            queryset = StockTakeLine.objects.select_related("product__supplier", "stock_type")
+        super().__init__(*args, queryset=queryset, **kwargs)
+
+
 StockTakeLineFormSet = inlineformset_factory(
     StockTake,
     StockTakeLine,
     form=StockTakeLineForm,
+    formset=BaseStockTakeLineFormSet,
     fields=["counted_quantity", "unit"],
     # No spare row. With extra=1 the form always rendered one blank line, so
     # taking an item out of a saved inventory and reopening it showed the

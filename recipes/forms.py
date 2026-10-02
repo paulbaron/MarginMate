@@ -1,3 +1,4 @@
+import html
 from decimal import Decimal
 
 from django import forms
@@ -5,7 +6,14 @@ from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
 from django.db.models import Q
 from django.forms import BaseInlineFormSet, inlineformset_factory
+from django.forms.renderers import DjangoTemplates, get_default_renderer
+from django.template import Context
+from django.template.base import render_value_in_context
+from django.template.defaultfilters import stringformat
 from django.utils import timezone
+from django.utils.choices import BaseChoiceIterator, normalize_choices
+from django.utils.functional import cached_property
+from django.utils.safestring import SafeData, mark_safe
 
 from common import BlankRowTolerantModelForm
 from inventory.models import StockType
@@ -16,6 +24,79 @@ from .services import assert_no_cycle
 # Sales typed in by hand live under their own source so a till import, which
 # only ever rewrites its OWN rows, can never clobber them.
 MANUAL_SALE_SOURCE = "manual"
+
+
+class SelectWidget(forms.Select):
+    """Django's <select>, byte for byte, printed without a template per
+    <option>.
+
+    The recipe form draws one ingredient picker per row, each offering every
+    article and every recipe - hundreds of options a picker - and Django's
+    select.html includes select_option.html, which includes attrs.html, for
+    every one of them: most of the page's time. This prints what those three
+    templates print from Django's own context (`get_context`: the selection,
+    the attributes), each value shown as {{ }} or |stringformat:'s' shows it,
+    and leaves anything it does not mirror - another renderer, other
+    templates - to them.
+
+    Named so that `BoundField.widget_type` - the class name less « Widget »,
+    which _form_fields.html prints as « form-field-select » - is Django's.
+    """
+
+    def render(self, name, value, attrs=None, renderer=None):
+        if not self._mirrors(renderer):
+            return super().render(name, value, attrs, renderer)
+        widget = self.get_context(name, value, attrs)["widget"]
+        context = Context()
+        parts = [f'<select name="{_shown(widget["name"], context)}"{_attributes(widget["attrs"], context)}>']
+        for group_name, options, _index in widget["optgroups"]:
+            if group_name:
+                parts.append(f'\n  <optgroup label="{_shown(group_name, context)}">')
+            for option in options:
+                parts.append(
+                    f'\n  <option value="{_shown_as_s(option["value"], context)}"'
+                    f"{_attributes(option['attrs'], context)}>{_shown(option['label'], context)}</option>\n"
+                )
+            if group_name:
+                parts.append("\n  </optgroup>")
+        # The renderer strips what the template ends with: the last newline.
+        parts.append("\n</select>")
+        return mark_safe("".join(parts))
+
+    def _mirrors(self, renderer) -> bool:
+        return (
+            type(renderer or get_default_renderer()) is DjangoTemplates
+            and self.template_name == forms.Select.template_name
+            and self.option_template_name == forms.Select.option_template_name
+        )
+
+
+class SelectMultipleWidget(SelectWidget, forms.SelectMultiple):
+    """The same, for a <select multiple>."""
+
+
+def _shown(value, context) -> str:
+    """{{ value }} - which, for plain text, is the text escaped."""
+    if type(value) is str:
+        return html.escape(value)
+    return render_value_in_context(value, context)
+
+
+def _shown_as_s(value, context) -> str:
+    """{{ value|stringformat:'s' }} - a safe value stays safe through it."""
+    if type(value) is str:
+        return html.escape(value)
+    text = stringformat(value, "s")
+    return _shown(mark_safe(text) if isinstance(value, SafeData) else text, context)
+
+
+def _attributes(attrs: dict, context) -> str:
+    """attrs.html: ` name="value"`, the bare name for True, nothing for False."""
+    return "".join(
+        f" {_shown(name, context)}" if value is True else f' {_shown(name, context)}="{_shown_as_s(value, context)}"'
+        for name, value in attrs.items()
+        if value is not False
+    )
 
 
 def recipes_usable_as_ingredients(exclude_pk=None):
@@ -63,6 +144,22 @@ def ingredient_source_choices(parent_recipe=None) -> list:
     return [("", "---------"), ("Articles", stock_choices), ("Recettes", recipe_choices)]
 
 
+class SharedChoices(BaseChoiceIterator):
+    """Choices built once and handed to every row as they are.
+
+    A ChoiceField normalises the choices it is given, and its widget does it
+    again: the ingredient picker's hundreds of choices were copied twice per
+    row. Django hands a choice iterator back untouched, so they are
+    normalised here, once.
+    """
+
+    def __init__(self, choices):
+        self.choices = normalize_choices(choices)
+
+    def __iter__(self):
+        return iter(self.choices)
+
+
 class RecipeForm(forms.ModelForm):
     # What the till sells as this recipe - linked on save (views.
     # _recipe_form_view, through recipes.links), so a recipe written for a till
@@ -74,7 +171,7 @@ class RecipeForm(forms.ModelForm):
         label="Vendue en caisse sous",
         help_text="Les produits de la caisse dont les ventes sont celles de cette recette. "
         "Un produit lié à une autre recette se détache d'abord depuis « À lier ».",
-        widget=forms.SelectMultiple(attrs={"data-pick-list": "", "size": "8"}),
+        widget=SelectMultipleWidget(attrs={"data-pick-list": "", "size": "8"}),
     )
 
     def __init__(self, *args, **kwargs):
@@ -169,7 +266,7 @@ class RecipeIngredientForm(BlankRowTolerantModelForm):
     # Exactly one of stock_type/sub_recipe, but presented to the user as a
     # single "pick an ingredient" field - see RecipeIngredient's own
     # docstring for why the model itself keeps them as two FKs.
-    source = forms.ChoiceField(label="Ingrédient")
+    source = forms.ChoiceField(label="Ingrédient", widget=SelectWidget)
     # Which alternatives-group this row belongs to - assigned by the form's
     # "OU" button (see recipe_form.html), never typed in directly. It's
     # bookkeeping, never something the user types, so it must not on its own
@@ -244,8 +341,17 @@ class BaseRecipeIngredientFormSet(BaseInlineFormSet):
 
     def _source_choices(self):
         if not hasattr(self, "_cached_source_choices"):
-            self._cached_source_choices = ingredient_source_choices(self.form_kwargs.get("parent_recipe"))
+            self._cached_source_choices = SharedChoices(
+                ingredient_source_choices(self.form_kwargs.get("parent_recipe"))
+            )
         return self._cached_source_choices
+
+    @cached_property
+    def empty_form(self):
+        """The spare row the page's script copies, built once: the template
+        reads four of its fields, and Django's property builds the whole
+        form again at every read."""
+        return super().empty_form
 
     def _assign_fresh_groups_to_blank_rows(self):
         """Give each spare blank row its own unused group number.

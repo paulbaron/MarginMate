@@ -207,7 +207,9 @@ def _waiting_first(suppliers) -> tuple[list[Supplier], list[Supplier]]:
     what is about to be imported is looked for first - among eighty, under
     its letter, it was one more to scroll past. The AI pseudo-supplier is
     never waiting: it is a way of reading, not someone."""
-    filed = set(Invoice.objects.values_list("supplier_id", flat=True).distinct())
+    # Unordered: the model's ordering would join its columns to the DISTINCT
+    # and read back every document rather than every supplier.
+    filed = set(Invoice.objects.order_by().values_list("supplier_id", flat=True).distinct())
     waiting = [supplier for supplier in suppliers if supplier.pk not in filed and supplier.parser_key != LLM_PARSER_KEY]
     return waiting, [supplier for supplier in suppliers if supplier not in waiting]
 

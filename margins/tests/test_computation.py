@@ -1067,6 +1067,38 @@ class LinearityTests(TestCase):
         self.assertEqual(report.costed_units, 12)
         self.assertEqual(len(many), len(few))
 
+    def test_as_many_sub_recipes_as_recipes_cost_no_more_queries(self):
+        """Each cocktail its own syrup, each syrup its own infusion: read one
+        sub-recipe at a time that was two queries per syrup and two per
+        infusion. Read a level at a time (`Recipe.load_choice_groups`), the
+        count follows how deep they nest, never how many there are."""
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        def sell_with_their_own_syrup(count):
+            for _ in range(count):
+                self.sold += 1
+                infusion = make_recipe(name=f"Infusion {self.sold}", selling_price_ttc=None, yield_quantity="4")
+                make_ingredient(infusion, stock_type=self.article, quantity="0.2")
+                syrup = make_recipe(name=f"Sirop {self.sold}", selling_price_ttc=None, yield_quantity="10")
+                make_ingredient(syrup, stock_type=self.article, quantity="1", group=0)
+                make_ingredient(syrup, sub_recipe=infusion, quantity="1", group=1)
+                recipe = make_recipe(name=f"Cocktail {self.sold}", selling_price_ttc="8.00")
+                make_ingredient(recipe, sub_recipe=syrup, quantity="0.5", group=0)
+                make_ingredient(recipe, stock_type=self.article, quantity="0.5", group=1)
+                pos = till_product(f"Cocktail {self.sold}", recipe=recipe, category="Cocktails")
+                rang_up(pos, date(2026, 3, 4), 1, ttc="8.00", ht="6.67")
+
+        sell_with_their_own_syrup(3)
+        with CaptureQueriesContext(connection) as few:
+            margins_for(MARCH)
+        sell_with_their_own_syrup(9)
+        with CaptureQueriesContext(connection) as many:
+            report = margins_for(MARCH)
+
+        self.assertEqual(report.costed_units, 12)
+        self.assertEqual(len(many), len(few))
+
 
 class CostPerServingTests(TestCase):
     """What ONE sale consumed, never what one preparation costs.

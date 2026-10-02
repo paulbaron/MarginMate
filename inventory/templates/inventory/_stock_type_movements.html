@@ -52,7 +52,7 @@ column's header word for word (inventory/tests/test_products_phone.py).
             <th>Fournisseur</th>
             <th>Date</th>
             <th class="num">Quantité achetée</th>
-            <th class="num">Prix (HT) / {{ stock_type.get_unit_display }}</th>
+            <th class="num">Prix (HT) / {{ unit_label }}</th>
             <th class="num">Total HT</th>
             <th class="num">TVA</th>
             <th class="num">Total TTC</th>
@@ -65,13 +65,13 @@ column's header word for word (inventory/tests/test_products_phone.py).
             {% comment %}
             A movement can have no invoice line at all - a manual stock
             correction (see StockMovement's docstring), which the view already
-            returns None for every invoice-derived field of. Every cell below
-            has to cope, and the url tags especially: they raise
-            NoReverseMatch on an empty pk and 500 the whole page.
+            returns None for every invoice-derived field of, its three links
+            included (built in the view, one reverse() each for the whole
+            panel). Every cell below has to cope.
             {% endcomment %}
             <td>
                 {% if entry.line %}
-                    <a href="{% url 'invoices:invoice_detail' entry.line.invoice_id %}" title="Voir la facture">{{ entry.line.product.raw_name|default:entry.line.raw_name }}</a>
+                    <a href="{{ entry.invoice_url }}" title="Voir la facture">{{ entry.line.product.raw_name|default:entry.line.raw_name }}</a>
                 {% else %}
                     {{ entry.movement.note|default:"Correction manuelle" }}
                 {% endif %}
@@ -94,22 +94,22 @@ column's header word for word (inventory/tests/test_products_phone.py).
             <td class="num" data-label="Quantité achetée">
                 {{ entry.purchased_quantity|quantity }} {{ entry.purchased_quantity_unit }}
             </td>
-            <td class="num" data-label="Prix (HT) / {{ stock_type.get_unit_display }}">{{ entry.movement.unit_cost_ht|money }} €</td>
+            <td class="num" data-label="Prix (HT) / {{ unit_label }}">{{ entry.movement.unit_cost_ht|money }} €</td>
             <td class="num" data-label="Total HT">{{ entry.line.total_ht|money }} €</td>
             <td class="num" data-label="TVA">{{ entry.vat_percent|floatformat:1 }} %</td>
             <td class="num" data-label="Total TTC">{{ entry.total_ttc|money }} €</td>
             <td class="phone-card-wide">
                 {% if entry.line %}
-                <form method="post" action="{% url 'inventory:edit_product_conversion' entry.line.product.id %}"
+                <form method="post" action="{{ entry.conversion_url }}"
                       class="conversion-form"
                       title="Quantité de l'article dans un produit acheté (ex. 0,7 pour une bouteille de 70 cl). Laissez 1 si la « Quantité achetée » est déjà en volume ou en poids.">
                     {% csrf_token %}
                     <span class="muted">1 produit =</span>
                     <input type="text" name="stock_equivalent" inputmode="decimal" value="{{ entry.stock_equivalent_display }}">
-                    <span class="muted">{{ stock_type.get_unit_display }}</span>
+                    <span class="muted">{{ unit_label }}</span>
                     <button type="submit" class="btn btn-small" title="Enregistrer">💾</button>
                 </form>
-                <form method="post" action="{% url 'inventory:remove_product' entry.line.product.id %}"
+                <form method="post" action="{{ entry.remove_url }}"
                       onsubmit="return confirm('Retirer « {{ entry.line.product.raw_name|escapejs }} » de cet article ? Il repassera dans « À classer ».');">
                     {% csrf_token %}
                     <button type="submit" class="btn btn-small btn-secondary">Retirer</button>

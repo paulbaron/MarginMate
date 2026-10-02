@@ -3970,6 +3970,97 @@ this, and wrapping `quantities_sold` and `compute_variance` in one took them
 to 114 and 109. It is scoped, not cached on the instance: a grouping changes
 every time someone presses "OU".
 
+### The pages are measured, and an optimisation prints the same bytes
+
+The owner, 01/10/2026: « les pages sont un peu lentes avec beaucoup de
+data ». Measured on a SCRATCH COPY of data-dev (never data-dev itself, never
+production): every page timed (median of three, after a warm-up), its SQL
+counted and its HTML kept, then compared byte for byte after the change
+(normalised: CSRF token, `?v=`, `data-tenant`, a datetime-local « now »).
+All 54 pages came back identical; measured the same day against the code
+before (a `git archive` of `main` run on the same copy - a window « the last
+twelve months » moves at midnight, so a baseline from another day differs),
+the slowest went from 0,5-1,2 s to 0,06-0,65 s and the sum of all pages from
+13,0 s to 5,2 s; « Écarts » and « Combler les écarts » ~5x, « À lier » ~7x,
+Banque ~4x. **An optimisation
+that changes a page is a regression**, whatever it saves: compare the HTML,
+not the figures one remembers to look at. Most of the time was never SQL -
+Python building thousands of model instances, and templates rendering
+thousands of rows - so profile (cProfile) before guessing.
+
+The rules it was done under, which still hold:
+
+- **Nothing outlives a request that holds data.** One process, eight
+  threads, many espaces: a module-level dict or an `lru_cache` over database
+  rows would show one bar's figures to another and serve stale ones.
+  Per-request memos only - a local dict, `variation_scope`, an attribute of
+  a per-request object. The two module-level caches added hold code, not
+  data: `{% asset %}` remembers where a static file is (its mtime is still
+  read at every call, so an edit still changes `?v=`), and
+  `invoices/rendering.PLAIN_INPUTS` whether Django's widget templates read
+  as expected.
+- **Money stays Decimal arithmetic in Python**; no sum moved into SQL.
+- **Load only what is read**, and keep the list of what is read next to the
+  code reading it: `margins.computation._INVOICE_COLUMNS` / `_LINE_COLUMNS`
+  (`with_lines`, « Marges »), `reconcile.UNREAD_INVOICE_FIELDS` (deferred on
+  every invoice the bank pages load), `invoices.workspace._listed` (the
+  documents list: deferred `UNLISTED_FIELDS`, each row handed its totals,
+  day and addresses precomputed). A new field read there is a query per row -
+  `bank/tests/test_page_cost.py`, `TheColumnsReadTests` and
+  `test_documents_list_rows.py` catch it.
+- **`Prefetch(to_attr=...)` for a list that only reads what was prefetched**:
+  without it Django clones a filtered queryset per parent row (801 on
+  Banque). And `.values_list(...).distinct()` on a model with
+  `Meta.ordering` puts the ordering columns into the DISTINCT: `.order_by()`
+  first.
+- **`Invoice.total_ht_of` / `total_ttc_of` / `adjustment_ttc_of(lines)`** are
+  the one definition of those totals; the properties delegate to them, so a
+  caller holding the lines in a list never goes back to the manager.
+- **One `reverse()` per request for a per-row address**, never `{% url %}`
+  in a loop of hundreds: `inventory.views.pk_url`, `recipes.menu.url_for_each`,
+  `bank.views._by_pk`, `invoices.workspace.link_maker` reverse the route once
+  around a placeholder pk and write each pk in (byte-identical to
+  `reverse()`, which they fall back to when the placeholder is ambiguous).
+- **A `{% comment %}` inside a row loop adds a blank line per row**: the
+  explanation of a template change lives in the view.
+- **Recipes**: `Recipe.load_choice_groups(recipes)` reads a set of recipes'
+  groups and every sub-recipe below into the open `variation_scope`, one
+  query per nesting level (« Marges » 72 -> 20 queries, « Écarts » 303 -> 27,
+  « Combler les écarts » 223 -> 27, « Recettes » 112 -> 16); the variance
+  engine's walks take `ingredients_of`. `StockType.current_unit_cost_ht`
+  is summed once per PREFETCHED movements list (memo keyed by the identity
+  of that list: a new prefetch, `refresh_from_db` or `movements.add` recompute
+  it). `variance.movement_day` reproduces `StockMovement.effective_date` on
+  columns for the window scan: **change both together** (`MovementDayTests`).
+- **« À lier »** suggests through `links.RecipeSuggester` (one per request,
+  the same answer as the old difflib loop, skipping by difflib's own upper
+  bounds) and prints each recipe `<option>` once per request
+  (`menu.ToLinkRows`). The recipe form's pickers are
+  `recipes.forms.SelectWidget`: Django's `<select>` written byte for byte in
+  Python, falling back to Django's templates if they change.
+- **Rendering**: `|money` takes a fast path for a finite Decimal, int or
+  float (`assets._floatformat`, equal to `floatformat` character for
+  character - `tests/test_money_format.py::MoneyFastPathTests`); `|date` is
+  `config.template_builtins.date` (a TEMPLATES builtin: `d/m/Y` and `Y-m-d`
+  written directly, anything else Django's filter - `tests/test_date_filter.py`);
+  `config.language.ActiveLanguageMiddleware` runs each request with its own
+  language ACTIVE (the same one: nothing printed changes), because
+  `get_language()` with none active raises and catches an exception at every
+  number, date and `{% url %}`.
+- **Ignore rules** are searched without a leading greedy `.*`
+  (`bank/rules.searcher`: the same lines found, 60x faster on « .*MOT.* »);
+  the pattern as written is still what is validated.
+
+**Not done, the owner's call** (structural, or a migration): drawing the
+biggest pages' hidden tables and per-row pickers on demand (Produits &
+charges, « À lier », the recipe form, Banque's pick lists, « Tout afficher »
+on Factures - most of the remaining server time and of the 0,4-1,6 MB the
+browser parses), compressing the HTML (gzip, after a BREACH review), an index
+for the nav badge's count of invoices (a few ms on every page), keeping the
+espace's SQLite connection open between requests (1-2 ms, in the security
+code), `gc.freeze()` after start-up (a full collection costs 0,1-0,2 s on the
+heaviest pages).
+
 ### Shrinkage: pool the alternatives, never guess the split
 
 `inventory/variance.py` answers "where did the alcohol go" between two stock
@@ -5020,19 +5111,19 @@ first recipe nobody thought of. `article_uses` is a memo around it, keyed by
 fourth query is a decision rather than drift). Nothing is enumerated: 20
 either/or ingredients is already a million variations.
 
-**What it costs grows with the number of distinct sub-recipe NODES, and that
-is not bounded today.** `_reached` memoises the top-level sub-recipe, but
-`reachable_stock_types` re-queries every level it walks into, and `_settled`
-asks `variation_count` besides. Measured on invented graphs: one flat syrup
-under thirty cocktails is 16 queries for the page, five syrups of three
-levels 63, ten syrups of three levels under sixty cocktails 113. The guard
-above measures the axis that does not grow. **A memo inside
-`reachable_stock_types` is the fix and it is not free**: that walk carries a
+**Its cost no longer grows with the sub-recipe NODES** (01/10/2026): the
+memo was passed down from `usage.py` and the engine left alone, as this note
+said to. `article_uses` hands `reachable_stock_types` the ingredients the tab
+already prefetched (`ingredients_of`, `variance.ingredients_by_recipe`), so a
+sub-recipe at any depth costs no query, and `_settled` reads the groups
+`menu._recipes` put in the scope. Before, ten syrups of three levels under
+sixty cocktails were 113 queries; the tab is now a constant 16
+(`test_article_usage.NestedGraphQueryTests`: the same count at two syrups and
+ten, the same articles reached as the database walk, a cycle included).
+**Still never a memo inside `reachable_stock_types`**: that walk carries a
 cycle guard (`seen`), so a result reached inside a cycle is TRUNCATED, and
 caching one of those would silently shrink a variance pool - which reports
-that member's whole consumption as unexplained. Cache only a walk that never
-met the guard, or pass the memo down from `usage.py` and leave the engine
-alone.
+that member's whole consumption as unexplained.
 
 **« OU » is a choice, not a certainty**, so every use carries whether it is
 settled, and the row says « peut-être ». A use is settled only when nothing

@@ -365,3 +365,64 @@ class ArticlePickerCostTests(TestCase):
         # choices of its own, and that is all. A walk per cocktail would be
         # thirty times this.
         self.assertLess(len(captured), 6)
+
+
+class NestedGraphQueryTests(TestCase):
+    """The walks below the tab's recipes read the ingredients the tab
+    prefetched: a sub-recipe costs no query at any depth (walked from the
+    database, ten syrups of three levels under sixty cocktails were a
+    hundred queries) - and reaches exactly what the database walk reaches."""
+
+    def _build(self, syrups):
+        """`syrups` syrups of three levels (syrup -> base -> extract ->
+        article), each in two cocktails; a cycle between two of them."""
+        for n in range(syrups):
+            article = make_stock_type(name=f"Article {n}")
+            extract = make_recipe(name=f"Extrait {n}")
+            make_ingredient(extract, stock_type=article, quantity="1")
+            base = make_recipe(name=f"Base {n}")
+            make_ingredient(base, sub_recipe=extract, quantity="1")
+            make_ingredient(base, stock_type=make_stock_type(name=f"Sucre {n}"), quantity="1")
+            syrup = make_recipe(name=f"Sirop {n}")
+            make_ingredient(syrup, sub_recipe=base, quantity="1")
+            for k in range(2):
+                cocktail = make_recipe(name=f"Cocktail {n}-{k}")
+                make_ingredient(cocktail, sub_recipe=syrup, quantity="0.02")
+        first, second = make_recipe(name="Cycle A"), make_recipe(name="Cycle B")
+        make_ingredient(first, sub_recipe=second, quantity="1")
+        make_ingredient(second, sub_recipe=first, quantity="1", group=0)
+        make_ingredient(second, stock_type=make_stock_type(name="Article du cycle"), quantity="1")
+
+    def _walk(self):
+        recipes = list(Recipe.objects.prefetch_related("ingredients__stock_type", "ingredients__sub_recipe"))
+        with variation_scope():
+            # Every recipe's groups in the scope, as the page puts them there
+            # (menu._recipes): whether a sub-recipe has choices costs nothing.
+            Recipe.load_choice_groups(recipes)
+            with CaptureQueriesContext(connection) as captured:
+                uses = article_uses(recipes)
+        return uses, len(captured)
+
+    def test_depth_and_breadth_cost_no_more_queries(self):
+        self._build(2)
+        _, small = self._walk()
+        RecipeIngredient.objects.all().delete()
+        Recipe.objects.all().delete()
+        StockType.objects.all().delete()
+        self._build(10)
+        _, large = self._walk()
+        self.assertEqual(large, small)
+
+    def test_the_handed_ingredients_reach_what_the_database_walk_reaches(self):
+        from inventory.variance import ingredients_by_recipe, reachable_stock_types
+
+        self._build(3)
+        recipes = list(Recipe.objects.prefetch_related("ingredients__stock_type", "ingredients__sub_recipe"))
+        handed = ingredients_by_recipe(recipes)
+        ingredients = RecipeIngredient.objects.filter(sub_recipe__isnull=False).select_related("sub_recipe")
+        self.assertGreater(len(ingredients), 10)
+        for ingredient in ingredients:
+            with self.subTest(ingredient=str(ingredient)):
+                self.assertEqual(
+                    reachable_stock_types(ingredient, ingredients_of=handed), reachable_stock_types(ingredient)
+                )

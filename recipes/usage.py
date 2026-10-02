@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from inventory.variance import reachable_stock_types
+from inventory.variance import ingredients_by_recipe, reachable_stock_types
 
 
 @dataclass(frozen=True)
@@ -60,25 +60,30 @@ def article_uses(recipes) -> dict[int, dict[int, list[Use]]]:
 
     The walk is memoised by sub-recipe, so a house syrup used by thirty
     cocktails is read once: the answer depends on the sub-recipe alone, and
-    without it the « Recettes » tab read the whole graph once per row.
+    without it the « Recettes » tab read the whole graph once per row. And it
+    is handed the ingredients the recipes were read with (the tab prefetches
+    every recipe's): walked from the database, each sub-recipe on the way
+    was a query - 44 of the tab's 60.
     """
+    recipes = list(recipes)
+    ingredients_of = ingredients_by_recipe(recipes)
     reached: dict[int, frozenset[int]] = {}
     settled: dict[int, bool] = {}
     uses: dict[int, dict[int, list[Use]]] = {}
     for recipe in recipes:
-        for group in recipe.choice_groups(list(recipe.ingredients.all())):
+        for group in recipe.choice_groups(ingredients_of[recipe.pk]):
             alone = len(group) == 1
             for ingredient in group:
                 via = "" if ingredient.stock_type_id else ingredient.sub_recipe.name
                 use = Use(via=via, certain=alone and _settled(ingredient, settled))
-                for article_id in _reached(ingredient, reached):
+                for article_id in _reached(ingredient, reached, ingredients_of):
                     ways = uses.setdefault(article_id, {}).setdefault(recipe.pk, [])
                     if use not in ways:
                         ways.append(use)
     return uses
 
 
-def _reached(ingredient, cache: dict[int, frozenset[int]]):
+def _reached(ingredient, cache: dict[int, frozenset[int]], ingredients_of=None):
     """Every article this ingredient could draw on - the variance engine's
     own answer, asked once per sub-recipe."""
     if ingredient.stock_type_id:
@@ -86,7 +91,7 @@ def _reached(ingredient, cache: dict[int, frozenset[int]]):
     if not ingredient.sub_recipe_id:
         return ()
     if ingredient.sub_recipe_id not in cache:
-        cache[ingredient.sub_recipe_id] = frozenset(reachable_stock_types(ingredient))
+        cache[ingredient.sub_recipe_id] = frozenset(reachable_stock_types(ingredient, ingredients_of=ingredients_of))
     return cache[ingredient.sub_recipe_id]
 
 

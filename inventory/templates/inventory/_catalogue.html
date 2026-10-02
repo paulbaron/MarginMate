@@ -118,9 +118,9 @@ next classification.
             {% endif %}
             <tbody>
                 {% for row in category.rows %}
-                <tr class="stock-row" data-toggle="details-{{ row.stock_type.id }}"
-                    data-stock-type-id="{{ row.stock_type.id }}"
-                    data-movements-url="{% url 'inventory:stock_type_movements' row.stock_type.pk %}{{ panel_window_query }}">
+                <tr class="stock-row" data-toggle="details-{{ row.id }}"
+                    data-stock-type-id="{{ row.id }}"
+                    data-movements-url="{{ row.movements_url }}{{ panel_window_query }}">
                     <td>
                         <span class="chevron">▸</span> {{ row.stock_type.name }}
                         {% if period and row.in_period and not row.reliable %}
@@ -150,7 +150,7 @@ next classification.
                     <td class="num" data-label="Vendu" data-sort="{{ row.sold.headline|default_if_none:'' }}">
                         {% if row.sold and row.sold.headline %}
                             <span {% if row.flag_over %}class="sold-over"
-                                  title="Vendu plus qu'il n'en {% if period %}est sorti du stock sur la période{% else %}a été acheté, pertes déclarées déduites{% endif %} : il manque {{ row.sold.missing|floatformat:2 }} {{ row.stock_type.get_unit_display }}. Facture manquante, recette erronée, ou produit caisse mal rattaché."{% endif %}>{{ row.sold.headline|floatformat:2 }}</span>
+                                  title="Vendu plus qu'il n'en {% if period %}est sorti du stock sur la période{% else %}a été acheté, pertes déclarées déduites{% endif %} : il manque {{ row.sold.missing|floatformat:2 }} {{ row.unit_label }}. Facture manquante, recette erronée, ou produit caisse mal rattaché."{% endif %}>{{ row.sold.headline|floatformat:2 }}</span>
                             {% if row.sold.is_ambiguous %}
                                 <span class="sold-shared"
                                       title="{% if row.sold.headline_is_estimate %}Estimation{% else %}Dont {{ row.sold.shared|floatformat:2 }} estimé{% endif %} : proposé en alternative de {{ row.sold.pool_partners }} autre{{ row.sold.pool_partners|pluralize }} dans une recette ; ventes réparties du plus cher au moins cher, dans la limite de ce qui {% if period %}est sorti du stock{% else %}a été acheté, pertes déclarées déduites{% endif %} (moins {{ row.stock_type.loss_percent|floatformat:"-2" }} % de perte).">
@@ -175,19 +175,19 @@ next classification.
                     <td class="num muted" data-label="Manquant" data-sort="">—</td>
                     <td class="num muted" data-label="Manquant (HT)" data-sort="">—</td>
                     {% endif %}
-                    <td data-label="Unité">{{ row.stock_type.get_unit_display }}</td>
+                    <td data-label="Unité">{{ row.unit_label }}</td>
                     {% else %}
-                    <td data-label="Unité">{{ row.stock_type.get_unit_display }}</td>
+                    <td data-label="Unité">{{ row.unit_label }}</td>
                     <td class="num" data-label="Total HT">{{ row.value_ht|money }} €</td>
                     <td class="num" data-label="Total TTC">{{ row.value_ttc|money }} €</td>
                     {% endif %}
                     <td class="row-actions">
-                        <a href="{% url 'inventory:stock_type_update' row.stock_type.pk %}">Modifier</a>
+                        <a href="{{ row.update_url }}">Modifier</a>
                         <button type="button" class="btn btn-small btn-secondary js-price-history-toggle"
                                 title="Évolution du prix" aria-label="Évolution du prix"
-                                data-price-history-url="{% url 'inventory:stock_type_price_history' row.stock_type.pk %}"
-                                data-target="price-history-{{ row.stock_type.id }}">📈</button>
-                        <form method="post" action="{% url 'inventory:stock_type_delete' row.stock_type.pk %}"
+                                data-price-history-url="{{ row.price_history_url }}"
+                                data-target="price-history-{{ row.id }}">📈</button>
+                        <form method="post" action="{{ row.delete_url }}"
                               onsubmit="return confirm('Supprimer \'{{ row.stock_type.name|escapejs }}\' ? Ses produits repasseront à classer.');">
                             {% csrf_token %}
                             <button type="submit" class="btn btn-small btn-secondary">Supprimer</button>
@@ -200,14 +200,14 @@ next classification.
                 without it the curve of an article dropped by the query was
                 left among the results, explaining a row no longer there.
                 {% endcomment %}
-                <tr id="price-history-{{ row.stock_type.id }}" data-child-row
-                    data-child-of="{{ row.stock_type.id }}" hidden>
+                <tr id="price-history-{{ row.id }}" data-child-row
+                    data-child-of="{{ row.id }}" hidden>
                     <td colspan="{{ column_count }}" style="padding:0.75rem 0.9rem;">
                         <p class="muted">Chargement…</p>
                     </td>
                 </tr>
-                <tr id="details-{{ row.stock_type.id }}" data-child-row
-                    data-child-of="{{ row.stock_type.id }}" hidden>
+                <tr id="details-{{ row.id }}" data-child-row
+                    data-child-of="{{ row.id }}" hidden>
                     <td colspan="{{ column_count }}" style="padding:0;">
                         <p class="muted" style="padding:0.75rem 0.9rem;">Chargement…</p>
                     </td>

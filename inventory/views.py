@@ -90,6 +90,27 @@ def existing_categories():
     return StockType.objects.exclude(category="").values_list("category", flat=True).distinct().order_by("category")
 
 
+# Big enough to appear nowhere else in a URL.
+_PK_MARKER = 2147483647
+
+
+def pk_url(name: str):
+    """`reverse(name, args=[pk])` as a function of `pk`, for one reverse().
+
+    A list of 400 stock items asking `{% url %}` four times a row spent a
+    third of its rendering resolving URLs. The URL of an `<int:pk>` route is
+    the same string around the pk's digits, so it is reversed once with a
+    marker and the digits are put in its place. Only for a route whose one
+    argument is an int pk; anything else would not be the same string.
+    """
+    url = reverse(name, args=[_PK_MARKER])
+    marker = str(_PK_MARKER)
+    if url.count(marker) != 1:
+        return lambda pk: reverse(name, args=[pk])
+    head, tail = url.split(marker)
+    return lambda pk: f"{head}{int(pk)}{tail}"
+
+
 class StockListView(TemplateView):
     """ "Produits & charges": every stock item and what was spent on it, the
     charges under them - and, beside them, the products no stock item has
@@ -215,14 +236,17 @@ def catalogue_context(request) -> dict:
     # Its fallback order is reproduced exactly below - the movement's own
     # date, else the invoice's (when the stock arrived, not when the PDF
     # happened to be imported), else when it was typed in - and a movement
-    # no date can be found for is in no window at all.
+    # no date can be found for is in no window at all. With no window (all
+    # time, or a stock take) the three dates decide nothing and are not
+    # fetched: parsing them for every movement, and the join to the invoice,
+    # were 40 % of this scan.
     quantity_by_type: dict[int, Decimal] = {}
     value_ht_by_type: dict[int, Decimal] = {}
     ledger_in_window: dict[int, Decimal] = {}
     bought_by_type: dict[int, Decimal] = {}
     bought_ht_by_type: dict[int, Decimal] = {}
     value_ttc_by_type: dict[int, Decimal] = {}
-    values = StockMovement.objects.values_list(
+    columns = [
         "stock_type_id",
         "kind",
         "quantity",
@@ -231,10 +255,9 @@ def catalogue_context(request) -> dict:
         "invoice_line__vat_rate",
         "invoice_line__printed_ttc",
         "invoice_line__discount_ttc",
-        "occurred_on",
-        "invoice_line__invoice__invoice_date",
-        "created_at",
-    )
+    ]
+    if window:
+        columns += ["occurred_on", "invoice_line__invoice__invoice_date", "created_at"]
     for (
         stock_type_id,
         kind,
@@ -244,18 +267,18 @@ def catalogue_context(request) -> dict:
         vat_rate,
         printed_ttc,
         discount_ttc,
-        occurred_on,
-        invoice_date,
-        created_at,
-    ) in values:
+        *dates,
+    ) in StockMovement.objects.values_list(*columns):
         quantity_by_type[stock_type_id] = quantity_by_type.get(stock_type_id, Decimal("0")) + quantity
         value_ht_by_type[stock_type_id] = value_ht_by_type.get(stock_type_id, Decimal("0")) + (quantity * unit_cost_ht)
         # The two sums above are all time whatever the window: they are what
         # an article COSTS per unit, and a price is not a property of a
         # window - valued over a window holding one delivery, every bottle
         # would be worth what that delivery charged.
-        if window and not window.holds(occurred_on or invoice_date or (created_at.date() if created_at else None)):
-            continue
+        if window:
+            occurred_on, invoice_date, created_at = dates
+            if not window.holds(occurred_on or invoice_date or (created_at.date() if created_at else None)):
+                continue
         ledger_in_window[stock_type_id] = ledger_in_window.get(stock_type_id, Decimal("0")) + quantity
         if kind != MovementKind.PURCHASE:
             continue
@@ -288,12 +311,26 @@ def catalogue_context(request) -> dict:
                 printed_ttc - discount_ttc if printed_ttc is not None else line_total_ht * (vat_rate + Decimal("1"))
             )
 
+    movements_url = pk_url("inventory:stock_type_movements")
+    update_url = pk_url("inventory:stock_type_update")
+    price_history_url = pk_url("inventory:stock_type_price_history")
+    delete_url = pk_url("inventory:stock_type_delete")
     rows = [
         {
             "stock_type": st,
             "quantity": bought_by_type.get(st.id, Decimal("0")),
             "value_ht": bought_ht_by_type.get(st.id, Decimal("0")),
             "value_ttc": value_ttc_by_type.get(st.id, Decimal("0")),
+            # What _catalogue.html prints on every row, worked out once here:
+            # four {% url %} and seven localised ids a row were most of the
+            # time the list took to render. `id` is the digits a template
+            # prints an int as.
+            "id": str(st.id),
+            "unit_label": st.get_unit_display(),
+            "movements_url": movements_url(st.pk),
+            "update_url": update_url(st.pk),
+            "price_history_url": price_history_url(st.pk),
+            "delete_url": delete_url(st.pk),
         }
         for st in stock_types
         # « Only see the products bought between two dates »: an
@@ -466,7 +503,14 @@ def charge_suppliers(window=None) -> list[dict]:
         }
         for supplier in suppliers
     }
-    for line in InvoiceLine.objects.filter(invoice__in=documents).select_related("invoice", "product"):
+    # Only what is read below: a line's invoice is its supplier here, and
+    # selected whole it brought the document's whole text along with it.
+    lines = (
+        InvoiceLine.objects.filter(invoice__in=documents)
+        .select_related("invoice", "product")
+        .only("raw_name", "total_ht", "vat_rate", "printed_ttc", "discount_ttc", "invoice__supplier", "product")
+    )
+    for line in lines:
         row = rows[line.invoice.supplier_id]
         # The line's own amount, which for a charge is the figure the
         # document prints (InvoiceLine.printed_ttc): 33,33 € HT at 20% works
@@ -479,20 +523,19 @@ def charge_suppliers(window=None) -> list[dict]:
         )
         charge_item["total_ttc"] += amount
         charge_item["invoices"].add(line.invoice_id)
-    for invoice in documents.only("supplier_id", "invoice_date"):
-        rows[invoice.supplier_id]["documents"] += 1
+    for supplier_id in documents.values_list("supplier_id", flat=True):
+        rows[supplier_id]["documents"] += 1
     # The last document ever, inside the window or not: it is what says a
     # supplier has gone quiet, and on a row showing nothing over the window
     # it is the only thing left to say. How many there are in all is said
     # beside the window's count: « Free est dit avoir 12 documents alors
     # qu'en réalité il y en a plus » - twelve is a year of a monthly
     # subscription, and the row opens on all 33 of them (owner, 20/09).
-    for invoice in every_document.only("supplier_id", "invoice_date"):
-        row = rows[invoice.supplier_id]
+    for supplier_id, invoice_date in every_document.values_list("supplier_id", "invoice_date"):
+        row = rows[supplier_id]
         row["documents_all"] += 1
-        if invoice.invoice_date is not None and (row["last"] is None or invoice.invoice_date > row["last"]):
-            row["last"] = invoice.invoice_date
-    filed = set(every_document.values_list("supplier_id", flat=True).distinct())
+        if invoice_date is not None and (row["last"] is None or invoice_date > row["last"]):
+            row["last"] = invoice_date
     return [
         row
         | {
@@ -513,7 +556,8 @@ def charge_suppliers(window=None) -> list[dict]:
             else [],
         }
         for row in rows.values()
-        if row["supplier"].pk in filed
+        # Filed anything at all - counted just above, whatever the window.
+        if row["documents_all"]
     ]
 
 
@@ -605,6 +649,10 @@ def _stock_type_movement_entries(stock_type, window: DateRange | None = None):
         .select_related("invoice_line__invoice__supplier", "invoice_line__product")
         .order_by("-invoice_line__invoice__invoice_date", "-created_at")
     )
+    # Three links a line, reversed once each rather than once a line.
+    invoice_url = pk_url("invoices:invoice_detail")
+    conversion_url = pk_url("inventory:edit_product_conversion")
+    remove_url = pk_url("inventory:remove_product")
     entries = []
     for m in movements_qs:
         if not window.holds(m.effective_date):
@@ -614,6 +662,9 @@ def _stock_type_movement_entries(stock_type, window: DateRange | None = None):
             {
                 "movement": m,
                 "line": line,
+                "invoice_url": invoice_url(line.invoice_id) if line else None,
+                "conversion_url": conversion_url(line.product.id) if line else None,
+                "remove_url": remove_url(line.product.id) if line else None,
                 # The date this movement was SELECTED by, which is the one
                 # to print: the column showed the invoice's date and "—"
                 # for a manual correction, and a row picked out by two dates
@@ -945,6 +996,8 @@ def stock_type_movements(request, pk):
         "inventory/_stock_type_movements.html",
         {
             "stock_type": stock_type,
+            # Printed on every line, twice.
+            "unit_label": stock_type.get_unit_display(),
             "movements": entries,
             # The header is a claim in French about what is under it, and
             # the row above counts purchases alone: « Achats » over a broken

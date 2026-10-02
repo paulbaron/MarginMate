@@ -13,6 +13,7 @@ from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
+from invoices.models import Invoice
 from tests.factories import make_invoice, make_invoice_line, make_product, make_supplier
 
 
@@ -164,3 +165,36 @@ class PrintedTotalWinsWithinRoundingTests(TestCase):
 
     def test_an_invoice_with_no_lines_is_untouched(self):
         self.assertEqual(self.invoice([], printed="12.00").total_ttc, Decimal("0"))
+
+
+class TotalsFromLinesInHandTests(TestCase):
+    """`total_ht_of`, `total_ttc_of` and `adjustment_ttc_of` are the
+    properties, from lines a page already holds (the documents list
+    prefetches them); the properties read the lines once."""
+
+    def setUp(self):
+        self.supplier = make_supplier()
+
+    def invoice(self, **kwargs):
+        invoice = make_invoice(supplier=self.supplier, **kwargs)
+        make_invoice_line(invoice=invoice, total_ht=Decimal("100.00"), vat_rate=Decimal("0.20"), taxes=Decimal("2"))
+        make_invoice_line(invoice=invoice, total_ht=Decimal("33.33"), vat_rate=Decimal("0.055"))
+        return Invoice.objects.get(pk=invoice.pk)
+
+    def test_the_same_figures_from_the_lines_in_hand(self):
+        invoice = self.invoice(reconciliation_adjustment=Decimal("0.37"), printed_total_ttc=Decimal("155.60"))
+        lines = list(invoice.lines.all())
+        self.assertEqual(str(invoice.total_ht_of(lines)), str(invoice.total_ht))
+        self.assertEqual(str(invoice.total_ttc_of(lines)), str(invoice.total_ttc))
+        self.assertEqual(str(invoice.adjustment_ttc_of(lines)), str(invoice.adjustment_ttc))
+        self.assertEqual(invoice.total_ht, Decimal("133.70"))
+
+    def test_the_total_reads_the_lines_once(self):
+        invoice = self.invoice(reconciliation_adjustment=Decimal("0.37"))
+        with self.assertNumQueries(1):
+            self.assertEqual(invoice.total_ttc, Decimal("120.00") + Decimal("35.16315") + Decimal("0.444"))
+
+    def test_a_stated_adjustment_rate_reads_no_line(self):
+        invoice = self.invoice(reconciliation_adjustment=Decimal("1.00"), adjustment_vat_rate=Decimal("0.0550"))
+        with self.assertNumQueries(0):
+            self.assertEqual(invoice.adjustment_ttc, Decimal("1.0550"))

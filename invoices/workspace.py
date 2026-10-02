@@ -17,7 +17,7 @@ import re
 from datetime import date, timedelta
 from decimal import Decimal
 
-from django.db.models import Count, Max, Q
+from django.db.models import Count, Max, Prefetch, Q
 from django.shortcuts import render
 from django.urls import reverse
 from django.utils import timezone
@@ -29,7 +29,7 @@ from common import RANGE_END, RANGE_START, DateRange, date_range, is_id, search_
 
 from . import integrations
 from .forms import CHANNELS, InvoiceUploadForm, ReceiptBatchUploadForm
-from .models import Invoice, InvoiceType, ReceiptBatch, ScrapeJob, Supplier
+from .models import Invoice, InvoiceLine, InvoiceType, ReceiptBatch, ScrapeJob, Supplier
 from .tasks import default_gather_start, slips_code, slips_label
 
 #: "Ajoutés récemment", "Vérifiés récemment": what an import or a checking
@@ -128,6 +128,9 @@ def render_purchases(request, tab, *, status=200, **card):
         tickets=Count("pk", filter=TICKET_TO_CHECK),
         to_fix=Count("pk", filter=DOCUMENT_TO_FIX),
     )
+    # The navigation's badge is these two counts (context_processors): left
+    # on the request, the page asks the database once, not twice.
+    request.invoices_waiting = counts
     waiting = counts["tickets"] + counts["to_fix"]
     # « Enseignes et fournisseurs » counts every supplier, grey - counted,
     # not listed: the list reads every document's text, and the tabs are on
@@ -358,8 +361,17 @@ def batch_rows(batch) -> list[dict]:
     A document deleted since is `gone`: the record still names it, and drawn
     from the record the row read « À vérifier » over a « Vérifier » that led
     to a 404.
+
+    Each row prints its total, which adds up the document's lines: prefetched,
+    or a folder of a hundred tickets was a hundred queries - every second,
+    while the import's live part polls.
     """
-    invoices = Invoice.objects.filter(pk__in=batch_invoice_ids(batch)).select_related("supplier").in_bulk()
+    invoices = (
+        Invoice.objects.filter(pk__in=batch_invoice_ids(batch))
+        .select_related("supplier")
+        .prefetch_related("lines")
+        .in_bulk()
+    )
     rows = []
     for entry in batch.results:
         invoice = invoices.get(entry.get("invoice_id"))
@@ -523,7 +535,7 @@ def unreconciled_q(start=_LOOK_UP) -> Q:
     return Q(payments__isnull=True) & (Q(invoice_date__gte=start) | Q(invoice_date__isnull=True))
 
 
-def bank_state(invoice, start) -> dict | None:
+def bank_state(invoice, start, payments=None) -> dict | None:
     """What a row says about its settlement - beside what `review_state`
     says about its reading, never instead of it.
 
@@ -531,8 +543,12 @@ def bank_state(invoice, start) -> dict | None:
     all, or a document older than the first one. « Non rapprochée » written
     on every document of 2024 is noise, and noise on hundreds of rows is what
     hides the handful that are really waiting.
+
+    `payments` are the invoice's payments when the caller already holds
+    them, each with its transaction (the documents list prefetches them).
     """
-    payments = list(invoice.payments.all())
+    if payments is None:
+        payments = list(invoice.payments.all())
     if payments:
         paid_on = min(payment.transaction.paid_on for payment in payments)
         return {"css": "COMPLETE", "label": f"Réglée le {paid_on:%d/%m/%Y}"}
@@ -553,6 +569,72 @@ def _list_url(request, *dropped: str) -> str:
     """
     kept = {key: value for key, value in request.GET.items() if value and key != "surligner" and key not in dropped}
     return reverse("invoices:invoice_list") + (f"?{urlencode(kept)}" if kept else "")
+
+
+#: What a row reads of its lines - its two totals (Invoice.total_ht_of,
+#: total_ttc_of) and nothing else. The other columns are six more decimals a
+#: line, each converted from SQLite's float: most of what loading the lines of
+#: « tout afficher » cost.
+LINE_TOTAL_FIELDS = ("invoice", "total_ht", "vat_rate", "taxes", "printed_ttc", "discount_ttc")
+#: What no row reads of a document: its text, its VAT table, its files. A
+#: digital invoice's text is most of the table, and SQLite sorted it along
+#: with every row before handing over the first 250 - half of what reading
+#: them cost. Read, one would be a query per row: the list's tests count them.
+UNLISTED_FIELDS = (
+    "source_text",
+    "vat_breakdown",
+    "vat_table_typed",
+    "ocr_confidence",
+    "source_sha256",
+    "source_file",
+    "preview_image",
+    "imported_at",
+)
+
+
+def _listed(invoices):
+    """`invoices` with what each row of the list draws, in three more queries
+    for the page whatever it holds: the suppliers (a few dozen, not one per
+    row), the lines its totals add up and its payments (bank_state).
+
+    Lines and payments land in plain lists, `listed_lines` and
+    `listed_payments`: prefetched into the related managers, Django built and
+    filtered a queryset of its own for every row of the page - a tenth of
+    « tout afficher » for a cache nothing re-filters."""
+    from bank.models import InvoicePayment  # here: bank reads this module
+
+    return invoices.defer(*UNLISTED_FIELDS).prefetch_related(
+        "supplier",
+        Prefetch("lines", queryset=InvoiceLine.objects.only(*LINE_TOTAL_FIELDS), to_attr="listed_lines"),
+        Prefetch("payments", queryset=InvoicePayment.objects.select_related("transaction"), to_attr="listed_payments"),
+    )
+
+
+def link_maker(name: str):
+    """`reverse(name, args=[pk])` as a function of `pk`, from one reverse().
+
+    The list draws four links a row, and a thousand rows spent a quarter of
+    their rendering in {% url %}. An `<int:pk>` address only ever differs by
+    the digits, so it is reversed once on a placeholder and filled in; an
+    address where the placeholder is not found exactly once is reversed
+    every time, as before."""
+    placeholder = "9081726354"
+    before, found, after = reverse(name, args=[placeholder]).partition(placeholder)
+    if not found or placeholder in after:
+        return lambda pk: reverse(name, args=[pk])
+    return lambda pk: f"{before}{pk}{after}"
+
+
+def shown_day(day) -> str:
+    """`{{ day|date:"d/m/Y" }}`, written out: the filter asks the locale for
+    its format on every call, and the list prints a date three times a row.
+    "" for no date, as the filter answers."""
+    return "" if day is None else f"{day.day:02d}/{day.month:02d}/{day.year:04d}"
+
+
+def sorted_day(day) -> str:
+    """`{{ day|date:"Y-m-d" }}`, written out (see shown_day)."""
+    return "" if day is None else f"{day.year:04d}-{day.month:02d}-{day.day:02d}"
 
 
 def _documents(request, batch) -> dict:
@@ -605,16 +687,15 @@ def _documents(request, batch) -> dict:
     # Counted over every document whatever the window, since its chip drops
     # the window: narrowed by one it is always 0, so the chip and the warning
     # below would vanish exactly when there are documents no valuation and no
-    # bank match can use.
-    counts["sans_date"] = Invoice.objects.filter(conditions["sans-date"]).count()
+    # bank match can use. Without a window the aggregate above has just
+    # counted them over every document.
+    if window:
+        counts["sans_date"] = Invoice.objects.filter(conditions["sans-date"]).count()
 
-    invoices = window.limit(
-        # `payments__transaction` is what each row says about its settlement
-        # (bank_state): one prefetched query for the page rather than one
-        # per row - see « N+1s hide in per-object properties ».
-        Invoice.objects.select_related("supplier").prefetch_related("lines", "payments__transaction"),
-        "invoice_date",
-    )
+    # The payments are what each row says about its settlement (bank_state):
+    # one prefetched query for the page rather than one per row - see « N+1s
+    # hide in per-object properties ».
+    invoices = window.limit(_listed(Invoice.objects.all()), "invoice_date")
     # One supplier's documents exactly, from its page: a search for "Free"
     # found Free Mobile's too.
     chosen = request.GET.get("fournisseur", "")
@@ -665,20 +746,31 @@ def _documents(request, batch) -> dict:
         # about two dates, and a document from outside them slipped into the
         # answer is exactly the silently wrong figure this page guards against.
         if not window and not any(invoice.pk == highlight for invoice in rows):
-            rows = [
-                *Invoice.objects.filter(pk=highlight)
-                .select_related("supplier")
-                .prefetch_related("lines", "payments__transaction"),
-                *rows,
-            ]
+            rows = [*_listed(Invoice.objects.filter(pk=highlight)), *rows]
         # Stable: the highlighted document first, the rest in their order.
         rows.sort(key=lambda invoice: invoice.pk != highlight)
     # Said on every row, on every list: a person looking at « Tous » sees
     # which documents the bank has settled without having to filter for it.
     # Annotated here, after the highlighted document has been folded in, so
-    # no row can reach the template without it.
+    # no row can reach the template without it. So is what the row prints
+    # that the template would work out again cell by cell - whether it is
+    # the one just imported, its totals, its dates, its links (link_maker,
+    # shown_day): the same strings, a thousand rows at a time.
+    preview, detail, review, lines = (
+        link_maker(f"invoices:{name}")
+        for name in ("invoice_preview", "invoice_detail", "receipt_review", "invoice_edit_lines")
+    )
     for invoice in rows:
-        invoice.bank_state = bank_state(invoice, reconciled_from)
+        invoice.is_new = invoice.pk == highlight
+        invoice.bank_state = bank_state(invoice, reconciled_from, invoice.listed_payments)
+        invoice.listed_total_ht = invoice.total_ht_of(invoice.listed_lines)
+        invoice.listed_total_ttc = invoice.total_ttc_of(invoice.listed_lines)
+        invoice.listed_day = shown_day(invoice.invoice_date)
+        invoice.listed_day_sort = sorted_day(invoice.invoice_date)
+        invoice.preview_url = preview(invoice.pk)
+        invoice.detail_url = detail(invoice.pk)
+        invoice.review_url = review(invoice.pk)
+        invoice.lines_url = lines(invoice.pk)
     return {
         "invoices": rows,
         "query": query,
@@ -763,10 +855,6 @@ def _suppliers() -> dict:
     for change in changes_to_see:
         change.why = why_to_see(change)
 
-    texts: dict[int, list[str]] = {}
-    for supplier_id, ocr_text, source_text in Invoice.objects.values_list("supplier_id", "ocr_text", "source_text"):
-        if ocr_text or source_text:
-            texts.setdefault(supplier_id, []).append(ocr_text or source_text)
     from .parsers import ticket_parser_for
 
     counts = dict(Invoice.objects.values_list("supplier_id").annotate(n=Count("id")).values_list("supplier_id", "n"))
@@ -786,6 +874,17 @@ def _suppliers() -> dict:
         supplier.is_till = ticket_parser_for(supplier.code) is not None
         supplier.sources = sources.get(supplier.pk, [])
     shops = [supplier for supplier in suppliers if is_ticket_shop(supplier)]
+    # The texts of the shops with a header only, unordered: what is counted
+    # is how many print it, and the documents' text is most of the table -
+    # read and sorted whole, it was a third of this tab.
+    texts: dict[int, list[str]] = {}
+    for supplier_id, ocr_text, source_text in (
+        Invoice.objects.filter(supplier__in=[shop.pk for shop in shops if shop.ticket_header])
+        .order_by()
+        .values_list("supplier_id", "ocr_text", "source_text")
+    ):
+        if ocr_text or source_text:
+            texts.setdefault(supplier_id, []).append(ocr_text or source_text)
     for shop in shops:
         # Attributes, since a template calls nothing with arguments.
         shop.names_shop = names_shop(shop)

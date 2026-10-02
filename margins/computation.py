@@ -618,9 +618,10 @@ def margins_for(window: DateRange, left_out: Iterable[str] = ()) -> MarginReport
     ignored).
 
     One pass over the till's days, one over the sale documents, one over the
-    recipes they sold, one over the invoices and their lines, three for the
-    articles (every article, every recipe line naming one, every purchase)
-    and at most one per KIND of key left out.
+    recipes they sold and one per level of sub-recipes below them, one over
+    the invoices and their lines, three for the articles (every article,
+    every recipe line naming one, every purchase) and at most one per KIND of
+    key left out.
     Nothing here is per-row: see `_recipe_costs` for why the recipes are the
     part that has to be watched.
     """
@@ -693,11 +694,12 @@ def _recipe_costs(recipe_ids: set[int]) -> tuple[dict[int, tuple[Decimal, Decima
     recipe's variations are the cartesian product of its choice groups, so
     twenty either/ors is a million of them and enumerating is hopeless. And
     `Recipe.choice_groups()` builds its own queryset, so a prefetch at the
-    call site buys nothing unless the ingredients are handed to it - hence
-    `summary(list(recipe.ingredients.all()))` inside a `variation_scope()`,
-    which is what keeps the sub-recipes from being read once per question
-    asked. Written without either, the two other pages of this app reached
-    290 queries.
+    call site buys nothing - hence a `variation_scope()`, which keeps a
+    recipe from being read once per question asked, filled up front by
+    `Recipe.load_choice_groups`: every recipe sold and every sub-recipe
+    below them, one query per level of nesting rather than two per
+    sub-recipe. Written without either, the two other pages of this app
+    reached 290 queries.
 
     Three recipes are left OUT rather than costed, each for the same reason:
     a cost that is only partly known reads as margin.
@@ -720,15 +722,14 @@ def _recipe_costs(recipe_ids: set[int]) -> tuple[dict[int, tuple[Decimal, Decima
     """
     if not recipe_ids:
         return {}, {}
-    recipes = Recipe.objects.filter(pk__in=recipe_ids).prefetch_related(
-        "ingredients__stock_type__movements", "ingredients__sub_recipe"
-    )
+    recipes = list(Recipe.objects.filter(pk__in=recipe_ids))
     costs: dict[int, tuple[Decimal, Decimal]] = {}
     uncosted: dict[int, str] = {}
     with variation_scope():
+        Recipe.load_choice_groups(recipes)
         for recipe in recipes:
-            ingredients = list(recipe.ingredients.all())
-            cost_range = recipe.summary(ingredients)["cost_range"]
+            ingredients = [line for group in recipe.choice_groups() for line in group]
+            cost_range = recipe.summary()["cost_range"]
             if (
                 cost_range is None
                 or cost_range[1] <= 0
@@ -761,7 +762,7 @@ def _every_ingredient_priced(recipe: Recipe, ingredients: list, being_read: set[
 
     A sub-recipe's own ingredients come through `choice_groups()`, which
     inside the caller's `variation_scope` is served from the memo
-    `summary()` has already filled - asked for them directly
+    `Recipe.load_choice_groups` has already filled - asked for them directly
     (`sub.ingredients.all()`) it is one query per recipe REACHING that
     sub-recipe, which is the N+1 CLAUDE.md has a section about.
     """
@@ -827,7 +828,13 @@ def _read_the_till(report: MarginReport, rows: list[tuple], costs: dict, why_not
             (categories, category, NO_CATEGORY),
             (typologies, typology, NO_TYPOLOGY),
         ):
-            slice_ = holder.setdefault(key or fallback, Slice(name=key or fallback))
+            # Not `setdefault`: its default is built on every row - two
+            # slices and a product thrown away per row of the till, a
+            # quarter of this loop's time.
+            label = key or fallback
+            slice_ = holder.get(label)
+            if slice_ is None:
+                slice_ = holder[label] = Slice(name=label)
             slice_.units += quantity
             slice_.revenue += money
             if revenue_read:
@@ -840,14 +847,13 @@ def _read_the_till(report: MarginReport, rows: list[tuple], costs: dict, why_not
             slice_.cost_ht_high += cost_range[1] * quantity
 
         if cost_range is None:
-            entry = uncosted.setdefault(
-                product_id,
-                UncostedProduct(
+            entry = uncosted.get(product_id)
+            if entry is None:
+                entry = uncosted[product_id] = UncostedProduct(
                     name=name,
                     reason=NO_RECIPE if recipe_id is None else why_not.get(recipe_id, RECIPE_WITHOUT_COST),
                     ignored=ignored,
-                ),
-            )
+                )
             entry.units += quantity
             entry.revenue += money
 
@@ -1022,9 +1028,44 @@ def lines_prefetch(lookup: str = "lines") -> Prefetch:
     return Prefetch(lookup, queryset=InvoiceLine.objects.select_related("product__stock_type"))
 
 
+#: What `_where_it_went`, `Invoice.total_ht` and `Invoice.total_ttc` read of
+#: an invoice, its supplier, its lines and their articles - and nothing more.
+#: A row of these tables also carries the document's text, its checks, its
+#: VAT table, a product's suggestion: turned into Python for every invoice the
+#: bar ever had, they were a third of what « Marges » spent reading the
+#: invoices, to be read by nothing. A column read and missing here is one
+#: query per row: `TheColumnsReadTests` reads every shape with none.
+_INVOICE_COLUMNS = (
+    "supplier__name",
+    "supplier__expenses_only",
+    "reconciliation_adjustment",
+    "adjustment_vat_rate",
+    "printed_total_ttc",
+    "einvoice_format",
+)
+_LINE_COLUMNS = (
+    # The invoice the prefetch files each line under.
+    "invoice",
+    "total_ht",
+    "vat_rate",
+    "taxes",
+    "printed_ttc",
+    "discount_ttc",
+    "is_spread_charge",
+    "spread_ht",
+    # `_line_place`: the article, its name and its category.
+    "product__stock_type__name",
+    "product__stock_type__category",
+)
+
+
 def with_lines(queryset):
-    """An Invoice queryset loaded the way `where_it_went` needs it."""
-    return queryset.select_related("supplier").prefetch_related(lines_prefetch())
+    """An Invoice queryset loaded the way `where_it_went` needs it - the
+    columns it reads only (`_INVOICE_COLUMNS`, `_LINE_COLUMNS`): anything
+    else asked of these invoices is a query per row. « Dépenses » reaches the
+    lines through a bank line and loads them whole (`lines_prefetch`)."""
+    lines = InvoiceLine.objects.select_related("product__stock_type").only(*_LINE_COLUMNS)
+    return queryset.select_related("supplier").only(*_INVOICE_COLUMNS).prefetch_related(Prefetch("lines", lines))
 
 
 def invoice_money(invoice: Invoice) -> Money:

@@ -85,6 +85,7 @@ from margins.computation import (
 )
 
 from .models import BankTransaction, IgnoreRule, InvoicePayment
+from .reconcile import UNREAD_INVOICE_FIELDS
 from .rules import compile_rules, ignoring_rule
 
 ZERO = Decimal("0")
@@ -196,6 +197,9 @@ class Spending:
     name: str
     source: str
     rule: IgnoreRule | None = None
+    #: Where its « Classer » posts, for the rows the page draws
+    #: (`views.spending_home`).
+    action_url: str = ""
 
     @property
     def unsaid(self) -> bool:
@@ -373,7 +377,7 @@ def spending_for(window: DateRange, kind: str = "", left_out=()) -> SpendingRepo
         report.operations += 1
         rule = ignoring_rule(line.label, rules)
         own, source = _own_category(line, rule)
-        payments = list(line.payments.all())
+        payments = line.paid_by
 
         parts: dict[str, Decimal] = {}
         invoiced = ZERO
@@ -508,16 +512,19 @@ def set_category(line: BankTransaction, value) -> str:
 
 def _lines(window: DateRange):
     """The window's debits, with everything `where_it_went` will ask of them
-    already loaded - four queries for the page rather than one per debit."""
+    already loaded - four queries for the page rather than one per debit.
+
+    Each line's payments are a list on it (`paid_by`) rather than a
+    queryset made per line, and the invoices come without what nothing here
+    reads (`reconcile.UNREAD_INVOICE_FIELDS`, their texts above all): a
+    year of debits made both a good part of the page."""
     lines = window.limit(BankTransaction.objects.filter(amount__lt=0), "operation_date")
-    return lines.prefetch_related(
-        Prefetch(
-            "payments",
-            queryset=InvoicePayment.objects.select_related("invoice__supplier").prefetch_related(
-                lines_prefetch("invoice__lines")
-            ),
-        )
+    payments = (
+        InvoicePayment.objects.select_related("invoice__supplier")
+        .defer(*(f"invoice__{name}" for name in UNREAD_INVOICE_FIELDS))
+        .prefetch_related(lines_prefetch("invoice__lines"))
     )
+    return lines.prefetch_related(Prefetch("payments", queryset=payments, to_attr="paid_by"))
 
 
 def _read_invoice(invoice, read: dict) -> dict[str, Decimal]:

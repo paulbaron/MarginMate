@@ -222,7 +222,7 @@ nothing saying the period had been dropped.
             {% for sale in sales %}
             <tr>
                 <td data-sort="{{ sale.sold_on|date:'Y-m-d' }}">{{ sale.sold_on|date:"d/m/Y" }}</td>
-                <td><a href="{% url 'recipes:recipe_detail' sale.recipe_id %}">{{ sale.recipe.name }}</a></td>
+                <td><a href="{{ sale.recipe_url }}">{{ sale.recipe.name }}</a></td>
                 <td class="num">{{ sale.quantity }}</td>
                 <td class="muted">{{ sale.source }}</td>
                 <td class="num">

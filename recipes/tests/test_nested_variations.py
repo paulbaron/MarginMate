@@ -317,25 +317,22 @@ class NestedQueryCountTests(TestCase):
     TAB_QUERIES = 2
 
     # The list's article picker: one query for the articles at least one
-    # recipe uses, and one walk per distinct SUB-RECIPE (this fixture has
-    # one, and it nests nothing) for what each of them reaches. Per
-    # sub-recipe, never per recipe - recipes/tests/test_article_usage.py
-    # holds that flat over thirty.
-    #
-    # It is NOT a bound on a nested graph: `_reached` memoises the top-level
-    # sub-recipe, while `variance.reachable_stock_types` re-queries each
-    # level it walks into, so the real driver is the number of distinct
-    # sub-recipe NODES. Measured on invented graphs: ten syrups of three
-    # levels under sixty cocktails cost a hundred queries here. See
-    # CLAUDE.md, « The recipes that use an article ».
-    ARTICLE_PICKER_QUERIES = 2
+    # recipe uses. Its walks read nothing: `usage.article_uses` hands
+    # `variance.reachable_stock_types` the ingredients the list already
+    # prefetched, so a sub-recipe at any depth costs no query
+    # (test_article_usage.NestedGraphQueryTests holds that over a nested graph).
+    ARTICLE_PICKER_QUERIES = 1
 
     def test_the_detail_page_stays_cheap(self):
         with self.assertNumQueries(6 + self.TILL_QUERIES + self.NAV_BADGE_QUERIES):
             self.assertEqual(self.client.get(f"/recipes/{self.recipe.pk}/").status_code, 200)
 
     def test_the_list_page_stays_cheap(self):
-        expected = 7 + self.TILL_QUERIES + self.TAB_QUERIES + self.NAV_BADGE_QUERIES + self.ARTICLE_PICKER_QUERIES
+        # Five reads cost the list: the recipes, their ingredients, articles,
+        # movements and sub-recipes. A sub-recipe's own groups, asked for
+        # while costing its parent, come from those reads (menu._recipes);
+        # they were two more queries per sub-recipe.
+        expected = 5 + self.TILL_QUERIES + self.TAB_QUERIES + self.NAV_BADGE_QUERIES + self.ARTICLE_PICKER_QUERIES
         with self.assertNumQueries(expected):
             self.assertEqual(self.client.get("/recipes/").status_code, 200)
 

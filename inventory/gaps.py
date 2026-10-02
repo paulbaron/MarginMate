@@ -45,7 +45,7 @@ it a closure over `attribute_sales`, which no longer touches the database.
 
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
@@ -54,13 +54,13 @@ from django.db.models import Max
 from django.utils import timezone
 
 from .gap_planner import Consumption, Offer, Plan, first_sales, plan_sales
-from .models import GapExclusion, MovementKind, StockMovement, StockTake, StockType
+from .models import GapExclusion, StockTake, StockType
 from .variance import (
     PeriodStock,
     attribute_sales,
     counts_by_stock_type,
     loss_allowance,
-    movements_between,
+    movements_and_last_purchase,
     order_options,
     read_sales,
     unit_costs_ht,
@@ -338,17 +338,6 @@ class FillResult:
         return sum(1 for line in self.lines if line.till_differs)
 
 
-def _last_purchase_day(start: date, end: date) -> date | None:
-    """The latest delivery in the window, dated as movements_between dates it."""
-    latest = None
-    purchases = StockMovement.objects.filter(kind=MovementKind.PURCHASE).select_related("invoice_line__invoice")
-    for movement in purchases.only("occurred_on", "created_at", "invoice_line__invoice__invoice_date"):
-        day = movement.effective_date
-        if day is not None and start < day <= end and (latest is None or day > latest):
-            latest = day
-    return latest
-
-
 def _till_buttons(recipes: dict[int, object], start: date, end: date) -> dict[int, TillButton]:
     """{recipe_id: the till button to press} - among the buttons linked to
     it, never its happy-hour one nor one set aside: first one whose price at
@@ -366,11 +355,12 @@ def _till_buttons(recipes: dict[int, object], start: date, end: date) -> dict[in
         if not (happy_hour and name.strip().lower() == happy_hour):
             buttons[product_id] = (recipe_id, name, rung)
 
-    charged: dict[int, Counter] = {}
+    # Not setdefault(..., Counter()): that made a Counter per day read.
+    charged: defaultdict[int, Counter] = defaultdict(Counter)
     for product_id, quantity, money in PosProductDailyQuantity.objects.filter(
         product_id__in=list(buttons), revenue_read=True, quantity__gt=0, sold_on__gt=start, sold_on__lte=end
     ).values_list("product_id", "quantity", "revenue_ttc"):
-        charged.setdefault(product_id, Counter())[(money / quantity).quantize(CENT)] += quantity
+        charged[product_id][(money / quantity).quantize(CENT)] += quantity
 
     best: dict[int, tuple[tuple, TillButton]] = {}
     for product_id, (recipe_id, name, rung) in buttons.items():
@@ -410,7 +400,8 @@ def gaps_since(take: StockTake, end: date | None = None) -> GapReport:
     start = take.taken_at.date()
 
     opening = counts_by_stock_type(take)
-    movements = movements_between(start, end)
+    # The latest delivery of the window comes out of the same scan.
+    movements, last_purchase_day = movements_and_last_purchase(start, end)
     unit_costs = unit_costs_ht()
     stock = {
         article: PeriodStock(
@@ -554,7 +545,7 @@ def gaps_since(take: StockTake, end: date | None = None) -> GapReport:
         ignored=ignored,
         exclusions=exclusions,
         last_sale_day=last_sale,
-        last_purchase_day=_last_purchase_day(start, end),
+        last_purchase_day=last_purchase_day,
     )
 
 

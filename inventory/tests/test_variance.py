@@ -14,27 +14,40 @@ It has to be defensible to the cent, and it has to be a FLOOR - never an
 accusation bigger than the data supports.
 """
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
 from inventory.models import MovementKind, StockMovement, UnitChoices
 from inventory.variance import (
+    MOVEMENT_DAY_COLUMNS,
+    allocate_choices,
     build_pools,
     compute_variance,
     counted_quantity_in_stock_units,
+    dated,
+    ingredients_by_recipe,
+    movement_day,
+    movements_and_last_purchase,
+    movements_between,
+    reachable_stock_types,
+    recipe_pool_groups,
     recipe_usage_terms,
     stock_units_per_item,
 )
-from recipes.models import RecipeIngredient
+from invoices.models import Invoice
+from recipes.models import Recipe, RecipeIngredient
 from recipes.sales import record_sales
 from tests.factories import (
     make_ingredient,
     make_invoice,
     make_invoice_line,
+    make_movement,
     make_product,
     make_recipe,
     make_stock_take,
@@ -1013,3 +1026,262 @@ class NestedAlternativePoolingTests(TestCase):
 
         pools = build_pools([cocktail])
         self.assertEqual(pools[self.sugar.id], frozenset({self.sugar.id, self.honey.id}))
+
+
+D = Decimal
+
+
+class MovementDayTests(TestCase):
+    """`movement_day` is `StockMovement.effective_date` read off the columns
+    a scan fetches (`MOVEMENT_DAY_COLUMNS`): « Écarts » and « Combler les
+    écarts » date every purchase that way rather than building each movement
+    with its invoice line and its invoice. The same day, every fallback."""
+
+    def setUp(self):
+        self.vodka = make_stock_type(name="Vodka", unit=UnitChoices.LITRE)
+        product = make_product(stock_type=self.vodka)
+        dated_invoice = make_invoice(supplier=product.supplier, invoice_date=date(2026, 3, 12))
+        undated = make_invoice(supplier=product.supplier)
+        Invoice.objects.filter(pk=undated.pk).update(invoice_date=None)
+
+        def line(invoice):
+            return make_invoice_line(invoice=invoice, product=product)
+
+        self.own_date = make_movement(
+            stock_type=self.vodka,
+            kind=MovementKind.PURCHASE,
+            occurred_on=date(2026, 3, 20),
+            invoice_line=line(dated_invoice),
+        )
+        self.invoice_date = make_movement(
+            stock_type=self.vodka, kind=MovementKind.PURCHASE, invoice_line=line(dated_invoice)
+        )
+        self.undated_invoice = make_movement(
+            stock_type=self.vodka, kind=MovementKind.PURCHASE, invoice_line=line(undated)
+        )
+        self.loss_with_date = make_movement(
+            stock_type=self.vodka, kind=MovementKind.LOSS, quantity="-1", occurred_on=date(2026, 3, 5)
+        )
+        self.typed_in = make_movement(stock_type=self.vodka, kind=MovementKind.LOSS, quantity="-1")
+        # Typed in late in the evening: already the next day in Paris, not in UTC.
+        StockMovement.objects.update(created_at=datetime(2026, 3, 9, 23, 30, tzinfo=UTC))
+
+    def days(self):
+        scan = dated(StockMovement.objects.all()).values_list("pk", *MOVEMENT_DAY_COLUMNS)
+        return {pk: movement_day(*dates) for pk, *dates in scan}
+
+    def test_every_fallback_gives_the_property_s_day(self):
+        days = self.days()
+        for movement in StockMovement.objects.all():
+            with self.subTest(movement=movement.pk):
+                self.assertEqual(days[movement.pk], movement.effective_date)
+
+    def test_its_own_date_then_its_invoice_s(self):
+        days = self.days()
+        self.assertEqual(days[self.own_date.pk], date(2026, 3, 20))
+        self.assertEqual(days[self.invoice_date.pk], date(2026, 3, 12))
+        self.assertEqual(days[self.loss_with_date.pk], date(2026, 3, 5))
+
+    def test_an_undated_invoice_falls_back_on_the_day_it_was_typed_in(self):
+        days = self.days()
+        self.assertEqual(days[self.undated_invoice.pk], days[self.typed_in.pk])
+        self.assertIsNotNone(days[self.typed_in.pk])
+
+    def test_nothing_dated_is_no_day(self):
+        self.assertIsNone(movement_day(None, None, None))
+
+    def test_the_typing_moment_is_read_only_where_it_dates_the_movement(self):
+        typed_in = dict(dated(StockMovement.objects.all()).values_list("pk", "typed_in"))
+        self.assertEqual(
+            {pk for pk, moment in typed_in.items() if moment is not None},
+            {self.undated_invoice.pk, self.typed_in.pk},
+        )
+        self.assertEqual(typed_in[self.typed_in.pk], datetime(2026, 3, 9, 23, 30, tzinfo=UTC))
+
+
+class MovementsAndLastPurchaseTests(TestCase):
+    """One scan for « Combler les écarts »: movements_between's totals, and
+    the latest purchase of the same half-open window - never a loss, never
+    the opening day, never past the end."""
+
+    def setUp(self):
+        self.vodka = make_stock_type(name="Vodka", unit=UnitChoices.LITRE)
+        self.move(MovementKind.PURCHASE, "6", date(2026, 3, 1))  # the opening day: in its count already
+        self.move(MovementKind.PURCHASE, "4", date(2026, 3, 18))
+        self.move(MovementKind.LOSS, "-1", date(2026, 3, 25))  # after every purchase
+        self.move(MovementKind.PURCHASE, "9", date(2026, 4, 2))  # after the end
+
+    def move(self, kind, quantity, day):
+        make_movement(stock_type=self.vodka, kind=kind, quantity=quantity, occurred_on=day)
+
+    def test_the_totals_are_movements_between_s(self):
+        totals, _last = movements_and_last_purchase(date(2026, 3, 1), date(2026, 3, 31))
+        self.assertEqual(totals, movements_between(date(2026, 3, 1), date(2026, 3, 31)))
+        self.assertEqual(totals[self.vodka.id], {"purchases": D("4"), "known_losses": D("1")})
+
+    def test_the_latest_purchase_of_the_window_not_a_later_loss(self):
+        self.assertEqual(movements_and_last_purchase(date(2026, 3, 1), date(2026, 3, 31))[1], date(2026, 3, 18))
+
+    def test_the_end_day_is_in_the_window(self):
+        self.assertEqual(movements_and_last_purchase(date(2026, 3, 1), date(2026, 4, 2))[1], date(2026, 4, 2))
+
+    def test_the_opening_day_is_not(self):
+        self.assertIsNone(movements_and_last_purchase(date(2026, 3, 1), date(2026, 3, 17))[1])
+
+    def test_losses_alone_are_no_purchase(self):
+        totals, last = movements_and_last_purchase(date(2026, 3, 20), date(2026, 3, 31))
+        self.assertEqual(totals, {self.vodka.id: {"purchases": D("0"), "known_losses": D("1")}})
+        self.assertIsNone(last)
+
+    def test_no_start_reaches_back_to_the_beginning(self):
+        totals, last = movements_and_last_purchase(None, date(2026, 3, 31))
+        self.assertEqual(totals[self.vodka.id]["purchases"], D("10"))
+        self.assertEqual(last, date(2026, 3, 18))
+
+    def test_a_purchase_dated_by_nothing_but_its_typing_is_counted_that_day(self):
+        typed = make_movement(stock_type=self.vodka, kind=MovementKind.PURCHASE, quantity="2")
+        StockMovement.objects.filter(pk=typed.pk).update(created_at=datetime(2026, 3, 22, 12, 0, tzinfo=UTC))
+        totals, last = movements_and_last_purchase(date(2026, 3, 1), date(2026, 3, 31))
+        self.assertEqual(totals[self.vodka.id]["purchases"], D("6"))
+        self.assertEqual(last, date(2026, 3, 22))
+
+
+class IngredientsHandedInTests(TestCase):
+    """`ingredients_by_recipe` hands the engine's walks the ingredients the
+    recipes were read with: the same pools, terms and reachable articles as
+    each recipe reading its own - two levels of sub-recipes, an « OU » at
+    each, a cycle the admin lets through, a recipe with nothing in it - and
+    the walk over sub-recipes costs no query."""
+
+    def setUp(self):
+        sugar = make_stock_type(name="Sucre", unit=UnitChoices.KILOGRAM)
+        honey = make_stock_type(name="Miel", unit=UnitChoices.KILOGRAM)
+        lime = make_stock_type(name="Citron vert", unit=UnitChoices.KILOGRAM)
+        rum = make_stock_type(name="Rhum", unit=UnitChoices.LITRE)
+        gin = make_stock_type(name="Gin", unit=UnitChoices.LITRE)
+        syrup = make_recipe(name="Sirop", yield_quantity="2")
+        make_ingredient(syrup, stock_type=sugar, quantity="1", group=0)
+        make_ingredient(syrup, stock_type=honey, quantity="1.5", group=0)
+        base = make_recipe(name="Base", yield_quantity="4")
+        make_ingredient(base, sub_recipe=syrup, quantity="0.5", group=0)
+        make_ingredient(base, stock_type=lime, quantity="0.2", group=1)
+        cocktail = make_recipe(name="Cocktail", sale_quantity="0.5")
+        make_ingredient(cocktail, sub_recipe=base, quantity="0.1", group=0)
+        make_ingredient(cocktail, stock_type=rum, quantity="0.04", group=1)
+        make_ingredient(cocktail, stock_type=gin, quantity="0.05", group=1)
+        loop_a = make_recipe(name="Boucle A")
+        loop_b = make_recipe(name="Boucle B")
+        RecipeIngredient.objects.create(recipe=loop_a, sub_recipe=loop_b, quantity=D("1"), group=0)
+        RecipeIngredient.objects.create(recipe=loop_b, sub_recipe=loop_a, quantity=D("1"), group=0)
+        RecipeIngredient.objects.create(recipe=loop_b, stock_type=rum, quantity=D("0.02"), group=1)
+        make_recipe(name="Vide")
+
+    def read(self):
+        recipes = list(Recipe.objects.prefetch_related("ingredients__stock_type", "ingredients__sub_recipe"))
+        return recipes, ingredients_by_recipe(recipes)
+
+    def test_the_same_pools(self):
+        recipes, ingredients_of = self.read()
+        self.assertEqual(build_pools(recipes, (), ingredients_of), build_pools(list(Recipe.objects.all())))
+
+    def test_the_same_terms_and_pool_groups(self):
+        recipes, ingredients_of = self.read()
+        for recipe in recipes:
+            with self.subTest(recipe=recipe.name):
+                self.assertEqual(recipe_usage_terms(recipe, ingredients_of), recipe_usage_terms(recipe))
+                self.assertEqual(recipe_pool_groups(recipe, ingredients_of), recipe_pool_groups(recipe))
+
+    def test_the_same_articles_reached(self):
+        _recipes, ingredients_of = self.read()
+        for ingredient in RecipeIngredient.objects.select_related("stock_type", "sub_recipe"):
+            with self.subTest(ingredient=ingredient.pk):
+                self.assertEqual(
+                    reachable_stock_types(ingredient, ingredients_of=ingredients_of),
+                    reachable_stock_types(ingredient),
+                )
+
+    def test_the_walk_costs_no_query(self):
+        recipes, ingredients_of = self.read()
+        with self.assertNumQueries(0):
+            for recipe in recipes:
+                recipe_pool_groups(recipe, ingredients_of)
+
+    def test_a_sub_recipe_not_handed_in_is_read(self):
+        cocktail = Recipe.objects.get(name="Cocktail")
+        for ingredient in cocktail.ingredients.select_related("stock_type", "sub_recipe"):
+            with self.subTest(ingredient=ingredient.pk):
+                self.assertEqual(
+                    reachable_stock_types(ingredient, ingredients_of={}), reachable_stock_types(ingredient)
+                )
+
+
+class VarianceQueryCountTests(TestCase):
+    """The « Écarts » page reads every recipe once, its sub-recipes and their
+    alternatives included (CLAUDE.md, « N+1s hide in per-object
+    properties »): three times the recipes - each pouring a syrup of its own
+    two levels down, an « OU » in it - cost no more queries."""
+
+    def setUp(self):
+        self.opening = make_stock_take(taken_at=at(1))
+        self.closing = make_stock_take(taken_at=at(20))
+        self.made = 0
+
+    def add_cocktails(self, count):
+        for _ in range(count):
+            self.made += 1
+            sugar = make_stock_type(name=f"Sucre {self.made}", unit=UnitChoices.KILOGRAM)
+            honey = make_stock_type(name=f"Miel {self.made}", unit=UnitChoices.KILOGRAM)
+            rum = make_stock_type(name=f"Rhum {self.made}", unit=UnitChoices.LITRE)
+            for take, quantity in ((self.opening, "5"), (self.closing, "3")):
+                for stock_type in (sugar, honey, rum):
+                    make_stock_take_line(
+                        stock_take=take, stock_type=stock_type, counted_quantity=quantity, unit=stock_type.unit
+                    )
+            make_movement(
+                stock_type=rum,
+                quantity="2",
+                unit_cost_ht="12",
+                kind=MovementKind.PURCHASE,
+                occurred_on=date(2026, 3, 9),
+            )
+            syrup = make_recipe(name=f"Sirop {self.made}", selling_price_ttc=None, yield_quantity="2")
+            make_ingredient(syrup, stock_type=sugar, quantity="1", group=0)
+            make_ingredient(syrup, stock_type=honey, quantity="1", group=0)
+            base = make_recipe(name=f"Base {self.made}", selling_price_ttc=None)
+            make_ingredient(base, sub_recipe=syrup, quantity="0.5", group=0)
+            cocktail = make_recipe(name=f"Cocktail {self.made}", selling_price_ttc="9")
+            make_ingredient(cocktail, sub_recipe=base, quantity="0.1", group=0)
+            make_ingredient(cocktail, stock_type=rum, quantity="0.04", group=1)
+            record_sales([(cocktail.name, date(2026, 3, 12), 10)])
+
+    def queries(self):
+        with CaptureQueriesContext(connection) as captured:
+            report = compute_variance(self.closing)
+        self.assertEqual(report.recipes_sold, self.made)
+        return len(captured)
+
+    def test_three_times_the_recipes_cost_no_more_queries(self):
+        self.add_cocktails(2)
+        few = self.queries()
+        self.add_cocktails(4)
+        self.assertEqual(self.queries(), few)
+
+
+class AllocationReadsOnlyTests(TestCase):
+    """`allocate_choices` reads what it is handed and writes none of it:
+    « Combler les écarts » hands it the same ceilings for every sale it plays
+    through the engine."""
+
+    def test_nothing_handed_in_is_changed(self):
+        available = {1: D("10"), 2: D("4"), 3: D("100")}
+        loss_fractions = {1: D("0.1"), 2: D("0.2")}
+        already_used = {1: D("1")}
+        handed = (dict(available), dict(loss_fractions), dict(already_used))
+        allocated = allocate_choices(
+            [(30, [{1: D("0.5")}, {2: D("0.5")}])], available, loss_fractions, {1: D("3"), 2: D("2")}, already_used
+        )
+        self.assertEqual((available, loss_fractions, already_used), handed)
+        # Round one: 16 servings of the dearer up to its allowance (9, 1 used
+        # already), 7 of the other up to its own (3,2, rounded up); round two:
+        # 2 and 1 more to the brim; the 4 left on the dearer, past it.
+        self.assertEqual(allocated, {1: D("11"), 2: D("4")})
