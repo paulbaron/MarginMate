@@ -3090,6 +3090,55 @@ of those already have an invoice (the sign of a pattern too broad). The page
 filters by month (`?mois=2026-07`) and groups what is still missing an
 invoice by payee, each with a pre-filled "Ignorer…".
 
+**An ignore rule's pattern is never trusted either** (02/10/2026; « A
+pattern is never trusted, typed or stored », under « Recognising the
+operations »). It was checked by `re.compile` alone and searched by `re`
+with no limit: « A{4294967296} » is an OverflowError, not a re.error, and was
+a 500 on the form and on « Données »'s PREVIEW of « Banque », whose
+archive carries the rules from one bar to another, and a pattern that
+backtracks (« (?:A |A  ?)+B » on a label holding a run of « A ») ran to the
+end on every draw of Banque, « Dépenses » and « Propositions » and in every
+automatic pass, seconds a label and doubling with each « A ».
+- **Checked by the guard**: `bank/rules.check` is
+  `returnables.patterns.compile_pattern` (field « Motif »), whose own
+  empty-line refusal is the « matches every payment » one. `IgnoreRule.clean`,
+  `IgnoreRuleForm.clean_pattern` (its `_post_clean` skips the model's clean,
+  as `OperationRuleForm`'s: one sentence, about the value typed; the motif's
+  « required », length and NUL refusals in French) and « Données »
+  (`transfer/sections/bank.py`, the model's `full_clean`: « Règle « … » :
+  Motif : <raison>. », the record skipped) all go through it. A rule already
+  here is its pattern and is not checked again by an import.
+- **Searched as a recognition rule is** (`rules.Matcher`): `PATTERN_TIMEOUT`
+  per match, the GIL released, asked once more when out of time; the rule
+  billed its THREAD time against `recognition.RULE_SECONDS`. `rules.searcher`
+  still leaves a leading greedy « .* » out (« The pages are measured »).
+- **A rule that cannot be applied hides nothing**, as `Rules.invalid` and
+  `Rules.slow` recognise nothing: `compile_rules` returns `IgnoreRules`, its
+  `invalid` the stored rules the guard now refuses (saved before it, typed or
+  imported) with the reason, its `slow` the rules found too slow during THIS
+  reading (one page drawn, one pass: set aside from then on, so lines read
+  before keep what it said). Its payments count as missing their invoice
+  again, lose its category on « Dépenses », and the automatic pass sees them
+  - it links one only when it is sure, as any open line. Banque
+  (`ignore_problems`) and « Dépenses » (`SpendingReport.rule_problems`) say
+  which rule and why, read after the last line, with « Corriger sur
+  « Dépenses sans facture attendue » »; the rules page marks the row
+  « motif invalide » with the reason, or « trop lent », its figures « — »
+  (`RuleMatches.problem` / `slow`). Nothing is repaired or deleted.
+- **« Tester » and « Ajouter la règle » run the pattern over every debit
+  before anything is saved** (`rules.caught`): too slow there is said on the
+  motif (`views.RULE_TOO_SLOW`) and nothing saved - kept, it would be set
+  aside on every page.
+- **What was stored keeps working**: the 18 rules of data-dev (a scratch
+  copy, read-only) all pass the guard and every debit gets the same rule as
+  before. The guard compiles with MULTILINE, which only a label holding a
+  line break could tell, and the import folds every break of a label; none
+  of the 801 lines holds one. `test_rules.REFUSED_NOW` lists shapes `re`
+  took and the guard refuses (a brace that is no count, a count past 100,
+  `(?x)`, `[` inside a set); the patterns « Ignorer… » writes
+  (`PayeeGroup.pattern`, escaped payees) pass
+  (`test_the_patterns_the_pages_write_still_pass_and_find_what_re_found`).
+
 **Found through the statement: `Invoice.total_ttc` left VAT off the
 reconciliation adjustment.** The adjustment is duty the lines don't carry
 (UBA's "VIG. SECU" and the like), and duty is part of the VAT base. Added
@@ -3367,9 +3416,9 @@ French decimals, the masked account `****0042` in the header line
   `OperationRuleForm` says `forms.NUL_REFUSED` instead (« Caractère
   interdit (NUL) : retapez ce champ. »; review, 01/10/2026). Each form's
   `test_every_text_field_says_a_nul_in_french` walks its text fields, so
-  one added later says it too; the site's other forms (`IgnoreRuleForm`…)
-  still say Django's. The name unique by `name_key`, the format itself
-  excepted; `clean()` runs
+  one added later says it too; the site's other forms still say Django's
+  (`IgnoreRuleForm` but for its motif, since 02/10/2026). The name unique
+  by `name_key`, the format itself excepted; `clean()` runs
   `check_format` and puts each refusal on its field, skipped when a field
   is refused already - nothing said twice; `_post_clean` skips the model's
   check, as `OperationRuleForm` does; the label columns are stored as the
@@ -3513,7 +3562,9 @@ values in, plain values out - but for its last three functions (`load`,
 - **A pattern is never trusted, typed or stored.** It goes through
   `returnables.patterns` only (« The motif guard », under « Consignes »:
   refused before `regex` compiles anything that could freeze the machine,
-  then `PATTERN_TIMEOUT` per match). A stored rule that no longer passes
+  then `PATTERN_TIMEOUT` per match) - an ignore rule's too, since
+  02/10/2026 (`bank/rules.py`, « Payments that never have an invoice »,
+  under « Bank statements »). A stored rule that no longer passes
   `check` lands in `Rules.invalid` and recognises nothing; one too slow lands
   in `Rules.slow` and is skipped for the rest of that `Rules` - one reading:
   one page drawn, one « Tester », one « Relire » preview or write, one
@@ -3728,8 +3779,10 @@ values in, plain values out - but for its last three functions (`load`,
   owner asked for it the same day: it is a `StatementFormat` now (« The
   statement's layout », above), so another bank's statement reads by a
   format typed on « Format du relevé » and rules typed here - no code.
-  `IgnoreRule` (« Dépenses sans facture attendue ») is untouched: another
-  question, applied on draw.
+  `IgnoreRule` (« Dépenses sans facture attendue ») is another question,
+  applied on draw - its patterns checked by the same guard and searched
+  under the same limits since 02/10/2026 (« Payments that never have an
+  invoice », under « Bank statements »).
 - **Costs**: each caller reads the rules ONCE (`recognition.load()`, one
   query, the active rules in their order) and hands them down -
   `parse_statement(content, rules, fmt)`,
@@ -4723,7 +4776,21 @@ The rules it was done under, which still hold:
   number, date and `{% url %}`.
 - **Ignore rules** are searched without a leading greedy `.*`
   (`bank/rules.searcher`: the same lines found, 60x faster on « .*MOT.* »);
-  the pattern as written is still what is validated.
+  the pattern as written is still what is validated. Since 02/10/2026
+  validated by the guard and searched under the per-match limit, billed its
+  thread time (« Payments that never have an invoice »), which costs: `regex`
+  with a timeout is no slower than `re` was, but `recognition.search` builds
+  a `Budget` per search and a rule billed by two `thread_time` reads a
+  search doubles it again - a year's debits of data-dev (a scratch copy)
+  through its 18 rules took 7 ms with `re`, 22 ms that way. `rules.Matcher`
+  searches with the same contract itself (`PATTERN_TIMEOUT`, `concurrent`,
+  asked twice) and `IgnoreRules.first` / `rules.caught` read the clock ONCE
+  a search, billing each the time since the last read: 12-13 ms. Banque,
+  « Dépenses » and « Propositions » measured within noise of before (median
+  of nine), the rules page (every rule over every debit) about +6 ms on
+  40 ms; all print the same once whitespace is set aside (the template lines
+  of the new warnings). Keep one read a search: a second read is a third
+  more on every draw.
 
 **Not done, the owner's call** (structural, or a migration): drawing the
 biggest pages' hidden tables and per-row pickers on demand (Produits &

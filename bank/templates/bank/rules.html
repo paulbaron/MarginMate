@@ -86,7 +86,16 @@
                     {% for rule, found in rules %}
                         <tr>
                             <td>{{ rule.description|default:"—" }}</td>
-                            <td><code>{{ rule.pattern }}</code></td>
+                            <td>
+                                <code>{{ rule.pattern }}</code>
+                                {% if found.problem %}
+                                    <span class="status-pill status-ERROR">motif invalide</span>
+                                    <p class="field-error">{{ found.problem }} - la règle ne s'applique à aucune opération.</p>
+                                {% elif found.slow %}
+                                    <span class="status-pill status-ERROR">trop lent</span>
+                                    <p class="field-error">Ignoré : simplifiez-le.</p>
+                                {% endif %}
+                            </td>
                             {% comment %}
                             Editable here: the « Dépenses » page says that giving its rule a category
                             is THE way not to type the same word again every month, and every rule
@@ -105,13 +114,18 @@
                                 </form>
                                 {% if rule.category %}<span class="read-as">« {{ rule.category }} »</span>{% endif %}
                             </td>
-                            <td class="num">{{ found.count|default:"0" }}</td>
-                            <td class="num" data-sort="{{ found.total|stringformat:'s' }}">
-                                {{ found.total|money }} €
-                                {% if found.linked %}
-                                    <span class="status-pill status-NEEDS_REVIEW">dont {{ found.linked }} rattachée{{ found.linked|pluralize }}</span>
-                                {% endif %}
-                            </td>
+                            {% if found.count is None %}
+                                <td class="num" data-sort="-1">—</td>
+                                <td class="num" data-sort="-1">—</td>
+                            {% else %}
+                                <td class="num">{{ found.count }}</td>
+                                <td class="num" data-sort="{{ found.total|stringformat:'s' }}">
+                                    {{ found.total|money }} €
+                                    {% if found.linked %}
+                                        <span class="status-pill status-NEEDS_REVIEW">dont {{ found.linked }} rattachée{{ found.linked|pluralize }}</span>
+                                    {% endif %}
+                                </td>
+                            {% endif %}
                             <td>
                                 {% if rule.is_active %}
                                     <span class="status-pill status-linked">Active</span>

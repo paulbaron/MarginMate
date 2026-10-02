@@ -53,6 +53,14 @@
             (dates de passage en banque).
         </p>
 
+        {# An ignore rule that named nothing over the period: its payments lost its category, and this says why. #}
+        {% if report.rule_problems %}
+            <div class="message message-warning">
+                {% for problem in report.rule_problems %}<p>{{ problem }}</p>{% endfor %}
+                <p><a href="{% url 'bank:rule_list' %}">Corriger sur « Dépenses sans facture attendue »</a></p>
+            </div>
+        {% endif %}
+
         <div class="stat-row">
             <div class="stat">
                 <span class="stat-label">Sorti du compte</span>

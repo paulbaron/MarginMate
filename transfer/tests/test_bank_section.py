@@ -2473,7 +2473,10 @@ class CheckTests(BankData, TestCase):
         reader = self.forged(change)
         run = import_archive(reader, MERGE)
         self.assertIn(
-            "Règle « URSSAF| » : Ce motif correspond à n'importe quelle opération : précisez-le.",
+            (
+                "Règle « URSSAF| » : Motif : le motif accepte une ligne vide : il trouverait quelque chose sur "
+                "n'importe quelle ligne."
+            ),
             bank_report(run).skipped,
         )
         self.assertFalse(IgnoreRule.objects.filter(pattern="URSSAF|").exists())
@@ -2484,9 +2487,49 @@ class CheckTests(BankData, TestCase):
             return payload
 
         run = import_archive(self.forged(change), MERGE)
-        (skipped,) = bank_report(run).skipped
-        self.assertTrue(skipped.startswith("Règle « LOYER ( » : Expression régulière invalide"), skipped)
+        self.assertEqual(bank_report(run).skipped, ["Règle « LOYER ( » : Motif : parenthèse non fermée (position 7)."])
         self.assertFalse(IgnoreRule.objects.filter(pattern="LOYER (").exists())
+
+    def test_a_count_past_what_re_can_hold_is_refused_on_the_preview_and_the_import(self):
+        """`re.compile` raised OverflowError on it, not re.error: the preview
+        of « Données » itself was a 500, and so was the import."""
+        pattern = "A{4294967296}"
+
+        def change(payload):
+            payload["rules"].append({"pattern": pattern, "description": "énorme", "is_active": True})
+            return payload
+
+        reader = self.forged(change)
+        before = db_fingerprint()
+        preview = import_archive(reader, MERGE, preview=True)
+        self.assertEqual(db_fingerprint(), before)
+        run = import_archive(reader, MERGE)
+        self.assertEqual(preview.outcome(), run.outcome())
+        self.assertEqual(bank_report(run).skipped, [f"Règle « {pattern} » : Motif : motif invalide."])
+        self.assertFalse(IgnoreRule.objects.filter(pattern=pattern).exists())
+
+    def test_a_pattern_the_guard_refuses_is_never_compiled(self):
+        """An archive carries one bar's rules into another: a foreign pattern
+        is refused before `regex` could freeze the machine compiling it."""
+        for pattern, reason in (
+            (r"(?:x{65535}){65535}", "répétition trop grande"),
+            (r"a{e<=1}", "accolade"),
+        ):
+            with self.subTest(pattern=pattern):
+
+                def change(payload, pattern=pattern):
+                    payload["rules"].append({"pattern": pattern, "description": "piégée", "is_active": True})
+                    return payload
+
+                reader = self.forged(change)
+                never = NeverCompile()
+                with mock.patch.object(regex, "compile", new=never):
+                    run = import_archive(reader, MERGE)
+                self.assertEqual(never.calls, [])
+                (skipped,) = bank_report(run).skipped
+                self.assertTrue(skipped.startswith(f"Règle « {pattern} » : Motif : "), skipped)
+                self.assertIn(reason, skipped)
+                self.assertFalse(IgnoreRule.objects.filter(pattern=pattern).exists())
 
     def test_a_rule_without_a_pattern_is_refused(self):
         def change(payload):
