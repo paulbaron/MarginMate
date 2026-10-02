@@ -120,6 +120,44 @@ INFO: dict[str, SectionInfo] = {
             reasons={"ventes": "Ventes"},
             clear_note="les recettes perdent leurs ventes venues de la caisse ; les ventes par jour de la caisse restent",
         ),
+        # What reads one bank's statements, apart from the lines it read
+        # (sections/bank_rules.py): another bar on the same bank takes it
+        # alone. It requires nothing - none of the three has a foreign key -
+        # and « Banque » only recommends it, so clearing the rules never
+        # takes the bank's lines, nor clearing the lines the rules.
+        _info(
+            "regles_banque",
+            "Règles de la banque",
+            Group.CONFIG,
+            55,
+            description=(
+                "Formats de relevé (CSV), règles de reconnaissance des opérations et règles « sans facture » : de "
+                "quoi lire les relevés d'une même banque."
+            ),
+            # The format seeded by bank/0007 and the rules seeded by
+            # bank/0006 go too (sections/bank_rules.py, FORMAT_CLEAR_NOTE,
+            # RECOGNITION_CLEAR_NOTE).
+            clear_note=(
+                "les formats et les règles installés d'office partent aussi : sans format aucun relevé ne s'importe, "
+                "sans règles un relevé n'est plus reconnu ; la sauvegarde prise avant l'effacement les ramène"
+            ),
+        ),
+        # The types and the slip formats name no pickup or slip, and a format
+        # names its supplier (PROTECT): it requires the suppliers. The pickups
+        # and slips of « Consignes » name types and formats, so that section
+        # requires this one (sections/returnable_types.py).
+        _info(
+            "types_consignes",
+            "Types et formats de consignes",
+            Group.CONFIG,
+            58,
+            requires=["fournisseurs"],
+            description="Les types de consigne et leurs motifs, et les formats de bons de chaque fournisseur.",
+            clear_note=(
+                "les types de consigne et le format de bon créés à l'installation partent aussi ; la sauvegarde prise "
+                "avant l'effacement les ramène"
+            ),
+        ),
         _info(
             "factures",
             "Factures et tickets",
@@ -140,28 +178,25 @@ INFO: dict[str, SectionInfo] = {
             "Banque",
             Group.DATA,
             70,
-            recommends=["factures", "fournisseurs"],
+            recommends=["factures", "fournisseurs", "regles_banque"],
             description=(
-                "Opérations importées, leurs liens aux factures, règles « sans facture », règles de reconnaissance "
-                "des opérations, formats de relevé, noms de payeurs appris et payeurs retenus des entrées d'argent."
+                "Opérations importées, leurs liens aux factures, noms de payeurs appris et payeurs retenus des "
+                "entrées d'argent."
             ),
             # In two imports the bank cannot tell a line whose payment went
             # with its invoice from one a person unlinked (bank.UNDONE_NOTE).
+            # The till rules and the « sans facture » rules are read whenever
+            # the lines are drawn, never stored on them.
             reasons={
                 "factures": (
                     "Factures et tickets — un lien vers une facture absente est ignoré ; importées ensemble, "
                     "les factures effacées reviennent avec leurs liens"
                 ),
                 "fournisseurs": "Enseignes et fournisseurs — un nom de payeur appris pour un fournisseur absent est ignoré",
+                "regles_banque": (
+                    "Règles de la banque — les entrées d'argent et les dépenses sans facture attendue se lisent avec elles"
+                ),
             },
-            # The rules seeded by bank/0006 and the format seeded by bank/0007
-            # go too (sections/bank.py, RECOGNITION_CLEAR_NOTE,
-            # FORMAT_CLEAR_NOTE).
-            clear_note=(
-                "les règles de reconnaissance des opérations et les formats de relevé partent aussi : sans règles un "
-                "relevé importé n'est plus reconnu, sans format il ne s'importe plus ; la sauvegarde prise avant "
-                "l'effacement les ramène"
-            ),
         ),
         _info(
             "ventes",
@@ -189,8 +224,9 @@ INFO: dict[str, SectionInfo] = {
                 "pertes saisies."
             ),
         ),
-        # Formats and pickups name their supplier (PROTECT): it requires the
-        # suppliers. Never the invoices: a slip is checked against them when a
+        # Pickups name their supplier, their counts a type and a slip its
+        # format (PROTECT): it requires the suppliers and the types and
+        # formats. Never the invoices: a slip is checked against them when a
         # page is drawn, nothing links the two, and « Effacer les factures »
         # must not take the pickups and their photos with it.
         _info(
@@ -198,17 +234,12 @@ INFO: dict[str, SectionInfo] = {
             "Consignes",
             Group.DATA,
             100,
-            requires=["fournisseurs"],
+            requires=["fournisseurs", "types_consignes"],
             recommends=["factures"],
             description=(
-                "Les types de consigne, les formats de bons et leurs motifs, chaque reprise avec ses nombres et "
-                "ses photos, et les bons reçus avec leur PDF et ce qui y a été lu."
+                "Chaque reprise avec ses nombres et ses photos, et les bons reçus avec leur PDF et ce qui y a été lu."
             ),
             reasons={"factures": "Factures et tickets — pour vérifier chaque bon contre la facture du fournisseur"},
-            clear_note=(
-                "les types de consigne et le format de bon créés à l'installation partent aussi ; la sauvegarde "
-                "prise avant l'effacement les ramène"
-            ),
         ),
     )
 }
@@ -251,7 +282,9 @@ SECTION_MODULES = (
     "till_links",
     "sales",
     "bank",
+    "bank_rules",
     "returnables",
+    "returnable_types",
 )
 
 _SECTIONS: dict[str, type[Section]] = {}

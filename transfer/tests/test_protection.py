@@ -83,9 +83,12 @@ class ProtectionCase(FakeSectionsMixin, TestCase):
         self.assertEqual(StockType.objects.filter(category="banque").count(), 1)
 
     def assertExportsAndReads(self):
-        response = self.client.post(EXPORT, {"sections": ["fournisseurs"]})
-        self.assertIsInstance(response, FileResponse)
-        response.close()
+        # « Configuration seule » too: an export, the espace's own.
+        for sections in (["fournisseurs"], views.configuration_keys()):
+            with self.subTest(sections=sections):
+                response = self.client.post(EXPORT, {"sections": sections})
+                self.assertIsInstance(response, FileResponse)
+                response.close()
         for url in (reverse("transfer:data_home"), IMPORT, CLEAR, self.stage_url):
             with self.subTest(url=url):
                 self.assertEqual(self.client.get(url).status_code, 200)

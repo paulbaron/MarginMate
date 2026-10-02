@@ -3094,8 +3094,8 @@ invoice by payee, each with a pre-filled "Ignorer…".
 pattern is never trusted, typed or stored », under « Recognising the
 operations »). It was checked by `re.compile` alone and searched by `re`
 with no limit: « A{4294967296} » is an OverflowError, not a re.error, and was
-a 500 on the form and on « Données »'s PREVIEW of « Banque », whose
-archive carries the rules from one bar to another, and a pattern that
+a 500 on the form and on « Données »'s PREVIEW of « Règles de la banque » -
+the section made to carry one bar's rules into another -, and a pattern that
 backtracks (« (?:A |A  ?)+B » on a label holding a run of « A ») ran to the
 end on every draw of Banque, « Dépenses » and « Propositions » and in every
 automatic pass, seconds a label and doubling with each « A ».
@@ -3105,9 +3105,9 @@ automatic pass, seconds a label and doubling with each « A ».
   `IgnoreRuleForm.clean_pattern` (its `_post_clean` skips the model's clean,
   as `OperationRuleForm`'s: one sentence, about the value typed; the motif's
   « required », length and NUL refusals in French) and « Données »
-  (`transfer/sections/bank.py`, the model's `full_clean`: « Règle « … » :
-  Motif : <raison>. », the record skipped) all go through it. A rule already
-  here is its pattern and is not checked again by an import.
+  (`sections/bank_rules._check_ignore_rule`: « Règle « … » : motif refusé —
+  <raison> », the record skipped) all go through it. A rule already here is
+  its pattern and is not checked again by an import.
 - **Searched as a recognition rule is** (`rules.Matcher`): `PATTERN_TIMEOUT`
   per match, the GIL released, asked once more when out of time; the rule
   billed its THREAD time against `recognition.RULE_SECONDS`. `rules.searcher`
@@ -3454,13 +3454,16 @@ French decimals, the masked account `****0042` in the header line
   the explainer says so. Or the import's own refusal sentence. Nothing is
   read while the format is refused (the errors are on the form); the name
   alone wrong still reads.
-- **« Données »** carries the formats (`statement_formats` in banque.json,
-  « formats de relevé » in the counts), as it carries the rules: the key is
-  `name_key(name)`, every field but `created_at` is compared (the name as
+- **« Données »** carries the formats in « Règles de la banque »
+  (`statement_formats` in regles_banque.json, `sections/bank_rules.py`;
+  banque.json until 02/10/2026, still read from an older archive -
+  `archive.CARVED`; « formats de relevé » in the counts), as it carries the
+  rules: the key is `name_key(name)`, every field but `created_at` is
+  compared (the name as
   spelt and the position included), a difference is a conflict kept under
   « Fusionner » and replaced under « Remplacer », whose prune deletes the
   formats the archive does not name - only when the archive said the list.
-  Every format written goes through `sections/bank._check_format`: the
+  Every format written goes through `sections/bank_rules._check_format`: the
   model's `clean` first (« format refusé — <champ> : <la phrase de
   check_format> »), then `full_clean`, whose English is never shown
   (« « champ » : valeur refusée »), then **a position past `MAX_POSITION`
@@ -3475,9 +3478,10 @@ French decimals, the masked account `****0042` in the header line
   exported, in (position, name), an empty list included; **absent is « not
   said »** (an archive written before 0007): no format created - even into
   a wiped bank - none pruned; anything but a list of objects is an
-  `ArchiveError`. « Effacer » takes
-  them, the seeded one too, and says so before (the section's
-  `clear_note`) and after (`FORMAT_CLEAR_NOTE`): with none, every import is
+  `ArchiveError`. « Effacer » of « Règles de la banque » takes them, the
+  seeded one too, and says so before (the section's `clear_note`) and after
+  (`FORMAT_CLEAR_NOTE`) - « Effacer » of « Banque » no longer does: with
+  none, every import is
   refused until one is brought back or typed again - as after a
   « Remplacer » with an empty list. A line keeps the fingerprint it was
   imported with: a format an archive brings reads no statement again.
@@ -3746,15 +3750,17 @@ values in, plain values out - but for its last three functions (`load`,
   generated from the till rules its credits were read with
   (`report.till_rules`) - no word of them in the template - with « Modifier
   les règles ».
-- **« Données »** carries the rules (`operation_rules` in banque.json,
-  « règles de reconnaissance » in the counts): configuration, merged like the
-  payers. The key is the name as `name_key` reads it; every field but the
+- **« Données »** carries the rules in « Règles de la banque »
+  (`operation_rules` in regles_banque.json, beside the formats and the
+  « sans facture » rules; banque.json until 02/10/2026, still read from an
+  older archive; « règles de reconnaissance » in the counts): configuration,
+  merged like the payers. The key is the name as `name_key` reads it; every field but the
   moment is compared - the name as spelt (spelt otherwise, it was renamed)
   and the position (the order is part of what a rule says) included.
   Different here: a conflict kept under « Fusionner », replaced under
   « Remplacer », whose prune deletes the rules the archive does not name.
   Every pattern written, created or replaced, goes through the model's
-  own `clean` (`sections/bank._check_recognition`: « motif refusé —
+  own `clean` (`sections/bank_rules._check_recognition`: « motif refusé —
   <raison> », the record skipped), and a position past `MAX_POSITION` is
   refused as a format's is (« The statement's layout », above): a new rule
   is saved at the highest plus one too. Always exported, an empty list
@@ -3762,8 +3768,9 @@ values in, plain values out - but for its last three functions (`load`,
   no rule merged, none pruned - never « forget every rule ». A line keeps
   the kind, payee and card date it comes with: an import reads nothing
   again.
-  « Effacer » takes the rules, the seeded ones too, and says so before (the
-  section's `clear_note`) and after (`RECOGNITION_CLEAR_NOTE`): with none,
+  « Effacer » of « Règles de la banque » takes the rules, the seeded ones
+  too, and says so before (the section's `clear_note`) and after
+  (`RECOGNITION_CLEAR_NOTE`); « Effacer » of « Banque » leaves them: with none,
   every line imported reads « Autre », no payee, no card date - the safety
   archive brings them back. An upload that wrote lines while no rule of the
   first question was active (`rules.kinds` empty: after « Effacer », or
@@ -3851,7 +3858,9 @@ follows from that:
   the advice was not followable). **What a person typed
   wins**, and the page says which of the two named each line - a rule edited
   next month must not read as somebody's decision. Both fields ride in the
-  « Données » archive (`transfer/sections/bank.py`), and a category changed
+  « Données » archive - the line's in « Banque » (`transfer/sections/bank.py`),
+  the rule's in « Règles de la banque » (`transfer/sections/bank_rules.py`) -,
+  and a category changed
   here is a conflict kept whole like any other decision: nothing rebuilds it,
   since a statement imported again brings the line back and not one word of
   what was said about it. Migration `bank/0004`, **WRITTEN and left to be
@@ -4250,8 +4259,9 @@ Tests: `invoices/tests/test_filenames.py`, `bank/tests/test_invoice_files.py`.
 One page (`/donnees/`, in the navigation) replaced « Exporter / Importer les
 associations »: three tabs - Exporter, Importer, Effacer - each with the same
 two groups of boxes, « Configuration » (fournisseurs, sources, associations
-produits → articles, recettes, liens recettes ↔ ventes) and « Données »
-(factures et tickets, banque, ventes, inventaires, consignes). The owner asked for it on
+produits → articles, recettes, liens recettes ↔ ventes, règles de la banque,
+types et formats de consignes) and « Données » (factures et tickets, banque,
+ventes, inventaires, consignes) - twelve sections. The owner asked for it on
 19/09; the old addresses redirect there and the old associations JSON still
 imports (`transfer/legacy.py`).
 
@@ -4260,10 +4270,77 @@ imports (`transfer/legacy.py`).
   depends on what is **one table**, `transfer/registry.py::INFO`: ticking a
   section to export or import ticks what it requires; ticking one to clear
   ticks what requires it (clearing the suppliers clears everything but the
-  bank). The server enforces the same closure the page's JS shows - a
-  selection that is not closed is refused, never completed in silence.
-  The bank requires nothing on purpose: a hard link to the invoices would make
-  « Effacer les factures » wipe the bank too.
+  bank and its rules). The server enforces the same closure the page's JS
+  shows - a selection that is not closed is refused, never completed in
+  silence. The bank requires nothing on purpose: a hard link to the invoices
+  would make « Effacer les factures » wipe the bank too.
+- **The configuration travels without the data** (the owner, 02/10/2026:
+  every configuration a person typed - « les regex », the bank's CSV
+  layout, its operation rules - exported from « Données » and « facilement »
+  imported for a new user on the same bank). The « Configuration » group is
+  closed under `requires` - nothing in it needs a « Données » section - so it
+  exports alone: « Configuration seule » on the Exporter tab is a LINK
+  (`?cocher=` for each of `views.configuration_keys()`, the page drawn with
+  the group ticked, the same with or without JavaScript), and an archive of
+  configuration sections only is named `marginmate-configuration-<date>.zip`.
+  The bank's formats, recognition rules and « sans facture » rules are
+  « Règles de la banque » (`regles_banque`, `sections/bank_rules.py`), apart
+  from its lines; the returnable types and slip formats are « Types et
+  formats de consignes » (`types_consignes`, `sections/returnable_types.py`),
+  apart from the pickups and slips - each was carried inside its data
+  section until then, so it could not be taken without a bar's statements
+  or empties. « Banque » only recommends its rules (the till and « sans
+  facture » rules read its credits and debits on draw; required, clearing
+  the rules would have taken the lines), « Consignes » requires its types
+  and formats (its counts and slips name them, PROTECT). **A new espace
+  already holds rows of four configuration sections** (the seeded
+  suppliers, the UBA mailbox search, the BNP format and eight recognition
+  rules, the three types and the UBA slip format: `views.SEEDED_SECTIONS`):
+  merged, an archive's edited copy of one is a conflict and the seeded one
+  stays, so on a new database (`_fresh_database`) the Importer tab's
+  « Base neuve » note names the archive's parts among them and asks for
+  « Remplacer » - **each only while it holds nothing but its seeds**
+  (`views.holds_only_seeds`: the seeds by the names their migrations gave
+  them, read off the migrations' own literals, edited or not; no ignore
+  rule at all, none is seeded). « Remplacer » deletes what the archive does
+  not name: an espace without its first invoice may well have imported
+  statements and typed a « sans facture » rule already, and the note asked
+  to delete it (review, 02/10/2026). The Exporter tab says the archive
+  « peut contenir » documents, bank and prices and to hand it only to whom
+  may see them - never « gardez-la pour vous », false of an archive made to
+  be handed over, which still carries the suppliers' known prices and the
+  recipes'. **Not configuration, on purpose**: the payee names learnt
+  for suppliers and the payers retained (« Banque »: learnt from that
+  bar's own links and choices, naming its payers), « Combler les écarts »'
+  exclusions and duration (never exported, below), « Personnel » and the
+  « Identifiants » vault.
+- **An archive written before a section existed is read as if it had it**
+  (`archive.CARVED`, `carved`, `manifest_sections`, `manifest_counts`): one
+  declaring « banque » - or « consignes » - and not the new key carries the
+  rules in banque.json (`statement_formats`, `operation_rules`, `rules`) -
+  or the types and formats in consignes.json (`types`, `formats`, with the
+  shared `supplier_names`). The reader offers the new section, reads it from
+  the old file (`SectionReader.member`, the file parsed once for both), and
+  hands the old section its file WITHOUT those keys; the counts are split
+  the same way, relabelled (« règles » → « règles « sans facture » »), so
+  the Importer tab compares like with like and `Stage.sections` lists both.
+  Every safety backup taken before 02/10/2026 is such an archive: read as
+  one section, « Banque » would have imported its lines and dropped its
+  rules in silence. Never carved: an archive declaring the new key, or
+  whose old section's counts name none of the labels it would take out -
+  this version's « Banque » exported alone. Counts missing, empty or not a
+  dict carve (the new sections read only the keys they find: each list is
+  « not said » when absent). A shared value (`supplier_names`) is copied,
+  one level, into the carved payload: neither section sees what the other
+  does to it (a deep copy of a hostile value nested hundreds of levels deep
+  was a RecursionError).
+  **The other way is refused, knowingly**: a version from before 02/10/2026
+  ignores « Règles de la banque » and « Types et formats de consignes »
+  (« partie inconnue ignorée ») and refuses this version's banque.json
+  (no `rules` list) and consignes.json (no `types`, `formats`) whole -
+  nothing written, the box can be unticked. No VERSION bump: a configuration
+  archive still reads there, and every bar of one installation runs one
+  version, so a new user's espace always reads its owner's archive.
 - **Natural keys, never pks** (`transfer/keys.py`): a supplier by its code
   (then its name), a product by (supplier code, raw name) and **never
   fuzzy** - an import must not merge two products -, an invoice by (supplier,
@@ -4447,10 +4524,17 @@ imports (`transfer/legacy.py`).
 - **« Personnel » is in no section**: employees, timesheets and signature
   requests are neither exported nor cleared, and the espace's `private/` is in
   no archive. Only the SQLite copy taken before a run holds those tables.
-- **« Consignes » is the tenth section** (`sections/returnables.py`, « Données »
-  group, order 100): it requires « fournisseurs » (a format's and a
-  reprise's supplier, by code) and only recommends « factures » (the invoice
-  check is read when a page is drawn, nothing of it is stored). Keys: a type
+- **« Consignes » is two sections**: « Types et formats de consignes »
+  (`sections/returnable_types.py`, « Configuration » group, order 58: the
+  types with their motifs, the slip formats with theirs; it requires
+  « fournisseurs », a format's supplier by code) and « Consignes »
+  (`sections/returnables.py`, « Données » group, order 100: the reprises and
+  the bons; it requires « fournisseurs », a reprise's supplier, and the
+  types and formats, which its counts and bons name - PROTECT). One section
+  until 02/10/2026 (« The configuration travels without the data », above,
+  and its older archives' carve). « Consignes » only recommends
+  « factures » (the invoice check is read when a page is drawn, nothing of
+  it is stored). Keys: a type
   and a format by `search_key` of their name with spaces collapsed (the
   forms' own uniqueness rule, so « Futs » finds « Fûts »), a reprise by its
   random `reference`, a bon by its sha256. A merge compares what lies
@@ -4467,10 +4551,22 @@ imports (`transfer/legacy.py`).
   `consignes/` (`archive.STORAGE_FOLDERS`), written through the same
   `check_file`/`save_file` as the invoices', old ones deleted on commit; a
   photo missing from the exporting disk leaves its reprise without it (said),
-  a bon whose PDF was missing is skipped. The seeded types and format are
-  counted and cleared like the rest - the safety archive brings them back.
+  a bon whose PDF was missing is skipped. A reprise's counts find their
+  type, and a bon its format, in the database - after « Types et formats de
+  consignes » applied in the same run. The seeded types and format are
+  counted and cleared like the rest, by « Effacer » of « Types et formats de
+  consignes » (which clears « Consignes » with it) - the safety archive
+  brings them back; « Effacer » of « Consignes » alone keeps them.
   The supplier page and « Données » name the consignes rows holding a
-  supplier (`supplier_views.returnables_refusal`, one sentence for both).
+  supplier (`supplier_views.returnables_refusal`, one sentence for both);
+  an import keeping it says which section left each there unreplaced
+  (`sections/suppliers._holders`: « Types et formats de consignes non
+  remplacés » for a slip format, « Consignes non remplacées » for a
+  reprise). A type's order from an archive is bounded as the types page
+  bounds it, 0..32 767 (`returnable_types.MAX_POSITION`, « « position » :
+  32 767 au plus »): past 2**63 SQLite refused it, an OverflowError and the
+  whole import a 500, preview included; between the two the type was
+  stored and its own page then refused to save it.
 - **A portal from an archive is never trusted** (`sections/sources.py`): the
   next gather types the .env variables it names into the page it names. A
   portal naming a variable the application reads for itself is refused, by
@@ -4536,7 +4632,7 @@ Test every section the same way (`transfer/tests/support.py`): a round trip
 (export, clear, import, same snapshot by natural keys, files byte-identical),
 importing its own export changes nothing (every record « inchangé » - this is
 what catches a Decimal's places or a time zone), merge versus replace on one
-record of each kind, the preview changing nothing - and all ten at once
+record of each kind, the preview changing nothing - and all twelve at once
 (`test_full_round_trip.py`), since what crosses sections (a stock take's
 invoice line, a payment to a ticket known only by its file) only shows there.
 Rehearse on a scratch copy of the real database, never on it: `preview_start`'s
@@ -7016,8 +7112,9 @@ source with a reader of its own (`parse_and_import`) and Metro, which never
 go through `import_document` - the seeded UBA invoice source does not match
 a bon's sender or subject (pinned by a test).
 
-**« Données »** (`transfer/sections/returnables.py`, the tenth section, after
-« fournisseurs »): types and formats by their name as their forms compare
+**« Données »** (`transfer/sections/returnable_types.py` for the types and
+formats, in the « Configuration » group, and `transfer/sections/returnables.py`
+for the reprises and bons): types and formats by their name as their forms compare
 it, a reprise by its random `reference`, a bon by its sha256; a bon's
 reading is copied, never compared nor read again at import; every motif
 imported passes the guard or its record is skipped (« motif refusé : … »),

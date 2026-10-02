@@ -346,7 +346,9 @@ class MergeAndReplaceTests(TestCase):
     def test_replace_keeps_a_supplier_returnables_name_and_says_so(self):
         """A slip format and a pickup hold their supplier (PROTECT): kept
         under the false « un de ses produits sert encore » before, since
-        `_holders` looked at documents, sources and products only."""
+        `_holders` looked at documents, sources and products only. Each is
+        left there by its own section: a slip format by « Types et formats de
+        consignes », a pickup by « Consignes »."""
         from returnables.tests.support import make_format, make_pickup
 
         florist = Supplier.objects.get(code="FLEURISTE_ESSAI")
@@ -354,17 +356,28 @@ class MergeAndReplaceTests(TestCase):
         grocer = make_supplier(code="EPICERIE_ESSAI", name="Épicerie Essai")
         make_pickup(supplier=grocer)
         make_pickup(supplier=grocer)
+        both = make_supplier(code="CAVISTE_ESSAI", name="Caviste Essai")
+        make_format(name="Caviste Essai — bon", supplier=both)
+        make_pickup(supplier=both)
         report = import_archive(self.reader, REPLACE).section("fournisseurs")
         self.assertIn(
-            "Fournisseur « Fleuriste Essai » : 1 format de bon de consignes est à son nom (Consignes non remplacées)",
+            "Fournisseur « Fleuriste Essai » : 1 format de bon de consignes est à son nom "
+            "(Types et formats de consignes non remplacés)",
             report.kept,
         )
         self.assertIn(
             "Fournisseur « Épicerie Essai » : 2 reprises de consignes sont à son nom (Consignes non remplacées)",
             report.kept,
         )
+        self.assertIn(
+            "Fournisseur « Caviste Essai » : 1 format de bon de consignes et 1 reprise de consignes sont à son nom "
+            "(Types et formats de consignes non remplacés, Consignes non remplacées)",
+            report.kept,
+        )
         self.assertFalse(any("un de ses produits" in line for line in report.kept), report.kept)
-        self.assertEqual(Supplier.objects.filter(code__in=["FLEURISTE_ESSAI", "EPICERIE_ESSAI"]).count(), 2)
+        self.assertEqual(
+            Supplier.objects.filter(code__in=["FLEURISTE_ESSAI", "EPICERIE_ESSAI", "CAVISTE_ESSAI"]).count(), 3
+        )
 
     def test_replace_deletes_a_suppliers_unused_products_and_says_its_payee_names_go(self):
         florist = Supplier.objects.get(code="FLEURISTE_ESSAI")
@@ -727,12 +740,13 @@ class ClearTests(TestCase):
         )
 
     def test_cleared_with_returnables_the_supplier_goes(self):
-        """What the page does: « Consignes » requires the suppliers, so it is
-        cleared first and holds nothing any more."""
+        """What the page does: « Types et formats de consignes » and
+        « Consignes » require the suppliers, so they are cleared first and
+        hold nothing any more."""
         from returnables.tests.support import make_format, make_pickup
 
         make_pickup(supplier=self.bakery)
         make_format(name="Boulangerie Essai — bon", supplier=self.bakery)
-        self.assertIn("consignes", registry.closure({"fournisseurs"}, "clear"))
-        run_clear({"fournisseurs", "consignes"}, preview=False, closed=False)
+        self.assertLessEqual({"consignes", "types_consignes"}, registry.closure({"fournisseurs"}, "clear"))
+        run_clear({"fournisseurs", "types_consignes", "consignes"}, preview=False, closed=False)
         self.assertFalse(Supplier.objects.filter(pk=self.bakery.pk).exists())
