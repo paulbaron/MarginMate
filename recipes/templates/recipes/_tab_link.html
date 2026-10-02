@@ -62,13 +62,13 @@
                     <td>{{ product.name }}</td>
                     <td class="num">{{ product.total_quantity }}</td>
                     <td>
-                        <a href="{% url 'recipes:recipe_detail' product.recipe.pk %}">{{ product.recipe.name }}</a>
+                        <a href="{{ product.recipe_url }}">{{ product.recipe.name }}</a>
                         {% if product.recipe.happy_hour_name == product.name %}
                             <span class="muted">(happy hour)</span>
                         {% endif %}
                     </td>
                     <td>
-                        <form method="post" action="{% url 'recipes:pos_product_assign' product.pk %}">
+                        <form method="post" action="{{ product.assign_url }}">
                             {% csrf_token %}
                             <button type="submit" name="action" value="reset" class="btn btn-small btn-secondary">Détacher</button>
                         </form>
@@ -94,7 +94,7 @@
                     <td class="muted">{{ product.name }}</td>
                     <td class="num muted">{{ product.total_quantity }}</td>
                     <td>
-                        <form method="post" action="{% url 'recipes:pos_product_assign' product.pk %}">
+                        <form method="post" action="{{ product.assign_url }}">
                             {% csrf_token %}
                             <button type="submit" name="action" value="reset" class="btn btn-small btn-secondary">Remettre à traiter</button>
                         </form>

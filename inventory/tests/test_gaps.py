@@ -2126,9 +2126,10 @@ class ChoiceWithASideLeftOutTests(TestCase):
 
 class QueryCountTests(TestCase):
     """`gaps_since` reads like the « Écarts » page: what it costs must not
-    grow with the sales, the purchases or the counted lines, and grows by at
-    most the two queries `Recipe.choice_groups` costs per recipe (CLAUDE.md,
-    « Combler les écarts », « Cost »)."""
+    grow with the sales, the purchases, the counted lines or the recipes -
+    their sub-recipes and « OU » included: every recipe's choice groups are
+    read in one go (`Recipe.load_choice_groups`), where each one asked cost
+    two queries (CLAUDE.md, « Combler les écarts », « Cost »)."""
 
     def setUp(self):
         self.take = make_stock_take(taken_at=at(1))
@@ -2141,6 +2142,22 @@ class QueryCountTests(TestCase):
         made = recipe(f"Recette exemple {index}", "35.00", (stock_type, "0.5"))
         sold(made, 4)
         self.made.append((made, stock_type))
+
+    def nested_recipe(self, index):
+        """A punch pouring a fixed rum and a base, the base a syrup « sucre
+        OU miel » - two levels of sub-recipes, a choice at the bottom."""
+        sugar = article(f"Sucre exemple {index}", unit=UnitChoices.KILOGRAM)
+        honey = article(f"Miel exemple {index}", unit=UnitChoices.KILOGRAM)
+        rum = article(f"Rhum exemple {index}")
+        for stock_type in (sugar, honey, rum):
+            counted(self.take, stock_type, "5")
+            bought(stock_type, "2", date(2026, 3, 10))
+        syrup = choice(f"Sirop exemple {index}", None, (sugar, "1"), (honey, "1"))
+        base = make_recipe(name=f"Base exemple {index}", selling_price_ttc=None)
+        make_ingredient(base, sub_recipe=syrup, quantity="0.5", group=0)
+        made = recipe(f"Punch exemple {index}", "9.00", (rum, "0.04"))
+        make_ingredient(made, sub_recipe=base, quantity="0.1", group=1)
+        sold(made, 4)
 
     def queries(self):
         with CaptureQueriesContext(connection) as captured:
@@ -2157,14 +2174,21 @@ class QueryCountTests(TestCase):
                 bought(stock_type, "1", date(2026, 3, day))
         self.assertEqual(self.queries(), few)
 
-    def test_three_times_the_recipes_cost_at_most_their_choice_groups(self):
+    def test_three_times_the_recipes_cost_no_more_queries(self):
         for index in range(3):
             self.independent_recipe(index)
         few = self.queries()
         for index in range(3, 9):
             self.independent_recipe(index)
-        many = self.queries()
-        self.assertLessEqual(many - few, 2 * 6, "more than choice_groups' two queries a recipe")
+        self.assertEqual(self.queries(), few)
+
+    def test_three_times_the_nested_recipes_cost_no_more_queries(self):
+        for index in range(2):
+            self.nested_recipe(index)
+        few = self.queries()
+        for index in range(2, 6):
+            self.nested_recipe(index)
+        self.assertEqual(self.queries(), few)
 
     def test_what_is_left_out_costs_one_query_however_much_there_is(self):
         for index in range(3):

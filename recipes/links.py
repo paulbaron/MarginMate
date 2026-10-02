@@ -37,20 +37,56 @@ def plain(text: str) -> str:
 def suggest_recipe(name: str, recipes) -> tuple:
     """The recipe a till product most likely is, or None - and whether its
     name says it is the happy-hour one ("Pinte Blonde HH")."""
-    target = plain(name)
-    happy_hour = bool(HAPPY_HOUR_RE.search(target))
-    target = " ".join(HAPPY_HOUR_RE.sub(" ", target).split())
-    if not target:
-        return None, happy_hour
-    best, best_score = None, 0.0
-    for recipe in recipes:
-        candidate = plain(recipe.name)
-        if candidate == target:
-            return recipe, happy_hour
-        score = difflib.SequenceMatcher(None, target, candidate).ratio()
-        if score > best_score:
-            best, best_score = recipe, score
-    return (best if best_score >= SUGGESTION_THRESHOLD else None), happy_hour
+    return RecipeSuggester(recipes)(name)
+
+
+class RecipeSuggester:
+    """`suggest_recipe` for many till names against one list of recipes -
+    « À lier » asks it once per row, every row against every recipe.
+
+    The answer is the one the plain loop gives, name for name: the FIRST
+    recipe whose plain name is the target, else the first one with the best
+    ratio, kept only at SUGGESTION_THRESHOLD and above. It is just cheaper to
+    reach. Each recipe's name is made plain and analysed once (difflib keeps
+    what it learnt of `b` across `set_seq1`), and a recipe whose ratio cannot
+    reach the threshold, or cannot beat the best so far, is never measured:
+    `real_quick_ratio` and `quick_ratio` bound `ratio` from above (same
+    formula, more matches counted). Neither test can skip the recipe the
+    loop chooses: its bound is at least its ratio, which is the highest, at
+    least the threshold, and higher than every ratio before it.
+    """
+
+    def __init__(self, recipes):
+        self._exact: dict[str, object] = {}
+        self._matchers = []
+        for recipe in recipes:
+            candidate = plain(recipe.name)
+            self._exact.setdefault(candidate, recipe)
+            self._matchers.append((recipe, difflib.SequenceMatcher(None, "", candidate)))
+
+    def __call__(self, name: str) -> tuple:
+        target = plain(name)
+        happy_hour = bool(HAPPY_HOUR_RE.search(target))
+        target = " ".join(HAPPY_HOUR_RE.sub(" ", target).split())
+        if not target:
+            return None, happy_hour
+        if target in self._exact:
+            return self._exact[target], happy_hour
+        best, best_score = None, 0.0
+        for recipe, matcher in self._matchers:
+            matcher.set_seq1(target)
+            if not _may_win(matcher.real_quick_ratio(), best_score) or not _may_win(matcher.quick_ratio(), best_score):
+                continue
+            score = matcher.ratio()
+            if score > best_score:
+                best, best_score = recipe, score
+        return (best if best_score >= SUGGESTION_THRESHOLD else None), happy_hour
+
+
+def _may_win(bound: float, best_score: float) -> bool:
+    """Whether a ratio at most `bound` could be the suggestion: kept only
+    from the threshold up, and only when strictly better than the best."""
+    return bound >= SUGGESTION_THRESHOLD and bound > best_score
 
 
 def link(product, recipe, happy_hour: bool = False) -> None:

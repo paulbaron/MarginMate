@@ -560,7 +560,14 @@ class Invoice(models.Model):
         """Added up in Python from the lines, like total_ttc: the invoice list
         prefetches them, so showing both totals costs two queries for the
         whole page rather than one per invoice per total."""
-        return self.lines_total_ht + self.reconciliation_adjustment
+        return self.total_ht_of(self.lines.all())
+
+    def total_ht_of(self, lines) -> Decimal:
+        """`total_ht` from `lines`, this invoice's lines already in hand - the
+        documents list prefetches them into a plain list
+        (workspace._documents), and a related manager per row per total was a
+        tenth of that page."""
+        return sum((line.total_ht for line in lines), start=Decimal("0")) + self.reconciliation_adjustment
 
     @property
     def total_ttc(self):
@@ -613,9 +620,13 @@ class Invoice(models.Model):
         hidden the fault entirely. Past a cent a bracket the lines stand,
         wrong and visible.
         """
+        return self.total_ttc_of(list(self.lines.all()))
+
+    def total_ttc_of(self, lines: list) -> Decimal:
+        """`total_ttc` from `lines`, this invoice's lines already in hand (see
+        total_ht_of)."""
         from .parsers.receipt_base import CENTS, RECONCILIATION_TOLERANCE
 
-        lines = list(self.lines.all())
         if lines and all(line.printed_ttc is not None for line in lines):
             printed = sum((line.total_ttc for line in lines), start=Decimal("0"))
             paid = self.printed_total_ttc
@@ -624,13 +635,10 @@ class Invoice(models.Model):
             return printed
         # Otherwise all from HT: the adjustment covers every line's rounding,
         # so mixing in printed amounts would count some of it twice.
-        total = (
-            sum(
-                (line.total_ht * (Decimal("1") + line.vat_rate) for line in lines),
-                start=Decimal("0"),
-            )
-            + self.adjustment_ttc
-        )
+        total = sum(
+            (line.total_ht * (Decimal("1") + line.vat_rate) for line in lines),
+            start=Decimal("0"),
+        ) + self.adjustment_ttc_of(lines)
         if self.printed_total_ttc is not None:
             if self.einvoice_format:
                 slack = max(RECONCILIATION_TOLERANCE, CENTS * len(lines))
@@ -655,9 +663,15 @@ class Invoice(models.Model):
         a 1 175,00 € invoice at 1 160,50 € - unmatchable against the bank,
         understated in « Marges », and with not one failing check, since the
         checks all work on figures the document states and those balance."""
+        return self.adjustment_ttc_of(self.lines.all())
+
+    def adjustment_ttc_of(self, lines) -> Decimal:
+        """`adjustment_ttc` from `lines` (see total_ht_of) - read only when
+        the document states no rate, so a queryset passed here costs no
+        query otherwise."""
         rate = self.adjustment_vat_rate
         if rate is None:
-            rate = self._adjustment_vat_rate(list(self.lines.all()))
+            rate = self._adjustment_vat_rate(list(lines))
         return self.reconciliation_adjustment * (Decimal("1") + rate)
 
     @staticmethod

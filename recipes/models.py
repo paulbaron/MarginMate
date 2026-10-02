@@ -343,7 +343,12 @@ class Recipe(models.Model):
             # Inside a variation_scope the same recipe gets asked for its
             # groups repeatedly - once per variation built, per sub-recipe
             # name resolved, per cost bound taken - and each ask was a query.
-            if cache is not None and self.pk in cache["groups"]:
+            # Its sub-recipes are asked next, and read one by one each was two
+            # queries of its own: they are read with it, a level at a time
+            # (`load_choice_groups`).
+            if cache is not None:
+                if self.pk not in cache["groups"]:
+                    self.load_choice_groups([self])
                 return cache["groups"][self.pk]
             ingredients = list(
                 self.ingredients.select_related("stock_type", "sub_recipe")
@@ -352,11 +357,64 @@ class Recipe(models.Model):
                 .prefetch_related("stock_type__movements")
                 .order_by("group", "id")
             )
-            if cache is not None:
-                groups = self._bucket(ingredients)
-                cache["groups"][self.pk] = groups
-                return groups
         return self._bucket(ingredients)
+
+    @classmethod
+    def load_choice_groups(cls, recipes) -> None:
+        """Read the choice groups of `recipes`, and of every sub-recipe they
+        reach, into the open `variation_scope`: one query per LEVEL of
+        nesting (and one for its stock items' movements), where
+        `choice_groups()` reads one recipe at a time - and costing a recipe
+        asks every sub-recipe below it, so a page costing fifty cocktails
+        read their syrups two queries each.
+
+        Each recipe gets exactly what its own `choice_groups()` would have
+        read: the same rows in the same order (group, then id), with their
+        stock items and movements, their sub-recipes, and each ingredient
+        pointing back at the recipe it belongs to. A recipe the scope already
+        holds is not read again, a cycle is read once, and outside a scope
+        nothing is read: there would be nowhere to keep it.
+        """
+        cache = getattr(_variation_counts, "cache", None)
+        if cache is None:
+            return
+        known = cache["groups"]
+        level = {recipe.pk: recipe for recipe in recipes if recipe.pk is not None and recipe.pk not in known}
+        while level:
+            read: dict[int, list] = {pk: [] for pk in level}
+            for ingredient in (
+                RecipeIngredient.objects.filter(recipe_id__in=level)
+                .select_related("stock_type", "sub_recipe")
+                .prefetch_related("stock_type__movements")
+                .order_by("group", "id")
+            ):
+                ingredient.recipe = level[ingredient.recipe_id]
+                read[ingredient.recipe_id].append(ingredient)
+            for pk, ingredients in read.items():
+                known[pk] = cls._bucket(ingredients)
+            level = {
+                ingredient.sub_recipe_id: ingredient.sub_recipe
+                for ingredients in read.values()
+                for ingredient in ingredients
+                if ingredient.sub_recipe_id and ingredient.sub_recipe_id not in known
+            }
+
+    def _read_sub_recipes(self, groups) -> None:
+        """Every sub-recipe `groups` name and the scope does not hold yet,
+        read together (`load_choice_groups`): each is about to be asked for
+        its own groups - its count, its cost range - and asked one at a time
+        that was two queries per sub-recipe, which is what a caller handing
+        its own ingredients in (a page that read them itself) got for every
+        one of them."""
+        cache = getattr(_variation_counts, "cache", None)
+        if cache is None:
+            return
+        self.load_choice_groups(
+            ingredient.sub_recipe
+            for group in groups
+            for ingredient in group
+            if ingredient.sub_recipe_id and ingredient.sub_recipe_id not in cache["groups"]
+        )
 
     @staticmethod
     def _bucket(ingredients) -> list[list["RecipeIngredient"]]:
@@ -401,6 +459,7 @@ class Recipe(models.Model):
                 "price_factor_range": None,
             }
 
+        self._read_sub_recipes(groups)
         # A group offers the SUM of what its options offer, because an
         # option can be a recipe with choices of its own - see
         # option_variation_count. With plain stock items every option offers

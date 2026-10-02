@@ -14,14 +14,17 @@ aren't:
     right and gets separated from the row it explains the moment you sort.
 """
 
+import os
 import pathlib
 import re
+import shutil
 import tempfile
 from collections import namedtuple
 from datetime import date, datetime
 from decimal import Decimal
 from html import unescape
 from html.parser import HTMLParser
+from unittest import mock
 
 from django.contrib.staticfiles.testing import StaticLiveServerTestCase
 from django.test import SimpleTestCase, TestCase, tag
@@ -1022,6 +1025,36 @@ class AssetVersioningTests(TestCase):
         from inventory.templatetags.assets import asset
 
         self.assertEqual(asset("css/does-not-exist.css"), "/static/css/does-not-exist.css")
+
+    def test_where_a_file_is_is_remembered_its_date_is_not(self):
+        """The finders walk every static folder; the answer (a path) is kept
+        for the process, the file's date is read at every call: an edit
+        still changes the address at once."""
+        from django.contrib.staticfiles import finders
+
+        from inventory.templatetags import assets
+
+        folder = pathlib.Path(tempfile.mkdtemp(prefix="marginmate-tests-assets-"))
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        (folder / "css").mkdir()
+        sheet = folder / "css" / "essai-cache.css"
+        sheet.write_text("a{}", encoding="utf-8")
+        os.utime(sheet, (1_700_000_000, 1_700_000_000))
+        with self.settings(STATICFILES_DIRS=[folder]):
+            self.assertEqual(assets.asset("css/essai-cache.css"), "/static/css/essai-cache.css?v=1700000000")
+            os.utime(sheet, (1_700_000_100, 1_700_000_100))
+            with mock.patch.object(finders, "find", side_effect=AssertionError("looked for again")):
+                self.assertEqual(assets.asset("css/essai-cache.css"), "/static/css/essai-cache.css?v=1700000100")
+            # Gone from there: looked for again, and nothing is not remembered.
+            sheet.unlink()
+            self.assertEqual(assets.asset("css/essai-cache.css"), "/static/css/essai-cache.css")
+            self.assertNotIn("css/essai-cache.css", assets._FOUND)
+            sheet.write_text("a{}", encoding="utf-8")
+            os.utime(sheet, (1_700_000_200, 1_700_000_200))
+            self.assertEqual(assets.asset("css/essai-cache.css"), "/static/css/essai-cache.css?v=1700000200")
+        # Other static folders: looked for again.
+        self.assertNotIn("css/essai-cache.css", assets._FOUND)
+        self.assertEqual(assets.asset("css/essai-cache.css"), "/static/css/essai-cache.css")
 
     def test_the_base_template_uses_it_for_every_local_asset(self):
         html = self.client.get(reverse("inventory:stock_list")).content.decode()

@@ -13,17 +13,20 @@ import re
 from datetime import timedelta
 from urllib.parse import urlencode
 
-from django.db.models import Count, Q, Sum
+from django.db.models import Count, Prefetch, Q, Sum
 from django.shortcuts import render
+from django.template import Context
+from django.template.base import render_value_in_context
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.safestring import mark_safe
 
 from common import RANGE_END, RANGE_START, DateRange, date_range, is_id
-from inventory.models import StockType
+from inventory.models import StockMovement, StockType
 
 from .forms import MANUAL_SALE_SOURCE, ManualSaleForm
 from .integration import TILL_TO_CONFIGURE, till_allowed
-from .links import suggest_recipe
+from .links import RecipeSuggester
 from .models import (
     PosProduct,
     Recipe,
@@ -48,6 +51,12 @@ SALES_TAB_PARAMS = (RANGE_START, RANGE_END, "vente", "ventes")
 #: address, so the filter is a link that can be sent, bookmarked and gone
 #: back to.
 ARTICLE_PARAM = "article"
+
+#: What StockType.current_unit_cost_ht reads of a movement (its quantity and
+#: its unit cost; the article it belongs to, for the prefetch to file it).
+#: Reading another field of one loaded with only these is a query per
+#: movement, which the recipes tab's query-count tests would show.
+COST_FIELDS = ("stock_type", "quantity", "unit_cost_ht")
 
 
 def sales_list_url(request) -> str:
@@ -133,9 +142,22 @@ def _recipes(article: str = "") -> dict:
     the article exists but no recipe uses it, the page says so by name.
     """
     # Every recipe's ingredients in one extra query, so summary() below
-    # never goes back to the database per row.
-    recipes = list(Recipe.objects.prefetch_related("ingredients__stock_type__movements", "ingredients__sub_recipe"))
-    with variation_scope():
+    # never goes back to the database per row - and of their articles'
+    # movements, thousands of them, only what an article's cost is worked
+    # out from (StockType.current_unit_cost_ht).
+    recipes = list(
+        Recipe.objects.prefetch_related(
+            Prefetch("ingredients__stock_type__movements", queryset=StockMovement.objects.only(*COST_FIELDS)),
+            "ingredients__sub_recipe",
+        )
+    )
+    with variation_scope() as scope:
+        # Every recipe's groups, from the prefetch above, for the scope to
+        # hand out: inside summary() a sub-recipe is asked for its own (its
+        # count, its cost range), and each ask was two queries - its
+        # ingredients, then their movements - per sub-recipe.
+        for recipe in recipes:
+            scope["groups"].setdefault(recipe.pk, recipe.choice_groups(list(recipe.ingredients.all())))
         for recipe in recipes:
             # summary() is linear in the number of ingredients, so a recipe
             # with a million variations costs the same here as one with two.
@@ -186,9 +208,90 @@ def _recipes(article: str = "") -> dict:
     }
 
 
+def _as_printed(value) -> str:
+    """`value` exactly as {{ value }} prints it in a page: localised, then
+    escaped."""
+    return render_value_in_context(value, Context())
+
+
+#: An id no row has, to find where an id sits in an address.
+_PROBE_ID = 9_876_543_210_123
+
+
+def url_for_each(name: str):
+    """reverse(name, args=[pk]) as a function of the pk, for the price of one
+    reverse() - built per request, like any address.
+
+    A list drawing an address per row paid a reverse() per row: thousands on
+    the sales tab drawn whole, most of its time. An <int:pk> address is the
+    same text around the pk whatever the pk (Django writes it with str()), so
+    it is cut once around an id no row has, and each pk put in between.
+    """
+    probe = str(_PROBE_ID)
+    before, found, after = reverse(name, args=[_PROBE_ID]).partition(probe)
+    if not found or probe in after:
+        return lambda pk: reverse(name, args=[pk])
+    return lambda pk: f"{before}{pk}{after}"
+
+
+#: One turn of the loop _pos_row.html drew the recipes with, its whitespace
+#: included, so the row is byte for byte what that loop printed.
+RECIPE_OPTION = '\n                        <option value="{value}"{selected}>{name}</option>\n                    '
+
+
+class ToLinkRows:
+    """What each row of « À lier » proposes - the recipe its till name most
+    likely is, chosen in a <select> of every recipe - worked out once per
+    request.
+
+    Every row lists the same recipes: a hundred rows of sixty recipes were
+    thousands of turns of a template loop and, with every recipe measured
+    against every row's name, most of the page's time. Each <option> is
+    printed once here, chosen and not, its value and name escaped as the
+    loop printed them, and a row joins them. Its addresses are built here
+    too (`url_for_each`).
+    """
+
+    def __init__(self, recipes):
+        recipes = list(recipes)
+        self.suggest = RecipeSuggester(recipes)
+        self._assign_url = url_for_each("recipes:pos_product_assign")
+        self._recipe_url = url_for_each("recipes:recipe_detail")
+        self._create_url = reverse("recipes:recipe_create")
+        self._options = []
+        for recipe in recipes:
+            value, name = _as_printed(recipe.pk), _as_printed(recipe.name)
+            self._options.append(
+                (
+                    recipe.pk,
+                    RECIPE_OPTION.format(value=value, selected="", name=name),
+                    RECIPE_OPTION.format(value=value, selected=" selected", name=name),
+                )
+            )
+
+    def prepare(self, product):
+        """`product` with its suggestion, its row's options and addresses."""
+        product.suggested_recipe, product.suggested_happy_hour = self.suggest(product.name)
+        chosen = product.suggested_recipe.pk if product.suggested_recipe is not None else None
+        # Safe: every name and value in it was escaped by _as_printed.
+        product.recipe_options = mark_safe(
+            "".join(selected if pk == chosen else unchosen for pk, unchosen, selected in self._options)
+        )
+        product.create_url = f"{self._create_url}?caisse={_as_printed(product.pk)}"
+        return self.address(product)
+
+    def address(self, product):
+        """`product` with the addresses its row links to: its own actions,
+        and the recipe it is linked to."""
+        product.assign_url = self._assign_url(product.pk)
+        if product.recipe_id:
+            product.recipe_url = self._recipe_url(product.recipe_id)
+        return product
+
+
 def with_suggestion(product, recipes):
-    product.suggested_recipe, product.suggested_happy_hour = suggest_recipe(product.name, recipes)
-    return product
+    """One row's proposal - for the row a link answers with."""
+    return ToLinkRows(recipes).prepare(product)
 
 
 def _to_link() -> dict:
@@ -197,11 +300,14 @@ def _to_link() -> dict:
     folded away below."""
     products = list(PosProduct.objects.select_related("recipe"))
     recipes = list(Recipe.objects.order_by("name"))
-    pending = [with_suggestion(product, recipes) for product in products if product.needs_review]
+    rows = ToLinkRows(recipes)
+    pending = [rows.prepare(product) for product in products if product.needs_review]
+    linked = [rows.address(product) for product in products if product.recipe_id]
+    ignored = [rows.address(product) for product in products if product.ignored and not product.recipe_id]
     return {
         "pending": pending,
-        "linked": [product for product in products if product.recipe_id],
-        "ignored": [product for product in products if product.ignored and not product.recipe_id],
+        "linked": linked,
+        "ignored": ignored,
         "recipes": recipes,
         "pending_quantity": sum(product.total_quantity for product in pending),
     }
@@ -276,6 +382,9 @@ def _sales(form=None, query: str = "", show_all: bool = False, window: DateRange
         sales = sales.filter(_sales_matching(query))
     counted = sales.count()
     shown = list(sales if show_all else sales[:SALES_PAGE_SIZE])
+    recipe_url = url_for_each("recipes:recipe_detail")
+    for sale in shown:
+        sale.recipe_url = recipe_url(sale.recipe_id)
     totals = recorded.values("source").annotate(rows=Count("id"), units=Sum("quantity")).order_by("-units")
     return {
         "form": form or ManualSaleForm(),

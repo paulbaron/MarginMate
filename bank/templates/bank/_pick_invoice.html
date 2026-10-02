@@ -6,14 +6,14 @@ completed here, without having to find a word that finds the second one.
 A cut list says so: kept quiet, it reads as « the invoice is not there ».
 {% endcomment %}
 {% if row.choices %}
-    <form method="post" action="{% url 'bank:bank_line_action' row.line.pk %}" class="inline-form">
+    <form method="post" action="{{ row.action_url }}" class="inline-form">
         {% csrf_token %}
         <input type="hidden" name="action" value="link">
         <input type="hidden" name="next" value="{{ page_url }}">
         <select name="invoice" aria-label="Facture réglée par ce paiement">
             <option value="">{% if row.status == "linked" %}Rattacher une facture de plus…{% else %}Choisir une facture…{% endif %}</option>
-            {% for invoice, total in row.choices %}
-                <option value="{{ invoice.pk }}">{{ invoice.supplier.name }} n° {{ invoice.invoice_number|default:invoice.pk }} · {{ invoice.invoice_date|date:"d/m/Y"|default:"sans date" }} · {{ total|money }} €</option>
+            {% for value, label in row.choices %}
+                <option value="{{ value }}">{{ label }}</option>
             {% endfor %}
         </select>
         <button class="btn btn-small btn-secondary" type="submit">Rattacher</button>

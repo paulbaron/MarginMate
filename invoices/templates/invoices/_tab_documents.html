@@ -174,15 +174,15 @@ Every invoice and ticket. Reloads itself when an import ends
             </thead>
             <tbody>
                 {% for invoice in invoices %}
-                <tr data-document="{{ invoice.pk }}"{% if invoice.pk == highlight %} data-highlight{% endif %}
-                    data-preview-url="{% url 'invoices:invoice_preview' invoice.pk %}" tabindex="0"
-                    class="document-row{% if invoice.pk == highlight %} is-new{% endif %}"
-                    aria-label="{{ invoice.supplier.name }} du {{ invoice.invoice_date|date:'d/m/Y'|default:'?' }} : afficher les lignes">
+                <tr data-document="{{ invoice.pk }}"{% if invoice.is_new %} data-highlight{% endif %}
+                    data-preview-url="{{ invoice.preview_url }}" tabindex="0"
+                    class="document-row{% if invoice.is_new %} is-new{% endif %}"
+                    aria-label="{{ invoice.supplier.name }} du {{ invoice.listed_day|default:'?' }} : afficher les lignes">
                     <td class="select-col"><input type="checkbox" name="invoice_ids" value="{{ invoice.pk }}" form="invoice-bulk-form" data-bulk-item aria-label="Sélectionner {{ invoice }}"></td>
                     <td>
                         <span class="chevron" aria-hidden="true">▸</span>
-                        <a href="{% url 'invoices:invoice_detail' invoice.pk %}">{{ invoice.supplier.name }}</a>
-                        {% if invoice.pk == highlight %}<span class="new-pill">importée</span>{% endif %}
+                        <a href="{{ invoice.detail_url }}">{{ invoice.supplier.name }}</a>
+                        {% if invoice.is_new %}<span class="new-pill">importée</span>{% endif %}
                     </td>
                     {% comment %}
                     « Facture électronique » rather than « Facture »: its
@@ -192,8 +192,8 @@ Every invoice and ticket. Reloads itself when an import ends
                     {% endcomment %}
                     <td class="muted" data-label="Type">{% if invoice.is_einvoice %}Facture électronique{% elif invoice.is_receipt %}Ticket{% else %}Facture{% endif %}</td>
                     <td data-label="N°">{{ invoice.invoice_number|default:"—" }}</td>
-                    <td data-label="Date" data-sort="{{ invoice.invoice_date|date:'Y-m-d' }}">
-                        {% if invoice.invoice_date %}{{ invoice.invoice_date|date:"d/m/Y" }}{% else %}<span class="status-pill status-ERROR">sans date</span>{% endif %}
+                    <td data-label="Date" data-sort="{{ invoice.listed_day_sort }}">
+                        {% if invoice.invoice_date %}{{ invoice.listed_day }}{% else %}<span class="status-pill status-ERROR">sans date</span>{% endif %}
                     </td>
                     <td data-label="État">
                         {% comment %}
@@ -201,7 +201,7 @@ Every invoice and ticket. Reloads itself when an import ends
                         (Invoice.review_state): 107 charges said "À vérifier" on
                         their row over a tab that rightly left them out.
                         {% endcomment %}
-                        <span class="status-pill status-{{ invoice.review_state.css }}">{{ invoice.review_state.label }}</span>
+                        {% with state=invoice.review_state %}<span class="status-pill status-{{ state.css }}">{{ state.label }}</span>{% endwith %}
                         {% comment %}
                         What the bank says about it, beside what the document
                         says about its own reading (workspace.bank_state):
@@ -212,15 +212,15 @@ Every invoice and ticket. Reloads itself when an import ends
                             <span class="status-pill status-{{ invoice.bank_state.css }}">{{ invoice.bank_state.label }}</span>
                         {% endif %}
                     </td>
-                    <td class="num" data-label="Total HT">{{ invoice.total_ht|money }} €</td>
-                    <td class="num" data-label="Total TTC">{{ invoice.total_ttc|money }} €</td>
+                    <td class="num" data-label="Total HT">{{ invoice.listed_total_ht|money }} €</td>
+                    <td class="num" data-label="Total TTC">{{ invoice.listed_total_ttc|money }} €</td>
                     <td class="num phone-card-end">
                         {% if invoice.waiting_check %}
-                            <a class="btn btn-small" href="{% url 'invoices:receipt_review' invoice.pk %}{% if lot %}?lot={{ lot.pk }}{% endif %}">Vérifier</a>
+                            <a class="btn btn-small" href="{{ invoice.review_url }}{% if lot %}?lot={{ lot.pk }}{% endif %}">Vérifier</a>
                         {% elif invoice.is_receipt %}
-                            <a class="btn btn-small btn-secondary" href="{% url 'invoices:receipt_review' invoice.pk %}">Corriger</a>
+                            <a class="btn btn-small btn-secondary" href="{{ invoice.review_url }}">Corriger</a>
                         {% else %}
-                            <a class="btn btn-small btn-secondary" href="{% url 'invoices:invoice_edit_lines' invoice.pk %}">Corriger</a>
+                            <a class="btn btn-small btn-secondary" href="{{ invoice.lines_url }}">Corriger</a>
                         {% endif %}
                     </td>
                 </tr>

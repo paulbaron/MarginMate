@@ -11,12 +11,12 @@ to link again.
         <td colspan="2">
             {% if outcome == "linked" %}
                 <span class="pos-outcome">✓ lié à
-                    <a href="{% url 'recipes:recipe_detail' product.recipe.pk %}">{{ product.recipe.name }}</a>{% if product.recipe.happy_hour_name|lower == product.name|lower %} (happy hour){% endif %}</span>
+                    <a href="{{ product.recipe_url }}">{{ product.recipe.name }}</a>{% if product.recipe.happy_hour_name|lower == product.name|lower %} (happy hour){% endif %}</span>
             {% else %}
                 <span class="pos-outcome muted">✓ ignoré</span>
             {% endif %}
-            <form method="post" action="{% url 'recipes:pos_product_assign' product.pk %}"
-                  hx-post="{% url 'recipes:pos_product_assign' product.pk %}" hx-target="closest tr" hx-swap="outerHTML"
+            <form method="post" action="{{ product.assign_url }}"
+                  hx-post="{{ product.assign_url }}" hx-target="closest tr" hx-swap="outerHTML"
                   class="inline-action">
                 {% csrf_token %}
                 <button type="submit" name="action" value="reset" class="link-button">Annuler</button>
@@ -46,23 +46,24 @@ to link again.
             we track. So one select - on the likely recipe already - and one
             primary button, with "happy hour" as a modifier on the same action,
             and the other two as quiet links.
+
+            The recipes' <option>s are printed once per request, not once per
+            row (menu.ToLinkRows): every row lists the same recipes.
             {% endcomment %}
-            <form method="post" action="{% url 'recipes:pos_product_assign' product.pk %}"
-                  hx-post="{% url 'recipes:pos_product_assign' product.pk %}" hx-target="closest tr" hx-swap="outerHTML"
+            <form method="post" action="{{ product.assign_url }}"
+                  hx-post="{{ product.assign_url }}" hx-target="closest tr" hx-swap="outerHTML"
                   class="pos-actions">
                 {% csrf_token %}
                 <select name="recipe" aria-label="Recette pour {{ product.name }}">
                     <option value="">— Choisir une recette —</option>
-                    {% for recipe in recipes %}
-                        <option value="{{ recipe.pk }}"{% if recipe.pk == product.suggested_recipe.pk %} selected{% endif %}>{{ recipe.name }}</option>
-                    {% endfor %}
+                    {{ product.recipe_options }}
                 </select>
                 <label class="pos-hh" title="Ventes cumulées avec la recette choisie.">
                     <input type="checkbox" name="as_happy_hour" value="1"{% if product.suggested_happy_hour %} checked{% endif %}> happy hour
                 </label>
                 <button type="submit" name="action" value="link" class="btn btn-small">Lier</button>
                 <span class="pos-secondary">
-                    <a href="{% url 'recipes:recipe_create' %}?caisse={{ product.pk }}">Créer la recette</a>
+                    <a href="{{ product.create_url }}">Créer la recette</a>
                     ·
                     <button type="submit" name="action" value="ignore" class="link-button"
                             title="Aucun stock suivi : café, cuisine, divers.">

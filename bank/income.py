@@ -919,8 +919,13 @@ def income_for(window: DateRange) -> IncomeReport:
             unread.add(sold_on)
             continue
         taken_by_day[sold_on] += revenue_ttc
-        report.takings += revenue_ttc
-        month_of(sold_on).takings += revenue_ttc
+    # A row is one till product on one day: added up by day first, then each
+    # day into the total and its month - the same sums, since every amount
+    # has the column's two places and none of them rounds, for a month
+    # looked up once a day rather than once a row.
+    for sold_on, taken in taken_by_day.items():
+        report.takings += taken
+        month_of(sold_on).takings += taken
     sold_days = set(taken_by_day) | unread
     report.days_without_payments = sorted(day for day in sold_days if day not in paid_by_day)
     report.unread_revenue_days = sorted(unread)

@@ -12,6 +12,7 @@ from common import MEGABYTE, BlankRowTolerantForm, file_too_big, group_thousands
 from . import integrations
 from .models import EmailInvoiceSource, Invoice, InvoiceType, ShopItemPrice, Supplier, WebsiteInvoiceSource
 from .parsers import LLM_PARSER_KEY, PARSER_REGISTRY
+from .rendering import PLAIN_INPUTS
 
 
 class QuantityField(forms.DecimalField):
@@ -262,6 +263,10 @@ class LineCorrectionForm(SpreadChargeRowMixin, BlankRowTolerantForm):
     rate. A ticket starts from its TTC, as printed; an invoice from its HT.
     A ticket's promotion sits beside its printed amount (`discount_ttc`)
     rather than inside it, so both can be checked against the photo."""
+
+    # Ten inputs a line, eighty lines on a wholesaler's invoice: drawn in
+    # Python, the same characters (invoices/rendering.py).
+    default_renderer = PLAIN_INPUTS
 
     product_name = forms.CharField(label="Produit", max_length=255)
     # Negative for a refund, with a negative amount to match (clean).

@@ -184,7 +184,7 @@
                                     <td data-sort="{{ group.last|date:'Y-m-d' }}">{{ group.last|date:"d/m/Y" }}</td>
                                     <td>
                                         <a class="btn btn-small btn-secondary"
-                                           href="{% url 'bank:rule_list' %}?motif={{ group.pattern|urlencode }}&amp;nom={{ group.name|urlencode }}">Ignorer…</a>
+                                           href="{{ rules_path }}?motif={{ group.pattern|urlencode }}&amp;nom={{ group.name|urlencode }}">Ignorer…</a>
                                     </td>
                                 </tr>
                             {% endfor %}
@@ -228,12 +228,12 @@
                                         {% if row.status == "linked" %}
                                             {% for link in row.links %}
                                                 <div>
-                                                    <a href="{% url 'invoices:invoice_detail' link.invoice.pk %}">{{ link.invoice.supplier.name }} n° {{ link.invoice.invoice_number|default:link.invoice.pk }}</a>
+                                                    <a href="{{ link.url }}">{{ link.invoice.supplier.name }} n° {{ link.invoice.invoice_number|default:link.invoice.pk }}</a>
                                                     <span class="muted">· {{ link.invoice.invoice_date|date:"d/m/Y"|default:"sans date" }} · {{ link.total|money }} €</span>
                                                     <span class="status-pill status-linked">{{ link.payment.get_method_display }}</span>
                                                     {# One invoice at a time: « Délier » alone took all three off. #}
                                                     {% if row.payments|length > 1 %}
-                                                        <form method="post" action="{% url 'bank:bank_line_action' line.pk %}" class="inline-form">
+                                                        <form method="post" action="{{ row.action_url }}" class="inline-form">
                                                             {% csrf_token %}
                                                             <input type="hidden" name="action" value="unlink_invoice">
                                                             <input type="hidden" name="next" value="{{ page_url }}">
@@ -262,7 +262,7 @@
                                         {% elif row.status == "no_invoice" %}
                                             <span class="status-pill status-ignored">Pas de facture attendue</span>
                                             {% if row.rule %}
-                                                <a class="read-as" href="{% url 'bank:rule_list' %}">règle « {{ row.rule }} »</a>
+                                                <a class="read-as" href="{{ rules_path }}">règle « {{ row.rule }} »</a>
                                             {% else %}
                                                 <span class="read-as">marquée à la main</span>
                                             {% endif %}
@@ -291,13 +291,13 @@
                                             {% if row.suggestion %}
                                                 <p class="read-as">
                                                     {# The certainty tier, the same word as on « Propositions », where it is accepted in bulk; the pill leads to the rule. #}
-                                                    <a href="{% url 'bank:proposals' %}#regles" class="status-pill status-tier-{{ row.suggestion.tier }}">{{ row.suggestion.tier_label }}</a>
+                                                    <a href="{{ proposals_path }}#regles" class="status-pill status-tier-{{ row.suggestion.tier }}">{{ row.suggestion.tier_label }}</a>
                                                     {{ row.suggestion.reason }}
                                                 </p>
                                                 {# The tier's reason: the figures the rule decided on. #}
                                                 {% if row.suggestion.tier_reason %}<p class="read-as">{{ row.suggestion.tier_reason }}</p>{% endif %}
                                                 {% for option in row.options %}
-                                                    <form method="post" action="{% url 'bank:bank_line_action' line.pk %}" class="inline-form">
+                                                    <form method="post" action="{{ row.action_url }}" class="inline-form">
                                                         {% csrf_token %}
                                                         <input type="hidden" name="action" value="link">
                                                         <input type="hidden" name="next" value="{{ page_url }}">
@@ -330,8 +330,8 @@
                                             The form is still a real GET underneath: without JavaScript, it is what
                                             answers, exactly as before. Both go through views._found_for.
                                             {% endcomment %}
-                                            <form method="get" action="{% url 'bank:bank_home' %}" class="inline-form"
-                                                  hx-get="{% url 'bank:invoice_search' line.pk %}"
+                                            <form method="get" action="{{ home_path }}" class="inline-form"
+                                                  hx-get="{{ row.search_url }}"
                                                   hx-target="#results-{{ line.pk }}" hx-swap="innerHTML"
                                                   hx-trigger="input delay:400ms, submit">
                                                 {% for name, value in page_fields.items %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
@@ -351,7 +351,7 @@
                                     </td>
                                     <td>
                                         {% if row.status != "income" %}
-                                            <form method="post" action="{% url 'bank:bank_line_action' line.pk %}" class="inline-form">
+                                            <form method="post" action="{{ row.action_url }}" class="inline-form">
                                                 {% csrf_token %}
                                                 <input type="hidden" name="next" value="{{ page_url }}">
                                                 {% if row.status == "linked" %}

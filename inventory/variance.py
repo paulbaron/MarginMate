@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 
-from django.db.models import Count, Q
+from django.db.models import Case, Count, DateTimeField, F, Q, When
 
 from .models import (
     DEFAULT_LOSS_PERCENT,
@@ -127,26 +127,69 @@ def _ingredient_usage(ingredient, seen: frozenset = frozenset()) -> dict[int, De
     return options[0] if options else {}
 
 
-def reachable_stock_types(ingredient, seen: frozenset = frozenset()) -> set[int]:
+def reachable_stock_types(ingredient, seen: frozenset = frozenset(), ingredients_of=None) -> set[int]:
     """Every stock item this ingredient could ever draw on, however deeply
     its sub-recipes nest.
 
     Deliberately separate from the amounts above, and never capped: pools are
     built from this, and a pool that misses one of its members would report
     that member's whole consumption as unexplained.
+
+    `ingredients_of` ({recipe pk: its ingredients}, `ingredients_by_recipe`)
+    hands the walk the ingredients a caller already read; a sub-recipe it
+    does not hold is read here, a query each time it is reached.
     """
     if ingredient.stock_type_id:
         return {ingredient.stock_type_id}
     if not ingredient.sub_recipe_id or ingredient.sub_recipe_id in seen:
         return set()
     seen = seen | {ingredient.sub_recipe_id}
+    nested_ingredients = None if ingredients_of is None else ingredients_of.get(ingredient.sub_recipe_id)
+    if nested_ingredients is None:
+        nested_ingredients = ingredient.sub_recipe.ingredients.select_related("stock_type", "sub_recipe")
     found: set[int] = set()
-    for nested in ingredient.sub_recipe.ingredients.select_related("stock_type", "sub_recipe"):
-        found |= reachable_stock_types(nested, seen)
+    for nested in nested_ingredients:
+        found |= reachable_stock_types(nested, seen, ingredients_of)
     return found
 
 
-def recipe_usage_terms(recipe) -> list[list[dict[int, Decimal]]]:
+def ingredients_by_recipe(recipes) -> dict[int, list]:
+    """{recipe pk: its ingredients, in display order} - read from what the
+    recipes were prefetched with (`_recipes_with_ingredients`), so the
+    engine's walks over every recipe cost no query per recipe.
+
+    `Recipe.choice_groups()` reads a recipe's ingredients itself (two
+    queries, the second its stock items' whole movement history, for a cost
+    the engine never reads); handed these, it buckets them as they are. Same
+    order - `RecipeIngredient.Meta.ordering`, group then id, is what it
+    orders by - so the same groups.
+    """
+    return {recipe.pk: list(recipe.ingredients.all()) for recipe in recipes}
+
+
+def _recipes_with_ingredients() -> list:
+    """Every recipe, its ingredients prefetched with their stock item and
+    sub-recipe: one read for the engine's walks (`ingredients_by_recipe`).
+
+    Inside a variation_scope every recipe's choice groups are read into it
+    too (`Recipe.load_choice_groups`): a sub-recipe's count and variations
+    are asked inside `Recipe` itself, out of reach of the ingredients handed
+    in here, and each first ask was two queries - its ingredients, then
+    their stock items' movements: two thirds of the « Écarts » page's."""
+    from recipes.models import Recipe
+
+    recipes = list(Recipe.objects.prefetch_related("ingredients__stock_type", "ingredients__sub_recipe"))
+    Recipe.load_choice_groups(recipes)
+    return recipes
+
+
+def _choice_groups(recipe, ingredients_of=None) -> list[list]:
+    """`recipe.choice_groups()`, from `ingredients_of` when it holds the
+    recipe (no query), else read by the recipe."""
+    return recipe.choice_groups(None if ingredients_of is None else ingredients_of.get(recipe.pk))
+
+
+def recipe_usage_terms(recipe, ingredients_of=None) -> list[list[dict[int, Decimal]]]:
     """One term per choice group; each term lists what each of that group's
     options would consume, per serving sold.
 
@@ -161,9 +204,11 @@ def recipe_usage_terms(recipe) -> list[list[dict[int, Decimal]]]:
     times what a plate really took as missing stock. The share IS one over
     the yield while a recipe sells one whole preparation, which is every
     recipe filed until a portion is - so nothing here moves for them.
+
+    `ingredients_of`: see `ingredients_by_recipe`.
     """
     terms = []
-    for group in recipe.choice_groups():
+    for group in _choice_groups(recipe, ingredients_of):
         options = []
         for ingredient in group:
             for usage in _ingredient_usage_options(ingredient, frozenset({recipe.pk})):
@@ -172,12 +217,16 @@ def recipe_usage_terms(recipe) -> list[list[dict[int, Decimal]]]:
     return terms
 
 
-def recipe_pool_groups(recipe) -> list[set[int]]:
+def recipe_pool_groups(recipe, ingredients_of=None) -> list[set[int]]:
     """Per choice group, every stock item reachable through ANY of its
-    options - what has to end up in one pool when the group is a choice."""
+    options - what has to end up in one pool when the group is a choice.
+
+    `ingredients_of`: see `ingredients_by_recipe`."""
     return [
-        set().union(*(reachable_stock_types(ingredient) for ingredient in group)) if group else set()
-        for group in recipe.choice_groups()
+        set().union(*(reachable_stock_types(ingredient, ingredients_of=ingredients_of) for ingredient in group))
+        if group
+        else set()
+        for group in _choice_groups(recipe, ingredients_of)
     ]
 
 
@@ -205,21 +254,23 @@ class _UnionFind:
             self.parent[root_b] = root_a
 
 
-def build_pools(recipes, stock_type_ids=()) -> dict[int, frozenset[int]]:
+def build_pools(recipes, stock_type_ids=(), ingredients_of=None) -> dict[int, frozenset[int]]:
     """{stock_type_id: the pool it belongs to}.
 
     Two stock items land in the same pool when some recipe offers them as
     alternatives - directly, or transitively through a third item. Anything
     never offered as an alternative gets a pool of one, and so an exact
     answer.
+
+    `ingredients_of`: see `ingredients_by_recipe`.
     """
     union_find = _UnionFind()
     for stock_type_id in stock_type_ids:
         union_find.find(stock_type_id)
 
     for recipe in recipes:
-        groups = recipe.choice_groups()
-        for group, involved_set in zip(groups, recipe_pool_groups(recipe)):
+        groups = _choice_groups(recipe, ingredients_of)
+        for group, involved_set in zip(groups, recipe_pool_groups(recipe, ingredients_of)):
             involved = sorted(involved_set)
             for st_id in involved:
                 union_find.find(st_id)
@@ -308,23 +359,64 @@ def movements_between(start: date | None, end: date) -> dict[int, dict[str, Deci
     delivery on the day of the opening count is already in that count.
     Losses are reported as a positive amount of stock lost, which is the
     sign a human expects to read.
+
+    Read as columns, not movements: `StockMovement.effective_date` is a
+    property over the movement, its invoice line and its invoice, and
+    building the three for every purchase ever made was most of the
+    « Écarts » page. `movement_day` is that property's fallback order.
     """
-    movements = StockMovement.objects.select_related("invoice_line__invoice").filter(
-        Q(kind=MovementKind.PURCHASE) | Q(kind=MovementKind.LOSS)
-    )
+    return movements_and_last_purchase(start, end)[0]
+
+
+def movements_and_last_purchase(start: date | None, end: date) -> tuple[dict[int, dict[str, Decimal]], date | None]:
+    """(movements_between's totals, the latest day a purchase of that same
+    window is dated) - one scan for both, which « Combler les écarts » needs
+    together."""
+    movements = dated(StockMovement.objects.filter(Q(kind=MovementKind.PURCHASE) | Q(kind=MovementKind.LOSS)))
     totals: dict[int, dict[str, Decimal]] = {}
-    for movement in movements:
-        occurred = movement.effective_date
+    last_purchase = None
+    for stock_type_id, kind, quantity, *dates in movements.values_list(
+        "stock_type_id", "kind", "quantity", *MOVEMENT_DAY_COLUMNS
+    ):
+        occurred = movement_day(*dates)
         if occurred is None or occurred > end:
             continue
         if start is not None and occurred <= start:
             continue
-        entry = totals.setdefault(movement.stock_type_id, {"purchases": ZERO, "known_losses": ZERO})
-        if movement.kind == MovementKind.PURCHASE:
-            entry["purchases"] += movement.quantity
+        entry = totals.setdefault(stock_type_id, {"purchases": ZERO, "known_losses": ZERO})
+        if kind == MovementKind.PURCHASE:
+            entry["purchases"] += quantity
+            if last_purchase is None or occurred > last_purchase:
+                last_purchase = occurred
         else:
-            entry["known_losses"] += -movement.quantity
-    return totals
+            entry["known_losses"] += -quantity
+    return totals, last_purchase
+
+
+#: The columns `movement_day` reads, in its order, from movements `dated`.
+MOVEMENT_DAY_COLUMNS = ("occurred_on", "invoice_line__invoice__invoice_date", "typed_in")
+
+
+def dated(movements):
+    """`movements` with `typed_in`: when each was typed in, read only where it
+    has neither a date of its own nor an invoice's - the one case
+    `movement_day` reads it. Converting thousands of datetimes it would not
+    read was a third of the scan."""
+    return movements.annotate(
+        typed_in=Case(
+            When(occurred_on__isnull=True, invoice_line__invoice__invoice_date__isnull=True, then=F("created_at")),
+            output_field=DateTimeField(),
+        )
+    )
+
+
+def movement_day(occurred_on, invoice_date, typed_in) -> date | None:
+    """`StockMovement.effective_date` from the columns a scan reads
+    (`MOVEMENT_DAY_COLUMNS`): its own date, else its invoice's (null with no
+    invoice line, the join being an outer one), else the day it was typed
+    in - for a scan over thousands of movements, where the property would
+    build each one with its invoice line and its invoice."""
+    return occurred_on or invoice_date or (typed_in.date() if typed_in else None)
 
 
 # --------------------------------------------------------------------------
@@ -687,7 +779,6 @@ def compute_variance(closing_take: StockTake, opening_take: StockTake | None = N
 
 
 def _compute_variance(closing_take: StockTake, opening_take: StockTake | None = None) -> VarianceReport:
-    from recipes.models import Recipe
     from recipes.sales import sales_between, stock_type_sales_between
 
     if opening_take is None:
@@ -704,21 +795,22 @@ def _compute_variance(closing_take: StockTake, opening_take: StockTake | None = 
     closing_counts = counts_by_stock_type(closing_take)
     movements = movements_between(period_start, period_end)
 
-    recipes = list(Recipe.objects.prefetch_related("ingredients__stock_type", "ingredients__sub_recipe"))
+    recipes = _recipes_with_ingredients()
+    ingredients_of = ingredients_by_recipe(recipes)
     sold = sales_between(period_start, period_end)
     report.sales_counted = sum(sold.values())
     report.recipes_sold = len([count for count in sold.values() if count])
 
     involved = set(opening_counts) | set(closing_counts) | set(movements)
-    pool_of = build_pools(recipes, involved)
+    pool_of = build_pools(recipes, involved, ingredients_of)
 
     # Every stock item any recipe can reach, however deeply its sub-recipes
     # nest. Same walk build_pools uses and never capped, for the same reason:
     # missing one member here would wrongly set the whole pool aside.
     in_recipes: set[int] = set()
     for recipe in recipes:
-        for ingredient in recipe.ingredients.all():
-            in_recipes |= reachable_stock_types(ingredient)
+        for ingredient in ingredients_of[recipe.pk]:
+            in_recipes |= reachable_stock_types(ingredient, ingredients_of=ingredients_of)
 
     # Expected usage, accumulated straight onto pools.
     expected_min: dict[frozenset, Decimal] = {}
@@ -727,7 +819,7 @@ def _compute_variance(closing_take: StockTake, opening_take: StockTake | None = 
         count = sold.get(recipe.pk, 0)
         if not count:
             continue
-        for options in recipe_usage_terms(recipe):
+        for options in recipe_usage_terms(recipe, ingredients_of):
             if not options:
                 continue
             if len(options) == 1:
@@ -1115,10 +1207,16 @@ def allocate_choices(
     if not pending:
         return allocated
 
-    hard_cap = dict(available)
+    # Read only. And the allowance only of what a choice pours, the one thing
+    # ever looked up: « Combler les écarts » plays a sale through this
+    # hundreds of times, over every article bought.
+    hard_cap = available
+    poured = {stock_type_id for demand in pending for option in demand.options for stock_type_id in option}
     allowance_cap = {
-        stock_type_id: quantity * (Decimal("1") - loss_fractions.get(stock_type_id, DEFAULT_LOSS_FRACTION))
-        for stock_type_id, quantity in available.items()
+        stock_type_id: available[stock_type_id]
+        * (Decimal("1") - loss_fractions.get(stock_type_id, DEFAULT_LOSS_FRACTION))
+        for stock_type_id in poured
+        if stock_type_id in available
     }
 
     def take(option, servings):
@@ -1207,6 +1305,7 @@ class SalesRead:
 
     `terms` memoises recipe_usage_terms per recipe pk; fill it inside a
     variation_scope(), or every recipe asked costs its own queries.
+    `ingredients_of`: the recipes' ingredients as read (`ingredients_by_recipe`).
     """
 
     sold: dict[int, int]
@@ -1215,10 +1314,11 @@ class SalesRead:
     pool_of: dict[int, frozenset[int]]
     loss_fractions: dict[int, Decimal]
     terms: dict[int, list[list[dict[int, Decimal]]]] = field(default_factory=dict)
+    ingredients_of: dict[int, list] = field(default_factory=dict)
 
     def terms_of(self, recipe) -> list[list[dict[int, Decimal]]]:
         if recipe.pk not in self.terms:
-            self.terms[recipe.pk] = recipe_usage_terms(recipe)
+            self.terms[recipe.pk] = recipe_usage_terms(recipe, self.ingredients_of)
         return self.terms[recipe.pk]
 
 
@@ -1226,19 +1326,20 @@ def read_sales(start: date | None, end: date) -> SalesRead:
     """The sales of the half-open window (start, end], and what attributing
     them needs: every recipe in the order the engine serves them, the pools,
     each item's loss fraction."""
-    from recipes.models import Recipe
     from recipes.sales import sales_between, stock_type_sales_between
 
-    recipes = list(Recipe.objects.prefetch_related("ingredients__stock_type", "ingredients__sub_recipe"))
+    recipes = _recipes_with_ingredients()
+    ingredients_of = ingredients_by_recipe(recipes)
     return SalesRead(
         sold=sales_between(start, end),
         as_itself=stock_type_sales_between(start, end),
         recipes=recipes,
-        pool_of=build_pools(recipes),
+        pool_of=build_pools(recipes, ingredients_of=ingredients_of),
         loss_fractions={
             stock_type_id: loss_fraction(percent)
             for stock_type_id, percent in StockType.objects.values_list("id", "loss_percent")
         },
+        ingredients_of=ingredients_of,
     )
 
 

@@ -327,9 +327,14 @@ class ResolverQueryCountTests(TestCase):
 
     def test_one_resolver_answers_every_row_without_a_query_each(self):
         resolver = EntryResolver()
-        with self.assertNumQueries(3):  # products, stock types, first purchases
+        # Products and stock types; the first purchases wait for a row to be
+        # judged against a date.
+        with self.assertNumQueries(2):
             for product in self.products:
                 self.assertEqual(resolver.product(product_display_name(product)), product)
+        with self.assertNumQueries(1):
+            for product in self.products:
+                self.assertIsNone(resolver.first_purchase(product))
 
     def test_validating_a_whole_formset_does_not_scale_with_its_rows(self):
         data = {

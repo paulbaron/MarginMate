@@ -195,7 +195,7 @@
             {% for message in gap_messages %}<li class="message message-{{ message.level_tag }}">{{ message }}</li>{% endfor %}
         </ul>
     {% endif %}
-    {% if report.rows %}
+    {% with rows=report.rows %}{% url 'inventory:stock_gap_filler_exclude' as exclude_url %}{% if rows %}
     <div class="table-wrap">
     <table data-table data-table-label="écarts" class="phone-cards">
         <thead>
@@ -215,7 +215,7 @@
             </tr>
         </thead>
         <tbody>
-            {% for row in report.rows %}
+            {% for row in rows %}
             <tr>
                 <td>
                     {{ row.stock_type.name }} <span class="muted small">{{ row.stock_type.get_unit_display|lower }}</span>
@@ -237,7 +237,7 @@
                 <td class="num" data-label="Comblé" data-sort="{{ row.filled_percent|default:0 }}">{% if row.filled_percent is not None %}{{ row.filled_percent|floatformat:1 }} %{% else %}—{% endif %}</td>
                 {% endif %}
                 <td class="row-actions">
-                    <form method="post" action="{% url 'inventory:stock_gap_filler_exclude' %}">
+                    <form method="post" action="{{ exclude_url }}">
                         {% csrf_token %}
                         <input type="hidden" name="{{ since_param }}" value="{{ take.pk }}">
                         <input type="hidden" name="article" value="{{ row.stock_type.pk }}">
@@ -253,7 +253,7 @@
         <p class="muted">Tous les articles de ces écarts sont exclus.</p>
     {% else %}
         <p class="muted">Aucune recette proposée n'utilise un article compté ou acheté.</p>
-    {% endif %}
+    {% endif %}{% endwith %}
 
     <details class="explainer" id="exclusions"{% if report.exclusions or exclusion_messages %} open{% endif %}>
         <summary>Exclus des écarts{% if report.excluded_categories %} · {{ report.excluded_categories|length }} catégorie{{ report.excluded_categories|length|pluralize }}{% endif %}{% if report.excluded_articles %} · {{ report.excluded_articles|length }} article{{ report.excluded_articles|length|pluralize }}{% endif %}</summary>

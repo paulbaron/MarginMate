@@ -152,6 +152,10 @@ MIDDLEWARE = [
     # The pages' Content-Security-Policy (config/security.py); above
     # XFrameOptionsMiddleware, whose header it reads on the way out.
     "config.security.ContentSecurityPolicyMiddleware",
+    # The request's language made active - the same one - so that the pages'
+    # thousands of number, date and URL formattings find it at once
+    # (config/language.py).
+    "config.language.ActiveLanguageMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -182,6 +186,9 @@ TEMPLATES = [
                 "invoices.context_processors.receipt_review_count",
                 "config.navigation.navigation",
             ],
+            # Django's `date` filter, quicker on "d/m/Y" and "Y-m-d", the
+            # same characters (config/template_builtins.py).
+            "builtins": ["config.template_builtins"],
         },
     },
 ]

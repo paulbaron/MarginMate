@@ -143,6 +143,14 @@ def statements_start():
     return BankTransaction.objects.aggregate(first=Min("operation_date"))["first"]
 
 
+#: What matching an invoice to the bank never reads of it, and is most of
+#: what its row weighs: the document's texts, its checks, its VAT table.
+#: Left in the database by the queries the bank pages make (`defer`) - read
+#: on one of those invoices, each is a query of its own, which the bank
+#: pages' query counts would show (bank/tests/test_page_cost.py).
+UNREAD_INVOICE_FIELDS = ("ocr_text", "source_text", "parse_checks", "vat_breakdown")
+
+
 def unpaid_invoices(start=None, end=None):
     """Invoices NO line pays at all, dated from `start` to `end` - and those
     with no date at all, which matching only ever suggests (OCR misses a
@@ -161,7 +169,7 @@ def unpaid_invoices(start=None, end=None):
     if end is not None:
         dated &= Q(invoice_date__lte=end)
     invoices = Invoice.objects.filter(dated | Q(invoice_date__isnull=True), payments__isnull=True)
-    return invoices.select_related("supplier").prefetch_related("lines")
+    return invoices.select_related("supplier").defer(*UNREAD_INVOICE_FIELDS).prefetch_related("lines")
 
 
 def rounded_total(invoice: Invoice) -> Decimal:
