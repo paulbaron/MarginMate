@@ -87,7 +87,7 @@ from .models import (
     TreasuryAdjustment,
     TreasuryCheckpoint,
 )
-from .rules import ignoring_rule, searcher
+from .rules import caught, ignoring_rule, reason_of, searcher
 
 TODO, LINKED, NO_INVOICE, INCOME = "todo", "linked", "no_invoice", "income"
 DEFAULT_VIEW = "a-traiter"
@@ -287,10 +287,16 @@ class PayeeGroup:
 
 @dataclass
 class RuleMatches:
-    count: int
-    total: Decimal
-    linked: int
-    examples: list
+    """What a rule's pattern catches among the debits - or why it catches
+    nothing here: its pattern refused (`problem`, `rules.check`'s reason),
+    or too slow on them (`slow`). Neither has a count."""
+
+    count: int | None = None
+    total: Decimal | None = None
+    linked: int = 0
+    examples: list = field(default_factory=list)
+    problem: str = ""
+    slow: bool = False
 
 
 def classify(line: BankTransaction, payments, rules) -> tuple[str, IgnoreRule | None]:
@@ -400,6 +406,9 @@ def bank_home(request):
             "stats": stats,
             # A till rule that recognised nothing while the credits were read.
             "rule_problems": rule_problems,
+            # An ignore rule that hid nothing - its pattern refused, or too
+            # slow on a label - read after every line was classified.
+            "ignore_problems": rules.problems,
             "months": months,
             "month": month,
             "date_window": window,
@@ -983,6 +992,11 @@ def _line_words(outcome: reconcile.Acceptance) -> str:
     return f"{line.paid_on:%d/%m/%Y} {who} {format_money(line.amount_due)} €"
 
 
+#: Said on the motif when « Tester » or « Ajouter la règle » stops a pattern
+#: on the imported lines: kept, it would be set aside on every page drawn.
+RULE_TOO_SLOW = "Motif : le motif est trop lent sur les opérations importées : simplifiez-le."
+
+
 def rule_list(request):
     form = IgnoreRuleForm(
         request.POST or None,
@@ -994,12 +1008,15 @@ def rule_list(request):
     paid = set(InvoicePayment.objects.values_list("transaction_id", flat=True))
     test = None
     if request.method == "POST" and form.is_valid():
-        regex = searcher(form.cleaned_data["pattern"])
-        if request.POST.get("action") == "test":
-            test = _rule_matches(regex, debits, paid)
+        # Run over every debit before anything is saved: a pattern the
+        # guard lets through can still stall on some label.
+        found = _rule_matches(form.searcher, debits, paid)
+        if found.slow:
+            form.add_error("pattern", RULE_TOO_SLOW)
+        elif request.POST.get("action") == "test":
+            test = found
         else:
             form.save()
-            found = _rule_matches(regex, debits, paid)
             messages.success(
                 request,
                 f"Règle ajoutée : {found.count} dépense(s), {format_money(found.total)} €, "
@@ -1007,12 +1024,17 @@ def rule_list(request):
             )
             return redirect("bank:rule_list")
 
+    # Each stored rule as Banque applies it: one whose pattern the guard
+    # refuses (saved before it, or imported) or that stalls on the debits
+    # catches nothing there, and its row says so.
     rules = []
     for rule in IgnoreRule.objects.all():
         try:
-            rules.append((rule, _rule_matches(searcher(rule.pattern), debits, paid)))
-        except re.error:
-            rules.append((rule, None))
+            regex = searcher(rule.pattern)
+        except PatternError as error:
+            rules.append((rule, RuleMatches(problem=reason_of(error.message))))
+            continue
+        rules.append((rule, _rule_matches(regex, debits, paid)))
     return render(
         request,
         "bank/rules.html",
@@ -2475,9 +2497,13 @@ def _payee_groups(rows) -> list[PayeeGroup]:
 
 
 def _rule_matches(regex, spending, paid: set[int]) -> RuleMatches:
-    """What `regex` catches among `spending`; `paid` holds the pks of the
-    lines that pay an invoice."""
-    found = [line for line in spending if regex.search(line.label)]
+    """What `regex` - `rules.searcher`'s - catches among `spending`, each
+    label searched under the time limits a page applies (`rules.caught`):
+    stopped on the way, it is `slow` and counts nothing. `paid` holds the
+    pks of the lines that pay an invoice."""
+    found = caught(regex, spending)
+    if found is None:
+        return RuleMatches(slow=True)
     return RuleMatches(
         count=len(found),
         total=sum((line.amount_due for line in found), Decimal("0")),

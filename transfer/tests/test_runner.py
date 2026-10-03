@@ -23,8 +23,9 @@ from recipes.models import SalesImportJob
 from tests.factories import make_recipe
 from transfer import rebuild, runner
 from transfer.archive import ArchiveReader
+from transfer.registry import INFO
 from transfer.runner import Busy, busy_reason, run_clear, run_export, run_import
-from transfer.sections.base import Dirty, Strategy
+from transfer.sections.base import Dirty, Group, Strategy
 from transfer.tests.support import (
     FakeSection,
     FakeSectionsMixin,
@@ -64,6 +65,20 @@ class ExportTests(FakeSectionsMixin, TestCase):
         self.assertEqual(
             [key for method, key in FakeSection.calls if method == "export"],
             ["fournisseurs", "associations", "factures", "inventaires"],
+        )
+
+    def test_the_configuration_alone_is_a_closed_selection(self):
+        """What « Configuration seule » posts is exported as it is: no
+        setting needs the bar's data, the bank's rules and the returnable
+        types included - and they go before the data that reads them."""
+        configuration = {key for key, info in INFO.items() if info.group == Group.CONFIG}
+        manifest = run_export(configuration, new_archive_path())
+        self.assertEqual(set(manifest["sections"]), configuration)
+        FakeSection.calls.clear()
+        run_export({"consignes", "types_consignes", "fournisseurs", "banque", "regles_banque"}, new_archive_path())
+        self.assertEqual(
+            [key for method, key in FakeSection.calls if method == "export"],
+            ["fournisseurs", "regles_banque", "types_consignes", "banque", "consignes"],
         )
 
 
@@ -252,6 +267,11 @@ class OrderTests(FakeSectionsMixin, TestCase):
     def test_clear_in_reverse_order(self):
         run_clear({"factures", "inventaires"}, preview=False)
         self.assertEqual(FakeSection.calls, [("clear", "inventaires"), ("clear", "factures")])
+
+    def test_the_pickups_go_before_the_types_they_count(self):
+        """A pickup's count names its type, a slip its format (PROTECT)."""
+        run_clear({"types_consignes", "consignes"}, preview=False)
+        self.assertEqual(FakeSection.calls, [("clear", "consignes"), ("clear", "types_consignes")])
 
     def test_the_page_clears_only_a_closed_selection(self):
         with self.assertRaises(ValueError):

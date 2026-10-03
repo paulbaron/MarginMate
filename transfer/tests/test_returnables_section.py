@@ -7,10 +7,10 @@ under the same names -, importing its own export changes nothing, a merge
 never overwrites a pickup edited here, and a slip's reading is copied,
 never compared and never read again.
 
-And the regex guard holds on this door too: a pattern from an archive goes
-through `returnables.patterns` exactly as the forms' do. The refusals are
-proven with `regex.compile` replaced by a sentinel that fails if it is
-called - nothing that could allocate gigabytes is ever compiled here.
+The types the pickups count and the formats the slips were read with are
+« Types et formats de consignes »' (test_returnable_types_section.py, the
+older archives that carried them here included): this section finds them in
+the database, by name, and neither exports, prunes nor clears them.
 
 Every name, number, date, count and file below is invented; the photos are
 JPEGs of a few pixels.
@@ -22,13 +22,11 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from unittest import mock
 
-import regex
 from django.core.files.storage import default_storage
 from django.test import TestCase
 from django.utils import timezone
 
 from invoices.models import Invoice, Supplier
-from returnables import patterns
 from returnables.models import (
     Pickup,
     PickupCount,
@@ -42,34 +40,29 @@ from returnables.tests.support import (
     CO2_LINE,
     CRATE_LINE,
     KEG_LINE,
-    UBA_PATTERNS,
     make_format,
     make_pickup,
     make_slip,
     make_type,
-    no_defaults,
     tiny_jpeg,
     uba,
 )
-from returnables.tests.test_patterns import NeverCompile
 from tests.factories import make_invoice, make_supplier
 from transfer import codec, registry
 from transfer.archive import ArchiveError, ArchiveReader
+from transfer.registry import INFO
 from transfer.runner import run_clear
+from transfer.sections import returnable_types
 from transfer.sections import returnables as section
 from transfer.sections.base import FileRefused, ImportContext, Strategy
 from transfer.sections.returnables import (
-    CLEAR_NOTE,
     ENTITIES,
-    FORMATS,
     LINES,
     MEGABYTES,
     PHOTOS,
     PICKUPS,
     SLIPS,
-    TYPES,
     ReturnablesSection,
-    check_format_patterns,
 )
 from transfer.tests.support import (
     db_fingerprint,
@@ -84,9 +77,13 @@ from transfer.tests.test_invoices_section import MediaMixin, media_names, sha, s
 MERGE, REPLACE = Strategy.MERGE, Strategy.REPLACE
 D = Decimal
 KEY = "consignes"
+TYPES_KEY = returnable_types.KEY
 
 #: What the fixture holds, per report row.
-HELD = {TYPES: 4, FORMATS: 3, PICKUPS: 2, PHOTOS: 2, SLIPS: 2, LINES: 3}
+HELD = {PICKUPS: 2, PHOTOS: 2, SLIPS: 2, LINES: 3}
+#: The types and formats it holds too: the seeds (three types, the UBA
+#: format) and its own. « Consignes » leaves them alone.
+TYPES_HELD = (4, 3)
 
 
 def moment(day, hour=9, minute=0, second=0, micro=0) -> datetime:
@@ -128,14 +125,8 @@ def clear_returnables():
         run_clear({KEY}, preview=False)
 
 
-def payload_of(*, types=(), formats=(), pickups=(), slips=(), supplier_names=None) -> dict:
-    return {
-        "supplier_names": supplier_names or {},
-        "types": list(types),
-        "formats": list(formats),
-        "pickups": list(pickups),
-        "slips": list(slips),
-    }
+def types_and_formats() -> tuple[int, int]:
+    return ReturnableType.objects.count(), SlipFormat.objects.count()
 
 
 class ReturnablesData(MediaMixin):
@@ -143,7 +134,10 @@ class ReturnablesData(MediaMixin):
     two pickups of our own - one with two photos, one « fournisseur non
     précisé » - and two slips, one sent by mail and replacing another. Every
     moment is set in the past: a round trip that forgot to restore one
-    would show the moment of the import instead."""
+    would show the moment of the import instead.
+
+    test_returnable_types_section.py uses it too, for what crosses the two
+    sections."""
 
     def setUp(self):
         super().setUp()
@@ -204,7 +198,7 @@ class ReturnablesData(MediaMixin):
 
     def export(self) -> ArchiveReader:
         """What the page exports when « Consignes » is ticked: the suppliers
-        it requires with it."""
+        and the types and formats it requires with it."""
         reader = export_archive(registry.closure({KEY}, "export"))
         self.addCleanup(reader.close)
         return reader
@@ -255,9 +249,25 @@ class ContractTests(TestCase):
         self.assertEqual(section.NOT_EXPORTED[Pickup]["updated_at"], "modifiée ici")
         self.assertEqual(section.NOT_EXPORTED[Slip]["read_at"], "relue ici")
 
+    def test_the_types_and_formats_are_the_other_section_s(self):
+        self.assertFalse(set(section.EXPORTED) & {ReturnableType, SlipFormat})
+        self.assertEqual(section.LISTS, ("pickups", "slips"))
+        self.assertEqual(section.TOP_LEVEL, ("supplier_names", "pickups", "slips"))
+
     def test_the_section_is_registered_under_its_key(self):
         self.assertIsInstance(registry.get(KEY), ReturnablesSection)
         self.assertIn("returnables", registry.SECTION_MODULES)
+
+    def test_it_requires_the_types_and_formats_and_takes_nothing_of_them_when_cleared(self):
+        """Its counts name a type, its slips a format (PROTECT): exported or
+        imported, they come with it; cleared, they stay - so its registry
+        entry no longer warns that the seeds go."""
+        self.assertEqual(INFO[KEY].requires, ("fournisseurs", TYPES_KEY))
+        self.assertLess(INFO[TYPES_KEY].order, INFO[KEY].order)
+        self.assertEqual(registry.closure({KEY}, "export"), {KEY, TYPES_KEY, "fournisseurs"})
+        self.assertEqual(registry.closure({KEY}, "clear"), {KEY})
+        self.assertEqual(INFO[KEY].clear_note, "")
+        self.assertNotIn("types", INFO[KEY].description)
 
     def test_the_database_fingerprint_sees_the_returnables_tables(self):
         """Every « changes nothing » test of this file rests on it: without
@@ -267,17 +277,12 @@ class ContractTests(TestCase):
         Pickup.objects.filter(pk=pickup.pk).update(note="modifiée")
         self.assertNotEqual(db_fingerprint(), before)
 
-    def test_count_of_an_empty_section(self):
-        no_defaults()
+    def test_count_of_an_empty_section_leaves_the_seeds_out(self):
+        """The seeded types and format are « Types et formats de
+        consignes »': this section holds nothing until a pickup is made."""
         section._SIZES.clear()
+        self.assertEqual(types_and_formats(), (3, 1))
         self.assertEqual(ReturnablesSection().count(), dict.fromkeys((*ENTITIES, MEGABYTES), 0))
-
-    def test_the_seeds_are_counted_like_the_rest(self):
-        section._SIZES.clear()
-        self.assertEqual(
-            ReturnablesSection().count(),
-            {TYPES: 3, FORMATS: 1, PICKUPS: 0, PHOTOS: 0, SLIPS: 0, LINES: 0, MEGABYTES: 0},
-        )
 
 
 class ExportTests(ReturnablesData, TestCase):
@@ -339,9 +344,17 @@ class ExportTests(ReturnablesData, TestCase):
         self.assertFalse({"id", "pk"} & found)
         self.assertFalse({name for name in found if name.endswith("_id")})
 
-    def test_the_suppliers_it_names_come_with_their_names(self):
+    def test_the_suppliers_of_its_pickups_come_with_their_names(self):
+        """Only theirs: a format's supplier is named by « Types et formats
+        de consignes »' file."""
         payload = self.export().section(KEY).payload()
-        self.assertEqual(payload["supplier_names"], {"BRASSERIE_ESSAI": "Brasserie Essai", "UBA": self.uba.name})
+        self.assertEqual(payload["supplier_names"], {"UBA": self.uba.name})
+
+    def test_its_file_holds_no_type_and_no_format(self):
+        reader = self.export()
+        self.assertEqual(set(reader.section(KEY).payload()), {"supplier_names", "pickups", "slips"})
+        self.assertEqual(reader.section(KEY).member, "consignes.json")
+        self.assertEqual(set(reader.section(TYPES_KEY).payload()), {"supplier_names", "types", "formats"})
 
     def test_file_sizes_are_kept_a_minute_per_tenant(self):
         """count() is drawn on every visit of /donnees/: the stat calls are
@@ -372,12 +385,13 @@ class RoundTripTests(ReturnablesData, TestCase):
         section._SIZES.clear()
         self.assertEqual(ReturnablesSection().count(), dict.fromkeys((*ENTITIES, MEGABYTES), 0))
         self.assertFalse(media_names() & set(self.files))
-        # The suppliers are not this section's.
+        # The suppliers, the types and the formats are not this section's.
         self.assertTrue(Supplier.objects.filter(code="BRASSERIE_ESSAI").exists())
+        self.assertEqual(types_and_formats(), TYPES_HELD)
 
     def _check(self, strategy):
         before, after = round_trip({KEY}, strategy, after_clear=self._after_clear)
-        self.assertEqual(list(after), ["fournisseurs", KEY])
+        self.assertEqual(list(after), ["fournisseurs", TYPES_KEY, KEY])
         self.assertEqual(after[KEY], before[KEY])
         # Byte for byte, under the same names.
         self.assertEqual(shas(), self.files)
@@ -385,7 +399,6 @@ class RoundTripTests(ReturnablesData, TestCase):
         pickup = Pickup.objects.get(reference=self.pickup.reference)
         self.assertEqual(pickup.created_at, moment(10, 7, 55, 3, 125000))
         self.assertEqual(Slip.objects.get(sha256=self.slip.sha256).received_at, moment(10, 9, 0, 0, 250000))
-        self.assertEqual(ReturnableType.objects.get(name="Palettes").created_at, moment(1))
         # Never exported: read here, not there.
         self.assertIsNone(Slip.objects.get(sha256=self.slip.sha256).read_at)
 
@@ -423,7 +436,7 @@ class IdempotenceTests(ReturnablesData, TestCase):
         differ, the records do not (never compared)."""
         reader = self.export()
         later = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
-        for model in (ReturnableType, SlipFormat, Pickup, PickupPhoto):
+        for model in (Pickup, PickupPhoto):
             model.objects.update(created_at=later)
         Slip.objects.update(received_at=later)
         for strategy in (MERGE, REPLACE):
@@ -444,14 +457,6 @@ class MergeAndReplaceTests(ReturnablesData, TestCase):
         super().setUp()
         self.before = ReturnablesSection().snapshot()
         self.reader = self.export()
-        # Types.
-        ReturnableType.objects.filter(name="Caisses verre").update(slip_patterns="CAISSE|CASIER")
-        self.barrels = make_type("Tonneaux", slip_patterns="TONNEAU")
-        self.pallets.delete()
-        # Formats.
-        SlipFormat.objects.filter(pk=self.brewer_format.pk).update(is_active=False)
-        self.cellar_format = make_format("Bon Cave Essai", supplier=self.brewer, sender_pattern="", subject_pattern="")
-        self.wholesaler_format.delete()
         # Pickups (and a photo only here).
         PickupCount.objects.filter(pickup=self.pickup, returnable_type__name="Fûts").update(quantity=14)
         self.extra = make_pickup(date=date(2026, 2, 12), counts={"Fûts": 2}, photos=1)
@@ -466,8 +471,6 @@ class MergeAndReplaceTests(ReturnablesData, TestCase):
     def test_merge_adds_what_is_missing_and_keeps_what_differs(self):
         run = run_import(self.reader, MERGE)
         report = run.section(KEY)
-        self.assertEqual(tally(report, TYPES), (1, 0, 0, 2))
-        self.assertEqual(tally(report, FORMATS), (1, 0, 0, 1))
         self.assertEqual(tally(report, PICKUPS), (1, 0, 0, 0))
         self.assertEqual(tally(report, PHOTOS), (0, 0, 0, 0))
         self.assertEqual(tally(report, SLIPS), (1, 0, 0, 0))
@@ -475,28 +478,17 @@ class MergeAndReplaceTests(ReturnablesData, TestCase):
         self.assertEqual(
             report.conflicts,
             [
-                "Type de consigne « Caisses verre » : différent dans l'archive (motifs des bons) — gardé tel quel",
-                "Format de bon « Bon Brasserie Essai » : différent dans l'archive (actif) — gardé tel quel",
                 "Reprise du 10/02/2026 : différente dans l'archive (nombres) — gardée telle quelle",
                 "Bon n° 1202 du 11/02/2026 : différent dans l'archive (objet du mail) — gardé tel quel",
             ],
         )
         # Kept as they are here.
-        self.assertEqual(ReturnableType.objects.get(name="Caisses verre").slip_patterns, "CAISSE|CASIER")
-        self.assertFalse(SlipFormat.objects.get(pk=self.brewer_format.pk).is_active)
         self.assertEqual(self.pickup.counts.get(returnable_type__name="Fûts").quantity, 14)
         self.assertEqual(Slip.objects.get(pk=self.mailed.pk).mail_subject, "Livraison du 11/02/2026 (renvoi)")
         # Only here: untouched.
-        for model, pk in (
-            (ReturnableType, self.barrels.pk),
-            (SlipFormat, self.cellar_format.pk),
-            (Pickup, self.extra.pk),
-            (Slip, self.late.pk),
-        ):
+        for model, pk in ((Pickup, self.extra.pk), (Slip, self.late.pk)):
             self.assertTrue(model.objects.filter(pk=pk).exists(), model.__name__)
         # Only in the archive: back.
-        self.assertTrue(ReturnableType.objects.filter(name="Palettes").exists())
-        self.assertTrue(SlipFormat.objects.filter(name="Bon Grossiste Essai").exists())
         self.assertEqual(Pickup.objects.get(reference=self.other.reference).counts.get().quantity, 3)
         self.assertEqual(Slip.objects.get(sha256=self.slip.sha256).lines.count(), 2)
         # A merge updates and deletes nothing: no safety archive is needed.
@@ -506,8 +498,6 @@ class MergeAndReplaceTests(ReturnablesData, TestCase):
         with self.captureOnCommitCallbacks(execute=True):
             run = run_import(self.reader, REPLACE)
         report = run.section(KEY)
-        self.assertEqual(tally(report, TYPES), (1, 1, 1, 2))
-        self.assertEqual(tally(report, FORMATS), (1, 1, 1, 1))
         self.assertEqual(tally(report, PICKUPS), (1, 1, 1, 0))
         self.assertEqual(tally(report, PHOTOS), (0, 0, 1, 2))
         self.assertEqual(tally(report, SLIPS), (1, 1, 1, 0))
@@ -535,45 +525,53 @@ class MergeAndReplaceTests(ReturnablesData, TestCase):
         self.assertEqual(db_fingerprint(), before)
         self.assertEqual(preview.outcome(), run_import(self.reader, MERGE).outcome())
 
-    def test_a_format_or_a_type_something_kept_still_uses_stays_and_is_said(self):
-        """A slip the archive names but could not read keeps its format here,
-        and a count its type: PROTECT, said rather than a crash."""
-        reader = ArchiveReader(
-            forge(
-                self.reader,
-                consignes=lambda payload: {
-                    **payload,
-                    "types": [record for record in payload["types"] if record["name"] != "Fûts"],
-                    "formats": [record for record in payload["formats"] if record["name"] != "Bon Brasserie Essai"],
-                },
-            )
-        )
-        self.addCleanup(reader.close)
-        report = run_import(reader, REPLACE).section(KEY)
-        self.assertIn("Type de consigne « Fûts » : encore compté dans 1 reprise", report.kept)
-        self.assertIn("Format de bon « Bon Brasserie Essai » : encore utilisé par 1 bon", report.kept)
-        self.assertTrue(ReturnableType.objects.filter(name="Fûts").exists())
+    def test_replace_never_prunes_a_type_or_a_format(self):
+        """They are « Types et formats de consignes »', merged here: a type
+        and a format only this database has, used by nothing, stay."""
+        barrels = make_type("Tonneaux", slip_patterns="TONNEAU")
+        cellar = make_format("Bon Cave Essai", supplier=self.brewer, sender_pattern="", subject_pattern="")
+        run = run_import(self.reader, REPLACE)
+        self.assertTrue(ReturnableType.objects.filter(pk=barrels.pk).exists())
+        self.assertTrue(SlipFormat.objects.filter(pk=cellar.pk).exists())
+        self.assertEqual(run.affected(), {KEY})
+        self.assertEqual(run.section(KEY).kept, [])
 
 
 # -- keys -----------------------------------------------------------------------------------------
 
 
 class KeyTests(ReturnablesData, TestCase):
-    def test_a_type_is_found_by_its_name_whatever_its_accents_case_and_spaces(self):
-        """The type form refuses « Futs » beside « Fûts »: an archive's
-        « Futs » is this database's « Fûts », never a twin created beside it."""
+    def test_a_count_finds_its_type_here_whatever_its_accents_case_and_spaces(self):
+        """The type form refuses « Futs » beside « Fûts »: a count of
+        « FUTS » in an archive is this database's « Fûts »."""
         reader = self.forged(
-            edit("types", lambda record: record["name"] == "Fûts", lambda record: record.update(name="Futs"))
+            edit("pickups", first_pickup, lambda record: record["counts"][0].update(type="FUTS", quantity=14))
         )
-        report = run_import(reader, MERGE).section(KEY)
-        self.assertIn("Type de consigne « Futs » : différent dans l'archive (nom) — gardé tel quel", report.conflicts)
-        self.assertEqual(ReturnableType.objects.count(), 4)
         report = run_import(reader, REPLACE).section(KEY)
-        self.assertEqual(tally(report, TYPES)[:3], (0, 1, 0))
-        self.assertTrue(ReturnableType.objects.filter(name="Futs").exists())
-        self.assertEqual(ReturnableType.objects.count(), 4)
-        # Its counts followed it: the same row.
-        self.assertEqual(self.pickup.counts.get(returnable_type__name="Futs").quantity, 15)
+        self.assertEqual(report.skipped, [])
+        self.assertEqual(self.pickup.counts.get(returnable_type__name="Fûts").quantity, 14)
+        self.assertEqual(types_and_formats(), TYPES_HELD)
+
+    def test_a_slip_finds_its_format_here_the_same_way(self):
+        reader = self.forged(
+            edit("slips", first_slip, lambda record: record.update(format="uba \N{EM DASH}  BON du livreur"))
+        )
+        clear_returnables()
+        report = run_import(reader, MERGE).section(KEY)
+        self.assertEqual(report.skipped, [])
+        self.assertEqual(Slip.objects.get(sha256=self.slip.sha256).format.name, "UBA \N{EM DASH} bon du livreur")
+
+    def test_the_exact_name_comes_before_a_twin_by_its_key(self):
+        """Two types here a form would call twins (made before the rule, or
+        by hand): the count goes to the one spelt as the archive spells it,
+        never to whichever comes first."""
+        reader = self.export()
+        twin = make_type("FÛTS", position=0)  # first by position, so first by key
+        clear_returnables()
+        run_import(reader, MERGE)
+        pickup = Pickup.objects.get(reference=self.pickup.reference)
+        self.assertEqual(pickup.counts.get(returnable_type__name="Fûts").quantity, 15)
+        self.assertFalse(PickupCount.objects.filter(returnable_type=twin).exists())
 
     def test_a_pickup_edited_here_is_still_the_same_pickup(self):
         """Its key is its reference, not its date or its counts: a pickup
@@ -839,7 +837,7 @@ class RefusalTests(ReturnablesData, TestCase):
         return run_import(reader, strategy).section(KEY)
 
     def test_a_file_without_one_of_its_lists_is_refused_whole(self):
-        for name in ("types", "formats", "pickups", "slips"):
+        for name in ("pickups", "slips"):
             with (
                 self.subTest(missing=name),
                 self.assertRaisesMessage(ArchiveError, f"consignes.json n'a pas de liste « {name} »"),
@@ -847,8 +845,8 @@ class RefusalTests(ReturnablesData, TestCase):
                 self._import(lambda payload, name=name: {key: value for key, value in payload.items() if key != name})
 
     def test_a_list_of_something_else_than_records_is_refused_whole(self):
-        with self.assertRaisesMessage(ArchiveError, "dans consignes.json, « types » ne contient pas que des objets"):
-            self._import(lambda payload: {**payload, "types": ["Fûts"]})
+        with self.assertRaisesMessage(ArchiveError, "dans consignes.json, « pickups » ne contient pas que des objets"):
+            self._import(lambda payload: {**payload, "pickups": ["Reprise"]})
 
     def test_an_unknown_field_is_noted_once(self):
         def change(payload):
@@ -860,17 +858,40 @@ class RefusalTests(ReturnablesData, TestCase):
         self.assertEqual(report.notes.count("champ inconnu ignoré : reprises › couleur"), 1)
         self.assertEqual(Pickup.objects.count(), 2)
 
+    def test_types_in_this_version_s_file_are_a_field_it_does_not_know(self):
+        """This version's consignes.json never holds them: there, they are
+        said and left alone - an older archive's are carved out before this
+        section reads its file (test_returnable_types_section.py)."""
+        report = self._import(lambda payload: {**payload, "types": [{"name": "Tonneaux"}]})
+        self.assertIn("champ inconnu ignoré : consignes.json › types", report.notes)
+        self.assertFalse(ReturnableType.objects.filter(name="Tonneaux").exists())
+
     def test_an_unknown_supplier_skips_the_format_and_then_its_slips(self):
-        report = self._import(
-            edit(
-                "formats",
-                lambda record: record["name"] == "Bon Brasserie Essai",
-                lambda record: record.update(supplier="INCONNU_ESSAI"),
+        """The format is « Types et formats de consignes »' to skip; a slip
+        read with it then finds no format here, and is skipped too."""
+        with self.captureOnCommitCallbacks(execute=True):
+            run_clear(registry.closure({TYPES_KEY}, "clear"), preview=False)
+        reader = ArchiveReader(
+            forge(
+                self.reader,
+                types_consignes=edit(
+                    "formats",
+                    lambda record: record["name"] == "Bon Brasserie Essai",
+                    lambda record: record.update(supplier="INCONNU_ESSAI"),
+                ),
             )
         )
-        self.assertIn("Format de bon « Bon Brasserie Essai » : fournisseur inconnu (« INCONNU_ESSAI »)", report.skipped)
-        self.assertIn("Bon n° 1202 du 11/02/2026 : format de bon inconnu « Bon Brasserie Essai »", report.skipped)
+        self.addCleanup(reader.close)
+        run = run_import(reader, MERGE)
+        self.assertIn(
+            "Format de bon « Bon Brasserie Essai » : fournisseur inconnu (« INCONNU_ESSAI »)",
+            run.section(TYPES_KEY).skipped,
+        )
+        self.assertIn(
+            "Bon n° 1202 du 11/02/2026 : format de bon inconnu « Bon Brasserie Essai »", run.section(KEY).skipped
+        )
         self.assertFalse(SlipFormat.objects.filter(name="Bon Brasserie Essai").exists())
+        self.assertTrue(Slip.objects.filter(sha256=self.slip.sha256).exists())
 
     def test_an_unknown_supplier_skips_the_pickup(self):
         report = self._import(edit("pickups", first_pickup, lambda record: record.update(supplier="INCONNU_ESSAI")))
@@ -913,13 +934,12 @@ class RefusalTests(ReturnablesData, TestCase):
         def change(payload):
             payload["pickups"].append(dict(payload["pickups"][0]))
             payload["slips"].append(dict(payload["slips"][0]))
-            payload["types"].append({**payload["types"][0], "name": "FUTS"})
             return payload
 
         report = self._import(change)
-        self.assertEqual(len(report.skipped), 3, report.skipped)
+        self.assertEqual(len(report.skipped), 2, report.skipped)
         self.assertTrue(all(line.endswith("en double dans l'archive") for line in report.skipped), report.skipped)
-        self.assertEqual((Pickup.objects.count(), Slip.objects.count(), ReturnableType.objects.count()), (2, 2, 4))
+        self.assertEqual((Pickup.objects.count(), Slip.objects.count()), (2, 2))
 
     def test_a_reading_the_pages_cannot_read_skips_the_slip(self):
         for reading in (
@@ -1058,146 +1078,17 @@ class NamedButUnreadTests(ReturnablesData, TestCase):
             for record in payload["slips"]:
                 if first_slip(record):
                     record["reading"]["checks"] = [1]
-            for record in payload["types"]:
-                if record["name"] == "Palettes":
-                    record["slip_patterns"] = "PALETTE("
             return payload
 
         reader = self.forged(change)
         with self.captureOnCommitCallbacks(execute=True):
             report = run_import(reader, REPLACE).section(KEY)
-        self.assertEqual(len(report.skipped), 3, report.skipped)
-        self.assertEqual((tally(report, PICKUPS)[2], tally(report, SLIPS)[2], tally(report, TYPES)[2]), (0, 0, 0))
+        self.assertEqual(len(report.skipped), 2, report.skipped)
+        self.assertEqual((tally(report, PICKUPS)[2], tally(report, SLIPS)[2]), (0, 0))
         self.assertTrue(Pickup.objects.filter(pk=self.pickup.pk).exists())
         self.assertTrue(Slip.objects.filter(pk=self.slip.pk).exists())
-        self.assertTrue(ReturnableType.objects.filter(pk=self.pallets.pk).exists())
         # And their files.
         self.assertTrue({self.slip.file.name, self.photo(0).image.name} <= media_names())
-
-
-class PatternRefusalTests(ReturnablesData, TestCase):
-    """A pattern from an archive meets the guard the forms use. Refusals are
-    proven with regex.compile replaced by a sentinel that fails if it is
-    called: none of these is ever compiled for real."""
-
-    def setUp(self):
-        super().setUp()
-        self.reader = self.export()
-        clear_returnables()
-
-    def _import(self, change):
-        reader = ArchiveReader(forge(self.reader, consignes=change))
-        self.addCleanup(reader.close)
-        return run_import(reader, MERGE).section(KEY)
-
-    def test_a_type_pattern_the_guard_refuses_is_never_compiled(self):
-        reader = ArchiveReader(
-            forge(
-                {
-                    KEY: payload_of(
-                        types=[
-                            {
-                                "name": "Palettes",
-                                "position": 4,
-                                "is_active": True,
-                                "slip_patterns": "PALETTE\n(?x)a{1 0 0 0 0}",
-                            }
-                        ]
-                    )
-                }
-            )
-        )
-        self.addCleanup(reader.close)
-        patterns.compile_field(patterns.TYPE_FIELD, "PALETTE")  # line 1, checked (and kept) before the sentinel
-        never = NeverCompile()
-        with mock.patch.object(regex, "compile", new=never):
-            report = import_archive(reader, MERGE).section(KEY)
-        self.assertEqual(never.calls, [])
-        self.assertIn(
-            "Type de consigne « Palettes » : motif refusé : Motifs des bons (ligne 2) — le mode (?x) n'est pas "
-            "accepté dans un motif",
-            report.skipped,
-        )
-        self.assertFalse(ReturnableType.objects.filter(name="Palettes").exists())
-
-    def test_a_format_pattern_the_guard_refuses_is_never_compiled(self):
-        check_format_patterns(UBA_PATTERNS)  # the others, checked (and kept) before the sentinel
-        uba_record = next(
-            record for record in self.reader.section(KEY).payload()["formats"] if record["supplier"] == "UBA"
-        )
-        for pattern, reason in (
-            ("(?:x{65535}){65535}", "répétition trop grande"),
-            ("((a{1000}){1000}){1000}", "répétition trop grande"),
-            ("(?x)(?:x{6 5 5 3 5}){6 5 5 3 5}", "le mode (?x) n'est pas accepté"),
-            ("(?x:a{1 0 0})", "le mode (?x) n'est pas accepté"),
-            ("a{e<=1}", "accolade"),
-            ("(?:(?:(?:x{100,}){100,}){100,}){100,}", "répétition trop grande"),
-        ):
-            with self.subTest(pattern=pattern):
-                payload = payload_of(
-                    formats=[{**uba_record, "name": "Bon piégé", "line_pattern": pattern}],
-                    supplier_names={"UBA": self.uba.name},
-                )
-                reader = ArchiveReader(forge({KEY: payload}))
-                self.addCleanup(reader.close)
-                never = NeverCompile()
-                with mock.patch.object(regex, "compile", new=never):
-                    report = import_archive(reader, MERGE).section(KEY)
-                self.assertEqual(never.calls, [])
-                self.assertEqual(len(report.skipped), 1, report.skipped)
-                self.assertTrue(
-                    report.skipped[0].startswith("Format de bon « Bon piégé » : motif refusé : Motif de ligne — "),
-                    report.skipped[0],
-                )
-                self.assertIn(reason, report.skipped[0])
-                self.assertFalse(SlipFormat.objects.filter(name="Bon piégé").exists())
-
-    def test_the_form_rules_hold_for_a_format(self):
-        for change, said in (
-            ({"line_pattern": ""}, "motif refusé : Motif de ligne — le motif est vide"),
-            ({"date_patterns": "  "}, "motif refusé : Motif de date — le motif est vide"),
-            (
-                {"line_pattern": r"^(?P<designation>.+?)\s+(?P<quantite>\d+"},
-                "motif refusé : Motif de ligne — parenthèse non fermée",
-            ),
-            (
-                {"line_pattern": r"^(?P<designation>.+?)\s+\d+"},
-                "motif refusé : Motif de ligne — le motif doit contenir",
-            ),
-            ({"section_start": "x*"}, "motif refusé : Début de la partie — le motif accepte une ligne vide"),
-            ({"sender_pattern": ".+@.+"}, "motif refusé : Motif d'expéditeur — Le motif d'expéditeur doit désigner"),
-            (
-                {"sender_pattern": "livreur@brasserie-essai\\.example", "subject_pattern": ""},
-                "motif refusé : Motif d'objet — obligatoire quand un motif d'expéditeur est donné",
-            ),
-        ):
-            with self.subTest(change=change):
-                report = self._import(
-                    edit(
-                        "formats",
-                        lambda record: record["name"] == "Bon Brasserie Essai",
-                        lambda record, change=change: record.update(change),
-                    )
-                )
-                refused = [line for line in report.skipped if line.startswith("Format de bon « Bon Brasserie Essai »")]
-                self.assertEqual(len(refused), 1, report.skipped)
-                self.assertIn(said, refused[0])
-                self.assertFalse(SlipFormat.objects.filter(name="Bon Brasserie Essai").exists())
-
-    def test_a_format_the_forms_accept_is_imported(self):
-        report = self._import(
-            edit(
-                "formats",
-                lambda record: record["name"] == "Bon Brasserie Essai",
-                lambda record: record.update(
-                    sender_pattern="livreur@brasserie-essai\\.example", subject_pattern="^Livraison"
-                ),
-            )
-        )
-        self.assertEqual(report.skipped, [])
-        self.assertEqual(
-            SlipFormat.objects.get(name="Bon Brasserie Essai").sender_pattern, "livreur@brasserie-essai\\.example"
-        )
 
 
 # -- clear ----------------------------------------------------------------------------------------
@@ -1215,16 +1106,21 @@ class ClearTests(ReturnablesData, TestCase):
         confirmed = run_clear({KEY}, preview=False)
         self.assertEqual(preview.outcome(), confirmed.outcome())
 
-    def test_everything_goes_the_seeds_too_and_nothing_else(self):
+    def test_its_rows_go_and_the_types_and_formats_stay(self):
+        """« Effacer » of « Consignes » leaves the types and formats - the
+        seeds included - to « Types et formats de consignes », and no longer
+        warns that the seeds go."""
         invoice = make_invoice(supplier=self.brewer, invoice_number="B-1")
+        types_before = registry.get(TYPES_KEY).snapshot()
         run = run_clear({KEY}, preview=False)
         section._SIZES.clear()
         self.assertEqual(ReturnablesSection().count(), dict.fromkeys((*ENTITIES, MEGABYTES), 0))
         report = run.section(KEY)
         self.assertEqual({entity: report.tallies[entity].deleted for entity in ENTITIES}, HELD)
-        self.assertIn(CLEAR_NOTE, report.notes)
+        self.assertNotIn(returnable_types.CLEAR_NOTE, report.notes)
         self.assertEqual(run.affected(), {KEY})
-        # The suppliers and the invoices are not this section's.
+        self.assertEqual(registry.get(TYPES_KEY).snapshot(), types_before)
+        # The suppliers and the invoices are not this section's either.
         self.assertTrue(Supplier.objects.filter(pk=self.brewer.pk).exists())
         self.assertTrue(Invoice.objects.filter(pk=invoice.pk).exists())
 
@@ -1250,12 +1146,10 @@ class ClearTests(ReturnablesData, TestCase):
         self.assertEqual(Pickup.objects.count(), 2)
         self.assertTrue(names <= media_names())
 
-    def test_after_a_clear_the_safety_archive_brings_the_seeds_back(self):
+    def test_after_a_clear_the_safety_archive_brings_every_pickup_and_slip_back(self):
         reader = self.export()
+        before = ReturnablesSection().snapshot()
         clear_returnables()
-        run_import(reader, REPLACE)
-        self.assertEqual(
-            set(ReturnableType.objects.values_list("name", flat=True)),
-            {"Fûts", "Caisses verre", "Bouteilles CO2", "Palettes"},
-        )
-        self.assertTrue(SlipFormat.objects.filter(name="UBA \N{EM DASH} bon du livreur", supplier=self.uba).exists())
+        with self.captureOnCommitCallbacks(execute=True):
+            run_import(reader, REPLACE)
+        self.assertEqual(ReturnablesSection().snapshot(), before)

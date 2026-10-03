@@ -14,9 +14,18 @@ from django.core.files.uploadedfile import SimpleUploadedFile, TemporaryUploaded
 from django.test import TestCase
 
 from accounts import paths
-from transfer import archive, safety, staging
+from transfer import archive, registry, safety, staging
 from transfer.archive import ArchiveError
-from transfer.tests.support import FakeSectionsMixin, export_archive, fake_row, forge
+from transfer.sections.bank import BankSection
+from transfer.sections.returnables import ReturnablesSection
+from transfer.tests.support import FAKES, FakeSectionsMixin, export_archive, fake_row, forge
+from transfer.tests.test_archive import (
+    OLD_BANK,
+    OLD_BANK_COUNTS,
+    OLD_RETURNABLES,
+    OLD_RETURNABLES_COUNTS,
+    old_archive,
+)
 
 
 def upload_of(path: Path, name="archive.zip") -> SimpleUploadedFile:
@@ -137,6 +146,58 @@ class StageUploadTests(FakeSectionsMixin, TestCase):
         }
         staging.save(stage)
         self.assertEqual(staging.get(stage.token).state["sections"], {"fournisseurs": "fusionner"})
+
+
+class CarvedStageTests(FakeSectionsMixin, TestCase):
+    """A stage holds what the archive holds as this version reads it
+    (archive.manifest_sections): an archive written before « Règles de la
+    banque » and « Types et formats de consignes » holds them inside
+    « Banque » and « Consignes » - and so does every safety backup taken
+    until then, staged by reference."""
+
+    def test_an_old_archive_is_staged_with_the_parts_carved_out_of_it(self):
+        path = old_archive(
+            banque=(OLD_BANK, OLD_BANK_COUNTS),
+            consignes=(OLD_RETURNABLES, OLD_RETURNABLES_COUNTS),
+        )
+        stage = staging.stage_upload(upload_of(path))
+        everything = {"banque", "regles_banque", "consignes", "types_consignes"}
+        self.assertEqual(stage.sections, everything)
+        # Read back from state.json, as every page after the upload does.
+        self.assertEqual(staging.get(stage.token).sections, everything)
+        with stage.open() as reader:
+            self.assertEqual(reader.sections, everything)
+
+    def test_an_old_backup_is_staged_with_them_too(self):
+        folder = safety.backup_dir()
+        backup = folder / "2026-09-30_101500_avant-import.zip"
+        backup.write_bytes(old_archive(banque=(OLD_BANK, OLD_BANK_COUNTS)).read_bytes())
+        self.addCleanup(backup.unlink, missing_ok=True)
+        stage = staging.stage_backup(backup.name)
+        self.assertEqual(staging.get(stage.token).sections, {"banque", "regles_banque"})
+        staging.discard(stage)
+
+    def test_this_versions_bank_or_returnables_alone_are_staged_alone(self):
+        """As the real sections write them - « Banque » exported alone,
+        « Consignes » alone as a safety backup takes it (closed=False) -
+        their counts name what they hold, none of the old labels: nothing is
+        carved out of them. Carved, an empty « Règles de la banque » would
+        be offered beside every such backup."""
+        with registry.swap({**FAKES, "banque": BankSection, "consignes": ReturnablesSection}):
+            readers = {"banque": export_archive({"banque"}), "consignes": export_archive({"consignes"}, closed=False)}
+        for key, reader in readers.items():
+            reader.close()
+            with self.subTest(key=key):
+                self.assertEqual(staging.stage_upload(upload_of(reader.path)).sections, {key})
+
+    def test_a_manifest_that_says_nothing_readable_holds_nothing(self):
+        """The stage's manifest is the archive's, kept in state.json: what
+        is not a dict of sections reads as nothing, never an error."""
+        stage = staging.stage_upload(upload_of(old_archive(banque=(OLD_BANK, OLD_BANK_COUNTS))))
+        for manifest in ({}, {"sections": []}, {"sections": {"banque": "x"}}, {"sections": {"cocktails": {}}}):
+            with self.subTest(manifest=manifest):
+                stage.manifest = manifest
+                self.assertEqual(stage.sections, frozenset())
 
 
 def no_stages():

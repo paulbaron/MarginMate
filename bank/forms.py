@@ -7,7 +7,7 @@ from common import format_money
 from returnables.forms import PATTERN_ATTRS
 from returnables.patterns import PatternError
 
-from . import recognition, statements, treasury
+from . import recognition, rules, statements, treasury
 from .models import IgnoreRule, OperationRule, StatementFormat, TreasuryAdjustment
 
 Meaning = OperationRule.Meaning
@@ -55,6 +55,13 @@ class IgnoreRuleForm(forms.ModelForm):
                 "classée à la main garde sa catégorie, la règle ne l'écrase pas."
             ),
         }
+        error_messages = {
+            "pattern": {
+                "required": PATTERN_REQUIRED,
+                "max_length": TOO_LONG,
+                "null_characters_not_allowed": NUL_REFUSED,
+            },
+        }
         widgets = {
             # The same free-typed-against-a-datalist field as elsewhere (see
             # StockType.category): the words a person already uses are the
@@ -62,6 +69,30 @@ class IgnoreRuleForm(forms.ModelForm):
             # to date is one more thing to keep up to date.
             "category": forms.TextInput(attrs={"list": "spending-category-datalist", "autocomplete": "off"}),
         }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        #: The pattern as `rules.searcher` compiled it, once the form is
+        #: valid - what « Tester » and « Ajouter la règle » search with.
+        self.searcher = None
+
+    def clean_pattern(self):
+        """Through the guard of `returnables.patterns` (`rules.check`), as
+        the model's own `clean` checks it - the refusal in French on this
+        field, and nothing compiled that could freeze the machine."""
+        pattern = self.cleaned_data["pattern"]
+        try:
+            self.searcher = rules.searcher(pattern)
+        except PatternError as error:
+            raise forms.ValidationError(error.message) from None
+        return pattern
+
+    def _post_clean(self):
+        # The pattern is checked above as the model would check it; its own
+        # clean() checks it again - on the value the instance held before
+        # where the field was refused here: two sentences, one about a value
+        # nobody typed (as OperationRuleForm).
+        self.instance = construct_instance(self, self.instance, self._meta.fields, self._meta.exclude)
 
     def clean_category(self):
         """Stored the way every other place stores a category

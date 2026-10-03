@@ -27,7 +27,7 @@ from django.test import SimpleTestCase, TestCase
 from accounts import paths
 from inventory.models import StockType
 from invoices.models import Invoice, InvoiceLine
-from transfer import archive, codec
+from transfer import archive, codec, registry
 from transfer.archive import (
     ArchiveError,
     ArchiveReader,
@@ -74,6 +74,79 @@ def stored(name: str, data: bytes) -> str:
     if default_storage.exists(name):
         default_storage.delete(name)
     return default_storage.save(name, ContentFile(data))
+
+
+# -- archives written before the bank's rules and the returnable types were sections --------
+
+#: banque.json and its counts as « Banque » wrote them until its formats and
+#: rules became « Règles de la banque » (02/10/2026) - every archive and
+#: every safety backup taken until then. The records are invented and cut
+#: to what tells them apart: these tests read the file, no section loads it.
+#: Its « supplier_names » are the lines' and the aliases': unlike the
+#: returnables', the rules name no supplier and do not share them.
+OLD_BANK = {
+    "supplier_names": {"OTHER": "Fournisseur Exemple"},
+    "transactions": [{"fingerprint": "a" * 64, "label": "PRLV SEPA EXEMPLE"}],
+    "aliases": [{"name": "BOULANGERIE EXEMPLE", "supplier": "OTHER"}],
+    "rules": [{"pattern": "URSSAF"}, {"pattern": "PRET EXEMPLE"}],
+    "operation_rules": [{"name": "Carte"}, {"name": "Prélèvement"}, {"name": "Virement"}],
+    "statement_formats": [{"name": "Banque Exemple (CSV)"}],
+    "income_payers": [{"key": "TERMINAL EXEMPLE", "source": "carte"}],
+}
+OLD_BANK_COUNTS = {
+    "opérations": 1,
+    "paiements": 0,
+    "règles": 2,
+    "règles de reconnaissance": 3,
+    "formats de relevé": 1,
+    "noms de payeurs appris": 4,
+    "payeurs retenus (entrées d'argent)": 5,
+}
+#: What « Banque » keeps of an old banque.json, and « Règles de la banque » takes.
+BANK_KEYS = ("supplier_names", "transactions", "aliases", "income_payers")
+BANK_RULES_KEYS = ("statement_formats", "operation_rules", "rules")
+
+#: consignes.json and its counts as « Consignes » wrote them until its types
+#: and slip formats became « Types et formats de consignes » (02/10/2026).
+OLD_RETURNABLES = {
+    "supplier_names": {"UBA": "Grossiste Exemple"},
+    "types": [{"name": "Fûts"}, {"name": "Caisses verre"}, {"name": "Bouteilles CO2"}],
+    "formats": [{"name": "Bon exemple", "supplier": "UBA"}],
+    "pickups": [{"reference": "r" * 16}, {"reference": "s" * 16}],
+    "slips": [{"sha256": "b" * 64}],
+}
+OLD_RETURNABLES_COUNTS = {
+    "types de consigne": 3,
+    "formats de bons": 1,
+    "reprises": 2,
+    "photos": 0,
+    "bons": 1,
+    "lignes de bons": 2,
+    "Mo de fichiers": 0,
+}
+
+#: A manifest entry with no « counts » at all.
+NO_COUNTS = object()
+
+
+def old_archive(**sections) -> Path:
+    """An archive forged as the version before wrote it: `sections` maps a
+    key to (payload, counts) - counts `NO_COUNTS` leaves the entry without
+    any."""
+
+    def manifest(data):
+        for key, (_payload, counts) in sections.items():
+            if counts is NO_COUNTS:
+                del data["sections"][key]["counts"]
+            else:
+                data["sections"][key]["counts"] = counts
+        return data
+
+    return forge({key: payload for key, (payload, _counts) in sections.items()}, manifest=manifest)
+
+
+def only(payload: dict, names) -> dict:
+    return {name: value for name, value in payload.items() if name in names}
 
 
 class WritingTests(TestCase):
@@ -360,6 +433,232 @@ class ReadingTests(TestCase):
         changed = forge(path, fournisseurs=lambda payload: {**payload, "suppliers": ["x"]})
         with ArchiveReader(changed) as reader:
             self.assertEqual(reader.section("fournisseurs").payload(), {"suppliers": ["x"]})
+
+
+class CarvedSectionTests(SimpleTestCase):
+    """An archive written before « Règles de la banque » and « Types et
+    formats de consignes » were sections of their own holds them inside
+    banque.json and consignes.json - and so does every safety backup taken
+    until then. It is read as if it held both: the same keys, read from the
+    old file. Read as « Banque » alone, its rules would have been offered
+    under a section that no longer reads them, and lost."""
+
+    def test_an_old_bank_holds_the_bank_rules_too(self):
+        with ArchiveReader(old_archive(banque=(OLD_BANK, OLD_BANK_COUNTS))) as reader:
+            self.assertEqual(reader.sections, {"banque", "regles_banque"})
+            rules, bank = reader.section("regles_banque"), reader.section("banque")
+            # The file each is read from: what their refusals name.
+            self.assertEqual((rules.member, bank.member), ("banque.json", "banque.json"))
+            self.assertEqual(rules.payload(), only(OLD_BANK, BANK_RULES_KEYS))
+            self.assertEqual(bank.payload(), only(OLD_BANK, BANK_KEYS))
+            # Each count under the section that holds it now, so the Importer
+            # tab compares like with like.
+            self.assertEqual(
+                reader.counts("regles_banque"),
+                {"formats de relevé": 1, "règles de reconnaissance": 3, "règles « sans facture »": 2},
+            )
+            self.assertEqual(
+                reader.counts("banque"),
+                {"opérations": 1, "paiements": 0, "noms de payeurs appris": 4, "payeurs retenus (entrées d'argent)": 5},
+            )
+
+    def test_old_returnables_hold_the_types_and_formats_too(self):
+        """The supplier names are read by both: a format and a pickup each
+        find their supplier through them."""
+        with ArchiveReader(old_archive(consignes=(OLD_RETURNABLES, OLD_RETURNABLES_COUNTS))) as reader:
+            self.assertEqual(reader.sections, {"consignes", "types_consignes"})
+            types, pickups = reader.section("types_consignes"), reader.section("consignes")
+            self.assertEqual((types.member, pickups.member), ("consignes.json", "consignes.json"))
+            self.assertEqual(types.payload(), only(OLD_RETURNABLES, ("types", "formats", "supplier_names")))
+            self.assertEqual(pickups.payload(), only(OLD_RETURNABLES, ("supplier_names", "pickups", "slips")))
+            self.assertEqual(reader.counts("types_consignes"), {"types de consigne": 3, "formats de bons": 1})
+            self.assertEqual(
+                reader.counts("consignes"),
+                {"reprises": 2, "photos": 0, "bons": 1, "lignes de bons": 2, "Mo de fichiers": 0},
+            )
+
+    def test_the_old_file_is_parsed_once_whichever_is_read_first(self):
+        """Up to MAX_JSON_BYTES of JSON: read for one section, it is not
+        read again for the other."""
+        path = old_archive(banque=(OLD_BANK, OLD_BANK_COUNTS), consignes=(OLD_RETURNABLES, OLD_RETURNABLES_COUNTS))
+        for order in (("banque", "regles_banque"), ("regles_banque", "banque"), ("types_consignes", "consignes")):
+            with (
+                self.subTest(order=order),
+                ArchiveReader(path) as reader,
+                mock.patch.object(archive, "_read_json", wraps=archive._read_json) as read,
+            ):
+                for key in order:
+                    reader.section(key).payload()
+                    reader.section(key).payload()
+                self.assertEqual([call.args[1] for call in read.call_args_list], [reader.section(order[0]).member])
+
+    def test_each_section_has_its_own_payload(self):
+        """A section keeps its payload and may take keys out of it: the
+        other's - the supplier names both read included - stays whole."""
+        with ArchiveReader(old_archive(consignes=(OLD_RETURNABLES, OLD_RETURNABLES_COUNTS))) as reader:
+            reader.section("types_consignes").payload().pop("supplier_names")
+            self.assertEqual(reader.section("consignes").payload()["supplier_names"], {"UBA": "Grossiste Exemple"})
+        # Changed in place too: the shared value is a copy, not the same dict.
+        with ArchiveReader(old_archive(consignes=(OLD_RETURNABLES, OLD_RETURNABLES_COUNTS))) as reader:
+            reader.section("types_consignes").payload()["supplier_names"]["UBA"] = "Autre nom"
+            self.assertEqual(reader.section("consignes").payload()["supplier_names"], {"UBA": "Grossiste Exemple"})
+        with ArchiveReader(old_archive(banque=(OLD_BANK, OLD_BANK_COUNTS))) as reader:
+            reader.section("banque").payload().clear()
+            self.assertEqual(reader.section("regles_banque").payload(), only(OLD_BANK, BANK_RULES_KEYS))
+
+    def test_a_refusal_names_the_file_read(self):
+        path = old_archive(banque=(OLD_BANK, OLD_BANK_COUNTS))
+        broken = forge(path, banque=b"[1, 2]")
+        with ArchiveReader(broken) as reader, self.assertRaises(ArchiveError) as caught:
+            reader.section("regles_banque").payload()
+        self.assertEqual(str(caught.exception), "Archive refusée : banque.json est illisible.")
+
+    def test_an_archive_holding_both_reads_each_its_own_file(self):
+        """This version's archive: nothing is carved, and banque.json is read
+        as it is - whatever it holds."""
+
+        def manifest(data):
+            data["sections"]["banque"]["counts"] = OLD_BANK_COUNTS
+            data["sections"]["regles_banque"]["counts"] = {"formats de relevé": 0}
+            return data
+
+        own_rules = {"statement_formats": [], "operation_rules": [], "rules": [{"pattern": "AUTRE"}]}
+        path = forge({"banque": OLD_BANK, "regles_banque": own_rules}, manifest=manifest)
+        with ArchiveReader(path) as reader:
+            self.assertEqual(reader.sections, {"banque", "regles_banque"})
+            self.assertEqual(reader.section("regles_banque").member, "regles_banque.json")
+            self.assertEqual(reader.section("regles_banque").payload(), own_rules)
+            self.assertEqual(reader.section("banque").payload(), OLD_BANK)
+            self.assertEqual(reader.counts("banque"), OLD_BANK_COUNTS)
+            self.assertEqual(reader.counts("regles_banque"), {"formats de relevé": 0})
+
+    def test_this_versions_bank_or_returnables_alone_carve_nothing(self):
+        """Counts naming every entity the section holds, none of the old
+        labels among them: written without the rules - a safety backup
+        taking « Banque » alone, say. Carved, an empty « Règles de la banque »
+        would be offered beside it."""
+        bank_counts = {"opérations": 1, "paiements": 0, "noms de payeurs appris": 0}
+        returnables_counts = {"reprises": 2, "photos": 0, "bons": 0}
+        path = old_archive(banque=(OLD_BANK, bank_counts), consignes=(OLD_RETURNABLES, returnables_counts))
+        with ArchiveReader(path) as reader:
+            self.assertEqual(reader.sections, {"banque", "consignes"})
+            self.assertEqual(reader.section("banque").payload(), OLD_BANK)
+            self.assertEqual(reader.section("consignes").payload(), OLD_RETURNABLES)
+            self.assertEqual(reader.counts("banque"), bank_counts)
+            for key in ("regles_banque", "types_consignes"):
+                with self.subTest(key=key), self.assertRaises(ArchiveError):
+                    reader.section(key)
+
+    def test_counts_that_say_nothing_carve(self):
+        """Missing, empty or not a dict: nothing says the file was written
+        without the rules, and the section is offered - its load reads only
+        the keys it finds."""
+        for counts in (NO_COUNTS, {}, None, "onze", [1], 3):
+            with self.subTest(counts=counts), ArchiveReader(old_archive(banque=(OLD_BANK, counts))) as reader:
+                self.assertEqual(reader.sections, {"banque", "regles_banque"})
+                self.assertEqual(reader.section("regles_banque").payload(), only(OLD_BANK, BANK_RULES_KEYS))
+                self.assertEqual(reader.section("banque").payload(), only(OLD_BANK, BANK_KEYS))
+                self.assertEqual((reader.counts("regles_banque"), reader.counts("banque")), ({}, {}))
+
+    def test_an_old_label_whatever_its_value_carves(self):
+        with ArchiveReader(old_archive(banque=(OLD_BANK, {"opérations": 1, "règles": "deux"}))) as reader:
+            self.assertEqual(reader.sections, {"banque", "regles_banque"})
+            self.assertEqual(reader.counts("regles_banque"), {})
+            self.assertEqual(reader.counts("banque"), {"opérations": 1})
+
+
+class ManifestSectionsTests(SimpleTestCase):
+    """What a staged archive holds, read off the manifest the stage kept:
+    the Importer tab draws from it, so garbage reads as nothing, never a
+    500."""
+
+    def test_garbage_holds_nothing(self):
+        for manifest in (
+            None,
+            [],
+            "manifeste",
+            1,
+            {},
+            {"sections": None},
+            {"sections": []},
+            {"sections": "banque"},
+            {"sections": {"banque": "x"}},
+            {"sections": {"banque": None, "consignes": [1]}},
+            {"sections": {"cocktails": {"counts": {}}}},
+        ):
+            with self.subTest(manifest=manifest):
+                self.assertEqual(archive.manifest_sections(manifest), frozenset())
+                for key in ("banque", "regles_banque", "consignes", "types_consignes"):
+                    # Never raises: whatever it returns, the page filters.
+                    archive.manifest_counts(manifest, key)
+
+    def test_the_sections_as_this_version_reads_them(self):
+        def sections(**entries):
+            return archive.manifest_sections({"sections": entries})
+
+        self.assertEqual(sections(banque={"counts": OLD_BANK_COUNTS}), {"banque", "regles_banque"})
+        self.assertEqual(sections(banque={}), {"banque", "regles_banque"})
+        self.assertEqual(sections(banque={"counts": {"opérations": 0}}), {"banque"})
+        self.assertEqual(sections(banque={"counts": OLD_BANK_COUNTS}, regles_banque={}), {"banque", "regles_banque"})
+        self.assertEqual(
+            sections(fournisseurs={}, consignes={"counts": OLD_RETURNABLES_COUNTS}, cocktails={}),
+            {"fournisseurs", "consignes", "types_consignes"},
+        )
+        self.assertEqual(archive.carved(None), {})
+        self.assertEqual(archive.carved([("banque", {})]), {})
+
+    def test_the_counts_as_this_version_reads_them(self):
+        manifest = {"sections": {"banque": {"counts": OLD_BANK_COUNTS}}}
+        self.assertEqual(
+            archive.manifest_counts(manifest, "regles_banque"),
+            {"formats de relevé": 1, "règles de reconnaissance": 3, "règles « sans facture »": 2},
+        )
+        self.assertEqual(
+            archive.manifest_counts(manifest, "banque"),
+            {
+                label: number
+                for label, number in OLD_BANK_COUNTS.items()
+                if label not in ("règles", "règles de reconnaissance", "formats de relevé")
+            },
+        )
+        self.assertIsNone(archive.manifest_counts(manifest, "consignes"))
+        # Left to the page's own filter (views._counts_text), as before.
+        self.assertEqual(archive.manifest_counts({"sections": {"banque": {"counts": "onze"}}}, "banque"), "onze")
+        self.assertIsNone(archive.manifest_counts({"sections": {"banque": {"counts": "onze"}}}, "regles_banque"))
+
+
+class CarvedLabelsTests(TestCase):
+    def test_this_versions_counts_tell_the_two_kinds_of_archive_apart(self):
+        """Through the section contract (count(), what the manifest's counts
+        are): « Banque » and « Consignes » never name an old label any more -
+        one back, and every « Banque » exported alone would be read as
+        carrying the rules - and the sections carved out of them count under
+        the labels the carve gives an old archive's counts, so the Importer
+        tab compares like with like."""
+        for key, carve in archive.CARVED.items():
+            with self.subTest(key=key):
+                self.assertFalse(set(registry.get(carve.within).count()) & {old for _label, old in carve.counts})
+                self.assertEqual(set(registry.get(key).count()), {label for label, _old in carve.counts})
+
+    def test_the_old_side_is_what_the_old_sections_wrote(self):
+        """The right-hand label of each pair, and the keys, are what
+        sections/bank.py (RULES, RECOGNITION, FORMATS) and
+        sections/returnables.py (TYPES, FORMATS) wrote into every archive
+        before 02/10/2026 - literals here, since those constants have moved.
+        One letter off and an old archive is no longer carved: its rules
+        would be offered under « Banque », which no longer reads them. The
+        left-hand labels are the new sections' own, checked by their tests."""
+        rules = archive.CARVED["regles_banque"]
+        self.assertEqual((rules.within, rules.keys, rules.shared), ("banque", BANK_RULES_KEYS, ()))
+        self.assertEqual(
+            {old for _label, old in rules.counts}, {"formats de relevé", "règles de reconnaissance", "règles"}
+        )
+        types = archive.CARVED["types_consignes"]
+        self.assertEqual(
+            (types.within, types.keys, types.shared), ("consignes", ("types", "formats"), ("supplier_names",))
+        )
+        self.assertEqual({old for _label, old in types.counts}, {"types de consigne", "formats de bons"})
+        self.assertEqual(set(archive.CARVED), {"regles_banque", "types_consignes"})
 
 
 DOCUMENT = "files/invoices/2026/09/essai.pdf"
