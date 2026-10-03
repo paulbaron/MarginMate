@@ -6391,6 +6391,12 @@ rather than a dropdown. All in the page's script, nothing saved differently:
   the island `ingredient-categories-data`): picked, it becomes one row per
   article in the row's group, what is already there skipped. Those rows
   share their quantity until one is given its own.
+- **Every result of a search, in one click** (the owner, 03/10/2026:
+  « sirop » → every syrup in « OU »): « Ajouter les N résultats en « OU » »
+  heads the list once a search finds two articles or recipes
+  (`everyResult`) - all it finds, not only the 40 listed; never the
+  categories, and not offered when a category found adds exactly the same.
+  Enter still takes the first ingredient, never all of them.
 
 Tests: `recipes/tests/test_ingredient_picker.py`, and in Chrome
 `test_recipe_form_browser.py`.

@@ -8,7 +8,9 @@
   accents and case aside, Enter picking;
 * **a category** (« Catégorie : Rhums ») puts all its articles in the row's
   « OU » group, sharing the quantity until one is given its own, and each
-  is removed with its « Retirer ».
+  is removed with its « Retirer »;
+* **every result of a search** (« sirop ») goes into the group in one click,
+  « Ajouter les N résultats en « OU » » - Enter still takes one.
 
 What is saved is checked in the database: the page posts plain rows.
 
@@ -25,7 +27,7 @@ from django.urls import reverse
 
 from invoices.scrapers import website
 from recipes.models import Recipe
-from tests.factories import make_stock_type
+from tests.factories import make_recipe, make_stock_type
 from tests.runner import log_in_the_browser
 
 WAIT_SECONDS = 10
@@ -179,3 +181,45 @@ class RecipeFormInBrowserTests(StaticLiveServerTestCase):
         self.driver.find_element(By.ID, "id_name").click()
         self.assertEqual(search.get_attribute("value"), "Rhum ambré (Litre)")
         self.assertEqual(select.get_attribute("value"), f"stock:{self.rums[0].pk}")
+
+    def test_every_result_of_a_search_goes_in_as_one_choice(self):
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.common.keys import Keys
+
+        syrups = [make_stock_type(name=name) for name in ("Sirop de canne", "Sirop d'orgeat", "Sirop de fraise")]
+        make_recipe(name="Sirop maison gingembre", selling_price_ttc=None)
+        self.driver.get(self.live_server_url + reverse("recipes:recipe_create"))
+        self.driver.find_element(By.ID, "id_name").send_keys("Mojito fraise")
+        search = self.driver.find_element(By.CSS_SELECTOR, ".ingredient-search")
+        search.click()
+        search.send_keys("sirop")
+        results = self.results(search)
+        self.assertEqual(results[0], "Ajouter les 4 résultats en « OU »tout « sirop »")
+        self.assertEqual(len(results), 5)
+        # Enter would take the first ingredient found, not all of them.
+        active = self.script("return document.querySelector('[role=option].is-active').textContent;")
+        self.assertEqual(active, results[1])
+
+        self.driver.find_element(By.CSS_SELECTOR, "[role=option].is-every").click()
+        frames = self.frames()
+        self.assertEqual(len(frames), 1)
+        self.assertEqual(frames[0]["title"], "Au choix : une option parmi 4")
+        self.driver.switch_to.active_element.send_keys("0.02")
+        self.assertEqual([row["quantity"] for row in self.frames()[0]["rows"]], ["0.02"] * 4)
+
+        # The recipe is not wanted after all.
+        recipe_row = [i for i, row in enumerate(self.frames()[0]["rows"]) if row["label"].startswith("Sirop maison")]
+        self.driver.find_elements(By.CSS_SELECTOR, ".js-remove-ingredient")[recipe_row[0]].click()
+        # Searching again adds nothing twice.
+        search = self.driver.find_elements(By.CSS_SELECTOR, ".ingredient-search")[0]
+        search.click()
+        search.send_keys(Keys.CONTROL, "a")
+        search.send_keys("sirop de")
+        self.driver.find_element(By.CSS_SELECTOR, "[role=option].is-every").click()
+        self.assertEqual(self.frames()[0]["title"], "Au choix : une option parmi 3")
+
+        self.driver.find_element(By.CSS_SELECTOR, "form button[type=submit].btn:not(.btn-secondary)").click()
+        self.wait_for(lambda: Recipe.objects.filter(name="Mojito fraise").exists())
+        saved = Recipe.objects.get(name="Mojito fraise").ingredients.all()
+        self.assertEqual(len({i.group for i in saved}), 1)
+        self.assertEqual(sorted(i.stock_type.name for i in saved), sorted(s.name for s in syrups))

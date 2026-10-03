@@ -568,6 +568,14 @@ form p { margin: var(--s3) 0; }
 .ingredient-results [role=option].is-active,
 .ingredient-results [role=option]:hover { background: var(--panel-hover); }
 .ingredient-results .is-category { color: var(--amber); font-weight: 600; }
+/* « Ajouter les N résultats en « OU » », above what it adds. */
+.ingredient-results .is-every {
+    color: var(--amber);
+    font-weight: 600;
+    border-bottom: 1px solid var(--border);
+    border-radius: 0;
+    margin-bottom: var(--s1);
+}
 .ingredient-result-kind { color: var(--muted); font-size: 0.8rem; font-weight: 400; white-space: nowrap; }
 .ingredient-results-note { padding: var(--s2); color: var(--muted); font-size: 0.85rem; }
 
