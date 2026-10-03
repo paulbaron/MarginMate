@@ -12,23 +12,30 @@
             </p>
         </div>
         <div class="page-header-actions">
-            <a class="btn" href="{% url 'inventory:stock_take_variance' stock_take.pk %}">Voir les écarts</a>
-            <a class="btn btn-secondary" href="{% url 'inventory:stock_gap_filler' %}?depuis={{ stock_take.pk }}">Combler depuis</a>
+            {% if can.stock_gaps %}
+                <a class="btn" href="{% url 'inventory:stock_take_variance' stock_take.pk %}">Voir les écarts</a>
+                <a class="btn btn-secondary" href="{% url 'inventory:stock_gap_filler' %}?depuis={{ stock_take.pk }}">Combler depuis</a>
+            {% endif %}
             <a class="btn btn-secondary" href="{% url 'inventory:stock_take_update' stock_take.pk %}">Modifier</a>
-            <form method="post" action="{% url 'inventory:stock_take_delete' stock_take.pk %}"
-                  onsubmit="return confirm('Supprimer cet inventaire ?');">
-                {% csrf_token %}
-                <button type="submit" class="btn btn-secondary">Supprimer</button>
-            </form>
+            {% if can.owner %}
+                <form method="post" action="{% url 'inventory:stock_take_delete' stock_take.pk %}"
+                      onsubmit="return confirm('Supprimer cet inventaire ?');">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-secondary">Supprimer</button>
+                </form>
+            {% endif %}
         </div>
     </div>
 
+    {% comment %}Values and what they were taken from: for whoever is shown what articles cost (accounts/access.py).{% endcomment %}
     <div class="stat-row">
+        {% if can.sees_costs %}
         <div class="stat">
             <span class="stat-label">Valeur comptée (HT)</span>
             <span class="stat-value">{{ stock_take.total_value_ht|money }} €</span>
             <span class="stat-note">au prix réellement payé, achat par achat</span>
         </div>
+        {% endif %}
         <div class="stat">
             <span class="stat-label">Lignes comptées</span>
             <span class="stat-value">{{ lines|length }}</span>
@@ -58,8 +65,10 @@
                     <th>Produit / article</th>
                     <th>Fournisseur</th>
                     <th class="num">Quantité comptée</th>
+                    {% if can.sees_costs %}
                     <th class="num">Valeur (HT)</th>
                     <th>Déduit de</th>
+                    {% endif %}
                 </tr>
             </thead>
             <tbody>
@@ -70,11 +79,12 @@
                     </td>
                     <td class="muted">{{ line.product.supplier.name|default:"—" }}</td>
                     <td class="num">{{ line.counted_quantity|floatformat:"-4" }} {{ line.get_unit_display }}</td>
+                    {% if can.sees_costs %}
                     <td class="num">{{ line.value_ht|money }} €</td>
                     <td class="muted" style="font-size:0.9em;">
                         {% for source in line.sources.all %}
                             {{ source.quantity_used|floatformat:"-4" }} {{ line.get_unit_display }} à {{ source.unit_cost_ht|money:4 }} €
-                            (<a href="{% url 'invoices:invoice_detail' source.invoice_line.invoice_id %}">facture du {{ source.invoice_line.invoice.invoice_date|date:"d/m/Y" }}</a>)<br>
+                            ({% if can.invoices %}<a href="{% url 'invoices:invoice_detail' source.invoice_line.invoice_id %}">facture du {{ source.invoice_line.invoice.invoice_date|date:"d/m/Y" }}</a>{% else %}facture du {{ source.invoice_line.invoice.invoice_date|date:"d/m/Y" }}{% endif %})<br>
                         {% empty %}
                             —
                         {% endfor %}
@@ -82,9 +92,10 @@
                             <span title="{{ line.shortfall_quantity|floatformat:'-4' }} {{ line.get_unit_display }} au-delà de l'historique d'achats connu, valorisé au prix le plus ancien connu">⚠️ {{ line.shortfall_quantity|floatformat:"-4" }} {{ line.get_unit_display }} au-delà de l'historique</span>
                         {% endif %}
                     </td>
+                    {% endif %}
                 </tr>
                 {% empty %}
-                <tr><td colspan="5" class="muted">Aucun produit compté.</td></tr>
+                <tr><td colspan="{% if can.sees_costs %}5{% else %}3{% endif %}" class="muted">Aucun produit compté.</td></tr>
                 {% endfor %}
             </tbody>
         </table>

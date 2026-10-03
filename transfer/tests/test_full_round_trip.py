@@ -1,14 +1,15 @@
 """Every section at once (§10.4): the owner's case, a whole database moved.
 
 Each section's own tests round-trip that section, the others standing in or
-left where they are. Here all ten are real and move together - export
+left where they are. Here all twelve are real and move together - export
 everything, clear everything, import everything - so what crosses sections
 has to survive the trip too: an invoice line a stock take was priced from,
 a bank payment to a ticket known only by its file (the second of two
 byte-identical ones), a supplier's code named by six sections' records, and
-by « Consignes »' pickup and slip format (UBA's), the photos of a
-pickup and the PDF of a slip byte for byte, and the purchase movements and
-the till's sales per recipe rebuilt from what came back.
+by « Types et formats de consignes »' slip format and « Consignes »' pickup
+(UBA's), the photos of a pickup and the PDF of a slip byte for byte, and the
+purchase movements and the till's sales per recipe rebuilt from what came
+back.
 
 Every name, amount and file below is invented.
 """
@@ -30,6 +31,8 @@ from bank.models import (
     InvoicePayment,
     OperationRule,
     StatementFormat,
+    TreasuryAdjustment,
+    TreasuryCheckpoint,
 )
 from inventory.models import (
     MovementKind,
@@ -57,14 +60,8 @@ from transfer.tests.support import (
     media_listing,
     round_trip,
 )
-from transfer.tests.test_bank_section import (
-    make_line,
-    make_operation_rule,
-    make_payer,
-    make_rule,
-    make_statement_format,
-    pay,
-)
+from transfer.tests.test_bank_rules_section import make_operation_rule, make_rule, make_statement_format
+from transfer.tests.test_bank_section import make_adjustment, make_checkpoint, make_line, make_payer, pay
 from transfer.tests.test_invoices_section import (
     MediaMixin,
     build_invoices,
@@ -154,8 +151,9 @@ def build_everything() -> dict:
     # a credit said to be an « Avoir » of the till on its own line, a
     # payment terminal retained as « Carte » for every credit it sends,
     # beside the seeded recognition rules one typed for a terminal printing
-    # no gross, and beside the seeded statement format one typed for another
-    # bank's export, split by tabulations.
+    # no gross, beside the seeded statement format one typed for another
+    # bank's export, split by tabulations, and on « Trésorerie » two balances
+    # typed and an adjustment between them.
     pay(make_line(date(2026, 8, 3), "METRO ESSAI", "-50.70", settled=True), built["invoice"])
     pay(make_line(date(2026, 2, 27), "MONOPRIX ESSAI", "-8.44"), built["twins"][1], InvoicePayment.Method.AUTO)
     pay(make_line(date(2026, 9, 3), "MONOPRIX ESSAI", "-117.09", settled=True), built["receipt"])
@@ -184,6 +182,9 @@ def build_everything() -> dict:
         credit_column=4,
         account_pattern=r"COMPTE (?P<compte>[0-9]+)",
     )
+    make_checkpoint(date(2026, 8, 1), "1840.00")
+    make_checkpoint(date(2026, 9, 1), "-65.20")
+    make_adjustment(date(2026, 8, 20), "-14.90", "Frais (essai)")
 
     # Returnables: the seeded types and UBA format, a pickup with two photos,
     # and the slip its driver sent - its lines and its PDF - each made at a
@@ -362,7 +363,8 @@ def empty_backups():
 def bank_kept() -> tuple:
     """What clearing every other section leaves the bank: its lines, its
     rules, its recognition rules and statement formats in their order, its
-    payers retained, and what its credits were said to be in the till."""
+    payers retained, what its credits were said to be in the till, and the
+    treasury's points and adjustments."""
     return (
         BankTransaction.objects.count(),
         IgnoreRule.objects.count(),
@@ -370,6 +372,8 @@ def bank_kept() -> tuple:
         list(StatementFormat.objects.order_by("position", "name").values_list("name", "delimiter", "created_at")),
         IncomePayer.objects.count(),
         sorted(BankTransaction.objects.exclude(income_source="").values_list("fingerprint", "income_source")),
+        list(TreasuryCheckpoint.objects.order_by("date").values_list("date", "balance", "created_at")),
+        sorted(TreasuryAdjustment.objects.values_list("reference", "date", "amount", "reason", "created_at")),
     )
 
 
@@ -399,7 +403,9 @@ class ClearFromThePageTests(MediaMixin, TransactionTestCase):
     def test_clearing_the_suppliers_clears_all_but_the_bank_and_the_backup_brings_it_back(self):
         url = reverse("transfer:data_clear")
         cleared = registry.closure({"fournisseurs"}, "clear")
-        self.assertEqual(cleared, ALL - {"banque"})
+        # Neither bank section requires the suppliers: « Règles de la banque »
+        # holds no supplier at all, « Banque » names them by key only.
+        self.assertEqual(cleared, ALL - {"banque", "regles_banque"})
         posted = {"sections": sorted(cleared)}
         self.client.post(url, {**posted, "action": "previsualiser"})
         # The confirm names the preview its page shows (views.SHOWN_PREVIEW).
@@ -411,8 +417,8 @@ class ClearFromThePageTests(MediaMixin, TransactionTestCase):
 
         # Everything but the bank is empty; the bank lost its payments and
         # its payee names, not its lines, its rules, its recognition rules,
-        # its statement formats, its payers retained nor what its credits are
-        # in the till.
+        # its statement formats, its payers retained, what its credits are
+        # in the till, nor the treasury's points and adjustments.
         for key in registry.ordered(cleared - {"fournisseurs"}):
             counts = registry.get(key).count()
             with self.subTest(section=key):
@@ -426,12 +432,14 @@ class ClearFromThePageTests(MediaMixin, TransactionTestCase):
         self.assertEqual(metro_pause(), self.pause)
         self.assertFalse(media_names() & set(self.files))
 
-        # Both backups, and the archive holds the bank too: it lost rows.
+        # Both backups, and the archive holds the bank too: it lost rows. Not
+        # its rules, which nothing changed - and this version's « Banque »
+        # alone is never read as carrying them (archive.carved).
         backups = safety.list_backups()
         self.assertEqual(sorted(backup.kind for backup in backups), ["sqlite", "zip"])
         archive = next(backup for backup in backups if backup.kind == "zip")
         with ArchiveReader(archive.path) as reader:
-            self.assertEqual(reader.sections, ALL)
+            self.assertEqual(reader.sections, ALL - {"regles_banque"})
             import_archive(reader, REPLACE)
         after = snapshots()
         for key in self.before:

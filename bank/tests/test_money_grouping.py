@@ -1,7 +1,7 @@
 """Banque groups every amount's thousands (the owner, 01/10/2026: « des
 espaces tous les 3 chiffres »): 25 000.00 €, never 25000.00 €, on the
-operations, « Propositions », the rules, « Dépenses » and « Entrées
-d'argent » alike, in the sentences the views write and in the pie's
+operations, « Propositions », the rules, « Dépenses », « Entrées
+d'argent » and « Trésorerie » alike, in the sentences the views write and in the pie's
 tooltip - with a no-break space, so a figure never wraps across two lines.
 
 What a script or a form reads beside it stays the figure as stored: a
@@ -17,7 +17,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from bank import reconcile
-from bank.models import BankTransaction
+from bank.models import BankTransaction, TreasuryCheckpoint
 from bank.tests.test_invoice_files import credit_row
 from bank.tests.test_reconcile import Fixtures, debit_row
 
@@ -168,3 +168,41 @@ class IncomeTests(GroupedFixtures, TestCase):
         self.assertIn(f'data-sort="3500.00">3{NBSP}500.00 €</td>', html)
         self.assertIn(f"3{NBSP}500.00 € net", html)
         self.assertNotIn("3500.00 €", html)
+
+
+class TreasuryTests(GroupedFixtures, TestCase):
+    """« Trésorerie »: 30 000,00 € typed on 01/07, 6 000,00 € on 20/07 -
+    1 000,00 € under what July's operations (-23 000,00 €) explain."""
+
+    def setUp(self):
+        super().setUp()
+        TreasuryCheckpoint.objects.create(date=date(2026, 7, 1), balance=30000)
+        TreasuryCheckpoint.objects.create(date=date(2026, 7, 20), balance=6000)
+
+    def test_the_headline_the_tables_and_the_card_group_their_amounts(self):
+        html = self.page("bank:treasury", tout="1")
+        self.assertIn(f'<span class="stat-value">6{NBSP}000.00 €</span>', html)
+        # The balances typed and the months: grouped, sorting by the bare figure.
+        self.assertIn(f'data-sort="30000.00">30{NBSP}000.00 €</td>', html)
+        self.assertIn(f'data-sort="-26500.00">-26{NBSP}500.00 €</td>', html)
+        self.assertIn(f'data-sort="3500.00">3{NBSP}500.00 €</td>', html)
+        self.assertIn(
+            f"Les opérations expliquent -23{NBSP}000.00 €, l&#x27;écart est de 1{NBSP}000.00 € de moins.", html
+        )
+        self.assertIn(f"Ajouter un ajustement de -1{NBSP}000.00 €", html)
+        self.assertIn(f"1{NBSP}000.00 € de moins : à résoudre", html)
+        # What the form posts back is the bare figure.
+        self.assertIn('name="ecart" value="-1000.00"', html)
+        self.assertNotIn("30000.00 €", html)
+
+    def test_the_messages_and_the_refusals_group_theirs(self):
+        before, after = TreasuryCheckpoint.objects.order_by("date").values_list("pk", flat=True)
+        response = self.client.post(
+            reverse("bank:treasury_adjustment_add"), {"avant": before, "apres": after, "ecart": "-1000.00"}
+        )
+        self.assertEqual(
+            self.said(response),
+            [f"Ajustement de -1{NBSP}000.00 € ajouté au 20/07/2026 : les points du 01/07 et du 20/07 concordent."],
+        )
+        refused = self.client.post(reverse("bank:treasury"), {"date": "2026-07-01", "solde": "12 345,60"})
+        self.assertContains(refused, f"Le 01/07/2026 a déjà un solde : 30{NBSP}000.00 €.")

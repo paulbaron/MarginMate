@@ -1762,8 +1762,9 @@ pour les consignes »). A third choice, the first of « Tickets et factures »:
 a camera input (`capture="environment"`) posting as `files` like the other
 two, inside a `[data-photos]` box set up by `static/js/photos.js` - the
 photo picking Consignes had in returnables.js, moved out and shared
-(purchases.html calls `MarginMatePhotos.setUp(form)` on DOMContentLoaded:
-the script is deferred, the page's inline one is not). After each shot the
+(`static/js/receipt_camera.js` calls `MarginMatePhotos.setUp(form)`, both
+deferred, photos.js first - shared since 02/10/2026 with « Ajouter des
+factures », which was purchases.html's inline script). After each shot the
 filled input moves into the box's hidden store, still in the form, and a
 fresh one takes its place, with a preview and « Retirer ». « Des fichiers »
 and « Un dossier entier » are no photo slots: native inputs, as before.
@@ -1818,7 +1819,7 @@ and « Un dossier entier » are no photo slots: native inputs, as before.
   own, and none of the above runs there: it has no `data-max-bytes`).
 - **The busy label**: while a shot waits, « Importer » sends as « Envoi des
   photos… gardez la page ouverte » (Consignes' words), else « Envoi… ».
-- **A shot is not lost without a word** (purchases.html): leaving the page
+- **A shot is not lost without a word** (receipt_camera.js): leaving the page
   with one waiting asks first (`beforeunload`, as the timesheet's grid; an
   Achats tab is an htmx swap and keeps them), and how many wait is noted
   for the TAB (`sessionStorage`, `achats:pending-photos`, kept at logout:
@@ -2738,11 +2739,14 @@ auditors and their skeptics, 25 confirmed findings - each rule below is one):
   was saved. Behind it: the page; every POST saving or testing
   a WEBSITE source (`invoices/views.py`, owner too); every « Données » POST
   that imports, stages or clears (`transfer/views.py _refused`, owner too;
-  export stays open); and the whole Django admin but its login and logout
+  the export stays open - to the owner: an employee opens no page of
+  « Données », « Employees' access » below); « Accès des employés » on GET
+  and POST (`accounts/members.py`); and the whole Django admin but its login and logout
   (`MarginMateAdminSite.admin_view`) - from the admin a superuser's session
   switched a repointed portal on. `InvoiceTypeAdmin` makes a portal's
   channel and « actif » read-only. A new membership in the admin starts as
-  MEMBER (the model's default stays OWNER: no migration). **The test
+  MEMBER (the model's default stays OWNER: no migration) - an employee who
+  opens NO page until his boxes are ticked (« Employees' access »). **The test
   client's implicit first login writes a confirmation** (`tests.runner`),
   an explicit `force_login`/`login` does not: `confirm_password(client,
   user)`, `forget_the_confirmation(client)`, `TenantClient(confirms_password=False)`.
@@ -3134,6 +3138,55 @@ of those already have an invoice (the sign of a pattern too broad). The page
 filters by month (`?mois=2026-07`) and groups what is still missing an
 invoice by payee, each with a pre-filled "Ignorer…".
 
+**An ignore rule's pattern is never trusted either** (02/10/2026; « A
+pattern is never trusted, typed or stored », under « Recognising the
+operations »). It was checked by `re.compile` alone and searched by `re`
+with no limit: « A{4294967296} » is an OverflowError, not a re.error, and was
+a 500 on the form and on « Données »'s PREVIEW of « Règles de la banque » -
+the section made to carry one bar's rules into another -, and a pattern that
+backtracks (« (?:A |A  ?)+B » on a label holding a run of « A ») ran to the
+end on every draw of Banque, « Dépenses » and « Propositions » and in every
+automatic pass, seconds a label and doubling with each « A ».
+- **Checked by the guard**: `bank/rules.check` is
+  `returnables.patterns.compile_pattern` (field « Motif »), whose own
+  empty-line refusal is the « matches every payment » one. `IgnoreRule.clean`,
+  `IgnoreRuleForm.clean_pattern` (its `_post_clean` skips the model's clean,
+  as `OperationRuleForm`'s: one sentence, about the value typed; the motif's
+  « required », length and NUL refusals in French) and « Données »
+  (`sections/bank_rules._check_ignore_rule`: « Règle « … » : motif refusé —
+  <raison> », the record skipped) all go through it. A rule already here is
+  its pattern and is not checked again by an import.
+- **Searched as a recognition rule is** (`rules.Matcher`): `PATTERN_TIMEOUT`
+  per match, the GIL released, asked once more when out of time; the rule
+  billed its THREAD time against `recognition.RULE_SECONDS`. `rules.searcher`
+  still leaves a leading greedy « .* » out (« The pages are measured »).
+- **A rule that cannot be applied hides nothing**, as `Rules.invalid` and
+  `Rules.slow` recognise nothing: `compile_rules` returns `IgnoreRules`, its
+  `invalid` the stored rules the guard now refuses (saved before it, typed or
+  imported) with the reason, its `slow` the rules found too slow during THIS
+  reading (one page drawn, one pass: set aside from then on, so lines read
+  before keep what it said). Its payments count as missing their invoice
+  again, lose its category on « Dépenses », and the automatic pass sees them
+  - it links one only when it is sure, as any open line. Banque
+  (`ignore_problems`) and « Dépenses » (`SpendingReport.rule_problems`) say
+  which rule and why, read after the last line, with « Corriger sur
+  « Dépenses sans facture attendue » »; the rules page marks the row
+  « motif invalide » with the reason, or « trop lent », its figures « — »
+  (`RuleMatches.problem` / `slow`). Nothing is repaired or deleted.
+- **« Tester » and « Ajouter la règle » run the pattern over every debit
+  before anything is saved** (`rules.caught`): too slow there is said on the
+  motif (`views.RULE_TOO_SLOW`) and nothing saved - kept, it would be set
+  aside on every page.
+- **What was stored keeps working**: the 18 rules of data-dev (a scratch
+  copy, read-only) all pass the guard and every debit gets the same rule as
+  before. The guard compiles with MULTILINE, which only a label holding a
+  line break could tell, and the import folds every break of a label; none
+  of the 801 lines holds one. `test_rules.REFUSED_NOW` lists shapes `re`
+  took and the guard refuses (a brace that is no count, a count past 100,
+  `(?x)`, `[` inside a set); the patterns « Ignorer… » writes
+  (`PayeeGroup.pattern`, escaped payees) pass
+  (`test_the_patterns_the_pages_write_still_pass_and_find_what_re_found`).
+
 **Found through the statement: `Invoice.total_ttc` left VAT off the
 reconciliation adjustment.** The adjustment is duty the lines don't carry
 (UBA's "VIG. SECU" and the like), and duty is part of the VAT base. Added
@@ -3411,9 +3464,9 @@ French decimals, the masked account `****0042` in the header line
   `OperationRuleForm` says `forms.NUL_REFUSED` instead (« Caractère
   interdit (NUL) : retapez ce champ. »; review, 01/10/2026). Each form's
   `test_every_text_field_says_a_nul_in_french` walks its text fields, so
-  one added later says it too; the site's other forms (`IgnoreRuleForm`…)
-  still say Django's. The name unique by `name_key`, the format itself
-  excepted; `clean()` runs
+  one added later says it too; the site's other forms still say Django's
+  (`IgnoreRuleForm` but for its motif, since 02/10/2026). The name unique
+  by `name_key`, the format itself excepted; `clean()` runs
   `check_format` and puts each refusal on its field, skipped when a field
   is refused already - nothing said twice; `_post_clean` skips the model's
   check, as `OperationRuleForm` does; the label columns are stored as the
@@ -3449,13 +3502,16 @@ French decimals, the masked account `****0042` in the header line
   the explainer says so. Or the import's own refusal sentence. Nothing is
   read while the format is refused (the errors are on the form); the name
   alone wrong still reads.
-- **« Données »** carries the formats (`statement_formats` in banque.json,
-  « formats de relevé » in the counts), as it carries the rules: the key is
-  `name_key(name)`, every field but `created_at` is compared (the name as
+- **« Données »** carries the formats in « Règles de la banque »
+  (`statement_formats` in regles_banque.json, `sections/bank_rules.py`;
+  banque.json until 02/10/2026, still read from an older archive -
+  `archive.CARVED`; « formats de relevé » in the counts), as it carries the
+  rules: the key is `name_key(name)`, every field but `created_at` is
+  compared (the name as
   spelt and the position included), a difference is a conflict kept under
   « Fusionner » and replaced under « Remplacer », whose prune deletes the
   formats the archive does not name - only when the archive said the list.
-  Every format written goes through `sections/bank._check_format`: the
+  Every format written goes through `sections/bank_rules._check_format`: the
   model's `clean` first (« format refusé — <champ> : <la phrase de
   check_format> »), then `full_clean`, whose English is never shown
   (« « champ » : valeur refusée »), then **a position past `MAX_POSITION`
@@ -3470,9 +3526,10 @@ French decimals, the masked account `****0042` in the header line
   exported, in (position, name), an empty list included; **absent is « not
   said »** (an archive written before 0007): no format created - even into
   a wiped bank - none pruned; anything but a list of objects is an
-  `ArchiveError`. « Effacer » takes
-  them, the seeded one too, and says so before (the section's
-  `clear_note`) and after (`FORMAT_CLEAR_NOTE`): with none, every import is
+  `ArchiveError`. « Effacer » of « Règles de la banque » takes them, the
+  seeded one too, and says so before (the section's `clear_note`) and after
+  (`FORMAT_CLEAR_NOTE`) - « Effacer » of « Banque » no longer does: with
+  none, every import is
   refused until one is brought back or typed again - as after a
   « Remplacer » with an empty list. A line keeps the fingerprint it was
   imported with: a format an archive brings reads no statement again.
@@ -3557,7 +3614,9 @@ values in, plain values out - but for its last three functions (`load`,
 - **A pattern is never trusted, typed or stored.** It goes through
   `returnables.patterns` only (« The motif guard », under « Consignes »:
   refused before `regex` compiles anything that could freeze the machine,
-  then `PATTERN_TIMEOUT` per match). A stored rule that no longer passes
+  then `PATTERN_TIMEOUT` per match) - an ignore rule's too, since
+  02/10/2026 (`bank/rules.py`, « Payments that never have an invoice »,
+  under « Bank statements »). A stored rule that no longer passes
   `check` lands in `Rules.invalid` and recognises nothing; one too slow lands
   in `Rules.slow` and is skipped for the rest of that `Rules` - one reading:
   one page drawn, one « Tester », one « Relire » preview or write, one
@@ -3739,15 +3798,17 @@ values in, plain values out - but for its last three functions (`load`,
   generated from the till rules its credits were read with
   (`report.till_rules`) - no word of them in the template - with « Modifier
   les règles ».
-- **« Données »** carries the rules (`operation_rules` in banque.json,
-  « règles de reconnaissance » in the counts): configuration, merged like the
-  payers. The key is the name as `name_key` reads it; every field but the
+- **« Données »** carries the rules in « Règles de la banque »
+  (`operation_rules` in regles_banque.json, beside the formats and the
+  « sans facture » rules; banque.json until 02/10/2026, still read from an
+  older archive; « règles de reconnaissance » in the counts): configuration,
+  merged like the payers. The key is the name as `name_key` reads it; every field but the
   moment is compared - the name as spelt (spelt otherwise, it was renamed)
   and the position (the order is part of what a rule says) included.
   Different here: a conflict kept under « Fusionner », replaced under
   « Remplacer », whose prune deletes the rules the archive does not name.
   Every pattern written, created or replaced, goes through the model's
-  own `clean` (`sections/bank._check_recognition`: « motif refusé —
+  own `clean` (`sections/bank_rules._check_recognition`: « motif refusé —
   <raison> », the record skipped), and a position past `MAX_POSITION` is
   refused as a format's is (« The statement's layout », above): a new rule
   is saved at the highest plus one too. Always exported, an empty list
@@ -3755,8 +3816,9 @@ values in, plain values out - but for its last three functions (`load`,
   no rule merged, none pruned - never « forget every rule ». A line keeps
   the kind, payee and card date it comes with: an import reads nothing
   again.
-  « Effacer » takes the rules, the seeded ones too, and says so before (the
-  section's `clear_note`) and after (`RECOGNITION_CLEAR_NOTE`): with none,
+  « Effacer » of « Règles de la banque » takes the rules, the seeded ones
+  too, and says so before (the section's `clear_note`) and after
+  (`RECOGNITION_CLEAR_NOTE`); « Effacer » of « Banque » leaves them: with none,
   every line imported reads « Autre », no payee, no card date - the safety
   archive brings them back. An upload that wrote lines while no rule of the
   first question was active (`rules.kinds` empty: after « Effacer », or
@@ -3772,8 +3834,10 @@ values in, plain values out - but for its last three functions (`load`,
   owner asked for it the same day: it is a `StatementFormat` now (« The
   statement's layout », above), so another bank's statement reads by a
   format typed on « Format du relevé » and rules typed here - no code.
-  `IgnoreRule` (« Dépenses sans facture attendue ») is untouched: another
-  question, applied on draw.
+  `IgnoreRule` (« Dépenses sans facture attendue ») is another question,
+  applied on draw - its patterns checked by the same guard and searched
+  under the same limits since 02/10/2026 (« Payments that never have an
+  invoice », under « Bank statements »).
 - **Costs**: each caller reads the rules ONCE (`recognition.load()`, one
   query, the active rules in their order) and hands them down -
   `parse_statement(content, rules, fmt)`,
@@ -3842,7 +3906,9 @@ follows from that:
   the advice was not followable). **What a person typed
   wins**, and the page says which of the two named each line - a rule edited
   next month must not read as somebody's decision. Both fields ride in the
-  « Données » archive (`transfer/sections/bank.py`), and a category changed
+  « Données » archive - the line's in « Banque » (`transfer/sections/bank.py`),
+  the rule's in « Règles de la banque » (`transfer/sections/bank_rules.py`) -,
+  and a category changed
   here is a conflict kept whole like any other decision: nothing rebuilds it,
   since a statement imported again brings the line back and not one word of
   what was said about it. Migration `bank/0004`, **WRITTEN and left to be
@@ -3918,9 +3984,10 @@ is Django's problem on every later read.
 payments' invoice lines, the rules. An invoice on two lines is read once.
 
 No new navigation link: « Dépenses par catégorie » is one of **Banque's
-three tabs** (`bank/_tabs.html`: « Opérations », « Dépenses par catégorie »,
-« Entrées d'argent », each page passing `bank_url`, `spending_url`,
-`income_url` over its period and `bank_tab` for the lit one). The owner,
+four tabs** (`bank/_tabs.html`: « Opérations », « Dépenses par catégorie »,
+« Entrées d'argent » and, since 02/10/2026, « Trésorerie », each page
+passing `bank_url`, `spending_url`, `income_url`, `treasury_url` over its
+period and `bank_tab` for the lit one). The owner,
 01/10/2026: a button to it in several places (Banque's header, Marges'
 header, each page's own) was one too many - the tabs are the only buttons
 now, and Marges no longer links there. Another entry in the topbar moves where the links wrap, which is
@@ -4196,6 +4263,377 @@ rest of the page out of reach.
 Reached from Banque's tab and its « Entrées » stat, both over
 Banque's period (`_bank_income_url`), and from « Dépenses ». No topbar link.
 
+### La trésorerie (`/banque/tresorerie/`, `bank/treasury.py`)
+
+**The account's balance on every day**, worked out from the balances a
+person types and the operations imported (the owner, 02/10/2026: « je peux
+rentrer la trésorerie du bar à une date et le calcul se fera
+automatiquement » - forward, and backward when the date is past; where two
+balances typed do not « match », « demander une résolution »: an amount
+adding or removing the difference, or a balance deleted). Banque's fourth
+tab, no topbar link. `bank/treasury.py` holds every rule below, and its
+docstring is their reference: `compute(points, lines, adjustments) ->
+Treasury` is pure - plain values, prefix sums looked up with `bisect`,
+Decimal summed in Python, no database and never today (the view and the
+form hand it in) - and `load()` reads the three tables in exactly
+`treasury.QUERIES` (3) queries whatever the history holds: the points, the
+adjustments, and ONE query over the lines (`operation_date`, `amount`,
+`account`, `imported_at`, ordered explicitly - `BankTransaction.Meta.ordering`
+is newest first). Pinned by `test_treasury.LoadQueriesTests` and
+`test_page_cost.TreasuryPageQueriesTests`.
+
+**Two models, no foreign key at all** (`bank/models.py`):
+`TreasuryCheckpoint`, « point de trésorerie » (`date` unique, `balance`
+signed (12, 2) - an overdraft is negative -, `created_at`), and
+`TreasuryAdjustment`, « ajustement » (`reference`, 16 random hex characters
+from `models.new_reference`, unique - its key for « Données »; `date`;
+`amount`, signed, negative when money went out; `reason`, « raison » -
+never « motif », a regular expression on these pages; `created_at`). Both
+`clean()`s refuse in French, on the field (`models.TREASURY_*`): a day
+outside 2000-2099 and a figure past `MAX_AMOUNT` - `bank.statements`'
+bounds, imported inside `clean()`, since statements.py imports the models -,
+and an adjustment of 0 €. Not in the admin. **An adjustment is no
+`BankTransaction`, on purpose**: a line needs a fingerprint no statement
+gives, is counted as a debit or a credit by « Dépenses », « Entrées
+d'argent » and the reconciliation, and is offered invoices. None of those
+reads this table: an adjustment counts in the treasury and nowhere else.
+
+**The rules of reading**:
+
+- **A point is the balance at the END of its day**, every operation booked
+  that day included (by `operation_date`, the day every Banque page reads).
+  One per day. **S(d), the movements through d, includes d**
+  (`bisect_right`): `balance_on(d) = r.balance + S(d) - S(r.day)`, r the
+  last point dated on or before d, or the first when d is before every
+  point (computed backward). On a point's own day it is the figure typed;
+  the next day, that figure plus that day's movements.
+  `income._card_sold_before` is strictly before (`bisect_left`): copied, a
+  point's own day would be counted again in the next stretch.
+- **No figure is invented**: `balance_on` is None with no point, before
+  `known_from` (the first line's or the first point's day, the earlier) and
+  past `horizon` (the last point's or the last line's, the later). No
+  extrapolation, and a window reaching back to 1990 is no column of
+  balances carried back from 2026.
+- **An adjustment COUNTS only between two points** - after the first
+  point's day, up to the last's: the stretch the consecutive pairs tile.
+  Any other - left outside by a point deleted or moved, or brought by
+  « Données » - counts nowhere (`Treasury.orphans`) and is listed « ne
+  compte pas » with its « Supprimer ». Counted, it moved the headline with
+  no gap saying why (design review, 02/10/2026).
+- **`complete_through`, the last day whose operations are all imported**:
+  `last_operation` when the lines DATED on it were imported on a LATER day
+  (the newest `imported_at` of THOSE lines), else the day before - an
+  export made during a day carries only part of it, and the owner imports a
+  statement the day he exports it. Only the last day's own lines tell: an
+  older statement imported afterwards - what every gap card asks for - says
+  nothing of that day, and read as proof (the newest import of ANY line)
+  it turned the part of today not imported yet into a gap to resolve, which
+  the card offered to adjust (review C1). Never the newest import's own day
+  or later either: a line dated after the day it was imported leaves that
+  day as partial as any other. None without a line. With several accounts,
+  each account's own (its lines alone), the earliest
+  (a line with a blank account then holds none back). The day of an import
+  is read through `timezone.localtime`, never `localdate`: the tests freeze
+  today by patching `timezone.localdate`, and every import would read as
+  made « today ».
+- **`provisional(d)`**: d is no point's day, and the computation crosses a
+  day not wholly imported - forward when d is past `complete_through`,
+  backward when the reference point is, always when nothing is imported.
+  **Shown, marked « provisoire », never hidden**: the everyday case - today's
+  balance typed while the statement stops yesterday - IS a backward
+  computation across today, and it must still give the history. Unmarked,
+  every day before such a point was wrong by the operations not imported,
+  and all of them moved at the next import.
+- **Accounts are summed**: a point is the TOTAL balance. With more than one
+  distinct non-blank `BankTransaction.account`, one muted line, « N comptes
+  importés : saisissez le total de leurs soldes. »
+
+**Gaps (« écarts »)**, one per pair of CONSECUTIVE points (a, b)
+(`treasury.Gap`) - computed live, never stored:
+
+- `operations` = the lines dated in (a.day, b.day], `adjusted` = the
+  counted adjustments there, `missing = b - a - operations - adjusted`.
+  Zero, the two « concordent », to the cent; positive, the account holds
+  more than the operations explain.
+- **Pending** (« relevé à importer ») when b.day is past `complete_through`,
+  or nothing is imported: the gap may be nothing but a statement not
+  imported yet. Never asked, never offered an adjustment, never amber, and
+  **no figure** - it would be the operations not imported, read as money
+  missing. It becomes a real gap, or vanishes, on the import completing
+  b.day. A point dated before the first line imported is NOT pending.
+- **To resolve** = not agreeing and not pending: the only gaps the page
+  asks about.
+- **A suspect point**: a middle point whose two gaps are both not pending,
+  at least one to resolve, and whose RAW gaps (`Gap.raw_missing`,
+  adjustments left out) cancel out and are not zero - « Sans le point du
+  JJ/MM, les points voisins concordent. » Raw, because counted with the
+  adjustments, one made on one side made a correct point suspect and hid a
+  wrong one. The counted adjustments between its neighbours
+  (`Treasury.around(point)`, the corrections of its two gaps) still count
+  once it is gone, so that sentence holds of the point ALONE only when they
+  add up to 0; otherwise the hint names them - « Sans le point du 10/09 ni
+  l'ajustement du 10/09 (+200.00 €), les points voisins concordent. »,
+  « ni les ajustements du 05/09 (…) et du 12/09 (…) » - and the card lists
+  each with its « Supprimer », its own once (`views._gap_card`). One made
+  on the point's other side, or dated on its own day (what « Ajouter un
+  ajustement » on its first card writes), lies outside the second card's
+  stretch: the sentence was false and that adjustment on no card (review
+  C2/C12).
+- **Read before its day's operations**: `missing == -M_ops(b.day) != 0`
+  (`operations_on`, the lines of that day alone), or `+M_ops(a.day)` for a,
+  exact Decimal equality: « L'écart vaut les opérations du JJ/MM : solde lu
+  avant elles ? » and « Dater ce point du JJ/MM », the day before
+  (`Gap.move_to`). The bank's app says « Solde au 01/10 » on the 2nd, the
+  form's date says the 2nd, and the card's other two answers were both
+  wrong: an adjustment invents a movement, a delete throws a right reading
+  away.
+- An import bringing the missing operation makes a gap vanish by itself;
+  an adjustment made, then the real operation imported, brings the gap
+  back with the opposite sign, and the card lists that adjustment
+  (`Gap.corrections`) with « Supprimer » - the fix.
+
+**The page**, top to bottom (`bank/treasury.html`; the view is
+`views.treasury_home` - one named `treasury` would shadow the module
+`from . import treasury`: ruff F811, then a 500):
+
+- The tabs (`bank/_tabs.html`, `bank_tab == "treasury"`). Two stats:
+  « Trésorerie au <horizon> » (« depuis le solde du JJ/MM », « provisoire »),
+  amber (`stat-warn`) only when ITS reference point ends a gap to resolve -
+  a gap of last year lighting today's figure teaches the reader to ignore
+  amber -, and « Relevé importé jusqu'au » (`last_operation`, or « aucun »).
+  Then « N écarts à résoudre » linking `#ecarts`, and the accounts line. No
+  point yet: one sentence instead. No line imported: « Aucun relevé
+  importé », with a link to Banque - the page still works, every gap
+  pending.
+- `#saisir` « Saisir un solde », BEFORE the gaps: typing today's balance is
+  the everyday action, and cards above it put it screens down on a phone.
+- `#ecarts` « Écarts à résoudre », one card per gap to resolve: its dates,
+  « Les opérations expliquent X € [et les ajustements Z €], l'écart est de
+  Y € de plus / de moins. » (the words of `views.Gap`, a bank line's), the
+  hints that apply (suspect, read before, and always « Relevé manquant entre
+  ces dates ? Importez-le. »), the counted adjustments inside with
+  « Supprimer » (and every one a suspect hint names, above), « Ajouter un
+  ajustement de ±X € » with an optional `raison`
+  (placeholder « Écart non expliqué »), and for each point « Corriger »
+  (`?date=…#saisir`) and « Supprimer le point du JJ/MM ».
+- `#courbe` « Solde jour par jour », drawn once a point exists: the window
+  form and its `.date-range-note`; the curve,
+  `_build_balance_svg(treasury.curve(window), label="Trésorerie")`, the
+  builder unchanged - `curve` adds the day before each day that follows a
+  quiet stretch, so the line draws STEPS (a diagonal between two movements
+  printed balances nobody ever had); « Provisoire du JJ/MM au JJ/MM : relevé
+  complet jusqu'au JJ/MM. » (`curve_provisional`, one stretch; the day said
+  is `complete_through`; « aucun relevé importé » with none). **« complet »,
+  never « importé »**: the stat's « Relevé importé jusqu'au » is
+  `last_operation`, the day after `complete_through` whenever a statement
+  is imported the day of its last operation - one phrase for both put two
+  dates under the same words on one page (review C3/C8/C11/C14). Then the
+  months, newest first: Entrées, Sorties (the lines alone, never an
+  adjustment), Ajustements (when a month has one), « Solde en fin de mois »
+  (« au JJ/MM » on a partial row, « provisoire », « relevé à importer »),
+  and « Écart » only when a row has a gap to resolve - asked by their COUNT
+  (`MonthRow.gaps_to_resolve`), never their sum: a suspect point's two gaps
+  cancel out, and summed the column vanished while the page asked two
+  resolutions (review C10). One gap: its figure, linking `#ecarts`;
+  several: « N écarts » linking there, with their sum (« X € en tout ») when
+  it is not 0; `data-sort` is the sum (`MonthRow.gap_to_resolve`). **A
+  row's gaps are the gaps to resolve whose LATER point falls in it**, never
+  closing minus opening minus movements: that printed a pending jump as an
+  « Écart » every month the balance was typed before the import.
+- `#points` « Soldes saisis », newest first, phone cards: Date | Solde |
+  « Avec le précédent » (« concorde », « X € de plus / de moins : à
+  résoudre » linking `#ecarts`, « relevé à importer », « — » for the
+  first) | « Corriger » and the delete.
+- `#ajustements`, when one exists, phone cards: Date | Montant | Raison
+  (« — ») | État (« compte » / « ne compte pas ») | the delete.
+- **The window** is « Entrées d'argent »'s (`?du=&au=`, the last twelve
+  months said on screen, `?tout=1`, `_window_fields`) and narrows the curve
+  and the months ONLY: the headline, the gaps, the points and the
+  adjustments are the whole history. Both stay inside `span` = [max(du,
+  known_from), min(au, horizon)]: `?du=0001-01-01` costs nothing and never
+  computes a day below `date.min`, and a row covers its month met with the
+  span, summed over those days only - a window starting mid-month shows no
+  false gap. Every form and redirect keeps the window: the point form posts
+  to `{{ page_url }}#saisir` (`_treasury_page_url`), the POST-only forms
+  carry `next`, and every Banque page hands `treasury_url` over its period.
+
+**Typing a balance** (`forms.TreasuryPointForm`; `date` and `solde` are the
+page's HTTP interface):
+
+- **A plain `Form`**: a ModelForm's `validate_unique` refuses the date
+  before « Remplacer » can be offered. The date is ISO only
+  (`treasury.check_point_date` → `common.read_date`: en-us reads
+  « 02/10/2026 » as 10 February), 01/01/2000 to today - a future point
+  moves the headline into the future (« Date illisible. », « Date
+  impossible : entre le 01/01/2000 et aujourd'hui (JJ/MM/AAAA). »). The
+  balance (`treasury.read_balance`) is `common.read_amount`, signed, two
+  decimals, the column's width, 40 characters at most (« Solde illisible :
+  tapez un montant comme 1 234,56 ou -250. »). **« 12.500 », « -1,500 »,
+  « 1,500- » are asked again** (« Solde ambigu : tapez 12 500 ou 12,50. »,
+  `common.AMBIGUOUS_THOUSANDS`, moved there from inventory/views.py, which
+  imports it back): read as 12,50 €, a balance in the thousands became a
+  gap in the thousands. A NUL is `forms.NUL_REFUSED`. Refused, the page is
+  drawn again, 200, values and window kept.
+- **The `solde` input has no `inputmode`**: an iPhone's decimal keypad has
+  no « - », and an overdraft typed « 250 » is a gap of twice its size. The
+  template says why; a test checks the attribute is absent.
+- **A date that has a balance is never replaced silently.** « Enregistrer »
+  on it with ANOTHER balance writes nothing and draws the form again with
+  « Le JJ/MM/AAAA a déjà un solde : X €. » on the date and a second button,
+  `action=remplacer` « Remplacer », carrying the same values; the SAME
+  balance is « Solde du … déjà enregistré », nothing written. « Corriger »
+  (`?date=`) prefills that point's balance and shows « Remplacer » at once.
+  « Enregistrer » stays the first button: Enter never replaces. A phone tab
+  left open for days posts a stale date - replaced, Monday's reading was
+  gone with nothing to say so. Saved inside `transaction.atomic()`; the
+  unique date's IntegrityError (two tabs) is the same refusal, never a 500
+  (the race test patches `views._point_on`). Any other `action` is
+  `UNKNOWN_RULE_ACTION`. **Nor is « Remplacer » offered without that
+  sentence**: a refusal of anything else on a date that has a balance
+  (« Solde illisible », « Solde ambigu », a NUL) says it too
+  (`refuse_taken`, in `treasury_home`) - a stale tab refused for a typo
+  offered « Remplacer » alone, and the typo fixed replaced the reading
+  (review C7). Not when « Remplacer » was pressed already (« Corriger »,
+  then a typo): the date is not what is wrong.
+- **One message per save**, in `#saisir`: « Solde du JJ/MM/AAAA enregistré :
+  X € (remplace Y €) — concorde avec le point du JJ/MM. ». A gap to resolve
+  NEXT TO the saved point makes it a warning in `#ecarts` instead (« Le
+  solde du JJ/MM ne concorde pas avec celui du JJ/MM : à résoudre. »), where
+  the redirect lands. A pending gap adds nothing, nor does an older gap
+  elsewhere: the everyday save must not nag.
+
+**The other POSTs trust nothing.** Each acts inside ONE transaction that
+reads again what it acts on - the treasury itself for an adjustment, a
+delete or a move of a point; the row for an adjustment's delete - before it
+writes. SQLite's IMMEDIATE mode (config/settings.py) takes the write lock as
+it opens, so a double click waits, then is refused:
+
+- `tresorerie/ajustements/` (`treasury_adjustment_add`): `avant`, `apres`
+  (two point ids, through `common.is_id`), `ecart` (the gap the card
+  showed, « -50.00 », `POSTED_GAP`), `raison`, `next`. Refused, nothing
+  written: a point gone (`PAIR_GONE`), another point now between them
+  (`PAIR_SPLIT`), the two the wrong way round (`GAP_NOT_FOUND`), agreeing
+  already (`PAIR_AGREES` - the second click), pending (`PAIR_PENDING`), not
+  the gap shown (`GAP_CHANGED`), or wider than an amount can be
+  (`GAP_TOO_BIG`: two balances can differ by twice the column - refused,
+  never truncated; such a card draws no adjustment form). Otherwise exactly
+  `missing`, dated b.day - no date field: the owner named none, and a date
+  would only move the curve inside one stretch -, through the model's
+  `clean()`, and the pair agrees.
+- `tresorerie/points/<pk>/` (`treasury_point`): `supprimer`, or `veille`
+  (« Dater ce point du … ») with `date`, the day the card showed: a second
+  click, or a page drawn before another tab moved it, moves nothing
+  (`POINT_CHANGED`). Refused when that day has a point or is before
+  01/01/2000 - and the button is drawn only where the POST would take it.
+  Then the treasury, read again inside the transaction, must still hold a
+  gap to resolve whose « read before » names that point and that day
+  (`MOVE_CHANGED`, « L'écart a changé depuis l'affichage : rien n'a
+  changé. »): drawn before an import, an adjustment or a correction settled
+  the pair, the page moved a right reading to the wrong day and made a gap
+  of its own (review C6). The same read gives the orphans it names.
+- `tresorerie/ajustements/<pk>/` (`treasury_adjustment`): `supprimer`.
+- A record gone is « Ce point n'existe plus. » / « Cet ajustement n'existe
+  plus. », never a 404 nor a 500; a GET redirects and writes nothing; the
+  per-row addresses are `_by_pk`'s (`ByPkTests.NAMES`). Every delete is its
+  own `<form data-confirm>` naming its date; a point's delete, and « Dater
+  ce point du … », also name the adjustments they would leave counting
+  nowhere (`orphaned_by_deleting`, `orphaned_by_moving`: « 1 ajustement ne
+  comptera plus. »), and the message says it again; an adjustment's delete
+  says how many still count nowhere.
+- **Messages are said where the redirect lands**: each carries its section
+  in `extra_tags` (`saisir`, `ecarts`, `points`, `ajustements`),
+  `views._treasury_messages` splits them and the template prints each in
+  its section, overriding `{% block messages %}`; one whose section is not
+  drawn (the last adjustment deleted) is said at the top. After a delete, a
+  move or an adjustment, a gap still to resolve anywhere makes the one
+  message a warning in `#ecarts` ending « N écarts à résoudre. »; otherwise
+  a success in the section acted on - a move in `#points`, since its card
+  is gone once the pair agrees.
+
+**The import asks too** (`views._say_treasury_gaps`): an upload that wrote
+lines loads the treasury (`QUERIES` more queries, on that POST alone) and,
+when a gap is to resolve, warns « Trésorerie : N écarts à résoudre. ». The
+import completing a pending stretch is the moment a gap becomes real, and
+nobody opens « Trésorerie » to find out. Nothing without a point, so the
+import tests keep their messages.
+
+**« Données »** carries both in « Banque » (`treasury_checkpoints`,
+`treasury_adjustments` in banque.json, `sections/bank.py`; « points de
+trésorerie », « ajustements de trésorerie » in the counts), never in
+« Règles de la banque »: a balance typed is a person's decision about this
+bar's money, not configuration another bar on the same bank could take. A
+point is keyed by its day, its balance compared; an adjustment
+by its `reference`, its day, amount and reason compared - corrected, it is
+the same adjustment. Merged like the payers: a difference is a conflict
+kept under « Fusionner » (« Point de trésorerie du JJ/MM/AAAA : X € ici,
+Y € dans l'archive — gardé tel quel »), replaced under « Remplacer », whose
+prune deletes what the archive does not name - named as soon as its key
+reads, whatever the rest of the record. `created_at` is restored. **A
+reference is never drawn at import**: a record without one is skipped, or
+the confirm's would differ from the preview's. The report names an
+adjustment by its day and amount, never by a reference nobody has seen.
+Every record written goes through `sections/bank._check_treasury` - the
+model's `clean()`, said in French after its field (« montant : un
+ajustement de 0 € ne change rien … »), then `full_clean()`, whose English is
+never shown (« « champ » : valeur refusée ») - and **a day between
+01/01/2000 and today** (`_check_day`, `timezone.localdate()` read once a
+run): the model allows 2099, and a point dated tomorrow moved « Trésorerie
+au … » past today, its gap waiting for a statement for ever. Always
+exported, empty lists included; **absent is « not said »** (an archive
+written before 0008): none created, none pruned. An older archive whose
+banque.json also holds the rules (`archive.CARVED`) leaves both lists to
+« Banque », with the lines. « Effacer » of « Banque » takes both and says
+so before (« Banque »'s `clear_note`, all it says there since the rules
+became « Règles de la banque »'s) and after (`TREASURY_CLEAR_NOTE`): no
+statement brings them back. **An import computes
+no balance and settles no gap**: an adjustment it brings outside two points
+is listed « ne compte pas », and a gap it leaves is asked on the page.
+
+**Not done, follow-ups**:
+
+- **The balance BNP's header line prints, read at import.** The seeded
+  export's line above the operations - the one the account is read from -
+  ends with a date and an amount (`statements.py`'s docstring, « …;
+  ****0042;14/09/2026;;1 234,56 ») that look like the account's balance;
+  `parse_statement` passes it over. Read by the format (two more fields),
+  it could be offered as a point with nothing typed, or checked against
+  `balance_on` that day. Check first, on a real export, which moment of
+  that day it is.
+- **A tab left open keeps its date input's `max`**: the day the page was
+  drawn. returnables.js's `data-today` refresh was not carried over, so a
+  tab shown again days later has its browser refuse today's date until it
+  is reloaded. Nothing stale is written: the server bounds the date to its
+  own today, and a date that has a balance asks « Remplacer ».
+
+Tests: `bank/tests/test_treasury.py` (the pure rules, one `SimpleTestCase`
+per rule, plus `LoadQueriesTests`, `ModelTests`, `MigrationTests`),
+`bank/tests/test_treasury_views.py` (the point form read off the page and
+posted as a browser does, CSRF enforced; every refusal; a double click
+giving one adjustment; the import's warning) and the guards -
+`BanqueTabsTests`, `TreasurySmokeTests`, `DateWindowSmokeTests` (one point
+in its fixture), `test_ui`, `test_navigation`, `TreasuryPageQueriesTests`,
+`test_money_grouping.TreasuryTests`, `test_phone_width_browser` (a gap card
+and three points at 320, 375 and 430 px). « Données »: `CheckpointTests`,
+`AdjustmentTests`, `OldTreasuryArchiveTests` and the check tests of
+`transfer/tests/test_bank_section.py`, whose
+`test_every_model_of_the_bank_is_in_exactly_one_of_the_two_sections` fails
+on a bank model that neither « Banque »'s `EXPORTED` nor « Règles de la
+banque »'s names, or that both do. Every amount invented.
+
+**An employee given « Banque » opens « Trésorerie » too** (`accounts/access.py`:
+every route of the bank app is that area's), types balances and resolves
+gaps as he links invoices there; the area's description on « Accès des
+employés » names the treasury, so the owner ticks it knowing.
+
+- Migration `bank/0008`, **WRITTEN and left to be applied** (the owner, after
+  a backup, `migrate_tenants`; `serve` refuses to start until then). Two
+  empty tables, so nothing existing changes meaning; reversing drops every
+  point and adjustment typed. Until then, not only /banque/tresorerie/
+  answers « no such table »: an upload on Banque that writes lines reads the
+  treasury after writing them (a 500, the lines in), and « Données » reads
+  both tables (the bank's counts shown unknown, no export or clear of
+  « Banque »).
+
 ### A document's file: its download name, and Banque's zip
 
 **Every door out names the file « Darty 11€55 01_10_2026.pdf »** (the owner,
@@ -4241,8 +4679,9 @@ Tests: `invoices/tests/test_filenames.py`, `bank/tests/test_invoice_files.py`.
 One page (`/donnees/`, in the navigation) replaced « Exporter / Importer les
 associations »: three tabs - Exporter, Importer, Effacer - each with the same
 two groups of boxes, « Configuration » (fournisseurs, sources, associations
-produits → articles, recettes, liens recettes ↔ ventes) and « Données »
-(factures et tickets, banque, ventes, inventaires, consignes). The owner asked for it on
+produits → articles, recettes, liens recettes ↔ ventes, règles de la banque,
+types et formats de consignes) and « Données » (factures et tickets, banque,
+ventes, inventaires, consignes) - twelve sections. The owner asked for it on
 19/09; the old addresses redirect there and the old associations JSON still
 imports (`transfer/legacy.py`).
 
@@ -4251,16 +4690,85 @@ imports (`transfer/legacy.py`).
   depends on what is **one table**, `transfer/registry.py::INFO`: ticking a
   section to export or import ticks what it requires; ticking one to clear
   ticks what requires it (clearing the suppliers clears everything but the
-  bank). The server enforces the same closure the page's JS shows - a
-  selection that is not closed is refused, never completed in silence.
-  The bank requires nothing on purpose: a hard link to the invoices would make
-  « Effacer les factures » wipe the bank too.
+  bank and its rules). The server enforces the same closure the page's JS
+  shows - a selection that is not closed is refused, never completed in
+  silence. The bank requires nothing on purpose: a hard link to the invoices
+  would make « Effacer les factures » wipe the bank too.
+- **The configuration travels without the data** (the owner, 02/10/2026:
+  every configuration a person typed - « les regex », the bank's CSV
+  layout, its operation rules - exported from « Données » and « facilement »
+  imported for a new user on the same bank). The « Configuration » group is
+  closed under `requires` - nothing in it needs a « Données » section - so it
+  exports alone: « Configuration seule » on the Exporter tab is a LINK
+  (`?cocher=` for each of `views.configuration_keys()`, the page drawn with
+  the group ticked, the same with or without JavaScript), and an archive of
+  configuration sections only is named `marginmate-configuration-<date>.zip`.
+  The bank's formats, recognition rules and « sans facture » rules are
+  « Règles de la banque » (`regles_banque`, `sections/bank_rules.py`), apart
+  from its lines; the returnable types and slip formats are « Types et
+  formats de consignes » (`types_consignes`, `sections/returnable_types.py`),
+  apart from the pickups and slips - each was carried inside its data
+  section until then, so it could not be taken without a bar's statements
+  or empties. « Banque » only recommends its rules (the till and « sans
+  facture » rules read its credits and debits on draw; required, clearing
+  the rules would have taken the lines), « Consignes » requires its types
+  and formats (its counts and slips name them, PROTECT). **A new espace
+  already holds rows of four configuration sections** (the seeded
+  suppliers, the UBA mailbox search, the BNP format and eight recognition
+  rules, the three types and the UBA slip format: `views.SEEDED_SECTIONS`):
+  merged, an archive's edited copy of one is a conflict and the seeded one
+  stays, so on a new database (`_fresh_database`) the Importer tab's
+  « Base neuve » note names the archive's parts among them and asks for
+  « Remplacer » - **each only while it holds nothing but its seeds**
+  (`views.holds_only_seeds`: the seeds by the names their migrations gave
+  them, read off the migrations' own literals, edited or not; no ignore
+  rule at all, none is seeded). « Remplacer » deletes what the archive does
+  not name: an espace without its first invoice may well have imported
+  statements and typed a « sans facture » rule already, and the note asked
+  to delete it (review, 02/10/2026). The Exporter tab says the archive
+  « peut contenir » documents, bank and prices and to hand it only to whom
+  may see them - never « gardez-la pour vous », false of an archive made to
+  be handed over, which still carries the suppliers' known prices and the
+  recipes'. **Not configuration, on purpose**: the payee names learnt
+  for suppliers and the payers retained (« Banque »: learnt from that
+  bar's own links and choices, naming its payers), the treasury's points
+  and adjustments (« Banque » too: that bar's own balances), « Combler les
+  écarts »' exclusions and duration (never exported, below), « Personnel »
+  and the « Identifiants » vault.
+- **An archive written before a section existed is read as if it had it**
+  (`archive.CARVED`, `carved`, `manifest_sections`, `manifest_counts`): one
+  declaring « banque » - or « consignes » - and not the new key carries the
+  rules in banque.json (`statement_formats`, `operation_rules`, `rules`) -
+  or the types and formats in consignes.json (`types`, `formats`, with the
+  shared `supplier_names`). The reader offers the new section, reads it from
+  the old file (`SectionReader.member`, the file parsed once for both), and
+  hands the old section its file WITHOUT those keys; the counts are split
+  the same way, relabelled (« règles » → « règles « sans facture » »), so
+  the Importer tab compares like with like and `Stage.sections` lists both.
+  Every safety backup taken before 02/10/2026 is such an archive: read as
+  one section, « Banque » would have imported its lines and dropped its
+  rules in silence. Never carved: an archive declaring the new key, or
+  whose old section's counts name none of the labels it would take out -
+  this version's « Banque » exported alone. Counts missing, empty or not a
+  dict carve (the new sections read only the keys they find: each list is
+  « not said » when absent). A shared value (`supplier_names`) is copied,
+  one level, into the carved payload: neither section sees what the other
+  does to it (a deep copy of a hostile value nested hundreds of levels deep
+  was a RecursionError).
+  **The other way is refused, knowingly**: a version from before 02/10/2026
+  ignores « Règles de la banque » and « Types et formats de consignes »
+  (« partie inconnue ignorée ») and refuses this version's banque.json
+  (no `rules` list) and consignes.json (no `types`, `formats`) whole -
+  nothing written, the box can be unticked. No VERSION bump: a configuration
+  archive still reads there, and every bar of one installation runs one
+  version, so a new user's espace always reads its owner's archive.
 - **Natural keys, never pks** (`transfer/keys.py`): a supplier by its code
   (then its name), a product by (supplier code, raw name) and **never
   fuzzy** - an import must not merge two products -, an invoice by (supplier,
   number), else its stored sha, else its file's sha, with an occurrence for
   byte-identical documents (two of the real Monoprix tickets), an invoice line
-  by its rank in its invoice, a bank line by its fingerprint. A supplier the
+  by its rank in its invoice, a bank line by its fingerprint, a treasury
+  point by its day and an adjustment by its random `reference`. A supplier the
   fournisseurs section skipped is refused for the rest of the run
   (`SupplierResolver.refuse`): found by its name instead, its documents would
   land on the supplier that name belongs to here. A product's folded name
@@ -4419,6 +4927,19 @@ imports (`transfer/legacy.py`).
   from ones a person unlinked: it brings back the AUTO links (10) and reports
   the hand-settled ones as conflicts (31), with a note (`bank.UNDONE_NOTE`);
   « Remplacer » on the bank then restores them.
+- **« Banque » carries** (its description on the page,
+  `registry.INFO["banque"]`): the lines with their decisions and links, the
+  payee names learnt, the payers retained and the treasury's points and
+  adjustments - each merged, replaced and checked as its own section of
+  these notes says (« Bank statements », « Entrées d'argent », « La
+  trésorerie »). The « sans facture » rules, the recognition rules and the
+  statement formats are « Règles de la banque »'s since 02/10/2026
+  (`sections/bank_rules.py`, « The statement's layout », « Recognising the
+  operations »), which « Banque » only recommends: its « Effacer » takes
+  none of them. Its `clear_note` names only the treasury's points and
+  adjustments, which no statement brings back; the description above it
+  lists the rest - the payee names learnt, the payers retained and every
+  line's decisions go too, and no statement brings them back either.
 - **Never exported:** Metro's `scrape_*` fields (the firewall's pause - a
   restore resetting it would let the next gather sign in), `SupplierChange`
   (its undo data holds pks), job history, `ai_suggestion` (the review panel
@@ -4448,10 +4969,17 @@ imports (`transfer/legacy.py`).
 - **« Personnel » is in no section**: employees, timesheets and signature
   requests are neither exported nor cleared, and the espace's `private/` is in
   no archive. Only the SQLite copy taken before a run holds those tables.
-- **« Consignes » is the tenth section** (`sections/returnables.py`, « Données »
-  group, order 100): it requires « fournisseurs » (a format's and a
-  reprise's supplier, by code) and only recommends « factures » (the invoice
-  check is read when a page is drawn, nothing of it is stored). Keys: a type
+- **« Consignes » is two sections**: « Types et formats de consignes »
+  (`sections/returnable_types.py`, « Configuration » group, order 58: the
+  types with their motifs, the slip formats with theirs; it requires
+  « fournisseurs », a format's supplier by code) and « Consignes »
+  (`sections/returnables.py`, « Données » group, order 100: the reprises and
+  the bons; it requires « fournisseurs », a reprise's supplier, and the
+  types and formats, which its counts and bons name - PROTECT). One section
+  until 02/10/2026 (« The configuration travels without the data », above,
+  and its older archives' carve). « Consignes » only recommends
+  « factures » (the invoice check is read when a page is drawn, nothing of
+  it is stored). Keys: a type
   and a format by `search_key` of their name with spaces collapsed (the
   forms' own uniqueness rule, so « Futs » finds « Fûts »), a reprise by its
   random `reference`, a bon by its sha256. A merge compares what lies
@@ -4468,10 +4996,22 @@ imports (`transfer/legacy.py`).
   `consignes/` (`archive.STORAGE_FOLDERS`), written through the same
   `check_file`/`save_file` as the invoices', old ones deleted on commit; a
   photo missing from the exporting disk leaves its reprise without it (said),
-  a bon whose PDF was missing is skipped. The seeded types and format are
-  counted and cleared like the rest - the safety archive brings them back.
+  a bon whose PDF was missing is skipped. A reprise's counts find their
+  type, and a bon its format, in the database - after « Types et formats de
+  consignes » applied in the same run. The seeded types and format are
+  counted and cleared like the rest, by « Effacer » of « Types et formats de
+  consignes » (which clears « Consignes » with it) - the safety archive
+  brings them back; « Effacer » of « Consignes » alone keeps them.
   The supplier page and « Données » name the consignes rows holding a
-  supplier (`supplier_views.returnables_refusal`, one sentence for both).
+  supplier (`supplier_views.returnables_refusal`, one sentence for both);
+  an import keeping it says which section left each there unreplaced
+  (`sections/suppliers._holders`: « Types et formats de consignes non
+  remplacés » for a slip format, « Consignes non remplacées » for a
+  reprise). A type's order from an archive is bounded as the types page
+  bounds it, 0..32 767 (`returnable_types.MAX_POSITION`, « « position » :
+  32 767 au plus »): past 2**63 SQLite refused it, an OverflowError and the
+  whole import a 500, preview included; between the two the type was
+  stored and its own page then refused to save it.
 - **A portal from an archive is never trusted** (`sections/sources.py`): the
   next gather types the .env variables it names into the page it names. A
   portal naming a variable the application reads for itself is refused, by
@@ -4537,7 +5077,7 @@ Test every section the same way (`transfer/tests/support.py`): a round trip
 (export, clear, import, same snapshot by natural keys, files byte-identical),
 importing its own export changes nothing (every record « inchangé » - this is
 what catches a Decimal's places or a time zone), merge versus replace on one
-record of each kind, the preview changing nothing - and all ten at once
+record of each kind, the preview changing nothing - and all twelve at once
 (`test_full_round_trip.py`), since what crosses sections (a stock take's
 invoice line, a payment to a ticket known only by its file) only shows there.
 Rehearse on a scratch copy of the real database, never on it: `preview_start`'s
@@ -4777,7 +5317,21 @@ The rules it was done under, which still hold:
   number, date and `{% url %}`.
 - **Ignore rules** are searched without a leading greedy `.*`
   (`bank/rules.searcher`: the same lines found, 60x faster on « .*MOT.* »);
-  the pattern as written is still what is validated.
+  the pattern as written is still what is validated. Since 02/10/2026
+  validated by the guard and searched under the per-match limit, billed its
+  thread time (« Payments that never have an invoice »), which costs: `regex`
+  with a timeout is no slower than `re` was, but `recognition.search` builds
+  a `Budget` per search and a rule billed by two `thread_time` reads a
+  search doubles it again - a year's debits of data-dev (a scratch copy)
+  through its 18 rules took 7 ms with `re`, 22 ms that way. `rules.Matcher`
+  searches with the same contract itself (`PATTERN_TIMEOUT`, `concurrent`,
+  asked twice) and `IgnoreRules.first` / `rules.caught` read the clock ONCE
+  a search, billing each the time since the last read: 12-13 ms. Banque,
+  « Dépenses » and « Propositions » measured within noise of before (median
+  of nine), the rules page (every rule over every debit) about +6 ms on
+  40 ms; all print the same once whitespace is set aside (the template lines
+  of the new warnings). Keep one read a search: a second read is a third
+  more on every draw.
 
 **Not done, the owner's call** (structural, or a migration): drawing the
 biggest pages' hidden tables and per-row pickers on demand (Produits &
@@ -5162,7 +5716,8 @@ count's page, the message at the top.
 or « ' » only ever separates thousands (« 42 50 » is no amount - it read as
 4 250 € - and that rule is the slips' too now), and one separator followed by
 exactly three digits (« 10.000 », « 1,500 ») is asked again rather than read
-as 10 € (`views.AMBIGUOUS_THOUSANDS`; a slip still reads « 4,000 » as 4).
+as 10 € (`common.AMBIGUOUS_THOUSANDS`, which « Trésorerie »'s balance asks
+too; a slip still reads « 4,000 » as 4).
 
 **Cost.** `gaps_since` reads like the « Écarts » page (one query per
 sub-recipe level in `build_pools`, two per recipe in `choice_groups`, every
@@ -5884,6 +6439,33 @@ For the variance engine this means a nested choice must be pooled too:
 **never capped**, because a pool missing a member reports that member's whole
 consumption as unexplained. Amounts are capped (`MAX_SUB_VARIATIONS`).
 
+### The recipe form's ingredients (`recipe_form.html`, 03/10/2026)
+
+The owner: a choice (« OU ») and two ingredients looked alike; a category
+should add all its articles as alternatives, pruned by hand; a search box
+rather than a dropdown. All in the page's script, nothing saved differently:
+
+- **Each group is a frame** (`renderGroups`), a choice amber-edged with
+  « OU » between its options. Rows are gathered by `data-group` wherever
+  they sit - moving a node never renames its fields (the note above
+  `nextFormIndex`). Without JavaScript the rows stay flat.
+- **The `<select>` stays the field**, hidden behind a search box
+  (`setUpPicker`, nodes and text only), accents and case aside; Enter picks
+  and never sends the form; a box left half typed shows the choice again.
+- **A category is never a form choice** (`forms.ingredient_categories`,
+  the island `ingredient-categories-data`): picked, it becomes one row per
+  article in the row's group, what is already there skipped. Those rows
+  share their quantity until one is given its own.
+- **Every result of a search, in one click** (the owner, 03/10/2026:
+  « sirop » → every syrup in « OU »): « Ajouter les N résultats en « OU » »
+  heads the list once a search finds two articles or recipes
+  (`everyResult`) - all it finds, not only the 40 listed; never the
+  categories, and not offered when a category found adds exactly the same.
+  Enter still takes the first ingredient, never all of them.
+
+Tests: `recipes/tests/test_ingredient_picker.py`, and in Chrome
+`test_recipe_form_browser.py`.
+
 ### The recipes that use an article (`recipes/usage.py`)
 
 « Le sucre augmente, qu'est-ce que je dois reprendre ? » — the « Recettes »
@@ -6114,13 +6696,15 @@ names did not follow (models, fields, url names, context keys, `data-persist`
 and localStorage keys, anchors), nor did texts already stored; these notes
 still say "stock item" and "stock page" for the article and that workspace.
 
-### « Du … au … »: one window, seven pages
+### « Du … au … »: one window, eight pages
 
-Seven pages are read through a period: **Produits & charges** (the articles
+Eight pages are read through a period: **Produits & charges** (the articles
 bought between two dates), **Achats** (the documents), **Ventes** (the sales,
 the sale invoices and « Par origine »), **Banque** (the operations),
 **Marges** (the three margins), **Dépenses par catégorie** (what left the
-account) and **Entrées d'argent** (what came into it). The last three are
+account), **Entrées d'argent** (what came into it) and **Trésorerie** (its
+curve and its months; the balances, gaps and adjustments are the whole
+history). The last four are
 the ones whose period has a **default** - the last 12 months - and all say
 so on screen; `common.last_twelve_months()` is the one definition of that
 phrase, so they cannot name the same period and count two different spans.
@@ -6742,6 +7326,101 @@ a scratch run broke each one in memory and saw its test fail):
   and the month sent again is a version 1 again, with a new document number -
   the uuid is what the stamps and the tombstone name.
 
+### Employees' access (`accounts/access.py`, `accounts/members.py`, « Accès des employés »)
+
+The owner, 02/10/2026: « séparer les opérations employés et employeur … choisir depuis la page
+employeur à quelles pages l'employé peut avoir accès ». His answers: the employee gets an
+INVITATION LINK he sends himself (SMS, WhatsApp) and chooses his own password; access is set PER
+EMPLOYEE; « Ajouter des factures » is a right apart from « Factures : tout consulter ». The design
+went through three independent reviews (security, conventions, UX) before code; what they found is
+below, each with its test.
+
+**Roles.** `Membership.role` OWNER opens everything, as before. MEMBER (« Employé ») opens the areas
+of `Membership.pages` (accounts 0003; the existing MEMBER rows were given every area: they opened
+every page). An AREA (`access.AREAS`, keys stored, never renamed) is one box the owner ticks:
+`invoices_add`, `stock_takes`, `returnables` (ticked for a new employee, `DEFAULT_AREAS`),
+`invoices`, `stock_gaps`, `products`, `recipes`, `bank`, `margins`, `staff`. Each help says what the
+area shows that an owner may not want shown (purchase prices, the invoices' files of « Banque »).
+
+**The gate, deny by default** (`AccessMiddleware.process_view`, after MessageMiddleware). Every
+route is named through its app (`APP_AREAS`) or itself (`VIEW_AREAS`); a route named nowhere is the
+owner's, and `accounts/tests/test_access.py` fails on an app missing from `APP_AREAS` - classify a
+new route on purpose. The membership comes from the query TenantMiddleware already made
+(`membership_of`): a request still costs 3 accounts queries (`test_middleware`). Public views and
+the admin pass (the admin has its own gate); a logged-in request with no `request.access` on a
+non-public page is refused (fails closed). Refused: `accounts/refused.html` inside base.html (his
+links on top, « Page non accessible »), htmx 403 + `HX-Redirect` to his home (a poll refused bare
+asked every second); « / » - the login's landing, the brand, « Revenir à l'accueil » - redirects to
+`Access.home_url` (« / » itself for one given « Produits & charges », the area it opens; else his
+first area's page in the order of `AREAS`; « Aucune page ouverte » with none).
+- **Owner only inside the areas** (each a review finding): the sources of invoices
+  (`invoice_type_create/update`: a mailbox source's « Tester » lists every sender and subject it
+  matches); the slips' formats and types (`returnables:format_*`, `type_*`: a format's start motif
+  decides which PDF Achats files as a slip - an employee could make invoices vanish); the
+  timesheets' signatures (`staff:signature_*`, `month_reopen`: an employee given « Personnel »
+  countersigned as his employer); deleting a stock take (it froze the stock's value at its date);
+  « Données », « Identifiants », « Accès des employés »; the reminders, alerts, automatic gathers
+  and automatic sales imports (« Notifications, rappels et récupération automatique » below: they
+  write to every phone, search the mailbox and sign in to the till on their own). Each login's own
+  notification devices are every login's (`EVERYONE`).
+- **A stored file by the folder it RESOLVES to** (`areas_of_file`): `/fichiers/` serves any file of
+  the media root, so « consignes/../invoices/… » and « consignes\..\invoices\… » (the server's
+  separator) are invoices, a name with « : », absolute or climbing out is the owner's. A plain
+  `startswith` let a Consignes employee read every invoice PDF (security review, blocker).
+- **What a route alone cannot say is decided in the view**, with `access_of(request)`: a gather
+  (`invoices:gather*` opens to `returnables` for « Récupérer les bons »: such a login posts slip
+  sources only, follows a GATHER of slips only and stops one only once its sources say so; a
+  source's « Tester » job - a mailbox's senders and subjects - is the owner's alone, whoever asks;
+  a card drawn before its gather named the bar's invoices ends its poll with a 286; Consignes
+  draws another's card neither running nor ended, and holds the button with a stand-in); an
+  import by who sent it (below). « Classer comme » on a slip's line writes a type's motifs: the
+  owner's, like the types.
+- **Hiding a link is never the boundary**: `can` (context processor `accounts.access.context`,
+  no query) draws the links he may follow - the topbar (« Factures » to « Ajouter des factures »
+  when that is all he may do there, no badge; his name before the bar's on a shared phone; the
+  owner's bar byte-identical), the stock take, Consignes, Personnel and Données pages. A request
+  through no membership (anonymous, public, built by hand) draws everything (`FULL`). The badges'
+  counts are skipped for a closed area.
+- **Prices**: an inventory shows values (columns, total, the live price of a line,
+  `value_stock_take_line`) only to whoever is shown what articles cost (`sees_costs`: owner, or an
+  area of `COST_AREAS`). A barman counting bottles learnt every purchase price otherwise - the
+  margin - from a box ticked by default.
+
+**« Ajouter des factures »** (`invoices:invoice_add`): the import's form on a page of its own
+(`_receipt_upload_form.html`, shared with the card; « Un dossier entier » left to Factures; the
+camera script `static/js/receipt_camera.js`, shared). Every import records who sent it
+(`ReceiptBatch.sent_by`, the username - invoices 0036; not exported by « Données »). A login that
+may only add follows its OWN imports (status, cancel, resume: another's is a 404 - their numbers
+follow each other; `?lot=` naming another's draws the add page with no import), never reaches `receipt_batch` (the whole workspace), and an invalid
+upload draws the add page again - the review found it drew every document with its totals. Its
+status says « Reçu » / « Déjà envoyé », no « Vérifier », no shop to choose, no log, and
+`batch_status_context(add_only=True)` reads no shop list on its poll. The owner's « Derniers
+imports » names who sent each (« Envoyé par », only when one is another login's).
+
+**Inviting** (`/acces-employes/`, the owner's, linked from Personnel and Données, lights
+Personnel): one accounts transaction makes the login (username = address, first_name = the name,
+NO usable password), the membership and a `MemberInvitation` (only `hash_secret(token)`, 7 days).
+The link is shown ONCE, in the answer that made it - not in the session either (review: the raw
+token sat in `django_session`). Built with `staff.signature_requests.absolute_link` (SITE_URL), and
+said unusable on a phone when it names this PC. Every request of the page asks the owner's password
+again (sudo on GET too: asked at the POST, it threw the typed form away). An address with a login
+elsewhere is refused - two logins per address name nobody at login - which tells the owner the
+address has an account: counted per espace and day in the cache (`TAKEN_ADDRESSES_PER_DAY`, then
+the form stops checking) and logged, unlike the public signup (ANON-5), which says nothing. An
+address held by an invitation expired unused is freed first (`users.free_the_address`, the signup
+too). « Nouveau lien »: a new hash kills the old link; for an ACTIVE employee it is the forgotten
+password's way back (the old one works until the link is used). Never for a login that is staff,
+superuser or in another espace (`_may_reset`, checked again at `accept`): the owner of bar A must
+not choose the password of a login that owns bar B. Removing deletes the login (its sessions read
+as nobody's) unless staff/superuser/elsewhere - then the membership only.
+
+**« Votre accès »** (`/invitation/<token>/`, public, `PUBLIC_VIEWS`): French, never_cache,
+X-Robots-Tag noindex, the token redacted from the logs like a signing link (`config/logs.py`). Django's
+validators; the invitation used up by a DELETE only the first request passes; then `login()` (the
+session pinned to his espace) and his first page, the message saying where to come back. A dead link
+says « déjà utilisé ? Se connecter ». A login lives in ONE espace today: an employee of two bars needs
+two addresses.
+
 ### « Consignes » (`returnables/`, `/consignes/`): the empties handed back
 
 The kegs, crates and CO2 bottles given back to the delivery driver:
@@ -7017,8 +7696,9 @@ source with a reader of its own (`parse_and_import`) and Metro, which never
 go through `import_document` - the seeded UBA invoice source does not match
 a bon's sender or subject (pinned by a test).
 
-**« Données »** (`transfer/sections/returnables.py`, the tenth section, after
-« fournisseurs »): types and formats by their name as their forms compare
+**« Données »** (`transfer/sections/returnable_types.py` for the types and
+formats, in the « Configuration » group, and `transfer/sections/returnables.py`
+for the reprises and bons): types and formats by their name as their forms compare
 it, a reprise by its random `reference`, a bon by its sha256; a bon's
 reading is copied, never compared nor read again at import; every motif
 imported passes the guard or its record is skipped (« motif refusé : … »),
@@ -7064,7 +7744,7 @@ latest sends), `/notifications/rappels/`, `/notifications/evenements/`
 « Identifiants »), and `/invoices/recuperation-auto/`, under « Factures ».
 
 **Where things live.** Devices are central: `accounts.PushDevice` (accounts
-0003, FK `membership` CASCADE; the admin shows the endpoint's host only and
+0004, FK `membership` CASCADE; the admin shows the endpoint's host only and
 adds nothing). Rules, history and the espace's settings are the tenant app
 `notifications` (0001): `NotificationSettings` (singleton: `night_ends_at`,
 `last_tick_at`), `Reminder`, `EventRule` (one per event), `Dispatch` (outbox
@@ -7075,7 +7755,7 @@ invoices row (a « Données » clear must never break). Auto gathers are
 automatic « automatique », default manual) and `ScrapeJob.auto_gather_id`,
 and each gathered source's coverage is `invoices.GatherCoverage` (one row
 per `type-<id>` / `bons-<id>` code; its admin is view-only) - all invoices
-0036. None of it is in a « Données » section (« Never exported »).
+0037. None of it is in a « Données » section (« Never exported »).
 
 **The push transport is in-house** (`webpush.py`): RFC 8291 (aes128gcm) and
 RFC 8292 (VAPID) on `cryptography` + `requests`, both already locked -
@@ -7087,7 +7767,7 @@ RFC 8292's token.
   order), cached per sha256 of the key: nothing stored, no .env line. Each
   copy has its own SECRET_KEY, so dev can never push to production's
   phones; changing the key means every phone re-subscribes (the next page
-  load's sync answers `renew` - DEPLOY.md 13).
+  load's sync answers `renew` - DEPLOY.md 14).
 - **`sending_enabled()`** = SITE_URL in https, DEBUG off, a strong key
   (`secret_key_problem` empty). Checked INSIDE `webpush.send` (no network
   at all otherwise) and by the delivery, which writes « non envoyé : les
@@ -7147,7 +7827,7 @@ the local time of the UTC instant.
   older, a `missed` row « manqué : serveur arrêté ou ordinateur en veille
   à HH:MM », never sent. The window never reaches before 24 h, the rule's
   `created_at`, nor the espace's `last_tick_at`. The PC must be on and awake
-  (DEPLOY.md 13).
+  (DEPLOY.md 14).
 
 **The scheduler** (`scheduler.py`) is ONE daemon thread started by
 `manage.py serve` after `create_server` and before `server.run()`, stopped
@@ -7227,13 +7907,27 @@ blocked, Activer, active). A Home Screen app has no Back button: the bon's
 head. `/sw.js` and `/manifest.webmanifest` are public views (`PUBLIC_VIEWS`):
 `/sw.js` at the root because a service worker's scope is its folder, served
 `no-cache` - a Cloudflare « Cache Everything » or challenge on it stops the
-notifications (DEPLOY.md 13).
+notifications (DEPLOY.md 14).
 
-**Who may do what**: rules, alerts, the night and auto gathers are the
-espace owner's (`is_owner`); a member reads them (« Seul le propriétaire de
-l'espace modifie ces réglages. ») and gets the 403 page on a POST. Devices:
-every member, their own only, the membership always
+**Who may do what**: rules, alerts, the night, auto gathers and auto sales
+imports are the espace owner's. Since the employees' access (« Employees'
+access » above) the gate refuses their routes to an employee whatever is
+ticked (`APP_AREAS["notifications"]` OWNER_ONLY, `VIEW_AREAS` for
+`invoices:auto_gather*` and `recipes:auto_sales*`; « Restent à vous seul »
+says « les rappels, alertes, récupérations et imports automatiques »).
+Behind the gate the views keep their own check (`is_owner`, defence in
+depth): a member reads them (« Seul le propriétaire de l'espace modifie ces
+réglages. ») and gets the 403 page on a POST. Devices: every login, their
+own only - `notifications:home`, `key`, `subscribe`, `sync`,
+`device_delete`, `test` are `EVERYONE` (push_sync.js calls the key and the
+sync from every logged-in page, an employee's too: refused, his phone would
+stop receiving) - the membership always
 `Membership.objects.get(user=request.user, tenant_id=request.tenant.pk)`.
+On « Notifications » a member is drawn « Cet appareil » and « Mes
+appareils » only (`home`: `access.owner and is_owner`, no rule, run or
+dispatch read for him; no « ← Données »); he reaches it from the topbar's
+« Notifications » beside « Se déconnecter » (members only - the owner's bar
+is unchanged), and lights no link there (`config/navigation.py`).
 Recipients are active users only. Forms never write the scheduler's columns
 (`last_tick_at`, `last_slot_at`, `last_result`): saves use `update_fields`.
 A reminder card's FIRST submit is a hidden « Aperçu »: Enter previews and
@@ -7462,7 +8156,7 @@ never a lost bon.
   card), but an ACTIVE automatic gather is still shown (« déjà en cours »;
   `_gather_status.html` « Lancée automatiquement »). An automatic run is a
   job like any other: `running_jobs` refuses a deploy while it runs, and
-  « Données » waits (DEPLOY.md 13).
+  « Données » waits (DEPLOY.md 14).
 - At the end of `gather_invoices_task`, after its try/except/finally, an
   automatic job that ended SUCCESS or FAILED emits `invoices-auto-gather`:
   `failed` (deduplicated per rule, failed sources and local day: « une
@@ -7472,11 +8166,16 @@ never a lost bon.
   « du nouveau ») when `invoices_created > 0` or the run stored new bons,
   else `nothing`. Cancelled and refused runs emit nothing.
 
-**Migrations**: accounts 0003, notifications 0001 and invoices 0036 reach
+**Migrations**: accounts 0004, notifications 0001 and invoices 0037 reach
 production with the next deploy.cmd (its `migrate_tenants`, after its
 backup); data-dev needs the owner's `migrate_tenants`. Until then the
 Factures and Consignes pages fail there (they read `ScrapeJob.trigger`).
-0036 was edited in place to add `GatherCoverage.pending_until` while it was
+They were written as accounts 0003 and invoices 0036 and renumbered when
+GitHub's main brought the employees' accounts 0003 and invoices 0036
+(0004_pushdevice and 0037_auto_gather depend on them): neither had reached
+production, and a dev copy migrated under the old names is restored from
+a backup and migrated again.
+0037 was edited in place to add `GatherCoverage.pending_until` while it was
 still unapplied everywhere; once applied anywhere, a further change is a new
 migration.
 
@@ -7669,7 +8368,9 @@ does.
 **A chart is a server-rendered inline SVG**, never a library: four of them
 now (`recipes/views.py::_build_ingredient_pie_svg`,
 `inventory/views.py::_build_price_history_svg`,
-`bank/views.py::_build_spending_pie_svg` and `_build_balance_svg`), all hovered by
+`bank/views.py::_build_spending_pie_svg` and `_build_balance_svg` - « Entrées
+d'argent »'s card balance and « Trésorerie »'s curve, which
+`treasury.curve` hands in as steps), all hovered by
 `static/js/charts.js`, which is the only thing Chart.js would have added. The
 palette is `common.PIE_COLORS`, **one list**: two pies in one app drawn from
 two lists that drifted apart read as two different legends. Every name that
@@ -7771,7 +8472,8 @@ header row is not drawn (no sort on a phone; a sort chosen in the session
 still orders the cards). A `data-child-row` that is not itself a card (an
 opened panel) runs across under its card. Used by the four tables of
 Produits & charges, Achats' documents and « Documents à corriger », an
-import's files and the recipes. Not a sideways scroll with the name pinned:
+import's files, the recipes, and « Trésorerie »'s balances typed and
+adjustments. Not a sideways scroll with the name pinned:
 that put a purchases table wider than the phone inside a box scrolling
 sideways. `inventory/tests/test_products_phone.py` compares every label with
 its header.

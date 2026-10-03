@@ -3,15 +3,21 @@
 {% block title %}Notifications - MarginMate{% endblock %}
 {% block content %}
 <div class="notifications-page">
-    <p class="breadcrumb"><a href="{% url 'transfer:data_home' %}">← Données</a></p>
+    {% comment %}
+    An employee (`owner` false, notifications/views.py home) is drawn « Cet
+    appareil » and « Mes appareils » only: the rules, the automatic runs and
+    the dispatches are the owner's (accounts/access.py), and « Données » is
+    no page of his.
+    {% endcomment %}
+    {% if owner %}<p class="breadcrumb"><a href="{% url 'transfer:data_home' %}">← Données</a></p>{% endif %}
     <div class="page-header">
         <div>
             <h1>Notifications</h1>
-            <p class="page-subtitle">Rappels et alertes sur vos téléphones.</p>
+            <p class="page-subtitle">{% if owner %}Rappels et alertes sur vos téléphones.{% else %}Les rappels de votre employeur sur vos téléphones.{% endif %}</p>
         </div>
     </div>
 
-    <p class="message message-{{ server_css }}">{{ server_text }}</p>
+    {% if owner %}<p class="message message-{{ server_css }}">{{ server_text }}</p>{% endif %}
 
     {% comment %}
     « Cet appareil »: every state is drawn here, hidden but the first (no
@@ -23,7 +29,7 @@
         <h2>Cet appareil</h2>
         {{ push_config|json_script:"push-config" }}
         <p data-device-state="nojs">JavaScript requis pour activer les notifications sur cet appareil.</p>
-        <p data-device-state="ios-install" hidden>Sur iPhone et iPad, les notifications passent par l'application : dans Safari, touchez Partager › Sur l'écran d'accueil (laissez « Ouvrir comme app web » activé), ouvrez MarginMate depuis l'icône, reconnectez-vous, puis revenez ici (Données › Notifications).</p>
+        <p data-device-state="ios-install" hidden>Sur iPhone et iPad, les notifications passent par l'application : dans Safari, touchez Partager › Sur l'écran d'accueil (laissez « Ouvrir comme app web » activé), ouvrez MarginMate depuis l'icône, reconnectez-vous, puis revenez ici ({% if owner %}Données › Notifications{% else %}« Notifications », en haut de la page{% endif %}).</p>
         <p data-device-state="ios-update" hidden>Mettez l'iPhone à jour (iOS 16.4 ou plus) pour recevoir les notifications.</p>
         <p data-device-state="unsupported" hidden>Ce navigateur ne reçoit pas de notifications.</p>
         <p data-device-state="denied-ios" hidden>Notifications bloquées : Réglages › Notifications › MarginMate.</p>
@@ -68,6 +74,7 @@
         {% endif %}
     </section>
 
+    {% if owner %}
     <section class="card">
         <h2>Rappels programmés</h2>
         <p>{% if reminder_count %}{{ reminder_count }} rappel{{ reminder_count|pluralize }} actif{{ reminder_count|pluralize }}{% if next_send %} · prochain envoi : {{ next_send }}{% endif %}.{% else %}Aucun rappel actif.{% endif %}</p>
@@ -129,6 +136,7 @@
             <p class="muted">Aucun envoi pour l'instant.</p>
         {% endif %}
     </section>
+    {% endif %}
 </div>
 {% endblock %}
 {% block extra_js %}<script src="{% asset 'js/notifications.js' %}" defer></script>{% endblock %}

@@ -33,3 +33,26 @@ def user_for_email(email):
     """The one login this address names, or None (none, or several)."""
     found = list(users_for_email(email)[:2])
     return found[0] if len(found) == 1 else None
+
+
+def free_the_address(email, now=None) -> int:
+    """The logins behind `email` that an employee's invitation made and
+    nobody ever used - the invitation expired, no password ever chosen,
+    in no other espace - deleted, so the address can be invited again or
+    signed up with (accounts/members.py, accounts/signup.py). How many."""
+    from django.utils import timezone
+
+    from .models import MemberInvitation
+
+    now = now or timezone.now()
+    freed = 0
+    stale = MemberInvitation.objects.select_related("membership__user").filter(
+        expires_at__lte=now, membership__user__in=users_for_email(email)
+    )
+    for invitation in stale:
+        user = invitation.membership.user
+        if user.has_usable_password() or user.is_staff or user.is_superuser or user.memberships.count() != 1:
+            continue
+        user.delete()
+        freed += 1
+    return freed

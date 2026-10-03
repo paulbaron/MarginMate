@@ -258,6 +258,11 @@ class SpendingReport:
     #: account must not appear to change the money when a work list is
     #: narrowed.
     kind: str = ""
+    #: The ignore rules that named nothing over the window - a pattern the
+    #: guard refuses, or one too slow on a label (`rules.IgnoreRules`) -
+    #: in French: their payments lost the rule's category, and the page
+    #: says why.
+    rule_problems: list[str] = field(default_factory=list)
 
     @property
     def selected(self) -> list[Spending]:
@@ -413,6 +418,8 @@ def spending_for(window: DateRange, kind: str = "", left_out=()) -> SpendingRepo
         if not payments:
             report.without_invoice.append(Spending(line, own, source, rule))
 
+    # Read after the last line: a rule turns out slow only once it has read some.
+    report.rule_problems = rules.problems
     report.categories = _ordered(categories.values())
     # Marked before anything is added up: `drawn` asks it. Every category is
     # then exactly one of drawn, left out, or given back, so the three add

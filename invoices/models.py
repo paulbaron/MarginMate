@@ -1210,6 +1210,12 @@ class ReceiptBatch(JobLogMixin):
     log = models.TextField(blank=True)
     results = models.JSONField(default=list, blank=True)
     started_at = models.DateTimeField(auto_now_add=True)
+    #: The login that sent it (its username, the address it logs in with;
+    #: the logins live in the accounts database, no key reaches them):
+    #: « Ajouter des factures » lists a login's own imports, and an employee
+    #: who may only add follows those alone (invoices/views.py). Blank for
+    #: an import from before (02/10/2026).
+    sent_by = models.CharField("envoyé par", max_length=150, blank=True, db_index=True)
     finished_at = models.DateTimeField(null=True, blank=True)
 
     #: A receipt takes seconds, and a running batch beats every 15 s

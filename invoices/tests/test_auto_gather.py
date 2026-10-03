@@ -387,6 +387,20 @@ class ImportCardUnchangedTests(Sources, TestCase):
         self.assertContains(page, f'href="{reverse("invoices:auto_gathers")}"')
         self.assertContains(page, "Récupération automatique : réglages")
 
+    def test_an_employee_is_given_no_link_to_the_owner_s_page(self):
+        """« Récupération automatique » is the owner's (accounts/access.py): an
+        employee given « Factures » and « Consignes » is not led to it, from
+        Achats' card nor from Consignes."""
+        from accounts.access import AREA_KEYS
+        from tests.runner import employee_of_the_test_tenant
+
+        self.client.force_login(employee_of_the_test_tenant("tout-voir@example.invalid", sorted(AREA_KEYS)))
+        for url in (reverse("invoices:invoice_list") + "?ajouter=recuperer", reverse("returnables:home")):
+            with self.subTest(url=url):
+                page = self.client.get(url)
+                self.assertEqual(page.status_code, 200)
+                self.assertNotContains(page, f'href="{reverse("invoices:auto_gathers")}"')
+
 
 def gather_job(status, trigger=ScrapeJob.Trigger.MANUAL, **fields):
     return ScrapeJob.objects.create(kind=ScrapeJob.Kind.GATHER, status=status, trigger=trigger, **fields)

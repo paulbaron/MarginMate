@@ -14,8 +14,9 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
+from accounts.access import AREA_KEYS, Access
 from accounts.models import Membership
-from notifications import registry, schedule
+from notifications import registry, schedule, views
 from notifications.forms import NEW_REMINDER, NUL_REFUSED, PAGE_REFUSED
 from notifications.models import MAX_REMINDERS, TOO_MANY_REMINDERS, Dispatch, EventRule, NotificationSettings, Reminder
 from notifications.tests.support import SITE, QuietLogs, make_device, make_login
@@ -481,14 +482,44 @@ class MemberTests(PageCase):
         self.reminder = make_reminder()
         self.member = self.as_member()
 
-    def test_a_member_reads_without_forms(self):
+    def test_the_gate_refuses_the_rules_to_an_employee_given_every_area(self):
+        """The reminders, the alerts and the night are the owner's
+        (accounts/access.py), whatever is ticked."""
+        Membership.objects.filter(pk=self.member.pk).update(pages=sorted(AREA_KEYS))
         for url in (REMINDERS, EVENTS):
             with self.subTest(url=url):
-                response = self.get(url)
-                self.assertIn("Seul le propriétaire de l'espace modifie ces réglages.", self.text(response))
-                actions = [form.action for form in forms_of(response.content.decode())]
-                self.assertEqual([action for action in actions if action.startswith("/notifications/")], [])
-        self.assertContains(self.get(REMINDERS), "Vides avant livraison")
+                self.assertContains(self.client.get(url), "Page non accessible", status_code=403)
+
+    def test_behind_the_gate_a_member_reads_without_forms(self):
+        """The views keep their own check (defence in depth): the gate
+        opened, a member reads the rules and is given no form."""
+        with mock.patch.object(Access, "opens", return_value=True):
+            for url in (REMINDERS, EVENTS):
+                with self.subTest(url=url):
+                    response = self.get(url)
+                    self.assertIn("Seul le propriétaire de l'espace modifie ces réglages.", self.text(response))
+                    actions = [form.action for form in forms_of(response.content.decode())]
+                    self.assertEqual([action for action in actions if action.startswith("/notifications/")], [])
+            self.assertContains(self.get(REMINDERS), "Vides avant livraison")
+
+    def test_behind_the_gate_a_member_s_post_is_still_the_403_page(self):
+        with mock.patch.object(Access, "opens", return_value=True):
+            for url in (
+                REMINDERS,
+                NIGHT,
+                reverse("notifications:reminder_edit", args=[self.reminder.pk]),
+                reverse("notifications:reminder_delete", args=[self.reminder.pk]),
+                reverse("notifications:event_edit", args=[CONSIGNES]),
+            ):
+                with self.subTest(url=url):
+                    client = self.client_class()
+                    client.force_login(self.member.user)
+                    response = client.post(url, {"night_ends_at": "05:00"})
+                    # The view's own 403 page, not the gate's.
+                    self.assertContains(response, "Accès refusé", status_code=403)
+        self.assertTrue(Reminder.objects.filter(pk=self.reminder.pk).exists())
+        self.assertFalse(EventRule.objects.exists())
+        self.assertFalse(NotificationSettings.objects.exists())
 
     def test_a_member_s_post_is_the_403_page(self):
         for url in (
@@ -511,6 +542,78 @@ class MemberTests(PageCase):
     def test_a_member_still_has_the_device_card(self):
         response = self.get(HOME)
         self.assertContains(response, 'id="cet-appareil"')
+
+    def test_a_member_is_drawn_his_devices_only(self):
+        """« Cet appareil » and « Mes appareils »: the rules in short, the
+        automatic runs' links and « Derniers envois » are the owner's, and
+        « Données » is no page of his - whatever he was given."""
+        Membership.objects.filter(pk=self.member.pk).update(pages=sorted(AREA_KEYS))
+        mine = make_device(self.member, label="Téléphone du serveur")
+        Dispatch.objects.create(
+            kind=Dispatch.Kind.REMINDER,
+            rule_name="Vides avant livraison",
+            dedupe_key="reminder:1:20270101T2300Z",
+            title="Comptez les vides",
+            ttl=3600,
+            status=Dispatch.Status.SENT,
+        )
+        with mock.patch("notifications.views.integrations_allowed", return_value=True):
+            response = self.get(HOME)
+        text = self.text(response)
+        self.assertIn("Cet appareil", text)
+        self.assertIn("Mes appareils", text)
+        self.assertIn(mine.label, text)
+        for owner_s in (
+            "Rappels programmés",
+            "Gérer les rappels",
+            "Gérer les alertes",
+            "Récupération automatique",
+            "Import automatique des ventes",
+            "Derniers envois",
+            "Vides avant livraison",
+            "Comptez les vides",
+            "← Données",
+            views.SERVER_DISABLED,
+        ):
+            with self.subTest(owner_s=owner_s):
+                self.assertNotIn(owner_s, text)
+        content = response.content.decode()
+        for url in (REMINDERS, EVENTS, reverse("transfer:data_home"), reverse("invoices:auto_gathers")):
+            with self.subTest(url=url):
+                self.assertNotIn(f'href="{url}', content)
+        # The topbar leads him back here; « Données » lights for nobody.
+        self.assertIn(f'<a class="topbar-notifications" href="{HOME}">Notifications</a>', content)
+        self.assertEqual(response.context["nav_section"], "")
+
+    def test_the_owner_s_page_and_bar_are_unchanged(self):
+        """The owner keeps every section, and no « Notifications » link of
+        the members' in his topbar (he reaches it from Données)."""
+        self.client.force_login(test_user())
+        response = self.get(HOME)
+        text = self.text(response)
+        for section in ("Cet appareil", "Mes appareils", "Rappels programmés", "Alertes", "Derniers envois"):
+            with self.subTest(section=section):
+                self.assertIn(section, text)
+        self.assertNotIn("topbar-notifications", response.content.decode())
+        self.assertEqual(response.context["nav_section"], "data")
+
+    def test_a_member_s_essai_of_a_reminder_is_the_403_page(self):
+        """« Envoyer un essai » is his for his own devices; a reminder's
+        texts through it are the owner's (its card's button)."""
+        make_device(self.member)
+        client = self.client_class()
+        client.force_login(self.member.user)
+        response = client.post(reverse("notifications:test"), {"rappel": str(self.reminder.pk)})
+        # The view's own 403 page: the gate lets the route through.
+        self.assertContains(response, "Accès refusé", status_code=403)
+        self.assertFalse(Dispatch.objects.exists())
+
+    def test_every_device_route_answers_a_member(self):
+        """push_sync.js calls the key and the sync from every page of an
+        employee too: the gate never refuses them (accounts/access.py)."""
+        response = self.client.get(reverse("notifications:key"))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("key", response.json())
 
 
 # -- Every POST route -----------------------------------------------------------------------------------------------

@@ -71,7 +71,7 @@ column's header word for word (inventory/tests/test_products_phone.py).
             {% endcomment %}
             <td>
                 {% if entry.line %}
-                    <a href="{{ entry.invoice_url }}" title="Voir la facture">{{ entry.line.product.raw_name|default:entry.line.raw_name }}</a>
+                    {% if can.invoices %}<a href="{{ entry.invoice_url }}" title="Voir la facture">{{ entry.line.product.raw_name|default:entry.line.raw_name }}</a>{% else %}{{ entry.line.product.raw_name|default:entry.line.raw_name }}{% endif %}
                 {% else %}
                     {{ entry.movement.note|default:"Correction manuelle" }}
                 {% endif %}

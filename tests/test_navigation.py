@@ -32,6 +32,7 @@ from tests.factories import (
     make_stock_type,
     make_supplier,
 )
+from tests.runner import employee_of_the_test_tenant
 from tests.test_views_smoke import make_gaps_to_fill
 
 LABELS = [
@@ -138,6 +139,8 @@ class NavigationTests(TestCase):
                 reverse("invoices:invoice_create_manual"),
                 # « Récupération automatique », reached from Factures' card.
                 reverse("invoices:auto_gathers"),
+                # « Ajouter des factures »: the import's form on a page of its own.
+                reverse("invoices:invoice_add"),
             ],
             "Recettes &amp; ventes": [
                 reverse("recipes:recipe_list"),
@@ -159,12 +162,16 @@ class NavigationTests(TestCase):
                 f"{gap_filler}?montant=50",
                 f"{gap_filler}?depuis={take.pk}&montant=50",
             ],
-            "Banque": [reverse("bank:bank_home")],
+            "Banque": [reverse("bank:bank_home"), reverse("bank:treasury")],
             "Marges": [reverse("margins:margins_home")],
             "Personnel": [
                 reverse("staff:home"),
                 reverse("staff:employee", args=[person.pk]),
                 reverse("staff:month", args=[person.pk, "2026-06"]),
+                # « Accès des employés » is about the employees, though its
+                # route is the accounts app's (« Données »'s):
+                # navigation.SECTION_BY_VIEW.
+                reverse("accounts:members"),
             ],
             "Consignes": [
                 reverse("returnables:home"),
@@ -277,6 +284,74 @@ class NavigationTests(TestCase):
     def test_nothing_waiting_means_no_badge(self):
         links = nav_links(self.client.get(reverse("inventory:stock_list")))
         self.assertFalse(any("badge" in link for link in links))
+
+
+class EmployeeNavigationTests(TestCase):
+    """An employee's bar (accounts/access.py): the links of the pages his
+    employer opened to him, each lit on its pages as the owner's are - and
+    nothing lit on a page the gate refuses him, nor on « Aucune page
+    ouverte »: the page shown is none of his links' (accounts.access.refused
+    lights none, navigation.SECTION_BY_VIEW). Lit there, his « Factures »
+    would say he is on a page of his while the page says he may not open
+    it. Names and addresses invented."""
+
+    def log_in_an_employee(self, *pages):
+        employee = employee_of_the_test_tenant("employe-nav@example.invalid", pages, name="Léa Exemple")
+        self.client.force_login(employee)
+        return employee
+
+    def test_his_pages_light_their_link(self):
+        """« Factures » leads one who may only add to « Ajouter des
+        factures », and lights there."""
+        self.log_in_an_employee("invoices_add", "stock_takes", "returnables")
+        for url, label in (
+            (reverse("invoices:invoice_add"), "Factures"),
+            (reverse("inventory:stock_take_list"), "Inventaires"),
+            (reverse("inventory:stock_take_create"), "Inventaires"),
+            (reverse("returnables:home"), "Consignes"),
+        ):
+            with self.subTest(url=url):
+                response = self.client.get(url)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(
+                    [label_of(link) for link in nav_links(response)], ["Factures", "Inventaires", "Consignes"]
+                )
+                self.assertEqual(active_labels(response), [label])
+                self.assertEqual(section_shown(response), label)
+        links = {label_of(link): link for link in nav_links(response)}
+        self.assertIn(f'href="{reverse("invoices:invoice_add")}"', links["Factures"])
+
+    def test_a_refused_page_lights_nothing(self):
+        """Pages of his links' sections he may not open: « Factures »'s list
+        (he may only add) and « Accès des employés » (lit « Personnel » for
+        the owner, the owner's alone) - and a page of no link of his."""
+        self.log_in_an_employee("invoices_add", "staff")
+        for url in (reverse("invoices:invoice_list"), reverse("accounts:members"), reverse("bank:bank_home")):
+            with self.subTest(url=url):
+                response = self.client.get(url)
+                self.assertEqual(response.status_code, 403)
+                self.assertContains(response, "Page non accessible", status_code=403)
+                self.assertEqual([label_of(link) for link in nav_links(response)], ["Factures", "Personnel"])
+                self.assertEqual(active_labels(response), [])
+                self.assertIsNone(section_shown(response))
+
+    def test_no_access_lights_nothing(self):
+        self.log_in_an_employee()
+        url = reverse("accounts:no_access")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Aucune page ouverte")
+        self.assertEqual(nav_links(response), [])
+        self.assertIsNone(section_shown(response))
+        self.assertEqual(navigation.section_of(resolve(url)), "")
+
+    def test_a_route_lighting_another_section_names_one_with_words(self):
+        """A route of SECTION_BY_VIEW lights a section the folded bar can
+        say, or none."""
+        for view, section in navigation.SECTION_BY_VIEW.items():
+            with self.subTest(view=view):
+                self.assertTrue(section == "" or section in navigation.SECTION_LABELS, section)
+                self.assertEqual(navigation.section_of(resolve(reverse(view))), section)
 
 
 class MenuButtonTests(TestCase):

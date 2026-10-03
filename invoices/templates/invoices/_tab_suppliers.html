@@ -76,7 +76,7 @@ document du 19/09/2026 : Premier document : … » (UX review, 19/09).
                 </td>
                 <td>
                     {% for source in shop.sources %}
-                        <a href="{% url 'invoices:invoice_type_update' source.pk %}">{{ source.name }}</a>{% if not source.is_active %} <span class="muted">(inactive)</span>{% endif %}{% if not forloop.last %}<br>{% endif %}
+                        {% if can.owner %}<a href="{% url 'invoices:invoice_type_update' source.pk %}">{{ source.name }}</a>{% else %}{{ source.name }}{% endif %}{% if not source.is_active %} <span class="muted">(inactive)</span>{% endif %}{% if not forloop.last %}<br>{% endif %}
                     {% empty %}<span class="muted">—</span>{% endfor %}
                 </td>
                 <td class="num" data-sort="{{ shop.last_date|date:'Y-m-d' }}">
@@ -113,7 +113,7 @@ mailbox search); Metro is fetched by a module of its own (workspace.OWN_MODULE).
                     <td>{% if supplier.names_shop %}{{ supplier.names_shop|join:", " }}{% else %}<span class="muted">son lecteur seul (en-tête de ses factures)</span>{% endif %}</td>
                     <td>
                         {% for source in supplier.sources %}
-                            <a href="{% url 'invoices:invoice_type_update' source.pk %}">{{ source.name }}</a>{% if not source.is_active %} <span class="muted">(inactive)</span>{% endif %}{% if not forloop.last or supplier.own_module %}<br>{% endif %}
+                            {% if can.owner %}<a href="{% url 'invoices:invoice_type_update' source.pk %}">{{ source.name }}</a>{% else %}{{ source.name }}{% endif %}{% if not source.is_active %} <span class="muted">(inactive)</span>{% endif %}{% if not forloop.last or supplier.own_module %}<br>{% endif %}
                         {% endfor %}
                         {% if supplier.own_module %}<span class="muted">son propre module</span>{% elif not supplier.sources %}<span class="muted">—</span>{% endif %}
                     </td>

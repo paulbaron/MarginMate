@@ -13,7 +13,9 @@ from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
+from accounts import access
 from accounts.middleware import TenantMiddleware
+from accounts.models import Membership
 from accounts.tenancy import bound_tenant, current_tenant
 from accounts.tests.support import TwoTenantsTestCase
 from config.navigation import navigation
@@ -198,6 +200,37 @@ class RealPagesTests(TwoTenantsTestCase):
                 ]
                 self.assertEqual(len(tenant_queries), 1, tenant_queries)
 
+    def test_an_employee_s_request_costs_three_queries_too(self):
+        """What an employee may open comes in the membership's own row
+        (membership_of, accounts/access.py): his request, whether his page is
+        drawn, refused by the gate or sent to his first page, asks the
+        accounts database no more than the owner's - nor does « Aucune page
+        ouverte » for one given none."""
+        employee = self.make_member(self.bar_a, "employe-alpha@example.invalid", role=Membership.Role.MEMBER)
+        Membership.objects.filter(user=employee).update(pages=["products", "invoices_add"])
+        nobody = self.make_member(self.bar_a, "sans-page-alpha@example.invalid", role=Membership.Role.MEMBER)
+        for user, url, status in (
+            (employee, reverse("inventory:stock_list"), 200),
+            (employee, reverse("invoices:invoice_add"), 200),
+            (employee, reverse("bank:bank_home"), 403),
+            (nobody, reverse("inventory:stock_list"), 302),
+            (nobody, reverse("accounts:no_access"), 200),
+        ):
+            self.client.force_login(user)
+            for visit in (1, 2):
+                with self.subTest(user=user.username, url=url, visit=visit):
+                    with (
+                        self.assertNumQueries(3, using="accounts"),
+                        CaptureQueriesContext(connections["accounts"]) as seen,
+                    ):
+                        self.assertEqual(self.client.get(url).status_code, status)
+                    tenant_queries = [
+                        query["sql"]
+                        for query in seen.captured_queries
+                        if "accounts_membership" in query["sql"] or "accounts_tenant" in query["sql"]
+                    ]
+                    self.assertEqual(len(tenant_queries), 1, tenant_queries)
+
 
 class NeverKeptByTheBrowserTests(TwoTenantsTestCase):
     """A bar's page is never kept by the browser: on a shared device, Back
@@ -239,6 +272,13 @@ class MiddlewareDirectTests(TwoTenantsTestCase):
         request = RequestFactory().get("/")
         request.user = user
         return request
+
+    @staticmethod
+    def seen_by_the_view(request, read):
+        """What `read(request)` gave inside a view the middleware ran."""
+        seen = []
+        TenantMiddleware(lambda r: seen.append(read(r)) or HttpResponse())(request)
+        return seen
 
     def test_an_unrendered_template_response_is_rendered_inside_the_binding(self):
         with bound_tenant(self.bar_a):
@@ -283,21 +323,27 @@ class MiddlewareDirectTests(TwoTenantsTestCase):
     def test_a_public_view_runs_unbound_for_a_logged_in_user_too(self):
         """@login_not_required means « not this login's business »: the
         employee's signing pages bind the LINK's tenant themselves - whoever
-        is logged in on that browser - and the login, the logout and the
-        signup need none. Bound to the visitor's own, the link of another
-        tenant could not be opened in the same request."""
+        is logged in on that browser - and the login, the logout, the signup
+        and an invited employee's « Votre accès » (its link names his login,
+        in the accounts database) need none. Bound to the visitor's own, the
+        link of another tenant could not be opened in the same request. And
+        no membership is read: what such a page draws is every link
+        (accounts.access.FULL), never the visitor's."""
         for url in (
             reverse("accounts:login"),
             reverse("accounts:signup"),
+            reverse("accounts:member_invitation", args=["jeton-d-essai"]),
             reverse("staff:sign", args=["jeton-d-essai"]),
             reverse("staff:sign_unknown", kwargs={"rest": "ailleurs/"}),
         ):
             with self.subTest(url=url):
-                seen = []
                 request = RequestFactory().get(url)
                 request.user = self.user_a
-                TenantMiddleware(lambda r: seen.append((current_tenant(), r.tenant)) or HttpResponse())(request)  # noqa: B023 - called at once, before the loop moves on
-                self.assertEqual(seen, [(None, None)])
+                seen = self.seen_by_the_view(
+                    request, lambda r: (current_tenant(), r.tenant, getattr(r, "access", None))
+                )
+                self.assertEqual(seen, [(None, None, None)])
+                self.assertIs(access.access_of(request), access.FULL)
         # A page that is not public is still the login's tenant.
         seen = []
         request = RequestFactory().get(reverse("invoices:supplier_list"))
@@ -313,6 +359,23 @@ class MiddlewareDirectTests(TwoTenantsTestCase):
         TenantMiddleware(lambda r: seen.append(current_tenant()) or HttpResponse())(request)
         self.assertEqual(seen, [None])
         self.assertIsNone(request.tenant)
+        self.assertIsNone(getattr(request, "access", None))
+
+    def test_what_a_login_may_open_comes_with_its_membership(self):
+        """The membership the tenant was read with is the request's, and so
+        is what it opens (`request.access`, the gate's) - an employee's areas
+        as ticked, a key no area has any more left out; an owner's all."""
+        employee = self.make_member(self.bar_a, "employe-direct@example.invalid", role=Membership.Role.MEMBER)
+        Membership.objects.filter(user=employee).update(pages=["returnables", "page-disparue"])
+        for user, owner, areas in (
+            (employee, False, ["returnables"]),
+            (self.user_a, True, sorted(access.AREA_KEYS)),
+        ):
+            with self.subTest(user=user.username):
+                seen = self.seen_by_the_view(
+                    self.request(user), lambda r: (r.membership.user_id, r.access.owner, sorted(r.access.areas))
+                )
+                self.assertEqual(seen, [(user.pk, owner, areas)])
 
 
 class UnboundContextProcessorsTests(TwoTenantsTestCase):
@@ -330,3 +393,18 @@ class UnboundContextProcessorsTests(TwoTenantsTestCase):
             self.assertEqual(review_count(request), {"review_count_nav": 1})
             self.assertIn("receipt_review_count_nav", receipt_review_count(request))
             self.assertIn("pos_pending_count_nav", navigation(request))
+
+    def test_the_links_of_a_request_with_no_membership_are_every_link(self):
+        """`can` (accounts.access.context) reads no database, bound or not: a
+        request that went through no membership - built by hand, as here,
+        or a public page's - draws every link, as it always did."""
+        request = RequestFactory().get("/")
+        with self.assertNumQueries(0), self.assertNumQueries(0, using="accounts"):
+            drawn = access.context(request)
+        self.assertEqual(drawn, {"can": access.FULL})
+        self.assertIs(drawn["can"], access.FULL)
+        self.assertTrue(drawn["can"].owner)
+        # The links of the membership the middleware read, when there is one.
+        request.access = access.Access(owner=False, areas=["returnables"])
+        with bound_tenant(self.bar_a), self.assertNumQueries(0), self.assertNumQueries(0, using="accounts"):
+            self.assertIs(access.context(request)["can"], request.access)

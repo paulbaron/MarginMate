@@ -80,7 +80,7 @@ those keys under the scope (accounts.middleware.LEGACY_STORAGE_SESSION_KEY).
     {% if request.storage_legacy %}<script src="{% asset 'js/tenant_storage_legacy.js' %}"></script>{% endif %}
     <header class="topbar">
         <div class="topbar-inner">
-            <a class="brand" href="{% url 'inventory:stock_list' %}">MarginMate</a>
+            <a class="brand" href="{{ can.home_url }}">MarginMate</a>
             {% comment %}
             Under 860 px, once topbar.js has run, the bar is one row: the brand,
             the section the page belongs to (config/navigation.py SECTION_LABELS -
@@ -103,18 +103,23 @@ those keys under the scope (accounts.middleware.LEGACY_STORAGE_SESSION_KEY).
             not run, #topbar-menu is display: contents: its children are the
             bar's items exactly as before. Under 860 px it is what « Menu »
             opens, over the page.
+            An employee sees the links of the pages his employer opened to him
+            (`can`, accounts/access.py) - « Factures » leads him to « Ajouter des
+            factures » when that is all he may do there, « Inventaires » to
+            « Combler les écarts » likewise; « Données » is the owner's. An owner's
+            bar is drawn exactly as before.
             {% endcomment %}
             <div class="topbar-menu" id="topbar-menu">
             <nav aria-label="Navigation principale">
-                <a href="{% url 'inventory:stock_list' %}"{% if nav_section == "products" %} class="active"{% endif %}>Produits &amp; charges<span id="nav-count-products">{% if review_count_nav %} <span class="badge">{{ review_count_nav }}</span>{% endif %}</span></a>
-                <a href="{% url 'invoices:invoice_list' %}"{% if nav_section == "purchases" %} class="active"{% endif %}>Factures<span id="nav-count-purchases">{% if receipt_review_count_nav %} <span class="badge">{{ receipt_review_count_nav }}</span>{% endif %}</span></a>
-                <a href="{% url 'bank:bank_home' %}"{% if nav_section == "bank" %} class="active"{% endif %}>Banque</a>
-                <a href="{% url 'recipes:recipe_list' %}"{% if nav_section == "recipes" %} class="active"{% endif %}>Recettes &amp; ventes<span id="nav-count-recipes">{% if pos_pending_count_nav %} <span class="badge">{{ pos_pending_count_nav }}</span>{% endif %}</span></a>
-                <a href="{% url 'margins:margins_home' %}"{% if nav_section == "margins" %} class="active"{% endif %}>Marges</a>
-                <a href="{% url 'staff:home' %}"{% if nav_section == "staff" %} class="active"{% endif %}>Personnel</a>
-                <a href="{% url 'inventory:stock_take_list' %}"{% if nav_section == "stock_takes" %} class="active"{% endif %}>Inventaires</a>
-                <a href="{% url 'returnables:home' %}"{% if nav_section == "returnables" %} class="active"{% endif %}>Consignes</a>
-                <a href="{% url 'transfer:data_home' %}"{% if nav_section == "data" %} class="active"{% endif %}>Données</a>
+                {% if can.products %}<a href="{% url 'inventory:stock_list' %}"{% if nav_section == "products" %} class="active"{% endif %}>Produits &amp; charges<span id="nav-count-products">{% if review_count_nav %} <span class="badge">{{ review_count_nav }}</span>{% endif %}</span></a>{% endif %}
+                {% if can.invoices %}<a href="{% url 'invoices:invoice_list' %}"{% if nav_section == "purchases" %} class="active"{% endif %}>Factures<span id="nav-count-purchases">{% if receipt_review_count_nav %} <span class="badge">{{ receipt_review_count_nav }}</span>{% endif %}</span></a>{% elif can.invoices_add %}<a href="{% url 'invoices:invoice_add' %}"{% if nav_section == "purchases" %} class="active"{% endif %}>Factures</a>{% endif %}
+                {% if can.bank %}<a href="{% url 'bank:bank_home' %}"{% if nav_section == "bank" %} class="active"{% endif %}>Banque</a>{% endif %}
+                {% if can.recipes %}<a href="{% url 'recipes:recipe_list' %}"{% if nav_section == "recipes" %} class="active"{% endif %}>Recettes &amp; ventes<span id="nav-count-recipes">{% if pos_pending_count_nav %} <span class="badge">{{ pos_pending_count_nav }}</span>{% endif %}</span></a>{% endif %}
+                {% if can.margins %}<a href="{% url 'margins:margins_home' %}"{% if nav_section == "margins" %} class="active"{% endif %}>Marges</a>{% endif %}
+                {% if can.staff %}<a href="{% url 'staff:home' %}"{% if nav_section == "staff" %} class="active"{% endif %}>Personnel</a>{% endif %}
+                {% if can.stock_takes %}<a href="{% url 'inventory:stock_take_list' %}"{% if nav_section == "stock_takes" %} class="active"{% endif %}>Inventaires</a>{% elif can.stock_gaps %}<a href="{% url 'inventory:stock_gap_filler' %}"{% if nav_section == "stock_takes" %} class="active"{% endif %}>Inventaires</a>{% endif %}
+                {% if can.returnables %}<a href="{% url 'returnables:home' %}"{% if nav_section == "returnables" %} class="active"{% endif %}>Consignes</a>{% endif %}
+                {% if can.owner %}<a href="{% url 'transfer:data_home' %}"{% if nav_section == "data" %} class="active"{% endif %}>Données</a>{% endif %}
                 {% if user.is_superuser %}<a href="/admin/">Admin</a>{% endif %}
             </nav>
             {% comment %}
@@ -127,7 +132,10 @@ those keys under the scope (accounts.middleware.LEGACY_STORAGE_SESSION_KEY).
             {% endcomment %}
             {% if request.tenant %}
                 <div class="topbar-account">
-                    <span class="topbar-tenant" title="{{ request.tenant.name }}">{{ request.tenant.name }}</span>
+                    {% comment %}An employee's name before the bar's: on a shared phone, who is logged in.{% endcomment %}
+                    {% if can.owner %}<span class="topbar-tenant" title="{{ request.tenant.name }}">{{ request.tenant.name }}</span>{% else %}{% with who=user.first_name|default:user.email %}<span class="topbar-tenant" title="{{ who }} · {{ request.tenant.name }}">{{ who }} · {{ request.tenant.name }}</span>{% endwith %}{% endif %}
+                    {% comment %}An employee's own devices (notifications:home, every login's - accounts/access.py): the owner reaches them from Données, which is no page of his.{% endcomment %}
+                    {% if not can.owner %}<a class="topbar-notifications" href="{% url 'notifications:home' %}">Notifications</a>{% endif %}
                     <form method="post" action="{% url 'accounts:logout' %}" class="topbar-logout">
                         {% csrf_token %}
                         <button type="submit" class="link-button">Se déconnecter</button>

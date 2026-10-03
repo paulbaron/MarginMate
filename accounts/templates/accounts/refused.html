@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% comment %}
+A page an employee may not open (accounts/access.py, `refused`): drawn inside the site, his own
+links on top, and the way back to his first page. The page asked for is not named; a refused POST
+says that nothing was saved.
+{% endcomment %}
+{% block title %}Page non accessible - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <h1>Page non accessible</h1>
+            <p class="page-subtitle">{{ refused }}{% if nothing_saved %} {{ nothing_saved }}{% endif %}</p>
+        </div>
+    </div>
+    <p><a class="btn" href="{{ home_url }}">Aller à mes pages</a></p>
+{% endblock %}

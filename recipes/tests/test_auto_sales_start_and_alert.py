@@ -130,6 +130,15 @@ class StartTests(TestCase):
             f'<a href="{reverse("recipes:auto_sales")}">Import automatique : réglages</a>',
         )
 
+    def test_an_employee_given_the_sales_is_not_led_to_the_owner_s_settings(self):
+        """« Import automatique des ventes » is the owner's (accounts/access.py)."""
+        from tests.runner import employee_of_the_test_tenant
+
+        self.client.force_login(employee_of_the_test_tenant("ventes@example.invalid", ["recipes"]))
+        page = self.client.get(reverse("recipes:sales_list"))
+        self.assertEqual(page.status_code, 200)
+        self.assertNotContains(page, f'href="{reverse("recipes:auto_sales")}"')
+
 
 class AlertTests(QuietLogs, TestCase):
     def setUp(self):

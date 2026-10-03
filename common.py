@@ -116,6 +116,14 @@ def read_amount(text, places: int = 2, *, digits: int = 12) -> Decimal | None:
     return abs(quantized) if quantized == 0 else quantized
 
 
+#: « 10.000 » or « 1,500 »: one separator and three digits after it. A slip
+#: prints cents (read_number takes « 4,000 » for 4), but a person typing an
+#: amount may well mean ten thousand - read as 10,00 €. Asked again rather
+#: than guessed, matched on the typed text without its spaces: « Combler les
+#: écarts »' amount, « Trésorerie »'s balance.
+AMBIGUOUS_THOUSANDS = re.compile(r"-?[0-9]+[.,][0-9]{3}")
+
+
 def is_id(value) -> bool:
     """Whether `value`, read from a request, is an id: ASCII digits only.
     str.isdigit() also says yes to "²" or "٣" - and "²" is no int, so the

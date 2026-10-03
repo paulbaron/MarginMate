@@ -19,11 +19,12 @@ from django.test.utils import CaptureQueriesContext, override_script_prefix
 from django.urls import reverse
 
 from bank import income, reconcile, views
-from bank.models import BankTransaction, IgnoreRule
-from bank.rules import compile_rules, ignoring_rule, searcher
+from bank.models import BankTransaction, IgnoreRule, TreasuryAdjustment, TreasuryCheckpoint
+from bank.rules import check, compile_rules, ignoring_rule, searcher
 from common import DateRange
 from invoices.models import Invoice, Supplier
 from recipes.models import PosProduct, PosProductDailyQuantity
+from returnables.patterns import PatternError
 from tests.factories import make_invoice, make_invoice_line, make_product, make_supplier
 
 #: Patterns with a leading « .* » - and the shapes around it that must not
@@ -64,30 +65,45 @@ LABELS = (
 )
 
 
+#: Of `PATTERNS`, those the guard refuses as written (`rules.check`): an
+#: empty label matches them, or a « { » is no count.
+REFUSED = (".*", ".*|URSSAF", ".*$", ".*{x")
+
+
 class SearcherTests(SimpleTestCase):
     def test_it_finds_exactly_what_the_pattern_as_written_finds(self):
         for pattern in PATTERNS:
-            written = re.compile(pattern, re.IGNORECASE)
+            if pattern in REFUSED:
+                continue
+            written = check(pattern)
             searched = searcher(pattern)
+            # And what `re` found with its flags then: the guard adds
+            # MULTILINE, which only a label holding a line break could tell,
+            # and the import folds every space and break of a label.
+            before = re.compile(pattern, re.IGNORECASE)
             for label in LABELS:
                 with self.subTest(pattern=pattern, label=label):
                     self.assertEqual(bool(searched.search(label)), bool(written.search(label)))
+                    if "\n" not in label:
+                        self.assertEqual(bool(searched.search(label)), bool(before.search(label)))
 
     def test_a_leading_greedy_dot_star_is_not_searched(self):
         """What makes it quick: « .* » ran to the end of the label and back
         at every position."""
         self.assertEqual(searcher(".*URSSAF.*").pattern, "URSSAF.*")
         self.assertEqual(searcher(".*.*FRAIS").pattern, "FRAIS")
-        for kept in (".*?CARTE", ".*+CARTE", "\\.*URSSAF", "(.*)URSSAF", ".*{x"):
+        for kept in (".*?CARTE", ".*+CARTE", "\\.*URSSAF", "(.*)URSSAF"):
             with self.subTest(pattern=kept):
                 self.assertEqual(searcher(kept).pattern, kept)
 
-    def test_a_pattern_that_does_not_compile_is_refused_as_before(self):
-        for pattern in (".*(", ".*)", ".**"):
+    def test_what_the_guard_refuses_as_written_is_refused_whatever_its_rest(self):
+        """The pattern as written is what is checked: « .*{x » leaves « {x »,
+        « .* » nothing at all."""
+        for pattern in (*REFUSED, ".*(", ".*)", ".**"):
             with self.subTest(pattern=pattern):
-                with self.assertRaises(re.error):
-                    re.compile(pattern, re.IGNORECASE)
-                with self.assertRaises(re.error):
+                with self.assertRaises(PatternError):
+                    check(pattern)
+                with self.assertRaises(PatternError):
                     searcher(pattern)
 
     def test_the_rules_answer_as_before(self):
@@ -97,7 +113,8 @@ class SearcherTests(SimpleTestCase):
 
         rules = [Rule(".*URSSAF.*"), Rule(".*("), Rule("PRET"), Rule(".*SEPA")]
         compiled = compile_rules(rules)
-        self.assertEqual([rule.pattern for rule, _regex in compiled], [".*URSSAF.*", "PRET", ".*SEPA"])
+        self.assertEqual([rule.pattern for rule, _matcher in compiled.rules], [".*URSSAF.*", "PRET", ".*SEPA"])
+        self.assertEqual([rule.pattern for rule, _sentence in compiled.invalid], [".*("])
         self.assertIs(ignoring_rule("PRLV SEPA URSSAF", compiled), rules[0])
         self.assertIs(ignoring_rule("ECHEANCE PRET SEPA", compiled), rules[2])
         self.assertIs(ignoring_rule("PRLV SEPA EXEMPLE", compiled), rules[3])
@@ -105,7 +122,14 @@ class SearcherTests(SimpleTestCase):
 
 
 class ByPkTests(SimpleTestCase):
-    NAMES = ("bank:bank_line_action", "bank:invoice_search", "invoices:invoice_detail", "bank:income_source")
+    NAMES = (
+        "bank:bank_line_action",
+        "bank:invoice_search",
+        "invoices:invoice_detail",
+        "bank:income_source",
+        "bank:treasury_point",
+        "bank:treasury_adjustment",
+    )
     PKS = (1, 7, 10, 99, 123456789, int(views.URL_PLACEHOLDER), 10**20)
 
     def test_it_gives_what_reverse_gives(self):
@@ -268,6 +292,37 @@ class ProposalsAndRulesQueriesTests(Statement, TestCase):
         # six are still open.
         self.assertEqual((found["Trop large"].count, found["Trop large"].linked), (15, 9))
         self.assertEqual((found["Loyer"].count, found["Loyer"].linked), (6, 0))
+
+
+class TreasuryPageQueriesTests(TestCase):
+    """« Trésorerie » costs the same whatever the history holds: the
+    treasury is `treasury.QUERIES` queries, and every row's addresses one
+    reverse for the page (`views._by_pk`)."""
+
+    def history(self, start, count):
+        """`count` days four days apart, each with an operation of +5,00, a
+        balance typed the day after it 10,00 above the one before - 4,00
+        more than the operation and an adjustment of +1,00 explain: a gap to
+        resolve each - and that adjustment."""
+        for n in range(start, start + count):
+            day = date(2026, 1, 1) + timedelta(days=4 * n)
+            BankTransaction.objects.create(
+                operation_date=day, label=f"VIR EXEMPLE {n}", amount=Decimal("5.00"), fingerprint=f"treso-cost-{n}"
+            )
+            TreasuryCheckpoint.objects.create(date=day + timedelta(days=1), balance=Decimal(10 * n))
+            TreasuryAdjustment.objects.create(date=day + timedelta(days=1), amount=Decimal("1.00"))
+
+    def test_more_history_costs_no_more_queries(self):
+        url = reverse("bank:treasury")
+        self.history(0, 3)
+        with CaptureQueriesContext(connection) as few:
+            self.client.get(url, {"tout": "1"})
+        self.history(3, 6)
+        with self.assertNumQueries(len(few.captured_queries)):
+            response = self.client.get(url, {"tout": "1"})
+        # Every gap drawn but the last, waiting for its statement.
+        self.assertContains(response, "Ajouter un ajustement de +4.00 €", count=7)
+        self.assertContains(response, 'data-label="Solde"', count=9)
 
 
 class TakingsByMonthTests(TestCase):

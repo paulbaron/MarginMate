@@ -1,0 +1,9 @@
+{% comment %}
+The messages of one place of « Trésorerie » (views._treasury_messages):
+`shown`, the list said there.
+{% endcomment %}
+{% if shown %}
+    <ul class="messages">
+        {% for message in shown %}<li class="message message-{{ message.level_tag }}">{{ message }}</li>{% endfor %}
+    </ul>
+{% endif %}

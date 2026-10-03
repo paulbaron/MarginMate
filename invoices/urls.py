@@ -35,6 +35,9 @@ urlpatterns = [
     path("fournisseurs/<int:pk>/charges/", views.supplier_expenses, name="supplier_expenses"),
     path("types/new/", views.invoice_type_form, name="invoice_type_create"),
     path("types/<int:pk>/edit/", views.invoice_type_form, name="invoice_type_update"),
+    # « Ajouter des factures »: the import's form on a page of its own (an
+    # employee given that page alone, accounts/access.py).
+    path("ajouter/", views.invoice_add, name="invoice_add"),
     path("tickets/", views.receipt_upload, name="receipt_upload"),
     path("tickets/lots/<int:pk>/", views.receipt_batch, name="receipt_batch"),
     path("tickets/lots/<int:pk>/statut/", views.receipt_batch_status, name="receipt_batch_status"),

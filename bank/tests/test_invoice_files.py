@@ -181,8 +181,15 @@ class InvoiceFilesTests(Fixtures, TestCase):
 
 
 class BanqueTabsTests(Fixtures, TestCase):
-    """Banque's three pages, one tab each (bank/_tabs.html): every page draws
-    all three, lights its own, and hands the others its period."""
+    """Banque's four pages, one tab each (bank/_tabs.html): every page draws
+    all four, lights its own, and hands the others its period."""
+
+    PAGES = (
+        ("bank:bank_home", "Opérations"),
+        ("bank:spending_home", "Dépenses par catégorie"),
+        ("bank:income_home", "Entrées d'argent"),
+        ("bank:treasury", "Trésorerie"),
+    )
 
     def setUp(self):
         self.load(debit_row(date(2026, 7, 9), "METRO FRANCE", "120,00"))
@@ -191,23 +198,33 @@ class BanqueTabsTests(Fixtures, TestCase):
         html = response.content.decode()
         return html[html.index('<nav class="tabs" aria-label="Banque">') :].split("</nav>")[0]
 
-    def test_each_page_draws_the_three_tabs_and_lights_its_own(self):
-        for name, lit in (
-            ("bank:bank_home", "Opérations"),
-            ("bank:spending_home", "Dépenses par catégorie"),
-            ("bank:income_home", "Entrées d'argent"),
-        ):
+    def test_each_page_draws_the_four_tabs_and_lights_its_own(self):
+        for name, lit in self.PAGES:
             with self.subTest(page=name):
                 tabs = self.tabs_of(self.client.get(reverse(name), {"du": "2026-07-01", "au": "2026-07-31"}))
-                self.assertEqual(tabs.count("<a "), 3)
+                self.assertEqual(tabs.count("<a "), 4)
                 self.assertEqual(tabs.count('aria-current="page"'), 1)
                 self.assertIn(f'aria-current="page">{lit}</a>', tabs)
                 self.assertNotIn('href=""', tabs)
 
-    def test_the_operations_tab_carries_the_period_from_both_other_pages(self):
-        for name in ("bank:spending_home", "bank:income_home"):
+    def test_the_operations_tab_carries_the_period_from_the_other_pages(self):
+        for name in ("bank:spending_home", "bank:income_home", "bank:treasury"):
             with self.subTest(page=name):
                 tabs = self.tabs_of(self.client.get(reverse(name), {"du": "2026-07-01", "au": "2026-07-31"}))
                 self.assertIn(
                     f'href="{reverse("bank:bank_home")}?vue=a-traiter&amp;du=2026-07-01&amp;au=2026-07-31"', tabs
                 )
+
+    def test_the_treasury_tab_carries_the_period_from_the_other_pages(self):
+        """Over the dates shown - and from Banque with no period chosen,
+        under « tout »: bare, the treasury would open on its own twelve
+        months."""
+        treasury = reverse("bank:treasury")
+        for name in ("bank:bank_home", "bank:spending_home", "bank:income_home"):
+            with self.subTest(page=name):
+                tabs = self.tabs_of(self.client.get(reverse(name), {"du": "2026-07-01", "au": "2026-07-31"}))
+                self.assertIn(f'href="{treasury}?du=2026-07-01&amp;au=2026-07-31" class="tab">Trésorerie</a>', tabs)
+        tabs = self.tabs_of(self.client.get(reverse("bank:bank_home")))
+        self.assertIn(f'href="{treasury}?tout=1" class="tab">Trésorerie</a>', tabs)
+        tabs = self.tabs_of(self.client.get(reverse("bank:bank_home"), {"mois": "2026-07"}))
+        self.assertIn(f'href="{treasury}?du=2026-07-01&amp;au=2026-07-31" class="tab">Trésorerie</a>', tabs)

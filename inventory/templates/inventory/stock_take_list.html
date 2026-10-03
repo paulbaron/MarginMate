@@ -5,10 +5,10 @@
     <div class="page-header">
         <div>
             <h1>Inventaires physiques</h1>
-            <p class="page-subtitle">Chaque comptage fige la valeur du stock à sa date, au prix des derniers achats.</p>
+            <p class="page-subtitle">{% if can.sees_costs %}Chaque comptage fige la valeur du stock à sa date, au prix des derniers achats.{% else %}Chaque comptage note ce qui est en stock à sa date.{% endif %}</p>
         </div>
         <div class="actions">
-            {% if stock_takes %}<a class="btn btn-secondary" href="{% url 'inventory:stock_gap_filler' %}">Combler les écarts</a>{% endif %}
+            {% if stock_takes and can.stock_gaps %}<a class="btn btn-secondary" href="{% url 'inventory:stock_gap_filler' %}">Combler les écarts</a>{% endif %}
             <a class="btn" href="{% url 'inventory:stock_take_create' %}">+ Nouvel inventaire</a>
         </div>
     </div>
@@ -21,7 +21,7 @@
                     <th>Date</th>
                     <th>Note</th>
                     <th class="num">Lignes comptées</th>
-                    <th class="num">Valeur (HT)</th>
+                    {% if can.sees_costs %}<th class="num">Valeur (HT)</th>{% endif %}
                     <th></th>
                 </tr>
             </thead>
@@ -31,7 +31,7 @@
                     <td><a href="{% url 'inventory:stock_take_detail' stock_take.pk %}">{{ stock_take.taken_at|date:"d/m/Y H:i" }}</a></td>
                     <td class="muted">{{ stock_take.note|default:"—" }}</td>
                     <td class="num">{{ stock_take.lines.count }}</td>
-                    <td class="num">{{ stock_take.total_value_ht|money }} €</td>
+                    {% if can.sees_costs %}<td class="num">{{ stock_take.total_value_ht|money }} €</td>{% endif %}
                     <td>{% if stock_take.has_shortfall %}<span class="muted" title="Au moins un produit compté dépasse son historique d'achats">⚠️</span>{% endif %}</td>
                 </tr>
                 {% endfor %}

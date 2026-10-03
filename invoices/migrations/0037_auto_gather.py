@@ -6,7 +6,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("invoices", "0035_supplier_typed_identifiers"),
+        ("invoices", "0036_receiptbatch_sent_by"),
     ]
 
     operations = [

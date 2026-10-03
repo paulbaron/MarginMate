@@ -42,6 +42,8 @@ STORAGE_FILES = (
     "inventory/templates/inventory/stock_take_form.html",
     "inventory/templates/inventory/stock_take_detail.html",
     "invoices/templates/invoices/purchases.html",
+    # « Prendre une photo »: how many shots wait, for the tab (Factures and « Ajouter des factures »).
+    "static/js/receipt_camera.js",
     # « Consignes »: the pickup not sent yet (its counts, its note).
     "static/js/returnables.js",
     # The notifications' sync: when it last told the server this browser's

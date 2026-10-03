@@ -17,10 +17,13 @@
   never be a redirect to the login, a manifest is fetched without the
   session), unbound - they read no espace.
 
-**Who may do what** (spec §1.6): the rules are the espace owner's; a member
-GETs the pages read-only and a member's POST gets the 403 page. The devices
-are each member's own: the membership is always the request's login in the
-espace the request is bound to.
+**Who may do what** (spec §1.6): the rules are the espace owner's. The gate
+(accounts/access.py) refuses their pages to an employee; behind it, these
+views still draw them read-only for a member and answer his POST with the
+403 page (defence in depth). The devices are each login's own, and their
+routes every login's: the membership is always the request's login in the
+espace the request is bound to. On « Notifications » a member is drawn his
+devices only.
 
 A GET on a POST-only route goes back to its page and writes nothing.
 """
@@ -44,6 +47,7 @@ from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_safe
 
+from accounts.access import access_of
 from accounts.models import PushDevice
 from accounts.tenancy import integrations_allowed, is_owner
 from common import is_id
@@ -195,13 +199,34 @@ def _server_line(settings_row: NotificationSettings, now) -> tuple[str, str]:
 
 
 def home(request):
-    now = timezone.now()
-    settings_row = _settings()
+    """« Notifications ». Every login opens it for its own devices
+    (accounts/access.py); the rules in short, the links to the automatic
+    runs and « Derniers envois » are the owner's - a member is drawn
+    « Cet appareil » and « Mes appareils » only, nothing else read."""
     membership = devices.membership_of(request)
     key = webpush.vapid_public_key()
     mine = devices.devices_of(membership) if membership is not None else []
     named = devices.cookie_device(request, membership) if membership is not None else None
+    push_config = {
+        "key": key,
+        "subscribe": reverse("notifications:subscribe"),
+        "sync": reverse("notifications:sync"),
+        "test": reverse("notifications:test"),
+        "remove": reverse("notifications:device_delete", args=[0]),
+        "device": named.pk if named is not None else None,
+    }
+    device_rows = [(device, devices.needs_renewal(device, key)) for device in mine]
+    # The gate's access first (no query, False for a member), the owner's
+    # row second: defence in depth, as every rule's POST (_owner_only).
+    if not (access_of(request).owner and is_owner(request)):
+        return render(
+            request,
+            "notifications/home.html",
+            {"owner": False, "push_config": push_config, "devices": device_rows},
+        )
 
+    now = timezone.now()
+    settings_row = _settings()
     active = list(Reminder.objects.filter(is_active=True))
     upcoming = [
         (instant, reminder)
@@ -223,17 +248,11 @@ def home(request):
     server_text, server_css = _server_line(settings_row, now)
     history = [(dispatch, STATUS_CSS.get(dispatch.status, "")) for dispatch in Dispatch.objects.all()[:HISTORY_ROWS]]
     context = {
+        "owner": True,
         "server_text": server_text,
         "server_css": server_css,
-        "push_config": {
-            "key": key,
-            "subscribe": reverse("notifications:subscribe"),
-            "sync": reverse("notifications:sync"),
-            "test": reverse("notifications:test"),
-            "remove": reverse("notifications:device_delete", args=[0]),
-            "device": named.pk if named is not None else None,
-        },
-        "devices": [(device, devices.needs_renewal(device, key)) for device in mine],
+        "push_config": push_config,
+        "devices": device_rows,
         "reminder_count": len(active),
         "next_send": next_send,
         "alerts": alerts,
@@ -653,6 +672,10 @@ def trial(request):
     back = _url("notifications:home", "cet-appareil")
     reminder_pk = str(data.get("rappel") or "")
     if reminder_pk:
+        # A reminder's essai is on its card, the owner's (the route is every
+        # login's for his own devices - accounts/access.py): a member never
+        # reads a reminder's texts through it.
+        _owner_only(request)
         if not is_id(reminder_pk):
             raise Http404("Rappel inconnu.")
         reminder = get_object_or_404(Reminder, pk=int(reminder_pk))

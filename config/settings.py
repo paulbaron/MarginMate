@@ -171,6 +171,10 @@ MIDDLEWARE = [
     "accounts.middleware.LoginRequiredMiddleware",
     "accounts.middleware.TenantMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
+    # An employee opens only the pages his employer opened to him
+    # (accounts/access.py): after the binding, whose membership it reads, and
+    # the messages, which its refusal page draws.
+    "accounts.access.AccessMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
@@ -189,6 +193,8 @@ TEMPLATES = [
                 "inventory.context_processors.review_count",
                 "invoices.context_processors.receipt_review_count",
                 "config.navigation.navigation",
+                # `can`: the links an employee may follow (accounts/access.py).
+                "accounts.access.context",
             ],
             # Django's `date` filter, quicker on "d/m/Y" and "Y-m-d", the
             # same characters (config/template_builtins.py).

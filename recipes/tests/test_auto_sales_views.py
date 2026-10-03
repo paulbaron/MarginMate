@@ -14,7 +14,9 @@ from unittest import mock
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.html import escape
 
+from accounts.access import AREA_KEYS, REFUSED_POST, Access
 from accounts.models import Membership
 from accounts.tenancy import current_tenant
 from recipes.auto_sales_views import AUTO_SALES_CAP, OWNER_ONLY_SETTINGS
@@ -300,13 +302,19 @@ class CsrfTests(PageCase):
 
 
 class MemberTests(PageCase):
+    """Behind the gate - which refuses these pages to an employee whatever
+    is ticked (GateTests) - the views keep their own check (defence in
+    depth): a member reads the rules, his POST is the 403 page."""
+
     def setUp(self):
         super().setUp()
         self.rule = make_rule()
         self.owner_form = self.new_form()
         self.edit = self.edit_form(self.rule)
         self.delete = form_posting_to(self.html(), reverse("recipes:auto_sales_delete", args=[self.rule.pk]))
-        Membership.objects.filter(tenant=current_tenant()).update(role=Membership.Role.MEMBER)
+        Membership.objects.filter(tenant=current_tenant()).update(role=Membership.Role.MEMBER, pages=sorted(AREA_KEYS))
+        # The gate opened, to reach the views' own check.
+        self.enterContext(mock.patch.object(Access, "opens", return_value=True))
 
     def test_a_member_reads_the_rules_without_a_form(self):
         content = self.html()
@@ -320,6 +328,27 @@ class MemberTests(PageCase):
             with self.subTest(action=form.action):
                 response = self.client.post(form.action.split("#")[0], as_post(form.submission()))
                 self.assertEqual(response.status_code, 403)
+        self.assertEqual(list(AutoSalesImport.objects.values_list("name", flat=True)), ["Ventes exemple"])
+
+
+class GateTests(PageCase):
+    """« Import automatique des ventes » is the owner's (accounts/access.py):
+    an employee given every area - « Recettes & ventes » included - is
+    refused the page and its posts by the gate, before any view."""
+
+    def test_an_employee_given_every_area_is_refused_the_page_and_its_posts(self):
+        rule = make_rule()
+        forms = (
+            self.new_form(),
+            self.edit_form(rule),
+            form_posting_to(self.html(), reverse("recipes:auto_sales_delete", args=[rule.pk])),
+        )
+        Membership.objects.filter(tenant=current_tenant()).update(role=Membership.Role.MEMBER, pages=sorted(AREA_KEYS))
+        self.assertContains(self.client.get(PAGE), "Page non accessible", status_code=403)
+        for form in forms:
+            with self.subTest(action=form.action):
+                response = self.client.post(form.action.split("#")[0], as_post(form.submission()))
+                self.assertContains(response, escape(REFUSED_POST), status_code=403)
         self.assertEqual(list(AutoSalesImport.objects.values_list("name", flat=True)), ["Ventes exemple"])
 
 

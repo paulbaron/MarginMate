@@ -43,6 +43,8 @@
             {% for error in form.header.errors %}<span class="field-error">{{ error }}</span>{% endfor %}
         </p>
 
+        {% comment %}Where its invoices arrive leads to the source form, the owner's (accounts/access.py): an employee files them by import.{% endcomment %}
+        {% if can.owner %}
         <fieldset class="choice-group">
             <legend>{{ form.arrivee.label }}</legend>
             <ul class="check-list">
@@ -50,6 +52,9 @@
             </ul>
             <p class="muted">E-mail ou espace client : la page suivante crée sa source.</p>
         </fieldset>
+        {% else %}
+        <input type="hidden" name="arrivee" value="import">
+        {% endif %}
 
         <div class="actions">
             <button class="btn" type="submit">Créer le fournisseur</button>

@@ -20,12 +20,16 @@ TABLE = {
     "associations": ("Associations produits → articles", Group.CONFIG, 30, ("fournisseurs",), ("factures",)),
     "recettes": ("Recettes", Group.CONFIG, 40, ("associations",), ()),
     "liens_ventes": ("Liens recettes ↔ ventes", Group.CONFIG, 50, ("recettes",), ("ventes",)),
+    "regles_banque": ("Règles de la banque", Group.CONFIG, 55, (), ()),
+    "types_consignes": ("Types et formats de consignes", Group.CONFIG, 58, ("fournisseurs",), ()),
     "factures": ("Factures et tickets", Group.DATA, 60, ("fournisseurs",), ("associations",)),
-    "banque": ("Banque", Group.DATA, 70, (), ("factures", "fournisseurs")),
+    "banque": ("Banque", Group.DATA, 70, (), ("factures", "fournisseurs", "regles_banque")),
     "ventes": ("Ventes", Group.DATA, 80, ("recettes",), ("liens_ventes",)),
     "inventaires": ("Inventaires", Group.DATA, 90, ("factures", "associations"), ()),
-    "consignes": ("Consignes", Group.DATA, 100, ("fournisseurs",), ("factures",)),
+    "consignes": ("Consignes", Group.DATA, 100, ("fournisseurs", "types_consignes"), ("factures",)),
 }
+CONFIG = {key for key, row in TABLE.items() if row[1] == Group.CONFIG}
+DATA = ALL - CONFIG
 
 
 class TableTests(SimpleTestCase):
@@ -68,6 +72,17 @@ class TableTests(SimpleTestCase):
         self.assertEqual(INFO["banque"].requires, ())
         self.assertNotIn("banque", registry.closure({"factures"}, "clear"))
 
+    def test_the_bank_and_its_rules_only_recommend_each_other(self):
+        """None of the rules has a foreign key, and a line keeps what it was
+        read as: clearing the rules never takes the lines, nor clearing the
+        lines the rules, and either goes alone to another bar."""
+        self.assertEqual(INFO["regles_banque"].requires, ())
+        self.assertEqual(registry.closure({"regles_banque"}, "clear"), {"regles_banque"})
+        self.assertEqual(registry.closure({"banque"}, "clear"), {"banque"})
+        self.assertEqual(registry.closure({"regles_banque"}, "export"), {"regles_banque"})
+        self.assertEqual(registry.closure({"banque"}, "export"), {"banque"})
+        self.assertIn("Règles de la banque", INFO["banque"].recommend_reason["regles_banque"])
+
     def test_returnables_go_with_the_suppliers_and_never_with_the_invoices(self):
         """Formats and pickups name their supplier; a slip is checked against
         the invoices when a page is drawn, and nothing links the two - so
@@ -75,9 +90,41 @@ class TableTests(SimpleTestCase):
         self.assertIn("consignes", registry.closure({"fournisseurs"}, "clear"))
         self.assertNotIn("consignes", registry.closure({"factures"}, "clear"))
         self.assertEqual(registry.closure({"consignes"}, "clear"), {"consignes"})
-        self.assertEqual(registry.closure({"consignes"}, "export"), {"consignes", "fournisseurs"})
+        self.assertEqual(registry.closure({"consignes"}, "export"), {"consignes", "types_consignes", "fournisseurs"})
         self.assertIn("vérifier chaque bon", INFO["consignes"].recommend_reason["factures"])
-        self.assertIn("la sauvegarde", INFO["consignes"].clear_note)
+
+    def test_the_types_and_slip_formats_go_with_their_pickups(self):
+        """A pickup counts a type and a slip names its format (PROTECT):
+        clearing the types takes the pickups and slips, and the types alone
+        go to another bar - a format still names its supplier."""
+        self.assertEqual(registry.closure({"types_consignes"}, "clear"), {"types_consignes", "consignes"})
+        self.assertIn("types_consignes", registry.closure({"fournisseurs"}, "clear"))
+        self.assertEqual(registry.closure({"types_consignes"}, "export"), {"types_consignes", "fournisseurs"})
+
+    def test_what_moved_is_described_where_it_is_now(self):
+        """The rules, formats and types left « Banque » and « Consignes »:
+        their descriptions and their « à savoir » no longer promise them.
+        « Banque »'s « à savoir » is the treasury's, which stayed."""
+        for word in ("règle", "format"):
+            with self.subTest(word=word):
+                self.assertNotIn(word, INFO["banque"].description)
+                self.assertNotIn(word, INFO["banque"].clear_note)
+                self.assertIn(word, INFO["regles_banque"].description.lower())
+        for word in ("type", "format"):
+            with self.subTest(word=word):
+                self.assertNotIn(word, INFO["consignes"].description)
+                self.assertIn(word, INFO["types_consignes"].description)
+        self.assertEqual(INFO["consignes"].clear_note, "")
+        self.assertIn("trésorerie", INFO["banque"].clear_note)
+        self.assertIn("la sauvegarde", INFO["regles_banque"].clear_note)
+        self.assertIn("la sauvegarde", INFO["types_consignes"].clear_note)
+
+    def test_the_configuration_needs_no_data(self):
+        """« Configuration seule » ticks the group alone, and that selection
+        is closed - no setting points at the bar's data. Nor does clearing
+        the data ever take a setting with it."""
+        self.assertEqual(registry.closure(CONFIG, "export"), CONFIG)
+        self.assertEqual(registry.closure(DATA, "clear"), DATA)
 
 
 class ClosureTests(SimpleTestCase):
@@ -87,16 +134,17 @@ class ClosureTests(SimpleTestCase):
         self.assertEqual(
             registry.closure({"inventaires"}, "export"), {"inventaires", "factures", "associations", "fournisseurs"}
         )
+        self.assertEqual(registry.closure({"consignes"}, "export"), {"consignes", "types_consignes", "fournisseurs"})
 
     def test_clear_takes_what_requires_a_section(self):
-        self.assertEqual(registry.closure({"fournisseurs"}, "clear"), ALL - {"banque"})
+        self.assertEqual(registry.closure({"fournisseurs"}, "clear"), ALL - {"banque", "regles_banque"})
         self.assertEqual(registry.closure({"factures"}, "clear"), {"factures", "inventaires"})
         self.assertEqual(
             registry.closure({"associations"}, "clear"),
             {"associations", "recettes", "liens_ventes", "ventes", "inventaires"},
         )
         self.assertEqual(registry.closure({"recettes"}, "clear"), {"recettes", "liens_ventes", "ventes"})
-        for alone in ("sources", "liens_ventes", "banque", "ventes", "inventaires"):
+        for alone in ("sources", "liens_ventes", "regles_banque", "banque", "ventes", "inventaires", "consignes"):
             with self.subTest(key=alone):
                 self.assertEqual(registry.closure({alone}, "clear"), {alone})
 
@@ -106,6 +154,9 @@ class ClosureTests(SimpleTestCase):
             {"inventaires", "factures"},
         )
         self.assertEqual(registry.closure({"recettes"}, "import"), {"recettes", "associations", "fournisseurs"})
+        # A safety archive takes « Consignes » alone when only the pickups
+        # change: imported back, it needs no types it does not hold.
+        self.assertEqual(registry.closure({"consignes"}, "import", available={"consignes"}), {"consignes"})
 
     def test_empty_is_empty(self):
         for mode in ("export", "import", "clear"):
@@ -131,6 +182,10 @@ class ClosureTests(SimpleTestCase):
             registry.ordered({"inventaires", "fournisseurs", "banque", "recettes"}),
             ["fournisseurs", "recettes", "banque", "inventaires"],
         )
+        self.assertEqual(
+            registry.ordered({"consignes", "banque", "types_consignes", "regles_banque", "factures"}),
+            ["regles_banque", "types_consignes", "factures", "banque", "consignes"],
+        )
 
 
 class ForcingTests(SimpleTestCase):
@@ -141,15 +196,20 @@ class ForcingTests(SimpleTestCase):
         forcing = registry.forcing("export")
         self.assertEqual(forcing["associations"], ["recettes", "liens_ventes", "ventes", "inventaires"])
         self.assertEqual(
-            forcing["fournisseurs"], [key for key in registry.ordered(ALL) if key not in ("fournisseurs", "banque")]
+            forcing["fournisseurs"],
+            [key for key in registry.ordered(ALL) if key not in ("fournisseurs", "regles_banque", "banque")],
         )
         self.assertEqual(forcing["banque"], [])
+        self.assertEqual(forcing["regles_banque"], [])
+        self.assertEqual(forcing["types_consignes"], ["consignes"])
 
     def test_to_clear_the_arrows_are_reversed(self):
         forcing = registry.forcing("clear")
         self.assertEqual(forcing["recettes"], ["fournisseurs", "associations"])
         self.assertEqual(forcing["inventaires"], ["fournisseurs", "associations", "factures"])
         self.assertEqual(forcing["fournisseurs"], [])
+        self.assertEqual(forcing["regles_banque"], [])
+        self.assertEqual(forcing["consignes"], ["fournisseurs", "types_consignes"])
 
     def test_import_forcing_is_exports(self):
         self.assertEqual(registry.forcing("import"), registry.forcing("export"))
@@ -209,7 +269,10 @@ class RegistrationTests(SimpleTestCase):
     def test_every_key_has_a_registered_section(self):
         """Runs once every lane has landed; until then it says which are
         missing and skips. A module that exists but registers nothing (or
-        fails to import) fails here."""
+        fails to import) fails here - « Règles de la banque » and « Types et
+        formats de consignes » (bank_rules, returnable_types) included."""
+        self.assertIn("bank_rules", registry.SECTION_MODULES)
+        self.assertIn("returnable_types", registry.SECTION_MODULES)
         folder = Path(registry.__file__).resolve().parent / "sections"
         absent = [name for name in registry.SECTION_MODULES if not (folder / f"{name}.py").exists()]
         if absent:

@@ -14,6 +14,7 @@ import zipfile
 from datetime import timedelta
 from pathlib import Path
 from unittest import mock
+from urllib.parse import parse_qs, urlsplit
 
 from django.contrib.messages import get_messages
 from django.contrib.staticfiles.testing import StaticLiveServerTestCase
@@ -23,14 +24,19 @@ from django.test import SimpleTestCase, TestCase, tag
 from django.urls import reverse
 from django.utils import timezone
 
+from bank.models import IgnoreRule, OperationRule, StatementFormat
 from inventory.models import StockType
 from invoices.models import ScrapeJob, Supplier
+from returnables.models import ReturnableType, SlipFormat
 from tests.runner import log_in_the_browser
 from tests.test_views_smoke import assertNoUnrenderedTemplateSyntax
-from transfer import runner, safety, staging, views
+from transfer import registry, runner, safety, staging, views
 from transfer.archive import ArchiveReader
+from transfer.registry import INFO
 from transfer.report import RunReport, SectionReport
+from transfer.sections.base import Group
 from transfer.tests.support import (
+    FAKES,
     FakeSection,
     FakeSectionsMixin,
     export_archive,
@@ -38,6 +44,19 @@ from transfer.tests.support import (
     forge,
     new_archive_path,
 )
+from transfer.tests.test_archive import (
+    OLD_BANK,
+    OLD_BANK_COUNTS,
+    OLD_RETURNABLES,
+    OLD_RETURNABLES_COUNTS,
+    old_archive,
+)
+
+#: « Configuration », in its order: what « Configuration seule » ticks.
+CONFIGURATION = [key for key in registry.ordered(INFO) if INFO[key].group == Group.CONFIG]
+#: The download's name, the moment it was made aside.
+CONFIGURATION_NAME = r'attachment; filename="marginmate-configuration-\d{4}-\d{2}-\d{2}-\d{4}\.zip"'
+FULL_NAME = r'attachment; filename="marginmate-\d{4}-\d{2}-\d{2}-\d{4}\.zip"'
 
 BACKUPS = {
     "database": "C:/sauvegardes/2026-09-19_143012_avant-effacement.sqlite3",
@@ -72,11 +91,35 @@ def ticked(response) -> set[str]:
     }
 
 
+def row_text(response, key: str) -> str:
+    """Everything the picker says under the box of `key`, as read."""
+    content = response.content.decode()
+    match = re.search(rf'data-row="{key}">(.*?)(?=data-row="|</fieldset>)', content, re.DOTALL)
+    return html.unescape(match.group(1)) if match else ""
+
+
+def archive_counts(response, key: str) -> set[str]:
+    """What a stage's row says the archive holds - « archive : 2 bons · … » -
+    one count a part."""
+    match = re.search(r'<span class="picker-counts">archive : (.*?)(?: — ici : .*?)?</span>', row_text(response, key))
+    return set(match.group(1).split(" · ")) if match else set()
+
+
+def new_database_note(response) -> str:
+    """The « Base neuve » note as read; "" when the page has none."""
+    match = re.search(r'<div class="message">(Base neuve[^<]*)</div>', response.content.decode())
+    return html.unescape(match.group(1)) if match else ""
+
+
 def stage_of(keys, **payload_changes):
     reader = export_archive(keys)
     reader.close()
     path = forge(reader.path, **payload_changes) if payload_changes else reader.path
     return staging.stage_upload(SimpleUploadedFile("archive.zip", Path(path).read_bytes()))
+
+
+def staged(path: Path):
+    return staging.stage_upload(SimpleUploadedFile("archive.zip", path.read_bytes()))
 
 
 def shown_preview(page) -> str:
@@ -170,6 +213,44 @@ class PickerTests(FakeSectionsMixin, TestCase):
         )
         clear = self.client.get(reverse("transfer:data_clear"))
         self.assertEqual(forced_by(clear, "associations"), {"fournisseurs": "Enseignes et fournisseurs"})
+
+    def test_the_bank_rules_and_the_returnable_types_tick_what_they_need(self):
+        """The rules tick nothing and nothing ticks them; the types go with
+        the suppliers, and the pickups with the types."""
+        export = self.client.get(reverse("transfer:data_home"))
+        self.assertEqual(forced_by(export, "regles_banque"), {})
+        self.assertEqual(forced_by(export, "types_consignes"), {"consignes": "Consignes"})
+        self.assertEqual(forced_by(export, "fournisseurs")["types_consignes"], "Types et formats de consignes")
+        self.assertNotIn("regles_banque", forced_by(export, "fournisseurs"))
+        clear = self.client.get(reverse("transfer:data_clear"))
+        self.assertEqual(forced_by(clear, "regles_banque"), {})
+        self.assertEqual(forced_by(clear, "banque"), {})
+        self.assertEqual(
+            forced_by(clear, "consignes"),
+            {"fournisseurs": "Enseignes et fournisseurs", "types_consignes": "Types et formats de consignes"},
+        )
+
+    def test_the_clear_tab_says_the_installed_rows_go_with_the_rules_and_the_types(self):
+        """What the migrations installed - the bank's format and rules, the
+        returnable types and the UBA slip format - goes with the part that
+        holds it now, and is said there, no longer under « Banque » and
+        « Consignes ». « Banque » says only what is still its own: the
+        treasury's points and adjustments."""
+        clear = self.client.get(reverse("transfer:data_clear"))
+        self.assertIn(
+            "à savoir : les formats et les règles installés d'office partent aussi", row_text(clear, "regles_banque")
+        )
+        self.assertIn(
+            "à savoir : les types de consigne et le format de bon créés à l'installation partent aussi",
+            row_text(clear, "types_consignes"),
+        )
+        self.assertTrue(row_text(clear, "consignes"))
+        self.assertNotIn("à savoir", row_text(clear, "consignes"))
+        bank = row_text(clear, "banque")
+        self.assertIn("à savoir : les points et les ajustements de trésorerie partent aussi", bank)
+        for word in ("règle", "format"):
+            with self.subTest(word=word):
+                self.assertNotIn(word, bank)
 
     def test_the_tick_parameter_pre_ticks_with_what_it_needs(self):
         response = self.client.get(reverse("transfer:data_home") + "?cocher=associations&cocher=inconnu")
@@ -265,9 +346,7 @@ class ExportTests(FakeSectionsMixin, TestCase):
         response = self.client.post(self.url, {"sections": ["recettes", "associations", "fournisseurs"]})
         self.assertIsInstance(response, FileResponse)
         self.assertTrue(response.streaming)
-        self.assertRegex(
-            response["Content-Disposition"], r'attachment; filename="marginmate-\d{4}-\d{2}-\d{2}-\d{4}\.zip"'
-        )
+        self.assertRegex(response["Content-Disposition"], CONFIGURATION_NAME)
         temp = set(staging.exports_dir().iterdir()) - before
         self.assertEqual(len(temp), 1)
         path = new_archive_path("downloaded")
@@ -284,6 +363,83 @@ class ExportTests(FakeSectionsMixin, TestCase):
         self.assertRedirects(response, reverse("transfer:data_home"), fetch_redirect_response=False)
         self.assertEqual(said(response), [runner.BUSY])
         self.assertContains(self.client.get(reverse("transfer:data_home")), "est en cours")
+
+    def test_an_archive_holding_data_keeps_its_name(self):
+        """« configuration » only where every part is configuration: the
+        rules of the bank with its lines are a full archive."""
+        for sections in (["fournisseurs", "factures"], ["banque"], ["regles_banque", "banque"]):
+            with self.subTest(sections=sections):
+                response = self.client.post(self.url, {"sections": sections})
+                self.assertIsInstance(response, FileResponse)
+                self.assertRegex(response["Content-Disposition"], FULL_NAME)
+                response.close()
+
+
+class ConfigurationOnlyTests(FakeSectionsMixin, TestCase):
+    """« Configuration seule » (the owner, 02/10/2026): every setting made by
+    hand, without the bar's data, for a new espace - another bar on the same
+    bank and suppliers. A link, so the page drawn with it reads the same
+    with or without its script."""
+
+    def link(self, response) -> str:
+        match = re.search(
+            r'<a class="btn btn-secondary" href="([^"]*)" data-configuration-only>Configuration seule</a>',
+            response.content.decode(),
+        )
+        return html.unescape(match.group(1)) if match else ""
+
+    def test_the_link_ticks_the_configuration_and_nothing_else(self):
+        self.assertEqual(views.configuration_keys(), CONFIGURATION)
+        self.assertIn("regles_banque", CONFIGURATION)
+        self.assertIn("types_consignes", CONFIGURATION)
+        href = self.link(self.client.get(reverse("transfer:data_home")))
+        self.assertEqual(urlsplit(href).path, reverse("transfer:data_home"))
+        self.assertEqual(parse_qs(urlsplit(href).query), {"cocher": CONFIGURATION})
+
+        page = self.client.get(href)
+        self.assertEqual(ticked(page), set(CONFIGURATION))
+        # Closed: no box is ticked for another, and none of « Données ».
+        for key in INFO:
+            with self.subTest(key=key):
+                self.assertNotIn("is-forced", checkbox(page, key))
+                self.assertEqual(" checked" in checkbox(page, key), INFO[key].group == Group.CONFIG)
+
+    def test_the_page_never_says_the_archive_holds_what_is_not_ticked(self):
+        """An archive of configuration is made to be handed to another bar:
+        « contient vos documents, votre banque… : gardez-la pour vous » was
+        false of it, and told the owner not to do what it is for. Prices
+        still travel with it (the suppliers' known prices, the recipes)."""
+        page = self.client.get(self.link(self.client.get(reverse("transfer:data_home"))))
+        self.assertNotContains(page, "contient vos documents")
+        self.assertNotContains(page, "gardez-la pour vous")
+        self.assertContains(page, "ne la confiez qu'à qui peut les voir")
+
+    def test_only_what_can_be_exported_is_ticked(self):
+        """A part whose lane is missing, or whose suppliers' is, cannot be
+        exported: the link leaves it out rather than be refused."""
+        with registry.swap({key: FAKES[key] for key in INFO if key != "fournisseurs"}):
+            self.assertEqual(views.configuration_keys(), ["regles_banque"])
+            href = self.link(self.client.get(reverse("transfer:data_home")))
+        self.assertEqual(parse_qs(urlsplit(href).query), {"cocher": ["regles_banque"]})
+
+    def test_only_the_export_tab_offers_it(self):
+        self.assertTrue(self.link(self.client.get(reverse("transfer:data_home"))))
+        for name in ("transfer:data_import", "transfer:data_clear"):
+            with self.subTest(page=name):
+                self.assertNotContains(self.client.get(reverse(name)), "data-configuration-only")
+
+    def test_its_archive_says_so_in_its_name(self):
+        """Beside the full archives it would otherwise look like."""
+        fake_row("regles_banque", "Format exemple")
+        response = self.client.post(reverse("transfer:data_export"), {"sections": views.configuration_keys()})
+        self.assertIsInstance(response, FileResponse)
+        self.assertRegex(response["Content-Disposition"], CONFIGURATION_NAME)
+        path = new_archive_path("configuration")
+        path.write_bytes(b"".join(response.streaming_content))
+        response.close()
+        with ArchiveReader(path) as reader:
+            self.assertEqual(reader.sections, set(CONFIGURATION))
+            self.assertEqual(reader.section("regles_banque").payload()["records"][0]["name"], "Format exemple")
 
 
 class ImportTests(FakeSectionsMixin, TestCase):
@@ -552,15 +708,123 @@ class ImportTests(FakeSectionsMixin, TestCase):
                 self.assertEqual(said(response), [views.GONE])
 
     def test_a_new_database_is_told_to_replace(self):
-        self.assertContains(self.client.get(self.url), "Base neuve")
+        self.assertIn(
+            "choisissez « Remplacer » pour Enseignes et fournisseurs, Sources de factures, afin",
+            new_database_note(self.client.get(self.url)),
+        )
         Supplier.objects.create(code="EXEMPLE", name="Fournisseur Exemple")
         self.assertNotContains(self.client.get(self.url), "Base neuve")
 
+    def test_the_new_database_note_names_every_part_installed_in_it(self):
+        """The migrations install the bank's format and recognition rules,
+        the returnable types and the UBA slip format too: merged into a new
+        database, an archive's edited copy is a conflict and the installed
+        one stays. An archive of the bank's rules alone - what another bar on
+        the same bank takes - is told so as well."""
+        stage = stage_of({"regles_banque"})
+        url = reverse("transfer:data_import_stage", args=[stage.token])
+        self.assertEqual(
+            new_database_note(self.client.get(url)),
+            "Base neuve : choisissez « Remplacer » pour Règles de la banque, afin que ce qui est installé d'office "
+            "prenne les réglages de l'archive.",
+        )
+        stage = stage_of({"types_consignes", "regles_banque", "recettes", "associations", "fournisseurs"})
+        self.assertIn(
+            "pour Enseignes et fournisseurs, Règles de la banque, Types et formats de consignes, afin",
+            new_database_note(self.client.get(reverse("transfer:data_import_stage", args=[stage.token]))),
+        )
+        Supplier.objects.create(code="EXEMPLE", name="Fournisseur Exemple")
+        self.assertEqual(new_database_note(self.client.get(url)), "")
+
+    def test_the_new_database_note_leaves_out_a_part_holding_rows_of_its_own(self):
+        """« Remplacer » deletes what the archive does not name: a part that
+        holds a row a person made - an ignore rule (none is installed), a
+        format, a recognition rule, a type, a slip format, a source - is not
+        « installé d'office », and the note asked to delete it. An espace
+        without its first invoice may well have imported statements and
+        typed rules already (review, 02/10/2026)."""
+        from invoices.models import InvoiceType
+        from returnables.tests.support import make_format
+
+        stage = stage_of({"fournisseurs", "sources", "regles_banque", "types_consignes"})
+        url = reverse("transfer:data_import_stage", args=[stage.token])
+        everything = (
+            "pour Enseignes et fournisseurs, Sources de factures, Règles de la banque, Types et formats de consignes,"
+        )
+        self.assertIn(everything, new_database_note(self.client.get(url)))
+        # A seed edited is still the seed: « Remplacer » is what gives it the
+        # archive's settings.
+        StatementFormat.objects.update(delimiter=",")
+        OperationRule.objects.update(is_active=False)
+        ReturnableType.objects.update(position=7)
+        self.assertIn(everything, new_database_note(self.client.get(url)))
+
+        def renamed():
+            rule = OperationRule.objects.first()
+            name = rule.name
+            OperationRule.objects.filter(pk=rule.pk).update(name="Renommée")
+            return lambda: OperationRule.objects.filter(pk=rule.pk).update(name=name)
+
+        def made(row):
+            return row.delete
+
+        franprix = Supplier.objects.get(code="FRANPRIX")
+        own_rows = {
+            "regles_banque": (
+                lambda: made(IgnoreRule.objects.create(pattern="PRET IMMO")),
+                lambda: made(
+                    StatementFormat.objects.create(
+                        name="Ma banque (CSV)", date_column=1, label_columns="2", amount_column=3
+                    )
+                ),
+                lambda: made(OperationRule.objects.create(name="Ma règle", meaning="debit", pattern="PRLV MOI")),
+                renamed,
+            ),
+            "types_consignes": (
+                lambda: made(ReturnableType.objects.create(name="Fûts 20 L", position=9)),
+                lambda: made(make_format(name="Bon du caviste", supplier=franprix)),
+            ),
+            "sources": (lambda: made(InvoiceType.objects.create(name="Franprix - tickets", supplier=franprix)),),
+        }
+        for key, makers in own_rows.items():
+            for index, make in enumerate(makers):
+                with self.subTest(section=key, row=index):
+                    undo = make()
+                    note = new_database_note(self.client.get(url))
+                    undo()
+                    self.assertIn("Base neuve", note)
+                    self.assertNotIn(INFO[key].label, note)
+                    for other in {"fournisseurs", "sources", "regles_banque", "types_consignes"} - {key}:
+                        self.assertIn(INFO[other].label, note)
+        self.assertIn(everything, new_database_note(self.client.get(url)))
+
     def test_the_new_database_note_needs_the_suppliers_in_the_archive(self):
         """An old associations file holds no « Enseignes et fournisseurs »:
-        the note would ask for a box that is disabled (review, 19/09)."""
+        the note would ask for a box that is disabled (review, 19/09). Nor
+        does this version's « Banque » alone hold anything installed: no
+        rule is carved out of it (archive.carved)."""
         stage = stage_of({"banque"})
+        self.assertEqual(stage.sections, {"banque"})
         self.assertNotContains(self.client.get(reverse("transfer:data_import_stage", args=[stage.token])), "Base neuve")
+        stage = staged(forge({"associations": {"records": [], "files": []}}))
+        self.assertNotContains(self.client.get(reverse("transfer:data_import_stage", args=[stage.token])), "Base neuve")
+
+    def test_the_new_database_note_names_only_a_box_that_can_be_ticked(self):
+        """A part whose lane is missing is not drawn, and one whose suppliers'
+        is drawn disabled: « Remplacer » cannot be chosen for either, and the
+        note asked for it (the review of 19/09, again)."""
+        stage = stage_of({"fournisseurs", "types_consignes", "regles_banque"})
+        url = reverse("transfer:data_import_stage", args=[stage.token])
+        with registry.swap({key: FAKES[key] for key in INFO if key != "regles_banque"}):
+            page = self.client.get(url)
+        self.assertEqual(checkbox(page, "regles_banque"), "")
+        self.assertIn("pour Enseignes et fournisseurs, Types et formats de consignes, afin", new_database_note(page))
+        with registry.swap({key: FAKES[key] for key in INFO if key != "fournisseurs"}):
+            page = self.client.get(url)
+        self.assertIn(" disabled", checkbox(page, "types_consignes"))
+        self.assertIn("pour Règles de la banque, afin", new_database_note(page))
+        with registry.swap({key: FAKES[key] for key in INFO if key not in ("fournisseurs", "regles_banque")}):
+            self.assertEqual(new_database_note(self.client.get(url)), "")
 
     def test_a_hint_names_only_what_the_archive_holds(self):
         stage = stage_of({"fournisseurs", "associations"})
@@ -945,6 +1209,178 @@ class PendingStageTests(FakeSectionsMixin, TestCase):
         self.assertContains(page, "data-untick-all")
 
 
+class OldArchiveTests(FakeSectionsMixin, TestCase):
+    """An archive written before « Règles de la banque » and « Types et
+    formats de consignes » were parts of their own - every safety backup
+    taken until then - holds them in « Banque »'s and « Consignes »'s files
+    (archive.CARVED): the Importer tab offers them as the parts they are
+    now, each with its own share of the archive's counts."""
+
+    def setUp(self):
+        super().setUp()
+        self.stage = staged(
+            old_archive(
+                fournisseurs=({"records": [], "files": []}, {"articles fictifs": 0}),
+                banque=(OLD_BANK, OLD_BANK_COUNTS),
+                consignes=(OLD_RETURNABLES, OLD_RETURNABLES_COUNTS),
+            )
+        )
+        self.url = reverse("transfer:data_import_stage", args=[self.stage.token])
+        self.everything = {"fournisseurs", "regles_banque", "types_consignes", "banque", "consignes"}
+
+    def test_the_parts_carved_out_are_offered_and_ticked(self):
+        self.assertEqual(staging.get(self.stage.token).sections, self.everything)
+        page = self.client.get(self.url)
+        self.assertEqual(ticked(page), self.everything)
+        for key in self.everything:
+            with self.subTest(key=key):
+                self.assertNotIn(" disabled", checkbox(page, key))
+        # « Archives en attente » names them too.
+        self.assertContains(
+            self.client.get(reverse("transfer:data_import")),
+            "Enseignes et fournisseurs, Règles de la banque, Types et formats de consignes, Banque, Consignes",
+        )
+
+    def test_each_part_shows_its_own_share_of_the_counts(self):
+        page = self.client.get(self.url)
+        self.assertEqual(
+            archive_counts(page, "regles_banque"),
+            {"1 format de relevé", "3 règles de reconnaissance", "2 règles « sans facture »"},
+        )
+        self.assertEqual(
+            archive_counts(page, "banque"),
+            {"1 opération", "0 paiements", "4 noms de payeurs appris", "5 payeurs retenus (entrées d'argent)"},
+        )
+        self.assertEqual(archive_counts(page, "types_consignes"), {"3 types de consigne", "1 format de bons"})
+        self.assertEqual(
+            archive_counts(page, "consignes"),
+            {"2 reprises", "0 photos", "1 bon", "2 lignes de bons", "0 Mo de fichiers"},
+        )
+
+    def test_a_new_database_is_told_to_replace_the_rules_and_types_inside(self):
+        self.assertIn(
+            "pour Enseignes et fournisseurs, Règles de la banque, Types et formats de consignes, afin",
+            new_database_note(self.client.get(self.url)),
+        )
+        bank_alone = staged(old_archive(banque=(OLD_BANK, OLD_BANK_COUNTS)))
+        page = self.client.get(reverse("transfer:data_import_stage", args=[bank_alone.token]))
+        self.assertEqual(ticked(page), {"banque", "regles_banque"})
+        self.assertIn("pour Règles de la banque, afin", new_database_note(page))
+
+
+class OldArchiveImportTests(TestCase):
+    """An older archive through the Importer tab with the real sections, up
+    to the confirm: its « Banque » brings the bank's rules back, and its
+    « Consignes » the types and slip formats, as they always did - each now
+    under the part it belongs to, whose report holds them, so the safety
+    archive of a « Remplacer » takes that part. Offered on the page and
+    dropped from what the confirm runs, they would be lost with nothing
+    said."""
+
+    def written_by_the_old_code(self, within: str, carved: str, old_labels: dict[str, str]):
+        """`within` and `carved` exported by this version, then made into the
+        archive the code before 02/10/2026 wrote: one file holding both
+        sections' lists, `carved`'s counts under their old labels
+        (`old_labels`: today's → then's) among `within`'s, and no `carved`
+        in the manifest. Returns (the archive, `carved`'s counts)."""
+        reader = export_archive({within, carved}, closed=False)
+        self.addCleanup(reader.close)
+        old, new = reader.section(within), reader.section(carved)
+        counts = {**old.counts, **{old_labels[label]: number for label, number in new.counts.items()}}
+        payload = {**old.payload(), **new.payload()}
+        # The supplier names both read: one dict of every code either names.
+        for name in set(old.payload()) & set(new.payload()):
+            payload[name] = {**old.payload()[name], **new.payload()[name]}
+
+        def manifest(data):
+            data["sections"][within]["counts"] = counts
+            return data
+
+        return forge({within: payload}, manifest=manifest), dict(new.counts)
+
+    def import_through_the_page(self, path: Path, within: str, carved: str):
+        """Upload, preview, then confirm with « Remplacer » on `carved`, as
+        a browser posts each step. Returns (the preview, the safety call)."""
+        response = self.client.post(
+            reverse("transfer:data_import"), {"archive": SimpleUploadedFile("ancienne.zip", path.read_bytes())}
+        )
+        url = response["Location"]
+        token = url.rstrip("/").split("/")[-1]
+        self.assertEqual(ticked(self.client.get(url)), {within, carved})
+        data = {"sections": [within, carved], f"strategie-{within}": "fusionner", f"strategie-{carved}": "remplacer"}
+        self.client.post(url, {**data, "action": "previsualiser"})
+        preview = RunReport.from_json(staging.get(token).state["preview"])
+        with mock.patch("transfer.views.safety.before", return_value=BACKUPS) as before:
+            response = self.client.post(
+                url, {**data, "action": "importer", "apercu": shown_preview(self.client.get(url))}
+            )
+        self.assertRedirects(response, reverse("transfer:data_import") + "?rapport=1", fetch_redirect_response=False)
+        return preview, before
+
+    def test_the_bank_rules_come_back_from_an_old_bank(self):
+        IgnoreRule.objects.create(pattern="URSSAF", description="Cotisations")
+        before = registry.get("regles_banque").snapshot()
+        path, counts = self.written_by_the_old_code(
+            "banque",
+            "regles_banque",
+            {
+                "formats de relevé": "formats de relevé",
+                "règles de reconnaissance": "règles de reconnaissance",
+                "règles « sans facture »": "règles",
+            },
+        )
+        self.assertTrue(all(counts.values()), counts)
+        for model in (IgnoreRule, OperationRule, StatementFormat):
+            model.objects.all().delete()
+
+        preview, backup = self.import_through_the_page(path, "banque", "regles_banque")
+        created = preview.section("regles_banque").tallies
+        self.assertEqual({label: created[label].created for label in counts}, counts)
+        self.assertFalse(set(preview.section("banque").tallies) & {"règles", *counts})
+        backup.assert_called_once_with("import", {"regles_banque"})
+        self.assertEqual(registry.get("regles_banque").snapshot(), before)
+
+    def test_the_types_and_slip_formats_come_back_from_old_returnables(self):
+        before = registry.get("types_consignes").snapshot()
+        path, counts = self.written_by_the_old_code(
+            "consignes",
+            "types_consignes",
+            {"types de consigne": "types de consigne", "formats de bons": "formats de bons"},
+        )
+        self.assertTrue(all(counts.values()), counts)
+        SlipFormat.objects.all().delete()
+        ReturnableType.objects.all().delete()
+
+        preview, backup = self.import_through_the_page(path, "consignes", "types_consignes")
+        created = preview.section("types_consignes").tallies
+        self.assertEqual({label: created[label].created for label in counts}, counts)
+        self.assertFalse(set(preview.section("consignes").tallies) & set(counts))
+        backup.assert_called_once_with("import", {"types_consignes"})
+        self.assertEqual(registry.get("types_consignes").snapshot(), before)
+
+
+class SeededSectionsTests(TestCase):
+    """`views.SEEDED_SECTIONS` is what the migrations install into every
+    database, read off the real sections of a new one (the test database is
+    migrated like a new espace): a part missing from it is merged into a new
+    database, and the archive's edited copy of its installed rows stays a
+    conflict nobody was told to replace; a part named there that installs
+    nothing asks for « Remplacer » for no reason."""
+
+    def test_they_are_the_configuration_parts_a_new_database_holds_rows_of(self):
+        self.assertTrue(views._fresh_database())
+        holding = {key for key in INFO if INFO[key].group == Group.CONFIG and any(registry.get(key).count().values())}
+        self.assertEqual(holding, set(views.SEEDED_SECTIONS))
+
+    def test_a_new_database_holds_only_what_they_say_is_installed(self):
+        """Each part's « nothing but the seeds » reads the migrations' own
+        names: a seed renamed by a later migration, or one added, and a new
+        espace would never be told to replace it."""
+        for key in views.SEEDED_SECTIONS:
+            with self.subTest(section=key):
+                self.assertTrue(views.holds_only_seeds(key))
+
+
 class CountsTextTests(SimpleTestCase):
     """« ici : 1 sources » - the labels are plural; one of a thing is said
     in the singular, as far as it can be without guessing."""
@@ -964,6 +1400,9 @@ class CountsTextTests(SimpleTestCase):
             "règles « sans facture »": "1 règle « sans facture »",
             "règles de reconnaissance": "1 règle de reconnaissance",
             "formats de relevé": "1 format de relevé",
+            # « Trésorerie »'s, in the bank's counts.
+            "points de trésorerie": "1 point de trésorerie",
+            "ajustements de trésorerie": "1 ajustement de trésorerie",
             "Mo de fichiers": "1 Mo de fichiers",
             "alias": "1 alias",
             # Two things counted together stay as they are.

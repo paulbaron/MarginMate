@@ -1,0 +1,20 @@
+{% comment %}
+The boxes of accounts/access.py AREAS in one form of « Accès des employés » (accounts/members.py):
+`form` (an InviteForm or a PagesForm - its `pages` field says what is ticked, posted or initial),
+`legend`, and `prefix`, which keeps the ids of one employee's boxes apart from the next one's. Each
+box is a label of its own, its help beside it: a whole line to tap on a phone. Unticked, a box sends
+nothing.
+{% endcomment %}
+<fieldset class="choice-group area-choices">
+    <legend>{{ legend }}</legend>
+    {% for area in areas %}
+        <label class="checkbox-label area-choice" for="pages-{{ prefix }}-{{ area.key }}">
+            <input type="checkbox" name="pages" value="{{ area.key }}" id="pages-{{ prefix }}-{{ area.key }}"{% if area.key in form.pages.value %} checked{% endif %}>
+            <span>
+                <span class="area-choice-label">{{ area.label }}</span>
+                <span class="help">{{ area.help }}</span>
+            </span>
+        </label>
+    {% endfor %}
+    {% for error in form.pages.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+</fieldset>

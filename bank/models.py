@@ -6,10 +6,14 @@ invoice that was never imported (money left, nothing to show for it), and a
 receipt the OCR misread (the ticket says 13,02, the bank says 13,06).
 """
 
-import re
+import secrets
+from datetime import date, datetime
+from decimal import Decimal
 
 from django.core.exceptions import ValidationError
 from django.db import models
+
+from common import format_money
 
 
 class IncomeSource(models.TextChoices):
@@ -359,11 +363,136 @@ class IgnoreRule(models.Model):
         return self.description or self.pattern
 
     def clean(self):
+        # Through the guard of returnables.patterns, as every typed pattern
+        # is: `re.compile` raised OverflowError on « A{4294967296} » (a 500
+        # on the form and on « Données »'s preview), and compiled what could
+        # freeze the machine. ".*", "URSSAF|" or "^" match an empty label,
+        # so every payment, and are refused there: one typo would hide
+        # everything still missing its invoice. Imported here: bank.rules
+        # reads bank.recognition, which reads this module.
+        from returnables.patterns import PatternError
+
+        from .rules import check
+
         try:
-            regex = re.compile(self.pattern, re.IGNORECASE)
-        except re.error as exc:
-            raise ValidationError({"pattern": f"Expression régulière invalide : {exc}."}) from None
-        # ".*", "URSSAF|" or "^" match an empty label, so every payment: one
-        # typo would hide everything still missing its invoice.
-        if regex.search("") is not None:
-            raise ValidationError({"pattern": "Ce motif correspond à n'importe quelle opération : précisez-le."})
+            check(self.pattern)
+        except PatternError as error:
+            raise ValidationError({"pattern": error.message}) from None
+
+
+#: What `TreasuryCheckpoint.clean` and `TreasuryAdjustment.clean` say, on the
+#: field (French: LANGUAGE_CODE is en-us, and « Données » shows them). The
+#: bounds are bank.statements' - a statement's days, the (12, 2) column.
+TREASURY_DATE_OUT_OF_BOUNDS = "Date hors limites : entre le {first:%d/%m/%Y} et le {last:%d/%m/%Y}."
+TREASURY_BALANCE_TOO_BIG = "Solde hors limites : {limit} € au plus, en plus ou en moins."
+TREASURY_AMOUNT_TOO_BIG = "Montant hors limites : {limit} € au plus, en plus ou en moins."
+TREASURY_AMOUNT_ZERO = "Un ajustement de 0 € ne change rien : tapez un montant."
+
+
+def _treasury_refusals(day, amount, amount_field: str, too_big: str, bounds) -> dict:
+    """The French refusals both treasury models share, by field: the day
+    outside a statement's (2000-2099), the amount wider than its (12, 2)
+    column. `bounds` is bank.statements' (FIRST_DAY, LAST_DAY, MAX_AMOUNT).
+    A value its field could not read - None, text, a NaN: `full_clean` calls
+    `clean` even then - is left to the field's own refusal."""
+    first, last, limit = bounds
+    refusals = {}
+    if isinstance(day, date) and not isinstance(day, datetime) and not first <= day <= last:
+        refusals["date"] = TREASURY_DATE_OUT_OF_BOUNDS.format(first=first, last=last)
+    if isinstance(amount, Decimal) and amount.is_finite() and abs(amount) > limit:
+        refusals[amount_field] = too_big.format(limit=format_money(limit))
+    return refusals
+
+
+class TreasuryCheckpoint(models.Model):
+    """A balance of the account a person read for one day - « point de
+    trésorerie », typed on « Trésorerie ».
+
+    **The balance at the END of that day**, every operation booked that day
+    included (by `BankTransaction.operation_date`, the date every Banque page
+    reads): what the bank shows once the day is over. Every other day's
+    balance is worked out from it by the operations between
+    (`bank.treasury`, which has the rules of reading), so the typed figure is
+    exact on its own day and the next day reads it plus that day's
+    movements. With several accounts imported it is their TOTAL.
+
+    One per day: two readings of one day are one reading corrected, and the
+    page replaces a balance only when asked to (its date's uniqueness is
+    refused in French by the code that saves). Signed - an overdraft is
+    negative. No foreign key: a point stands whatever lines are imported,
+    cleared or imported again, and that is exactly what lets two points
+    disagree, which the page then asks to resolve.
+    """
+
+    date = models.DateField("date", unique=True)
+    #: Signed: an overdraft is negative.
+    balance = models.DecimalField("solde", max_digits=12, decimal_places=2)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["date"]
+
+    def __str__(self):
+        return f"{self.date:%d/%m/%Y} {self.balance}"
+
+    def clean(self):
+        # Imported here: bank.statements imports this module (StatementFormat).
+        from .statements import FIRST_DAY, LAST_DAY, MAX_AMOUNT
+
+        bounds = (FIRST_DAY, LAST_DAY, MAX_AMOUNT)
+        refusals = _treasury_refusals(self.date, self.balance, "balance", TREASURY_BALANCE_TOO_BIG, bounds)
+        if refusals:
+            raise ValidationError(refusals)
+
+
+def new_reference() -> str:
+    """A `TreasuryAdjustment`'s reference: 16 random hex characters. A module
+    function, so migration bank/0008 names it rather than freezing one value."""
+    return secrets.token_hex(8)
+
+
+class TreasuryAdjustment(models.Model):
+    """A signed amount, dated on one day, that the imported operations do not
+    carry - « ajustement », made by a person on « Trésorerie » to settle two
+    points the operations between them do not explain (money that moved
+    with no line on the statement, a figure nobody can find).
+
+    **It counts in the treasury ONLY**, and only while it lies between two
+    points (after the first point's day, up to the last's): left outside by a
+    point deleted, or brought by « Données », it counts nowhere and the page
+    lists it « ne compte pas » (`bank.treasury`, which has the rules).
+
+    **It is not a `BankTransaction`**, on purpose: a line would need a
+    fingerprint the statement never gives, would be counted as a debit or a
+    credit by « Dépenses », « Entrées d'argent » and the reconciliation, and
+    would be offered invoices to pay. None of those pages reads this table.
+    No foreign key either: it names its day, not the two points it settled -
+    a point deleted or moved leaves it to be judged by the rule above.
+    """
+
+    #: Its natural key - what « Données » names it by (an id is this
+    #: database's).
+    reference = models.CharField("référence", max_length=16, unique=True, default=new_reference, editable=False)
+    date = models.DateField("date")
+    #: Signed, as `BankTransaction.amount`: negative when money went out.
+    amount = models.DecimalField("montant", max_digits=12, decimal_places=2)
+    #: Never « motif », which means a regular expression on the bank's pages.
+    reason = models.CharField("raison", max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["date", "pk"]
+
+    def __str__(self):
+        return f"{self.date:%d/%m/%Y} {self.amount}"
+
+    def clean(self):
+        # Imported here: bank.statements imports this module (StatementFormat).
+        from .statements import FIRST_DAY, LAST_DAY, MAX_AMOUNT
+
+        bounds = (FIRST_DAY, LAST_DAY, MAX_AMOUNT)
+        refusals = _treasury_refusals(self.date, self.amount, "amount", TREASURY_AMOUNT_TOO_BIG, bounds)
+        if isinstance(self.amount, Decimal) and self.amount == 0:
+            refusals.setdefault("amount", TREASURY_AMOUNT_ZERO)
+        if refusals:
+            raise ValidationError(refusals)

@@ -20,6 +20,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
 
+from accounts.access import access_of
 from accounts.tenancy import integrations_allowed
 
 from . import integrations, supplier_changes
@@ -256,6 +257,10 @@ def supplier_create(request):
                 _say_created(request, supplier)
                 supplier_page = supplier_page_url(supplier)
                 if data["arrivee"] in ("EMAIL", "WEBSITE"):
+                    if not access_of(request).owner:
+                        # The source form is the owner's (accounts/access.py).
+                        messages.info(request, "Sa source (boîte mail ou espace client) est créée par votre employeur.")
+                        return redirect(supplier_page)
                     query = urlencode(
                         {"fournisseur": supplier.pk, "source": data["arrivee"], "retour": supplier_page}, safe="/"
                     )

@@ -44,8 +44,18 @@ SECTION_BY_APP = {
     # app with the navigation: a setting of the espace, beside « Données ».
     "accounts": "data",
     # « Notifications » (notifications/), reached from Données' header like
-    # « Identifiants »: a setting of the espace, no link of its own.
+    # « Identifiants »: a setting of the espace, no link of its own. An
+    # employee reaches his devices from the topbar's account (base.html),
+    # and lights nothing there (`navigation`).
     "notifications": "data",
+}
+
+#: Routes lighting another link than their app's: « Accès des employés »
+#: is about the employees (accounts/members.py), « Aucune page ouverte »
+#: lights nothing - the employee seeing it has no link to light.
+SECTION_BY_VIEW = {
+    "accounts:members": "staff",
+    "accounts:no_access": "",
 }
 
 #: What the folded topbar says under 860 px (base.html's .topbar-section):
@@ -67,12 +77,16 @@ SECTION_LABELS = {
 def section_of(match) -> str:
     if match is None:
         return ""
+    view_name = getattr(match, "view_name", None)
+    if view_name in SECTION_BY_VIEW:
+        return SECTION_BY_VIEW[view_name]
     if match.app_name == "inventory":
         return "stock_takes" if match.url_name in STOCK_TAKE_VIEWS else "products"
     return SECTION_BY_APP.get(match.app_name, "")
 
 
 def navigation(request):
+    from accounts.access import access_of
     from accounts.tenancy import current_tenant
     from recipes.models import PosProduct
 
@@ -80,9 +94,17 @@ def navigation(request):
         # Multi mode, no tenant bound (the login, 404 and CSRF pages): no
         # section to light, no database to count in.
         return {}
+    access = access_of(request)
     section = section_of(getattr(request, "resolver_match", None))
+    if section == "data" and not access.owner:
+        # An employee's « Notifications » (his own devices): « Données » is
+        # no link of his, there is none to light nor to name.
+        section = ""
+    # The till products to link: counted for whoever has the link
+    # (accounts/access.py).
+    pending = PosProduct.objects.filter(recipe__isnull=True, ignored=False).count() if access.allows("recipes") else 0
     return {
         "nav_section": section,
         "nav_section_label": SECTION_LABELS.get(section, ""),
-        "pos_pending_count_nav": PosProduct.objects.filter(recipe__isnull=True, ignored=False).count(),
+        "pos_pending_count_nav": pending,
     }

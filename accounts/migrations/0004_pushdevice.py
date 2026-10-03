@@ -7,7 +7,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("accounts", "0002_invitation_refused_addresses"),
+        ("accounts", "0003_member_pages_and_invitations"),
     ]
 
     operations = [

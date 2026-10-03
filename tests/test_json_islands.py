@@ -115,6 +115,14 @@ class RecipeFormTests(NoLiveMarkupMixin, TestCase):
         self.assertNoBreakout(page)
         self.assertEqual(island(page, "ingredient-units-data"), units)
 
+    def test_the_categories_are_data_only(self):
+        """An article's category is typed by hand, or learnt."""
+        categories = [{"name": f"Rhums{PAYLOAD}", "sources": ["stock:1"]}]
+        with mock.patch("recipes.views.ingredient_categories", return_value=categories):
+            page = self.client.get(reverse("recipes:recipe_create")).content.decode()
+        self.assertNoBreakout(page)
+        self.assertEqual(island(page, "ingredient-categories-data"), categories)
+
 
 def template_sources():
     base = Path(settings.BASE_DIR)

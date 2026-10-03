@@ -41,7 +41,7 @@ nothing saying the period had been dropped.
         Nécessite <code>LADDITION_EMAIL</code> et <code>LADDITION_PASSWORD</code> dans le fichier <code>.env</code>.
         Comptez quelques minutes par tranche de deux ans.
     </p>
-    <p class="muted small"><a href="{% url 'recipes:auto_sales' %}">Import automatique : réglages</a></p>
+    {% if can.owner %}<p class="muted small"><a href="{% url 'recipes:auto_sales' %}">Import automatique : réglages</a></p>{% endif %}
     {% else %}
     <p class="muted">{{ till_to_configure|capfirst }}.</p>
     {% endif %}

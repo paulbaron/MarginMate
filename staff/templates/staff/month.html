@@ -33,7 +33,7 @@
         {% endcomment %}
         <div class="message message-warning" data-locked>
             {{ signature.current.status }} (version {{ signature.current.version }}) : le mois ne se modifie plus.
-            Pour le corriger : « Corriger ce mois », dans la section Signature.
+            {% if can.owner %}Pour le corriger : « Corriger ce mois », dans la section Signature.{% else %}Seul votre employeur peut le rouvrir.{% endif %}
         </div>
     {% endif %}
     {% if sheet.has_errors %}
@@ -88,7 +88,8 @@
     </div>
 
     {% if signature.locked %}
-    {% include "staff/_signature.html" %}
+    {% comment %}« Signature » is the owner's: an employee given « Personnel » reads the month, signs nothing for him.{% endcomment %}
+    {% if can.owner %}{% include "staff/_signature.html" %}{% endif %}
     <section class="month-readonly" aria-labelledby="month-readonly-title">
         <h2 id="month-readonly-title">Les jours du mois</h2>
         {% include "staff/_month_table.html" with month=month_table %}
@@ -252,7 +253,7 @@
                 </section>
             {% endif %}
 
-            {% include "staff/_signature.html" %}
+            {% if can.owner %}{% include "staff/_signature.html" %}{% endif %}
         </aside>
     </div>
     {% endif %}

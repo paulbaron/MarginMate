@@ -23,6 +23,7 @@ from .forms import (
     RecipeIngredientFormSet,
     SaleDocumentForm,
     SaleDocumentLineFormSet,
+    ingredient_categories,
     ingredient_unit_map,
 )
 from .importing import active_import, start_sales_import
@@ -240,6 +241,7 @@ def _recipe_form_view(request, recipe, for_product=None):
             "for_product": for_product,
             "existing_categories": _existing_categories(),
             "ingredient_units": ingredient_unit_map(),
+            "ingredient_categories": ingredient_categories(),
         },
     )
 

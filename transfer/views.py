@@ -24,11 +24,15 @@ staged one, or previews or confirms a clear, requires
 `accounts.tenancy.is_owner` (a member: 403, `OWNER_ONLY`) and
 `accounts.sudo.confirmed` (else the confirmation page, back to the tab it
 was posted from - what was posted is not replayed), and keeps the
-confirmation alive. The export and every tab stay open.
+confirmation alive. The export and every tab stay open - to the owner:
+since 02/10/2026 an employee opens no page of « Données » at all
+(accounts/access.py names no area for it), so `_refused` is the owner's
+password check, and its member branch the second lock behind the gate.
 """
 
 from __future__ import annotations
 
+import importlib
 import json
 import logging
 import secrets
@@ -40,11 +44,12 @@ from django.http import FileResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.http import urlencode
 
 from accounts import sudo
 from accounts.tenancy import is_owner, tenant_key
 from transfer import registry, safety, staging
-from transfer.archive import ArchiveError, DeleteOnClose, shown_moment
+from transfer.archive import ArchiveError, DeleteOnClose, manifest_counts, shown_moment
 from transfer.registry import GROUP_LABELS, INFO
 from transfer.report import RunReport
 from transfer.runner import (
@@ -111,6 +116,12 @@ TYPE_TO_CONFIRM = "Tapez EFFACER pour confirmer."
 #: these (and no invoice) is new, and « Remplacer » is what gives them the
 #: archive's settings.
 SEEDED_SUPPLIERS = {"METRO", "UBA", "OTHER", "FRANPRIX", "MONOPRIX", "SABBH", "WINGSENG"}
+#: The sections whose rows the migrations install into every database too
+#: (the suppliers, the UBA mailbox search, the bank's format and recognition
+#: rules, the returnable types and the UBA slip format): merged into a new
+#: database, an archive's edited copy of one of them is a conflict and the
+#: installed one stays - only « Remplacer » gives them the archive's.
+SEEDED_SECTIONS = ("fournisseurs", "sources", "regles_banque", "types_consignes")
 
 TABS = (
     ("export", "Exporter", "transfer:data_home"),
@@ -356,9 +367,11 @@ def _render(request, tab: str, *, status: int = 200, **context):
 def _refused(request, page_url: str, refused_page):
     """None when this POST may import or clear: the espace's owner, his
     MarginMate password confirmed - the confirmation is then kept alive.
-    Otherwise the answer: `refused_page()` (the tab, drawn again with
-    `OWNER_ONLY`, 403) for a member, the confirmation page coming back to
-    `page_url` (the tab it was posted from) for an owner not confirmed."""
+    Otherwise the answer: the confirmation page coming back to `page_url`
+    (the tab it was posted from) for an owner not confirmed; and for a
+    member `refused_page()` (the tab, drawn again with `OWNER_ONLY`, 403) -
+    the second lock: the gate (accounts/access.py) refuses him every page
+    of « Données » before this runs."""
     if not is_owner(request):
         messages.error(request, OWNER_ONLY)
         return refused_page()
@@ -421,8 +434,23 @@ def _backup_message(done: str, backups: dict[str, str]) -> str:
 # -- Exporter ------------------------------------------------------------------------
 
 
+def configuration_keys() -> list[str]:
+    """The « Configuration » group's sections that can be exported, in
+    their order: what « Configuration seule » ticks."""
+    usable = usable_keys("export")
+    return [key for key in registry.ordered(INFO) if INFO[key].group == Group.CONFIG and key in usable]
+
+
 def _export_page(request, user: set[str], *, status=200):
-    return _render(request, "export", status=status, picker=_picker("export", user))
+    # A link, not a script: the closure of the « Configuration » group is
+    # the group itself, and the page drawn with it ticked reads the same
+    # with or without JavaScript.
+    configuration_only = (
+        reverse("transfer:data_home") + "?" + urlencode([("cocher", key) for key in configuration_keys()])
+    )
+    return _render(
+        request, "export", status=status, picker=_picker("export", user), configuration_only=configuration_only
+    )
 
 
 def data_home(request):
@@ -462,7 +490,10 @@ def data_export(request):
             + ", ".join(left_out[:5])
             + ("…" if len(left_out) > 5 else ""),
         )
-    filename = f"marginmate-{timezone.localtime(timezone.now()):%Y-%m-%d-%H%M}.zip"
+    # An archive of configuration alone - what another bar takes - says so in
+    # its name, beside the full ones it would otherwise look like.
+    kind = "configuration-" if all(INFO[key].group == Group.CONFIG for key in selected) else ""
+    filename = f"marginmate-{kind}{timezone.localtime(timezone.now()):%Y-%m-%d-%H%M}.zip"
     return FileResponse(DeleteOnClose(path), as_attachment=True, filename=filename)
 
 
@@ -558,6 +589,69 @@ def _fresh_database() -> bool:
     return not Invoice.objects.exists() and not Supplier.objects.exclude(code__in=SEEDED_SUPPLIERS).exists()
 
 
+#: The mailbox search invoices/0007 installs: (its supplier's code, its name).
+SEEDED_SOURCE = ("UBA", "UBA - Factures")
+
+
+def _migration(app: str, name: str):
+    """A migration's module, for the literals it seeded with (as the tests
+    read them): a migration replays the same whatever the code becomes."""
+    return importlib.import_module(f"{app}.migrations.{name}")
+
+
+def holds_only_seeds(key: str) -> bool:
+    """Whether this database holds nothing of section `key` but the rows
+    the migrations installed - by the names they gave them, edited or not:
+    « Remplacer » then deletes nothing a person made, and gives the
+    installed rows the archive's settings. A row of a person's own - an
+    ignore rule (none is installed), a format, a recognition rule, a type, a
+    slip format, a source - and the note would ask for its deletion: an
+    espace without its first invoice may well have imported statements and
+    typed rules already (review, 02/10/2026). The suppliers are
+    `_fresh_database`'s."""
+    if key == "fournisseurs":
+        return _fresh_database()
+    if key == "sources":
+        from invoices.models import InvoiceType
+
+        code, name = SEEDED_SOURCE
+        return not InvoiceType.objects.exclude(supplier__code=code, name=name).exists()
+    if key == "regles_banque":
+        from bank.models import IgnoreRule, OperationRule, StatementFormat
+
+        rules = [rule[1] for rule in _migration("bank", "0006_operation_rules").RULES]
+        layout = _migration("bank", "0007_statement_formats").NAME
+        return (
+            not IgnoreRule.objects.exists()
+            and not OperationRule.objects.exclude(name__in=rules).exists()
+            and not StatementFormat.objects.exclude(name=layout).exists()
+        )
+    if key == "types_consignes":
+        from returnables.models import ReturnableType, SlipFormat
+
+        seeds = _migration("returnables", "0002_seed_defaults")
+        return (
+            not ReturnableType.objects.exclude(name__in=[seed[0] for seed in seeds.TYPES]).exists()
+            and not SlipFormat.objects.exclude(name=seeds.FORMAT_NAME).exists()
+        )
+    return False
+
+
+def _seeded_parts(stage) -> list[str]:
+    """The labels of the archive's sections whose rows a new database
+    already holds (`SEEDED_SECTIONS`), when this database is a new one and
+    still holds nothing else of them (`holds_only_seeds`): the « Base
+    neuve » note asks for « Remplacer » on those. Empty otherwise. Only
+    those whose box can be ticked: a section not installed is not drawn, one
+    whose closure is not is drawn disabled - and the note named them all the
+    same."""
+    usable = usable_keys("import")
+    present = [key for key in SEEDED_SECTIONS if key in stage.sections and key in usable]
+    if not present or not _fresh_database():
+        return []
+    return registry.labels(key for key in present if holds_only_seeds(key))
+
+
 def _stored_strategies(stage) -> dict[str, Strategy]:
     stored = stage.state.get("sections") or {}
     return {
@@ -577,12 +671,10 @@ def _stage_page(request, stage, *, user=None, strategies=None, status=200):
         else:
             user = set(stage.sections)
     strategies = strategies or {}
-    # Filtered by _counts_text: the manifest comes from outside.
-    archive_counts = {
-        key: entry.get("counts")
-        for key, entry in (stage.manifest.get("sections") or {}).items()
-        if key in INFO and isinstance(entry, dict)
-    }
+    # Filtered by _counts_text: the manifest comes from outside. A section an
+    # older archive carried inside another's file has its counts taken out of
+    # that one's (archive.manifest_counts).
+    archive_counts = {key: manifest_counts(stage.manifest, key) for key in stage.sections}
     at_risk = safety.sections_at_risk(preview, strategies=stored) if preview else set()
     revision = stage.manifest.get("app_revision")
     return _render(
@@ -598,7 +690,7 @@ def _stage_page(request, stage, *, user=None, strategies=None, status=200):
         safety_mb=safety.estimated_megabytes(at_risk) if at_risk else 0,
         # Only where « Remplacer » can be chosen for them: an old associations
         # file has no suppliers, and the note asked for a disabled box.
-        fresh_database="fournisseurs" in stage.sections and _fresh_database(),
+        fresh_database=_seeded_parts(stage),
     )
 
 

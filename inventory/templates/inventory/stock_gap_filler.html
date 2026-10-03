@@ -12,7 +12,7 @@
 {% block content %}
     <div class="page-header">
         <div>
-            <p class="breadcrumb"><a href="{% url 'inventory:stock_take_list' %}">← Inventaires</a></p>
+            {% if can.stock_takes %}<p class="breadcrumb"><a href="{% url 'inventory:stock_take_list' %}">← Inventaires</a></p>{% endif %}
             <h1>Combler les écarts</h1>
             <p class="page-subtitle">Les ventes à encaisser pour réduire chaque écart de stock dans la même proportion, montant après montant.</p>
         </div>
@@ -21,7 +21,7 @@
     {% if not takes %}
         <div class="empty-state">
             <p>Aucun inventaire : les écarts partent du dernier comptage.</p>
-            <a class="btn" href="{% url 'inventory:stock_take_create' %}">+ Nouvel inventaire</a>
+            {% if can.stock_takes %}<a class="btn" href="{% url 'inventory:stock_take_create' %}">+ Nouvel inventaire</a>{% endif %}
         </div>
     {% else %}
 
@@ -35,6 +35,7 @@
         </label>
         <button class="btn btn-secondary" type="submit">Afficher</button>
     </form>
+    <p class="muted"><a href="{% url 'inventory:stock_take_variance' take.pk %}">Écarts de stock à l'inventaire du {{ take.taken_at|date:"d/m/Y" }} →</a></p>
 
     {% if take_not_found %}
         <div class="message message-warning">Inventaire introuvable : les écarts partent du dernier.</div>
@@ -72,13 +73,13 @@
     {% if report.sales_behind %}
         <div class="message message-warning">
             {% if report.purchases_after_sales %}Des achats sont plus récents que les dernières ventes importées{% else %}Les ventes ne sont pas importées jusqu'à hier{% endif %} : les ventes pas encore importées comptent comme écart. Importez-les avant de calculer.
-            <a href="{% url 'recipes:sales_import' %}">Importer les ventes</a>
+            {% if can.recipes %}<a href="{% url 'recipes:sales_import' %}">Importer les ventes</a>{% else %}Importer les ventes{% endif %}
         </div>
     {% endif %}
-    {% if pos_pending_count_nav %}
+    {% if unlinked_till_products %}
         <div class="message message-warning">
-            {% if pos_pending_count_nav == 1 %}1 produit de caisse n'est lié{% else %}{{ pos_pending_count_nav }} produits de caisse ne sont liés{% endif %} à aucune recette : ce qu'il{{ pos_pending_count_nav|pluralize:"s" }} vend{{ pos_pending_count_nav|pluralize:"ent" }} compte comme écart.
-            <a href="{% url 'recipes:pos_product_list' %}">À lier</a>
+            {% if unlinked_till_products == 1 %}1 produit de caisse n'est lié{% else %}{{ unlinked_till_products }} produits de caisse ne sont liés{% endif %} à aucune recette : ce qu'il{{ unlinked_till_products|pluralize:"s" }} vend{{ unlinked_till_products|pluralize:"ent" }} compte comme écart.
+            {% if can.recipes %}<a href="{% url 'recipes:pos_product_list' %}">À lier</a>{% else %}À lier{% endif %}
         </div>
     {% endif %}
 
@@ -133,7 +134,7 @@
         <tbody>
             {% for line in latest.lines %}
             <tr>
-                <td>{% if line.recipe_id %}<a href="{% url 'recipes:recipe_detail' line.recipe_id %}">{{ line.name }}</a>{% else %}{{ line.name }}{% endif %}</td>
+                <td>{% if line.recipe_id and can.recipes %}<a href="{% url 'recipes:recipe_detail' line.recipe_id %}">{{ line.name }}</a>{% else %}{{ line.name }}{% endif %}</td>
                 <td data-label="Bouton de caisse">{{ line.till }}{% if line.till_differs %}<br><span class="muted small">en caisse {{ line.till_price|money }} €</span>{% endif %}</td>
                 <td class="num" data-label="Nombre">{{ line.count }}</td>
                 <td class="num" data-label="Prix (TTC)" data-sort="{{ line.price }}">{{ line.price|money }} €</td>
@@ -312,7 +313,7 @@
         <p class="muted">Une seule vente ferait dépasser un écart :</p>
         <ul>
             {% for blocked in report.blocked %}
-            <li><a href="{% url 'recipes:recipe_detail' blocked.recipe.pk %}">{{ blocked.recipe.name }}</a> —
+            <li>{% if can.recipes %}<a href="{% url 'recipes:recipe_detail' blocked.recipe.pk %}">{{ blocked.recipe.name }}</a>{% else %}{{ blocked.recipe.name }}{% endif %} —
                 {% for article in blocked.articles %}{{ article.stock_type.name }} ({% if not article.counted and article.status == "over" %}non compté à l'inventaire{% elif article.status == "over" %}vendu plus qu'acheté{% elif article.status == "within_allowance" %}dans la perte tolérée{% else %}moins d'une vente à combler{% endif %}){% if not forloop.last %}, {% endif %}{% endfor %}
             </li>
             {% endfor %}
@@ -320,7 +321,7 @@
         {% endif %}
         {% if report.not_sold_since %}
         <p class="muted">{% if report.not_sold_since|length == 1 %}Pas vendue{% else %}Pas vendues{% endif %} {% if report.sold_within_months %}depuis le {{ report.menu_since|date:"d/m/Y" }}{% else %}depuis l'inventaire{% endif %}, donc pas proposée{{ report.not_sold_since|length|pluralize }} :
-            {% for unsold in report.not_sold_since %}<a href="{% url 'recipes:recipe_detail' unsold.recipe.pk %}">{{ unsold.recipe.name }}</a> ({% if unsold.last_sold %}dernière vente {{ unsold.last_sold|date:"d/m/Y" }}{% else %}jamais vendue{% endif %}){% if not forloop.last %} · {% endif %}{% endfor %}
+            {% for unsold in report.not_sold_since %}{% if can.recipes %}<a href="{% url 'recipes:recipe_detail' unsold.recipe.pk %}">{{ unsold.recipe.name }}</a>{% else %}{{ unsold.recipe.name }}{% endif %} ({% if unsold.last_sold %}dernière vente {{ unsold.last_sold|date:"d/m/Y" }}{% else %}jamais vendue{% endif %}){% if not forloop.last %} · {% endif %}{% endfor %}
         </p>
         {% endif %}
         {% if report.unreached %}

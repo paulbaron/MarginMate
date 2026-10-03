@@ -37,7 +37,7 @@ from django.utils import timezone
 
 from accounts import paths
 from transfer import archive, safety
-from transfer.archive import ArchiveError, ArchiveReader
+from transfer.archive import ArchiveError, ArchiveReader, manifest_sections
 
 logger = logging.getLogger(__name__)
 
@@ -88,10 +88,9 @@ class Stage:
 
     @property
     def sections(self) -> frozenset[str]:
-        from transfer.registry import INFO
-
-        sections = self.manifest.get("sections", {})
-        return frozenset(key for key in sections if key in INFO)
+        """What the archive holds as this version reads it, the sections an
+        older one carried inside another's file included (`archive.CARVED`)."""
+        return manifest_sections(self.manifest)
 
     def open(self) -> ArchiveReader:
         return ArchiveReader(self.archive_path)

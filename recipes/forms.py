@@ -129,6 +129,24 @@ def ingredient_unit_map() -> dict[str, str]:
     return mapping
 
 
+def ingredient_categories() -> list[dict]:
+    """[{"name": "Rhums", "sources": ["stock:3", "stock:7"]}, ...]: every
+    article category with the articles filed under it, by name - what the
+    recipe form's picker offers as « Catégorie : … ». Picking one puts every
+    article of it in the row's « OU » group, to be pruned by hand: quicker
+    than adding twelve rums one at a time.
+
+    Client-side only. A category is never a form choice - the rows it makes
+    each post one article, exactly as rows added one by one do, so nothing
+    about saving changes. An article with no category belongs to none."""
+    by_name: dict[str, list[str]] = {}
+    for stock_type_id, category in (
+        StockType.objects.exclude(category="").order_by("category", "name").values_list("id", "category")
+    ):
+        by_name.setdefault(category, []).append(f"stock:{stock_type_id}")
+    return [{"name": name, "sources": sources} for name, sources in by_name.items()]
+
+
 def ingredient_source_choices(parent_recipe=None) -> list:
     """The grouped "pick an ingredient" choices, built once per formset
     rather than once per row - it's two full table scans, and a form with

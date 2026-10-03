@@ -1,14 +1,19 @@
-"""Who may import or clear on « Données » (security review of 01/10/2026).
+"""Who may export, import or clear on « Données » (security review of
+01/10/2026; employee access of 02/10/2026).
 
-An import replaces the espace's invoices, bank, prices and portals - a
-portal from an archive decides where a stored password is typed - and a
-clear deletes them: the espace's owner's alone, his MarginMate password
-confirmed (accounts/sudo.py), as « Identifiants » and a portal's source are.
-Every POST that stages an archive (sent, or one of the backups), previews,
-confirms or cancels a staged one, or previews or confirms a clear asks
-both; the confirmation then lasts while the page is in use. The export and
-every tab stay open to a member: what is shown and downloaded there is the
-espace's own, as on every page.
+« Données » is the espace's owner's alone (accounts/access.py,
+`OWNER_ONLY_PAGES`): an export carries every invoice, price and portal of
+the espace, an import replaces them - a portal from an archive decides where
+a stored password is typed - and a clear deletes them. An employee is
+refused by the gate before any view runs, whatever areas he was given and
+his password confirmed or not: every tab, the export and every POST.
+
+The owner imports and clears with his MarginMate password confirmed
+(accounts/sudo.py), as « Identifiants » and a portal's source ask: every
+POST that stages an archive (sent, or one of the backups), previews,
+confirms or cancels a staged one, or previews or confirms a clear asks it;
+the confirmation then lasts while the page is in use. His export and his
+tabs ask nothing more.
 """
 
 from unittest import mock
@@ -19,10 +24,9 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils.html import escape
 
-from accounts import sudo
-from accounts.models import Membership
+from accounts import access, sudo
 from inventory.models import StockType
-from tests.runner import TEST_TENANT_PK, confirm_password, test_user
+from tests.runner import confirm_password, employee_of_the_test_tenant
 from transfer import safety, staging, views
 from transfer.report import RunReport
 from transfer.tests.support import FakeSectionsMixin, export_archive, fake_row
@@ -33,6 +37,8 @@ BACKUP = reverse("transfer:data_import_backup")
 CLEAR = reverse("transfer:data_clear")
 EXPORT = reverse("transfer:data_export")
 BACKUP_NAME = "2026-09-19_143012_avant-effacement.zip"
+#: An invented employee's login.
+EMPLOYEE = "employe-donnees@example.invalid"
 
 
 class ProtectionCase(FakeSectionsMixin, TestCase):
@@ -57,6 +63,10 @@ class ProtectionCase(FakeSectionsMixin, TestCase):
         reader = export_archive({"fournisseurs"})
         reader.close()
         return SimpleUploadedFile("archive.zip", reader.path.read_bytes())
+
+    def tabs(self):
+        """Every page of « Données » a GET reaches."""
+        return (reverse("transfer:data_home"), IMPORT, CLEAR, self.stage_url)
 
     def protected_posts(self):
         """Every POST that imports or clears, with the page it comes from."""
@@ -83,30 +93,63 @@ class ProtectionCase(FakeSectionsMixin, TestCase):
         self.assertEqual(StockType.objects.filter(category="banque").count(), 1)
 
     def assertExportsAndReads(self):
-        response = self.client.post(EXPORT, {"sections": ["fournisseurs"]})
-        self.assertIsInstance(response, FileResponse)
-        response.close()
-        for url in (reverse("transfer:data_home"), IMPORT, CLEAR, self.stage_url):
+        # « Configuration seule » too: an export, the espace's own.
+        for sections in (["fournisseurs"], views.configuration_keys()):
+            with self.subTest(sections=sections):
+                response = self.client.post(EXPORT, {"sections": sections})
+                self.assertIsInstance(response, FileResponse)
+                response.close()
+        for url in self.tabs():
             with self.subTest(url=url):
                 self.assertEqual(self.client.get(url).status_code, 200)
 
 
 class AMemberTests(ProtectionCase):
+    """An employee given every box of « Accès des employés », his password
+    confirmed: « Données » is none of them."""
+
     def setUp(self):
         super().setUp()
-        Membership.objects.filter(user=test_user(), tenant_id=TEST_TENANT_PK).update(role=Membership.Role.MEMBER)
+        self.member = employee_of_the_test_tenant(EMPLOYEE, pages=sorted(access.AREA_KEYS), name="Employé")
+        # His own password confirmed (the owner's is asked for an import):
+        # it is not enough either.
+        confirm_password(self.client, self.member)
 
-    def test_every_import_and_clear_is_refused_and_said(self):
-        # His password confirmed (the client's implicit login): it is not
-        # enough.
+    def assertRefused(self, response, *, posted=False):
+        """The gate's page (accounts/refused.html), not the tab redrawn with
+        the view's own refusal: no view of « Données » ran."""
+        self.assertNotIsInstance(response, FileResponse)
+        self.assertContains(response, "Page non accessible", status_code=403)
+        self.assertContains(response, escape(access.REFUSED), status_code=403)
+        if posted:
+            self.assertContains(response, escape(access.REFUSED_POST), status_code=403)
+        self.assertNotContains(response, escape(views.OWNER_ONLY), status_code=403)
+
+    def test_every_tab_is_refused(self):
+        for url in (*self.tabs(), EXPORT, BACKUP):
+            with self.subTest(url=url):
+                self.assertRefused(self.client.get(url))
+
+    def test_the_export_is_refused_and_nothing_is_downloaded(self):
+        # « Configuration seule » too: its portals say where a password is typed.
+        for sections in (["fournisseurs"], views.configuration_keys()):
+            with self.subTest(sections=sections):
+                response = self.client.post(EXPORT, {"sections": sections})
+                self.assertRefused(response, posted=True)
+                self.assertNotIn("Content-Disposition", response)
+
+    def test_every_import_and_clear_is_refused_and_nothing_is_done(self):
         for name, url, data, _page in self.protected_posts():
             with self.subTest(post=name):
-                response = self.client.post(url, data())
-                self.assertContains(response, escape(views.OWNER_ONLY), status_code=403)
+                self.assertRefused(self.client.post(url, data()), posted=True)
                 self.assertNothingDone()
 
-    def test_he_still_exports_and_reads_every_tab(self):
-        self.assertExportsAndReads()
+    def test_his_pages_draw_no_link_to_it(self):
+        """The link is hidden too - the gate above is the boundary."""
+        response = self.client.get(reverse("returnables:home"))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, f'href="{reverse("transfer:data_home")}"')
+        self.assertNotContains(response, ">Données</a>")
 
 
 class TheOwnerUnconfirmedTests(ProtectionCase):
@@ -129,6 +172,11 @@ class TheOwnerUnconfirmedTests(ProtectionCase):
 
     def test_he_still_exports_and_reads_every_tab(self):
         self.assertExportsAndReads()
+
+    def test_his_page_links_the_employees_access(self):
+        response = self.client.get(reverse("transfer:data_home"))
+        self.assertContains(response, f'href="{reverse("accounts:members")}"')
+        self.assertContains(response, "Accès des employés")
 
 
 class TheOwnerConfirmedTests(ProtectionCase):
