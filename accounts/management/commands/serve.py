@@ -72,8 +72,12 @@ In order:
      read it, and nothing else here does.
    * no Server header, no traceback to a visitor (Waitress's default), and
      no access log: a signing link's token is in its path (config/logs.py).
-6. **Ctrl+C** stops it: Waitress stops its threads, the socket is closed,
-   « Serveur arrêté. »
+6. **The scheduler** (notifications/scheduler.py: the reminders, the
+   automatic gathers), a daemon thread started once Waitress has its
+   socket and before it runs - never under ``--verifier`` - and stopped on
+   the way out: « Rappels et récupérations automatiques : actifs. »
+7. **Ctrl+C** stops it: Waitress stops its threads, the scheduler stops,
+   the socket is closed, « Serveur arrêté. »
 """
 
 from __future__ import annotations
@@ -318,10 +322,16 @@ class Command(BaseCommand):
         from django.core.handlers.wsgi import WSGIHandler
         from waitress import create_server
 
-        server = None
+        from notifications import scheduler
+
+        server = scheduled = None
         try:
             application = WSGIHandler()
             server = create_server(application, sockets=[sock], **waitress_options())
+            # Here only: the socket is ours and this process serves (never
+            # under --verifier, never for a serve refused its port).
+            scheduled = scheduler.start()
+            self.stdout.write("Rappels et récupérations automatiques : actifs.")
             log_file = Path(getattr(settings, "LOG_DIR", "")) / "marginmate.log"
             # Only the tunnel's port is called its address: `--port` serves
             # somewhere the tunnel (DEPLOY.md, section 6) does not point.
@@ -341,6 +351,8 @@ class Command(BaseCommand):
         except KeyboardInterrupt:
             pass
         finally:
+            if scheduled is not None:
+                scheduled.stop(timeout=5)
             if server is not None:
                 server.close()
             sock.close()

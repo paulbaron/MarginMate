@@ -8,6 +8,7 @@ from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.contrib import messages
+from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -33,6 +34,10 @@ DOWNLOAD_PARAM = "telecharger"
 #: the way bank/reconcile.py rounds it before matching.
 CENTS = Decimal("0.01")
 
+#: Said when « Récupérer » is pressed while a gather - by hand or automatic
+#: (gathering.start_gather) - is running.
+ALREADY_GATHERING = "Une récupération est déjà en cours : elle s'affiche ci-dessous."
+
 #: Said, with a 403, to a login of the espace that is not its owner and
 #: posts a customer portal's source (invoice_type_form).
 PORTAL_OWNER_ONLY = (
@@ -40,13 +45,14 @@ PORTAL_OWNER_ONLY = (
     "sont envoyés."
 )
 
-from . import integrations, supplier_changes
+from . import coverage, gathering, integrations, supplier_changes
 from .deletion import InvoiceInUseError, blocking_stock_takes, delete_invoice
 from .einvoice import NO_LINES_CHECK as EINVOICE_NO_LINES
 from .filenames import download_name
 from .forms import (
     DOCUMENT_INVOICE,
     DOCUMENT_RECEIPT,
+    AutoGatherForm,
     DocumentHeaderForm,
     EmailInvoiceSourceForm,
     EmptyVatTableFormSet,
@@ -70,11 +76,20 @@ from .importing import (
     parse_and_import,
     replace_invoice_lines,
 )
-from .models import Invoice, InvoiceType, ReceiptBatch, ScrapeJob, Supplier
+from .models import EMAIL_SEARCH_FIELDS, AutoGather, Invoice, InvoiceType, ReceiptBatch, ScrapeJob, Supplier
 from .parsers import LLM_PARSER_KEY, get_parser
 from .parsers.base import ParsedInvoice, ParsedLine
 from .receipt_batches import READING_REFUSALS
-from .tasks import SLIPS_PREFIX, gather_invoices_task, test_email_pattern_task
+
+# gather_invoices_task: started by gathering.start_gather, which imports it at
+# call time; kept here because a browser test patches it under this name.
+from .tasks import (  # noqa: F401
+    DEFAULT_LOOKBACK_DAYS,
+    SLIPS_PREFIX,
+    _own_start,
+    gather_invoices_task,
+    test_email_pattern_task,
+)
 from .workspace import batch_deleted, batch_invoice_ids, batch_status_context, render_purchases
 
 
@@ -365,43 +380,47 @@ def trigger_gather(request):
         messages.error(request, integrations.GATHER)
         return redirect(back)
 
-    # Clear out any run that died without saying so before deciding whether
-    # one is genuinely in progress - otherwise a single killed thread locks
-    # this page out permanently. See common.JobLogMixin.
-    ScrapeJob.reap_stale()
-    active_job = ScrapeJob.objects.filter(
-        kind=ScrapeJob.Kind.GATHER, status__in=[ScrapeJob.Status.PENDING, ScrapeJob.Status.RUNNING]
-    ).first()
     source_codes = set(request.POST.getlist("sources"))
     # One sign-in to a paused Metro, asked for on purpose (its own box is
     # disabled while paused, so this names it).
     metro_now = request.POST.get("metro_now") == "on"
     if metro_now:
         source_codes.add("METRO")
+    # Which sources this login may gather (accounts/access.py): one given
+    # « Consignes » and not « Factures » gathers the slips' formats alone.
     if gathers_slips_only(request) and not all(str(code).startswith(SLIPS_PREFIX) for code in source_codes):
         return refused(request, access_of(request))
-    if active_job is not None:
-        if _shows_gather(request, active_job):
-            messages.info(request, "Une récupération est déjà en cours : elle s'affiche ci-dessous.")
+    # The stale runs reaped, the active check and the job created in one
+    # transaction, the thread bound to this request's tenant: one function
+    # for this page and the automatic gathers (gathering.start_gather).
+    if not source_codes:
+        active_job = gathering.active_gather()
+        if active_job is not None:
+            _say_already_gathering(request, active_job)
         else:
-            # Its card is not drawn for him (another's gather, on Factures).
-            messages.info(request, GATHER_ELSEWHERE)
-    elif not source_codes:
-        # It ran, searched nothing and said "Terminé".
-        messages.error(request, "Aucune source cochée : rien à récupérer. Cochez-en au moins une.")
+            # It ran, searched nothing and said "Terminé".
+            messages.error(request, "Aucune source cochée : rien à récupérer. Cochez-en au moins une.")
     else:
         start_date = _parse_date(request.POST.get("start_date"))
         end_date = _parse_date(request.POST.get("end_date"))
-        active_job = ScrapeJob.objects.create(range_start=start_date, range_end=end_date)
-        # bound(): the thread works in this request's tenant - a new thread
-        # starts with nothing bound (accounts/tenancy.py).
-        thread = threading.Thread(
-            target=bound(gather_invoices_task),
-            args=(active_job.id, start_date, end_date, source_codes, metro_now),
-            daemon=True,
+        started = gathering.start_gather(
+            source_codes, start_date, end_date, metro_now=metro_now, trigger=ScrapeJob.Trigger.MANUAL
         )
-        thread.start()
+        if started is None:
+            _say_already_gathering(request, gathering.active_gather(reap=False))
     return redirect(back)
+
+
+def _say_already_gathering(request, active_job) -> None:
+    """« Récupérer » pressed while a gather - by hand or automatic - runs:
+    below, when its card is drawn for this login; on « Factures » when it is
+    another's he is not shown (_shows_gather). One that ended in between
+    is said as running: the page drawn next shows how it ended."""
+    if active_job is None or _shows_gather(request, active_job):
+        messages.info(request, ALREADY_GATHERING)
+    else:
+        # Its card is not drawn for him (another's gather, on Factures).
+        messages.info(request, GATHER_ELSEWHERE)
 
 
 def gather_status(request, job_id):
@@ -631,6 +650,10 @@ def _save_invoice_type(request, type_form, invoice_type, source_form, kind, retu
             saved_source = source_form.save(commit=False)
             saved_source.invoice_type = saved_type
             saved_source.save()
+            if kind == "email" and _search_changed(type_form, source_form, new=invoice_type is None):
+                # What it searched for changed: the days it covered were
+                # searched for other mails - from its own start again.
+                coverage.restart(f"type-{saved_type.pk}", _own_start(saved_type.supplier))
             if before is not None and before.pk != supplier.pk:
                 record_type_moved(saved_type, before, supplier)
     except ValueError as exc:
@@ -647,6 +670,18 @@ def _save_invoice_type(request, type_form, invoice_type, source_form, kind, retu
             "depuis leur page.",
         )
     return redirect(return_to or "invoices:invoice_type_list")
+
+
+def _search_changed(type_form, source_form, *, new: bool) -> bool:
+    """A mailbox type saved with other search settings than it had - a
+    pattern changed, a new type, or one that was a portal - so its gather
+    coverage starts again from its own start (coverage.restart). By the
+    fields, never `has_changed()`: the form carries « Tester »'s dates too.
+    The kind it had is the form's initial: validating wrote the posted one
+    onto the instance."""
+    if new or type_form.initial.get("source_kind") != InvoiceType.SourceKind.EMAIL:
+        return True
+    return bool(EMAIL_SEARCH_FIELDS & set(source_form.changed_data))
 
 
 def _test_website(request, type_form, website_form):
@@ -1822,3 +1857,222 @@ def invoice_bulk_delete(request):
     if summaries:
         messages.success(request, _deletion_message(summaries))
     return redirect(next_url)
+
+
+# -- « Récupération automatique » (invoices/auto_gather.py) ----------------------------------------------------------
+
+#: Said to a member, who sees the rules and not their forms.
+OWNER_ONLY_SETTINGS = "Seul le propriétaire de l'espace modifie ces réglages."
+AUTO_GATHER_CAP = f"{AutoGather.MAX_PER_TENANT} récupérations automatiques au plus : supprimez-en une."
+#: The latest runs listed under each rule.
+AUTO_GATHER_RUNS_SHOWN = 10
+#: The new rule's form prefix (#nouvelle-auto).
+NEW_AUTO_GATHER = "nouveau"
+#: The fields drawn by _form_fields.html above and below the hand-drawn
+#: boxes of the sources and the days.
+AUTO_GATHER_HEAD_FIELDS = ["name"]
+AUTO_GATHER_TAIL_FIELDS = ["start_time", "end_time", "every_minutes", "is_active"]
+
+
+def _auto_gathers_url(pk=None) -> str:
+    url = reverse("invoices:auto_gathers")
+    return f"{url}#auto-{pk}" if pk else url
+
+
+def _may_change_auto_gathers(request) -> None:
+    """A POST changing the rules: the espace's owner, where the server's
+    accounts may be used - anybody else gets the 403 page."""
+    if not integrations_allowed() or not is_owner(request):
+        raise PermissionDenied
+
+
+def _new_auto_gather_initial(offered) -> dict:
+    """The new rule, pre-filled for the drivers' slips with a product's
+    neutral default for any bar: Monday to Saturday mornings, every half
+    hour - each bar unticks the days it gets no delivery."""
+    return {
+        "name": "Bons du livreur",
+        "sources": [source["code"] for source in offered if source["kind"] == "slips" and source["allowed"]],
+        "weekdays": ["0", "1", "2", "3", "4", "5"],
+        "start_time": "06:00",
+        "end_time": "14:00",
+        "every_minutes": 30,
+        "is_active": True,
+    }
+
+
+def _hours_said(rule) -> str:
+    if rule.start_time == rule.end_time:
+        return f"une fois par jour à {rule.start_time:%H:%M}"
+    return f"de {rule.start_time:%H:%M} à {rule.end_time:%H:%M}, toutes les {rule.get_every_minutes_display()}"
+
+
+def _catch_ups(job) -> list[str]:
+    """What a run left to catch up by hand, one sentence per source
+    (coverage.unattended_start: its line's « catch_up »)."""
+    progress = job.progress if isinstance(job.progress, dict) else {}
+    return [
+        f"{entry.get('label') or code} : {entry['catch_up']}"
+        for code, entry in progress.items()
+        if isinstance(entry, dict) and entry.get("catch_up")
+    ]
+
+
+def _pending_catch_ups(rule, labels, pending) -> list[str]:
+    """The stretches its sources have left to catch up by hand, one sentence
+    per source (coverage.GatherCoverage.pending_from, up to the bound that
+    cut it): said until a search covers them, however many runs have
+    scrolled past since."""
+    return [f"{labels.get(code, code)} : {pending[code]}" for code in rule.source_list() if code in pending]
+
+
+def _auto_gather_card(rule, form, labels, runs, now, pending=None) -> dict:
+    """A rule's card. A row the admin or a hand left unreadable (days, or an
+    end before the start: range_times refuses it) is said on the card,
+    never a 500 for every viewer. `pending`: code → the sentence of a
+    stretch to catch up by hand (coverage.catch_ups)."""
+    from notifications import schedule
+
+    from .auto_gather import describe_catch_up
+
+    problem = ""
+    try:
+        days = rule.weekday_list()
+    except ValueError:
+        days = ()
+        problem = "jours illisibles : corrigez-les"
+    if rule.end_time < rule.start_time:
+        problem = "heures illisibles : corrigez-les"
+    upcoming = []
+    if rule.is_active and days and not problem:
+        try:
+            upcoming = [
+                schedule.describe_gather_instant(instant)
+                for instant in schedule.next_gather_instants(
+                    days, rule.start_time, rule.end_time, rule.every_minutes, now
+                )
+            ]
+        except ValueError:
+            problem = "heures illisibles : corrigez-les"
+    for job in runs:
+        job.catch_ups = _catch_ups(job)
+    return {
+        "rule": rule,
+        "form": form,
+        "sources_said": ", ".join(labels.get(code, f"{code} (plus proposée)") for code in rule.source_list()) or "—",
+        "days_said": schedule.format_weekdays(days) if days else "—",
+        "hours_said": _hours_said(rule),
+        "catch_up_said": describe_catch_up(rule),
+        "problem": problem,
+        "upcoming": upcoming,
+        "runs": runs,
+        "pending": _pending_catch_ups(rule, labels, pending or {}),
+    }
+
+
+def _auto_gather_page(request, bound=None, new_form=None, status=200):
+    """The page; `bound` is (pk, form) - a rule's refused form, drawn back in
+    its own card - and `new_form` the new rule's."""
+    from notifications import webpush
+
+    from .workspace import gather_sources
+
+    owner = is_owner(request)
+    context = {
+        "refused": "" if integrations_allowed() else integrations.GATHER,
+        "owner": owner,
+        "owner_only": "" if owner else OWNER_ONLY_SETTINGS,
+        "cards": [],
+        "new_form": None,
+        "sending_enabled": webpush.sending_enabled(),
+        "head_fields": AUTO_GATHER_HEAD_FIELDS,
+        "tail_fields": AUTO_GATHER_TAIL_FIELDS,
+        "lookback_days": DEFAULT_LOOKBACK_DAYS,
+    }
+    if context["refused"]:
+        return render(request, "invoices/auto_gathers.html", context, status=status)
+
+    offered, _ = gather_sources(for_auto=True)
+    labels = {source["code"]: source["label"] for source in offered}
+    now = timezone.now()
+    rules = list(AutoGather.objects.order_by("pk"))
+    pending = coverage.catch_ups({code for rule in rules for code in rule.source_list()}, timezone.localdate(now))
+    for rule in rules:
+        form = None
+        if owner:
+            if bound is not None and bound[0] == rule.pk:
+                form = bound[1]
+            else:
+                form = AutoGatherForm(
+                    prefix=f"auto-{rule.pk}", initial=AutoGatherForm.initial_for(rule), offered=offered
+                )
+        runs = list(
+            ScrapeJob.objects.filter(trigger=ScrapeJob.Trigger.AUTOMATIC, auto_gather_id=rule.pk)
+            .defer("log", "test_matches")
+            .order_by("-started_at", "-pk")[:AUTO_GATHER_RUNS_SHOWN]
+        )
+        context["cards"].append(_auto_gather_card(rule, form, labels, runs, now, pending))
+    if owner:
+        context["new_form"] = new_form or AutoGatherForm(
+            prefix=NEW_AUTO_GATHER, initial=_new_auto_gather_initial(offered), offered=offered
+        )
+    return render(request, "invoices/auto_gathers.html", context, status=status)
+
+
+def auto_gathers(request):
+    """« Récupération automatique »: the rules, and a new one posted here."""
+    if request.method != "POST":
+        return _auto_gather_page(request)
+    _may_change_auto_gathers(request)
+    from .workspace import gather_sources
+
+    offered, _ = gather_sources(for_auto=True)
+    form = AutoGatherForm(request.POST, prefix=NEW_AUTO_GATHER, offered=offered)
+    if form.is_valid() and AutoGather.objects.count() >= AutoGather.MAX_PER_TENANT:
+        form.add_error("name", AUTO_GATHER_CAP)
+    if not form.is_valid():
+        return _auto_gather_page(request, new_form=form)
+    rule = AutoGather.objects.create(**form.values())
+    # From now on: « Enregistrer » never runs a slot already past.
+    AutoGather.objects.filter(pk=rule.pk).update(last_slot_at=timezone.now())
+    messages.success(request, f"Récupération automatique « {rule.name} » enregistrée.")
+    return redirect(_auto_gathers_url(rule.pk))
+
+
+def auto_gather_edit(request, pk):
+    if request.method != "POST":
+        return redirect(_auto_gathers_url(pk))
+    _may_change_auto_gathers(request)
+    from .workspace import gather_sources
+
+    rule = get_object_or_404(AutoGather, pk=pk)
+    offered, _ = gather_sources(for_auto=True)
+    form = AutoGatherForm(request.POST, prefix=f"auto-{rule.pk}", offered=offered)
+    if not form.is_valid():
+        return _auto_gather_page(request, bound=(rule.pk, form))
+    values = form.values()
+    # Switched back on, or its days or hours changed: its slots count from
+    # now, never one already past (§1.5).
+    restart = (values["is_active"] and not rule.is_active) or any(
+        values[name] != getattr(rule, name) for name in ("weekdays", "start_time", "end_time", "every_minutes")
+    )
+    for name, value in values.items():
+        setattr(rule, name, value)
+    # The form's fields only: the scheduler's (last_slot_at, last_result,
+    # last_failed_codes) are written by it alone.
+    rule.save(update_fields=[*values, "updated_at"])
+    if restart:
+        AutoGather.objects.filter(pk=rule.pk).update(last_slot_at=timezone.now())
+    messages.success(request, f"Récupération automatique « {rule.name} » enregistrée.")
+    return redirect(_auto_gathers_url(rule.pk))
+
+
+def auto_gather_delete(request, pk):
+    if request.method != "POST":
+        return redirect(_auto_gathers_url(pk))
+    _may_change_auto_gathers(request)
+    rule = get_object_or_404(AutoGather, pk=pk)
+    name = rule.name
+    rule.delete()
+    messages.success(request, f"Récupération automatique « {name} » supprimée.")
+    return redirect(_auto_gathers_url())

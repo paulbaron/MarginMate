@@ -7,10 +7,11 @@ from django.contrib.sessions.models import Session
 from django.db import router
 from django.test import SimpleTestCase
 
-from accounts.models import SigningLink, Tenant
+from accounts.models import PushDevice, SigningLink, Tenant
 from accounts.router import ACCOUNTS_APPS, AccountsRouter
 from accounts.tests.support import TenancyTestCase
 from invoices.models import Supplier
+from notifications.models import Dispatch
 from staff.models import SignatureRequest
 
 
@@ -36,11 +37,11 @@ class NoForeignKeyAcrossTests(SimpleTestCase):
 
 class MultiModeRoutingTests(TenancyTestCase):
     def test_central_rows_go_to_accounts_business_rows_to_the_bound_default(self):
-        for model in (get_user_model(), Session, ContentType, Tenant, SigningLink):
+        for model in (get_user_model(), Session, ContentType, Tenant, SigningLink, PushDevice):
             with self.subTest(model=model.__name__):
                 self.assertEqual(router.db_for_read(model), "accounts")
                 self.assertEqual(router.db_for_write(model), "accounts")
-        for model in (Supplier, SignatureRequest):
+        for model in (Supplier, SignatureRequest, Dispatch):
             with self.subTest(model=model.__name__):
                 self.assertEqual(router.db_for_read(model), "default")
                 self.assertEqual(router.db_for_write(model), "default")
@@ -51,7 +52,17 @@ class MultiModeRoutingTests(TenancyTestCase):
             with self.subTest(app=app):
                 self.assertIs(rules.allow_migrate("accounts", app), True)
                 self.assertIs(rules.allow_migrate("default", app), False)
-        for app in ("invoices", "inventory", "recipes", "bank", "margins", "transfer", "staff", "returnables"):
+        for app in (
+            "invoices",
+            "inventory",
+            "recipes",
+            "bank",
+            "margins",
+            "transfer",
+            "staff",
+            "returnables",
+            "notifications",
+        ):
             with self.subTest(app=app):
                 self.assertIs(rules.allow_migrate("default", app), True)
                 self.assertIs(rules.allow_migrate("accounts", app), False)

@@ -3,7 +3,9 @@ from django.urls import reverse
 from django.utils.html import format_html
 
 from .models import (
+    AutoGather,
     EmailInvoiceSource,
+    GatherCoverage,
     Invoice,
     InvoiceLine,
     InvoiceType,
@@ -106,6 +108,44 @@ class ShopItemPriceAdmin(admin.ModelAdmin):
 
 @admin.register(ScrapeJob)
 class ScrapeJobAdmin(admin.ModelAdmin):
-    list_display = ["id", "kind", "status", "invoices_found", "invoices_created", "started_at", "finished_at"]
-    list_filter = ["kind", "status"]
+    list_display = [
+        "id",
+        "kind",
+        "trigger",
+        "status",
+        "invoices_found",
+        "invoices_created",
+        "started_at",
+        "finished_at",
+    ]
+    list_filter = ["kind", "trigger", "status"]
     readonly_fields = ["log"]
+
+
+@admin.register(AutoGather)
+class AutoGatherAdmin(admin.ModelAdmin):
+    """For looking: the rules are made on /invoices/recuperation-auto/, and
+    the scheduler alone writes the slot it last ran and what came of it."""
+
+    list_display = ["name", "weekdays", "start_time", "end_time", "every_minutes", "is_active", "last_result"]
+    list_filter = ["is_active"]
+    readonly_fields = ["last_slot_at", "last_result", "last_failed_codes", "created_at", "updated_at"]
+
+
+@admin.register(GatherCoverage)
+class GatherCoverageAdmin(admin.ModelAdmin):
+    """For looking: how far each source was searched without a gap, and a
+    stretch left to catch up by hand - written by the gather alone
+    (invoices/coverage.py)."""
+
+    list_display = ["code", "searched_until", "pending_from", "pending_until", "updated_at"]
+    readonly_fields = ["code", "searched_until", "pending_from", "pending_until", "updated_at"]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

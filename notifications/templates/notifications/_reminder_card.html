@@ -1,0 +1,64 @@
+<section class="card rule-card{% if card.reminder and not card.reminder.is_active %} is-inactive{% endif %}" id="{{ card.anchor }}">
+    <h2>{% if card.reminder %}{{ card.reminder.name }}{% if not card.reminder.is_active %} <span class="status-pill status-ignored">inactif</span>{% endif %}{% else %}Nouveau rappel{% endif %}</h2>
+    {% if card.form %}
+        <form method="post" action="{{ card.action }}#{{ card.anchor }}">
+            {% csrf_token %}
+            <button class="visually-hidden" type="submit" name="action" value="apercu" tabindex="-1" aria-hidden="true">Aperçu</button>
+            {% include "_form_fields.html" with form=card.parts.0 %}
+            <fieldset class="choice-boxes">
+                <legend>{{ days_legend }}</legend>
+                {% if not card.reminder %}<p class="help">{{ new_help }}</p>{% endif %}
+                {% for box in card.days %}
+                    <label class="choice-box"><input type="checkbox" name="{{ card.form.days.html_name }}" value="{{ box.value }}"{% if box.checked %} checked{% endif %}> {{ box.label }}{% if box.sends %} <span class="muted">→ {{ box.sends }}</span>{% endif %}</label>
+                {% endfor %}
+                {% for error in card.form.days.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+            </fieldset>
+            {% include "_form_fields.html" with form=card.parts.1 %}
+            {% include "notifications/_recipient_boxes.html" with form=card.form %}
+            {% include "_form_fields.html" with form=card.parts.2 %}
+            <div class="next-sends">
+                <h3>Prochains envois</h3>
+                {% if not card.active %}
+                    <p class="muted">Inactif : rien ne part.</p>
+                {% elif card.previews %}
+                    <ul>{% for line in card.previews %}<li>{{ line }}</li>{% endfor %}</ul>
+                {% else %}
+                    <p class="muted">Aucun : cochez au moins un jour.</p>
+                {% endif %}
+                {% if card.previewed %}<p class="muted small">Aperçu : rien n'est enregistré.</p>{% endif %}
+            </div>
+            <div class="form-actions">
+                <button class="btn" type="submit" name="action" value="enregistrer">Enregistrer</button>
+                <button class="btn btn-secondary" type="submit" name="action" value="apercu">Aperçu</button>
+            </div>
+        </form>
+        {% if card.reminder %}
+            <form method="post" action="{% url 'notifications:test' %}" class="rule-test">
+                {% csrf_token %}
+                <input type="hidden" name="rappel" value="{{ card.reminder.pk }}">
+                <button class="btn btn-secondary" type="submit">Envoyer un essai</button>
+            </form>
+            <details class="danger-zone">
+                <summary>Supprimer le rappel…</summary>
+                <form method="post" action="{% url 'notifications:reminder_delete' card.reminder.pk %}">
+                    {% csrf_token %}
+                    <p>Le rappel ne partira plus ; son historique reste.</p>
+                    <button class="btn btn-danger" type="submit">Supprimer le rappel</button>
+                </form>
+            </details>
+        {% endif %}
+    {% else %}
+        <p>{{ card.reminder.title }}{% if card.reminder.body %} — {{ card.reminder.body }}{% endif %}</p>
+        {% if card.summary %}<p class="muted">{{ card.summary }}</p>{% endif %}
+        <div class="next-sends">
+            <h3>Prochains envois</h3>
+            {% if not card.active %}
+                <p class="muted">Inactif : rien ne part.</p>
+            {% elif card.previews %}
+                <ul>{% for line in card.previews %}<li>{{ line }}</li>{% endfor %}</ul>
+            {% else %}
+                <p class="muted">Aucun.</p>
+            {% endif %}
+        </div>
+    {% endif %}
+</section>

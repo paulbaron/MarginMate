@@ -1,4 +1,4 @@
-{% load assets %}<!DOCTYPE html>
+{% load static %}{% load assets %}<!DOCTYPE html>
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
@@ -6,6 +6,18 @@
     <meta name="robots" content="noindex, nofollow">
     <title>{% block title %}MarginMate{% endblock %}</title>
     <link rel="stylesheet" href="{% asset 'css/marginmate.css' %}">
+    {% comment %}
+    The installed app's tags (notifications/views.py manifest): the login
+    page is where an iPhone's « Sur l'écran d'accueil » is done once the
+    session has ended, and the Home Screen app takes its name, icon and
+    standalone display from them.
+    {% endcomment %}
+    <link rel="manifest" href="/manifest.webmanifest">
+    <meta name="theme-color" content="#1a1a21">
+    <link rel="icon" href="{% static 'icons/favicon-32.png' %}">
+    <link rel="apple-touch-icon" href="{% static 'icons/apple-touch-icon.png' %}">
+    <meta name="apple-mobile-web-app-title" content="MarginMate">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black">
     {% block scripts %}{% endblock %}
 </head>
 {% comment %}

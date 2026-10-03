@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% load assets %}
+{% block title %}Rappels - MarginMate{% endblock %}
+{% block content %}
+<div class="notifications-page">
+    <p class="breadcrumb"><a href="{% url 'notifications:home' %}">← Notifications</a></p>
+    <div class="page-header">
+        <div>
+            <h1>Rappels</h1>
+            <p class="page-subtitle">Des notifications à jours et heures fixes, qui ouvrent une page du site.</p>
+        </div>
+    </div>
+
+    {% if not owner %}<p class="message message-warning">{{ owner_only }}</p>{% endif %}
+
+    <section class="card" id="nuit">
+        <h2>La nuit du bar</h2>
+        {% if night_form %}
+            <form method="post" action="{% url 'notifications:night' %}#nuit">
+                {% csrf_token %}
+                {% include "_form_fields.html" with form=night_form %}
+                <div class="form-actions">
+                    <button class="btn btn-secondary" type="submit">Enregistrer</button>
+                </div>
+            </form>
+        {% else %}
+            <p>La nuit se termine à {{ night|time:"H:i" }}.</p>
+        {% endif %}
+    </section>
+
+    {% comment %}
+    One form per reminder, each posting to its own address with its card's
+    fragment (returnables' types). « Aperçu » is each form's first submit
+    button, out of sight: Enter previews the next sends and never saves.
+    {% endcomment %}
+    {% for card in cards %}
+        {% include "notifications/_reminder_card.html" %}
+    {% empty %}
+        <div class="empty-state">
+            <p>Aucun rappel{% if owner %} : créez-en un ci-dessous{% endif %}.</p>
+        </div>
+    {% endfor %}
+
+    {% if new_card %}
+        {% include "notifications/_reminder_card.html" with card=new_card %}
+    {% endif %}
+
+    <details class="explainer">
+        <summary>Comment ça marche</summary>
+        <p>Une heure avant la fin de la nuit compte pour le soir coché : samedi soir à 00:00 et 02:00 part le dimanche à 00:00 et 02:00.</p>
+        <p>Un rappel part jusqu'à 30 minutes en retard ; plus tard, l'historique dit « manqué ».</p>
+        <p>L'ordinateur qui fait tourner le site doit être allumé et ne pas être en veille à l'heure du rappel.</p>
+        <p>Sur iPhone, les notifications arrivent dans l'application installée depuis Safari (Partager › Sur l'écran d'accueil).</p>
+    </details>
+</div>
+{% endblock %}
+{% block extra_js %}<script src="{% asset 'js/notifications.js' %}" defer></script>{% endblock %}

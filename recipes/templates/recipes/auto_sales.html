@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}Import automatique des ventes - MarginMate{% endblock %}
+{% block content %}
+<p class="breadcrumb"><a href="{% url 'recipes:sales_list' %}">← Ventes</a></p>
+<div class="page-header">
+    <div>
+        <h1>Import automatique des ventes</h1>
+        <p class="page-subtitle">Les ventes de la caisse, importées sans clic aux heures choisies.</p>
+    </div>
+</div>
+
+{% if refused %}
+    {% comment %}
+    The till is one of the server's own accounts (recipes/integration.py):
+    an espace that may not use it gets the sentence and no form - the POST
+    routes answer 403 all the same.
+    {% endcomment %}
+    <div class="message">{{ refused }}</div>
+{% else %}
+    {% if not sending_enabled %}
+        <p class="message message-warning">Serveur de développement : aucun import ne part d'ici.</p>
+    {% endif %}
+    {% if owner_only %}<p class="muted">{{ owner_only }}</p>{% endif %}
+    <p class="muted">Période : de la dernière journée importée moins {{ overlap_days }} jours jusqu'à la dernière nuit terminée (La nuit se termine à {{ night_ends_at|time:"H:i" }} : réglage dans <a href="{% url 'notifications:reminders' %}">Notifications › Rappels</a>).</p>
+    {% for line in coverage %}<p class="muted">{{ line }}</p>{% endfor %}
+
+    {% for card in cards %}
+        <section class="card{% if not card.rule.is_active %} is-inactive{% endif %}" id="import-{{ card.rule.pk }}">
+            <h2>{{ card.rule.name }}{% if not card.rule.is_active %} <span class="status-pill status-ignored">inactif</span>{% endif %}</h2>
+            <p class="muted">{{ card.source_said }} · {{ card.days_said }} · {{ card.times_said }}</p>
+            {% if card.problem %}<p class="message message-warning">{{ card.problem }}</p>{% else %}<p class="muted">Un import manqué est rattrapé dans les {{ catch_up_hours }} h.</p>{% endif %}
+            {% if card.rule.last_result %}<p>Dernier passage : {{ card.rule.last_result }}</p>{% endif %}
+            {% if card.rule.last_failed %}<p class="message message-warning">Dernier échec : {{ card.rule.last_failed|date:"d/m/Y" }}</p>{% endif %}
+            {% if card.upcoming %}
+                <h3>Prochains imports</h3>
+                <ul class="check-list">
+                    {% for when in card.upcoming %}<li>{{ when }}</li>{% endfor %}
+                </ul>
+            {% endif %}
+            {% if card.runs %}
+                <h3>Derniers imports</h3>
+                <div class="table-wrap">
+                    <table data-table data-table-label="imports automatiques">
+                        <thead>
+                            <tr><th>Date</th><th>État</th><th>Période</th><th class="num">Totaux enregistrés</th></tr>
+                        </thead>
+                        <tbody>
+                            {% for job in card.runs %}
+                                <tr>
+                                    <td data-sort="{{ job.started_at|date:'Y-m-d H:i' }}">{{ job.started_at|date:"d/m/Y H:i" }}</td>
+                                    <td><span class="status-pill status-{{ job.status }}">{{ job.get_status_display }}</span></td>
+                                    <td data-sort="{{ job.range_start|date:'Y-m-d' }}">{% if job.range_start %}du {{ job.range_start|date:"d/m/Y" }} au {{ job.range_end|date:"d/m/Y" }}{% else %}—{% endif %}</td>
+                                    <td class="num">{{ job.recorded }}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% endif %}
+            {% if card.form %}
+                <form method="post" action="{% url 'recipes:auto_sales_edit' card.rule.pk %}#import-{{ card.rule.pk }}">
+                    {% csrf_token %}
+                    {% include "recipes/_auto_sales_fields.html" with form=card.form %}
+                    <div class="form-actions">
+                        <button class="btn btn-secondary" type="submit">Enregistrer</button>
+                    </div>
+                </form>
+                <details class="danger-zone">
+                    <summary>Supprimer…</summary>
+                    <form method="post" action="{% url 'recipes:auto_sales_delete' card.rule.pk %}">
+                        {% csrf_token %}
+                        <p>La règle est supprimée ; les ventes déjà importées restent.</p>
+                        <button class="btn btn-danger" type="submit">Supprimer « {{ card.rule.name }} »</button>
+                    </form>
+                </details>
+            {% endif %}
+        </section>
+    {% empty %}
+        <div class="empty-state">
+            <p>Aucun import automatique.</p>
+        </div>
+    {% endfor %}
+
+    {% if new_form %}
+        <section class="card" id="nouvel-import">
+            <h2>Nouvel import automatique</h2>
+            <form method="post" action="{% url 'recipes:auto_sales' %}#nouvel-import">
+                {% csrf_token %}
+                {% include "recipes/_auto_sales_fields.html" with form=new_form %}
+                <div class="form-actions">
+                    <button class="btn" type="submit">Ajouter</button>
+                </div>
+            </form>
+        </section>
+    {% endif %}
+
+    <details class="explainer">
+        <summary>Comment ça marche</summary>
+        <p>Le serveur importe les ventes aux heures choisies, s'il est allumé et pas en veille. Déjà à jour, il ne se connecte pas à la caisse : une connexion par jour environ, quelles que soient les heures.</p>
+        <p>Un import déjà en cours, à la main ou automatique, fait attendre le passage ; une mise à jour du site le fait sauter.</p>
+        <p>Les factures et les bons ont leur propre <a href="{% url 'invoices:auto_gathers' %}">récupération automatique</a>. Les alertes de fin se règlent dans Notifications › Alertes.</p>
+    </details>
+{% endif %}
+{% endblock %}

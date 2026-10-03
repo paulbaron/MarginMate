@@ -149,6 +149,127 @@ class CompiledPatternsTests(SimpleTestCase):
         client.assert_not_called()
 
 
+def dated_mail(day: date, name: str, sender="factures@cave.exemple", subject=None) -> bytes:
+    """A mail of `day` from `sender` carrying `<name>.pdf`. Data invented."""
+    from email.message import EmailMessage
+
+    message = EmailMessage()
+    message["From"] = sender
+    message["To"] = "factures@example.test"
+    message["Subject"] = subject or f"Facture {name}"
+    message["Date"] = day.strftime("%a, %d %b %Y 08:00:00 +0200")
+    message.set_content("Votre document.")
+    message.add_attachment(b"%PDF-1.4 exemple", maintype="application", subtype="pdf", filename=f"{name}.pdf")
+    return message.as_bytes()
+
+
+class FakeMailbox:
+    """The IMAP client's answers for `mails` (id -> the message's bytes), read
+    one message a batch (BATCH_SIZE patched to 1). `broken` is what goes wrong,
+    on mail b"1" only: « search-no » (the SEARCH answered NO), « header-no » /
+    « body-no » (that FETCH answered NO, as Gmail answers « Some messages could
+    not be FETCHed »), « header-timeout » / « body-timeout » (the FETCH timed
+    out - an OSError the connection recovers from)."""
+
+    def __init__(self, mails: dict, broken: str = ""):
+        self.mails = mails
+        self.broken = broken
+
+    def install(self, client) -> None:
+        client.return_value.search.side_effect = self.search
+        client.return_value.fetch.side_effect = self.fetch
+
+    def search(self, charset, criteria):
+        if self.broken == "search-no":
+            return "NO", [b"[UNAVAILABLE] Temporary System Error"]
+        return "OK", [b" ".join(self.mails)]
+
+    def fetch(self, message_set, parts):
+        phase = "header" if "HEADER" in parts else "body"
+        if message_set == b"1" and self.broken == f"{phase}-no":
+            return "NO", [b"Some messages could not be FETCHed (Failure)"]
+        if message_set == b"1" and self.broken == f"{phase}-timeout":
+            raise TimeoutError("The read operation timed out")
+        data = []
+        for mail_id in message_set.split(b","):
+            raw = self.mails[mail_id]
+            content = raw.split(b"\n\n", 1)[0] + b"\n\n" if phase == "header" else raw
+            data += [(mail_id + b" (BODY[] {%d}" % len(content), content), b")"]
+        return "OK", data
+
+
+#: Every way a server answers part of a search and not the rest.
+INCOMPLETE = ("header-no", "body-no", "header-timeout", "body-timeout")
+
+
+@override_settings(INVOICE_EMAIL_ADDRESS="factures@example.test", INVOICE_EMAIL_APP_PASSWORD="x")
+class IncompleteSearchTests(SimpleTestCase):
+    """A server answering a FETCH « NO », or a FETCH timing out, left the
+    batch unread and the search returned normally: the gather took it for a
+    whole search and recorded the source covered past mails it never read
+    (rereview Q0). The rest is still read; the search says it is
+    incomplete. A SEARCH answered NO is no empty range."""
+
+    def mails(self):
+        return {b"1": dated_mail(date(2026, 3, 2), "ancienne"), b"2": dated_mail(date(2026, 3, 20), "recente")}
+
+    def search(self, broken=""):
+        with (
+            mock.patch("invoices.scrapers.generic_email.BATCH_SIZE", 1),
+            mock.patch("invoices.scrapers.generic_email.imaplib.IMAP4_SSL") as client,
+        ):
+            FakeMailbox(self.mails(), broken).install(client)
+            self.client_mock = client
+            return find_matching_emails(
+                date(2026, 3, 1), date(2026, 3, 31), sender_pattern=r"cave\.exemple", log=lambda message: None
+            )
+
+    def test_a_whole_search_reads_both(self):
+        self.assertEqual([match.subject for match in self.search()], ["Facture ancienne", "Facture recente"])
+
+    def test_a_search_answered_no_is_no_empty_range(self):
+        from invoices.scrapers import generic_email
+
+        with self.assertRaises(RuntimeError) as caught:
+            self.search("search-no")
+        self.assertNotIsInstance(caught.exception, generic_email.IncompleteSearch)
+        self.assertEqual(str(caught.exception), "Recherche refusée par le serveur mail (NO).")
+        self.client_mock.return_value.logout.assert_called_once()
+
+    def test_a_batch_left_unread_makes_the_search_incomplete_and_the_rest_is_read(self):
+        from invoices.scrapers import generic_email
+
+        for broken in INCOMPLETE:
+            with self.subTest(broken=broken):
+                with self.assertRaises(generic_email.IncompleteSearch) as caught:
+                    self.search(broken)
+                self.assertEqual(caught.exception.unread, 1)
+                self.assertEqual([match.subject for match in caught.exception.matches], ["Facture recente"])
+                self.assertEqual(
+                    str(caught.exception), "Recherche incomplète : 1 e-mail(s) non lu(s) par le serveur mail."
+                )
+                self.client_mock.return_value.logout.assert_called_once()
+
+    def test_scraping_writes_what_was_read_and_says_it_is_incomplete(self):
+        from invoices.scrapers import generic_email
+
+        folder = self.enterContext(tempfile.TemporaryDirectory())
+        with (
+            mock.patch("invoices.scrapers.generic_email.BATCH_SIZE", 1),
+            mock.patch("invoices.scrapers.generic_email.imaplib.IMAP4_SSL") as client,
+        ):
+            FakeMailbox(self.mails(), "body-no").install(client)
+            with self.assertRaises(generic_email.IncompleteSearch) as caught:
+                generic_email.scrape_email_invoices(
+                    folder, date(2026, 3, 1), date(2026, 3, 31), sender_pattern=r"cave\.exemple", log=lambda m: None
+                )
+        self.assertEqual(
+            [(os.path.basename(path), day) for path, day in caught.exception.downloaded],
+            [("recente.pdf", date(2026, 3, 20))],
+        )
+        self.assertEqual(os.listdir(folder), ["recente.pdf"])
+
+
 class AttachmentFileTests(SimpleTestCase):
     """What lands on disk before the import: one file per attachment, even
     when two share a name, and a name the disk refuses does not stop the

@@ -150,6 +150,7 @@ parts trigger `documents-changed` when they end).
             </details>
             <button class="btn" type="submit" data-job-control="gather-status"{% if latest_job.is_active %} disabled{% endif %}>Récupérer les nouvelles factures</button>
         </form>
+        {% if can.owner %}<p class="muted"><a href="{% url 'invoices:auto_gathers' %}">Récupération automatique : réglages</a></p>{% endif %}
         {% endif %}
         {% if latest_job %}
             {% include "invoices/_gather_status.html" with job=latest_job %}

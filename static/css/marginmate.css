@@ -2317,6 +2317,9 @@ html:has(body.public-page) { scroll-padding-top: var(--s4); }
 .topbar-logout { margin: 0; flex: none; }
 .topbar-logout .link-button { color: var(--muted); white-space: nowrap; }
 .topbar-logout .link-button:hover { color: var(--text); }
+/* An employee's « Notifications » (base.html): drawn like « Se déconnecter ». */
+.topbar-notifications { flex: none; color: var(--muted); white-space: nowrap; text-decoration: none; }
+.topbar-notifications:hover { color: var(--text); }
 
 @media (min-width: 861px) and (max-width: 1000px) {
     /* Still three rows of links just above 860 px, stacked or not: 124 px
@@ -2526,7 +2529,8 @@ html:has(body.public-page) { scroll-padding-top: var(--s4); }
         font-size: 0.95rem;
     }
     html.topbar-menu-ready .topbar-tenant { display: block; max-width: 100%; padding: 0 var(--s3); }
-    html.topbar-menu-ready .topbar-logout .link-button {
+    html.topbar-menu-ready .topbar-logout .link-button,
+    html.topbar-menu-ready .topbar-notifications {
         display: inline-flex;
         align-items: center;
         min-height: 44px;
@@ -2810,6 +2814,43 @@ details.format-group > summary { cursor: pointer; }
 /* The returnable types: one card each. */
 .type-card.is-inactive h2 { color: var(--muted); }
 .position-input { width: 6rem; }
+
+/* ---------------------------------------------------------- notifications */
+
+/* Données › Notifications, its reminders and its alerts (notifications/):
+   phone-first like Consignes - fields at 1rem at every width, nothing wider
+   than the card. */
+.notifications-page :is(input, select, textarea) { font-size: 1rem; }
+.notifications-page .card { overflow-wrap: anywhere; }
+.device-answer { margin: var(--s3) 0 0; color: var(--text-dim); }
+.device-list, .plain-list { list-style: none; margin: 0 0 var(--s3); padding: 0; }
+.device-row { padding: var(--s2) 0; border-bottom: 1px solid var(--border); }
+.device-row:last-child { border-bottom: 0; }
+.device-row p { margin: 0 0 var(--s1); }
+.device-name { font-weight: 600; }
+.device-row .danger-zone { margin: var(--s2) 0 0; }
+.plain-list li + li { margin-top: var(--s1); }
+.rule-card.is-inactive h2 { color: var(--muted); }
+.rule-test { margin-top: var(--s3); }
+/* Days, results and recipients: boxes drawn by hand, each label beside its
+   box, one column (a day's label carries where its times land). */
+.choice-boxes { border: 0; margin: 0 0 var(--s4); padding: 0; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s1); }
+.choice-boxes > legend { padding: 0; margin-bottom: var(--s2); color: var(--text-dim); font-size: 0.85rem; font-weight: 600; }
+.choice-boxes .help { margin: 0 0 var(--s1); font-size: 0.8rem; color: var(--muted); }
+.choice-box { display: flex; align-items: center; gap: var(--s2); margin: 0; color: var(--text); font-size: 0.95rem; font-weight: 500; }
+.choice-box input { flex: none; }
+.next-sends { margin: 0 0 var(--s4); }
+.next-sends h3 { margin: 0 0 var(--s2); font-size: 0.95rem; }
+.next-sends ul { margin: 0; padding-left: var(--s5); color: var(--text-dim); }
+/* A dispatch's state (notifications.models.Dispatch.Status). */
+.status-sent { background: var(--green-bg); color: var(--green); border-color: #2f5233; }
+.status-partial, .status-missed { background: var(--amber-bg); color: var(--amber); border-color: #574728; }
+.status-failed, .status-no_device { background: var(--red-bg); color: var(--red); border-color: #5a2f2c; }
+.status-sending { background: var(--blue-bg); color: var(--blue); border-color: #2f3d57; }
+.status-skipped, .status-disabled { background: #2a2934; color: var(--muted); border-color: var(--border); }
+@media (pointer: coarse) {
+    .choice-box { min-height: 44px; }
+}
 
 /* « Accès des employés » (accounts/members.html): one card per employee,
    his pages folded under the list of what they open; each box a whole line

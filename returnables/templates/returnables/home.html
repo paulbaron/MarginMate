@@ -201,15 +201,17 @@
             reloads when the gather ends, and the sentence goes with it.
             {% endcomment %}
             {% include "returnables/_gather_form.html" %}
+            {% comment %}The automatic gathers are the owner's (accounts/access.py).{% endcomment %}
+            {% if can.owner %}<p class="muted"><a href="{% url 'invoices:auto_gathers' %}">Récupération automatique : réglages</a></p>{% endif %}
         {% else %}
             <p class="muted">Aucun format de bon n'a de motif d'expéditeur : dépôt à la main seulement.</p>
         {% endif %}
     </section>
 
     {% if can.owner %}
-        {% comment %}The formats and types are the owner's (accounts/access.py): they decide what Achats files as a slip.{% endcomment %}
+        {% comment %}The formats and types are the owner's (accounts/access.py): they decide what Achats files as a slip. So are the reminders and alerts (notifications/); an employee reaches his own devices from the topbar.{% endcomment %}
         <p class="returnables-settings">
-            Réglages : <a href="{% url 'returnables:format_list' %}">Formats de bons</a> · <a href="{% url 'returnables:type_list' %}">Types de consigne</a>
+            Réglages : <a href="{% url 'returnables:format_list' %}">Formats de bons</a> · <a href="{% url 'returnables:type_list' %}">Types de consigne</a> · <a href="{% url 'notifications:home' %}">Rappels et notifications</a>
         </p>
     {% endif %}
     <details class="explainer">

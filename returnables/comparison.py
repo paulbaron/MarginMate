@@ -938,6 +938,21 @@ class Board:
             self._days[key] = self._compute(key, self.units.get(key) or [pickup])
         return self._days[key]
 
+    def as_if_dated(self, supplier_id, pickup_day, slip_day) -> DayComparison:
+        """What `supplier_id`'s pickups of `pickup_day` would compare to if
+        they were dated `slip_day`: those pickups (summed) against the slips
+        that count on `slip_day`, by the rules of a paired day (`_compute`:
+        status, reasons, sentence) - its `date`, so its sentence, is the slip
+        day. A slip's notification says this of a misdated pickup (counted
+        the evening before, the slip dated the delivery day: a hint) before anybody
+        moves it. Never kept among the board's days - it is none of them.
+        LookupError when `pickup_day` has no pickup loaded in this board."""
+        key = (supplier_id, pickup_day)
+        pickups = self.units.get(key) if self._loaded(*key) else None
+        if not pickups:
+            raise LookupError(f"Aucune reprise du {pickup_day} n'a été chargée dans ce Board.")
+        return self._compute((supplier_id, slip_day), pickups)
+
     def _compute(self, key, pickups) -> DayComparison:
         supplier_id, day = key
         counts = defaultdict(int)

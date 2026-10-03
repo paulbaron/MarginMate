@@ -74,7 +74,8 @@ refresh_dev_data.cmd runs beside its code.
   real place is asked). Opened ``mode=rw``: a database that is not there is
   not made. A database that will not open holds back none of the others:
   every one is tried, then the failures are said together. SESSIONS= how
-  many went.
+  many went. The push devices (`PUSH_DEVICE_TABLE`, their endpoints and
+  keys) go with them, in the same transaction, wherever that table is.
 
 **A folder has more than one name** (review of 01/10/2026): an 8.3 short
 name (C:\\MARGIN~1\\data), a directory junction or a symbolic link, a subst
@@ -114,6 +115,12 @@ DATA = "data"
 ENV = ".env"
 ACCOUNTS_ROLE = "comptes"
 SESSION_TABLE = "django_session"
+#: accounts.PushDevice's table: the browsers that receive the site's push
+#: notifications (endpoints are bearer capabilities, `auth` a secret). The
+#: development copy never pushes - its SECRET_KEY, so its VAPID key, is its
+#: own - so a copy of them in data-dev is exposure only: emptied with the
+#: sessions. Production's backups keep them (a restore keeps the phones).
+PUSH_DEVICE_TABLE = "accounts_pushdevice"
 OLD = ".ancien-"
 #: The .env line config/settings.py reads SECRET_KEY from.
 SECRET_KEY_NAME = "DJANGO_SECRET_KEY"
@@ -448,19 +455,27 @@ def development(settings, backup, now: datetime | None = None) -> dict[str, str]
 
 
 def _forget_sessions(database: Path) -> int:
-    """Delete every session of `database` and rewrite the file; how many
-    went (0: no session table). Failed when it does not open or write."""
+    """Delete every session of `database` - and every push device, when it
+    has accounts.PushDevice's table - and rewrite the file; how many
+    sessions went (0: no session table). Failed when it does not open or
+    write."""
     uri = database.as_uri() + "?mode=rw"
     try:
         connection = sqlite3.connect(uri, uri=True, isolation_level=None, timeout=20)
         try:
-            found = connection.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (SESSION_TABLE,)
-            ).fetchone()
-            if found is None:
+            tables = {
+                name
+                for (name,) in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?)",
+                    (SESSION_TABLE, PUSH_DEVICE_TABLE),
+                )
+            }
+            if not tables:
                 return 0
             connection.execute("BEGIN IMMEDIATE")
-            removed = connection.execute(f'DELETE FROM "{SESSION_TABLE}"').rowcount
+            removed = connection.execute(f'DELETE FROM "{SESSION_TABLE}"').rowcount if SESSION_TABLE in tables else 0
+            if PUSH_DEVICE_TABLE in tables:
+                connection.execute(f'DELETE FROM "{PUSH_DEVICE_TABLE}"')
             connection.execute("COMMIT")
             # A DELETE only frees the rows' room: their bytes - the session
             # keys - stay in the file until it is rewritten.
@@ -494,9 +509,9 @@ def _databases_in(data: Path) -> list[Path]:
 
 
 def purge_sessions(settings, backup) -> dict[str, str]:
-    """The sessions the copy of `backup` brought into this folder's data,
-    deleted from every database of it - behind the refusals of
-    `development`."""
+    """The sessions (and push devices) the copy of `backup` brought into this
+    folder's data, deleted from every database of it - behind the refusals
+    of `development`."""
     data, _backup, manifest = _development_copy(settings, backup)
     named = [_accounts_database(settings)]
     listed = manifest.get("databases")

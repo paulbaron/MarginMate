@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import views
+from . import auto_sales_views, views
 
 app_name = "recipes"
 
@@ -23,4 +23,8 @@ urlpatterns = [
     path("caisse/import/run/", views.trigger_sales_import, name="trigger_sales_import"),
     path("caisse/import/<int:job_id>/status/", views.sales_import_status, name="sales_import_status"),
     path("caisse/import/<int:job_id>/cancel/", views.cancel_sales_import, name="cancel_sales_import"),
+    # « Import automatique des ventes » (recipes/auto_sales.py).
+    path("import-auto/", auto_sales_views.auto_sales_page, name="auto_sales"),
+    path("import-auto/<int:pk>/", auto_sales_views.auto_sales_edit, name="auto_sales_edit"),
+    path("import-auto/<int:pk>/supprimer/", auto_sales_views.auto_sales_delete, name="auto_sales_delete"),
 ]

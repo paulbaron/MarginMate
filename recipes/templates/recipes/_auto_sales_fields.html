@@ -1,0 +1,22 @@
+{% comment %}
+An automatic sales import's fields (forms.AutoSalesImportForm): the name and
+the source, then the days as seven boxes in a fieldset - drawn here, since
+_form_fields.html draws a list of boxes without a legend - then the times
+and « Actif ».
+{% endcomment %}
+{% include "_form_fields.html" with form=form only=head_fields %}
+<fieldset class="choice-group">
+    <legend>Jours</legend>
+    <ul class="check-list">
+        {% for day in form.day_rows %}
+            <li>
+                <label for="{{ day.id }}">
+                    <input type="checkbox" id="{{ day.id }}" name="{{ form.weekdays.html_name }}" value="{{ day.value }}"{% if day.checked %} checked{% endif %}>
+                    {{ day.label }}
+                </label>
+            </li>
+        {% endfor %}
+    </ul>
+    {% for error in form.weekdays.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+</fieldset>
+{% include "_form_fields.html" with form=form only=tail_fields %}

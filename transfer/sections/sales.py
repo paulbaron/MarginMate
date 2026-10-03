@@ -23,6 +23,13 @@ deletes those of every day it leaves with no till sales, and both say how to
 bring them back (`PAYMENTS_NOTE`) - or, in a tenant whose till the server
 does not import (a hosted bar, which runs no command on the server), that
 this is « à configurer » (`payments_note`); nothing else here touches them.
+
+**The till's coverage goes back with the days deleted** (`lower_till_coverage`):
+the automatic sales imports start from `ventes-<key>`, « imported without a
+gap up to », so a clear or a « Remplacer » that deletes till days lowers it
+to the day before the first of them - never forward -, and the next
+automatic import fetches them again. Left as it was, those days stayed empty
+for good under a page saying they were imported.
 """
 
 from __future__ import annotations
@@ -30,9 +37,10 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import defaultdict
+from datetime import timedelta
 from decimal import Decimal
 
-from django.db.models import Prefetch
+from django.db.models import Min, Prefetch
 
 from recipes.forms import MANUAL_SALE_SOURCE
 from recipes.integration import TILL_TO_CONFIGURE, till_allowed
@@ -171,6 +179,43 @@ def _delete(model, pks: list[int]) -> int:
         _total, per_model = model.objects.filter(pk__in=batch).delete()
         deleted += per_model.get(model._meta.label, 0)
     return deleted
+
+
+#: Said when the till's coverage went back (a participle: the preview and the
+#: confirm read the same).
+COVERAGE_NOTE = (
+    "Import automatique des ventes : ramené au {day:%d/%m/%Y}, les jours supprimés sont importés à nouveau ensuite."
+)
+
+
+def lower_till_coverage(first_deleted, report=None) -> None:
+    """Days deleted here are no longer imported: each sales source's
+    coverage (`ventes-<key>`, where the next automatic import starts) goes
+    back to the day before the first of them - never forward. A source with
+    no row is given one only where its history (the successful imports,
+    which a clear keeps) would rebuild it past those days. Inside the run's
+    transaction: a preview rolls it back with the rest."""
+    if first_deleted is None:
+        return
+    from invoices.models import GatherCoverage
+    from recipes import auto_sales, sales_sources
+
+    until = first_deleted - timedelta(days=1)
+    lowered = False
+    for key in sales_sources.SOURCES:
+        code = auto_sales.coverage_code(key)
+        row = GatherCoverage.objects.filter(code=code).first()
+        if row is None:
+            known = auto_sales.covered_until(key)
+            if known is not None and known > until:
+                GatherCoverage.objects.create(code=code, searched_until=until)
+                lowered = True
+        elif row.searched_until is not None and row.searched_until > until:
+            row.searched_until = until
+            row.save(update_fields=["searched_until", "updated_at"])
+            lowered = True
+    if lowered and report is not None:
+        report.note(COVERAGE_NOTE.format(day=until))
 
 
 @registry.register
@@ -575,14 +620,15 @@ class SalesSection(Section):
         documents, and the till products left with no day and no link - pure
         data. A linked or ignored one stays: that is the links'."""
         stale = [
-            (pk, product_id)
+            (pk, product_id, sold_on)
             for pk, product_id, sold_on in PosProductDailyQuantity.objects.values_list("pk", "product_id", "sold_on")
             if (product_id, sold_on) not in self.daily_keys
         ]
-        days = _delete(PosProductDailyQuantity, [pk for pk, _product in stale])
+        days = _delete(PosProductDailyQuantity, [pk for pk, _product, _sold_on in stale])
         if days:
             report.deleted(QUANTITIES, days)
-            self.touched.update(product_id for _pk, product_id in stale)
+            self.touched.update(product_id for _pk, product_id, _sold_on in stale)
+            lower_till_coverage(min(sold_on for _pk, _product, sold_on in stale), report)
 
         manual = _delete(
             RecipeSale,
@@ -630,8 +676,10 @@ class SalesSection(Section):
         """Every day, every sale per recipe (typed in or the till's), every
         document, every day's payments. The till products with no link go; a
         linked or ignored one is the links' and stays, at zero and with no
-        day."""
+        day. The till's coverage goes back before the first day it held."""
+        first = PosProductDailyQuantity.objects.aggregate(first=Min("sold_on"))["first"]
         days, _ = PosProductDailyQuantity.objects.all().delete()
+        lower_till_coverage(first, report)
         payments, _ = PosDailyPayment.objects.all().delete()
         if payments:
             report.note(payments_note())

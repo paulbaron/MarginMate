@@ -60,7 +60,7 @@ from django.utils.dateparse import parse_date
 from accounts.access import access_of
 from accounts.tenancy import integrations_allowed
 from common import is_id
-from invoices import integrations
+from invoices import coverage, integrations
 from invoices.models import ScrapeJob
 from returnables import comparison, invoice_check, patterns, reading, slips
 from returnables.comparison import Board, pickup_summary, slip_label
@@ -68,12 +68,13 @@ from returnables.forms import (
     COUNT_PREFIX,
     NOTHING_LEFT,
     NOTHING_TO_SAVE,
+    PATTERN_FIELDS,
     PickupForm,
     SlipFormatForm,
     TypeForm,
     check_pickup_date,
 )
-from returnables.mail import fetch_start
+from returnables.mail import SLIP_SOURCE_PREFIX, fetch_start
 from returnables.models import (
     MAX_PHOTOS,
     Pickup,
@@ -127,10 +128,9 @@ SAVED_FLAG = "enregistree"
 GATHER_SHOWN_FOR = timedelta(minutes=10)
 #: The latest gathers searched for one that fetched slips.
 GATHER_JOBS_SEARCHED = 20
-#: The gather's codes for a format's slips (invoices/tasks.py).
-SLIP_SOURCE_PREFIX = "bons-"
-
 ALREADY_GATHERING = "Une récupération est déjà en cours sur Factures."
+#: Said while an automatic gather (invoices/auto_gather.py) runs.
+AUTO_GATHERING = "Une récupération automatique est en cours."
 
 
 def _is_htmx(request) -> bool:
@@ -176,14 +176,21 @@ def slips_refused() -> str:
 
 def _slips_job():
     """(the gather to show, whether one is running): the latest GATHER that
-    is running, or that fetched slips - shown while it runs and for ten
-    minutes after it ended."""
+    is running - by hand or automatic -, or that a person asked for and that
+    fetched slips - shown while it runs and for ten minutes after it ended.
+    An automatic run that ended says how it went on its own page
+    (invoices/auto_gather.py), never here."""
     jobs = list(
         ScrapeJob.objects.filter(kind=ScrapeJob.Kind.GATHER).order_by("-started_at", "-pk")[:GATHER_JOBS_SEARCHED]
     )
     running = next((job for job in jobs if job.is_active), None)
     job = running or next(
-        (job for job in jobs if any(str(code).startswith(SLIP_SOURCE_PREFIX) for code in (job.progress or {}))),
+        (
+            job
+            for job in jobs
+            if job.trigger == ScrapeJob.Trigger.MANUAL
+            and any(str(code).startswith(SLIP_SOURCE_PREFIX) for code in (job.progress or {}))
+        ),
         None,
     )
     if job is not None and not job.is_active:
@@ -210,6 +217,9 @@ def _gather_context(today: date, slips_only: bool = False) -> dict:
     # written yet, its thread barely started) is shown by its card, and the
     # sentence read as if the tap had been ignored.
     another = running and bool(job.progress) and not job.slips_only
+    # Read before the card is taken away below: an automatic run is said as
+    # such to whoever does not see its card.
+    automatic = running and job.trigger == ScrapeJob.Trigger.AUTOMATIC
     if slips_only and job is not None and job.progress and not job.slips_only:
         # An employee given Consignes and not « Factures » (accounts/access.py)
         # follows a gather of slips only (invoices.views._shows_gather):
@@ -224,7 +234,7 @@ def _gather_context(today: date, slips_only: bool = False) -> dict:
         "gather_refused": "" if allowed else slips_refused(),
         "gather_job": job,
         "gather_running": running,
-        "gather_running_sentence": ALREADY_GATHERING if another else "",
+        "gather_running_sentence": AUTO_GATHERING if automatic else ALREADY_GATHERING if another else "",
         "gather_start": min(starts) if starts else today,
         "gather_codes": [f"{SLIP_SOURCE_PREFIX}{fmt.pk}" for fmt in mail_formats],
     }
@@ -967,7 +977,15 @@ def _format_page(request, fmt):
             form.is_valid()
         elif action == SAVE:
             if form.is_valid():
-                saved = form.save()
+                with transaction.atomic():
+                    saved = form.save()
+                    if set(PATTERN_FIELDS) & set(form.changed_data):
+                        # What it searches for, or keeps of what it finds,
+                        # changed: the days its gather covered were searched
+                        # for other slips - from its own start again.
+                        coverage.restart(
+                            f"{SLIP_SOURCE_PREFIX}{saved.pk}", fetch_start(saved, None, timezone.localdate())
+                        )
                 count = saved.slips.count()
                 said = f"Format « {saved.name} » enregistré."
                 if count == 1:

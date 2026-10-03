@@ -137,6 +137,8 @@ class NavigationTests(TestCase):
                 reverse("invoices:invoice_detail", args=[invoice.pk]),
                 reverse("invoices:invoice_edit_lines", args=[invoice.pk]),
                 reverse("invoices:invoice_create_manual"),
+                # « Récupération automatique », reached from Factures' card.
+                reverse("invoices:auto_gathers"),
                 # « Ajouter des factures »: the import's form on a page of its own.
                 reverse("invoices:invoice_add"),
             ],
@@ -147,6 +149,8 @@ class NavigationTests(TestCase):
                 reverse("recipes:pos_product_list"),
                 reverse("recipes:sales_list"),
                 reverse("recipes:sale_document_create"),
+                # « Import automatique des ventes », reached from the Ventes tab.
+                reverse("recipes:auto_sales"),
             ],
             "Inventaires": [
                 reverse("inventory:stock_take_list"),
@@ -178,7 +182,16 @@ class NavigationTests(TestCase):
                 reverse("returnables:format_edit", args=[seeded_format().pk]),
                 reverse("returnables:type_list"),
             ],
-            "Données": [reverse("transfer:data_home"), reverse("transfer:data_import"), reverse("transfer:data_clear")],
+            "Données": [
+                reverse("transfer:data_home"),
+                reverse("transfer:data_import"),
+                reverse("transfer:data_clear"),
+                # « Notifications », reached from Données' header like
+                # « Identifiants »: no link of its own.
+                reverse("notifications:home"),
+                reverse("notifications:reminders"),
+                reverse("notifications:events"),
+            ],
         }
         for label, urls in pages.items():
             for url in urls:

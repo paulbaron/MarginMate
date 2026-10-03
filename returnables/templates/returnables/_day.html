@@ -5,6 +5,8 @@ the home page's « Dernière reprise » card and the pickup's own page.
 the pickup's page); `removable` draws a « Retirer » under each photo.
 Every sentence comes built from returnables/comparison.py and
 invoice_check.py as plain text - escaped here, never |safe.
+A photo opens in a new tab (target="_blank" rel="noopener"): the site opened
+from a phone's Home Screen has no Back button to come back with.
 {% endcomment %}
 {% with day=view.day pickup=view.pickup %}
 <p class="pickup-head">
@@ -20,7 +22,7 @@ invoice_check.py as plain text - escaped here, never |safe.
     <ul class="pickup-photo-grid">
         {% for shown in view.photos %}
             <li class="pickup-photo">
-                <a href="{{ shown.photo.image.url }}"><img src="{{ shown.photo.thumb.url }}" alt="{{ shown.caption }}" loading="lazy"></a>
+                <a href="{{ shown.photo.image.url }}" target="_blank" rel="noopener"><img src="{{ shown.photo.thumb.url }}" alt="{{ shown.caption }}" loading="lazy"></a>
                 <span class="small muted">{{ shown.caption }}</span>
                 {% if removable %}
                     {% comment %}

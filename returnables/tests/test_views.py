@@ -364,6 +364,8 @@ class HomePageTests(PageTestCase):
         html = self.html(HOME)
         self.assertIn(f'<a href="{reverse("returnables:format_list")}">Formats de bons</a>', html)
         self.assertIn(f'<a href="{reverse("returnables:type_list")}">Types de consigne</a>', html)
+        # The reminder before a delivery and the bon's alert are set up there.
+        self.assertIn(f'<a href="{reverse("notifications:home")}">Rappels et notifications</a>', html)
         self.assertIn('<details class="explainer">', html)
 
 
@@ -1090,6 +1092,50 @@ class FormatPageTests(PageTestCase):
         self.assertEqual(
             self.messages_of(two),
             ["Format « UBA — bon du livreur » enregistré. Ses 2 bons n'ont pas été relus : utilisez « Relire »."],
+        )
+
+    def coverage_after_saving(self, fmt, values, searched_until):
+        """The format's gather coverage once `values` are saved on its page,
+        from `searched_until` (invoices/coverage.py)."""
+        from invoices.models import GatherCoverage
+        from invoices.tasks import slips_code
+
+        GatherCoverage.objects.update_or_create(code=slips_code(fmt), defaults={"searched_until": searched_until})
+        response = self.send(self.form(fmt), press=self.SAVE, values=values)
+        self.assertEqual(response.redirect_chain[-1], (self.url(fmt), 302))
+        return GatherCoverage.objects.get(code=slips_code(fmt)).searched_until
+
+    def test_a_search_setting_changed_searches_its_mails_again_from_its_own_start(self):
+        """[Q3] A sender pattern that stopped matching: every run found
+        nothing, cleanly, and moved the coverage to today. Corrected, the
+        days it missed were never searched again."""
+        from invoices.coverage import OVERLAP_DAYS
+        from returnables.mail import fetch_start
+
+        fmt = seeded_format()
+        today = timezone.localdate()
+        own = fetch_start(fmt, None, today)
+        for field, value in (
+            ("sender_pattern", r"bons@livreur\.exemple"),
+            ("subject_pattern", "^Livraison"),
+            ("attachment_pattern", r"(?i)\.pdf$|\.PDF$"),
+            ("line_pattern", r"^(?P<designation>.+?)\s+(?P<quantite>\d+)$"),
+        ):
+            with self.subTest(field=field):
+                self.assertEqual(
+                    self.coverage_after_saving(fmt, {field: value}, today), own + timedelta(days=OVERLAP_DAYS)
+                )
+
+    def test_a_save_leaving_its_patterns_alone_leaves_its_coverage(self):
+        fmt = seeded_format()
+        today = timezone.localdate()
+        self.assertEqual(self.coverage_after_saving(fmt, {"name": "UBA — bon du chauffeur"}, today), today)
+
+    def test_a_coverage_is_never_moved_forward_by_a_save(self):
+        fmt = seeded_format()
+        long_ago = timezone.localdate() - timedelta(days=300)
+        self.assertEqual(
+            self.coverage_after_saving(fmt, {"sender_pattern": r"bons@livreur\.exemple"}, long_ago), long_ago
         )
 
     def test_enter_tests_and_never_saves(self):
