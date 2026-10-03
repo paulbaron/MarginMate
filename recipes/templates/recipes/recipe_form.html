@@ -32,7 +32,8 @@
             <h3>Ingrédients</h3>
             <p class="muted">
                 Chaque cadre est un ingrédient. « OU » ajoute une alternative dans le même cadre : une variante par
-                combinaison. Une catégorie ajoute tous ses articles en alternative ; retirez ceux qui ne conviennent pas.
+                combinaison. Une catégorie, ou « Ajouter les N résultats en « OU » » d'une recherche, les ajoute tous en
+                alternative ; retirez ceux qui ne conviennent pas.
             </p>
             {{ formset.management_form }}
             {% if formset.non_form_errors %}
@@ -172,6 +173,29 @@ function matches(query) {
     return found.map(function (item) { return item.entry; });
 }
 
+// « Ajouter les N résultats en « OU » »: every article and recipe the
+// search finds - not only the ones listed - as one choice, offered once a
+// search finds two of them. Categories are not among them: each is offered
+// as itself.
+function everyResult(query, found) {
+    if (!query) return null;
+    var sources = found.filter(function (entry) { return !entry.category; }).map(function (entry) { return entry.value; });
+    if (sources.length < 2) return null;
+    // A category found that adds exactly these says it better.
+    var same = found.some(function (entry) {
+        return entry.category && entry.sources.length === sources.length &&
+            entry.sources.every(function (source) { return sources.indexOf(source) >= 0; });
+    });
+    if (same) return null;
+    return {
+        every: true,
+        query: query,
+        sources: sources,
+        label: "Ajouter les " + sources.length + " résultats en « OU »",
+        kind: "tout « " + query + " »",
+    };
+}
+
 function selectOf(wrapper) { return wrapper.querySelector("select[name$='-source']"); }
 function quantityOf(wrapper) { return wrapper.querySelector("input[name$='-quantity']"); }
 function searchOf(wrapper) { return wrapper.querySelector(".ingredient-search"); }
@@ -255,14 +279,18 @@ function setUpPicker(wrapper) {
         active = index;
     }
     function render() {
-        var found = matches(search.value === labelOf[select.value] ? "" : search.value);
+        var query = search.value === labelOf[select.value] ? "" : search.value.trim();
+        var found = matches(query);
         shown = found.slice(0, MAX_RESULTS);
+        var every = everyResult(query, found);
+        if (every) shown.unshift(every);
         list.textContent = "";
         shown.forEach(function (entry, i) {
             var item = document.createElement("li");
             item.id = listId + "-" + i;
             item.setAttribute("role", "option");
             if (entry.category) item.className = "is-category";
+            if (entry.every) item.className = "is-every";
             var name = document.createElement("span");
             name.textContent = entry.label;
             var kind = document.createElement("span");
@@ -275,17 +303,25 @@ function setUpPicker(wrapper) {
         });
         var note = document.createElement("li");
         note.className = "ingredient-results-note";
+        var listed = shown.length - (every ? 1 : 0);
         if (!found.length) note.textContent = "Rien ne correspond.";
-        else if (found.length > shown.length) note.textContent = "… et " + (found.length - shown.length) + " de plus : précisez la recherche.";
+        else if (found.length > listed) note.textContent = "… et " + (found.length - listed) + " de plus : précisez la recherche.";
         if (note.textContent) list.appendChild(note);
         list.hidden = false;
         search.setAttribute("aria-expanded", "true");
-        highlight(shown.length && search.value.trim() && search.value !== labelOf[select.value] ? 0 : -1);
+        // Enter takes the first ingredient found, never « all of them »: that
+        // one is a click, or the arrow up.
+        var first = every ? 1 : 0;
+        highlight(shown.length > first && query ? first : -1);
     }
     function pick(entry) {
         close();
         if (entry.category) {
-            addCategory(wrapper, entry);
+            addAlternatives(wrapper, entry.sources, "de « " + entry.category + " »");
+            return;
+        }
+        if (entry.every) {
+            addAlternatives(wrapper, entry.sources, "pour « " + entry.query + " »");
             return;
         }
         setSource(wrapper, entry.value);
@@ -423,20 +459,21 @@ function sayInGroup(groupId, text) {
     if (frame) frame.querySelector(".ingredient-group-status").textContent = text;
 }
 
-// A category picked in a row: that row takes its first article, and every
-// other article of it joins the row's « OU » group with the same quantity.
-// What the group already offers is not added twice.
-function addCategory(wrapper, entry) {
+// A category, or every result of a search, picked in a row: that row takes
+// the first ingredient, and every other one joins the row's « OU » group
+// with the same quantity. What the group already offers is not added twice.
+// `what` says where they came from: « de « Rhums » », « pour « sirop » ».
+function addAlternatives(wrapper, wanted, what) {
     var groupId = wrapper.dataset.group;
     var already = {};
     visibleWrappers(groupId).forEach(function (row) {
         if (row !== wrapper && selectOf(row).value) already[selectOf(row).value] = true;
     });
-    var sources = entry.sources.filter(function (source) { return !already[source]; });
+    var sources = wanted.filter(function (source) { return !already[source]; });
     if (!sources.length) {
         searchOf(wrapper).value = labelOf[selectOf(wrapper).value] || "";
         renderGroups();
-        sayInGroup(groupId, "Tous les articles de « " + entry.category + " » sont déjà dans ce choix.");
+        sayInGroup(groupId, "Tous les ingrédients " + what + " sont déjà dans ce choix.");
         return;
     }
     var quantity = quantityOf(wrapper).value;
@@ -455,8 +492,8 @@ function addCategory(wrapper, entry) {
     renderGroups();
     sayInGroup(
         groupId,
-        sources.length + (sources.length > 1 ? " articles" : " article") + " de « " + entry.category +
-        " » en alternative : retirez ceux qui ne conviennent pas" + (quantity ? "." : ", puis donnez la quantité.")
+        sources.length + (sources.length > 1 ? " ingrédients " : " ingrédient ") + what +
+        " en alternative : retirez ceux qui ne conviennent pas" + (quantity ? "." : ", puis donnez la quantité.")
     );
     quantityOf(wrapper).focus();
 }
