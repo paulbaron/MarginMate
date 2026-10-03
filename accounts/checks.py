@@ -188,7 +188,7 @@ def https_cookies_online(app_configs=None, **kwargs):
 def site_url_online(app_configs=None, **kwargs):
     """accounts.E010 (deployment): MARGINMATE_SITE_URL, when set, is an
     https address whose host is allowed - the signing links e-mailed to the
-    employees start with it."""
+    employees start with it, and so do their invitations (accounts/members.py)."""
     url = str(getattr(settings, "SITE_URL", "") or "").strip()
     if not url:
         return []
@@ -197,8 +197,8 @@ def site_url_online(app_configs=None, **kwargs):
     if parts.scheme != "https" or not parts.hostname:
         return [
             Error(
-                "MARGINMATE_SITE_URL n'est pas une adresse https:// : les liens de signature envoyés aux salariés "
-                "partiraient en clair, ou nulle part.",
+                "MARGINMATE_SITE_URL n'est pas une adresse https:// : les liens de signature et d'invitation "
+                "envoyés aux salariés partiraient en clair, ou nulle part.",
                 hint=hint,
                 id="accounts.E010",
             )
@@ -206,8 +206,8 @@ def site_url_online(app_configs=None, **kwargs):
     if not validate_host(parts.hostname, getattr(settings, "ALLOWED_HOSTS", ())):
         return [
             Error(
-                "Le nom de MARGINMATE_SITE_URL n'est pas dans DJANGO_ALLOWED_HOSTS : les liens de signature "
-                "envoyés aux salariés mèneraient à une erreur 400.",
+                "Le nom de MARGINMATE_SITE_URL n'est pas dans DJANGO_ALLOWED_HOSTS : les liens de signature et "
+                "d'invitation envoyés aux salariés mèneraient à une erreur 400.",
                 hint=hint,
                 id="accounts.E010",
             )

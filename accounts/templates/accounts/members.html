@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block title %}Accès des employés - MarginMate{% endblock %}
+{% block content %}
+    {% comment %}
+    « Accès des employés » (accounts/members.py): the owner invites an employee and ticks, for each,
+    the pages he opens (accounts/access.py AREAS). A link is shown once, in the answer that made it
+    (`new_link`): only its hash is stored, and the link nowhere. Every form posts `action` and, for
+    one employee, `member` (his membership's pk). The invite form comes before the list, and no form
+    posts to a fragment: the answer showing a new link opens at the top, where the link is. Each
+    employee's boxes are folded under the pages they open: ten boxes per employee were a phone's
+    whole screen. Removing is confirmed by a <details>, never by confirm(), which does nothing
+    without JavaScript. The sentences about one employee name him, or say « votre employé »: no
+    « il » for Léa.
+    {% endcomment %}
+    <div class="page-header">
+        <div>
+            <p class="breadcrumb"><a href="{% url 'staff:home' %}">← Personnel</a></p>
+            <h1>Accès des employés</h1>
+            <p class="page-subtitle">
+                Chaque employé se connecte avec son propre compte et n'ouvre que les pages cochées pour lui.
+                Restent à vous seul : {{ owner_only|join:", " }}.
+            </p>
+        </div>
+    </div>
+
+    {% if refused %}
+        <div class="message">{{ refused }}</div>
+    {% else %}
+        {% if new_link %}
+            <section class="member-link message message-success" id="nouveau-lien">
+                <label for="member-link">{% if new_link.reset %}Lien pour le nouveau mot de passe de {{ new_link.name }}{% else %}Lien d'invitation de {{ new_link.name }}{% endif %}</label>
+                <div class="copy-row">
+                    <input id="member-link" type="text" readonly value="{{ new_link.link }}">
+                    <button type="button" class="btn btn-secondary" data-copy="member-link">Copier</button>
+                    <button type="button" class="btn btn-secondary" data-share="member-link" data-share-title="MarginMate" hidden>Partager…</button>
+                </div>
+                {% if new_link.local %}<p class="small field-error">{{ new_link.local }}</p>{% endif %}
+                <p class="small">
+                    Envoyez-le vous-même à {{ new_link.name }} (SMS, WhatsApp…) : le lien ouvert, le mot de passe se
+                    choisit{% if not new_link.reset %}, puis la connexion se fait avec l'adresse e-mail{% endif %}. Valable
+                    {{ invitation_days }} jours, une seule fois.
+                </p>
+                <p class="small">
+                    Ce lien ne s'affiche qu'une fois. Perdu, « Nouveau lien » en crée un autre (l'ancien cesse de
+                    fonctionner).
+                </p>
+            </section>
+        {% endif %}
+
+        <section class="card member-invite" id="inviter" aria-labelledby="invite-title">
+            <h2 id="invite-title">Inviter un employé</h2>
+            <p class="muted">
+                Un lien d'invitation est créé : vous l'envoyez à votre employé, qui choisit lui-même son mot de passe.
+                Les pages se changent à tout moment.
+            </p>
+            <form method="post" action="{% url 'accounts:members' %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="invite">
+                {% include "_form_fields.html" with form=invite_form exclude="pages" %}
+                {% include "accounts/_area_choices.html" with form=invite_form legend="Pages ouvertes" prefix="nouveau" %}
+                <button class="btn" type="submit">Créer son lien d'invitation</button>
+            </form>
+        </section>
+
+        <section class="members" aria-labelledby="members-title">
+            <h2 id="members-title">Vos employés</h2>
+            {% for card in cards %}
+                <article class="card member-card" id="employe-{{ card.membership.pk }}">
+                    <div class="member-head">
+                        <div>
+                            <h3>{{ card.name }}</h3>
+                            <p class="muted small">{{ card.user.email }}</p>
+                        </div>
+                        {% if card.no_link %}
+                            <span class="status-pill status-ERROR">Sans lien</span>
+                        {% elif card.pending and card.expired %}
+                            <span class="status-pill status-ERROR">Invitation expirée</span>
+                        {% elif card.pending %}
+                            <span class="status-pill status-PENDING">Invitation en attente</span>
+                        {% else %}
+                            <span class="status-pill status-linked">Actif</span>
+                        {% endif %}
+                    </div>
+                    <p class="muted small">
+                        {% if card.no_link %}
+                            Aucun lien en cours et pas de mot de passe : créez un nouveau lien d'invitation.
+                        {% elif card.pending and card.expired %}
+                            Le lien a expiré le {{ card.invitation.expires_at|date:"d/m/Y à H:i" }} sans servir : créez-en un nouveau.
+                        {% elif card.pending %}
+                            Mot de passe pas encore choisi ; le lien vaut jusqu'au {{ card.invitation.expires_at|date:"d/m/Y à H:i" }}.
+                        {% elif card.user.last_login %}
+                            Dernière connexion le {{ card.user.last_login|date:"d/m/Y à H:i" }}.
+                        {% else %}
+                            Pas encore connecté.
+                        {% endif %}
+                        {% if card.resetting %}Un lien pour un nouveau mot de passe vaut jusqu'au {{ card.invitation.expires_at|date:"d/m/Y à H:i" }}.{% endif %}
+                    </p>
+                    <form method="post" action="{% url 'accounts:members' %}">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="pages">
+                        <input type="hidden" name="member" value="{{ card.membership.pk }}">
+                        <details class="member-pages"{% if card.form.is_bound %} open{% endif %}>
+                            <summary>
+                                Pages ouvertes :
+                                {% for area in card.opened %}{{ area.label }}{% if not forloop.last %}, {% endif %}{% empty %}aucune{% endfor %}
+                            </summary>
+                            {% with legend="Pages ouvertes à "|add:card.name %}
+                                {% include "accounts/_area_choices.html" with form=card.form prefix=card.membership.pk %}
+                            {% endwith %}
+                            <button class="btn" type="submit">Enregistrer ses pages</button>
+                        </details>
+                    </form>
+                    <div class="member-actions">
+                        {% if card.may_reset %}
+                            <form method="post" action="{% url 'accounts:members' %}">
+                                {% csrf_token %}
+                                <input type="hidden" name="action" value="renew">
+                                <input type="hidden" name="member" value="{{ card.membership.pk }}">
+                                {% if card.pending %}
+                                    <button class="btn btn-secondary" type="submit">Nouveau lien d'invitation</button>
+                                {% else %}
+                                    <button class="btn btn-secondary" type="submit">Nouveau mot de passe…</button>
+                                    <span class="muted small">Un lien pour en choisir un autre ; l'actuel reste valable jusque-là.</span>
+                                {% endif %}
+                            </form>
+                        {% endif %}
+                        <details class="danger-zone">
+                            <summary>Retirer l'accès…</summary>
+                            <form method="post" action="{% url 'accounts:members' %}">
+                                {% csrf_token %}
+                                <input type="hidden" name="action" value="remove">
+                                <input type="hidden" name="member" value="{{ card.membership.pk }}">
+                                <p>
+                                    {{ card.name }} ne pourra plus se connecter, et une page déjà ouverte sur son téléphone
+                                    revient à la connexion. Ce qui a été enregistré (factures, inventaires, consignes) reste.
+                                </p>
+                                <button class="btn btn-danger" type="submit">Oui, retirer l'accès</button>
+                            </form>
+                        </details>
+                    </div>
+                </article>
+            {% empty %}
+                <div class="empty-state">
+                    <p>Aucun employé n'a encore d'accès : invitez le premier avec le <a href="#inviter">formulaire ci-dessus</a>.</p>
+                </div>
+            {% endfor %}
+        </section>
+
+    {% endif %}
+{% endblock %}

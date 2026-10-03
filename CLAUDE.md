@@ -1758,8 +1758,9 @@ pour les consignes »). A third choice, the first of « Tickets et factures »:
 a camera input (`capture="environment"`) posting as `files` like the other
 two, inside a `[data-photos]` box set up by `static/js/photos.js` - the
 photo picking Consignes had in returnables.js, moved out and shared
-(purchases.html calls `MarginMatePhotos.setUp(form)` on DOMContentLoaded:
-the script is deferred, the page's inline one is not). After each shot the
+(`static/js/receipt_camera.js` calls `MarginMatePhotos.setUp(form)`, both
+deferred, photos.js first - shared since 02/10/2026 with « Ajouter des
+factures », which was purchases.html's inline script). After each shot the
 filled input moves into the box's hidden store, still in the form, and a
 fresh one takes its place, with a preview and « Retirer ». « Des fichiers »
 and « Un dossier entier » are no photo slots: native inputs, as before.
@@ -1814,7 +1815,7 @@ and « Un dossier entier » are no photo slots: native inputs, as before.
   own, and none of the above runs there: it has no `data-max-bytes`).
 - **The busy label**: while a shot waits, « Importer » sends as « Envoi des
   photos… gardez la page ouverte » (Consignes' words), else « Envoi… ».
-- **A shot is not lost without a word** (purchases.html): leaving the page
+- **A shot is not lost without a word** (receipt_camera.js): leaving the page
   with one waiting asks first (`beforeunload`, as the timesheet's grid; an
   Achats tab is an htmx swap and keeps them), and how many wait is noted
   for the TAB (`sessionStorage`, `achats:pending-photos`, kept at logout:
@@ -2734,11 +2735,14 @@ auditors and their skeptics, 25 confirmed findings - each rule below is one):
   was saved. Behind it: the page; every POST saving or testing
   a WEBSITE source (`invoices/views.py`, owner too); every « Données » POST
   that imports, stages or clears (`transfer/views.py _refused`, owner too;
-  export stays open); and the whole Django admin but its login and logout
+  the export stays open - to the owner: an employee opens no page of
+  « Données », « Employees' access » below); « Accès des employés » on GET
+  and POST (`accounts/members.py`); and the whole Django admin but its login and logout
   (`MarginMateAdminSite.admin_view`) - from the admin a superuser's session
   switched a repointed portal on. `InvoiceTypeAdmin` makes a portal's
   channel and « actif » read-only. A new membership in the admin starts as
-  MEMBER (the model's default stays OWNER: no migration). **The test
+  MEMBER (the model's default stays OWNER: no migration) - an employee who
+  opens NO page until his boxes are ticked (« Employees' access »). **The test
   client's implicit first login writes a confirmation** (`tests.runner`),
   an explicit `force_login`/`login` does not: `confirm_password(client,
   user)`, `forget_the_confirmation(client)`, `TenantClient(confirms_password=False)`.
@@ -6839,6 +6843,98 @@ a scratch run broke each one in memory and saw its test fail):
   follow the highest version REMAINING: the month's only version deleted
   and the month sent again is a version 1 again, with a new document number -
   the uuid is what the stamps and the tombstone name.
+
+### Employees' access (`accounts/access.py`, `accounts/members.py`, « Accès des employés »)
+
+The owner, 02/10/2026: « séparer les opérations employés et employeur … choisir depuis la page
+employeur à quelles pages l'employé peut avoir accès ». His answers: the employee gets an
+INVITATION LINK he sends himself (SMS, WhatsApp) and chooses his own password; access is set PER
+EMPLOYEE; « Ajouter des factures » is a right apart from « Factures : tout consulter ». The design
+went through three independent reviews (security, conventions, UX) before code; what they found is
+below, each with its test.
+
+**Roles.** `Membership.role` OWNER opens everything, as before. MEMBER (« Employé ») opens the areas
+of `Membership.pages` (accounts 0003; the existing MEMBER rows were given every area: they opened
+every page). An AREA (`access.AREAS`, keys stored, never renamed) is one box the owner ticks:
+`invoices_add`, `stock_takes`, `returnables` (ticked for a new employee, `DEFAULT_AREAS`),
+`invoices`, `stock_gaps`, `products`, `recipes`, `bank`, `margins`, `staff`. Each help says what the
+area shows that an owner may not want shown (purchase prices, the invoices' files of « Banque »).
+
+**The gate, deny by default** (`AccessMiddleware.process_view`, after MessageMiddleware). Every
+route is named through its app (`APP_AREAS`) or itself (`VIEW_AREAS`); a route named nowhere is the
+owner's, and `accounts/tests/test_access.py` fails on an app missing from `APP_AREAS` - classify a
+new route on purpose. The membership comes from the query TenantMiddleware already made
+(`membership_of`): a request still costs 3 accounts queries (`test_middleware`). Public views and
+the admin pass (the admin has its own gate); a logged-in request with no `request.access` on a
+non-public page is refused (fails closed). Refused: `accounts/refused.html` inside base.html (his
+links on top, « Page non accessible »), htmx 403 + `HX-Redirect` to his home (a poll refused bare
+asked every second); « / » - the login's landing, the brand, « Revenir à l'accueil » - redirects to
+`Access.home_url` (« / » itself for one given « Produits & charges », the area it opens; else his
+first area's page in the order of `AREAS`; « Aucune page ouverte » with none).
+- **Owner only inside the areas** (each a review finding): the sources of invoices
+  (`invoice_type_create/update`: a mailbox source's « Tester » lists every sender and subject it
+  matches); the slips' formats and types (`returnables:format_*`, `type_*`: a format's start motif
+  decides which PDF Achats files as a slip - an employee could make invoices vanish); the
+  timesheets' signatures (`staff:signature_*`, `month_reopen`: an employee given « Personnel »
+  countersigned as his employer); deleting a stock take (it froze the stock's value at its date);
+  « Données », « Identifiants », « Accès des employés ».
+- **A stored file by the folder it RESOLVES to** (`areas_of_file`): `/fichiers/` serves any file of
+  the media root, so « consignes/../invoices/… » and « consignes\..\invoices\… » (the server's
+  separator) are invoices, a name with « : », absolute or climbing out is the owner's. A plain
+  `startswith` let a Consignes employee read every invoice PDF (security review, blocker).
+- **What a route alone cannot say is decided in the view**, with `access_of(request)`: a gather
+  (`invoices:gather*` opens to `returnables` for « Récupérer les bons »: such a login posts slip
+  sources only, follows a GATHER of slips only and stops one only once its sources say so; a
+  source's « Tester » job - a mailbox's senders and subjects - is the owner's alone, whoever asks;
+  a card drawn before its gather named the bar's invoices ends its poll with a 286; Consignes
+  draws another's card neither running nor ended, and holds the button with a stand-in); an
+  import by who sent it (below). « Classer comme » on a slip's line writes a type's motifs: the
+  owner's, like the types.
+- **Hiding a link is never the boundary**: `can` (context processor `accounts.access.context`,
+  no query) draws the links he may follow - the topbar (« Factures » to « Ajouter des factures »
+  when that is all he may do there, no badge; his name before the bar's on a shared phone; the
+  owner's bar byte-identical), the stock take, Consignes, Personnel and Données pages. A request
+  through no membership (anonymous, public, built by hand) draws everything (`FULL`). The badges'
+  counts are skipped for a closed area.
+- **Prices**: an inventory shows values (columns, total, the live price of a line,
+  `value_stock_take_line`) only to whoever is shown what articles cost (`sees_costs`: owner, or an
+  area of `COST_AREAS`). A barman counting bottles learnt every purchase price otherwise - the
+  margin - from a box ticked by default.
+
+**« Ajouter des factures »** (`invoices:invoice_add`): the import's form on a page of its own
+(`_receipt_upload_form.html`, shared with the card; « Un dossier entier » left to Factures; the
+camera script `static/js/receipt_camera.js`, shared). Every import records who sent it
+(`ReceiptBatch.sent_by`, the username - invoices 0036; not exported by « Données »). A login that
+may only add follows its OWN imports (status, cancel, resume: another's is a 404 - their numbers
+follow each other; `?lot=` naming another's draws the add page with no import), never reaches `receipt_batch` (the whole workspace), and an invalid
+upload draws the add page again - the review found it drew every document with its totals. Its
+status says « Reçu » / « Déjà envoyé », no « Vérifier », no shop to choose, no log, and
+`batch_status_context(add_only=True)` reads no shop list on its poll. The owner's « Derniers
+imports » names who sent each (« Envoyé par », only when one is another login's).
+
+**Inviting** (`/acces-employes/`, the owner's, linked from Personnel and Données, lights
+Personnel): one accounts transaction makes the login (username = address, first_name = the name,
+NO usable password), the membership and a `MemberInvitation` (only `hash_secret(token)`, 7 days).
+The link is shown ONCE, in the answer that made it - not in the session either (review: the raw
+token sat in `django_session`). Built with `staff.signature_requests.absolute_link` (SITE_URL), and
+said unusable on a phone when it names this PC. Every request of the page asks the owner's password
+again (sudo on GET too: asked at the POST, it threw the typed form away). An address with a login
+elsewhere is refused - two logins per address name nobody at login - which tells the owner the
+address has an account: counted per espace and day in the cache (`TAKEN_ADDRESSES_PER_DAY`, then
+the form stops checking) and logged, unlike the public signup (ANON-5), which says nothing. An
+address held by an invitation expired unused is freed first (`users.free_the_address`, the signup
+too). « Nouveau lien »: a new hash kills the old link; for an ACTIVE employee it is the forgotten
+password's way back (the old one works until the link is used). Never for a login that is staff,
+superuser or in another espace (`_may_reset`, checked again at `accept`): the owner of bar A must
+not choose the password of a login that owns bar B. Removing deletes the login (its sessions read
+as nobody's) unless staff/superuser/elsewhere - then the membership only.
+
+**« Votre accès »** (`/invitation/<token>/`, public, `PUBLIC_VIEWS`): French, never_cache,
+X-Robots-Tag noindex, the token redacted from the logs like a signing link (`config/logs.py`). Django's
+validators; the invitation used up by a DELETE only the first request passes; then `login()` (the
+session pinned to his espace) and his first page, the message saying where to come back. A dead link
+says « déjà utilisé ? Se connecter ». A login lives in ONE espace today: an employee of two bars needs
+two addresses.
 
 ### « Consignes » (`returnables/`, `/consignes/`): the empties handed back
 

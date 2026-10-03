@@ -71,16 +71,28 @@ class Tenant(models.Model):
 
 class Membership(models.Model):
     """A login's place in a tenant. One per user today (the middleware
-    takes the first); several later, without moving any data."""
+    takes the first); several later, without moving any data.
+
+    An OWNER opens every page of the espace; a MEMBER - an employee - only
+    the areas `pages` lists (accounts/access.py), which the owner ticks on
+    « Accès des employés »."""
 
     class Role(models.TextChoices):
         OWNER = "owner", "Propriétaire"
-        MEMBER = "member", "Membre"
+        MEMBER = "member", "Employé"
 
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="memberships")
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="memberships")
     role = models.CharField("rôle", max_length=10, choices=Role.choices, default=Role.OWNER)
     created_at = models.DateTimeField("depuis le", default=timezone.now)
+    #: The keys of accounts.access.AREAS a MEMBER opens (an owner's are not
+    #: read). A key no area has any more is ignored.
+    pages = models.JSONField(
+        "pages ouvertes",
+        default=list,
+        blank=True,
+        help_text="Pour un employé : les pages que le propriétaire lui ouvre (accounts/access.py).",
+    )
 
     class Meta:
         verbose_name = "membre"
@@ -133,6 +145,31 @@ class Invitation(models.Model):
     def is_usable(self, now=None) -> bool:
         now = now or timezone.now()
         return self.used_at is None and (self.expires_at is None or now < self.expires_at)
+
+
+class MemberInvitation(models.Model):
+    """The link an employee opens once to choose his password
+    (/invitation/<token>/, accounts/members.py): his login and membership
+    were made by the owner with it, the login with no usable password.
+
+    Only the token's hash is kept (`hash_secret`): the link is shown to the
+    owner once, when it is made. « Nouveau lien » writes another hash, which
+    kills the old link; choosing the password deletes the row."""
+
+    membership = models.OneToOneField(Membership, on_delete=models.CASCADE, related_name="invitation")
+    token_hash = models.CharField(max_length=64, unique=True)
+    created_at = models.DateTimeField("créée le", default=timezone.now)
+    expires_at = models.DateTimeField("expire le")
+
+    class Meta:
+        verbose_name = "invitation d'employé"
+        verbose_name_plural = "invitations d'employés"
+
+    def __str__(self):
+        return f"Invitation de {self.membership.user} - {self.membership.tenant}"
+
+    def is_usable(self, now=None) -> bool:
+        return (now or timezone.now()) < self.expires_at
 
 
 class SigningLink(models.Model):

@@ -76,7 +76,7 @@ them - without JavaScript the field is typed.
             {% for error in field.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
         </div>
     {% empty %}
-        <p class="muted">Aucun type de consigne actif : ajoutez-en un sous <a href="{% url 'returnables:type_list' %}">Types de consigne</a>.</p>
+        <p class="muted">Aucun type de consigne actif : {% if can.owner %}ajoutez-en un sous <a href="{% url 'returnables:type_list' %}">Types de consigne</a>{% else %}votre employeur doit en ajouter un{% endif %}.</p>
     {% endfor %}
 </fieldset>
 

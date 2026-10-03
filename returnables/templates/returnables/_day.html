@@ -57,7 +57,7 @@ invoice_check.py as plain text - escaped here, never |safe.
     <p class="muted">Précisez « Repris par » pour comparer la reprise aux bons.</p>
 {% elif day.status == "no_format" %}
     <p class="muted">
-        {{ day.supplier.name }} n'a pas de format de bon : <a href="{% url 'returnables:format_create' %}">créez-le</a>.
+        {{ day.supplier.name }} n'a pas de format de bon{% if can.owner %} : <a href="{% url 'returnables:format_create' %}">créez-le</a>{% endif %}.
     </p>
 {% elif day.status == "waiting" %}
     <p class="muted">Pas encore de bon de {{ day.supplier.name }} pour le {{ day.date|date:"d/m/Y" }}.</p>

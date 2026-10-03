@@ -242,7 +242,7 @@
             <ul>
                 {% for invoice_type in invoice_types %}
                     <li>
-                        <a href="{% url 'invoices:invoice_type_update' invoice_type.pk %}">{{ invoice_type.name }}</a>
+                        {% if can.owner %}<a href="{% url 'invoices:invoice_type_update' invoice_type.pk %}">{{ invoice_type.name }}</a>{% else %}{{ invoice_type.name }}{% endif %}
                         <span class="muted">· {{ invoice_type.channel }}{% if not invoice_type.is_active %} · inactive{% endif %}</span>
                     </li>
                 {% endfor %}
@@ -267,7 +267,7 @@
             {% endcomment %}
             <p class="muted">{{ sources_refused }}</p>
         {% else %}
-            <p><a class="btn btn-small btn-secondary" href="{% url 'invoices:invoice_type_create' %}?fournisseur={{ supplier.pk }}&amp;retour={{ supplier_page|urlencode }}">+ Nouvelle source pour {{ supplier.name }}</a></p>
+            {% if can.owner %}<p><a class="btn btn-small btn-secondary" href="{% url 'invoices:invoice_type_create' %}?fournisseur={{ supplier.pk }}&amp;retour={{ supplier_page|urlencode }}">+ Nouvelle source pour {{ supplier.name }}</a></p>{% endif %}
         {% endif %}
     </section>
 

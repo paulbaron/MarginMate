@@ -9,6 +9,12 @@
                 Une fiche de temps par salarié et par mois, tirée de sa semaine type : corrigez les jours qui diffèrent.
             </p>
         </div>
+        {% comment %}The owner's only: an employee given « Personnel » does not choose who opens what.{% endcomment %}
+        {% if can.owner %}
+            <div class="actions">
+                <a class="btn btn-secondary" href="{% url 'accounts:members' %}">Accès des employés au site</a>
+            </div>
+        {% endif %}
     </div>
 
     {% if rows %}

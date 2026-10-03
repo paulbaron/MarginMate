@@ -17,14 +17,19 @@ What is not done here, on purpose:
 - an invitation is never added here - its code would never be shown
   (`manage.py create_invitation`); one can be deleted, which revokes it;
 - a membership is never made an owner by default here (`MembershipAdmin`):
-  an owner reaches the espace's third-party passwords.
+  an owner reaches the espace's third-party passwords. A membership added
+  here is an employee who opens no page until its boxes are ticked
+  (accounts/access.py) - the owner does it from « Accès des employés »;
+- an employee's invitation is never added nor changed here: its link is
+  shown once, to the owner who makes it (accounts/members.py).
 """
 
 from django import forms
 from django.contrib import admin, messages
 from django.core.exceptions import ValidationError
 
-from .models import Invitation, Membership, Tenant
+from .access import AREAS
+from .models import Invitation, MemberInvitation, Membership, Tenant
 
 
 class TenantAdminForm(forms.ModelForm):
@@ -70,8 +75,33 @@ class TenantAdmin(admin.ModelAdmin):
 
 #: What being the espace's owner gives, under the role field: the
 #: « Identifiants » page and a customer portal's source are the owner's
-#: alone (accounts/credentials.py, invoices/views.py).
-ROLE_HELP = "Propriétaire : voit et modifie les identifiants des comptes (boîte mail, Metro, caisse, espaces clients)."
+#: alone (accounts/credentials.py, invoices/views.py), and an employee
+#: opens only the pages ticked below (accounts/access.py).
+ROLE_HELP = (
+    "Propriétaire : voit et modifie les identifiants des comptes (boîte mail, Metro, caisse, espaces clients) et "
+    "ouvre toutes les pages. Employé : ouvre seulement les pages cochées ci-dessous."
+)
+
+
+class MembershipAdminForm(forms.ModelForm):
+    """The pages as the boxes of « Accès des employés », not a JSON text:
+    emptied, the text was a null the column refuses."""
+
+    pages = forms.MultipleChoiceField(
+        label="Pages ouvertes",
+        choices=[(area.key, area.label) for area in AREAS],
+        widget=forms.CheckboxSelectMultiple,
+        required=False,
+        help_text="Pour un employé ; un propriétaire ouvre toutes les pages.",
+    )
+
+    class Meta:
+        model = Membership
+        fields = "__all__"
+
+    def clean_pages(self):
+        chosen = set(self.cleaned_data["pages"])
+        return [area.key for area in AREAS if area.key in chosen]
 
 
 @admin.register(Membership)
@@ -82,10 +112,18 @@ class MembershipAdmin(admin.ModelAdmin):
     password the espace keeps. Making a second owner of one espace is
     allowed - a bar may have two managers - and said."""
 
-    list_display = ("user", "tenant", "role", "created_at")
+    form = MembershipAdminForm
+    list_display = ("user", "tenant", "role", "opened_pages", "created_at")
     list_filter = ("role",)
     search_fields = ("user__username", "user__email", "tenant__name")
     list_select_related = ("user", "tenant")
+
+    @admin.display(description="pages ouvertes")
+    def opened_pages(self, obj):
+        if obj.role == Membership.Role.OWNER:
+            return "toutes"
+        labels = [area.label for area in AREAS if area.key in (obj.pages or [])]
+        return ", ".join(labels) or "aucune"
 
     def get_changeform_initial_data(self, request):
         initial = super().get_changeform_initial_data(request)
@@ -112,8 +150,24 @@ class MembershipAdmin(admin.ModelAdmin):
                 request,
                 f"L'espace « {obj.tenant} » a maintenant {len(owners)} propriétaires ({named}) : chacun voit et "
                 "modifie les identifiants des comptes et les espaces clients. Si ce n'est pas voulu, passez ce "
-                "membre en « Membre ».",
+                "membre en « Employé ».",
             )
+
+
+@admin.register(MemberInvitation)
+class MemberInvitationAdmin(admin.ModelAdmin):
+    """An employee's invitation, read only: its link was shown once, to
+    the owner who made it. Deleting one revokes the link."""
+
+    list_display = ("membership", "created_at", "expires_at")
+    readonly_fields = ("membership", "token_hash", "created_at", "expires_at")
+    list_select_related = ("membership__user", "membership__tenant")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(Invitation)

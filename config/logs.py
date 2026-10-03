@@ -27,7 +27,8 @@ left no trace anywhere. Here:
   server that logs nothing leaves no file anywhere;
 * every record, on both, goes through `SigningLinkFilter`: the employee's
   signing link is a secret in the address (/personnel/signer/<token>/…) -
-  for 14 days it opens the month and its PDF - so a log keeps the first 4
+  for 14 days it opens the month and its PDF - and so is an employee's
+  invitation (/invitation/<token>/), so a log keeps the first 4
   characters of the token only. Waitress writes no access log (nothing in
   `manage.py serve` turns one on), so no other line of this server holds
   the path; Cloudflare's logs are Cloudflare's.
@@ -62,8 +63,10 @@ def is_the_server(argv) -> bool:
 
 
 #: The signing link's token, after /personnel/signer/ - or its encoded form
-#: in a query string. A token is URL-safe base64: never a « % ».
-SIGNING_LINK = re.compile(r'((?:/|%2[fF])personnel(?:/|%2[fF])signer(?:/|%2[fF]))([^/%\s?#&"\'<>]+)')
+#: in a query string - and an employee's invitation's, after /invitation/
+#: (accounts/members.py: for 7 days it lets whoever holds it choose the
+#: employee's password). A token is URL-safe base64: never a « % ».
+SIGNING_LINK = re.compile(r'((?:/|%2[fF])(?:personnel(?:/|%2[fF])signer|invitation)(?:/|%2[fF]))([^/%\s?#&"\'<>]+)')
 #: How much of a token a log keeps: enough to tell two links apart when
 #: reading a log, nothing to open one with.
 KEPT = 4

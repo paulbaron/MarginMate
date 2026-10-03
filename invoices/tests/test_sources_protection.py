@@ -15,7 +15,10 @@ at once, type what is kept under those names into that page. So:
 - the names derived from the site (`forms.portal_env_names`) carry a digest
   of the exact host, so two sites whose names fold alike never share one;
 - only the espace's owner, his MarginMate password confirmed
-  (accounts/sudo.py), saves or tests one.
+  (accounts/sudo.py), saves or tests one - and an employee never opens a
+  source's form at all, a mailbox's included, even one given « Factures »
+  (accounts/access.py: the gate refuses it before the view runs; a mailbox
+  search lists every sender and subject it matches).
 
 The form and the « Données » import both run `WebsiteInvoiceSource.clean`
 (the import's side: transfer/tests/test_sources_section.py).
@@ -33,8 +36,7 @@ from django.urls import reverse
 from django.utils.html import escape
 
 from accounts import sudo
-from accounts.models import Membership
-from accounts.tenancy import current_tenant
+from accounts.access import REFUSED, REFUSED_POST
 from invoices.forms import WebsiteInvoiceSourceForm, portal_env_names
 from invoices.models import (
     ENV_NAME_RE,
@@ -44,12 +46,13 @@ from invoices.models import (
     EmailInvoiceSource,
     InvoiceType,
     ScrapeJob,
+    Supplier,
     WebsiteInvoiceSource,
     app_env_name,
 )
 from invoices.views import PORTAL_OWNER_ONLY
 from tests.factories import make_invoice_type, make_supplier
-from tests.runner import test_user
+from tests.runner import employee_of_the_test_tenant, test_user
 from tests.support import NoNetworkTestCase
 
 WEBSITE = InvoiceType.SourceKind.WEBSITE
@@ -314,8 +317,11 @@ class DerivedNameTests(SimpleTestCase):
 
 class OwnerOnlyTests(NoNetworkTestCase):
     """Saving or testing a portal's source decides where a stored password
-    is typed: the espace's owner's, his MarginMate password confirmed. The
-    page itself shows no secret, and a mailbox source is not held back."""
+    is typed: the espace's owner's, his MarginMate password confirmed. A
+    source's form is the owner's whatever its channel: an employee given
+    « Factures » is refused it by the gate (accounts/access.py,
+    OWNER_ONLY) - the page, a portal's or a mailbox's, and every post of it,
+    his password confirmed or not - and keeps the list of the sources."""
 
     def setUp(self):
         super().setUp()
@@ -326,8 +332,15 @@ class OwnerOnlyTests(NoNetworkTestCase):
     def confirm(self, seconds=600):
         confirm_password(self.client, self.user, seconds)
 
-    def make_a_member(self):
-        Membership.objects.filter(user=self.user, tenant=current_tenant()).update(role=Membership.Role.MEMBER)
+    def log_in_a_member(self, confirmed=True):
+        """An employee given « Factures » (every page of the area but the
+        sources' form), logged in on this client - his own MarginMate
+        password confirmed, unless `confirmed` is False."""
+        member = employee_of_the_test_tenant("comptoir@example.invalid", ["invoices"], name="Lina")
+        self.client.force_login(member)
+        if confirmed:
+            confirm_password(self.client, member)
+        return member
 
     def post_portal(self, url=CREATE, **fields):
         data = {
@@ -350,73 +363,156 @@ class OwnerOnlyTests(NoNetworkTestCase):
         thread.assert_not_called()
         self.assertFalse(ScrapeJob.objects.exists())
 
-    # -- a member, his password confirmed or not ------------------------------------
+    def assertRefusedByTheGate(self, response, posted=True):
+        """The gate's « Page non accessible », never the view's own refusal:
+        the form was not drawn, nor its post read."""
+        self.assertContains(response, escape(REFUSED), status_code=403)
+        if posted:
+            self.assertContains(response, escape(REFUSED_POST), status_code=403)
+        self.assertNotContains(response, escape(PORTAL_OWNER_ONLY), status_code=403)
+
+    # -- a member given « Factures », his password confirmed or not ---------------------
+    def test_the_sources_tab_draws_him_neither_identifiants_nor_a_new_source(self):
+        """Both lead to the owner's pages (« Page non accessible »); the
+        owner's tab keeps them."""
+        self.log_in_a_member()
+        page = self.client.get(reverse("invoices:invoice_type_list"))
+        self.assertEqual(page.status_code, 200)
+        self.assertNotContains(page, reverse("accounts:credentials"))
+        self.assertNotContains(page, reverse("invoices:invoice_type_create"))
+        self.client.force_login(self.user)
+        page = self.client.get(reverse("invoices:invoice_type_list"))
+        self.assertContains(page, reverse("accounts:credentials"))
+        self.assertContains(page, reverse("invoices:invoice_type_create"))
+
+    def test_a_supplier_he_creates_is_filed_by_import_its_source_left_to_the_owner(self):
+        """« Ses factures arrivent » leads to the source form, the owner's:
+        not offered to him, and a post naming a mailbox lands on the
+        supplier's page with a sentence, never on « Page non accessible »."""
+        self.log_in_a_member()
+        page = self.client.get(reverse("invoices:supplier_create"))
+        self.assertNotContains(page, 'value="EMAIL"')
+        self.assertNotContains(page, 'value="WEBSITE"')
+        self.assertContains(page, '<input type="hidden" name="arrivee" value="import">', html=True)
+        response = self.client.post(
+            reverse("invoices:supplier_create"),
+            {"name": "Cave Exemple", "nature": "produits", "header": "", "arrivee": "EMAIL"},
+            follow=True,
+        )
+        supplier = Supplier.objects.get(name="Cave Exemple")
+        self.assertEqual(response.redirect_chain[-1][0], reverse("invoices:supplier_detail", args=[supplier.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(
+            "Sa source (boîte mail ou espace client) est créée par votre employeur.",
+            [str(message) for message in response.context["messages"]],
+        )
+        # The owner still goes on to the source's form.
+        self.client.force_login(self.user)
+        confirm_password(self.client, self.user)
+        created = self.client.post(
+            reverse("invoices:supplier_create"),
+            {"name": "Cave Exemple 2", "nature": "produits", "header": "", "arrivee": "EMAIL"},
+        )
+        self.assertTrue(created["Location"].startswith(reverse("invoices:invoice_type_create")))
+
     def test_a_member_cannot_save_a_new_portal(self):
-        self.make_a_member()
-        self.confirm()
-        response, thread = self.post_portal()
-        self.assertContains(response, escape(PORTAL_OWNER_ONLY), status_code=403)
+        member = employee_of_the_test_tenant("comptoir@example.invalid", ["invoices"], name="Lina")
+        for confirmed in (False, True):
+            with self.subTest(confirmed=confirmed):
+                self.client.force_login(member)
+                if confirmed:
+                    confirm_password(self.client, member)
+                response, thread = self.post_portal()
+                self.assertRefusedByTheGate(response)
+                self.assertNothingStarted(thread)
+                # Refused, never sent to confirm a password he has no use for.
+                self.assertNotIn("Location", response)
         self.assertFalse(InvoiceType.objects.filter(name="Box Exemple - Factures").exists())
         self.assertFalse(WebsiteInvoiceSource.objects.exists())
-        self.assertNothingStarted(thread)
 
     def test_a_member_cannot_test_a_portal(self):
-        self.make_a_member()
-        self.confirm()
+        self.log_in_a_member()
         response, thread = self.post_portal(action="test", test_start_date="2026-04-01", test_end_date="2026-05-31")
-        self.assertContains(response, escape(PORTAL_OWNER_ONLY), status_code=403)
+        self.assertRefusedByTheGate(response)
         self.assertNothingStarted(thread)
         self.assertFalse(WebsiteInvoiceSource.objects.exists())
 
     def test_a_member_cannot_change_a_saved_portal(self):
         box = portal("Box Exemple - Factures")
-        self.make_a_member()
-        self.confirm()
+        self.log_in_a_member()
         url = reverse("invoices:invoice_type_update", args=[box.invoice_type_id])
         for action in ("save", "test"):
             with self.subTest(action=action):
                 response, thread = self.post_portal(url, action=action, **{"site-login_url": WATER_URL})
-                self.assertEqual(response.status_code, 403)
+                self.assertRefusedByTheGate(response)
                 self.assertNothingStarted(thread)
+                # The refusal names nothing of the source, not even its site.
+                self.assertNotContains(response, BOX_URL, status_code=403)
         box.refresh_from_db()
         self.assertEqual(box.login_url, BOX_URL)
-        # The page drawn back is the source as saved, beside the reason.
-        self.assertContains(response, f'value="{BOX_URL}"', status_code=403)
 
     def test_a_member_cannot_turn_a_mailbox_source_into_a_portal(self):
         mailbox = make_invoice_type(supplier=self.supplier, name="Box Exemple - Factures", sender_pattern="box@")
-        self.make_a_member()
-        self.confirm()
+        self.log_in_a_member()
         response, thread = self.post_portal(reverse("invoices:invoice_type_update", args=[mailbox.pk]))
-        self.assertEqual(response.status_code, 403)
+        self.assertRefusedByTheGate(response)
         mailbox.refresh_from_db()
         self.assertEqual(mailbox.source_kind, InvoiceType.SourceKind.EMAIL)
         self.assertFalse(WebsiteInvoiceSource.objects.exists())
         self.assertNothingStarted(thread)
 
-    def test_a_member_still_sees_the_page_and_keeps_the_mailbox_sources(self):
-        """The mailbox's server and account are fixed on « Identifiants »:
-        a mailbox source's patterns send no password anywhere new."""
+    def test_a_member_opens_no_source_form_a_portals_or_a_mailboxs(self):
+        """A mailbox source's « Tester » lists every sender and subject its
+        patterns match in the owner's mailbox: its page is the owner's as
+        much as a portal's."""
         box = portal("Box Exemple - Factures")
-        self.make_a_member()
-        page = self.client.get(reverse("invoices:invoice_type_update", args=[box.invoice_type_id]))
-        self.assertEqual(page.status_code, 200)
-        self.assertContains(page, f'value="{BOX_URL}"')
-        response = self.client.post(
+        mailbox = make_invoice_type(supplier=self.supplier, name="Grossiste - Factures", sender_pattern="grossiste@")
+        self.log_in_a_member()
+        for url in (
             CREATE,
-            {
-                "name": "Grossiste - Factures",
-                "supplier": self.supplier.pk,
-                "source_kind": "EMAIL",
-                "parser_key": "",
-                "is_active": "on",
-                "action": "save",
-                "sender_pattern": "factures@",
-                "attachment_pattern": r"(?i)\.pdf$",
-            },
-        )
-        self.assertRedirects(response, reverse("invoices:invoice_type_list"))
-        self.assertTrue(EmailInvoiceSource.objects.filter(invoice_type__name="Grossiste - Factures").exists())
+            reverse("invoices:invoice_type_update", args=[box.invoice_type_id]),
+            reverse("invoices:invoice_type_update", args=[mailbox.pk]),
+        ):
+            with self.subTest(url=url):
+                page = self.client.get(url)
+                self.assertRefusedByTheGate(page, posted=False)
+                self.assertNotContains(page, BOX_URL, status_code=403)
+                self.assertNotContains(page, "grossiste@", status_code=403)
+
+    def test_a_member_saves_or_tests_no_mailbox_source(self):
+        mailbox = make_invoice_type(supplier=self.supplier, name="Grossiste - Factures", sender_pattern="grossiste@")
+        self.log_in_a_member()
+        mailbox_fields = {
+            "name": "Grossiste - Factures",
+            "supplier": self.supplier.pk,
+            "source_kind": "EMAIL",
+            "parser_key": "",
+            "is_active": "on",
+            "sender_pattern": "factures@",
+            "attachment_pattern": r"(?i)\.pdf$",
+        }
+        for url, action in (
+            (CREATE, "save"),
+            (CREATE, "test"),
+            (reverse("invoices:invoice_type_update", args=[mailbox.pk]), "save"),
+            (reverse("invoices:invoice_type_update", args=[mailbox.pk]), "test"),
+        ):
+            with self.subTest(url=url, action=action):
+                with mock.patch("invoices.views.threading.Thread") as thread:
+                    response = self.client.post(url, {**mailbox_fields, "action": action})
+                self.assertRefusedByTheGate(response)
+                self.assertNothingStarted(thread)
+        self.assertEqual(InvoiceType.objects.filter(name="Grossiste - Factures").count(), 1)
+        self.assertEqual(EmailInvoiceSource.objects.get(invoice_type=mailbox).sender_pattern, "grossiste@")
+
+    def test_a_member_still_reaches_the_list_of_the_sources(self):
+        """« Factures » opens the Sources tab; only the form behind each
+        source is the owner's."""
+        portal("Box Exemple - Factures")
+        self.log_in_a_member()
+        page = self.client.get(reverse("invoices:invoice_type_list"))
+        self.assertEqual(page.status_code, 200)
+        self.assertContains(page, "Box Exemple - Factures")
 
     # -- the owner, his password not confirmed --------------------------------------
     def test_the_owner_is_asked_his_password_before_saving(self):

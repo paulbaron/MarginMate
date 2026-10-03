@@ -24,7 +24,10 @@ staged one, or previews or confirms a clear, requires
 `accounts.tenancy.is_owner` (a member: 403, `OWNER_ONLY`) and
 `accounts.sudo.confirmed` (else the confirmation page, back to the tab it
 was posted from - what was posted is not replayed), and keeps the
-confirmation alive. The export and every tab stay open.
+confirmation alive. The export and every tab stay open - to the owner:
+since 02/10/2026 an employee opens no page of « Données » at all
+(accounts/access.py names no area for it), so `_refused` is the owner's
+password check, and its member branch the second lock behind the gate.
 """
 
 from __future__ import annotations
@@ -364,9 +367,11 @@ def _render(request, tab: str, *, status: int = 200, **context):
 def _refused(request, page_url: str, refused_page):
     """None when this POST may import or clear: the espace's owner, his
     MarginMate password confirmed - the confirmation is then kept alive.
-    Otherwise the answer: `refused_page()` (the tab, drawn again with
-    `OWNER_ONLY`, 403) for a member, the confirmation page coming back to
-    `page_url` (the tab it was posted from) for an owner not confirmed."""
+    Otherwise the answer: the confirmation page coming back to `page_url`
+    (the tab it was posted from) for an owner not confirmed; and for a
+    member `refused_page()` (the tab, drawn again with `OWNER_ONLY`, 403) -
+    the second lock: the gate (accounts/access.py) refuses him every page
+    of « Données » before this runs."""
     if not is_owner(request):
         messages.error(request, OWNER_ONLY)
         return refused_page()

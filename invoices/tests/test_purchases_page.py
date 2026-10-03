@@ -15,8 +15,10 @@ import json
 from datetime import date, timedelta
 from decimal import Decimal
 from html.parser import HTMLParser
+from pathlib import Path
 from unittest import mock
 
+from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
@@ -489,7 +491,13 @@ class CameraOnTheImportCardTests(TestCase):
                 ]
                 self.assertIn("defer", script)
                 self.assertIn("?v=", script["src"])
-                self.assertIn("MarginMatePhotos.setUp(form)", html)
+                # receipt_camera.js sets the form up, photos.js loaded first.
+                sources = [attrs.get("src", "") for tag, attrs, _around in elements(html) if tag == "script"]
+                (camera,) = [index for index, src in enumerate(sources) if "js/receipt_camera.js" in src]
+                (photos,) = [index for index, src in enumerate(sources) if "js/photos.js" in src]
+                self.assertLess(photos, camera)
+        source = (Path(settings.BASE_DIR) / "static/js/receipt_camera.js").read_text(encoding="utf-8")
+        self.assertIn("MarginMatePhotos.setUp(form)", source)
 
     def test_the_cap_stops_short_of_cloudflare_s_100_mb(self):
         """90 MiB: under the free plan's 100 MB however it counts them, with

@@ -2744,6 +2744,22 @@ details.format-group > summary { cursor: pointer; }
 .type-card.is-inactive h2 { color: var(--muted); }
 .position-input { width: 6rem; }
 
+/* « Accès des employés » (accounts/members.html): one card per employee,
+   his pages folded under the list of what they open; each box a whole line
+   with its help beside it, a line a finger can hit. */
+.member-card { margin-bottom: var(--s3); }
+.member-head { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--s3); }
+.member-head h3 { margin: 0; overflow-wrap: anywhere; }
+.member-head p { margin: 0; overflow-wrap: anywhere; }
+.member-pages > summary { cursor: pointer; font-weight: 500; overflow-wrap: anywhere; }
+.member-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s4); margin-top: var(--s3); }
+.member-actions form { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
+.member-actions .danger-zone { margin: 0; }
+.area-choices { display: grid; gap: var(--s2); }
+.area-choice { padding: var(--s1) 0; }
+.area-choice-label { display: block; }
+.area-choice .help { display: block; margin: 0; }
+
 /* ------------------------------------------------------------------ touch */
 
 /* A touch screen, whatever its width: a phone held sideways is wider than
@@ -2812,4 +2828,10 @@ details.format-group > summary { cursor: pointer; }
 @media (pointer: coarse) and (max-height: 600px) {
     .table-wrap { max-height: none; }
     thead th { position: static; }
+}
+
+/* « Accès des employés »: a box's whole line, and the fold, a finger's height. */
+@media (pointer: coarse) {
+    main .area-choice { min-height: 44px; align-items: center; }
+    main .member-pages > summary { min-height: 44px; display: flex; align-items: center; }
 }

@@ -54,7 +54,7 @@ from django.utils import timezone
 from . import invitations, provisioning
 from .models import Invitation, Membership
 from .router import ACCOUNTS_ALIAS
-from .users import normalize_email, users_for_email
+from .users import free_the_address, normalize_email, users_for_email
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +114,9 @@ def sign_up(*, code: str, bar_name: str, email: str, password: str, now=None):
     invitation = invitations.usable_invitation(code, now=now)
     if invitation is None:
         raise SignupRefused("code", CODE_REFUSED)
+    # An employee's invitation that expired unused holds the address with a
+    # login nobody can log in with: freed (accounts/members.py).
+    free_the_address(email, now)
     if users_for_email(email).exists():
         raise _address_taken(invitation, now)
 

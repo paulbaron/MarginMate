@@ -548,3 +548,24 @@
         }
     });
 })();
+
+/* « Partager… » (data-share="<id of the field>"): the field's link handed to
+   the phone's own share sheet (SMS, WhatsApp…) - an employee's invitation
+   (accounts/templates/accounts/members.html). Drawn hidden, and shown only
+   where the browser can share; « Copier » beside it works everywhere. */
+(function () {
+    function reveal() {
+        if (!navigator.share) return;
+        document.querySelectorAll("button[data-share][hidden]").forEach(function (button) { button.hidden = false; });
+    }
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", reveal);
+    else reveal();
+    document.addEventListener("click", function (event) {
+        var button = event.target.closest("button[data-share]");
+        if (!button || !navigator.share) return;
+        var field = document.getElementById(button.getAttribute("data-share"));
+        if (!field) return;
+        navigator.share({ title: button.getAttribute("data-share-title") || document.title, url: field.value })
+            .catch(function () { /* closed, or refused: the link is still in its field */ });
+    });
+})();

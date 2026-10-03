@@ -1,0 +1,77 @@
+{% comment %}
+The receipt import's form - « Prendre une photo », « Des fichiers », « Un dossier entier » - posting
+to invoices:receipt_upload: on « Factures »' import card (_import_card.html) and on « Ajouter des
+factures » (invoice_add.html), which posts `retour` (`upload_return`) to be drawn again
+(invoices.views.receipt_upload).
+`add_only`: the employee who may add and nothing else (accounts/access.py) - the note about the
+e-invoicing platform is the owner's business. `adding_page`: « Un dossier entier » is « Factures »'
+alone - a phone cannot pick a folder, and a folder is the PC's import.
+{% endcomment %}
+        <form method="post" action="{% url 'invoices:receipt_upload' %}" enctype="multipart/form-data" data-receipt-upload>
+            {% csrf_token %}
+            {% if upload_return %}<input type="hidden" name="retour" value="{{ upload_return }}">{% endif %}
+            {% for error in receipt_form.files.errors %}<div class="message message-error">{{ error }}</div>{% endfor %}
+            {% comment %}
+            Every input, one field: all post as "files", so a selection from
+            any of them - or all - arrives as one list (forms.MultipleFileField).
+            « Prendre une photo » is a photo slot of static/js/photos.js, as on
+            Consignes (static/js/receipt_camera.js sets the form up): after each shot its
+            input moves into the hidden [data-photo-inputs] box, still inside
+            this form, and a fresh one takes its place - so every shot posts as
+            "files" too. The box holds the post at data-max-bytes
+            (common.ONLINE_SEND_MAX_BYTES: online, a post over Cloudflare's
+            100 MB is refused before the server sees it, and its photos are
+            lost): a shot that would pass it is refused as it is taken, and
+            while a shot waits, a pick in the two other choices that would
+            pass it is emptied and « Importer » past it sends nothing. It also
+            renames each shot after the moment it was taken (data-photo-rename:
+            iOS names every one image.jpg, Android a bare number with no
+            extension). Its tile is drawn on a touch screen only
+            (marginmate.css): a desktop browser ignores `capture`, and the
+            tile would open a file dialog. The refusal and the previews sit
+            right under it, as on Consignes: under the whole grid of choices,
+            a phone drew them a screen below the tile tapped. The two other
+            choices are no photo slots: native inputs, as they always were.
+            {% endcomment %}
+            <div class="receipt-photos" data-photos data-max-bytes="{{ camera_max_bytes }}" data-photo-rename>
+                <label class="upload-choice upload-choice-camera" data-photo-slot>
+                    <span class="upload-choice-title">Prendre une photo</span>
+                    <span class="muted">Une photo par ticket ou par facture, chacune lue à part, puis « Importer ».</span>
+                    <input type="file" name="files" accept="image/*" capture="environment" data-photo-capture>
+                </label>
+                <div class="photo-inputs" data-photo-inputs hidden></div>
+                <p class="field-error" data-photo-refused role="status" aria-live="polite" hidden></p>
+                <ul class="photo-previews" data-photo-previews></ul>
+                <div class="upload-choices">
+                    <label class="upload-choice">
+                        <span class="upload-choice-title">Des fichiers</span>
+                        <span class="muted">Photos de tickets, scans, factures PDF ou XML, mélangés.</span>
+                        {# .xml: an electronic invoice (Factur-X, UBL, CII) can arrive on its own, with no PDF around it. #}
+                        <input type="file" name="files" multiple
+                               accept=".pdf,.xml,.jpg,.jpeg,.png,.webp,.tif,.tiff,.bmp,application/pdf,text/xml,application/xml,image/*">
+                    </label>
+                    {% if not adding_page %}
+                    <label class="upload-choice">
+                        <span class="upload-choice-title">Un dossier entier</span>
+                        <span class="muted">Seuls les PDF, XML et photos sont lus ; les documents déjà importés sont sautés.</span>
+                        <input type="file" name="files" webkitdirectory directory multiple>
+                    </label>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="import-actions">
+                <button class="btn" type="submit" data-busy-label="Envoi…">Importer</button>
+                {% if not add_only %}
+                <span class="muted">
+                    {% comment %}
+                    Said here too, because this is where the sentence reads
+                    as « the e-invoicing side is handled »: the invoices are
+                    read, but bringing them back from the platform is up to
+                    you. See _tab_sources.html.
+                    {% endcomment %}
+                    <strong>MarginMate ne va pas chercher vos factures sur votre plateforme de facturation
+                    électronique</strong> : téléchargez-les chez votre comptable et déposez-les ici.
+                </span>
+                {% endif %}
+            </div>
+        </form>

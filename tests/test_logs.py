@@ -40,6 +40,49 @@ class RedactTests(SimpleTestCase):
             self.assertEqual(logs.redact_signing_links(text), text)
 
 
+class InvitationLinkTests(SimpleTestCase):
+    """An employee's invitation (accounts/members.py) is a secret in the
+    address as the signing link is: for 7 days whoever holds it chooses the
+    employee's password. A 404 on it, a CSRF refusal or a `next` carrying it
+    would otherwise write it whole into the log."""
+
+    INVITATION = f"/invitation/{TOKEN}/"
+
+    def test_an_invitation_keeps_four_characters_of_its_token(self):
+        self.assertEqual(
+            logs.redact_signing_links(f"Not Found: {self.INVITATION}"),
+            "Not Found: /invitation/Zq3v\N{HORIZONTAL ELLIPSIS}/",
+        )
+
+    def test_its_encoded_form_in_a_query_string_too(self):
+        text = f"GET /connexion/?next=%2Finvitation%2F{TOKEN}%2F puis ?next=%2finvitation%2f{TOKEN}"
+        redacted = logs.redact_signing_links(text)
+        self.assertNotIn(TOKEN, redacted)
+        self.assertNotIn(TOKEN[4:12], redacted)
+        self.assertEqual(redacted.count("Zq3v\N{HORIZONTAL ELLIPSIS}"), 2)
+
+    def test_a_folder_named_invitations_is_left_alone(self):
+        for text in (
+            "/fichiers/invitations/x.pdf",
+            "/fichiers/invitations/abc/",
+            "invitation/abc",
+            "/invitationx/abc/",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(logs.redact_signing_links(text), text)
+
+    def test_the_filter_cuts_it_out_of_a_record(self):
+        entry = record(
+            "Forbidden (CSRF token missing.): %s",
+            self.INVITATION,
+            name="django.security.csrf",
+            level=logging.WARNING,
+        )
+        self.assertTrue(logs.SigningLinkFilter().filter(entry))
+        self.assertNotIn(TOKEN, entry.getMessage())
+        self.assertIn("/invitation/Zq3v\N{HORIZONTAL ELLIPSIS}/", entry.getMessage())
+
+
 class FilterTests(SimpleTestCase):
     def test_the_message_with_its_arguments(self):
         """Django writes « Not Found: %s » with the path as an argument."""

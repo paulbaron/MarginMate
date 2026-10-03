@@ -6,13 +6,14 @@ says beyond it (« Facture : à vérifier BL n° … sur plusieurs factures »),
 never the label word printed before a sentence that says it again; the
 invoices it was read on, each designation's figures, the other credits of
 those invoices (listed, never counted as a gap), and the notes. Read when
-the page is drawn, never stored.
+the page is drawn, never stored. The invoices are links for whoever opens « Factures »
+(`can`, accounts/access.py), their names otherwise.
 {% endcomment %}
 <div class="invoice-check">
     <p class="invoice-check-state">Facture : <span class="status-pill status-{{ pill.css }}" title="{{ pill.title }}">{{ pill.text }}</span>{% if pill.detail %} {{ pill.detail }}{% endif %}</p>
     {% if check.invoices %}
         <p class="small">
-            {% for ref in check.invoices %}<a href="{% url 'invoices:invoice_detail' ref.pk %}">Facture {{ ref.label }}</a>{% if not forloop.last %} · {% endif %}{% endfor %}
+            {% for ref in check.invoices %}{% if can.invoices %}<a href="{% url 'invoices:invoice_detail' ref.pk %}">Facture {{ ref.label }}</a>{% else %}Facture {{ ref.label }}{% endif %}{% if not forloop.last %} · {% endif %}{% endfor %}
         </p>
     {% endif %}
     {% if check.rows %}

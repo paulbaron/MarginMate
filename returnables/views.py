@@ -57,6 +57,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 
+from accounts.access import access_of
 from accounts.tenancy import integrations_allowed
 from common import is_id
 from invoices import integrations
@@ -192,7 +193,7 @@ def _slips_job():
     return job, running is not None
 
 
-def _gather_context(today: date) -> dict:
+def _gather_context(today: date, slips_only: bool = False) -> dict:
     mail_formats = list(
         SlipFormat.objects.filter(is_active=True)
         .exclude(sender_pattern="")
@@ -209,6 +210,14 @@ def _gather_context(today: date) -> dict:
     # written yet, its thread barely started) is shown by its card, and the
     # sentence read as if the tap had been ignored.
     another = running and bool(job.progress) and not job.slips_only
+    if slips_only and job is not None and job.progress and not job.slips_only:
+        # An employee given Consignes and not « Factures » (accounts/access.py)
+        # follows a gather of slips only (invoices.views._shows_gather):
+        # another one's card names the bar's invoices and its log the mails
+        # matched - running or ended (an ended card is not polled, so the
+        # gather's own check never runs for it). A running one still holds
+        # his button, and is said (one gather at a time).
+        job = None
     return {
         "mail_formats": mail_formats,
         "gather_allowed": allowed,
@@ -609,7 +618,7 @@ def _home_context(request, form: PickupForm, today: date) -> dict:
         "photo_room": MAX_PHOTOS,
         "saved_flag": SAVED_FLAG,
         "home_url": _home_url(),
-        **_gather_context(today),
+        **_gather_context(today, slips_only=not access_of(request).allows("invoices")),
     }
 
 

@@ -1,0 +1,53 @@
+{% extends "accounts/page.html" %}
+{% comment %}
+« Votre accès » (accounts.members.invitation_page): public, the link's token is the key. Context:
+`dead` (the link opens nothing: expired, used, replaced, or never was; `logged_in`), else `form`
+(ChoosePasswordForm), `tenant`, `invited` (the login the owner made), `reset` (an active employee
+choosing a NEW password: the old one works until this is sent) and `someone_else` (this browser is
+logged in as another login, which the account's creation logs out). The address is shown, not
+posted: it is the owner's choice, and a password manager files the password under it.
+{% endcomment %}
+{% block title %}Votre accès - MarginMate{% endblock %}
+{% block content %}
+    <section class="public-card account-card">
+        {% if dead %}
+            <h1>Lien expiré ou déjà utilisé</h1>
+            <p class="public-lead">{{ dead }}</p>
+            {% if logged_in %}
+                <p><a class="btn" href="/">Revenir à mes pages</a></p>
+            {% else %}
+                <p>Vous avez déjà choisi votre mot de passe ?</p>
+                <p><a class="btn" href="{% url 'accounts:login' %}">Se connecter</a></p>
+            {% endif %}
+            <p class="muted small">Sinon, demandez un nouveau lien à votre employeur.</p>
+        {% else %}
+            <h1>Votre accès à « {{ tenant.name }} »</h1>
+            <p class="public-lead">
+                {% if reset %}
+                    Bonjour {{ invited.first_name }}, choisissez votre nouveau mot de passe. L'ancien ne servira plus.
+                {% else %}
+                    Bonjour {{ invited.first_name }}, choisissez votre mot de passe : vous vous connecterez ensuite avec
+                    cette adresse e-mail.
+                {% endif %}
+            </p>
+            {% if someone_else %}
+                <p class="message message-warning">
+                    Ce navigateur est connecté avec un autre compte : il en sera déconnecté quand vous enregistrerez
+                    votre mot de passe.
+                </p>
+            {% endif %}
+            <form method="post" class="public-form">
+                {% csrf_token %}
+                <div class="form-grid">
+                    <div class="form-field">
+                        <label for="invited-email">Adresse e-mail</label>
+                        <input id="invited-email" type="email" value="{{ invited.email }}" readonly autocomplete="username">
+                        <p class="help">Ce n'est pas votre adresse ? Demandez à votre employeur de vous inviter de nouveau.</p>
+                    </div>
+                </div>
+                {% include "_form_fields.html" %}
+                <button type="submit" class="btn public-submit">{% if reset %}Enregistrer mon mot de passe{% else %}Créer mon compte{% endif %}</button>
+            </form>
+        {% endif %}
+    </section>
+{% endblock %}
